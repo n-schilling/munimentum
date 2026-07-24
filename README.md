@@ -136,6 +136,44 @@ writes one self-contained search page with person, date and source filters:
 python3 combined_search.py             # → combined_search.html
 ```
 
+The page has three tabs: **Suche** (full-text search), **Kalender** (week and
+month view of the exported `.ics` events, colour-coded by status — confirmed,
+tentative, cancelled) and **Adressbuch** (contacts from the `.vcf` files with
+mail/phone links). Every entry links to its source file.
+
+**Deleted appointments are recovered from the mailbox.** Meeting invitations,
+replies and cancellations carry the full event (including its UID) in a
+`text/calendar` part. If that UID is missing from the calendar export, the event
+was removed from the calendar — it is rebuilt from the mail and shown dashed, as
+*Gelöscht* when a cancellation (`METHOD:CANCEL`) exists, otherwise as *Nicht im
+Kalender* (invited/accepted but no longer there). Such entries link to the mail
+they were rebuilt from. A cancellation also fixes the status of an event that is
+still in the calendar but not marked as cancelled there.
+
+The calendar has a third mode next to *Woche* and *Monat*: **Rekonstruiert**,
+a chronological list of exactly those rebuilt events —
+filterable by *Gelöscht* / *Nicht im Kalender* and searchable by title, person
+or content. Each row links to the mail it was rebuilt from.
+
+Reply mails carry no `ORGANIZER`, only the responding attendee — but a reply
+always goes *to* the organizer, so the recipient is used instead (verified
+against the calendar export: 1442 of 1456 replies match, 99%). Invitations and
+cancellations come from the organizer, so there the sender is used.
+
+Matching mail to calendar needs two guards, both worth knowing about:
+
+* Exchange wraps foreign UIDs (Google, Zoom, …) into its own Global Object ID —
+  a hex blob that carries the original UID after a `vCal-Uid` marker. It is
+  unwrapped before comparing, otherwise those events would all look deleted.
+* If an event with the same title and start minute is still in the calendar, the
+  reconstruction is dropped as a duplicate. This catches ID formats that the
+  unwrapping does not know about, at the price of hiding a deleted event that
+  starts at exactly the same minute as a surviving one with the same title.
+
+Invitations carry Windows time-zone names (`W. Europe Standard Time`); the
+common ones are mapped to IANA zones. An unknown name falls back to local time,
+as does a missing time zone.
+
 It accepts custom folders (`[teams] [outlook] [-o out.html]`) and writes the
 page to the common parent folder of both exports — don't move it afterwards,
 the links are relative.
