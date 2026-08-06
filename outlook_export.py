@@ -12,6 +12,9 @@ Outlook/Exchange-Export als .eml über Microsoft Graph (delegiert, kein Admin n�
   nur 4 gleichzeitige Anfragen (MailboxConcurrency, festes Limit) – mehr erzeugt
   nur 429er. Ein globaler Semaphor hält Listing + Downloads zusammen unter dieser
   Grenze; bei 429 wird mit Retry-After zurückgenommen.
+- ROBUST: Netzwerkfehler (Timeout, Verbindungsabbruch, TLS) werden mit Backoff
+  wiederholt; ein Ordner, der sich nicht vollständig listen lässt, wird
+  übersprungen statt den Lauf abzubrechen (nächster Lauf holt ihn nach).
 
 Setup:   pip install msal requests
 Start:   python3 outlook_export.py [ausgabe-ordner] [-default]
@@ -89,6 +92,14 @@ DEFAULT_SKIP_FOLDERS = {
     "postausgang", "outbox",
 }
 
+# Netzwerk: getrennte Timeouts für Verbindungsaufbau und Antwort. Graph liefert
+# große Seiten und MIME-Downloads teils sehr träge; ein zu knapper Read-Timeout
+# bricht sonst einen stundenlangen Export grundlos ab.
+TIMEOUT_JSON = (30, 120)     # (connect, read) für Listen-/Metadaten-Abfragen
+TIMEOUT_BYTES = (30, 300)    # (connect, read) für .eml-Downloads
+NET_RETRIES = 6              # Wiederholungen bei Timeout/Verbindungsabbruch/TLS
+HTTP_RETRIES = 6             # Wiederholungen bei 429/5xx bzw. nach Token-Erneuerung
+
 # Geteilte HTTP-Session (Keep-Alive/Connection-Pooling) und Drossel-Gate.
 SESSION = requests.Session()
 GATE = threading.BoundedSemaphore(WORKERS)   # hält gleichzeitige Postfach-Calls <= WORKERS
@@ -98,6 +109,27 @@ ASSUME_DEFAULT = False                       # -default: keine Abfragen, überal
 
 class TokenExpired(RuntimeError):
     """Signalisiert einen 401 im Token-Modus (kein Refresh möglich)."""
+
+
+def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, label=""):
+    """Ein GET gegen Graph; wiederholt NUR bei Netzwerkfehlern (Timeout,
+    Verbindungsabbruch, TLS). Der HTTP-Status wird hier nicht bewertet.
+
+    Eigener Zähler: ein Netzaussetzer soll die Versuche für 429/5xx nicht
+    aufbrauchen. Ohne dieses Retry beendet ein einzelner ReadTimeout nach
+    Stunden den kompletten Export."""
+    for net in range(NET_RETRIES):
+        try:
+            with GATE:   # nur das eigentliche Request zählt gegen das Limit
+                return SESSION.get(url, headers=headers, params=params, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            if net == NET_RETRIES - 1:
+                raise
+            w = min(2 ** net, 60)
+            print(f"    … Netzwerkfehler{label} ({type(e).__name__}), warte {w}s "
+                  f"(Versuch {net + 2}/{NET_RETRIES})")
+            time.sleep(w)   # Pause OHNE belegten Slot
+    raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")   # nicht erreichbar
 
 
 # ---------------------------------------------------------------------------
@@ -146,9 +178,8 @@ class Graph:
         headers = self._headers()
         if extra_headers:
             headers = {**headers, **extra_headers}
-        for attempt in range(6):
-            with GATE:   # nur das eigentliche Request zählt gegen das Limit
-                r = SESSION.get(url, headers=headers, params=params, timeout=60)
+        for attempt in range(HTTP_RETRIES):
+            r = fetch(url, headers, params, TIMEOUT_JSON)
             if r.status_code == 401:
                 self._refresh()
                 headers = {**self._headers(), **(extra_headers or {})}
@@ -164,9 +195,8 @@ class Graph:
         raise RuntimeError(f"Zu viele Fehlversuche: {url}")
 
     def get_bytes(self, url):
-        for attempt in range(6):
-            with GATE:
-                r = SESSION.get(url, headers=self._headers(), timeout=120)
+        for attempt in range(HTTP_RETRIES):
+            r = fetch(url, self._headers(), timeout=TIMEOUT_BYTES, label=" (MIME)")
             if r.status_code == 401:
                 self._refresh()
                 continue
@@ -221,9 +251,8 @@ class TokenClient:
         headers = self._headers()
         if extra_headers:
             headers = {**headers, **extra_headers}
-        for attempt in range(6):
-            with GATE:
-                r = SESSION.get(url, headers=headers, params=params, timeout=60)
+        for attempt in range(HTTP_RETRIES):
+            r = fetch(url, headers, params, TIMEOUT_JSON)
             if r.status_code == 401:
                 raise TokenExpired()
             if r.status_code == 429 or 500 <= r.status_code < 600:
@@ -237,9 +266,8 @@ class TokenClient:
         raise RuntimeError(f"Zu viele Fehlversuche: {url}")
 
     def get_bytes(self, url):
-        for attempt in range(6):
-            with GATE:
-                r = SESSION.get(url, headers=self._headers(), timeout=120)
+        for attempt in range(HTTP_RETRIES):
+            r = fetch(url, self._headers(), timeout=TIMEOUT_BYTES, label=" (MIME)")
             if r.status_code == 401:
                 raise TokenExpired()
             if r.status_code == 429 or 500 <= r.status_code < 600:
@@ -512,14 +540,25 @@ def iter_messages_to_export(graph, out, done, stats, selected):
             total = folder.get("totalItemCount")
             print(f"\nOrdner: {rel_path}" + (f"  ({total} Elemente)" if total is not None else ""))
             seen = 0
-            for msg in graph.paged(f"{GRAPH}/me/mailFolders/{folder['id']}/messages",
-                                   {"$top": PAGE, "$select": select}):
-                seen += 1
-                mid = msg["id"]
-                if done.is_done(out, mid):
-                    stats["skipped"] += 1
-                    continue
-                yield mid, f"{rel_path}/{mail_filename(msg)}"
+            try:
+                for msg in graph.paged(f"{GRAPH}/me/mailFolders/{folder['id']}/messages",
+                                       {"$top": PAGE, "$select": select}):
+                    seen += 1
+                    mid = msg["id"]
+                    if done.is_done(out, mid):
+                        stats["skipped"] += 1
+                        continue
+                    yield mid, f"{rel_path}/{mail_filename(msg)}"
+            except TokenExpired:
+                raise
+            except Exception as e:
+                # Ein dauerhaft hängender Ordner darf nicht den ganzen Lauf killen:
+                # Rest überspringen, weiter mit dem nächsten. Was schon exportiert
+                # ist, steht in exported.tsv – der nächste Lauf holt den Rest.
+                stats["folder_errors"] = stats.get("folder_errors", 0) + 1
+                print(f"  ! Ordner unvollständig gelistet ({type(e).__name__}: {e})"
+                      f" – nach {seen} Mails abgebrochen, nächster Lauf setzt fort.")
+                continue
             if seen:
                 print(f"  {seen} Mails gesichtet.")
 
@@ -956,7 +995,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     done = DoneLog(out / DONE_FILE)
     migrate_to_email_subdir(out, done)   # einmalig: Alt-Struktur -> E-Mail/
-    stats = {"new": 0, "skipped": 0}
+    stats = {"new": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
 
     try:
@@ -990,6 +1029,14 @@ def main():
                 result = "expired"
     except TokenExpired:
         result = "expired"
+    except (requests.exceptions.RequestException, RuntimeError) as e:
+        # Netz endgültig weg (alle Wiederholungen aufgebraucht) – kein Traceback,
+        # der Fortschritt in exported.tsv bleibt erhalten.
+        result = "network"
+        print(f"\nAbgebrochen: Verbindung zu Graph nicht möglich ({type(e).__name__}: {e})")
+    except KeyboardInterrupt:
+        result = "aborted"
+        print("\nAbgebrochen durch Benutzer.")
     finally:
         done.close()
 
@@ -997,11 +1044,18 @@ def main():
         print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
               "setzen und erneut starten – bereits Exportiertes bleibt erhalten.")
         sys.exit(1)
+    if result in ("network", "aborted"):
+        print(f"Bis hier neu exportiert: {stats['new']}. Einfach neu starten – "
+              "der Export setzt bei der letzten Mail fort.")
+        sys.exit(1)
 
     def _count(suffix):
         return sum(1 for rel in done.done.values()
                    if rel.endswith(suffix) and (out / rel).exists())
     print(f"\nFertig. Neu exportiert: {stats['new']}, übersprungen: {stats['skipped']}.")
+    if stats.get("folder_errors"):
+        print(f"{stats['folder_errors']} Ordner konnten nicht vollständig gelistet "
+              "werden – Skript erneut starten, um den Rest zu holen.")
     print(f"Im Archiv: {_count('.eml')} Mails, {_count('.ics')} Termine, "
           f"{_count('.vcf')} Kontakte.")
     print(f"Ordner: {out.resolve()}")

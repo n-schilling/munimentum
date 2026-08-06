@@ -41,8 +41,12 @@ class FakeSession:
         self.calls = []
 
     def get(self, url, headers=None, params=None, timeout=None):
-        self.calls.append({"url": url, "headers": dict(headers or {}), "params": params})
-        return self.responses.pop(0)
+        self.calls.append({"url": url, "headers": dict(headers or {}),
+                           "params": params, "timeout": timeout})
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):   # Netzwerkfehler simulieren
+            raise r
+        return r
 
 
 def _unfold(text):
@@ -561,6 +565,51 @@ def test_tokenclient_paged_folgt_nextlink(monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Netzwerkfehler: Timeout/Verbindungsabbruch werden wiederholt statt zu beenden
+# --------------------------------------------------------------------------
+def _timeout():
+    return requests.exceptions.ReadTimeout("read timed out")
+
+
+def test_fetch_wiederholt_nach_netzwerkfehler(monkeypatch):
+    fake = FakeSession([_timeout(), _timeout(), FakeResponse(payload={"ok": 1})])
+    monkeypatch.setattr(outlook_export, "SESSION", fake)
+    sleeps = []
+    monkeypatch.setattr(outlook_export.time, "sleep", sleeps.append)
+    assert outlook_export.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
+    assert len(fake.calls) == 3
+    assert sleeps == [1, 2]
+
+
+def test_fetch_gibt_nach_allen_netzwerkversuchen_auf(monkeypatch):
+    fake = FakeSession([_timeout() for _ in range(outlook_export.NET_RETRIES)])
+    monkeypatch.setattr(outlook_export, "SESSION", fake)
+    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        outlook_export.TokenClient("t").get("https://example.invalid/x")
+    assert len(fake.calls) == outlook_export.NET_RETRIES
+
+
+def test_netzwerkfehler_verbraucht_keinen_http_versuch(monkeypatch):
+    """Ein Aussetzer darf die Versuche für 429/5xx nicht aufbrauchen."""
+    fake = FakeSession([_timeout()]
+                       + [FakeResponse(500) for _ in range(outlook_export.HTTP_RETRIES - 1)]
+                       + [FakeResponse(payload={"ok": 1})])
+    monkeypatch.setattr(outlook_export, "SESSION", fake)
+    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
+    assert outlook_export.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
+
+
+def test_get_bytes_wiederholt_nach_netzwerkfehler(monkeypatch):
+    fake = FakeSession([_timeout(), FakeResponse(content=b"MIME")])
+    monkeypatch.setattr(outlook_export, "SESSION", fake)
+    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
+    content, _ = outlook_export.TokenClient("t").get_bytes("https://example.invalid/m")
+    assert content == b"MIME"
+    assert fake.calls[0]["timeout"] == outlook_export.TIMEOUT_BYTES
+
+
+# --------------------------------------------------------------------------
 # Graph-Client: Token-Erneuerung bei 401 (ohne echte Anmeldung)
 # --------------------------------------------------------------------------
 def _bare_graph():
@@ -681,6 +730,44 @@ def test_iter_messages_ueberspringt_erledigte_und_legt_ordner_an(tmp_path):
     assert mid == "m2"
     assert rel == "E-Mail/Posteingang/" + outlook_export.mail_filename(m2)
     assert (tmp_path / "E-Mail" / "Posteingang").is_dir()
+
+
+def test_iter_messages_ueberspringt_ordner_mit_netzwerkfehler(tmp_path):
+    """Ein nicht listbarer Ordner beendet nicht den ganzen Lauf."""
+    kaputt = {"id": "f1", "displayName": "SAP Content Server"}
+    heil = {"id": "f2", "displayName": "Posteingang"}
+    selected = [{"subtree": [(kaputt, "E-Mail/SAP"), (heil, "E-Mail/Posteingang")]}]
+
+    class HalbKaputt:
+        def paged(self, url, params=None, extra_headers=None):
+            if "f1" in url:
+                yield {"id": "m1", "subject": "geht noch"}
+                raise requests.exceptions.ReadTimeout("read timed out")
+            yield {"id": "m2", "subject": "danach"}
+
+    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    stats = {"new": 0, "skipped": 0}
+    got = list(outlook_export.iter_messages_to_export(
+        HalbKaputt(), tmp_path, done, stats, selected))
+    done.close()
+    assert [mid for mid, _ in got] == ["m1", "m2"]   # danach wird weitergemacht
+    assert stats["folder_errors"] == 1
+
+
+def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
+    folder = {"id": "f1", "displayName": "Posteingang"}
+    selected = [{"subtree": [(folder, "E-Mail/Posteingang")]}]
+
+    class Abgelaufen:
+        def paged(self, url, params=None, extra_headers=None):
+            raise outlook_export.TokenExpired()
+            yield   # pragma: no cover – macht paged zum Generator
+
+    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    with pytest.raises(outlook_export.TokenExpired):
+        list(outlook_export.iter_messages_to_export(
+            Abgelaufen(), tmp_path, done, {"new": 0, "skipped": 0}, selected))
+    done.close()
 
 
 # --------------------------------------------------------------------------
