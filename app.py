@@ -152,6 +152,49 @@ LABEL_FOR = {
     "meeting": "Meeting-Chats", "channels": "Team-Kanäle",
 }
 
+# Weitere Berechtigungen, die die jeweils nötige mit abdecken. Der Graph
+# Explorer vergibt oft gleich die Schreibvariante: wer Mail.ReadWrite hat, darf
+# erst recht lesen, im Token steht dann aber nie Mail.Read. Ohne diese Tabelle
+# meldete der Assistent fehlende Rechte, die in Wahrheit da sind.
+#
+# Bewusst großzügig: eine ausbleibende Warnung kostet höchstens einen 403 im
+# Lauf (so war es vor der Prüfung ohnehin), eine falsche Warnung schickt
+# dagegen jemanden los, im Graph Explorer etwas zu suchen, das er längst hat.
+# NICHT enthalten sind Varianten, die weniger können, als der Export braucht:
+# Chat.ReadBasic und Mail.ReadBasic liefern keine Nachrichteninhalte.
+SCOPE_COVERED_BY = {
+    "Mail.Read": ("Mail.ReadWrite", "Mail.Read.Shared", "Mail.ReadWrite.Shared"),
+    "Calendars.Read": ("Calendars.ReadWrite", "Calendars.Read.Shared",
+                       "Calendars.ReadWrite.Shared"),
+    "Contacts.Read": ("Contacts.ReadWrite", "Contacts.Read.Shared",
+                      "Contacts.ReadWrite.Shared"),
+    "Chat.Read": ("Chat.ReadWrite",),
+    # Graph erlaubt das Lesen von Kanalnachrichten auch mit den Gruppenrechten.
+    "ChannelMessage.Read.All": ("Group.Read.All", "Group.ReadWrite.All"),
+}
+
+
+# Der Reiter "Modify permissions" im Graph Explorer listet nur die Rechte zu der
+# Abfrage, die gerade in der Adresszeile steht. Wer dort nie eine Mail-Abfrage
+# ausgeführt hat, bekommt Mail.Read schlicht nie angeboten und sucht vergeblich.
+# Deshalb zu jedem Recht die Abfrage, die es sichtbar macht.
+SCOPE_QUERY = {
+    "Mail.Read": "https://graph.microsoft.com/v1.0/me/messages?$top=1",
+    "Calendars.Read": "https://graph.microsoft.com/v1.0/me/events?$top=1",
+    "Contacts.Read": "https://graph.microsoft.com/v1.0/me/contacts?$top=1",
+    "Chat.Read": "https://graph.microsoft.com/v1.0/me/chats?$top=1",
+    "ChannelMessage.Read.All": "https://graph.microsoft.com/v1.0/me/joinedTeams",
+    "User.Read": "https://graph.microsoft.com/v1.0/me",
+}
+
+
+def scope_missing(needed_scopes, have):
+    """Welche der nötigen Berechtigungen deckt der Token nicht ab?"""
+    have = set(have)
+    return sorted(s for s in needed_scopes
+                  if s not in have
+                  and not have.intersection(SCOPE_COVERED_BY.get(s, ())))
+
 
 # --------------------------------------------------------------------------
 # Konfiguration
@@ -263,7 +306,7 @@ def token_status(token, now=None, needed=()):
     # sonst sähe ein Token ohne lesbare Claims so aus, als fehlte alles.
     if out["scopes"]:
         want = {SCOPE_FOR[c] for c in needed if c in SCOPE_FOR}
-        out["missing"] = sorted(w for w in want if w not in set(out["scopes"]))
+        out["missing"] = scope_missing(want, out["scopes"])
     return out
 
 
@@ -893,6 +936,7 @@ class App:
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
+            "scope_queries": SCOPE_QUERY,
         }
 
     # -- Aktionen ----------------------------------------------------------
@@ -1474,7 +1518,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
-var S = null, seen = 0, dismissed = {}, offset = 0;
+var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null;
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 function post(p, body){
@@ -1668,21 +1712,34 @@ function toggleMcp(){
 }
 
 /* ---------- Assistenten ---------- */
-function openWizard(kind){
-  var m = el('modal');
-  m.innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
+function openWizard(kind, neuZeichnen){
+  // Steht der Assistent schon offen, NICHT neu zeichnen: der Status wird alle
+  // paar Sekunden abgefragt, und ein neu gesetztes innerHTML löschte dabei den
+  // gerade eingefügten Token wieder aus dem Textfeld.
+  if(wizardOffen === kind && !neuZeichnen) return;
+  el('modal').innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
   el('overlay').classList.add('on');
+  wizardOffen = kind;
 }
 function closeWizard(kind){
   dismissed[kind] = true;
   el('overlay').classList.remove('on');
+  wizardOffen = null;
   post('/api/wizard-seen');
 }
+function scopeListe(){
+  var q = S.scope_queries || {};
+  return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(s){
+    return '<li style="margin-bottom:3px"><code>' + esc(s) + '</code>' +
+      (q[s] ? '<br><span class="small muted">sichtbar nach der Abfrage </span><code class="small">' + esc(q[s]) + '</code>' : '') +
+      '</li>';
+  }).join('') + '</ul>';
+}
 function tokenWizard(){
-  var t = S.token, need = (S.scopes_needed || []).join(', ');
+  var t = S.token;
   var head = !t.present ? '<div class="banner err">Es ist kein Token hinterlegt – ohne ihn kann nichts exportiert werden.</div>'
     : t.expired ? '<div class="banner err">Der Token ist abgelaufen. Bitte einen frischen holen.</div>'
-    : (t.missing && t.missing.length) ? '<div class="banner warn">Der Token hat nicht alle nötigen Berechtigungen: ' + esc(t.missing.join(', ')) + '</div>'
+    : (t.missing && t.missing.length) ? '<div class="banner warn">Im Token fehlen diese Berechtigungen: ' + esc(t.missing.join(', ')) + '. Eine umfassendere zählt mit – wer <code>Mail.ReadWrite</code> hat, braucht <code>Mail.Read</code> nicht extra.</div>'
     : '<div class="banner">Token gültig' + (t.account ? ' für ' + esc(t.account) : '') +
       (t.expires_in_minutes != null ? ', noch ' + t.expires_in_minutes + ' Minuten' : '') + '.</div>';
   return '<h2>Access Token holen</h2>' +
@@ -1690,7 +1747,8 @@ function tokenWizard(){
     head +
     '<ol>' +
     '<li><a href="' + S.graph_explorer + '" target="_blank" rel="noopener">Graph Explorer öffnen</a> und oben rechts mit dem Geschäftskonto anmelden.</li>' +
-    '<li>Reiter <strong>Modify permissions</strong>: diesen Berechtigungen zustimmen (<em>Consent</em>):<br><code>' + esc(need) + '</code></li>' +
+    '<li>Diesen Berechtigungen zustimmen – Reiter <strong>Modify permissions</strong>, dann <em>Consent</em>:' + scopeListe() +
+    '<span class="small muted">Der Reiter zeigt nur Berechtigungen zu der Abfrage, die gerade oben in der Adresszeile steht. Wird eine nicht angeboten, die zugehörige Abfrage dort einsetzen, ausführen und erneut nachsehen.</span></li>' +
     '<li>Reiter <strong>Access token</strong>: den langen Text vollständig kopieren.</li>' +
     '<li>Hier einfügen und speichern:</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
@@ -1704,7 +1762,8 @@ function saveToken(){
   post('/api/token', {token: el('tok').value}).then(function(r){
     el('tok-msg').textContent = r.message || '';
     el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
-    if(r.ok){ dismissed = {}; setTimeout(function(){ el('overlay').classList.remove('on'); }, 900); }
+    if(r.ok){ dismissed = {};
+              setTimeout(function(){ el('overlay').classList.remove('on'); wizardOffen = null; }, 1200); }
     refresh();
   });
 }
@@ -1727,7 +1786,7 @@ function ollamaWizard(){
     '<p class="small muted" style="margin-top:14px">„Ohne Ollama fortfahren“ baut einen reinen Volltextindex (BM25). Suche und MCP funktionieren damit sofort; die semantische Hälfte lässt sich später jederzeit nachbauen.</p>';
 }
 function recheckOllama(){
-  post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama'); }); });
+  post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
 }
 
 /* ---------- Schleife ---------- */

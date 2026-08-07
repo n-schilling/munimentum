@@ -12,8 +12,13 @@ damit nichts im Projektordner landet.
 import base64
 import http.client
 import json
+import os
+import re
+import shutil
 import sqlite3
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -151,6 +156,57 @@ def test_token_status_meldet_fehlende_rechte():
     tok = make_jwt(exp=now + 600, scp="Mail.Read User.Read")
     st = app_mod.token_status(tok, now=now, needed=["mail", "calendar", "channels"])
     assert st["missing"] == ["Calendars.Read", "ChannelMessage.Read.All"]
+
+
+def test_token_status_akzeptiert_umfassendere_berechtigung():
+    """Der Graph Explorer vergibt oft gleich die Schreibvariante. Wer
+    Mail.ReadWrite hat, darf erst recht lesen – Mail.Read steht dann aber nie
+    im Token, und der Assistent meldete Rechte als fehlend, die da sind."""
+    now = 1_000_000
+    tok = make_jwt(exp=now + 600,
+                   scp="Mail.ReadWrite Contacts.ReadWrite Calendars.Read "
+                       "Chat.ReadWrite Group.Read.All User.Read")
+    st = app_mod.token_status(tok, now=now, needed=["mail", "contacts", "calendar",
+                                                    "1on1", "channels"])
+    assert st["missing"] == []
+
+
+@pytest.mark.parametrize("haben,fehlt", [
+    (["Mail.ReadWrite"], []),
+    (["Mail.Read.Shared"], []),
+    (["Mail.ReadWrite.Shared"], []),
+    (["Mail.Read"], []),
+    # ReadBasic liefert keine Nachrichteninhalte – deckt den Export nicht ab
+    (["Mail.ReadBasic"], ["Mail.Read"]),
+    (["Calendars.Read"], ["Mail.Read"]),
+    ([], ["Mail.Read"]),
+])
+def test_scope_missing_mail(haben, fehlt):
+    assert app_mod.scope_missing({"Mail.Read"}, haben) == fehlt
+
+
+def test_scope_missing_kanalnachrichten_ueber_gruppenrechte():
+    assert app_mod.scope_missing({"ChannelMessage.Read.All"}, ["Group.Read.All"]) == []
+    assert app_mod.scope_missing({"ChannelMessage.Read.All"}, ["Chat.Read"]) \
+        == ["ChannelMessage.Read.All"]
+
+
+def test_scope_missing_ohne_ersatz_bleibt_streng():
+    """Chat.ReadBasic liest keine Nachrichteninhalte – kein gültiger Ersatz."""
+    assert app_mod.scope_missing({"Chat.Read"}, ["Chat.ReadBasic"]) == ["Chat.Read"]
+
+
+def test_jede_noetige_berechtigung_hat_eine_beispielabfrage():
+    """Der Assistent nennt zu jedem Recht die Abfrage, die es im Graph Explorer
+    überhaupt erst sichtbar macht – sonst sucht man es dort vergeblich."""
+    noetig = set(app_mod.SCOPE_FOR.values()) | {"User.Read"}
+    assert noetig <= set(app_mod.SCOPE_QUERY)
+
+
+def test_status_liefert_die_beispielabfragen(sandbox, with_ollama):
+    s = app_mod.App(app_mod.load_config()).status()
+    assert all(s["scope_queries"].get(x, "").startswith("https://graph.microsoft.com/")
+               for x in s["scopes_needed"])
 
 
 def test_token_status_ohne_token():
@@ -1116,6 +1172,99 @@ def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
             zweiter.server_close()
     finally:
         erster.server_close()
+
+
+# --------------------------------------------------------------------------
+# Oberfläche: das eingebettete JavaScript in node ausführen
+# --------------------------------------------------------------------------
+DOM_STUMMEL = """
+process.on('unhandledRejection', function(){});
+global.fetch = function(){ return Promise.resolve({json: function(){ return Promise.resolve({}); }}); };
+var knoten = {};
+function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', value: '',
+  scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0,
+  classList: {add: function(){}, remove: function(){}, toggle: function(){}},
+  appendChild: function(){}, removeChild: function(){}, firstChild: null}; }
+global.document = {
+  getElementById: function(id){ return knoten[id] || (knoten[id] = mk(id)); },
+  querySelector: function(){ return mk('x'); },
+  querySelectorAll: function(){ return []; },
+  createElement: function(){ return mk('x'); },
+};
+global.setInterval = function(){ return 0; };
+global.setTimeout = function(){ return 0; };
+global.alert = function(){};
+"""
+
+PRUEFUNG = """
+S = {token: {present: true, valid: true, expired: false, missing: [],
+             account: 'a@example.com', expires_in_minutes: 42},
+     scopes_needed: ['Mail.Read', 'User.Read'],
+     scope_queries: {'Mail.Read': 'https://graph.microsoft.com/v1.0/me/messages'},
+     graph_explorer: 'https://example.invalid'};
+
+openWizard('token');
+var modal = document.getElementById('modal');
+if (modal.innerHTML.indexOf('Access Token') < 0) throw new Error('Assistent nicht gezeichnet');
+if (modal.innerHTML.indexOf('me/messages') < 0) throw new Error('Beispielabfrage fehlt');
+
+// So sieht es aus, wenn jemand den Token eingefügt hat:
+modal.innerHTML = 'EINGEFUEGTER-TOKEN';
+
+// Der Statusabruf alle 2,5 Sekunden ruft openWizard erneut auf.
+openWizard('token');
+if (modal.innerHTML !== 'EINGEFUEGTER-TOKEN') throw new Error('Eingabe wurde ueberschrieben');
+
+// Ausdrueckliches Neuzeichnen muss weiterhin gehen (z. B. "Erneut pruefen").
+openWizard('token', true);
+if (modal.innerHTML === 'EINGEFUEGTER-TOKEN') throw new Error('Neuzeichnen wirkte nicht');
+
+// Nach dem Schliessen zeichnet der naechste Aufruf wieder.
+closeWizard('token');
+openWizard('token');
+if (modal.innerHTML.indexOf('Access Token') < 0) throw new Error('Nach Schliessen nicht wieder gezeichnet');
+
+console.log('OK');
+"""
+
+
+def _seiten_js():
+    treffer = re.search(r"<script>(.*?)</script>", app_mod.PAGE, re.S)
+    assert treffer, "Kein <script>-Block in der Seite"
+    return treffer.group(1)
+
+
+def test_seite_enthaelt_gueltiges_javascript():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node nicht vorhanden")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(_seiten_js())
+        pfad = f.name
+    try:
+        r = subprocess.run([node, "--check", pfad], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    finally:
+        os.unlink(pfad)
+
+
+def test_assistent_ueberschreibt_die_eingabe_nicht():
+    """Regression: der Assistent wurde bei jedem Statusabruf neu gezeichnet und
+    löschte dabei den gerade eingefügten Token wieder aus dem Textfeld."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node nicht vorhanden")
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                     encoding="utf-8") as f:
+        f.write(DOM_STUMMEL + _seiten_js() + PRUEFUNG)
+        pfad = f.name
+    try:
+        r = subprocess.run([node, pfad], capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
+        assert "OK" in r.stdout
+    finally:
+        os.unlink(pfad)
 
 
 # --------------------------------------------------------------------------
