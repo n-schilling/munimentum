@@ -56,6 +56,12 @@ Der Pfad steht auch im Export-Reiter der Oberfläche. Ein Postfach kann zweistel
 Gigabyte belegen; für eine andere Platte die App mit `--data-dir ORDNER` starten
 oder `OFFICE365_DATA_DIR` setzen.
 
+## Sprache
+
+Die Oberfläche gibt es auf Deutsch, Englisch und Französisch und richtet sich
+standardmäßig nach der Sprache deines Browsers. Umstellen kannst du sie im
+Reiter *Einstellungen*. Exportierte Inhalte bleiben davon unberührt.
+
 ## Optional: Ollama
 
 Ohne Ollama funktioniert alles außer der *semantischen* Suche — Export, Volltextsuche

@@ -20,7 +20,7 @@ ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH setzt PyInstaller)
 
 TEILPROGRAMME = ["outlook_export", "teams_export", "rag_index",
                  "combined_search", "mcp_server", "rag_server", "corpus",
-                 "settings"]
+                 "settings", "i18n"]
 
 def ohne_cli(name):
     """mcp.cli braucht typer – ein optionales Extra, das wir nicht mitliefern.
@@ -37,7 +37,11 @@ for paket in ("uvicorn", "mcp", "anyio", "sse_starlette"):
 
 # Einige Pakete lesen ihre eigene Version über importlib.metadata – ohne die
 # .dist-info-Ordner bricht der Import im Bündel ab.
-datas = []
+# Die Sprachdateien der Oberfläche. i18n.py sucht sie neben der ausführbaren
+# Datei bzw. im entpackten Bündel – ohne sie spräche die App nur Schlüssel.
+datas = [(str(p), "lang") for p in sorted((ROOT / "lang").glob("*.json"))]
+assert datas, "lang/ ist leer – die Oberfläche hätte keine Texte"
+
 for paket in ("mcp", "uvicorn", "starlette", "pydantic", "msal", "requests"):
     try:
         datas += copy_metadata(paket)

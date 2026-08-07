@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 import app as app_mod
+import i18n
 import corpus
 import rag_index
 
@@ -34,6 +35,16 @@ import rag_index
 # --------------------------------------------------------------------------
 # Hilfen
 # --------------------------------------------------------------------------
+def schluessel(m):
+    """Textschlüssel einer Meldung. Serverseitige Meldungen sind {k, v} –
+    übersetzt wird erst in der Oberfläche."""
+    return m.get("k") if isinstance(m, dict) else m
+
+
+def werte(m):
+    return (m or {}).get("v", {}) if isinstance(m, dict) else {}
+
+
 def make_jwt(exp=None, scp="Mail.Read User.Read", upn="a@example.com", name="A B"):
     """JWT ohne gültige Signatur – app.decode_jwt prüft die auch nicht."""
     claims = {"scp": scp, "upn": upn, "name": name}
@@ -344,7 +355,7 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
 def test_build_steps_ohne_embeddings(sandbox):
     steps = app_mod.build_steps(app_mod.load_config(), index=True, embeddings=False)
     assert steps[0]["argv"][-1] == "--no-embeddings"
-    assert "nur Volltext" in steps[0]["label"]
+    assert steps[0]["label"] == "job.step.index.lexical"
 
 
 def test_build_steps_ohne_token_setzt_keine_variable(sandbox):
@@ -491,7 +502,7 @@ def test_jobrunner_fuehrt_schritte_der_reihe_nach_aus(sandbox):
     r = app_mod.JobRunner()
     assert r.start([_py_step("print('eins')", "A"), _py_step("print('zwei')", "B")], "Lauf")
     _warte(r)
-    text = "\n".join(ln["text"] for ln in r.lines)
+    text = "\n".join(str(ln["text"]) for ln in r.lines)
     assert "eins" in text and "zwei" in text
     assert r.last["ok"] and r.last["label"] == "Lauf"
     assert text.index("eins") < text.index("zwei")
@@ -501,9 +512,11 @@ def test_jobrunner_bricht_bei_fehler_ab(sandbox):
     r = app_mod.JobRunner()
     r.start([_py_step("raise SystemExit(3)", "Kaputt"), _py_step("print('nie')", "B")], "Lauf")
     _warte(r)
-    text = "\n".join(ln["text"] for ln in r.lines)
+    text = "\n".join(str(ln["text"]) for ln in r.lines)
     assert "nie" not in text                              # zweiter Schritt lief nicht
-    assert not r.last["ok"] and "Code 3" in r.last["detail"]
+    assert not r.last["ok"]
+    assert schluessel(r.last["detail"]) == "srv.job.exitcode"
+    assert werte(r.last["detail"])["code"] == 3
 
 
 def test_jobrunner_erkennt_abgelaufenen_token(sandbox):
@@ -539,7 +552,7 @@ def test_jobrunner_meldet_nicht_startbaren_befehl(sandbox):
     r.start([{"key": "x", "label": "Weg", "argv": ["/gibt/es/nicht"], "env": {}}], "Lauf")
     _warte(r)
     assert not r.last["ok"]
-    assert any("Start fehlgeschlagen" in ln["text"] for ln in r.lines)
+    assert any(schluessel(ln["text"]) == "srv.job.spawnfail" for ln in r.lines)
 
 
 def test_jobrunner_log_since(sandbox):
@@ -566,13 +579,13 @@ def test_jobrunner_ringpuffer_begrenzt(sandbox, monkeypatch):
 def test_launch_ohne_token_wird_abgelehnt(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     ok, why = a.launch(outlook=True)
-    assert not ok and "Token" in why
+    assert not ok and schluessel(why) == "srv.notoken"
 
 
 def test_launch_ohne_auswahl(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     ok, why = a.launch()
-    assert not ok and "Nichts" in why
+    assert not ok and schluessel(why) == "srv.nothing"
 
 
 def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeypatch):
@@ -585,7 +598,7 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
     ok, _ = a.launch(index=True, label="Index")
     assert ok
     assert "--no-embeddings" in gesehen["steps"][0]["argv"]
-    assert any("Ollama nicht verfügbar" in ln["text"] for ln in a.jobs.lines)
+    assert any(schluessel(ln["text"]) == "srv.lexical.noollama" for ln in a.jobs.lines)
 
 
 def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
@@ -594,7 +607,7 @@ def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
     monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label: True)
     a = app_mod.App(app_mod.load_config())
     assert a.launch(index=True, embeddings=False)[0]
-    assert any("Auf Wunsch ohne Embeddings" in ln["text"] for ln in a.jobs.lines)
+    assert any(schluessel(ln["text"]) == "srv.lexical.choice" for ln in a.jobs.lines)
 
 
 def test_launch_mit_ollama_baut_embeddings(sandbox, with_ollama, monkeypatch):
@@ -610,7 +623,7 @@ def test_launch_lehnt_zweiten_lauf_ab(sandbox, with_ollama, monkeypatch):
     monkeypatch.setattr(app_mod.JobRunner, "busy", property(lambda self: True))
     a = app_mod.App(app_mod.load_config())
     ok, why = a.launch(index=True)
-    assert not ok and "bereits" in why
+    assert not ok and schluessel(why) == "srv.busy"
 
 
 def test_ollama_ergebnis_wird_kurz_zwischengespeichert(sandbox, monkeypatch):
@@ -689,15 +702,16 @@ def test_log_token_state_bei_gueltigem_token(sandbox, with_ollama):
     a.log_token_state()
     zeile = a.jobs.lines[-1]
     assert zeile["level"] == "ok"
-    assert "chef@example.com" in zeile["text"]
-    assert "12 Std." in zeile["text"]
+    assert schluessel(zeile["text"]) == "srv.token.found"
+    assert werte(zeile["text"])["account"] == "chef@example.com"
+    assert werte(zeile["text"])["minutes"] == 12 * 60      # Formatierung macht die Oberfläche
 
 
 def test_log_token_state_ohne_token(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     a.log_token_state()
     assert a.jobs.lines[-1]["level"] == "warn"
-    assert "Kein Token" in a.jobs.lines[-1]["text"]
+    assert schluessel(a.jobs.lines[-1]["text"]) == "srv.token.none"
 
 
 def test_log_token_state_bei_abgelaufenem_token(sandbox, with_ollama):
@@ -705,7 +719,7 @@ def test_log_token_state_bei_abgelaufenem_token(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     a.log_token_state()
     assert a.jobs.lines[-1]["level"] == "warn"
-    assert "abgelaufen" in a.jobs.lines[-1]["text"]
+    assert schluessel(a.jobs.lines[-1]["text"]) == "srv.token.expired"
 
 
 def test_log_token_state_nennt_fehlende_rechte(sandbox, with_ollama):
@@ -713,29 +727,16 @@ def test_log_token_state_nennt_fehlende_rechte(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     a.log_token_state()
     assert a.jobs.lines[-1]["level"] == "warn"
-    assert "Mail.Read" in a.jobs.lines[-1]["text"]
+    assert schluessel(a.jobs.lines[-1]["text"]) == "srv.token.scopes"
+    assert "Mail.Read" in werte(a.jobs.lines[-1]["text"])["list"]
 
 
-@pytest.mark.parametrize("minuten,text", [
-    (None, "unbekannte Restlaufzeit"),
-    (-5, "abgelaufen"),
-    (0, "0 Min."),
-    (59, "59 Min."),
-    (60, "1 Std."),
-    (135, "2 Std. 15 Min."),
-    (620, "10 Std. 20 Min."),
-    (1440, "1 Tage"),
-    (1500, "1 Tage 1 Std."),
-])
-def test_format_remaining(minuten, text):
-    assert app_mod.format_remaining(minuten) == text
-
-
-def test_token_status_liefert_lesbare_restlaufzeit():
+def test_token_status_liefert_die_restminuten():
+    """Formatiert wird in der Oberfläche – nur dort ist die Sprache bekannt."""
     now = 1_000_000
     st = app_mod.token_status(make_jwt(exp=now + 620 * 60), now=now)
     assert st["expires_in_minutes"] == 620
-    assert st["expires_text"] == "10 Std. 20 Min."
+    assert "expires_text" not in st
 
 
 def test_status_nennt_die_noetigen_berechtigungen(sandbox, with_ollama):
@@ -758,7 +759,7 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
     a.scheduler._tick()
     assert gestartet["outlook"] is True and gestartet["teams"] is False
-    assert gestartet["index"] is True and gestartet["label"] == "Geplanter Lauf"
+    assert gestartet["index"] is True and gestartet["label"] == "job.scheduled"
 
 
 def test_scheduler_wartet_bis_zum_intervall(sandbox, with_ollama):
@@ -779,7 +780,7 @@ def test_scheduler_ueberspringt_ohne_gueltigen_token(sandbox, with_ollama):
     a.launch = lambda **kw: pytest.fail("darf nicht starten")
     a.scheduler._tick()
     assert a.jobs.token_expired is True
-    assert any("kein gültiger Token" in ln["text"] for ln in a.jobs.lines)
+    assert any(schluessel(ln["text"]) == "srv.sched.notoken" for ln in a.jobs.lines)
 
 
 def test_scheduler_tut_nichts_wenn_aus(sandbox, with_ollama):
@@ -811,7 +812,7 @@ def test_scheduler_next_due(sandbox, with_ollama):
 def test_mcp_ohne_index_startet_nicht(sandbox):
     a = app_mod.App(app_mod.load_config())
     ok, why = a.mcp.start(a.cfg)
-    assert not ok and "Kein Index" in why
+    assert not ok and schluessel(why) == "srv.mcp.noindex"
     assert a.mcp.status(a.cfg)["running"] is False
 
 
@@ -824,7 +825,7 @@ def test_mcp_status_nennt_die_url(sandbox):
 def test_autostart_mcp_meldet_fehlenden_index(sandbox):
     a = app_mod.App(app_mod.load_config())
     a.autostart_mcp()
-    assert any("MCP nicht gestartet" in ln["text"] for ln in a.jobs.lines)
+    assert any(schluessel(ln["text"]) == "srv.mcp.notstarted" for ln in a.jobs.lines)
 
 
 def test_autostart_mcp_kann_abgeschaltet_werden(sandbox):
@@ -878,7 +879,7 @@ def fake_popen(monkeypatch):
 def test_mcp_start_und_stop(sandbox, store, fake_popen):
     a = app_mod.App(app_mod.load_config())
     ok, why = a.mcp.start(a.cfg)
-    assert ok and why == "gestartet"
+    assert ok and schluessel(why) == "srv.mcp.startok"
     assert a.mcp.running and a.mcp.status(a.cfg)["port"] == a.cfg["mcp_port"]
 
     argv = fake_popen[0].argv
@@ -886,7 +887,7 @@ def test_mcp_start_und_stop(sandbox, store, fake_popen):
     assert "--store" in argv and "rag_store" in argv
     assert "--port" in argv
 
-    assert a.mcp.start(a.cfg) == (True, "läuft bereits")    # kein zweiter Prozess
+    assert schluessel(a.mcp.start(a.cfg)[1]) == "srv.mcp.running"   # kein zweiter Prozess
     assert len(fake_popen) == 1
 
     assert a.mcp.stop() is True
@@ -910,7 +911,7 @@ def test_mcp_start_scheitert_am_betriebssystem(sandbox, store, monkeypatch):
     monkeypatch.setattr(app_mod.subprocess, "Popen", boom)
     a = app_mod.App(app_mod.load_config())
     ok, why = a.mcp.start(a.cfg)
-    assert not ok and "Start fehlgeschlagen" in why
+    assert not ok and schluessel(why) == "srv.mcp.spawnfail"
 
 
 def test_autostart_mcp_startet_bei_vorhandenem_index(sandbox, store, fake_popen):
@@ -954,7 +955,7 @@ def store(sandbox):
 def test_searchbridge_ohne_index(sandbox):
     b = app_mod.SearchBridge()
     assert b.ensure(app_mod.load_config()) is None
-    assert "Kein Index" in b.error
+    assert schluessel(b.error) == "srv.noindex"
 
 
 def test_searchbridge_sucht_lexikalisch(sandbox, store):
@@ -1056,14 +1057,15 @@ def test_http_token_speichern(server, sandbox):
 def test_http_token_abgelaufen_wird_gemeldet(server):
     _, port = server
     code, r = call(port, "POST", "/api/token", {"token": make_jwt(exp=time.time() - 10)})
-    assert not r["ok"] and "abgelaufen" in r["message"]
+    assert not r["ok"] and schluessel(r["message"]) == "srv.token.stale"
 
 
 def test_http_token_fehlende_rechte_werden_benannt(server):
     _, port = server
     code, r = call(port, "POST", "/api/token",
                    {"token": make_jwt(exp=time.time() + 3600, scp="Mail.Read")})
-    assert r["ok"] and "Calendars.Read" in r["message"]
+    assert r["ok"] and schluessel(r["message"]) == "srv.token.saved.scopes"
+    assert "Calendars.Read" in werte(r["message"])["list"]
 
 
 def test_http_token_muell_wird_abgelehnt(server):
@@ -1154,7 +1156,7 @@ def test_http_zeitplan_speichern(server, sandbox):
 def test_http_mcp_ohne_index(server):
     _, port = server
     code, r = call(port, "POST", "/api/mcp", {"action": "start"})
-    assert not r["ok"] and "Kein Index" in r["message"]
+    assert not r["ok"] and schluessel(r["message"]) == "srv.mcp.noindex"
     assert call(port, "POST", "/api/mcp", {"action": "quatsch"})[1]["ok"] is False
 
 
@@ -1168,7 +1170,7 @@ def test_http_log(server):
 
 def test_http_kalender_fehlt(server):
     code, r = call(server[1], "GET", "/api/calendar")
-    assert code == 404 and r["recs"] == [] and "Kalenderdaten fehlen" in r["error"]
+    assert code == 404 and r["recs"] == [] and schluessel(r["error"]) == "cal.missing"
 
 
 def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
@@ -1215,7 +1217,7 @@ def test_kalender_puffer_erkennt_neue_daten(sandbox, with_ollama):
 def test_http_suche_ohne_index_meldet_das(server):
     _, port = server
     code, r = call(port, "GET", "/api/search?q=test")
-    assert code == 200 and r["hits"] == [] and "Kein Index" in r["error"]
+    assert code == 200 and r["hits"] == [] and schluessel(r["error"]) == "srv.noindex"
 
 
 def test_http_ollama_recheck(server):
@@ -1470,7 +1472,11 @@ var modal = {
 knoten['modal'] = modal;
 
 global.document = {
+  documentElement: {},
+  title: '',
   getElementById: function(id){
+    // Die Seite liest ihre Texte aus diesem eingebetteten JSON-Block.
+    if(id === 'i18n') return {textContent: global.I18N_ROH};
     // Kindknoten des Assistenten gibt es nur, solange sie in dessen HTML stehen.
     if(id === 'tok' && !knoten['tok']){
       if(modalRoh.innerHTML.indexOf('id="tok"') < 0) return null;
@@ -1496,8 +1502,7 @@ global.alert = function(){};
 
 GRUNDZUSTAND = """
 S = {token: {present: true, valid: true, expired: false, missing: [],
-             account: 'a@example.com', expires_in_minutes: 620,
-             expires_text: '10 Std. 20 Min.'},
+             account: 'a@example.com', expires_in_minutes: 620},
      ollama: {running: true, has_model: false, model: 'bge-m3', models: []},
      ollama_hint: {os: 'macOS', steps: ['Schritt eins'], brew: 'brew install ollama'},
      scopes_needed: ['Mail.Read', 'User.Read'],
@@ -1619,6 +1624,7 @@ function statusGeruest(){
           mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null,
                 config: {http: {}, stdio: {}}},
           config: {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
+                   language: 'auto',
                    schedule: {enabled: false, interval_minutes: 60,
                               outlook: true, teams: true, index: true}},
           calendar: {exists: false, built_at: null},
@@ -1648,14 +1654,21 @@ def test_seite_enthaelt_gueltiges_javascript():
         os.unlink(pfad)
 
 
-def _in_node(pruefung):
-    """Das eingebettete JavaScript samt Prüfcode in node ausführen."""
+def _in_node(pruefung, sprache="de"):
+    """Das eingebettete JavaScript samt Prüfcode in node ausführen.
+
+    Mit den echten Sprachdaten: so prüfen die Tests denselben Weg, den der
+    Browser geht – Texte kommen aus lang/*.json, nicht aus dem Quelltext.
+    """
     node = shutil.which("node")
     if not node:
         pytest.skip("node nicht vorhanden")
+    kopf = ("global.I18N_ROH = " + json.dumps(json.dumps(
+        {"lang": sprache, "strings": i18n.strings(sprache),
+         "languages": i18n.available()}, ensure_ascii=False)) + ";\n")
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                      encoding="utf-8") as f:
-        f.write(DOM_STUMMEL + _seiten_js() + STATUS_GERUEST + pruefung)
+        f.write(kopf + DOM_STUMMEL + _seiten_js() + STATUS_GERUEST + pruefung)
         pfad = f.name
     try:
         r = subprocess.run([node, pfad], capture_output=True, text=True, timeout=60)

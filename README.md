@@ -31,6 +31,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `rag_server.py` | Local RAG web UI with AI answers (fully offline via Ollama) |
 | `corpus.py` | Shared export parsing (used internally) |
 | `settings.py` | `app_config.json` as a defaults layer for every script (used internally) |
+| `i18n.py`, `lang/` | UI translations (German, English, French) |
 | `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
 Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
@@ -66,7 +67,8 @@ Data does **not** live inside the app, so updates never touch it:
 tab. A mailbox can run to tens of gigabytes — for another disk, start with
 `--data-dir FOLDER` or set `OFFICE365_DATA_DIR`.
 
-Ollama stays optional: without it everything works except *semantic* search.
+Ollama stays optional: without it everything works except *semantic* search. The
+interface follows your browser's language (German, English, French).
 
 ---
 
@@ -77,8 +79,8 @@ python3 app.py                         # → opens http://127.0.0.1:8700 in your
 ```
 
 The same thing the bundles run, straight from the source tree. One command, one
-window, no terminal work afterwards. The UI is German (like the search page); the
-underlying scripts are unchanged and still work on their own.
+window, no terminal work afterwards. The underlying scripts are unchanged and
+still work on their own.
 
 **Token assistant.** The app never signs you in — you fetch the access token
 yourself in the Graph Explorer and paste it in. It reads the token's `exp` and
@@ -140,6 +142,19 @@ rebuild sets existing ones aside by content hash instead of discarding them.
 
 **MCP.** Start/stop `mcp_server.py` from the UI and copy the config snippet for
 Claude Code or Claude Desktop. Quitting the app also shuts the MCP server down.
+
+**Languages.** The interface ships in German, English and French and picks the
+browser's language by default (`Accept-Language`), overridable in the settings
+tab. Each language is one file in [`lang/`](lang/) — drop in a `xx.json` with a
+`_meta` block and it appears in the picker, nothing to register. Missing keys
+fall back to German rather than rendering blank, so a partial translation is
+usable from the first line.
+
+Only the app's own interface is translated, including the messages it writes to
+its log: those are stored as keys and rendered on display, so switching language
+also re-renders what is already in the log. What the export scripts print to
+their console passes through untouched — they are standalone tools with their own
+docs. Exported content is never touched at all.
 
 **Settings.** The *Einstellungen* tab exposes every option the individual scripts
 have — the Teams image and channel switches, Outlook's hidden folders and its

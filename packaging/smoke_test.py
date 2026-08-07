@@ -14,12 +14,14 @@ schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
      eigenen Unterprozess, also die komplette Kette aus Punkt 1.
   5. Die eingebettete Suche findet den indizierten Inhalt (SQLite/FTS5 an Bord).
   6. Der MCP-Server startet (uvicorn/starlette/pydantic vollständig gebündelt).
+  7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
 
 Ohne Netz, ohne Graph, ohne Ollama – nur das Bündel selbst.
 """
 
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -132,6 +134,22 @@ def pruefe(exe, daten, port, proc):
         raise Fehler("Die App hält sich nicht für ein Bündel (frozen == False).")
     if Path(st["data_dir"]).resolve() != Path(daten).resolve():
         raise Fehler(f"Falscher Datenordner: {st['data_dir']} statt {daten}")
+
+    schritt("Sprachdateien (Browsersprache und Umschaltung)")
+    for kopf, erwartet in (("de-DE,de;q=0.9", "de"), ("fr-CH,fr;q=0.9", "fr"),
+                           ("en-US,en;q=0.9", "en")):
+        req = urllib.request.Request(f"{basis}/", headers={"Accept-Language": kopf})
+        with urllib.request.urlopen(req, timeout=10) as r:                # noqa: S310
+            seite = r.read().decode("utf-8")
+        m = re.search(r'id="i18n">(.*?)</script>', seite, re.S)
+        if not m:
+            raise Fehler("Die Seite enthält keine Sprachdaten.")
+        sprache = json.loads(m.group(1).replace("\\u003c", "<"))
+        if sprache.get("lang") != erwartet:
+            raise Fehler(f"Accept-Language {kopf} ergab {sprache.get('lang')}, "
+                         f"erwartet {erwartet}")
+        if not sprache.get("strings", {}).get("nav.export"):
+            raise Fehler(f"Sprache {erwartet} hat keine Texte im Bündel.")
 
     schritt("Volltextindex bauen (Unterprozess = die gebündelte Datei selbst)")
     antwort = sende(f"{basis}/api/run",

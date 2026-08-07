@@ -51,6 +51,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import i18n
 import settings
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage; UTF-8
@@ -154,6 +155,7 @@ DEFAULT_CONFIG = {
     "embed_model": "bge-m3",
     "mcp_port": 8365,
     "mcp_autostart": True,
+    "language": "auto",   # "auto" = Browsersprache, sonst ein Code aus lang/
     "schedule": {
         "enabled": False,
         "interval_minutes": 60,
@@ -313,21 +315,6 @@ def decode_jwt(token):
         return {}
 
 
-def format_remaining(minutes):
-    """Restlaufzeit lesbar machen. "620 Min." beantwortet keine Frage."""
-    if minutes is None:
-        return "unbekannte Restlaufzeit"
-    if minutes < 0:
-        return "abgelaufen"
-    if minutes < 60:
-        return f"{minutes} Min."
-    std, rest = divmod(minutes, 60)
-    if std < 24:
-        return f"{std} Std. {rest} Min." if rest else f"{std} Std."
-    tage, std = divmod(std, 24)
-    return f"{tage} Tage {std} Std." if std else f"{tage} Tage"
-
-
 def token_status(token, now=None, needed=()):
     """Zustand des Tokens für die Oberfläche.
 
@@ -340,7 +327,7 @@ def token_status(token, now=None, needed=()):
     out = {"present": bool(token), "valid": False, "expired": False,
            "readable": False, "account": None, "name": None,
            "expires_at": None, "expires_in_minutes": None,
-           "expires_text": None, "scopes": [], "missing": []}
+           "scopes": [], "missing": []}
     if not token:
         return out
     claims = decode_jwt(token)
@@ -356,7 +343,6 @@ def token_status(token, now=None, needed=()):
     if isinstance(exp, (int, float)):
         out["expires_at"] = datetime.fromtimestamp(exp, UTC).isoformat()
         out["expires_in_minutes"] = int((exp - now) // 60)
-        out["expires_text"] = format_remaining(out["expires_in_minutes"])
         out["expired"] = exp <= now
     out["valid"] = not out["expired"]
     # Fehlende Rechte nur melden, wenn der scp-Claim wirklich gelesen wurde –
@@ -410,25 +396,26 @@ def check_ollama(url, model, timeout=1.5):
 
 
 def ollama_hint():
-    """Installationshinweis passend zum Betriebssystem."""
+    """Installationshinweis passend zum Betriebssystem – als Textschlüssel.
+
+    Die Sätze stehen in den Sprachdateien; hier wird nur entschieden, welche
+    Schritte gelten und mit welchen Werten sie zu füllen sind.
+    """
     sysname = platform.system()
     if sysname == "Darwin":
-        return {"os": "macOS",
-                "steps": [f"Ollama von {OLLAMA_SITE} laden und in „Programme“ ziehen",
-                          "Ollama einmal starten (Symbol in der Menüleiste)",
-                          "Danach hier auf „Erneut prüfen“ klicken"],
-                "brew": "brew install --cask ollama"}
+        return {"os": "macOS", "url": OLLAMA_SITE,
+                "steps": ["wizard.ollama.step.mac1", "wizard.ollama.step.mac2",
+                          "wizard.ollama.step.recheck"],
+                "pkg": "brew install --cask ollama"}
     if sysname == "Windows":
-        return {"os": "Windows",
-                "steps": [f"OllamaSetup.exe von {OLLAMA_SITE} laden und ausführen",
-                          "Ollama startet danach automatisch im Hintergrund",
-                          "Danach hier auf „Erneut prüfen“ klicken"],
-                "brew": "winget install Ollama.Ollama"}
-    return {"os": sysname or "Linux",
-            "steps": ["curl -fsSL https://ollama.com/install.sh | sh",
-                      "ollama serve  (falls kein Dienst läuft)",
-                      "Danach hier auf „Erneut prüfen“ klicken"],
-            "brew": None}
+        return {"os": "Windows", "url": OLLAMA_SITE,
+                "steps": ["wizard.ollama.step.win1", "wizard.ollama.step.win2",
+                          "wizard.ollama.step.recheck"],
+                "pkg": "winget install Ollama.Ollama"}
+    return {"os": sysname or "Linux", "url": OLLAMA_SITE,
+            "steps": ["wizard.ollama.step.linux1", "wizard.ollama.step.linux2",
+                      "wizard.ollama.step.recheck"],
+            "pkg": None}
 
 
 # --------------------------------------------------------------------------
@@ -538,7 +525,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if outlook:
         cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
         steps.append({
-            "key": "outlook", "label": "Outlook-Export",
+            "key": "outlook", "label": "job.step.outlook",
             "argv": script_argv("outlook_export", cfg["outlook_dir"]),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
@@ -550,7 +537,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         cats = _clean_categories(cfg["teams_categories"],
                                  ["1on1", "group", "meeting", "channels"])
         steps.append({
-            "key": "teams", "label": "Teams-Export",
+            "key": "teams", "label": "job.step.teams",
             "argv": script_argv("teams_export", cfg["teams_dir"]),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "EMBED_IMAGES": _flag(cfg.get("embed_images")),
@@ -567,7 +554,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             argv.append("--no-embeddings")
         steps.append({
             "key": "index",
-            "label": "Index" + ("" if embeddings else " (nur Volltext)"),
+            "label": "job.step.index" if embeddings else "job.step.index.lexical",
             "argv": argv, "env": dict(base_env),
         })
     if calendar:
@@ -575,14 +562,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         # und Absagemails zurückzuholen – bei 45.000 Mails ein paar Minuten.
         # Deshalb ein eigener Schritt mit Ergebnisdatei und nicht auf Zuruf.
         steps.append({
-            "key": "calendar", "label": "Kalender & Kontakte",
+            "key": "calendar", "label": "job.step.calendar",
             "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"],
                                 "--json", str(Path(cfg["store_dir"]) / "calendar.json")),
             "env": dict(base_env),
         })
     if search_page:
         steps.append({
-            "key": "search_page", "label": "Portable Suchseite",
+            "key": "search_page", "label": "job.step.searchpage",
             "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"]),
             "env": dict(base_env),
         })
@@ -626,11 +613,22 @@ class JobRunner:
 
     # -- Protokoll ---------------------------------------------------------
     def log(self, text, level="info"):
+        """Rohe Protokollzeile – so, wie die Export-Skripte sie ausgeben."""
         with self.lock:
             self.seq += 1
             self.lines.append({"n": self.seq, "level": level,
                                "t": datetime.now().strftime("%H:%M:%S"),
                                "text": text})
+
+    def logk(self, key, level="info", **vars):
+        """Protokollzeile als Textschlüssel; übersetzt wird erst beim Anzeigen.
+
+        Getrennt von log(), damit nichts geraten werden muss: eine Skriptzeile
+        kann aussehen wie ein Schlüssel. Und erst beim Anzeigen zu übersetzen
+        heißt, dass ein Sprachwechsel auch das vorhandene Protokoll umstellt,
+        statt es in der Sprache von damals einzufrieren.
+        """
+        self.log({"k": key, "v": vars}, level)
 
     def log_since(self, since):
         with self.lock:
@@ -666,30 +664,32 @@ class JobRunner:
         proc = self.proc
         if proc and proc.poll() is None:
             proc.terminate()
-            self.log("Abbruch angefordert – laufender Schritt wird beendet.", "warn")
+            self.logk("srv.job.cancel", "warn")
             return True
         return False
 
     def _run(self, steps, label):
-        self.log(f"▶ {label}", "head")
+        self.logk("srv.job.start", "head", label=label)
         ok = True
         detail = ""
         for i, step in enumerate(steps):
             if self.cancelled:
-                ok, detail = False, "abgebrochen"
+                ok, detail = False, {"k": "srv.job.cancelled", "v": {}}
                 break
             self.job = {**self.job, "step": step["label"], "index": i}
-            self.log(f"— {step['label']} —", "head")
+            self.logk("srv.job.step", "head", step=step["label"])
             code = self._exec(step)
             if code != 0:
                 ok = False
-                detail = (f"{step['label']}: Abbruch" if self.cancelled
-                          else f"{step['label']} endete mit Code {code}")
-                self.log(f"✗ {detail}", "err")
+                detail = ({"k": "srv.job.aborted", "v": {"step": step["label"]}}
+                          if self.cancelled else
+                          {"k": "srv.job.exitcode",
+                           "v": {"step": step["label"], "code": code}})
+                self.logk("srv.job.stepfail", "err", detail=detail)
                 break
-            self.log(f"✓ {step['label']} fertig", "ok")
+            self.logk("srv.job.stepdone", "ok", step=step["label"])
         if ok:
-            self.log(f"✓ {label} abgeschlossen", "ok")
+            self.logk("srv.job.done", "ok", label=label)
         self.last = {"label": label, "ok": ok, "detail": detail,
                      "finished": datetime.now().isoformat(timespec="seconds")}
         self.job = None
@@ -703,7 +703,7 @@ class JobRunner:
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT)
         except OSError as e:
-            self.log(f"Start fehlgeschlagen: {e}", "err")
+            self.logk("srv.job.spawnfail", "err", error=str(e))
             return -1
         for line in _stream_lines(self.proc.stdout):
             if _TOKEN_DEAD.search(line):
@@ -779,7 +779,8 @@ class Scheduler(threading.Thread):
             try:
                 self._tick()
             except Exception as e:
-                self.app.jobs.log(f"Zeitplan: {type(e).__name__}: {e}", "err")
+                self.app.jobs.logk("srv.sched.error", "err",
+                                   error=f"{type(e).__name__}: {e}")
 
     def _tick(self):
         plan = self.plan
@@ -791,8 +792,7 @@ class Scheduler(threading.Thread):
         token = read_token()
         st = token_status(token)
         if not st["valid"]:
-            self.app.jobs.log("Zeitplan übersprungen: kein gültiger Token – "
-                              "bitte im Assistenten einen neuen einfügen.", "warn")
+            self.app.jobs.logk("srv.sched.notoken", "warn")
             self.app.jobs.token_expired = True
             return
         ok, why = self.app.launch(outlook=plan.get("outlook", True),
@@ -802,9 +802,9 @@ class Scheduler(threading.Thread):
                                   # Daten dafür kommen ausschließlich von dort.
                                   calendar=bool(plan.get("outlook", True)
                                                 and plan.get("calendar", True)),
-                                  label="Geplanter Lauf")
+                                  label="job.scheduled")
         if not ok:
-            self.app.jobs.log(f"Zeitplan übersprungen: {why}", "warn")
+            self.app.jobs.logk("srv.sched.skipped", "warn", why=why)
 
 
 # --------------------------------------------------------------------------
@@ -851,10 +851,10 @@ class McpProcess:
 
     def start(self, cfg):
         if self.running:
-            return True, "läuft bereits"
+            return True, {"k": "srv.mcp.running", "v": {}}
         db = BASE / cfg["store_dir"] / "corpus.db"
         if not db.exists():
-            self.error = "Kein Index vorhanden – MCP kann nichts ausliefern."
+            self.error = {"k": "srv.mcp.noindex", "v": {}}
             return False, self.error
         argv = script_argv("mcp_server",
                            "--store", cfg["store_dir"], "--teams", cfg["teams_dir"],
@@ -867,21 +867,21 @@ class McpProcess:
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, bufsize=0)
         except OSError as e:
-            self.error = f"Start fehlgeschlagen: {e}"
+            self.error = {"k": "srv.mcp.spawnfail", "v": {"error": str(e)}}
             return False, self.error
         self.port = cfg["mcp_port"]
         self.error = None
         threading.Thread(target=self._pump, args=(self.proc,), daemon=True).start()
-        self.jobs.log(f"MCP-Server gestartet auf Port {self.port}.", "ok")
-        return True, "gestartet"
+        self.jobs.logk("srv.mcp.started", "ok", port=self.port)
+        return True, {"k": "srv.mcp.startok", "v": {}}
 
     def _pump(self, proc):
         for line in _stream_lines(proc.stdout):
             self.jobs.log(f"[MCP] {line}")
         code = proc.wait()
         if proc is self.proc and code not in (0, -15):
-            self.error = f"MCP-Server beendet (Code {code})"
-            self.jobs.log(self.error, "err")
+            self.error = {"k": "srv.mcp.exit", "v": {"code": code}}
+            self.jobs.logk("srv.mcp.exit", "err", code=code)
 
     def stop(self):
         if not self.running:
@@ -891,7 +891,7 @@ class McpProcess:
             self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
-        self.jobs.log("MCP-Server gestoppt.", "warn")
+        self.jobs.logk("srv.mcp.stopped", "warn")
         return True
 
 
@@ -932,13 +932,13 @@ class SearchBridge:
                 return self.module
             db = BASE / cfg["store_dir"] / "corpus.db"
             if not db.exists():
-                self.error = "Kein Index vorhanden."
+                self.error = {"k": "srv.noindex", "v": {}}
                 self.module = None
                 return None
             try:
                 import mcp_server
             except ImportError as e:
-                self.error = f"mcp_server nicht ladbar ({e}) – 'pip install -r requirements.txt'?"
+                self.error = {"k": "srv.nomcpmodule", "v": {"error": str(e)}}
                 self.module = None
                 return None
             try:
@@ -947,7 +947,7 @@ class SearchBridge:
                 con.close()
                 np, V = mcp_server._open_vectors(str(BASE / cfg["store_dir"]), n)
             except sqlite3.Error as e:
-                self.error = f"Index unlesbar: {e}"
+                self.error = {"k": "srv.badindex", "v": {"error": str(e)}}
                 self.module = None
                 return None
             mcp_server.STATE.update(
@@ -998,20 +998,21 @@ class App:
         """
         st = token_status(read_token(), needed=self.selected_categories())
         if not st["present"]:
-            return self.jobs.log("Kein Token hinterlegt – der Assistent führt "
-                                 "durch die Beschaffung.", "warn")
+            return self.jobs.logk("srv.token.none", "warn")
         if st["expired"]:
-            return self.jobs.log("Der hinterlegte Token ist abgelaufen – der "
-                                 "Assistent öffnet sich.", "warn")
-        wer = f" für {st['account']}" if st["account"] else ""
-        wie_lange = (f", noch {st['expires_text']} gültig" if st["expires_text"]
-                     else ", Laufzeit unbekannt")
-        msg = f"Token gefunden{wer}{wie_lange}."
+            return self.jobs.logk("srv.token.expired", "warn")
+        # Vier vollständige Sätze statt zusammengesetzter Bruchstücke: was in
+        # der einen Sprache aneinandergehängt funktioniert, ergibt in der
+        # nächsten keinen Satz mehr.
+        konto, minuten = st["account"], st["expires_in_minutes"]
+        schluessel = ("srv.token.found" if konto and minuten is not None else
+                      "srv.token.found.unknown" if konto else
+                      "srv.token.found.nowho" if minuten is not None else
+                      "srv.token.found.plain")
+        self.jobs.logk(schluessel, "ok", account=konto or "", minutes=minuten)
         if st["missing"]:
-            msg += (" Es fehlen Berechtigungen: " + ", ".join(st["missing"])
-                    + " – oben auf die Token-Kachel klicken.")
-            return self.jobs.log(msg, "warn")
-        return self.jobs.log(msg, "ok")
+            self.jobs.logk("srv.token.scopes", "warn", list=", ".join(st["missing"]))
+        return None
 
     def status(self):
         token = read_token()
@@ -1077,26 +1078,24 @@ class App:
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, search_page=False, label="Lauf"):
         if self.jobs.busy:
-            return False, "Es läuft bereits ein Auftrag."
+            return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         token = read_token() if (outlook or teams) else ""
         if (outlook or teams) and not token:
-            return False, "Kein Token hinterlegt – bitte den Assistenten durchlaufen."
+            return False, {"k": "srv.notoken", "v": {}}
         if index and not embeddings:
-            grund = ("Auf Wunsch ohne Embeddings" if gewaehlt
-                     else "Ollama nicht verfügbar")
-            self.jobs.log(f"{grund} – der Index wird als reiner Volltextindex "
-                          "gebaut (Suche ohne semantische Treffer).", "warn")
+            self.jobs.logk("srv.lexical.choice" if gewaehlt
+                           else "srv.lexical.noollama", "warn")
         steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
                             calendar=calendar, embeddings=embeddings,
                             search_page=search_page, token=token)
         if not steps:
-            return False, "Nichts ausgewählt."
+            return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
-            return False, "Auftrag konnte nicht gestartet werden."
-        return True, "gestartet"
+            return False, {"k": "srv.nostart", "v": {}}
+        return True, {"k": "srv.mcp.startok", "v": {}}
 
     def autostart_mcp(self):
         """Beim App-Start: MCP hochfahren, wenn ein Index da ist.
@@ -1108,7 +1107,7 @@ class App:
             return
         ok, why = self.mcp.start(self.cfg)
         if not ok:
-            self.jobs.log(f"MCP nicht gestartet: {why}", "warn")
+            self.jobs.logk("srv.mcp.notstarted", "warn", why=why)
 
     def shutdown(self):
         self.scheduler.stop_event.set()
@@ -1179,7 +1178,7 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         try:
             if u.path in ("/", "/index.html"):
-                return self._send(200, PAGE, "text/html; charset=utf-8")
+                return self._send(200, self._page(), "text/html; charset=utf-8")
             if u.path == "/api/status":
                 return self._json(app.status())
             if u.path == "/api/log":
@@ -1223,7 +1222,7 @@ class Handler(BaseHTTPRequestHandler):
                     index=bool(data.get("index")), calendar=bool(data.get("calendar")),
                     search_page=bool(data.get("search_page")),
                     embeddings=data.get("embeddings"),
-                    label=str(data.get("label") or "Lauf"))
+                    label=str(data.get("label") or "job.export"))
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
             if u.path == "/api/cancel":
                 return self._json({"ok": app.jobs.cancel()})
@@ -1243,23 +1242,34 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
 
     # -- Route-Implementierungen ------------------------------------------
+    def _page(self):
+        """Die Oberfläche mit ihren Texten ausliefern.
+
+        Die Sprache steht damit schon beim ersten Aufbau fest – nachzuladen
+        hieße, dass kurz die falsche Sprache zu sehen ist.
+        """
+        code = i18n.negotiate(self.app.cfg.get("language"),
+                              self.headers.get("Accept-Language"), RES)
+        nutzlast = json.dumps({"lang": code, "strings": i18n.strings(code, RES),
+                               "languages": i18n.available(RES)},
+                              ensure_ascii=False).replace("<", "\\u003c")
+        return PAGE.replace("/*__I18N__*/", nutzlast)
+
     def _save_token(self, data):
         token = normalize_token(data.get("token"))
         if not token:
-            return {"ok": False, "message": "Kein Token eingefügt."}
+            return {"ok": False, "message": {"k": "srv.token.empty", "v": {}}}
         if len(token) < 40:
-            return {"ok": False, "message": "Das sieht nicht nach einem Access Token aus."}
+            return {"ok": False, "message": {"k": "srv.token.short", "v": {}}}
         write_token(token)
         self.app.jobs.token_expired = False
         st = token_status(token, needed=self.app.selected_categories())
         if st["expired"]:
-            return {"ok": False, "message": "Der Token ist bereits abgelaufen – "
-                                            "bitte einen frischen kopieren.", "token": st}
-        msg = "Token gespeichert."
-        if st["missing"]:
-            msg += (" Es fehlen noch Berechtigungen: " + ", ".join(st["missing"])
-                    + " – im Graph Explorer zustimmen und neu kopieren.")
-        self.app.jobs.log(msg, "ok")
+            return {"ok": False, "token": st,
+                    "message": {"k": "srv.token.stale", "v": {}}}
+        msg = ({"k": "srv.token.saved.scopes", "v": {"list": ", ".join(st["missing"])}}
+               if st["missing"] else {"k": "srv.token.saved", "v": {}})
+        self.app.jobs.log(msg, "warn" if st["missing"] else "ok")
         return {"ok": True, "message": msg, "token": st}
 
     def _save_config(self, data):
@@ -1289,6 +1299,13 @@ class Handler(BaseHTTPRequestHandler):
                 cfg[key] = bool(data[key])
         if "skip_folders" in data:
             cfg["skip_folders"] = _clean_folders(data["skip_folders"])
+        if "language" in data:
+            # Nur bekannte Codes – ein Tippfehler sonst und die Oberfläche
+            # spräche für immer die Notsprache.
+            gewuenscht = str(data["language"] or "auto").strip().lower()
+            erlaubt = {e["code"] for e in i18n.available(RES)} | {"auto"}
+            if gewuenscht in erlaubt:
+                cfg["language"] = gewuenscht
         save_config(cfg)
         return {"ok": True, "config": cfg}
 
@@ -1304,9 +1321,9 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         save_config(self.app.cfg)
         self.app.scheduler.reset()
-        state = "aktiv" if plan["enabled"] else "aus"
-        self.app.jobs.log(f"Zeitplan {state} (alle {plan['interval_minutes']} Minuten).",
-                          "info")
+        self.app.jobs.logk("srv.sched.state", "info", min=plan["interval_minutes"],
+                           state={"k": "srv.sched.on" if plan["enabled"]
+                                  else "srv.sched.off", "v": {}})
         return {"ok": True, "schedule": plan,
                 "next": self.app.scheduler.next_due()}
 
@@ -1318,7 +1335,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == "stop":
             self.app.mcp.stop()
             return {"ok": True, "mcp": self.app.mcp.status(self.app.cfg)}
-        return {"ok": False, "message": "action muss start oder stop sein."}
+        return {"ok": False, "message": {"k": "srv.mcp.badaction", "v": {}}}
 
     def _search(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -1361,8 +1378,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         roh, gz = self.app.calendar_payload()
         if roh is None:
-            return self._json({"error": "Kalenderdaten fehlen – im Export-Reiter "
-                                        "„Kalender & Kontakte aufbauen“ starten.",
+            return self._json({"error": {"k": "cal.missing", "v": {}},
                                "recs": []}, 404)
         akzeptiert = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
         if akzeptiert:
@@ -1380,7 +1396,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return self._send(503, "Kein Index geladen.", "text/plain; charset=utf-8")
+            return self._send(503, "no index loaded", "text/plain; charset=utf-8")
         target, err = mod._resolve_source(q.get("root", ""), q.get("path", ""))
         if err:
             return self._send(404, err, "text/plain; charset=utf-8")
@@ -1647,7 +1663,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 </head>
 <body>
 <header>
-  <h1>Microsoft-365-Archiv</h1>
+  <h1 data-i18n="app.title">Microsoft-365-Archiv</h1>
   <div class="pills">
     <button class="pill" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Token</span></button>
     <button class="pill" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">Ollama</span></button>
@@ -1657,140 +1673,138 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 </header>
 
 <nav>
-  <button data-tab="export" class="on" onclick="tab('export')">Export</button>
-  <button data-tab="suche" onclick="tab('suche')">Suche</button>
-  <button data-tab="kalender" onclick="tab('kalender')">Kalender</button>
-  <button data-tab="adressbuch" onclick="tab('adressbuch')">Adressbuch</button>
-  <button data-tab="zeitplan" onclick="tab('zeitplan')">Zeitplan</button>
-  <button data-tab="mcp" onclick="tab('mcp')">MCP &amp; Claude</button>
-  <button data-tab="einstellungen" onclick="tab('einstellungen')">Einstellungen</button>
+  <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Export</button>
+  <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Suche</button>
+  <button data-tab="kalender" onclick="tab('kalender')" data-i18n="nav.calendar">Kalender</button>
+  <button data-tab="adressbuch" onclick="tab('adressbuch')" data-i18n="nav.book">Adressbuch</button>
+  <button data-tab="zeitplan" onclick="tab('zeitplan')" data-i18n="nav.schedule">Zeitplan</button>
+  <button data-tab="mcp" onclick="tab('mcp')" data-i18n="nav.mcp">MCP &amp; Claude</button>
+  <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
 </nav>
 
 <main>
 <section id="tab-export">
   <div class="card">
-    <h2>Was soll exportiert werden?</h2>
-    <p class="sub">Die Auswahl wird gespeichert und gilt auch für den Zeitplan. Jeder Lauf holt nur Neues – ein zweiter Lauf ist schnell.</p>
+    <h2 data-i18n="export.what">Was soll exportiert werden?</h2>
+    <p class="sub" data-i18n="export.what.sub">Die Auswahl wird gespeichert und gilt auch für den Zeitplan.</p>
     <div class="row" style="gap:36px;align-items:flex-start">
       <div>
-        <strong class="small">Outlook</strong>
+        <strong class="small" data-i18n="export.outlook">Outlook</strong>
         <div id="cat-outlook"></div>
       </div>
       <div>
-        <strong class="small">Teams</strong>
+        <strong class="small" data-i18n="export.teams">Teams</strong>
         <div id="cat-teams"></div>
       </div>
     </div>
     <p class="small muted" id="teams-note" style="margin-top:10px"></p>
     <div class="row" style="margin-top:14px">
-      <button class="act" id="btn-run" onclick="runExport()">Export starten</button>
-      <button class="ghost" onclick="run({index:true},'Nur indizieren')">Nur indizieren</button>
-      <button class="ghost" onclick="run({calendar:true},'Kalender &amp; Kontakte')">Kalender &amp; Kontakte aufbauen</button>
-      <button class="ghost" onclick="run({search_page:true},'Portable Suchseite')">Portable Suchseite erzeugen</button>
-      <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')">Abbrechen</button>
+      <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
+      <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
+      <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
+      <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
+      <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
     </div>
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
-    <p class="small muted">Alle Daten liegen in <code id="data-dir">…</code></p>
+    <p class="small muted"><span data-i18n="export.datadir">Alle Daten liegen in</span> <code id="data-dir">…</code></p>
   </div>
   <div class="card">
-    <h2>Protokoll</h2>
-    <p class="sub" id="job-line">Bereit.</p>
+    <h2 data-i18n="log.title">Protokoll</h2>
+    <p class="sub" id="job-line" data-i18n="log.ready">Bereit.</p>
     <div id="log"></div>
   </div>
 </section>
 
 <section id="tab-suche" class="hide">
   <div class="card">
-    <h2>Suche</h2>
+    <h2 data-i18n="nav.search">Suche</h2>
     <p class="sub" id="search-sub"></p>
     <div class="row">
-      <input type="text" id="q" placeholder="Suchbegriff oder Frage" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')doSearch(0)">
-      <button class="act" onclick="doSearch(0)">Suchen</button>
+      <input type="text" id="q" data-i18n-ph="search.query.ph" placeholder="Suchbegriff oder Frage" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')doSearch(0)">
+      <button class="act" onclick="doSearch(0)" data-i18n="search.go">Suchen</button>
     </div>
     <div class="row" style="margin-top:10px">
-      <input type="text" id="f-person" placeholder="Person" style="width:180px">
+      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person" style="width:180px">
       <select id="f-source">
-        <option value="all">Alle Quellen</option><option value="teams">Teams</option>
-        <option value="outlook">Mail</option><option value="kalender">Kalender</option>
-        <option value="kontakte">Kontakte</option>
+        <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
+        <option value="outlook" data-i18n="search.source.outlook">Mail</option>
+        <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
+        <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
       </select>
       <input type="date" id="f-from"><input type="date" id="f-to">
     </div>
   </div>
-  <div class="card"><div id="results" class="muted small">Noch keine Suche.</div>
+  <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
 </section>
 
 <section id="tab-kalender" class="hide">
   <div class="card">
     <div class="calbar">
-      <span class="chip on" data-mode="week">Woche</span>
-      <span class="chip" data-mode="month">Monat</span>
-      <span class="chip" data-mode="rebuilt">Rekonstruiert</span>
+      <span class="chip on" data-mode="week" data-i18n="cal.week">Woche</span>
+      <span class="chip" data-mode="month" data-i18n="cal.month">Monat</span>
+      <span class="chip" data-mode="rebuilt" data-i18n="cal.rebuilt">Rekonstruiert</span>
       <span id="kalNav">
         <button class="ghost" id="kalPrev" style="padding:6px 12px">‹</button>
-        <button class="ghost" id="kalToday" style="padding:6px 12px">Heute</button>
+        <button class="ghost" id="kalToday" style="padding:6px 12px" data-i18n="cal.today">Heute</button>
         <button class="ghost" id="kalNext" style="padding:6px 12px">›</button>
       </span>
       <span id="kalTitle"></span>
       <span class="legend" id="kalLegend">
-        <span><i style="background:var(--ev-ok)"></i>Bestätigt</span>
-        <span><i style="background:var(--ev-warn)"></i>Vorläufig</span>
-        <span><i style="background:var(--ev-bad)"></i>Abgesagt</span>
-        <span><i style="background:var(--ev-gone)"></i>Rekonstruiert</span>
+        <span><i style="background:var(--ev-ok)"></i><span data-i18n="cal.legend.confirmed">Bestätigt</span></span>
+        <span><i style="background:var(--ev-warn)"></i><span data-i18n="cal.legend.tentative">Vorläufig</span></span>
+        <span><i style="background:var(--ev-bad)"></i><span data-i18n="cal.legend.cancelled">Abgesagt</span></span>
+        <span><i style="background:var(--ev-gone)"></i><span data-i18n="cal.legend.rebuilt">Rekonstruiert</span></span>
       </span>
     </div>
     <p class="small muted" id="kalStats"></p>
-    <div id="kalBox"><p class="hint">Wird geladen…</p></div>
+    <div id="kalBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
   </div>
 </section>
 
 <section id="tab-adressbuch" class="hide">
   <div class="card">
     <div class="row">
-      <input type="text" id="kbQ" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:240px">
+      <input type="text" id="kbQ" data-i18n-ph="book.search.ph" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:240px">
       <span class="small muted" id="kbStats"></span>
     </div>
   </div>
-  <div class="card"><div id="kbBox"><p class="hint">Wird geladen…</p></div></div>
+  <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
 </section>
 
 <section id="tab-zeitplan" class="hide">
   <div class="card">
-    <h2>Regelmäßig exportieren</h2>
-    <p class="sub">Läuft nur, solange dieses Fenster bzw. die App geöffnet ist. Nach jedem Export wird auf Wunsch direkt neu indiziert – für die Suche hier und für den MCP-Server.</p>
-    <label class="chk"><input type="checkbox" id="s-enabled"> Zeitplan aktiv</label>
+    <h2 data-i18n="sched.title">Regelmäßig exportieren</h2>
+    <p class="sub" data-i18n="sched.sub">Läuft nur, solange die App geöffnet ist.</p>
+    <label class="chk"><input type="checkbox" id="s-enabled"> <span data-i18n="sched.enabled">Zeitplan aktiv</span></label>
     <div class="row" style="margin:10px 0">
-      <label class="small">Alle <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> Minuten</label>
+      <label class="small"><span data-i18n="sched.every">Alle</span> <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> <span data-i18n="sched.minutes">Minuten</span></label>
     </div>
-    <label class="chk"><input type="checkbox" id="s-outlook"> Outlook exportieren</label>
-    <label class="chk"><input type="checkbox" id="s-teams"> Teams exportieren</label>
-    <label class="chk"><input type="checkbox" id="s-index"> Danach indizieren</label>
-    <label class="chk"><input type="checkbox" id="s-calendar"> Kalender &amp; Kontakte neu aufbauen (nur mit Outlook)</label>
+    <label class="chk"><input type="checkbox" id="s-outlook"> <span data-i18n="sched.outlook">Outlook exportieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-teams"> <span data-i18n="sched.teams">Teams exportieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-index"> <span data-i18n="sched.index">Danach indizieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-calendar"> <span data-i18n="sched.calendar">Kalender &amp; Kontakte neu aufbauen</span></label>
     <div class="row" style="margin-top:14px">
-      <button class="act" onclick="saveSchedule()">Zeitplan speichern</button>
+      <button class="act" onclick="saveSchedule()" data-i18n="sched.save">Zeitplan speichern</button>
       <span class="small muted" id="s-next"></span>
     </div>
-    <div class="banner warn" style="margin-top:14px">
-      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist – wie lange
-      das ist, gibt dein Tenant vor und steht oben auf der Token-Kachel. Läuft er
-      ab, überspringt der Zeitplan den nächsten Lauf und der Assistent meldet
-      sich; bereits Exportiertes bleibt erhalten.
+    <div class="banner warn" style="margin-top:14px" data-i18n="sched.token.note">
+      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist.
     </div>
   </div>
 </section>
 
 <section id="tab-mcp" class="hide">
   <div class="card">
-    <h2>MCP-Server</h2>
-    <p class="sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
+    <h2 data-i18n="mcp.title">MCP-Server</h2>
+    <p class="sub" data-i18n="mcp.sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
     <div class="row">
       <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
       <span class="small" id="mcp-state"></span>
     </div>
-    <p class="small muted" style="margin-top:12px">In Claude Code eintragen (<code>.mcp.json</code> im Projekt):</p>
+    <p class="small muted" style="margin-top:12px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
     <pre id="mcp-json"></pre>
-    <p class="small muted">Claude Desktop akzeptiert nur <code>command</code>-Einträge – dafür statt der URL:</p>
+    <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
     <pre id="mcp-stdio"></pre>
   </div>
 </section>
@@ -1798,81 +1812,145 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 
 <section id="tab-einstellungen" class="hide">
   <div class="card">
-    <h2>Teams-Export</h2>
-    <p class="sub">Wirkt auf den nächsten Lauf. Bereits Exportiertes bleibt, wie es ist.</p>
-    <label class="chk"><input type="checkbox" id="c-embed_images"> Inline-Bilder in die HTML einbetten
-      <span class="small muted">– aus: kleinere Dateien, Bilder fehlen</span></label>
-    <label class="chk"><input type="checkbox" id="c-cache_images"> Bilder zwischenspeichern
-      <span class="small muted">– schnellerer Neu-Export, kostet Plattenplatz doppelt</span></label>
-    <label class="chk"><input type="checkbox" id="c-refresh_channels"> Kanäle bei jedem Lauf auf neue Antworten prüfen
-      <span class="small muted">– aus: Kanäle nur einmalig</span></label>
-    <label class="chk"><input type="checkbox" id="c-skip_empty_chats"> Chats ohne echte Nachricht überspringen
-      <span class="small muted">– nur Beitritte, Anrufe, Mitgliederwechsel</span></label>
+    <h2 data-i18n="settings.teams.title">Teams-Export</h2>
+    <p class="sub" data-i18n="settings.teams.sub">Wirkt auf den nächsten Lauf.</p>
+    <label class="chk"><input type="checkbox" id="c-embed_images"> <span data-i18n="settings.embed_images">Inline-Bilder einbetten</span>
+      <span class="small muted" data-i18n="settings.embed_images.hint">– aus: kleinere Dateien</span></label>
+    <label class="chk"><input type="checkbox" id="c-cache_images"> <span data-i18n="settings.cache_images">Bilder zwischenspeichern</span>
+      <span class="small muted" data-i18n="settings.cache_images.hint">– schnellerer Neu-Export</span></label>
+    <label class="chk"><input type="checkbox" id="c-refresh_channels"> <span data-i18n="settings.refresh_channels">Kanäle auf neue Antworten prüfen</span>
+      <span class="small muted" data-i18n="settings.refresh_channels.hint">– aus: Kanäle nur einmalig</span></label>
+    <label class="chk"><input type="checkbox" id="c-skip_empty_chats"> <span data-i18n="settings.skip_empty_chats">Chats ohne echte Nachricht überspringen</span>
+      <span class="small muted" data-i18n="settings.skip_empty_chats.hint">– nur Beitritte, Anrufe</span></label>
   </div>
 
   <div class="card">
-    <h2>Outlook-Export</h2>
-    <label class="chk"><input type="checkbox" id="c-include_hidden"> Versteckte Systemordner mitnehmen
-      <span class="small muted">– Conversation History, Sync Issues …</span></label>
-    <p class="sub" style="margin:12px 0 6px">Ordner, die die Standardauswahl auslässt (einer pro Zeile,
-      Groß-/Kleinschreibung egal). Leer = alle Ordner exportieren.</p>
+    <h2 data-i18n="settings.outlook.title">Outlook-Export</h2>
+    <label class="chk"><input type="checkbox" id="c-include_hidden"> <span data-i18n="settings.include_hidden">Versteckte Systemordner mitnehmen</span>
+      <span class="small muted" data-i18n="settings.include_hidden.hint">– Conversation History …</span></label>
+    <p class="sub" style="margin:12px 0 6px" data-i18n="settings.skip_folders.sub">Ordner, die die Standardauswahl auslässt.</p>
     <textarea id="c-skip_folders" style="min-height:120px"></textarea>
     <div class="row" style="margin-top:8px">
-      <button class="ghost" onclick="ordnerZuruecksetzen()">Auf Vorgabe zurücksetzen</button>
+      <button class="ghost" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
     </div>
   </div>
 
   <div class="card">
-    <h2>Geschwindigkeit</h2>
+    <h2 data-i18n="settings.speed.title">Geschwindigkeit</h2>
     <div class="row">
-      <label class="small">Parallele Downloads
+      <label class="small"><span data-i18n="settings.workers">Parallele Downloads</span>
         <input type="number" id="c-workers" min="1" max="8" style="width:80px"></label>
-      <span class="small muted">Graph erlaubt 4 gleichzeitige Anfragen je Postfach – mehr erzeugt
-        vor allem Drosselung. Bei wackliger Verbindung 1.</span>
+      <span class="small muted" data-i18n="settings.workers.hint">Graph erlaubt 4 gleichzeitige Anfragen je Postfach.</span>
     </div>
     <div class="row" style="margin-top:10px">
-      <label class="small">Embeddings je Anfrage
+      <label class="small"><span data-i18n="settings.batch">Embeddings je Anfrage</span>
         <input type="number" id="c-index_batch" min="1" max="512" style="width:90px"></label>
-      <span class="small muted">Größer = weniger Anfragen an Ollama, mehr Speicher je Anfrage.</span>
+      <span class="small muted" data-i18n="settings.batch.hint">Größer = weniger Anfragen an Ollama.</span>
     </div>
   </div>
 
   <div class="card">
-    <h2>Suche und MCP</h2>
+    <h2 data-i18n="settings.search.title">Suche und MCP</h2>
     <div class="row">
-      <label class="small">Ollama <input type="text" id="c-ollama" style="width:230px"></label>
-      <label class="small">Embedding-Modell <input type="text" id="c-embed_model" style="width:160px"></label>
+      <label class="small"><span data-i18n="settings.ollama">Ollama</span> <input type="text" id="c-ollama" style="width:230px"></label>
+      <label class="small"><span data-i18n="settings.embed_model">Embedding-Modell</span> <input type="text" id="c-embed_model" style="width:160px"></label>
     </div>
     <div class="row" style="margin-top:10px">
-      <label class="small">MCP-Port <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
-      <label class="chk"><input type="checkbox" id="c-mcp_autostart"> MCP-Server beim Start mitstarten</label>
+      <label class="small"><span data-i18n="settings.mcp_port">MCP-Port</span> <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
+      <label class="chk"><input type="checkbox" id="c-mcp_autostart"> <span data-i18n="settings.mcp_autostart">MCP-Server beim Start mitstarten</span></label>
     </div>
-    <p class="small muted" style="margin-top:8px">Ein geänderter Port wirkt erst, wenn der MCP-Server
-      neu gestartet wird – und die Einträge in Claude müssen dann mitgezogen werden.</p>
+    <p class="small muted" style="margin-top:8px" data-i18n="settings.mcp.note">Ein geänderter Port wirkt erst nach einem Neustart des MCP-Servers.</p>
   </div>
 
   <div class="card">
-    <h2>Ordner</h2>
-    <p class="sub">Relativ zum Datenordner, oder absolut. Ein Wechsel verschiebt nichts –
-      vorhandene Exporte bleiben liegen, wo sie sind.</p>
+    <h2 data-i18n="settings.dirs.title">Ordner</h2>
+    <p class="sub" data-i18n="settings.dirs.sub">Relativ zum Datenordner, oder absolut.</p>
     <div class="row">
-      <label class="small">Teams <input type="text" id="c-teams_dir" style="width:200px"></label>
-      <label class="small">Outlook <input type="text" id="c-outlook_dir" style="width:200px"></label>
-      <label class="small">Index <input type="text" id="c-store_dir" style="width:200px"></label>
+      <label class="small"><span data-i18n="settings.dir.teams">Teams</span> <input type="text" id="c-teams_dir" style="width:200px"></label>
+      <label class="small"><span data-i18n="settings.dir.outlook">Outlook</span> <input type="text" id="c-outlook_dir" style="width:200px"></label>
+      <label class="small"><span data-i18n="settings.dir.store">Index</span> <input type="text" id="c-store_dir" style="width:200px"></label>
     </div>
-    <p class="small muted" style="margin-top:10px">Datenordner: <code id="data-dir2">…</code></p>
+    <p class="small muted" style="margin-top:10px"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="settings.lang.title">Sprache</h2>
+    <p class="sub" data-i18n="settings.lang.sub">Gilt für diese Oberfläche.</p>
+    <select id="c-language" style="min-width:240px"></select>
   </div>
 
   <div class="row" style="margin-bottom:24px">
-    <button class="act" onclick="speichereEinstellungen()">Einstellungen speichern</button>
+    <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
     <span class="small" id="cfg-msg"></span>
   </div>
 </section>
 
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
+<script type="application/json" id="i18n">/*__I18N__*/</script>
 <script>
 var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null, wizardStand = null;
+
+/* ---------- Sprache ----------
+   Die Texte kommen fertig mit der Seite (window.I18N) – kein zusätzlicher
+   Abruf, und damit auch kein kurzes Aufblitzen der falschen Sprache. */
+var I18N = JSON.parse(document.getElementById('i18n').textContent);
+var STR = I18N.strings || {};
+var LOC = I18N.lang || 'de';
+function t(key, vars){
+  var text = STR[key];
+  if(text == null) return key;          // fehlender Schlüssel: sichtbar statt leer
+  if(vars) Object.keys(vars).forEach(function(k){
+    text = text.split('{' + k + '}').join(vars[k]);
+  });
+  return text;
+}
+/* Meldungen vom Server sind entweder roher Text (Ausgabe der Export-Skripte)
+   oder {k: Schlüssel, v: Werte}. Ein Wert darf selbst wieder so eine Meldung
+   sein – so bleibt "Zeitplan aktiv (alle 60 Minuten)" ein Satz statt drei
+   Bruchstücken. Enthält v ein `minutes`, wird daraus zusätzlich `rest` als
+   lesbare Dauer gebildet: die Sprache kennt nur die Oberfläche. */
+function mtext(m){
+  if(m == null) return '';
+  if(typeof m === 'string') return m;
+  if(!m.k) return String(m);
+  var v = {};
+  Object.keys(m.v || {}).forEach(function(k){ v[k] = mtext(m.v[k]); });
+  if(m.v && m.v.minutes !== undefined) v.rest = restzeit(m.v.minutes);
+  return t(m.k, v);
+}
+function restzeit(min){
+  if(min === null || min === undefined) return t('unit.unknown');
+  if(min < 0) return t('unit.expired');
+  if(min < 60) return t('unit.min', {n: min});
+  var h = Math.floor(min / 60), m = min % 60;
+  if(h < 24) return m ? t('unit.hoursmin', {h: h, m: m}) : t('unit.hours', {h: h});
+  var d = Math.floor(h / 24); h = h % 24;
+  return h ? t('unit.dayshours', {d: d, h: h}) : t('unit.days', {d: d});
+}
+function fuelleSprachen(){
+  var sel = el('c-language');
+  sel.innerHTML = '<option value="auto">' + esc(t('settings.lang.auto')) + '</option>' +
+    (I18N.languages || []).map(function(l){
+      return '<option value="' + esc(l.code) + '">' + esc(l.name) + '</option>';
+    }).join('');
+  sel.value = (S && S.config && S.config.language) || 'auto';
+}
+function uebersetzeSeite(){
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    el.textContent = t(el.dataset.i18n);
+  });
+  // Texte mit Auszeichnung (<code>, <strong>) – die Sprachdatei liefert HTML.
+  document.querySelectorAll('[data-i18n-html]').forEach(function(el){
+    el.innerHTML = t(el.dataset.i18nHtml);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  document.title = t('app.title');
+  document.documentElement.lang = LOC;
+}
+uebersetzeSeite();
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 function post(p, body){
@@ -1902,30 +1980,30 @@ function renderStatus(s){
   var first = S === null;
   S = s;
 
-  var t = s.token;
-  if(!t.present) setPill('token','err','Kein Token');
-  else if(t.expired) setPill('token','err','Token abgelaufen');
-  else if(t.missing && t.missing.length) setPill('token','warn','Token: Rechte fehlen');
-  else if(t.expires_text) setPill('token','ok','Token noch ' + t.expires_text);
-  else setPill('token','ok','Token gesetzt');
+  var tok = s.token;
+  if(!tok.present) setPill('token','err', t('pill.token.missing'));
+  else if(tok.expired) setPill('token','err', t('pill.token.expired'));
+  else if(tok.missing && tok.missing.length) setPill('token','warn', t('pill.token.scopes'));
+  else if(tok.expires_in_minutes != null) setPill('token','ok', t('pill.token.left', {rest: restzeit(tok.expires_in_minutes)}));
+  else setPill('token','ok', t('pill.token.set'));
 
   var o = s.ollama;
   setPill('ollama', o.running ? (o.has_model ? 'ok' : 'warn') : 'err',
-    o.running ? (o.has_model ? 'Ollama bereit' : 'Modell fehlt') : 'Ollama aus');
+    o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model')) : t('pill.ollama.off'));
 
   var st = s.store;
+  var anz = st.chunks.toLocaleString(LOC);
   setPill('index', st.exists ? (st.semantic ? 'ok' : 'warn') : 'err',
-    st.exists ? (st.chunks.toLocaleString('de-DE') + ' Chunks' + (st.semantic ? '' : ', nur Volltext'))
-              : 'Kein Index');
+    st.exists ? t(st.semantic ? 'pill.index.chunks' : 'pill.index.lexical', {n: anz})
+              : t('pill.index.none'));
 
-  setPill('mcp', s.mcp.running ? 'ok' : '', s.mcp.running ? 'MCP läuft' : 'MCP aus');
+  setPill('mcp', s.mcp.running ? 'ok' : '', t(s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'));
 
   /* Export-Tab */
   if(first){
-    fill('cat-outlook', [['mail','E-Mail'],['calendar','Kalender'],['contacts','Kontakte']],
-         s.config.outlook_categories, 'o');
-    fill('cat-teams', [['1on1','1:1-Chats'],['group','Gruppenchats'],
-         ['meeting','Meeting-Chats'],['channels','Team-Kanäle']], s.config.teams_categories, 't');
+    fill('cat-outlook', ['mail','calendar','contacts'], s.config.outlook_categories, 'o');
+    fill('cat-teams', ['1on1','group','meeting','channels'], s.config.teams_categories, 't');
+    fuelleSprachen();
     el('s-enabled').checked = s.config.schedule.enabled;
     el('s-interval').value = s.config.schedule.interval_minutes;
     el('s-outlook').checked = s.config.schedule.outlook;
@@ -1934,13 +2012,13 @@ function renderStatus(s){
     el('s-calendar').checked = s.config.schedule.calendar;
   }
   el('teams-note').textContent = checked('t').indexOf('channels') >= 0
-    ? 'Team-Kanäle: es werden alle Teams exportiert, in denen du Mitglied bist. Das kann lange dauern.'
-    : '';
+    ? t('export.channels.note') : '';
 
   var ex = s.exports, parts = [];
-  parts.push('Outlook: ' + (ex.outlook.last_run ? 'zuletzt ' + fmt(ex.outlook.last_run) : 'noch nie'));
-  parts.push('Teams: ' + (ex.teams.last_run ? 'zuletzt ' + fmt(ex.teams.last_run) : 'noch nie'));
-  parts.push('Index: ' + (st.exists ? fmt(st.built_at) : 'noch nie'));
+  function wann(iso){ return iso ? t('export.state.last', {when: fmt(iso)}) : t('export.state.never'); }
+  parts.push(t('export.state.outlook', {when: wann(ex.outlook.last_run)}));
+  parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
+  parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
   el('export-state').textContent = parts.join('  ·  ');
   el('data-dir').textContent = s.data_dir;
   el('data-dir2').textContent = s.data_dir;
@@ -1951,26 +2029,26 @@ function renderStatus(s){
   el('btn-cancel').classList.toggle('hide', !busy);
   if(busy){
     var j = s.jobs.job || {};
-    el('job-line').textContent = j.label + ' – ' + j.step +
-      ' (' + ((j.index || 0) + 1) + '/' + ((j.steps || []).length) + ')';
+    el('job-line').textContent = t('log.job.running', {label: mtext(j.label), step: mtext(j.step),
+      i: (j.index || 0) + 1, n: (j.steps || []).length});
   } else if(s.jobs.last){
-    el('job-line').textContent = (s.jobs.last.ok ? '✓ ' : '✗ ') + s.jobs.last.label +
-      ' – ' + fmt(s.jobs.last.finished) + (s.jobs.last.detail ? ' (' + s.jobs.last.detail + ')' : '');
+    var L = s.jobs.last;
+    el('job-line').textContent = L.ok
+      ? t('log.job.done', {label: mtext(L.label), when: fmt(L.finished)})
+      : t('log.job.failed', {label: mtext(L.label), when: fmt(L.finished), detail: mtext(L.detail)});
   }
 
   /* Zeitplan / MCP */
   el('s-next').textContent = s.schedule_enabled && s.schedule_next
-    ? 'Nächster Lauf: ' + fmt(s.schedule_next) : 'Kein Lauf geplant.';
-  el('mcp-toggle').textContent = s.mcp.running ? 'Stoppen' : 'Starten';
+    ? t('sched.next', {when: fmt(s.schedule_next)}) : t('sched.none');
+  el('mcp-toggle').textContent = t(s.mcp.running ? 'mcp.stop' : 'mcp.start');
   el('mcp-state').textContent = s.mcp.running
-    ? 'läuft auf ' + s.mcp.url + (st.semantic ? ' · hybride Suche' : ' · nur Volltextsuche')
-    : (s.mcp.error || 'gestoppt');
+    ? t('mcp.running', {url: s.mcp.url, mode: t(st.semantic ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')})
+    : (mtext(s.mcp.error) || t('mcp.stopped'));
   el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
   el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
-  el('search-sub').textContent = st.exists
-    ? (st.semantic ? 'Hybride Suche: Volltext (BM25) und Bedeutung (Embeddings) zusammengeführt.'
-                   : 'Nur Volltextsuche (BM25) – für die semantische Hälfte fehlen die Embeddings.')
-    : 'Es gibt noch keinen Index. Zuerst exportieren und indizieren.';
+  el('search-sub').textContent = t(st.exists
+    ? (st.semantic ? 'search.sub.hybrid' : 'search.sub.lexical') : 'search.sub.none');
 
   // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
   // und Adressbuch weiter den Stand von vor dem Lauf.
@@ -1993,14 +2071,14 @@ function renderStatus(s){
 function fmt(iso){
   if(!iso) return '–';
   var d = new Date(iso);
-  return isNaN(d) ? iso : d.toLocaleString('de-DE', {dateStyle:'short', timeStyle:'short'});
+  return isNaN(d) ? iso : d.toLocaleString(LOC, {dateStyle:'short', timeStyle:'short'});
 }
 
-function fill(id, opts, active, pre){
-  el(id).innerHTML = opts.map(function(o){
-    return '<label class="chk"><input type="checkbox" id="' + pre + '-' + o[0] + '" value="' +
-      o[0] + '"' + (active.indexOf(o[0]) >= 0 ? ' checked' : '') +
-      ' onchange="saveCats()"> ' + esc(o[1]) + '</label>';
+function fill(id, keys, active, pre){
+  el(id).innerHTML = keys.map(function(k){
+    return '<label class="chk"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
+      k + '"' + (active.indexOf(k) >= 0 ? ' checked' : '') +
+      ' onchange="saveCats()"> ' + esc(t('export.cat.' + k)) + '</label>';
   }).join('');
 }
 function checked(pre){
@@ -2016,16 +2094,16 @@ function saveCats(){
 function run(what, label){
   what.label = label;
   post('/api/run', what).then(function(r){
-    if(!r.ok) alert(r.message || 'Nicht gestartet.');
+    if(!r.ok) alert(mtext(r.message));
     refresh();
   });
 }
 function runExport(){
-  var o = checked('o').length > 0, t = checked('t').length > 0;
-  if(!o && !t){ alert('Nichts ausgewählt.'); return; }
+  var o = checked('o').length > 0, tm = checked('t').length > 0;
+  if(!o && !tm){ alert(t('export.nothing')); return; }
   // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
   // gelöschter Termine stammen ausschließlich aus dem Postfach.
-  run({outlook:o, teams:t, index:true, calendar:o}, 'Export');
+  run({outlook:o, teams:tm, index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Protokoll ---------- */
@@ -2036,7 +2114,7 @@ function pullLog(){
     r.lines.forEach(function(l){
       var d = document.createElement('div');
       d.className = 'l-' + l.level;
-      d.textContent = l.t + '  ' + l.text;
+      d.textContent = l.t + '  ' + mtext(l.text);
       box.appendChild(d);
     });
     while(box.childElementCount > 1200) box.removeChild(box.firstChild);
@@ -2051,26 +2129,26 @@ function doSearch(off){
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     k: 20, offset: offset});
-  el('results').textContent = 'Suche…';
+  el('results').textContent = t('search.running');
   api('/api/search?' + p.toString()).then(renderHits);
 }
 function renderHits(r){
-  if(r.error){ el('results').innerHTML = '<span class="err">' + esc(r.error) + '</span>'; return; }
+  if(r.error){ el('results').innerHTML = '<span class="err">' + esc(mtext(r.error)) + '</span>'; return; }
   var hits = r.results || [];
-  if(!hits.length){ el('results').textContent = 'Keine Treffer.'; el('pager').innerHTML = ''; return; }
+  if(!hits.length){ el('results').textContent = t('search.nohits'); el('pager').innerHTML = ''; return; }
   el('results').innerHTML = hits.map(function(h){
     var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
     var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
     return '<div class="hit"><h3>' + (link ? '<a href="' + link + '" target="_blank">' : '') +
-      esc(h.title || '(ohne Betreff)') + (link ? '</a>' : '') + '</h3>' +
+      esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
       '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
       '<div class="prev">' + esc(h.preview || '') + '…</div></div>';
   }).join('');
   el('pager').innerHTML =
-    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - 20) + ')">Zurück</button>' : '') +
-    (hits.length >= 20 ? '<button class="ghost" onclick="doSearch(' + (offset + 20) + ')">Weiter</button>' : '') +
-    '<span class="small muted">Rangfolge: ' + esc(r.backend || '–') + '</span>';
+    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - 20) + ')">' + esc(t('search.back')) + '</button>' : '') +
+    (hits.length >= 20 ? '<button class="ghost" onclick="doSearch(' + (offset + 20) + ')">' + esc(t('search.next')) + '</button>' : '') +
+    '<span class="small muted">' + esc(t('search.ranking', {backend: r.backend || '–'})) + '</span>';
 }
 
 /* =======================================================================
@@ -2080,12 +2158,19 @@ function renderHits(r){
    ======================================================================= */
 var KAL = null, kalGeladen = false, kTimer = null, kalStand = null;
 var DAYMS = 86400000;
-var WD = ['Mo','Di','Mi','Do','Fr','Sa','So'];
-var MON = ['Januar','Februar','März','April','Mai','Juni','Juli','August',
-           'September','Oktober','November','Dezember'];
-var STL = {confirmed:'Bestätigt', tentative:'Vorläufig', cancelled:'Abgesagt',
-           deleted:'Gelöscht – aus Absagemail rekonstruiert',
-           gone:'Nicht mehr im Kalender – aus Mail rekonstruiert'};
+/* Wochentage und Monatsnamen liefert der Browser für die gewählte Sprache –
+   sie gehören nicht in die Sprachdateien. */
+var WD = wochentage(), MON = monatsnamen();
+var STATI = ['confirmed','tentative','cancelled','deleted','gone'];
+function wochentage(){
+  var f = new Intl.DateTimeFormat(LOC, {weekday: 'short'});
+  return [0,1,2,3,4,5,6].map(function(i){ return f.format(new Date(Date.UTC(2024, 0, 1 + i))); });
+}
+function monatsnamen(){
+  var f = new Intl.DateTimeFormat(LOC, {month: 'long'});
+  return [0,1,2,3,4,5,6,7,8,9,10,11].map(function(i){ return f.format(new Date(Date.UTC(2024, i, 15))); });
+}
+function stl(st){ return t('cal.st.' + (STATI.indexOf(st) >= 0 ? st : 'confirmed')); }
 var events = [], byDay = new Map(), REBUILT = [], contacts = [];
 var calMode = 'week', cursor = new Date(), rbSt = 'all';
 
@@ -2099,8 +2184,9 @@ function ladeKalender(ziel){
   kalGeladen = true;
   api('/api/calendar').then(function(d){
     if(d.error){
-      var h = '<p class="hint">' + esc(d.error) + '</p>' +
-        '<button class="act" onclick="run({calendar:true}, \'Kalender &amp; Kontakte\')">Jetzt aufbauen</button>';
+      var h = '<p class="hint">' + esc(mtext(d.error)) + '</p>' +
+        '<button class="act" onclick="run({calendar:true}, t(&quot;job.calendar&quot;))">' +
+        esc(t('cal.build.now')) + '</button>';
       el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
       kalGeladen = false;                     // nach dem Aufbau erneut versuchen
       return;
@@ -2112,13 +2198,13 @@ function ladeKalender(ziel){
     var recs = d.recs || [];
     events = recs.filter(function(r){ return r.src === 'kalender' && r.ts != null; });
     contacts = recs.filter(function(r){ return r.src === 'kontakte'; })
-      .sort(function(a,b){ return (a.title||'').localeCompare(b.title||'','de',{sensitivity:'base'}); });
+      .sort(function(a,b){ return (a.title||'').localeCompare(b.title||'',LOC,{sensitivity:'base'}); });
     REBUILT = events.filter(function(r){ return r.st === 'deleted' || r.st === 'gone'; });
     verteileAufTage();
     setzeStartwoche();
     var c = d.counts || {};
-    el('kalStats').textContent = c.kalender + ' Termine im Kalenderexport · ' +
-      c.rekonstruiert + ' aus Mails rekonstruiert · Stand ' + fmt(d.generated);
+    el('kalStats').textContent = t('cal.stats', {n: c.kalender, r: c.rekonstruiert,
+                                                 when: fmt(d.generated)});
     zeichneKalenderTeil(ziel);
   });
 }
@@ -2164,16 +2250,18 @@ function isoWeek(d){
   return 1 + Math.round(((t - w1)/DAYMS - 3 + ((w1.getDay()+6)%7))/7);
 }
 function evTime(r){
-  if(r.ad) return 'ganztägig';
+  if(r.ad) return t('cal.allday');
   var s = hhmm(new Date(r.ts*1000));
   if(r.te != null && r.te > r.ts) s += '–' + hhmm(new Date(r.te*1000));
   return s;
 }
 function evHtml(r){
-  var st = STL[r.st] ? r.st : 'confirmed';
-  var tip = [r.title, STL[st], r.d, r.loc ? ('Ort: '+r.loc) : '', r.who ? ('Organisator: '+r.who) : '',
-             (r.att && r.att.length) ? ('Teilnehmer: '+r.att.join(', ')) : '', r.ctx]
-            .filter(Boolean).join('\n');
+  var st = STATI.indexOf(r.st) >= 0 ? r.st : 'confirmed';
+  var tip = [r.title, stl(st), r.d,
+             r.loc ? t('cal.tip.location', {v: r.loc}) : '',
+             r.who ? t('cal.tip.organizer', {v: r.who}) : '',
+             (r.att && r.att.length) ? t('cal.tip.attendees', {v: r.att.join(', ')}) : '',
+             r.ctx].filter(Boolean).join('\n');
   return '<a class="ev ' + st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
          esc(tip) + '"><span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
 }
@@ -2190,20 +2278,18 @@ function rbRow(r){
   var d = new Date(r.ts*1000);
   return '<a class="rbrow ' + r.st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
          esc(r.ctx) + '"><span class="rbdate">' + WD[(d.getDay()+6)%7] + ' ' + esc(r.d) + '</span>' +
-         '<span class="rbstate">' + (r.st === 'deleted' ? 'Gelöscht' : 'Nicht im Kalender') + '</span>' +
+         '<span class="rbstate">' + esc(t(r.st === 'deleted' ? 'cal.rb.state.deleted' : 'cal.rb.state.gone')) + '</span>' +
          '<span class="rbtitle">' + esc(r.title) + '</span>' +
          '<span class="rbwho">' + esc(r.who) + '</span></a>';
 }
 function rbFrame(){
   var nDel = REBUILT.filter(function(r){ return r.st === 'deleted'; }).length;
   el('kalBox').innerHTML =
-      '<p class="rbnote">Termine, die nicht (mehr) im Kalenderexport stehen und allein aus ' +
-      'Einladungs-, Antwort- oder Absagemails wiederhergestellt wurden. „Gelöscht“ heißt: es liegt ' +
-      'eine Absagemail vor. Klick öffnet die Quellmail.</p><div class="calbar">' +
-      '<span class="chip" data-rb="all">Alle (' + REBUILT.length + ')</span>' +
-      '<span class="chip" data-rb="deleted">Gelöscht (' + nDel + ')</span>' +
-      '<span class="chip" data-rb="gone">Nicht im Kalender (' + (REBUILT.length - nDel) + ')</span>' +
-      '<input type="text" id="rbQ" placeholder="Titel, Person oder Inhalt…" style="min-width:240px">' +
+      '<p class="rbnote">' + esc(t('cal.rb.note')) + '</p><div class="calbar">' +
+      '<span class="chip" data-rb="all">' + esc(t('cal.rb.all', {n: REBUILT.length})) + '</span>' +
+      '<span class="chip" data-rb="deleted">' + esc(t('cal.rb.deleted', {n: nDel})) + '</span>' +
+      '<span class="chip" data-rb="gone">' + esc(t('cal.rb.gone', {n: REBUILT.length - nDel})) + '</span>' +
+      '<input type="text" id="rbQ" placeholder="' + esc(t('cal.rb.search.ph')) + '" style="min-width:240px">' +
       '<span class="rbcount"></span></div><div id="rblist"></div>';
   el('rbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(rbList, 160); });
   document.querySelectorAll('#kalBox [data-rb]').forEach(function(ch){
@@ -2219,16 +2305,15 @@ function rbList(){
   document.querySelectorAll('#kalBox [data-rb]').forEach(function(c){
     c.classList.toggle('on', c.dataset.rb === rbSt);
   });
-  document.querySelector('#kalBox .rbcount').textContent = hits.length + ' Treffer';
+  document.querySelector('#kalBox .rbcount').textContent = t('cal.rb.hits', {n: hits.length});
   var h = '', monat = null;
   hits.forEach(function(r){
     var d = new Date(r.ts*1000), m = MON[d.getMonth()] + ' ' + d.getFullYear();
     if(m !== monat){ h += '<div class="rbmonth">' + m + '</div>'; monat = m; }
     h += rbRow(r);
   });
-  el('rblist').innerHTML = h || (REBUILT.length ? '<p class="hint">Keine Treffer.</p>'
-    : '<p class="hint">Keine rekonstruierten Termine – im Postfach lagen keine passenden ' +
-      'Einladungs- oder Absagemails.</p>');
+  el('rblist').innerHTML = h || '<p class="hint">' +
+    esc(t(REBUILT.length ? 'cal.rb.nohits' : 'cal.rb.empty')) + '</p>';
 }
 
 function drawCal(){
@@ -2241,7 +2326,7 @@ function drawCal(){
   }
   if(!events.length){
     el('kalTitle').textContent = '';
-    el('kalBox').innerHTML = '<p class="hint">Keine Termine im Export.</p>';
+    el('kalBox').innerHTML = '<p class="hint">' + esc(t('cal.empty')) + '</p>';
     return;
   }
   var head = '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + ' dowrow" style="margin-bottom:2px">' +
@@ -2250,8 +2335,9 @@ function drawCal(){
   if(calMode === 'week'){
     var mon = startOfWeek(cursor), sun = addDays(mon, 6);
     for(var i = 0; i < 7; i++) cells += dayCell(addDays(mon, i));
-    el('kalTitle').textContent = 'KW ' + isoWeek(mon) + ' · ' + mon.getDate() + '. ' + MON[mon.getMonth()] +
-      ' – ' + sun.getDate() + '. ' + MON[sun.getMonth()] + ' ' + sun.getFullYear();
+    el('kalTitle').textContent = t('cal.kw', {week: isoWeek(mon),
+      from: mon.getDate() + '. ' + MON[mon.getMonth()],
+      to: sun.getDate() + '. ' + MON[sun.getMonth()] + ' ' + sun.getFullYear()});
   } else {
     var first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
     var start = startOfWeek(first);
@@ -2302,7 +2388,7 @@ function cardHtml(r){
 function drawBook(){
   if(!contacts.length){
     el('kbStats').textContent = '';
-    el('kbBox').innerHTML = '<p class="hint">Keine Kontakte im Export.</p>';
+    el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.empty')) + '</p>';
     return;
   }
   var t = toks(el('kbQ').value.trim());
@@ -2310,8 +2396,8 @@ function drawBook(){
     return !t.length || allIn([r.title, r.org, r.role, (r.em||[]).join(' '),
                                (r.tel||[]).join(' ')].join(' '), t);
   });
-  el('kbStats').textContent = hits.length + ' von ' + contacts.length + ' Kontakten';
-  if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">Keine Kontakte gefunden.</p>'; return; }
+  el('kbStats').textContent = t('book.stats', {n: hits.length, total: contacts.length});
+  if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.nohits')) + '</p>'; return; }
   var h = '', letter = null;
   hits.forEach(function(r){
     var first = (r.title || '#').trim().charAt(0).toUpperCase();
@@ -2333,7 +2419,7 @@ function saveSchedule(){
 }
 function toggleMcp(){
   post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
-    if(!r.ok && r.message) alert(r.message);
+    if(!r.ok && r.message) alert(mtext(r.message));
     refresh();
   });
 }
@@ -2354,18 +2440,24 @@ function fuelleEinstellungen(cfg){
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
+  fuelleSprachen();
 }
 function speichereEinstellungen(){
-  var body = {skip_folders: el('c-skip_folders').value};
+  var body = {skip_folders: el('c-skip_folders').value,
+              language: el('c-language').value};
+  var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
   TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
   post('/api/config', body).then(function(r){
+    // Die Sprache steckt in der ausgelieferten Seite – ein Wechsel braucht
+    // einen Neuaufbau, alles andere wirkt sofort.
+    if(r.config.language !== spracheVorher){ location.reload(); return; }
     cfgGefuellt = false;                 // gespeicherte (und begrenzte) Werte zurückspielen
     fuelleEinstellungen(r.config);
     var m = el('cfg-msg');
     m.className = 'small ok';
-    m.textContent = 'Gespeichert – wirkt auf den nächsten Lauf.';
+    m.textContent = t('settings.saved');
     setTimeout(function(){ m.textContent = ''; }, 4000);
     refresh();
   });
@@ -2412,39 +2504,47 @@ function closeWizard(kind){
 }
 function scopeListe(){
   var q = S.scope_queries || {};
-  return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(s){
-    return '<li style="margin-bottom:3px"><code>' + esc(s) + '</code>' +
-      (q[s] ? '<br><span class="small muted">sichtbar nach der Abfrage </span><code class="small">' + esc(q[s]) + '</code>' : '') +
-      '</li>';
+  return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(x){
+    return '<li style="margin-bottom:3px"><code>' + esc(x) + '</code>' +
+      (q[x] ? '<br><span class="small muted">' + esc(t('wizard.token.step2.query')) +
+              ' </span><code class="small">' + esc(q[x]) + '</code>' : '') + '</li>';
   }).join('') + '</ul>';
 }
 function tokenWizard(){
-  var t = S.token;
-  var head = !t.present ? '<div class="banner err">Es ist kein Token hinterlegt – ohne ihn kann nichts exportiert werden.</div>'
-    : t.expired ? '<div class="banner err">Der Token ist abgelaufen. Bitte einen frischen holen.</div>'
-    : (t.missing && t.missing.length) ? '<div class="banner warn">Im Token fehlen diese Berechtigungen: ' + esc(t.missing.join(', ')) + '. Eine umfassendere zählt mit – wer <code>Mail.ReadWrite</code> hat, braucht <code>Mail.Read</code> nicht extra.</div>'
-    : '<div class="banner"><span class="ok">✓</span> Token gültig' + (t.account ? ' für ' + esc(t.account) : '') +
-      (t.expires_text ? ', noch ' + esc(t.expires_text) : '') +
-      '. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst.</div>';
-  return '<h2>Access Token holen</h2>' +
-    '<p class="muted small">Dieses Tool meldet dich nicht selbst an. Du holst den Token einmal im Microsoft Graph Explorer und fügst ihn hier ein. Wie lange er trägt, gibt dein Tenant vor – von einer Stunde bis zu mehreren.</p>' +
-    head +
-    '<ol>' +
-    '<li><a href="' + S.graph_explorer + '" target="_blank" rel="noopener">Graph Explorer öffnen</a> und oben rechts mit dem Geschäftskonto anmelden.</li>' +
-    '<li>Diesen Berechtigungen zustimmen – Reiter <strong>Modify permissions</strong>, dann <em>Consent</em>:' + scopeListe() +
-    '<span class="small muted">Der Reiter zeigt nur Berechtigungen zu der Abfrage, die gerade oben in der Adresszeile steht. Wird eine nicht angeboten, die zugehörige Abfrage dort einsetzen, ausführen und erneut nachsehen.</span></li>' +
-    '<li>Reiter <strong>Access token</strong>: den langen Text vollständig kopieren.</li>' +
-    '<li>Hier einfügen und speichern:</li></ol>' +
+  var tk = S.token, head;
+  if(!tk.present) head = banner('err', t('wizard.token.none'));
+  else if(tk.expired) head = banner('err', t('wizard.token.expired'));
+  else if(tk.missing && tk.missing.length)
+    head = banner('warn', t('wizard.token.missing', {list: esc(tk.missing.join(', '))}));
+  else {
+    // Vier ganze Sätze statt zusammengesetzter Bruchstücke – siehe Sprachdateien.
+    var hatWer = !!tk.account, hatZeit = tk.expires_in_minutes != null;
+    var k = hatWer && hatZeit ? 'wizard.token.ok'
+          : hatWer ? 'wizard.token.ok.unknown'
+          : hatZeit ? 'wizard.token.ok.nowho' : 'wizard.token.ok.plain';
+    head = banner('', '<span class="ok">✓</span> ' + t(k, {who: esc(tk.account || ''),
+                                                          rest: restzeit(tk.expires_in_minutes)}));
+  }
+  return '<h2>' + esc(t('wizard.token.title')) + '</h2>' +
+    '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
+    '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
+    '<li>' + t('wizard.token.step2') + scopeListe() +
+    '<span class="small muted">' + esc(t('wizard.token.step2.note')) + '</span></li>' +
+    '<li>' + t('wizard.token.step3') + '</li>' +
+    '<li>' + esc(t('wizard.token.step4')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
     '<div class="row" style="margin-top:12px">' +
-    '<button class="act" onclick="saveToken()">Token speichern</button>' +
-    '<button class="ghost" onclick="closeWizard(\'token\')">Später</button>' +
+    '<button class="act" onclick="saveToken()">' + esc(t('wizard.token.save')) + '</button>' +
+    '<button class="ghost" onclick="closeWizard(\'token\')">' + esc(t('wizard.later')) + '</button>' +
     '<span class="small muted" id="tok-msg"></span></div>' +
-    '<p class="small muted" style="margin-top:14px">Der Token liegt nur lokal in <code>gx_token.txt</code> (nur für dich lesbar) und wird an nichts außer Microsoft Graph geschickt.</p>';
+    '<p class="small muted" style="margin-top:14px">' + t('wizard.token.privacy') + '</p>';
+}
+function banner(art, html){
+  return '<div class="banner' + (art ? ' ' + art : '') + '">' + html + '</div>';
 }
 function saveToken(){
   post('/api/token', {token: el('tok').value}).then(function(r){
-    el('tok-msg').textContent = r.message || '';
+    el('tok-msg').textContent = mtext(r.message);
     el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
     if(r.ok){ dismissed = {};
               setTimeout(function(){ el('overlay').classList.remove('on');
@@ -2455,33 +2555,33 @@ function saveToken(){
 function ollamaWizard(){
   var o = S.ollama, h = S.ollama_hint;
 
-  // Alles da – das kann während der Assistent offen steht passieren, wenn
+  // Alles da – das kann passieren, während der Assistent offen steht und
   // nebenher "ollama pull" durchläuft. Dann bestätigen statt weiter mahnen.
   if(o.running && o.has_model){
-    return '<h2>Ollama ist bereit</h2>' +
-      '<div class="banner"><span class="ok">✓</span> Ollama läuft, das Modell <code>' +
-      esc(o.model) + '</code> ist da. Der nächste Index bekommt Embeddings, die Suche wird hybrid.</div>' +
+    return '<h2>' + esc(t('wizard.ollama.ready.title')) + '</h2>' +
+      banner('', '<span class="ok">✓</span> ' + t('wizard.ollama.ready', {model: esc(o.model)})) +
       '<div class="row" style="margin-top:12px">' +
-      '<button class="act" onclick="closeWizard(\'ollama\')">Schließen</button>' +
-      '<button class="ghost" onclick="closeWizard(\'ollama\'); run({index:true}, \'Index\')">Jetzt neu indizieren</button></div>';
+      '<button class="act" onclick="closeWizard(&quot;ollama&quot;)">' + esc(t('wizard.ollama.close')) + '</button>' +
+      '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))">' +
+      esc(t('wizard.ollama.reindex')) + '</button></div>';
   }
 
-  var head = !o.running
-    ? '<div class="banner warn">Ollama läuft nicht. Ohne Ollama gibt es keine semantische Suche – Export, Volltextsuche und MCP funktionieren trotzdem.</div>'
-    : '<div class="banner warn">Ollama läuft, aber das Modell <code>' + esc(o.model) + '</code> fehlt noch.</div>';
+  var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc(o.model)})
+                                      : esc(t('wizard.ollama.off')));
   var steps = o.running
-    ? ['Im Terminal: <code>ollama pull ' + esc(o.model) + '</code>',
-       'Sobald das durch ist, meldet sich dieses Fenster von selbst – oder auf „Erneut prüfen“ klicken']
-    : h.steps.map(esc);
-  return '<h2>Ollama einrichten (optional)</h2>' +
-    '<p class="muted small">Ollama berechnet die Embeddings für die semantische Suche. Alles läuft lokal, nichts verlässt den Rechner.</p>' +
-    head + '<ol>' + steps.map(function(s){ return '<li>' + s + '</li>'; }).join('') + '</ol>' +
-    (h.brew && !o.running ? '<p class="small muted">Oder per Paketmanager:</p><pre>' + esc(h.brew) + '</pre>' : '') +
+    ? [t('wizard.ollama.pull', {model: esc(o.model)}), esc(t('wizard.ollama.wait'))]
+    : (h.steps || []).map(function(k){ return t(k, {url: esc(h.url || '')}); });
+  return '<h2>' + esc(t('wizard.ollama.title')) + '</h2>' +
+    '<p class="muted small">' + esc(t('wizard.ollama.intro')) + '</p>' + head +
+    '<ol>' + steps.map(function(x){ return '<li>' + x + '</li>'; }).join('') + '</ol>' +
+    (h.pkg && !o.running ? '<p class="small muted">' + esc(t('wizard.ollama.pkg')) +
+                           '</p><pre>' + esc(h.pkg) + '</pre>' : '') +
     '<div class="row" style="margin-top:12px">' +
-    '<button class="act" onclick="recheckOllama()">Erneut prüfen</button>' +
-    '<button class="ghost" onclick="closeWizard(\'ollama\'); run({index:true, embeddings:false}, \'Volltextindex\')">Ohne Ollama fortfahren – nur Volltextindex</button>' +
-    '<button class="ghost" onclick="closeWizard(\'ollama\')">Später</button></div>' +
-    '<p class="small muted" style="margin-top:14px">„Ohne Ollama fortfahren“ baut einen reinen Volltextindex (BM25). Suche und MCP funktionieren damit sofort; die semantische Hälfte lässt sich später jederzeit nachbauen.</p>';
+    '<button class="act" onclick="recheckOllama()">' + esc(t('wizard.ollama.recheck')) + '</button>' +
+    '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;); run({index:true, embeddings:false}, t(&quot;job.index.lexical&quot;))">' +
+    esc(t('wizard.ollama.without')) + '</button>' +
+    '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;)">' + esc(t('wizard.later')) + '</button></div>' +
+    '<p class="small muted" style="margin-top:14px">' + esc(t('wizard.ollama.without.note')) + '</p>';
 }
 function recheckOllama(){
   post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
