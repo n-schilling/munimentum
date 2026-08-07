@@ -11,6 +11,7 @@ report() nur meldet, was auch wirklich gegriffen hat.
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -40,9 +41,12 @@ def test_config_path_folgt_dem_datenordner(sauber):
 
 
 def test_config_path_ohne_datenordner_liegt_neben_dem_modul(monkeypatch):
+    """Gegen settings.__file__ prüfen, nicht gegen einen Ordnernamen: wie das
+    Arbeitsverzeichnis heißt, ist Zufall – lokal anders als im Checkout der CI."""
     monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
     settings.reset()
-    assert settings.config_path().parent.name == "office365-export"
+    erwartet = Path(settings.__file__).resolve().parent / settings.CONFIG_NAME
+    assert settings.config_path() == erwartet
 
 
 def test_load_ohne_datei(sauber):
@@ -215,7 +219,6 @@ def _lies_konstanten(tmp_path, modul, felder, umgebung=None):
     """Ein Skript frisch in einem eigenen Prozess importieren und seine
     Konstanten auslesen – nur so greift die Auswertung beim Import wirklich."""
     import subprocess
-    from pathlib import Path
     repo = str(Path(__file__).resolve().parent.parent)
     code = SKRIPT.format(repo=repo, modul=modul,
                          felder=", ".join(f'"{f}": m.{f}' for f in felder))
