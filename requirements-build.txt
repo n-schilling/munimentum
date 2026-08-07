@@ -1,0 +1,10 @@
+# Nur zum Bündeln der App (packaging/app.spec) – nicht zur Laufzeit nötig.
+#
+# Gepinnt aus demselben Grund wie requirements.txt: ein neuer PyInstaller-Major
+# ändert gern die Spec-API oder das Bootloader-Verhalten, und das fiele erst
+# beim Release auf. Beim Anheben: lokal bauen und packaging/smoke_test.py
+# laufen lassen, dann committen.
+
+-r requirements.txt
+
+pyinstaller==6.21.0

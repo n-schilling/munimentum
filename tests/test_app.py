@@ -16,6 +16,7 @@ import sqlite3
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -429,6 +430,15 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
     assert ok
     assert "--no-embeddings" in gesehen["steps"][0]["argv"]
     assert any("Ollama nicht verfügbar" in ln["text"] for ln in a.jobs.lines)
+
+
+def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
+        sandbox, with_ollama, monkeypatch):
+    """Ollama läuft – der Volltextindex ist dann eine Entscheidung, kein Mangel."""
+    monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label: True)
+    a = app_mod.App(app_mod.load_config())
+    assert a.launch(index=True, embeddings=False)[0]
+    assert any("Auf Wunsch ohne Embeddings" in ln["text"] for ln in a.jobs.lines)
 
 
 def test_launch_mit_ollama_baut_embeddings(sandbox, with_ollama, monkeypatch):
@@ -947,6 +957,165 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+# --------------------------------------------------------------------------
+# Gebündelter Betrieb (PyInstaller): Selbstaufruf statt .py-Dateien
+# --------------------------------------------------------------------------
+@pytest.fixture
+def frozen(monkeypatch, tmp_path):
+    """Tut so, als liefe app.py als gebündelte Datei."""
+    monkeypatch.setattr(app_mod, "FROZEN", True)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "Microsoft365-Archiv"))
+    return tmp_path
+
+
+def test_script_argv_als_skript(sandbox):
+    argv = app_mod.script_argv("teams_export", "ordner")
+    assert argv[0] == sys.executable
+    assert argv[1].endswith("teams_export.py")
+    assert argv[2] == "ordner"
+
+
+def test_script_argv_gebuendelt(sandbox, frozen):
+    """Im Bündel gibt es weder Interpreter noch .py-Dateien – die ausführbare
+    Datei ruft sich selbst mit --run auf."""
+    assert app_mod.script_argv("teams_export", "ordner") == \
+        [sys.executable, "--run", "teams_export", "ordner"]
+
+
+def test_script_argv_wandelt_argumente_in_text(sandbox):
+    assert app_mod.script_argv("rag_index", "--port", 8365)[-1] == "8365"
+
+
+def test_script_argv_lehnt_unbekanntes_teilprogramm_ab(sandbox):
+    with pytest.raises(ValueError, match="Unbekanntes Teilprogramm"):
+        app_mod.script_argv("rm", "-rf")
+
+
+def test_build_steps_gebuendelt(sandbox, frozen):
+    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, index=True,
+                                token="tok")
+    assert steps[0]["argv"][:3] == [sys.executable, "--run", "outlook_export"]
+    assert steps[1]["argv"][:3] == [sys.executable, "--run", "rag_index"]
+
+
+def test_run_bundled_startet_teilprogramm(sandbox, monkeypatch):
+    gesehen = {}
+    monkeypatch.setattr(app_mod.importlib, "import_module",
+                        lambda name: gesehen.update(name=name)
+                        or type("M", (), {"main": staticmethod(
+                            lambda: gesehen.update(argv=list(sys.argv)))}))
+    app_mod.run_bundled("rag_index", ["--store", "s"])
+    assert gesehen["name"] == "rag_index"
+    assert gesehen["argv"] == ["rag_index.py", "--store", "s"]
+
+
+def test_run_bundled_lehnt_unbekanntes_ab(sandbox):
+    with pytest.raises(SystemExit, match="Unbekanntes Teilprogramm"):
+        app_mod.run_bundled("boese", [])
+
+
+def test_main_leitet_run_weiter(monkeypatch):
+    gesehen = {}
+    monkeypatch.setattr(app_mod, "run_bundled",
+                        lambda name, argv: gesehen.update(name=name, argv=argv))
+    monkeypatch.setattr(app_mod, "serve", lambda *a, **k: pytest.fail("darf nicht"))
+    app_mod.main(["--run", "mcp_server", "--transport", "stdio"])
+    assert gesehen == {"name": "mcp_server", "argv": ["--transport", "stdio"]}
+
+
+def test_main_run_ohne_namen(monkeypatch):
+    with pytest.raises(SystemExit, match="braucht einen Namen"):
+        app_mod.main(["--run"])
+
+
+def test_main_data_dir_haengt_die_pfade_um(monkeypatch, tmp_path):
+    monkeypatch.setattr(app_mod, "serve", lambda *a, **k: None)
+    ziel = tmp_path / "woanders"
+    app_mod.main(["--data-dir", str(ziel), "--no-browser"])
+    assert app_mod.BASE == ziel.resolve()
+    assert app_mod.TOKEN_FILE == ziel.resolve() / "gx_token.txt"
+    assert ziel.is_dir()                                    # wird angelegt
+
+
+def test_data_dir_je_betriebssystem(monkeypatch):
+    monkeypatch.setattr(app_mod, "FROZEN", True)
+    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert app_mod.data_dir().parts[-3:] == ("Library", "Application Support",
+                                             app_mod.APP_DIRNAME)
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", "C:\\Users\\x\\AppData\\Local")
+    assert app_mod.data_dir().name == app_mod.APP_DIRNAME
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setenv("XDG_DATA_HOME", "/tmp/xdg")
+    assert app_mod.data_dir() == Path("/tmp/xdg") / app_mod.APP_DIRNAME
+
+
+def test_data_dir_per_umgebungsvariable(monkeypatch, tmp_path):
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    assert app_mod.data_dir() == tmp_path.resolve()
+
+
+def test_data_dir_als_skript_ist_der_projektordner(monkeypatch):
+    monkeypatch.setattr(app_mod, "FROZEN", False)
+    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    assert app_mod.data_dir() == Path(app_mod.__file__).resolve().parent
+
+
+def test_mcp_client_config_nennt_absolute_pfade(sandbox):
+    cfg = app_mod.load_config()
+    conf = app_mod.mcp_client_config(cfg, 8365)
+    assert conf["http"]["mcpServers"]["office365-export"]["url"] \
+        == "http://127.0.0.1:8365/mcp"
+    args = conf["stdio"]["mcpServers"]["office365-export"]["args"]
+    assert "--transport" in args and "stdio" in args
+    # Claude startet den Befehl in einem unbekannten Arbeitsverzeichnis
+    store = args[args.index("--store") + 1]
+    assert Path(store).is_absolute() and store.startswith(str(sandbox))
+
+
+def test_mcp_client_config_gebuendelt(sandbox, frozen):
+    conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
+    eintrag = conf["stdio"]["mcpServers"]["office365-export"]
+    assert eintrag["command"] == sys.executable          # die App selbst
+    assert eintrag["args"][:2] == ["--run", "mcp_server"]
+
+
+def test_ensure_streams_faengt_fehlende_konsole_ab(sandbox, monkeypatch):
+    """Windows-Bündel ohne Konsole: sys.stdout ist None, jedes print() flöge."""
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    f = app_mod.ensure_streams()
+    try:
+        assert sys.stdout is not None and sys.stderr is not None
+        print("Testzeile")
+    finally:
+        f.close()
+    assert "Testzeile" in (sandbox / "app.log").read_text(encoding="utf-8")
+
+
+def test_ensure_streams_laesst_vorhandene_konsole_in_ruhe(sandbox):
+    vorher = sys.stdout
+    assert app_mod.ensure_streams() is None
+    assert sys.stdout is vorher
+
+
+def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
+    """Zweiter Start bzw. belegter Port: ein Doppelklick soll nicht mit einem
+    Traceback enden, den in einer fensterlosen App niemand sieht."""
+    a = app_mod.App(app_mod.load_config())
+    erster = app_mod.make_server(a, 0)
+    port = erster.server_address[1]
+    try:
+        zweiter = app_mod.make_server(a, port)
+        try:
+            assert zweiter.server_address[1] == port + 1
+        finally:
+            zweiter.server_close()
+    finally:
+        erster.server_close()
 
 
 # --------------------------------------------------------------------------

@@ -40,6 +40,7 @@ import shutil
 import sqlite3
 import argparse
 import platform
+import importlib
 import subprocess
 import threading
 import webbrowser
@@ -57,9 +58,60 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-BASE = Path(__file__).resolve().parent
+APP_DIRNAME = "Microsoft365-Archiv"
+FROZEN = bool(getattr(sys, "frozen", False))
+
+# Teilprogramme, die die gebündelte Datei über "--run <name>" selbst starten
+# kann. Als Skripte liegen sie nebeneinander, im Bündel als Module darin.
+RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
+            "mcp_server", "rag_server")
+
+
+def resource_dir():
+    """Verzeichnis der mitgelieferten Skripte (im Bündel: das entpackte Archiv)."""
+    if FROZEN:
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
+def data_dir():
+    """Verzeichnis für Exporte, Index, Konfiguration und Token.
+
+    Als Skript: der Projektordner – dort liegen Exporte und rag_store schon.
+    Gebündelt: der Datenordner des Benutzers, denn das Bündel selbst entpackt
+    sich in ein Temp-Verzeichnis, das bei jedem Ende verschwindet, und in
+    /Applications bzw. C:\\Program Files darf eine App nicht schreiben.
+    Mit OFFICE365_DATA_DIR frei wählbar (z. B. eine externe Platte – ein
+    Postfach kann zweistellige Gigabyte haben).
+    """
+    env = os.environ.get("OFFICE365_DATA_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    if not FROZEN:
+        return Path(__file__).resolve().parent
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_DIRNAME
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(root) / APP_DIRNAME
+    root = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(root) / APP_DIRNAME
+
+
+RES = resource_dir()
+BASE = data_dir()
 CONFIG_FILE = BASE / "app_config.json"
 TOKEN_FILE = BASE / "gx_token.txt"
+
+
+def set_data_dir(path):
+    """Datenverzeichnis umhängen (--data-dir). Liefert den neuen Pfad."""
+    global BASE, CONFIG_FILE, TOKEN_FILE
+    BASE = Path(path).expanduser().resolve()
+    CONFIG_FILE = BASE / "app_config.json"
+    TOKEN_FILE = BASE / "gx_token.txt"
+    return BASE
+
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
 OLLAMA_SITE = "https://ollama.com/download"
 
@@ -332,6 +384,34 @@ def store_status(cfg):
 # --------------------------------------------------------------------------
 # Schritte eines Laufs (rein – ohne Seiteneffekte, daher gut testbar)
 # --------------------------------------------------------------------------
+def script_argv(name, *args):
+    """Kommandozeile für eines der Teilprogramme.
+
+    Als Skript: python3 <name>.py …
+    Gebündelt: die eigene ausführbare Datei mit "--run <name>" – dort gibt es
+    keinen Python-Interpreter und keine .py-Dateien mehr, die Module stecken
+    im Bündel und werden von run_bundled() importiert.
+    """
+    if name not in RUNNABLE:
+        raise ValueError(f"Unbekanntes Teilprogramm: {name}")
+    if FROZEN:
+        return [sys.executable, "--run", name, *(str(a) for a in args)]
+    return [sys.executable, str(RES / f"{name}.py"), *(str(a) for a in args)]
+
+
+def run_bundled(name, argv):
+    """Ein Teilprogramm im Bündel starten (Gegenstück zu script_argv).
+
+    Die Teilprogramme lesen ihre Argumente selbst aus sys.argv, also wird die
+    Liste vorher so hergerichtet, wie sie beim direkten Aufruf aussähe.
+    """
+    if name not in RUNNABLE:
+        raise SystemExit(f"Unbekanntes Teilprogramm: {name}. "
+                         f"Möglich: {', '.join(RUNNABLE)}")
+    sys.argv = [f"{name}.py", *argv]
+    importlib.import_module(name).main()
+
+
 def build_steps(cfg, outlook=False, teams=False, index=False,
                 embeddings=True, search_page=False, token=""):
     """Kommandozeilen für einen Lauf zusammenstellen.
@@ -341,7 +421,6 @@ def build_steps(cfg, outlook=False, teams=False, index=False,
     Der Token geht als GRAPH_TOKEN mit, damit der Lauf nicht davon abhängt, in
     welchem Verzeichnis er gestartet wurde.
     """
-    py = sys.executable
     steps = []
     base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4))}
     if token:
@@ -351,7 +430,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False,
         cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
         steps.append({
             "key": "outlook", "label": "Outlook-Export",
-            "argv": [py, str(BASE / "outlook_export.py"), cfg["outlook_dir"]],
+            "argv": script_argv("outlook_export", cfg["outlook_dir"]),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
         })
     if teams:
@@ -359,13 +438,13 @@ def build_steps(cfg, outlook=False, teams=False, index=False,
                                  ["1on1", "group", "meeting", "channels"])
         steps.append({
             "key": "teams", "label": "Teams-Export",
-            "argv": [py, str(BASE / "teams_export.py"), cfg["teams_dir"]],
+            "argv": script_argv("teams_export", cfg["teams_dir"]),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
         })
     if index:
-        argv = [py, str(BASE / "rag_index.py"), cfg["teams_dir"], cfg["outlook_dir"],
-                "--store", cfg["store_dir"], "--model", cfg["embed_model"],
-                "--ollama", cfg["ollama"]]
+        argv = script_argv("rag_index", cfg["teams_dir"], cfg["outlook_dir"],
+                           "--store", cfg["store_dir"], "--model", cfg["embed_model"],
+                           "--ollama", cfg["ollama"])
         if not embeddings:
             argv.append("--no-embeddings")
         steps.append({
@@ -376,8 +455,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False,
     if search_page:
         steps.append({
             "key": "search_page", "label": "Portable Suchseite",
-            "argv": [py, str(BASE / "combined_search.py"),
-                     cfg["teams_dir"], cfg["outlook_dir"]],
+            "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"]),
             "env": dict(base_env),
         })
     return steps
@@ -600,6 +678,26 @@ class Scheduler(threading.Thread):
 # --------------------------------------------------------------------------
 # MCP-Server als Unterprozess
 # --------------------------------------------------------------------------
+def mcp_client_config(cfg, port):
+    """Fertige Einträge für Claude Code (HTTP) und Claude Desktop (stdio).
+
+    Serverseitig gebaut, weil nur hier bekannt ist, wie das Teilprogramm
+    aufzurufen ist (Skript oder gebündelte Datei) und wo die Daten liegen. Die
+    stdio-Variante bekommt absolute Pfade: Claude startet sie in einem
+    unbekannten Arbeitsverzeichnis.
+    """
+    argv = script_argv("mcp_server", "--transport", "stdio",
+                       "--store", str(BASE / cfg["store_dir"]),
+                       "--teams", str(BASE / cfg["teams_dir"]),
+                       "--outlook", str(BASE / cfg["outlook_dir"]))
+    return {
+        "http": {"mcpServers": {"office365-export": {
+            "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
+        "stdio": {"mcpServers": {"office365-export": {
+            "command": argv[0], "args": argv[1:]}}},
+    }
+
+
 class McpProcess:
     """Startet/stoppt mcp_server.py und sammelt dessen Ausgabe im Protokoll."""
 
@@ -616,7 +714,8 @@ class McpProcess:
     def status(self, cfg):
         return {"running": self.running, "port": self.port or cfg["mcp_port"],
                 "url": f"http://127.0.0.1:{self.port or cfg['mcp_port']}/mcp",
-                "error": self.error}
+                "error": self.error, "config": mcp_client_config(cfg,
+                                                                 self.port or cfg["mcp_port"])}
 
     def start(self, cfg):
         if self.running:
@@ -625,10 +724,11 @@ class McpProcess:
         if not db.exists():
             self.error = "Kein Index vorhanden – MCP kann nichts ausliefern."
             return False, self.error
-        argv = [sys.executable, str(BASE / "mcp_server.py"),
-                "--store", cfg["store_dir"], "--teams", cfg["teams_dir"],
-                "--outlook", cfg["outlook_dir"], "--embed-model", cfg["embed_model"],
-                "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"])]
+        argv = script_argv("mcp_server",
+                           "--store", cfg["store_dir"], "--teams", cfg["teams_dir"],
+                           "--outlook", cfg["outlook_dir"],
+                           "--embed-model", cfg["embed_model"],
+                           "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
         try:
             self.proc = subprocess.Popen(
                 argv, cwd=str(BASE), env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -788,6 +888,8 @@ class App:
                               if nxt else None),
             "schedule_enabled": bool(plan.get("enabled")),
             "wizard": wizard,
+            "data_dir": str(BASE),
+            "frozen": FROZEN,
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
@@ -798,14 +900,17 @@ class App:
                search_page=False, label="Lauf"):
         if self.jobs.busy:
             return False, "Es läuft bereits ein Auftrag."
+        gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         token = read_token() if (outlook or teams) else ""
         if (outlook or teams) and not token:
             return False, "Kein Token hinterlegt – bitte den Assistenten durchlaufen."
         if index and not embeddings:
-            self.jobs.log("Ollama nicht verfügbar – der Index wird als reiner "
-                          "Volltextindex gebaut (Suche ohne semantische Treffer).", "warn")
+            grund = ("Auf Wunsch ohne Embeddings" if gewaehlt
+                     else "Ollama nicht verfügbar")
+            self.jobs.log(f"{grund} – der Index wird als reiner Volltextindex "
+                          "gebaut (Suche ohne semantische Treffer).", "warn")
         steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
                             embeddings=embeddings, search_page=search_page,
                             token=token)
@@ -1087,13 +1192,23 @@ class Handler(BaseHTTPRequestHandler):
             shutil.copyfileobj(f, self.wfile, 64 * 1024)
 
 
-def make_server(app, port, host="127.0.0.1"):
+def make_server(app, port, host="127.0.0.1", tries=12):
     """Server binden und die erlaubten Host-Header festlegen.
 
     Erst binden, dann die Liste bauen: mit port=0 sucht das Betriebssystem
     einen freien Port aus, und der muss in den erlaubten Headern stehen.
+    Ist der Wunschport belegt (zweiter Start, fremdes Programm), werden die
+    nächsten durchprobiert – ein Doppelklick soll nicht mit einem Traceback
+    enden, den niemand sieht.
     """
-    httpd = ThreadingHTTPServer((host, port), Handler)
+    httpd = None
+    for versuch in range(tries if port else 1):
+        try:
+            httpd = ThreadingHTTPServer((host, port + versuch), Handler)
+            break
+        except OSError as e:
+            if versuch == tries - 1:
+                raise SystemExit(f"Kein freier Port ab {port}: {e}") from None
     real = httpd.server_address[1]
     Handler.app = app
     Handler.allowed_hosts = (f"{host}:{real}", f"localhost:{real}",
@@ -1121,13 +1236,52 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     return httpd
 
 
-def main():
+def ensure_streams():
+    """Ohne Konsole (Windows-Bündel) ist sys.stdout None – jedes print() flöge.
+
+    Beides landet dann in app.log neben den Daten; sonst wäre ein Fehlstart
+    einer fensterlosen Anwendung vollkommen stumm.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return None
+    try:
+        BASE.mkdir(parents=True, exist_ok=True)
+        f = open(BASE / "app.log", "a", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        f = open(os.devnull, "w")
+    if sys.stdout is None:
+        sys.stdout = f
+    if sys.stderr is None:
+        sys.stderr = f
+    return f
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    # Selbstaufruf als Teilprogramm (siehe script_argv) – vor dem Argument-
+    # Parser, denn die Teilprogramme haben ihre eigenen Optionen.
+    if argv and argv[0] == "--run":
+        if len(argv) < 2:
+            raise SystemExit(f"--run braucht einen Namen: {', '.join(RUNNABLE)}")
+        return run_bundled(argv[1], argv[2:])
+
+    ensure_streams()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--port", type=int, default=8700)
     ap.add_argument("--no-browser", action="store_true",
                     help="Oberfläche nicht automatisch öffnen.")
-    a = ap.parse_args()
+    ap.add_argument("--data-dir", metavar="ORDNER",
+                    help="Ordner für Exporte, Index, Konfiguration und Token "
+                         "(Vorgabe gebündelt: Benutzerdatenordner, als Skript: "
+                         "der Projektordner). Wie OFFICE365_DATA_DIR.")
+    ap.epilog = ("Als erstes Argument startet --run NAME [Optionen] ein "
+                 f"Teilprogramm direkt: {', '.join(RUNNABLE)}. So ruft sich die "
+                 "gebündelte Datei selbst auf; von Hand nur zum Nachsehen nötig.")
+    a = ap.parse_args(argv)
+    if a.data_dir:
+        set_data_dir(a.data_dir)
+    BASE.mkdir(parents=True, exist_ok=True)
     serve(App(), a.port, open_browser=not a.no_browser)
 
 
@@ -1247,6 +1401,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
       <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')">Abbrechen</button>
     </div>
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
+    <p class="small muted">Alle Daten liegen in <code id="data-dir">…</code></p>
   </div>
   <div class="card">
     <h2>Protokoll</h2>
@@ -1386,6 +1541,7 @@ function renderStatus(s){
   parts.push('Teams: ' + (ex.teams.last_run ? 'zuletzt ' + fmt(ex.teams.last_run) : 'noch nie'));
   parts.push('Index: ' + (st.exists ? fmt(st.built_at) : 'noch nie'));
   el('export-state').textContent = parts.join('  ·  ');
+  el('data-dir').textContent = s.data_dir;
 
   var busy = s.jobs.busy;
   el('btn-run').disabled = busy;
@@ -1406,11 +1562,8 @@ function renderStatus(s){
   el('mcp-state').textContent = s.mcp.running
     ? 'läuft auf ' + s.mcp.url + (st.semantic ? ' · hybride Suche' : ' · nur Volltextsuche')
     : (s.mcp.error || 'gestoppt');
-  el('mcp-json').textContent = JSON.stringify(
-    {mcpServers:{'office365-export':{type:'http', url:s.mcp.url}}}, null, 2);
-  el('mcp-stdio').textContent = JSON.stringify(
-    {mcpServers:{'office365-export':{command:'python3',
-      args:['mcp_server.py','--transport','stdio','--store',s.config.store_dir]}}}, null, 2);
+  el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
+  el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
   el('search-sub').textContent = st.exists
     ? (st.semantic ? 'Hybride Suche: Volltext (BM25) und Bedeutung (Embeddings) zusammengeführt.'
                    : 'Nur Volltextsuche (BM25) – für die semantische Hälfte fehlen die Embeddings.')

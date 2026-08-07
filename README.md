@@ -5,8 +5,10 @@ contacts) via Microsoft Graph — delegated access, no admin consent required �
 and search the exports offline: as a static HTML page, through **Claude** (MCP),
 or with a local RAG web UI.
 
-Either drive the scripts individually (sections 1–7) or run **`app.py`**, which
-puts all of it behind one browser window — see [The app](#the-app--everything-in-one-window).
+**Just want to use it?** Grab the ready-made app from
+[Releases](../../releases) — no Python, no `pip install`, nothing to set up. See
+[Download and run](#download-and-run). Everything below describes the scripts it
+is built from.
 
 ```
                    app.py  ── browser UI: token, export, search, schedule, MCP
@@ -28,9 +30,42 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `mcp_server.py` | MCP server — Claude searches and reads the exports itself |
 | `rag_server.py` | Local RAG web UI with AI answers (fully offline via Ollama) |
 | `corpus.py` | Shared export parsing (used internally) |
+| `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
-Everything runs on macOS, Windows and Linux with Python 3.11+ (CI tests 3.11
-and 3.13). Commands below use `python3`; on Windows type `python` instead.
+Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
+installed; from source it needs Python 3.11+ (CI tests 3.11 and 3.13). Commands
+below use `python3`; on Windows type `python` instead.
+
+---
+
+## Download and run
+
+Prebuilt bundles for macOS, Windows and Linux are attached to every
+[release](../../releases). They contain their own Python and every dependency —
+download, unpack, double-click, done. The UI opens in your default browser.
+
+| File | For |
+|---|---|
+| `Microsoft365-Archiv-macos-arm64.zip` | Mac with Apple Silicon (M1–M4) |
+| `Microsoft365-Archiv-macos-x86_64.zip` | Mac with an Intel CPU |
+| `Microsoft365-Archiv-windows-x64.zip` | Windows 10/11, 64-bit |
+| `Microsoft365-Archiv-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
+
+The bundles are **not code-signed** — certificates from Apple and Microsoft cost
+money — so both systems warn once on first launch. On macOS: open it, dismiss the
+warning, then System Settings → *Privacy & Security* → *Open Anyway* (or
+`xattr -dr com.apple.quarantine "/Applications/Microsoft365-Archiv.app"`). On
+Windows: *More info* → *Run anyway*. Running from source avoids this entirely and
+behaves identically.
+
+Data does **not** live inside the app, so updates never touch it:
+`~/Library/Application Support/Microsoft365-Archiv` (macOS),
+`%LOCALAPPDATA%\Microsoft365-Archiv` (Windows),
+`~/.local/share/Microsoft365-Archiv` (Linux). The path is shown in the Export
+tab. A mailbox can run to tens of gigabytes — for another disk, start with
+`--data-dir FOLDER` or set `OFFICE365_DATA_DIR`.
+
+Ollama stays optional: without it everything works except *semantic* search.
 
 ---
 
@@ -40,8 +75,9 @@ and 3.13). Commands below use `python3`; on Windows type `python` instead.
 python3 app.py                         # → opens http://127.0.0.1:8700 in your browser
 ```
 
-One command, one window, no terminal work afterwards. The UI is German (like the
-search page); the underlying scripts are unchanged and still work on their own.
+The same thing the bundles run, straight from the source tree. One command, one
+window, no terminal work afterwards. The UI is German (like the search page); the
+underlying scripts are unchanged and still work on their own.
 
 **Token assistant.** The app never signs you in — you fetch the access token
 yourself in the Graph Explorer and paste it in. The assistant opens at every
@@ -80,7 +116,32 @@ rebuild sets existing ones aside by content hash instead of discarding them.
 **MCP.** Start/stop `mcp_server.py` from the UI and copy the config snippet for
 Claude Code or Claude Desktop. Quitting the app also shuts the MCP server down.
 
-Options: `--port 8700`, `--no-browser`. Settings live in `app_config.json`.
+Options: `--port 8700` (busy ports are skipped automatically), `--no-browser`,
+`--data-dir FOLDER`. Settings live in `app_config.json` next to the data.
+
+<details>
+<summary>Building the bundles yourself</summary>
+
+```bash
+pip install -r requirements-build.txt
+pyinstaller packaging/app.spec --noconfirm
+python3 packaging/smoke_test.py dist/Microsoft365-Archiv/Microsoft365-Archiv
+```
+
+[`.github/workflows/build.yml`](.github/workflows/build.yml) does exactly this on
+macOS (arm64 + Intel), Windows and Linux for every push to `main`; a `v*` tag
+additionally publishes a release. Every bundle has to pass
+[`packaging/smoke_test.py`](packaging/smoke_test.py) first — it starts the app,
+builds an index (for which the bundle launches *itself* as a subprocess), searches
+it and starts the MCP server. A bundle with a missing dependency therefore never
+reaches a release.
+
+Inside a bundle there is no interpreter and there are no `.py` files, so `app.py`
+calls the sub-programs through its own executable: `Microsoft365-Archiv --run
+rag_index …` imports the module from the bundle and hands it the arguments. That
+is also what the Claude Desktop snippet in the MCP tab points at.
+
+</details>
 
 > ⚠️ Same rule as the MCP server: the app binds to `127.0.0.1`, has no
 > authentication and serves your whole mail and chat history. It validates the

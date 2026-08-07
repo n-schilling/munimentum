@@ -13,7 +13,10 @@ pythonpath = ["."]
 
 [tool.coverage.run]
 source = ["."]
-omit = ["tests/*"]
+# packaging/ ist Werkzeug für den Build, kein ausgelieferter Code: smoke_test.py
+# testet ein fertiges Bündel und läuft daher nur in der Build-Pipeline, nie unter
+# pytest. Mitzuzählen hieße, die Quote um totes Gewicht zu drücken.
+omit = ["tests/*", "packaging/*"]
 
 [tool.coverage.report]
 skip_empty = true
