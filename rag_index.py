@@ -119,6 +119,10 @@ def write_db(store, chunks):
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         CREATE INDEX ix_chunks_src_ts ON chunks(src, ts);
         CREATE INDEX ix_chunks_file ON chunks(root, rel, msg_idx);
+        -- browse_messages listet Nachrichten (seq = 0) nach Datum. Ohne diesen
+        -- Teilindex scannt SQLite alle Chunks und sortiert sie temporär: 48 ms
+        -- statt 0,06 ms bei 270k Chunks. Kostet ~1 MB.
+        CREATE INDEX ix_chunks_msg_ts ON chunks(ts DESC) WHERE seq = 0;
         CREATE TABLE people(src TEXT, who TEXT, messages INTEGER, ppl TEXT);
         CREATE INDEX ix_people_who ON people(who);
         CREATE VIRTUAL TABLE chunks_fts USING fts5(

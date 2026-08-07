@@ -37,9 +37,15 @@ Run (HTTP, default – one shared server for all Claude sessions):
         {"mcpServers": {"office365-export":
             {"type": "http", "url": "http://127.0.0.1:8365/mcp"}}}
 
-    The server binds to 127.0.0.1 and has no authentication – do NOT expose
-    it on the network (--host 0.0.0.0) unless you know what you are doing:
-    it serves your complete mail and chat history.
+    The server binds to 127.0.0.1 and has no authentication – it serves your
+    complete mail and chat history, so keep it local. On loopback the SDK
+    validates the Host and Origin headers, which stops a web page you happen
+    to visit from talking to the server through your browser (DNS rebinding).
+
+    That protection does not apply to any other bind address, so binding one
+    requires naming the hostnames clients will use; the server refuses to
+    start otherwise:
+        python3 mcp_server.py --host 0.0.0.0 --allowed-host nas.local
 
 Run (stdio – auto-launched per client, the classic setup):
     python3 mcp_server.py --transport stdio [--store …]
@@ -54,6 +60,7 @@ from datetime import datetime
 from urllib.parse import quote, unquote
 
 from mcp.server.mcpserver import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
@@ -107,6 +114,7 @@ _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
 _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail",
                  "kalender": "Kalender", "kontakte": "Kontakte"}
+_WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
 
@@ -135,7 +143,7 @@ def _where(person, dfrom, dto, src):
     if dto is not None:
         conds.append("ts <= ?")
         params.append(dto)
-    return (" AND ".join(conds) or "1=1"), params
+    return (" AND ".join(conds) or _WHERE_ALL), params
 
 
 def _to_ts(s, end):
@@ -190,6 +198,28 @@ def _embed_query(text):
 
 def _semantic_rank(con, query, where, params, limit):
     np, V = STATE["np"], STATE["V"]
+    B = 32768                                        # ~64 MB float16 per block
+
+    # Unfiltered – the default for search_messages – means "every chunk", so
+    # asking SQLite for the id list only to get back 1..n is pure overhead, and
+    # gathering those rows copies what is already contiguous. Scoring the matrix
+    # in slices instead is ~2.7x faster on a 270k-chunk corpus (105 ms → 39 ms).
+    # Safe because chunks.id is a contiguous INTEGER PRIMARY KEY starting at 1
+    # (vector row = id - 1) and _open_vectors() has already refused to load a
+    # matrix whose row count disagrees with the chunk count.
+    if where == _WHERE_ALL and not params:
+        n = V.shape[0]
+        if n == 0:
+            return []
+        qvec = _embed_query(query)                   # may raise (Ollama down)
+        sims = np.empty(n, dtype=np.float32)
+        for s in range(0, n, B):
+            sims[s:s + B] = V[s:s + B].astype(np.float32) @ qvec
+        take = min(limit, n)
+        order = np.argpartition(-sims, take - 1)[:take]
+        order = order[np.argsort(-sims[order])]
+        return [(int(o) + 1, float(sims[o])) for o in order]
+
     ids = np.fromiter((r[0] for r in
                        con.execute(f"SELECT id FROM chunks WHERE {where}", params)),
                       dtype=np.int64)
@@ -197,7 +227,6 @@ def _semantic_rank(con, query, where, params, limit):
         return []
     qvec = _embed_query(query)                       # may raise (Ollama down)
     sims = np.empty(ids.size, dtype=np.float32)
-    B = 32768                                        # ~64 MB float16 per block
     for s in range(0, ids.size, B):
         block = ids[s:s + B] - 1                     # chunks.id → vector row
         sims[s:s + B] = V[block].astype(np.float32) @ qvec
@@ -416,9 +445,12 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
     try:
         where, params = _where(person.strip(), _to_ts(date_from, False),
                                _to_ts(date_to, True), source)
+        # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
+        # below every value, so DESC already puts undated messages last – same
+        # order, but ix_chunks_msg_ts can serve it without a temp sort.
         rows = con.execute(
             f"SELECT * FROM chunks WHERE seq = 0 AND {where} "
-            f"ORDER BY (ts IS NULL), ts DESC LIMIT ? OFFSET ?",
+            f"ORDER BY ts DESC LIMIT ? OFFSET ?",
             [*params, max(1, k), max(0, offset)]).fetchall()
         pc = max(0, min(preview_chars, 2000))
         return {"count": len(rows), "offset": max(0, offset),
@@ -598,6 +630,51 @@ def source_resource(root: str, path: str) -> str:
 # --------------------------------------------------------------------------
 # Startup
 # --------------------------------------------------------------------------
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def _with_port(host, port):
+    """Append the default port unless the value already carries one.
+
+    Written so an IPv6 literal ("[fe80::1]") is not mistaken for host:port –
+    only a trailing all-digit segment counts as a port.
+    """
+    _, sep, tail = host.rpartition(":")
+    return host if sep and tail.isdigit() else f"{host}:{port}"
+
+
+def _transport_security(host, port, allowed):
+    """Origin/Host validation (DNS-rebinding protection) for the HTTP transport.
+
+    The SDK switches this on by itself for loopback binds, and there the
+    defaults are exactly right. It does *not* for any other address – which is
+    the one case where it matters: a server reachable from the network, with no
+    authentication, serving the complete mail and chat history. Without Host
+    and Origin checks, any web page the user happens to open can POST to this
+    endpoint and read the archive out through the browser.
+
+    Guessing the legitimate hostnames is not possible, so they have to be named
+    with --allowed-host. Refusing to start beats starting unprotected.
+    """
+    if host in _LOOPBACK:
+        return None                     # SDK default already validates these
+    if not allowed:
+        raise SystemExit(
+            f"Refusing to bind {host} without --allowed-host.\n"
+            f"This server has no authentication and serves your whole mail and\n"
+            f"chat history. Off the loopback interface, Host/Origin validation\n"
+            f"is the only thing standing between it and any web page you open.\n"
+            f"  • keep it local:  drop --host (defaults to 127.0.0.1)\n"
+            f"  • or name the hostnames clients will use:\n"
+            f"      --host {host} --allowed-host myhost.local --allowed-host 192.168.1.5")
+    hosts = [_with_port(h, port) for h in allowed]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=[f"{scheme}://{h}" for h in hosts
+                         for scheme in ("http", "https")])
+
+
 def _open_vectors(store, n_chunks):
     """Memory-map vectors.npy if numpy + the file are present."""
     vp = Path(store) / "vectors.npy"
@@ -632,6 +709,10 @@ def main():
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
     ap.add_argument("--port", type=int, default=8365)
+    ap.add_argument("--allowed-host", action="append", default=[], metavar="HOST[:PORT]",
+                    help="Hostname clients may use in the Host/Origin header. "
+                         "Required when --host is not the loopback interface; "
+                         "repeat for several. Port defaults to --port.")
     a = ap.parse_args()
 
     dbp = Path(a.store) / "corpus.db"
@@ -653,10 +734,14 @@ def main():
                else "lexical (FTS5/BM25) only")
     print(f"office365-export MCP: {n_chunks} chunks · {backend}", file=sys.stderr)
     if a.transport == "http":
+        security = _transport_security(a.host, a.port, a.allowed_host)
         print(f"MCP endpoint: http://{a.host}:{a.port}{_HTTP_PATH}",
               file=sys.stderr)
+        if security is not None:
+            print(f"Host/Origin restricted to: {', '.join(security.allowed_hosts)}",
+                  file=sys.stderr)
         mcp.run(transport="streamable-http", host=a.host, port=a.port,
-                streamable_http_path=_HTTP_PATH)
+                streamable_http_path=_HTTP_PATH, transport_security=security)
     else:
         mcp.run(transport="stdio")
 

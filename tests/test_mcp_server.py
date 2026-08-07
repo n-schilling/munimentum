@@ -197,7 +197,8 @@ def test_to_ts_parses_and_clamps_day_end():
 
 def test_where_builds_fragments():
     w, p = mcp_server._where("", None, None, "all")
-    assert w == "1=1" and p == []
+    # _WHERE_ALL ist der Schnellpfad-Marker in _semantic_rank – Wert festnageln
+    assert w == "1=1" and w == mcp_server._WHERE_ALL and p == []
     w, p = mcp_server._where("Alice", 1.0, 2.0, "teams")
     assert "src = ?" in w and "ppl LIKE ?" in w
     assert "ts >= ?" in w and "ts <= ?" in w
@@ -606,6 +607,69 @@ def test_list_people_contains_ist_umlaut_unabhaengig(tmp_path):
     finally:
         mcp_server.STATE.clear()
         mcp_server.STATE.update(old)
+
+
+# --------------------------------------------------------------------------
+# Schnellpfad in _semantic_rank (ungefiltert)
+# --------------------------------------------------------------------------
+def test_semantic_schnellpfad_ist_deckungsgleich(state, monkeypatch):
+    """Ohne Filter wird die Matrix am Stück gelesen statt über eine id-Liste.
+
+    Beide Wege müssen dieselben Treffer mit denselben Scores liefern. Der
+    SQL-Weg wird über ein äquivalentes, aber nicht wörtlich gleiches WHERE
+    erzwungen ("1=1 AND 1=1"), das denselben Zeilen entspricht.
+    """
+    chunks = state["chunks"]
+    _stub_semantic(monkeypatch, chunks, {c["uid"]: 1.0 / (i + 1)
+                                         for i, c in enumerate(chunks)})
+    con = mcp_server._db()
+    try:
+        schnell = mcp_server._semantic_rank(con, "q", mcp_server._WHERE_ALL, [], 10)
+        ueber_sql = mcp_server._semantic_rank(con, "q", "1=1 AND 1=1", [], 10)
+    finally:
+        con.close()
+    assert schnell, "Schnellpfad liefert nichts"
+    assert dict(schnell) == dict(ueber_sql)      # gleiche ids, gleiche Scores
+
+
+def test_semantic_schnellpfad_bei_leerer_matrix(state, monkeypatch):
+    monkeypatch.setitem(mcp_server.STATE, "V", np.zeros((0, DIM), dtype="float16"))
+    con = mcp_server._db()
+    try:
+        assert mcp_server._semantic_rank(con, "q", mcp_server._WHERE_ALL, [], 5) == []
+    finally:
+        con.close()
+
+
+# --------------------------------------------------------------------------
+# Transport-Absicherung (DNS-Rebinding) für den HTTP-Transport
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_loopback_ueberlaesst_die_pruefung_dem_sdk(host):
+    # None = SDK-Automatik; die deckt genau die Loopback-Adressen ab
+    assert mcp_server._transport_security(host, 8365, []) is None
+
+
+def test_nicht_loopback_ohne_allowed_host_startet_nicht():
+    with pytest.raises(SystemExit, match="--allowed-host"):
+        mcp_server._transport_security("0.0.0.0", 8365, [])
+
+
+def test_nicht_loopback_mit_allowed_host_erzwingt_pruefung():
+    s = mcp_server._transport_security("0.0.0.0", 8365,
+                                       ["nas.local", "192.168.1.5:9000"])
+    assert s.enable_dns_rebinding_protection is True
+    assert s.allowed_hosts == ["nas.local:8365", "192.168.1.5:9000"]
+    assert "http://nas.local:8365" in s.allowed_origins
+    assert "https://192.168.1.5:9000" in s.allowed_origins
+
+
+def test_with_port_verwechselt_ipv6_nicht_mit_port():
+    assert mcp_server._with_port("host", 8365) == "host:8365"
+    assert mcp_server._with_port("host:9000", 8365) == "host:9000"
+    # IPv6-Literal ohne Port: der Teil hinter dem letzten ":" ist keine Zahl
+    assert mcp_server._with_port("[fe80::1]", 8365) == "[fe80::1]:8365"
+    assert mcp_server._with_port("[fe80::1]:9000", 8365) == "[fe80::1]:9000"
 
 
 # --------------------------------------------------------------------------

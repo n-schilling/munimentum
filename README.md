@@ -199,6 +199,16 @@ python3 rag_index.py teams_export outlook_export
 The build is **incremental** — re-run it after each export; only new/changed
 content is re-embedded.
 
+> Store built before the `ix_chunks_msg_ts` index was added? `browse_messages`
+> then scans the whole table (~48 ms at 270k chunks instead of ~0.2 ms). The
+> next `rag_index.py` run creates it; to add it in place instead, without
+> re-embedding anything:
+>
+> ```bash
+> sqlite3 rag_store/corpus.db \
+>   'CREATE INDEX IF NOT EXISTS ix_chunks_msg_ts ON chunks(ts DESC) WHERE seq = 0;'
+> ```
+
 ---
 
 ## 6. MCP server — search with Claude
@@ -219,8 +229,17 @@ python3 mcp_server.py                  # endpoint: http://127.0.0.1:8365/mcp
 ```
 
 > ⚠️ The server has **no authentication** and serves your complete mail and
-> chat history. Keep it on `127.0.0.1` (the default) — never bind it to the
-> network with `--host`.
+> chat history. Keep it on `127.0.0.1` (the default).
+>
+> On loopback the Host and Origin headers are validated, so a web page you
+> happen to visit cannot reach the server through your browser (DNS
+> rebinding). That protection does not extend to other bind addresses, so
+> binding one means naming the hostnames clients will use — otherwise the
+> server refuses to start:
+>
+> ```bash
+> python3 mcp_server.py --host 0.0.0.0 --allowed-host nas.local
+> ```
 
 **Register in Claude Code** — this repo's `.mcp.json` already does it:
 
