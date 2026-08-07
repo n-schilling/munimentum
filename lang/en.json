@@ -271,5 +271,19 @@
   "srv.token.found.plain": "Token found, lifetime unknown.",
   "wizard.token.ok.nowho": "Token valid, {rest} left. You only need a new one once it expires — this window will say so by itself.",
   "wizard.token.ok.unknown": "Token valid for {who}. You only need a new one once it expires — this window will say so by itself.",
-  "wizard.token.ok.plain": "Token valid. You only need a new one once it expires — this window will say so by itself."
+  "wizard.token.ok.plain": "Token valid. You only need a new one once it expires — this window will say so by itself.",
+  "update.title": "Version",
+  "update.current": "Installed version: {v}",
+  "update.checking": "Checking…",
+  "update.uptodate": "This is the latest version.",
+  "update.available": "Version {v} is available.",
+  "update.none": "There is no release yet.",
+  "update.off": "The check is switched off.",
+  "update.error": "Check not possible: {error}",
+  "update.check": "Check now",
+  "update.open": "Go to the releases page",
+  "update.enabled": "Look for updates at startup",
+  "update.enabled.hint": "— asks api.github.com once. Otherwise the app talks to nothing but Microsoft Graph and your local Ollama.",
+  "update.banner": "Version {v} is available — you have {current}.",
+  "srv.update.available": "Version {version} is available ({url})."
 }

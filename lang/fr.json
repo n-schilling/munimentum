@@ -271,5 +271,19 @@
   "srv.token.found.plain": "Jeton trouvé, durée inconnue.",
   "wizard.token.ok.nowho": "Jeton valide, {rest} restantes. Vous n’en aurez besoin d’un nouveau qu’à son expiration — cette fenêtre vous le dira d’elle-même.",
   "wizard.token.ok.unknown": "Jeton valide pour {who}. Vous n’en aurez besoin d’un nouveau qu’à son expiration — cette fenêtre vous le dira d’elle-même.",
-  "wizard.token.ok.plain": "Jeton valide. Vous n’en aurez besoin d’un nouveau qu’à son expiration — cette fenêtre vous le dira d’elle-même."
+  "wizard.token.ok.plain": "Jeton valide. Vous n’en aurez besoin d’un nouveau qu’à son expiration — cette fenêtre vous le dira d’elle-même.",
+  "update.title": "Version",
+  "update.current": "Version installée : {v}",
+  "update.checking": "Vérification…",
+  "update.uptodate": "C’est la version la plus récente.",
+  "update.available": "La version {v} est disponible.",
+  "update.none": "Il n’y a pas encore de version publiée.",
+  "update.off": "La vérification est désactivée.",
+  "update.error": "Vérification impossible : {error}",
+  "update.check": "Vérifier maintenant",
+  "update.open": "Aller à la page des versions",
+  "update.enabled": "Rechercher des mises à jour au démarrage",
+  "update.enabled.hint": "— interroge api.github.com une fois. Sinon l’application ne parle qu’à Microsoft Graph et à votre Ollama local.",
+  "update.banner": "La version {v} est disponible — vous avez {current}.",
+  "srv.update.available": "La version {version} est disponible ({url})."
 }

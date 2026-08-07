@@ -47,6 +47,19 @@ jobs:
         with:
           python-version: "3.13"
 
+      - name: Version prüfen
+        # Bei einem Tag muss version.py dieselbe Zahl tragen. Sonst meldete die
+        # App eine andere Version als der Download – und die eingebaute
+        # Aktualisierungsprüfung riete dauerhaft zum Update auf sich selbst.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          datei=$(python -c "import version; print(version.VERSION)")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "version.py: $datei · Tag: $tag"
+          test "$datei" = "$tag" || {
+            echo "::error::version.py sagt $datei, der Tag sagt $tag"; exit 1; }
+
       - name: Abhängigkeiten installieren
         run: pip install -r requirements-build.txt
 

@@ -64,6 +64,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 import settings
+import version
 
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
 # Unicode in messages never raises (no-op on macOS/Linux).
@@ -105,7 +106,7 @@ offset rather than raising k; a hit's "uri" can be read as an MCP resource.
 mcp = MCPServer(
     "office365-export",
     title="Office 365 Export",
-    version="1.0.0",
+    version=version.VERSION,
     website_url="https://github.com/n-schilling/office_365_exporter",
     instructions=_INSTRUCTIONS,
 )

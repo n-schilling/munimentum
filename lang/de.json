@@ -271,5 +271,19 @@
   "srv.token.found.plain": "Token gefunden, Laufzeit unbekannt.",
   "wizard.token.ok.nowho": "Token gültig, noch {rest}. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst.",
   "wizard.token.ok.unknown": "Token gültig für {who}. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst.",
-  "wizard.token.ok.plain": "Token gültig. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst."
+  "wizard.token.ok.plain": "Token gültig. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst.",
+  "update.title": "Version",
+  "update.current": "Installierte Version: {v}",
+  "update.checking": "Wird geprüft…",
+  "update.uptodate": "Das ist die neueste Version.",
+  "update.available": "Version {v} ist verfügbar.",
+  "update.none": "Es gibt noch kein Release.",
+  "update.off": "Die Prüfung ist abgeschaltet.",
+  "update.error": "Prüfung nicht möglich: {error}",
+  "update.check": "Jetzt prüfen",
+  "update.open": "Zur Releases-Seite",
+  "update.enabled": "Beim Start nach Aktualisierungen sehen",
+  "update.enabled.hint": "– fragt einmal api.github.com. Sonst spricht die App mit nichts außer Microsoft Graph und dem lokalen Ollama.",
+  "update.banner": "Version {v} ist verfügbar – du hast {current}.",
+  "srv.update.available": "Version {version} ist verfügbar ({url})."
 }

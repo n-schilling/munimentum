@@ -68,6 +68,14 @@ Ohne Ollama funktioniert alles außer der *semantischen* Suche — Export, Vollt
 und der MCP-Server für Claude laufen ganz normal. Die App fragt beim Start und
 erklärt die Installation, falls gewünscht.
 
+## Aktualisierungen
+
+Die App sieht beim Start einmal bei GitHub nach, ob es eine neuere Version gibt,
+und hinterlässt dann nur eine Notiz mit Link – heruntergeladen oder ersetzt wird
+nichts. Abschalten kannst du das im Reiter *Einstellungen*; es ist die einzige
+Verbindung, die die App außer zu Microsoft Graph und deinem lokalen Ollama
+aufbaut.
+
 ## Prüfsummen
 
 `SHA256SUMS.txt` liegt bei. Prüfen mit `shasum -a 256 -c SHA256SUMS.txt` (macOS/Linux)

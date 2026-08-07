@@ -18,9 +18,14 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH setzt PyInstaller)
 
+# Versionsnummer aus version.py – nicht hier noch einmal pflegen.
+_v = {}
+exec((ROOT / "version.py").read_text(encoding="utf-8"), _v)
+VERSION = _v["VERSION"]
+
 TEILPROGRAMME = ["outlook_export", "teams_export", "rag_index",
                  "combined_search", "mcp_server", "rag_server", "corpus",
-                 "settings", "i18n"]
+                 "settings", "i18n", "updates", "version"]
 
 def ohne_cli(name):
     """mcp.cli braucht typer – ein optionales Extra, das wir nicht mitliefern.
@@ -97,7 +102,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "Microsoft365-Archiv",
             "CFBundleDisplayName": "Microsoft 365 Archiv",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleShortVersionString": VERSION,
             "NSHighResolutionCapable": True,
             # Kein Dock-Icon-Dauergast: die App lebt im Browser.
             "LSUIElement": False,

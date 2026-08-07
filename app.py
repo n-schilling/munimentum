@@ -53,6 +53,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import i18n
 import settings
+import updates
+import version
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage; UTF-8
 # erzwingen, damit print() an Unicode nicht scheitert (macOS/Linux: No-op).
@@ -155,6 +157,7 @@ DEFAULT_CONFIG = {
     "embed_model": "bge-m3",
     "mcp_port": 8365,
     "mcp_autostart": True,
+    "update_check": True,   # einmal beim Start bei GitHub nachsehen
     "language": "auto",   # "auto" = Browsersprache, sonst ein Code aus lang/
     "schedule": {
         "enabled": False,
@@ -972,6 +975,8 @@ class App:
         self.scheduler = Scheduler(self)
         self._ollama_cache = (0.0, None)
         self._calendar_cache = None      # (Kennung, roh, gzip)
+        self._update = {"status": "off", "current": version.VERSION,
+                        "latest": None, "url": None, "newer": False, "error": None}
 
     # -- abgeleiteter Zustand ---------------------------------------------
     def selected_categories(self):
@@ -988,6 +993,27 @@ class App:
         res = check_ollama(self.cfg["ollama"], self.cfg["embed_model"])
         self._ollama_cache = (time.time(), res)
         return res
+
+    def check_updates(self, blockierend=False):
+        """Einmal nachsehen, ob es ein neueres Release gibt.
+
+        Im Hintergrund, weil der Start nicht auf eine Netzantwort warten soll –
+        wer offline ist, will die App trotzdem sofort sehen.
+        """
+        def lauf():
+            self._update = updates.check(version.VERSION, version.REPO,
+                                         enabled=bool(self.cfg.get("update_check", True)))
+            if self._update["newer"]:
+                self.jobs.logk("srv.update.available", "info",
+                               version=self._update["latest"],
+                               url=self._update["url"] or version.RELEASES_URL)
+            # Alles andere bleibt still: kein Release, kein Netz oder abgeschaltet
+            # sind keine Ereignisse, mit denen man jemanden behelligt.
+        if blockierend:
+            lauf()
+        else:
+            threading.Thread(target=lauf, daemon=True).start()
+        return self._update
 
     def log_token_state(self):
         """Beim Start einmal sagen, woran man ist.
@@ -1049,6 +1075,7 @@ class App:
             "wizard": wizard,
             "data_dir": str(BASE),
             "frozen": FROZEN,
+            "update": dict(self._update, releases_url=version.RELEASES_URL),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
@@ -1234,6 +1261,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._mcp(data))
             if u.path == "/api/ollama-recheck":
                 return self._json(app.ollama(force=True))
+            if u.path == "/api/update-check":
+                return self._json(app.check_updates(blockierend=True))
             if u.path == "/api/quit":
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return self._json({"ok": True})
@@ -1293,7 +1322,7 @@ class Handler(BaseHTTPRequestHandler):
                     cfg[key] = max(low, min(high, int(data[key])))
                 except (TypeError, ValueError):
                     pass
-        for key in ("mcp_autostart", "embed_images", "cache_images",
+        for key in ("mcp_autostart", "update_check", "embed_images", "cache_images",
                     "refresh_channels", "skip_empty_chats", "include_hidden"):
             if key in data:
                 cfg[key] = bool(data[key])
@@ -1444,6 +1473,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
     app.log_token_state()
+    app.check_updates()
     app.scheduler.start()
     app.autostart_mcp()
     print(f"Office-365-Export läuft: {url}")
@@ -1684,6 +1714,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 
 <main>
 <section id="tab-export">
+  <div class="banner hide" id="update-banner" style="margin-bottom:16px"></div>
   <div class="card">
     <h2 data-i18n="export.what">Was soll exportiert werden?</h2>
     <p class="sub" data-i18n="export.what.sub">Die Auswahl wird gespeichert und gilt auch für den Zeitplan.</p>
@@ -1872,6 +1903,20 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   </div>
 
   <div class="card">
+    <h2 data-i18n="update.title">Version</h2>
+    <p class="small" id="update-current"></p>
+    <p class="small muted" id="update-state"></p>
+    <label class="chk"><input type="checkbox" id="c-update_check">
+      <span data-i18n="update.enabled">Beim Start nach Aktualisierungen sehen</span></label>
+    <p class="small muted" data-i18n="update.enabled.hint" style="margin:2px 0 12px 26px"></p>
+    <div class="row">
+      <button class="ghost" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
+      <a class="ghost" id="update-link" target="_blank" rel="noopener"
+         style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
+    </div>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="settings.lang.title">Sprache</h2>
     <p class="sub" data-i18n="settings.lang.sub">Gilt für diese Oberfläche.</p>
     <select id="c-language" style="min-width:240px"></select>
@@ -2022,6 +2067,7 @@ function renderStatus(s){
   el('export-state').textContent = parts.join('  ·  ');
   el('data-dir').textContent = s.data_dir;
   el('data-dir2').textContent = s.data_dir;
+  zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
 
   var busy = s.jobs.busy;
@@ -2431,9 +2477,34 @@ function toggleMcp(){
   });
 }
 
+/* ---------- Aktualisierungen ----------
+   Nur eine Notiz: nichts wird geladen, nichts ersetzt. Gemeldet wird allein
+   der Fall "es gibt etwas Neueres" – kein Release, kein Netz oder abgeschaltet
+   sind normale Zustände und stehen nur in den Einstellungen. */
+function zeigeUpdate(u){
+  var banner = el('update-banner');
+  banner.classList.toggle('hide', !u.newer);
+  if(u.newer){
+    banner.innerHTML = esc(t('update.banner', {v: u.latest, current: u.current})) +
+      ' <a href="' + esc(u.url || u.releases_url || '#') + '" target="_blank" rel="noopener">' +
+      esc(t('update.open')) + '</a>';
+  }
+  el('update-current').textContent = t('update.current', {v: u.current || '?'});
+  el('update-state').textContent =
+      u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest}) : t('update.uptodate'))
+    : u.status === 'none' ? t('update.none')
+    : u.status === 'error' ? t('update.error', {error: u.error || ''})
+    : t('update.off');
+  el('update-link').href = u.url || u.releases_url || '#';
+}
+function pruefeUpdate(){
+  el('update-state').textContent = t('update.checking');
+  post('/api/update-check').then(function(u){ zeigeUpdate(u); refresh(); });
+}
+
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
-                'include_hidden','mcp_autostart'];
+                'include_hidden','mcp_autostart','update_check'];
 var ZAHLEN   = ['workers','index_batch','mcp_port'];
 var TEXTE    = ['ollama','embed_model','teams_dir','outlook_dir','store_dir'];
 var cfgGefuellt = false;

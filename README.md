@@ -32,6 +32,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `corpus.py` | Shared export parsing (used internally) |
 | `settings.py` | `app_config.json` as a defaults layer for every script (used internally) |
 | `i18n.py`, `lang/` | UI translations (German, English, French) |
+| `version.py`, `updates.py` | Version number and the startup update check |
 | `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
 Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
@@ -155,6 +156,20 @@ its log: those are stored as keys and rendered on display, so switching language
 also re-renders what is already in the log. What the export scripts print to
 their console passes through untouched — they are standalone tools with their own
 docs. Exported content is never touched at all.
+
+**Update note.** At startup the app asks the GitHub releases API once whether a
+newer version exists and, if so, leaves a note — a line in the log and a banner
+on the Export tab linking to the release. Nothing is downloaded and nothing is
+replaced: with an unsigned app, a silent self-replacement is not something you
+should want. No release yet (the API answers 404), no network, or the check
+switched off are all normal states and stay quiet; the *Version* card in the
+settings shows them.
+
+It is the app's only call to anything but Microsoft Graph and your local Ollama,
+so it has its own switch right next to it. The version lives in
+[`version.py`](version.py); the release workflow refuses to build a `v*` tag
+whose number disagrees with that file, because a mismatch would make the app
+recommend updating to itself forever.
 
 **Settings.** The *Einstellungen* tab exposes every option the individual scripts
 have — the Teams image and channel switches, Outlook's hidden folders and its

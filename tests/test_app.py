@@ -643,6 +643,92 @@ def test_ollama_ergebnis_wird_kurz_zwischengespeichert(sandbox, monkeypatch):
 
 
 # --------------------------------------------------------------------------
+# Aktualisierungsprüfung
+# --------------------------------------------------------------------------
+def test_update_check_meldet_nur_neuere_versionen(sandbox, with_ollama, monkeypatch):
+    monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
+        "status": "ok", "current": "1.0.0", "latest": "1.4.0",
+        "url": "https://example.invalid/v1.4.0", "newer": True, "error": None})
+    a = app_mod.App(app_mod.load_config())
+    a.check_updates(blockierend=True)
+    zeile = a.jobs.lines[-1]
+    assert schluessel(zeile["text"]) == "srv.update.available"
+    assert werte(zeile["text"])["version"] == "1.4.0"
+    assert a.status()["update"]["newer"] is True
+
+
+@pytest.mark.parametrize("zustand", [
+    {"status": "none", "newer": False},           # noch kein Release
+    {"status": "error", "newer": False, "error": "kein Netz"},
+    {"status": "off", "newer": False},
+    {"status": "ok", "newer": False, "latest": "1.0.0"},
+])
+def test_update_check_schweigt_sonst(sandbox, with_ollama, monkeypatch, zustand):
+    """Kein Release, kein Netz oder schon aktuell sind normale Zustände – damit
+    behelligt man niemanden im Protokoll."""
+    voll = {"current": "1.0.0", "latest": None, "url": None, "error": None, **zustand}
+    monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: voll)
+    a = app_mod.App(app_mod.load_config())
+    a.check_updates(blockierend=True)
+    assert list(a.jobs.lines) == []          # deque
+    assert a.status()["update"]["status"] == zustand["status"]
+
+
+def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeypatch):
+    """Abgeschaltet heißt abgeschaltet – updates.check darf gar nicht erst
+    hinausgehen, das prüft es selbst anhand dieses Schalters."""
+    gesehen = {}
+    monkeypatch.setattr(app_mod.updates, "check",
+                        lambda current, repo, enabled=True: gesehen.update(
+                            current=current, repo=repo, enabled=enabled) or
+                        {"status": "off", "current": current, "latest": None,
+                         "url": None, "newer": False, "error": None})
+    cfg = app_mod.load_config()
+    cfg["update_check"] = False
+    app_mod.App(cfg).check_updates(blockierend=True)
+    assert gesehen["enabled"] is False
+    assert gesehen["current"] == app_mod.version.VERSION
+    assert gesehen["repo"] == app_mod.version.REPO
+
+
+def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
+    """Der erste Statusabruf kommt, bevor die Prüfung im Hintergrund fertig ist."""
+    s = app_mod.App(app_mod.load_config()).status()
+    assert s["update"]["current"] == app_mod.version.VERSION
+    assert s["update"]["newer"] is False
+    assert s["update"]["releases_url"].startswith("https://github.com/")
+
+
+def test_update_check_laeuft_im_hintergrund(sandbox, with_ollama, monkeypatch):
+    """Der Start darf nicht auf eine Netzantwort warten."""
+    los = threading.Event()
+    def langsam(*a, **k):
+        los.wait(5)
+        return {"status": "none", "current": "1.0.0", "latest": None,
+                "url": None, "newer": False, "error": None}
+
+    monkeypatch.setattr(app_mod.updates, "check", langsam)
+    a = app_mod.App(app_mod.load_config())
+    a.check_updates()                       # kehrt sofort zurück
+    assert a.status()["update"]["status"] == "off"
+    los.set()
+
+
+def test_http_update_check(server, monkeypatch):
+    monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
+        "status": "ok", "current": "1.0.0", "latest": "2.0.0",
+        "url": "u", "newer": True, "error": None})
+    code, r = call(server[1], "POST", "/api/update-check")
+    assert code == 200 and r["newer"] is True and r["latest"] == "2.0.0"
+
+
+def test_http_config_schaltet_die_pruefung_ab(server, sandbox):
+    code, r = call(server[1], "POST", "/api/config", {"update_check": False})
+    assert code == 200 and r["config"]["update_check"] is False
+    assert app_mod.load_config()["update_check"] is False
+
+
+# --------------------------------------------------------------------------
 # Status und Assistenten-Steuerung
 # --------------------------------------------------------------------------
 def test_status_zeigt_token_assistenten_ohne_token(sandbox, with_ollama):
