@@ -5,8 +5,13 @@ contacts) via Microsoft Graph — delegated access, no admin consent required �
 and search the exports offline: as a static HTML page, through **Claude** (MCP),
 or with a local RAG web UI.
 
+Either drive the scripts individually (sections 1–7) or run **`app.py`**, which
+puts all of it behind one browser window — see [The app](#the-app--everything-in-one-window).
+
 ```
-teams_export.py  ─┐                        ┌─ *_search.py      → static search.html
+                   app.py  ── browser UI: token, export, search, schedule, MCP
+                     │
+teams_export.py  ─┐  │                     ┌─ *_search.py      → static search.html
                   ├─ local export folders ─┤
 outlook_export.py ┘                        └─ rag_index.py → rag_store/
                                                 ├─ mcp_server.py → Claude (MCP tools)
@@ -15,6 +20,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 
 | Script | Purpose |
 |---|---|
+| `app.py` | Browser UI that drives everything below (start here) |
 | `teams_export.py` | Teams 1:1/group/meeting chats and channels → HTML |
 | `outlook_export.py` | Mail (`.eml`), calendar (`.ics`), contacts (`.vcf`) |
 | `combined_search.py` | Self-contained offline search page (Teams + Mail + calendar + contacts) |
@@ -25,6 +31,61 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 
 Everything runs on macOS, Windows and Linux with Python 3.11+ (CI tests 3.11
 and 3.13). Commands below use `python3`; on Windows type `python` instead.
+
+---
+
+## The app — everything in one window
+
+```bash
+python3 app.py                         # → opens http://127.0.0.1:8700 in your browser
+```
+
+One command, one window, no terminal work afterwards. The UI is German (like the
+search page); the underlying scripts are unchanged and still work on their own.
+
+**Token assistant.** The app never signs you in — you fetch the access token
+yourself in the Graph Explorer and paste it in. The assistant opens at every
+start and whenever no valid token is there: it links the Graph Explorer, names
+exactly the permissions your current selection needs, takes the pasted token
+(with or without `Bearer`, line breaks and quotes are stripped) and writes it to
+`gx_token.txt`, readable only by you. It also reads the token's `exp` and `scp`
+claims, so it can say *"valid for another 43 minutes"* or *"still missing
+Calendars.Read"* instead of letting a run fail later for reasons nobody sees.
+
+**Export.** Tick what you want; the app passes the selection to the export
+scripts through `EXPORT_CATEGORIES`, so they run without a single prompt. Output
+streams into the log panel live. Both exports stay resumable — a second run only
+fetches what is new.
+
+**Search** is built in and uses the same ranking as the MCP server (BM25 and
+embeddings fused with RRF) — `mcp_server.py` is imported as a library rather than
+a second search path being maintained. Hits link to their source file, served
+with `Content-Security-Policy: sandbox` so an exported Teams page cannot script
+against the app.
+
+**Schedule.** While the app is open, it can re-run export and indexing at a fixed
+interval. Deliberately bound to the app's runtime and not to launchd/Task
+Scheduler: a hand-fetched token is valid for roughly an hour, so a background
+schedule would mostly produce expired-token failures that nobody sees. When a run
+does hit an expired token, the app notices, skips the next one and reopens the
+assistant.
+
+**No Ollama?** The app checks at start and shows an assistant with the install
+steps for your OS. You can also just continue: the MCP server still starts (it
+falls back to BM25 by itself) and indexing is skipped — or built as a pure
+full-text index via `rag_index.py --no-embeddings`, which keeps search and MCP
+working immediately. Embeddings can be added later at any time; a lexical
+rebuild sets existing ones aside by content hash instead of discarding them.
+
+**MCP.** Start/stop `mcp_server.py` from the UI and copy the config snippet for
+Claude Code or Claude Desktop. Quitting the app also shuts the MCP server down.
+
+Options: `--port 8700`, `--no-browser`. Settings live in `app_config.json`.
+
+> ⚠️ Same rule as the MCP server: the app binds to `127.0.0.1`, has no
+> authentication and serves your whole mail and chat history. It validates the
+> `Host` header so a web page you happen to visit cannot reach it through your
+> browser (DNS rebinding), and it has no option to bind anything else.
 
 ---
 
@@ -119,6 +180,7 @@ default calendar and all contacts. Same as pressing Enter at every prompt.
 |---|---|---|---|
 | `EXPORT_WORKERS` | both | `4` | Parallel downloads. `4` is the sensible max (throttling); use `1` on flaky connections. |
 | `GRAPH_TOKEN` | both | — | Pasted Graph token instead of browser login (section 2). |
+| `EXPORT_CATEGORIES` | both | — | Pick categories without any prompt — Teams: `1on1,group,meeting,channels`; Outlook: `mail,calendar,contacts`. Wins over `-default`. This is how `app.py` and its scheduler drive the exports; equally useful for cron. |
 | `REFRESH_CHANNELS` | Teams | `1` | `0` = don't re-check exported channels for new replies. |
 | `CACHE_IMAGES` | Teams | `1` | `0` = don't cache inline images (saves disk, slower re-export). |
 | `SKIP_EMPTY_CHATS` | Teams | `1` | `0` = also export chats with only system messages. |
@@ -200,6 +262,18 @@ python3 rag_index.py teams_export outlook_export
 
 The build is **incremental** — re-run it after each export; only new/changed
 content is re-embedded.
+
+**Without Ollama:** `--no-embeddings` writes only `corpus.db` with its FTS5
+index. Search and the MCP server then rank purely lexically (BM25) — the
+semantic half is missing, nothing else. Existing embeddings are not thrown away:
+because `vectors.npy` is tied row-by-row to `corpus.db`, a lexical rebuild would
+break that pairing, so they are set aside hash-indexed in `vectors_stale.npz`
+first. A later run with Ollama picks them straight back up and only embeds what
+is genuinely new.
+
+```bash
+python3 rag_index.py --no-embeddings   # no Ollama needed
+```
 
 > Store built before the `ix_chunks_msg_ts` index was added? `browse_messages`
 > then scans the whole table (~48 ms at 270k chunks instead of ~0.2 ms). The

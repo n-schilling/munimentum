@@ -195,7 +195,21 @@ def test_select_calendars_default_und_auswahl(monkeypatch):
     assert outlook_export.select_calendars(cals) == [cals[0]]
 
 
+def test_prompt_categories_env(monkeypatch, capsys):
+    """EXPORT_CATEGORIES setzt die Auswahl ohne jede Abfrage (app.py, Zeitplan)."""
+    monkeypatch.setattr(outlook_export, "_interactive", lambda: True)
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail;CONTACTS")
+    assert outlook_export.prompt_categories() == {"mail", "contacts"}
+    assert "EXPORT_CATEGORIES" in capsys.readouterr().out
+
+    # Nur Unbekanntes zählt wie „nicht gesetzt“ – dann greift die Standardauswahl
+    monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch")
+    monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
+    assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
+
+
 def test_prompt_categories(monkeypatch):
+    monkeypatch.delenv("EXPORT_CATEGORIES", raising=False)
     monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
     assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
     monkeypatch.setattr(outlook_export, "_interactive", lambda: True)

@@ -1,0 +1,1591 @@
+#!/usr/bin/env python3
+"""
+app.py – Bedienoberfläche für den Office-365-Export im Browser.
+
+Ein Start, ein Fenster: das Skript startet einen kleinen HTTP-Server auf
+127.0.0.1 und öffnet die Oberfläche im Standardbrowser. Von dort aus laufen
+alle Teile des Projekts, ohne dass jemand ein Terminal braucht:
+
+    Token       Assistent: Access Token im Graph Explorer holen und einfügen.
+                Erscheint bei jedem Start und immer dann, wenn kein gültiger
+                Token da ist. Eine Anmeldung findet NICHT statt – der Token
+                wird ausschließlich manuell besorgt (gx_token.txt).
+    Export      Outlook und/oder Teams, Auswahl per Klick statt per Abfrage
+                (setzt EXPORT_CATEGORIES für die Export-Skripte).
+    Index       rag_index.py im Anschluss, für Suche und MCP.
+    Suche       eingebettet – dieselbe Rangfolge wie im MCP-Server
+                (BM25 + Embeddings, per RRF fusioniert).
+    Zeitplan    solange die App läuft: Export + Index in festem Abstand.
+    MCP         mcp_server.py starten/stoppen, Konfigschnipsel für Claude.
+
+Ohne Ollama zeigt die App einen Assistenten zur Installation. Alternativ läuft
+alles weiter: der MCP-Server wird gestartet und die Indizierung ausgelassen
+(bzw. auf Wunsch als reiner Volltextindex gebaut, rag_index.py --no-embeddings).
+
+    python3 app.py [--port 8700] [--no-browser]
+
+Der Server bindet nur auf die Loopback-Adresse und prüft den Host-Header. Er
+hat keine Authentifizierung und liefert den gesamten Mail- und Chatbestand
+aus – er gehört nicht auf 0.0.0.0.
+"""
+
+import os
+import re
+import sys
+import copy
+import json
+import time
+import base64
+import shutil
+import sqlite3
+import argparse
+import platform
+import subprocess
+import threading
+import webbrowser
+from collections import deque
+from datetime import UTC, datetime
+from pathlib import Path
+from urllib.parse import urlsplit, parse_qs
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage; UTF-8
+# erzwingen, damit print() an Unicode nicht scheitert (macOS/Linux: No-op).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
+BASE = Path(__file__).resolve().parent
+CONFIG_FILE = BASE / "app_config.json"
+TOKEN_FILE = BASE / "gx_token.txt"
+GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
+OLLAMA_SITE = "https://ollama.com/download"
+
+DEFAULT_CONFIG = {
+    "teams_dir": "teams_export",
+    "outlook_dir": "outlook_export",
+    "store_dir": "rag_store",
+    "outlook_categories": ["mail", "calendar", "contacts"],
+    "teams_categories": ["1on1", "group", "meeting"],
+    "workers": 4,
+    "ollama": "http://localhost:11434",
+    "embed_model": "bge-m3",
+    "mcp_port": 8365,
+    "mcp_autostart": True,
+    "schedule": {
+        "enabled": False,
+        "interval_minutes": 60,
+        "outlook": True,
+        "teams": True,
+        "index": True,
+    },
+}
+
+# Kategorie -> Graph-Berechtigung. Der Assistent prüft damit, ob der eingefügte
+# Token für das reicht, was ausgewählt ist (scp-Claim im JWT).
+SCOPE_FOR = {
+    "mail": "Mail.Read",
+    "calendar": "Calendars.Read",
+    "contacts": "Contacts.Read",
+    "1on1": "Chat.Read",
+    "group": "Chat.Read",
+    "meeting": "Chat.Read",
+    "channels": "ChannelMessage.Read.All",
+}
+LABEL_FOR = {
+    "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
+    "1on1": "1:1-Chats", "group": "Gruppenchats",
+    "meeting": "Meeting-Chats", "channels": "Team-Kanäle",
+}
+
+
+# --------------------------------------------------------------------------
+# Konfiguration
+# --------------------------------------------------------------------------
+def _merge_defaults(base, loaded):
+    """Geladene Werte über die Vorgaben legen, eine Ebene tief rekursiv.
+
+    Damit fehlt nach einem Update nie ein Schlüssel, und eine von Hand
+    verkürzte app_config.json bleibt gültig. Tiefe Kopie, sonst würde ein
+    späteres cfg["schedule"]["enabled"] = True DEFAULT_CONFIG selbst verändern –
+    die Vorgaben wären dann für den Rest der Laufzeit verstellt.
+    """
+    out = copy.deepcopy(base)
+    for k, v in (loaded or {}).items():
+        if k in out and isinstance(out[k], dict) and isinstance(v, dict):
+            out[k] = {**out[k], **v}
+        elif k in out:
+            out[k] = v
+    return out
+
+
+def load_config(path=None):
+    path = Path(path or CONFIG_FILE)
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        loaded = {}
+    return _merge_defaults(DEFAULT_CONFIG, loaded)
+
+
+def save_config(cfg, path=None):
+    path = Path(path or CONFIG_FILE)
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _clean_categories(values, allowed):
+    """Nur bekannte Kategorien, in der Reihenfolge von `allowed`."""
+    picked = {str(v).strip().lower() for v in (values or [])}
+    return [k for k in allowed if k in picked]
+
+
+# --------------------------------------------------------------------------
+# Token: einfügen, prüfen, ablegen
+# --------------------------------------------------------------------------
+def normalize_token(raw):
+    """Eingefügten Token säubern: Anführungszeichen, "Bearer ", Zeilenumbrüche.
+
+    Der Graph Explorer liefert den Token oft mit Zeilenumbrüchen aus dem
+    Kopier-Feld; ein JWT enthält selbst keinen Whitespace, also darf alles
+    davon weg.
+    """
+    if not raw:
+        return ""
+    val = str(raw).strip().strip('"').strip("'").strip()
+    if val.lower().startswith("bearer "):
+        val = val[7:]
+    return re.sub(r"\s+", "", val)
+
+
+def decode_jwt(token):
+    """Nutzlast eines JWT ohne Signaturprüfung lesen. {} wenn das nichts ist.
+
+    Nur zur Anzeige (Konto, Ablauf, Berechtigungen) – geprüft wird der Token
+    ohnehin von Graph beim ersten Aufruf.
+    """
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    body = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        return json.loads(base64.urlsafe_b64decode(body).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+
+
+def token_status(token, now=None, needed=()):
+    """Zustand des Tokens für die Oberfläche.
+
+    `needed` sind Kategorien (mail, 1on1, …); fehlende Berechtigungen dazu
+    werden benannt, damit der Assistent sagen kann, was im Graph Explorer noch
+    zuzustimmen ist. Lässt sich der Token nicht als JWT lesen, gilt er als
+    vorhanden mit unbekanntem Ablauf – er wird dann einfach ausprobiert.
+    """
+    now = now if now is not None else time.time()
+    out = {"present": bool(token), "valid": False, "expired": False,
+           "readable": False, "account": None, "name": None,
+           "expires_at": None, "expires_in_minutes": None,
+           "scopes": [], "missing": []}
+    if not token:
+        return out
+    claims = decode_jwt(token)
+    if not claims:
+        out["valid"] = True          # unlesbar, aber vorhanden -> ausprobieren
+        return out
+    out["readable"] = True
+    out["account"] = (claims.get("upn") or claims.get("preferred_username")
+                      or claims.get("unique_name"))
+    out["name"] = claims.get("name")
+    out["scopes"] = sorted((claims.get("scp") or "").split())
+    exp = claims.get("exp")
+    if isinstance(exp, (int, float)):
+        out["expires_at"] = datetime.fromtimestamp(exp, UTC).isoformat()
+        out["expires_in_minutes"] = int((exp - now) // 60)
+        out["expired"] = exp <= now
+    out["valid"] = not out["expired"]
+    # Fehlende Rechte nur melden, wenn der scp-Claim wirklich gelesen wurde –
+    # sonst sähe ein Token ohne lesbare Claims so aus, als fehlte alles.
+    if out["scopes"]:
+        want = {SCOPE_FOR[c] for c in needed if c in SCOPE_FOR}
+        out["missing"] = sorted(w for w in want if w not in set(out["scopes"]))
+    return out
+
+
+def read_token(path=None):
+    try:
+        return normalize_token(Path(path or TOKEN_FILE).read_text(encoding="utf-8"))
+    except OSError:
+        return ""
+
+
+def write_token(token, path=None):
+    """Token ablegen – nur für den eigenen Benutzer lesbar."""
+    token = normalize_token(token)
+    p = Path(path or TOKEN_FILE)
+    p.write_text(token + "\n", encoding="utf-8")
+    try:
+        p.chmod(0o600)
+    except OSError:
+        pass                          # z. B. Windows/FAT: Rechte nicht setzbar
+    return token
+
+
+# --------------------------------------------------------------------------
+# Ollama
+# --------------------------------------------------------------------------
+def check_ollama(url, model, timeout=1.5):
+    """Läuft Ollama, und ist das Embedding-Modell da?"""
+    out = {"running": False, "models": [], "has_model": False, "error": None,
+           "model": model, "url": url}
+    try:
+        import requests
+        r = requests.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
+        r.raise_for_status()
+        names = [m.get("name", "") for m in (r.json().get("models") or [])]
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+    out["running"] = True
+    out["models"] = sorted(names)
+    # "bge-m3" in der Liste heißt "bge-m3:latest" – Tag-loser Vergleich.
+    out["has_model"] = any(n == model or n.split(":", 1)[0] == model.split(":", 1)[0]
+                           for n in names)
+    return out
+
+
+def ollama_hint():
+    """Installationshinweis passend zum Betriebssystem."""
+    sysname = platform.system()
+    if sysname == "Darwin":
+        return {"os": "macOS",
+                "steps": [f"Ollama von {OLLAMA_SITE} laden und in „Programme“ ziehen",
+                          "Ollama einmal starten (Symbol in der Menüleiste)",
+                          "Danach hier auf „Erneut prüfen“ klicken"],
+                "brew": "brew install --cask ollama"}
+    if sysname == "Windows":
+        return {"os": "Windows",
+                "steps": [f"OllamaSetup.exe von {OLLAMA_SITE} laden und ausführen",
+                          "Ollama startet danach automatisch im Hintergrund",
+                          "Danach hier auf „Erneut prüfen“ klicken"],
+                "brew": "winget install Ollama.Ollama"}
+    return {"os": sysname or "Linux",
+            "steps": ["curl -fsSL https://ollama.com/install.sh | sh",
+                      "ollama serve  (falls kein Dienst läuft)",
+                      "Danach hier auf „Erneut prüfen“ klicken"],
+            "brew": None}
+
+
+# --------------------------------------------------------------------------
+# Zustand von Exporten und Index
+# --------------------------------------------------------------------------
+def _mtime_iso(p):
+    try:
+        return datetime.fromtimestamp(Path(p).stat().st_mtime).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
+def export_status(cfg):
+    """Gibt es die Export-Ordner, und wann liefen sie zuletzt?
+
+    Als Zeitpunkt dient die Fortschrittsdatei des jeweiligen Exports – die
+    Ordnergröße bleibt bewusst außen vor: ein Postfach kann zweistellige
+    Gigabyte haben, das bei jedem Statusabruf durchzuzählen wäre teuer.
+    """
+    teams = BASE / cfg["teams_dir"]
+    outlook = BASE / cfg["outlook_dir"]
+    return {
+        "teams": {"dir": str(teams), "exists": teams.is_dir(),
+                  "last_run": _mtime_iso(teams / "export_state.json")},
+        "outlook": {"dir": str(outlook), "exists": outlook.is_dir(),
+                    "last_run": _mtime_iso(outlook / "exported.tsv")},
+    }
+
+
+def store_status(cfg):
+    """Zustand des Index: wie viele Chunks, mit oder ohne Embeddings."""
+    store = BASE / cfg["store_dir"]
+    db = store / "corpus.db"
+    vec = store / "vectors.npy"
+    out = {"dir": str(store), "exists": db.exists(), "chunks": 0,
+           "semantic": vec.exists(), "built_at": _mtime_iso(db), "model": None}
+    if not out["exists"]:
+        return out
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        out["chunks"] = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        con.close()
+    except sqlite3.Error as e:
+        out["error"] = str(e)
+    try:
+        info = json.loads((store / "info.json").read_text(encoding="utf-8"))
+        out["model"] = info.get("model")
+    except (OSError, ValueError):
+        pass
+    return out
+
+
+# --------------------------------------------------------------------------
+# Schritte eines Laufs (rein – ohne Seiteneffekte, daher gut testbar)
+# --------------------------------------------------------------------------
+def build_steps(cfg, outlook=False, teams=False, index=False,
+                embeddings=True, search_page=False, token=""):
+    """Kommandozeilen für einen Lauf zusammenstellen.
+
+    Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
+    sie ohne jede Rückfrage, mit genau dem, was in der Oberfläche angehakt ist.
+    Der Token geht als GRAPH_TOKEN mit, damit der Lauf nicht davon abhängt, in
+    welchem Verzeichnis er gestartet wurde.
+    """
+    py = sys.executable
+    steps = []
+    base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4))}
+    if token:
+        base_env["GRAPH_TOKEN"] = token
+
+    if outlook:
+        cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
+        steps.append({
+            "key": "outlook", "label": "Outlook-Export",
+            "argv": [py, str(BASE / "outlook_export.py"), cfg["outlook_dir"]],
+            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
+        })
+    if teams:
+        cats = _clean_categories(cfg["teams_categories"],
+                                 ["1on1", "group", "meeting", "channels"])
+        steps.append({
+            "key": "teams", "label": "Teams-Export",
+            "argv": [py, str(BASE / "teams_export.py"), cfg["teams_dir"]],
+            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
+        })
+    if index:
+        argv = [py, str(BASE / "rag_index.py"), cfg["teams_dir"], cfg["outlook_dir"],
+                "--store", cfg["store_dir"], "--model", cfg["embed_model"],
+                "--ollama", cfg["ollama"]]
+        if not embeddings:
+            argv.append("--no-embeddings")
+        steps.append({
+            "key": "index",
+            "label": "Index" + ("" if embeddings else " (nur Volltext)"),
+            "argv": argv, "env": dict(base_env),
+        })
+    if search_page:
+        steps.append({
+            "key": "search_page", "label": "Portable Suchseite",
+            "argv": [py, str(BASE / "combined_search.py"),
+                     cfg["teams_dir"], cfg["outlook_dir"]],
+            "env": dict(base_env),
+        })
+    return steps
+
+
+def due_now(last_run, interval_minutes, now):
+    """Ist der nächste geplante Lauf fällig? (last_run None = sofort)"""
+    if last_run is None:
+        return True
+    return now >= last_run + max(1, int(interval_minutes)) * 60
+
+
+# --------------------------------------------------------------------------
+# Läufe ausführen: ein Job nach dem anderen, Ausgabe live in den Puffer
+# --------------------------------------------------------------------------
+_TOKEN_DEAD = re.compile(r"Token abgelaufen|Anmeldung fehlgeschlagen|InvalidAuthenticationToken")
+
+
+class JobRunner:
+    """Führt eine Folge von Schritten als Unterprozesse aus, einer zur Zeit.
+
+    Ein Job nach dem anderen ist Absicht und keine Einschränkung: Export und
+    Index schreiben in dieselben Ordner, und Graph drosselt ohnehin pro
+    Postfach. Die Ausgabe landet zeilenweise in einem Ringpuffer, den die
+    Oberfläche pollt.
+    """
+
+    MAX_LINES = 4000
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.lines = deque(maxlen=self.MAX_LINES)
+        self.seq = 0
+        self.thread = None
+        self.proc = None
+        self.cancelled = False
+        self.job = None            # {"label", "steps", "step", "started"}
+        self.last = None           # {"label", "ok", "finished", "detail"}
+        self.token_expired = False
+
+    # -- Protokoll ---------------------------------------------------------
+    def log(self, text, level="info"):
+        with self.lock:
+            self.seq += 1
+            self.lines.append({"n": self.seq, "level": level,
+                               "t": datetime.now().strftime("%H:%M:%S"),
+                               "text": text})
+
+    def log_since(self, since):
+        with self.lock:
+            return [ln for ln in self.lines if ln["n"] > since], self.seq
+
+    # -- Zustand -----------------------------------------------------------
+    @property
+    def busy(self):
+        return self.thread is not None and self.thread.is_alive()
+
+    def snapshot(self):
+        job = dict(self.job) if self.job else None
+        return {"busy": self.busy, "job": job, "last": self.last,
+                "token_expired": self.token_expired, "seq": self.seq}
+
+    # -- Steuerung ---------------------------------------------------------
+    def start(self, steps, label):
+        if self.busy:
+            return False
+        if not steps:
+            return False
+        self.cancelled = False
+        self.token_expired = False
+        self.job = {"label": label, "steps": [s["label"] for s in steps],
+                    "step": steps[0]["label"], "index": 0,
+                    "started": datetime.now().isoformat(timespec="seconds")}
+        self.thread = threading.Thread(target=self._run, args=(steps, label), daemon=True)
+        self.thread.start()
+        return True
+
+    def cancel(self):
+        self.cancelled = True
+        proc = self.proc
+        if proc and proc.poll() is None:
+            proc.terminate()
+            self.log("Abbruch angefordert – laufender Schritt wird beendet.", "warn")
+            return True
+        return False
+
+    def _run(self, steps, label):
+        self.log(f"▶ {label}", "head")
+        ok = True
+        detail = ""
+        for i, step in enumerate(steps):
+            if self.cancelled:
+                ok, detail = False, "abgebrochen"
+                break
+            self.job = {**self.job, "step": step["label"], "index": i}
+            self.log(f"— {step['label']} —", "head")
+            code = self._exec(step)
+            if code != 0:
+                ok = False
+                detail = (f"{step['label']}: Abbruch" if self.cancelled
+                          else f"{step['label']} endete mit Code {code}")
+                self.log(f"✗ {detail}", "err")
+                break
+            self.log(f"✓ {step['label']} fertig", "ok")
+        if ok:
+            self.log(f"✓ {label} abgeschlossen", "ok")
+        self.last = {"label": label, "ok": ok, "detail": detail,
+                     "finished": datetime.now().isoformat(timespec="seconds")}
+        self.job = None
+        self.proc = None
+
+    def _exec(self, step):
+        env = {**os.environ, **step.get("env", {})}
+        try:
+            self.proc = subprocess.Popen(
+                step["argv"], cwd=str(BASE), env=env, bufsize=0,
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT)
+        except OSError as e:
+            self.log(f"Start fehlgeschlagen: {e}", "err")
+            return -1
+        for line in _stream_lines(self.proc.stdout):
+            if _TOKEN_DEAD.search(line):
+                self.token_expired = True
+            self.log(line)
+        return self.proc.wait()
+
+
+def _stream_lines(stream):
+    """Zeilen aus einem Prozess-Stream, auch bei Fortschritt per \\r.
+
+    Die Skripte überschreiben Fortschrittszeilen mit "\\r" statt sie mit "\\n"
+    abzuschließen (rag_index.py: "… 500/12000 eingebettet"). readline() würde
+    darauf bis zum Ende des Schritts warten, deshalb wird roh gelesen und an
+    beiden Zeichen getrennt.
+    """
+    buf = ""
+    while True:
+        try:
+            chunk = stream.read(4096)
+        except (OSError, ValueError):
+            break
+        if not chunk:
+            break
+        buf += chunk.decode("utf-8", errors="replace")
+        parts = re.split(r"[\r\n]", buf)
+        buf = parts.pop()
+        for p in parts:
+            if p.strip():
+                yield p.rstrip()
+    if buf.strip():
+        yield buf.rstrip()
+
+
+# --------------------------------------------------------------------------
+# Zeitplan: läuft nur, solange die App offen ist
+# --------------------------------------------------------------------------
+class Scheduler(threading.Thread):
+    """Stößt in festem Abstand Export + Index an.
+
+    Bewusst an die Laufzeit der App gebunden (kein launchd/Task Scheduler): der
+    Token wird von Hand geholt und ist typischerweise etwa eine Stunde gültig –
+    ein Zeitplan, der im Hintergrund ohne offene Oberfläche weiterläuft, würde
+    vor allem abgelaufene Token produzieren, die niemand sieht.
+    """
+
+    TICK = 10                       # Sekunden zwischen zwei Fälligkeitsprüfungen
+
+    def __init__(self, app):
+        super().__init__(daemon=True)
+        self.app = app
+        self.stop_event = threading.Event()
+        self.last_run = None
+        self.last_result = None
+
+    @property
+    def plan(self):
+        return self.app.cfg["schedule"]
+
+    def next_due(self):
+        if not self.plan.get("enabled"):
+            return None
+        if self.last_run is None:
+            return time.time()
+        return self.last_run + max(1, int(self.plan.get("interval_minutes", 60))) * 60
+
+    def reset(self):
+        """Nach einer Änderung am Plan: Abstand ab jetzt neu zählen."""
+        self.last_run = time.time() if self.plan.get("enabled") else None
+
+    def run(self):
+        while not self.stop_event.wait(self.TICK):
+            try:
+                self._tick()
+            except Exception as e:
+                self.app.jobs.log(f"Zeitplan: {type(e).__name__}: {e}", "err")
+
+    def _tick(self):
+        plan = self.plan
+        if not plan.get("enabled") or self.app.jobs.busy:
+            return
+        if not due_now(self.last_run, plan.get("interval_minutes", 60), time.time()):
+            return
+        self.last_run = time.time()
+        token = read_token()
+        st = token_status(token)
+        if not st["valid"]:
+            self.app.jobs.log("Zeitplan übersprungen: kein gültiger Token – "
+                              "bitte im Assistenten einen neuen einfügen.", "warn")
+            self.app.jobs.token_expired = True
+            return
+        ok, why = self.app.launch(outlook=plan.get("outlook", True),
+                                  teams=plan.get("teams", True),
+                                  index=plan.get("index", True),
+                                  label="Geplanter Lauf")
+        if not ok:
+            self.app.jobs.log(f"Zeitplan übersprungen: {why}", "warn")
+
+
+# --------------------------------------------------------------------------
+# MCP-Server als Unterprozess
+# --------------------------------------------------------------------------
+class McpProcess:
+    """Startet/stoppt mcp_server.py und sammelt dessen Ausgabe im Protokoll."""
+
+    def __init__(self, jobs):
+        self.jobs = jobs
+        self.proc = None
+        self.port = None
+        self.error = None
+
+    @property
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def status(self, cfg):
+        return {"running": self.running, "port": self.port or cfg["mcp_port"],
+                "url": f"http://127.0.0.1:{self.port or cfg['mcp_port']}/mcp",
+                "error": self.error}
+
+    def start(self, cfg):
+        if self.running:
+            return True, "läuft bereits"
+        db = BASE / cfg["store_dir"] / "corpus.db"
+        if not db.exists():
+            self.error = "Kein Index vorhanden – MCP kann nichts ausliefern."
+            return False, self.error
+        argv = [sys.executable, str(BASE / "mcp_server.py"),
+                "--store", cfg["store_dir"], "--teams", cfg["teams_dir"],
+                "--outlook", cfg["outlook_dir"], "--embed-model", cfg["embed_model"],
+                "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"])]
+        try:
+            self.proc = subprocess.Popen(
+                argv, cwd=str(BASE), env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, bufsize=0)
+        except OSError as e:
+            self.error = f"Start fehlgeschlagen: {e}"
+            return False, self.error
+        self.port = cfg["mcp_port"]
+        self.error = None
+        threading.Thread(target=self._pump, args=(self.proc,), daemon=True).start()
+        self.jobs.log(f"MCP-Server gestartet auf Port {self.port}.", "ok")
+        return True, "gestartet"
+
+    def _pump(self, proc):
+        for line in _stream_lines(proc.stdout):
+            self.jobs.log(f"[MCP] {line}")
+        code = proc.wait()
+        if proc is self.proc and code not in (0, -15):
+            self.error = f"MCP-Server beendet (Code {code})"
+            self.jobs.log(self.error, "err")
+
+    def stop(self):
+        if not self.running:
+            return False
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.jobs.log("MCP-Server gestoppt.", "warn")
+        return True
+
+
+# --------------------------------------------------------------------------
+# Eingebettete Suche – nutzt die Rangfolge des MCP-Servers
+# --------------------------------------------------------------------------
+class SearchBridge:
+    """Bindet mcp_server.py als Bibliothek ein statt die Suche nachzubauen.
+
+    Die Tool-Funktionen dort sind ganz normale Funktionen (der Dekorator meldet
+    sie nur zusätzlich am MCP-Server an) und arbeiten auf mcp_server.STATE. Wir
+    füllen STATE genauso wie dessen main() und rufen sie direkt auf – dieselbe
+    hybride Rangfolge, ohne einen zweiten Suchpfad zu pflegen.
+    """
+
+    def __init__(self):
+        self.module = None
+        self.stamp = None
+        self.error = None
+        self.lock = threading.Lock()
+
+    def _store_stamp(self, cfg):
+        store = BASE / cfg["store_dir"]
+        out = []
+        for name in ("corpus.db", "vectors.npy"):
+            p = store / name
+            try:
+                out.append((name, p.stat().st_mtime_ns, p.stat().st_size))
+            except OSError:
+                out.append((name, None, None))
+        return tuple(out)
+
+    def ensure(self, cfg):
+        """STATE (neu) aufsetzen, wenn der Index sich geändert hat."""
+        with self.lock:
+            stamp = self._store_stamp(cfg)
+            if self.module is not None and stamp == self.stamp:
+                return self.module
+            db = BASE / cfg["store_dir"] / "corpus.db"
+            if not db.exists():
+                self.error = "Kein Index vorhanden."
+                self.module = None
+                return None
+            try:
+                import mcp_server
+            except ImportError as e:
+                self.error = f"mcp_server nicht ladbar ({e}) – 'pip install -r requirements.txt'?"
+                self.module = None
+                return None
+            try:
+                con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+                n = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+                con.close()
+                np, V = mcp_server._open_vectors(str(BASE / cfg["store_dir"]), n)
+            except sqlite3.Error as e:
+                self.error = f"Index unlesbar: {e}"
+                self.module = None
+                return None
+            mcp_server.STATE.update(
+                db=str(db), V=V, np=np, semantic=(np is not None),
+                vector_dtype=str(V.dtype) if V is not None else None,
+                teams_dir=str(BASE / cfg["teams_dir"]),
+                outlook_dir=str(BASE / cfg["outlook_dir"]),
+                embed_model=cfg["embed_model"], ollama=cfg["ollama"])
+            self.module, self.stamp, self.error = mcp_server, stamp, None
+            return mcp_server
+
+
+# --------------------------------------------------------------------------
+# Anwendung: hält Konfiguration, Läufe, Zeitplan, MCP und Suche zusammen
+# --------------------------------------------------------------------------
+class App:
+    def __init__(self, cfg=None):
+        self.cfg = cfg or load_config()
+        self.jobs = JobRunner()
+        self.mcp = McpProcess(self.jobs)
+        self.search = SearchBridge()
+        self.scheduler = Scheduler(self)
+        self.wizard_pending = True     # bei jedem Start einmal zeigen
+        self._ollama_cache = (0.0, None)
+
+    # -- abgeleiteter Zustand ---------------------------------------------
+    def selected_categories(self):
+        return (_clean_categories(self.cfg["outlook_categories"],
+                                  ["mail", "calendar", "contacts"])
+                + _clean_categories(self.cfg["teams_categories"],
+                                    ["1on1", "group", "meeting", "channels"]))
+
+    def ollama(self, force=False):
+        """Ergebnis kurz zwischenspeichern – der Status wird im Sekundentakt abgefragt."""
+        age, cached = self._ollama_cache
+        if not force and cached is not None and time.time() - age < 10:
+            return cached
+        res = check_ollama(self.cfg["ollama"], self.cfg["embed_model"])
+        self._ollama_cache = (time.time(), res)
+        return res
+
+    def status(self):
+        token = read_token()
+        tok = token_status(token, needed=self.selected_categories())
+        oll = self.ollama()
+        store = store_status(self.cfg)
+        jobs = self.jobs.snapshot()
+        plan = self.cfg["schedule"]
+        nxt = self.scheduler.next_due()
+        # Der Assistent geht auf, wenn die App gerade gestartet wurde oder der
+        # Token fehlt/abgelaufen ist – beides Fälle, in denen sonst nur ein
+        # Lauf scheitern würde, ohne dass jemand weiß, warum.
+        wizard = None
+        if not tok["valid"] or jobs["token_expired"]:
+            wizard = "token"
+        elif self.wizard_pending:
+            wizard = "token"
+        elif not oll["running"] or not oll["has_model"]:
+            wizard = "ollama"
+        return {
+            "token": tok,
+            "ollama": oll,
+            "ollama_hint": ollama_hint(),
+            "store": store,
+            "exports": export_status(self.cfg),
+            "jobs": jobs,
+            "mcp": self.mcp.status(self.cfg),
+            "config": self.cfg,
+            "schedule_next": (datetime.fromtimestamp(nxt).isoformat(timespec="seconds")
+                              if nxt else None),
+            "schedule_enabled": bool(plan.get("enabled")),
+            "wizard": wizard,
+            "graph_explorer": GRAPH_EXPLORER,
+            "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
+                                     if c in SCOPE_FOR} | {"User.Read"}),
+        }
+
+    # -- Aktionen ----------------------------------------------------------
+    def launch(self, outlook=False, teams=False, index=False, embeddings=None,
+               search_page=False, label="Lauf"):
+        if self.jobs.busy:
+            return False, "Es läuft bereits ein Auftrag."
+        if embeddings is None:
+            embeddings = self.ollama()["running"] and self.ollama()["has_model"]
+        token = read_token() if (outlook or teams) else ""
+        if (outlook or teams) and not token:
+            return False, "Kein Token hinterlegt – bitte den Assistenten durchlaufen."
+        if index and not embeddings:
+            self.jobs.log("Ollama nicht verfügbar – der Index wird als reiner "
+                          "Volltextindex gebaut (Suche ohne semantische Treffer).", "warn")
+        steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
+                            embeddings=embeddings, search_page=search_page,
+                            token=token)
+        if not steps:
+            return False, "Nichts ausgewählt."
+        if not self.jobs.start(steps, label):
+            return False, "Auftrag konnte nicht gestartet werden."
+        return True, "gestartet"
+
+    def autostart_mcp(self):
+        """Beim App-Start: MCP hochfahren, wenn ein Index da ist.
+
+        Genau der Fall aus der Anforderung „ohne Ollama läuft der MCP-Server
+        trotzdem“: der Server rankt dann rein lexikalisch weiter.
+        """
+        if not self.cfg.get("mcp_autostart"):
+            return
+        ok, why = self.mcp.start(self.cfg)
+        if not ok:
+            self.jobs.log(f"MCP nicht gestartet: {why}", "warn")
+
+    def shutdown(self):
+        self.scheduler.stop_event.set()
+        self.jobs.cancel()
+        self.mcp.stop()
+
+
+# --------------------------------------------------------------------------
+# HTTP
+# --------------------------------------------------------------------------
+class Handler(BaseHTTPRequestHandler):
+    server_version = "office365-export-app"
+    protocol_version = "HTTP/1.1"
+    app = None                 # von serve() gesetzt
+    allowed_hosts = ()
+
+    def log_message(self, fmt, *args):
+        pass                    # kein Zugriffsprotokoll auf stdout
+
+    # -- Hilfen ------------------------------------------------------------
+    def _host_ok(self):
+        """Nur die eigene Loopback-Adresse akzeptieren.
+
+        Ohne diese Prüfung könnte eine beliebige Webseite über einen auf
+        127.0.0.1 zeigenden DNS-Namen (Rebinding) mit dem Server sprechen – und
+        der liefert den kompletten Mail- und Chatbestand aus.
+        """
+        host = (self.headers.get("Host") or "").lower()
+        return host in self.allowed_hosts
+
+    def _send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False, default=str))
+
+    def _body(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return {}
+        if n <= 0 or n > 4 * 1024 * 1024:
+            return {}
+        try:
+            return json.loads(self.rfile.read(n).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {}
+
+    # -- Routen ------------------------------------------------------------
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
+                              "text/plain; charset=utf-8")
+        u = urlsplit(self.path)
+        q = parse_qs(u.query)
+        one = {k: v[0] for k, v in q.items()}
+        app = self.app
+        try:
+            if u.path in ("/", "/index.html"):
+                return self._send(200, PAGE, "text/html; charset=utf-8")
+            if u.path == "/api/status":
+                return self._json(app.status())
+            if u.path == "/api/log":
+                lines, seq = app.jobs.log_since(int(one.get("since", 0) or 0))
+                return self._json({"lines": lines, "seq": seq})
+            if u.path == "/api/search":
+                return self._json(self._search(one))
+            if u.path == "/api/people":
+                return self._json(self._people(one))
+            if u.path == "/api/document":
+                return self._json(self._document(one))
+            if u.path == "/source":
+                return self._source(one)
+        except Exception as e:
+            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_POST(self):
+        if not self._host_ok():
+            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
+                              "text/plain; charset=utf-8")
+        u = urlsplit(self.path)
+        app = self.app
+        data = self._body()
+        try:
+            if u.path == "/api/token":
+                return self._json(self._save_token(data))
+            if u.path == "/api/wizard-seen":
+                app.wizard_pending = False
+                app.jobs.token_expired = False
+                return self._json({"ok": True})
+            if u.path == "/api/run":
+                ok, why = app.launch(
+                    outlook=bool(data.get("outlook")), teams=bool(data.get("teams")),
+                    index=bool(data.get("index")), search_page=bool(data.get("search_page")),
+                    embeddings=data.get("embeddings"),
+                    label=str(data.get("label") or "Lauf"))
+                return self._json({"ok": ok, "message": why}, 200 if ok else 409)
+            if u.path == "/api/cancel":
+                return self._json({"ok": app.jobs.cancel()})
+            if u.path == "/api/config":
+                return self._json(self._save_config(data))
+            if u.path == "/api/schedule":
+                return self._json(self._save_schedule(data))
+            if u.path == "/api/mcp":
+                return self._json(self._mcp(data))
+            if u.path == "/api/ollama-recheck":
+                return self._json(app.ollama(force=True))
+            if u.path == "/api/quit":
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return self._json({"ok": True})
+        except Exception as e:
+            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
+        self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
+
+    # -- Route-Implementierungen ------------------------------------------
+    def _save_token(self, data):
+        token = normalize_token(data.get("token"))
+        if not token:
+            return {"ok": False, "message": "Kein Token eingefügt."}
+        if len(token) < 40:
+            return {"ok": False, "message": "Das sieht nicht nach einem Access Token aus."}
+        write_token(token)
+        self.app.jobs.token_expired = False
+        self.app.wizard_pending = False
+        st = token_status(token, needed=self.app.selected_categories())
+        if st["expired"]:
+            return {"ok": False, "message": "Der Token ist bereits abgelaufen – "
+                                            "bitte einen frischen kopieren.", "token": st}
+        msg = "Token gespeichert."
+        if st["missing"]:
+            msg += (" Es fehlen noch Berechtigungen: " + ", ".join(st["missing"])
+                    + " – im Graph Explorer zustimmen und neu kopieren.")
+        self.app.jobs.log(msg, "ok")
+        return {"ok": True, "message": msg, "token": st}
+
+    def _save_config(self, data):
+        cfg = self.app.cfg
+        if "outlook_categories" in data:
+            cfg["outlook_categories"] = _clean_categories(
+                data["outlook_categories"], ["mail", "calendar", "contacts"])
+        if "teams_categories" in data:
+            cfg["teams_categories"] = _clean_categories(
+                data["teams_categories"], ["1on1", "group", "meeting", "channels"])
+        for key in ("teams_dir", "outlook_dir", "store_dir", "embed_model", "ollama"):
+            if key in data and str(data[key]).strip():
+                cfg[key] = str(data[key]).strip()
+        for key in ("workers", "mcp_port"):
+            if key in data:
+                try:
+                    cfg[key] = max(1, int(data[key]))
+                except (TypeError, ValueError):
+                    pass
+        if "mcp_autostart" in data:
+            cfg["mcp_autostart"] = bool(data["mcp_autostart"])
+        save_config(cfg)
+        return {"ok": True, "config": cfg}
+
+    def _save_schedule(self, data):
+        plan = self.app.cfg["schedule"]
+        for key in ("enabled", "outlook", "teams", "index"):
+            if key in data:
+                plan[key] = bool(data[key])
+        if "interval_minutes" in data:
+            try:
+                plan["interval_minutes"] = max(5, int(data["interval_minutes"]))
+            except (TypeError, ValueError):
+                pass
+        save_config(self.app.cfg)
+        self.app.scheduler.reset()
+        state = "aktiv" if plan["enabled"] else "aus"
+        self.app.jobs.log(f"Zeitplan {state} (alle {plan['interval_minutes']} Minuten).",
+                          "info")
+        return {"ok": True, "schedule": plan,
+                "next": self.app.scheduler.next_due()}
+
+    def _mcp(self, data):
+        action = str(data.get("action") or "").lower()
+        if action == "start":
+            ok, why = self.app.mcp.start(self.app.cfg)
+            return {"ok": ok, "message": why, "mcp": self.app.mcp.status(self.app.cfg)}
+        if action == "stop":
+            self.app.mcp.stop()
+            return {"ok": True, "mcp": self.app.mcp.status(self.app.cfg)}
+        return {"ok": False, "message": "action muss start oder stop sein."}
+
+    def _search(self, q):
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "hits": [], "count": 0}
+        kw = dict(person=q.get("person", ""), date_from=q.get("from", ""),
+                  date_to=q.get("to", ""), source=q.get("source", "all"),
+                  k=min(int(q.get("k", 20) or 20), 50),
+                  offset=max(int(q.get("offset", 0) or 0), 0))
+        query = (q.get("q") or "").strip()
+        if query:
+            res = mod.search_messages(query=query, mode=q.get("mode", "auto"), **kw)
+        else:
+            res = mod.browse_messages(**kw)
+        res["semantic"] = bool(mod.STATE.get("semantic"))
+        return res
+
+    def _people(self, q):
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "people": []}
+        return mod.list_people(source=q.get("source", "all"),
+                               contains=q.get("contains", ""),
+                               limit=min(int(q.get("limit", 50) or 50), 200))
+
+    def _document(self, q):
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error}
+        return mod.get_document(uid=q.get("uid", ""),
+                                context_before=int(q.get("before", 0) or 0),
+                                context_after=int(q.get("after", 0) or 0))
+
+    def _source(self, q):
+        """Exportierte Quelldatei ausliefern (für die Links in den Treffern).
+
+        Content-Security-Policy: sandbox setzt die Seite in einen eigenen,
+        undurchsichtigen Ursprung. Ein exportiertes Teams-HTML kann damit kein
+        Skript gegen die API dieser App laufen lassen, zeigt aber weiterhin
+        seine eingebetteten Bilder.
+        """
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return self._send(503, "Kein Index geladen.", "text/plain; charset=utf-8")
+        target, err = mod._resolve_source(q.get("root", ""), q.get("path", ""))
+        if err:
+            return self._send(404, err, "text/plain; charset=utf-8")
+        ctype = ("text/html; charset=utf-8" if target.suffix.lower() in (".html", ".htm")
+                 else "text/plain; charset=utf-8")
+        size = target.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(size))
+        self.send_header("Content-Security-Policy", "sandbox")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(target, "rb") as f:
+            shutil.copyfileobj(f, self.wfile, 64 * 1024)
+
+
+def make_server(app, port, host="127.0.0.1"):
+    """Server binden und die erlaubten Host-Header festlegen.
+
+    Erst binden, dann die Liste bauen: mit port=0 sucht das Betriebssystem
+    einen freien Port aus, und der muss in den erlaubten Headern stehen.
+    """
+    httpd = ThreadingHTTPServer((host, port), Handler)
+    real = httpd.server_address[1]
+    Handler.app = app
+    Handler.allowed_hosts = (f"{host}:{real}", f"localhost:{real}",
+                             f"127.0.0.1:{real}", f"[::1]:{real}")
+    return httpd
+
+
+def serve(app, port, open_browser=True, host="127.0.0.1"):
+    httpd = make_server(app, port, host)
+    port = httpd.server_address[1]
+    url = f"http://{host}:{port}/"
+    app.scheduler.start()
+    app.autostart_mcp()
+    print(f"Office-365-Export läuft: {url}")
+    print("Beenden mit Strg+C (schließt auch den MCP-Server).")
+    if open_browser:
+        threading.Timer(0.4, webbrowser.open, args=(url,)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print("\nBeende…")
+    finally:
+        app.shutdown()
+        httpd.server_close()
+    return httpd
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--port", type=int, default=8700)
+    ap.add_argument("--no-browser", action="store_true",
+                    help="Oberfläche nicht automatisch öffnen.")
+    a = ap.parse_args()
+    serve(App(), a.port, open_browser=not a.no_browser)
+
+
+PAGE = r"""<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microsoft-365-Archiv</title>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6570; --line:#dfe3e8;
+  --accent:#2f6fed; --ok:#1a7f4b; --warn:#a2650a; --err:#b3261e; --code:#f1f3f6;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa4ae; --line:#2c3238;
+         --accent:#7aa2ff; --ok:#4cc38a; --warn:#e0a33a; --err:#f2837c; --code:#22272c; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+  padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+h1{font-size:17px;margin:0;font-weight:650}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+  border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
+nav button{border:0;background:transparent;color:var(--muted);padding:8px 14px;
+  border-radius:8px 8px 0 0;font:inherit;cursor:pointer}
+nav button.on{background:var(--bg);color:var(--ink);font-weight:600}
+main{padding:20px;max-width:1080px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px;margin-bottom:16px}
+.card h2{font-size:15px;margin:0 0 4px}
+.card p.sub{color:var(--muted);margin:0 0 14px;font-size:13px}
+label.chk{display:flex;gap:8px;align-items:center;padding:4px 0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px 20px}
+button.act{background:var(--accent);color:#fff;border:0;border-radius:8px;
+  padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.act:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:transparent;border:1px solid var(--line);color:inherit;
+  border-radius:8px;padding:9px 16px;font:inherit;cursor:pointer}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:8px;
+  padding:8px 10px;font:inherit}
+textarea{width:100%;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+code,pre{background:var(--code);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
+.muted{color:var(--muted)} .small{font-size:13px}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+#log{background:#0d1013;color:#cbd3da;border-radius:10px;padding:12px;height:230px;
+  overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
+#log .l-head{color:#9ad0ff;font-weight:600} #log .l-ok{color:#7fdca4}
+#log .l-warn{color:#f0c674} #log .l-err{color:#ff9c94}
+.hit{border-top:1px solid var(--line);padding:12px 0}
+.hit:first-child{border-top:0}
+.hit h3{margin:0 0 3px;font-size:14px;font-weight:600}
+.hit .meta{color:var(--muted);font-size:12.5px;margin-bottom:5px}
+.hit .prev{font-size:13.5px}
+.tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 6px;
+  font-size:11.5px;color:var(--muted);margin-right:6px}
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
+  align-items:center;justify-content:center;padding:20px;z-index:20}
+#overlay.on{display:flex}
+.modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;
+  max-height:88vh;overflow:auto;padding:24px}
+.modal h2{margin:0 0 6px;font-size:18px}
+ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
+.banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
+  border:1px solid var(--line)}
+.banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<header>
+  <h1>Microsoft-365-Archiv</h1>
+  <div class="pills">
+    <button class="pill" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Token</span></button>
+    <button class="pill" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">Ollama</span></button>
+    <button class="pill" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Index</span></button>
+    <button class="pill" onclick="tab('mcp')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">MCP</span></button>
+  </div>
+</header>
+
+<nav>
+  <button data-tab="export" class="on" onclick="tab('export')">Export</button>
+  <button data-tab="suche" onclick="tab('suche')">Suche</button>
+  <button data-tab="zeitplan" onclick="tab('zeitplan')">Zeitplan</button>
+  <button data-tab="mcp" onclick="tab('mcp')">MCP &amp; Claude</button>
+</nav>
+
+<main>
+<section id="tab-export">
+  <div class="card">
+    <h2>Was soll exportiert werden?</h2>
+    <p class="sub">Die Auswahl wird gespeichert und gilt auch für den Zeitplan. Jeder Lauf holt nur Neues – ein zweiter Lauf ist schnell.</p>
+    <div class="row" style="gap:36px;align-items:flex-start">
+      <div>
+        <strong class="small">Outlook</strong>
+        <div id="cat-outlook"></div>
+      </div>
+      <div>
+        <strong class="small">Teams</strong>
+        <div id="cat-teams"></div>
+      </div>
+    </div>
+    <p class="small muted" id="teams-note" style="margin-top:10px"></p>
+    <div class="row" style="margin-top:14px">
+      <button class="act" id="btn-run" onclick="runExport()">Export starten</button>
+      <button class="ghost" onclick="run({index:true},'Nur indizieren')">Nur indizieren</button>
+      <button class="ghost" onclick="run({search_page:true},'Portable Suchseite')">Portable Suchseite erzeugen</button>
+      <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')">Abbrechen</button>
+    </div>
+    <p class="small muted" style="margin-top:10px" id="export-state"></p>
+  </div>
+  <div class="card">
+    <h2>Protokoll</h2>
+    <p class="sub" id="job-line">Bereit.</p>
+    <div id="log"></div>
+  </div>
+</section>
+
+<section id="tab-suche" class="hide">
+  <div class="card">
+    <h2>Suche</h2>
+    <p class="sub" id="search-sub"></p>
+    <div class="row">
+      <input type="text" id="q" placeholder="Suchbegriff oder Frage" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')doSearch(0)">
+      <button class="act" onclick="doSearch(0)">Suchen</button>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="f-person" placeholder="Person" style="width:180px">
+      <select id="f-source">
+        <option value="all">Alle Quellen</option><option value="teams">Teams</option>
+        <option value="outlook">Mail</option><option value="kalender">Kalender</option>
+        <option value="kontakte">Kontakte</option>
+      </select>
+      <input type="date" id="f-from"><input type="date" id="f-to">
+    </div>
+  </div>
+  <div class="card"><div id="results" class="muted small">Noch keine Suche.</div>
+    <div class="row" id="pager" style="margin-top:12px"></div></div>
+</section>
+
+<section id="tab-zeitplan" class="hide">
+  <div class="card">
+    <h2>Regelmäßig exportieren</h2>
+    <p class="sub">Läuft nur, solange dieses Fenster bzw. die App geöffnet ist. Nach jedem Export wird auf Wunsch direkt neu indiziert – für die Suche hier und für den MCP-Server.</p>
+    <label class="chk"><input type="checkbox" id="s-enabled"> Zeitplan aktiv</label>
+    <div class="row" style="margin:10px 0">
+      <label class="small">Alle <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> Minuten</label>
+    </div>
+    <label class="chk"><input type="checkbox" id="s-outlook"> Outlook exportieren</label>
+    <label class="chk"><input type="checkbox" id="s-teams"> Teams exportieren</label>
+    <label class="chk"><input type="checkbox" id="s-index"> Danach indizieren</label>
+    <div class="row" style="margin-top:14px">
+      <button class="act" onclick="saveSchedule()">Zeitplan speichern</button>
+      <span class="small muted" id="s-next"></span>
+    </div>
+    <div class="banner warn" style="margin-top:14px">
+      Der Access Token aus dem Graph Explorer gilt meist nur etwa eine Stunde.
+      Läuft er ab, überspringt der Zeitplan den nächsten Lauf und der Assistent
+      meldet sich – bereits Exportiertes bleibt erhalten.
+    </div>
+  </div>
+</section>
+
+<section id="tab-mcp" class="hide">
+  <div class="card">
+    <h2>MCP-Server</h2>
+    <p class="sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
+    <div class="row">
+      <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
+      <span class="small" id="mcp-state"></span>
+    </div>
+    <p class="small muted" style="margin-top:12px">In Claude Code eintragen (<code>.mcp.json</code> im Projekt):</p>
+    <pre id="mcp-json"></pre>
+    <p class="small muted">Claude Desktop akzeptiert nur <code>command</code>-Einträge – dafür statt der URL:</p>
+    <pre id="mcp-stdio"></pre>
+  </div>
+</section>
+</main>
+
+<div id="overlay"><div class="modal" id="modal"></div></div>
+
+<script>
+var S = null, seen = 0, dismissed = {}, offset = 0;
+
+function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
+function post(p, body){
+  return fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
+}
+function esc(s){ return String(s == null ? '' : s)
+  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function el(id){ return document.getElementById(id); }
+
+function tab(name){
+  ['export','suche','zeitplan','mcp'].forEach(function(t){
+    el('tab-' + t).classList.toggle('hide', t !== name);
+    document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
+  });
+}
+
+/* ---------- Status ---------- */
+function setPill(id, cls, text){
+  el('p-' + id).className = 'dot ' + cls;
+  el('p-' + id + '-t').textContent = text;
+}
+
+function renderStatus(s){
+  var first = S === null;
+  S = s;
+
+  var t = s.token;
+  if(!t.present) setPill('token','err','Kein Token');
+  else if(t.expired) setPill('token','err','Token abgelaufen');
+  else if(t.missing && t.missing.length) setPill('token','warn','Token: Rechte fehlen');
+  else if(t.expires_in_minutes != null) setPill('token','ok','Token ' + t.expires_in_minutes + ' Min');
+  else setPill('token','ok','Token gesetzt');
+
+  var o = s.ollama;
+  setPill('ollama', o.running ? (o.has_model ? 'ok' : 'warn') : 'err',
+    o.running ? (o.has_model ? 'Ollama bereit' : 'Modell fehlt') : 'Ollama aus');
+
+  var st = s.store;
+  setPill('index', st.exists ? (st.semantic ? 'ok' : 'warn') : 'err',
+    st.exists ? (st.chunks.toLocaleString('de-DE') + ' Chunks' + (st.semantic ? '' : ', nur Volltext'))
+              : 'Kein Index');
+
+  setPill('mcp', s.mcp.running ? 'ok' : '', s.mcp.running ? 'MCP läuft' : 'MCP aus');
+
+  /* Export-Tab */
+  if(first){
+    fill('cat-outlook', [['mail','E-Mail'],['calendar','Kalender'],['contacts','Kontakte']],
+         s.config.outlook_categories, 'o');
+    fill('cat-teams', [['1on1','1:1-Chats'],['group','Gruppenchats'],
+         ['meeting','Meeting-Chats'],['channels','Team-Kanäle']], s.config.teams_categories, 't');
+    el('s-enabled').checked = s.config.schedule.enabled;
+    el('s-interval').value = s.config.schedule.interval_minutes;
+    el('s-outlook').checked = s.config.schedule.outlook;
+    el('s-teams').checked = s.config.schedule.teams;
+    el('s-index').checked = s.config.schedule.index;
+  }
+  el('teams-note').textContent = checked('t').indexOf('channels') >= 0
+    ? 'Team-Kanäle: es werden alle Teams exportiert, in denen du Mitglied bist. Das kann lange dauern.'
+    : '';
+
+  var ex = s.exports, parts = [];
+  parts.push('Outlook: ' + (ex.outlook.last_run ? 'zuletzt ' + fmt(ex.outlook.last_run) : 'noch nie'));
+  parts.push('Teams: ' + (ex.teams.last_run ? 'zuletzt ' + fmt(ex.teams.last_run) : 'noch nie'));
+  parts.push('Index: ' + (st.exists ? fmt(st.built_at) : 'noch nie'));
+  el('export-state').textContent = parts.join('  ·  ');
+
+  var busy = s.jobs.busy;
+  el('btn-run').disabled = busy;
+  el('btn-cancel').classList.toggle('hide', !busy);
+  if(busy){
+    var j = s.jobs.job || {};
+    el('job-line').textContent = j.label + ' – ' + j.step +
+      ' (' + ((j.index || 0) + 1) + '/' + ((j.steps || []).length) + ')';
+  } else if(s.jobs.last){
+    el('job-line').textContent = (s.jobs.last.ok ? '✓ ' : '✗ ') + s.jobs.last.label +
+      ' – ' + fmt(s.jobs.last.finished) + (s.jobs.last.detail ? ' (' + s.jobs.last.detail + ')' : '');
+  }
+
+  /* Zeitplan / MCP */
+  el('s-next').textContent = s.schedule_enabled && s.schedule_next
+    ? 'Nächster Lauf: ' + fmt(s.schedule_next) : 'Kein Lauf geplant.';
+  el('mcp-toggle').textContent = s.mcp.running ? 'Stoppen' : 'Starten';
+  el('mcp-state').textContent = s.mcp.running
+    ? 'läuft auf ' + s.mcp.url + (st.semantic ? ' · hybride Suche' : ' · nur Volltextsuche')
+    : (s.mcp.error || 'gestoppt');
+  el('mcp-json').textContent = JSON.stringify(
+    {mcpServers:{'office365-export':{type:'http', url:s.mcp.url}}}, null, 2);
+  el('mcp-stdio').textContent = JSON.stringify(
+    {mcpServers:{'office365-export':{command:'python3',
+      args:['mcp_server.py','--transport','stdio','--store',s.config.store_dir]}}}, null, 2);
+  el('search-sub').textContent = st.exists
+    ? (st.semantic ? 'Hybride Suche: Volltext (BM25) und Bedeutung (Embeddings) zusammengeführt.'
+                   : 'Nur Volltextsuche (BM25) – für die semantische Hälfte fehlen die Embeddings.')
+    : 'Es gibt noch keinen Index. Zuerst exportieren und indizieren.';
+
+  if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);
+}
+
+function fmt(iso){
+  if(!iso) return '–';
+  var d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleString('de-DE', {dateStyle:'short', timeStyle:'short'});
+}
+
+function fill(id, opts, active, pre){
+  el(id).innerHTML = opts.map(function(o){
+    return '<label class="chk"><input type="checkbox" id="' + pre + '-' + o[0] + '" value="' +
+      o[0] + '"' + (active.indexOf(o[0]) >= 0 ? ' checked' : '') +
+      ' onchange="saveCats()"> ' + esc(o[1]) + '</label>';
+  }).join('');
+}
+function checked(pre){
+  return Array.prototype.slice.call(document.querySelectorAll('#cat-' +
+    (pre === 'o' ? 'outlook' : 'teams') + ' input:checked')).map(function(i){ return i.value; });
+}
+function saveCats(){
+  post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t')})
+    .then(refresh);
+}
+
+/* ---------- Läufe ---------- */
+function run(what, label){
+  what.label = label;
+  post('/api/run', what).then(function(r){
+    if(!r.ok) alert(r.message || 'Nicht gestartet.');
+    refresh();
+  });
+}
+function runExport(){
+  var o = checked('o').length > 0, t = checked('t').length > 0;
+  if(!o && !t){ alert('Nichts ausgewählt.'); return; }
+  run({outlook:o, teams:t, index:true}, 'Export');
+}
+
+/* ---------- Protokoll ---------- */
+function pullLog(){
+  api('/api/log?since=' + seen).then(function(r){
+    if(!r.lines || !r.lines.length){ seen = r.seq; return; }
+    var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+    r.lines.forEach(function(l){
+      var d = document.createElement('div');
+      d.className = 'l-' + l.level;
+      d.textContent = l.t + '  ' + l.text;
+      box.appendChild(d);
+    });
+    while(box.childElementCount > 1200) box.removeChild(box.firstChild);
+    seen = r.seq;
+    if(atEnd) box.scrollTop = box.scrollHeight;
+  });
+}
+
+/* ---------- Suche ---------- */
+function doSearch(off){
+  offset = off || 0;
+  var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
+    source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
+    k: 20, offset: offset});
+  el('results').textContent = 'Suche…';
+  api('/api/search?' + p.toString()).then(renderHits);
+}
+function renderHits(r){
+  if(r.error){ el('results').innerHTML = '<span class="err">' + esc(r.error) + '</span>'; return; }
+  var hits = r.results || [];
+  if(!hits.length){ el('results').textContent = 'Keine Treffer.'; el('pager').innerHTML = ''; return; }
+  el('results').innerHTML = hits.map(function(h){
+    var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
+    var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
+    return '<div class="hit"><h3>' + (link ? '<a href="' + link + '" target="_blank">' : '') +
+      esc(h.title || '(ohne Betreff)') + (link ? '</a>' : '') + '</h3>' +
+      '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
+      esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
+      '<div class="prev">' + esc(h.preview || '') + '…</div></div>';
+  }).join('');
+  el('pager').innerHTML =
+    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - 20) + ')">Zurück</button>' : '') +
+    (hits.length >= 20 ? '<button class="ghost" onclick="doSearch(' + (offset + 20) + ')">Weiter</button>' : '') +
+    '<span class="small muted">Rangfolge: ' + esc(r.backend || '–') + '</span>';
+}
+
+/* ---------- Zeitplan / MCP ---------- */
+function saveSchedule(){
+  post('/api/schedule', {enabled: el('s-enabled').checked,
+    interval_minutes: parseInt(el('s-interval').value, 10) || 60,
+    outlook: el('s-outlook').checked, teams: el('s-teams').checked,
+    index: el('s-index').checked}).then(refresh);
+}
+function toggleMcp(){
+  post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
+    if(!r.ok && r.message) alert(r.message);
+    refresh();
+  });
+}
+
+/* ---------- Assistenten ---------- */
+function openWizard(kind){
+  var m = el('modal');
+  m.innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
+  el('overlay').classList.add('on');
+}
+function closeWizard(kind){
+  dismissed[kind] = true;
+  el('overlay').classList.remove('on');
+  post('/api/wizard-seen');
+}
+function tokenWizard(){
+  var t = S.token, need = (S.scopes_needed || []).join(', ');
+  var head = !t.present ? '<div class="banner err">Es ist kein Token hinterlegt – ohne ihn kann nichts exportiert werden.</div>'
+    : t.expired ? '<div class="banner err">Der Token ist abgelaufen. Bitte einen frischen holen.</div>'
+    : (t.missing && t.missing.length) ? '<div class="banner warn">Der Token hat nicht alle nötigen Berechtigungen: ' + esc(t.missing.join(', ')) + '</div>'
+    : '<div class="banner">Token gültig' + (t.account ? ' für ' + esc(t.account) : '') +
+      (t.expires_in_minutes != null ? ', noch ' + t.expires_in_minutes + ' Minuten' : '') + '.</div>';
+  return '<h2>Access Token holen</h2>' +
+    '<p class="muted small">Dieses Tool meldet dich nicht selbst an. Du holst den Token einmal im Microsoft Graph Explorer und fügst ihn hier ein – er gilt danach etwa eine Stunde.</p>' +
+    head +
+    '<ol>' +
+    '<li><a href="' + S.graph_explorer + '" target="_blank" rel="noopener">Graph Explorer öffnen</a> und oben rechts mit dem Geschäftskonto anmelden.</li>' +
+    '<li>Reiter <strong>Modify permissions</strong>: diesen Berechtigungen zustimmen (<em>Consent</em>):<br><code>' + esc(need) + '</code></li>' +
+    '<li>Reiter <strong>Access token</strong>: den langen Text vollständig kopieren.</li>' +
+    '<li>Hier einfügen und speichern:</li></ol>' +
+    '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
+    '<div class="row" style="margin-top:12px">' +
+    '<button class="act" onclick="saveToken()">Token speichern</button>' +
+    '<button class="ghost" onclick="closeWizard(\'token\')">Später</button>' +
+    '<span class="small muted" id="tok-msg"></span></div>' +
+    '<p class="small muted" style="margin-top:14px">Der Token liegt nur lokal in <code>gx_token.txt</code> (nur für dich lesbar) und wird an nichts außer Microsoft Graph geschickt.</p>';
+}
+function saveToken(){
+  post('/api/token', {token: el('tok').value}).then(function(r){
+    el('tok-msg').textContent = r.message || '';
+    el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
+    if(r.ok){ dismissed = {}; setTimeout(function(){ el('overlay').classList.remove('on'); }, 900); }
+    refresh();
+  });
+}
+function ollamaWizard(){
+  var o = S.ollama, h = S.ollama_hint;
+  var head = !o.running
+    ? '<div class="banner warn">Ollama läuft nicht. Ohne Ollama gibt es keine semantische Suche – Export, Volltextsuche und MCP funktionieren trotzdem.</div>'
+    : '<div class="banner warn">Ollama läuft, aber das Modell <code>' + esc(o.model) + '</code> fehlt noch.</div>';
+  var steps = o.running
+    ? ['Im Terminal: <code>ollama pull ' + esc(o.model) + '</code>', 'Danach hier auf „Erneut prüfen“ klicken']
+    : h.steps.map(esc);
+  return '<h2>Ollama einrichten (optional)</h2>' +
+    '<p class="muted small">Ollama berechnet die Embeddings für die semantische Suche. Alles läuft lokal, nichts verlässt den Rechner.</p>' +
+    head + '<ol>' + steps.map(function(s){ return '<li>' + s + '</li>'; }).join('') + '</ol>' +
+    (h.brew && !o.running ? '<p class="small muted">Oder per Paketmanager:</p><pre>' + esc(h.brew) + '</pre>' : '') +
+    '<div class="row" style="margin-top:12px">' +
+    '<button class="act" onclick="recheckOllama()">Erneut prüfen</button>' +
+    '<button class="ghost" onclick="closeWizard(\'ollama\'); run({index:true, embeddings:false}, \'Volltextindex\')">Ohne Ollama fortfahren – nur Volltextindex</button>' +
+    '<button class="ghost" onclick="closeWizard(\'ollama\')">Später</button></div>' +
+    '<p class="small muted" style="margin-top:14px">„Ohne Ollama fortfahren“ baut einen reinen Volltextindex (BM25). Suche und MCP funktionieren damit sofort; die semantische Hälfte lässt sich später jederzeit nachbauen.</p>';
+}
+function recheckOllama(){
+  post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama'); }); });
+}
+
+/* ---------- Schleife ---------- */
+function refresh(){ return api('/api/status').then(renderStatus); }
+refresh();
+setInterval(refresh, 2500);
+setInterval(pullLog, 1000);
+</script>
+</body>
+</html>
+"""
+
+if __name__ == "__main__":
+    main()

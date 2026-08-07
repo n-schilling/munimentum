@@ -407,8 +407,8 @@ def test_build_index_ohne_inhalte_bricht_ab(tmp_path):
 def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
     seen = {}
 
-    def fake_build(teams, outlook, store, model, url, batch):
-        seen["args"] = (teams, outlook, store, model, url, batch)
+    def fake_build(teams, outlook, store, model, url, batch, embeddings=True):
+        seen["args"] = (teams, outlook, store, model, url, batch, embeddings)
         return 3, 1, 8
 
     monkeypatch.setattr(rag_index, "build_index", fake_build)
@@ -416,5 +416,83 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
                         ["rag_index.py", "t_dir", "o_dir", "--store", "s", "--batch", "7"])
     rag_index.main()
     assert seen["args"] == ("t_dir", "o_dir", "s", rag_index.DEFAULT_MODEL,
-                            rag_index.DEFAULT_OLLAMA, 7)
+                            rag_index.DEFAULT_OLLAMA, 7, True)
     assert "3 Chunks" in capsys.readouterr().out
+
+
+def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
+    seen = {}
+
+    def fake_build(teams, outlook, store, model, url, batch, embeddings=True):
+        seen["embeddings"] = embeddings
+        return 3, 0, 0
+
+    monkeypatch.setattr(rag_index, "build_index", fake_build)
+    monkeypatch.setattr(sys, "argv", ["rag_index.py", "--no-embeddings"])
+    rag_index.main()
+    assert seen["embeddings"] is False
+    out = capsys.readouterr().out
+    assert "ohne Embeddings" in out and "3 Chunks im Volltextindex" in out
+
+
+# --------------------------------------------------------------------------
+# Lexikalischer Index (--no-embeddings): ohne Ollama, ohne Vektoren
+# --------------------------------------------------------------------------
+def test_build_index_ohne_embeddings_schreibt_nur_die_db(tmp_path, monkeypatch):
+    _make_exports(tmp_path)
+    monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
+    store = tmp_path / "store"
+    n, neu, dim = rag_index.build_index(
+        str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
+        str(store), "test-modell", "http://ollama.test", embeddings=False)
+
+    assert (n, neu, dim) == (3, 0, 0)
+    assert (store / "corpus.db").exists()
+    assert not (store / "vectors.npy").exists()         # nichts eingebettet
+
+    con = sqlite3.connect(store / "corpus.db")
+    treffer = list(con.execute(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'Bericht'"))
+    con.close()
+    assert treffer                                       # Volltextsuche funktioniert
+
+    info = json.loads((store / "info.json").read_text(encoding="utf-8"))
+    assert info["chunks"] == 3 and info["dim"] == 0 and info["model"] is None
+
+
+def test_build_index_ohne_embeddings_rettet_vorhandene_vektoren(tmp_path, monkeypatch):
+    """Der lexikalische Lauf darf teuer berechnete Embeddings nicht wegwerfen.
+
+    vectors.npy hängt zeilenweise an corpus.db; wird die DB ohne Vektoren neu
+    geschrieben, passt die Zuordnung nicht mehr. Deshalb werden sie vorher
+    hash-indiziert gesichert – und ein späterer Lauf mit Ollama muss nichts
+    davon erneut einbetten.
+    """
+    _make_exports(tmp_path)
+    (_, neu1, _), _, store = _build(tmp_path, monkeypatch)
+    assert neu1 == 3
+    V1 = np.load(store / "vectors.npy").astype("float32")
+
+    monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
+    rag_index.build_index(str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
+                          str(store), "test-modell", "http://ollama.test", embeddings=False)
+    assert not (store / "vectors.npy").exists()
+    assert (store / rag_index.STALE_VECTORS).exists()
+
+    # Wieder mit Ollama: alles kommt aus der Sicherung, kein neuer Aufruf
+    (_, neu2, _), calls2, _ = _build(tmp_path, monkeypatch)
+    assert neu2 == 0 and calls2 == []
+    assert not (store / rag_index.STALE_VECTORS).exists()   # wird nicht mehr gebraucht
+    V2 = np.load(store / "vectors.npy").astype("float32")
+    assert np.allclose(V1, V2, atol=1e-3)
+
+
+def test_retire_vectors_ohne_vorhandene_datei(tmp_path):
+    (tmp_path / "store").mkdir()
+    assert rag_index.retire_vectors(tmp_path / "store") == 0
+
+
+def test_load_stale_ignoriert_kaputte_datei(tmp_path, capsys):
+    (tmp_path / rag_index.STALE_VECTORS).write_bytes(b"kein npz")
+    assert rag_index._load_stale(tmp_path) == {}
+    assert "unlesbar" in capsys.readouterr().out

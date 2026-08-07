@@ -20,6 +20,10 @@ Inkrementell: bei erneutem Lauf werden nur neue/geänderte Chunks neu berechnet
     pip3 install numpy requests
     python3 rag_index.py [teams_export] [outlook_export] [--store rag_store]
 
+Ohne Ollama: --no-embeddings baut nur corpus.db mit dem FTS5-Volltextindex.
+Suche und MCP-Server funktionieren dann rein lexikalisch (BM25), nur die
+semantische Hälfte der Hybrid-Suche fehlt.
+
 Optionen: --model bge-m3  --ollama http://localhost:11434  --batch 64
 """
 
@@ -48,6 +52,7 @@ DEFAULT_MODEL = "bge-m3"
 DEFAULT_OLLAMA = "http://localhost:11434"
 FORMAT = 2                     # 2 = corpus.db + float16-Vektoren
 PPL_TOKEN_CAP = 60             # Personen-Tokens pro Person in der people-Tabelle
+STALE_VECTORS = "vectors_stale.npz"   # beiseitegelegte Embeddings, hash-indiziert
 
 
 def embed(texts, model, url, timeout=600):
@@ -174,27 +179,83 @@ def _load_old_store(store):
     return [], V
 
 
+def _load_stale(store):
+    """Beiseitegelegte Embeddings aus einem lexikalischen Lauf (hash -> Vektor)."""
+    p = Path(store) / STALE_VECTORS
+    if not p.exists():
+        return {}
+    try:
+        with np.load(p) as z:
+            V, hashes = z["V"], z["hashes"].tolist()
+        return {h: V[i] for i, h in enumerate(hashes) if h and i < len(V)}
+    except Exception:
+        print(f"  {STALE_VECTORS} unlesbar – wird ignoriert.")
+        return {}
+
+
 def load_old_vectors(store):
+    out = _load_stale(store)          # Fallback, von vectors.npy überstimmt
     try:
         hashes, V = _load_old_store(store)
         if V is None or not hashes:
-            return {}
-        return {h: V[i] for i, h in enumerate(hashes) if h and i < len(V)}
+            return out
+        out.update({h: V[i] for i, h in enumerate(hashes) if h and i < len(V)})
+        return out
     except Exception:
         print("  Alter Index unlesbar – baue komplett neu.")
-        return {}
+        return out
+
+
+def retire_vectors(store):
+    """Vor einem lexikalischen Rebuild: Embeddings hash-indiziert sichern und
+    vectors.npy entfernen. Liefert die Zahl der geretteten Vektoren.
+
+    Nötig, weil vectors.npy zeilenweise an corpus.db hängt (Zeile i gehört zu
+    id i+1). Wird die DB ohne Embeddings neu geschrieben, stimmt diese Zuordnung
+    nicht mehr – die Datei einfach liegen zu lassen hieße, später falsche
+    Vektoren zu ranken. Über den Inhalts-Hash bleiben sie dagegen gültig, und
+    ein späterer Lauf mit Ollama muss nur wirklich Neues einbetten statt alles.
+    """
+    sp = Path(store)
+    vp = sp / "vectors.npy"
+    if not vp.exists():
+        return 0
+    keep = load_old_vectors(store)
+    if keep:
+        items = sorted(keep.items())
+        tmp = sp / (STALE_VECTORS + ".tmp")
+        with open(tmp, "wb") as f:
+            np.savez(f, hashes=np.array([h for h, _ in items]),
+                     V=np.vstack([v for _, v in items]).astype("float16"))
+        tmp.replace(sp / STALE_VECTORS)
+    vp.unlink()
+    return len(keep)
 
 
 # --------------------------------------------------------------------------
 # Index bauen
 # --------------------------------------------------------------------------
-def build_index(teams_dir, outlook_dir, store, model, url, batch=64):
+def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
+                embeddings=True):
     recs = corpus.load_records(teams_dir, outlook_dir)
     chunks = corpus.chunk_records(recs)
     if not chunks:
         raise SystemExit("Keine Inhalte gefunden – stimmen die Export-Ordner?")
     for c in chunks:
         c["hash"] = corpus.chunk_hash(c)
+
+    Path(store).mkdir(parents=True, exist_ok=True)
+    if not embeddings:
+        # Nur corpus.db + FTS5: Volltextsuche (BM25) läuft ohne Ollama, die
+        # semantische Hälfte der Hybrid-Suche fehlt. mcp_server.py und app.py
+        # erkennen das fehlende vectors.npy und ranken rein lexikalisch.
+        saved = retire_vectors(store)
+        if saved:
+            print(f"{saved} vorhandene Embeddings nach {STALE_VECTORS} gesichert "
+                  f"– ein späterer Lauf mit Ollama nutzt sie wieder.")
+        write_db(store, chunks)
+        write_info(store, None, 0, len(chunks))
+        return len(chunks), 0, 0
 
     old = load_old_vectors(store)
     vectors = [None] * len(chunks)
@@ -235,10 +296,11 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64):
                 print(f"  … {done}/{len(todo_texts)} eingebettet", end="\r", flush=True)
         print()
 
-    Path(store).mkdir(parents=True, exist_ok=True)
     V = save_vectors(store, np.vstack(vectors))
     write_db(store, chunks)
     write_info(store, model, V.shape[1], len(chunks))
+    # Alles wieder in vectors.npy – die Hash-Sicherung wird nicht mehr gebraucht.
+    (Path(store) / STALE_VECTORS).unlink(missing_ok=True)
     return len(chunks), new_total, int(V.shape[1])
 
 
@@ -250,11 +312,23 @@ def main():
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--ollama", default=DEFAULT_OLLAMA)
     ap.add_argument("--batch", type=int, default=64)
+    ap.add_argument("--no-embeddings", action="store_true",
+                    help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
+                         "Suche und MCP laufen dann rein lexikalisch.")
     a = ap.parse_args()
 
-    print(f"Index → {a.store}  (Modell {a.model})")
-    n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama, a.batch)
-    print(f"\nFertig. {n} Chunks im Index ({dim} Dimensionen), davon {new} neu berechnet.")
+    if a.no_embeddings:
+        print(f"Index → {a.store}  (nur Volltext, ohne Embeddings)")
+    else:
+        print(f"Index → {a.store}  (Modell {a.model})")
+    n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
+                              a.batch, embeddings=not a.no_embeddings)
+    if a.no_embeddings:
+        print(f"\nFertig. {n} Chunks im Volltextindex – keine Embeddings.")
+        print("Für die semantische/hybride Suche später ohne --no-embeddings "
+              "erneut laufen lassen (Ollama nötig).")
+    else:
+        print(f"\nFertig. {n} Chunks im Index ({dim} Dimensionen), davon {new} neu berechnet.")
     print(f"Jetzt: python3 rag_server.py --store {a.store}  oder  mcp_server.py")
 
 

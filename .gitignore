@@ -12,3 +12,4 @@ __pycache__/*
 rag_store
 rag_store/*
 .coverage
+app_config.json

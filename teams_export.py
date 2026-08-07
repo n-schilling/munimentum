@@ -21,6 +21,8 @@ Setup:   pip install msal requests
 Start:   python3 teams_export.py [ausgabe-ordner] [-default]
          -default überspringt die Abfrage und nutzt die Vorgabe (1, 2, 3 =
          1:1-, Gruppen- und Meeting-Chats, keine Kanäle).
+         EXPORT_CATEGORIES="1on1,group,meeting,channels" wählt ohne Abfrage
+         genau diese Kategorien (für app.py, Scheduler, Cron).
 
 Token-Modus (wenn der Tenant für neue Apps "Approval required" verlangt):
     Access Token im Graph Explorer holen (Chat.Read bzw. ChannelMessage.Read.All
@@ -381,7 +383,26 @@ def default_categories(options):
     return {k for k, _ in options[:3]}
 
 
+def env_categories(options):
+    """Auswahl aus EXPORT_CATEGORIES, z. B. "1on1,group,channels".
+
+    Für Aufrufer ohne Terminal (app.py, Scheduler, Cron), die mehr wollen als
+    die -default-Vorgabe. Unbekannte Namen werden ignoriert; bleibt nichts
+    übrig, zählt die Variable als nicht gesetzt -> None (normale Abfrage).
+    """
+    raw = os.environ.get("EXPORT_CATEGORIES")
+    if not raw:
+        return None
+    picked = {t.strip().lower() for t in raw.replace(";", ",").split(",")}
+    sel = {k for k, _ in options if k.lower() in picked}
+    return sel or None
+
+
 def prompt_categories(options):
+    env = env_categories(options)
+    if env is not None:
+        print("Auswahl aus EXPORT_CATEGORIES – keine Abfrage.")
+        return env
     if not sys.stdin.isatty():
         print("Kein interaktives Terminal – nutze die Standardauswahl (1, 2, 3).")
         return default_categories(options)
@@ -999,11 +1020,11 @@ def main():
     # 1) Kategorien abfragen (vor dem Login, damit der Kanal-Scope nur bei Bedarf kommt)
     cat_options = [("1on1", "1:1-Chats"), ("group", "Gruppenchats"),
                    ("meeting", "Meeting-Chats"), ("channels", "Team-Kanäle")]
-    if use_default:
+    if use_default and not os.environ.get("EXPORT_CATEGORIES"):
         categories = default_categories(cat_options)
         print("Standardauswahl (-default) aktiv – keine Abfrage.")
     else:
-        categories = prompt_categories(cat_options)
+        categories = prompt_categories(cat_options)   # beachtet EXPORT_CATEGORIES
     labels = {k: v for k, v in cat_options}
     print("Gewählt:", ", ".join(labels[k] for k in
                                  ["1on1", "group", "meeting", "channels"] if k in categories))

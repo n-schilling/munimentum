@@ -20,6 +20,8 @@ Setup:   pip install msal requests
 Start:   python3 outlook_export.py [ausgabe-ordner] [-default]
          -default überspringt alle Abfragen und nutzt die Vorgaben (E-Mail ohne
          Archiv/Entwürfe/Gelöschte/Junk/Postausgang, Standardkalender, Kontakte).
+         EXPORT_CATEGORIES="mail,calendar,contacts" wählt ohne Abfrage genau
+         diese Kategorien (für app.py, Scheduler, Cron).
 
 Token-Modus (wenn der Tenant für neue Apps "Approval required" verlangt):
     Access Token im Graph Explorer holen (Mail.Read muss zugestimmt sein; für
@@ -377,12 +379,31 @@ def list_calendars(graph):
     return cals
 
 
+def env_categories(options):
+    """Auswahl aus EXPORT_CATEGORIES, z. B. "mail,contacts".
+
+    Für Aufrufer ohne Terminal (app.py, Scheduler, Cron), die nicht alles
+    wollen. Unbekannte Namen werden ignoriert; bleibt nichts übrig, zählt die
+    Variable als nicht gesetzt -> None (normale Abfrage bzw. Standardauswahl).
+    """
+    raw = os.environ.get("EXPORT_CATEGORIES")
+    if not raw:
+        return None
+    picked = {t.strip().lower() for t in raw.replace(";", ",").split(",")}
+    sel = {k for k, _ in options if k.lower() in picked}
+    return sel or None
+
+
 def prompt_categories():
     """Schritt 1: Was exportieren? Mehrfachauswahl (z. B. 1,2).
     Liefert ein Set aus {"mail", "calendar", "contacts"}."""
     options = [("mail", "E-Mail (Postfach-Ordner)"),
                ("calendar", "Kalender"),
                ("contacts", "Kontakte")]
+    env = env_categories(options)
+    if env is not None:
+        print("Auswahl aus EXPORT_CATEGORIES – keine Abfrage.")
+        return env
     if not _interactive():
         print("Standardauswahl – exportiere E-Mail, Standardkalender und Kontakte.")
         return {k for k, _ in options}

@@ -315,6 +315,32 @@ def test_prompt_categories_without_tty_uses_default(monkeypatch):
     assert te.prompt_categories(options) == {"1on1", "group", "meeting"}
 
 
+_OPTIONS = [("1on1", "a"), ("group", "b"), ("meeting", "c"), ("channels", "d")]
+
+
+def test_env_categories_liest_auswahl(monkeypatch):
+    monkeypatch.setenv("EXPORT_CATEGORIES", "1on1, CHANNELS ;group")
+    assert te.env_categories(_OPTIONS) == {"1on1", "group", "channels"}
+
+
+def test_env_categories_ohne_variable_oder_ohne_treffer(monkeypatch):
+    monkeypatch.delenv("EXPORT_CATEGORIES", raising=False)
+    assert te.env_categories(_OPTIONS) is None
+    monkeypatch.setenv("EXPORT_CATEGORIES", "")
+    assert te.env_categories(_OPTIONS) is None
+    monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch,unsinn")
+    assert te.env_categories(_OPTIONS) is None          # nur Unbekanntes -> normale Abfrage
+
+
+def test_prompt_categories_env_schlaegt_terminal(monkeypatch, capsys):
+    """Die Variable gewinnt auch dann, wenn ein Terminal da wäre – sie kommt von
+    app.py bzw. dem Zeitplan und ist damit eine bewusste Vorgabe."""
+    monkeypatch.setattr(te.sys, "stdin", _NoTTY())
+    monkeypatch.setenv("EXPORT_CATEGORIES", "channels")
+    assert te.prompt_categories(_OPTIONS) == {"channels"}
+    assert "EXPORT_CATEGORIES" in capsys.readouterr().out
+
+
 def test_select_teams_without_tty_takes_all_sorted(monkeypatch):
     monkeypatch.setattr(te.sys, "stdin", _NoTTY())
     graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": [
