@@ -537,32 +537,105 @@ def test_status_zeigt_token_assistenten_ohne_token(sandbox, with_ollama):
     assert a.status()["wizard"] == "token"
 
 
-def test_status_zeigt_assistenten_bei_jedem_start(sandbox, with_ollama):
-    """Anforderung: bei jedem Start einmal aufpoppen, auch mit gültigem Token."""
-    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+ALLE_RECHTE = "Mail.Read Calendars.Read Contacts.Read Chat.Read"
+
+
+def test_status_laesst_gueltigen_token_in_ruhe(sandbox, with_ollama):
+    """Ein noch gültiger Token darf beim Start nicht nach einem neuen fragen –
+    seine Laufzeit hängt am Tenant und reicht durchaus über einen Arbeitstag."""
+    app_mod.write_token(make_jwt(exp=time.time() + 12 * 3600, scp=ALLE_RECHTE))
     a = app_mod.App(app_mod.load_config())
-    assert a.wizard_pending is True
-    assert a.status()["wizard"] == "token"
-    a.wizard_pending = False
     assert a.status()["wizard"] is None
 
 
-def test_status_zeigt_ollama_assistenten_wenn_token_passt(sandbox, no_ollama):
-    app_mod.write_token(make_jwt(exp=time.time() + 3600,
-                                 scp="Mail.Read Calendars.Read Contacts.Read Chat.Read"))
+def test_status_zeigt_assistenten_bei_abgelaufenem_token(sandbox, with_ollama):
+    app_mod.write_token(make_jwt(exp=time.time() - 60, scp=ALLE_RECHTE))
+    assert app_mod.App(app_mod.load_config()).status()["wizard"] == "token"
+
+
+def test_status_fragt_bei_fehlenden_rechten_nicht_von_selbst(sandbox, with_ollama):
+    """Fehlende Rechte melden Kachel und Protokoll; ungefragt aufpoppen soll der
+    Assistent deswegen nicht – der Token selbst ist ja gültig."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600, scp="Chat.Read"))
     a = app_mod.App(app_mod.load_config())
-    a.wizard_pending = False
+    s = a.status()
+    assert s["wizard"] is None
+    assert s["token"]["missing"]
+
+
+def test_status_zeigt_ollama_assistenten_wenn_token_passt(sandbox, no_ollama):
+    app_mod.write_token(make_jwt(exp=time.time() + 3600, scp=ALLE_RECHTE))
+    a = app_mod.App(app_mod.load_config())
     assert a.status()["wizard"] == "ollama"
 
 
 def test_status_zeigt_token_assistenten_nach_abgelaufenem_lauf(sandbox, with_ollama):
-    app_mod.write_token(make_jwt(exp=time.time() + 3600,
-                                 scp="Mail.Read Calendars.Read Contacts.Read Chat.Read"))
+    """Ein Lauf, der am Token gescheitert ist, holt den Assistenten zurück –
+    auch wenn exp formal noch in der Zukunft liegt (zurückgezogener Token)."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600, scp=ALLE_RECHTE))
     a = app_mod.App(app_mod.load_config())
-    a.wizard_pending = False
     assert a.status()["wizard"] is None
     a.jobs.token_expired = True
     assert a.status()["wizard"] == "token"
+
+
+# --------------------------------------------------------------------------
+# Rückmeldung beim Start (der Assistent schweigt jetzt im Normalfall)
+# --------------------------------------------------------------------------
+def test_log_token_state_bei_gueltigem_token(sandbox, with_ollama):
+    app_mod.write_token(make_jwt(exp=time.time() + 12 * 3600 + 60,
+                                 scp=ALLE_RECHTE, upn="chef@example.com"))
+    a = app_mod.App(app_mod.load_config())
+    a.log_token_state()
+    zeile = a.jobs.lines[-1]
+    assert zeile["level"] == "ok"
+    assert "chef@example.com" in zeile["text"]
+    assert "12 Std." in zeile["text"]
+
+
+def test_log_token_state_ohne_token(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    a.log_token_state()
+    assert a.jobs.lines[-1]["level"] == "warn"
+    assert "Kein Token" in a.jobs.lines[-1]["text"]
+
+
+def test_log_token_state_bei_abgelaufenem_token(sandbox, with_ollama):
+    app_mod.write_token(make_jwt(exp=time.time() - 60))
+    a = app_mod.App(app_mod.load_config())
+    a.log_token_state()
+    assert a.jobs.lines[-1]["level"] == "warn"
+    assert "abgelaufen" in a.jobs.lines[-1]["text"]
+
+
+def test_log_token_state_nennt_fehlende_rechte(sandbox, with_ollama):
+    app_mod.write_token(make_jwt(exp=time.time() + 3600, scp="Chat.Read"))
+    a = app_mod.App(app_mod.load_config())
+    a.log_token_state()
+    assert a.jobs.lines[-1]["level"] == "warn"
+    assert "Mail.Read" in a.jobs.lines[-1]["text"]
+
+
+@pytest.mark.parametrize("minuten,text", [
+    (None, "unbekannte Restlaufzeit"),
+    (-5, "abgelaufen"),
+    (0, "0 Min."),
+    (59, "59 Min."),
+    (60, "1 Std."),
+    (135, "2 Std. 15 Min."),
+    (620, "10 Std. 20 Min."),
+    (1440, "1 Tage"),
+    (1500, "1 Tage 1 Std."),
+])
+def test_format_remaining(minuten, text):
+    assert app_mod.format_remaining(minuten) == text
+
+
+def test_token_status_liefert_lesbare_restlaufzeit():
+    now = 1_000_000
+    st = app_mod.token_status(make_jwt(exp=now + 620 * 60), now=now)
+    assert st["expires_in_minutes"] == 620
+    assert st["expires_text"] == "10 Std. 20 Min."
 
 
 def test_status_nennt_die_noetigen_berechtigungen(sandbox, with_ollama):
@@ -877,7 +950,7 @@ def test_http_token_speichern(server, sandbox):
     code, r = call(port, "POST", "/api/token", {"token": "Bearer " + tok})
     assert code == 200 and r["ok"]
     assert app_mod.read_token() == tok
-    assert a.wizard_pending is False
+    assert a.status()["wizard"] is None            # gültig -> kein Assistent mehr
 
 
 def test_http_token_abgelaufen_wird_gemeldet(server):
@@ -900,10 +973,12 @@ def test_http_token_muell_wird_abgelehnt(server):
 
 
 def test_http_wizard_seen(server):
+    """„Später“ setzt die Merkung eines totgelaufenen Tokens zurück – sonst ginge
+    der Assistent beim nächsten Statusabruf sofort wieder auf."""
     a, port = server
     a.jobs.token_expired = True
     call(port, "POST", "/api/wizard-seen")
-    assert a.wizard_pending is False and a.jobs.token_expired is False
+    assert a.jobs.token_expired is False
 
 
 def test_http_run_ohne_token(server):
@@ -1220,7 +1295,8 @@ global.alert = function(){};
 
 GRUNDZUSTAND = """
 S = {token: {present: true, valid: true, expired: false, missing: [],
-             account: 'a@example.com', expires_in_minutes: 42},
+             account: 'a@example.com', expires_in_minutes: 620,
+             expires_text: '10 Std. 20 Min.'},
      ollama: {running: true, has_model: false, model: 'bge-m3', models: []},
      ollama_hint: {os: 'macOS', steps: ['Schritt eins'], brew: 'brew install ollama'},
      scopes_needed: ['Mail.Read', 'User.Read'],

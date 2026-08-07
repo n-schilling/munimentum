@@ -80,13 +80,21 @@ window, no terminal work afterwards. The UI is German (like the search page); th
 underlying scripts are unchanged and still work on their own.
 
 **Token assistant.** The app never signs you in — you fetch the access token
-yourself in the Graph Explorer and paste it in. The assistant opens at every
-start and whenever no valid token is there: it links the Graph Explorer, names
-exactly the permissions your current selection needs, takes the pasted token
-(with or without `Bearer`, line breaks and quotes are stripped) and writes it to
-`gx_token.txt`, readable only by you. It also reads the token's `exp` and `scp`
-claims, so it can say *"valid for another 43 minutes"* or *"still missing
-Calendars.Read"* instead of letting a run fail later for reasons nobody sees.
+yourself in the Graph Explorer and paste it in. It reads the token's `exp` and
+`scp` claims, so it knows what it has: a still-valid token is left alone and the
+assistant stays shut (how long a token lasts is up to your tenant — an hour for
+some, most of a day for others). It opens only when there is no token, when the
+stored one has expired, or when a run just died on a dead token. Either way the
+header pill and the log line at startup say which account the token belongs to
+and how much longer it lasts.
+
+When it does open, it links the Graph Explorer, names exactly the permissions
+your current selection needs — plus the query that makes each one appear under
+*Modify permissions*, which only ever lists permissions for the request
+currently in the address bar — and takes the pasted token with or without
+`Bearer`, stripping line breaks and quotes. It lands in `gx_token.txt`, readable
+only by you. A permission you already hold in a wider form counts: `Mail.ReadWrite`
+satisfies `Mail.Read`.
 
 **Export.** Tick what you want; the app passes the selection to the export
 scripts through `EXPORT_CATEGORIES`, so they run without a single prompt. Output
@@ -101,10 +109,10 @@ against the app.
 
 **Schedule.** While the app is open, it can re-run export and indexing at a fixed
 interval. Deliberately bound to the app's runtime and not to launchd/Task
-Scheduler: a hand-fetched token is valid for roughly an hour, so a background
-schedule would mostly produce expired-token failures that nobody sees. When a run
-does hit an expired token, the app notices, skips the next one and reopens the
-assistant.
+Scheduler: the schedule only reaches as far as the hand-fetched token stays
+valid, and a background service would mostly produce expired-token failures that
+nobody sees. When a run does hit an expired token, the app notices, skips the
+next one and reopens the assistant.
 
 **No Ollama?** The app checks at start and shows an assistant with the install
 steps for your OS. You can also just continue: the MCP server still starts (it

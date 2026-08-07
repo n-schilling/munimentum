@@ -272,6 +272,21 @@ def decode_jwt(token):
         return {}
 
 
+def format_remaining(minutes):
+    """Restlaufzeit lesbar machen. "620 Min." beantwortet keine Frage."""
+    if minutes is None:
+        return "unbekannte Restlaufzeit"
+    if minutes < 0:
+        return "abgelaufen"
+    if minutes < 60:
+        return f"{minutes} Min."
+    std, rest = divmod(minutes, 60)
+    if std < 24:
+        return f"{std} Std. {rest} Min." if rest else f"{std} Std."
+    tage, std = divmod(std, 24)
+    return f"{tage} Tage {std} Std." if std else f"{tage} Tage"
+
+
 def token_status(token, now=None, needed=()):
     """Zustand des Tokens für die Oberfläche.
 
@@ -284,7 +299,7 @@ def token_status(token, now=None, needed=()):
     out = {"present": bool(token), "valid": False, "expired": False,
            "readable": False, "account": None, "name": None,
            "expires_at": None, "expires_in_minutes": None,
-           "scopes": [], "missing": []}
+           "expires_text": None, "scopes": [], "missing": []}
     if not token:
         return out
     claims = decode_jwt(token)
@@ -300,6 +315,7 @@ def token_status(token, now=None, needed=()):
     if isinstance(exp, (int, float)):
         out["expires_at"] = datetime.fromtimestamp(exp, UTC).isoformat()
         out["expires_in_minutes"] = int((exp - now) // 60)
+        out["expires_text"] = format_remaining(out["expires_in_minutes"])
         out["expired"] = exp <= now
     out["valid"] = not out["expired"]
     # Fehlende Rechte nur melden, wenn der scp-Claim wirklich gelesen wurde –
@@ -881,7 +897,6 @@ class App:
         self.mcp = McpProcess(self.jobs)
         self.search = SearchBridge()
         self.scheduler = Scheduler(self)
-        self.wizard_pending = True     # bei jedem Start einmal zeigen
         self._ollama_cache = (0.0, None)
 
     # -- abgeleiteter Zustand ---------------------------------------------
@@ -900,6 +915,30 @@ class App:
         self._ollama_cache = (time.time(), res)
         return res
 
+    def log_token_state(self):
+        """Beim Start einmal sagen, woran man ist.
+
+        Der Assistent geht nur noch auf, wenn etwas fehlt – ohne diese Zeile
+        wäre der häufige Fall (Token liegt da und ist gültig) völlig stumm, und
+        niemand wüsste, wie lange er noch trägt.
+        """
+        st = token_status(read_token(), needed=self.selected_categories())
+        if not st["present"]:
+            return self.jobs.log("Kein Token hinterlegt – der Assistent führt "
+                                 "durch die Beschaffung.", "warn")
+        if st["expired"]:
+            return self.jobs.log("Der hinterlegte Token ist abgelaufen – der "
+                                 "Assistent öffnet sich.", "warn")
+        wer = f" für {st['account']}" if st["account"] else ""
+        wie_lange = (f", noch {st['expires_text']} gültig" if st["expires_text"]
+                     else ", Laufzeit unbekannt")
+        msg = f"Token gefunden{wer}{wie_lange}."
+        if st["missing"]:
+            msg += (" Es fehlen Berechtigungen: " + ", ".join(st["missing"])
+                    + " – oben auf die Token-Kachel klicken.")
+            return self.jobs.log(msg, "warn")
+        return self.jobs.log(msg, "ok")
+
     def status(self):
         token = read_token()
         tok = token_status(token, needed=self.selected_categories())
@@ -908,13 +947,13 @@ class App:
         jobs = self.jobs.snapshot()
         plan = self.cfg["schedule"]
         nxt = self.scheduler.next_due()
-        # Der Assistent geht auf, wenn die App gerade gestartet wurde oder der
-        # Token fehlt/abgelaufen ist – beides Fälle, in denen sonst nur ein
-        # Lauf scheitern würde, ohne dass jemand weiß, warum.
+        # Der Assistent geht nur auf, wenn er gebraucht wird: kein Token, ein
+        # abgelaufener, oder einer, den ein Lauf gerade als tot erkannt hat.
+        # Ein noch gültiger Token wird nicht angetastet – seine Laufzeit hängt
+        # am Tenant und reicht durchaus über einen Arbeitstag. Wer ihn trotzdem
+        # ersetzen will, klickt oben auf die Token-Kachel.
         wizard = None
         if not tok["valid"] or jobs["token_expired"]:
-            wizard = "token"
-        elif self.wizard_pending:
             wizard = "token"
         elif not oll["running"] or not oll["has_model"]:
             wizard = "ollama"
@@ -1077,7 +1116,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/token":
                 return self._json(self._save_token(data))
             if u.path == "/api/wizard-seen":
-                app.wizard_pending = False
+                # "Später": die Merkung eines totgelaufenen Tokens zurücksetzen,
+                # sonst ginge der Assistent bei jedem Statusabruf wieder auf.
                 app.jobs.token_expired = False
                 return self._json({"ok": True})
             if u.path == "/api/run":
@@ -1113,7 +1153,6 @@ class Handler(BaseHTTPRequestHandler):
             return {"ok": False, "message": "Das sieht nicht nach einem Access Token aus."}
         write_token(token)
         self.app.jobs.token_expired = False
-        self.app.wizard_pending = False
         st = token_status(token, needed=self.app.selected_categories())
         if st["expired"]:
             return {"ok": False, "message": "Der Token ist bereits abgelaufen – "
@@ -1264,6 +1303,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     httpd = make_server(app, port, host)
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
+    app.log_token_state()
     app.scheduler.start()
     app.autostart_mcp()
     print(f"Office-365-Export läuft: {url}")
@@ -1492,9 +1532,10 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
       <span class="small muted" id="s-next"></span>
     </div>
     <div class="banner warn" style="margin-top:14px">
-      Der Access Token aus dem Graph Explorer gilt meist nur etwa eine Stunde.
-      Läuft er ab, überspringt der Zeitplan den nächsten Lauf und der Assistent
-      meldet sich – bereits Exportiertes bleibt erhalten.
+      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist – wie lange
+      das ist, gibt dein Tenant vor und steht oben auf der Token-Kachel. Läuft er
+      ab, überspringt der Zeitplan den nächsten Lauf und der Assistent meldet
+      sich; bereits Exportiertes bleibt erhalten.
     </div>
   </div>
 </section>
@@ -1550,7 +1591,7 @@ function renderStatus(s){
   if(!t.present) setPill('token','err','Kein Token');
   else if(t.expired) setPill('token','err','Token abgelaufen');
   else if(t.missing && t.missing.length) setPill('token','warn','Token: Rechte fehlen');
-  else if(t.expires_in_minutes != null) setPill('token','ok','Token ' + t.expires_in_minutes + ' Min');
+  else if(t.expires_text) setPill('token','ok','Token noch ' + t.expires_text);
   else setPill('token','ok','Token gesetzt');
 
   var o = s.ollama;
@@ -1765,10 +1806,11 @@ function tokenWizard(){
   var head = !t.present ? '<div class="banner err">Es ist kein Token hinterlegt – ohne ihn kann nichts exportiert werden.</div>'
     : t.expired ? '<div class="banner err">Der Token ist abgelaufen. Bitte einen frischen holen.</div>'
     : (t.missing && t.missing.length) ? '<div class="banner warn">Im Token fehlen diese Berechtigungen: ' + esc(t.missing.join(', ')) + '. Eine umfassendere zählt mit – wer <code>Mail.ReadWrite</code> hat, braucht <code>Mail.Read</code> nicht extra.</div>'
-    : '<div class="banner">Token gültig' + (t.account ? ' für ' + esc(t.account) : '') +
-      (t.expires_in_minutes != null ? ', noch ' + t.expires_in_minutes + ' Minuten' : '') + '.</div>';
+    : '<div class="banner"><span class="ok">✓</span> Token gültig' + (t.account ? ' für ' + esc(t.account) : '') +
+      (t.expires_text ? ', noch ' + esc(t.expires_text) : '') +
+      '. Einen neuen brauchst du erst, wenn er abgelaufen ist – dann meldet sich dieses Fenster von selbst.</div>';
   return '<h2>Access Token holen</h2>' +
-    '<p class="muted small">Dieses Tool meldet dich nicht selbst an. Du holst den Token einmal im Microsoft Graph Explorer und fügst ihn hier ein – er gilt danach etwa eine Stunde.</p>' +
+    '<p class="muted small">Dieses Tool meldet dich nicht selbst an. Du holst den Token einmal im Microsoft Graph Explorer und fügst ihn hier ein. Wie lange er trägt, gibt dein Tenant vor – von einer Stunde bis zu mehreren.</p>' +
     head +
     '<ol>' +
     '<li><a href="' + S.graph_explorer + '" target="_blank" rel="noopener">Graph Explorer öffnen</a> und oben rechts mit dem Geschäftskonto anmelden.</li>' +
