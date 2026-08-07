@@ -10,5 +10,10 @@
 
 mcp==2.0.0              # MCP-SDK, 2.x-API (MCPServer) – siehe mcp_server.py
 msal==1.37.0            # Graph-Login (Device-Code-Flow)
-numpy==2.5.1            # Embedding-Matrix für semantische/hybride Suche
+numpy==2.4.6            # Embedding-Matrix für semantische/hybride Suche
 requests==2.34.2        # Graph-REST-Aufrufe und Ollama
+
+# numpy bleibt bewusst auf 2.4.x: ab 2.5.0 ist Python >= 3.12 Pflicht, das
+# README nennt aber 3.11 als Untergrenze. "Neueste Version" heißt hier neueste,
+# die 3.11 noch unterstützt. Erst zusammen mit der 3.11-Zeile in
+# .github/workflows/ci.yml anheben – die CI-Matrix testet genau diese Zusage.

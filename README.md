@@ -23,8 +23,8 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `rag_server.py` | Local RAG web UI with AI answers (fully offline via Ollama) |
 | `corpus.py` | Shared export parsing (used internally) |
 
-Everything runs on macOS, Windows and Linux with Python 3.11+.
-Commands below use `python3`; on Windows type `python` instead.
+Everything runs on macOS, Windows and Linux with Python 3.11+ (CI tests 3.11
+and 3.13). Commands below use `python3`; on Windows type `python` instead.
 
 ---
 
@@ -44,7 +44,9 @@ server and the AI search.
 
 Versions are pinned in [`requirements.txt`](requirements.txt) so an upstream
 release cannot break the tools unannounced; `requirements-dev.txt` adds the
-test and lint tools and is what CI installs.
+test and lint tools and is what CI installs. The pins stay on the newest
+release that still runs on Python 3.11 — `numpy` 2.5 would raise that floor to
+3.12, so it is held at 2.4.x.
 
 > PowerShell blocks the activation script? Run once:
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
