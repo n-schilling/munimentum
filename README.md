@@ -55,11 +55,25 @@ download, unpack, double-click, done. The UI opens in your default browser.
 | `Microsoft365-Archiv-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
 
 The bundles are **not code-signed** — certificates from Apple and Microsoft cost
-money — so both systems warn once on first launch. On macOS: open it, dismiss the
-warning, then System Settings → *Privacy & Security* → *Open Anyway* (or
-`xattr -dr com.apple.quarantine "/Applications/Microsoft365-Archiv.app"`). On
-Windows: *More info* → *Run anyway*. Running from source avoids this entirely and
-behaves identically.
+money — so both systems warn once on first launch.
+
+On **macOS** the dialog offers *Move to Trash* as its blue button; take *Done*
+instead, then System Settings → *Privacy & Security* → scroll down → *Open
+Anyway*, which is offered for about an hour after the blocked attempt.
+*Control-click → Open* has not worked reliably since macOS 15. The quick way is
+one line in the Terminal:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Microsoft365-Archiv.app"
+```
+
+The browser tags every download with a quarantine flag, and for tagged programs
+macOS insists on Apple notarization; the bundle is only ad-hoc signed. That is
+also why a copy that did not arrive through a browser starts without any
+prompting.
+
+On **Windows**: *More info* → *Run anyway*. Running from source avoids all of
+this and behaves identically.
 
 Data does **not** live inside the app, so updates never touch it:
 `~/Library/Application Support/Microsoft365-Archiv` (macOS),

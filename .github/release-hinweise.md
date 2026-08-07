@@ -30,13 +30,28 @@ Die Dateien sind **nicht signiert** (Signaturzertifikate von Apple und Microsoft
 kosten Geld). Beide Systeme warnen deshalb beim ersten Start. Das ist erwartet
 und einmalig:
 
-**macOS** — App doppelklicken, die Warnung wegklicken, dann
-Systemeinstellungen → *Datenschutz & Sicherheit* → ganz unten *„Dennoch öffnen“*.
-Alternativ einmal im Terminal:
+**macOS** — der Dialog heißt *„Apple konnte nicht überprüfen, ob … frei von
+Schadsoftware ist“* und bietet als blauen Knopf **„In den Papierkorb legen“** an.
+Nicht darauf klicken:
+
+1. **„Fertig“** wählen (der unauffällige Knopf darunter).
+2. Systemeinstellungen → *Datenschutz & Sicherheit* → ganz nach unten scrollen →
+   **„Dennoch öffnen“**. Der Knopf erscheint nur für etwa eine Stunde nach dem
+   blockierten Versuch; ist er weg, die App noch einmal doppelklicken.
+3. Beim erneuten Nachfragen *„Öffnen“* bestätigen. Danach ist Ruhe.
+
+Der oft genannte Weg *Rechtsklick → Öffnen* funktioniert seit macOS 15 nicht
+mehr zuverlässig. Schneller und sicher geht es im Terminal:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Microsoft365-Archiv.app"
 ```
+
+Was dabei passiert: Der Browser markiert jeden Download mit einem Quarantäne-
+Merkmal, und für markierte Programme verlangt macOS eine Beglaubigung durch
+Apple. Die App ist nur ad-hoc signiert, nicht beglaubigt – der Befehl entfernt
+das Merkmal. Deshalb lief eine Kopie, die nicht über den Browser kam, auch ohne
+Nachfrage.
 
 **Windows** — im blauen SmartScreen-Fenster auf *„Weitere Informationen“* und
 dann *„Trotzdem ausführen“*.
