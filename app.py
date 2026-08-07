@@ -1444,6 +1444,26 @@ class Handler(BaseHTTPRequestHandler):
             shutil.copyfileobj(f, self.wfile, 64 * 1024)
 
 
+def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
+    """Antwortet auf dem Port schon eine Instanz dieser App?
+
+    Ohne diese Prüfung startete jeder weitere Doppelklick eine zweite Instanz
+    auf dem nächsten freien Port. Die fällt niemandem auf – die App hat kein
+    Fenster und bleibt auch nicht im Dock stehen – und war nur über die
+    Aktivitätsanzeige wieder loszuwerden.
+    """
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/api/status",
+                                    timeout=timeout) as r:
+            daten = json.loads(r.read().decode("utf-8"))
+    except Exception:
+        return False
+    # Auf dem Port könnte etwas völlig anderes horchen; nur unsere eigene
+    # Antwort zählt als "läuft schon".
+    return isinstance(daten, dict) and "data_dir" in daten and "token" in daten
+
+
 def make_server(app, port, host="127.0.0.1", tries=12):
     """Server binden und die erlaubten Host-Header festlegen.
 
@@ -1469,6 +1489,13 @@ def make_server(app, port, host="127.0.0.1", tries=12):
 
 
 def serve(app, port, open_browser=True, host="127.0.0.1"):
+    if port and laeuft_bereits(port, host):
+        url = f"http://{host}:{port}/"
+        print(f"Läuft bereits – öffne {url}")
+        print("Beenden geht dort oben rechts über „Beenden“.")
+        if open_browser:
+            webbrowser.open(url)
+        return None
     httpd = make_server(app, port, host)
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
@@ -1699,6 +1726,8 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <button class="pill" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">Ollama</span></button>
     <button class="pill" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Index</span></button>
     <button class="pill" onclick="tab('mcp')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">MCP</span></button>
+    <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
+            style="border-color:var(--err);color:var(--err)">Beenden</button>
   </div>
 </header>
 
@@ -2154,6 +2183,7 @@ function runExport(){
 
 /* ---------- Protokoll ---------- */
 function pullLog(){
+  if(beendet) return;
   api('/api/log?since=' + seen).then(function(r){
     if(!r.lines || !r.lines.length){ seen = r.seq; return; }
     var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
@@ -2665,8 +2695,27 @@ function recheckOllama(){
   post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
 }
 
+/* ---------- Beenden ----------
+   Die App hat kein Fenster und steht nicht im Dock – ohne diesen Knopf bliebe
+   nur die Aktivitätsanzeige. Der MCP-Server geht mit; ein laufender Auftrag
+   wird abgebrochen, bereits Exportiertes bleibt aber erhalten. */
+var beendet = false;
+function beenden(){
+  var laeuft = S && S.jobs && S.jobs.busy;
+  if(!confirm(t(laeuft ? 'quit.confirm.busy' : 'quit.confirm'))) return;
+  beendet = true;
+  post('/api/quit').catch(function(){});   // die Antwort kommt evtl. nicht mehr
+  document.querySelector('main').innerHTML =
+    '<div class="card"><p>' + esc(t('quit.done')) + '</p></div>';
+  document.querySelector('nav').classList.add('hide');
+  el('btn-quit').classList.add('hide');
+}
+
 /* ---------- Schleife ---------- */
-function refresh(){ return api('/api/status').then(renderStatus); }
+function refresh(){
+  if(beendet) return Promise.resolve();
+  return api('/api/status').then(renderStatus);
+}
 refresh();
 setInterval(refresh, 2500);
 setInterval(pullLog, 1000);

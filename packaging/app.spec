@@ -104,7 +104,11 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "Microsoft 365 Archiv",
             "CFBundleShortVersionString": VERSION,
             "NSHighResolutionCapable": True,
-            # Kein Dock-Icon-Dauergast: die App lebt im Browser.
+            # false = normales Programm. Ein Dock-Symbol erscheint trotzdem
+            # nur kurz: die App öffnet kein Fenster, sondern bedient den
+            # Browser, und spricht deshalb nie mit dem Fenstersystem. Beendet
+            # wird sie über den Knopf in der Oberfläche; ein erneuter Start
+            # öffnet die laufende Instanz, statt eine zweite anzulegen.
             "LSUIElement": False,
         },
     )

@@ -166,7 +166,7 @@ def test_uebersetzungen_sind_nicht_bloss_kopiert():
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.",
            "book.", "sched.", "mcp.mode.", "mcp.title", "mcp.sub", "mcp.start",
            "mcp.stop", "mcp.running", "mcp.stopped", "mcp.code.", "mcp.desktop.",
-           "settings.", "wizard.", "job.", "srv.", "unit.", "update.")
+           "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.

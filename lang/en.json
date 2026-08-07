@@ -285,5 +285,9 @@
   "update.enabled": "Look for updates at startup",
   "update.enabled.hint": "— asks api.github.com once. Otherwise the app talks to nothing but Microsoft Graph and your local Ollama.",
   "update.banner": "Version {v} is available — you have {current}.",
-  "srv.update.available": "Version {version} is available ({url})."
+  "srv.update.available": "Version {version} is available ({url}).",
+  "app.quit": "Quit",
+  "quit.confirm": "Quit the app? The MCP server goes with it, and search will no longer be reachable.",
+  "quit.confirm.busy": "A job is running. Quitting cancels it — anything already exported is kept and the next run continues from there. Quit anyway?",
+  "quit.done": "Stopped. You can close this window. To carry on, just start the app again."
 }

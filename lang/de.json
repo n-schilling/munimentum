@@ -285,5 +285,9 @@
   "update.enabled": "Beim Start nach Aktualisierungen sehen",
   "update.enabled.hint": "– fragt einmal api.github.com. Sonst spricht die App mit nichts außer Microsoft Graph und dem lokalen Ollama.",
   "update.banner": "Version {v} ist verfügbar – du hast {current}.",
-  "srv.update.available": "Version {version} ist verfügbar ({url})."
+  "srv.update.available": "Version {version} ist verfügbar ({url}).",
+  "app.quit": "Beenden",
+  "quit.confirm": "Die App beenden? Der MCP-Server wird mitbeendet, und die Suche ist danach nicht mehr erreichbar.",
+  "quit.confirm.busy": "Es läuft gerade ein Auftrag. Beim Beenden wird er abgebrochen – bereits Exportiertes bleibt erhalten und der nächste Lauf setzt dort fort. Trotzdem beenden?",
+  "quit.done": "Beendet. Dieses Fenster kann geschlossen werden. Zum Weiterarbeiten die App einfach wieder starten."
 }

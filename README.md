@@ -195,6 +195,13 @@ one exported in a shell do exactly the same thing. Numbers are clamped on save
 (workers 1–8, MCP port 1024–65535, batch 1–512) so a typo can't wedge the next
 run, and changes apply to the next run — never to what is already exported.
 
+**Starting and stopping.** The app has no window of its own — it serves a page
+and lives in the browser. On macOS that means no lasting Dock icon, so quitting
+happens through the **Beenden** button in the header; it stops the MCP server
+with it. Launching a second time does not start a second copy: the app notices
+one is already running and just opens its page. That is also the way back if you
+closed the tab.
+
 Options: `--port 8700` (busy ports are skipped automatically), `--no-browser`,
 `--data-dir FOLDER`. Settings live in `app_config.json` next to the data.
 

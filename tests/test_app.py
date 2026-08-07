@@ -1588,7 +1588,7 @@ global.document = {
   createElement: function(){ return mk('x'); },
 };
 global.aktiverTab = 'export';
-global.vorhanden = {'.rbcount': mk('rbcount')};
+global.vorhanden = {'.rbcount': mk('rbcount'), 'main': mk('main'), 'nav': mk('nav')};
 global.setInterval = function(){ return 0; };
 // setTimeout echt lassen: die Kalenderpruefung wartet auf Promises.
 global.alert = function(){};
@@ -1822,6 +1822,51 @@ def _seiten_js():
     return treffer.group(1)
 
 
+PRUEFUNG_BEENDEN = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+global.confirm = function(text){ global.gefragt = text; return true; };
+
+renderStatus(statusGeruest());
+beenden();
+pruefe(String(global.gefragt).length > 10, 'Es wurde nicht rueckgefragt');
+pruefe(gesendet.indexOf('/api/quit') >= 0, 'Kein Beenden an den Server: ' + gesendet.join(','));
+pruefe(beendet === true, 'Zustand nicht gesetzt');
+
+// Danach darf nicht weiter abgefragt werden – sonst Fehler ohne Ende.
+var vorher = gesendet.length;
+refresh(); pullLog();
+pruefe(gesendet.length === vorher, 'Fragt nach dem Beenden weiter');
+console.log('OK');
+"""
+
+
+def test_beenden_fragt_zurueck_und_hoert_auf_zu_fragen():
+    """Ohne Knopf bliebe nur die Aktivitätsanzeige – die App hat kein Fenster."""
+    _in_node(PRUEFUNG_BEENDEN)
+
+
+PRUEFUNG_BEENDEN_LAUF = GRUNDZUSTAND + """
+global.confirm = function(text){ global.gefragt = text; return false; };
+var st = statusGeruest();
+st.jobs = {busy: true, job: {label: 'job.export', step: 'job.step.outlook', index: 0,
+                             steps: ['a']}, last: null, token_expired: false, seq: 0};
+renderStatus(st);
+beenden();
+pruefe(String(global.gefragt).indexOf('abgebrochen') >= 0,
+       'Warnt nicht vor dem Abbruch: ' + global.gefragt);
+pruefe(beendet === false, 'Trotz Abbruch der Rueckfrage beendet');
+console.log('OK');
+"""
+
+
+def test_beenden_warnt_bei_laufendem_auftrag():
+    _in_node(PRUEFUNG_BEENDEN_LAUF)
+
+
 def test_jeder_reiter_liegt_im_hauptbereich():
     """Regression: der Einstellungen-Abschnitt stand hinter </main> und bekam
     damit weder Innenabstand noch Maximalbreite – seine Karten klebten am
@@ -1932,6 +1977,88 @@ def test_serve_oeffnet_den_browser_und_raeumt_auf(sandbox, with_ollama, monkeypa
     assert geoeffnet and geoeffnet[0].startswith("http://127.0.0.1:")
     assert a.scheduler.ident is not None                    # Zeitplan-Thread lief
     assert a.scheduler.stop_event.is_set()                  # shutdown() hat aufgeräumt
+
+
+# --------------------------------------------------------------------------
+# Nur eine Instanz – und ein Weg, sie zu beenden
+# --------------------------------------------------------------------------
+def test_laeuft_bereits_erkennt_die_eigene_instanz(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    try:
+        assert app_mod.laeuft_bereits(port) is True
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_laeuft_bereits_bei_freiem_port(sandbox):
+    import socket as _s
+    with _s.socket() as sock:            # Port ermitteln und sofort freigeben
+        sock.bind(("127.0.0.1", 0))
+        frei = sock.getsockname()[1]
+    assert app_mod.laeuft_bereits(frei, timeout=0.5) is False
+
+
+def test_laeuft_bereits_bei_fremdem_dienst(sandbox):
+    """Auf dem Port kann etwas anderes horchen – das ist keine zweite Instanz."""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Fremd(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"hallo": "ich bin etwas anderes"}')
+
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), Fremd)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        assert app_mod.laeuft_bereits(httpd.server_address[1], timeout=2) is False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_serve_startet_keine_zweite_instanz(sandbox, with_ollama, monkeypatch):
+    """Regression: jeder weitere Doppelklick legte eine zweite Instanz auf dem
+    nächsten Port an – unsichtbar, weil die App kein Fenster hat."""
+    a = app_mod.App(app_mod.load_config())
+    erste = app_mod.make_server(a, 0)
+    threading.Thread(target=erste.serve_forever, daemon=True).start()
+    port = erste.server_address[1]
+    geoeffnet = []
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: geoeffnet.append(url))
+    monkeypatch.setattr(app_mod, "make_server",
+                        lambda *a, **k: pytest.fail("zweite Instanz gestartet"))
+    try:
+        zweite = app_mod.App(app_mod.load_config())
+        assert app_mod.serve(zweite, port, open_browser=True) is None
+        assert geoeffnet == [f"http://127.0.0.1:{port}/"]
+    finally:
+        erste.shutdown()
+        erste.server_close()
+
+
+def test_serve_mit_port_null_prueft_nicht(sandbox, with_ollama, monkeypatch):
+    """Port 0 heißt "irgendein freier" – da gibt es nichts zu erkennen."""
+    monkeypatch.setattr(app_mod, "laeuft_bereits",
+                        lambda *a, **k: pytest.fail("darf nicht gefragt werden"))
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: None)
+    a = app_mod.App(app_mod.load_config())
+    box = []
+    echtes = app_mod.make_server
+    monkeypatch.setattr(app_mod, "make_server",
+                        lambda app, port, host="127.0.0.1":
+                        box.append(echtes(app, port, host)) or box[0])
+    threading.Timer(0.05, lambda: box[0].shutdown()).start()
+    app_mod.serve(a, 0, open_browser=False)
+    assert box
 
 
 def test_main_reicht_argumente_an_serve_weiter(monkeypatch):

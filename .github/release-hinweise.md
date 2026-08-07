@@ -59,6 +59,16 @@ dann *„Trotzdem ausführen“*.
 Wer das nicht möchte, kann stattdessen aus dem Quelltext starten (`python3 app.py`,
 siehe README) — Funktion und Ergebnis sind identisch.
 
+## Starten und Beenden
+
+Die App hat kein eigenes Fenster – sie liefert eine Seite aus und lebt im
+Browser. Auf dem Mac bleibt sie deshalb nicht im Dock stehen. Beendet wird sie
+oben rechts über **„Beenden“**; der MCP-Server geht mit.
+
+Ein zweiter Start legt keine zweite Kopie an: die App merkt, dass schon eine
+läuft, und öffnet nur deren Seite. Das ist auch der Weg zurück, wenn du den Tab
+geschlossen hast – einfach die App noch einmal starten.
+
 ## Wo landen die Daten?
 
 Nicht in der App, sondern im Benutzerordner — ein Update überschreibt also nichts:

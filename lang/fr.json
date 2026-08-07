@@ -285,5 +285,9 @@
   "update.enabled": "Rechercher des mises à jour au démarrage",
   "update.enabled.hint": "— interroge api.github.com une fois. Sinon l’application ne parle qu’à Microsoft Graph et à votre Ollama local.",
   "update.banner": "La version {v} est disponible — vous avez {current}.",
-  "srv.update.available": "La version {version} est disponible ({url})."
+  "srv.update.available": "La version {version} est disponible ({url}).",
+  "app.quit": "Quitter",
+  "quit.confirm": "Quitter l’application ? Le serveur MCP s’arrête aussi et la recherche ne sera plus accessible.",
+  "quit.confirm.busy": "Une tâche est en cours. Quitter l’interrompt — ce qui est déjà exporté est conservé et la prochaine exécution reprendra là. Quitter quand même ?",
+  "quit.done": "Arrêté. Vous pouvez fermer cette fenêtre. Pour continuer, relancez simplement l’application."
 }
