@@ -289,5 +289,17 @@
   "app.quit": "Quitter",
   "quit.confirm": "Quitter l’application ? Le serveur MCP s’arrête aussi et la recherche ne sera plus accessible.",
   "quit.confirm.busy": "Une tâche est en cours. Quitter l’interrompt — ce qui est déjà exporté est conservé et la prochaine exécution reprendra là. Quitter quand même ?",
-  "quit.done": "Arrêté. Vous pouvez fermer cette fenêtre. Pour continuer, relancez simplement l’application."
+  "quit.done": "Arrêté. Vous pouvez fermer cette fenêtre. Pour continuer, relancez simplement l’application.",
+  "search.ai": "Rédiger une réponse",
+  "search.ai.label": "Réponse générée localement",
+  "search.ai.stop": "Arrêter",
+  "search.ai.note": "Résumé à partir des résultats ci-dessous — les numéros entre crochets y renvoient. Un modèle local se trompe plus facilement que Claude ; la source, ce sont les résultats eux-mêmes.",
+  "search.ai.err.model": "Le modèle manque dans Ollama : {detail}. Vérifiez les paramètres ou récupérez-le avec « ollama pull ».",
+  "search.ai.err.ollama": "Ollama injoignable : {detail}",
+  "settings.chat_model": "Modèle de réponse",
+  "settings.answer_sources": "Sources par réponse",
+  "settings.chat_model.hint": "Dans l’onglet « Recherche », il peut rédiger une réponse à partir des résultats — en local, rien ne quitte votre machine. Les modèles plus grands répondent mieux et plus lentement ; qwen2.5:7b demande environ 5 Go, qwen2.5:14b-instruct environ 9 Go. Pensez à faire « ollama pull » au préalable.",
+  "srv.answer.nomodel": "Aucun modèle de réponse dans Ollama : {model}",
+  "srv.answer.noquery": "Sans terme de recherche, il n’y a rien à répondre.",
+  "srv.answer.nohits": "Aucun résultat à partir duquel répondre."
 }

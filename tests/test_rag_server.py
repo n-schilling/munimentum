@@ -20,6 +20,24 @@ import rag_server
 # --------------------------------------------------------------------------
 # Hilfen: Meta-Daten, gefälschte Ollama-Antworten
 # --------------------------------------------------------------------------
+class FakeStream:
+    """Ollamas Chat-Antwort kommt zeilenweise als JSON – eine Zeile je Stück."""
+
+    status_code = 200
+
+    def __init__(self, stuecke):
+        self._stuecke = list(stuecke)
+
+    def raise_for_status(self):
+        pass
+
+    def iter_lines(self, decode_unicode=False):
+        import json as _j
+        for st in self._stuecke:
+            yield _j.dumps({"message": {"content": st}, "done": False}).encode("utf-8")
+        yield _j.dumps({"message": {"content": ""}, "done": True}).encode("utf-8")
+
+
 class FakeResp:
     """Minimaler Ersatz für requests.Response."""
 
@@ -215,24 +233,26 @@ def test_embed_query_alte_single_form_und_nullvektor(state, monkeypatch):
 
 
 def test_chat_baut_kontext_mit_quellennummern(state, monkeypatch):
+    """chat() gibt die Arbeit an answer.py ab – dieselbe Logik wie in der App."""
     seen = {}
 
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, timeout=None, stream=None):
         seen["url"], seen["json"] = url, json
-        return FakeResp({"message": {"content": "Antwort [1]"}})
+        return FakeStream(["Antwort ", "[1]"])
 
-    monkeypatch.setattr(rag_server.requests, "post", fake_post)
+    monkeypatch.setattr("requests.post", fake_post)
     meta = _meta()
     assert rag_server.chat("Was ist fertig?", [meta[0], meta[2]]) == "Antwort [1]"
     assert seen["url"] == "http://ollama.test/api/chat"
     payload = seen["json"]
-    assert payload["model"] == "test-chat" and payload["stream"] is False
+    assert payload["model"] == "test-chat" and payload["stream"] is True
     system, user = payload["messages"]
-    assert system == {"role": "system", "content": rag_server.SYSTEM_PROMPT}
+    assert "Quellennummern" in system["content"]
     assert "Frage: Was ist fertig?" in user["content"]
-    assert ("[1] (2025-06-01 09:30, Alice Example, teams – 1:1-Chat) "
-            "Bericht ist fertig.") in user["content"]
-    assert "[2] (2025-06-01 12:00" in user["content"]
+    # Nummerierung = Reihenfolge der Treffer; sie ist die Zusage an den Leser
+    assert "[1] 2025-06-01 09:30 · Alice Example · teams" in user["content"]
+    assert "Bericht ist fertig." in user["content"]
+    assert "[2] 2025-06-01 12:00" in user["content"]
 
 
 # --------------------------------------------------------------------------
@@ -350,14 +370,15 @@ def test_api_answer_ohne_frage_400(server):
 
 
 def test_api_answer_mit_quellen(server, monkeypatch):
-    def fake_post(url, json=None, timeout=None):
+    def fake_post(url, json=None, timeout=None, stream=None):
         if url.endswith("/api/embed"):
             return FakeResp({"embeddings": [[0.0, 1.0, 0.0, 0.0]]})
         if url.endswith("/api/chat"):
-            return FakeResp({"message": {"content": "Die Antwort [1]."}})
+            return FakeStream(["Die Antwort [1]."])
         raise AssertionError(f"unerwartete URL: {url}")
 
     monkeypatch.setattr(rag_server.requests, "post", fake_post)
+    monkeypatch.setattr("requests.post", fake_post)
     status, data = _post(server, "/api/answer", {"query": "Worum geht es?", "k": 2})
     assert status == 200
     assert data["answer"] == "Die Antwort [1]."

@@ -51,6 +51,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import answer
 import i18n
 import settings
 import updates
@@ -155,6 +156,8 @@ DEFAULT_CONFIG = {
     "index_batch": 64,
     "ollama": "http://localhost:11434",
     "embed_model": "bge-m3",
+    "chat_model": "qwen2.5:14b-instruct",   # formuliert die Antwort, lokal
+    "answer_sources": 8,                    # wie viele Treffer sie dafür liest
     "mcp_port": 8365,
     "mcp_autostart": True,
     "update_check": True,   # einmal beim Start bei GitHub nachsehen
@@ -378,10 +381,25 @@ def write_token(token, path=None):
 # --------------------------------------------------------------------------
 # Ollama
 # --------------------------------------------------------------------------
-def check_ollama(url, model, timeout=1.5):
-    """Läuft Ollama, und ist das Embedding-Modell da?"""
-    out = {"running": False, "models": [], "has_model": False, "error": None,
-           "model": model, "url": url}
+def _hat_modell(namen, gesucht):
+    """"bge-m3" in der Liste heißt "bge-m3:latest" – ohne Tag vergleichen."""
+    if not gesucht:
+        return False
+    rumpf = gesucht.split(":", 1)[0]
+    return any(n == gesucht or n.split(":", 1)[0] == rumpf for n in namen)
+
+
+def check_ollama(url, model, chat_model=None, timeout=1.5):
+    """Läuft Ollama – und welche der beiden Modelle liegen bereit?
+
+    Das Embedding-Modell trägt die semantische Suche, das Chat-Modell die
+    formulierte Antwort. Beide getrennt gemeldet: wer nur das erste hat, soll
+    suchen können, ohne dass die Oberfläche eine Antwort verspricht, die kein
+    Modell erzeugen kann.
+    """
+    out = {"running": False, "models": [], "has_model": False,
+           "has_chat_model": False, "error": None,
+           "model": model, "chat_model": chat_model, "url": url}
     try:
         import requests
         r = requests.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
@@ -392,9 +410,8 @@ def check_ollama(url, model, timeout=1.5):
         return out
     out["running"] = True
     out["models"] = sorted(names)
-    # "bge-m3" in der Liste heißt "bge-m3:latest" – Tag-loser Vergleich.
-    out["has_model"] = any(n == model or n.split(":", 1)[0] == model.split(":", 1)[0]
-                           for n in names)
+    out["has_model"] = _hat_modell(names, model)
+    out["has_chat_model"] = _hat_modell(names, chat_model)
     return out
 
 
@@ -990,7 +1007,8 @@ class App:
         age, cached = self._ollama_cache
         if not force and cached is not None and time.time() - age < 10:
             return cached
-        res = check_ollama(self.cfg["ollama"], self.cfg["embed_model"])
+        res = check_ollama(self.cfg["ollama"], self.cfg["embed_model"],
+                           self.cfg.get("chat_model"))
         self._ollama_cache = (time.time(), res)
         return res
 
@@ -1261,6 +1279,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._mcp(data))
             if u.path == "/api/ollama-recheck":
                 return self._json(app.ollama(force=True))
+            if u.path == "/api/answer":
+                return self._answer(data)
             if u.path == "/api/update-check":
                 return self._json(app.check_updates(blockierend=True))
             if u.path == "/api/quit":
@@ -1309,14 +1329,15 @@ class Handler(BaseHTTPRequestHandler):
         if "teams_categories" in data:
             cfg["teams_categories"] = _clean_categories(
                 data["teams_categories"], ["1on1", "group", "meeting", "channels"])
-        for key in ("teams_dir", "outlook_dir", "store_dir", "embed_model", "ollama"):
+        for key in ("teams_dir", "outlook_dir", "store_dir", "embed_model",
+                    "chat_model", "ollama"):
             if key in data and str(data[key]).strip():
                 cfg[key] = str(data[key]).strip()
         # Grenzen, damit eine vertippte Zahl den nächsten Lauf nicht lahmlegt:
         # Graph erlaubt 4 gleichzeitige Anfragen pro Postfach, alles darüber
         # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
         for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
-                               ("index_batch", 1, 512)):
+                               ("index_batch", 1, 512), ("answer_sources", 1, 20)):
             if key in data:
                 try:
                     cfg[key] = max(low, min(high, int(data[key])))
@@ -1365,6 +1386,72 @@ class Handler(BaseHTTPRequestHandler):
             self.app.mcp.stop()
             return {"ok": True, "mcp": self.app.mcp.status(self.app.cfg)}
         return {"ok": False, "message": {"k": "srv.mcp.badaction", "v": {}}}
+
+    def _answer(self, data):
+        """Aus den Treffern einer Suche eine Antwort formulieren lassen.
+
+        Gesucht wird mit derselben Funktion wie im Reiter daneben – die Antwort
+        sieht also genau die Treffer, die auch in der Liste stehen. Ein zweites
+        Retrieval hier hieße, dass sie Dinge zitieren könnte, die niemand
+        nachschlagen kann.
+
+        Die Antwort läuft stückweise heraus (eine JSON-Zeile je Stück): ein
+        lokales Modell braucht für einen Absatz gut und gern eine Minute, und
+        so viel Wartezeit vor einem leeren Kasten hält niemand aus.
+        """
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return self._json({"error": self.app.search.error}, 503)
+        oll = self.app.ollama()
+        if not (oll["running"] and oll["has_chat_model"]):
+            return self._json({"error": {"k": "srv.answer.nomodel",
+                                         "v": {"model": self.app.cfg["chat_model"]}}}, 503)
+
+        query = str(data.get("q") or "").strip()
+        if not query:
+            return self._json({"error": {"k": "srv.answer.noquery", "v": {}}}, 400)
+        k = max(1, min(int(self.app.cfg.get("answer_sources", 8)), 20))
+        res = mod.search_messages(
+            query=query, person=str(data.get("person") or ""),
+            date_from=str(data.get("from") or ""), date_to=str(data.get("to") or ""),
+            source=str(data.get("source") or "all"), k=k, preview_chars=0)
+        treffer = res.get("results") or []
+        if not treffer:
+            return self._json({"error": {"k": "srv.answer.nohits", "v": {}}}, 200)
+
+        # Volltext je Treffer: die Vorschau in der Liste ist zu kurz, um daraus
+        # etwas zu beantworten.
+        quellen = []
+        for h in treffer:
+            doc = mod.get_document(uid=h["uid"])
+            quellen.append({**h, "text": doc.get("text") or ""})
+
+        lang = i18n.negotiate(self.app.cfg.get("language"),
+                              self.headers.get("Accept-Language"), RES)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Connection", "close")   # Ende des Stroms = Verbindungsende
+        self.end_headers()
+        self.close_connection = True
+
+        def schicke(obj):
+            self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            self.wfile.flush()
+
+        schicke({"sources": [{"n": i, "uid": h["uid"], "title": h.get("title"),
+                              "who": h.get("who"), "date": h.get("date"),
+                              "uri": h.get("uri")}
+                             for i, h in enumerate(treffer, 1)],
+                 "model": self.app.cfg["chat_model"]})
+        try:
+            for stueck in answer.stream(query, quellen, self.app.cfg["chat_model"],
+                                        self.app.cfg["ollama"], lang):
+                schicke(stueck)
+            schicke({"done": True})
+        except (BrokenPipeError, ConnectionResetError):
+            pass          # Fenster zu oder abgebrochen – kein Grund für Lärm
 
     def _search(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -1716,6 +1803,25 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 .cline a{color:var(--accent);text-decoration:none}
 .cline span{color:var(--muted);margin-right:5px}
 .hint{color:var(--muted)}
+
+/* Antwortkasten. Bewusst anders als eine Trefferkarte: was hier steht, hat
+   kein Mensch geschrieben, sondern ein Modell aus den Treffern darunter
+   zusammengefasst. Farbiger Balken links, eigene Kopfzeile, Fußnoten. */
+.answer{background:var(--card);border:1px solid var(--line);
+  border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px}
+.answer .ahead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  font-size:12px;color:var(--muted);margin-bottom:8px}
+.answer .ahead .tag{background:var(--code);border-radius:5px;padding:1px 7px}
+.answer .atext{white-space:pre-wrap;overflow-wrap:anywhere}
+.answer .atext a{color:var(--accent);text-decoration:none;font-weight:600}
+.answer .afoot{font-size:12px;color:var(--muted);margin-top:10px;
+  border-top:1px solid var(--line);padding-top:8px}
+.answer.err{border-left-color:var(--err)}
+.blink::after{content:"▍";animation:blink 1s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
+.hit.zitiert{background:var(--code);border-radius:8px;padding-left:10px;
+  margin-left:-10px;box-shadow:inset 3px 0 0 var(--accent)}
+.hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
 </style>
 </head>
 <body>
@@ -1782,6 +1888,9 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <div class="row">
       <input type="text" id="q" data-i18n-ph="search.query.ph" placeholder="Suchbegriff oder Frage" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')doSearch(0)">
       <button class="act" onclick="doSearch(0)" data-i18n="search.go">Suchen</button>
+      <label class="chk hide" id="ai-wrap" style="margin-left:4px">
+        <input type="checkbox" id="ai-on" onchange="merkeKI()">
+        <span data-i18n="search.ai">Antwort formulieren</span></label>
     </div>
     <div class="row" style="margin-top:10px">
       <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person" style="width:180px">
@@ -1794,6 +1903,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
       <input type="date" id="f-from"><input type="date" id="f-to">
     </div>
   </div>
+  <div class="answer hide" id="ai-box"></div>
   <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
 </section>
@@ -1913,6 +2023,13 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
       <label class="small"><span data-i18n="settings.ollama">Ollama</span> <input type="text" id="c-ollama" style="width:230px"></label>
       <label class="small"><span data-i18n="settings.embed_model">Embedding-Modell</span> <input type="text" id="c-embed_model" style="width:160px"></label>
     </div>
+    <div class="row" style="margin-top:10px">
+      <label class="small"><span data-i18n="settings.chat_model">Antwort-Modell</span>
+        <input type="text" id="c-chat_model" style="width:210px"></label>
+      <label class="small"><span data-i18n="settings.answer_sources">Quellen je Antwort</span>
+        <input type="number" id="c-answer_sources" min="1" max="20" style="width:80px"></label>
+    </div>
+    <p class="small muted" data-i18n="settings.chat_model.hint" style="margin-top:2px"></p>
     <div class="row" style="margin-top:10px">
       <label class="small"><span data-i18n="settings.mcp_port">MCP-Port</span> <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
       <label class="chk"><input type="checkbox" id="c-mcp_autostart"> <span data-i18n="settings.mcp_autostart">MCP-Server beim Start mitstarten</span></label>
@@ -2122,6 +2239,11 @@ function renderStatus(s){
     : (mtext(s.mcp.error) || t('mcp.stopped'));
   el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
   el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
+  // Die Antwort gibt es nur, wenn auch ein Modell sie formulieren kann.
+  var kiMoeglich = !!(o.running && o.has_chat_model && st.exists);
+  el('ai-wrap').classList.toggle('hide', !kiMoeglich);
+  if(!kiMoeglich) el('ai-on').checked = false;
+
   el('search-sub').textContent = t(st.exists
     ? (st.semantic ? 'search.sub.hybrid' : 'search.sub.lexical') : 'search.sub.none');
 
@@ -2206,16 +2328,25 @@ function doSearch(off){
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     k: 20, offset: offset});
   el('results').textContent = t('search.running');
-  api('/api/search?' + p.toString()).then(renderHits);
+  api('/api/search?' + p.toString()).then(function(r){
+    renderHits(r);
+    // Erst die Treffer, dann die Antwort: die Suche ist sofort da, das Modell
+    // braucht eine Minute. Wer eine Rechnungsnummer sucht, soll nicht warten.
+    if(el('ai-on').checked && (r.results || []).length) frageKI();
+    else abbrechenKI();
+  });
 }
 function renderHits(r){
   if(r.error){ el('results').innerHTML = '<span class="err">' + esc(mtext(r.error)) + '</span>'; return; }
   var hits = r.results || [];
-  if(!hits.length){ el('results').textContent = t('search.nohits'); el('pager').innerHTML = ''; return; }
-  el('results').innerHTML = hits.map(function(h){
+  if(!hits.length){ el('results').textContent = t('search.nohits');
+                    el('pager').innerHTML = ''; abbrechenKI(); return; }
+  el('results').innerHTML = hits.map(function(h, i){
     var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
     var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
-    return '<div class="hit"><h3>' + (link ? '<a href="' + link + '" target="_blank">' : '') +
+    return '<div class="hit" id="treffer-' + (i + 1) + '">' +
+      '<h3><span class="fussnote">[' + (i + 1) + ']</span>' +
+      (link ? '<a href="' + link + '" target="_blank">' : '') +
       esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
       '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
@@ -2493,6 +2624,117 @@ function drawBook(){
 }
 el('kbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(drawBook, 120); });
 
+/* ---------- Formulierte Antwort ----------
+   Ergänzt die Treffer, ersetzt sie nicht: die Liste darunter bleibt unberührt,
+   und jede Fußnote [1] springt genau dorthin. Was hier steht, hat ein lokales
+   Modell aus eben diesen Treffern geschrieben – das sagt der Kasten auch. */
+var kiLauf = null, kiQuellen = [];
+
+function merkeKI(){
+  // Die Wahl gilt für die nächste Suche, nicht rückwirkend – ein Haken soll
+  // nicht ungefragt ein Modell anwerfen.
+  try { localStorage.setItem('ki', el('ai-on').checked ? '1' : '0'); } catch(e){}
+}
+function stelleKIher(){
+  try { el('ai-on').checked = localStorage.getItem('ki') === '1'; } catch(e){}
+}
+function abbrechenKI(){
+  if(kiLauf){ kiLauf.abort(); kiLauf = null; }
+  el('ai-box').classList.add('hide');
+  markiereZitate([]);
+}
+function kiKopf(modell, laufend){
+  return '<div class="ahead"><span class="tag">' + esc(t('search.ai.label')) + '</span>' +
+    '<span>' + esc(modell || '') + '</span>' +
+    (laufend ? '<button class="ghost" style="margin-left:auto;padding:3px 10px" ' +
+               'onclick="abbrechenKI()">' + esc(t('search.ai.stop')) + '</button>' : '') +
+    '</div>';
+}
+function kiFuss(){
+  return '<div class="afoot">' + esc(t('search.ai.note')) + '</div>';
+}
+
+function frageKI(){
+  abbrechenKI();
+  var box = el('ai-box');
+  box.classList.remove('hide', 'err');
+  box.innerHTML = kiKopf('', true) +
+    '<div class="atext blink" id="ai-text"></div>';
+
+  kiLauf = new AbortController();
+  var text = '', modell = '';
+  fetch('/api/answer', {
+    method: 'POST', signal: kiLauf.signal,
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({q: el('q').value, person: el('f-person').value,
+                          source: el('f-source').value,
+                          from: el('f-from').value, to: el('f-to').value})
+  }).then(function(r){
+    if(!r.ok || !r.body){
+      return r.json().then(function(d){ throw new Error(mtext(d.error)); });
+    }
+    var leser = r.body.getReader(), dekoder = new TextDecoder(), rest = '';
+    function weiter(){
+      return leser.read().then(function(st){
+        if(st.done) return fertig();
+        rest += dekoder.decode(st.value, {stream: true});
+        var zeilen = rest.split('\n');
+        rest = zeilen.pop();
+        zeilen.forEach(function(z){
+          if(!z.trim()) return;
+          var d;
+          try { d = JSON.parse(z); } catch(e){ return; }
+          if(d.sources){ kiQuellen = d.sources; modell = d.model;
+                         box.innerHTML = kiKopf(modell, true) +
+                           '<div class="atext blink" id="ai-text"></div>'; }
+          if(d.text){ text += d.text; el('ai-text').textContent = text; }
+          if(d.error){ throw new Error(t(d.error === 'model'
+                         ? 'search.ai.err.model' : 'search.ai.err.ollama',
+                         {detail: d.detail || ''})); }
+        });
+        return weiter();
+      });
+    }
+    function fertig(){
+      kiLauf = null;
+      box.innerHTML = kiKopf(modell, false) +
+        '<div class="atext">' + mitFussnoten(text) + '</div>' + kiFuss();
+      markiereZitate(zitierte(text));
+    }
+    return weiter();
+  }).catch(function(e){
+    kiLauf = null;
+    if(e && e.name === 'AbortError') return;      // vom Benutzer gestoppt
+    box.classList.add('err');
+    box.innerHTML = kiKopf(modell, false) +
+      '<div class="atext">' + esc(String(e && e.message || e)) + '</div>';
+  });
+}
+
+/* [1] wird zu einem Sprung in die Trefferliste – keine zweite Quellenliste,
+   die dieselben Einträge noch einmal zeigt. */
+function mitFussnoten(text){
+  return esc(text).replace(/\[(\d+)\]/g, function(m, n){
+    return kiQuellen[+n - 1]
+      ? '<a href="#treffer-' + n + '" onclick="zeigeTreffer(' + n + ');return false;">' + m + '</a>'
+      : m;
+  });
+}
+function zitierte(text){
+  var raus = [], m, re = /\[(\d+)\]/g;
+  while((m = re.exec(text))) if(raus.indexOf(+m[1]) < 0) raus.push(+m[1]);
+  return raus;
+}
+function markiereZitate(nummern){
+  document.querySelectorAll('#results .hit').forEach(function(el2, i){
+    el2.classList.toggle('zitiert', nummern.indexOf(i + 1) >= 0);
+  });
+}
+function zeigeTreffer(n){
+  var el2 = document.getElementById('treffer-' + n);
+  if(el2) el2.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
+
 /* ---------- Zeitplan / MCP ---------- */
 function saveSchedule(){
   post('/api/schedule', {enabled: el('s-enabled').checked,
@@ -2535,8 +2777,8 @@ function pruefeUpdate(){
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','mcp_autostart','update_check'];
-var ZAHLEN   = ['workers','index_batch','mcp_port'];
-var TEXTE    = ['ollama','embed_model','teams_dir','outlook_dir','store_dir'];
+var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources'];
+var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir'];
 var cfgGefuellt = false;
 
 function fuelleEinstellungen(cfg){
@@ -2716,6 +2958,7 @@ function refresh(){
   if(beendet) return Promise.resolve();
   return api('/api/status').then(renderStatus);
 }
+stelleKIher();
 refresh();
 setInterval(refresh, 2500);
 setInterval(pullLog, 1000);

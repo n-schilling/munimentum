@@ -33,6 +33,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `settings.py` | `app_config.json` as a defaults layer for every script (used internally) |
 | `i18n.py`, `lang/` | UI translations (German, English, French) |
 | `version.py`, `updates.py` | Version number and the startup update check |
+| `answer.py` | Prompt and streaming for the local drafted answer (shared) |
 | `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
 Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
@@ -124,6 +125,25 @@ embeddings fused with RRF) — `mcp_server.py` is imported as a library rather t
 a second search path being maintained. Hits link to their source file, served
 with `Content-Security-Policy: sandbox` so an exported Teams page cannot script
 against the app.
+
+**Drafted answers, entirely local.** With Ollama and a chat model in place, a
+checkbox next to the search offers *Antwort formulieren*. It does not search
+again: it takes the hits already on screen, sends them to the local model and
+streams back a paragraph whose bracketed numbers jump to those very hits. So the
+answer can never cite something you cannot look up, and the hit list underneath
+stays exactly as it was — the answer complements it rather than repeating it.
+
+Hits appear instantly; the model needs 15–60 seconds, so the two are deliberately
+separate steps and the text streams in as it is written. The box is visually set
+apart, names the model, and says outright that a local model errs more easily
+than Claude and that the hits are the actual source. Without Ollama or without
+the model pulled, the checkbox is simply absent. Model and number of sources live
+in the settings; `answer.py` holds the prompt and streaming for both this and
+`rag_server.py`, so the rules cannot drift apart.
+
+The point is not to beat Claude — via MCP Claude is faster and better. The point
+is that nothing leaves the machine, which for a mailbox archive is a reason of
+its own.
 
 **Calendar and address book.** The app has the same three calendar views as the
 static page — week, month and **Rekonstruiert** — plus the contacts view, and it

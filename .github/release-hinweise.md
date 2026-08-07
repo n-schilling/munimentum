@@ -93,6 +93,11 @@ Ohne Ollama funktioniert alles außer der *semantischen* Suche — Export, Vollt
 und der MCP-Server für Claude laufen ganz normal. Die App fragt beim Start und
 erklärt die Installation, falls gewünscht.
 
+Mit Ollama und einem Sprachmodell kommt im Reiter *Suche* zusätzlich die Checkbox
+**„Antwort formulieren“** dazu: die Treffer werden von einem lokalen Modell zu
+einem Absatz mit Quellenangaben zusammengefasst. Nichts verlässt dabei den
+Rechner. Modell und Quellenzahl stehen in den *Einstellungen*.
+
 ## Aktualisierungen
 
 Die App sieht beim Start einmal bei GitHub nach, ob es eine neuere Version gibt,

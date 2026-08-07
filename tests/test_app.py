@@ -68,17 +68,19 @@ def sandbox(tmp_path, monkeypatch):
 @pytest.fixture
 def no_ollama(monkeypatch):
     monkeypatch.setattr(app_mod, "check_ollama",
-                        lambda url, model, timeout=1.5: {
+                        lambda url, model, chat_model=None, timeout=1.5: {
                             "running": False, "models": [], "has_model": False,
-                            "error": "ConnectionError", "model": model, "url": url})
+                            "has_chat_model": False, "error": "ConnectionError",
+                            "model": model, "chat_model": chat_model, "url": url})
 
 
 @pytest.fixture
 def with_ollama(monkeypatch):
     monkeypatch.setattr(app_mod, "check_ollama",
-                        lambda url, model, timeout=1.5: {
+                        lambda url, model, chat_model=None, timeout=1.5: {
                             "running": True, "models": [model], "has_model": True,
-                            "error": None, "model": model, "url": url})
+                            "has_chat_model": True, "error": None, "model": model,
+                            "chat_model": chat_model, "url": url})
 
 
 # --------------------------------------------------------------------------
@@ -279,8 +281,9 @@ def test_check_ollama_erkennt_modell_ohne_tag(monkeypatch):
         def raise_for_status(self): pass
         def json(self): return {"models": [{"name": "bge-m3:latest"}, {"name": "qwen:7b"}]}
     monkeypatch.setattr("requests.get", lambda *a, **k: R())
-    out = app_mod.check_ollama("http://x", "bge-m3")
+    out = app_mod.check_ollama("http://x", "bge-m3", "qwen:7b")
     assert out["running"] and out["has_model"]
+    assert out["has_chat_model"] is True            # auch ohne genaues Tag
     assert out["models"] == ["bge-m3:latest", "qwen:7b"]
 
 
@@ -291,6 +294,7 @@ def test_check_ollama_modell_fehlt(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: R())
     out = app_mod.check_ollama("http://x", "bge-m3")
     assert out["running"] and not out["has_model"]
+    assert out["has_chat_model"] is False           # ohne Namen kein Modell
 
 
 def test_check_ollama_nicht_erreichbar(monkeypatch):
@@ -1068,6 +1072,116 @@ def test_searchbridge_laedt_nach_neuem_index_neu(sandbox, store):
 
 
 # --------------------------------------------------------------------------
+# Formulierte Antwort: nutzt die Treffer der Suche, sucht nicht selbst
+# --------------------------------------------------------------------------
+def _antwort(port, body, kopf=None):
+    """POST /api/answer und die NDJSON-Zeilen einsammeln."""
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
+    con.request("POST", "/api/answer", json.dumps(body),
+                {"Content-Type": "application/json", **(kopf or {})})
+    r = con.getresponse()
+    roh = r.read().decode("utf-8")
+    con.close()
+    if r.getheader("Content-Type", "").startswith("application/x-ndjson"):
+        return r.status, [json.loads(z) for z in roh.splitlines() if z.strip()]
+    return r.status, json.loads(roh)
+
+
+def test_antwort_nutzt_die_treffer_der_suche(sandbox, with_ollama, store, monkeypatch):
+    """Kein zweites Retrieval: die Antwort sieht genau die Treffer, die auch in
+    der Liste stehen – sonst könnte sie Unauffindbares zitieren."""
+    gesehen = {}
+    monkeypatch.setattr(app_mod.answer, "stream",
+                        lambda q, quellen, model, ollama, lang="de", **kw:
+                        gesehen.update(query=q, quellen=quellen, model=model,
+                                       lang=lang) or iter([{"text": "Antwort [1]."}]))
+    a = app_mod.App(app_mod.load_config())
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        code, zeilen = _antwort(httpd.server_address[1], {"q": "Rechnung"})
+        assert code == 200
+        assert zeilen[0]["sources"][0]["n"] == 1          # Nummerierung ab 1
+        assert zeilen[0]["model"] == a.cfg["chat_model"]
+        assert {"text": "Antwort [1]."} in zeilen
+        assert zeilen[-1] == {"done": True}
+        # Volltext statt Vorschau – aus 200 Zeichen lässt sich nichts beantworten
+        assert "4711" in gesehen["quellen"][0]["text"]
+        assert gesehen["query"] == "Rechnung"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_antwort_ohne_chat_modell(sandbox, store, monkeypatch):
+    monkeypatch.setattr(app_mod, "check_ollama",
+                        lambda url, model, chat_model=None, timeout=1.5: {
+                            "running": True, "models": [], "has_model": True,
+                            "has_chat_model": False, "error": None,
+                            "model": model, "chat_model": chat_model, "url": url})
+    a = app_mod.App(app_mod.load_config())
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        code, d = _antwort(httpd.server_address[1], {"q": "Rechnung"})
+        assert code == 503 and schluessel(d["error"]) == "srv.answer.nomodel"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_antwort_ohne_suchbegriff_und_ohne_treffer(sandbox, with_ollama, store):
+    a = app_mod.App(app_mod.load_config())
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        code, d = _antwort(port, {"q": "   "})
+        assert code == 400 and schluessel(d["error"]) == "srv.answer.noquery"
+        code, d = _antwort(port, {"q": "xyzzyplugh"})
+        assert code == 200 and schluessel(d["error"]) == "srv.answer.nohits"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_antwort_folgt_der_spracheinstellung(sandbox, with_ollama, store, monkeypatch):
+    gesehen = {}
+    monkeypatch.setattr(app_mod.answer, "stream",
+                        lambda q, quellen, model, ollama, lang="de", **kw:
+                        gesehen.update(lang=lang) or iter([]))
+    cfg = app_mod.load_config()
+    cfg["language"] = "fr"
+    a = app_mod.App(cfg)
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        _antwort(httpd.server_address[1], {"q": "Rechnung"})
+        assert gesehen["lang"] == "fr"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_antwort_begrenzt_die_quellenzahl(sandbox, with_ollama, store, monkeypatch):
+    gesehen = {}
+    monkeypatch.setattr(app_mod.answer, "stream",
+                        lambda q, quellen, *a, **kw:
+                        gesehen.update(n=len(quellen)) or iter([]))
+    cfg = app_mod.load_config()
+    cfg["answer_sources"] = 99                   # jenseits der Grenze
+    a = app_mod.App(cfg)
+    httpd = app_mod.make_server(a, 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        _antwort(httpd.server_address[1], {"q": "Rechnung"})
+        assert gesehen["n"] <= 20
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+# --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
 @pytest.fixture
@@ -1597,7 +1711,8 @@ global.alert = function(){};
 GRUNDZUSTAND = """
 S = {token: {present: true, valid: true, expired: false, missing: [],
              account: 'a@example.com', expires_in_minutes: 620},
-     ollama: {running: true, has_model: false, model: 'bge-m3', models: []},
+     ollama: {running: true, has_model: false, has_chat_model: false,
+              model: 'bge-m3', chat_model: 'qwen2.5:7b', models: []},
      ollama_hint: {os: 'macOS', steps: ['Schritt eins'], brew: 'brew install ollama'},
      scopes_needed: ['Mail.Read', 'User.Read'],
      scope_queries: {'Mail.Read': 'https://graph.microsoft.com/v1.0/me/messages'},
@@ -1794,6 +1909,42 @@ setTimeout(function(){
 }, 0);
 """
 
+# Die Checkbox für die formulierte Antwort darf es nur geben, wenn auch ein
+# Modell sie erzeugen kann – sonst verspricht die Oberfläche etwas, das nicht
+# kommt. Und der Antwortkasten muss sich sichtbar von den Treffern abheben.
+PRUEFUNG_KI = GRUNDZUSTAND + """
+function zustand(chat, index){
+  var st = statusGeruest();
+  st.ollama = {running: true, has_model: true, has_chat_model: chat,
+               model: 'bge-m3', chat_model: 'qwen2.5:7b', models: []};
+  st.store = {exists: index, chunks: 5, semantic: true, built_at: null, model: null};
+  return st;
+}
+var box = document.getElementById('ai-wrap');
+var versteckt = null;
+box.classList.toggle = function(c, an){ versteckt = (c === 'hide') ? an : versteckt; };
+
+renderStatus(zustand(false, true));
+pruefe(versteckt === true, 'Checkbox trotz fehlendem Modell sichtbar');
+renderStatus(zustand(true, false));
+pruefe(versteckt === true, 'Checkbox trotz fehlendem Index sichtbar');
+renderStatus(zustand(true, true));
+pruefe(versteckt === false, 'Checkbox fehlt, obwohl alles da ist');
+
+// Fussnoten: [1] verweist auf den ersten Treffer, Unbekanntes bleibt Text
+kiQuellen = [{n: 1, uid: 'a'}, {n: 2, uid: 'b'}];
+var h = mitFussnoten('Bezahlt [1], offen [2], erfunden [9].');
+pruefe(h.indexOf('href="#treffer-1"') >= 0, 'Fussnote 1 verweist nicht');
+pruefe(h.indexOf('href="#treffer-2"') >= 0, 'Fussnote 2 verweist nicht');
+pruefe(h.indexOf('href="#treffer-9"') < 0, 'Erfundene Fussnote wurde verlinkt');
+pruefe(h.indexOf('[9]') >= 0, 'Erfundene Fussnote verschwand ganz');
+
+// Welche Treffer zitiert wurden – fuer die Hervorhebung in der Liste
+pruefe(zitierte('a [2] b [1] c [2]').join(',') === '2,1', 'Zitate falsch erkannt');
+pruefe(zitierte('ohne').length === 0, 'Zitate erfunden');
+console.log('OK');
+"""
+
 # renderStatus liest viel mehr aus dem Status als die Assistenten – ein
 # vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
 STATUS_GERUEST = """
@@ -1802,6 +1953,8 @@ function statusGeruest(){
           scopes_needed: S.scopes_needed, scope_queries: S.scope_queries,
           graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
           store: {exists: true, chunks: 5, semantic: false, built_at: null, model: null},
+          update: {status: 'off', current: '1.0.1', latest: null, url: null,
+                   newer: false, error: null, releases_url: 'https://x'},
           exports: {teams: {last_run: null}, outlook: {last_run: null}},
           jobs: {busy: false, job: null, last: null, token_expired: false, seq: 0},
           mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null,
@@ -1865,6 +2018,12 @@ console.log('OK');
 
 def test_beenden_warnt_bei_laufendem_auftrag():
     _in_node(PRUEFUNG_BEENDEN_LAUF)
+
+
+def test_ki_checkbox_und_fussnoten():
+    """Die Checkbox erscheint nur mit Modell UND Index; Fußnoten verweisen in
+    die Trefferliste, erfundene Nummern bleiben unverlinkter Text."""
+    _in_node(PRUEFUNG_KI)
 
 
 def test_jeder_reiter_liegt_im_hauptbereich():

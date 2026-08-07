@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import requests
 
+import answer
 import corpus  # noqa: F401  (gleiche Umgebung wie der Index)
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
@@ -43,14 +44,6 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 STATE = {}
-
-SYSTEM_PROMPT = (
-    "Du beantwortest Fragen ausschließlich anhand des bereitgestellten Kontexts aus "
-    "E-Mails und Teams-Nachrichten. Antworte auf Deutsch, knapp und präzise. Belege "
-    "Aussagen mit Quellennummern in eckigen Klammern, z. B. [2]. Wenn der Kontext die "
-    "Frage nicht beantwortet, sage das ausdrücklich und rate nicht."
-)
-
 
 # --------------------------------------------------------------------------
 # Reine Retrieval-Logik (ohne Netz/Disk – testbar)
@@ -116,18 +109,15 @@ def embed_query(text):
 
 
 def chat(query, hits_meta):
-    url, model = STATE["ollama"], STATE["chat_model"]
-    ctx = "\n\n".join(
-        f'[{n}] ({c["date"]}, {c["who"]}, {c["src"]} – {c["ctx"]}) {c["text"]}'
-        for n, c in enumerate(hits_meta, 1))
-    user = f"Kontext:\n{ctx}\n\nFrage: {query}"
-    r = requests.post(f"{url}/api/chat", json={
-        "model": model, "stream": False, "options": {"temperature": 0.2},
-        "messages": [{"role": "system", "content": SYSTEM_PROMPT},
-                     {"role": "user", "content": user}],
-    }, timeout=600)
-    r.raise_for_status()
-    return r.json()["message"]["content"]
+    """Antwort formulieren – dieselbe Logik wie in der App (siehe answer.py),
+    damit die Antwortregeln nicht an zwei Stellen auseinanderlaufen."""
+    quellen = [{"date": c["date"], "who": c["who"], "source_label": c["src"],
+                "title": c["ctx"], "text": c["text"]} for c in hits_meta]
+    text, fehler = answer.complete(query, quellen, STATE["chat_model"],
+                                   STATE["ollama"], lang="de")
+    if fehler:
+        raise requests.exceptions.RequestException(fehler.get("detail", "Ollama"))
+    return text
 
 
 # --------------------------------------------------------------------------
