@@ -26,8 +26,7 @@ read_source_file, corpus_stats. Every hit carries an o365:// resource URI;
 the corresponding MCP resource returns the raw source file.
 
 Install (SDK required; numpy/requests only for semantic/hybrid ranking):
-    pip install mcp
-    pip install numpy requests        # optional
+    pip install -r requirements.txt   # pinned; mcp 2.x (MCPServer API)
 
 Run (HTTP, default – one shared server for all Claude sessions):
     python3 mcp_server.py --store rag_store \
@@ -54,7 +53,7 @@ from pathlib import Path
 from datetime import datetime
 from urllib.parse import quote, unquote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.types import ToolAnnotations
 
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
@@ -66,7 +65,8 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 STATE = {}          # populated in main(): db path, V (mmap), np, dirs, flags
-mcp = FastMCP("office365-export")
+mcp = MCPServer("office365-export")
+_HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 
 _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
                             openWorldHint=False)
@@ -78,7 +78,7 @@ _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
 
 
 def _db():
-    """Fresh read-only connection per call – safe across FastMCP worker threads."""
+    """Fresh read-only connection per call – safe across MCP worker threads."""
     con = sqlite3.connect(f'file:{STATE["db"]}?mode=ro', uri=True)
     con.row_factory = sqlite3.Row
     return con
@@ -619,13 +619,12 @@ def main():
                else "lexical (FTS5/BM25) only")
     print(f"office365-export MCP: {n_chunks} chunks · {backend}", file=sys.stderr)
     if a.transport == "http":
-        mcp.settings.host = a.host
-        mcp.settings.port = a.port
-        print(f"MCP endpoint: http://{a.host}:{a.port}{mcp.settings.streamable_http_path}",
+        print(f"MCP endpoint: http://{a.host}:{a.port}{_HTTP_PATH}",
               file=sys.stderr)
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=a.host, port=a.port,
+                streamable_http_path=_HTTP_PATH)
     else:
-        mcp.run()
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":

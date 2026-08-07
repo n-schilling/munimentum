@@ -16,10 +16,9 @@ jobs:
           python-version: "3.13"
 
       - name: Install dependencies
-        # mcp auf 1.x festgelegt: 2.0 hat mcp.server.fastmcp entfernt
-        # (Ersatz: mcp.server.mcpserver). Erst nach Migration von
-        # mcp_server.py/rag_server.py anheben.
-        run: pip install ruff pytest coverage requests msal numpy "mcp<2"
+        # Exakte Pins – siehe requirements.txt / requirements-dev.txt.
+        # Nichts hier direkt installieren: sonst laufen CI und lokal auseinander.
+        run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
         run: ruff check .

@@ -1,0 +1,13 @@
+# Test- und Lint-Werkzeuge, exakt gepinnt. Installiert auch die Laufzeit-Deps.
+#
+#     pip install -r requirements-dev.txt
+#
+# Genau das installiert auch die GitHub Action (.github/workflows/ci.yml),
+# damit lokal und in CI dieselben Versionen laufen.
+
+-r requirements.txt
+
+anyio==4.14.2           # tests/test_mcp_server.py fährt die async MCP-API
+coverage==7.15.4
+pytest==9.1.1
+ruff==0.16.1

@@ -1,0 +1,14 @@
+# Laufzeit-Abhängigkeiten, exakt gepinnt.
+#
+# Ungepinnt hat CI schon zweimal gebrochen, weil ein neuer Major einfach
+# eingesammelt wurde (zuletzt mcp 2.0, das mcp.server.fastmcp entfernt hat).
+# Beim Anheben: erst lokal `pip install -r requirements-dev.txt` + Tests,
+# dann committen.
+#
+# Wer nur exportieren will (outlook_export.py / teams_export.py), braucht
+# davon nur msal + requests; mcp und numpy gehören zu RAG-Index und MCP-Server.
+
+mcp==2.0.0              # MCP-SDK, 2.x-API (MCPServer) – siehe mcp_server.py
+msal==1.37.0            # Graph-Login (Device-Code-Flow)
+numpy==2.5.1            # Embedding-Matrix für semantische/hybride Suche
+requests==2.34.2        # Graph-REST-Aufrufe und Ollama

@@ -34,12 +34,17 @@ Create a virtual environment and install what you need:
 
 ```bash
 python3 -m venv .venv
-source .venv/bin/activate              # Windows PowerShell: .\.venv\Scripts\Activate.ps1
-python3 -m pip install msal requests   # export tools
-python3 -m pip install mcp numpy       # only for the MCP server / AI search
+source .venv/bin/activate                      # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python3 -m pip install -r requirements.txt     # everything, exact versions
 ```
 
-The static search tools need no packages at all.
+The static search tools need no packages at all. If you only want the export
+tools, `msal` and `requests` are enough — `mcp` and `numpy` are for the MCP
+server and the AI search.
+
+Versions are pinned in [`requirements.txt`](requirements.txt) so an upstream
+release cannot break the tools unannounced; `requirements-dev.txt` adds the
+test and lint tools and is what CI installs.
 
 > PowerShell blocks the activation script? Run once:
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
