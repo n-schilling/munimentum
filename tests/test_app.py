@@ -1185,8 +1185,30 @@ function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', 
   scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0,
   classList: {add: function(){}, remove: function(){}, toggle: function(){}},
   appendChild: function(){}, removeChild: function(){}, firstChild: null}; }
+
+// Der Assistent liegt in #modal. Ein Zuweisen von innerHTML ersetzt im Browser
+// samtliche Kindknoten - das Textfeld #tok ist danach ein NEUES, leeres
+// Element. Ohne dieses Verhalten koennte der Test gar nicht zeigen, ob eine
+// Eingabe verloren geht, und waere wertlos.
+global.zaehlerNeuzeichnen = 0;
+var modalRoh = mk('modal');
+var modal = {
+  get innerHTML(){ return modalRoh.innerHTML; },
+  set innerHTML(v){ modalRoh.innerHTML = v; global.zaehlerNeuzeichnen++;
+                    delete knoten['tok']; },
+  classList: modalRoh.classList,
+};
+knoten['modal'] = modal;
+
 global.document = {
-  getElementById: function(id){ return knoten[id] || (knoten[id] = mk(id)); },
+  getElementById: function(id){
+    // Kindknoten des Assistenten gibt es nur, solange sie in dessen HTML stehen.
+    if(id === 'tok' && !knoten['tok']){
+      if(modalRoh.innerHTML.indexOf('id="tok"') < 0) return null;
+      knoten['tok'] = mk('tok');
+    }
+    return knoten[id] || (knoten[id] = mk(id));
+  },
   querySelector: function(){ return mk('x'); },
   querySelectorAll: function(){ return []; },
   createElement: function(){ return mk('x'); },
@@ -1196,35 +1218,85 @@ global.setTimeout = function(){ return 0; };
 global.alert = function(){};
 """
 
-PRUEFUNG = """
+GRUNDZUSTAND = """
 S = {token: {present: true, valid: true, expired: false, missing: [],
              account: 'a@example.com', expires_in_minutes: 42},
+     ollama: {running: true, has_model: false, model: 'bge-m3', models: []},
+     ollama_hint: {os: 'macOS', steps: ['Schritt eins'], brew: 'brew install ollama'},
      scopes_needed: ['Mail.Read', 'User.Read'],
      scope_queries: {'Mail.Read': 'https://graph.microsoft.com/v1.0/me/messages'},
      graph_explorer: 'https://example.invalid'};
-
-openWizard('token');
 var modal = document.getElementById('modal');
-if (modal.innerHTML.indexOf('Access Token') < 0) throw new Error('Assistent nicht gezeichnet');
-if (modal.innerHTML.indexOf('me/messages') < 0) throw new Error('Beispielabfrage fehlt');
+function pruefe(bedingung, text){ if(!bedingung) throw new Error(text); }
+"""
 
-// So sieht es aus, wenn jemand den Token eingefügt hat:
-modal.innerHTML = 'EINGEFUEGTER-TOKEN';
-
-// Der Statusabruf alle 2,5 Sekunden ruft openWizard erneut auf.
+# Der Token-Assistent darf die halb fertige Eingabe nicht wegwerfen.
+PRUEFUNG_EINGABE = GRUNDZUSTAND + """
 openWizard('token');
-if (modal.innerHTML !== 'EINGEFUEGTER-TOKEN') throw new Error('Eingabe wurde ueberschrieben');
+pruefe(modal.innerHTML.indexOf('Access Token') >= 0, 'Assistent nicht gezeichnet');
+pruefe(modal.innerHTML.indexOf('me/messages') >= 0, 'Beispielabfrage fehlt');
+pruefe(zaehlerNeuzeichnen === 1, 'Erwartet: einmal gezeichnet');
 
-// Ausdrueckliches Neuzeichnen muss weiterhin gehen (z. B. "Erneut pruefen").
-openWizard('token', true);
-if (modal.innerHTML === 'EINGEFUEGTER-TOKEN') throw new Error('Neuzeichnen wirkte nicht');
+// Jemand fuegt den Token ein. Der Statusabruf alle 2,5 Sekunden ruft
+// openWizard erneut auf - ohne Zustandsaenderung darf dabei nichts passieren.
+document.getElementById('tok').value = 'EINGEFUEGTER-TOKEN';
+openWizard('token');
+pruefe(zaehlerNeuzeichnen === 1, 'Ohne Aenderung neu gezeichnet');
+pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
+       'Eingabe wurde beim Statusabruf geloescht');
 
-// Nach dem Schliessen zeichnet der naechste Aufruf wieder.
+// Aendert sich der Zustand, MUSS neu gezeichnet werden - die Eingabe darf
+// trotzdem nicht verloren gehen.
+S.token.missing = ['Mail.Read'];
+openWizard('token');
+pruefe(zaehlerNeuzeichnen === 2, 'Zustandswechsel loeste kein Neuzeichnen aus');
+pruefe(modal.innerHTML.indexOf('fehlen diese Berechtigungen') >= 0,
+       'Zustandswechsel kam im Text nicht an');
+pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
+       'Eingabe ging beim Neuzeichnen verloren');
+
 closeWizard('token');
 openWizard('token');
-if (modal.innerHTML.indexOf('Access Token') < 0) throw new Error('Nach Schliessen nicht wieder gezeichnet');
-
+pruefe(modal.innerHTML.indexOf('Access Token') >= 0, 'Nach Schliessen nicht gezeichnet');
 console.log('OK');
+"""
+
+# Der Ollama-Assistent muss merken, wenn nebenher "ollama pull" durchlief.
+PRUEFUNG_OLLAMA = GRUNDZUSTAND + """
+openWizard('ollama');
+pruefe(modal.innerHTML.indexOf('fehlt noch') >= 0, 'Fehlendes Modell nicht gemeldet');
+
+// Nichts geaendert: nicht neu zeichnen (sonst flackert es im Sekundentakt).
+modal.innerHTML = 'UNVERAENDERT';
+openWizard('ollama');
+pruefe(modal.innerHTML === 'UNVERAENDERT', 'Ohne Aenderung neu gezeichnet');
+
+// Modell ist da. Der Server verlangt jetzt KEINEN Assistenten mehr
+// (wizard === null) – renderStatus muss den offenen trotzdem auffrischen.
+S.ollama.has_model = true;
+renderStatus(Object.assign({}, statusGeruest(), {wizard: null}));
+pruefe(modal.innerHTML.indexOf('Ollama ist bereit') >= 0,
+       'Offener Assistent blieb auf altem Stand: ' + modal.innerHTML.slice(0, 80));
+console.log('OK');
+"""
+
+# renderStatus liest viel mehr aus dem Status als die Assistenten – ein
+# vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
+STATUS_GERUEST = """
+function statusGeruest(){
+  return {token: S.token, ollama: S.ollama, ollama_hint: S.ollama_hint,
+          scopes_needed: S.scopes_needed, scope_queries: S.scope_queries,
+          graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
+          store: {exists: true, chunks: 5, semantic: false, built_at: null, model: null},
+          exports: {teams: {last_run: null}, outlook: {last_run: null}},
+          jobs: {busy: false, job: null, last: null, token_expired: false, seq: 0},
+          mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null,
+                config: {http: {}, stdio: {}}},
+          config: {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
+                   schedule: {enabled: false, interval_minutes: 60,
+                              outlook: true, teams: true, index: true}},
+          schedule_enabled: false, schedule_next: null, wizard: null};
+}
 """
 
 
@@ -1249,15 +1321,14 @@ def test_seite_enthaelt_gueltiges_javascript():
         os.unlink(pfad)
 
 
-def test_assistent_ueberschreibt_die_eingabe_nicht():
-    """Regression: der Assistent wurde bei jedem Statusabruf neu gezeichnet und
-    löschte dabei den gerade eingefügten Token wieder aus dem Textfeld."""
+def _in_node(pruefung):
+    """Das eingebettete JavaScript samt Prüfcode in node ausführen."""
     node = shutil.which("node")
     if not node:
         pytest.skip("node nicht vorhanden")
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False,
                                      encoding="utf-8") as f:
-        f.write(DOM_STUMMEL + _seiten_js() + PRUEFUNG)
+        f.write(DOM_STUMMEL + _seiten_js() + STATUS_GERUEST + pruefung)
         pfad = f.name
     try:
         r = subprocess.run([node, pfad], capture_output=True, text=True, timeout=60)
@@ -1265,6 +1336,20 @@ def test_assistent_ueberschreibt_die_eingabe_nicht():
         assert "OK" in r.stdout
     finally:
         os.unlink(pfad)
+
+
+def test_assistent_ueberschreibt_die_eingabe_nicht():
+    """Regression: der Assistent wurde bei jedem Statusabruf neu gezeichnet und
+    löschte dabei den gerade eingefügten Token wieder aus dem Textfeld."""
+    _in_node(PRUEFUNG_EINGABE)
+
+
+def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
+    """Regression: nach 'ollama pull' wurde die Ampel im Kopf grün, im offenen
+    Assistenten stand aber weiter 'Modell fehlt'. Sobald das Modell da ist,
+    verlangt der Server gar keinen Assistenten mehr – ein bereits offener muss
+    trotzdem aufgefrischt werden."""
+    _in_node(PRUEFUNG_OLLAMA)
 
 
 # --------------------------------------------------------------------------

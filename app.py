@@ -1518,7 +1518,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
-var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null;
+var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null, wizardStand = null;
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 function post(p, body){
@@ -1614,6 +1614,11 @@ function renderStatus(s){
     : 'Es gibt noch keinen Index. Zuerst exportieren und indizieren.';
 
   if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);
+  else if(wizardOffen) openWizard(wizardOffen);   // offenen Assistenten aktuell halten
+  // Das zweite ist nicht optional: sobald das Modell geladen ist, verlangt der
+  // Server keinen Assistenten mehr (s.wizard === null). Ohne diesen Zweig
+  // stünde im offenen Fenster für immer „Modell fehlt“, während die Ampel im
+  // Kopf längst grün ist.
 }
 
 function fmt(iso){
@@ -1712,19 +1717,39 @@ function toggleMcp(){
 }
 
 /* ---------- Assistenten ---------- */
+/* Kennung dessen, was der Assistent gerade anzeigt. Ändert sie sich nicht,
+   wird nicht neu gezeichnet – der Status kommt alle 2,5 Sekunden, und ein neu
+   gesetztes innerHTML wirft sonst die halb fertige Eingabe weg. Ändert sie
+   sich doch (Modell nachgeladen, Token gespeichert), muss neu gezeichnet
+   werden, sonst behauptet der Assistent Dinge, die längst erledigt sind.
+   Die Restlaufzeit des Tokens steht bewusst nicht drin: sie ändert sich jede
+   Minute, ohne dass am Text etwas Wesentliches anders wird. */
+function wizardKennung(kind){
+  if(kind === 'ollama'){
+    var o = S.ollama || {};
+    return ['ollama', o.running, o.has_model, o.model].join('|');
+  }
+  var t = S.token || {};
+  return ['token', t.present, t.valid, t.expired, t.account,
+          (t.missing || []).join(','), (S.scopes_needed || []).join(',')].join('|');
+}
 function openWizard(kind, neuZeichnen){
-  // Steht der Assistent schon offen, NICHT neu zeichnen: der Status wird alle
-  // paar Sekunden abgefragt, und ein neu gesetztes innerHTML löschte dabei den
-  // gerade eingefügten Token wieder aus dem Textfeld.
-  if(wizardOffen === kind && !neuZeichnen) return;
+  var kennung = wizardKennung(kind);
+  if(wizardOffen === kind && wizardStand === kennung && !neuZeichnen) return;
+  var feld = document.getElementById('tok');       // bereits Eingefügtes retten
+  var eingabe = feld ? feld.value : '';
   el('modal').innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
+  var neu = document.getElementById('tok');
+  if(neu && eingabe) neu.value = eingabe;
   el('overlay').classList.add('on');
   wizardOffen = kind;
+  wizardStand = kennung;
 }
 function closeWizard(kind){
   dismissed[kind] = true;
   el('overlay').classList.remove('on');
   wizardOffen = null;
+  wizardStand = null;
   post('/api/wizard-seen');
 }
 function scopeListe(){
@@ -1763,17 +1788,31 @@ function saveToken(){
     el('tok-msg').textContent = r.message || '';
     el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
     if(r.ok){ dismissed = {};
-              setTimeout(function(){ el('overlay').classList.remove('on'); wizardOffen = null; }, 1200); }
+              setTimeout(function(){ el('overlay').classList.remove('on');
+                                     wizardOffen = null; wizardStand = null; }, 1200); }
     refresh();
   });
 }
 function ollamaWizard(){
   var o = S.ollama, h = S.ollama_hint;
+
+  // Alles da – das kann während der Assistent offen steht passieren, wenn
+  // nebenher "ollama pull" durchläuft. Dann bestätigen statt weiter mahnen.
+  if(o.running && o.has_model){
+    return '<h2>Ollama ist bereit</h2>' +
+      '<div class="banner"><span class="ok">✓</span> Ollama läuft, das Modell <code>' +
+      esc(o.model) + '</code> ist da. Der nächste Index bekommt Embeddings, die Suche wird hybrid.</div>' +
+      '<div class="row" style="margin-top:12px">' +
+      '<button class="act" onclick="closeWizard(\'ollama\')">Schließen</button>' +
+      '<button class="ghost" onclick="closeWizard(\'ollama\'); run({index:true}, \'Index\')">Jetzt neu indizieren</button></div>';
+  }
+
   var head = !o.running
     ? '<div class="banner warn">Ollama läuft nicht. Ohne Ollama gibt es keine semantische Suche – Export, Volltextsuche und MCP funktionieren trotzdem.</div>'
     : '<div class="banner warn">Ollama läuft, aber das Modell <code>' + esc(o.model) + '</code> fehlt noch.</div>';
   var steps = o.running
-    ? ['Im Terminal: <code>ollama pull ' + esc(o.model) + '</code>', 'Danach hier auf „Erneut prüfen“ klicken']
+    ? ['Im Terminal: <code>ollama pull ' + esc(o.model) + '</code>',
+       'Sobald das durch ist, meldet sich dieses Fenster von selbst – oder auf „Erneut prüfen“ klicken']
     : h.steps.map(esc);
   return '<h2>Ollama einrichten (optional)</h2>' +
     '<p class="muted small">Ollama berechnet die Embeddings für die semantische Suche. Alles läuft lokal, nichts verlässt den Rechner.</p>' +
