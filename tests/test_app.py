@@ -1485,16 +1485,24 @@ global.document = {
     return knoten[id] || (knoten[id] = mk(id));
   },
   // Welcher Reiter offen ist, liest der Code ueber 'nav [data-tab].on'.
+  // Sonst null: der Code prueft damit, ob ein Element schon existiert
+  // ('#kalBox [data-rb]'), und ein immer wahrer Stummel liesse ihn den Aufbau
+  // ueberspringen. Was es wirklich gibt, steht in `vorhanden`.
   querySelector: function(sel){
-    if(String(sel).indexOf('[data-tab]') >= 0){
+    sel = String(sel);
+    if(sel.indexOf('[data-tab]') >= 0){
       var n = mk('tabbtn'); n.dataset = {tab: global.aktiverTab || 'export'}; return n;
     }
-    return mk('x');
+    for(var muster in global.vorhanden){
+      if(sel.indexOf(muster) >= 0) return global.vorhanden[muster];
+    }
+    return null;
   },
   querySelectorAll: function(){ return []; },
   createElement: function(){ return mk('x'); },
 };
 global.aktiverTab = 'export';
+global.vorhanden = {'.rbcount': mk('rbcount')};
 global.setInterval = function(){ return 0; };
 // setTimeout echt lassen: die Kalenderpruefung wartet auf Promises.
 global.alert = function(){};
@@ -1611,6 +1619,95 @@ setTimeout(function(){
 }, 0);
 """
 
+# Adressbuch und die Liste der rekonstruierten Termine wirklich zeichnen –
+# beide filtern über Suchbegriffe UND übersetzen dabei. Genau dort verdeckte
+# einmal eine lokale Variable `t` die Übersetzungsfunktion t(), und die Ansicht
+# blieb stumm auf "Wird geladen…" stehen, weil das Promise den Fehler schluckte.
+PRUEFUNG_ANSICHTEN = GRUNDZUSTAND + """
+global.fetch = function(pfad){
+  if(String(pfad).indexOf('/api/calendar') >= 0){
+    return Promise.resolve({json: function(){ return Promise.resolve(
+      {generated: '2026-08-07T09:00:00', counts: {kalender: 2, rekonstruiert: 1},
+       recs: [
+        {src:'kontakte', title:'Alice Example', em:['alice@example.com'], tel:['+49 1'],
+         org:'Firma GmbH', role:'Chefin', root:'outlook', rel:'kontakte/a.vcf'},
+        {src:'kontakte', title:'Bob Builder', em:['bob@example.com'], tel:[],
+         org:'Bau AG', role:'', root:'outlook', rel:'kontakte/b.vcf'},
+        {src:'kalender', ts: 1750000000, te: 1750003600, ad:0, st:'confirmed',
+         title:'Regelrunde', who:'Alice', d:'2025-06-15 14:00', ctx:'Kalender',
+         loc:'Raum 7', att:['Bob'], root:'outlook', rel:'kalender/x.ics'},
+        {src:'kalender', ts: 1750086400, te: 1750090000, ad:0, st:'deleted',
+         title:'Jour Fixe', who:'Alice', d:'2025-06-16 14:00', ctx:'rekonstruiert',
+         ppl:'alice', x:'Agenda', root:'outlook', rel:'E-Mail/absage.eml'}]}); }});
+  }
+  return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+
+setTimeout(function(){
+  var status = statusGeruest();
+  status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
+  renderStatus(status);
+  aktiverTab = 'adressbuch';
+  ladeKalender('adressbuch');
+
+  setTimeout(function(){
+    var buch = document.getElementById('kbBox').innerHTML;
+    pruefe(buch.indexOf('Alice Example') >= 0, 'Adressbuch leer: ' + JSON.stringify(buch.slice(0,90)));
+    pruefe(buch.indexOf('alice@example.com') >= 0, 'Mailadresse fehlt');
+    pruefe(document.getElementById('kbStats').textContent.indexOf('2') >= 0, 'Zaehlung fehlt');
+
+    // Suche im Adressbuch: derselbe Pfad, der die Uebersetzung verdeckt hatte
+    document.getElementById('kbQ').value = 'Bau';
+    drawBook();
+    var gefiltert = document.getElementById('kbBox').innerHTML;
+    pruefe(gefiltert.indexOf('Bob Builder') >= 0, 'Filter fand Bob nicht');
+    pruefe(gefiltert.indexOf('Alice Example') < 0, 'Filter liess Alice stehen');
+
+    // Rekonstruierte Termine: eigene Liste, ebenfalls mit Suche
+    calMode = 'rebuilt';
+    drawCal();
+    var rahmen = document.getElementById('kalBox').innerHTML;
+    pruefe(rahmen.indexOf('data-rb') >= 0, 'Rahmen der Liste fehlt');
+    var liste = document.getElementById('rblist').innerHTML;
+    pruefe(liste.indexOf('Jour Fixe') >= 0, 'Rekonstruierter Termin fehlt: ' +
+           JSON.stringify(liste.slice(0, 90)));
+    pruefe(liste.indexOf('Gelöscht') >= 0, 'Zustand fehlt');
+    document.getElementById('rbQ').value = 'gibtsnicht';
+    rbList();
+    pruefe(document.getElementById('rblist').innerHTML.indexOf('Keine Treffer') >= 0,
+           'Leermeldung fehlt');
+
+    // Wochenansicht zeichnet den normalen Termin
+    calMode = 'week';
+    cursor = new Date(1750000000 * 1000);
+    drawCal();
+    pruefe(document.getElementById('kalBox').innerHTML.indexOf('Regelrunde') >= 0,
+           'Wochenansicht leer');
+    console.log('OK');
+  }, 20);
+}, 0);
+"""
+
+# Scheitert das Laden, muss das zu sehen sein. Ohne catch bleibt die Ansicht
+# stumm auf "Wird geladen…" stehen – und niemand weiß, warum.
+PRUEFUNG_LADEFEHLER = GRUNDZUSTAND + """
+global.fetch = function(pfad){
+  if(String(pfad).indexOf('/api/calendar') >= 0)
+    return Promise.reject(new Error('Netz weg'));
+  return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+setTimeout(function(){
+  ladeKalender('adressbuch');
+  setTimeout(function(){
+    var buch = document.getElementById('kbBox').innerHTML;
+    pruefe(buch.indexOf('Netz weg') >= 0,
+           'Ladefehler wird verschluckt, Ansicht bleibt leer: ' + JSON.stringify(buch));
+    pruefe(kalGeladen === false, 'Nach dem Fehler wird kein zweiter Versuch erlaubt');
+    console.log('OK');
+  }, 20);
+}, 0);
+"""
+
 # renderStatus liest viel mehr aus dem Status als die Assistenten – ein
 # vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
 STATUS_GERUEST = """
@@ -1637,6 +1734,17 @@ def _seiten_js():
     treffer = re.search(r"<script>(.*?)</script>", app_mod.PAGE, re.S)
     assert treffer, "Kein <script>-Block in der Seite"
     return treffer.group(1)
+
+
+def test_jeder_reiter_liegt_im_hauptbereich():
+    """Regression: der Einstellungen-Abschnitt stand hinter </main> und bekam
+    damit weder Innenabstand noch Maximalbreite – seine Karten klebten am
+    Fensterrand, anders als bei allen anderen Reitern."""
+    seite = app_mod.PAGE
+    haupt = seite[seite.index("<main>"):seite.index("</main>")]
+    for reiter in ("export", "suche", "kalender", "adressbuch", "zeitplan",
+                   "mcp", "einstellungen"):
+        assert f'<section id="tab-{reiter}"' in haupt, f"{reiter} liegt außerhalb <main>"
 
 
 def test_seite_enthaelt_gueltiges_javascript():
@@ -1690,6 +1798,19 @@ def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
     verlangt der Server gar keinen Assistenten mehr – ein bereits offener muss
     trotzdem aufgefrischt werden."""
     _in_node(PRUEFUNG_OLLAMA)
+
+
+def test_adressbuch_und_rekonstruierte_termine_zeichnen():
+    """Regression: eine lokale Variable `t` verdeckte die Übersetzungsfunktion,
+    drawBook warf, und weil das Promise keinen catch hatte, blieb das Adressbuch
+    für immer bei „Wird geladen…“."""
+    _in_node(PRUEFUNG_ANSICHTEN)
+
+
+def test_ladefehler_wird_angezeigt_statt_verschluckt():
+    """Regression: das Promise hatte kein catch – ein Fehler beim Laden ließ die
+    Ansicht für immer bei „Wird geladen…“ stehen, ohne jeden Hinweis."""
+    _in_node(PRUEFUNG_LADEFEHLER)
 
 
 def test_kalender_wird_erst_bei_bedarf_und_nach_neuaufbau_geholt():

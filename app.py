@@ -1808,8 +1808,6 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <pre id="mcp-stdio"></pre>
   </div>
 </section>
-</main>
-
 <section id="tab-einstellungen" class="hide">
   <div class="card">
     <h2 data-i18n="settings.teams.title">Teams-Export</h2>
@@ -1884,6 +1882,8 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <span class="small" id="cfg-msg"></span>
   </div>
 </section>
+</main>
+
 
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
@@ -2175,7 +2175,8 @@ var events = [], byDay = new Map(), REBUILT = [], contacts = [];
 var calMode = 'week', cursor = new Date(), rbSt = 'all';
 
 function toks(q){ return q.toLowerCase().split(/\s+/).filter(Boolean); }
-function allIn(hay, t){ hay = (hay||'').toLowerCase(); return t.every(function(x){ return hay.indexOf(x) >= 0; }); }
+function allIn(hay, worte){ hay = (hay||'').toLowerCase();
+  return worte.every(function(x){ return hay.indexOf(x) >= 0; }); }
 function quelle(r){ return '/source?root=' + encodeURIComponent(r.root||'outlook') +
                            '&path=' + encodeURIComponent(r.rel||''); }
 
@@ -2206,6 +2207,12 @@ function ladeKalender(ziel){
     el('kalStats').textContent = t('cal.stats', {n: c.kalender, r: c.rekonstruiert,
                                                  when: fmt(d.generated)});
     zeichneKalenderTeil(ziel);
+  }).catch(function(e){
+    // Ohne diesen Zweig verschluckt das Promise jeden Fehler und die Ansicht
+    // bleibt für immer bei "Wird geladen…" – genau so ist es einmal passiert.
+    kalGeladen = false;
+    var h = '<p class="hint err">' + esc(String(e && e.message || e)) + '</p>';
+    el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
   });
 }
 function zeichneKalenderTeil(ziel){
@@ -2245,9 +2252,9 @@ function addDays(d,n){ var x = new Date(d); x.setDate(x.getDate()+n); return x; 
 function startOfWeek(d){ return addDays(midnight(d.getTime()), -((d.getDay()+6)%7)); }
 function hhmm(d){ return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
 function isoWeek(d){
-  var t = midnight(d.getTime()); t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
-  var w1 = new Date(t.getFullYear(), 0, 4);
-  return 1 + Math.round(((t - w1)/DAYMS - 3 + ((w1.getDay()+6)%7))/7);
+  var tag = midnight(d.getTime()); tag.setDate(tag.getDate() + 3 - ((tag.getDay()+6)%7));
+  var w1 = new Date(tag.getFullYear(), 0, 4);
+  return 1 + Math.round(((tag - w1)/DAYMS - 3 + ((w1.getDay()+6)%7))/7);
 }
 function evTime(r){
   if(r.ad) return t('cal.allday');
@@ -2297,10 +2304,10 @@ function rbFrame(){
   });
 }
 function rbList(){
-  var t = toks(el('rbQ').value.trim());
+  var worte = toks(el('rbQ').value.trim());
   var hits = REBUILT.filter(function(r){
     return (rbSt === 'all' || r.st === rbSt) &&
-           (!t.length || allIn(r.title + ' ' + (r.ppl||'') + ' ' + (r.x||''), t));
+           (!worte.length || allIn(r.title + ' ' + (r.ppl||'') + ' ' + (r.x||''), worte));
   });
   document.querySelectorAll('#kalBox [data-rb]').forEach(function(c){
     c.classList.toggle('on', c.dataset.rb === rbSt);
@@ -2391,10 +2398,10 @@ function drawBook(){
     el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.empty')) + '</p>';
     return;
   }
-  var t = toks(el('kbQ').value.trim());
+  var worte = toks(el('kbQ').value.trim());
   var hits = contacts.filter(function(r){
-    return !t.length || allIn([r.title, r.org, r.role, (r.em||[]).join(' '),
-                               (r.tel||[]).join(' ')].join(' '), t);
+    return !worte.length || allIn([r.title, r.org, r.role, (r.em||[]).join(' '),
+                                   (r.tel||[]).join(' ')].join(' '), worte);
   });
   el('kbStats').textContent = t('book.stats', {n: hits.length, total: contacts.length});
   if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.nohits')) + '</p>'; return; }
@@ -2479,9 +2486,9 @@ function wizardKennung(kind){
     var o = S.ollama || {};
     return ['ollama', o.running, o.has_model, o.model].join('|');
   }
-  var t = S.token || {};
-  return ['token', t.present, t.valid, t.expired, t.account,
-          (t.missing || []).join(','), (S.scopes_needed || []).join(',')].join('|');
+  var tk = S.token || {};
+  return ['token', tk.present, tk.valid, tk.expired, tk.account,
+          (tk.missing || []).join(','), (S.scopes_needed || []).join(',')].join('|');
 }
 function openWizard(kind, neuZeichnen){
   var kennung = wizardKennung(kind);
