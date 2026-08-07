@@ -65,7 +65,41 @@ for _stream in (sys.stdout, sys.stderr):
         pass
 
 STATE = {}          # populated in main(): db path, V (mmap), np, dirs, flags
-mcp = MCPServer("office365-export")
+
+# Server-level guidance, handed to the client together with the tool list –
+# i.e. *before* a tool is picked, unlike the per-tool docstrings below. Keep it
+# about choosing between the tools; details belong in the docstrings.
+_INSTRUCTIONS = """\
+Offline archive of the user's own Teams chats, Outlook mail, calendar and
+contacts. Everything is local and read-only; there is no live mailbox access,
+so anything not exported is simply absent.
+
+Which tool to use:
+  • search_messages – the default entry point. Ranks with BM25 and embeddings
+    fused, so exact tokens (invoice numbers, names) and paraphrases both work.
+  • browse_messages – when there is no query, only filters ("everything from
+    Bob in June"). Newest first.
+  • get_document    – full text of one hit, via the uid from a search/browse
+    result. For chats, context_before/context_after return the neighbouring
+    messages of the conversation.
+  • list_people     – resolve a name before filtering; the person filter is a
+    substring match over names and addresses.
+  • corpus_stats    – what is indexed and which ranking backend is live.
+  • read_source_file – last resort: the raw .eml/.html file. Teams
+    conversations can exceed 100 MB and come back windowed, so prefer
+    get_document with context for chat history.
+
+Notes: dates are "YYYY-MM-DD"; results are one hit per message – page with
+offset rather than raising k; a hit's "uri" can be read as an MCP resource.
+"""
+
+mcp = MCPServer(
+    "office365-export",
+    title="Office 365 Export",
+    version="1.0.0",
+    website_url="https://github.com/n-schilling/office_365_exporter",
+    instructions=_INSTRUCTIONS,
+)
 _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 
 _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,

@@ -14,6 +14,9 @@ from urllib.parse import quote
 import anyio
 import numpy as np
 import pytest
+from mcp.client.client import Client
+from mcp.shared.exceptions import MCPError
+from mcp.types import LATEST_PROTOCOL_VERSION
 
 import corpus
 import mcp_server
@@ -611,39 +614,23 @@ def test_list_people_contains_ist_umlaut_unabhaengig(tmp_path):
 # Alle Tests oben rufen die Tool-Funktionen direkt auf – sie würden auch dann
 # grün bleiben, wenn die Registrierung beim SDK gar nicht mehr funktioniert
 # (genau das ist beim Wechsel FastMCP → MCPServer passiert). Die folgenden
-# Tests gehen deshalb über das SDK: Registrierung, call_tool, read_resource.
+# Tests sprechen deshalb echtes MCP: Client(mcp) verbindet sich in-process
+# direkt mit dem Server-Objekt – kein Subprozess, kein HTTP, aber derselbe
+# Weg über die Leitung, den auch Claude nimmt.
 # --------------------------------------------------------------------------
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "list_people", "read_source_file", "corpus_stats"}
 
 
-def test_alle_tools_sind_beim_sdk_registriert():
-    tools = anyio.run(mcp_server.mcp.list_tools)
-    assert {t.name for t in tools} == TOOL_NAMES
-    for t in tools:
-        # Ohne Docstring bekommt Claude keine Beschreibung zu sehen
-        assert t.description, f"{t.name} hat keine Beschreibung"
-        assert t.annotations is not None, f"{t.name} hat keine Annotations"
-        assert t.annotations.read_only_hint is True
-        assert t.annotations.idempotent_hint is True
-        assert t.annotations.open_world_hint is False
+def _via_client(fn):
+    """fn(client) gegen den In-Memory-Client laufen lassen."""
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return await fn(c)
+    return anyio.run(run)
 
 
-def test_tool_schema_enthaelt_alle_parameter():
-    tools = anyio.run(mcp_server.mcp.list_tools)
-    schema = next(t for t in tools if t.name == "search_messages").input_schema
-    assert set(schema["properties"]) == {
-        "query", "person", "date_from", "date_to", "source", "k", "offset",
-        "mode", "preview_chars"}
-    assert schema["required"] == ["query"]      # nur query ist Pflicht
-
-
-def test_resource_template_ist_registriert():
-    tpl = anyio.run(mcp_server.mcp.list_resource_templates)
-    assert [t.uri_template for t in tpl] == ["o365://{root}/{path}"]
-
-
-def _tool_payload(res):
+def _payload(res):
     """Rückgabewert eines Tools aus dem CallToolResult holen.
 
     Die Tools sind mit "-> dict" annotiert (ohne Wertetyp), deshalb erzeugt das
@@ -655,22 +642,82 @@ def _tool_payload(res):
     return json.loads(res.content[0].text)
 
 
+def test_server_metadaten_werden_ausgeliefert():
+    """Name/Version/Instructions gehen mit der Initialisierung an den Client."""
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return c.server_info, c.instructions, c.protocol_version
+
+    info, instr, proto = anyio.run(run)
+    assert info.name == "office365-export"
+    assert info.version                          # nicht leer
+    assert proto == LATEST_PROTOCOL_VERSION      # neueste Revision, nicht 2025er
+    # Die Instructions sollen bei der Tool-Auswahl helfen – der teure Ausweg
+    # read_source_file muss als solcher benannt sein.
+    assert instr and "search_messages" in instr
+    assert "read_source_file" in instr
+
+
+def test_alle_tools_sind_beim_sdk_registriert():
+    tools = _via_client(lambda c: c.list_tools()).tools
+    assert {t.name for t in tools} == TOOL_NAMES
+    for t in tools:
+        # Ohne Docstring bekommt Claude keine Beschreibung zu sehen
+        assert t.description, f"{t.name} hat keine Beschreibung"
+        assert t.annotations is not None, f"{t.name} hat keine Annotations"
+        assert t.annotations.read_only_hint is True
+        assert t.annotations.idempotent_hint is True
+        assert t.annotations.open_world_hint is False
+
+
+def test_tool_schema_enthaelt_alle_parameter():
+    tools = _via_client(lambda c: c.list_tools()).tools
+    schema = next(t for t in tools if t.name == "search_messages").input_schema
+    assert set(schema["properties"]) == {
+        "query", "person", "date_from", "date_to", "source", "k", "offset",
+        "mode", "preview_chars"}
+    assert schema["required"] == ["query"]      # nur query ist Pflicht
+
+
+def test_resource_template_ist_registriert():
+    tpl = _via_client(lambda c: c.list_resource_templates()).resource_templates
+    assert [t.uri_template for t in tpl] == ["o365://{root}/{path}"]
+
+
 def test_call_tool_ueber_sdk_liefert_ergebnis(state):
-    res = anyio.run(lambda: mcp_server.mcp.call_tool(
+    res = _via_client(lambda c: c.call_tool(
         "search_messages", {"query": "Rechnung", "mode": "lexical"}))
-    payload = _tool_payload(res)
+    payload = _payload(res)
     assert payload["backend"] == "lexical"
     assert UID_M1 in [h["uid"] for h in payload["results"]]
 
 
 def test_read_resource_ueber_sdk_liefert_quelldatei(state):
     uri = "o365://teams/" + quote("1on1/alice__chat.html", safe="")
-    contents = list(anyio.run(lambda: mcp_server.mcp.read_resource(uri)))
-    assert [c.content for c in contents] == [TEAMS_FILE_CONTENT]
+    res = _via_client(lambda c: c.read_resource(uri))
+    assert [c.text for c in res.contents] == [TEAMS_FILE_CONTENT]
 
 
 def test_call_tool_meldet_fehler_statt_ihn_zu_verschlucken(state):
     """read_source_file gibt bei Traversal ein error-Feld zurück (kein Crash)."""
-    res = anyio.run(lambda: mcp_server.mcp.call_tool(
+    res = _via_client(lambda c: c.call_tool(
         "read_source_file", {"source_root": "teams", "path": "../geheim.txt"}))
-    assert "outside the export directory" in _tool_payload(res)["error"]
+    assert "outside the export directory" in _payload(res)["error"]
+
+
+def test_resource_traversal_wird_vom_sdk_abgewiesen(state):
+    """mcp 2.x weist Traversal in Resource-URIs schon vor dem Handler ab.
+
+    Zweite Verteidigungslinie ist weiterhin _resolve_source – siehe
+    test_source_resource_rejects_traversal, das die Funktion direkt aufruft.
+    """
+    uri = "o365://teams/" + quote("../geheim.txt", safe="")
+
+    # Der Fehler muss innerhalb des Client-Kontexts abgefangen werden: entkommt
+    # er anyio.run(), verpackt die TaskGroup ihn in eine ExceptionGroup.
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            with pytest.raises(MCPError, match="Unknown resource"):
+                await c.read_resource(uri)
+
+    anyio.run(run)
