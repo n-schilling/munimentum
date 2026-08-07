@@ -63,6 +63,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
+import settings
+
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
 # Unicode in messages never raises (no-op on macOS/Linux).
 for _stream in (sys.stdout, sys.stderr):
@@ -697,23 +699,27 @@ def _open_vectors(store, n_chunks):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--store", default="rag_store")
-    ap.add_argument("--teams", default="teams_export")
-    ap.add_argument("--outlook", default="outlook_export")
-    ap.add_argument("--embed-model", default="bge-m3")
-    ap.add_argument("--ollama", default="http://localhost:11434")
+    # Defaults come from app_config.json when it exists; flags win (settings.py).
+    ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
+    ap.add_argument("--teams", default=settings.value("teams_dir", "teams_export"))
+    ap.add_argument("--outlook", default=settings.value("outlook_dir", "outlook_export"))
+    ap.add_argument("--embed-model", default=settings.value("embed_model", "bge-m3"))
+    ap.add_argument("--ollama", default=settings.value("ollama", "http://localhost:11434"))
     ap.add_argument("--transport", choices=["http", "stdio"], default="http",
                     help="http: one shared server, register its URL in Claude "
                          "(default). stdio: launched per client via command.")
     ap.add_argument("--host", default="127.0.0.1",
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
-    ap.add_argument("--port", type=int, default=8365)
+    ap.add_argument("--port", type=int, default=settings.value("mcp_port", 8365))
     ap.add_argument("--allowed-host", action="append", default=[], metavar="HOST[:PORT]",
                     help="Hostname clients may use in the Host/Origin header. "
                          "Required when --host is not the loopback interface; "
                          "repeat for several. Port defaults to --port.")
     a = ap.parse_args()
+    note = settings.report()
+    if note:
+        print(note, file=sys.stderr)
 
     dbp = Path(a.store) / "corpus.db"
     if not dbp.exists():

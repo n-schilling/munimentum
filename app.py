@@ -51,6 +51,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import settings
+
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage; UTF-8
 # erzwingen, damit print() an Unicode nicht scheitert (macOS/Linux: No-op).
 for _stream in (sys.stdout, sys.stderr):
@@ -101,7 +103,7 @@ def data_dir():
 
 RES = resource_dir()
 BASE = data_dir()
-CONFIG_FILE = BASE / "app_config.json"
+CONFIG_FILE = BASE / settings.CONFIG_NAME   # dieselbe Datei, die die Einzelskripte lesen
 TOKEN_FILE = BASE / "gx_token.txt"
 
 
@@ -109,8 +111,12 @@ def set_data_dir(path):
     """Datenverzeichnis umhängen (--data-dir). Liefert den neuen Pfad."""
     global BASE, CONFIG_FILE, TOKEN_FILE
     BASE = Path(path).expanduser().resolve()
-    CONFIG_FILE = BASE / "app_config.json"
+    CONFIG_FILE = BASE / settings.CONFIG_NAME
     TOKEN_FILE = BASE / "gx_token.txt"
+    # Die Teilprogramme suchen ihre Vorgaben über dieselbe Variable – sonst läse
+    # ein Unterprozess die Datei neben dem Skript statt die hier gewählte.
+    os.environ["OFFICE365_DATA_DIR"] = str(BASE)
+    settings.reset()
     return BASE
 
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"

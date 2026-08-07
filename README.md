@@ -30,6 +30,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `mcp_server.py` | MCP server — Claude searches and reads the exports itself |
 | `rag_server.py` | Local RAG web UI with AI answers (fully offline via Ollama) |
 | `corpus.py` | Shared export parsing (used internally) |
+| `settings.py` | `app_config.json` as a defaults layer for every script (used internally) |
 | `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
 Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
@@ -283,9 +284,30 @@ default calendar and all contacts. Same as pressing Enter at every prompt.
 | `INCLUDE_HIDDEN` | Outlook | `0` | `1` = also export hidden system folders (Conversation History, Sync Issues …). |
 | `SKIP_FOLDERS` | Outlook | see below | Comma-separated folders the default selection leaves out, compared case-insensitively. Set it empty to export every folder; unset it to keep the built-in list (Archive, Drafts, Deleted Items, Junk, Outbox and their German names). |
 
-Flags accept `0/false/no/nein/off/empty` for off and anything else for on. Every
-one of them is also a control in the app's **Einstellungen** tab — the app just
-sets these variables for the run, so both paths behave identically.
+Flags accept `0/false/no/nein/off/empty` for off and anything else for on.
+
+**These are not the only source.** Every one of them is also a control in the
+app's **Einstellungen** tab, and `app_config.json` counts for direct script runs
+too — `python3 outlook_export.py` picks up what you clicked in the app. The
+order is:
+
+```
+environment variable   >   app_config.json   >   built-in default
+```
+
+The environment stays on top so a single run can override the file
+(`INCLUDE_HIDDEN=0 python3 outlook_export.py`), and so runs started by the app —
+which passes everything as environment variables — stay unambiguous. A script
+that took a value from the file says so in one line at startup, and prints its
+effective output folder, so nothing changes behind your back.
+
+The file is looked up in `OFFICE365_DATA_DIR`, otherwise next to the scripts; a
+missing or broken one is simply ignored. `rag_index.py`, `mcp_server.py` and
+`combined_search.py` take their defaults from it as well (store, model, Ollama
+URL, batch, port, folders), with command-line flags winning as usual. What it
+deliberately does **not** supply is *what* to export — running a script directly
+should still ask, otherwise the interactive mode is gone. See
+[`settings.py`](settings.py).
 
 `USE_DEVICE_CODE = True` at the top of either script switches the browser login
 for a device code (headless machines). It is the one switch the app does not

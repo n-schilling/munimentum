@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 import corpus
+import settings
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
 # und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
@@ -306,16 +307,21 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("teams", nargs="?", default="teams_export")
-    ap.add_argument("outlook", nargs="?", default="outlook_export")
-    ap.add_argument("--store", default="rag_store")
-    ap.add_argument("--model", default=DEFAULT_MODEL)
-    ap.add_argument("--ollama", default=DEFAULT_OLLAMA)
-    ap.add_argument("--batch", type=int, default=64)
+    # Vorgaben aus app_config.json, sofern vorhanden – die Kommandozeile sticht
+    # sie aus (siehe settings.py).
+    ap.add_argument("teams", nargs="?", default=settings.value("teams_dir", "teams_export"))
+    ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", "outlook_export"))
+    ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
+    ap.add_argument("--model", default=settings.value("embed_model", DEFAULT_MODEL))
+    ap.add_argument("--ollama", default=settings.value("ollama", DEFAULT_OLLAMA))
+    ap.add_argument("--batch", type=int, default=settings.value("index_batch", 64))
     ap.add_argument("--no-embeddings", action="store_true",
                     help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
                          "Suche und MCP laufen dann rein lexikalisch.")
     a = ap.parse_args()
+    hinweis = settings.report()
+    if hinweis:
+        print(hinweis)
 
     if a.no_embeddings:
         print(f"Index → {a.store}  (nur Volltext, ohne Embeddings)")

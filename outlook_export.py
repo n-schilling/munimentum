@@ -35,6 +35,8 @@ Resume: exported.tsv im Ausgabeordner (eine Zeile pro fertige Mail). Bereits
 Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS
     (Parallelität, sinnvoll max 4), INCLUDE_HIDDEN (versteckte Systemordner),
     SKIP_FOLDERS (Ordner, die die Standardauswahl auslässt, kommagetrennt).
+    Ohne gesetzte Variable gilt app_config.json neben diesem Skript, sonst die
+    Vorgabe unten – siehe settings.py.
 """
 
 import os
@@ -47,6 +49,8 @@ import threading
 from datetime import datetime, UTC
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+
+import settings
 
 try:
     import msal
@@ -76,23 +80,12 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
 
-def env_flag(name, default):
-    """Schalter aus der Umgebung lesen: 0/false/nein/off aus, sonst an.
-
-    Damit lassen sich alle Schalter von außen setzen (app.py, Cron) statt nur
-    durch Ändern dieser Datei.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in ("0", "false", "no", "nein", "off", "")
-
-
 USE_DEVICE_CODE = False     # True = Code-Login statt Browser
-INCLUDE_HIDDEN = env_flag("INCLUDE_HIDDEN", False)   # versteckte Ordner (Sync Issues …)
+# Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
+INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden", False)
 WORKERS = 4                 # parallele Downloads; Exchange-Limit pro Postfach = 4
 PAGE = 50                   # $top für Listenabfragen
-OUT_ROOT = "outlook_export"  # fester Ordner -> Resume über mehrere Läufe hinweg
+OUT_ROOT = settings.value("outlook_dir", "outlook_export")  # fest -> Resume über Läufe
 DONE_FILE = "exported.tsv"
 MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu kalender/kontakte)
 
@@ -108,20 +101,7 @@ BUILTIN_SKIP_FOLDERS = {
 }
 
 
-def env_folders(name, default):
-    """Ordnerliste aus der Umgebung (kommagetrennt).
-
-    Nicht gesetzt = Vorgabe. Leer gesetzt = leere Liste, also nichts auslassen –
-    das ist ein Unterschied, den app.py braucht, um "alles exportieren" sagen zu
-    können, ohne die Vorgabe hier zu kennen.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return set(default)
-    return {t.strip().lower() for t in raw.split(",") if t.strip()}
-
-
-DEFAULT_SKIP_FOLDERS = env_folders("SKIP_FOLDERS", BUILTIN_SKIP_FOLDERS)
+DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders", BUILTIN_SKIP_FOLDERS)
 
 # Netzwerk: getrennte Timeouts für Verbindungsaufbau und Antwort. Graph liefert
 # große Seiten und MIME-Downloads teils sehr träge; ein zu knapper Read-Timeout
@@ -1019,13 +999,11 @@ def main():
     if argv:
         OUT_ROOT = argv[0]
 
-    workers = WORKERS
-    env = os.environ.get("EXPORT_WORKERS")
-    if env:
-        try:
-            workers = max(1, int(env))
-        except ValueError:
-            pass
+    workers = settings.number("EXPORT_WORKERS", "workers", WORKERS)
+    print(f"Ausgabeordner: {OUT_ROOT}")
+    hinweis = settings.report()
+    if hinweis:
+        print(hinweis)
     if workers > 4:
         print("Hinweis: Exchange Online erlaubt nur 4 gleichzeitige Anfragen pro "
               f"Postfach – {workers} Worker erzeugen v. a. Drosselung. 4 ist das "

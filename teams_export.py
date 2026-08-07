@@ -37,7 +37,9 @@ Resume / inkrementell: export_state.json im Ausgabeordner merkt sich pro
     setzen, neu starten. Kompletter Neu-Export: Datei (oder Ordner) löschen.
 
 Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS,
-    EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS.
+    EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS. Ohne
+    gesetzte Variable gilt app_config.json neben diesem Skript, sonst die
+    Vorgabe unten – siehe settings.py.
 """
 
 import os
@@ -53,6 +55,8 @@ from datetime import datetime
 from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+import settings
 
 try:
     import msal
@@ -87,23 +91,12 @@ SCOPES_FULL = SCOPES_CHAT + [
     RES + "Channel.ReadBasic.All",
 ]
 
-def env_flag(name, default):
-    """Schalter aus der Umgebung lesen: 0/false/nein/off aus, sonst an.
-
-    Damit lassen sich alle Schalter von außen setzen (app.py, Cron) statt nur
-    durch Ändern dieser Datei.
-    """
-    raw = os.environ.get(name)
-    if raw is None:
-        return default
-    return raw.strip().lower() not in ("0", "false", "no", "nein", "off", "")
-
-
 USE_DEVICE_CODE = False     # True = Code-Login statt Browser
-EMBED_IMAGES = env_flag("EMBED_IMAGES", True)   # Inline-Bilder als base64 einbetten
+# Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
+EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images", True)
 WORKERS = 4                 # parallele Konversationen (sinnvoll: 4; per Env EXPORT_WORKERS)
 PAGE = 50                   # $top (Graph-Maximum für Nachrichten)
-OUT_ROOT = "teams_export"    # fester Ordner -> Resume über mehrere Läufe hinweg
+OUT_ROOT = settings.value("teams_dir", "teams_export")  # fest -> Resume über Läufe hinweg
 STATE_FILE = "export_state.json"
 
 # Inkrementelle Läufe (z. B. per Scheduler): Chats werden bei neuen Nachrichten
@@ -111,18 +104,18 @@ STATE_FILE = "export_state.json"
 # bieten keinen günstigen Änderungs-Indikator (neue Antworten in alten Threads),
 # daher werden gewählte Kanäle pro Lauf neu geholt und nur bei Änderung neu
 # geschrieben. Mit REFRESH_CHANNELS=0 abschaltbar (Kanäle dann nur einmalig).
-REFRESH_CHANNELS = env_flag("REFRESH_CHANNELS", True)
+REFRESH_CHANNELS = settings.flag("REFRESH_CHANNELS", "refresh_channels", True)
 
 # Heruntergeladene Inline-Bilder zwischenspeichern (Ordner .imgcache). Bei erneutem
 # Export eines Chats werden so nur NEUE Bilder geladen statt aller. Kostet zusätzlichen
 # Plattenplatz (Bilder liegen dann doppelt: im Cache und eingebettet im HTML).
 # Mit CACHE_IMAGES=0 abschaltbar.
-CACHE_IMAGES = env_flag("CACHE_IMAGES", True)
+CACHE_IMAGES = settings.flag("CACHE_IMAGES", "cache_images", True)
 
 # Chats, die NUR System-/Event-Nachrichten enthalten (Beitritte, Anrufe, Mitglieder-
 # Änderungen, …) und keine echte Nachricht, werden standardmäßig NICHT exportiert
 # und nicht in den Index aufgenommen. Mit SKIP_EMPTY_CHATS=0 doch exportieren.
-SKIP_EMPTY_CHATS = env_flag("SKIP_EMPTY_CHATS", True)
+SKIP_EMPTY_CHATS = settings.flag("SKIP_EMPTY_CHATS", "skip_empty_chats", True)
 
 TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",
@@ -1019,13 +1012,11 @@ def main():
     if argv:
         OUT_ROOT = argv[0]
 
-    workers = WORKERS
-    env = os.environ.get("EXPORT_WORKERS")
-    if env:
-        try:
-            workers = max(1, int(env))
-        except ValueError:
-            pass
+    workers = settings.number("EXPORT_WORKERS", "workers", WORKERS)
+    print(f"Ausgabeordner: {OUT_ROOT}")
+    hinweis = settings.report()
+    if hinweis:
+        print(hinweis)
     GATE = threading.BoundedSemaphore(workers)
     SESSION.mount("https://", requests.adapters.HTTPAdapter(
         pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))

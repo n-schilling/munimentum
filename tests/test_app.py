@@ -397,6 +397,29 @@ def test_build_steps_vorgaben_schalten_nichts_ab(sandbox):
         == sorted(app_mod.SKIP_FOLDERS_DEFAULT)
 
 
+def _env_namen(modul):
+    """Umgebungsvariablen, die ein Skript über settings liest – aus dem Quelltext.
+
+    Selbsttragend: kommt im Skript eine neue Einstellung dazu, fällt der Test
+    unten auf, solange app.py sie nicht mitgibt.
+    """
+    quelle = (Path(app_mod.__file__).parent / f"{modul}.py").read_text(encoding="utf-8")
+    return set(re.findall(r'settings\.(?:flag|folders|number)\(\s*"([A-Z_0-9]+)"', quelle))
+
+
+@pytest.mark.parametrize("modul,key", [("teams_export", "teams"),
+                                       ("outlook_export", "outlook")])
+def test_app_setzt_alles_was_die_skripte_sonst_aus_der_datei_laesen(sandbox, modul, key):
+    """Für einen Lauf aus der App muss die Umgebung vollständig sein – sonst
+    gälte teils die Oberfläche, teils app_config.json, und das Skript meldete
+    „aus app_config.json übernommen“ mitten in einem App-Lauf."""
+    noetig = _env_namen(modul)
+    assert noetig, f"keine settings-Aufrufe in {modul}.py gefunden"
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        app_mod.load_config(), outlook=True, teams=True, token="t")}
+    assert noetig <= set(steps[key]["env"])
+
+
 def test_build_steps_kalender(sandbox):
     steps = app_mod.build_steps(app_mod.load_config(), calendar=True)
     assert steps[0]["key"] == "calendar"

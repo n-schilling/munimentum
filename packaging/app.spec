@@ -19,7 +19,8 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH setzt PyInstaller)
 
 TEILPROGRAMME = ["outlook_export", "teams_export", "rag_index",
-                 "combined_search", "mcp_server", "rag_server", "corpus"]
+                 "combined_search", "mcp_server", "rag_server", "corpus",
+                 "settings"]
 
 def ohne_cli(name):
     """mcp.cli braucht typer – ein optionales Extra, das wir nicht mitliefern.

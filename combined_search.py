@@ -50,6 +50,8 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 from html.parser import HTMLParser
 
+import settings
+
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
 # und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
 # Unicode-Zeichen wie →, · oder … mit UnicodeEncodeError scheitern. UTF-8 erzwingen
@@ -1329,8 +1331,11 @@ def main():
         else:
             pos.append(args[i])
             i += 1
-    teams_dir = pos[0] if len(pos) > 0 else "teams_export"
-    outlook_dir = pos[1] if len(pos) > 1 else "outlook_export"
+    teams_dir = pos[0] if len(pos) > 0 else settings.value("teams_dir", "teams_export")
+    outlook_dir = pos[1] if len(pos) > 1 else settings.value("outlook_dir", "outlook_export")
+    hinweis = settings.report()
+    if hinweis:
+        print(hinweis)
 
     if kalender_json:
         print(f"Kalenderdaten → {kalender_json}")

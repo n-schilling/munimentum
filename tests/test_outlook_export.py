@@ -998,37 +998,6 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
     assert not any(z.startswith("None\t") for z in log.splitlines())
 
 
-# --------------------------------------------------------------------------
-# Schalter und Ordnerliste aus der Umgebung (app.py, Zeitplan, Cron setzen sie)
-# --------------------------------------------------------------------------
-@pytest.mark.parametrize("wert,erwartet", [
-    (None, False),                # nicht gesetzt -> Vorgabe
-    ("1", True), ("true", True), ("ja", True),
-    ("0", False), ("false", False), ("off", False), ("", False),
-])
-def test_env_flag(monkeypatch, wert, erwartet):
-    monkeypatch.delenv("TESTSCHALTER", raising=False)
-    if wert is not None:
-        monkeypatch.setenv("TESTSCHALTER", wert)
-    assert outlook_export.env_flag("TESTSCHALTER", False) is erwartet
-
-
-def test_env_folders_nicht_gesetzt_nimmt_die_vorgabe(monkeypatch):
-    monkeypatch.delenv("TESTORDNER", raising=False)
-    assert outlook_export.env_folders("TESTORDNER", {"archiv"}) == {"archiv"}
-
-
-def test_env_folders_liest_liste(monkeypatch):
-    monkeypatch.setenv("TESTORDNER", " Archiv , Drafts ,, ")
-    assert outlook_export.env_folders("TESTORDNER", {"x"}) == {"archiv", "drafts"}
-
-
-def test_env_folders_leer_heisst_nichts_auslassen(monkeypatch):
-    """Der Unterschied zu "nicht gesetzt": app.py muss sagen können, dass ALLE
-    Ordner exportiert werden sollen, ohne die Vorgabe hier zu kennen."""
-    monkeypatch.setenv("TESTORDNER", "")
-    assert outlook_export.env_folders("TESTORDNER", {"archiv"}) == set()
-
-
 def test_default_skip_folders_stammt_aus_der_eingebauten_liste():
+    """Ohne SKIP_FOLDERS und ohne app_config.json gilt die Liste im Skript."""
     assert outlook_export.DEFAULT_SKIP_FOLDERS == outlook_export.BUILTIN_SKIP_FOLDERS
