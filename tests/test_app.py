@@ -10,6 +10,7 @@ damit nichts im Projektordner landet.
 """
 
 import base64
+import gzip
 import http.client
 import json
 import os
@@ -333,6 +334,21 @@ def test_build_steps_ohne_token_setzt_keine_variable(sandbox):
 
 def test_build_steps_leere_auswahl(sandbox):
     assert app_mod.build_steps(app_mod.load_config()) == []
+
+
+def test_build_steps_kalender(sandbox):
+    steps = app_mod.build_steps(app_mod.load_config(), calendar=True)
+    assert steps[0]["key"] == "calendar"
+    assert steps[0]["argv"][1].endswith("combined_search.py")
+    assert "--json" in steps[0]["argv"]
+    ziel = steps[0]["argv"][steps[0]["argv"].index("--json") + 1]
+    assert ziel.endswith("calendar.json") and "rag_store" in ziel
+
+
+def test_build_steps_reihenfolge_export_index_kalender(sandbox):
+    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, teams=True,
+                                index=True, calendar=True, token="t")
+    assert [s["key"] for s in steps] == ["outlook", "teams", "index", "calendar"]
 
 
 def test_build_steps_suchseite(sandbox):
@@ -1027,6 +1043,52 @@ def test_http_log(server):
     assert call(port, "GET", f"/api/log?since={r['seq']}")[1]["lines"] == []
 
 
+def test_http_kalender_fehlt(server):
+    code, r = call(server[1], "GET", "/api/calendar")
+    assert code == 404 and r["recs"] == [] and "Kalenderdaten fehlen" in r["error"]
+
+
+def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
+    """Rund 5 MB JSON – ungepackt wäre das bei jedem Tab-Wechsel Verschwendung."""
+    a, port = server
+    daten = {"generated": "2026-08-07T10:00:00", "counts": {"kalender": 1},
+             "recs": [{"src": "kalender", "title": "Regelrunde", "ts": 1.0,
+                       "st": "deleted", "root": "outlook", "rel": "E-Mail/x.eml"}]}
+    ziel = app_mod.calendar_file(a.cfg)
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    ziel.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
+
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", "/api/calendar", None, {"Accept-Encoding": "gzip"})
+    r = con.getresponse()
+    roh = r.read()
+    con.close()
+    assert r.status == 200 and r.getheader("Content-Encoding") == "gzip"
+    assert json.loads(gzip.decompress(roh))["recs"][0]["title"] == "Regelrunde"
+
+    # Ohne Accept-Encoding: unverändert durchreichen
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", "/api/calendar", None, {"Accept-Encoding": "identity"})
+    r2 = con.getresponse()
+    klar = r2.read()
+    con.close()
+    assert r2.getheader("Content-Encoding") is None
+    assert json.loads(klar)["counts"]["kalender"] == 1
+
+
+def test_kalender_puffer_erkennt_neue_daten(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    ziel = app_mod.calendar_file(a.cfg)
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    ziel.write_text('{"recs": [], "counts": {"kalender": 1}}', encoding="utf-8")
+    erst, _ = a.calendar_payload()
+    assert a.calendar_payload()[0] is erst          # gepuffert, nicht neu gelesen
+    time.sleep(0.01)
+    ziel.write_text('{"recs": [], "counts": {"kalender": 2}}', encoding="utf-8")
+    zweit, _ = a.calendar_payload()
+    assert b'"kalender": 2' in zweit                # neu eingelesen
+
+
 def test_http_suche_ohne_index_meldet_das(server):
     _, port = server
     code, r = call(port, "GET", "/api/search?q=test")
@@ -1254,12 +1316,21 @@ def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
 # --------------------------------------------------------------------------
 DOM_STUMMEL = """
 process.on('unhandledRejection', function(){});
-global.fetch = function(){ return Promise.resolve({json: function(){ return Promise.resolve({}); }}); };
+// Beim Laden ruft die Seite einmal /api/status. Kaeme dort {} zurueck, wuerde
+// renderStatus mittendrin scheitern und ein halb gesetztes S hinterlassen -
+// ein Zustand, den es im Betrieb nicht gibt. Also ein vollstaendiger Status.
+global.fetch = function(){
+  return Promise.resolve({json: function(){
+    return Promise.resolve(typeof statusGeruest === 'function' ? statusGeruest() : {});
+  }});
+};
 var knoten = {};
 function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', value: '',
-  scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0,
+  scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0, dataset: {},
   classList: {add: function(){}, remove: function(){}, toggle: function(){}},
-  appendChild: function(){}, removeChild: function(){}, firstChild: null}; }
+  appendChild: function(){}, removeChild: function(){}, firstChild: null,
+  addEventListener: function(){}, querySelector: function(){ return null; },
+  querySelectorAll: function(){ return []; }}; }
 
 // Der Assistent liegt in #modal. Ein Zuweisen von innerHTML ersetzt im Browser
 // samtliche Kindknoten - das Textfeld #tok ist danach ein NEUES, leeres
@@ -1284,12 +1355,19 @@ global.document = {
     }
     return knoten[id] || (knoten[id] = mk(id));
   },
-  querySelector: function(){ return mk('x'); },
+  // Welcher Reiter offen ist, liest der Code ueber 'nav [data-tab].on'.
+  querySelector: function(sel){
+    if(String(sel).indexOf('[data-tab]') >= 0){
+      var n = mk('tabbtn'); n.dataset = {tab: global.aktiverTab || 'export'}; return n;
+    }
+    return mk('x');
+  },
   querySelectorAll: function(){ return []; },
   createElement: function(){ return mk('x'); },
 };
+global.aktiverTab = 'export';
 global.setInterval = function(){ return 0; };
-global.setTimeout = function(){ return 0; };
+// setTimeout echt lassen: die Kalenderpruefung wartet auf Promises.
 global.alert = function(){};
 """
 
@@ -1356,6 +1434,55 @@ pruefe(modal.innerHTML.indexOf('Ollama ist bereit') >= 0,
 console.log('OK');
 """
 
+# Kalenderdaten werden erst beim Oeffnen des Reiters geholt und nach einem
+# Neuaufbau verworfen. Der Stand kommt aus dem Status (Dateizeit) – wuerde
+# stattdessen das "generated" aus dem JSON gemerkt, waeren die beiden Werte nie
+# gleich und die Daten wuerden bei jedem Statusabruf neu geladen.
+PRUEFUNG_KALENDER = GRUNDZUSTAND + """
+var geholt = 0;
+global.fetch = function(pfad){
+  if(String(pfad).indexOf('/api/calendar') >= 0){
+    geholt++;
+    return Promise.resolve({json: function(){ return Promise.resolve(
+      {generated: '2020-01-01T00:00:00', counts: {kalender: 1, rekonstruiert: 1},
+       recs: [{src:'kalender', ts: 1750000000, te: 1750003600, st:'deleted', ad:0,
+               title:'Jour Fixe', who:'Alice', d:'2025-06-15 14:00', ctx:'rekonstruiert',
+               ppl:'alice', x:'', root:'outlook', rel:'E-Mail/absage.eml'},
+              {src:'kontakte', title:'Alice Example', em:['a@example.com'], tel:[],
+               org:'Firma', role:'Chefin', root:'outlook', rel:'kontakte/a.vcf'}]}); }});
+  }
+  return Promise.resolve({json: function(){ return Promise.resolve({}); }});
+};
+
+var status = statusGeruest();
+status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
+
+// Erst den Start abwarten: die Seite ruft beim Laden selbst /api/status auf.
+setTimeout(function(){
+aktiverTab = 'kalender';
+renderStatus(status);
+ladeKalender('kalender');
+setTimeout(function(){
+  pruefe(geholt === 1, 'Kalenderdaten nicht geholt');
+  pruefe(REBUILT.length === 1, 'Rekonstruierter Termin fehlt');
+  pruefe(contacts.length === 1, 'Kontakt fehlt');
+
+  // Unveraenderter Stand: nicht erneut holen.
+  renderStatus(status);
+  renderStatus(status);
+  pruefe(geholt === 1, 'Ohne Neuaufbau erneut geholt (Stand falsch gemerkt)');
+
+  // Neuer Aufbau: Daten verwerfen und neu holen.
+  var neu = Object.assign({}, status, {calendar: {exists: true, built_at: '2026-08-07T12:00:00'}});
+  renderStatus(neu);
+  setTimeout(function(){
+    pruefe(geholt === 2, 'Nach Neuaufbau nicht neu geholt');
+    console.log('OK');
+  }, 10);
+}, 10);
+}, 0);
+"""
+
 # renderStatus liest viel mehr aus dem Status als die Assistenten – ein
 # vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
 STATUS_GERUEST = """
@@ -1371,6 +1498,7 @@ function statusGeruest(){
           config: {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
                    schedule: {enabled: false, interval_minutes: 60,
                               outlook: true, teams: true, index: true}},
+          calendar: {exists: false, built_at: null},
           schedule_enabled: false, schedule_next: null, wizard: null};
 }
 """
@@ -1426,6 +1554,12 @@ def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
     verlangt der Server gar keinen Assistenten mehr – ein bereits offener muss
     trotzdem aufgefrischt werden."""
     _in_node(PRUEFUNG_OLLAMA)
+
+
+def test_kalender_wird_erst_bei_bedarf_und_nach_neuaufbau_geholt():
+    """Die Kalenderdaten sind einige Megabyte: einmal holen, danach nur wieder,
+    wenn der Aufbau-Schritt sie tatsächlich neu geschrieben hat."""
+    _in_node(PRUEFUNG_KALENDER)
 
 
 # --------------------------------------------------------------------------

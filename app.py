@@ -35,6 +35,7 @@ import sys
 import copy
 import json
 import time
+import gzip
 import base64
 import shutil
 import sqlite3
@@ -132,6 +133,7 @@ DEFAULT_CONFIG = {
         "outlook": True,
         "teams": True,
         "index": True,
+        "calendar": True,
     },
 }
 
@@ -471,7 +473,11 @@ def run_bundled(name, argv):
     importlib.import_module(name).main()
 
 
-def build_steps(cfg, outlook=False, teams=False, index=False,
+def calendar_file(cfg):
+    return BASE / cfg["store_dir"] / "calendar.json"
+
+
+def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token=""):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
@@ -510,6 +516,16 @@ def build_steps(cfg, outlook=False, teams=False, index=False,
             "key": "index",
             "label": "Index" + ("" if embeddings else " (nur Volltext)"),
             "argv": argv, "env": dict(base_env),
+        })
+    if calendar:
+        # Wertet alle .eml aus, um gelöschte Termine aus Einladungs-, Antwort-
+        # und Absagemails zurückzuholen – bei 45.000 Mails ein paar Minuten.
+        # Deshalb ein eigener Schritt mit Ergebnisdatei und nicht auf Zuruf.
+        steps.append({
+            "key": "calendar", "label": "Kalender & Kontakte",
+            "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"],
+                                "--json", str(Path(cfg["store_dir"]) / "calendar.json")),
+            "env": dict(base_env),
         })
     if search_page:
         steps.append({
@@ -729,6 +745,10 @@ class Scheduler(threading.Thread):
         ok, why = self.app.launch(outlook=plan.get("outlook", True),
                                   teams=plan.get("teams", True),
                                   index=plan.get("index", True),
+                                  # Kalender nur, wenn Outlook mitläuft – die
+                                  # Daten dafür kommen ausschließlich von dort.
+                                  calendar=bool(plan.get("outlook", True)
+                                                and plan.get("calendar", True)),
                                   label="Geplanter Lauf")
         if not ok:
             self.app.jobs.log(f"Zeitplan übersprungen: {why}", "warn")
@@ -898,6 +918,7 @@ class App:
         self.search = SearchBridge()
         self.scheduler = Scheduler(self)
         self._ollama_cache = (0.0, None)
+        self._calendar_cache = None      # (Kennung, roh, gzip)
 
     # -- abgeleiteter Zustand ---------------------------------------------
     def selected_categories(self):
@@ -962,6 +983,8 @@ class App:
             "ollama": oll,
             "ollama_hint": ollama_hint(),
             "store": store,
+            "calendar": {"exists": calendar_file(self.cfg).exists(),
+                         "built_at": _mtime_iso(calendar_file(self.cfg))},
             "exports": export_status(self.cfg),
             "jobs": jobs,
             "mcp": self.mcp.status(self.cfg),
@@ -979,8 +1002,26 @@ class App:
         }
 
     # -- Aktionen ----------------------------------------------------------
-    def launch(self, outlook=False, teams=False, index=False, embeddings=None,
-               search_page=False, label="Lauf"):
+    def calendar_payload(self):
+        """Kalenderdaten roh und gzip-gepackt, gepuffert bis die Datei sich ändert.
+
+        Rund 5 MB JSON – neu einlesen und packen bei jedem Tab-Wechsel wäre
+        Verschwendung, gepackt gehen daraus 0,75 MB über die Leitung.
+        """
+        p = calendar_file(self.cfg)
+        try:
+            st = p.stat()
+        except OSError:
+            return None, None
+        stamp = (st.st_mtime_ns, st.st_size)
+        if self._calendar_cache and self._calendar_cache[0] == stamp:
+            return self._calendar_cache[1], self._calendar_cache[2]
+        roh = p.read_bytes()
+        self._calendar_cache = (stamp, roh, gzip.compress(roh, 6))
+        return self._calendar_cache[1], self._calendar_cache[2]
+
+    def launch(self, outlook=False, teams=False, index=False, calendar=False,
+               embeddings=None, search_page=False, label="Lauf"):
         if self.jobs.busy:
             return False, "Es läuft bereits ein Auftrag."
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
@@ -995,8 +1036,8 @@ class App:
             self.jobs.log(f"{grund} – der Index wird als reiner Volltextindex "
                           "gebaut (Suche ohne semantische Treffer).", "warn")
         steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
-                            embeddings=embeddings, search_page=search_page,
-                            token=token)
+                            calendar=calendar, embeddings=embeddings,
+                            search_page=search_page, token=token)
         if not steps:
             return False, "Nichts ausgewählt."
         if not self.jobs.start(steps, label):
@@ -1096,6 +1137,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._people(one))
             if u.path == "/api/document":
                 return self._json(self._document(one))
+            if u.path == "/api/calendar":
+                return self._calendar()
             if u.path == "/source":
                 return self._source(one)
         except Exception as e:
@@ -1123,7 +1166,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/run":
                 ok, why = app.launch(
                     outlook=bool(data.get("outlook")), teams=bool(data.get("teams")),
-                    index=bool(data.get("index")), search_page=bool(data.get("search_page")),
+                    index=bool(data.get("index")), calendar=bool(data.get("calendar")),
+                    search_page=bool(data.get("search_page")),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "Lauf"))
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
@@ -1188,7 +1232,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save_schedule(self, data):
         plan = self.app.cfg["schedule"]
-        for key in ("enabled", "outlook", "teams", "index"):
+        for key in ("enabled", "outlook", "teams", "index", "calendar"):
             if key in data:
                 plan[key] = bool(data[key])
         if "interval_minutes" in data:
@@ -1245,6 +1289,24 @@ class Handler(BaseHTTPRequestHandler):
         return mod.get_document(uid=q.get("uid", ""),
                                 context_before=int(q.get("before", 0) or 0),
                                 context_after=int(q.get("after", 0) or 0))
+
+    def _calendar(self):
+        """Kalender, rekonstruierte Termine und Kontakte am Stück ausliefern.
+
+        Gepackt, wenn der Browser es anbietet: ~5 MB JSON werden dabei zu
+        ~0,75 MB. Die Auswertung selbst läuft als eigener Schritt (sie liest
+        jede Mail), hier wird nur deren Ergebnisdatei durchgereicht.
+        """
+        roh, gz = self.app.calendar_payload()
+        if roh is None:
+            return self._json({"error": "Kalenderdaten fehlen – im Export-Reiter "
+                                        "„Kalender & Kontakte aufbauen“ starten.",
+                               "recs": []}, 404)
+        akzeptiert = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
+        if akzeptiert:
+            return self._send(200, gz, "application/json; charset=utf-8",
+                              {"Content-Encoding": "gzip"})
+        return self._send(200, roh, "application/json; charset=utf-8")
 
     def _source(self, q):
         """Exportierte Quelldatei ausliefern (für die Links in den Treffern).
@@ -1442,6 +1504,83 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   border:1px solid var(--line)}
 .banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
 .hide{display:none!important}
+
+/* ---- Kalender und Adressbuch (übernommen aus combined_search.py, an die
+       Farbvariablen der App angepasst, damit sie auch dunkel funktionieren) ---- */
+:root{
+  --ev-ok:#2b6cb0; --ev-ok-bg:#eef4fb; --ev-warn:#c98a17; --ev-warn-bg:#fdf6e7;
+  --ev-bad:#c0392b; --ev-bad-bg:#fbeceb; --ev-gone:#b6bbc2; --ev-gone-bg:#f2f3f5;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ev-ok:#7aa2ff; --ev-ok-bg:#1e2733; --ev-warn:#e0a33a; --ev-warn-bg:#2e2716;
+    --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
+  }
+}
+:root[data-theme="dark"]{
+  --ev-ok:#7aa2ff; --ev-ok-bg:#1e2733; --ev-warn:#e0a33a; --ev-warn-bg:#2e2716;
+  --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
+}
+.calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.chip{padding:6px 13px;border:1px solid var(--line);border-radius:8px;background:transparent;
+  color:var(--muted);font-size:13.5px;cursor:pointer}
+.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+#kalTitle{font-weight:650;margin-left:4px}
+.legend{display:flex;gap:12px;margin-left:auto;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
+.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.grid{display:grid;gap:8px}
+/* minmax(0,…): sonst sprengen lange Termintitel die Spaltenbreite */
+.wk,.mo{grid-template-columns:repeat(7,minmax(0,1fr))}
+.mo{gap:6px}
+.dow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;padding:0 2px}
+.day{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;min-height:110px;min-width:0}
+.day.today{border-color:var(--accent);box-shadow:0 0 0 2px rgba(122,162,255,.18)}
+.day.out{opacity:.5}
+.dnum{font-size:12px;color:var(--muted);margin-bottom:5px;display:flex;gap:5px;align-items:baseline}
+.dnum b{font-size:14px;color:var(--ink)}
+.dnum .wd{display:none}          /* Wochentag steht schon in der Spaltenüberschrift */
+.ev{display:block;font-size:12px;line-height:1.35;margin:3px 0;padding:4px 6px;border-radius:6px;
+  text-decoration:none;border-left:3px solid var(--ev-ok);background:var(--ev-ok-bg);color:var(--ink);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ev:hover{white-space:normal}
+.ev .evt{color:var(--muted);font-variant-numeric:tabular-nums}
+.ev.tentative{border-left-color:var(--ev-warn);background:var(--ev-warn-bg);border-left-style:dashed}
+.ev.cancelled{border-left-color:var(--ev-bad);background:var(--ev-bad-bg);text-decoration:line-through;opacity:.75}
+/* nur aus Mails rekonstruiert: gestrichelter Rahmen statt Balken */
+.ev.deleted{border:1px dashed var(--ev-bad);border-left-width:3px;background:var(--ev-bad-bg);text-decoration:line-through;opacity:.85}
+.ev.gone{border:1px dashed var(--ev-gone);border-left-width:3px;background:var(--ev-gone-bg);color:var(--muted)}
+.mo .day{min-height:96px}
+@media(max-width:820px){.wk,.mo{grid-template-columns:minmax(0,1fr)}.dowrow{display:none}
+  .day{min-height:0}.dnum .wd{display:inline}}
+.rbnote{color:var(--muted);font-size:12.5px;margin:0 0 10px}
+.rbcount{color:var(--muted);font-size:12px;margin-left:auto}
+.rbmonth{margin:16px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
+  border-bottom:1px solid var(--line);padding-bottom:3px}
+.rbrow{display:flex;gap:10px;align-items:baseline;background:var(--card);border:1px solid var(--line);
+  border-radius:9px;padding:8px 11px;margin:5px 0;text-decoration:none;color:var(--ink)}
+.rbrow:hover{border-color:var(--accent)}
+.rbrow.deleted{border-left:3px solid var(--ev-bad)}
+.rbrow.gone{border-left:3px solid var(--ev-gone)}
+.rbdate{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:158px}
+.rbstate{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;white-space:nowrap}
+.rbrow.deleted .rbstate{background:var(--ev-bad-bg);color:var(--ev-bad)}
+.rbrow.gone .rbstate{background:var(--ev-gone-bg);color:var(--muted)}
+.rbtitle{font-weight:600;overflow-wrap:anywhere;min-width:0;flex:1}
+.rbrow.deleted .rbtitle{text-decoration:line-through}
+.rbwho{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
+@media(max-width:820px){.rbrow{flex-wrap:wrap;gap:4px 9px}.rbwho{max-width:none}}
+.letter{margin:18px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
+  border-bottom:1px solid var(--line);padding-bottom:3px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.card2{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+.cname{font-weight:600;overflow-wrap:anywhere}
+.cname a{color:var(--ink);text-decoration:none}
+.cname a:hover{color:var(--accent);text-decoration:underline}
+.crole{font-size:12.5px;color:var(--muted);margin-bottom:5px;overflow-wrap:anywhere}
+.cline{font-size:13px;overflow-wrap:anywhere}
+.cline a{color:var(--accent);text-decoration:none}
+.cline span{color:var(--muted);margin-right:5px}
+.hint{color:var(--muted)}
 </style>
 </head>
 <body>
@@ -1458,6 +1597,8 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 <nav>
   <button data-tab="export" class="on" onclick="tab('export')">Export</button>
   <button data-tab="suche" onclick="tab('suche')">Suche</button>
+  <button data-tab="kalender" onclick="tab('kalender')">Kalender</button>
+  <button data-tab="adressbuch" onclick="tab('adressbuch')">Adressbuch</button>
   <button data-tab="zeitplan" onclick="tab('zeitplan')">Zeitplan</button>
   <button data-tab="mcp" onclick="tab('mcp')">MCP &amp; Claude</button>
 </nav>
@@ -1481,6 +1622,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()">Export starten</button>
       <button class="ghost" onclick="run({index:true},'Nur indizieren')">Nur indizieren</button>
+      <button class="ghost" onclick="run({calendar:true},'Kalender &amp; Kontakte')">Kalender &amp; Kontakte aufbauen</button>
       <button class="ghost" onclick="run({search_page:true},'Portable Suchseite')">Portable Suchseite erzeugen</button>
       <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')">Abbrechen</button>
     </div>
@@ -1516,6 +1658,40 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <div class="row" id="pager" style="margin-top:12px"></div></div>
 </section>
 
+<section id="tab-kalender" class="hide">
+  <div class="card">
+    <div class="calbar">
+      <span class="chip on" data-mode="week">Woche</span>
+      <span class="chip" data-mode="month">Monat</span>
+      <span class="chip" data-mode="rebuilt">Rekonstruiert</span>
+      <span id="kalNav">
+        <button class="ghost" id="kalPrev" style="padding:6px 12px">‹</button>
+        <button class="ghost" id="kalToday" style="padding:6px 12px">Heute</button>
+        <button class="ghost" id="kalNext" style="padding:6px 12px">›</button>
+      </span>
+      <span id="kalTitle"></span>
+      <span class="legend" id="kalLegend">
+        <span><i style="background:var(--ev-ok)"></i>Bestätigt</span>
+        <span><i style="background:var(--ev-warn)"></i>Vorläufig</span>
+        <span><i style="background:var(--ev-bad)"></i>Abgesagt</span>
+        <span><i style="background:var(--ev-gone)"></i>Rekonstruiert</span>
+      </span>
+    </div>
+    <p class="small muted" id="kalStats"></p>
+    <div id="kalBox"><p class="hint">Wird geladen…</p></div>
+  </div>
+</section>
+
+<section id="tab-adressbuch" class="hide">
+  <div class="card">
+    <div class="row">
+      <input type="text" id="kbQ" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:240px">
+      <span class="small muted" id="kbStats"></span>
+    </div>
+  </div>
+  <div class="card"><div id="kbBox"><p class="hint">Wird geladen…</p></div></div>
+</section>
+
 <section id="tab-zeitplan" class="hide">
   <div class="card">
     <h2>Regelmäßig exportieren</h2>
@@ -1527,6 +1703,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <label class="chk"><input type="checkbox" id="s-outlook"> Outlook exportieren</label>
     <label class="chk"><input type="checkbox" id="s-teams"> Teams exportieren</label>
     <label class="chk"><input type="checkbox" id="s-index"> Danach indizieren</label>
+    <label class="chk"><input type="checkbox" id="s-calendar"> Kalender &amp; Kontakte neu aufbauen (nur mit Outlook)</label>
     <div class="row" style="margin-top:14px">
       <button class="act" onclick="saveSchedule()">Zeitplan speichern</button>
       <span class="small muted" id="s-next"></span>
@@ -1571,10 +1748,12 @@ function esc(s){ return String(s == null ? '' : s)
 function el(id){ return document.getElementById(id); }
 
 function tab(name){
-  ['export','suche','zeitplan','mcp'].forEach(function(t){
+  ['export','suche','kalender','adressbuch','zeitplan','mcp'].forEach(function(t){
     el('tab-' + t).classList.toggle('hide', t !== name);
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
   });
+  // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
+  if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
 }
 
 /* ---------- Status ---------- */
@@ -1616,6 +1795,7 @@ function renderStatus(s){
     el('s-outlook').checked = s.config.schedule.outlook;
     el('s-teams').checked = s.config.schedule.teams;
     el('s-index').checked = s.config.schedule.index;
+    el('s-calendar').checked = s.config.schedule.calendar;
   }
   el('teams-note').textContent = checked('t').indexOf('channels') >= 0
     ? 'Team-Kanäle: es werden alle Teams exportiert, in denen du Mitglied bist. Das kann lange dauern.'
@@ -1653,6 +1833,16 @@ function renderStatus(s){
     ? (st.semantic ? 'Hybride Suche: Volltext (BM25) und Bedeutung (Embeddings) zusammengeführt.'
                    : 'Nur Volltextsuche (BM25) – für die semantische Hälfte fehlen die Embeddings.')
     : 'Es gibt noch keinen Index. Zuerst exportieren und indizieren.';
+
+  // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
+  // und Adressbuch weiter den Stand von vor dem Lauf.
+  if(kalGeladen && kalStand && s.calendar && s.calendar.built_at &&
+     s.calendar.built_at !== kalStand){
+    kalGeladen = false; kalStand = null;
+    var offen = document.querySelector('nav [data-tab].on');
+    if(offen && (offen.dataset.tab === 'kalender' || offen.dataset.tab === 'adressbuch'))
+      ladeKalender(offen.dataset.tab);
+  }
 
   if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);
   else if(wizardOffen) openWizard(wizardOffen);   // offenen Assistenten aktuell halten
@@ -1695,7 +1885,9 @@ function run(what, label){
 function runExport(){
   var o = checked('o').length > 0, t = checked('t').length > 0;
   if(!o && !t){ alert('Nichts ausgewählt.'); return; }
-  run({outlook:o, teams:t, index:true}, 'Export');
+  // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
+  // gelöschter Termine stammen ausschließlich aus dem Postfach.
+  run({outlook:o, teams:t, index:true, calendar:o}, 'Export');
 }
 
 /* ---------- Protokoll ---------- */
@@ -1743,12 +1935,263 @@ function renderHits(r){
     '<span class="small muted">Rangfolge: ' + esc(r.backend || '–') + '</span>';
 }
 
+/* =======================================================================
+   Kalender und Adressbuch – Ansichten aus combined_search.py, hier gegen
+   /api/calendar statt gegen eingebettete Daten. Die Auswertung selbst
+   (inklusive der aus Mails rekonstruierten Termine) macht combined_search.py.
+   ======================================================================= */
+var KAL = null, kalGeladen = false, kTimer = null, kalStand = null;
+var DAYMS = 86400000;
+var WD = ['Mo','Di','Mi','Do','Fr','Sa','So'];
+var MON = ['Januar','Februar','März','April','Mai','Juni','Juli','August',
+           'September','Oktober','November','Dezember'];
+var STL = {confirmed:'Bestätigt', tentative:'Vorläufig', cancelled:'Abgesagt',
+           deleted:'Gelöscht – aus Absagemail rekonstruiert',
+           gone:'Nicht mehr im Kalender – aus Mail rekonstruiert'};
+var events = [], byDay = new Map(), REBUILT = [], contacts = [];
+var calMode = 'week', cursor = new Date(), rbSt = 'all';
+
+function toks(q){ return q.toLowerCase().split(/\s+/).filter(Boolean); }
+function allIn(hay, t){ hay = (hay||'').toLowerCase(); return t.every(function(x){ return hay.indexOf(x) >= 0; }); }
+function quelle(r){ return '/source?root=' + encodeURIComponent(r.root||'outlook') +
+                           '&path=' + encodeURIComponent(r.rel||''); }
+
+function ladeKalender(ziel){
+  if(kalGeladen) return zeichneKalenderTeil(ziel);
+  kalGeladen = true;
+  api('/api/calendar').then(function(d){
+    if(d.error){
+      var h = '<p class="hint">' + esc(d.error) + '</p>' +
+        '<button class="act" onclick="run({calendar:true}, \'Kalender &amp; Kontakte\')">Jetzt aufbauen</button>';
+      el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
+      kalGeladen = false;                     // nach dem Aufbau erneut versuchen
+      return;
+    }
+    KAL = d;
+    // Denselben Wert merken, den der Status liefert (Dateizeit) – d.generated
+    // steht im JSON und wäre nie gleich, der Vergleich schlüge immer an.
+    kalStand = (S && S.calendar) ? S.calendar.built_at : null;
+    var recs = d.recs || [];
+    events = recs.filter(function(r){ return r.src === 'kalender' && r.ts != null; });
+    contacts = recs.filter(function(r){ return r.src === 'kontakte'; })
+      .sort(function(a,b){ return (a.title||'').localeCompare(b.title||'','de',{sensitivity:'base'}); });
+    REBUILT = events.filter(function(r){ return r.st === 'deleted' || r.st === 'gone'; });
+    verteileAufTage();
+    setzeStartwoche();
+    var c = d.counts || {};
+    el('kalStats').textContent = c.kalender + ' Termine im Kalenderexport · ' +
+      c.rekonstruiert + ' aus Mails rekonstruiert · Stand ' + fmt(d.generated);
+    zeichneKalenderTeil(ziel);
+  });
+}
+function zeichneKalenderTeil(ziel){
+  if(!KAL) return;
+  if(ziel === 'adressbuch') drawBook(); else drawCal();
+}
+
+// Termine auf Tage verteilen (mehrtägige erscheinen an jedem Tag)
+function verteileAufTage(){
+  byDay = new Map();
+  events.forEach(function(r){
+    var s = midnight(r.ts * 1000);
+    var endMs = (r.te != null ? r.te : r.ts) * 1000;
+    if(r.ad) endMs -= DAYMS;            // DTEND ist bei Ganztags-Terminen exklusiv
+    var e = midnight(Math.max(endMs, r.ts * 1000));
+    for(var d = new Date(s), n = 0; d <= e && n < 366; d = addDays(d,1), n++){
+      var k = dkey(d);
+      if(!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(r);
+    }
+  });
+  byDay.forEach(function(list){
+    list.sort(function(a,b){ return (a.ad?0:1) - (b.ad?0:1) || a.ts - b.ts; });
+  });
+}
+function setzeStartwoche(){
+  // Ein Archiv liegt meist in der Vergangenheit: auf den jüngsten Termin springen
+  if(!events.length) return;
+  var last = events.reduce(function(m,r){ return r.ts > m ? r.ts : m; }, -Infinity);
+  if(last * 1000 < midnight(Date.now()).getTime()) cursor = new Date(last * 1000);
+}
+
+function dkey(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') +
+                         '-' + String(d.getDate()).padStart(2,'0'); }
+function midnight(ms){ var d = new Date(ms); d.setHours(0,0,0,0); return d; }
+function addDays(d,n){ var x = new Date(d); x.setDate(x.getDate()+n); return x; }
+function startOfWeek(d){ return addDays(midnight(d.getTime()), -((d.getDay()+6)%7)); }
+function hhmm(d){ return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
+function isoWeek(d){
+  var t = midnight(d.getTime()); t.setDate(t.getDate() + 3 - ((t.getDay()+6)%7));
+  var w1 = new Date(t.getFullYear(), 0, 4);
+  return 1 + Math.round(((t - w1)/DAYMS - 3 + ((w1.getDay()+6)%7))/7);
+}
+function evTime(r){
+  if(r.ad) return 'ganztägig';
+  var s = hhmm(new Date(r.ts*1000));
+  if(r.te != null && r.te > r.ts) s += '–' + hhmm(new Date(r.te*1000));
+  return s;
+}
+function evHtml(r){
+  var st = STL[r.st] ? r.st : 'confirmed';
+  var tip = [r.title, STL[st], r.d, r.loc ? ('Ort: '+r.loc) : '', r.who ? ('Organisator: '+r.who) : '',
+             (r.att && r.att.length) ? ('Teilnehmer: '+r.att.join(', ')) : '', r.ctx]
+            .filter(Boolean).join('\n');
+  return '<a class="ev ' + st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
+         esc(tip) + '"><span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
+}
+function dayCell(d, extraCls){
+  var k = dkey(d), list = byDay.get(k) || [];
+  var today = k === dkey(new Date()) ? ' today' : '';
+  return '<div class="day' + (extraCls||'') + today + '">' +
+         '<div class="dnum"><b>' + d.getDate() + '</b><span class="wd">' + WD[(d.getDay()+6)%7] + '</span></div>' +
+         (list.length ? list.map(evHtml).join('') : '') + '</div>';
+}
+
+/* Nur aus Mails rekonstruierte Termine – eigene Liste statt Kalenderraster */
+function rbRow(r){
+  var d = new Date(r.ts*1000);
+  return '<a class="rbrow ' + r.st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
+         esc(r.ctx) + '"><span class="rbdate">' + WD[(d.getDay()+6)%7] + ' ' + esc(r.d) + '</span>' +
+         '<span class="rbstate">' + (r.st === 'deleted' ? 'Gelöscht' : 'Nicht im Kalender') + '</span>' +
+         '<span class="rbtitle">' + esc(r.title) + '</span>' +
+         '<span class="rbwho">' + esc(r.who) + '</span></a>';
+}
+function rbFrame(){
+  var nDel = REBUILT.filter(function(r){ return r.st === 'deleted'; }).length;
+  el('kalBox').innerHTML =
+      '<p class="rbnote">Termine, die nicht (mehr) im Kalenderexport stehen und allein aus ' +
+      'Einladungs-, Antwort- oder Absagemails wiederhergestellt wurden. „Gelöscht“ heißt: es liegt ' +
+      'eine Absagemail vor. Klick öffnet die Quellmail.</p><div class="calbar">' +
+      '<span class="chip" data-rb="all">Alle (' + REBUILT.length + ')</span>' +
+      '<span class="chip" data-rb="deleted">Gelöscht (' + nDel + ')</span>' +
+      '<span class="chip" data-rb="gone">Nicht im Kalender (' + (REBUILT.length - nDel) + ')</span>' +
+      '<input type="text" id="rbQ" placeholder="Titel, Person oder Inhalt…" style="min-width:240px">' +
+      '<span class="rbcount"></span></div><div id="rblist"></div>';
+  el('rbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(rbList, 160); });
+  document.querySelectorAll('#kalBox [data-rb]').forEach(function(ch){
+    ch.addEventListener('click', function(){ rbSt = ch.dataset.rb; rbList(); });
+  });
+}
+function rbList(){
+  var t = toks(el('rbQ').value.trim());
+  var hits = REBUILT.filter(function(r){
+    return (rbSt === 'all' || r.st === rbSt) &&
+           (!t.length || allIn(r.title + ' ' + (r.ppl||'') + ' ' + (r.x||''), t));
+  });
+  document.querySelectorAll('#kalBox [data-rb]').forEach(function(c){
+    c.classList.toggle('on', c.dataset.rb === rbSt);
+  });
+  document.querySelector('#kalBox .rbcount').textContent = hits.length + ' Treffer';
+  var h = '', monat = null;
+  hits.forEach(function(r){
+    var d = new Date(r.ts*1000), m = MON[d.getMonth()] + ' ' + d.getFullYear();
+    if(m !== monat){ h += '<div class="rbmonth">' + m + '</div>'; monat = m; }
+    h += rbRow(r);
+  });
+  el('rblist').innerHTML = h || (REBUILT.length ? '<p class="hint">Keine Treffer.</p>'
+    : '<p class="hint">Keine rekonstruierten Termine – im Postfach lagen keine passenden ' +
+      'Einladungs- oder Absagemails.</p>');
+}
+
+function drawCal(){
+  el('kalNav').classList.toggle('hide', calMode === 'rebuilt');
+  el('kalLegend').classList.toggle('hide', calMode === 'rebuilt');   // Zeilen sind beschriftet
+  if(calMode === 'rebuilt'){
+    el('kalTitle').textContent = '';
+    if(!document.querySelector('#kalBox [data-rb]')) rbFrame();
+    return rbList();
+  }
+  if(!events.length){
+    el('kalTitle').textContent = '';
+    el('kalBox').innerHTML = '<p class="hint">Keine Termine im Export.</p>';
+    return;
+  }
+  var head = '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + ' dowrow" style="margin-bottom:2px">' +
+             WD.map(function(w){ return '<div class="dow">' + w + '</div>'; }).join('') + '</div>';
+  var cells = '';
+  if(calMode === 'week'){
+    var mon = startOfWeek(cursor), sun = addDays(mon, 6);
+    for(var i = 0; i < 7; i++) cells += dayCell(addDays(mon, i));
+    el('kalTitle').textContent = 'KW ' + isoWeek(mon) + ' · ' + mon.getDate() + '. ' + MON[mon.getMonth()] +
+      ' – ' + sun.getDate() + '. ' + MON[sun.getMonth()] + ' ' + sun.getFullYear();
+  } else {
+    var first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    var start = startOfWeek(first);
+    var lastDay = new Date(cursor.getFullYear(), cursor.getMonth()+1, 0);
+    var weeks = Math.round((startOfWeek(lastDay) - start)/DAYMS/7) + 1;
+    for(var j = 0; j < weeks*7; j++){
+      var d = addDays(start, j);
+      cells += dayCell(d, d.getMonth() !== cursor.getMonth() ? ' out' : '');
+    }
+    el('kalTitle').textContent = MON[cursor.getMonth()] + ' ' + cursor.getFullYear();
+  }
+  el('kalBox').innerHTML = head + '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + '">' + cells + '</div>';
+}
+el('kalPrev').addEventListener('click', function(){
+  cursor = calMode === 'week' ? addDays(cursor, -7)
+                              : new Date(cursor.getFullYear(), cursor.getMonth()-1, 1);
+  drawCal();
+});
+el('kalNext').addEventListener('click', function(){
+  cursor = calMode === 'week' ? addDays(cursor, 7)
+                              : new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
+  drawCal();
+});
+el('kalToday').addEventListener('click', function(){ cursor = new Date(); drawCal(); });
+document.querySelectorAll('#tab-kalender .calbar .chip[data-mode]').forEach(function(ch){
+  ch.addEventListener('click', function(){
+    document.querySelectorAll('#tab-kalender .calbar .chip[data-mode]')
+      .forEach(function(x){ x.classList.remove('on'); });
+    ch.classList.add('on'); calMode = ch.dataset.mode;
+    if(calMode !== 'rebuilt') el('kalBox').innerHTML = '';   // Rahmen der Liste verwerfen
+    drawCal();
+  });
+});
+
+/* ---------- Adressbuch ---------- */
+function telHref(t){ return 'tel:' + (t||'').replace(/[^\d+]/g, ''); }
+function cardHtml(r){
+  var sub = [r.role, r.org].filter(Boolean).join(' · ');
+  var h = '<div class="card2"><div class="cname"><a href="' + quelle(r) +
+          '" target="_blank" rel="noopener">' + esc(r.title) + '</a></div>';
+  if(sub) h += '<div class="crole">' + esc(sub) + '</div>';
+  (r.em||[]).forEach(function(e){
+    h += '<div class="cline"><span>✉</span><a href="mailto:' + esc(e) + '">' + esc(e) + '</a></div>'; });
+  (r.tel||[]).forEach(function(t){
+    h += '<div class="cline"><span>☎</span><a href="' + esc(telHref(t)) + '">' + esc(t) + '</a></div>'; });
+  return h + '</div>';
+}
+function drawBook(){
+  if(!contacts.length){
+    el('kbStats').textContent = '';
+    el('kbBox').innerHTML = '<p class="hint">Keine Kontakte im Export.</p>';
+    return;
+  }
+  var t = toks(el('kbQ').value.trim());
+  var hits = contacts.filter(function(r){
+    return !t.length || allIn([r.title, r.org, r.role, (r.em||[]).join(' '),
+                               (r.tel||[]).join(' ')].join(' '), t);
+  });
+  el('kbStats').textContent = hits.length + ' von ' + contacts.length + ' Kontakten';
+  if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">Keine Kontakte gefunden.</p>'; return; }
+  var h = '', letter = null;
+  hits.forEach(function(r){
+    var first = (r.title || '#').trim().charAt(0).toUpperCase();
+    var L = /[A-ZÄÖÜ]/.test(first) ? first : '#';
+    if(L !== letter){ h += (letter !== null ? '</div>' : '') + '<div class="letter">' + L +
+                           '</div><div class="cards">'; letter = L; }
+    h += cardHtml(r);
+  });
+  el('kbBox').innerHTML = h + '</div>';
+}
+el('kbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(drawBook, 120); });
+
 /* ---------- Zeitplan / MCP ---------- */
 function saveSchedule(){
   post('/api/schedule', {enabled: el('s-enabled').checked,
     interval_minutes: parseInt(el('s-interval').value, 10) || 60,
     outlook: el('s-outlook').checked, teams: el('s-teams').checked,
-    index: el('s-index').checked}).then(refresh);
+    index: el('s-index').checked, calendar: el('s-calendar').checked}).then(refresh);
 }
 function toggleMcp(){
   post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){

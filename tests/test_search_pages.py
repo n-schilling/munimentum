@@ -650,3 +650,89 @@ def test_generator_escapet_jedes_kleiner_zeichen(tmp_path):
     _, idx = read_page(ziel)
     treffer = [r for r in idx["recs"] if KOMMENTAR_ANGRIFF in r["x"]]
     assert len(treffer) == 2                     # Teams-Nachricht und Mail
+
+
+# --------------------------------------------------------------------------
+# collect_calendar_data / --json: dieselbe Auswertung ohne Seite drumherum
+# --------------------------------------------------------------------------
+def _kalender_export(tmp_path):
+    """Outlook-Export mit einem Termin, einer Absagemail und einem Kontakt."""
+    outlook = tmp_path / "outlook_export"
+    post = outlook / "E-Mail" / "Posteingang"
+    post.mkdir(parents=True)
+    (post / "absage.eml").write_bytes(make_ical_eml(MAIL_ICS))
+    kal = outlook / "kalender" / "Arbeit"
+    kal.mkdir(parents=True)
+    (kal / "termin.ics").write_text(ICS, encoding="utf-8")     # andere UID -> bleibt
+    kon = outlook / "kontakte" / "Team"
+    kon.mkdir(parents=True)
+    (kon / "alice.vcf").write_text(VCF, encoding="utf-8")
+    return outlook
+
+
+def test_collect_calendar_data_liefert_termine_kontakte_und_rekonstruktion(tmp_path):
+    daten = combined_search.collect_calendar_data(str(_kalender_export(tmp_path)))
+
+    assert daten["counts"] == {"kalender": 1, "rekonstruiert": 1, "kontakte": 1,
+                               "abgesagt_markiert": 0, "doppel_verworfen": 0}
+    nach_status = {r.get("st"): r for r in daten["recs"] if r["src"] == "kalender"}
+    assert nach_status["confirmed"]["title"] == "Planung, Quartal"
+
+    # Der aus der Absagemail zurückgeholte Termin verweist auf die Mail selbst
+    ghost = nach_status["deleted"]
+    assert ghost["title"] == "Jour Fixe"
+    assert ghost["root"] == "outlook"
+    assert ghost["rel"] == "E-Mail/Posteingang/absage.eml"     # relativ zum Export-Stamm
+
+    kontakt = [r for r in daten["recs"] if r["src"] == "kontakte"][0]
+    assert kontakt["title"] == "Alice Example"
+    assert kontakt["em"] == ["alice@example.com"]
+    assert kontakt["rel"] == "kontakte/Team/alice.vcf"
+
+
+def test_collect_calendar_data_laesst_unnoetiges_weg(tmp_path):
+    """uid, ppl und Beschreibung machen zwei Drittel der Antwort aus und werden
+    außerhalb der rekonstruierten Termine von keiner Ansicht gelesen."""
+    daten = combined_search.collect_calendar_data(str(_kalender_export(tmp_path)))
+    for r in daten["recs"]:
+        assert "uid" not in r and "p" not in r
+    normal = [r for r in daten["recs"] if r.get("st") == "confirmed"][0]
+    assert "ppl" not in normal and "x" not in normal
+    ghost = [r for r in daten["recs"] if r.get("st") == "deleted"][0]
+    assert "ppl" in ghost                       # die Suche dort filtert darüber
+
+
+def test_collect_calendar_data_kuerzt_beschreibungen(tmp_path):
+    outlook = _kalender_export(tmp_path)
+    lang = MAIL_ICS.replace("LOCATION:Raum 7", "DESCRIPTION:" + "z" * 5000)
+    (outlook / "E-Mail" / "Posteingang" / "absage.eml").write_bytes(make_ical_eml(lang))
+    daten = combined_search.collect_calendar_data(str(outlook), text_cap=100)
+    ghost = [r for r in daten["recs"] if r.get("st") == "deleted"][0]
+    assert len(ghost["x"]) == 100
+
+
+def test_collect_calendar_data_ohne_ordner(tmp_path):
+    with pytest.raises(SystemExit, match="nicht gefunden"):
+        combined_search.collect_calendar_data(str(tmp_path / "fehlt"))
+
+
+def test_write_calendar_json_schreibt_atomar(tmp_path):
+    ziel = tmp_path / "store" / "calendar.json"
+    counts = combined_search.write_calendar_json(str(_kalender_export(tmp_path)), ziel)
+    assert counts["rekonstruiert"] == 1
+    assert not ziel.with_name(ziel.name + ".tmp").exists()
+    daten = json.loads(ziel.read_text(encoding="utf-8"))
+    assert daten["counts"] == counts
+    assert any(r.get("st") == "deleted" for r in daten["recs"])
+
+
+def test_main_json_schreibt_nur_die_daten(tmp_path, monkeypatch, capsys):
+    outlook = _kalender_export(tmp_path)
+    ziel = tmp_path / "kal.json"
+    monkeypatch.setattr(sys, "argv", ["combined_search.py", str(tmp_path / "fehlt"),
+                                      str(outlook), "--json", str(ziel)])
+    combined_search.main()
+    assert ziel.exists()
+    assert not (tmp_path / "combined_search.html").exists()      # keine Seite gebaut
+    out = capsys.readouterr().out
+    assert "1 Termine" in out and "1 aus Mails rekonstruiert" in out

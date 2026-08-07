@@ -24,6 +24,11 @@ Nur Standardbibliothek – keine Installation nötig.
 
     python3 combined_search.py [teams-ordner] [outlook-ordner] [-o ausgabe.html]
 
+Mit --json datei.json wird statt der Seite nur die Kalender-/Kontaktauswertung
+als JSON geschrieben (Termine, rekonstruierte Termine, Kontakte). Das nutzt
+app.py, um Kalender und Adressbuch selbst darzustellen – die Rekonstruktion
+gibt es damit einmal im Projekt statt zweimal leicht anders.
+
 Standard: teams_export, outlook_export. Die Ausgabe wird per Default in den
 gemeinsamen übergeordneten Ordner beider Exporte geschrieben (combined_search.html),
 damit die relativen Links funktionieren. Die Datei danach nicht relativ zu den
@@ -42,7 +47,7 @@ from email.utils import getaddresses
 from datetime import datetime, UTC
 from zoneinfo import ZoneInfo
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from html.parser import HTMLParser
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
@@ -728,6 +733,56 @@ def link(path, out_dir):
         return Path(path).as_uri()
 
 
+def collect_calendar_data(outlook_dir, text_cap=600):
+    """Kalender, Kontakte und rekonstruierte Termine als reine Daten liefern.
+
+    Dieselbe Auswertung wie build(), nur ohne Seite drumherum – für app.py, das
+    Kalender und Adressbuch selbst darstellt. Damit gibt es die Rekonstruktion
+    gelöschter Termine genau einmal im Projekt und nicht zweimal leicht anders.
+
+    Die Pfade kommen als `root` + `rel` (unkodiert) statt als fertiger Link:
+    die statische Seite verlinkt relativ zu ihrem Ablageort, die App über ihre
+    eigene /source-Route. Beschreibungstexte werden gekürzt (`text_cap`) – im
+    Kalender stehen sie nur im Tooltip und in der Suche über die
+    rekonstruierten Termine, ungekürzt blähen 5000 Termine die Antwort auf.
+    """
+    root = Path(outlook_dir).resolve()
+    if not root.is_dir():
+        raise SystemExit(f"Outlook-Export nicht gefunden: {outlook_dir}")
+    people = set()
+    invites = []
+    # out_dir = root: link() liefert dann Pfade relativ zum Export-Stamm, genau
+    # das, was die /source-Route der App erwartet.
+    read_outlook(root, root, people, invites)     # nur wegen der Einladungen
+    cal = read_calendar(root, root, people)
+    ghosts, marked, dupes = reconstruct_events(invites, cal)
+    contacts = read_contacts(root, root, people)
+
+    recs = cal + ghosts + contacts
+    for r in recs:
+        r["root"] = "outlook"
+        r["rel"] = unquote(r.pop("p", ""))
+        r.pop("uid", None)          # nur fürs Zuordnen oben gebraucht, knapp 1 MB
+        # Personenliste und Beschreibung braucht nur die Suche über die
+        # rekonstruierten Termine. Über alle 5860 Termine hinweg sind das zwei
+        # Drittel der Antwort, ohne dass sie je jemand liest.
+        if r.get("st") in ("deleted", "gone"):
+            if text_cap is not None and r.get("x"):
+                r["x"] = r["x"][:text_cap]
+        else:
+            r.pop("ppl", None)
+            r.pop("x", None)
+    recs.sort(key=lambda r: (r["ts"] is None, -(r["ts"] or 0)))
+    return {
+        "generated": datetime.now().isoformat(timespec="seconds"),
+        "outlook_dir": str(root),
+        "counts": {"kalender": len(cal), "rekonstruiert": len(ghosts),
+                   "kontakte": len(contacts), "abgesagt_markiert": marked,
+                   "doppel_verworfen": dupes},
+        "recs": recs,
+    }
+
+
 def build(teams_dir, outlook_dir, output):
     out_dir = output.parent.resolve()
     people = set()
@@ -1247,20 +1302,46 @@ personEl.focus();
 """
 
 
+def write_calendar_json(outlook_dir, ziel):
+    """Kalenderdaten nach `ziel` schreiben (atomar). Liefert die Zählungen."""
+    daten = collect_calendar_data(outlook_dir)
+    ziel = Path(ziel)
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ziel.with_name(ziel.name + ".tmp")
+    tmp.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(ziel)
+    return daten["counts"]
+
+
 def main():
     args = sys.argv[1:]
     output = None
+    kalender_json = None
     pos = []
     i = 0
     while i < len(args):
         if args[i] in ("-o", "--out") and i + 1 < len(args):
             output = args[i + 1]
             i += 2
+        elif args[i] == "--json" and i + 1 < len(args):
+            kalender_json = args[i + 1]
+            i += 2
         else:
             pos.append(args[i])
             i += 1
     teams_dir = pos[0] if len(pos) > 0 else "teams_export"
     outlook_dir = pos[1] if len(pos) > 1 else "outlook_export"
+
+    if kalender_json:
+        print(f"Kalenderdaten → {kalender_json}")
+        c = write_calendar_json(outlook_dir, kalender_json)
+        print(f"Fertig. {c['kalender']} Termine, {c['rekonstruiert']} aus Mails "
+              f"rekonstruiert, {c['kontakte']} Kontakte."
+              + (f" {c['abgesagt_markiert']} nachträglich als abgesagt markiert."
+                 if c["abgesagt_markiert"] else "")
+              + (f" {c['doppel_verworfen']} als Doppel verworfen."
+                 if c["doppel_verworfen"] else ""))
+        return
 
     tp, op = Path(teams_dir), Path(outlook_dir)
     if not tp.is_dir() and not op.is_dir():

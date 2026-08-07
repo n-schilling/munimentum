@@ -107,6 +107,22 @@ a second search path being maintained. Hits link to their source file, served
 with `Content-Security-Policy: sandbox` so an exported Teams page cannot script
 against the app.
 
+**Calendar and address book.** The app has the same three calendar views as the
+static page — week, month and **Rekonstruiert** — plus the contacts view, and it
+gets them from the same code: `combined_search.py --json` runs its readers and
+`reconstruct_events()` and writes the result to `rag_store/calendar.json`, which
+the app serves. So deleted appointments recovered from invitation, reply and
+cancellation mails (see section 4 for how that works, Exchange Global Object IDs
+and all) exist once in this project, not twice in slightly different forms.
+
+That step reads every `.eml` to find the invitations, so it takes minutes on a
+large mailbox — it is therefore its own pipeline step with a result file, run
+after each Outlook export, on the schedule, or from the *Kalender & Kontakte
+aufbauen* button. The payload drops `uid` everywhere and the person/description
+fields on everything except the reconstructed events (nothing reads them there),
+which takes it from 11 MB to under 5 MB, and it goes over the wire gzipped at
+roughly 0.75 MB.
+
 **Schedule.** While the app is open, it can re-run export and indexing at a fixed
 interval. Deliberately bound to the app's runtime and not to launchd/Task
 Scheduler: the schedule only reaches as far as the hand-fetched token stays
@@ -315,6 +331,11 @@ as does a missing time zone.
 It accepts custom folders (`[teams] [outlook] [-o out.html]`) and writes the
 page to the common parent folder of both exports — don't move it afterwards,
 the links are relative.
+
+`--json datei.json` writes only this analysis — calendar entries, reconstructed
+appointments and contacts — as data, without building a page. That is what
+`app.py` uses for its own calendar and address book, so the reconstruction above
+lives in exactly one place.
 
 ---
 
