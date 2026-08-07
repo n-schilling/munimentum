@@ -140,6 +140,16 @@ rebuild sets existing ones aside by content hash instead of discarding them.
 **MCP.** Start/stop `mcp_server.py` from the UI and copy the config snippet for
 Claude Code or Claude Desktop. Quitting the app also shuts the MCP server down.
 
+**Settings.** The *Einstellungen* tab exposes every option the individual scripts
+have — the Teams image and channel switches, Outlook's hidden folders and its
+skipped-folder list, parallelism, embedding batch size, Ollama URL and model, MCP
+port and autostart, and the three folder paths. Nothing there is app-only: the
+app writes `app_config.json` and turns it into the same environment variables and
+command-line flags the scripts take on their own, so a setting changed here and
+one exported in a shell do exactly the same thing. Numbers are clamped on save
+(workers 1–8, MCP port 1024–65535, batch 1–512) so a typo can't wedge the next
+run, and changes apply to the next run — never to what is already exported.
+
 Options: `--port 8700` (busy ports are skipped automatically), `--no-browser`,
 `--data-dir FOLDER`. Settings live in `app_config.json` next to the data.
 
@@ -266,18 +276,20 @@ default calendar and all contacts. Same as pressing Enter at every prompt.
 | `EXPORT_WORKERS` | both | `4` | Parallel downloads. `4` is the sensible max (throttling); use `1` on flaky connections. |
 | `GRAPH_TOKEN` | both | — | Pasted Graph token instead of browser login (section 2). |
 | `EXPORT_CATEGORIES` | both | — | Pick categories without any prompt — Teams: `1on1,group,meeting,channels`; Outlook: `mail,calendar,contacts`. Wins over `-default`. This is how `app.py` and its scheduler drive the exports; equally useful for cron. |
-| `REFRESH_CHANNELS` | Teams | `1` | `0` = don't re-check exported channels for new replies. |
+| `EMBED_IMAGES` | Teams | `1` | `0` = don't embed inline images as base64 (much smaller HTML, no images). |
 | `CACHE_IMAGES` | Teams | `1` | `0` = don't cache inline images (saves disk, slower re-export). |
+| `REFRESH_CHANNELS` | Teams | `1` | `0` = don't re-check exported channels for new replies. |
 | `SKIP_EMPTY_CHATS` | Teams | `1` | `0` = also export chats with only system messages. |
+| `INCLUDE_HIDDEN` | Outlook | `0` | `1` = also export hidden system folders (Conversation History, Sync Issues …). |
+| `SKIP_FOLDERS` | Outlook | see below | Comma-separated folders the default selection leaves out, compared case-insensitively. Set it empty to export every folder; unset it to keep the built-in list (Archive, Drafts, Deleted Items, Junk, Outbox and their German names). |
 
-<details>
-<summary>Switches at the top of each script (edit the file)</summary>
+Flags accept `0/false/no/nein/off/empty` for off and anything else for on. Every
+one of them is also a control in the app's **Einstellungen** tab — the app just
+sets these variables for the run, so both paths behave identically.
 
-- `USE_DEVICE_CODE = True` — device-code login instead of a browser (headless machines).
-- Teams `EMBED_IMAGES = False` — don't embed images as base64 (smaller HTML).
-- Outlook `INCLUDE_HIDDEN = True` — also export hidden system folders.
-- Outlook `DEFAULT_SKIP_FOLDERS` — folders skipped by the default selection.
-</details>
+`USE_DEVICE_CODE = True` at the top of either script switches the browser login
+for a device code (headless machines). It is the one switch the app does not
+expose, because the app never signs in — it works from a pasted token only.
 
 ---
 

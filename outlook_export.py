@@ -32,8 +32,9 @@ Resume: exported.tsv im Ausgabeordner (eine Zeile pro fertige Mail). Bereits
     exportierte Mails werden übersprungen. Token tot -> frischen Token setzen,
     neu starten, es geht weiter. Kompletter Neu-Export: exported.tsv löschen.
 
-Schalter unten: WORKERS (Parallelität, sinnvoll max 4 / per Env EXPORT_WORKERS),
-    USE_DEVICE_CODE, INCLUDE_HIDDEN (versteckte Systemordner).
+Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS
+    (Parallelität, sinnvoll max 4), INCLUDE_HIDDEN (versteckte Systemordner),
+    SKIP_FOLDERS (Ordner, die die Standardauswahl auslässt, kommagetrennt).
 """
 
 import os
@@ -75,8 +76,20 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
 
+def env_flag(name, default):
+    """Schalter aus der Umgebung lesen: 0/false/nein/off aus, sonst an.
+
+    Damit lassen sich alle Schalter von außen setzen (app.py, Cron) statt nur
+    durch Ändern dieser Datei.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "nein", "off", "")
+
+
 USE_DEVICE_CODE = False     # True = Code-Login statt Browser
-INCLUDE_HIDDEN = False      # versteckte Ordner (Conversation History, Sync Issues …)
+INCLUDE_HIDDEN = env_flag("INCLUDE_HIDDEN", False)   # versteckte Ordner (Sync Issues …)
 WORKERS = 4                 # parallele Downloads; Exchange-Limit pro Postfach = 4
 PAGE = 50                   # $top für Listenabfragen
 OUT_ROOT = "outlook_export"  # fester Ordner -> Resume über mehrere Läufe hinweg
@@ -85,7 +98,7 @@ MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu k
 
 # Diese Postfach-Ordner sind bei "alle" (Enter) standardmäßig NICHT dabei – nur per
 # expliziter Auswahl. Vergleich case-insensitive über den Anzeigenamen (DE + EN).
-DEFAULT_SKIP_FOLDERS = {
+BUILTIN_SKIP_FOLDERS = {
     "archive", "archiv",
     "entwürfe", "drafts",
     "erneut erinnern aktiviert",
@@ -93,6 +106,22 @@ DEFAULT_SKIP_FOLDERS = {
     "junk-e-mail", "junk email", "junk-email",
     "postausgang", "outbox",
 }
+
+
+def env_folders(name, default):
+    """Ordnerliste aus der Umgebung (kommagetrennt).
+
+    Nicht gesetzt = Vorgabe. Leer gesetzt = leere Liste, also nichts auslassen –
+    das ist ein Unterschied, den app.py braucht, um "alles exportieren" sagen zu
+    können, ohne die Vorgabe hier zu kennen.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return set(default)
+    return {t.strip().lower() for t in raw.split(",") if t.strip()}
+
+
+DEFAULT_SKIP_FOLDERS = env_folders("SKIP_FOLDERS", BUILTIN_SKIP_FOLDERS)
 
 # Netzwerk: getrennte Timeouts für Verbindungsaufbau und Antwort. Graph liefert
 # große Seiten und MIME-Downloads teils sehr träge; ein zu knapper Read-Timeout

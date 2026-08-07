@@ -36,7 +36,8 @@ Resume / inkrementell: export_state.json im Ausgabeordner merkt sich pro
     geschrieben (REFRESH_CHANNELS=0 schaltet das ab). Token tot -> frischen Token
     setzen, neu starten. Kompletter Neu-Export: Datei (oder Ordner) löschen.
 
-Schalter unten: WORKERS, USE_DEVICE_CODE, EMBED_IMAGES, REFRESH_CHANNELS (env).
+Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS,
+    EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS.
 """
 
 import os
@@ -86,8 +87,20 @@ SCOPES_FULL = SCOPES_CHAT + [
     RES + "Channel.ReadBasic.All",
 ]
 
+def env_flag(name, default):
+    """Schalter aus der Umgebung lesen: 0/false/nein/off aus, sonst an.
+
+    Damit lassen sich alle Schalter von außen setzen (app.py, Cron) statt nur
+    durch Ändern dieser Datei.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "nein", "off", "")
+
+
 USE_DEVICE_CODE = False     # True = Code-Login statt Browser
-EMBED_IMAGES = True         # Inline-Bilder als base64 einbetten
+EMBED_IMAGES = env_flag("EMBED_IMAGES", True)   # Inline-Bilder als base64 einbetten
 WORKERS = 4                 # parallele Konversationen (sinnvoll: 4; per Env EXPORT_WORKERS)
 PAGE = 50                   # $top (Graph-Maximum für Nachrichten)
 OUT_ROOT = "teams_export"    # fester Ordner -> Resume über mehrere Läufe hinweg
@@ -98,18 +111,18 @@ STATE_FILE = "export_state.json"
 # bieten keinen günstigen Änderungs-Indikator (neue Antworten in alten Threads),
 # daher werden gewählte Kanäle pro Lauf neu geholt und nur bei Änderung neu
 # geschrieben. Mit REFRESH_CHANNELS=0 abschaltbar (Kanäle dann nur einmalig).
-REFRESH_CHANNELS = os.environ.get("REFRESH_CHANNELS", "1") not in ("0", "false", "False")
+REFRESH_CHANNELS = env_flag("REFRESH_CHANNELS", True)
 
 # Heruntergeladene Inline-Bilder zwischenspeichern (Ordner .imgcache). Bei erneutem
 # Export eines Chats werden so nur NEUE Bilder geladen statt aller. Kostet zusätzlichen
 # Plattenplatz (Bilder liegen dann doppelt: im Cache und eingebettet im HTML).
 # Mit CACHE_IMAGES=0 abschaltbar.
-CACHE_IMAGES = os.environ.get("CACHE_IMAGES", "1") not in ("0", "false", "False")
+CACHE_IMAGES = env_flag("CACHE_IMAGES", True)
 
 # Chats, die NUR System-/Event-Nachrichten enthalten (Beitritte, Anrufe, Mitglieder-
 # Änderungen, …) und keine echte Nachricht, werden standardmäßig NICHT exportiert
 # und nicht in den Index aufgenommen. Mit SKIP_EMPTY_CHATS=0 doch exportieren.
-SKIP_EMPTY_CHATS = os.environ.get("SKIP_EMPTY_CHATS", "1") not in ("0", "false", "False")
+SKIP_EMPTY_CHATS = env_flag("SKIP_EMPTY_CHATS", True)
 
 TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",

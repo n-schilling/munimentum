@@ -894,3 +894,24 @@ def test_run_parallel_catches_raising_runner():
 
 def test_run_parallel_empty_list_is_done():
     assert te.run_parallel([], {}, workers=4) == "done"
+
+
+# --------------------------------------------------------------------------
+# Schalter aus der Umgebung (app.py, Zeitplan, Cron setzen sie)
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("wert,erwartet", [
+    (None, True),                 # nicht gesetzt -> Vorgabe
+    ("0", False), ("false", False), ("False", False), ("no", False),
+    ("nein", False), ("off", False), ("", False),
+    ("1", True), ("true", True), ("ja", True), ("  1  ", True),
+])
+def test_env_flag(monkeypatch, wert, erwartet):
+    monkeypatch.delenv("TESTSCHALTER", raising=False)
+    if wert is not None:
+        monkeypatch.setenv("TESTSCHALTER", wert)
+    assert te.env_flag("TESTSCHALTER", True) is erwartet
+
+
+def test_env_flag_vorgabe_aus(monkeypatch):
+    monkeypatch.delenv("TESTSCHALTER", raising=False)
+    assert te.env_flag("TESTSCHALTER", False) is False

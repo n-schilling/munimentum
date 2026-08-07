@@ -116,6 +116,19 @@ def set_data_dir(path):
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
 OLLAMA_SITE = "https://ollama.com/download"
 
+# Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
+# Bewusst hier gespiegelt statt outlook_export zu importieren: das Modul bricht
+# beim Import ohne msal/requests ab, und die App soll auch dann eine Oberfläche
+# zeigen. Ein Test hält beide Listen zusammen (test_app: gespiegelte_liste).
+SKIP_FOLDERS_DEFAULT = {
+    "archive", "archiv",
+    "entwürfe", "drafts",
+    "erneut erinnern aktiviert",
+    "gelöschte elemente", "deleted items",
+    "junk-e-mail", "junk email", "junk-email",
+    "postausgang", "outbox",
+}
+
 DEFAULT_CONFIG = {
     "teams_dir": "teams_export",
     "outlook_dir": "outlook_export",
@@ -123,6 +136,14 @@ DEFAULT_CONFIG = {
     "outlook_categories": ["mail", "calendar", "contacts"],
     "teams_categories": ["1on1", "group", "meeting"],
     "workers": 4,
+    # Schalter der Export-Skripte (dort per Umgebungsvariable, siehe env_flag)
+    "embed_images": True,
+    "cache_images": True,
+    "refresh_channels": True,
+    "skip_empty_chats": True,
+    "include_hidden": False,
+    "skip_folders": sorted(SKIP_FOLDERS_DEFAULT),
+    "index_batch": 64,
     "ollama": "http://localhost:11434",
     "embed_model": "bge-m3",
     "mcp_port": 8365,
@@ -238,6 +259,18 @@ def _clean_categories(values, allowed):
     """Nur bekannte Kategorien, in der Reihenfolge von `allowed`."""
     picked = {str(v).strip().lower() for v in (values or [])}
     return [k for k in allowed if k in picked]
+
+
+def _clean_folders(values):
+    """Ordnernamen aus Liste oder Text (kommagetrennt): kleingeschrieben, ohne Doppel.
+
+    outlook_export.py vergleicht Anzeigenamen case-insensitive, also wird hier
+    schon kleingeschrieben – sonst steht in der Oberfläche etwas anderes als
+    das, wonach am Ende verglichen wird.
+    """
+    if isinstance(values, str):
+        values = values.replace("\n", ",").split(",")
+    return sorted({str(v).strip().lower() for v in (values or []) if str(v).strip()})
 
 
 # --------------------------------------------------------------------------
@@ -473,6 +506,11 @@ def run_bundled(name, argv):
     importlib.import_module(name).main()
 
 
+def _flag(value):
+    """Schalter so schreiben, wie env_flag() in den Export-Skripten ihn liest."""
+    return "1" if value else "0"
+
+
 def calendar_file(cfg):
     return BASE / cfg["store_dir"] / "calendar.json"
 
@@ -496,7 +534,11 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         steps.append({
             "key": "outlook", "label": "Outlook-Export",
             "argv": script_argv("outlook_export", cfg["outlook_dir"]),
-            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
+            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
+                    "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
+                    # Immer setzen, auch leer: leer heißt "nichts auslassen",
+                    # nicht gesetzt hieße "Vorgabe des Skripts".
+                    "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])},
         })
     if teams:
         cats = _clean_categories(cfg["teams_categories"],
@@ -504,12 +546,17 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         steps.append({
             "key": "teams", "label": "Teams-Export",
             "argv": script_argv("teams_export", cfg["teams_dir"]),
-            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats)},
+            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
+                    "EMBED_IMAGES": _flag(cfg.get("embed_images")),
+                    "CACHE_IMAGES": _flag(cfg.get("cache_images")),
+                    "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
+                    "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))},
         })
     if index:
         argv = script_argv("rag_index", cfg["teams_dir"], cfg["outlook_dir"],
                            "--store", cfg["store_dir"], "--model", cfg["embed_model"],
-                           "--ollama", cfg["ollama"])
+                           "--ollama", cfg["ollama"],
+                           "--batch", cfg.get("index_batch", 64))
         if not embeddings:
             argv.append("--no-embeddings")
         steps.append({
@@ -995,6 +1042,7 @@ class App:
             "wizard": wizard,
             "data_dir": str(BASE),
             "frozen": FROZEN,
+            "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
@@ -1219,14 +1267,22 @@ class Handler(BaseHTTPRequestHandler):
         for key in ("teams_dir", "outlook_dir", "store_dir", "embed_model", "ollama"):
             if key in data and str(data[key]).strip():
                 cfg[key] = str(data[key]).strip()
-        for key in ("workers", "mcp_port"):
+        # Grenzen, damit eine vertippte Zahl den nächsten Lauf nicht lahmlegt:
+        # Graph erlaubt 4 gleichzeitige Anfragen pro Postfach, alles darüber
+        # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
+        for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
+                               ("index_batch", 1, 512)):
             if key in data:
                 try:
-                    cfg[key] = max(1, int(data[key]))
+                    cfg[key] = max(low, min(high, int(data[key])))
                 except (TypeError, ValueError):
                     pass
-        if "mcp_autostart" in data:
-            cfg["mcp_autostart"] = bool(data["mcp_autostart"])
+        for key in ("mcp_autostart", "embed_images", "cache_images",
+                    "refresh_channels", "skip_empty_chats", "include_hidden"):
+            if key in data:
+                cfg[key] = bool(data[key])
+        if "skip_folders" in data:
+            cfg["skip_folders"] = _clean_folders(data["skip_folders"])
         save_config(cfg)
         return {"ok": True, "config": cfg}
 
@@ -1601,6 +1657,7 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   <button data-tab="adressbuch" onclick="tab('adressbuch')">Adressbuch</button>
   <button data-tab="zeitplan" onclick="tab('zeitplan')">Zeitplan</button>
   <button data-tab="mcp" onclick="tab('mcp')">MCP &amp; Claude</button>
+  <button data-tab="einstellungen" onclick="tab('einstellungen')">Einstellungen</button>
 </nav>
 
 <main>
@@ -1733,6 +1790,79 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 </section>
 </main>
 
+<section id="tab-einstellungen" class="hide">
+  <div class="card">
+    <h2>Teams-Export</h2>
+    <p class="sub">Wirkt auf den nächsten Lauf. Bereits Exportiertes bleibt, wie es ist.</p>
+    <label class="chk"><input type="checkbox" id="c-embed_images"> Inline-Bilder in die HTML einbetten
+      <span class="small muted">– aus: kleinere Dateien, Bilder fehlen</span></label>
+    <label class="chk"><input type="checkbox" id="c-cache_images"> Bilder zwischenspeichern
+      <span class="small muted">– schnellerer Neu-Export, kostet Plattenplatz doppelt</span></label>
+    <label class="chk"><input type="checkbox" id="c-refresh_channels"> Kanäle bei jedem Lauf auf neue Antworten prüfen
+      <span class="small muted">– aus: Kanäle nur einmalig</span></label>
+    <label class="chk"><input type="checkbox" id="c-skip_empty_chats"> Chats ohne echte Nachricht überspringen
+      <span class="small muted">– nur Beitritte, Anrufe, Mitgliederwechsel</span></label>
+  </div>
+
+  <div class="card">
+    <h2>Outlook-Export</h2>
+    <label class="chk"><input type="checkbox" id="c-include_hidden"> Versteckte Systemordner mitnehmen
+      <span class="small muted">– Conversation History, Sync Issues …</span></label>
+    <p class="sub" style="margin:12px 0 6px">Ordner, die die Standardauswahl auslässt (einer pro Zeile,
+      Groß-/Kleinschreibung egal). Leer = alle Ordner exportieren.</p>
+    <textarea id="c-skip_folders" style="min-height:120px"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="ghost" onclick="ordnerZuruecksetzen()">Auf Vorgabe zurücksetzen</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Geschwindigkeit</h2>
+    <div class="row">
+      <label class="small">Parallele Downloads
+        <input type="number" id="c-workers" min="1" max="8" style="width:80px"></label>
+      <span class="small muted">Graph erlaubt 4 gleichzeitige Anfragen je Postfach – mehr erzeugt
+        vor allem Drosselung. Bei wackliger Verbindung 1.</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="small">Embeddings je Anfrage
+        <input type="number" id="c-index_batch" min="1" max="512" style="width:90px"></label>
+      <span class="small muted">Größer = weniger Anfragen an Ollama, mehr Speicher je Anfrage.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Suche und MCP</h2>
+    <div class="row">
+      <label class="small">Ollama <input type="text" id="c-ollama" style="width:230px"></label>
+      <label class="small">Embedding-Modell <input type="text" id="c-embed_model" style="width:160px"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="small">MCP-Port <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
+      <label class="chk"><input type="checkbox" id="c-mcp_autostart"> MCP-Server beim Start mitstarten</label>
+    </div>
+    <p class="small muted" style="margin-top:8px">Ein geänderter Port wirkt erst, wenn der MCP-Server
+      neu gestartet wird – und die Einträge in Claude müssen dann mitgezogen werden.</p>
+  </div>
+
+  <div class="card">
+    <h2>Ordner</h2>
+    <p class="sub">Relativ zum Datenordner, oder absolut. Ein Wechsel verschiebt nichts –
+      vorhandene Exporte bleiben liegen, wo sie sind.</p>
+    <div class="row">
+      <label class="small">Teams <input type="text" id="c-teams_dir" style="width:200px"></label>
+      <label class="small">Outlook <input type="text" id="c-outlook_dir" style="width:200px"></label>
+      <label class="small">Index <input type="text" id="c-store_dir" style="width:200px"></label>
+    </div>
+    <p class="small muted" style="margin-top:10px">Datenordner: <code id="data-dir2">…</code></p>
+  </div>
+
+  <div class="row" style="margin-bottom:24px">
+    <button class="act" onclick="speichereEinstellungen()">Einstellungen speichern</button>
+    <span class="small" id="cfg-msg"></span>
+  </div>
+</section>
+
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
 <script>
@@ -1748,7 +1878,7 @@ function esc(s){ return String(s == null ? '' : s)
 function el(id){ return document.getElementById(id); }
 
 function tab(name){
-  ['export','suche','kalender','adressbuch','zeitplan','mcp'].forEach(function(t){
+  ['export','suche','kalender','adressbuch','zeitplan','mcp','einstellungen'].forEach(function(t){
     el('tab-' + t).classList.toggle('hide', t !== name);
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
   });
@@ -1807,6 +1937,8 @@ function renderStatus(s){
   parts.push('Index: ' + (st.exists ? fmt(st.built_at) : 'noch nie'));
   el('export-state').textContent = parts.join('  ·  ');
   el('data-dir').textContent = s.data_dir;
+  el('data-dir2').textContent = s.data_dir;
+  fuelleEinstellungen(s.config);
 
   var busy = s.jobs.busy;
   el('btn-run').disabled = busy;
@@ -2198,6 +2330,42 @@ function toggleMcp(){
     if(!r.ok && r.message) alert(r.message);
     refresh();
   });
+}
+
+/* ---------- Einstellungen ---------- */
+var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
+                'include_hidden','mcp_autostart'];
+var ZAHLEN   = ['workers','index_batch','mcp_port'];
+var TEXTE    = ['ollama','embed_model','teams_dir','outlook_dir','store_dir'];
+var cfgGefuellt = false;
+
+function fuelleEinstellungen(cfg){
+  // Nur einmal befüllen: der Status kommt alle 2,5 Sekunden, und ein Neusetzen
+  // würde eine gerade getippte Zahl oder Ordnerliste unter den Fingern ersetzen.
+  if(cfgGefuellt) return;
+  cfgGefuellt = true;
+  SCHALTER.forEach(function(k){ el('c-'+k).checked = !!cfg[k]; });
+  ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
+  TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
+  el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
+}
+function speichereEinstellungen(){
+  var body = {skip_folders: el('c-skip_folders').value};
+  SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
+  ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
+  TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
+  post('/api/config', body).then(function(r){
+    cfgGefuellt = false;                 // gespeicherte (und begrenzte) Werte zurückspielen
+    fuelleEinstellungen(r.config);
+    var m = el('cfg-msg');
+    m.className = 'small ok';
+    m.textContent = 'Gespeichert – wirkt auf den nächsten Lauf.';
+    setTimeout(function(){ m.textContent = ''; }, 4000);
+    refresh();
+  });
+}
+function ordnerZuruecksetzen(){
+  el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');
 }
 
 /* ---------- Assistenten ---------- */

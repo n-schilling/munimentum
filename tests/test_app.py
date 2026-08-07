@@ -102,6 +102,26 @@ def test_save_config_roundtrip(sandbox):
     assert not (sandbox / "app_config.json.tmp").exists()   # atomarer Tausch
 
 
+def test_skip_folders_default_ist_mit_outlook_export_deckungsgleich():
+    """app.py spiegelt die Liste, statt outlook_export zu importieren (das Modul
+    bricht ohne msal/requests ab). Damit die Kopie nicht wegdriftet, hält dieser
+    Test beide zusammen."""
+    import outlook_export
+    assert app_mod.SKIP_FOLDERS_DEFAULT == outlook_export.BUILTIN_SKIP_FOLDERS
+
+
+@pytest.mark.parametrize("eingabe,erwartet", [
+    (["Archiv", "archiv", " Drafts "], ["archiv", "drafts"]),
+    ("Archiv, Drafts", ["archiv", "drafts"]),
+    ("Archiv\nDrafts\n\n", ["archiv", "drafts"]),      # Textfeld mit Zeilen
+    ([], []),
+    (None, []),
+    ("  ,  ", []),
+])
+def test_clean_folders(eingabe, erwartet):
+    assert app_mod._clean_folders(eingabe) == erwartet
+
+
 def test_clean_categories_filtert_und_sortiert():
     erlaubt = ["mail", "calendar", "contacts"]
     assert app_mod._clean_categories(["CONTACTS", "mail", "quatsch"], erlaubt) \
@@ -334,6 +354,47 @@ def test_build_steps_ohne_token_setzt_keine_variable(sandbox):
 
 def test_build_steps_leere_auswahl(sandbox):
     assert app_mod.build_steps(app_mod.load_config()) == []
+
+
+def test_build_steps_reicht_die_schalter_durch(sandbox):
+    """Alles, was in der Oberfläche steht, muss auch beim Skript ankommen –
+    sonst ändert ein Klick nur die Datei und nicht den Lauf."""
+    cfg = app_mod.load_config()
+    cfg.update(embed_images=False, cache_images=False, refresh_channels=False,
+               skip_empty_chats=False, include_hidden=True,
+               skip_folders=["archiv", "drafts"], workers=2, index_batch=8)
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        cfg, outlook=True, teams=True, index=True, token="t")}
+
+    o = steps["outlook"]["env"]
+    assert o["INCLUDE_HIDDEN"] == "1" and o["SKIP_FOLDERS"] == "archiv,drafts"
+    assert o["EXPORT_WORKERS"] == "2"
+
+    t = steps["teams"]["env"]
+    assert t["EMBED_IMAGES"] == "0" and t["CACHE_IMAGES"] == "0"
+    assert t["REFRESH_CHANNELS"] == "0" and t["SKIP_EMPTY_CHATS"] == "0"
+
+    argv = steps["index"]["argv"]
+    assert argv[argv.index("--batch") + 1] == "8"
+
+
+def test_build_steps_leere_ordnerliste_wird_gesetzt(sandbox):
+    """Leer heißt "nichts auslassen". Die Variable muss trotzdem gesetzt sein –
+    nicht gesetzt hieße für outlook_export.py "nimm deine Vorgabe"."""
+    cfg = app_mod.load_config()
+    cfg["skip_folders"] = []
+    env = app_mod.build_steps(cfg, outlook=True, token="t")[0]["env"]
+    assert env["SKIP_FOLDERS"] == "" and "SKIP_FOLDERS" in env
+
+
+def test_build_steps_vorgaben_schalten_nichts_ab(sandbox):
+    cfg = app_mod.load_config()
+    steps = {s["key"]: s for s in app_mod.build_steps(cfg, outlook=True, teams=True,
+                                                      token="t")}
+    assert steps["teams"]["env"]["EMBED_IMAGES"] == "1"
+    assert steps["outlook"]["env"]["INCLUDE_HIDDEN"] == "0"
+    assert steps["outlook"]["env"]["SKIP_FOLDERS"].split(",") \
+        == sorted(app_mod.SKIP_FOLDERS_DEFAULT)
 
 
 def test_build_steps_kalender(sandbox):
@@ -1014,6 +1075,45 @@ def test_http_config_speichern(server, sandbox):
     assert r["config"]["mcp_port"] == app_mod.DEFAULT_CONFIG["mcp_port"]   # unverändert
     assert "unbekannt" not in r["config"]
     assert app_mod.load_config()["workers"] == 2                          # persistiert
+
+
+def test_http_config_schalter_und_ordner(server, sandbox):
+    a, port = server
+    code, r = call(port, "POST", "/api/config",
+                   {"embed_images": False, "include_hidden": True,
+                    "skip_folders": "Archiv\nDrafts", "index_batch": 16})
+    assert code == 200
+    cfg = r["config"]
+    assert cfg["embed_images"] is False and cfg["include_hidden"] is True
+    assert cfg["skip_folders"] == ["archiv", "drafts"]
+    assert cfg["index_batch"] == 16
+    assert app_mod.load_config()["skip_folders"] == ["archiv", "drafts"]
+
+
+@pytest.mark.parametrize("key,eingabe,erwartet", [
+    ("workers", 99, 8),          # Graph erlaubt 4 gleichzeitig, mehr ist Drosselung
+    ("workers", 0, 1),
+    ("mcp_port", 80, 1024),      # privilegierte Ports gehören nicht dazu
+    ("mcp_port", 99999, 65535),
+    ("index_batch", 9999, 512),
+    ("index_batch", -3, 1),
+])
+def test_http_config_begrenzt_zahlen(server, key, eingabe, erwartet):
+    """Eine vertippte Zahl darf den nächsten Lauf nicht lahmlegen."""
+    code, r = call(server[1], "POST", "/api/config", {key: eingabe})
+    assert r["config"][key] == erwartet
+
+
+def test_http_config_ignoriert_unsinnige_zahlen(server):
+    vorher = call(server[1], "GET", "/api/status")[1]["config"]["workers"]
+    r = call(server[1], "POST", "/api/config", {"workers": "vier"})[1]
+    assert r["config"]["workers"] == vorher
+
+
+def test_status_nennt_die_ordner_vorgabe(server):
+    """Der Zurücksetzen-Knopf in der Oberfläche füllt sich daraus."""
+    s = call(server[1], "GET", "/api/status")[1]
+    assert s["skip_folders_default"] == sorted(app_mod.SKIP_FOLDERS_DEFAULT)
 
 
 def test_http_zeitplan_speichern(server, sandbox):
