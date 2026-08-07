@@ -90,7 +90,14 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: Microsoft365-Archiv-${{ matrix.ziel }}
+          # Bewusst NICHT wie die Datei darin benannt. GitHub packt jedes
+          # Artefakt noch einmal in ein ZIP; hießen beide gleich, wollte das
+          # Archivierungsprogramm beim Doppelklick eine Datei neben das Archiv
+          # legen, die genau so heißt wie das Archiv selbst. Heraus kommt dann
+          # "… 2.zip" statt der App – das sieht nach kaputtem Download aus.
+          # Die Namen der Release-Dateien ändert das nicht: die stammen aus den
+          # Dateien im Artefakt, nicht aus dessen Namen.
+          name: bundle-${{ matrix.ziel }}
           path: |
             Microsoft365-Archiv-${{ matrix.ziel }}.zip
             Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz
