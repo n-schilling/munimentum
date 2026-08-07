@@ -13,6 +13,16 @@ msal==1.37.0            # Graph-Login (Device-Code-Flow)
 numpy==2.4.6            # Embedding-Matrix für semantische/hybride Suche
 requests==2.34.2        # Graph-REST-Aufrufe und Ollama
 
+# cryptography kommt nur mittelbar herein (msal -> PyJWT[crypto]) und wird hier
+# kaum gebraucht: die App meldet sich nicht an, sie arbeitet mit eingefügtem
+# Token. Ab Version 49 gibt es aber keine macOS-x86_64-Räder mehr. pip baut
+# dort dann aus dem Quelltext und bindet dynamisch gegen das OpenSSL des
+# Build-Rechners; PyInstaller legt eine andere libssl ins Bündel, und die
+# fertige App stirbt beim Start mit "Symbol not found: _SSL_get0_group_name".
+# 48.0.1 ist die letzte Version mit universal2-Rad – nur für diesen einen Fall
+# festgehalten, alle anderen Plattformen bleiben frei.
+cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"
+
 # numpy bleibt bewusst auf 2.4.x: ab 2.5.0 ist Python >= 3.12 Pflicht, das
 # README nennt aber 3.11 als Untergrenze. "Neueste Version" heißt hier neueste,
 # die 3.11 noch unterstützt. Erst zusammen mit der 3.11-Zeile in

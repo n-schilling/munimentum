@@ -88,7 +88,7 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: tar -czf "Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz" -C dist "Microsoft365-Archiv"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           # Bewusst NICHT wie die Datei darin benannt. GitHub packt jedes
           # Artefakt noch einmal in ein ZIP; hießen beide gleich, wollte das
@@ -114,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: pakete
           merge-multiple: true
