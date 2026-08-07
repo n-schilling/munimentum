@@ -32,6 +32,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Windows-Konsolen nutzen eine Legacy-Codepage (cp1252); "→" in der Fortschritts-
+# ausgabe lässt print() dort sonst mit UnicodeEncodeError sterben – und zwar
+# bevor auch nur ein einziger Prüfschritt gelaufen ist. Dieselbe Umstellung wie
+# in allen anderen Skripten des Projekts (auf macOS/Linux ein No-op).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 TEAMS_HTML = """<html><body>
 <h1>Projekt Alpha</h1>
 <div class="msg">
