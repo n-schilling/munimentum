@@ -3130,10 +3130,14 @@ function modalKopf(titel, kind){
     '<button class="modal-zu" title="' + zu + '" aria-label="' + zu + '" ' +
     'onclick="closeWizard(&quot;' + kind + '&quot;)">&times;</button></div>';
 }
+/* Der sekundäre Knopf darf fehlen. Ein „Später“, das nichts anderes tut als
+   das Kreuz darüber, ist keine zweite Möglichkeit – nur derselbe Ausgang
+   zweimal, und der Blick muss ihn zweimal prüfen. */
 function modalFuss(primaer, sekundaer, anhang){
   return '<div class="row modal-fuss">' +
     '<button class="act" onclick="' + primaer.tun + '">' + esc(primaer.text) + '</button>' +
-    '<button class="ghost" onclick="' + sekundaer.tun + '">' + esc(sekundaer.text) + '</button>' +
+    (sekundaer ? '<button class="ghost" onclick="' + sekundaer.tun + '">' +
+                 esc(sekundaer.text) + '</button>' : '') +
     (anhang || '') + '</div>';
 }
 
@@ -3180,8 +3184,7 @@ function tokenWizard(){
     '<li>' + t('wizard.token.step2') + '</li>' +
     '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
-    modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'},
-              {text: t('wizard.later'), tun: 'closeWizard(&quot;token&quot;)'},
+    modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'}, null,
               '<span class="small muted" id="tok-msg"></span>') +
     '<p class="small muted" style="margin-top:14px">' + t('wizard.token.privacy') + '</p>';
 }
@@ -3210,7 +3213,7 @@ function ollamaWizard(){
       banner('', '<span class="ok">✓</span> ' + t('wizard.ollama.ready', {model: esc(o.model)})) +
       modalFuss({text: t('wizard.ollama.reindex'),
                  tun: 'closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))'},
-                {text: t('wizard.later'), tun: 'closeWizard(&quot;ollama&quot;)'});
+                null);
   }
 
   var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc(o.model)})

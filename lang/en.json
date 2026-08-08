@@ -184,7 +184,6 @@
   "wizard.token.scopes.query": "appears after running",
   "wizard.token.scopes.note": "That tab only lists permissions for the request currently in the address bar. If one is not offered, put the matching query in there, run it, and look again.",
   "wizard.token.save": "Save access",
-  "wizard.later": "Later",
   "wizard.token.privacy": "The key stays on this computer — in the file <code>gx_token.txt</code>, readable only by you — and goes to nobody but Microsoft.",
   "wizard.ollama.title": "Set up Ollama (optional)",
   "wizard.ollama.intro": "Ollama computes the embeddings for semantic search. Everything runs locally, nothing leaves your machine.",

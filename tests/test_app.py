@@ -2464,6 +2464,10 @@ def test_berechtigungen_sind_eingeklappt_solange_sie_nicht_fehlen():
 # waehrend die eigentliche Handlung blass daneben stand.
 PRUEFUNG_MODALE = GRUNDZUSTAND + """
 function zaehle(html, muster){ return html.split(muster).length - 1; }
+// Tut der Knopf mehr, als den Dialog zu schliessen?
+function handelt(knopf){
+  return knopf.onclickCode.replace(/closeWizard\\([^)]*\\);?\\s*/g, '').length > 0;
+}
 
 // Alle drei Zustaende, die es gibt.
 var faelle = [
@@ -2481,15 +2485,18 @@ faelle.forEach(function(f, i){
 
   pruefe(zaehle(html, 'class="modal-zu"') === 1, wo + 'kein oder mehrfaches Schliesskreuz');
   pruefe(zaehle(html, 'class="act"') === 1, wo + 'nicht genau ein primaerer Knopf');
-  pruefe(zaehle(html, 'class="ghost"') === 1, wo + 'nicht genau ein sekundaerer Knopf');
+  pruefe(zaehle(html, 'class="ghost"') <= 1, wo + 'mehr als ein sekundaerer Knopf');
 
-  // Der primaere Knopf steht vor dem sekundaeren - und ist keine Absage.
-  pruefe(html.indexOf('class="act"') < html.indexOf('class="ghost"'),
-         wo + 'sekundaerer Knopf steht vor dem primaeren');
-  // Der primaere Knopf muss etwas tun - Schliessen allein ist das Kreuz.
-  var act = modal.querySelector('button.act');
-  var rest = act.onclickCode.replace(/closeWizard\\([^)]*\\);?\\s*/g, '');
-  pruefe(rest.length > 0, wo + 'der primaere Knopf schliesst nur: ' + act.onclickCode);
+  // Es gibt genau einen Ausgang: das Kreuz. Jeder andere Knopf muss etwas tun -
+  // ein zweiter Knopf, der nur schliesst, ist derselbe Ausgang zweimal.
+  modal.querySelectorAll('button.act, button.ghost').forEach(function(k){
+    pruefe(handelt(k), wo + 'Knopf schliesst nur: "' + k.onclickCode + '"');
+  });
+
+  // Und wo es einen sekundaeren gibt, steht der primaere davor.
+  if(zaehle(html, 'class="ghost"'))
+    pruefe(html.indexOf('class="act"') < html.indexOf('class="ghost"'),
+           wo + 'sekundaerer Knopf steht vor dem primaeren');
 });
 console.log('OK');
 """

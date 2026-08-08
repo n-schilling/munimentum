@@ -184,7 +184,6 @@
   "wizard.token.scopes.query": "visible après la requête",
   "wizard.token.scopes.note": "Cet onglet ne liste que les autorisations liées à la requête actuellement dans la barre d’adresse. Si l’une n’est pas proposée, saisissez-y la requête correspondante, exécutez-la et regardez de nouveau.",
   "wizard.token.save": "Enregistrer l’accès",
-  "wizard.later": "Plus tard",
   "wizard.token.privacy": "La clé reste sur cet ordinateur — dans le fichier <code>gx_token.txt</code>, lisible par vous seul — et ne va à personne d’autre que Microsoft.",
   "wizard.ollama.title": "Installer Ollama (facultatif)",
   "wizard.ollama.intro": "Ollama calcule les embeddings de la recherche sémantique. Tout s’exécute en local, rien ne quitte votre machine.",

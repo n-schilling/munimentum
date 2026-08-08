@@ -184,7 +184,6 @@
   "wizard.token.scopes.query": "sichtbar nach der Abfrage",
   "wizard.token.scopes.note": "Der Reiter zeigt nur Berechtigungen zu der Abfrage, die gerade oben in der Adresszeile steht. Wird eine nicht angeboten, die zugehörige Abfrage dort einsetzen, ausführen und erneut nachsehen.",
   "wizard.token.save": "Zugang speichern",
-  "wizard.later": "Später",
   "wizard.token.privacy": "Der Schlüssel bleibt auf diesem Rechner – in der Datei <code>gx_token.txt</code>, nur für dich lesbar – und geht an niemanden außer Microsoft.",
   "wizard.ollama.title": "Ollama einrichten (optional)",
   "wizard.ollama.intro": "Ollama berechnet die Embeddings für die semantische Suche. Alles läuft lokal, nichts verlässt den Rechner.",
