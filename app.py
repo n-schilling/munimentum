@@ -1811,7 +1811,8 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px}
 .answer .ahead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   font-size:12px;color:var(--muted);margin-bottom:8px}
-.answer .ahead .tag{background:var(--code);border-radius:5px;padding:1px 7px}
+.answer .ahead .tag{background:var(--accent);color:#fff;border-radius:5px;
+  padding:1px 8px;font-weight:700;letter-spacing:.04em}
 .answer .atext{white-space:pre-wrap;overflow-wrap:anywhere}
 .answer .atext a{color:var(--accent);text-decoration:none;font-weight:600}
 .answer .afoot{font-size:12px;color:var(--muted);margin-top:10px;
@@ -2644,8 +2645,13 @@ function abbrechenKI(){
   markiereZitate([]);
 }
 function kiKopf(modell, laufend){
-  return '<div class="ahead"><span class="tag">' + esc(t('search.ai.label')) + '</span>' +
-    '<span>' + esc(modell || '') + '</span>' +
+  // Der Kasten steht über den Treffern – die Kopfzeile muss deshalb in einem
+  // Satz sagen, dass hier eine KI schreibt, dass sie über Ollama auf diesem
+  // Rechner läuft und dass sie sich auf die Treffer darunter stützt.
+  return '<div class="ahead">' +
+    '<span class="tag">' + esc(t('search.ai.tag')) + '</span>' +
+    '<span>' + esc(t('search.ai.label')) + '</span>' +
+    (modell ? '<code class="small">' + esc(t('search.ai.model', {model: modell})) + '</code>' : '') +
     (laufend ? '<button class="ghost" style="margin-left:auto;padding:3px 10px" ' +
                'onclick="abbrechenKI()">' + esc(t('search.ai.stop')) + '</button>' : '') +
     '</div>';

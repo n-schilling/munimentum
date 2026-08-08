@@ -156,6 +156,27 @@ def test_uebersetzungen_sind_nicht_bloss_kopiert():
         assert fr[k] != de[k], f"{k} ist im Französischen unverändert"
 
 
+def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
+    """Der Kasten steht ÜBER den Treffern. Er muss deshalb in jeder Sprache
+    sagen, dass hier eine KI schreibt, dass sie in Ollama auf diesem Rechner
+    läuft und dass sie sich auf die Treffer darunter stützt – "lokal erzeugt"
+    allein sagt keines der drei."""
+    for code in SPRACHEN:
+        d = roh(code)
+        for k in ("search.ai", "search.ai.label", "search.ai.note",
+                  "settings.chat_model.hint"):
+            assert "llama" in d[k], f"{code}.json[{k}] nennt Ollama nicht"
+        kopf = d["search.ai.label"] + " " + d["search.ai.tag"]
+        assert re.search(r"\bKI\b|\bAI\b|\bIA\b", kopf), \
+            f"{code}.json: Kopfzeile kennzeichnet die KI nicht"
+        # Der Bezug auf die Treffer darunter – sonst wirkt die Zusammenfassung
+        # wie ein eigenständiges Ergebnis.
+        assert re.search(r"unten|below|ci-dessous", d["search.ai.label"]), \
+            f"{code}.json: Kopfzeile nennt den Bezug zu den Treffern nicht"
+        assert re.search(r"Claude", d["search.ai.note"]), \
+            f"{code}.json: Fußnote ordnet die Qualität nicht ein"
+
+
 # --------------------------------------------------------------------------
 # Abgleich mit app.py – die eigentliche Klammer
 # --------------------------------------------------------------------------
