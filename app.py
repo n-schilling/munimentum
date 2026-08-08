@@ -1767,6 +1767,14 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;
   max-height:88vh;overflow:auto;padding:24px}
 .modal h2{margin:0 0 6px;font-size:18px}
+/* Alle Assistenten tragen denselben Rahmen: Titel mit Schließkreuz oben,
+   unten genau eine primäre und eine sekundäre Aktion. */
+.modal-kopf{display:flex;align-items:flex-start;gap:12px}
+.modal-kopf h2{flex:1}
+.modal-zu{flex:0 0 auto;border:0;background:transparent;color:var(--muted);
+  font-size:22px;line-height:1;padding:0 4px;cursor:pointer;border-radius:6px}
+.modal-zu:hover{color:var(--ink);background:var(--code)}
+.modal-fuss{margin-top:16px;align-items:center}
 ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 .banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
   border:1px solid var(--line)}
@@ -2200,7 +2208,7 @@ main{padding-bottom:60px}
   <div id="log"></div>
 </div>
 
-<div id="overlay"><div class="modal" id="modal"></div></div>
+<div id="overlay"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
 
 <script type="application/json" id="i18n">/*__I18N__*/</script>
 <script>
@@ -3053,25 +3061,82 @@ function wizardKennung(kind){
   return ['token', tk.present, tk.valid, tk.expired, tk.account,
           (tk.missing || []).join(','), (S.scopes_needed || []).join(',')].join('|');
 }
+/* ---------- Tastatur im Assistenten ----------
+   Ein modales Fenster nimmt die Seite in Beschlag; wer keine Maus benutzt, muss
+   trotzdem hinein, herum und wieder heraus. ESC schließt, Tab bleibt innerhalb
+   (sonst wandert der Fokus unsichtbar hinter die Abdeckung), und beim Schließen
+   geht er dorthin zurück, wo er herkam. */
+var fokusVorher = null;
+
+function fokussierbare(){
+  return [].slice.call(el('modal').querySelectorAll(
+    'button, [href], textarea, input, select, summary, [tabindex]:not([tabindex="-1"])'));
+}
+function modalTaste(e){
+  if(!wizardOffen) return;
+  if(e.key === 'Escape'){ e.preventDefault(); closeWizard(wizardOffen); return; }
+  // Strg/Cmd+Enter im Textfeld: speichern, ohne zum Knopf tabben zu müssen.
+  if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)){
+    var act = el('modal').querySelector('button.act');
+    if(act){ e.preventDefault(); act.click(); }
+    return;
+  }
+  if(e.key !== 'Tab') return;
+  var liste = fokussierbare();
+  if(!liste.length) return;
+  var erster = liste[0], letzter = liste[liste.length - 1];
+  if(e.shiftKey && document.activeElement === erster){ e.preventDefault(); letzter.focus(); }
+  else if(!e.shiftKey && document.activeElement === letzter){ e.preventDefault(); erster.focus(); }
+}
+document.addEventListener('keydown', modalTaste);
+
 function openWizard(kind, neuZeichnen){
   var kennung = wizardKennung(kind);
   if(wizardOffen === kind && wizardStand === kennung && !neuZeichnen) return;
   var feld = document.getElementById('tok');       // bereits Eingefügtes retten
   var eingabe = feld ? feld.value : '';
+  var warOffen = !!wizardOffen;
+  if(!warOffen) fokusVorher = document.activeElement;
   el('modal').innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
   var neu = document.getElementById('tok');
   if(neu && eingabe) neu.value = eingabe;
   el('overlay').classList.add('on');
   wizardOffen = kind;
   wizardStand = kennung;
+  // Beim Öffnen in den Dialog springen – aber nicht bei jedem Neuzeichnen,
+  // sonst risse es einem den Fokus mitten aus dem Textfeld.
+  if(!warOffen){
+    var ziel = document.getElementById('tok') || el('modal').querySelector('button.act');
+    if(ziel && ziel.focus) ziel.focus();
+  }
 }
 function closeWizard(kind){
   dismissed[kind] = true;
   el('overlay').classList.remove('on');
   wizardOffen = null;
   wizardStand = null;
+  if(fokusVorher && fokusVorher.focus) fokusVorher.focus();
+  fokusVorher = null;
   post('/api/wizard-seen');
 }
+/* Rahmen für alle Assistenten. Vorher hatte jeder eine andere Knopfzahl – zwei,
+   drei, und im Ollama-Fenster war ausgerechnet „Schließen“ der primäre Knopf,
+   während die eigentliche Aktion daneben blass stand. Jetzt gilt überall:
+   Kreuz oben rechts zum Schließen, unten links die Aktion, daneben die
+   Ausweichmöglichkeit. */
+function modalKopf(titel, kind){
+  var zu = esc(t('wizard.close'));
+  return '<div class="modal-kopf"><h2>' + esc(titel) + '</h2>' +
+    '<button class="modal-zu" title="' + zu + '" aria-label="' + zu + '" ' +
+    'onclick="closeWizard(&quot;' + kind + '&quot;)">&times;</button></div>';
+}
+function modalFuss(primaer, sekundaer, anhang){
+  return '<div class="row modal-fuss">' +
+    '<button class="act" onclick="' + primaer.tun + '">' + esc(primaer.text) + '</button>' +
+    '<button class="ghost" onclick="' + sekundaer.tun + '">' + esc(sekundaer.text) + '</button>' +
+    (anhang || '') + '</div>';
+}
+
 function scopeListe(){
   var q = S.scope_queries || {};
   return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(x){
@@ -3108,17 +3173,16 @@ function tokenWizard(){
     head = banner('', '<span class="ok">✓</span> ' + t(k, {who: esc(tk.account || ''),
                                                           rest: restzeit(tk.expires_in_minutes)}));
   }
-  return '<h2>' + esc(t('wizard.token.title')) + '</h2>' +
+  return modalKopf(t('wizard.token.title'), 'token') +
     '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
     rechteBlock(fehlen) +
     '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
     '<li>' + t('wizard.token.step2') + '</li>' +
     '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
-    '<div class="row" style="margin-top:12px">' +
-    '<button class="act" onclick="saveToken()">' + esc(t('wizard.token.save')) + '</button>' +
-    '<button class="ghost" onclick="closeWizard(\'token\')">' + esc(t('wizard.later')) + '</button>' +
-    '<span class="small muted" id="tok-msg"></span></div>' +
+    modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'},
+              {text: t('wizard.later'), tun: 'closeWizard(&quot;token&quot;)'},
+              '<span class="small muted" id="tok-msg"></span>') +
     '<p class="small muted" style="margin-top:14px">' + t('wizard.token.privacy') + '</p>';
 }
 function banner(art, html){
@@ -3140,12 +3204,13 @@ function ollamaWizard(){
   // Alles da – das kann passieren, während der Assistent offen steht und
   // nebenher "ollama pull" durchläuft. Dann bestätigen statt weiter mahnen.
   if(o.running && o.has_model){
-    return '<h2>' + esc(t('wizard.ollama.ready.title')) + '</h2>' +
+    // Das Neuindizieren ist hier die Handlung, für die das Fenster überhaupt
+    // aufgeht – es steht vorn, nicht mehr blass neben „Schließen“.
+    return modalKopf(t('wizard.ollama.ready.title'), 'ollama') +
       banner('', '<span class="ok">✓</span> ' + t('wizard.ollama.ready', {model: esc(o.model)})) +
-      '<div class="row" style="margin-top:12px">' +
-      '<button class="act" onclick="closeWizard(&quot;ollama&quot;)">' + esc(t('wizard.ollama.close')) + '</button>' +
-      '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))">' +
-      esc(t('wizard.ollama.reindex')) + '</button></div>';
+      modalFuss({text: t('wizard.ollama.reindex'),
+                 tun: 'closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))'},
+                {text: t('wizard.later'), tun: 'closeWizard(&quot;ollama&quot;)'});
   }
 
   var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc(o.model)})
@@ -3153,16 +3218,17 @@ function ollamaWizard(){
   var steps = o.running
     ? [t('wizard.ollama.pull', {model: esc(o.model)}), esc(t('wizard.ollama.wait'))]
     : (h.steps || []).map(function(k){ return t(k, {url: esc(h.url || '')}); });
-  return '<h2>' + esc(t('wizard.ollama.title')) + '</h2>' +
+  return modalKopf(t('wizard.ollama.title'), 'ollama') +
     '<p class="muted small">' + esc(t('wizard.ollama.intro')) + '</p>' + head +
     '<ol>' + steps.map(function(x){ return '<li>' + x + '</li>'; }).join('') + '</ol>' +
     (h.pkg && !o.running ? '<p class="small muted">' + esc(t('wizard.ollama.pkg')) +
                            '</p><pre>' + esc(h.pkg) + '</pre>' : '') +
-    '<div class="row" style="margin-top:12px">' +
-    '<button class="act" onclick="recheckOllama()">' + esc(t('wizard.ollama.recheck')) + '</button>' +
-    '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;); run({index:true, embeddings:false}, t(&quot;job.index.lexical&quot;))">' +
-    esc(t('wizard.ollama.without')) + '</button>' +
-    '<button class="ghost" onclick="closeWizard(&quot;ollama&quot;)">' + esc(t('wizard.later')) + '</button></div>' +
+    // „Später“ ist hier weggefallen: das Kreuz oben tut dasselbe, und der
+    // Ausweg ohne Ollama ist die Entscheidung, die wirklich ansteht.
+    modalFuss({text: t('wizard.ollama.recheck'), tun: 'recheckOllama()'},
+              {text: t('wizard.ollama.without'),
+               tun: 'closeWizard(&quot;ollama&quot;); run({index:true, embeddings:false}, ' +
+                    't(&quot;job.index.lexical&quot;))'}) +
     '<p class="small muted" style="margin-top:14px">' + esc(t('wizard.ollama.without.note')) + '</p>';
 }
 function recheckOllama(){

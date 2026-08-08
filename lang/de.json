@@ -198,7 +198,7 @@
   "wizard.ollama.without.note": "„Ohne Ollama fortfahren“ baut einen reinen Volltextindex (BM25). Suche und MCP funktionieren damit sofort; die semantische Hälfte lässt sich später jederzeit nachbauen.",
   "wizard.ollama.ready.title": "Ollama ist bereit",
   "wizard.ollama.ready": "Ollama läuft, das Modell <code>{model}</code> ist da. Der nächste Index bekommt Embeddings, die Suche wird hybrid.",
-  "wizard.ollama.close": "Schließen",
+  "wizard.close": "Schließen",
   "wizard.ollama.reindex": "Jetzt neu indizieren",
   "wizard.ollama.step.mac1": "Ollama von {url} laden und in „Programme“ ziehen",
   "wizard.ollama.step.mac2": "Ollama einmal starten (Symbol in der Menüleiste)",

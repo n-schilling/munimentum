@@ -1760,6 +1760,7 @@ function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', 
   classList: {add: function(){}, remove: function(){}, toggle: function(){}},
   appendChild: function(){}, removeChild: function(){}, firstChild: null,
   addEventListener: function(){}, scrollIntoView: function(){},
+  focus: function(){ global.document.activeElement = this; },
   querySelector: function(){ return null; },
   querySelectorAll: function(){ return []; }}; }
 
@@ -1777,9 +1778,53 @@ var modal = {
 };
 knoten['modal'] = modal;
 
+// Der Assistent baut sein Inneres als HTML-Zeichenkette. Fuer Tastatur und
+// Fokus braucht es daraus echte Knoten - sonst koennte kein Test zeigen, dass
+// ESC schliesst oder Tab im Fenster bleibt. Gemerkt je Zeichenkette, damit
+// zwei Abfragen dieselben Objekte liefern (im Browser ist es derselbe Knoten;
+// ohne das schluege jeder Vergleich mit activeElement fehl).
+var knotenCache = {};
+function ausHtml(html){
+  if(knotenCache[html]) return knotenCache[html];
+  var out = [], re = /<(button|textarea|a|summary|input|select)\\b([^>]*)>/g, m;
+  while((m = re.exec(html))){
+    (function(tag, attr){
+      function A(name){
+        var tr = new RegExp(name + '="([^"]*)"').exec(attr);
+        return tr ? tr[1].replace(/&quot;/g, '"').replace(/&amp;/g, '&') : '';
+      }
+      out.push({tag: tag, className: A('class'), id: A('id'), href: A('href'),
+                onclickCode: A('onclick'),
+                focus: function(){ global.document.activeElement = this; },
+                click: function(){ (0, eval)(this.onclickCode); }});
+    })(m[1], m[2]);
+  }
+  knotenCache[html] = out;
+  return out;
+}
+function passt(n, sel){
+  sel = sel.trim();
+  if(sel === '[href]') return n.tag === 'a' && !!n.href;
+  if(sel.indexOf('[tabindex]') === 0) return false;
+  var teile = sel.split('.'), tag = teile.shift();
+  if(tag && n.tag !== tag) return false;
+  return teile.every(function(c){ return (' ' + n.className + ' ').indexOf(' ' + c + ' ') >= 0; });
+}
+modal.querySelectorAll = function(sel){
+  var teile = String(sel).split(',');
+  return ausHtml(modalRoh.innerHTML).filter(function(n){
+    return teile.some(function(s){ return passt(n, s); });
+  });
+};
+modal.querySelector = function(sel){ return modal.querySelectorAll(sel)[0] || null; };
+
 global.document = {
   documentElement: {},
   title: '',
+  activeElement: null,
+  // Die Seite haengt ihre Tastaturbehandlung hier ein; `taste()` loest sie aus.
+  handler: {},
+  addEventListener: function(art, fn){ (this.handler[art] = this.handler[art] || []).push(fn); },
   getElementById: function(id){
     // Die Seite liest ihre Texte aus diesem eingebetteten JSON-Block.
     if(id === 'i18n') return {textContent: global.I18N_ROH};
@@ -1806,6 +1851,14 @@ global.document = {
   },
   querySelectorAll: function(){ return []; },
   createElement: function(){ return mk('x'); },
+};
+// Einen Tastendruck ausloesen - wie im Browser, samt preventDefault.
+global.taste = function(key, opt){
+  var e = Object.assign({key: key, shiftKey: false, metaKey: false, ctrlKey: false,
+                         verhindert: false}, opt || {});
+  e.preventDefault = function(){ e.verhindert = true; };
+  (global.document.handler.keydown || []).forEach(function(fn){ fn(e); });
+  return e;
 };
 global.aktiverTab = 'export';
 global.vorhanden = {'.rbcount': mk('rbcount'), 'main': mk('main'),
@@ -2404,6 +2457,96 @@ console.log('OK');
 
 def test_berechtigungen_sind_eingeklappt_solange_sie_nicht_fehlen():
     _in_node(PRUEFUNG_RECHTE)
+
+
+# Vorher hatte jeder Assistent eine andere Knopfzahl - zwei, drei -, und im
+# fertigen Ollama-Fenster war ausgerechnet "Schliessen" der primaere Knopf,
+# waehrend die eigentliche Handlung blass daneben stand.
+PRUEFUNG_MODALE = GRUNDZUSTAND + """
+function zaehle(html, muster){ return html.split(muster).length - 1; }
+
+// Alle drei Zustaende, die es gibt.
+var faelle = [
+  ['token',  function(){ S.token.present = false; }],
+  ['ollama', function(){ S.ollama.running = true; S.ollama.has_model = false; }],
+  ['ollama', function(){ S.ollama.running = true; S.ollama.has_model = true; }]
+];
+faelle.forEach(function(f, i){
+  S.token = {present: true, valid: true, expired: false, missing: [],
+             account: 'a@example.com', expires_in_minutes: 620};
+  f[1]();
+  closeWizard(f[0]);
+  openWizard(f[0]);
+  var html = modal.innerHTML, wo = 'Fall ' + i + ': ';
+
+  pruefe(zaehle(html, 'class="modal-zu"') === 1, wo + 'kein oder mehrfaches Schliesskreuz');
+  pruefe(zaehle(html, 'class="act"') === 1, wo + 'nicht genau ein primaerer Knopf');
+  pruefe(zaehle(html, 'class="ghost"') === 1, wo + 'nicht genau ein sekundaerer Knopf');
+
+  // Der primaere Knopf steht vor dem sekundaeren - und ist keine Absage.
+  pruefe(html.indexOf('class="act"') < html.indexOf('class="ghost"'),
+         wo + 'sekundaerer Knopf steht vor dem primaeren');
+  // Der primaere Knopf muss etwas tun - Schliessen allein ist das Kreuz.
+  var act = modal.querySelector('button.act');
+  var rest = act.onclickCode.replace(/closeWizard\\([^)]*\\);?\\s*/g, '');
+  pruefe(rest.length > 0, wo + 'der primaere Knopf schliesst nur: ' + act.onclickCode);
+});
+console.log('OK');
+"""
+
+
+def test_alle_assistenten_tragen_dieselben_knoepfe():
+    _in_node(PRUEFUNG_MODALE)
+
+
+# Ein modales Fenster nimmt die Seite in Beschlag. Wer keine Maus benutzt, muss
+# trotzdem hinein, herum und wieder heraus.
+PRUEFUNG_TASTATUR = GRUNDZUSTAND + """
+var ausloeser = {focus: function(){ document.activeElement = this; }, name: 'Kachel'};
+document.activeElement = ausloeser;
+
+S.token.present = false;
+openWizard('token');
+pruefe(document.activeElement !== ausloeser, 'Fokus blieb ausserhalb des Dialogs');
+pruefe(document.activeElement.id === 'tok', 'Fokus nicht im Textfeld');
+
+// Neuzeichnen darf den Fokus nicht aus dem Textfeld reissen.
+var drin = document.activeElement;
+S.token.missing = ['Mail.Read'];
+openWizard('token');
+pruefe(document.activeElement === drin, 'Neuzeichnen riss den Fokus weg');
+
+// Tab am Ende springt an den Anfang, Shift+Tab am Anfang ans Ende.
+var liste = modal.querySelectorAll(
+  'button, [href], textarea, input, select, summary, [tabindex]:not([tabindex="-1"])');
+pruefe(liste.length >= 4, 'Zu wenige fokussierbare Elemente: ' + liste.length);
+liste[liste.length - 1].focus();
+pruefe(taste('Tab').verhindert, 'Tab am Ende nicht abgefangen');
+pruefe(document.activeElement === liste[0], 'Tab am Ende verliess den Dialog');
+pruefe(taste('Tab', {shiftKey: true}).verhindert, 'Shift+Tab am Anfang nicht abgefangen');
+pruefe(document.activeElement === liste[liste.length - 1], 'Shift+Tab verliess den Dialog');
+
+// Strg+Enter loest die primaere Handlung aus, ohne dorthin tabben zu muessen.
+global.gespeichert = false;
+global.saveToken = function(){ global.gespeichert = true; };
+taste('Enter', {ctrlKey: true});
+pruefe(global.gespeichert === true, 'Strg+Enter speicherte nicht');
+
+// ESC schliesst - und gibt den Fokus zurueck, wo er herkam.
+pruefe(taste('Escape').verhindert, 'ESC nicht abgefangen');
+pruefe(wizardOffen === null, 'ESC schloss den Dialog nicht');
+pruefe(document.activeElement === ausloeser, 'Fokus kam nicht zurueck');
+
+// Ist keiner offen, darf ESC nichts anfassen.
+document.activeElement = ausloeser;
+taste('Escape');
+pruefe(document.activeElement === ausloeser, 'ESC wirkte ohne offenen Dialog');
+console.log('OK');
+"""
+
+
+def test_assistent_ist_mit_der_tastatur_bedienbar():
+    _in_node(PRUEFUNG_TASTATUR)
 
 
 def test_adressbuch_und_rekonstruierte_termine_zeichnen():
