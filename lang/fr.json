@@ -17,12 +17,10 @@
   "pill.index.none": "Aucun index",
   "pill.mcp.on": "MCP actif",
   "pill.mcp.off": "MCP arrêté",
-  "nav.export": "Export",
-  "nav.search": "Recherche",
+  "nav.export": "Exporter les données",
+  "nav.search": "Rechercher",
   "nav.calendar": "Calendrier",
   "nav.book": "Contacts",
-  "nav.schedule": "Planification",
-  "nav.mcp": "MCP et Claude",
   "nav.settings": "Paramètres",
   "export.what": "Que faut-il exporter ?",
   "export.what.sub": "La sélection est enregistrée et vaut aussi pour la planification. Chaque exécution ne récupère que les nouveautés — une deuxième est rapide.",
@@ -303,5 +301,6 @@
   "srv.answer.noquery": "Sans terme de recherche, il n’y a rien à répondre.",
   "srv.answer.nohits": "Aucun résultat à résumer.",
   "search.ai.tag": "IA",
-  "search.ai.model": "Modèle : {model}"
+  "search.ai.model": "Modèle : {model}",
+  "view.hits": "Résultats"
 }

@@ -1832,19 +1832,15 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <button class="pill" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Token</span></button>
     <button class="pill" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">Ollama</span></button>
     <button class="pill" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Index</span></button>
-    <button class="pill" onclick="tab('mcp')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">MCP</span></button>
+    <button class="pill" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">MCP</span></button>
     <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
             style="border-color:var(--err);color:var(--err)">Beenden</button>
   </div>
 </header>
 
 <nav>
-  <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Export</button>
-  <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Suche</button>
-  <button data-tab="kalender" onclick="tab('kalender')" data-i18n="nav.calendar">Kalender</button>
-  <button data-tab="adressbuch" onclick="tab('adressbuch')" data-i18n="nav.book">Adressbuch</button>
-  <button data-tab="zeitplan" onclick="tab('zeitplan')" data-i18n="nav.schedule">Zeitplan</button>
-  <button data-tab="mcp" onclick="tab('mcp')" data-i18n="nav.mcp">MCP &amp; Claude</button>
+  <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Daten exportieren</button>
+  <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Daten durchsuchen</button>
   <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
 </nav>
 
@@ -1883,6 +1879,13 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 </section>
 
 <section id="tab-suche" class="hide">
+  <div class="calbar" id="sichten" style="margin-bottom:14px">
+    <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
+    <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
+    <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
+  </div>
+
+  <div id="sicht-treffer">
   <div class="card">
     <h2 data-i18n="nav.search">Suche</h2>
     <p class="sub" id="search-sub"></p>
@@ -1907,9 +1910,9 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   <div class="answer hide" id="ai-box"></div>
   <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
-</section>
+  </div>
 
-<section id="tab-kalender" class="hide">
+  <div id="sicht-kalender" class="hide">
   <div class="card">
     <div class="calbar">
       <span class="chip on" data-mode="week" data-i18n="cal.week">Woche</span>
@@ -1931,9 +1934,9 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <p class="small muted" id="kalStats"></p>
     <div id="kalBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
   </div>
-</section>
+  </div>
 
-<section id="tab-adressbuch" class="hide">
+  <div id="sicht-adressbuch" class="hide">
   <div class="card">
     <div class="row">
       <input type="text" id="kbQ" data-i18n-ph="book.search.ph" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:240px">
@@ -1941,44 +1944,12 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     </div>
   </div>
   <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
-</section>
-
-<section id="tab-zeitplan" class="hide">
-  <div class="card">
-    <h2 data-i18n="sched.title">Regelmäßig exportieren</h2>
-    <p class="sub" data-i18n="sched.sub">Läuft nur, solange die App geöffnet ist.</p>
-    <label class="chk"><input type="checkbox" id="s-enabled"> <span data-i18n="sched.enabled">Zeitplan aktiv</span></label>
-    <div class="row" style="margin:10px 0">
-      <label class="small"><span data-i18n="sched.every">Alle</span> <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> <span data-i18n="sched.minutes">Minuten</span></label>
-    </div>
-    <label class="chk"><input type="checkbox" id="s-outlook"> <span data-i18n="sched.outlook">Outlook exportieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-teams"> <span data-i18n="sched.teams">Teams exportieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-index"> <span data-i18n="sched.index">Danach indizieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-calendar"> <span data-i18n="sched.calendar">Kalender &amp; Kontakte neu aufbauen</span></label>
-    <div class="row" style="margin-top:14px">
-      <button class="act" onclick="saveSchedule()" data-i18n="sched.save">Zeitplan speichern</button>
-      <span class="small muted" id="s-next"></span>
-    </div>
-    <div class="banner warn" style="margin-top:14px" data-i18n="sched.token.note">
-      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist.
-    </div>
   </div>
 </section>
 
-<section id="tab-mcp" class="hide">
-  <div class="card">
-    <h2 data-i18n="mcp.title">MCP-Server</h2>
-    <p class="sub" data-i18n="mcp.sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
-    <div class="row">
-      <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
-      <span class="small" id="mcp-state"></span>
-    </div>
-    <p class="small muted" style="margin-top:12px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
-    <pre id="mcp-json"></pre>
-    <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
-    <pre id="mcp-stdio"></pre>
-  </div>
-</section>
+
+
+
 <section id="tab-einstellungen" class="hide">
   <div class="card">
     <h2 data-i18n="settings.teams.title">Teams-Export</h2>
@@ -2061,6 +2032,39 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
       <a class="ghost" id="update-link" target="_blank" rel="noopener"
          style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
     </div>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="sched.title">Regelmäßig exportieren</h2>
+    <p class="sub" data-i18n="sched.sub">Läuft nur, solange die App geöffnet ist.</p>
+    <label class="chk"><input type="checkbox" id="s-enabled"> <span data-i18n="sched.enabled">Zeitplan aktiv</span></label>
+    <div class="row" style="margin:10px 0">
+      <label class="small"><span data-i18n="sched.every">Alle</span> <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> <span data-i18n="sched.minutes">Minuten</span></label>
+    </div>
+    <label class="chk"><input type="checkbox" id="s-outlook"> <span data-i18n="sched.outlook">Outlook exportieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-teams"> <span data-i18n="sched.teams">Teams exportieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-index"> <span data-i18n="sched.index">Danach indizieren</span></label>
+    <label class="chk"><input type="checkbox" id="s-calendar"> <span data-i18n="sched.calendar">Kalender &amp; Kontakte neu aufbauen</span></label>
+    <div class="row" style="margin-top:14px">
+      <button class="act" onclick="saveSchedule()" data-i18n="sched.save">Zeitplan speichern</button>
+      <span class="small muted" id="s-next"></span>
+    </div>
+    <div class="banner warn" style="margin-top:14px" data-i18n="sched.token.note">
+      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="mcp.title" id="mcp-karte">MCP-Server</h2>
+    <p class="sub" data-i18n="mcp.sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
+    <div class="row">
+      <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
+      <span class="small" id="mcp-state"></span>
+    </div>
+    <p class="small muted" style="margin-top:12px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
+    <pre id="mcp-json"></pre>
+    <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
+    <pre id="mcp-stdio"></pre>
   </div>
 
   <div class="card">
@@ -2153,13 +2157,39 @@ function esc(s){ return String(s == null ? '' : s)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function el(id){ return document.getElementById(id); }
 
+/* Drei Reiter, mehr braucht es nicht: Daten holen, Daten ansehen, einstellen.
+   Kalender und Adressbuch sind Sichten auf denselben Bestand wie die Suche und
+   liegen deshalb eine Ebene darunter; Zeitplan und MCP sind Einstellungen. */
+var REITER = ['export', 'suche', 'einstellungen'];
+var SICHTEN = ['treffer', 'kalender', 'adressbuch'];
+var offeneSicht = 'treffer';
+
 function tab(name){
-  ['export','suche','kalender','adressbuch','zeitplan','mcp','einstellungen'].forEach(function(t){
+  REITER.forEach(function(t){
     el('tab-' + t).classList.toggle('hide', t !== name);
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
   });
+  if(name === 'suche') sicht(offeneSicht);
+}
+
+function sicht(name){
+  offeneSicht = name;
+  SICHTEN.forEach(function(v){
+    el('sicht-' + v).classList.toggle('hide', v !== name);
+  });
+  document.querySelectorAll('#sichten .chip').forEach(function(c){
+    c.classList.toggle('on', c.dataset.sicht === name);
+  });
   // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
+}
+
+function zeigeEinstellung(anker){
+  // Die Kachel oben führt weiterhin direkt zu ihrem Thema – nur liegt das
+  // jetzt in den Einstellungen statt in einem eigenen Reiter.
+  tab('einstellungen');
+  var ziel = document.getElementById(anker);
+  if(ziel) ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
 /* ---------- Status ---------- */
@@ -2253,9 +2283,10 @@ function renderStatus(s){
   if(kalGeladen && kalStand && s.calendar && s.calendar.built_at &&
      s.calendar.built_at !== kalStand){
     kalGeladen = false; kalStand = null;
-    var offen = document.querySelector('nav [data-tab].on');
-    if(offen && (offen.dataset.tab === 'kalender' || offen.dataset.tab === 'adressbuch'))
-      ladeKalender(offen.dataset.tab);
+    var reiter = document.querySelector('nav [data-tab].on');
+    if(reiter && reiter.dataset.tab === 'suche' &&
+       (offeneSicht === 'kalender' || offeneSicht === 'adressbuch'))
+      ladeKalender(offeneSicht);
   }
 
   if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);

@@ -17,12 +17,10 @@
   "pill.index.none": "No index",
   "pill.mcp.on": "MCP running",
   "pill.mcp.off": "MCP off",
-  "nav.export": "Export",
-  "nav.search": "Search",
+  "nav.export": "Export data",
+  "nav.search": "Search data",
   "nav.calendar": "Calendar",
   "nav.book": "Contacts",
-  "nav.schedule": "Schedule",
-  "nav.mcp": "MCP & Claude",
   "nav.settings": "Settings",
   "export.what": "What should be exported?",
   "export.what.sub": "Your selection is saved and also applies to the schedule. Every run fetches only what is new — a second run is quick.",
@@ -303,5 +301,6 @@
   "srv.answer.noquery": "Without a search term there is nothing to answer.",
   "srv.answer.nohits": "No results to summarise.",
   "search.ai.tag": "AI",
-  "search.ai.model": "Model: {model}"
+  "search.ai.model": "Model: {model}",
+  "view.hits": "Results"
 }

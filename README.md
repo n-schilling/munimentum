@@ -166,6 +166,12 @@ fields on everything except the reconstructed events (nothing reads them there),
 which takes it from 11 MB to under 5 MB, and it goes over the wire gzipped at
 roughly 0.75 MB.
 
+**Three tabs, not seven.** *Export data*, *Search data*, *Settings* — that is the
+whole top level. Calendar and contacts are views of the same archive as the
+search, so they sit one level below it as *Results | Calendar | Contacts*, and
+the chosen view survives switching tabs. Schedule and MCP are settings, so they
+live in the settings; the header pills still jump straight to them.
+
 **Schedule.** While the app is open, it can re-run export and indexing at a fixed
 interval. Deliberately bound to the app's runtime and not to launchd/Task
 Scheduler: the schedule only reaches as far as the hand-fetched token stays

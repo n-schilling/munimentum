@@ -17,12 +17,10 @@
   "pill.index.none": "Kein Index",
   "pill.mcp.on": "MCP läuft",
   "pill.mcp.off": "MCP aus",
-  "nav.export": "Export",
-  "nav.search": "Suche",
+  "nav.export": "Daten exportieren",
+  "nav.search": "Daten durchsuchen",
   "nav.calendar": "Kalender",
   "nav.book": "Adressbuch",
-  "nav.schedule": "Zeitplan",
-  "nav.mcp": "MCP & Claude",
   "nav.settings": "Einstellungen",
   "export.what": "Was soll exportiert werden?",
   "export.what.sub": "Die Auswahl wird gespeichert und gilt auch für den Zeitplan. Jeder Lauf holt nur Neues – ein zweiter Lauf ist schnell.",
@@ -303,5 +301,6 @@
   "srv.answer.noquery": "Ohne Suchbegriff gibt es nichts zu beantworten.",
   "srv.answer.nohits": "Keine Treffer, die sich zusammenfassen ließen.",
   "search.ai.tag": "KI",
-  "search.ai.model": "Modell: {model}"
+  "search.ai.model": "Modell: {model}",
+  "view.hits": "Treffer"
 }

@@ -1654,7 +1654,8 @@ function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', 
   scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0, dataset: {},
   classList: {add: function(){}, remove: function(){}, toggle: function(){}},
   appendChild: function(){}, removeChild: function(){}, firstChild: null,
-  addEventListener: function(){}, querySelector: function(){ return null; },
+  addEventListener: function(){}, scrollIntoView: function(){},
+  querySelector: function(){ return null; },
   querySelectorAll: function(){ return []; }}; }
 
 // Der Assistent liegt in #modal. Ein Zuweisen von innerHTML ersetzt im Browser
@@ -1690,7 +1691,7 @@ global.document = {
   // ueberspringen. Was es wirklich gibt, steht in `vorhanden`.
   querySelector: function(sel){
     sel = String(sel);
-    if(sel.indexOf('[data-tab]') >= 0){
+    if(sel.indexOf('data-tab') >= 0){
       var n = mk('tabbtn'); n.dataset = {tab: global.aktiverTab || 'export'}; return n;
     }
     for(var muster in global.vorhanden){
@@ -1796,7 +1797,8 @@ status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
 
 // Erst den Start abwarten: die Seite ruft beim Laden selbst /api/status auf.
 setTimeout(function(){
-aktiverTab = 'kalender';
+aktiverTab = 'suche';
+offeneSicht = 'kalender';
 renderStatus(status);
 ladeKalender('kalender');
 setTimeout(function(){
@@ -1848,7 +1850,8 @@ setTimeout(function(){
   var status = statusGeruest();
   status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
   renderStatus(status);
-  aktiverTab = 'adressbuch';
+  aktiverTab = 'suche';
+  offeneSicht = 'adressbuch';
   ladeKalender('adressbuch');
 
   setTimeout(function(){
@@ -1945,6 +1948,45 @@ pruefe(zitierte('ohne').length === 0, 'Zitate erfunden');
 console.log('OK');
 """
 
+# Drei Reiter oben, drei Sichten darunter. Der Test schaltet durch und schaut,
+# was sichtbar ist – und ob die zuletzt gewählte Sicht einen Reiterwechsel
+# übersteht.
+PRUEFUNG_NAV = GRUNDZUSTAND + """
+var sichtbar = {};
+['export','suche','einstellungen'].forEach(function(t){
+  document.getElementById('tab-'+t).classList.toggle = function(c, an){ sichtbar[t] = !an; };
+});
+['treffer','kalender','adressbuch'].forEach(function(v){
+  document.getElementById('sicht-'+v).classList.toggle = function(c, an){
+    sichtbar['sicht:'+v] = !an; };
+});
+function offen(){ return Object.keys(sichtbar).filter(function(k){ return sichtbar[k]; }); }
+function hat(x){ return offen().indexOf(x) >= 0; }
+
+tab('export');
+pruefe(hat('export') && !hat('suche') && !hat('einstellungen'), 'Export: ' + offen());
+
+tab('suche');
+pruefe(hat('suche') && !hat('export'), 'Suche: ' + offen());
+pruefe(hat('sicht:treffer'), 'Suche zeigt nicht die Trefferliste: ' + offen());
+
+sicht('kalender');
+pruefe(hat('sicht:kalender') && !hat('sicht:treffer'), 'Kalender: ' + offen());
+sicht('adressbuch');
+pruefe(hat('sicht:adressbuch') && !hat('sicht:kalender'), 'Adressbuch: ' + offen());
+
+// Reiter wechseln und zurueck: die gewaehlte Sicht bleibt
+tab('einstellungen');
+pruefe(hat('einstellungen') && !hat('suche'), 'Einstellungen: ' + offen());
+tab('suche');
+pruefe(hat('sicht:adressbuch'), 'Sicht nach Reiterwechsel vergessen: ' + offen());
+
+// Die Kachel im Kopf fuehrt weiter zu ihrem Thema, jetzt in den Einstellungen
+zeigeEinstellung('mcp-karte');
+pruefe(hat('einstellungen'), 'MCP-Kachel fuehrt nicht in die Einstellungen');
+console.log('OK');
+"""
+
 # renderStatus liest viel mehr aus dem Status als die Assistenten – ein
 # vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
 STATUS_GERUEST = """
@@ -2020,6 +2062,12 @@ def test_beenden_warnt_bei_laufendem_auftrag():
     _in_node(PRUEFUNG_BEENDEN_LAUF)
 
 
+def test_navigation_drei_reiter_drei_sichten():
+    """Kalender und Adressbuch liegen unter der Suche, nicht daneben – und die
+    zuletzt gewählte Sicht übersteht einen Reiterwechsel."""
+    _in_node(PRUEFUNG_NAV)
+
+
 def test_ki_checkbox_und_fussnoten():
     """Die Checkbox erscheint nur mit Modell UND Index; Fußnoten verweisen in
     die Trefferliste, erfundene Nummern bleiben unverlinkter Text."""
@@ -2032,9 +2080,24 @@ def test_jeder_reiter_liegt_im_hauptbereich():
     Fensterrand, anders als bei allen anderen Reitern."""
     seite = app_mod.PAGE
     haupt = seite[seite.index("<main>"):seite.index("</main>")]
-    for reiter in ("export", "suche", "kalender", "adressbuch", "zeitplan",
-                   "mcp", "einstellungen"):
+    for reiter in ("export", "suche", "einstellungen"):
         assert f'<section id="tab-{reiter}"' in haupt, f"{reiter} liegt außerhalb <main>"
+
+
+def test_es_gibt_genau_drei_reiter():
+    """Daten holen, Daten ansehen, einstellen – mehr Ebenen oben verwirren mehr,
+    als sie ordnen. Kalender und Adressbuch sind Sichten auf denselben Bestand
+    wie die Suche und liegen darunter; Zeitplan und MCP sind Einstellungen."""
+    seite = app_mod.PAGE
+    nav = seite[seite.index("<nav>"):seite.index("</nav>")]
+    assert nav.count("data-tab=") == 3, "Die Reiterzeile ist wieder gewachsen"
+    for weg in ("kalender", "adressbuch", "zeitplan", "mcp"):
+        assert f'data-tab="{weg}"' not in nav, f"{weg} ist wieder ein eigener Reiter"
+    for sicht in ("treffer", "kalender", "adressbuch"):
+        assert f'id="sicht-{sicht}"' in seite, f"Sicht {sicht} fehlt unter der Suche"
+    # Zeitplan und MCP müssen in den Einstellungen gelandet sein, nicht verschwunden
+    einst = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</main>")]
+    assert 'data-i18n="sched.title"' in einst and 'data-i18n="mcp.title"' in einst
 
 
 def test_seite_enthaelt_gueltiges_javascript():
