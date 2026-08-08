@@ -71,6 +71,48 @@ def test_bibliotheken_geben_nichts_unabgesichertes_aus():
             f"DUERFEN_AUSGEBEN) oder sie dem Aufrufer überlassen.")
 
 
+# --------------------------------------------------------------------------
+# App-Symbol
+#
+# Bis 1.1.0 stand icon=None in der Spec – im Dock erschien PyInstallers
+# Standardsymbol (Python-Logo auf einer Diskette). Das fiel niemandem auf, weil
+# nichts fehlschlug: ein Bündel ohne Symbol baut anstandslos.
+# --------------------------------------------------------------------------
+ICON = WURZEL / "packaging" / "icon"
+
+
+def test_symbol_ist_in_der_spec_verdrahtet():
+    text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
+    assert "icon=str(ICON_ICO)" in text, "Windows-Symbol nicht gesetzt"
+    assert "icon=str(ICON_ICNS)" in text, "macOS-Symbol nicht gesetzt"
+    assert "icon=None" not in text
+
+
+def test_symbol_hat_eine_quelle():
+    """Ohne die SVG ließe sich das Symbol nicht mehr nachbauen."""
+    assert (ICON / "icon.svg").read_text(encoding="utf-8").lstrip().startswith("<svg")
+
+
+def test_icns_ist_eine_echte_icns():
+    roh = (ICON / "icon.icns").read_bytes()
+    assert roh[:4] == b"icns", "keine gültige .icns-Datei"
+    # Die Längenangabe im Kopf muss zur Datei passen – eine abgeschnittene
+    # Datei baut durch und zeigt dann im Finder nichts.
+    assert int.from_bytes(roh[4:8], "big") == len(roh)
+
+
+def test_ico_enthaelt_die_kleinen_groessen():
+    """16 und 32 px sind die, die man wirklich sieht: Taskleiste und Titelzeile.
+    Ein .ico nur mit 256 px lässt Windows hässlich herunterrechnen."""
+    roh = (ICON / "icon.ico").read_bytes()
+    reserviert, typ, anzahl = (int.from_bytes(roh[i:i + 2], "little")
+                               for i in (0, 2, 4))
+    assert (reserviert, typ) == (0, 1), "keine gültige .ico-Datei"
+    # 0 im Breitenbyte heißt laut Format 256.
+    groessen = {roh[6 + i * 16] or 256 for i in range(anzahl)}
+    assert {16, 32}<= groessen, f"kleine Größen fehlen: {sorted(groessen)}"
+
+
 def test_ausnahmen_sichern_ihre_ausgabe_wirklich_ab():
     """Wer auf der Liste steht, muss seinen print auch tatsächlich fangen."""
     for name in DUERFEN_AUSGEBEN:

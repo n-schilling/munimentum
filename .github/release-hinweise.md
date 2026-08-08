@@ -1,5 +1,12 @@
 Fertige App zum Herunterladen — Python oder sonstige Installationen sind nicht nötig.
 
+## Neu in 1.1.1
+
+**Die App hat ein eigenes Symbol.** Bis hierher zeigten Dock, Taskleiste und
+Finder PyInstallers Standardbild — ein Python-Logo auf einer Diskette. Jetzt
+steht dort ein Archivkasten in der Farbe der Oberfläche, in allen Größen bis
+hinunter zu 16 Pixeln.
+
 ## Neu in 1.1.0
 
 **Läufe, die nichts zu tun haben, tun auch nichts.** Bringt ein Export keine

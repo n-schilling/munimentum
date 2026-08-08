@@ -18,6 +18,20 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH setzt PyInstaller)
 
+# Das App-Symbol. Beide Formate stammen aus packaging/icon/icon.svg und liegen
+# fertig im Repo – so braucht der Build kein Zeichenwerkzeug. Neu erzeugen:
+#
+#   magick -background none packaging/icon/icon.svg \
+#          -define icon:auto-resize=256,128,64,48,32,16 packaging/icon/icon.ico
+#   (macOS: je Größe ein PNG in ein .iconset legen, dann `iconutil -c icns`)
+#
+# Windows liest das .ico aus der EXE, macOS das .icns aus dem Bündel. Linux
+# kennt kein Symbol in der Binärdatei – dort bleibt es ohne Wirkung.
+ICON_ICO = ROOT / "packaging" / "icon" / "icon.ico"
+ICON_ICNS = ROOT / "packaging" / "icon" / "icon.icns"
+for _p in (ICON_ICO, ICON_ICNS):
+    assert _p.exists(), f"{_p.name} fehlt – ohne es trüge die App PyInstallers Standardsymbol"
+
 # Versionsnummer aus version.py – nicht hier noch einmal pflegen.
 _v = {}
 exec((ROOT / "version.py").read_text(encoding="utf-8"), _v)
@@ -81,6 +95,7 @@ exe = EXE(                             # noqa: F821
     # Windows: kein Konsolenfenster beim Doppelklick. app.ensure_streams()
     # leitet stdout/stderr dann in app.log um, sonst wäre ein Fehlstart stumm.
     console=(sys.platform not in ("darwin", "win32")),
+    icon=str(ICON_ICO),
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
@@ -97,7 +112,7 @@ if sys.platform == "darwin":
     app = BUNDLE(                      # noqa: F821
         coll,
         name="Microsoft365-Archiv.app",
-        icon=None,
+        icon=str(ICON_ICNS),
         bundle_identifier="de.nschilling.office365export",
         info_plist={
             "CFBundleName": "Microsoft365-Archiv",
