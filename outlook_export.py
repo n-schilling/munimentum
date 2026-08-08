@@ -1085,6 +1085,7 @@ def main():
         return sum(1 for rel in done.done.values()
                    if rel.endswith(suffix) and (out / rel).exists())
     print(f"\nFertig. Neu exportiert: {stats['new']}, übersprungen: {stats['skipped']}.")
+    progress.ergebnis(stats["new"], uebersprungen=stats["skipped"])
     if stats.get("folder_errors"):
         print(f"{stats['folder_errors']} Ordner konnten nicht vollständig gelistet "
               "werden – Skript erneut starten, um den Rest zu holen.")

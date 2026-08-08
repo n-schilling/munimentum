@@ -1097,6 +1097,9 @@ def main():
     print(f"\nFertig. Neu: {stats['new']}, aktualisiert: {stats['updated']}, "
           f"unverändert: {stats['skipped']}, leer übersprungen: {stats['empty']}, "
           f"gesamt im Archiv: {done_total}.")
+    # Aktualisierte Konversationen zählen mit: ihre Dateien haben sich geändert,
+    # der Index kennt sie also in der alten Fassung.
+    progress.ergebnis(stats["new"] + stats["updated"], unveraendert=stats["skipped"])
     print(f"Ordner: {out.resolve()}")
     print(f"Im Browser öffnen: {out.resolve() / 'index.html'}")
 

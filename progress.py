@@ -22,6 +22,7 @@ import json
 import os
 
 MARKE = "@@PROGRESS@@"
+MARKE_ERGEBNIS = "@@RESULT@@"
 
 
 def aktiv():
@@ -45,19 +46,46 @@ def melde(done, total=None, what=None):
         pass                       # eine Meldung darf nie einen Lauf aufhalten
 
 
+def ergebnis(neu, **weitere):
+    """Was der Schritt bewirkt hat – am Ende einmal, für den Aufrufer.
+
+    `neu` ist die Zahl der tatsächlich geschriebenen Stücke. Ist sie null, hat
+    sich am Bestand nichts geändert, und die App kann sich das Indizieren und
+    den Kalenderaufbau sparen. Die Skripte sagen das längst („Neu exportiert:
+    0“), nur eben in Prosa – die auszulesen bräche bei jeder Umformulierung.
+    """
+    if not aktiv():
+        return
+    daten = {"neu": int(neu)}
+    daten.update({k: int(v) for k, v in weitere.items()})
+    try:
+        print(f"{MARKE_ERGEBNIS} {json.dumps(daten)}", flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def _lies(zeile, marke, pflicht):
+    text = (zeile or "").strip()
+    if not text.startswith(marke):
+        return None
+    try:
+        daten = json.loads(text[len(marke):])
+    except ValueError:
+        return None
+    if not isinstance(daten, dict) or pflicht not in daten:
+        return None
+    return daten
+
+
 def lies(zeile):
     """Gegenstück für die App: Zahlen aus der Zeile, sonst None.
 
     None heißt „das ist eine gewöhnliche Ausgabezeile“ – der Aufrufer schreibt
     sie dann ins Protokoll, statt sie als Fortschritt zu deuten.
     """
-    text = (zeile or "").strip()
-    if not text.startswith(MARKE):
-        return None
-    try:
-        daten = json.loads(text[len(MARKE):])
-    except ValueError:
-        return None
-    if not isinstance(daten, dict) or "done" not in daten:
-        return None
-    return daten
+    return _lies(zeile, MARKE, "done")
+
+
+def lies_ergebnis(zeile):
+    """Gegenstück zu ergebnis(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    return _lies(zeile, MARKE_ERGEBNIS, "neu")

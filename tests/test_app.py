@@ -726,6 +726,94 @@ def test_jobrunner_setzt_den_fortschritt_je_schritt_zurueck(sandbox):
     assert [p for _, p in staende] == [None, None]
 
 
+# --------------------------------------------------------------------------
+# Nichts Neues exportiert -> Index und Kalender entfallen
+#
+# Gemeldet aus der Praxis: ein Lauf mit nur "Kontakte" meldete "Neu exportiert:
+# 0" und indizierte danach zwei Minuten lang denselben Bestand.
+# --------------------------------------------------------------------------
+def _melde_step(neu, label="job.step.outlook"):
+    wurzel = str(Path(app_mod.__file__).resolve().parent)
+    return _py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
+                    f"print('Fertig.'); progress.ergebnis({neu})", label)
+
+
+def _folge(sandbox, neu, ziel_da=True, steps_extra=None):
+    """Export-Schritt mit `neu` Stück, danach ein markierter Folgeschritt."""
+    ziel = sandbox / "corpus.db"
+    if ziel_da:
+        ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('INDIZIERT')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner()
+    r.start([_melde_step(neu)] + (steps_extra or []) + [folge], "job.export")
+    _warte(r)
+    return r, "\n".join(str(ln["text"]) for ln in r.lines)
+
+
+def test_jobrunner_ueberspringt_index_wenn_nichts_neu_ist(sandbox):
+    r, text = _folge(sandbox, neu=0)
+    assert "INDIZIERT" not in text, "der Index lief trotz unverändertem Bestand"
+    assert r.last["ok"]
+    assert "srv.job.skipped" in text          # und sagt auch, warum
+    assert "@@RESULT@@" not in text           # die Meldung selbst ist kein Protokoll
+
+
+def test_jobrunner_indiziert_wenn_es_etwas_neues_gibt(sandbox):
+    _, text = _folge(sandbox, neu=1)
+    assert "INDIZIERT" in text
+
+
+def test_jobrunner_indiziert_ohne_vorhandenen_index(sandbox):
+    """Sonst gäbe es nach dem ersten Lauf mit unverändertem Bestand nie einen."""
+    _, text = _folge(sandbox, neu=0, ziel_da=False)
+    assert "INDIZIERT" in text
+
+
+def test_jobrunner_zaehlt_ueber_alle_exportschritte(sandbox):
+    """Teams bringt etwas, Outlook nicht – dann muss indiziert werden."""
+    _, text = _folge(sandbox, neu=0,
+                     steps_extra=[_melde_step(3, "job.step.teams")])
+    assert "INDIZIERT" in text
+
+
+def test_jobrunner_indiziert_wenn_der_export_nichts_meldet(sandbox):
+    """Unwissen ist kein Grund zu sparen – etwa bei einem älteren Skript."""
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('INDIZIERT')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner()
+    r.start([_py_step("print('Fertig.')"), folge], "job.export")
+    _warte(r)
+    assert "INDIZIERT" in "\n".join(str(ln["text"]) for ln in r.lines)
+
+
+def test_jobrunner_indiziert_wenn_gar_kein_export_lief(sandbox):
+    """Der Knopf „Nur indizieren“ muss immer indizieren."""
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('INDIZIERT')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner()
+    r.start([folge], "job.index")
+    _warte(r)
+    assert "INDIZIERT" in "\n".join(str(ln["text"]) for ln in r.lines)
+
+
+def test_build_steps_markiert_index_und_kalender(sandbox):
+    """Die Marke samt Ergebnisdatei muss aus build_steps kommen – ohne sie
+    greift die Ersparnis nie."""
+    cfg = app_mod.load_config()
+    steps = {s["key"]: s for s in
+             app_mod.build_steps(cfg, outlook=True, index=True, calendar=True)}
+    assert steps["index"]["nur_bei_neuem"] and steps["index"]["ziel"].name == "corpus.db"
+    assert steps["calendar"]["nur_bei_neuem"]
+    assert steps["calendar"]["ziel"].name == "calendar.json"
+    # Die Export-Schritte selbst niemals.
+    assert not steps["outlook"].get("nur_bei_neuem")
+
+
 def test_jobrunner_log_since(sandbox):
     r = app_mod.JobRunner()
     r.log("eins")

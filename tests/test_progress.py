@@ -101,8 +101,65 @@ def test_melden_und_lesen_passen_zusammen(monkeypatch, capsys):
 
 
 # --------------------------------------------------------------------------
+# Ergebnis: was der Schritt bewirkt hat
+# --------------------------------------------------------------------------
+def test_ergebnis_schweigt_ohne_variable(capsys):
+    progress.ergebnis(0, uebersprungen=67)
+    assert capsys.readouterr().out == ""
+
+
+def test_ergebnis_melden_und_lesen(monkeypatch, capsys):
+    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+    progress.ergebnis(0, uebersprungen=67)
+    assert progress.lies_ergebnis(capsys.readouterr().out) == {
+        "neu": 0, "uebersprungen": 67}
+
+
+def test_ergebnis_haelt_keinen_lauf_auf(monkeypatch):
+    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+
+    def kaputt(*a, **kw):
+        raise OSError("Rohr zu")
+    monkeypatch.setattr("builtins.print", kaputt)
+    progress.ergebnis(3)                       # wirft nicht
+
+
+@pytest.mark.parametrize("zeile", [
+    "Fertig. Neu exportiert: 0, übersprungen: 67.",   # echte Ausgabe des Skripts
+    '@@PROGRESS@@ {"done": 5}',                       # der andere Kanal
+    '@@RESULT@@ {"ohne": "neu"}',
+    '@@RESULT@@ kein json',
+    "", None,
+])
+def test_lies_ergebnis_gibt_gewoehnliche_zeilen_zurueck(zeile):
+    assert progress.lies_ergebnis(zeile) is None
+
+
+def test_die_beiden_kanaele_verwechseln_sich_nicht(monkeypatch, capsys):
+    """Beide laufen über dieselbe Leitung – jeder darf nur seine Zeile lesen."""
+    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+    progress.melde(5, 10)
+    progress.ergebnis(7)
+    fortschritt, fazit = capsys.readouterr().out.strip().splitlines()
+    assert progress.lies(fortschritt) == {"done": 5, "total": 10}
+    assert progress.lies_ergebnis(fortschritt) is None
+    assert progress.lies_ergebnis(fazit) == {"neu": 7}
+    assert progress.lies(fazit) is None
+
+
+# --------------------------------------------------------------------------
 # Die Skripte melden auch wirklich
 # --------------------------------------------------------------------------
+@pytest.mark.parametrize("modul", ["teams_export", "outlook_export"])
+def test_export_meldet_sein_ergebnis(modul):
+    """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter."""
+    from pathlib import Path
+    quelle = (Path(__file__).resolve().parent.parent / f"{modul}.py").read_text(
+        encoding="utf-8")
+    assert "progress.ergebnis(" in quelle, f"{modul} meldet sein Ergebnis nicht"
+
+
+
 @pytest.mark.parametrize("modul,stelle", [
     ("teams_export", "chats"),          # kennt die Gesamtzahl
     ("outlook_export", "mails"),        # kennt sie nicht

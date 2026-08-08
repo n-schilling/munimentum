@@ -634,6 +634,10 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "index",
             "label": "job.step.index" if embeddings else "job.step.index.lexical",
             "argv": argv, "env": dict(base_env),
+            # Hat der Export nichts Neues gebracht, indiziert dieser Schritt
+            # denselben Bestand ein zweites Mal. "ziel" ist die Bedingung, unter
+            # der das Auslassen sicher ist: nur wenn es schon einen Index gibt.
+            "nur_bei_neuem": True, "ziel": BASE / cfg["store_dir"] / "corpus.db",
         })
     if calendar:
         # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
@@ -648,6 +652,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "calendar",
             "label": "job.step.calendar" if reconstruct else "job.step.calendar.plain",
             "argv": argv, "env": dict(base_env),
+            "nur_bei_neuem": True, "ziel": calendar_file(cfg),
         })
     if search_page:
         steps.append({
@@ -692,6 +697,10 @@ class JobRunner:
         self.job = None            # {"label", "steps", "step", "started"}
         self.last = None           # {"label", "ok", "finished", "detail"}
         self.token_expired = False
+        # Summe der neu geschriebenen Stücke über alle Export-Schritte dieses
+        # Laufs. None heißt „kein Export-Schritt hat sich geäußert“ – dann wird
+        # nichts übersprungen, denn Unwissen ist kein Grund.
+        self.neu = None
 
     # -- Protokoll ---------------------------------------------------------
     def log(self, text, level="info"):
@@ -734,6 +743,7 @@ class JobRunner:
             return False
         self.cancelled = False
         self.token_expired = False
+        self.neu = None
         self.job = {"label": label, "steps": [s["label"] for s in steps],
                     "step": steps[0]["label"], "index": 0, "progress": None,
                     "started": datetime.now().isoformat(timespec="seconds")}
@@ -760,6 +770,9 @@ class JobRunner:
                 break
             self.job = {**self.job, "step": step["label"], "index": i,
                         "progress": None}      # jeder Schritt zählt bei null an
+            if self._erspart(step):
+                self.logk("srv.job.skipped", "info", step=step["label"])
+                continue
             self.logk("srv.job.step", "head", step=step["label"])
             code = self._exec(step)
             if code != 0:
@@ -778,6 +791,24 @@ class JobRunner:
         self.job = None
         self.proc = None
 
+    def _erspart(self, step):
+        """Darf dieser Schritt entfallen, weil der Export nichts Neues brachte?
+
+        Aus der Praxis: ein Lauf mit nur „Kontakte“ meldete „Neu exportiert: 0“
+        und indizierte danach zwei Minuten lang denselben Bestand.
+
+        Drei Bedingungen, jede einzeln nötig:
+          * Der Schritt ist überhaupt dafür vorgesehen (Index, Kalender).
+          * Es lief ein Export-Schritt, der sich geäußert hat, und er brachte
+            nichts. Ohne Meldung wird gearbeitet – Unwissen ist kein Grund.
+          * Das Ergebnis existiert bereits. Sonst gäbe es nach dem ersten Lauf
+            mit unverändertem Bestand nie einen Index.
+        """
+        if not step.get("nur_bei_neuem") or self.neu is None or self.neu > 0:
+            return False
+        ziel = step.get("ziel")
+        return bool(ziel and Path(ziel).exists())
+
     def _exec(self, step):
         env = {**os.environ, **step.get("env", {})}
         try:
@@ -794,6 +825,10 @@ class JobRunner:
                 # Zahlen für den Balken – im Protokoll wären sie nur Rauschen.
                 if self.job:
                     self.job = {**self.job, "progress": stand}
+                continue
+            fazit = progress.lies_ergebnis(line)
+            if fazit is not None:
+                self.neu = (self.neu or 0) + fazit["neu"]
                 continue
             if _TOKEN_DEAD.search(line):
                 self.token_expired = True

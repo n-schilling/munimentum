@@ -225,6 +225,7 @@
   "srv.job.start": "▶ {label}",
   "srv.job.step": "— {step} —",
   "srv.job.stepdone": "✓ {step} finished",
+  "srv.job.skipped": "Skipped: {step} — the export brought nothing new.",
   "srv.job.stepfail": "✗ {detail}",
   "srv.job.done": "✓ {label} completed",
   "srv.job.cancel": "Cancellation requested — the running step is being stopped.",
