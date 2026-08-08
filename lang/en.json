@@ -149,7 +149,7 @@
   "settings.workers.hint": "Graph allows 4 concurrent requests per mailbox — more mostly produces throttling. Use 1 on a flaky connection.",
   "settings.batch": "Embeddings per request",
   "settings.batch.hint": "Larger = fewer requests to Ollama, more memory per request.",
-  "settings.search.title": "Search and MCP",
+  "settings.search.title": "AI search (Ollama)",
   "settings.ollama": "Ollama",
   "settings.embed_model": "Embedding model",
   "settings.mcp_port": "MCP port",
@@ -302,5 +302,6 @@
   "srv.answer.nohits": "No results to summarise.",
   "search.ai.tag": "AI",
   "search.ai.model": "Model: {model}",
-  "view.hits": "Results"
+  "view.hits": "Results",
+  "settings.search.sub": "Both run in your Ollama on this machine: the semantic half of the search and the summary of the results."
 }

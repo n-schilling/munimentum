@@ -149,7 +149,7 @@
   "settings.workers.hint": "Graph autorise 4 requêtes simultanées par boîte aux lettres — au-delà, cela produit surtout de la limitation. Mettez 1 sur une connexion instable.",
   "settings.batch": "Embeddings par requête",
   "settings.batch.hint": "Plus grand = moins de requêtes vers Ollama, plus de mémoire par requête.",
-  "settings.search.title": "Recherche et MCP",
+  "settings.search.title": "Recherche IA (Ollama)",
   "settings.ollama": "Ollama",
   "settings.embed_model": "Modèle d’embedding",
   "settings.mcp_port": "Port MCP",
@@ -302,5 +302,6 @@
   "srv.answer.nohits": "Aucun résultat à résumer.",
   "search.ai.tag": "IA",
   "search.ai.model": "Modèle : {model}",
-  "view.hits": "Résultats"
+  "view.hits": "Résultats",
+  "settings.search.sub": "Les deux s’exécutent dans votre Ollama sur cette machine : la moitié sémantique de la recherche et le résumé des résultats."
 }

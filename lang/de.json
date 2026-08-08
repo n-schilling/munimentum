@@ -149,7 +149,7 @@
   "settings.workers.hint": "Graph erlaubt 4 gleichzeitige Anfragen je Postfach – mehr erzeugt vor allem Drosselung. Bei wackliger Verbindung 1.",
   "settings.batch": "Embeddings je Anfrage",
   "settings.batch.hint": "Größer = weniger Anfragen an Ollama, mehr Speicher je Anfrage.",
-  "settings.search.title": "Suche und MCP",
+  "settings.search.title": "KI-Suche (Ollama)",
   "settings.ollama": "Ollama",
   "settings.embed_model": "Embedding-Modell",
   "settings.mcp_port": "MCP-Port",
@@ -302,5 +302,6 @@
   "srv.answer.nohits": "Keine Treffer, die sich zusammenfassen ließen.",
   "search.ai.tag": "KI",
   "search.ai.model": "Modell: {model}",
-  "view.hits": "Treffer"
+  "view.hits": "Treffer",
+  "settings.search.sub": "Beides läuft in deinem Ollama auf diesem Rechner: die semantische Hälfte der Suche und die Zusammenfassung der Treffer."
 }

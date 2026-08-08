@@ -1976,65 +1976,6 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   </div>
 
   <div class="card">
-    <h2 data-i18n="settings.speed.title">Geschwindigkeit</h2>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.workers">Parallele Downloads</span>
-        <input type="number" id="c-workers" min="1" max="8" style="width:80px"></label>
-      <span class="small muted" data-i18n="settings.workers.hint">Graph erlaubt 4 gleichzeitige Anfragen je Postfach.</span>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.batch">Embeddings je Anfrage</span>
-        <input type="number" id="c-index_batch" min="1" max="512" style="width:90px"></label>
-      <span class="small muted" data-i18n="settings.batch.hint">Größer = weniger Anfragen an Ollama.</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="settings.search.title">Suche und MCP</h2>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.ollama">Ollama</span> <input type="text" id="c-ollama" style="width:230px"></label>
-      <label class="small"><span data-i18n="settings.embed_model">Embedding-Modell</span> <input type="text" id="c-embed_model" style="width:160px"></label>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.chat_model">Antwort-Modell</span>
-        <input type="text" id="c-chat_model" style="width:210px"></label>
-      <label class="small"><span data-i18n="settings.answer_sources">Quellen je Antwort</span>
-        <input type="number" id="c-answer_sources" min="1" max="20" style="width:80px"></label>
-    </div>
-    <p class="small muted" data-i18n="settings.chat_model.hint" style="margin-top:2px"></p>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.mcp_port">MCP-Port</span> <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
-      <label class="chk"><input type="checkbox" id="c-mcp_autostart"> <span data-i18n="settings.mcp_autostart">MCP-Server beim Start mitstarten</span></label>
-    </div>
-    <p class="small muted" style="margin-top:8px" data-i18n="settings.mcp.note">Ein geänderter Port wirkt erst nach einem Neustart des MCP-Servers.</p>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="settings.dirs.title">Ordner</h2>
-    <p class="sub" data-i18n="settings.dirs.sub">Relativ zum Datenordner, oder absolut.</p>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.dir.teams">Teams</span> <input type="text" id="c-teams_dir" style="width:200px"></label>
-      <label class="small"><span data-i18n="settings.dir.outlook">Outlook</span> <input type="text" id="c-outlook_dir" style="width:200px"></label>
-      <label class="small"><span data-i18n="settings.dir.store">Index</span> <input type="text" id="c-store_dir" style="width:200px"></label>
-    </div>
-    <p class="small muted" style="margin-top:10px"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="update.title">Version</h2>
-    <p class="small" id="update-current"></p>
-    <p class="small muted" id="update-state"></p>
-    <label class="chk"><input type="checkbox" id="c-update_check">
-      <span data-i18n="update.enabled">Beim Start nach Aktualisierungen sehen</span></label>
-    <p class="small muted" data-i18n="update.enabled.hint" style="margin:2px 0 12px 26px"></p>
-    <div class="row">
-      <button class="ghost" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
-      <a class="ghost" id="update-link" target="_blank" rel="noopener"
-         style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
-    </div>
-  </div>
-
-  <div class="card">
     <h2 data-i18n="sched.title">Regelmäßig exportieren</h2>
     <p class="sub" data-i18n="sched.sub">Läuft nur, solange die App geöffnet ist.</p>
     <label class="chk"><input type="checkbox" id="s-enabled"> <span data-i18n="sched.enabled">Zeitplan aktiv</span></label>
@@ -2055,16 +1996,64 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
   </div>
 
   <div class="card">
+    <h2 data-i18n="settings.speed.title">Geschwindigkeit</h2>
+    <div class="row">
+      <label class="small"><span data-i18n="settings.workers">Parallele Downloads</span>
+        <input type="number" id="c-workers" min="1" max="8" style="width:80px"></label>
+      <span class="small muted" data-i18n="settings.workers.hint">Graph erlaubt 4 gleichzeitige Anfragen je Postfach.</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="small"><span data-i18n="settings.batch">Embeddings je Anfrage</span>
+        <input type="number" id="c-index_batch" min="1" max="512" style="width:90px"></label>
+      <span class="small muted" data-i18n="settings.batch.hint">Größer = weniger Anfragen an Ollama.</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="settings.search.title">KI-Suche (Ollama)</h2>
+    <p class="sub" data-i18n="settings.search.sub">Beides läuft in deinem Ollama auf diesem Rechner.</p>
+    <div class="row">
+      <label class="small"><span data-i18n="settings.ollama">Ollama</span> <input type="text" id="c-ollama" style="width:230px"></label>
+      <label class="small"><span data-i18n="settings.embed_model">Embedding-Modell</span> <input type="text" id="c-embed_model" style="width:160px"></label>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="small"><span data-i18n="settings.chat_model">Antwort-Modell</span>
+        <input type="text" id="c-chat_model" style="width:210px"></label>
+      <label class="small"><span data-i18n="settings.answer_sources">Quellen je Antwort</span>
+        <input type="number" id="c-answer_sources" min="1" max="20" style="width:80px"></label>
+    </div>
+    <p class="small muted" data-i18n="settings.chat_model.hint" style="margin-top:2px"></p>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="mcp.title" id="mcp-karte">MCP-Server</h2>
     <p class="sub" data-i18n="mcp.sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
     <div class="row">
       <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
       <span class="small" id="mcp-state"></span>
     </div>
-    <p class="small muted" style="margin-top:12px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
+    <div class="row" style="margin-top:12px">
+      <label class="small"><span data-i18n="settings.mcp_port">MCP-Port</span>
+        <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
+      <label class="chk"><input type="checkbox" id="c-mcp_autostart">
+        <span data-i18n="settings.mcp_autostart">MCP-Server beim Start mitstarten</span></label>
+    </div>
+    <p class="small muted" style="margin-top:6px" data-i18n="settings.mcp.note">Ein geänderter Port wirkt erst nach einem Neustart des MCP-Servers.</p>
+    <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
     <pre id="mcp-json"></pre>
     <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
     <pre id="mcp-stdio"></pre>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="settings.dirs.title">Ordner</h2>
+    <p class="sub" data-i18n="settings.dirs.sub">Relativ zum Datenordner, oder absolut.</p>
+    <div class="row">
+      <label class="small"><span data-i18n="settings.dir.teams">Teams</span> <input type="text" id="c-teams_dir" style="width:200px"></label>
+      <label class="small"><span data-i18n="settings.dir.outlook">Outlook</span> <input type="text" id="c-outlook_dir" style="width:200px"></label>
+      <label class="small"><span data-i18n="settings.dir.store">Index</span> <input type="text" id="c-store_dir" style="width:200px"></label>
+    </div>
+    <p class="small muted" style="margin-top:10px"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
   </div>
 
   <div class="card">
@@ -2073,6 +2062,19 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <select id="c-language" style="min-width:240px"></select>
   </div>
 
+  <div class="card">
+    <h2 data-i18n="update.title">Version</h2>
+    <p class="small" id="update-current"></p>
+    <p class="small muted" id="update-state"></p>
+    <label class="chk"><input type="checkbox" id="c-update_check">
+      <span data-i18n="update.enabled">Beim Start nach Aktualisierungen sehen</span></label>
+    <p class="small muted" data-i18n="update.enabled.hint" style="margin:2px 0 12px 26px"></p>
+    <div class="row">
+      <button class="ghost" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
+      <a class="ghost" id="update-link" target="_blank" rel="noopener"
+         style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
+    </div>
+  </div>
   <div class="row" style="margin-bottom:24px">
     <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
     <span class="small" id="cfg-msg"></span>
