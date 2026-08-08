@@ -335,6 +335,68 @@ def test_export_status_mit_fortschrittsdateien(sandbox):
 def test_store_status_ohne_index(sandbox):
     st = app_mod.store_status(app_mod.load_config())
     assert not st["exists"] and st["chunks"] == 0 and not st["semantic"]
+    assert st["messages"] == 0
+
+
+def _index_bauen(sandbox, uids, chunks_je=3):
+    """Ein winziger Index: uids Nachrichten mit je chunks_je Textstellen."""
+    store = sandbox / "rag_store"
+    store.mkdir(exist_ok=True)
+    app_mod._ZAEHLUNG.clear()
+    con = sqlite3.connect(store / "corpus.db")
+    con.execute("CREATE TABLE IF NOT EXISTS chunks(uid TEXT, seq INTEGER)")
+    con.executemany("INSERT INTO chunks(uid, seq) VALUES (?, ?)",
+                    [(f"m{u}", s) for u in range(uids) for s in range(chunks_je)])
+    con.commit()
+    con.close()
+    return store
+
+
+def test_store_status_zaehlt_nachrichten_nicht_nur_textstellen(sandbox):
+    """Die Kachel nennt Nachrichten – das ist die Einheit, in der jemand sein
+    Archiv denkt. Lange Mails stehen als mehrere Textstellen im Index; die
+    Zeilenzahl wäre also spürbar höher als das, was er wiederzufinden erwartet.
+    """
+    _index_bauen(sandbox, uids=4, chunks_je=3)
+    st = app_mod.store_status(app_mod.load_config())
+    assert st["chunks"] == 12 and st["messages"] == 4
+
+
+def test_store_status_puffert_die_zaehlung(sandbox, monkeypatch):
+    """Die Oberfläche fragt alle paar Sekunden – über den ganzen Index zu
+    zählen darf nicht jedes Mal passieren."""
+    _index_bauen(sandbox, uids=2)
+    cfg = app_mod.load_config()
+
+    abfragen = []
+    echt = sqlite3.connect
+
+    def mitzaehlen(*a, **kw):
+        con = echt(*a, **kw)
+        con.set_trace_callback(abfragen.append)
+        return con
+    monkeypatch.setattr(sqlite3, "connect", mitzaehlen)
+
+    assert app_mod.store_status(cfg)["messages"] == 2
+    erste = len(abfragen)
+    assert erste >= 2                       # Textstellen und Nachrichten
+    for _ in range(5):
+        assert app_mod.store_status(cfg)["messages"] == 2
+    assert len(abfragen) == erste, "zählt trotz unveränderter Datei erneut"
+
+
+def test_store_status_zaehlt_nach_einer_aenderung_neu(sandbox):
+    """Der Puffer darf nicht dazu führen, dass ein frischer Index alt aussieht."""
+    _index_bauen(sandbox, uids=2)
+    cfg = app_mod.load_config()
+    assert app_mod.store_status(cfg)["messages"] == 2
+
+    store = sandbox / "rag_store"
+    con = sqlite3.connect(store / "corpus.db")
+    con.execute("INSERT INTO chunks(uid, seq) VALUES ('m99', 0)")
+    con.commit()
+    con.close()
+    assert app_mod.store_status(cfg)["messages"] == 3
 
 
 # --------------------------------------------------------------------------
@@ -2085,7 +2147,8 @@ function statusGeruest(){
   return {token: S.token, ollama: S.ollama, ollama_hint: S.ollama_hint,
           scopes_needed: S.scopes_needed, scope_queries: S.scope_queries,
           graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
-          store: {exists: true, chunks: 5, semantic: false, built_at: null, model: null},
+          store: {exists: true, chunks: 5, messages: 2, semantic: false,
+                  built_at: null, model: null},
           update: {status: 'off', current: '1.0.1', latest: null, url: null,
                    newer: false, error: null, releases_url: 'https://x'},
           exports: {teams: {last_run: null}, outlook: {last_run: null}},
@@ -2151,6 +2214,60 @@ console.log('OK');
 
 def test_beenden_warnt_bei_laufendem_auftrag():
     _in_node(PRUEFUNG_BEENDEN_LAUF)
+
+
+# Die vier Kacheln standen anfangs für ihre Bauteile: „Token“, „Ollama“,
+# „269.744 Chunks“, „MCP läuft“. Für jemanden, der die Wörter nicht kennt, war
+# das vier Mal keine Auskunft. Der Test hält beide Hälften der Lösung fest –
+# Alltagssprache auf der Kachel, Fachbegriff im Tooltip.
+PRUEFUNG_KACHELN = GRUNDZUSTAND + """
+function kachel(id){ return document.getElementById('p-' + id + '-t').textContent; }
+function hinweis(id){ return document.getElementById('pill-' + id).title || ''; }
+
+var st = statusGeruest();
+st.store = {exists: true, chunks: 269744, messages: 238408, semantic: true,
+            built_at: '2026-08-07T09:00:00', model: 'bge-m3'};
+st.ollama = {running: true, has_model: true, has_chat_model: true,
+             model: 'bge-m3', chat_model: 'q', models: []};
+st.mcp = {running: true, url: 'http://127.0.0.1:8365/mcp', error: null,
+          config: {http: {}, stdio: {}}};
+renderStatus(st);
+
+var SYSTEMWORT = ['Chunk', 'chunk', 'MCP', 'Token', 'token', 'Ollama', 'Index'];
+['token', 'ollama', 'index', 'mcp'].forEach(function(id){
+  var text = kachel(id);
+  pruefe(text.length > 0, 'Kachel ' + id + ' ist leer');
+  SYSTEMWORT.forEach(function(w){
+    pruefe(text.indexOf(w) < 0,
+           'Kachel ' + id + ' spricht Systemsprache: "' + text + '"');
+  });
+});
+
+// Nachrichten, nicht Textstellen: das ist die Einheit, in der jemand zaehlt.
+pruefe(kachel('index').indexOf('238.408') >= 0, 'Nachrichtenzahl fehlt: ' + kachel('index'));
+pruefe(kachel('index').indexOf('269.744') < 0,
+       'Textstellen gehoeren nicht auf die Kachel: ' + kachel('index'));
+
+// Der Fachbegriff bleibt erreichbar - eine Mausbewegung entfernt.
+pruefe(hinweis('token').indexOf('Access Token') >= 0, 'Tooltip nennt den Token nicht');
+pruefe(hinweis('token').indexOf('a@example.com') >= 0, 'Tooltip nennt das Konto nicht');
+pruefe(hinweis('ollama').indexOf('Ollama') >= 0, 'Tooltip nennt Ollama nicht');
+pruefe(hinweis('mcp').indexOf('MCP') >= 0, 'Tooltip nennt MCP nicht');
+pruefe(hinweis('index').indexOf('269.744') >= 0,
+       'Tooltip nennt die Textstellen nicht: ' + hinweis('index'));
+
+// Ohne Index: die Kachel sagt nicht nur, dass etwas fehlt, sondern was zu tun ist.
+st.store = {exists: false, chunks: 0, messages: 0, semantic: false,
+            built_at: null, model: null};
+renderStatus(st);
+pruefe(hinweis('index').indexOf('xportier') >= 0,
+       'Kein Weg nach vorn ohne Index: ' + hinweis('index'));
+console.log('OK');
+"""
+
+
+def test_kacheln_sagen_die_bedeutung_und_nennen_den_begriff_im_tooltip():
+    _in_node(PRUEFUNG_KACHELN)
 
 
 def test_navigation_drei_reiter_drei_sichten():

@@ -208,7 +208,7 @@ def benutzte_schluessel():
     Von Hand gepflegt liefe die Liste unweigerlich weg.
     """
     quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
-    keys = set(re.findall(r'data-i18n(?:-html|-ph)?="([\w.]+)"', quelle))
+    keys = set(re.findall(r'data-i18n(?:-html|-ph|-title)?="([\w.]+)"', quelle))
     # Literale in einfachen/doppelten Anführungszeichen und in HTML-Attributen
     # (dort steht &quot; statt ").
     muster = r"""(?:['"]|&quot;)([\w][\w.]*\.[\w.]+)(?:['"]|&quot;)"""

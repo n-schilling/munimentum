@@ -466,19 +466,52 @@ def export_status(cfg):
     }
 
 
+_ZAEHLUNG = {}          # db-Pfad -> (Kennung der Datei, Zahlen)
+
+
+def _zaehle(db):
+    """Textstellen und Nachrichten im Index – gepuffert.
+
+    Die Oberfläche fragt den Zustand alle paar Sekunden ab. COUNT(DISTINCT uid)
+    läuft über den ganzen Index (auf 270.000 Zeilen rund 30 ms); das jedes Mal
+    zu wiederholen wäre Verschwendung, denn die Zahlen ändern sich nur, wenn
+    die Datei sich ändert. Größe und Änderungszeit sind die Kennung dafür.
+    """
+    try:
+        s = db.stat()
+        kennung = (s.st_mtime_ns, s.st_size)
+    except OSError:
+        return {"chunks": 0, "messages": 0}
+    alt = _ZAEHLUNG.get(str(db))
+    if alt and alt[0] == kennung:
+        return alt[1]
+    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        zahlen = {
+            "chunks": con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+            # Was der Anwender „Nachricht“ nennt: eine Mail, ein Chat, ein
+            # Termin. Lange Nachrichten stehen als mehrere Textstellen im
+            # Index – die Zahl der Zeilen wäre also deutlich höher als das,
+            # was jemand in seinem Archiv wiederzufinden erwartet.
+            "messages": con.execute("SELECT COUNT(DISTINCT uid) FROM chunks").fetchone()[0],
+        }
+    finally:
+        con.close()
+    _ZAEHLUNG[str(db)] = (kennung, zahlen)
+    return zahlen
+
+
 def store_status(cfg):
-    """Zustand des Index: wie viele Chunks, mit oder ohne Embeddings."""
+    """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
     store = BASE / cfg["store_dir"]
     db = store / "corpus.db"
     vec = store / "vectors.npy"
-    out = {"dir": str(store), "exists": db.exists(), "chunks": 0,
+    out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
            "semantic": vec.exists(), "built_at": _mtime_iso(db), "model": None}
     if not out["exists"]:
         return out
     try:
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-        out["chunks"] = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        con.close()
+        out.update(_zaehle(db))
     except sqlite3.Error as e:
         out["error"] = str(e)
     try:
@@ -1683,9 +1716,13 @@ body{margin:0;background:var(--bg);color:var(--ink);
 header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
   padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
 h1{font-size:17px;margin:0;font-weight:650}
-.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto}
+.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
+.pill:hover{border-color:var(--muted)}
+/* „Beenden“ ist kein Zustand, sondern eine Handlung – die Lücke trennt es von
+   den vier Anzeigen, damit niemand es für eine weitere Meldung hält. */
+.pill-luecke{width:10px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
 nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
@@ -1867,12 +1904,17 @@ main{padding-bottom:60px}
 <body>
 <header>
   <h1 data-i18n="app.title">Microsoft-365-Archiv</h1>
+  <!-- Die Kacheln sagen, was der Zustand für den Anwender bedeutet; der
+       Fachbegriff (Token, Ollama, Chunks, MCP) steht im Tooltip, damit ihn
+       findet, wer ihn braucht, ohne dass ihn lesen muss, wer ihn nicht kennt. -->
   <div class="pills">
-    <button class="pill" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Token</span></button>
-    <button class="pill" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">Ollama</span></button>
-    <button class="pill" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Index</span></button>
-    <button class="pill" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">MCP</span></button>
+    <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
+    <button class="pill" id="pill-ollama" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
+    <button class="pill" id="pill-index" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Archiv</span></button>
+    <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
+    <span class="pill-luecke"></span>
     <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
+            data-i18n-title="app.quit.tip"
             style="border-color:var(--err);color:var(--err)">Beenden</button>
   </div>
 </header>
@@ -2213,6 +2255,9 @@ function uebersetzeSeite(){
   document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
     el.placeholder = t(el.dataset.i18nPh);
   });
+  document.querySelectorAll('[data-i18n-title]').forEach(function(el){
+    el.title = t(el.dataset.i18nTitle);
+  });
   document.title = t('app.title');
   document.documentElement.lang = LOC;
 }
@@ -2262,34 +2307,48 @@ function zeigeEinstellung(anker){
   if(ziel) ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
 }
 
-/* ---------- Status ---------- */
-function setPill(id, cls, text){
+/* ---------- Status ----------
+   Beschriftung in Alltagssprache, Fachbegriff im Tooltip. Wer „Chunks“ oder
+   „MCP“ sucht, findet es beim Darüberfahren; wer die Wörter nicht kennt, muss
+   sie nicht lesen, um den Zustand zu verstehen. */
+function setPill(id, cls, text, tip){
   el('p-' + id).className = 'dot ' + cls;
   el('p-' + id + '-t').textContent = text;
+  var knopf = el('pill-' + id);
+  if(knopf) knopf.title = tip || '';
 }
 
 function renderStatus(s){
   var first = S === null;
   S = s;
 
-  var tok = s.token;
-  if(!tok.present) setPill('token','err', t('pill.token.missing'));
-  else if(tok.expired) setPill('token','err', t('pill.token.expired'));
-  else if(tok.missing && tok.missing.length) setPill('token','warn', t('pill.token.scopes'));
-  else if(tok.expires_in_minutes != null) setPill('token','ok', t('pill.token.left', {rest: restzeit(tok.expires_in_minutes)}));
-  else setPill('token','ok', t('pill.token.set'));
+  var tok = s.token, tokTip = t('pill.token.tip');
+  if(tok.account) tokTip += '\n' + tok.account;
+  if(!tok.present) setPill('token','err', t('pill.token.missing'), tokTip);
+  else if(tok.expired) setPill('token','err', t('pill.token.expired'), tokTip);
+  else if(tok.missing && tok.missing.length) setPill('token','warn', t('pill.token.scopes'), tokTip);
+  else if(tok.expires_in_minutes != null) setPill('token','ok', t('pill.token.left', {rest: restzeit(tok.expires_in_minutes)}), tokTip);
+  else setPill('token','ok', t('pill.token.set'), tokTip);
 
   var o = s.ollama;
   setPill('ollama', o.running ? (o.has_model ? 'ok' : 'warn') : 'err',
-    o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model')) : t('pill.ollama.off'));
+    o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model')) : t('pill.ollama.off'),
+    t('pill.ollama.tip'));
 
+  // „Nachrichten“ ist die Einheit, in der jemand sein Archiv denkt. Die Zahl
+  // der Textstellen liegt deutlich höher (lange Mails werden geteilt) und
+  // gehört deshalb in den Tooltip, nicht auf die Kachel.
   var st = s.store;
-  var anz = st.chunks.toLocaleString(LOC);
   setPill('index', st.exists ? (st.semantic ? 'ok' : 'warn') : 'err',
-    st.exists ? t(st.semantic ? 'pill.index.chunks' : 'pill.index.lexical', {n: anz})
-              : t('pill.index.none'));
+    st.exists ? t(st.semantic ? 'pill.index.ready' : 'pill.index.lexical',
+                  {n: (st.messages || 0).toLocaleString(LOC)})
+              : t('pill.index.none'),
+    st.exists ? t('pill.index.tip', {c: (st.chunks || 0).toLocaleString(LOC),
+                                     when: fmt(st.built_at)})
+              : t('pill.index.tip.none'));
 
-  setPill('mcp', s.mcp.running ? 'ok' : '', t(s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'));
+  setPill('mcp', s.mcp.running ? 'ok' : '',
+    t(s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'), t('pill.mcp.tip'));
 
   /* Export-Tab */
   if(first){
