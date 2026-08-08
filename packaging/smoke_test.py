@@ -15,6 +15,8 @@ schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
   5. Die eingebettete Suche findet den indizierten Inhalt (SQLite/FTS5 an Bord).
   6. Der MCP-Server startet (uvicorn/starlette/pydantic vollständig gebündelt).
   7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
+  8. Kalender und Adressbuch entstehen – ein zweiter Selbstaufruf, diesmal von
+     combined_search, mit eigenen Parsern (E-Mail, iCalendar, vCard).
 
 Ohne Netz, ohne Graph, ohne Ollama – nur das Bündel selbst.
 """
@@ -41,6 +43,24 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
+
+# Ein Termin und ein Kontakt: daraus baut combined_search Kalender und
+# Adressbuch. Klein gehalten – geprüft wird das Bündeln, nicht das Auswerten.
+ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:rauchtest-1
+SUMMARY:Rauchtest-Termin
+DTSTART:20250601T090000Z
+DTEND:20250601T100000Z
+END:VEVENT
+END:VCALENDAR"""
+
+VCF = """BEGIN:VCARD
+VERSION:3.0
+FN:Alice Example
+EMAIL:alice@example.com
+END:VCARD"""
 
 TEAMS_HTML = """<html><body>
 <h1>Projekt Alpha</h1>
@@ -112,6 +132,12 @@ def testdaten(ordner):
     chat.mkdir(parents=True)
     (chat / "alice__abc.html").write_text(TEAMS_HTML, encoding="utf-8")
 
+    outlook = Path(ordner) / "outlook_export"
+    (outlook / "kalender" / "Arbeit").mkdir(parents=True)
+    (outlook / "kalender" / "Arbeit" / "termin.ics").write_text(ICS, encoding="utf-8")
+    (outlook / "kontakte" / "Team").mkdir(parents=True)
+    (outlook / "kontakte" / "Team" / "alice.vcf").write_text(VCF, encoding="utf-8")
+
 
 def app_starten(exe, daten, port):
     schritt(f"App starten auf Port {port}")
@@ -181,6 +207,20 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Die Suche fand nichts: {treffer}\n{protokoll(basis)}")
     if "4711" not in json.dumps(treffer, ensure_ascii=False):
         raise Fehler(f"Unerwartetes Suchergebnis: {treffer}")
+
+    schritt("Kalender & Kontakte aufbauen (Selbstaufruf von combined_search)")
+    antwort = sende(f"{basis}/api/run", {"calendar": True, "label": "Rauchtest"})
+    if not antwort.get("ok"):
+        raise Fehler(f"Kalenderlauf nicht gestartet: {antwort}")
+    letzter = warte_auf(fertig, 240, "Kalenderlauf wird fertig")
+    if not letzter.get("ok"):
+        raise Fehler(f"Kalenderlauf fehlgeschlagen: {letzter}\n{protokoll(basis)}")
+
+    kal = hole(f"{basis}/api/calendar")
+    titel = {r.get("title") for r in kal.get("recs", [])}
+    if "Rauchtest-Termin" not in titel or "Alice Example" not in titel:
+        raise Fehler(f"Kalender/Adressbuch unvollständig: {sorted(titel)}\n"
+                     f"{protokoll(basis)}")
 
     schritt("MCP-Server starten")
     r = sende(f"{basis}/api/mcp", {"action": "start"})

@@ -377,6 +377,7 @@ default calendar and all contacts. Same as pressing Enter at every prompt.
 | `REFRESH_CHANNELS` | Teams | `1` | `0` = don't re-check exported channels for new replies. |
 | `SKIP_EMPTY_CHATS` | Teams | `1` | `0` = also export chats with only system messages. |
 | `INCLUDE_HIDDEN` | Outlook | `0` | `1` = also export hidden system folders (Conversation History, Sync Issues …). |
+| `CALENDAR_RECONSTRUCT` | `combined_search` | `1` | `0` = skip recovering deleted appointments from mail. That step reads every `.eml`; on a 45,000-mail archive it is minutes against seconds for the rest. Calendar and contacts are still built. |
 | `SKIP_FOLDERS` | Outlook | see below | Comma-separated folders the default selection leaves out, compared case-insensitively. Set it empty to export every folder; unset it to keep the built-in list (Archive, Drafts, Deleted Items, Junk, Outbox and their German names). |
 
 Flags accept `0/false/no/nein/off/empty` for off and anything else for on.
@@ -465,6 +466,14 @@ the links are relative.
 appointments and contacts — as data, without building a page. That is what
 `app.py` uses for its own calendar and address book, so the reconstruction above
 lives in exactly one place.
+
+`--no-reconstruct` leaves the recovery out. It is by far the most expensive part
+— every `.eml` has to be read, measured at 288 s against 1.6 s for the rest on a
+45,000-mail archive — and calendar and contacts do not need it. The app passes
+this flag whenever a run did not fetch any mail, and there is a switch for it in
+**Einstellungen → Outlook-Export** (on by default: it recovered 2,687 events on
+that same archive). The written JSON carries `reconstruct` so a reader can tell
+"nothing was found" from "nothing was looked for".
 
 ---
 

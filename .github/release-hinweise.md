@@ -1,5 +1,34 @@
 Fertige App zum Herunterladen — Python oder sonstige Installationen sind nicht nötig.
 
+## Neu in 1.1.0
+
+**Läufe, die nichts zu tun haben, tun auch nichts.** Bringt ein Export keine
+neuen Inhalte, entfallen Indizierung und Kalenderaufbau — statt zweier Minuten
+für ein unverändertes Ergebnis. Der Kalender wird außerdem nur noch aufgebaut,
+wenn *Kalender* oder *Kontakte* im Export stehen, und liest die Mails nur, wenn
+auch Mail dabei war.
+
+**Wiederherstellung gelöschter Termine abschaltbar.** Sie holt Termine zurück,
+die es im Kalender nicht mehr gibt (auf einem Testarchiv 2.687 Stück), liest
+dafür aber jede Mail — dort gemessen 288 s gegen 1,6 s ohne. Standardmäßig an,
+umschaltbar in *Einstellungen → Outlook-Export*.
+
+**Aufgeräumte Oberfläche.** Drei Reiter statt sieben (Exportieren, Durchsuchen,
+Einstellungen); Zeitplan und MCP sind in die Einstellungen gewandert. Neu sind
+ein Fortschrittsbalken, der zeigt, wie weit ein Lauf ist, und ein Protokoll als
+ausklappbare Leiste am unteren Rand — auf jedem Reiter erreichbar.
+
+**Klartext statt Systemsprache.** Die Statuskacheln oben rechts nennen jetzt,
+was der Zustand bedeutet (*„238.408 Nachrichten durchsuchbar"* statt *„269.744
+chunks"*); der Fachbegriff steht im Tooltip. Auch der Token-Dialog wurde
+entschlackt, die Berechtigungen sind eingeklappt und gehen nur auf, wenn
+wirklich eine fehlt.
+
+**Assistenten mit der Tastatur bedienbar.** ESC schließt, Tab bleibt im Fenster,
+Strg/Cmd+Enter löst die Hauptaktion aus.
+
+**KI-Zusammenfassung im Suchreiter** (nur mit Ollama) — siehe unten.
+
 ## Welche Datei?
 
 | Datei | Für |
