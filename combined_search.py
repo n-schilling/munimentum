@@ -29,6 +29,10 @@ als JSON geschrieben (Termine, rekonstruierte Termine, Kontakte). Das nutzt
 app.py, um Kalender und Adressbuch selbst darzustellen – die Rekonstruktion
 gibt es damit einmal im Projekt statt zweimal leicht anders.
 
+--no-reconstruct lässt die Wiederherstellung gelöschter Termine aus Mails weg.
+Sie ist der mit Abstand teuerste Teil – jede .eml wird gelesen, bei 45.000
+Mails Minuten – und für Termine und Kontakte allein nicht nötig.
+
 Standard: teams_export, outlook_export. Die Ausgabe wird per Default in den
 gemeinsamen übergeordneten Ordner beider Exporte geschrieben (combined_search.html),
 damit die relativen Links funktionieren. Die Datei danach nicht relativ zu den
@@ -740,7 +744,7 @@ def link(path, out_dir):
         return Path(path).as_uri()
 
 
-def collect_calendar_data(outlook_dir, text_cap=600):
+def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
     """Kalender, Kontakte und rekonstruierte Termine als reine Daten liefern.
 
     Dieselbe Auswertung wie build(), nur ohne Seite drumherum – für app.py, das
@@ -758,11 +762,19 @@ def collect_calendar_data(outlook_dir, text_cap=600):
         raise SystemExit(f"Outlook-Export nicht gefunden: {outlook_dir}")
     people = set()
     invites = []
+    ghosts, marked, dupes = [], 0, 0
     # out_dir = root: link() liefert dann Pfade relativ zum Export-Stamm, genau
     # das, was die /source-Route der App erwartet.
-    read_outlook(root, root, people, invites)     # nur wegen der Einladungen
+    #
+    # Das Lesen aller .eml ist der teure Teil – bei 45.000 Mails Minuten – und
+    # geschieht ausschließlich für die Einladungen. Wer den Kalender nur wegen
+    # der Termine oder der Kontakte aufbaut, zahlt das sonst mit, ohne etwas
+    # davon zu haben.
+    if reconstruct:
+        read_outlook(root, root, people, invites)     # nur wegen der Einladungen
     cal = read_calendar(root, root, people)
-    ghosts, marked, dupes = reconstruct_events(invites, cal)
+    if reconstruct:
+        ghosts, marked, dupes = reconstruct_events(invites, cal)
     contacts = read_contacts(root, root, people)
 
     recs = cal + ghosts + contacts
@@ -783,6 +795,10 @@ def collect_calendar_data(outlook_dir, text_cap=600):
     return {
         "generated": datetime.now().isoformat(timespec="seconds"),
         "outlook_dir": str(root),
+        # Ob rekonstruiert wurde, muss mit: sonst könnte die Oberfläche eine
+        # leere Liste nur als „es gab nichts“ deuten und nicht als „danach
+        # wurde gar nicht gesucht“.
+        "reconstruct": bool(reconstruct),
         "counts": {"kalender": len(cal), "rekonstruiert": len(ghosts),
                    "kontakte": len(contacts), "abgesagt_markiert": marked,
                    "doppel_verworfen": dupes},
@@ -1309,9 +1325,9 @@ personEl.focus();
 """
 
 
-def write_calendar_json(outlook_dir, ziel):
+def write_calendar_json(outlook_dir, ziel, reconstruct=True):
     """Kalenderdaten nach `ziel` schreiben (atomar). Liefert die Zählungen."""
-    daten = collect_calendar_data(outlook_dir)
+    daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct)
     ziel = Path(ziel)
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")
@@ -1324,6 +1340,9 @@ def main():
     args = sys.argv[1:]
     output = None
     kalender_json = None
+    # Vorgabe aus app_config.json, damit der Einzelaufruf dieselbe Einstellung
+    # trägt wie die App. --no-reconstruct schlägt sie auf der Zeile.
+    reconstruct = settings.flag("CALENDAR_RECONSTRUCT", "calendar_reconstruct", True)
     pos = []
     i = 0
     while i < len(args):
@@ -1333,6 +1352,9 @@ def main():
         elif args[i] == "--json" and i + 1 < len(args):
             kalender_json = args[i + 1]
             i += 2
+        elif args[i] == "--no-reconstruct":
+            reconstruct = False
+            i += 1
         else:
             pos.append(args[i])
             i += 1
@@ -1343,8 +1365,9 @@ def main():
         print(hinweis)
 
     if kalender_json:
-        print(f"Kalenderdaten → {kalender_json}")
-        c = write_calendar_json(outlook_dir, kalender_json)
+        print(f"Kalenderdaten → {kalender_json}"
+              + ("" if reconstruct else " (ohne Wiederherstellung aus Mails)"))
+        c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct)
         print(f"Fertig. {c['kalender']} Termine, {c['rekonstruiert']} aus Mails "
               f"rekonstruiert, {c['kontakte']} Kontakte."
               + (f" {c['abgesagt_markiert']} nachträglich als abgesagt markiert."

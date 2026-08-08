@@ -400,6 +400,68 @@ def test_store_status_zaehlt_nach_einer_aenderung_neu(sandbox):
 
 
 # --------------------------------------------------------------------------
+# Kalenderschritt: wann überhaupt, und wann mit Mail-Auswertung
+#
+# Gemeldet aus der Praxis: ein Lauf mit nur „Kontakte“ ließ trotzdem die
+# Wiederherstellung gelöschter Termine anlaufen – jede der 45.000 Mails wurde
+# gelesen, minutenlang, für ein Ergebnis, an dem sich nichts geändert haben
+# konnte.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("cats,noetig,mit_mails", [
+    (["mail", "calendar", "contacts"], True, True),
+    (["calendar"], True, False),          # Termine ja, Mails wurden nicht geholt
+    (["contacts"], True, False),          # genau der gemeldete Fall
+    (["mail"], False, True),              # nichts aufzubauen: kein Kalender, keine Kontakte
+    ([], False, False),
+    (["mail", "contacts"], True, True),
+])
+def test_calendar_plan(sandbox, cats, noetig, mit_mails):
+    cfg = app_mod.load_config()
+    cfg["outlook_categories"] = cats
+    assert app_mod.calendar_plan(cfg) == (noetig, mit_mails)
+
+
+def test_build_steps_laesst_die_wiederherstellung_weg(sandbox):
+    """Ohne Mail-Auswertung fällt der teure Teil weg – erkennbar am Schalter
+    und daran, dass der Schritt anders heißt."""
+    cfg = app_mod.load_config()
+    schritt = [s for s in app_mod.build_steps(cfg, calendar=True, reconstruct=False)
+               if s["key"] == "calendar"][0]
+    assert "--no-reconstruct" in schritt["argv"]
+    assert schritt["label"] == "job.step.calendar.plain"
+
+
+def test_build_steps_folgt_der_einstellung(sandbox):
+    """Ohne ausdrückliche Angabe entscheidet app_config.json."""
+    cfg = app_mod.load_config()
+    voll = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
+    assert "--no-reconstruct" not in voll["argv"]      # Vorgabe: an
+
+    cfg["calendar_reconstruct"] = False
+    aus = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
+    assert "--no-reconstruct" in aus["argv"]
+
+
+def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollama):
+    """Der gemeldete Fall, einmal durch den ganzen Weg: /api/run -> build_steps."""
+    gesehen = {}
+
+    def merken(steps, label):
+        gesehen["steps"] = steps
+        return True
+    app = app_mod.App()
+    app.cfg["outlook_categories"] = ["contacts"]
+    monkeypatch.setattr(app.jobs, "start", merken)
+    monkeypatch.setattr(app_mod, "read_token", lambda *a, **kw: "tok")
+
+    ok, _ = app.launch(outlook=True, index=True, calendar=True,
+                       reconstruct=False, label="job.export")
+    assert ok
+    kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
+    assert kal and "--no-reconstruct" in kal[0]["argv"]
+
+
+# --------------------------------------------------------------------------
 # Schritte eines Laufs
 # --------------------------------------------------------------------------
 def test_build_steps_setzt_kategorien_und_token(sandbox):
@@ -957,6 +1019,26 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     assert gestartet["index"] is True and gestartet["label"] == "job.scheduled"
 
 
+@pytest.mark.parametrize("cats,kalender,rekonstruktion", [
+    (["mail", "calendar"], True, None),    # None = wie eingestellt
+    (["contacts"], True, False),           # aufbauen ja, Mails lesen nein
+    (["mail"], False, None),               # nichts aufzubauen – dann egal
+])
+def test_scheduler_stimmt_den_kalenderschritt_ab(sandbox, with_ollama, cats,
+                                                 kalender, rekonstruktion):
+    """Derselbe Fehler saß im Zeitplan – dort unbemerkt, weil er nachts läuft."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["outlook_categories"] = cats
+    a.cfg["schedule"].update(enabled=True, interval_minutes=5, outlook=True,
+                             teams=False, index=True, calendar=True)
+    gestartet = {}
+    a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
+    a.scheduler._tick()
+    assert gestartet["calendar"] is kalender
+    assert gestartet["reconstruct"] is rekonstruktion
+
+
 def test_scheduler_wartet_bis_zum_intervall(sandbox, with_ollama):
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
     a = app_mod.App(app_mod.load_config())
@@ -1392,6 +1474,46 @@ def test_http_run_ohne_token(server):
     _, port = server
     code, r = call(port, "POST", "/api/run", {"outlook": True})
     assert code == 409 and not r["ok"]
+
+
+@pytest.mark.parametrize("cats,erwartet", [
+    # (gibt es den Kalenderschritt, liest er die Mails)
+    (["mail", "calendar"], (True, True)),
+    (["contacts"], (True, False)),        # der gemeldete Fall
+    (["calendar"], (True, False)),
+    (["mail"], (False, False)),           # nichts aufzubauen
+])
+def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwartet):
+    """Der Weg, den die Oberfläche wirklich geht. Sie schickt weiterhin
+    calendar=true zu jedem Outlook-Lauf; verfeinert wird serverseitig, damit
+    die Regel nur an einer Stelle steht."""
+    a, port = server
+    a.cfg["outlook_categories"] = cats
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label: gesehen.setdefault("steps", steps) or True)
+
+    code, r = call(port, "POST", "/api/run",
+                   {"outlook": True, "index": True, "calendar": True})
+    assert code == 200 and r["ok"]
+    kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
+    assert (bool(kal), bool(kal) and "--no-reconstruct" not in kal[0]["argv"]) == erwartet
+
+
+def test_http_kalenderknopf_bleibt_vollstaendig(server, monkeypatch):
+    """„Kalender & Kontakte aufbauen“ kommt ohne outlook – wer ihn drückt, will
+    die Auswertung, unabhängig davon, was zuletzt exportiert wurde."""
+    a, port = server
+    a.cfg["outlook_categories"] = ["contacts"]
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label: gesehen.setdefault("steps", steps) or True)
+
+    code, r = call(port, "POST", "/api/run", {"calendar": True})
+    assert code == 200 and r["ok"]
+    kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
+    assert kal and "--no-reconstruct" not in kal[0]["argv"]
 
 
 def test_http_config_speichern(server, sandbox):

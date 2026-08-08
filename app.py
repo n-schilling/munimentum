@@ -153,6 +153,10 @@ DEFAULT_CONFIG = {
     "refresh_channels": True,
     "skip_empty_chats": True,
     "include_hidden": False,
+    # Holt gelöschte Termine aus Einladungs- und Absagemails zurück. Dafür wird
+    # jede .eml gelesen – der mit Abstand teuerste Schritt. Standardmäßig an,
+    # weil es Termine sichtbar macht, die es sonst nirgends mehr gibt.
+    "calendar_reconstruct": True,
     "skip_folders": sorted(SKIP_FOLDERS_DEFAULT),
     "index_batch": 64,
     "ollama": "http://localhost:11434",
@@ -562,8 +566,23 @@ def calendar_file(cfg):
     return BASE / cfg["store_dir"] / "calendar.json"
 
 
+def calendar_plan(cfg):
+    """Was der Kalenderschritt in diesem Lauf zu tun hat.
+
+    Liefert (noetig, mit_mails). Termine und Kontakte stammen ausschließlich
+    aus dem Outlook-Export – ist keine der beiden Kategorien gewählt, gäbe es
+    nichts aufzubauen. Die Wiederherstellung gelöschter Termine liest darüber
+    hinaus jede einzelne .eml; das lohnt nur, wenn in diesem Lauf auch Mails
+    geholt wurden. Wer nur Kontakte exportiert, wartete sonst minutenlang auf
+    eine Auswertung, an der sich nichts geändert haben kann.
+    """
+    cats = set(_clean_categories(cfg.get("outlook_categories"),
+                                 ["mail", "calendar", "contacts"]))
+    return bool(cats & {"calendar", "contacts"}), "mail" in cats
+
+
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
-                embeddings=True, search_page=False, token=""):
+                embeddings=True, search_page=False, token="", reconstruct=None):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -572,6 +591,10 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     welchem Verzeichnis er gestartet wurde.
     """
     steps = []
+    # None heißt „wie eingestellt“. Der Aufrufer setzt es nur, wenn er es besser
+    # weiß – etwa weil in diesem Lauf gar keine Mails geholt wurden.
+    if reconstruct is None:
+        reconstruct = bool(cfg.get("calendar_reconstruct", True))
     base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
                 "EXPORT_PROGRESS": "1"}   # Zahlen für den Balken, siehe progress.py
     if token:
@@ -613,14 +636,18 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "argv": argv, "env": dict(base_env),
         })
     if calendar:
-        # Wertet alle .eml aus, um gelöschte Termine aus Einladungs-, Antwort-
-        # und Absagemails zurückzuholen – bei 45.000 Mails ein paar Minuten.
-        # Deshalb ein eigener Schritt mit Ergebnisdatei und nicht auf Zuruf.
+        # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
+        # nur die Wiederherstellung gelöschter Termine: dafür wird jede .eml
+        # gelesen, bei 45.000 Mails ein paar Minuten. Deshalb ein eigener
+        # Schritt mit Ergebnisdatei – und abschaltbar.
+        argv = script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"],
+                           "--json", str(Path(cfg["store_dir"]) / "calendar.json"))
+        if not reconstruct:
+            argv.append("--no-reconstruct")
         steps.append({
-            "key": "calendar", "label": "job.step.calendar",
-            "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"],
-                                "--json", str(Path(cfg["store_dir"]) / "calendar.json")),
-            "env": dict(base_env),
+            "key": "calendar",
+            "label": "job.step.calendar" if reconstruct else "job.step.calendar.plain",
+            "argv": argv, "env": dict(base_env),
         })
     if search_page:
         steps.append({
@@ -857,13 +884,15 @@ class Scheduler(threading.Thread):
             self.app.jobs.logk("srv.sched.notoken", "warn")
             self.app.jobs.token_expired = True
             return
+        # Kalender nur, wenn Outlook mitläuft – die Daten dafür kommen
+        # ausschließlich von dort – und nur, wenn die Auswahl etwas hergibt.
+        noetig, mit_mails = calendar_plan(self.app.cfg)
+        kalender = bool(plan.get("outlook", True) and plan.get("calendar", True) and noetig)
         ok, why = self.app.launch(outlook=plan.get("outlook", True),
                                   teams=plan.get("teams", True),
                                   index=plan.get("index", True),
-                                  # Kalender nur, wenn Outlook mitläuft – die
-                                  # Daten dafür kommen ausschließlich von dort.
-                                  calendar=bool(plan.get("outlook", True)
-                                                and plan.get("calendar", True)),
+                                  calendar=kalender,
+                                  reconstruct=None if mit_mails else False,
                                   label="job.scheduled")
         if not ok:
             self.app.jobs.logk("srv.sched.skipped", "warn", why=why)
@@ -1163,7 +1192,7 @@ class App:
         return self._calendar_cache[1], self._calendar_cache[2]
 
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
-               embeddings=None, search_page=False, label="Lauf"):
+               embeddings=None, search_page=False, label="Lauf", reconstruct=None):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
@@ -1177,7 +1206,8 @@ class App:
                            else "srv.lexical.noollama", "warn")
         steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
                             calendar=calendar, embeddings=embeddings,
-                            search_page=search_page, token=token)
+                            search_page=search_page, token=token,
+                            reconstruct=reconstruct)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
@@ -1304,12 +1334,23 @@ class Handler(BaseHTTPRequestHandler):
                 app.jobs.token_expired = False
                 return self._json({"ok": True})
             if u.path == "/api/run":
+                mit_outlook = bool(data.get("outlook"))
+                kalender = bool(data.get("calendar"))
+                rekonstruktion = None            # None: wie eingestellt
+                if kalender and mit_outlook:
+                    # Teil eines Exportlaufs: der Schritt richtet sich danach,
+                    # was überhaupt geholt wird. Der Knopf „Kalender & Kontakte
+                    # aufbauen“ kommt ohne outlook und bleibt unangetastet.
+                    kalender, mit_mails = calendar_plan(app.cfg)
+                    if not mit_mails:
+                        rekonstruktion = False
                 ok, why = app.launch(
-                    outlook=bool(data.get("outlook")), teams=bool(data.get("teams")),
-                    index=bool(data.get("index")), calendar=bool(data.get("calendar")),
+                    outlook=mit_outlook, teams=bool(data.get("teams")),
+                    index=bool(data.get("index")), calendar=kalender,
                     search_page=bool(data.get("search_page")),
                     embeddings=data.get("embeddings"),
-                    label=str(data.get("label") or "job.export"))
+                    label=str(data.get("label") or "job.export"),
+                    reconstruct=rekonstruktion)
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
             if u.path == "/api/cancel":
                 return self._json({"ok": app.jobs.cancel()})
@@ -1386,7 +1427,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     pass
         for key in ("mcp_autostart", "update_check", "embed_images", "cache_images",
-                    "refresh_channels", "skip_empty_chats", "include_hidden"):
+                    "refresh_channels", "skip_empty_chats", "include_hidden",
+                    "calendar_reconstruct"):
             if key in data:
                 cfg[key] = bool(data[key])
         if "skip_folders" in data:
@@ -2081,6 +2123,8 @@ main{padding-bottom:60px}
     <h2 data-i18n="settings.outlook.title">Outlook-Export</h2>
     <label class="chk"><input type="checkbox" id="c-include_hidden"> <span data-i18n="settings.include_hidden">Versteckte Systemordner mitnehmen</span>
       <span class="small muted" data-i18n="settings.include_hidden.hint">– Conversation History …</span></label>
+    <label class="chk"><input type="checkbox" id="c-calendar_reconstruct"> <span data-i18n="settings.calendar_reconstruct">Gelöschte Termine aus Mails wiederherstellen</span></label>
+    <p class="small muted" style="margin:2px 0 0 24px" data-i18n="settings.calendar_reconstruct.hint">Liest jede Mail – der langsamste Schritt.</p>
     <p class="sub" style="margin:12px 0 6px" data-i18n="settings.skip_folders.sub">Ordner, die die Standardauswahl auslässt.</p>
     <textarea id="c-skip_folders" style="min-height:120px"></textarea>
     <div class="row" style="margin-top:8px">
@@ -2749,8 +2793,11 @@ function rbList(){
     if(m !== monat){ h += '<div class="rbmonth">' + m + '</div>'; monat = m; }
     h += rbRow(r);
   });
+  // Leer heißt nicht immer dasselbe: „nichts gefunden“ wäre gelogen, wenn gar
+  // nicht gesucht wurde, weil die Wiederherstellung ausgeschaltet ist.
+  var leer = (KAL && KAL.reconstruct === false) ? 'cal.rb.off' : 'cal.rb.empty';
   el('rblist').innerHTML = h || '<p class="hint">' +
-    esc(t(REBUILT.length ? 'cal.rb.nohits' : 'cal.rb.empty')) + '</p>';
+    esc(t(REBUILT.length ? 'cal.rb.nohits' : leer)) + '</p>';
 }
 
 function drawCal(){
@@ -3004,7 +3051,7 @@ function pruefeUpdate(){
 
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
-                'include_hidden','mcp_autostart','update_check'];
+                'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources'];
 var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir'];
 var cfgGefuellt = false;

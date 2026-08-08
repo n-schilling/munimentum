@@ -711,6 +711,36 @@ def test_collect_calendar_data_kuerzt_beschreibungen(tmp_path):
     assert len(ghost["x"]) == 100
 
 
+def test_collect_calendar_data_ohne_wiederherstellung(tmp_path):
+    """Termine und Kontakte entstehen weiter – nur die Mails bleiben ungelesen.
+
+    Aus der Praxis gemeldet: ein Lauf mit nur „Kontakte“ ließ die
+    Wiederherstellung trotzdem anlaufen und las minutenlang jede der 45.000
+    Mails, für ein Ergebnis, an dem sich nichts geändert haben konnte.
+    """
+    daten = combined_search.collect_calendar_data(str(_kalender_export(tmp_path)),
+                                                  reconstruct=False)
+    assert daten["reconstruct"] is False
+    assert daten["counts"]["kalender"] == 1 and daten["counts"]["kontakte"] == 1
+    assert daten["counts"]["rekonstruiert"] == 0
+    assert not [r for r in daten["recs"] if r.get("st") in ("deleted", "gone")]
+
+
+def test_collect_calendar_data_ohne_wiederherstellung_liest_keine_mail(tmp_path, monkeypatch):
+    """Der teure Teil darf nicht bloß verworfen, er muss übersprungen werden."""
+    gelesen = []
+    echt = combined_search.read_outlook
+    monkeypatch.setattr(combined_search, "read_outlook",
+                        lambda *a, **kw: gelesen.append(1) or echt(*a, **kw))
+    outlook = str(_kalender_export(tmp_path))
+
+    combined_search.collect_calendar_data(outlook, reconstruct=False)
+    assert gelesen == [], "die Mails wurden trotzdem gelesen"
+
+    combined_search.collect_calendar_data(outlook)          # Vorgabe: doch
+    assert gelesen == [1]
+
+
 def test_collect_calendar_data_ohne_ordner(tmp_path):
     with pytest.raises(SystemExit, match="nicht gefunden"):
         combined_search.collect_calendar_data(str(tmp_path / "fehlt"))
@@ -736,3 +766,33 @@ def test_main_json_schreibt_nur_die_daten(tmp_path, monkeypatch, capsys):
     assert not (tmp_path / "combined_search.html").exists()      # keine Seite gebaut
     out = capsys.readouterr().out
     assert "1 Termine" in out and "1 aus Mails rekonstruiert" in out
+
+
+def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch, capsys):
+    outlook = _kalender_export(tmp_path)
+    ziel = tmp_path / "kal.json"
+    monkeypatch.setattr(sys, "argv", ["combined_search.py", str(tmp_path / "fehlt"),
+                                      str(outlook), "--json", str(ziel),
+                                      "--no-reconstruct"])
+    combined_search.main()
+    daten = json.loads(ziel.read_text(encoding="utf-8"))
+    assert daten["reconstruct"] is False and daten["counts"]["rekonstruiert"] == 0
+    assert "ohne Wiederherstellung" in capsys.readouterr().out
+
+
+def test_main_json_folgt_der_app_config(tmp_path, monkeypatch):
+    """app_config.json trägt auch, wenn combined_search.py von Hand läuft."""
+    import settings
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    (tmp_path / settings.CONFIG_NAME).write_text(
+        json.dumps({"calendar_reconstruct": False}), encoding="utf-8")
+    settings.reset()
+    try:
+        outlook = _kalender_export(tmp_path)
+        ziel = tmp_path / "kal.json"
+        monkeypatch.setattr(sys, "argv", ["combined_search.py", str(tmp_path / "fehlt"),
+                                          str(outlook), "--json", str(ziel)])
+        combined_search.main()
+        assert json.loads(ziel.read_text(encoding="utf-8"))["reconstruct"] is False
+    finally:
+        settings.reset()
