@@ -47,7 +47,6 @@
   "export.datadir": "Alle Daten liegen in",
   "export.nothing": "Nichts ausgewählt.",
   "log.title": "Protokoll",
-  "log.ready": "Bereit.",
   "log.job.running": "{label} – {step} ({i}/{n})",
   "log.job.done": "✓ {label} – {when}",
   "log.job.failed": "✗ {label} – {when} ({detail})",
@@ -303,5 +302,16 @@
   "search.ai.tag": "KI",
   "search.ai.model": "Modell: {model}",
   "view.hits": "Treffer",
-  "settings.search.sub": "Beides läuft in deinem Ollama auf diesem Rechner: die semantische Hälfte der Suche und die Zusammenfassung der Treffer."
+  "settings.search.sub": "Beides läuft in deinem Ollama auf diesem Rechner: die semantische Hälfte der Suche und die Zusammenfassung der Treffer.",
+  "export.start.hint": "Holt neue Mails und Chats, baut danach Index und Kalender neu auf. Mehr braucht es im Normalfall nicht.",
+  "export.steps.title": "Einzelne Schritte",
+  "export.steps.sub": "Normalerweise nicht nötig – „Export starten“ erledigt das alles nacheinander. Einzeln braucht man sie nur in diesen Fällen:",
+  "export.index.only.when": "Wenn du nichts Neues holen, aber den Suchindex neu bauen willst – etwa nachdem du in Ollama ein Embedding-Modell nachgeladen hast und die Suche nun auch semantisch arbeiten soll.",
+  "export.calendar.build.when": "Liest alle Mails erneut, um gelöschte Termine daraus zurückzuholen. Läuft nach jedem Outlook-Export ohnehin mit; einzeln nur, wenn Kalender oder Adressbuch leer bleiben.",
+  "export.page.build.when": "Erzeugt eine einzelne HTML-Datei mit Suche, Kalender und Adressbuch – zum Weitergeben oder Archivieren, sie läuft ohne diese App und ohne Index.",
+  "progress.of": "{done} von {total} {what}",
+  "progress.count": "{done} {what}",
+  "progress.unit.chats": "Chats",
+  "progress.unit.mails": "Mails",
+  "progress.unit.embeddings": "Embeddings"
 }

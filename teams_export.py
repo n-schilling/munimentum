@@ -57,6 +57,7 @@ from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import settings
+import progress
 
 try:
     import msal
@@ -972,8 +973,10 @@ def run_parallel(runners, stats, workers):
     done_count = 0
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = [ex.submit(r) for r in runners]
+        progress.melde(0, total, "chats")
         for fut in as_completed(futs):
             done_count += 1
+            progress.melde(done_count, total, "chats")
             try:
                 res = fut.result()
             except Exception as e:

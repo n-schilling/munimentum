@@ -492,7 +492,8 @@ def test_stream_lines_ueberspringt_leerzeilen():
 # JobRunner – echte Unterprozesse, aber winzige
 # --------------------------------------------------------------------------
 def _py_step(code, label="Schritt"):
-    return {"key": "t", "label": label, "argv": [sys.executable, "-c", code], "env": {}}
+    return {"key": "t", "label": label, "argv": [sys.executable, "-c", code],
+            "env": {"EXPORT_PROGRESS": "1"}}
 
 
 def _warte(runner, sekunden=15):
@@ -557,6 +558,48 @@ def test_jobrunner_meldet_nicht_startbaren_befehl(sandbox):
     _warte(r)
     assert not r.last["ok"]
     assert any(schluessel(ln["text"]) == "srv.job.spawnfail" for ln in r.lines)
+
+
+def test_jobrunner_nimmt_fortschritt_auf_und_haelt_ihn_aus_dem_protokoll(sandbox):
+    """Die Zahlen treiben den Balken; im Protokoll wären sie nur Rauschen."""
+    r = app_mod.JobRunner()
+    # progress liegt im Projektordner, nicht im Sandkasten
+    wurzel = str(Path(app_mod.__file__).resolve().parent)
+    skript = (f"import sys, time; sys.path.insert(0, {wurzel!r}); import progress; "
+              "[(progress.melde(i, 3, 'chats'), time.sleep(0.05)) for i in range(4)]; "
+              "print('fertig')")
+    r.start([_py_step(skript)], "Lauf")
+    gesehen = []
+    while r.busy:
+        p = (r.job or {}).get("progress")
+        if p and p not in gesehen:
+            gesehen.append(p)
+        time.sleep(0.02)
+    assert {"done": 0, "total": 3, "what": "chats"} in gesehen
+    assert gesehen[-1]["done"] == 3
+    texte = [ln["text"] for ln in r.lines if isinstance(ln["text"], str)]
+    assert "fertig" in texte
+    assert not [x for x in texte if "PROGRESS" in x], "Fortschritt landete im Protokoll"
+
+
+def test_jobrunner_setzt_den_fortschritt_je_schritt_zurueck(sandbox):
+    """Sonst zeigte der zweite Schritt kurz den Stand des ersten."""
+    r = app_mod.JobRunner()
+    staende = []
+    echtes = app_mod.JobRunner._exec
+
+    def merke(self, step):
+        staende.append((step["label"], (self.job or {}).get("progress")))
+        return echtes(self, step)
+
+    app_mod.JobRunner._exec = merke
+    try:
+        r.start([_py_step("print(1)", "job.step.outlook"),
+                 _py_step("print(2)", "job.step.teams")], "Lauf")
+        _warte(r)
+    finally:
+        app_mod.JobRunner._exec = echtes
+    assert [p for _, p in staende] == [None, None]
 
 
 def test_jobrunner_log_since(sandbox):
@@ -1703,7 +1746,8 @@ global.document = {
   createElement: function(){ return mk('x'); },
 };
 global.aktiverTab = 'export';
-global.vorhanden = {'.rbcount': mk('rbcount'), 'main': mk('main'), 'nav': mk('nav')};
+global.vorhanden = {'.rbcount': mk('rbcount'), 'main': mk('main'),
+                    'nav': mk('nav'), '.balken': mk('balken')};
 global.setInterval = function(){ return 0; };
 // setTimeout echt lassen: die Kalenderpruefung wartet auf Promises.
 global.alert = function(){};
@@ -1987,6 +2031,53 @@ pruefe(hat('einstellungen'), 'MCP-Kachel fuehrt nicht in die Einstellungen');
 console.log('OK');
 """
 
+# Der Balken hat zwei Ebenen: Schritt i von n, und darin so genau, wie das
+# Skript es weiss. Wo keine Gesamtzahl vorliegt (Outlook entdeckt seine Mails
+# erst im Laufen), darf keine Prozentzahl erfunden werden.
+PRUEFUNG_BALKEN = GRUNDZUSTAND + """
+var breite = null, unbekannt = null;
+document.getElementById('balken-fuell').style = {set width(v){ breite = v; }};
+global.vorhanden['.balken'].classList.toggle = function(c, an){
+  if(c === 'unbekannt') unbekannt = an; };
+
+function lauf(index, n, progress){
+  return {busy: true, last: null, token_expired: false, seq: 0,
+          job: {label: 'job.export', step: 'job.step.teams', index: index,
+                steps: new Array(n), progress: progress}};
+}
+
+// Schritt 1 von 4, darin 25 % -> 6 %
+zeigeFortschritt(lauf(0, 4, {done: 25, total: 100, what: 'chats'}));
+pruefe(unbekannt === false, 'Balken als unbekannt markiert, obwohl Gesamtzahl da');
+pruefe(breite === '6%', 'Breite bei Schritt 1/4 und 25%: ' + breite);
+pruefe(document.getElementById('fortschritt-text').textContent.indexOf('25') >= 0,
+       'Zahl fehlt in der Zeile');
+
+// Schritt 3 von 4, darin halb -> (2 + 0,5) / 4 = 63 %
+zeigeFortschritt(lauf(2, 4, {done: 50, total: 100, what: 'chats'}));
+pruefe(breite === '63%', 'Breite bei Schritt 3/4 und 50%: ' + breite);
+
+// Ohne Gesamtzahl: gestreift, keine erfundene Breite
+breite = null;
+zeigeFortschritt(lauf(1, 4, {done: 1234, what: 'mails'}));
+pruefe(unbekannt === true, 'Ohne Gesamtzahl nicht als unbekannt markiert');
+pruefe(breite === null, 'Ohne Gesamtzahl wurde eine Breite gesetzt: ' + breite);
+var zeile = document.getElementById('fortschritt-text').textContent;
+pruefe(zeile.indexOf('1.234') >= 0 || zeile.indexOf('1,234') >= 0,
+       'Zahl fehlt: ' + zeile);
+
+// Fertig: Balken weg, letzte Meldung in die Protokollleiste
+var versteckt = null;
+document.getElementById('fortschritt').classList.toggle = function(c, an){ versteckt = an; };
+zeigeFortschritt({busy: false, job: null, seq: 0, token_expired: false,
+                  last: {label: 'job.export', ok: true, detail: '',
+                         finished: '2026-08-08T10:00:00'}});
+pruefe(versteckt === true, 'Balken bleibt nach dem Lauf stehen');
+pruefe(document.getElementById('log-letzte').textContent.length > 3,
+       'Letzte Meldung fehlt in der Protokollleiste');
+console.log('OK');
+"""
+
 # renderStatus liest viel mehr aus dem Status als die Assistenten – ein
 # vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
 STATUS_GERUEST = """
@@ -2066,6 +2157,12 @@ def test_navigation_drei_reiter_drei_sichten():
     """Kalender und Adressbuch liegen unter der Suche, nicht daneben – und die
     zuletzt gewählte Sicht übersteht einen Reiterwechsel."""
     _in_node(PRUEFUNG_NAV)
+
+
+def test_fortschrittsbalken_zwei_ebenen():
+    """Schritt i von n mal Fortschritt im Schritt – und ohne Gesamtzahl keine
+    erfundene Prozentangabe, sondern ein gestreifter Balken mit der Zahl."""
+    _in_node(PRUEFUNG_BALKEN)
 
 
 def test_ki_checkbox_und_fussnoten():

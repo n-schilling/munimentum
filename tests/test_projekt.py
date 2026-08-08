@@ -45,14 +45,35 @@ def test_startbares_skript_stellt_auf_utf8(pfad):
         f"beendet das erste Sonderzeichen den Lauf.")
 
 
-def test_bibliotheken_geben_nichts_aus():
+# Bibliotheken, die trotz fehlendem __main__ ausgeben dürfen – mit Grund.
+# Eine Bibliothek soll sys.stdout NICHT global umstellen; das ginge alle an, die
+# sie importieren. Wer hier steht, muss seine Ausgabe stattdessen selbst
+# absichern.
+DUERFEN_AUSGEBEN = {
+    # Eine einzige Zeile, rein ASCII (json.dumps escapt alles andere), und der
+    # print steht in einem try/except – UnicodeEncodeError ist ein ValueError,
+    # eine misslungene Fortschrittsmeldung hält also nie einen Lauf auf.
+    "progress.py",
+}
+
+
+def test_bibliotheken_geben_nichts_unabgesichertes_aus():
     """Module ohne __main__ brauchen die Umstellung nicht – solange sie auch
     nichts ausgeben. Täten sie es, gälte für sie dieselbe Falle."""
     startbar = {p.name for p in startbare_skripte()}
     for p in sorted(WURZEL.glob("*.py")):
-        if p.name in startbar:
+        if p.name in startbar or p.name in DUERFEN_AUSGEBEN:
             continue
         quelle = p.read_text(encoding="utf-8")
         assert "print(" not in quelle, (
             f"{p.name} gibt etwas aus, hat aber kein __main__ – entweder die "
-            f"UTF-8-Umstellung ergänzen oder die Ausgabe dem Aufrufer überlassen.")
+            f"UTF-8-Umstellung ergänzen, die Ausgabe absichern (siehe "
+            f"DUERFEN_AUSGEBEN) oder sie dem Aufrufer überlassen.")
+
+
+def test_ausnahmen_sichern_ihre_ausgabe_wirklich_ab():
+    """Wer auf der Liste steht, muss seinen print auch tatsächlich fangen."""
+    for name in DUERFEN_AUSGEBEN:
+        quelle = (WURZEL / name).read_text(encoding="utf-8")
+        assert "try:" in quelle and "except" in quelle, \
+            f"{name} steht auf der Ausnahmeliste, fängt aber nichts ab"

@@ -50,6 +50,7 @@ from pathlib import Path
 from urllib.parse import quote, unquote
 from html.parser import HTMLParser
 
+import progress
 import settings
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
@@ -283,7 +284,11 @@ def mail_ical(msg):
 
 def read_outlook(root, out_dir, people, invites=None):
     recs = []
-    for p in sorted(root.rglob("*.eml")):
+    dateien = sorted(root.rglob("*.eml"))
+    progress.melde(0, len(dateien), "mails")
+    for n, p in enumerate(dateien, 1):
+        if n % 200 == 0:
+            progress.melde(n, len(dateien), "mails")
         try:
             with open(p, "rb") as f:
                 msg = BytesParser(policy=policy.default).parse(f)

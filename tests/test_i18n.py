@@ -187,7 +187,8 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.",
            "book.", "sched.", "mcp.mode.", "mcp.title", "mcp.sub", "mcp.start",
            "mcp.stop", "mcp.running", "mcp.stopped", "mcp.code.", "mcp.desktop.",
-           "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.")
+           "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
+           "progress.", "view.")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.
@@ -195,6 +196,7 @@ DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels")),
+    ("progress.unit.", ("chats", "mails", "embeddings")),
 )
 
 

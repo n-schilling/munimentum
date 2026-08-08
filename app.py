@@ -53,6 +53,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
 import i18n
+import progress
 import settings
 import updates
 import version
@@ -538,7 +539,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     welchem Verzeichnis er gestartet wurde.
     """
     steps = []
-    base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4))}
+    base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
+                "EXPORT_PROGRESS": "1"}   # Zahlen für den Balken, siehe progress.py
     if token:
         base_env["GRAPH_TOKEN"] = token
 
@@ -673,7 +675,7 @@ class JobRunner:
         self.cancelled = False
         self.token_expired = False
         self.job = {"label": label, "steps": [s["label"] for s in steps],
-                    "step": steps[0]["label"], "index": 0,
+                    "step": steps[0]["label"], "index": 0, "progress": None,
                     "started": datetime.now().isoformat(timespec="seconds")}
         self.thread = threading.Thread(target=self._run, args=(steps, label), daemon=True)
         self.thread.start()
@@ -696,7 +698,8 @@ class JobRunner:
             if self.cancelled:
                 ok, detail = False, {"k": "srv.job.cancelled", "v": {}}
                 break
-            self.job = {**self.job, "step": step["label"], "index": i}
+            self.job = {**self.job, "step": step["label"], "index": i,
+                        "progress": None}      # jeder Schritt zählt bei null an
             self.logk("srv.job.step", "head", step=step["label"])
             code = self._exec(step)
             if code != 0:
@@ -726,6 +729,12 @@ class JobRunner:
             self.logk("srv.job.spawnfail", "err", error=str(e))
             return -1
         for line in _stream_lines(self.proc.stdout):
+            stand = progress.lies(line)
+            if stand is not None:
+                # Zahlen für den Balken – im Protokoll wären sie nur Rauschen.
+                if self.job:
+                    self.job = {**self.job, "progress": stand}
+                continue
             if _TOKEN_DEAD.search(line):
                 self.token_expired = True
             self.log(line)
@@ -1804,6 +1813,36 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 .cline span{color:var(--muted);margin-right:5px}
 .hint{color:var(--muted)}
 
+/* Fortschritt: Schritt für Schritt, und innerhalb eines Schritts so genau,
+   wie das Skript es weiß. Wo es keine Gesamtzahl gibt, läuft der Balken
+   gestreift weiter, statt eine Prozentzahl zu erfinden. */
+.fortschritt{margin-top:14px}
+.balken{height:8px;background:var(--code);border-radius:99px;overflow:hidden}
+.balken>div{height:100%;background:var(--accent);border-radius:99px;
+  transition:width .3s ease;width:0}
+.balken.unbekannt>div{width:35%;background:linear-gradient(90deg,
+  var(--code) 0%,var(--accent) 50%,var(--code) 100%);animation:wandern 1.6s linear infinite}
+@keyframes wandern{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+
+/* Einzelschritte: eingeklappt, jeder Knopf mit dem Satz, wann man ihn braucht */
+#einzelschritte summary{cursor:pointer;font-weight:650;font-size:15px}
+.schritt{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin:10px 0}
+.schritt button{flex:0 0 auto;min-width:230px}
+.schritt span{flex:1;min-width:240px}
+
+/* Protokollleiste unten */
+#protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
+  border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
+#protokoll .pkopf{display:flex;gap:10px;align-items:center;padding:8px 20px;
+  cursor:pointer;user-select:none}
+#protokoll .pkopf .pfeil{color:var(--muted);transition:transform .2s}
+#protokoll.zu .pkopf .pfeil{transform:rotate(180deg)}
+#protokoll .pkopf #log-letzte{overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;flex:1}
+#protokoll.zu #log{display:none}
+#protokoll #log{margin:0 12px 12px;height:220px}
+main{padding-bottom:60px}
+
 /* Antwortkasten. Bewusst anders als eine Trefferkarte: was hier steht, hat
    kein Mensch geschrieben, sondern ein Modell aus den Treffern darunter
    zusammengefasst. Farbiger Balken links, eigene Kopfzeile, Fußnoten. */
@@ -1863,19 +1902,36 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
     <p class="small muted" id="teams-note" style="margin-top:10px"></p>
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
-      <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
-      <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
-      <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
       <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
+      <span class="small muted" data-i18n="export.start.hint">Holt Neues und baut danach Index und Kalender auf.</span>
     </div>
+
+    <div class="fortschritt hide" id="fortschritt">
+      <div class="balken"><div id="balken-fuell"></div></div>
+      <p class="small muted" id="fortschritt-text"></p>
+    </div>
+
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
     <p class="small muted"><span data-i18n="export.datadir">Alle Daten liegen in</span> <code id="data-dir">…</code></p>
   </div>
-  <div class="card">
-    <h2 data-i18n="log.title">Protokoll</h2>
-    <p class="sub" id="job-line" data-i18n="log.ready">Bereit.</p>
-    <div id="log"></div>
-  </div>
+
+  <details class="card" id="einzelschritte">
+    <summary data-i18n="export.steps.title">Einzelne Schritte</summary>
+    <p class="sub" style="margin-top:10px" data-i18n="export.steps.sub">Normalerweise nicht nötig – „Export starten“ erledigt das alles. Einzeln braucht man sie nur in den unten genannten Fällen.</p>
+
+    <div class="schritt">
+      <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
+      <span class="small muted" data-i18n="export.index.only.when"></span>
+    </div>
+    <div class="schritt">
+      <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
+      <span class="small muted" data-i18n="export.calendar.build.when"></span>
+    </div>
+    <div class="schritt">
+      <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
+      <span class="small muted" data-i18n="export.page.build.when"></span>
+    </div>
+  </details>
 </section>
 
 <section id="tab-suche" class="hide">
@@ -2083,6 +2139,18 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 </main>
 
 
+<!-- Das Protokoll gehört zur Anwendung, nicht zum Export-Reiter: darin stehen
+     auch Token-Zustand, MCP-Ausgabe und Meldungen des Zeitplans. Deshalb eine
+     Leiste am unteren Rand, von überall erreichbar und normalerweise zu. -->
+<div id="protokoll" class="zu">
+  <div class="pkopf" onclick="protokollUmschalten()">
+    <span class="pfeil" id="p-pfeil">▴</span>
+    <strong data-i18n="log.title">Protokoll</strong>
+    <span class="small muted" id="log-letzte"></span>
+  </div>
+  <div id="log"></div>
+</div>
+
 <div id="overlay"><div class="modal" id="modal"></div></div>
 
 <script type="application/json" id="i18n">/*__I18N__*/</script>
@@ -2252,16 +2320,7 @@ function renderStatus(s){
   var busy = s.jobs.busy;
   el('btn-run').disabled = busy;
   el('btn-cancel').classList.toggle('hide', !busy);
-  if(busy){
-    var j = s.jobs.job || {};
-    el('job-line').textContent = t('log.job.running', {label: mtext(j.label), step: mtext(j.step),
-      i: (j.index || 0) + 1, n: (j.steps || []).length});
-  } else if(s.jobs.last){
-    var L = s.jobs.last;
-    el('job-line').textContent = L.ok
-      ? t('log.job.done', {label: mtext(L.label), when: fmt(L.finished)})
-      : t('log.job.failed', {label: mtext(L.label), when: fmt(L.finished), detail: mtext(L.detail)});
-  }
+  zeigeFortschritt(s.jobs);
 
   /* Zeitplan / MCP */
   el('s-next').textContent = s.schedule_enabled && s.schedule_next
@@ -2337,7 +2396,59 @@ function runExport(){
   run({outlook:o, teams:tm, index:true, calendar:o}, t('job.export'));
 }
 
+/* ---------- Fortschritt ----------
+   Zwei Ebenen: der wievielte Schritt von wie vielen, und innerhalb des
+   Schrittes so genau, wie das Skript es weiß. Der Outlook-Export kennt seine
+   Gesamtzahl nicht – er entdeckt die Mails erst im Laufen. Dort läuft der
+   Balken gestreift weiter und die Zeile nennt die Zahl, statt eine Prozent-
+   angabe zu erfinden, die niemand halten kann. */
+function zeigeFortschritt(jobs){
+  var kasten = el('fortschritt'), balken = document.querySelector('.balken');
+  kasten.classList.toggle('hide', !jobs.busy);
+  if(!jobs.busy){
+    var L = jobs.last;
+    el('fortschritt-text').textContent = '';
+    if(L) el('log-letzte').textContent = L.ok
+      ? t('log.job.done', {label: mtext(L.label), when: fmt(L.finished)})
+      : t('log.job.failed', {label: mtext(L.label), when: fmt(L.finished),
+                             detail: mtext(L.detail)});
+    return;
+  }
+  var j = jobs.job || {}, n = (j.steps || []).length || 1, i = j.index || 0;
+  var p = j.progress, anteil = 0, kennt = false;
+  if(p && p.total){ anteil = Math.min(p.done / p.total, 1); kennt = true; }
+
+  balken.classList.toggle('unbekannt', !kennt);
+  if(kennt) el('balken-fuell').style.width = Math.round((i + anteil) / n * 100) + '%';
+
+  var zeile = t('log.job.running', {label: mtext(j.label), step: mtext(j.step),
+                                    i: i + 1, n: n});
+  if(p) zeile += ' · ' + (p.total
+    ? t('progress.of', {done: p.done.toLocaleString(LOC),
+                        total: p.total.toLocaleString(LOC), what: einheit(p.what)})
+    : t('progress.count', {done: p.done.toLocaleString(LOC), what: einheit(p.what)}));
+  el('fortschritt-text').textContent = zeile;
+  el('log-letzte').textContent = zeile;
+}
+function einheit(was){
+  return was ? t('progress.unit.' + was) : '';
+}
+
 /* ---------- Protokoll ---------- */
+function protokollUmschalten(){
+  var p = el('protokoll');
+  p.classList.toggle('zu');
+  try { localStorage.setItem('protokoll', p.classList.contains('zu') ? 'zu' : 'auf'); } catch(e){}
+  if(!p.classList.contains('zu')){
+    var box = el('log'); box.scrollTop = box.scrollHeight;
+  }
+}
+function stelleProtokollHer(){
+  try {
+    if(localStorage.getItem('protokoll') === 'auf') el('protokoll').classList.remove('zu');
+  } catch(e){}
+}
+
 function pullLog(){
   if(beendet) return;
   api('/api/log?since=' + seen).then(function(r){
@@ -2350,6 +2461,10 @@ function pullLog(){
       box.appendChild(d);
     });
     while(box.childElementCount > 1200) box.removeChild(box.firstChild);
+    if(!(S && S.jobs && S.jobs.busy)){
+      var letzte = r.lines[r.lines.length - 1];
+      el('log-letzte').textContent = mtext(letzte.text);
+    }
     seen = r.seq;
     if(atEnd) box.scrollTop = box.scrollHeight;
   });
@@ -2998,6 +3113,7 @@ function refresh(){
   return api('/api/status').then(renderStatus);
 }
 stelleKIher();
+stelleProtokollHer();
 refresh();
 setInterval(refresh, 2500);
 setInterval(pullLog, 1000);

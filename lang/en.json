@@ -47,7 +47,6 @@
   "export.datadir": "All data lives in",
   "export.nothing": "Nothing selected.",
   "log.title": "Log",
-  "log.ready": "Ready.",
   "log.job.running": "{label} – {step} ({i}/{n})",
   "log.job.done": "✓ {label} – {when}",
   "log.job.failed": "✗ {label} – {when} ({detail})",
@@ -303,5 +302,16 @@
   "search.ai.tag": "AI",
   "search.ai.model": "Model: {model}",
   "view.hits": "Results",
-  "settings.search.sub": "Both run in your Ollama on this machine: the semantic half of the search and the summary of the results."
+  "settings.search.sub": "Both run in your Ollama on this machine: the semantic half of the search and the summary of the results.",
+  "export.start.hint": "Fetches new mail and chats, then rebuilds index and calendar. Normally that is all you need.",
+  "export.steps.title": "Individual steps",
+  "export.steps.sub": "Not normally needed — “Start export” does all of this in turn. You only need them separately in these cases:",
+  "export.index.only.when": "When you do not want to fetch anything new but rebuild the search index — for instance after pulling an embedding model in Ollama so that search can work semantically too.",
+  "export.calendar.build.when": "Re-reads every mail to recover deleted appointments from them. It runs after each Outlook export anyway; separately only if calendar or contacts stay empty.",
+  "export.page.build.when": "Creates a single HTML file with search, calendar and contacts — to hand on or archive; it works without this app and without an index.",
+  "progress.of": "{done} of {total} {what}",
+  "progress.count": "{done} {what}",
+  "progress.unit.chats": "chats",
+  "progress.unit.mails": "mails",
+  "progress.unit.embeddings": "embeddings"
 }

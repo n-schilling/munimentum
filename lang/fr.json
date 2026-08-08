@@ -47,7 +47,6 @@
   "export.datadir": "Toutes les données se trouvent dans",
   "export.nothing": "Rien de sélectionné.",
   "log.title": "Journal",
-  "log.ready": "Prêt.",
   "log.job.running": "{label} – {step} ({i}/{n})",
   "log.job.done": "✓ {label} – {when}",
   "log.job.failed": "✗ {label} – {when} ({detail})",
@@ -303,5 +302,16 @@
   "search.ai.tag": "IA",
   "search.ai.model": "Modèle : {model}",
   "view.hits": "Résultats",
-  "settings.search.sub": "Les deux s’exécutent dans votre Ollama sur cette machine : la moitié sémantique de la recherche et le résumé des résultats."
+  "settings.search.sub": "Les deux s’exécutent dans votre Ollama sur cette machine : la moitié sémantique de la recherche et le résumé des résultats.",
+  "export.start.hint": "Récupère les nouveaux courriels et conversations, puis reconstruit l’index et le calendrier. Normalement, cela suffit.",
+  "export.steps.title": "Étapes individuelles",
+  "export.steps.sub": "Normalement inutile — « Démarrer l’export » enchaîne tout cela. Vous n’en avez besoin séparément que dans ces cas :",
+  "export.index.only.when": "Quand vous ne voulez rien récupérer de neuf mais reconstruire l’index — par exemple après avoir récupéré un modèle d’embedding dans Ollama pour que la recherche fonctionne aussi sémantiquement.",
+  "export.calendar.build.when": "Relit tous les courriels pour en récupérer les rendez-vous supprimés. Cela s’exécute de toute façon après chaque export Outlook ; séparément uniquement si le calendrier ou les contacts restent vides.",
+  "export.page.build.when": "Crée un fichier HTML unique avec recherche, calendrier et contacts — à transmettre ou archiver ; il fonctionne sans cette application et sans index.",
+  "progress.of": "{done} sur {total} {what}",
+  "progress.count": "{done} {what}",
+  "progress.unit.chats": "conversations",
+  "progress.unit.mails": "courriels",
+  "progress.unit.embeddings": "embeddings"
 }

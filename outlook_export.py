@@ -51,6 +51,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 import settings
+import progress
 
 try:
     import msal
@@ -644,6 +645,9 @@ def run_export(graph, out, done, stats, selected, workers):
                     status, info = "error", str(e)
                 if status == "ok":
                     stats["new"] += 1
+                    # Ohne Gesamtzahl: der Generator entdeckt die Mails erst im
+                    # Laufen. Gemeldet wird deshalb nur der Stand.
+                    progress.melde(stats["new"], what="mails")
                     if stats["new"] % 50 == 0:
                         print(f"  … {stats['new']} Mails neu exportiert")
                 elif status == "expired":

@@ -34,6 +34,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `i18n.py`, `lang/` | UI translations (German, English, French) |
 | `version.py`, `updates.py` | Version number and the startup update check |
 | `answer.py` | Prompt and streaming for the Ollama summary (shared with `rag_server.py`) |
+| `progress.py` | Machine-readable progress from the scripts, for the progress bar |
 | `packaging/` | PyInstaller spec + smoke test for the downloadable bundles |
 
 Everything runs on macOS, Windows and Linux. The prebuilt app needs nothing
@@ -116,9 +117,21 @@ only by you. A permission you already hold in a wider form counts: `Mail.ReadWri
 satisfies `Mail.Read`.
 
 **Export.** Tick what you want; the app passes the selection to the export
-scripts through `EXPORT_CATEGORIES`, so they run without a single prompt. Output
-streams into the log panel live. Both exports stay resumable — a second run only
-fetches what is new.
+scripts through `EXPORT_CATEGORIES`, so they run without a single prompt. Both
+exports stay resumable — a second run only fetches what is new. One button does
+the whole job; the individual steps sit collapsed underneath, each with a
+sentence on when you would actually need it.
+
+A progress bar tracks two levels: which step of how many, and inside a step as
+precisely as the script knows. The scripts report that on a separate channel
+(`progress.py`, only when the app asks via `EXPORT_PROGRESS`), so the bar does
+not depend on how they phrase their output. Where there is no total — the
+Outlook export discovers its mail as it goes — the bar runs striped and the line
+shows the count, rather than inventing a percentage nothing can honour.
+
+**The log belongs to the app, not to a tab.** It also carries token state, MCP
+output and schedule messages, so it lives in a collapsible bar along the bottom,
+reachable from every tab and closed by default with the latest line in view.
 
 **Search** is built in and uses the same ranking as the MCP server (BM25 and
 embeddings fused with RRF) — `mcp_server.py` is imported as a library rather than

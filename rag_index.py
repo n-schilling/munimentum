@@ -37,6 +37,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 import corpus
+import progress
 import settings
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
@@ -294,6 +295,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
                     for i in todo_groups[b + k]:
                         vectors[i] = arr
                 done += len(vecs)
+                progress.melde(done, len(todo_texts), "embeddings")
                 print(f"  … {done}/{len(todo_texts)} eingebettet", end="\r", flush=True)
         print()
 
