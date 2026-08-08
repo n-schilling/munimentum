@@ -1867,6 +1867,13 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 .schritt button{flex:0 0 auto;min-width:230px}
 .schritt span{flex:1;min-width:240px}
 
+/* Berechtigungen im Token-Assistenten: eine unauffällige Zeile, solange sie
+   nicht das Problem sind. */
+details.rechte{margin:12px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+details.rechte summary{cursor:pointer;font-size:13px;color:var(--muted)}
+details.rechte[open] summary{margin-bottom:4px;color:var(--ink)}
+details.rechte p{margin:6px 0}
+
 /* Protokollleiste unten */
 #protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
   border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
@@ -3069,15 +3076,28 @@ function scopeListe(){
   var q = S.scope_queries || {};
   return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(x){
     return '<li style="margin-bottom:3px"><code>' + esc(x) + '</code>' +
-      (q[x] ? '<br><span class="small muted">' + esc(t('wizard.token.step2.query')) +
+      (q[x] ? '<br><span class="small muted">' + esc(t('wizard.token.scopes.query')) +
               ' </span><code class="small">' + esc(q[x]) + '</code>' : '') + '</li>';
   }).join('') + '</ul>';
 }
+
+/* Die Berechtigungen sind der technischste Teil des Dialogs – Namen wie
+   Contacts.Read und dazu Graph-Adressen. Meist sind sie längst erteilt und
+   stehen dann nur im Weg. Eingeklappt bleiben sie erreichbar; aufgeklappt
+   genau dann, wenn sie wirklich fehlen und damit das Thema sind. */
+function rechteBlock(offen){
+  return '<details class="rechte"' + (offen ? ' open' : '') + '>' +
+    '<summary>' + esc(t('wizard.token.scopes.title')) + '</summary>' +
+    '<p class="small muted">' + t('wizard.token.scopes.intro') + '</p>' +
+    scopeListe() +
+    '<p class="small muted">' + esc(t('wizard.token.scopes.note')) + '</p></details>';
+}
+
 function tokenWizard(){
-  var tk = S.token, head;
+  var tk = S.token, head, fehlen = !!(tk.missing && tk.missing.length);
   if(!tk.present) head = banner('err', t('wizard.token.none'));
   else if(tk.expired) head = banner('err', t('wizard.token.expired'));
-  else if(tk.missing && tk.missing.length)
+  else if(fehlen)
     head = banner('warn', t('wizard.token.missing', {list: esc(tk.missing.join(', '))}));
   else {
     // Vier ganze Sätze statt zusammengesetzter Bruchstücke – siehe Sprachdateien.
@@ -3090,11 +3110,10 @@ function tokenWizard(){
   }
   return '<h2>' + esc(t('wizard.token.title')) + '</h2>' +
     '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
+    rechteBlock(fehlen) +
     '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
-    '<li>' + t('wizard.token.step2') + scopeListe() +
-    '<span class="small muted">' + esc(t('wizard.token.step2.note')) + '</span></li>' +
-    '<li>' + t('wizard.token.step3') + '</li>' +
-    '<li>' + esc(t('wizard.token.step4')) + '</li></ol>' +
+    '<li>' + t('wizard.token.step2') + '</li>' +
+    '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
     '<div class="row" style="margin-top:12px">' +
     '<button class="act" onclick="saveToken()">' + esc(t('wizard.token.save')) + '</button>' +

@@ -1831,7 +1831,7 @@ function pruefe(bedingung, text){ if(!bedingung) throw new Error(text); }
 # Der Token-Assistent darf die halb fertige Eingabe nicht wegwerfen.
 PRUEFUNG_EINGABE = GRUNDZUSTAND + """
 openWizard('token');
-pruefe(modal.innerHTML.indexOf('Access Token') >= 0, 'Assistent nicht gezeichnet');
+pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Assistent nicht gezeichnet');
 pruefe(modal.innerHTML.indexOf('me/messages') >= 0, 'Beispielabfrage fehlt');
 pruefe(zaehlerNeuzeichnen === 1, 'Erwartet: einmal gezeichnet');
 
@@ -1848,14 +1848,14 @@ pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
 S.token.missing = ['Mail.Read'];
 openWizard('token');
 pruefe(zaehlerNeuzeichnen === 2, 'Zustandswechsel loeste kein Neuzeichnen aus');
-pruefe(modal.innerHTML.indexOf('fehlen diese Berechtigungen') >= 0,
+pruefe(modal.innerHTML.indexOf('fehlen noch Berechtigungen') >= 0,
        'Zustandswechsel kam im Text nicht an');
 pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
        'Eingabe ging beim Neuzeichnen verloren');
 
 closeWizard('token');
 openWizard('token');
-pruefe(modal.innerHTML.indexOf('Access Token') >= 0, 'Nach Schliessen nicht gezeichnet');
+pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Nach Schliessen nicht gezeichnet');
 console.log('OK');
 """
 
@@ -2365,6 +2365,45 @@ def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
     verlangt der Server gar keinen Assistenten mehr – ein bereits offener muss
     trotzdem aufgefrischt werden."""
     _in_node(PRUEFUNG_OLLAMA)
+
+
+# Der Berechtigungsblock ist der technischste Teil des Dialogs – Namen wie
+# Contacts.Read samt Graph-Adressen. Meist ist er längst erledigt und stand
+# dann nur im Weg; fehlt aber wirklich eine Berechtigung, ist er das Thema.
+PRUEFUNG_RECHTE = GRUNDZUSTAND + """
+S.token.missing = [];
+openWizard('token');
+var html = modal.innerHTML;
+pruefe(html.indexOf('<details class="rechte">') >= 0,
+       'Berechtigungen stehen nicht in einem einklappbaren Block');
+pruefe(html.indexOf('Mail.Read') >= 0, 'Berechtigungen fehlen ganz');
+
+// Eingeklappt heisst: die Schritte kommen ohne sie aus. Drei statt vier.
+var liste = html.split('<ol>')[1].split('</ol>')[0];
+var schritte = liste.split('<li>').length - 1;
+pruefe(schritte === 3, 'Erwartet drei Schritte, gezaehlt: ' + schritte);
+pruefe(liste.indexOf('Mail.Read') < 0, 'Berechtigungen stehen noch in den Schritten');
+
+// Fehlt wirklich etwas, muss der Block von selbst offen stehen.
+S.token.missing = ['Mail.Read'];
+openWizard('token');
+pruefe(modal.innerHTML.indexOf('<details class="rechte" open>') >= 0,
+       'Fehlende Berechtigung, Block aber zugeklappt');
+
+// Und der Dialog spricht nicht mehr von Graph oder Tenant - ausser im Link
+// auf die Seite, die tatsaechlich so heisst.
+S.token.missing = [];
+openWizard('token');
+var ohneLink = modal.innerHTML.replace(/<a [^>]*>.*?<\\/a>/g, '');
+['Tenant', 'Microsoft Graph', 'Access Token holen'].forEach(function(w){
+  pruefe(ohneLink.indexOf(w) < 0, 'Dialog sagt noch "' + w + '"');
+});
+console.log('OK');
+"""
+
+
+def test_berechtigungen_sind_eingeklappt_solange_sie_nicht_fehlen():
+    _in_node(PRUEFUNG_RECHTE)
 
 
 def test_adressbuch_und_rekonstruierte_termine_zeichnen():
