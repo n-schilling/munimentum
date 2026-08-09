@@ -1447,6 +1447,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"lines": lines, "seq": seq})
             if u.path == "/api/search":
                 return self._json(self._search(one))
+            if u.path == "/api/thread":
+                return self._json(self._thread(one))
             if u.path == "/api/people":
                 return self._json(self._people(one))
             if u.path == "/api/document":
@@ -1709,6 +1711,14 @@ class Handler(BaseHTTPRequestHandler):
             res = mod.browse_messages(**kw)
         res["semantic"] = bool(mod.STATE.get("semantic"))
         return res
+
+    def _thread(self, q):
+        """Alle Nachrichten eines Gesprächs – dieselbe Auswertung wie im MCP."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "messages": [], "count": 0}
+        return mod.get_thread(thread=q.get("key", ""),
+                              limit=min(int(q.get("limit", 50) or 50), 200))
 
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -2092,6 +2102,15 @@ details.rechte p{margin:6px 0}
 button.mini{border:1px solid var(--line);background:transparent;color:inherit;
   border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
 button.mini:hover{border-color:var(--accent);color:var(--accent)}
+/* Verlauf unter einem Treffer: schmal und ruhig, damit er die Trefferliste
+   nicht erschlägt. */
+.verlauf{margin-top:8px}
+.verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
+.verlaufliste p{margin:0 0 6px}
+.vzeile{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;
+  font-size:13.5px;padding:3px 0}
+.vdatum{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.vwer{color:var(--muted);flex:0 0 auto;min-width:120px}
 .geraetecode{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;
   text-align:center}
 .geraetecode p{margin:0 0 8px}
@@ -2791,12 +2810,45 @@ function renderHits(r){
       esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
       '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
-      '<div class="prev">' + esc(h.preview || '') + '…</div></div>';
+      '<div class="prev">' + esc(h.preview || '') + '…</div>' +
+      (h.thread ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +
+        '<button class="mini" onclick="zeigeVerlauf(' + (i + 1) + ',\'' +
+        esc(h.thread).replace(/'/g, "\\'") + '\')">' +
+        esc(t('search.thread.show')) + '</button></div>' : '') +
+      '</div>';
   }).join('');
   el('pager').innerHTML =
     (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - 20) + ')">' + esc(t('search.back')) + '</button>' : '') +
     (hits.length >= 20 ? '<button class="ghost" onclick="doSearch(' + (offset + 20) + ')">' + esc(t('search.next')) + '</button>' : '') +
     '<span class="small muted">' + esc(t('search.ranking', {backend: r.backend || '–'})) + '</span>';
+}
+
+/* Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
+   Frage davor eine Aussage. Der Verlauf klappt deshalb unter dem Treffer auf,
+   statt in eine andere Ansicht zu springen. */
+function zeigeVerlauf(nr, schluessel){
+  var kasten = el('verlauf-' + nr);
+  if(!kasten) return;
+  kasten.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+  api('/api/thread?key=' + encodeURIComponent(schluessel)).then(function(r){
+    if(r.error || !(r.messages || []).length){
+      kasten.innerHTML = '<p class="hint">' + esc(t('search.thread.alone')) + '</p>';
+      return;
+    }
+    kasten.innerHTML = '<div class="verlaufliste"><p class="small muted">' +
+      esc(t('search.thread.count', {n: r.count})) + '</p>' +
+      r.messages.map(function(m){
+        var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
+        var link = g ? '/source?root=' + g[1] + '&path=' + g[2] : null;
+        return '<div class="vzeile"><span class="vdatum">' + esc(m.date || '') + '</span>' +
+          '<span class="vwer">' + esc(m.who || '') + '</span>' +
+          (link ? '<a href="' + link + '" target="_blank">' : '<span>') +
+          esc(m.title || t('search.nosubject')) + (link ? '</a>' : '</span>') +
+          '</div>';
+      }).join('') + '</div>';
+  }).catch(function(e){
+    kasten.innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
+  });
 }
 
 /* =======================================================================

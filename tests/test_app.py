@@ -3087,3 +3087,73 @@ def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, mon
     a.cfg["auth_mode"] = "login"
     ok, _ = a.launch(outlook=True, label="job.export")
     assert ok, "Login-Modus verlangt weiterhin einen Schlüssel"
+
+
+# --------------------------------------------------------------------------
+# Verlauf: ein Treffer allein sagt oft zu wenig
+# --------------------------------------------------------------------------
+def test_http_thread_reicht_die_auswertung_durch(server, monkeypatch):
+    a, port = server
+
+    class FakeSuche:
+        STATE = {"semantic": False}
+
+        @staticmethod
+        def get_thread(thread, limit=50):
+            return {"thread": thread, "count": 2, "limit": limit,
+                    "messages": [{"uid": "u1"}, {"uid": "u2"}]}
+
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    code, r = call(port, "GET", "/api/thread?key=tix:abc")
+    assert code == 200 and r["count"] == 2 and r["thread"] == "tix:abc"
+
+    # Eine überzogene Grenze darf nicht die halbe Datenbank holen.
+    assert call(port, "GET", "/api/thread?key=x&limit=9999")[1]["limit"] == 200
+
+
+def test_http_thread_ohne_index(server, monkeypatch):
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: None)
+    a.search.error = {"k": "cal.missing", "v": {}}
+    code, r = call(port, "GET", "/api/thread?key=x")
+    assert code == 200 and r["messages"] == [] and r["error"]
+
+
+PRUEFUNG_VERLAUF = GRUNDZUSTAND + """
+// Ein Treffer mit Gespraechskennung bietet den Verlauf an, einer ohne nicht.
+global.fetch = function(pfad){
+  return Promise.resolve({json: function(){
+    return Promise.resolve(String(pfad).indexOf('/api/thread') === 0
+      ? global.ANTWORT : statusGeruest());
+  }});
+};
+renderHits({results: [
+  {uid: 'a', title: 'Frage', who: 'Alice', date: '2025-06-01', source_label: 'Mail',
+   preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'tix:abc'},
+  {uid: 'b', title: 'Einzeln', who: 'Bob', date: '2025-06-02', source_label: 'Mail',
+   preview: 'Text', uri: 'o365://outlook/b.eml', thread: null}
+], count: 2, backend: 'bm25'});
+var html = document.getElementById('results').innerHTML;
+pruefe(html.indexOf('zeigeVerlauf(1') >= 0, 'Kein Verlauf beim ersten Treffer');
+pruefe(html.indexOf('zeigeVerlauf(2') < 0, 'Verlauf ohne Gespraech angeboten');
+
+// Aufklappen holt die Nachrichten und zeigt sie chronologisch untereinander.
+global.ANTWORT = {count: 3, messages: [
+  {date: '2025-06-01', who: 'Alice', title: 'Frage', uri: 'o365://outlook/a.eml'},
+  {date: '2025-06-02', who: 'Bob', title: 'RE: Frage', uri: 'o365://outlook/b.eml'},
+  {date: '2025-06-03', who: 'Alice', title: 'AW: Frage', uri: 'o365://outlook/c.eml'}]};
+zeigeVerlauf(1, 'tix:abc');
+// Das Nachladen laeuft ueber ein Promise – erst danach steht der Kasten.
+setTimeout(function(){
+  var kasten = document.getElementById('verlauf-1').innerHTML;
+  pruefe(kasten.indexOf('3 Nachrichten') >= 0, 'Anzahl fehlt: ' + kasten.slice(0, 120));
+  pruefe(kasten.indexOf('RE: Frage') >= 0, 'Antwort fehlt im Verlauf');
+  pruefe(kasten.indexOf('2025-06-01') < kasten.indexOf('2025-06-03'),
+         'Verlauf steht nicht in zeitlicher Reihenfolge');
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_verlauf_klappt_unter_dem_treffer_auf():
+    _in_node(PRUEFUNG_VERLAUF)

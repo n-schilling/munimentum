@@ -88,7 +88,8 @@ def _chunk_row(i, c):
         msg_idx = 0
     return (i + 1, c["uid"], seq, msg_idx, c["src"], c["root"], c["rel"],
             c.get("who"), c.get("ppl"), c.get("ts"), c.get("date"),
-            c.get("title"), c.get("ctx"), c.get("text"), c.get("hash"))
+            c.get("title"), c.get("ctx"), c.get("text"), c.get("hash"),
+            c.get("thread"))
 
 
 def _people_rows(chunks):
@@ -122,8 +123,12 @@ def write_db(store, chunks):
             msg_idx INTEGER NOT NULL,      -- Nachrichten-Nr. innerhalb der Datei
             src     TEXT NOT NULL, root TEXT NOT NULL, rel TEXT NOT NULL,
             who TEXT, ppl TEXT, ts REAL, date TEXT,
-            title TEXT, ctx TEXT, text TEXT, hash TEXT);
+            title TEXT, ctx TEXT, text TEXT, hash TEXT,
+            thread TEXT);                 -- Gesprächskennung, siehe corpus.thread_key
         CREATE INDEX ix_chunks_uid ON chunks(uid);
+        -- „Verlauf anzeigen“ holt alle Nachrichten eines Gesprächs. Ohne den
+        -- Index wäre das ein voller Scan über alle Chunks.
+        CREATE INDEX ix_chunks_thread ON chunks(thread) WHERE seq = 0;
         CREATE INDEX ix_chunks_src_ts ON chunks(src, ts);
         CREATE INDEX ix_chunks_file ON chunks(root, rel, msg_idx);
         -- browse_messages listet Nachrichten (seq = 0) nach Datum. Ohne diesen
@@ -135,7 +140,7 @@ def write_db(store, chunks):
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             title, text, content='chunks', content_rowid='id');
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")

@@ -313,6 +313,9 @@ def _hit(row, score, preview_chars):
         "path": row["rel"],
         "uri": _source_uri(row["root"], row["rel"]),
         "score": round(score, 4) if score is not None else None,
+        # Kennung des Gesprächs, zu dem der Treffer gehört – damit lässt sich
+        # der ganze Verlauf holen, statt nur die eine Nachricht zu lesen.
+        "thread": (row["thread"] if "thread" in row.keys() else None),
     }
     if preview_chars > 0:
         h["preview"] = (row["text"] or "")[:preview_chars]
@@ -458,6 +461,28 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         pc = max(0, min(preview_chars, 2000))
         return {"count": len(rows), "offset": max(0, offset),
                 "results": [_hit(r, None, pc) for r in rows]}
+    finally:
+        con.close()
+
+
+@mcp.tool(annotations=_READONLY)
+def get_thread(thread: str, limit: int = 50) -> dict:
+    """Alle Nachrichten eines Gesprächs, chronologisch.
+
+    Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
+    Frage davor eine Aussage. `thread` steht an jedem Treffer aus
+    search_messages.
+    """
+    if not thread:
+        return {"thread": "", "count": 0, "messages": []}
+    con = _db()
+    try:
+        rows = con.execute(
+            "SELECT * FROM chunks WHERE thread = ? AND seq = 0 "
+            "ORDER BY ts IS NULL, ts LIMIT ?",
+            (thread, max(1, min(int(limit), 500)))).fetchall()
+        return {"thread": thread, "count": len(rows),
+                "messages": [_hit(r, None, 400) for r in rows]}
     finally:
         con.close()
 

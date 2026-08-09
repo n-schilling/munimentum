@@ -8,6 +8,8 @@ und rag_server.py (Retrieval/Antwort) genutzt. Nur Standardbibliothek.
 """
 
 import os
+import base64
+import binascii
 import re
 import email
 import html as html_lib
@@ -152,6 +154,7 @@ def _teams_file(p_str, root_str):
     for i, m in enumerate(msgs):
         out.append({
             "uid": f"teams:{rel}:{i}", "src": "teams", "root": "teams", "rel": rel,
+            "thread": f"chat:{rel}",
             "who": m["n"] or "(unbekannt)", "ppl": (m["n"] + " " + title).lower(),
             "ts": parse_local(m["t"]), "date": m["t"], "title": title, "ctx": ctx,
             "text": (m["x"] or "")[:SAFETY_CAP],
@@ -220,6 +223,38 @@ def strip_quoted(text):
         if m and m.start() > 0:
             head = head[:m.start()]
     return re.sub(r"(?m)^[ \t]*>.*$", "", head)            # restliche Zitatzeilen
+
+
+# --------------------------------------------------------------------------
+# Verlauf: welche Mails zusammengehören
+#
+# Alles dafür steht längst in den .eml-Dateien – ein Neu-Export ist nicht nötig.
+# Am echten Bestand (Stichprobe 400 von 45.615) gemessen: Thread-Index 89 %,
+# References/In-Reply-To 58 %, Message-ID 100 %. Deshalb eine Kaskade, die mit
+# der genauesten Angabe beginnt und am Ende jede Mail wenigstens sich selbst
+# zuordnet – ein Verlauf aus einer Nachricht ist richtig, nur langweilig.
+# --------------------------------------------------------------------------
+def thread_key(msg):
+    """Stabile Kennung des Gesprächs, zu dem diese Mail gehört."""
+    roh = hdr(msg, "thread-index")
+    if roh:
+        try:
+            # Exchange: die ersten 22 Byte sind die Kennung des Gesprächs,
+            # jede Antwort hängt weitere 5 Byte an. Nur der Kopf zählt.
+            kopf = base64.b64decode(roh + "===", validate=False)[:22]
+            if len(kopf) == 22:
+                return "tix:" + kopf.hex()
+        except (ValueError, binascii.Error):
+            pass
+    for name in ("references", "in-reply-to"):
+        wert = hdr(msg, name)
+        if wert:
+            # Der erste Eintrag in References ist der Anfang des Gesprächs.
+            treffer = re.findall(r"<[^>]+>", wert)
+            if treffer:
+                return "mid:" + treffer[0].strip("<>").lower()
+    eigene = hdr(msg, "message-id")
+    return "mid:" + eigene.strip("<>").lower() if eigene else ""
 
 
 def hdr(msg, name):
@@ -300,6 +335,7 @@ def _outlook_file(p_str, root_str):
     folder = rel.rsplit("/", 1)[0] if "/" in rel else "(Stamm)"
     return {
         "uid": f"outlook:{rel}:0", "src": "outlook", "root": "outlook", "rel": rel,
+        "thread": thread_key(msg),
         "who": who, "ppl": " ".join(fn + fe + tn + te).lower(),
         "ts": ts, "date": disp, "title": hdr(msg, "subject") or "(kein Betreff)",
         "ctx": folder, "text": extract_body(msg),

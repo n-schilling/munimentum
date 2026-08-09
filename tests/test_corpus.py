@@ -261,3 +261,76 @@ def test_ics_when_variants():
     assert ts is None and disp == ""
     ts, disp = corpus._ics_when("unsinn", dateonly=False)
     assert ts is None and disp == "unsinn"
+
+
+# --------------------------------------------------------------------------
+# Verlauf: welche Mails zusammengehören
+#
+# Alles dafür steht in den .eml-Dateien – ein Neu-Export ist nicht nötig. Am
+# echten Bestand gemessen (Stichprobe 400 von 45.615): Thread-Index 89 %,
+# References/In-Reply-To 58 %, Message-ID 100 %.
+# --------------------------------------------------------------------------
+def _msg(**kopf):
+    from email import policy
+    from email.parser import BytesParser
+    roh = "".join(f"{k.replace('_', '-')}: {v}\n" for k, v in kopf.items())
+    return BytesParser(policy=policy.default).parsebytes(
+        (roh + "Subject: X\n\nText\n").encode("utf-8"))
+
+
+def test_thread_index_gewinnt():
+    import base64
+    kopf = bytes(range(22))
+    key = corpus.thread_key(_msg(Thread_Index=base64.b64encode(kopf).decode(),
+                                 References="<anders@x>"))
+    assert key == "tix:" + kopf.hex()
+
+
+def test_antwort_landet_im_selben_gespraech():
+    """Exchange hängt je Antwort 5 Byte an – nur die ersten 22 zählen."""
+    import base64
+    kopf = bytes(range(22))
+    erste = corpus.thread_key(_msg(Thread_Index=base64.b64encode(kopf).decode()))
+    antwort = corpus.thread_key(
+        _msg(Thread_Index=base64.b64encode(kopf + b"\x01\x02\x03\x04\x05").decode()))
+    assert erste == antwort
+
+
+def test_references_nimmt_den_anfang_des_gespraechs():
+    """Nicht die letzte Nachricht, sondern die erste – sonst zerfiele ein
+    Verlauf in so viele Gespräche, wie er Antworten hat."""
+    key = corpus.thread_key(_msg(References="<start@x> <mitte@x> <ende@x>"))
+    assert key == "mid:start@x"
+
+
+def test_in_reply_to_als_naechstes():
+    assert corpus.thread_key(_msg(In_Reply_To="<vorher@x>")) == "mid:vorher@x"
+
+
+def test_ohne_alles_ein_gespraech_fuer_sich():
+    """Ein Verlauf aus einer Nachricht ist richtig, nur langweilig – besser als
+    gar keine Zuordnung."""
+    assert corpus.thread_key(_msg(Message_ID="<allein@x>")) == "mid:allein@x"
+
+
+def test_kaputter_thread_index_faellt_zurueck():
+    key = corpus.thread_key(_msg(Thread_Index="das ist kein base64!!",
+                                 Message_ID="<rettung@x>"))
+    assert key == "mid:rettung@x"
+
+
+def test_zu_kurzer_thread_index_faellt_zurueck():
+    import base64
+    key = corpus.thread_key(_msg(Thread_Index=base64.b64encode(b"kurz").decode(),
+                                 Message_ID="<rettung@x>"))
+    assert key == "mid:rettung@x"
+
+
+def test_ohne_jede_kopfzeile_leer():
+    assert corpus.thread_key(_msg()) == ""
+
+
+def test_gross_und_kleinschreibung_egal():
+    a = corpus.thread_key(_msg(Message_ID="<Gross@Example.COM>"))
+    b = corpus.thread_key(_msg(In_Reply_To="<gross@example.com>"))
+    assert a == b

@@ -12,6 +12,8 @@ from datetime import datetime
 from urllib.parse import quote
 
 import anyio
+import sqlite3
+
 import numpy as np
 import pytest
 from mcp.client.client import Client
@@ -683,7 +685,7 @@ def test_with_port_verwechselt_ipv6_nicht_mit_port():
 # Weg über die Leitung, den auch Claude nimmt.
 # --------------------------------------------------------------------------
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
-              "list_people", "read_source_file", "corpus_stats"}
+              "get_thread", "list_people", "read_source_file", "corpus_stats"}
 
 
 def _via_client(fn):
@@ -785,3 +787,40 @@ def test_resource_traversal_wird_vom_sdk_abgewiesen(state):
                 await c.read_resource(uri)
 
     anyio.run(run)
+
+
+# --------------------------------------------------------------------------
+# get_thread – ein Treffer allein sagt oft zu wenig
+# --------------------------------------------------------------------------
+def test_get_thread_liefert_das_gespraech_chronologisch(state):
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET thread = 'tix:abc' WHERE seq = 0")
+    con.commit()
+    con.close()
+
+    r = mcp_server.get_thread(thread="tix:abc")
+    assert r["count"] >= 2
+    zeiten = [m["date"] for m in r["messages"]]
+    datiert = [z for z in zeiten if z]
+    assert datiert == sorted(datiert), "Verlauf ist nicht chronologisch"
+    # Undatiertes ans Ende: es zwischen zwei Tage zu schieben, wäre erfunden.
+    assert zeiten[:len(datiert)] == datiert, "Undatiertes steht mittendrin"
+    assert all("uid" in m for m in r["messages"])
+
+
+def test_get_thread_ohne_schluessel(state):
+    assert mcp_server.get_thread(thread="")["count"] == 0
+
+
+def test_get_thread_unbekannt(state):
+    assert mcp_server.get_thread(thread="tix:gibtesnicht")["messages"] == []
+
+
+def test_treffer_tragen_ihre_gespraechskennung(state):
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET thread = 'tix:xyz'")
+    con.commit()
+    con.close()
+    treffer = mcp_server.browse_messages(k=1)["results"]
+    assert treffer and treffer[0]["thread"] == "tix:xyz", \
+        "ohne Kennung am Treffer liesse sich der Verlauf nicht nachladen"
