@@ -2412,6 +2412,9 @@ function statusGeruest(){
           graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
           store: {exists: true, chunks: 5, messages: 2, semantic: false,
                   built_at: null, model: null},
+          auth: {mode: 'token', signed_in: false, account: null, device: null,
+                 own_registration: false, client_id: 'std', tenant: 'organizations',
+                 default_client_id: 'std'},
           update: {status: 'off', current: '1.0.1', latest: null, url: null,
                    newer: false, error: null, releases_url: 'https://x'},
           exports: {teams: {last_run: null}, outlook: {last_run: null}},
@@ -2766,6 +2769,53 @@ def test_assistent_ist_mit_der_tastatur_bedienbar():
     _in_node(PRUEFUNG_TASTATUR)
 
 
+# Der Assistent bietet beide Wege an – der Schlüssel bleibt vorausgewählt,
+# weil er ohne Rückfrage bei der IT funktioniert.
+PRUEFUNG_ANMELDEWAHL = GRUNDZUSTAND + """
+S.auth = {mode: 'token', signed_in: false, account: null, own_registration: false,
+          client_id: 'std', tenant: 'organizations', default_client_id: 'std',
+          device: null};
+S.token.present = false;
+closeWizard('token'); openWizard('token');
+var html = modal.innerHTML;
+pruefe(html.indexOf('name="authmode"') >= 0, 'Keine Auswahl der Anmeldewege');
+pruefe(html.indexOf('value="token" checked') >= 0, 'Schluessel ist nicht vorausgewaehlt');
+pruefe(html.indexOf('id="tok"') >= 0, 'Textfeld fuer den Schluessel fehlt');
+pruefe(html.indexOf('Graph Explorer') >= 0, 'Der Schluesselweg wird nicht erklaert');
+
+// Umschalten: derselbe Assistent, anderer Inhalt.
+S.auth.mode = 'login';
+openWizard('token');
+html = modal.innerHTML;
+pruefe(html.indexOf('value="login" checked') >= 0, 'Login nicht vorausgewaehlt');
+pruefe(html.indexOf('id="tok"') < 0, 'Textfeld steht noch da');
+pruefe(html.indexOf('id="au-client"') >= 0, 'Eigene Registrierung nicht erreichbar');
+
+// Ein laufender Gerätecode ist das Einzige, was dann zaehlt.
+S.auth.device = {code: 'ABCD-1234', url: 'https://ms.example/dev', done: false};
+openWizard('token');
+pruefe(modal.innerHTML.indexOf('ABCD-1234') >= 0, 'Der Code wird nicht angezeigt');
+
+// Angemeldet: die Abmeldung ist der sekundaere Knopf, nicht der primaere.
+S.auth.device = null; S.auth.signed_in = true; S.auth.account = 'a@b.c';
+openWizard('token');
+pruefe(modal.innerHTML.indexOf('a@b.c') >= 0, 'Konto wird nicht genannt');
+var act = modal.querySelector('button.act'), ghost = modal.querySelector('button.ghost');
+pruefe(act.onclickCode.indexOf('starteLogin') >= 0, 'Primaer ist nicht das Anmelden');
+pruefe(ghost && ghost.onclickCode.indexOf('abmelden') >= 0, 'Abmelden fehlt');
+
+// Eigene Registrierung: der Block steht offen, wenn eine eingetragen ist.
+S.auth.own_registration = true; S.auth.client_id = 'eigene-id';
+openWizard('token');
+pruefe(modal.innerHTML.indexOf('value="eigene-id"') >= 0, 'Eigene Client-ID fehlt');
+console.log('OK');
+"""
+
+
+def test_assistent_bietet_beide_anmeldewege():
+    _in_node(PRUEFUNG_ANMELDEWAHL)
+
+
 def test_adressbuch_und_rekonstruierte_termine_zeichnen():
     """Regression: eine lokale Variable `t` verdeckte die Übersetzungsfunktion,
     drawBook warf, und weil das Promise keinen catch hatte, blieb das Adressbuch
@@ -2904,3 +2954,136 @@ def test_main_reicht_argumente_an_serve_weiter(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["app.py", "--port", "9001", "--no-browser"])
     app_mod.main()
     assert gesehen == {"port": 9001, "browser": False}
+
+
+# --------------------------------------------------------------------------
+# Anmeldemodus über HTTP
+# --------------------------------------------------------------------------
+def test_http_status_nennt_den_anmeldemodus(server):
+    _, port = server
+    code, r = call(port, "GET", "/api/status")
+    assert code == 200
+    au = r["auth"]
+    assert au["mode"] == "token"                     # Vorgabe bleibt der Schlüssel
+    assert au["own_registration"] is False
+    assert au["client_id"] == app_mod.auth.STANDARD_CLIENT_ID
+
+
+def test_http_modus_umschalten(server):
+    a, port = server
+    code, r = call(port, "POST", "/api/config", {"auth_mode": "login"})
+    assert code == 200 and r["config"]["auth_mode"] == "login"
+    assert call(port, "GET", "/api/status")[1]["auth"]["mode"] == "login"
+
+    # Unbekanntes fällt auf den Weg zurück, der immer funktioniert.
+    call(port, "POST", "/api/config", {"auth_mode": "quatsch"})
+    assert a.cfg["auth_mode"] == "token"
+
+
+def test_http_eigene_registrierung_speichern(server):
+    a, port = server
+    code, r = call(port, "POST", "/api/config",
+                   {"client_id": " eigene-id ", "tenant": "contoso.example"})
+    assert code == 200 and r["config"]["client_id"] == "eigene-id"
+    st = call(port, "GET", "/api/status")[1]["auth"]
+    assert st["own_registration"] is True and st["tenant"] == "contoso.example"
+    assert a.cfg["tenant"] == "contoso.example"
+
+
+def test_http_abmelden_loescht_den_cache(server, sandbox, monkeypatch):
+    a, port = server
+    geleert = []
+    monkeypatch.setattr(app_mod.auth, "cache_leeren",
+                        lambda: geleert.append(True) or True)
+    a.device_login = {"code": "X", "done": False}
+    code, r = call(port, "POST", "/api/logout")
+    assert code == 200 and r["ok"]
+    assert geleert == [True]
+    assert a.device_login is None, "abgebrochene Anmeldung blieb stehen"
+
+
+def test_login_starten_meldet_code_und_wartet(sandbox, monkeypatch, no_ollama):
+    """Der Code muss sofort da sein – das Warten läuft daneben, sonst stünde
+    die Oberfläche still, bis jemand am Handy fertig ist."""
+    fertig = threading.Event()
+
+    class FakeDevice:
+        def __init__(self, scopes, client=None, mandant=None):
+            self.scopes = scopes
+
+        def start(self):
+            return {"code": "ABCD-1234", "url": "https://ms.example/dev",
+                    "expires_in": 900}
+
+        def warten(self):
+            fertig.wait(5)
+            return True, ""
+
+    monkeypatch.setattr(app_mod.auth, "DeviceLogin", FakeDevice)
+    a = app_mod.App()
+    ok, daten = a.login_starten()
+    assert ok and daten["code"] == "ABCD-1234" and daten["done"] is False
+    assert a.auth_status()["device"]["code"] == "ABCD-1234"
+
+    fertig.set()
+    ende = time.time() + 5
+    while not (a.device_login or {}).get("done") and time.time() < ende:
+        time.sleep(0.02)
+    assert a.device_login["done"] and a.device_login["ok"]
+
+
+def test_login_fordert_nur_noetige_rechte(sandbox, monkeypatch, no_ollama):
+    """Mehr zu verlangen, als der Export braucht, wäre schlechter Stil
+    gegenüber dem, der zustimmen soll."""
+    gesehen = {}
+
+    class FakeDevice:
+        def __init__(self, scopes, client=None, mandant=None):
+            gesehen["scopes"] = scopes
+
+        def start(self):
+            return {"code": "X", "url": "u", "expires_in": 60}
+
+        def warten(self):
+            return True, ""
+
+    monkeypatch.setattr(app_mod.auth, "DeviceLogin", FakeDevice)
+    a = app_mod.App()
+    a.cfg["outlook_categories"] = ["mail"]
+    a.cfg["teams_categories"] = []
+    a.login_starten()
+    kurz = {s.rsplit("/", 1)[-1] for s in gesehen["scopes"]}
+    assert kurz == {"Mail.Read", "User.Read"}
+
+
+def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
+    """Sonst führte die App eine Einstellung, von der der Export nichts weiß."""
+    cfg = app_mod.load_config()
+    cfg.update(auth_mode="login", client_id="eigene-id", tenant="contoso.example")
+    env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
+    assert env["GRAPH_AUTH"] == "login"
+    assert env["GRAPH_CLIENT_ID"] == "eigene-id"
+    assert env["GRAPH_TENANT"] == "contoso.example"
+
+
+def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
+    """Ein leeres Feld heißt „Microsofts Anwendung“, nicht „Client-ID ist ''“."""
+    cfg = app_mod.load_config()
+    env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
+    assert env["GRAPH_AUTH"] == "token"
+    assert "GRAPH_CLIENT_ID" not in env and "GRAPH_TENANT" not in env
+
+
+def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, monkeypatch):
+    """Im Login-Modus trägt der Cache – das Fehlen eines Schlüssels darf keinen
+    Lauf mehr verhindern."""
+    a = app_mod.App()
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
+
+    ok, why = a.launch(outlook=True, label="job.export")
+    assert not ok and schluessel(why) == "srv.notoken"
+
+    a.cfg["auth_mode"] = "login"
+    ok, _ = a.launch(outlook=True, label="job.export")
+    assert ok, "Login-Modus verlangt weiterhin einen Schlüssel"

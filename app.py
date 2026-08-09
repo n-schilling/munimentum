@@ -52,6 +52,7 @@ from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
+import auth
 import i18n
 import progress
 import settings
@@ -166,6 +167,13 @@ DEFAULT_CONFIG = {
     "mcp_port": 8365,
     "mcp_autostart": True,
     "update_check": True,   # einmal beim Start bei GitHub nachsehen
+    # Wie sich die App anmeldet. "token" = eingefügter Zugangsschlüssel (keine
+    # Rückfrage bei der IT nötig, gilt aber nur Stunden); "login" = richtige
+    # Anmeldung mit Refresh Token, damit der Zeitplan unbeaufsichtigt läuft.
+    "auth_mode": "token",
+    "client_id": "",        # leer = Microsofts öffentliche Anwendung
+    "tenant": "",           # leer = organizations
+    "device_code": False,   # Skripte im Terminal: Code statt Browserfenster
     "language": "auto",   # "auto" = Browsersprache, sonst ein Code aus lang/
     "schedule": {
         "enabled": False,
@@ -581,6 +589,23 @@ def calendar_plan(cfg):
     return bool(cats & {"calendar", "contacts"}), "mail" in cats
 
 
+def _auth_env(cfg):
+    """Anmeldung an die Unterprozesse weiterreichen.
+
+    Wie bei den Kategorien: die App führt ihre Konfiguration im Speicher und
+    gibt sie als Umgebungsvariable mit, statt sich darauf zu verlassen, dass
+    settings.py dieselbe Datei zur selben Zeit gleich liest.
+    """
+    env = {"GRAPH_AUTH": ("login" if str(cfg.get("auth_mode", "token")).lower()
+                          == "login" else "token")}
+    for schluessel, name in (("client_id", "GRAPH_CLIENT_ID"),
+                             ("tenant", "GRAPH_TENANT")):
+        wert = str(cfg.get(schluessel) or "").strip()
+        if wert:
+            env[name] = wert
+    return env
+
+
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token="", reconstruct=None):
     """Kommandozeilen für einen Lauf zusammenstellen.
@@ -596,7 +621,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if reconstruct is None:
         reconstruct = bool(cfg.get("calendar_reconstruct", True))
     base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
-                "EXPORT_PROGRESS": "1"}   # Zahlen für den Balken, siehe progress.py
+                "EXPORT_PROGRESS": "1",   # Zahlen für den Balken, siehe progress.py
+                **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token
 
@@ -1098,6 +1124,7 @@ class App:
         self.scheduler = Scheduler(self)
         self._ollama_cache = (0.0, None)
         self._calendar_cache = None      # (Kennung, roh, gzip)
+        self.device_login = None         # laufende Gerätecode-Anmeldung
         self._update = {"status": "off", "current": version.VERSION,
                         "latest": None, "url": None, "newer": False, "error": None}
 
@@ -1205,6 +1232,45 @@ class App:
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
             "scope_queries": SCOPE_QUERY,
+            "auth": self.auth_status(),
+        }
+
+    def auth_modus(self):
+        """Die App führt ihre Konfiguration selbst – nicht über settings.py.
+
+        settings.py liest app_config.json und ist die Quelle für die Skripte im
+        Terminal. Die App hat ihr cfg schon im Speicher; beides gleichzeitig zu
+        befragen hieße, zwei Wahrheiten für dieselbe Einstellung zu pflegen.
+        Weitergereicht wird sie an die Unterprozesse als Umgebungsvariable.
+        """
+        return "login" if str(self.cfg.get("auth_mode", "token")).lower() == "login" \
+            else "token"
+
+    def auth_ziel(self):
+        """(Client-ID, Tenant) – leer heißt Microsofts öffentliche Anwendung."""
+        return (str(self.cfg.get("client_id") or "").strip() or auth.STANDARD_CLIENT_ID,
+                str(self.cfg.get("tenant") or "").strip() or auth.STANDARD_TENANT)
+
+    def auth_status(self):
+        """Wie sich die App anmeldet – und ob das gerade trägt.
+
+        `signed_in` fragt nur den Cache und öffnet dabei nichts: die Kachel soll
+        den Zustand anzeigen können, ohne ungefragt eine Anmeldung anzustoßen.
+        """
+        klient, mandant = self.auth_ziel()
+        konto = auth.angemeldet(client=klient, mandant=mandant)
+        laeuft = self.device_login
+        return {
+            "mode": self.auth_modus(),
+            "signed_in": bool(konto),
+            "account": konto if isinstance(konto, str) else None,
+            "own_registration": (klient, mandant) != (auth.STANDARD_CLIENT_ID,
+                                                      auth.STANDARD_TENANT),
+            "client_id": klient,
+            "tenant": mandant,
+            "default_client_id": auth.STANDARD_CLIENT_ID,
+            # Läuft gerade eine Gerätecode-Anmeldung? Dann Code und Adresse.
+            "device": dict(laeuft) if laeuft else None,
         }
 
     # -- Aktionen ----------------------------------------------------------
@@ -1234,7 +1300,10 @@ class App:
         if embeddings is None:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         token = read_token() if (outlook or teams) else ""
-        if (outlook or teams) and not token:
+        # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
+        # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
+        # verhindern.
+        if (outlook or teams) and not token and self.auth_modus() != "login":
             return False, {"k": "srv.notoken", "v": {}}
         if index and not embeddings:
             self.jobs.logk("srv.lexical.choice" if gewaehlt
@@ -1248,6 +1317,46 @@ class App:
         if not self.jobs.start(steps, label):
             return False, {"k": "srv.nostart", "v": {}}
         return True, {"k": "srv.mcp.startok", "v": {}}
+
+    def login_starten(self):
+        """Gerätecode holen und im Hintergrund auf die Zustimmung warten.
+
+        Ein natives Anmeldefenster gibt es hier nicht – die App hat keins. Die
+        Seite zeigt stattdessen den Code; dieser Faden wartet, bis Microsoft
+        bestätigt, und legt das Ergebnis in den Cache auf der Platte.
+        """
+        if self.device_login and not self.device_login.get("done"):
+            return True, self.device_login          # schon einer offen
+        scopes = sorted({auth.RES + s for s in
+                         ({SCOPE_FOR[c] for c in self.selected_categories()
+                           if c in SCOPE_FOR} | {"User.Read"})})
+        klient, mandant = self.auth_ziel()
+        try:
+            vorgang = auth.DeviceLogin(scopes, client=klient, mandant=mandant)
+            daten = vorgang.start()
+        except Exception as e:                      # noqa: BLE001
+            self.jobs.logk("srv.login.failed", "err", detail=f"{type(e).__name__}: {e}")
+            return False, {"error": f"{type(e).__name__}: {e}"}
+        self.device_login = {**daten, "done": False, "ok": False}
+        self.jobs.logk("srv.login.code", code=daten["code"], url=daten["url"])
+
+        def warten():
+            ok, meldung = vorgang.warten()
+            self.device_login = {**self.device_login, "done": True, "ok": ok,
+                                 "error": None if ok else meldung}
+            if ok:
+                self.jobs.logk("srv.login.ok", "ok")
+            else:
+                self.jobs.logk("srv.login.failed", "err", detail=meldung)
+        threading.Thread(target=warten, daemon=True).start()
+        return True, self.device_login
+
+    def abmelden(self):
+        """Refresh Token verwerfen. Der Schlüssel bleibt, wo er ist."""
+        auth.cache_leeren()
+        self.device_login = None
+        self.jobs.logk("srv.logout")
+        return True
 
     def autostart_mcp(self):
         """Beim App-Start: MCP hochfahren, wenn ein Index da ist.
@@ -1387,6 +1496,11 @@ class Handler(BaseHTTPRequestHandler):
                     label=str(data.get("label") or "job.export"),
                     reconstruct=rekonstruktion)
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
+            if u.path == "/api/login":
+                ok, daten = app.login_starten()
+                return self._json({"ok": ok, "device": daten}, 200 if ok else 500)
+            if u.path == "/api/logout":
+                return self._json({"ok": app.abmelden()})
             if u.path == "/api/cancel":
                 return self._json({"ok": app.jobs.cancel()})
             if u.path == "/api/config":
@@ -1468,6 +1582,14 @@ class Handler(BaseHTTPRequestHandler):
                 cfg[key] = bool(data[key])
         if "skip_folders" in data:
             cfg["skip_folders"] = _clean_folders(data["skip_folders"])
+        if "auth_mode" in data:
+            # Alles Unbekannte wird zum Schlüssel-Modus – dem Weg, der ohne
+            # Rückfrage bei der IT funktioniert.
+            cfg["auth_mode"] = ("login" if str(data["auth_mode"]).strip().lower()
+                                == "login" else "token")
+        for key in ("client_id", "tenant"):
+            if key in data:
+                cfg[key] = str(data[key] or "").strip()
         if "language" in data:
             # Nur bekannte Codes – ein Tippfehler sonst und die Oberfläche
             # spräche für immer die Notsprache.
@@ -1958,6 +2080,23 @@ details.rechte{margin:12px 0;border:1px solid var(--line);border-radius:8px;padd
 details.rechte summary{cursor:pointer;font-size:13px;color:var(--muted)}
 details.rechte[open] summary{margin-bottom:4px;color:var(--ink)}
 details.rechte p{margin:6px 0}
+
+/* Die Auswahl der beiden Anmeldewege: zwei gleichwertige Karten, damit keiner
+   wie eine Fußnote des anderen aussieht. */
+.wahlreihe{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.wahl{flex:1 1 240px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;
+  border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.wahl.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.wahl input{margin-top:3px}
+.wahl span{display:flex;flex-direction:column;gap:2px}
+button.mini{border:1px solid var(--line);background:transparent;color:inherit;
+  border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+button.mini:hover{border-color:var(--accent);color:var(--accent)}
+.geraetecode{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;
+  text-align:center}
+.geraetecode p{margin:0 0 8px}
+.code-gross{display:inline-block;font-size:26px;letter-spacing:.14em;font-weight:700;
+  background:var(--code);border-radius:8px;padding:8px 16px}
 
 /* Protokollleiste unten */
 #protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
@@ -3139,9 +3278,11 @@ function wizardKennung(kind){
     var o = S.ollama || {};
     return ['ollama', o.running, o.has_model, o.model].join('|');
   }
-  var tk = S.token || {};
+  var tk = S.token || {}, au = S.auth || {}, dev = au.device || {};
   return ['token', tk.present, tk.valid, tk.expired, tk.account,
-          (tk.missing || []).join(','), (S.scopes_needed || []).join(',')].join('|');
+          (tk.missing || []).join(','), (S.scopes_needed || []).join(','),
+          au.mode, au.signed_in, au.account, au.own_registration,
+          dev.code, dev.done, dev.ok].join('|');
 }
 /* ---------- Tastatur im Assistenten ----------
    Ein modales Fenster nimmt die Seite in Beschlag; wer keine Maus benutzt, muss
@@ -3244,7 +3385,70 @@ function rechteBlock(offen){
     '<p class="small muted">' + esc(t('wizard.token.scopes.note')) + '</p></details>';
 }
 
-function tokenWizard(){
+function modusWahl(){
+  /* Zwei Wege, einer davon die Vorgabe. Der Unterschied, der zaehlt, steht
+     direkt daneben – nicht in einer Hilfe, die niemand oeffnet. */
+  var jetzt = (S.auth && S.auth.mode) || 'token';
+  function karte(wert, titel, hinweis){
+    return '<label class="wahl' + (jetzt === wert ? ' on' : '') + '">' +
+      '<input type="radio" name="authmode" value="' + wert + '"' +
+      (jetzt === wert ? ' checked' : '') + ' onchange="setzeModus(\'' + wert + '\')">' +
+      '<span><strong>' + esc(t(titel)) + '</strong>' +
+      '<span class="small muted">' + esc(t(hinweis)) + '</span></span></label>';
+  }
+  return '<div class="wahlreihe">' +
+    karte('token', 'wizard.auth.token', 'wizard.auth.token.hint') +
+    karte('login', 'wizard.auth.login', 'wizard.auth.login.hint') + '</div>';
+}
+
+function eigeneRegistrierung(){
+  var au = S.auth || {};
+  return '<details class="rechte"' + (au.own_registration ? ' open' : '') + '>' +
+    '<summary>' + esc(t('wizard.login.own.title')) + '</summary>' +
+    '<p class="small muted">' + t('wizard.login.own.intro') + '</p>' +
+    '<div class="row"><label class="small">' + esc(t('wizard.login.own.client')) +
+    ' <input type="text" id="au-client" style="width:320px" value="' +
+    esc(au.own_registration ? (au.client_id || '') : '') + '" placeholder="' +
+    esc(au.default_client_id || '') + '"></label>' +
+    '<label class="small">' + esc(t('wizard.login.own.tenant')) +
+    ' <input type="text" id="au-tenant" style="width:220px" value="' +
+    esc(au.own_registration ? (au.tenant || '') : '') + '" placeholder="organizations"></label>' +
+    '<button class="mini" onclick="speichereRegistrierung()">' +
+    esc(t('wizard.login.own.save')) + '</button></div></details>';
+}
+
+function loginTeil(){
+  var au = S.auth || {}, dev = au.device;
+  var kopf;
+  if(au.signed_in)
+    kopf = banner('', '<span class="ok">✓</span> ' +
+      t(au.account ? 'wizard.login.state.in' : 'wizard.login.state.in.plain',
+        {who: esc(au.account || '')}));
+  else
+    kopf = banner('warn', esc(t('wizard.login.state.out')));
+
+  var mitte = '';
+  if(dev && !dev.done){
+    // Der Code ist das Einzige, was jetzt zaehlt – gross und zum Kopieren.
+    mitte = '<div class="geraetecode">' +
+      '<p>' + t('wizard.login.code.intro', {url: esc(dev.url)}) + '</p>' +
+      '<code class="code-gross">' + esc(dev.code) + '</code>' +
+      '<p class="small muted">' + esc(t('wizard.login.waiting')) + '</p></div>';
+  } else if(dev && dev.done && !dev.ok){
+    mitte = banner('err', esc(t('wizard.login.failed', {detail: dev.error || ''})));
+  }
+
+  var primaer = au.signed_in
+    ? {text: t('wizard.login.again'), tun: 'starteLogin()'}
+    : {text: t('wizard.login.start'), tun: 'starteLogin()'};
+  var sekundaer = au.signed_in
+    ? {text: t('wizard.login.logout'), tun: 'abmelden()'} : null;
+
+  return '<p class="muted small">' + esc(t('wizard.login.intro')) + '</p>' +
+    kopf + mitte + eigeneRegistrierung() + modalFuss(primaer, sekundaer);
+}
+
+function schluesselTeil(){
   var tk = S.token, head, fehlen = !!(tk.missing && tk.missing.length);
   if(!tk.present) head = banner('err', t('wizard.token.none'));
   else if(tk.expired) head = banner('err', t('wizard.token.expired'));
@@ -3259,17 +3463,47 @@ function tokenWizard(){
     head = banner('', '<span class="ok">✓</span> ' + t(k, {who: esc(tk.account || ''),
                                                           rest: restzeit(tk.expires_in_minutes)}));
   }
-  return modalKopf(t('wizard.token.title'), 'token') +
-    '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
+  return '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
     rechteBlock(fehlen) +
     '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
     '<li>' + t('wizard.token.step2') + '</li>' +
     '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
     modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'}, null,
-              '<span class="small muted" id="tok-msg"></span>') +
-    '<p class="small muted" style="margin-top:14px">' + t('wizard.token.privacy') + '</p>';
+              '<span class="small muted" id="tok-msg"></span>');
 }
+
+function tokenWizard(){
+  var login = (S.auth && S.auth.mode) === 'login';
+  return modalKopf(t('wizard.token.title'), 'token') +
+    modusWahl() +
+    (login ? loginTeil() : schluesselTeil()) +
+    '<p class="small muted" style="margin-top:14px">' +
+    t(login ? 'wizard.login.privacy' : 'wizard.token.privacy') + '</p>';
+}
+
+function setzeModus(wert){
+  post('/api/config', {auth_mode: wert}).then(function(){
+    refresh().then(function(){ openWizard('token', true); });
+  });
+}
+function starteLogin(){
+  post('/api/login').then(function(){
+    refresh().then(function(){ openWizard('token', true); });
+  });
+}
+function abmelden(){
+  post('/api/logout').then(function(){
+    refresh().then(function(){ openWizard('token', true); });
+  });
+}
+function speichereRegistrierung(){
+  post('/api/config', {client_id: el('au-client').value.trim(),
+                       tenant: el('au-tenant').value.trim()}).then(function(){
+    refresh().then(function(){ openWizard('token', true); });
+  });
+}
+
 function banner(art, html){
   return '<div class="banner' + (art ? ' ' + art : '') + '">' + html + '</div>';
 }

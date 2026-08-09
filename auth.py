@@ -181,13 +181,19 @@ class Login:
     der zustimmen soll.
     """
 
-    def __init__(self, scopes, ausgabe=print):
+    def __init__(self, scopes, ausgabe=print, client=None, mandant=None):
+        # `client`/`mandant` reicht die App durch: sie führt ihre Konfiguration
+        # selbst und schreibt sie nicht erst in eine Datei, die settings.py
+        # danach wieder einliest. Ohne Angabe gilt, was konfiguriert ist – so
+        # bleibt der Aufruf von Hand im Terminal unverändert.
         import msal
         self.scopes = list(scopes)
         self.ausgabe = ausgabe
         self._cache = _Cache(cache_datei())
         self.app = msal.PublicClientApplication(
-            client_id(), authority=authority(), token_cache=self._cache.cache)
+            client or client_id(),
+            authority=f"https://login.microsoftonline.com/{mandant or tenant()}",
+            token_cache=self._cache.cache)
         self.account = None
         self.token = None
         self.fehler = ""
@@ -259,7 +265,46 @@ class Login:
         return {"Authorization": f"Bearer {self.token}"}
 
 
-def angemeldet():
+class DeviceLogin:
+    """Anmeldung über Gerätecode, in zwei Schritten.
+
+    Für die Oberfläche im Browser der einzig sinnvolle Weg: ein natives
+    Anmeldefenster (acquire_token_interactive) gehört zu einer Anwendung mit
+    eigenem Fenster – diese hier hat keins. Stattdessen zeigt die Seite einen
+    Code, den man auf einer Microsoft-Seite eingibt, und wartet.
+
+    Getrennt in `start` und `warten`, weil `warten` blockiert, bis der Anwender
+    fertig ist: der Aufrufer legt es in einen eigenen Faden und kann derweil
+    den Code anzeigen.
+    """
+
+    def __init__(self, scopes, client=None, mandant=None):
+        self.login = Login(scopes, ausgabe=lambda *_: None,
+                           client=client, mandant=mandant)
+        self.flow = None
+
+    def start(self):
+        self.flow = self.login.app.initiate_device_flow(scopes=self.login.scopes)
+        if "user_code" not in self.flow:
+            raise RuntimeError(str(self.flow.get("error_description")
+                                   or "Gerätecode nicht erhalten"))
+        return {"code": self.flow["user_code"],
+                "url": self.flow.get("verification_uri")
+                or "https://microsoft.com/devicelogin",
+                "expires_in": int(self.flow.get("expires_in") or 900)}
+
+    def warten(self):
+        """Blockiert bis zur Zustimmung. Liefert (ok, meldung)."""
+        try:
+            res = self.login.app.acquire_token_by_device_flow(self.flow)
+        except Exception as e:                   # noqa: BLE001 – nie den Faden reißen
+            return False, f"{type(e).__name__}: {e}"
+        if self.login._fertig(res):
+            return True, ""
+        return False, ((res or {}).get("error_description") or "abgebrochen")
+
+
+def angemeldet(client=None, mandant=None):
     """Liegt ein brauchbarer Cache vor? Ohne den Anwender zu fragen.
 
     Für die Oberfläche: sie soll den Zustand anzeigen können, ohne dabei ein
@@ -272,7 +317,8 @@ def angemeldet():
     if not cache_datei().exists():
         return None
     try:
-        anmeldung = Login([RES + "User.Read"], ausgabe=lambda *_: None)
+        anmeldung = Login([RES + "User.Read"], ausgabe=lambda *_: None,
+                          client=client, mandant=mandant)
         for acc in anmeldung.app.get_accounts():
             return acc.get("username") or True
     except Exception:                            # noqa: BLE001 – nur eine Anzeige
