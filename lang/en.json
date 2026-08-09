@@ -348,7 +348,7 @@
   "search.ai.err.ollama": "Ollama unreachable: {detail}",
   "settings.chat_model": "Answer model",
   "settings.answer_sources": "Sources per answer",
-  "settings.chat_model.hint": "On the Search tab it can summarise the results on request — by an AI model in Ollama on this machine, nothing goes outside. Bigger models answer better and slower; qwen2.5:7b needs about 5 GB, qwen2.5:14b-instruct about 9 GB. Fetch it with “ollama pull” first.",
+  "settings.chat_model.hint": "On the Search tab it can summarise the results on request — by an AI model in Ollama on this machine, nothing goes outside. Bigger models answer better and slower; qwen3.6:27b needs about 17 GB, smaller variants correspondingly less. Fetch it with “ollama pull” first.",
   "srv.answer.nomodel": "Ollama has no model for the summary: {model}",
   "srv.answer.noquery": "Without a search term there is nothing to answer.",
   "srv.answer.nohits": "No results to summarise.",

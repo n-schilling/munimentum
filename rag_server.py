@@ -11,12 +11,12 @@ Der Dienst liefert auch die Quelldateien aus (Teams-HTML rendert im Browser,
 Outlook-.eml öffnet im Mailprogramm), damit die Links über http funktionieren.
 
     ollama serve
-    ollama pull bge-m3 && ollama pull qwen2.5:14b-instruct
+    ollama pull bge-m3 && ollama pull qwen3.6:27b
     pip3 install numpy requests
     python3 rag_server.py --store rag_store \
         --teams teams_export --outlook outlook_export
 
-Optionen: --embed-model bge-m3  --chat-model qwen2.5:14b-instruct
+Optionen: --embed-model bge-m3  --chat-model qwen3.6:27b
           --ollama http://localhost:11434  --port 8000
 """
 
@@ -389,7 +389,7 @@ def main():
     ap.add_argument("--teams", default="teams_export")
     ap.add_argument("--outlook", default="outlook_export")
     ap.add_argument("--embed-model", default="bge-m3")
-    ap.add_argument("--chat-model", default="qwen2.5:14b-instruct")
+    ap.add_argument("--chat-model", default="qwen3.6:27b")
     ap.add_argument("--ollama", default="http://localhost:11434")
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()

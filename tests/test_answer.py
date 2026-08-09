@@ -187,3 +187,35 @@ def test_complete_meldet_fehler(ollama):
     ollama(ConnectionError("weg"))
     text, fehler = answer.complete("F", QUELLEN, "m", "http://o.test")
     assert text == "" and fehler["error"] == "ollama"
+
+
+# --------------------------------------------------------------------------
+# Was im Chat-Request steht – zwei Werte, an denen die Antwort haengt
+# --------------------------------------------------------------------------
+def test_kontextfenster_wird_gesetzt(ollama):
+    """Ollamas Vorgabe ist 2048 Token. Bei bis zu 20 Quellen à 2000 Zeichen
+    saehe das Modell ein Zwanzigstel und antwortete auf Treffer, die es nie
+    gelesen hat."""
+    gesehen = ollama(Strom(["ok"]))
+    list(answer.stream("F", QUELLEN, "m", "http://o.test"))
+    assert gesehen[0]["json"]["options"]["num_ctx"] == answer.NUM_CTX
+    assert answer.NUM_CTX >= 32768
+
+
+def test_denken_ist_abgeschaltet(ollama):
+    """Qwen 3 denkt sonst vor jeder Antwort – das kostet nur Zeit, und der
+    Gedankengang liefe als Text mit in den Datenstrom."""
+    gesehen = ollama(Strom(["ok"]))
+    list(answer.stream("F", QUELLEN, "m", "http://o.test"))
+    assert gesehen[0]["json"]["think"] is False
+
+
+def test_der_kontext_passt_ins_fenster():
+    """Groesster Fall gegen das Fenster gerechnet: 20 Quellen, volle Laenge.
+    Grob vier Zeichen je Token – bleibt Luft, ist die Rechnung in Ordnung."""
+    quellen = [{"date": "2025-06-01 09:30", "who": "Wer", "source_label": "Mail",
+                "title": "Titel", "text": "x" * answer.CHARS_PER_SOURCE}
+               for _ in range(20)]
+    zeichen = len(answer.build_context(quellen))
+    assert zeichen / 4 < answer.NUM_CTX * 0.8, (
+        f"{zeichen} Zeichen passen nicht mit Reserve in {answer.NUM_CTX} Token")

@@ -29,6 +29,17 @@ STREAM_TIMEOUT = 600
 # dass es gewinnt.
 CHARS_PER_SOURCE = 2000
 
+# Ollamas Vorgabe für num_ctx ist 2048 Token. Bei bis zu 20 Quellen à 2000
+# Zeichen sind das rund 40.000 Zeichen allein an Kontext – das Modell sähe
+# davon ein Zwanzigstel und antwortete auf Treffer, die es nie gelesen hat.
+# 32768 deckt den größten Fall mit Reserve.
+NUM_CTX = 32768
+
+# Qwen 3 denkt von Haus aus vor der Antwort. Für eine Zusammenfassung aus
+# bereits gefundenen Stellen kostet das nur Zeit – und der Gedankengang liefe
+# als Text mit in den Datenstrom, den die Oberfläche live anzeigt.
+THINK = False
+
 SPRACHNAME = {"de": "Deutsch", "en": "English", "fr": "français"}
 
 _REGELN = {
@@ -99,7 +110,8 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
     try:
         r = requests.post(
             f"{ollama.rstrip('/')}/api/chat",
-            json={"model": model, "stream": True, "options": {"temperature": 0.2},
+            json={"model": model, "stream": True, "think": THINK,
+                  "options": {"temperature": 0.2, "num_ctx": NUM_CTX},
                   "messages": build_messages(query, quellen, lang, chars)},
             stream=True, timeout=timeout)
         if r.status_code == 404:

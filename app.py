@@ -237,7 +237,7 @@ DEFAULT_CONFIG = {
     "index_batch": 64,
     "ollama": "http://localhost:11434",
     "embed_model": "bge-m3",
-    "chat_model": "qwen2.5:14b-instruct",   # formuliert die Antwort, lokal
+    "chat_model": "qwen3.6:27b",            # formuliert die Antwort, lokal
     "answer_sources": 8,                    # wie viele Treffer sie dafür liest
     # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
     # eine längere Liste, durch die man erst einmal hindurchsehen muss.

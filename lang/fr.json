@@ -348,7 +348,7 @@
   "search.ai.err.ollama": "Ollama injoignable : {detail}",
   "settings.chat_model": "Modèle de réponse",
   "settings.answer_sources": "Sources par réponse",
-  "settings.chat_model.hint": "Dans l’onglet « Recherche », il peut résumer les résultats sur demande — par un modèle d’IA dans Ollama sur cette machine, rien ne sort. Les modèles plus grands répondent mieux et plus lentement ; qwen2.5:7b demande environ 5 Go, qwen2.5:14b-instruct environ 9 Go. Récupérez-le d’abord avec « ollama pull ».",
+  "settings.chat_model.hint": "Dans l’onglet « Recherche », il peut résumer les résultats sur demande — par un modèle d’IA dans Ollama sur cette machine, rien ne sort. Les modèles plus grands répondent mieux et plus lentement ; qwen3.6:27b demande environ 17 Go, les variantes plus petites d’autant moins. Récupérez-le d’abord avec « ollama pull ».",
   "srv.answer.nomodel": "Ollama n’a aucun modèle pour le résumé : {model}",
   "srv.answer.noquery": "Sans terme de recherche, il n’y a rien à répondre.",
   "srv.answer.nohits": "Aucun résultat à résumer.",

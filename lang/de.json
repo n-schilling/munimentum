@@ -348,7 +348,7 @@
   "search.ai.err.ollama": "Ollama nicht erreichbar: {detail}",
   "settings.chat_model": "Antwort-Modell",
   "settings.answer_sources": "Quellen je Antwort",
-  "settings.chat_model.hint": "Fasst im Reiter „Suche“ auf Wunsch die Treffer zusammen – von einem KI-Modell in Ollama auf diesem Rechner, es geht nichts nach draußen. Größere Modelle antworten besser und langsamer; qwen2.5:7b braucht rund 5 GB, qwen2.5:14b-instruct rund 9 GB. Vorher mit „ollama pull“ laden.",
+  "settings.chat_model.hint": "Fasst im Reiter „Suche“ auf Wunsch die Treffer zusammen – von einem KI-Modell in Ollama auf diesem Rechner, es geht nichts nach draußen. Größere Modelle antworten besser und langsamer; qwen3.6:27b braucht rund 17 GB, kleinere Varianten entsprechend weniger. Vorher mit „ollama pull“ laden.",
   "srv.answer.nomodel": "Ollama hat kein Modell für die Zusammenfassung: {model}",
   "srv.answer.noquery": "Ohne Suchbegriff gibt es nichts zu beantworten.",
   "srv.answer.nohits": "Keine Treffer, die sich zusammenfassen ließen.",
