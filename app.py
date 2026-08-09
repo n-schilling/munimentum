@@ -506,6 +506,11 @@ def _zaehle(db):
             # Index – die Zahl der Zeilen wäre also deutlich höher als das,
             # was jemand in seinem Archiv wiederzufinden erwartet.
             "messages": con.execute("SELECT COUNT(DISTINCT uid) FROM chunks").fetchone()[0],
+            # Was dieser Index kann. Ein älterer kennt Verlauf und Löschungen
+            # nicht; die Oberfläche bietet sie dann gar nicht erst an, statt
+            # den Anwender in einen Fehler laufen zu lassen.
+            "features": sorted({r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+                               & {"thread", "gone"}),
         }
     finally:
         con.close()
@@ -519,6 +524,7 @@ def store_status(cfg):
     db = store / "corpus.db"
     vec = store / "vectors.npy"
     out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
+           "features": [],
            "semantic": vec.exists(), "built_at": _mtime_iso(db), "model": None}
     if not out["exists"]:
         return out
@@ -2534,6 +2540,7 @@ function el(id){ return document.getElementById(id); }
 /* Drei Reiter, mehr braucht es nicht: Daten holen, Daten ansehen, einstellen.
    Kalender und Adressbuch sind Sichten auf denselben Bestand wie die Suche und
    liegen deshalb eine Ebene darunter; Zeitplan und MCP sind Einstellungen. */
+var KANN_VERLAUF = false;   // hängt am Index, siehe store.features
 var REITER = ['export', 'suche', 'einstellungen'];
 var SICHTEN = ['treffer', 'kalender', 'adressbuch'];
 var offeneSicht = 'treffer';
@@ -2630,6 +2637,11 @@ function renderStatus(s){
   parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
   parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
   el('export-state').textContent = parts.join('  ·  ');
+  // „Nur Gelöschtes“ und der Verlauf brauchen einen Index, der beides kennt.
+  var kann = (st.features || []);
+  el('gone-wrap').classList.toggle('hide', kann.indexOf('gone') < 0);
+  el('gone-note').classList.toggle('hide', kann.indexOf('gone') < 0);
+  KANN_VERLAUF = kann.indexOf('thread') >= 0;
   el('data-dir').textContent = s.data_dir;
   el('data-dir2').textContent = s.data_dir;
   zeigeUpdate(s.update || {});
@@ -2821,7 +2833,7 @@ function renderHits(r){
         esc(t('search.gone.tag')) + '</span>' : '') +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
       '<div class="prev">' + esc(h.preview || '') + '…</div>' +
-      (h.thread ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +
+      (h.thread && KANN_VERLAUF ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +
         '<button class="mini" onclick="zeigeVerlauf(' + (i + 1) + ',\'' +
         esc(h.thread).replace(/'/g, "\\'") + '\')">' +
         esc(t('search.thread.show')) + '</button></div>' : '') +

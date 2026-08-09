@@ -1967,7 +1967,20 @@ global.fetch = function(){
 var knoten = {};
 function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', value: '',
   scrollTop: 0, clientHeight: 0, scrollHeight: 0, childElementCount: 0, dataset: {},
-  classList: {add: function(){}, remove: function(){}, toggle: function(){}},
+  // classList merkt sich wirklich etwas. Eine Attrappe, die nur nickt, laesst
+  // genau die Fehler durch, um die es hier geht ("Knopf bleibt sichtbar").
+  classList: (function(){
+    var drin = {};
+    return {
+      add: function(c){ drin[c] = true; },
+      remove: function(c){ delete drin[c]; },
+      contains: function(c){ return !!drin[c]; },
+      toggle: function(c, an){
+        if(an === undefined) an = !drin[c];
+        if(an) drin[c] = true; else delete drin[c];
+        return !!drin[c];
+      }};
+  })(),
   appendChild: function(){}, removeChild: function(){}, firstChild: null,
   addEventListener: function(){}, scrollIntoView: function(){},
   focus: function(){ global.document.activeElement = this; },
@@ -2411,7 +2424,7 @@ function statusGeruest(){
           scopes_needed: S.scopes_needed, scope_queries: S.scope_queries,
           graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
           store: {exists: true, chunks: 5, messages: 2, semantic: false,
-                  built_at: null, model: null},
+                  built_at: null, model: null, features: ['thread', 'gone']},
           auth: {mode: 'token', signed_in: false, account: null, device: null,
                  own_registration: false, client_id: 'std', tenant: 'organizations',
                  default_client_id: 'std'},
@@ -3120,6 +3133,7 @@ def test_http_thread_ohne_index(server, monkeypatch):
 
 
 PRUEFUNG_VERLAUF = GRUNDZUSTAND + """
+KANN_VERLAUF = true;      // wird sonst aus store.features gesetzt
 // Ein Treffer mit Gespraechskennung bietet den Verlauf an, einer ohne nicht.
 global.fetch = function(pfad){
   return Promise.resolve({json: function(){
@@ -3196,3 +3210,27 @@ def test_http_search_reicht_den_filter_durch(server, monkeypatch):
     assert gesehen["only_gone"] is True
     call(port, "GET", "/api/search")
     assert gesehen["only_gone"] is False
+
+
+PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """
+// Ein Index aus einer aelteren Fassung kennt Verlauf und Loeschungen nicht.
+// Dann bietet die Oberflaeche sie gar nicht erst an, statt in einen Fehler
+// laufen zu lassen.
+var st = statusGeruest();
+st.store.features = [];
+renderStatus(st);
+pruefe(document.getElementById('gone-wrap').classList.contains('hide'),
+       'Filter wird trotz altem Index angeboten');
+pruefe(KANN_VERLAUF === false, 'Verlauf gilt trotz altem Index als moeglich');
+
+st.store.features = ['gone', 'thread'];
+renderStatus(st);
+pruefe(!document.getElementById('gone-wrap').classList.contains('hide'),
+       'Filter fehlt trotz passendem Index');
+pruefe(KANN_VERLAUF === true, 'Verlauf fehlt trotz passendem Index');
+console.log('OK');
+"""
+
+
+def test_alter_index_bietet_die_neuen_filter_nicht_an():
+    _in_node(PRUEFUNG_ALTER_INDEX)

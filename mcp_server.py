@@ -132,6 +132,15 @@ def _db():
 # --------------------------------------------------------------------------
 # Filters (SQL WHERE fragments shared by all query tools)
 # --------------------------------------------------------------------------
+def _hat_spalte(con, name):
+    """Kennt der Index diese Spalte schon?
+
+    Ein Index aus einer älteren Fassung hat sie nicht. Ohne diese Frage endete
+    ein Klick auf „Nur Gelöschtes“ in einem SQL-Fehler statt in einem Hinweis.
+    """
+    return any(r[1] == name for r in con.execute("PRAGMA table_info(chunks)"))
+
+
 def _where(person, dfrom, dto, src, only_gone=False):
     conds, params = [], []
     if only_gone:
@@ -423,6 +432,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
     """
     con = _db()
     try:
+        if only_gone and not _hat_spalte(con, "gone"):
+            return {"error": "This index predates deletion tracking. Rebuild it "
+                             "(Export tab → “Index only”) to use only_gone.",
+                    "count": 0, "results": []}
         where, params = _where(person.strip(), _to_ts(date_from, False),
                                _to_ts(date_to, True), source, only_gone)
         try:
@@ -460,6 +473,10 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
     """
     con = _db()
     try:
+        if only_gone and not _hat_spalte(con, "gone"):
+            return {"error": "This index predates deletion tracking. Rebuild it "
+                             "(Export tab → “Index only”) to use only_gone.",
+                    "count": 0, "results": []}
         where, params = _where(person.strip(), _to_ts(date_from, False),
                                _to_ts(date_to, True), source, only_gone)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
@@ -488,6 +505,10 @@ def get_thread(thread: str, limit: int = 50) -> dict:
         return {"thread": "", "count": 0, "messages": []}
     con = _db()
     try:
+        if not _hat_spalte(con, "thread"):
+            return {"thread": thread, "count": 0, "messages": [],
+                    "error": "This index predates conversation grouping. "
+                             "Rebuild it (Export tab → “Index only”)."}
         rows = con.execute(
             "SELECT * FROM chunks WHERE thread = ? AND seq = 0 "
             "ORDER BY ts IS NULL, ts LIMIT ?",
