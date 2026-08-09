@@ -30,6 +30,7 @@ outlook_export.py ┘                        └─ rag_index.py → rag_store/
 | `mcp_server.py` | MCP server — Claude searches and reads the exports itself |
 | `rag_server.py` | Local RAG web UI with AI answers (fully offline via Ollama) |
 | `corpus.py` | Shared export parsing (used internally) |
+| `auth.py` | Sign-in for every script — pasted key or MSAL login (used internally) |
 | `settings.py` | `app_config.json` as a defaults layer for every script (used internally) |
 | `i18n.py`, `lang/` | UI translations (German, English, French) |
 | `version.py`, `updates.py` | Version number and the startup update check |
@@ -377,6 +378,10 @@ default calendar and all contacts. Same as pressing Enter at every prompt.
 | `REFRESH_CHANNELS` | Teams | `1` | `0` = don't re-check exported channels for new replies. |
 | `SKIP_EMPTY_CHATS` | Teams | `1` | `0` = also export chats with only system messages. |
 | `INCLUDE_HIDDEN` | Outlook | `0` | `1` = also export hidden system folders (Conversation History, Sync Issues …). |
+| `GRAPH_AUTH` | both | `token` | `login` uses a real sign-in with a refresh token on disk instead of a pasted key — that is what lets the scheduler keep running unattended. |
+| `GRAPH_CLIENT_ID` | both | Microsoft's | Client ID of your own app registration. Empty = `Graph Command Line Tools`, which needs no registration. |
+| `GRAPH_TENANT` | both | `organizations` | Tenant for your own registration. |
+| `GRAPH_DEVICE_CODE` | both | `0` | `1` = device-code sign-in instead of a browser window (headless machines). |
 | `CALENDAR_RECONSTRUCT` | `combined_search` | `1` | `0` = skip recovering deleted appointments from mail. That step reads every `.eml`; on a 45,000-mail archive it is minutes against seconds for the rest. Calendar and contacts are still built. |
 | `SKIP_FOLDERS` | Outlook | see below | Comma-separated folders the default selection leaves out, compared case-insensitively. Set it empty to export every folder; unset it to keep the built-in list (Archive, Drafts, Deleted Items, Junk, Outbox and their German names). |
 
@@ -405,9 +410,13 @@ deliberately does **not** supply is *what* to export — running a script direct
 should still ask, otherwise the interactive mode is gone. See
 [`settings.py`](settings.py).
 
-`USE_DEVICE_CODE = True` at the top of either script switches the browser login
-for a device code (headless machines). It is the one switch the app does not
-expose, because the app never signs in — it works from a pasted token only.
+Both ways of signing in live in [`auth.py`](auth.py), once rather than twice:
+the pasted key (`gx_token.txt` / `GRAPH_TOKEN`, valid for hours, cannot be
+renewed) and a real MSAL sign-in whose **refresh token is cached on disk**
+(`msal_cache.bin`, mode `0600`), which is what survives a restart. The fallback
+runs one way only: with `login` configured and no cache, a pasted key steps in
+so the run still starts — never the reverse, so choosing the key mode never
+pops up a sign-in window unasked.
 
 ---
 

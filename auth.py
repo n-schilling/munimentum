@@ -375,7 +375,13 @@ def beschreibe(ausgabe=print):
         ausgabe("Token-Modus aktiv – nutze Access Token aus Graph Explorer (kein Login).")
 
 
-if __name__ == "__main__":                       # kleine Selbstauskunft
+def main():
+    """Selbstauskunft: welcher Weg gilt, was liegt vor.
+
+    Auch das Gegenstück im Bündel (`--run auth`): dort ist es der einzige Weg,
+    ohne Netz zu prüfen, dass dieses Modul und msal wirklich mitgeliefert sind.
+    Ein Export würde es sonst erst beim Anwender merken.
+    """
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -389,3 +395,7 @@ if __name__ == "__main__":                       # kleine Selbstauskunft
           f" ({cache_datei()})")
     konto = angemeldet()
     print(f"Angemeldet: {konto if konto else 'nein'}")
+
+
+if __name__ == "__main__":
+    main()

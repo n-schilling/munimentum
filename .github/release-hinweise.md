@@ -1,5 +1,39 @@
 Fertige App zum Herunterladen — Python oder sonstige Installationen sind nicht nötig.
 
+## Neu in 2.0.0
+
+**Anmelden statt Schlüssel einfügen — wahlweise.** Der Assistent bietet oben
+zwei gleichwertige Wege an. Der bisherige bleibt vorausgewählt: Zugangsschlüssel
+aus dem Graph Explorer, ohne Rückfrage bei der IT, gültig für ein paar Stunden.
+Neu daneben: eine richtige Anmeldung. Die App merkt sich danach nur die
+Erlaubnis, sich selbst neue Schlüssel auszustellen — **damit läuft der Zeitplan
+zum ersten Mal unbeaufsichtigt weiter, auch über einen Neustart hinweg.** Dein
+Passwort sieht sie nie. Wer eine eigene App-Registrierung braucht, trägt
+Client-ID und Tenant ein; ohne Eintrag genügt Microsofts öffentliche Anwendung,
+für die es keine Registrierung braucht.
+
+**Verlauf: zusammengehörende Mails als Gespräch.** Ein Treffer allein sagt oft
+zu wenig — „Ja, machen wir so" ist erst mit der Frage davor eine Aussage. Unter
+jedem Treffer klappt jetzt der ganze Mailwechsel auf. Auf einem Testordner mit
+1.181 Mails ergab das 556 Gespräche, das längste mit 19 Nachrichten über zehn
+Tage. Dafür ist **kein Neu-Export nötig**, nur einmal neu indizieren.
+
+**Gelöschte Mails bleiben auffindbar.** Ein Archiv, das nur wächst, beantwortet
+die wichtigste Frage nicht: was war hier einmal und ist jetzt weg? Jeder
+Exportlauf vergleicht nun, was im Postfach wirklich noch liegt, und vermerkt
+Verschwundenes — die Datei bleibt selbstverständlich erhalten. In der Suche gibt
+es dafür **„Nur Gelöschtes"** und eine Markierung am Treffer. Verschobenes wird
+nicht mit Gelöschtem verwechselt: jeder Verdacht wird einzeln bei Microsoft
+nachgefragt.
+
+**Mails öffnen sich im Mailprogramm.** Ein Klick auf einen Treffer lud bisher
+den MIME-Rohtext ins Browserfenster. Jetzt kommt die `.eml` als Datei — und
+damit als richtige Mail samt Anhängen. Ebenso Termine und Kontakte.
+
+**Datenordner und Trefferzahl einstellbar.** Beides steht jetzt in den
+*Einstellungen*, statt nur über Kommandozeilenschalter erreichbar zu sein. Der
+Datenordner wirkt nach einem Neustart und verschiebt nichts.
+
 ## Neu in 1.1.1
 
 **Die App hat ein eigenes Symbol.** Bis hierher zeigten Dock, Taskleiste und
@@ -114,8 +148,10 @@ Nicht in der App, sondern im Benutzerordner — ein Update überschreibt also ni
 * Linux: `~/.local/share/Microsoft365-Archiv`
 
 Der Pfad steht auch im Export-Reiter der Oberfläche. Ein Postfach kann zweistellige
-Gigabyte belegen; für eine andere Platte die App mit `--data-dir ORDNER` starten
-oder `OFFICE365_DATA_DIR` setzen.
+Gigabyte belegen; für eine andere Platte lässt er sich seit 2.0.0 direkt in den
+*Einstellungen* umstellen (wirkt nach einem Neustart und verschiebt nichts).
+Für einen einzelnen Lauf gehen weiterhin `--data-dir ORDNER` und
+`OFFICE365_DATA_DIR`.
 
 ## Sprache
 

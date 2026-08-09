@@ -73,7 +73,12 @@ FROZEN = bool(getattr(sys, "frozen", False))
 # Teilprogramme, die die gebündelte Datei über "--run <name>" selbst starten
 # kann. Als Skripte liegen sie nebeneinander, im Bündel als Module darin.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
-            "mcp_server", "rag_server")
+            "mcp_server", "rag_server",
+            # auth ist kein Exportschritt, sondern eine Selbstauskunft: welcher
+            # Anmeldeweg gilt, liegt ein Schlüssel vor, gibt es einen Cache.
+            # Im Bündel ist das der einzige Weg, das ohne Netz zu prüfen –
+            # der Rauchtest tut genau das.
+            "auth")
 
 
 def resource_dir():

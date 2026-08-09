@@ -127,6 +127,22 @@ def teilprogramm_aufrufbar(exe):
                      f"  Code {r.returncode}\n  {r.stdout[-800:]}\n  {r.stderr[-800:]}")
 
 
+def anmeldung_im_buendel(exe):
+    """Die Selbstauskunft von auth.py aufrufen.
+
+    Sie importiert msal und liest die Konfiguration – im Bündel der einzige Weg,
+    den Anmeldeweg ohne Netz zu prüfen. Fehlte auth.py oder msal, liefe jeder
+    Export sofort in einen ModuleNotFoundError, und das fiele erst beim Anwender
+    auf: der Rauchtest startet selbst keinen Export (er hat keinen Token).
+    """
+    schritt("Anmeldung im Bündel (--run auth)")
+    r = subprocess.run([str(exe), "--run", "auth"],
+                       capture_output=True, text=True, timeout=180)
+    if r.returncode != 0 or "Client-ID" not in r.stdout:
+        raise Fehler("--run auth schlug fehl:\n"
+                     f"  Code {r.returncode}\n  {r.stdout[-800:]}\n  {r.stderr[-800:]}")
+
+
 def testdaten(ordner):
     chat = Path(ordner) / "teams_export" / "1on1"
     chat.mkdir(parents=True)
@@ -248,6 +264,7 @@ def main():
         raise SystemExit(f"Nicht gefunden: {exe}")
 
     teilprogramm_aufrufbar(exe)
+    anmeldung_im_buendel(exe)
     daten = Path(tempfile.mkdtemp(prefix="o365-rauchtest-"))
     port = freier_port()
     proc = None
