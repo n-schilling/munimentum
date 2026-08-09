@@ -3467,3 +3467,72 @@ def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
         assert ziel is None and fehler, "Ordner ohne Schreibrecht durchgewinkt"
     finally:
         gesperrt.chmod(0o700)
+
+
+# --------------------------------------------------------------------------
+# Die Antwort spricht die Sprache der Oberfläche
+#
+# Sie wird genauso ausgehandelt wie die Seite selbst: Einstellung schlägt
+# Browsersprache. Ohne Test bräche das lautlos – die Antwort käme weiterhin,
+# nur eben auf Deutsch für jemanden, der Französisch liest.
+# --------------------------------------------------------------------------
+def _antwort_sprache(server, monkeypatch, accept=None, eingestellt="auto"):
+    a, port = server
+    a.cfg["language"] = eingestellt
+    gesehen = {}
+
+    class FakeSuche:
+        STATE = {"semantic": True}
+
+        @staticmethod
+        def search_messages(**kw):
+            return {"results": [{"uid": "u1", "title": "T", "who": "W",
+                                 "date": "2025-06-01", "uri": "o365://outlook/a.eml"}]}
+
+        @staticmethod
+        def get_document(uid):
+            return {"text": "Inhalt"}
+
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    monkeypatch.setattr(a, "ollama", lambda: {"running": True, "has_chat_model": True})
+
+    def fake_stream(query, quellen, model, ollama, lang="de", *rest, **kw):
+        gesehen["lang"] = lang
+        yield {"text": "ok"}
+
+    monkeypatch.setattr(app_mod.answer, "stream", fake_stream)
+
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    kopf = {"Content-Type": "application/json"}
+    if accept:
+        kopf["Accept-Language"] = accept
+    con.request("POST", "/api/answer", json.dumps({"q": "Frage"}), kopf)
+    con.getresponse().read()
+    con.close()
+    return gesehen.get("lang")
+
+
+@pytest.mark.parametrize("accept,erwartet", [
+    ("fr-CH,fr;q=0.9", "fr"),
+    ("en-US,en;q=0.9", "en"),
+    ("de-DE,de;q=0.9", "de"),
+    (None, "de"),                      # ohne Angabe die Vorgabe
+    ("kl-GL", "de"),                   # unbekannt: nicht raten
+])
+def test_antwort_folgt_der_browsersprache(server, monkeypatch, accept, erwartet):
+    assert _antwort_sprache(server, monkeypatch, accept) == erwartet
+
+
+def test_eingestellte_sprache_schlaegt_den_browser(server, monkeypatch):
+    """Wer die Oberfläche auf Französisch stellt, will die Antwort nicht auf
+    Englisch, nur weil der Browser das meldet."""
+    assert _antwort_sprache(server, monkeypatch, "en-US,en;q=0.9", "fr") == "fr"
+
+
+def test_prompt_verlangt_die_passende_sprache():
+    """Die Regel steht in derselben Sprache wie die gewünschte Antwort – ein
+    kleines Modell folgt ihr dann zuverlässiger."""
+    import answer
+    assert "Deutsch" in answer.system_prompt("de")
+    assert "English" in answer.system_prompt("en")
+    assert "français" in answer.system_prompt("fr")
