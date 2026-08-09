@@ -1778,6 +1778,9 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
         assert resp.status == 200
         assert resp.getheader("Content-Security-Policy") == "sandbox"
         assert "4711" in body
+        # Teams-Exporte sind zum Lesen gemacht und bleiben im Browser.
+        assert resp.getheader("Content-Disposition") is None
+        assert resp.getheader("Content-Type").startswith("text/html")
         con.close()
 
         # Ausbruch aus dem Export-Ordner wird abgewiesen
@@ -3234,3 +3237,58 @@ console.log('OK');
 
 def test_alter_index_bietet_die_neuen_filter_nicht_an():
     _in_node(PRUEFUNG_ALTER_INDEX)
+
+
+# --------------------------------------------------------------------------
+# Quelldateien: was in den Browser gehört und was ins Programm daneben
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("name,inhalt,ctype", [
+    ("mail.eml", b"From: a@b.c\nSubject: X\n\nText\n", "message/rfc822"),
+    ("termin.ics", b"BEGIN:VCALENDAR\nEND:VCALENDAR\n", "text/calendar; charset=utf-8"),
+    ("alice.vcf", b"BEGIN:VCARD\nEND:VCARD\n", "text/vcard; charset=utf-8"),
+])
+def test_quelldatei_wird_heruntergeladen(sandbox, monkeypatch, name, inhalt, ctype):
+    """Eine .eml als roher Text im Browserfenster ist für niemanden zu
+    gebrauchen – im Mailprogramm dagegen eine Mail mit Anhängen."""
+    ordner = sandbox / "outlook_export"
+    ordner.mkdir()
+    (ordner / name).write_bytes(inhalt)
+
+    class FakeSuche:
+        STATE = {}
+
+        @staticmethod
+        def _resolve_source(root, pfad):
+            return (ordner / pfad), None
+
+    a = app_mod.App(app_mod.load_config())
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    httpd = app_mod.make_server(a, 0)
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+    try:
+        con = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=10)
+        con.request("GET", f"/source?root=outlook&path={name}")
+        resp = con.getresponse()
+        koerper = resp.read()
+        assert resp.status == 200 and koerper == inhalt
+        assert resp.getheader("Content-Type") == ctype
+        disp = resp.getheader("Content-Disposition")
+        assert disp == f'attachment; filename="{name}"', disp
+        con.close()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.mark.parametrize("roh,erwartet", [
+    ('a"b.eml', "a_b.eml"),
+    ("x\r\ny.eml", "x__y.eml"),
+    ("../../etc/passwd", "passwd"),
+    ("", "datei"),
+    ("normal.eml", "normal.eml"),
+])
+def test_dateiname_im_header_ist_unbedenklich(roh, erwartet):
+    """Der Name landet in einem Header – ein Anführungszeichen oder ein
+    Zeilenumbruch darin liesse ihn aufbrechen."""
+    assert app_mod._sicherer_name(roh) == erwartet

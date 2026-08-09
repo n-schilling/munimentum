@@ -1774,19 +1774,48 @@ class Handler(BaseHTTPRequestHandler):
         target, err = mod._resolve_source(q.get("root", ""), q.get("path", ""))
         if err:
             return self._send(404, err, "text/plain; charset=utf-8")
-        ctype = ("text/html; charset=utf-8" if target.suffix.lower() in (".html", ".htm")
-                 else "text/plain; charset=utf-8")
+        # Teams-Exporte sind zum Lesen gemacht und bleiben im Browser. Alles
+        # andere gehört in das Programm, das es kennt: eine .eml als roher Text
+        # im Browserfenster ist für niemanden zu gebrauchen, im Mailprogramm
+        # dagegen eine Mail mit Anhängen. Dasselbe gilt für .ics und .vcf.
+        endung = target.suffix.lower()
+        ctype = _CONTENT_TYPE.get(endung, "application/octet-stream")
         size = target.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(size))
         self.send_header("Content-Security-Policy", "sandbox")
         self.send_header("X-Content-Type-Options", "nosniff")
+        if endung not in (".html", ".htm"):
+            # Der Dateiname ohne Pfad, und nur mit unbedenklichen Zeichen: er
+            # landet in einem Header und im Downloadordner.
+            self.send_header("Content-Disposition",
+                             f'attachment; filename="{_sicherer_name(target.name)}"')
         self.end_headers()
         if self.command == "HEAD":
             return
         with open(target, "rb") as f:
             shutil.copyfileobj(f, self.wfile, 64 * 1024)
+
+
+# Womit das Betriebssystem etwas anfangen kann. .eml öffnet das Mailprogramm,
+# .ics den Kalender, .vcf die Kontakte – vorausgesetzt, der Typ stimmt.
+_CONTENT_TYPE = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".eml": "message/rfc822",
+    ".ics": "text/calendar; charset=utf-8",
+    ".vcf": "text/vcard; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+}
+
+
+def _sicherer_name(name):
+    """Dateiname für Content-Disposition: keine Anführungszeichen, keine
+    Zeilenumbrüche, kein Pfad – sonst ließe sich der Header aufbrechen."""
+    sauber = re.sub(r'[\\"\r\n]', "_", Path(name).name).strip()
+    return sauber or "datei"
 
 
 def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
