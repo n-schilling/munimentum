@@ -3536,3 +3536,40 @@ def test_prompt_verlangt_die_passende_sprache():
     assert "Deutsch" in answer.system_prompt("de")
     assert "English" in answer.system_prompt("en")
     assert "français" in answer.system_prompt("fr")
+
+
+# --------------------------------------------------------------------------
+# Jeder ID-Selektor muss ein Element treffen
+#
+# Aus der Praxis gemeldet: „Monat“ und „Rekonstruiert“ im Kalender liessen sich
+# nicht mehr klicken. Ursache war der Reiter-Umbau – aus #tab-kalender wurde
+# #sicht-kalender, aber zwei querySelectorAll blieben auf dem alten Namen. Die
+# Auswahl traf nichts, es wurde nie ein Klick-Empfänger gesetzt, und „Woche“ sah
+# nur deshalb aktiv aus, weil die Klasse im Markup steht. Kein Fehler in der
+# Konsole, keine Meldung: der Knopf tat einfach nichts.
+# --------------------------------------------------------------------------
+def test_jeder_id_selektor_trifft_ein_element():
+    quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
+    # Alle im JavaScript benutzten '#id'-Selektoren. Nur die vollständig
+    # ausgeschriebenen: '#cat-' + name wird erst zur Laufzeit fertig, dazu
+    # liesse sich hier nichts sagen.
+    selektoren = set(re.findall(
+        r"""querySelector(?:All)?\('#([\w-]+)[^']*'\s*\)""", quelle))
+    assert selektoren, "keine ID-Selektoren gefunden – Muster kaputt?"
+    # … gegen die IDs im Markup.
+    vorhanden = set(re.findall(r'id="([\w-]+)"', quelle))
+    fehlt = sorted(selektoren - vorhanden)
+    # Statisch geprüft und nicht im DOM-Stummel nachgestellt: der müsste dafür
+    # echtes Markup parsen, und diese Prüfung deckt ohnehin jeden Selektor der
+    # Seite ab statt nur die drei Kalenderknöpfe.
+    assert not fehlt, (
+        f"Selektor trifft kein Element: {fehlt}. Der zugehörige Knopf tut dann "
+        f"nichts, ohne dass irgendwo ein Fehler auftaucht.")
+
+
+def test_seite_bringt_ihr_eigenes_symbol_mit():
+    """Ohne das holt sich jeder Browser ein 404 auf /favicon.ico ab – und im
+    Bündel gäbe es keine Datei, die man stattdessen ausliefern könnte."""
+    seite = app_mod.PAGE
+    assert 'rel="icon"' in seite
+    assert "data:image/svg+xml" in seite, "Symbol als Datei statt eingebettet"

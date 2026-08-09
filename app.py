@@ -2040,6 +2040,10 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Microsoft-365-Archiv</title>
+<!-- Der Archivkasten aus packaging/icon/icon.svg, klein nachgezeichnet. Als
+     Datenadresse, damit auch das Bündel ohne zusätzliche Datei auskommt –
+     sonst holt sich jeder Browser ein 404 auf /favicon.ico ab. -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Crect width='1024' height='1024' rx='229' fill='%232f6fed'/%3E%3Crect x='196' y='330' width='632' height='158' rx='34' fill='%23fff'/%3E%3Crect x='246' y='500' width='532' height='300' rx='34' fill='%23fff' opacity='.93'/%3E%3Crect x='430' y='596' width='164' height='44' rx='22' fill='%232f6fed'/%3E%3C/svg%3E">
 <style>
 :root{
   --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6570; --line:#dfe3e8;
@@ -3244,9 +3248,9 @@ el('kalNext').addEventListener('click', function(){
   drawCal();
 });
 el('kalToday').addEventListener('click', function(){ cursor = new Date(); drawCal(); });
-document.querySelectorAll('#tab-kalender .calbar .chip[data-mode]').forEach(function(ch){
+document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]').forEach(function(ch){
   ch.addEventListener('click', function(){
-    document.querySelectorAll('#tab-kalender .calbar .chip[data-mode]')
+    document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]')
       .forEach(function(x){ x.classList.remove('on'); });
     ch.classList.add('on'); calMode = ch.dataset.mode;
     if(calMode !== 'rebuilt') el('kalBox').innerHTML = '';   // Rahmen der Liste verwerfen
