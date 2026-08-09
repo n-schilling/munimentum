@@ -342,10 +342,36 @@ def _outlook_file(p_str, root_str):
     }
 
 
+def lies_verschwunden(root_dir):
+    """rel -> Zeitpunkt, seit dem die Mail nicht mehr im Postfach steht.
+
+    Geschrieben von outlook_export.py. Die Datei selbst bleibt liegen; hier
+    wird nur vermerkt, dass sie im Postfach fehlt – das ist der Unterschied
+    zwischen einer Kopie und einem Archiv.
+    """
+    out = {}
+    try:
+        text = (Path(root_dir) / "verschwunden.tsv").read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for zeile in text.splitlines():
+        if "\t" in zeile:
+            rel, wann = zeile.split("\t", 1)
+            out[rel] = wann
+    return out
+
+
 def load_outlook(root_dir):
     root = Path(root_dir)
     files = sorted(root.rglob("*.eml"))
-    return [r for r in _pmap(_outlook_file, files, root_dir) if r is not None]
+    recs = [r for r in _pmap(_outlook_file, files, root_dir) if r is not None]
+    weg = lies_verschwunden(root_dir)
+    if weg:
+        for r in recs:
+            wann = weg.get(r["rel"])
+            if wann:
+                r["gone"] = wann
+    return recs
 
 
 # --------------------------------------------------------------------------

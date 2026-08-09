@@ -132,8 +132,12 @@ def _db():
 # --------------------------------------------------------------------------
 # Filters (SQL WHERE fragments shared by all query tools)
 # --------------------------------------------------------------------------
-def _where(person, dfrom, dto, src):
+def _where(person, dfrom, dto, src, only_gone=False):
     conds, params = [], []
+    if only_gone:
+        # Nur was im Postfach nicht mehr steht. Das ist die Frage, für die man
+        # ein Archiv überhaupt hat – und sie ist sonst nicht zu beantworten.
+        conds.append("gone IS NOT NULL")
     if src and src != "all":
         conds.append("src = ?")
         params.append(src)
@@ -316,6 +320,9 @@ def _hit(row, score, preview_chars):
         # Kennung des Gesprächs, zu dem der Treffer gehört – damit lässt sich
         # der ganze Verlauf holen, statt nur die eine Nachricht zu lesen.
         "thread": (row["thread"] if "thread" in row.keys() else None),
+        # Seit wann die Nachricht nicht mehr im Postfach steht. Leer heißt: sie
+        # ist noch da. Die Datei liegt in beiden Fällen im Archiv.
+        "gone": (row["gone"] if "gone" in row.keys() else None),
     }
     if preview_chars > 0:
         h["preview"] = (row["text"] or "")[:preview_chars]
@@ -393,7 +400,7 @@ def _read_window(target, offset, max_chars):
 def search_messages(query: str, person: str = "", date_from: str = "",
                     date_to: str = "", source: str = "all",
                     k: int = 12, offset: int = 0, mode: str = "auto",
-                    preview_chars: int = 200) -> dict:
+                    preview_chars: int = 200, only_gone: bool = False) -> dict:
     """Search the exported Teams messages and Outlook mail/calendar/contacts.
 
     Hybrid ranking (BM25 + semantic embeddings, fused) when available. Results
@@ -411,11 +418,13 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         mode: "auto" (hybrid if embeddings available, else lexical),
               "hybrid", "semantic", or "lexical".
         preview_chars: Preview length per hit (default 200; 0 disables previews).
+        only_gone: Only messages that are no longer in the mailbox (deleted from
+            it after they were archived). Everything stays on disk either way.
     """
     con = _db()
     try:
         where, params = _where(person.strip(), _to_ts(date_from, False),
-                               _to_ts(date_to, True), source)
+                               _to_ts(date_to, True), source, only_gone)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -432,7 +441,7 @@ def search_messages(query: str, person: str = "", date_from: str = "",
 @mcp.tool(annotations=_READONLY)
 def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     source: str = "all", k: int = 30, offset: int = 0,
-                    preview_chars: int = 200) -> dict:
+                    preview_chars: int = 200, only_gone: bool = False) -> dict:
     """List messages by filter, newest first, without a search query.
 
     Useful for "everything from <person> in <month>" or scanning a source.
@@ -446,11 +455,13 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
+        only_gone: Only messages that are no longer in the mailbox (deleted from
+            it after they were archived). Everything stays on disk either way.
     """
     con = _db()
     try:
         where, params = _where(person.strip(), _to_ts(date_from, False),
-                               _to_ts(date_to, True), source)
+                               _to_ts(date_to, True), source, only_gone)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.

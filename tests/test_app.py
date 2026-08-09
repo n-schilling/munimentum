@@ -3157,3 +3157,42 @@ setTimeout(function(){
 
 def test_verlauf_klappt_unter_dem_treffer_auf():
     _in_node(PRUEFUNG_VERLAUF)
+
+
+PRUEFUNG_GELOESCHT = GRUNDZUSTAND + """
+// Gelöschtes ist am Treffer erkennbar, ohne die Liste zu erschlagen.
+renderHits({results: [
+  {uid: 'a', title: 'Weg', who: 'Alice', date: '2025-06-01', source_label: 'Mail',
+   preview: 'Text', uri: 'o365://outlook/a.eml', gone: '2026-03-12T09:00:00'},
+  {uid: 'b', title: 'Da', who: 'Bob', date: '2025-06-02', source_label: 'Mail',
+   preview: 'Text', uri: 'o365://outlook/b.eml', gone: null}
+], count: 2, backend: 'bm25'});
+var html = document.getElementById('results').innerHTML;
+var marken = html.split('tag weg').length - 1;
+pruefe(marken === 1, 'Erwartet genau eine Markierung, gezaehlt: ' + marken);
+pruefe(html.indexOf('12.03.26') >= 0, 'Der Zeitpunkt fehlt im Tooltip: ' + html.slice(0,300));
+console.log('OK');
+"""
+
+
+def test_geloeschtes_ist_am_treffer_erkennbar():
+    _in_node(PRUEFUNG_GELOESCHT)
+
+
+def test_http_search_reicht_den_filter_durch(server, monkeypatch):
+    a, port = server
+    gesehen = {}
+
+    class FakeSuche:
+        STATE = {"semantic": False}
+
+        @staticmethod
+        def browse_messages(**kw):
+            gesehen.update(kw)
+            return {"count": 0, "results": []}
+
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    call(port, "GET", "/api/search?gone=1")
+    assert gesehen["only_gone"] is True
+    call(port, "GET", "/api/search")
+    assert gesehen["only_gone"] is False

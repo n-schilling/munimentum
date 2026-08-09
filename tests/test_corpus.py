@@ -334,3 +334,30 @@ def test_gross_und_kleinschreibung_egal():
     a = corpus.thread_key(_msg(Message_ID="<Gross@Example.COM>"))
     b = corpus.thread_key(_msg(In_Reply_To="<gross@example.com>"))
     assert a == b
+
+
+# --------------------------------------------------------------------------
+# Verschwundene Mails: die Datei bleibt, der Vermerk kommt dazu
+# --------------------------------------------------------------------------
+def test_verschwundene_werden_markiert(tmp_path):
+    post = tmp_path / "E-Mail" / "Posteingang"
+    post.mkdir(parents=True)
+    for name in ("weg.eml", "da.eml"):
+        (post / name).write_bytes(
+            b"From: a@b.c\nTo: d@e.f\nSubject: X\nDate: Sun, 1 Jun 2025 10:00:00 +0000\n\nText\n")
+    (tmp_path / "verschwunden.tsv").write_text(
+        "E-Mail/Posteingang/weg.eml\t2026-03-12T09:00:00\n", encoding="utf-8")
+
+    recs = {r["rel"]: r for r in corpus.load_outlook(str(tmp_path))}
+    assert recs["E-Mail/Posteingang/weg.eml"]["gone"] == "2026-03-12T09:00:00"
+    assert "gone" not in recs["E-Mail/Posteingang/da.eml"]
+    # Die Datei liegt weiterhin da – das ist der Unterschied zwischen einer
+    # Kopie und einem Archiv.
+    assert (post / "weg.eml").exists()
+
+
+def test_ohne_verschwundene_datei_ist_nichts_markiert(tmp_path):
+    post = tmp_path / "E-Mail"
+    post.mkdir(parents=True)
+    (post / "a.eml").write_bytes(b"From: a@b.c\nSubject: X\n\nText\n")
+    assert all("gone" not in r for r in corpus.load_outlook(str(tmp_path)))

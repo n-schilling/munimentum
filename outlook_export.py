@@ -532,7 +532,95 @@ def build_tree(graph):
     return tops
 
 
-def iter_messages_to_export(graph, out, done, stats, selected):
+# ---------------------------------------------------------------------------
+# Verschwundene Mails erkennen
+#
+# Ein Archiv, das nur wächst, beantwortet die wichtigste Frage nicht: was war
+# hier einmal und ist jetzt weg? Die Datei bleibt selbstverständlich liegen –
+# vermerkt wird nur, dass sie im Postfach nicht mehr auftaucht.
+#
+# Die Falle dabei ist die Verwechslung von gelöscht und verschoben. Eine Mail,
+# die in einen Ordner wandert, den dieser Lauf nicht exportiert (Archiv steht
+# in der Standardauswahl nicht drin), sähe verschwunden aus. Deshalb wird jeder
+# Verdacht bei Graph nachgefragt: 404 heißt wirklich weg, alles andere heißt
+# verschoben.
+# ---------------------------------------------------------------------------
+GONE_FILE = "verschwunden.tsv"
+
+
+class Bestand:
+    """Was in diesem Lauf wirklich im Postfach lag."""
+
+    def __init__(self):
+        self.gesehen = set()        # IDs aus vollständig gelisteten Ordnern
+        self.vollstaendig = []      # deren Pfade, mit Schrägstrich am Ende
+
+    def ordner_fertig(self, rel_path):
+        self.vollstaendig.append(rel_path.rstrip("/") + "/")
+
+    def aus_gelistetem_ordner(self, rel):
+        return any(rel.startswith(p) for p in self.vollstaendig)
+
+
+def verdaechtige(done, bestand):
+    """Früher exportiert, in diesem Lauf nicht mehr gesehen.
+
+    Nur aus Ordnern, die vollständig gelistet wurden – ein abgebrochenes
+    Listing darf nicht den halben Ordner für gelöscht erklären.
+    """
+    return sorted((mid, rel) for mid, rel in done.done.items()
+                  if mid not in bestand.gesehen and bestand.aus_gelistetem_ordner(rel))
+
+
+def wirklich_weg(graph, kandidaten, grenze=2000):
+    """Jeden Verdacht bei Graph nachfragen. Liefert (weg, verschoben).
+
+    Ein Fehler, der kein 404 ist (Drosselung, Netz), zählt als „nicht weg“:
+    lieber eine Löschung später melden als eine falsche jetzt.
+    """
+    weg, verschoben = [], 0
+    for mid, rel in kandidaten[:grenze]:
+        try:
+            graph.get(f"{GRAPH}/me/messages/{mid}", {"$select": "id"})
+            verschoben += 1
+        except TokenExpired:
+            raise
+        except Exception as e:
+            if "404" in str(e) or getattr(e, "status", None) == 404:
+                weg.append(rel)
+            # sonst: unklar – nichts behaupten
+    if len(kandidaten) > grenze:
+        print(f"  Hinweis: {len(kandidaten) - grenze} weitere Verdachtsfälle erst "
+              f"beim nächsten Lauf geprüft (Grenze {grenze}).")
+    return weg, verschoben
+
+
+def lies_verschwunden(pfad):
+    """rel -> Zeitpunkt des ersten Fehlens."""
+    out = {}
+    try:
+        for zeile in pfad.read_text(encoding="utf-8").splitlines():
+            if "\t" in zeile:
+                rel, wann = zeile.split("\t", 1)
+                out[rel] = wann
+    except OSError:
+        pass
+    return out
+
+
+def schreibe_verschwunden(pfad, bekannt, neue, jetzt):
+    """Bestehende Vermerke behalten, neue ergänzen. Atomar."""
+    zusammen = dict(bekannt)
+    for rel in neue:
+        zusammen.setdefault(rel, jetzt)
+    tmp = pfad.with_name(pfad.name + ".tmp")
+    tmp.write_text("".join(f"{rel}\t{wann}\n" for rel, wann in sorted(zusammen.items())),
+                   encoding="utf-8")
+    tmp.replace(pfad)
+    return zusammen
+
+
+def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
     """Spiegelt die Ordner aufs Dateisystem und liefert (mid, rel) für jede
     noch nicht exportierte Mail. Listing läuft im Hauptthread (lazy)."""
     select = "id,subject,receivedDateTime,sentDateTime,from,hasAttachments"
@@ -547,6 +635,8 @@ def iter_messages_to_export(graph, out, done, stats, selected):
                                        {"$top": PAGE, "$select": select}):
                     seen += 1
                     mid = msg["id"]
+                    if bestand is not None:
+                        bestand.gesehen.add(mid)
                     if done.is_done(out, mid):
                         stats["skipped"] += 1
                         continue
@@ -561,6 +651,10 @@ def iter_messages_to_export(graph, out, done, stats, selected):
                 print(f"  ! Ordner unvollständig gelistet ({type(e).__name__}: {e})"
                       f" – nach {seen} Mails abgebrochen, nächster Lauf setzt fort.")
                 continue
+            # Nur ein vollständig durchlaufener Ordner taugt zum Vergleich –
+            # nach einem Abbruch oben sind wir hier gar nicht.
+            if bestand is not None:
+                bestand.ordner_fertig(rel_path)
             if seen:
                 print(f"  {seen} Mails gesichtet.")
 
@@ -585,8 +679,8 @@ def download_one(graph, out, done, mid, rel):
     return ("ok", rel)
 
 
-def run_export(graph, out, done, stats, selected, workers):
-    gen = iter_messages_to_export(graph, out, done, stats, selected)
+def run_export(graph, out, done, stats, selected, workers, bestand=None):
+    gen = iter_messages_to_export(graph, out, done, stats, selected, bestand)
     cap = max(workers * 8, workers)      # so viele Tasks gleichzeitig in der Pipeline
     pending = set()
     expired = False
@@ -964,6 +1058,29 @@ def migrate_to_email_subdir(out, done):
           f"(Resume-Liste angepasst, kein erneuter Download).")
 
 
+def pruefe_verschwundene(graph, out, done, bestand):
+    """Was seit dem letzten Lauf aus dem Postfach verschwunden ist.
+
+    Läuft nur nach einem sauberen Durchlauf: nach einem Abbruch oder einem
+    unvollständig gelisteten Ordner wüssten wir nicht, ob etwas fehlt oder ob
+    wir nur nicht hingesehen haben. Lieber gar keine Aussage als eine falsche.
+    """
+    kandidaten = verdaechtige(done, bestand)
+    if not kandidaten:
+        return {}
+    print(f"\nPrüfe {len(kandidaten)} Mails, die nicht mehr im Postfach standen…")
+    weg, verschoben = wirklich_weg(graph, kandidaten)
+    pfad = out / GONE_FILE
+    bekannt = lies_verschwunden(pfad)
+    neue = [rel for rel in weg if rel not in bekannt]
+    if neue:
+        schreibe_verschwunden(pfad, bekannt, neue,
+                              datetime.now(UTC).isoformat(timespec="seconds"))
+    print(f"  {len(weg)} gelöscht ({len(neue)} neu), {verschoben} nur verschoben.")
+    return {"gone_new": len(neue), "gone_total": len(bekannt) + len(neue),
+            "moved": verschoben}
+
+
 def main():
     global OUT_ROOT, GATE, ASSUME_DEFAULT
     argv = sys.argv[1:]
@@ -1014,7 +1131,10 @@ def main():
         want_con = "contacts" in categories
 
         if selected_mail:
-            result = run_export(graph, out, done, stats, selected_mail, workers)
+            bestand = Bestand()
+            result = run_export(graph, out, done, stats, selected_mail, workers, bestand)
+            if result == "done" and not stats.get("folder_errors"):
+                stats.update(pruefe_verschwundene(graph, out, done, bestand))
         if result != "expired" and sel_cals:
             try:
                 export_calendar(graph, out, done, stats, sel_cals)
@@ -1057,6 +1177,9 @@ def main():
               "werden – Skript erneut starten, um den Rest zu holen.")
     print(f"Im Archiv: {_count('.eml')} Mails, {_count('.ics')} Termine, "
           f"{_count('.vcf')} Kontakte.")
+    if stats.get("gone_total"):
+        print(f"Nicht mehr im Postfach: {stats['gone_total']} Mails "
+              f"({stats.get('gone_new', 0)} neu erkannt) – die Dateien bleiben.")
     print(f"Ordner: {out.resolve()}")
 
 

@@ -1703,7 +1703,8 @@ class Handler(BaseHTTPRequestHandler):
         kw = dict(person=q.get("person", ""), date_from=q.get("from", ""),
                   date_to=q.get("to", ""), source=q.get("source", "all"),
                   k=min(int(q.get("k", 20) or 20), 50),
-                  offset=max(int(q.get("offset", 0) or 0), 0))
+                  offset=max(int(q.get("offset", 0) or 0), 0),
+                  only_gone=str(q.get("gone", "")).lower() in ("1", "true", "ja"))
         query = (q.get("q") or "").strip()
         if query:
             res = mod.search_messages(query=query, mode=q.get("mode", "auto"), **kw)
@@ -2104,6 +2105,9 @@ button.mini{border:1px solid var(--line);background:transparent;color:inherit;
 button.mini:hover{border-color:var(--accent);color:var(--accent)}
 /* Verlauf unter einem Treffer: schmal und ruhig, damit er die Trefferliste
    nicht erschlägt. */
+/* Gelöschtes ist die Ausnahme und darf auffallen – aber nur so weit, dass die
+   Trefferliste ruhig bleibt. */
+.tag.weg{border-color:var(--warn);color:var(--warn)}
 .verlauf{margin-top:8px}
 .verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
 .verlaufliste p{margin:0 0 6px}
@@ -2253,7 +2257,10 @@ main{padding-bottom:60px}
         <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
       </select>
       <input type="date" id="f-from"><input type="date" id="f-to">
+      <label class="chk" id="gone-wrap"><input type="checkbox" id="f-gone" onchange="doSearch(0)">
+        <span data-i18n="search.gone.only">Nur Gelöschtes</span></label>
     </div>
+    <p class="small muted" id="gone-note" data-i18n="search.gone.note">Zeigt nur Nachrichten, die nicht mehr im Postfach stehen.</p>
   </div>
   <div class="answer hide" id="ai-box"></div>
   <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
@@ -2786,7 +2793,7 @@ function doSearch(off){
   offset = off || 0;
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
-    k: 20, offset: offset});
+    gone: el('f-gone').checked ? '1' : '', k: 20, offset: offset});
   el('results').textContent = t('search.running');
   api('/api/search?' + p.toString()).then(function(r){
     renderHits(r);
@@ -2809,6 +2816,9 @@ function renderHits(r){
       (link ? '<a href="' + link + '" target="_blank">' : '') +
       esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
       '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
+      (h.gone ? '<span class="tag weg" title="' +
+        esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
+        esc(t('search.gone.tag')) + '</span>' : '') +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
       '<div class="prev">' + esc(h.preview || '') + '…</div>' +
       (h.thread ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +

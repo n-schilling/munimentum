@@ -741,7 +741,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     schema = next(t for t in tools if t.name == "search_messages").input_schema
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "source", "k", "offset",
-        "mode", "preview_chars"}
+        "mode", "preview_chars", "only_gone"}
     assert schema["required"] == ["query"]      # nur query ist Pflicht
 
 
@@ -824,3 +824,23 @@ def test_treffer_tragen_ihre_gespraechskennung(state):
     treffer = mcp_server.browse_messages(k=1)["results"]
     assert treffer and treffer[0]["thread"] == "tix:xyz", \
         "ohne Kennung am Treffer liesse sich der Verlauf nicht nachladen"
+
+
+def test_only_gone_zeigt_nur_verschwundenes(state):
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET gone = '2026-03-12T09:00:00' "
+                "WHERE uid = (SELECT uid FROM chunks WHERE seq = 0 LIMIT 1)")
+    con.commit()
+    con.close()
+
+    alle = mcp_server.browse_messages(k=50)["count"]
+    nur = mcp_server.browse_messages(k=50, only_gone=True)
+    assert 0 < nur["count"] < alle
+    assert all(m["gone"] for m in nur["results"])
+    # Und der Normalfall zeigt weiterhin alles, Gelöschtes eingeschlossen.
+    assert mcp_server.browse_messages(k=50)["count"] == alle
+
+
+def test_treffer_sagen_ob_die_mail_noch_da_ist(state):
+    treffer = mcp_server.browse_messages(k=1)["results"][0]
+    assert "gone" in treffer and treffer["gone"] is None

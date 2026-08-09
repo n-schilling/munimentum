@@ -89,7 +89,7 @@ def _chunk_row(i, c):
     return (i + 1, c["uid"], seq, msg_idx, c["src"], c["root"], c["rel"],
             c.get("who"), c.get("ppl"), c.get("ts"), c.get("date"),
             c.get("title"), c.get("ctx"), c.get("text"), c.get("hash"),
-            c.get("thread"))
+            c.get("thread"), c.get("gone"))
 
 
 def _people_rows(chunks):
@@ -124,11 +124,15 @@ def write_db(store, chunks):
             src     TEXT NOT NULL, root TEXT NOT NULL, rel TEXT NOT NULL,
             who TEXT, ppl TEXT, ts REAL, date TEXT,
             title TEXT, ctx TEXT, text TEXT, hash TEXT,
-            thread TEXT);                 -- Gesprächskennung, siehe corpus.thread_key
+            thread TEXT,                  -- Gesprächskennung, siehe corpus.thread_key
+            gone TEXT);                   -- seit wann nicht mehr im Postfach
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         -- „Verlauf anzeigen“ holt alle Nachrichten eines Gesprächs. Ohne den
         -- Index wäre das ein voller Scan über alle Chunks.
         CREATE INDEX ix_chunks_thread ON chunks(thread) WHERE seq = 0;
+        -- „Nur Gelöschtes“ ist ein schmaler Ausschnitt – ein Teilindex reicht
+        -- und kostet fast nichts, weil die allermeisten Zeilen NULL sind.
+        CREATE INDEX ix_chunks_gone ON chunks(gone) WHERE gone IS NOT NULL;
         CREATE INDEX ix_chunks_src_ts ON chunks(src, ts);
         CREATE INDEX ix_chunks_file ON chunks(root, rel, msg_idx);
         -- browse_messages listet Nachrichten (seq = 0) nach Datum. Ohne diesen
@@ -140,7 +144,7 @@ def write_db(store, chunks):
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             title, text, content='chunks', content_rowid='id');
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")

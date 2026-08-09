@@ -225,7 +225,13 @@ def test_prompt_categories(monkeypatch):
 # Token aus Datei/Umgebung
 # --------------------------------------------------------------------------
 def test_load_pasted_token_aus_env_und_datei(tmp_path, monkeypatch):
+    # Beides umbiegen: seit auth.py sucht die Funktion neben dem Aufruf UND im
+    # Datenordner. Ohne die zweite Zeile fände sie das gx_token.txt des Repos –
+    # der Test hinge dann an der Reihenfolge der Testläufe.
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    import settings
+    settings.reset()
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
     assert outlook_export.load_pasted_token() is None
 
@@ -1011,3 +1017,145 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
 def test_default_skip_folders_stammt_aus_der_eingebauten_liste():
     """Ohne SKIP_FOLDERS und ohne app_config.json gilt die Liste im Skript."""
     assert outlook_export.DEFAULT_SKIP_FOLDERS == outlook_export.BUILTIN_SKIP_FOLDERS
+
+
+# --------------------------------------------------------------------------
+# Verschwundene Mails erkennen
+#
+# Die gefährliche Stelle ist die Verwechslung von gelöscht und verschoben – und
+# ein abgebrochenes Listing, das den halben Ordner für gelöscht erklärt.
+# --------------------------------------------------------------------------
+class _Done:
+    def __init__(self, eintraege):
+        self.done = dict(eintraege)
+
+
+def _bestand(gesehen, ordner):
+    b = outlook_export.Bestand()
+    b.gesehen = set(gesehen)
+    for o in ordner:
+        b.ordner_fertig(o)
+    return b
+
+
+def test_verdaechtig_ist_was_fehlt():
+    done = _Done({"m1": "E-Mail/Posteingang/a.eml", "m2": "E-Mail/Posteingang/b.eml"})
+    b = _bestand({"m1"}, ["E-Mail/Posteingang"])
+    assert outlook_export.verdaechtige(done, b) == [("m2", "E-Mail/Posteingang/b.eml")]
+
+
+def test_nicht_gelistete_ordner_bleiben_unangetastet():
+    """Wer nur Kontakte exportiert, hat keine Aussage über den Posteingang."""
+    done = _Done({"m1": "E-Mail/Archiv/alt.eml"})
+    b = _bestand(set(), ["E-Mail/Posteingang"])
+    assert outlook_export.verdaechtige(done, b) == []
+
+
+def test_umzug_zwischen_gelisteten_ordnern_ist_keine_loeschung():
+    done = _Done({"m1": "E-Mail/Posteingang/a.eml"})
+    b = _bestand({"m1"}, ["E-Mail/Posteingang", "E-Mail/Projekte"])
+    assert outlook_export.verdaechtige(done, b) == []
+
+
+class _FakeGraph:
+    """get() wirft für gelöschte IDs einen 404, liefert sonst etwas."""
+
+    def __init__(self, weg=(), fehler=()):
+        self.weg, self.fehler = set(weg), set(fehler)
+        self.gefragt = []
+
+    def get(self, url, params=None):
+        mid = url.rsplit("/", 1)[-1]
+        self.gefragt.append(mid)
+        if mid in self.weg:
+            raise RuntimeError("HTTP 404 Not Found")
+        if mid in self.fehler:
+            raise RuntimeError("HTTP 429 zu viele Anfragen")
+        return {"id": mid}
+
+
+def test_nur_ein_404_zaehlt_als_geloescht():
+    g = _FakeGraph(weg={"m2"})
+    weg, verschoben = outlook_export.wirklich_weg(
+        g, [("m1", "a.eml"), ("m2", "b.eml")])
+    assert weg == ["b.eml"] and verschoben == 1
+
+
+def test_unklares_gilt_als_nicht_geloescht():
+    """Drosselung oder Netzfehler: lieber eine Löschung später melden als eine
+    falsche jetzt."""
+    g = _FakeGraph(fehler={"m1"})
+    weg, verschoben = outlook_export.wirklich_weg(g, [("m1", "a.eml")])
+    assert weg == [] and verschoben == 0
+
+
+def test_grenze_bremst_die_nachfragen(capsys):
+    g = _FakeGraph(weg={f"m{i}" for i in range(10)})
+    weg, _ = outlook_export.wirklich_weg(
+        g, [(f"m{i}", f"{i}.eml") for i in range(10)], grenze=3)
+    assert len(g.gefragt) == 3 and len(weg) == 3
+    assert "7 weitere" in capsys.readouterr().out
+
+
+def test_verschwunden_datei_behaelt_den_ersten_zeitpunkt(tmp_path):
+    """Sonst wanderte das Datum bei jedem Lauf nach vorn und die Angabe
+    „seit wann“ wäre wertlos."""
+    pfad = tmp_path / "verschwunden.tsv"
+    outlook_export.schreibe_verschwunden(pfad, {}, ["a.eml"], "2026-01-01T10:00:00")
+    zusammen = outlook_export.schreibe_verschwunden(
+        pfad, outlook_export.lies_verschwunden(pfad), ["a.eml", "b.eml"],
+        "2026-06-01T10:00:00")
+    assert zusammen["a.eml"] == "2026-01-01T10:00:00"
+    assert zusammen["b.eml"] == "2026-06-01T10:00:00"
+    assert not pfad.with_name(pfad.name + ".tmp").exists()
+
+
+def test_verschwunden_datei_ueberlebt_fehlen(tmp_path):
+    assert outlook_export.lies_verschwunden(tmp_path / "gibtsnicht.tsv") == {}
+
+
+class _ListenGraph:
+    """paged() liefert Mails und bricht optional mittendrin ab."""
+
+    def __init__(self, mails, abbruch_nach=None):
+        self.mails, self.abbruch_nach = mails, abbruch_nach
+
+    def paged(self, url, params=None):
+        for i, m in enumerate(self.mails):
+            if self.abbruch_nach is not None and i == self.abbruch_nach:
+                raise RuntimeError("Ordner haengt")
+            yield m
+
+
+def _lauf(graph, tmp_path):
+    """Einen Ordner listen lassen und den Bestand zurückgeben."""
+    bestand = outlook_export.Bestand()
+    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    stats = {"new": 0, "skipped": 0, "folder_errors": 0}
+    selected = [{"subtree": [({"id": "f1", "totalItemCount": 3}, "E-Mail/Posteingang")]}]
+    list(outlook_export.iter_messages_to_export(
+        graph, tmp_path, done, stats, selected, bestand))
+    return bestand, stats
+
+
+def test_abgebrochenes_listing_taugt_nicht_zum_vergleich(tmp_path):
+    """DER gefährliche Fall: ein Ordner, der nach der Hälfte hängen bleibt.
+    Würde er als vollständig gelten, erklärte der nächste Schritt die andere
+    Hälfte für gelöscht."""
+    mails = [{"id": f"m{i}", "subject": "X", "receivedDateTime": "2025-06-01T10:00:00Z"}
+             for i in range(4)]
+    bestand, stats = _lauf(_ListenGraph(mails, abbruch_nach=2), tmp_path)
+    assert stats["folder_errors"] == 1
+    assert bestand.vollstaendig == [], "abgebrochener Ordner gilt als vollständig"
+    # Und damit ist auch nichts verdächtig, obwohl zwei IDs ungesehen blieben.
+    done = _Done({"m3": "E-Mail/Posteingang/x.eml"})
+    assert outlook_export.verdaechtige(done, bestand) == []
+
+
+def test_vollstaendiges_listing_taugt_zum_vergleich(tmp_path):
+    mails = [{"id": f"m{i}", "subject": "X", "receivedDateTime": "2025-06-01T10:00:00Z"}
+             for i in range(3)]
+    bestand, stats = _lauf(_ListenGraph(mails), tmp_path)
+    assert stats["folder_errors"] == 0
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"]
+    assert bestand.gesehen == {"m0", "m1", "m2"}

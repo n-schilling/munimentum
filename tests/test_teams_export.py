@@ -284,6 +284,17 @@ def test_graph_get_bytes_401_refresh_then_ok(monkeypatch):
 # --------------------------------------------------------------------------
 # Token-Modus: load_pasted_token
 # --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def _eigener_datenordner(tmp_path, monkeypatch):
+    """auth.load_pasted_token sucht auch im Datenordner – sonst fände es das
+    gx_token.txt des Repos, und die Tests hingen an der Laufreihenfolge."""
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    import settings
+    settings.reset()
+    yield
+    settings.reset()
+
+
 def test_load_pasted_token_from_env(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)   # kein gx_token.txt aus dem Repo einlesen
     monkeypatch.setenv("GRAPH_TOKEN", '  "Bearer eyJ0abc"  ')
