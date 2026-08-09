@@ -164,6 +164,9 @@ DEFAULT_CONFIG = {
     "embed_model": "bge-m3",
     "chat_model": "qwen2.5:14b-instruct",   # formuliert die Antwort, lokal
     "answer_sources": 8,                    # wie viele Treffer sie dafür liest
+    # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
+    # eine längere Liste, durch die man erst einmal hindurchsehen muss.
+    "search_results": 20,
     "mcp_port": 8365,
     "mcp_autostart": True,
     "update_check": True,   # einmal beim Start bei GitHub nachsehen
@@ -1577,7 +1580,8 @@ class Handler(BaseHTTPRequestHandler):
         # Graph erlaubt 4 gleichzeitige Anfragen pro Postfach, alles darüber
         # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
         for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
-                               ("index_batch", 1, 512), ("answer_sources", 1, 20)):
+                               ("index_batch", 1, 512), ("answer_sources", 1, 20),
+                               ("search_results", 5, 100)):
             if key in data:
                 try:
                     cfg[key] = max(low, min(high, int(data[key])))
@@ -1708,7 +1712,7 @@ class Handler(BaseHTTPRequestHandler):
             return {"error": self.app.search.error, "hits": [], "count": 0}
         kw = dict(person=q.get("person", ""), date_from=q.get("from", ""),
                   date_to=q.get("to", ""), source=q.get("source", "all"),
-                  k=min(int(q.get("k", 20) or 20), 50),
+                  k=min(int(q.get("k", 20) or 20), 100),
                   offset=max(int(q.get("offset", 0) or 0), 0),
                   only_gone=str(q.get("gone", "")).lower() in ("1", "true", "ja"))
         query = (q.get("q") or "").strip()
@@ -2402,6 +2406,15 @@ main{padding-bottom:60px}
   </div>
 
   <div class="card">
+    <h2 data-i18n="settings.hits.title">Suche</h2>
+    <div class="row">
+      <label class="small"><span data-i18n="settings.search_results">Treffer je Seite</span>
+        <input type="number" id="c-search_results" min="5" max="100" step="5" style="width:80px"></label>
+      <span class="small muted" data-i18n="settings.search_results.hint">Mehr heißt weniger Blättern.</span>
+    </div>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="settings.search.title">KI-Suche (Ollama)</h2>
     <p class="sub" data-i18n="settings.search.sub">Beides läuft in deinem Ollama auf diesem Rechner.</p>
     <div class="row">
@@ -2830,11 +2843,16 @@ function pullLog(){
 }
 
 /* ---------- Suche ---------- */
+function trefferProSeite(){
+  var n = S && S.config ? parseInt(S.config.search_results, 10) : NaN;
+  return isNaN(n) ? 20 : Math.max(5, Math.min(n, 100));
+}
 function doSearch(off){
   offset = off || 0;
+  var proSeite = trefferProSeite();
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
-    gone: el('f-gone').checked ? '1' : '', k: 20, offset: offset});
+    gone: el('f-gone').checked ? '1' : '', k: proSeite, offset: offset});
   el('results').textContent = t('search.running');
   api('/api/search?' + p.toString()).then(function(r){
     renderHits(r);
@@ -2868,9 +2886,12 @@ function renderHits(r){
         esc(t('search.thread.show')) + '</button></div>' : '') +
       '</div>';
   }).join('');
+  // Auch das Blättern richtet sich nach der Einstellung – sonst übersprünge
+  // „Weiter“ Treffer oder zeigte dieselben noch einmal.
+  var proSeite = trefferProSeite();
   el('pager').innerHTML =
-    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - 20) + ')">' + esc(t('search.back')) + '</button>' : '') +
-    (hits.length >= 20 ? '<button class="ghost" onclick="doSearch(' + (offset + 20) + ')">' + esc(t('search.next')) + '</button>' : '') +
+    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - proSeite) + ')">' + esc(t('search.back')) + '</button>' : '') +
+    (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '') +
     '<span class="small muted">' + esc(t('search.ranking', {backend: r.backend || '–'})) + '</span>';
 }
 
@@ -3329,7 +3350,7 @@ function pruefeUpdate(){
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
-var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources'];
+var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results'];
 var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir'];
 var cfgGefuellt = false;
 

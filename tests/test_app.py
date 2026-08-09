@@ -3292,3 +3292,71 @@ def test_dateiname_im_header_ist_unbedenklich(roh, erwartet):
     """Der Name landet in einem Header – ein Anführungszeichen oder ein
     Zeilenumbruch darin liesse ihn aufbrechen."""
     assert app_mod._sicherer_name(roh) == erwartet
+
+
+# --------------------------------------------------------------------------
+# Treffer je Seite
+# --------------------------------------------------------------------------
+def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
+    a, port = server
+    gesehen = {}
+
+    class FakeSuche:
+        STATE = {"semantic": False}
+
+        @staticmethod
+        def browse_messages(**kw):
+            gesehen.update(kw)
+            return {"count": 0, "results": []}
+
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    call(port, "GET", "/api/search?k=50")
+    assert gesehen["k"] == 50
+    call(port, "GET", "/api/search?k=99999")     # nicht die halbe Datenbank
+    assert gesehen["k"] == 100
+
+
+@pytest.mark.parametrize("wert,erwartet", [
+    (50, 50), (5, 5), (100, 100),
+    (1, 5), (500, 100),          # außerhalb: auf den Rand gezogen
+    ("quatsch", 20),             # unbrauchbar: Vorgabe bleibt
+])
+def test_config_trefferzahl(server, wert, erwartet):
+    a, port = server
+    call(port, "POST", "/api/config", {"search_results": wert})
+    assert a.cfg["search_results"] == erwartet
+
+
+PRUEFUNG_SEITENGROESSE = GRUNDZUSTAND + """
+KANN_VERLAUF = false;
+var gefragt = [];
+global.fetch = function(pfad){
+  gefragt.push(String(pfad));
+  return Promise.resolve({json: function(){
+    return Promise.resolve(String(pfad).indexOf('/api/search') === 0
+      ? {results: [], count: 0, backend: 'bm25'} : statusGeruest());
+  }});
+};
+S.config = {search_results: 50};
+doSearch(0);
+pruefe(gefragt[0].indexOf('k=50') >= 0, 'Einstellung wirkt nicht: ' + gefragt[0]);
+
+// Und das Blaettern springt genauso weit – sonst uebersprungen oder doppelt.
+var treffer = [];
+for(var i = 0; i < 50; i++) treffer.push({uid: 'u' + i, title: 'T', who: 'W',
+  date: '2025-06-01', source_label: 'Mail', preview: 'x', uri: 'o365://outlook/a.eml'});
+offset = 50;
+renderHits({results: treffer, count: 50, backend: 'bm25'});
+var pager = document.getElementById('pager').innerHTML;
+pruefe(pager.indexOf('doSearch(0)') >= 0, 'Zurueck springt falsch: ' + pager);
+pruefe(pager.indexOf('doSearch(100)') >= 0, 'Weiter springt falsch: ' + pager);
+
+// Ohne Angabe bleibt es bei 20.
+S.config = {};
+pruefe(trefferProSeite() === 20, 'Vorgabe ist nicht 20');
+console.log('OK');
+"""
+
+
+def test_seitengroesse_wirkt_auf_suche_und_blaettern():
+    _in_node(PRUEFUNG_SEITENGROESSE)
