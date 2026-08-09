@@ -1985,8 +1985,10 @@ function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', 
       }};
   })(),
   appendChild: function(){}, removeChild: function(){}, firstChild: null,
+  style: {},                     // reicht: der Code setzt darauf nur Werte
   addEventListener: function(){}, scrollIntoView: function(){},
   focus: function(){ global.document.activeElement = this; },
+  select: function(){},          // der Rückfall beim Kopieren markiert das Feld
   querySelector: function(){ return null; },
   querySelectorAll: function(){ return []; }}; }
 
@@ -2077,6 +2079,8 @@ global.document = {
   },
   querySelectorAll: function(){ return []; },
   createElement: function(){ return mk('x'); },
+  // Der Rueckfall beim Kopieren haengt ein Feld voruebergehend in die Seite.
+  body: mk('body'),
 };
 // Einen Tastendruck ausloesen - wie im Browser, samt preventDefault.
 global.taste = function(key, opt){
@@ -3573,3 +3577,67 @@ def test_seite_bringt_ihr_eigenes_symbol_mit():
     seite = app_mod.PAGE
     assert 'rel="icon"' in seite
     assert "data:image/svg+xml" in seite, "Symbol als Datei statt eingebettet"
+
+
+# --------------------------------------------------------------------------
+# MCP-Eintrag: kopieren, und die Pfade folgen dem Datenordner
+# --------------------------------------------------------------------------
+def test_mcp_eintrag_folgt_dem_datenordner(sandbox, monkeypatch, tmp_path):
+    """Der Eintrag trägt absolute Pfade – Claude startet ihn in einem
+    unbekannten Arbeitsverzeichnis. Sie müssen also mitwandern."""
+    for ordner in (tmp_path / "platte-a", tmp_path / "platte-b"):
+        app_mod.set_data_dir(ordner)
+        conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
+        args = conf["stdio"]["mcpServers"]["office365-export"]["args"]
+        datenpfade = [a for a in args if a.endswith(("rag_store", "teams_export",
+                                                     "outlook_export"))]
+        assert len(datenpfade) == 3, args
+        for pfad in datenpfade:
+            assert str(ordner.resolve()) in pfad, f"{pfad} folgt {ordner} nicht"
+
+
+def test_mcp_programmpfad_folgt_dem_datenordner_nicht(sandbox, tmp_path):
+    """Das Programm liegt, wo es liegt – nur die Daten wandern."""
+    app_mod.set_data_dir(tmp_path / "woanders")
+    conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
+    eintrag = conf["stdio"]["mcpServers"]["office365-export"]
+    alles = " ".join([eintrag["command"], *eintrag["args"]])
+    assert "mcp_server" in alles
+    assert str(tmp_path / "woanders") not in alles.split("--store")[0]
+
+
+PRUEFUNG_KOPIEREN = GRUNDZUSTAND + """
+var kopiert = [];
+// node bringt ein eigenes navigator mit, und zwar nur mit Getter - eine
+// schlichte Zuweisung liefe ins Leere.
+var zwischenablage = {writeText: function(t){
+  kopiert.push(t); return Promise.resolve();
+}};
+Object.defineProperty(global, 'navigator',
+  {value: {clipboard: zwischenablage}, configurable: true, writable: true});
+var kasten = document.getElementById('mcp-json');
+kasten.textContent = '{"mcpServers": {}}';
+var knopf = {textContent: 'Kopieren'};
+kopiere('mcp-json', knopf);
+pruefe(kopiert.length === 1, 'Nichts kopiert');
+pruefe(kopiert[0] === '{"mcpServers": {}}', 'Falscher Inhalt: ' + kopiert[0]);
+
+setTimeout(function(){
+  pruefe(knopf.textContent === 'Kopiert', 'Keine Rueckmeldung: ' + knopf.textContent);
+
+  // Schlaegt die Zwischenablage fehl, wird der alte Weg versucht statt still
+  // nichts zu tun.
+  var versucht = false;
+  zwischenablage.writeText = function(){ return Promise.reject(new Error('nein')); };
+  document.execCommand = function(){ versucht = true; return true; };
+  kopiere('mcp-json', knopf);
+  setTimeout(function(){
+    pruefe(versucht, 'Kein Rueckfall auf den alten Weg');
+    console.log('OK');
+  }, 20);
+}, 20);
+"""
+
+
+def test_mcp_eintrag_laesst_sich_kopieren():
+    _in_node(PRUEFUNG_KOPIEREN)

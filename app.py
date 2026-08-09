@@ -2236,6 +2236,10 @@ details.rechte p{margin:6px 0}
 button.mini{border:1px solid var(--line);background:transparent;color:inherit;
   border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
 button.mini:hover{border-color:var(--accent);color:var(--accent)}
+/* Kopierknopf im Eck des Kastens – sichtbar, ohne den Inhalt zu verdecken. */
+.mitkopie{position:relative}
+.mitkopie pre{padding-right:96px}
+button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 /* Verlauf unter einem Treffer: schmal und ruhig, damit er die Trefferliste
    nicht erschlägt. */
 /* Gelöschtes ist die Ausnahme und darf auffallen – aber nur so weit, dass die
@@ -2539,9 +2543,12 @@ main{padding-bottom:60px}
     </div>
     <p class="small muted" style="margin-top:6px" data-i18n="settings.mcp.note">Ein geänderter Port wirkt erst nach einem Neustart des MCP-Servers.</p>
     <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
-    <pre id="mcp-json"></pre>
+    <div class="mitkopie"><pre id="mcp-json"></pre>
+      <button class="mini kopie" onclick="kopiere('mcp-json', this)" data-i18n="copy">Kopieren</button></div>
     <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
-    <pre id="mcp-stdio"></pre>
+    <div class="mitkopie"><pre id="mcp-stdio"></pre>
+      <button class="mini kopie" onclick="kopiere('mcp-stdio', this)" data-i18n="copy">Kopieren</button></div>
+    <p class="small muted" data-i18n="mcp.paths.note">Die Pfade folgen dem Datenordner.</p>
   </div>
 
   <div class="card">
@@ -2672,6 +2679,38 @@ function uebersetzeSeite(){
 uebersetzeSeite();
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
+
+/* In die Zwischenablage. Auf 127.0.0.1 gilt die Seite als vertrauenswürdig,
+   die Zwischenablage-Schnittstelle steht also zur Verfügung – aber nicht in
+   jedem Browser und nicht, wenn das Fenster gerade nicht im Vordergrund ist.
+   Deshalb der alte Weg als Rückfall, statt still nichts zu tun. */
+function kopiere(id, knopf){
+  var text = el(id).textContent || '';
+  function fertig(ok){
+    var vorher = knopf.textContent;
+    knopf.textContent = t(ok ? 'copy.done' : 'copy.failed');
+    setTimeout(function(){ knopf.textContent = vorher; }, 1600);
+  }
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){ fertig(true); },
+                                            function(){ altKopieren(text, fertig); });
+  } else {
+    altKopieren(text, fertig);
+  }
+}
+function altKopieren(text, fertig){
+  try {
+    var feld = document.createElement('textarea');
+    feld.value = text;
+    feld.style.position = 'fixed';
+    feld.style.opacity = '0';
+    document.body.appendChild(feld);
+    feld.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(feld);
+    fertig(ok);
+  } catch(e){ fertig(false); }
+}
 function post(p, body){
   return fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });

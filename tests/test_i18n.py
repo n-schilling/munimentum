@@ -184,7 +184,7 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 # Schlüssel – damit werden auch die zusammengesetzten Fälle gefunden
 # (t(x ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')), an denen ein Muster um t(…)
 # herum vorbeiliefe.
-PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.",
+PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.",
            "book.", "sched.", "mcp.mode.", "mcp.title", "mcp.sub", "mcp.start",
            "mcp.stop", "mcp.running", "mcp.stopped", "mcp.code.", "mcp.desktop.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
