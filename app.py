@@ -83,19 +83,17 @@ def resource_dir():
     return Path(__file__).resolve().parent
 
 
-def data_dir():
-    """Verzeichnis für Exporte, Index, Konfiguration und Token.
+ZEIGER_DATEI = "datenordner.txt"
+
+
+def standard_data_dir():
+    """Wo die Daten liegen, wenn niemand etwas anderes sagt.
 
     Als Skript: der Projektordner – dort liegen Exporte und rag_store schon.
     Gebündelt: der Datenordner des Benutzers, denn das Bündel selbst entpackt
     sich in ein Temp-Verzeichnis, das bei jedem Ende verschwindet, und in
     /Applications bzw. C:\\Program Files darf eine App nicht schreiben.
-    Mit OFFICE365_DATA_DIR frei wählbar (z. B. eine externe Platte – ein
-    Postfach kann zweistellige Gigabyte haben).
     """
-    env = os.environ.get("OFFICE365_DATA_DIR")
-    if env:
-        return Path(env).expanduser().resolve()
     if not FROZEN:
         return Path(__file__).resolve().parent
     if sys.platform == "darwin":
@@ -105,6 +103,43 @@ def data_dir():
         return Path(root) / APP_DIRNAME
     root = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
     return Path(root) / APP_DIRNAME
+
+
+def zeiger_datei():
+    """Die eine Datei, die am Standardort bleibt und woandershin zeigt.
+
+    Der Datenordner lässt sich nicht in app_config.json einstellen – die Datei
+    liegt ja selbst darin, man müsste sie lesen, um zu wissen, wo sie liegt.
+    Deshalb ein Zeiger am Standardort: eine Zeile, ein Pfad.
+    """
+    return standard_data_dir() / ZEIGER_DATEI
+
+
+def lies_zeiger():
+    try:
+        roh = zeiger_datei().read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not roh:
+        return None
+    ziel = Path(roh).expanduser()
+    # Ein Zeiger auf einen Ordner, den es nicht mehr gibt (externe Platte ab),
+    # darf die App nicht am Starten hindern – dann eben wieder der Standardort.
+    return ziel.resolve() if ziel.is_dir() else None
+
+
+def data_dir():
+    """Verzeichnis für Exporte, Index, Konfiguration und Token.
+
+    Reihenfolge wie überall im Projekt: Umgebung schlägt Datei schlägt Vorgabe.
+    Mit OFFICE365_DATA_DIR bzw. --data-dir für einen einzelnen Lauf, mit dem
+    Zeiger dauerhaft (z. B. eine externe Platte – ein Postfach kann
+    zweistellige Gigabyte haben).
+    """
+    env = os.environ.get("OFFICE365_DATA_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
+    return lies_zeiger() or standard_data_dir()
 
 
 RES = resource_dir()
@@ -124,6 +159,41 @@ def set_data_dir(path):
     os.environ["OFFICE365_DATA_DIR"] = str(BASE)
     settings.reset()
     return BASE
+
+def pruefe_datenordner(pfad):
+    """Taugt der Ordner? Liefert (Pfad, Fehlerschlüssel).
+
+    Lieber jetzt ablehnen als beim nächsten Start: ein Zeiger auf einen Ordner
+    ohne Schreibrecht führte in eine App, die nichts mehr speichern kann – und
+    die Einstellung, mit der man es zurücknähme, liegt genau dort.
+    """
+    roh = str(pfad or "").strip()
+    if not roh:
+        return None, "srv.datadir.empty"
+    ziel = Path(roh).expanduser()
+    try:
+        ziel.mkdir(parents=True, exist_ok=True)
+        probe = ziel / ".schreibprobe"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+    except OSError as e:
+        return None, {"k": "srv.datadir.unwritable", "v": {"detail": str(e)}}
+    return ziel.resolve(), None
+
+
+def schreibe_zeiger(pfad):
+    """Den Zeiger setzen – oder löschen, wenn er auf den Standardort zeigt."""
+    datei = zeiger_datei()
+    try:
+        datei.parent.mkdir(parents=True, exist_ok=True)
+        if Path(pfad).resolve() == standard_data_dir().resolve():
+            datei.unlink(missing_ok=True)
+        else:
+            datei.write_text(str(pfad) + "\n", encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
 
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
 OLLAMA_SITE = "https://ollama.com/download"
@@ -1234,6 +1304,7 @@ class App:
             "schedule_enabled": bool(plan.get("enabled")),
             "wizard": wizard,
             "data_dir": str(BASE),
+            "data_dir_default": str(standard_data_dir()),
             "frozen": FROZEN,
             "update": dict(self._update, releases_url=version.RELEASES_URL),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
@@ -1510,6 +1581,20 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/login":
                 ok, daten = app.login_starten()
                 return self._json({"ok": ok, "device": daten}, 200 if ok else 500)
+            if u.path == "/api/data-dir":
+                ziel, fehler = pruefe_datenordner(data.get("path"))
+                if fehler:
+                    return self._json({"ok": False, "message": fehler}, 400)
+                if not schreibe_zeiger(ziel):
+                    return self._json({"ok": False,
+                                       "message": {"k": "srv.datadir.unwritable",
+                                                   "v": {"detail": str(zeiger_datei())}}}, 500)
+                app.jobs.logk("srv.datadir.set", "warn", path=str(ziel))
+                # BASE steht seit dem Start fest und geht als Arbeitsverzeichnis an
+                # jeden Unterprozess. Ihn mitten im Betrieb umzuhängen – womöglich
+                # während ein Export läuft – wäre grob fahrlässig.
+                return self._json({"ok": True, "path": str(ziel),
+                                   "restart": str(ziel) != str(BASE)})
             if u.path == "/api/logout":
                 return self._json({"ok": app.abmelden()})
             if u.path == "/api/cancel":
@@ -2459,6 +2544,13 @@ main{padding-bottom:60px}
       <label class="small"><span data-i18n="settings.dir.store">Index</span> <input type="text" id="c-store_dir" style="width:200px"></label>
     </div>
     <p class="small muted" style="margin-top:10px"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
+      <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
+      <button class="mini" onclick="datenordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
+      <span class="small" id="datadir-msg"></span>
+    </div>
+    <p class="small muted" data-i18n="settings.datadir.note">Ein Wechsel verschiebt nichts.</p>
   </div>
 
   <div class="card">
@@ -2686,6 +2778,9 @@ function renderStatus(s){
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   el('data-dir').textContent = s.data_dir;
   el('data-dir2').textContent = s.data_dir;
+  // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
+  // 2,5 Sekunden, was gerade getippt wird.
+  if(first) el('c-data-dir').value = s.data_dir;
   zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
 
@@ -3385,6 +3480,20 @@ function speichereEinstellungen(){
     refresh();
   });
 }
+function setzeDatenordner(pfad){
+  var ziel = pfad !== undefined ? pfad : el('c-data-dir').value.trim();
+  post('/api/data-dir', {path: ziel}).then(function(r){
+    var kasten = el('datadir-msg');
+    if(!r.ok){ kasten.className = 'small err'; kasten.textContent = mtext(r.message); return; }
+    el('c-data-dir').value = r.path;
+    kasten.className = 'small muted';
+    kasten.textContent = t(r.restart ? 'settings.datadir.restart' : 'settings.datadir.same');
+  });
+}
+function datenordnerZurueck(){
+  setzeDatenordner((S && S.data_dir_default) || '');
+}
+
 function ordnerZuruecksetzen(){
   el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');
 }

@@ -3360,3 +3360,110 @@ console.log('OK');
 
 def test_seitengroesse_wirkt_auf_suche_und_blaettern():
     _in_node(PRUEFUNG_SEITENGROESSE)
+
+
+# --------------------------------------------------------------------------
+# Datenordner umhängen
+#
+# Er lässt sich nicht in app_config.json einstellen – die Datei liegt selbst
+# darin. Deshalb ein Zeiger am Standardort.
+# --------------------------------------------------------------------------
+@pytest.fixture
+def standardort(tmp_path, monkeypatch):
+    """standard_data_dir() in den Sandkasten biegen."""
+    ort = tmp_path / "standard"
+    ort.mkdir()
+    monkeypatch.setattr(app_mod, "standard_data_dir", lambda: ort)
+    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    return ort
+
+
+def test_ohne_zeiger_gilt_der_standardort(standardort):
+    assert app_mod.data_dir() == standardort
+
+
+def test_zeiger_biegt_den_ordner_um(standardort, tmp_path):
+    woanders = tmp_path / "platte"
+    woanders.mkdir()
+    app_mod.schreibe_zeiger(woanders)
+    assert app_mod.data_dir() == woanders.resolve()
+
+
+def test_zeiger_ins_leere_haelt_die_app_nicht_auf(standardort, tmp_path):
+    """Externe Platte ab: dann eben wieder der Standardort, statt gar nicht
+    zu starten."""
+    (standardort / app_mod.ZEIGER_DATEI).write_text(
+        str(tmp_path / "gibtsnicht"), encoding="utf-8")
+    assert app_mod.data_dir() == standardort
+
+
+def test_umgebung_schlaegt_den_zeiger(standardort, tmp_path, monkeypatch):
+    app_mod.schreibe_zeiger(tmp_path)
+    anders = tmp_path / "env"
+    anders.mkdir()
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(anders))
+    assert app_mod.data_dir() == anders.resolve()
+
+
+def test_zeiger_auf_den_standardort_wird_geloescht(standardort, tmp_path):
+    """Sonst bliebe eine Datei liegen, die nichts mehr aussagt."""
+    app_mod.schreibe_zeiger(tmp_path)
+    assert app_mod.zeiger_datei().exists()
+    app_mod.schreibe_zeiger(standardort)
+    assert not app_mod.zeiger_datei().exists()
+
+
+def test_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
+    """Lieber jetzt ablehnen als beim nächsten Start: die Einstellung, mit der
+    man es zurücknähme, läge genau dort."""
+    gesperrt = tmp_path / "gesperrt"
+    gesperrt.mkdir()
+    gesperrt.chmod(0o500)
+    try:
+        ziel, fehler = app_mod.pruefe_datenordner(gesperrt / "unten")
+        assert ziel is None and fehler
+    finally:
+        gesperrt.chmod(0o700)
+
+
+def test_leerer_ordner_wird_abgelehnt():
+    assert app_mod.pruefe_datenordner("  ")[0] is None
+
+
+def test_ordner_wird_angelegt(tmp_path):
+    ziel, fehler = app_mod.pruefe_datenordner(tmp_path / "neu" / "tiefer")
+    assert fehler is None and ziel.is_dir()
+    assert not (ziel / ".schreibprobe").exists(), "Probe blieb liegen"
+
+
+def test_http_datenordner_setzen(server, standardort, tmp_path):
+    a, port = server
+    ziel = tmp_path / "extern"
+    code, r = call(port, "POST", "/api/data-dir", {"path": str(ziel)})
+    assert code == 200 and r["ok"] and r["restart"] is True
+    assert app_mod.lies_zeiger() == ziel.resolve()
+    # Die App hängt sich NICHT im Betrieb um – BASE geht als Arbeitsverzeichnis
+    # an jeden Unterprozess, womöglich mitten in einem Export.
+    assert call(port, "GET", "/api/status")[1]["data_dir"] != str(ziel)
+
+
+def test_http_datenordner_ablehnen(server, standardort):
+    _, port = server
+    code, r = call(port, "POST", "/api/data-dir", {"path": ""})
+    assert code == 400 and not r["ok"]
+    assert app_mod.lies_zeiger() is None, "kaputter Wert wurde trotzdem gemerkt"
+
+
+def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
+    """Den Fall deckt erst die Schreibprobe ab: mkdir(exist_ok=True) gelingt
+    bei einem vorhandenen Ordner auch dann, wenn niemand darin schreiben darf.
+    Ohne die Probe zeigte der Zeiger dorthin und die App könnte beim nächsten
+    Start nichts mehr speichern."""
+    gesperrt = tmp_path / "nur_lesen"
+    gesperrt.mkdir()
+    gesperrt.chmod(0o500)
+    try:
+        ziel, fehler = app_mod.pruefe_datenordner(gesperrt)
+        assert ziel is None and fehler, "Ordner ohne Schreibrecht durchgewinkt"
+    finally:
+        gesperrt.chmod(0o700)
