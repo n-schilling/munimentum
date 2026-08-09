@@ -220,10 +220,21 @@ def test_tokenclient_paged_follows_nextlink(monkeypatch):
 # --------------------------------------------------------------------------
 # Graph – 401 löst Token-Refresh aus, Paging läuft über get()
 # --------------------------------------------------------------------------
+class _StubAnmeldung:
+    """Nur was die HTTP-Schicht von auth.Login braucht. Die Anmeldung selbst
+    hat eigene Tests (test_auth.py); hier geht es um Retry und Paging."""
+
+    def __init__(self, token="alt"):
+        self.token = token
+
+    def headers(self):
+        return {"Authorization": f"Bearer {self.token}"}
+
+
 def _bare_graph():
     """Graph-Instanz ohne interaktiven Login (kein __init__)."""
     g = object.__new__(te.Graph)
-    g.token = "alt"
+    g.anmeldung = _StubAnmeldung()
     g._refresh_lock = threading.Lock()
     return g
 
@@ -236,7 +247,7 @@ def test_graph_get_refreshes_token_on_401(monkeypatch):
 
     def fake_refresh():
         refreshed.append(True)
-        g.token = "neu"
+        g.anmeldung.token = "neu"
 
     g._refresh = fake_refresh
     assert g.get("https://x/y") == {"ok": 1}

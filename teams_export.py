@@ -56,11 +56,14 @@ from pathlib import Path
 from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import auth
 import settings
 import progress
 
 try:
-    import msal
+    # msal wird erst in auth.py gebraucht (und nur im Login-Modus) – hier nur
+    # geprüft, damit die Meldung über fehlende Pakete früh und gemeinsam kommt.
+    import msal  # noqa: F401
     import requests
 except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
@@ -79,10 +82,6 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
-CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"  # Microsoft Graph Command Line Tools
-TENANT = "organizations"
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
-
 GRAPH = "https://graph.microsoft.com/v1.0"
 RES = "https://graph.microsoft.com/"
 SCOPES_CHAT = [RES + "Chat.Read", RES + "User.Read"]
@@ -92,7 +91,6 @@ SCOPES_FULL = SCOPES_CHAT + [
     RES + "Channel.ReadBasic.All",
 ]
 
-USE_DEVICE_CODE = False     # True = Code-Login statt Browser
 # Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
 EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images", True)
 WORKERS = 4                 # parallele Konversationen (sinnvoll: 4; per Env EXPORT_WORKERS)
@@ -138,8 +136,10 @@ def log(msg):
         print(msg, flush=True)
 
 
-class TokenExpired(RuntimeError):
-    """Signalisiert einen 401 im Token-Modus (kein Refresh möglich)."""
+# Anmeldung und Schlüsselmodus liegen in auth.py – vorher stand das hier und in
+# outlook_export.py Zeile für Zeile doppelt.
+TokenExpired = auth.TokenExpired
+load_pasted_token = auth.load_pasted_token
 
 
 class ImageUnavailable(RuntimeError):
@@ -151,66 +151,53 @@ class ImageUnavailable(RuntimeError):
 # Graph-Client: Auth, Retry, Paging
 # ---------------------------------------------------------------------------
 class Graph:
-    def __init__(self, want_channels):
-        self.app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
+    """Angemeldeter Zugriff. Die Anmeldung steckt in auth.Login; hier bleibt,
+    was dieses Skript eigen hat: die Kanalfrage, Drosselung, Paging.
+
+    Die Kanalrechte werden erst angefragt und bei Misserfolg fallen gelassen –
+    ChannelMessage.Read.All verlangt in vielen Tenants Admin-Zustimmung, und
+    daran soll ein Chat-Export nicht scheitern."""
+
+    def __init__(self, want_channels, nur_still=False):
         self.want_channels = want_channels
-        self.account = None
-        self.scopes = None
         self.channels_enabled = False
-        self.token = None
         self._refresh_lock = threading.Lock()
-        self._login()
 
-    def _acquire(self, scopes):
-        if USE_DEVICE_CODE:
-            flow = self.app.initiate_device_flow(scopes=scopes)
-            if "user_code" not in flow:
-                raise RuntimeError(f"Device-Flow fehlgeschlagen: {flow.get('error_description')}")
-            print("\n" + flow["message"] + "\n")
-            return self.app.acquire_token_by_device_flow(flow)
-        return self.app.acquire_token_interactive(scopes=scopes, prompt="select_account")
-
-    def _login(self):
-        if self.want_channels:
+        if want_channels:
             print("Anmeldung – fordere Zugriff auf Chats + Kanäle an…")
-            res = self._acquire(SCOPES_FULL)
-            if res and "access_token" in res:
-                self.scopes, self.channels_enabled = SCOPES_FULL, True
-            else:
-                err = (res or {}).get("error_description", "") or ""
-                print("Kanal-Zugriff nicht gewährt – ChannelMessage.Read.All "
-                      "erfordert evtl. Admin-Consent.")
-                if err:
-                    print(f"  Details: {err.splitlines()[0]}")
-                print("Melde mit reinem Chat-Zugriff an…")
-                res = self._acquire(SCOPES_CHAT)
-                if not res or "access_token" not in res:
-                    raise SystemExit("Anmeldung fehlgeschlagen: "
-                                     + (res or {}).get("error_description", "unbekannt"))
-                self.scopes, self.channels_enabled = SCOPES_CHAT, False
+            self.anmeldung = auth.Login(SCOPES_FULL)
+            if self.anmeldung.anmelden(nur_still=nur_still, weich=True):
+                self.channels_enabled = True
+                return
+            print("Kanal-Zugriff nicht gewährt – ChannelMessage.Read.All "
+                  "erfordert evtl. Admin-Consent.")
+            if self.anmeldung.fehler:
+                print(f"  Details: {self.anmeldung.fehler.splitlines()[0]}")
+            print("Melde mit reinem Chat-Zugriff an…")
         else:
             print("Anmeldung – fordere Chat-Zugriff an…")
-            res = self._acquire(SCOPES_CHAT)
-            if not res or "access_token" not in res:
-                raise SystemExit("Anmeldung fehlgeschlagen: "
-                                 + (res or {}).get("error_description", "unbekannt"))
-            self.scopes, self.channels_enabled = SCOPES_CHAT, False
+        self.anmeldung = auth.Login(SCOPES_CHAT)
+        if not self.anmeldung.anmelden(nur_still=nur_still):
+            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
 
-        accs = self.app.get_accounts()
-        self.account = accs[0] if accs else None
-        self.token = res["access_token"]
+    @property
+    def account(self):
+        return self.anmeldung.account
+
+    @property
+    def token(self):
+        return self.anmeldung.token
+
+    @property
+    def scopes(self):
+        return self.anmeldung.scopes
 
     def _refresh(self):
         with self._refresh_lock:   # nur ein Thread erneuert gleichzeitig
-            res = self.app.acquire_token_silent(self.scopes, account=self.account) if self.account else None
-            if not res or "access_token" not in res:
-                res = self._acquire(self.scopes)
-            if not res or "access_token" not in res:
-                raise SystemExit("Token-Erneuerung fehlgeschlagen.")
-            self.token = res["access_token"]
+            self.anmeldung.erneuern()
 
     def _headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
+        return self.anmeldung.headers()
 
     def get(self, url, params=None):
         for attempt in range(6):
@@ -275,22 +262,8 @@ class Graph:
 
 
 # ---------------------------------------------------------------------------
-# Token-Modus: vorhandenen Access Token nutzen (z. B. aus Graph Explorer)
+# Schlüssel-Modus: vorhandenen Access Token nutzen (Graph Explorer)
 # ---------------------------------------------------------------------------
-def load_pasted_token():
-    val = os.environ.get("GRAPH_TOKEN")
-    if not val:
-        p = Path("gx_token.txt")
-        if p.exists():
-            val = p.read_text(encoding="utf-8")
-    if not val:
-        return None
-    val = val.strip().strip('"').strip("'").strip()
-    if val.lower().startswith("bearer "):
-        val = val[7:].strip()
-    return val or None
-
-
 class TokenClient:
     """Nutzt einen fertigen Bearer-Token; keine Anmeldung, kein Refresh."""
 
@@ -1038,12 +1011,9 @@ def main():
     want_channels = "channels" in categories
 
     # 2) Login bzw. Token-Modus
-    pasted = load_pasted_token()
-    if pasted:
-        print("Token-Modus aktiv – nutze Access Token aus Graph Explorer (kein Login).")
-        graph = TokenClient(pasted, channels_enabled=want_channels)
-    else:
-        graph = Graph(want_channels=want_channels)
+    graph = auth.waehle_zugang(
+        lambda tok: TokenClient(tok, channels_enabled=want_channels),
+        lambda: Graph(want_channels=want_channels))
     _client = graph
     if want_channels and not graph.channels_enabled:
         print("Hinweis: Kanal-Zugriff nicht verfügbar – Kanäle werden übersprungen.")

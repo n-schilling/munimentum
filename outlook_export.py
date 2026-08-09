@@ -50,11 +50,14 @@ from datetime import datetime, UTC
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
+import auth
 import settings
 import progress
 
 try:
-    import msal
+    # msal wird erst in auth.py gebraucht (und nur im Login-Modus) – hier nur
+    # geprüft, damit die Meldung über fehlende Pakete früh und gemeinsam kommt.
+    import msal  # noqa: F401
     import requests
 except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
@@ -73,15 +76,9 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
-CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"  # Microsoft Graph Command Line Tools
-TENANT = "organizations"
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT}"
-
 GRAPH = "https://graph.microsoft.com/v1.0"
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
-
-USE_DEVICE_CODE = False     # True = Code-Login statt Browser
 # Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
 INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden", False)
 WORKERS = 4                 # parallele Downloads; Exchange-Limit pro Postfach = 4
@@ -119,8 +116,10 @@ STOP = threading.Event()                     # Signal: Token tot -> nichts Neues
 ASSUME_DEFAULT = False                       # -default: keine Abfragen, überall die Vorgabe
 
 
-class TokenExpired(RuntimeError):
-    """Signalisiert einen 401 im Token-Modus (kein Refresh möglich)."""
+# Anmeldung, Schlüsselmodus und Konfiguration liegen in auth.py – beide Export-
+# Skripte hatten das vorher Zeile für Zeile doppelt.
+TokenExpired = auth.TokenExpired
+load_pasted_token = auth.load_pasted_token
 
 
 def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, label=""):
@@ -148,43 +147,29 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, label=""):
 # Graph-Client (Anmeldung) – Auth, Retry, Paging
 # ---------------------------------------------------------------------------
 class Graph:
-    def __init__(self):
-        self.app = msal.PublicClientApplication(CLIENT_ID, authority=AUTHORITY)
-        self.account = None
-        self.token = None
+    """Angemeldeter Zugriff. Die Anmeldung selbst steckt in auth.Login; hier
+    bleibt nur, was dieses Skript eigen hat: Timeouts, Drosselung, Paging."""
+
+    def __init__(self, nur_still=False):
+        self.anmeldung = auth.Login(SCOPES)
         self._refresh_lock = threading.Lock()
-        self._login()
+        if not self.anmeldung.anmelden(nur_still=nur_still):
+            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
 
-    def _acquire(self, scopes):
-        if USE_DEVICE_CODE:
-            flow = self.app.initiate_device_flow(scopes=scopes)
-            if "user_code" not in flow:
-                raise RuntimeError(f"Device-Flow fehlgeschlagen: {flow.get('error_description')}")
-            print("\n" + flow["message"] + "\n")
-            return self.app.acquire_token_by_device_flow(flow)
-        return self.app.acquire_token_interactive(scopes=scopes, prompt="select_account")
+    @property
+    def account(self):
+        return self.anmeldung.account
 
-    def _login(self):
-        print("Anmeldung – fordere Lesezugriff auf Postfach, Kalender und Kontakte an…")
-        res = self._acquire(SCOPES)
-        if not res or "access_token" not in res:
-            raise SystemExit("Anmeldung fehlgeschlagen: "
-                             + (res or {}).get("error_description", "unbekannt"))
-        accs = self.app.get_accounts()
-        self.account = accs[0] if accs else None
-        self.token = res["access_token"]
+    @property
+    def token(self):
+        return self.anmeldung.token
 
     def _refresh(self):
         with self._refresh_lock:   # nur ein Thread erneuert gleichzeitig
-            res = self.app.acquire_token_silent(SCOPES, account=self.account) if self.account else None
-            if not res or "access_token" not in res:
-                res = self._acquire(SCOPES)
-            if not res or "access_token" not in res:
-                raise SystemExit("Token-Erneuerung fehlgeschlagen.")
-            self.token = res["access_token"]
+            self.anmeldung.erneuern()
 
     def _headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
+        return self.anmeldung.headers()
 
     def get(self, url, params=None, extra_headers=None):
         headers = self._headers()
@@ -233,22 +218,8 @@ class Graph:
 
 
 # ---------------------------------------------------------------------------
-# Token-Modus: vorhandenen fertigen Bearer-Token nutzen (z. B. aus Graph Explorer)
+# Schlüssel-Modus: vorhandenen fertigen Bearer-Token nutzen (Graph Explorer)
 # ---------------------------------------------------------------------------
-def load_pasted_token():
-    val = os.environ.get("GRAPH_TOKEN")
-    if not val:
-        p = Path("gx_token.txt")
-        if p.exists():
-            val = p.read_text(encoding="utf-8")
-    if not val:
-        return None
-    val = val.strip().strip('"').strip("'").strip()
-    if val.lower().startswith("bearer "):
-        val = val[7:].strip()
-    return val or None
-
-
 class TokenClient:
     """Nutzt einen fertigen Bearer-Token; keine Anmeldung, kein Refresh."""
 
@@ -1016,12 +987,7 @@ def main():
     SESSION.mount("https://", requests.adapters.HTTPAdapter(
         pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
 
-    pasted = load_pasted_token()
-    if pasted:
-        print("Token-Modus aktiv – nutze Access Token aus Graph Explorer (kein Login).")
-        graph = TokenClient(pasted)
-    else:
-        graph = Graph()
+    graph = auth.waehle_zugang(TokenClient, Graph)
 
     out = Path(OUT_ROOT)
     out.mkdir(parents=True, exist_ok=True)

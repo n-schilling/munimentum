@@ -626,11 +626,21 @@ def test_get_bytes_wiederholt_nach_netzwerkfehler(monkeypatch):
 # --------------------------------------------------------------------------
 # Graph-Client: Token-Erneuerung bei 401 (ohne echte Anmeldung)
 # --------------------------------------------------------------------------
+class _StubAnmeldung:
+    """Nur was die HTTP-Schicht von auth.Login braucht. Die Anmeldung selbst
+    hat eigene Tests (test_auth.py); hier geht es um Retry und Paging."""
+
+    def __init__(self, token="alt"):
+        self.token = token
+
+    def headers(self):
+        return {"Authorization": f"Bearer {self.token}"}
+
+
 def _bare_graph():
-    """Graph-Instanz ohne msal-Login (kein Netzwerk, kein Browser)."""
-    g = outlook_export.Graph.__new__(outlook_export.Graph)
-    g.token = "alt"
-    g.account = None
+    """Graph-Instanz ohne interaktiven Login (kein __init__)."""
+    g = object.__new__(outlook_export.Graph)
+    g.anmeldung = _StubAnmeldung()
     g._refresh_lock = threading.Lock()
     return g
 
@@ -643,7 +653,7 @@ def test_graph_get_erneuert_token_bei_401(monkeypatch):
 
     def refresh():
         aufrufe.append(1)
-        g.token = "neu"
+        g.anmeldung.token = "neu"
     g._refresh = refresh
 
     assert g.get("https://example.invalid/x", extra_headers={"Prefer": "utc"}) == {"ok": True}
@@ -657,7 +667,7 @@ def test_graph_get_bytes_erneuert_token_bei_401(monkeypatch):
     fake = FakeSession([FakeResponse(401), FakeResponse(content=b"X")])
     monkeypatch.setattr(outlook_export, "SESSION", fake)
     g = _bare_graph()
-    g._refresh = lambda: setattr(g, "token", "neu")
+    g._refresh = lambda: setattr(g.anmeldung, "token", "neu")
     content, _ = g.get_bytes("https://example.invalid/m")
     assert content == b"X"
     assert fake.calls[1]["headers"]["Authorization"] == "Bearer neu"
