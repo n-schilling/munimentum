@@ -2552,12 +2552,12 @@ pruefe(hinweis('ollama').indexOf('Ollama') >= 0, 'Tooltip nennt Ollama nicht');
 pruefe(hinweis('mcp').indexOf('MCP') >= 0, 'Tooltip nennt MCP nicht');
 
 // Ohne Index darf der Kopf nicht stolpern - er zeigt den Zustand nicht mehr,
-// aber renderStatus rechnet weiter damit (Suchhinweis, KI-Kasten).
+// aber renderStatus rechnet weiter damit (KI-Kasten, Sicht "Geloeschtes").
 st.store = {exists: false, chunks: 0, messages: 0, semantic: false,
-            built_at: null, model: null};
+            built_at: null, model: null, features: []};
 renderStatus(st);
-pruefe(document.getElementById('search-sub').textContent.length > 0,
-       'Ohne Index sagt die Suche gar nichts mehr');
+pruefe(document.getElementById('ai-wrap').classList.contains('hide'),
+       'KI-Kasten trotz fehlendem Index angeboten');
 console.log('OK');
 """
 
@@ -3243,13 +3243,13 @@ PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """
 var st = statusGeruest();
 st.store.features = [];
 renderStatus(st);
-pruefe(document.getElementById('gone-wrap').classList.contains('hide'),
-       'Filter wird trotz altem Index angeboten');
+pruefe(document.getElementById('chip-geloescht').classList.contains('hide'),
+       'Sicht wird trotz altem Index angeboten');
 pruefe(KANN_VERLAUF === false, 'Verlauf gilt trotz altem Index als moeglich');
 
 st.store.features = ['gone', 'thread'];
 renderStatus(st);
-pruefe(!document.getElementById('gone-wrap').classList.contains('hide'),
+pruefe(!document.getElementById('chip-geloescht').classList.contains('hide'),
        'Filter fehlt trotz passendem Index');
 pruefe(KANN_VERLAUF === true, 'Verlauf fehlt trotz passendem Index');
 console.log('OK');
@@ -3576,6 +3576,12 @@ def test_jeder_id_selektor_trifft_ein_element():
     # liesse sich hier nichts sagen.
     selektoren = set(re.findall(
         r"""querySelector(?:All)?\('#([\w-]+)[^']*'\s*\)""", quelle))
+    # el('x') ist der häufigere Zugriff und war bisher nicht geprüft. Genau
+    # dort ist es passiert: nach dem Umbau der Suchmaske zeigte el('search-sub')
+    # auf ein Element, das es nicht mehr gab. Im Browser wirft das, und
+    # renderStatus bricht mitten im Aufbau ab – die DOM-Attrappe der Tests legt
+    # dagegen jede ID auf Anfrage an und merkte nichts.
+    selektoren |= set(re.findall(r"""\bel\('([\w-]+)'\)""", quelle))
     assert selektoren, "keine ID-Selektoren gefunden – Muster kaputt?"
     # … gegen die IDs im Markup.
     vorhanden = set(re.findall(r'id="([\w-]+)"', quelle))
@@ -4582,3 +4588,39 @@ def test_die_maske_loest_ueberall_gleich_aus():
         # Zeichenkette und prüfte dann irgendetwas.
         umfeld = block[max(0, j - 120):j + 200]
         assert 'onchange="doSearch(0)"' in umfeld, f"{feld} löst nicht aus"
+
+
+PRUEFUNG_KI_UND_PAGER = GRUNDZUSTAND + """
+var st = statusGeruest();
+st.store = {exists: true, chunks: 5, messages: 2, semantic: true,
+            built_at: '2026-08-10T09:00:00', model: 'bge-m3', features: ['gone','thread']};
+st.ollama = {running: true, has_model: true, has_chat_model: true,
+             model: 'bge-m3', chat_model: 'q', models: []};
+S = null;
+renderStatus(st);
+
+// renderStatus muss BIS ANS ENDE laufen. Zeigt eine Zeile darin auf ein
+// Element, das es nicht gibt, wirft der Browser - und alles danach unterbleibt.
+pruefe(!document.getElementById('ai-wrap').classList.contains('hide'),
+       'KI-Kasten fehlt, obwohl ein Modell da ist');
+pruefe(document.getElementById('mcp-json').textContent.length > 0,
+       'renderStatus ist vorher abgebrochen');
+
+// Ohne Modell verschwindet er wieder.
+st.ollama.has_chat_model = false;
+renderStatus(st);
+pruefe(document.getElementById('ai-wrap').classList.contains('hide'),
+       'KI-Kasten trotz fehlendem Modell');
+
+// Der Blaetterbereich nennt kein "Ranking" mehr - bei einer Suche ohne
+// Begriff gibt es keines, und "hybrid" ist ein Wort fuer Entwickler.
+renderHits({results: [], total: 0, backend: 'hybrid'});
+var p = document.getElementById('pager').innerHTML;
+pruefe(p.toLowerCase().indexOf('ranking') < 0, 'Ranking steht wieder da: ' + p);
+pruefe(p.indexOf('hybrid') < 0, 'Systemwort im Blaetterbereich');
+console.log('OK');
+"""
+
+
+def test_ki_kasten_erscheint_und_pager_bleibt_stumm():
+    _in_node(PRUEFUNG_KI_UND_PAGER)

@@ -3238,9 +3238,10 @@ function renderStatus(s){
   parts.push(t('export.state.onedrive', {when: wann(ex.onedrive && ex.onedrive.last_run)}));
   parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
   el('export-state').textContent = parts.join('  ·  ');
-  // „Nur Gelöschtes“ und der Verlauf brauchen einen Index, der beides kennt.
+  // Die Sicht „Gelöschtes“ und der Verlauf brauchen einen Index, der beides
+  // kennt. Ein alter kennt die Spalten nicht – dann gibt es den Chip nicht.
   var kann = (st.features || []);
-  el('gone-wrap').classList.toggle('hide', kann.indexOf('gone') < 0);
+  el('chip-geloescht').classList.toggle('hide', kann.indexOf('gone') < 0);
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
@@ -3269,9 +3270,6 @@ function renderStatus(s){
   var kiMoeglich = !!(o.running && o.has_chat_model && st.exists);
   el('ai-wrap').classList.toggle('hide', !kiMoeglich);
   if(!kiMoeglich) el('ai-on').checked = false;
-
-  el('search-sub').textContent = t(st.exists
-    ? (st.semantic ? 'search.sub.hybrid' : 'search.sub.lexical') : 'search.sub.none');
 
   // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
   // und Adressbuch weiter den Stand von vor dem Lauf.
@@ -3479,8 +3477,10 @@ function renderHits(r){
   var proSeite = trefferProSeite();
   el('pager').innerHTML =
     (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - proSeite) + ')">' + esc(t('search.back')) + '</button>' : '') +
-    (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '') +
-    '<span class="small muted">' + esc(t('search.ranking', {backend: r.backend || '–'})) + '</span>';
+    (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '');
+  // Hier stand "Ranking: hybrid". Bei einer Suche ohne Begriff gibt es gar
+  // kein Ranking, also stand meistens ein Strich da; und "hybrid" ist ein
+  // Wort für Entwickler. Ob die Bedeutungssuche läuft, sagt die Kachel oben.
 }
 
 /* Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
