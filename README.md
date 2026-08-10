@@ -40,25 +40,36 @@ nothing. The path is shown in the UI and can be changed in *Settings*.
 
 ## What the app does
 
-One browser page with three tabs.
+One browser page with four tabs.
 
 **Export data** — pick what to fetch (mail, calendar, contacts; 1:1, group,
-meeting chats, team channels; OneDrive files) and start. Every run fetches only what is new. A
-schedule can repeat it while the app is open, and index straight afterwards.
+meeting and channel chats; OneDrive files) and start. Every run fetches only
+what is new. A schedule can repeat it while the app is open, and index straight
+afterwards.
 
-**Search data** — full-text and, with [Ollama](https://ollama.com), semantic
-search over everything exported, merged into one ranking. Optional extras: an
-AI summary of the hits with source numbers, the whole mail thread under a hit,
-and a *Deleted only* filter for messages that are no longer in the mailbox but
-still in your archive. Two more views sit here: a calendar (including
-appointments recovered from invitation and cancellation mails) and an address
-book.
+**Search data** — a search box and a button; filters (person, source, date
+range, folder) sit behind a toggle that shows how many are set. Nothing
+searches until you ask. Full-text and, with [Ollama](https://ollama.com),
+semantic search are merged into one ranking; semantic hits below a similarity
+floor are dropped, so narrowing the search does not fill the list with
+everything that passes the filter. Previews show the passage around the match
+with the term highlighted. Four views sit here: results, calendar (including
+appointments recovered from invitation and cancellation mails), the address
+book, and *Deleted* — messages no longer in the mailbox but still in the
+archive. An AI summary of the hits, with source numbers, can be switched on
+above the results.
+
+**Analytics** — what the archive holds (messages per source, conversations,
+people, OneDrive files, period, disk usage) and, on request, a completeness
+check against the mailbox and the drive: what Microsoft counts per folder
+against what is here.
 
 **Settings** — everything the scripts can do: folders, categories, models,
 schedule, MCP server, language (German, English, French). Which folders get
-exported is a list of include/exclude rules, and *Show export list* spells out
-what they currently mean: what comes along, what is left out and why, and what
-is only in your archive because it is gone from the mailbox.
+exported — from the mailbox and from OneDrive — is a list of include/exclude
+rules, and *Show export list* spells out what they currently mean: what comes
+along, what is left out and why, and what is only in your archive because it is
+gone from the source.
 
 ### Signing in
 

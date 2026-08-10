@@ -34,6 +34,15 @@ würde. Die schlanke Alternative aus einzelnen Bibliotheken ist ein Viertel so
 groß, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
 einem echten Bündel, nicht am Schreibtisch.
 
+## Signierte macOS-Bündel
+
+Der Developer-Account ist da, die Anleitung steht in `packaging/signieren.md` —
+umgesetzt ist sie noch nicht. Solange bleibt beim ersten Start die Warnung
+*„Apple konnte nicht überprüfen …"*, und die Release-Hinweise erklären den Weg
+daran vorbei. Der Aufwand steckt weniger im Signieren als in den
+Entitlements: Hardened Runtime ist Pflicht für die Beglaubigung und schaltet
+genau das ab, was CPython braucht.
+
 ## Kleineres
 
 * **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene

@@ -1,5 +1,10 @@
 # macOS: signieren und beglaubigen
 
+> **Noch nicht in Betrieb.** Diese Anleitung ist vorbereitet, der Build
+> signiert bisher nicht — die Bündel tragen weiterhin den Hinweis „nicht
+> überprüft". Umgesetzt wird es in einem der nächsten Releases; bis dahin ist
+> hier nichts zu tun außer dem, was in Schritt 1 bis 3 steht.
+
 Was Nutzer heute sehen: *„Apple konnte nicht überprüfen, ob … frei von
 Schadsoftware ist"*, dazu ein blauer Knopf **„In den Papierkorb legen"**. Das
 verschwindet erst, wenn das Bündel **signiert** *und* von Apple **beglaubigt**

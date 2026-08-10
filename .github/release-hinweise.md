@@ -2,11 +2,11 @@ Fertige App zum Herunterladen — Python oder sonstige Installationen sind nicht
 
 ## Was die App kann
 
-**Exportieren.** Teams-Chats und -Kanäle, Outlook-Mail, Kalender und Kontakte
-über Microsoft Graph — mit deinem eigenen Zugang, ohne dass jemand in der IT
-etwas freischalten muss. Jeder Lauf holt nur, was neu ist. Welche Postfachordner
-mitkommen, sagen geordnete Include/Exclude-Regeln; *Exportliste anzeigen* führt
-vor, was sie bedeuten.
+**Exportieren.** Teams-Chats und -Kanäle, Outlook-Mail, Kalender, Kontakte und
+**OneDrive-Dateien** über Microsoft Graph — mit deinem eigenen Zugang, ohne dass
+jemand in der IT etwas freischalten muss. Jeder Lauf holt nur, was neu ist.
+Welche Ordner mitkommen, sagen geordnete Include/Exclude-Regeln; *Exportliste
+anzeigen* führt vor, was sie bedeuten.
 
 **Durchsuchen.** Volltext und — mit [Ollama](https://ollama.com) — semantische
 Suche über alles Exportierte, zu einer Rangfolge zusammengeführt. Filtern nach
@@ -15,8 +15,9 @@ einem Treffer, ein Kalender samt aus Einladungen zurückgeholter Termine, ein
 Adressbuch und ein Filter für Nachrichten, die es im Postfach nicht mehr gibt.
 
 **Auswerten.** Was im Archiv steckt — Nachrichten je Quelle, Gespräche,
-Personen, Zeitraum, belegter Platz. Und auf Knopfdruck ein Abgleich gegen das
-Postfach: Was Microsoft je Ordner zählt gegen das, was hier liegt.
+Personen, Dateien, Zeitraum, belegter Platz. Und auf Knopfdruck ein Abgleich
+gegen Postfach und Laufwerk: Was Microsoft je Ordner zählt gegen das, was hier
+liegt.
 
 **Mit Claude arbeiten.** Ein eingebauter MCP-Server macht das Archiv für Claude
 durchsuchbar — mit Quellenangaben, Ordnerfilter und einer `days`-Abkürzung für
@@ -24,6 +25,50 @@ durchsuchbar — mit Quellenangaben, Ordnerfilter und einer `days`-Abkürzung f�
 
 Alles bleibt auf deinem Rechner. Die einzigen Verbindungen nach außen sind
 Microsoft Graph und dein lokales Ollama.
+
+## Neu in 4.0.0
+
+**OneDrive wird gesichert.** Das eigene Laufwerk kommt als lokaler Spiegel
+dazu — mit denselben Include/Exclude-Regeln wie das Postfach, einer
+Größengrenze und einem Abgleich der Ordnerstruktur. Umbenanntes und
+Verschobenes wird mitgezogen statt neu geladen; was in OneDrive gelöscht wird,
+**bleibt hier liegen** und bekommt einen Vermerk. Frühere Fassungen einer
+geänderten Datei bewahrt der Spiegel nicht — er hält die aktuelle und merkt
+sich, was verschwunden ist.
+
+Durchsuchbar sind **Name und Ordner**, nicht der Inhalt: `att:pdf` findet eine
+Datei wie einen Mailanhang. Die Inhalte der Dokumente kommen später (siehe
+`ROADMAP.md`).
+
+**macOS kommt als DMG.** Bisher ein ZIP — bei dem das Archivierungsprogramm von
+macOS auf manchen Rechnern abbrach und eine unbrauchbare App hinterließ.
+Ursache waren die 36 Symlinks, die jedes PyInstaller-Bündel enthält. Beim DMG
+wird gar nicht entpackt: Doppelklick, App auf *Programme* ziehen, fertig.
+
+**Die Suche findet, was gemeint ist.** Die Bedeutungssuche hatte keine
+Untergrenze und lieferte immer ihre besten Treffer — auch wenn nichts passte.
+Wer einen einzelnen Tag eingrenzte, bekam alle Nachrichten dieses Tages. Jetzt
+gibt es eine gemessene Untergrenze (45 %, in den *Einstellungen* verstellbar).
+Dazu zeigt die Vorschau den Ausschnitt **um die Fundstelle** und hebt den
+Begriff hervor — vorher standen dort stur die ersten 200 Zeichen, und ein
+richtiger Treffer sah aus wie ein Fehlgriff.
+
+**Die KI-Antwort ist deutlich schneller.** Das Kontextfenster war fest auf
+32768 Token eingestellt; Ollama legt den Zwischenspeicher dafür immer an, auch
+wenn der Text kürzer ist. Auf einem Rechner mit 24 GB und einem großen Modell
+drückte das ins Auslagern. Jetzt richtet es sich nach dem tatsächlichen Text —
+gemessen mehr als doppelt so schnell, ohne dass man etwas umstellt.
+
+**Aufgeräumte Oberfläche.** Die Suchmaske ist eine Suchzeile mit Knopf; die
+Filter liegen darunter hinter einem Schalter, der zeigt, wie viele gesetzt
+sind. Gesucht wird, wenn man danach fragt — nicht beim Tippen. *Gelöschtes* ist
+eine eigene Sicht neben Treffer, Kalender und Adressbuch geworden. Erklärungen
+stehen an einem **(i)** statt als Absatz neben jedem Knopf, und Zahlen über das
+Archiv stehen nur noch in *Analytics*, nicht zusätzlich im Kopf.
+
+**Vorabversionen sagen es.** Wer eine Fassung benutzt, die neuer ist als das
+letzte Release, bekam „Du bist auf dem neuesten Stand" — formal wahr,
+inhaltlich falsch. Jetzt steht dort ein Hinweis.
 
 ## Welche Datei?
 
@@ -144,8 +189,8 @@ bzw. `Get-FileHash datei.zip` (PowerShell).
 
 ## Was bis hierher entstanden ist
 
-Dies ist das erste veröffentlichte Bündel. Gewachsen ist es aus einer Reihe von
-Vorstufen, die es nicht als Download gab — der Kürze halber in einem Absatz:
+Vor 3.5.0 gab es eine Reihe von Vorstufen, die nie als Download erschienen sind
+— der Kürze halber in einem Absatz:
 
 Aus einer festen Namensliste für auszulassende Ordner wurden geordnete Regeln
 auf Pfaden, bei denen die letzte zutreffende gewinnt; der Ordnerbaum wurde dabei
