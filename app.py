@@ -580,11 +580,17 @@ def export_status(cfg):
     """
     teams = BASE / cfg["teams_dir"]
     outlook = BASE / cfg["outlook_dir"]
+    onedrive = BASE / cfg["onedrive_dir"]
     return {
         "teams": {"dir": str(teams), "exists": teams.is_dir(),
                   "last_run": _mtime_iso(teams / "export_state.json")},
         "outlook": {"dir": str(outlook), "exists": outlook.is_dir(),
                     "last_run": _mtime_iso(outlook / "exported.tsv")},
+        # Der Bestand, nicht der Delta-Zeiger: der wird auch nach einem Lauf
+        # ohne Änderung neu geschrieben und behauptete dann einen Abgleich,
+        # bei dem nichts geholt wurde.
+        "onedrive": {"dir": str(onedrive), "exists": onedrive.is_dir(),
+                     "last_run": _mtime_iso(onedrive / "dateien.tsv")},
     }
 
 
@@ -2631,8 +2637,6 @@ main{padding-bottom:60px}
       <p class="small muted" id="fortschritt-text"></p>
     </div>
 
-    <p class="small muted" style="margin-top:10px" id="export-state"></p>
-    <p class="small muted"><span data-i18n="export.datadir">Alle Daten liegen in</span> <code id="data-dir">…</code></p>
   </div>
 
   <details class="card" id="einzelschritte">
@@ -2742,6 +2746,7 @@ main{padding-bottom:60px}
     <h2 data-i18n="ana.title">Was im Archiv steckt</h2>
     <p class="sub" data-i18n="ana.sub">Alles aus dem Index gerechnet – ohne Microsoft zu fragen.</p>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
+    <p class="small muted" style="margin-top:10px" id="export-state"></p>
   </div>
 
   <div class="card">
@@ -3170,6 +3175,7 @@ function renderStatus(s){
   function wann(iso){ return iso ? t('export.state.last', {when: fmt(iso)}) : t('export.state.never'); }
   parts.push(t('export.state.outlook', {when: wann(ex.outlook.last_run)}));
   parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
+  parts.push(t('export.state.onedrive', {when: wann(ex.onedrive && ex.onedrive.last_run)}));
   parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
   el('export-state').textContent = parts.join('  ·  ');
   // „Nur Gelöschtes“ und der Verlauf brauchen einen Index, der beides kennt.
@@ -3177,7 +3183,6 @@ function renderStatus(s){
   el('gone-wrap').classList.toggle('hide', kann.indexOf('gone') < 0);
   el('gone-note').classList.toggle('hide', kann.indexOf('gone') < 0);
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
-  el('data-dir').textContent = s.data_dir;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   el('data-dir2').textContent = s.data_dir;
@@ -3293,7 +3298,11 @@ function zeigeFortschritt(jobs){
   balken.classList.toggle('unbekannt', !kennt);
   if(kennt) el('balken-fuell').style.width = Math.round((i + anteil) / n * 100) + '%';
 
-  var zeile = t('log.job.running', {label: mtext(j.label), step: mtext(j.step),
+  // Der Name des Schrittes kommt als Textschlüssel vom Server (job.step.…);
+  // das Etikett des Laufs hat der Browser schon übersetzt, bevor er ihn
+  // startete. mtext reicht Zeichenketten unverändert durch – für den Schritt
+  // stand deshalb der Schlüssel selbst in der Zeile.
+  var zeile = t('log.job.running', {label: mtext(j.label), step: t(j.step),
                                     i: i + 1, n: n});
   if(p) zeile += ' · ' + (p.total
     ? t('progress.of', {done: p.done.toLocaleString(LOC),

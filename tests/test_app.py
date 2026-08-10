@@ -4306,3 +4306,44 @@ console.log('OK');
 
 def test_bericht_nennt_die_richtige_einheit():
     _in_node(PRUEFUNG_BERICHT_EINHEIT)
+
+
+def test_export_status_kennt_onedrive(sandbox):
+    """Der Bestand, nicht der Delta-Zeiger: der wird auch nach einem Lauf ohne
+    Änderung neu geschrieben und behauptete dann einen Abgleich, bei dem nichts
+    geholt wurde."""
+    cfg = app_mod.load_config()
+    od = sandbox / cfg["onedrive_dir"]
+    od.mkdir(parents=True, exist_ok=True)
+    assert app_mod.export_status(cfg)["onedrive"]["last_run"] is None
+    (od / "dateien.tsv").write_text("a\tb\tc\t1\n", encoding="utf-8")
+    assert app_mod.export_status(cfg)["onedrive"]["last_run"]
+
+
+def test_export_reiter_zeigt_weder_zeiten_noch_datenordner():
+    """Beides steht woanders: die Zeiten in Analytics, der Ordner in den
+    Einstellungen. Zweimal dasselbe an zwei Orten veraltet an einem."""
+    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
+    assert 'id="export-state"' not in kopf, "Zeiten stehen noch im Export-Reiter"
+    assert 'id="data-dir"' not in kopf
+    assert 'id="export-state"' in app_mod.PAGE, "Zeiten sind ganz verschwunden"
+    assert 'id="data-dir2"' in app_mod.PAGE, "Datenordner fehlt in den Einstellungen"
+
+
+PRUEFUNG_SCHRITTNAME = GRUNDZUSTAND + """
+var status = statusGeruest();
+status.jobs = {busy: true, seq: 1, token_expired: false, last: null,
+               job: {label: 'Export', steps: ['job.step.outlook', 'job.step.index'],
+                     step: 'job.step.index', index: 1, progress: null}};
+S = null;
+renderStatus(status);
+var zeile = document.getElementById('fortschritt-text').textContent;
+pruefe(zeile.indexOf('job.step.') < 0, 'Schluessel statt Text: ' + zeile);
+pruefe(zeile.indexOf('Index') >= 0, 'Schrittname fehlt: ' + zeile);
+pruefe(zeile.indexOf('Export') >= 0, 'Etikett des Laufs fehlt: ' + zeile);
+console.log('OK');
+"""
+
+
+def test_schrittname_wird_uebersetzt():
+    _in_node(PRUEFUNG_SCHRITTNAME)
