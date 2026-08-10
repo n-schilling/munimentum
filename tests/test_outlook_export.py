@@ -1246,7 +1246,7 @@ def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
     monkeypatch.setattr(outlook_export, "DEFAULT_SKIP_FOLDERS", {"archiv"})
     monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
         {"folder": {"displayName": "Archiv"},
-         "subtree": [({"totalItemCount": 19649}, "E-Mail/Archiv")]},
+         "subtree": [({"totalItemCount": 14000}, "E-Mail/Archiv")]},
         {"folder": {"displayName": "Posteingang"},
          "subtree": [({"totalItemCount": 10}, "E-Mail/Posteingang")]},
     ])
@@ -1258,7 +1258,7 @@ def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
     b = outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})
     assert b["fehlt"] == 0, "ausgelassener Ordner wurde als Lücke gezählt"
     assert b["erwartet"] == 10, "ausgelassener Ordner wurde mitgezählt"
-    assert b["ausgelassen"] == 19649
+    assert b["ausgelassen"] == 14000
     assert b["ausgelassene_ordner"] == ["Archiv"]
     # Sichtbar bleibt er trotzdem – nur eben als Zeile ohne Lücke.
     archiv = [z for z in b["ordner"] if z["ordner"] == "E-Mail/Archiv"][0]

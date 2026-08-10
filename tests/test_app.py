@@ -3812,12 +3812,12 @@ zeigeAnalytics({exists: true, nachrichten: 238408,
   gespraeche: 16545, mit_anhang: null, personen: 3860, verschwunden: 12,
   von: 1568851200, bis: 1789603200,
   groesse: {teams: 3758096384, outlook: 28879134720, index: 966367641},
-  vollstaendigkeit: {geprueft: '2026-08-10T20:00:00', erwartet: 45615,
-    vorhanden: 45621, geloescht: 12, fehlt: 6, ausgelassen: 20027,
+  vollstaendigkeit: {geprueft: '2026-08-10T20:00:00', erwartet: 40000,
+    vorhanden: 39994, geloescht: 12, fehlt: 6, ausgelassen: 15000,
     ausgelassene_ordner: ['Archiv', 'Junk-E-Mail'],
     ordner: [{ordner: 'E-Mail/Gesendete Elemente', erwartet: 100, vorhanden: 97,
               geloescht: 0, fehlt: 3, ausgelassen: false},
-             {ordner: 'E-Mail/Archiv', erwartet: 19649, vorhanden: 0,
+             {ordner: 'E-Mail/Archiv', erwartet: 14000, vorhanden: 0,
               geloescht: 0, fehlt: 0, ausgelassen: true}]}});
 
 var kpi = document.getElementById('ana-kpi').innerHTML;
@@ -3829,7 +3829,7 @@ pruefe(kpi.indexOf('–') >= 0, 'Unbekanntes nicht als Strich gezeigt');
 pruefe(kpi.indexOf('GB') >= 0, 'Groesse fehlt: ' + kpi.slice(0, 200));
 
 var pruef = document.getElementById('ana-check-box').innerHTML;
-pruefe(pruef.indexOf('20.027') >= 0, 'Ausgelassene Ordner nicht erklaert');
+pruefe(pruef.indexOf('15.000') >= 0, 'Ausgelassene Ordner nicht erklaert');
 pruefe(pruef.indexOf('Archiv') >= 0, 'Ausgelassene Ordner nicht benannt');
 // Der ausgelassene Ordner darf NICHT in der Luecken-Tabelle stehen.
 var tab = pruef.split('<tbody>')[1] || '';
@@ -3862,7 +3862,7 @@ def test_exportliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
     a, port = server
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "E-Mail/Posteingang", "name": "P", "elemente": 100},
-           {"id": "2", "pfad": "E-Mail/Archiv", "name": "A", "elemente": 19649}],
+           {"id": "2", "pfad": "E-Mail/Archiv", "name": "A", "elemente": 14000}],
           [("E-Mail/Archiv", 3), ("E-Mail/Weg", 4)])
 
     code, r = call(port, "POST", "/api/folder-plan",
@@ -4405,9 +4405,9 @@ def test_infozeichen_ist_erreichbar_und_erklaert_sich():
 
 
 PRUEFUNG_ANALYTICS_KACHELN = GRUNDZUSTAND + """
-var a = {exists: true, nachrichten: 239093, gespraeche: 16550, mit_anhang: 4979,
-  personen: 3863, verschwunden: 18, von: 1551398400, bis: 1788134400,
-  quellen: [{src:'teams',nachrichten:196693},{src:'outlook',nachrichten:36852},
+var a = {exists: true, nachrichten: 123456, gespraeche: 12000, mit_anhang: 3400,
+  personen: 2500, verschwunden: 18, von: 1551398400, bis: 1788134400,
+  quellen: [{src:'teams',nachrichten:100000},{src:'outlook',nachrichten:23000},
             {src:'datei',nachrichten:629}],
   groesse: {teams: 1000, outlook: 2000, onedrive: 3000, index: 500},
   vollstaendigkeit: null, vollstaendigkeit_onedrive: null};
@@ -4428,7 +4428,7 @@ pruefe(h.indexOf('role="button"') >= 0 && h.indexOf('onkeydown=') >= 0,
 pruefe(h.indexOf('Related mails') < 0, 'Erklaerung steht noch als Text da');
 pruefe((h.match(/class="info"/g) || []).length === 4, 'Falsche Zahl an Infozeichen');
 // Ohne Tausendertrennzeichen geprueft: das haengt an der Sprache.
-pruefe(h.indexOf('Teams 196') >= 0, 'Aufteilung nach Quellen ist verschwunden');
+pruefe(h.indexOf('Teams 100') >= 0, 'Aufteilung nach Quellen ist verschwunden');
 pruefe(h.indexOf('kpi-hint') >= 0, 'Sichtbare Zahlenzeile ganz weg');
 
 // Ohne Verschwundenes fuehrt die Kachel nirgendwohin – eine Sackgasse waere schlechter.

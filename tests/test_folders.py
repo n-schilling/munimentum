@@ -166,12 +166,12 @@ def test_ohne_datei(tmp_path):
 def test_zusammenfassung_zaehlt_die_auswahl(tmp_path):
     folders.speichere(tmp_path, [
         _eintrag(1, "E-Mail/Posteingang", 100),
-        _eintrag(2, "E-Mail/Archiv", 19649),
+        _eintrag(2, "E-Mail/Archiv", 14000),
         _eintrag(3, "E-Mail/Archiv/Wichtig", 12),
     ])
     z = folders.zusammenfassung(folders.lade(tmp_path), REGELN)
     assert z["ordner_gesamt"] == 3 and z["ordner_gewaehlt"] == 2
-    assert z["mails_gesamt"] == 19761
+    assert z["mails_gesamt"] == 14112
     assert z["mails_gewaehlt"] == 112        # Posteingang + Archiv/Wichtig
 
 
@@ -189,7 +189,7 @@ def test_plan_trennt_gewaehlt_ausgelassen_und_nur_noch_im_archiv(tmp_path):
     """Die drei Listen, die man sonst im Kopf zusammensetzen müsste."""
     folders.speichere(tmp_path, [
         _eintrag(1, "E-Mail/Posteingang", 100),
-        _eintrag(2, "E-Mail/Archiv", 19649),
+        _eintrag(2, "E-Mail/Archiv", 14000),
         _eintrag(3, "E-Mail/Archiv/Wichtig", 12),
     ])
     _mails(tmp_path, "E-Mail/Posteingang", 3)
@@ -200,7 +200,7 @@ def test_plan_trennt_gewaehlt_ausgelassen_und_nur_noch_im_archiv(tmp_path):
     assert [z["pfad"] for z in p["an"]] == ["E-Mail/Posteingang", "E-Mail/Archiv/Wichtig"]
     assert [z["pfad"] for z in p["aus"]] == ["E-Mail/Archiv"]
     assert [z["pfad"] for z in p["weg"]] == ["E-Mail/Weg"]
-    assert p["mails_an"] == 112 and p["mails_aus"] == 19649 and p["mails_weg"] == 4
+    assert p["mails_an"] == 112 and p["mails_aus"] == 14000 and p["mails_weg"] == 4
 
 
 def test_plan_nennt_die_regel_die_entschied(tmp_path):
@@ -220,7 +220,7 @@ def test_plan_nennt_die_regel_die_entschied(tmp_path):
 
 def test_plan_zeigt_ausgelassene_ordner_mit_bestand(tmp_path):
     """„Ausgelassen“ heißt nicht „leer“: was schon da ist, bleibt liegen."""
-    folders.speichere(tmp_path, [_eintrag(2, "E-Mail/Archiv", 19649)])
+    folders.speichere(tmp_path, [_eintrag(2, "E-Mail/Archiv", 14000)])
     _mails(tmp_path, "E-Mail/Archiv", 7)
     p = folders.plan(tmp_path, REGELN)
     assert p["aus"][0]["archiv"] == 7
