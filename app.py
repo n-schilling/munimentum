@@ -2319,6 +2319,14 @@ h1{font-size:17px;margin:0;font-weight:650}
 /* „Beenden“ ist kein Zustand, sondern eine Handlung – die Lücke trennt es von
    den vier Anzeigen, damit niemand es für eine weitere Meldung hält. */
 .pill-luecke{width:10px}
+/* Erklärung auf Abruf statt Fließtext neben jedem Knopf. Der Text steckt im
+   title-Attribut – das zeigt jeder Browser, liest jeder Screenreader vor, und
+   es braucht kein eigenes Fenster, das aufgehen und wieder zugehen muss. */
+.info{display:inline-flex;align-items:center;justify-content:center;
+  width:17px;height:17px;border-radius:50%;border:1px solid var(--line);
+  color:var(--muted);font-size:11.5px;font-style:italic;font-weight:600;
+  cursor:help;user-select:none;flex:0 0 auto}
+.info:hover,.info:focus{color:var(--ink);border-color:var(--muted);outline:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
 .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
 nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
@@ -2629,7 +2637,8 @@ main{padding-bottom:60px}
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
       <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
-      <span class="small muted" data-i18n="export.start.hint">Holt Neues und baut danach Index und Kalender auf.</span>
+      <span class="info" tabindex="0" data-i18n-title="export.start.hint"
+            role="img" aria-label="Info">i</span>
     </div>
 
     <div class="fortschritt hide" id="fortschritt">

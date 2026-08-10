@@ -4347,3 +4347,24 @@ console.log('OK');
 
 def test_schrittname_wird_uebersetzt():
     _in_node(PRUEFUNG_SCHRITTNAME)
+
+
+def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
+    """Fließtext neben jedem Knopf macht die Oberfläche unruhig. Die Erklärung
+    steckt jetzt im title-Attribut eines (i) – sichtbar auf Abruf, vorlesbar,
+    und ohne eigenes Fenster, das aufgehen und wieder zugehen muss."""
+    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
+    assert 'data-i18n="export.start.hint"' not in kopf, "steht wieder als Text da"
+    assert 'data-i18n-title="export.start.hint"' in kopf
+    # Der Text selbst bleibt erhalten – nur seine Form ändert sich.
+    assert i18n.strings("de")["export.start.hint"]
+
+
+def test_infozeichen_ist_erreichbar_und_erklaert_sich():
+    """Ein (i), das nur die Maus kennt, ist für die Tastatur ein Buchstabe
+    ohne Bedeutung."""
+    i = app_mod.PAGE.index('data-i18n-title="export.start.hint"')
+    block = app_mod.PAGE[i - 200:i + 200]
+    assert 'tabindex="0"' in block, "mit der Tastatur nicht erreichbar"
+    assert 'aria-label=' in block, "ohne Namen für den Screenreader"
+    assert ".info{" in app_mod.PAGE and "cursor:help" in app_mod.PAGE
