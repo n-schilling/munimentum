@@ -180,3 +180,37 @@ def test_spec_nimmt_die_version_aus_der_datei():
     text = spec.read_text(encoding="utf-8")
     assert '"CFBundleShortVersionString": VERSION' in text
     assert '"1.0.0"' not in text                    # nicht doppelt gepflegt
+
+
+# --------------------------------------------------------------------------
+# Voraus: die eigene Version ist höher als alles Veröffentlichte
+#
+# „Du bist auf dem neuesten Stand" wäre dort unwahr – und wer eine
+# unveröffentlichte Fassung benutzt, sollte das wissen.
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("eigene,neueste,newer,ahead", [
+    ("4.0.0", "v3.5.0", False, True),      # Vorabversion
+    ("3.5.0", "v4.0.0", True,  False),     # normales Update
+    ("3.5.0", "v3.5.0", False, False),     # gleich – keines von beidem
+    ("3.5.0", "v3.5",   False, False),     # 3.5 und 3.5.0 sind dieselbe
+    ("4.0.0", "v4.0.1", True,  False),
+    ("4.1.0", "v4.0.9", False, True),
+    ("wirr",  "v4.0.0", False, False),     # unvergleichbar: gar nichts behaupten
+    ("4.0.0", "wirr",   False, False),
+])
+def test_ahead_und_newer_schliessen_sich_aus(github, eigene, neueste, newer, ahead):
+    github(Antwort(200, {"tag_name": neueste, "html_url": "https://x"}))
+    u = updates.check(eigene, "n/x")
+    assert u["status"] == "ok"
+    assert (u["newer"], u["ahead"]) == (newer, ahead)
+    assert not (u["newer"] and u["ahead"]), "beides zugleich ist nie richtig"
+
+
+def test_ahead_ist_bei_jedem_anderen_ausgang_falsch(github):
+    """Ohne brauchbare Antwort wird nichts behauptet – auch nicht das Gegenteil."""
+    for code in (404, 500):
+        github(Antwort(code, {}))
+        assert updates.check("4.0.0", "n/x")["ahead"] is False
+    github(RuntimeError("kein Netz"))
+    assert updates.check("4.0.0", "n/x")["ahead"] is False
+    assert updates.check("4.0.0", "n/x", enabled=False)["ahead"] is False

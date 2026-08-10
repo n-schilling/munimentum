@@ -1374,7 +1374,8 @@ class App:
         self._calendar_cache = None      # (Kennung, roh, gzip)
         self.device_login = None         # laufende Gerätecode-Anmeldung
         self._update = {"status": "off", "current": version.VERSION,
-                        "latest": None, "url": None, "newer": False, "error": None}
+                        "latest": None, "url": None, "newer": False,
+                        "ahead": False, "error": None}
 
     # -- abgeleiteter Zustand ---------------------------------------------
     def selected_categories(self):
@@ -4011,17 +4012,26 @@ function toggleMcp(){
    Nur eine Notiz: nichts wird geladen, nichts ersetzt. Gemeldet wird allein
    der Fall "es gibt etwas Neueres" – kein Release, kein Netz oder abgeschaltet
    sind normale Zustände und stehen nur in den Einstellungen. */
+/* Drei Lagen, nicht zwei. „Du bist auf dem neuesten Stand" ist falsch, wenn
+   die eigene Version HÖHER ist als alles Veröffentlichte – dann läuft hier ein
+   selbstgebauter Stand, und das gehört gesagt, nicht verschwiegen. */
 function zeigeUpdate(u){
   var banner = el('update-banner');
-  banner.classList.toggle('hide', !u.newer);
+  var vorab = u.status === 'ok' && u.ahead;
+  banner.classList.toggle('hide', !u.newer && !vorab);
+  banner.classList.toggle('warn', vorab);
   if(u.newer){
     banner.innerHTML = esc(t('update.banner', {v: u.latest, current: u.current})) +
       ' <a href="' + esc(u.url || u.releases_url || '#') + '" target="_blank" rel="noopener">' +
       esc(t('update.open')) + '</a>';
+  } else if(vorab){
+    banner.textContent = t('update.ahead.banner', {v: u.current, latest: u.latest});
   }
   el('update-current').textContent = t('update.current', {v: u.current || '?'});
   el('update-state').textContent =
-      u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest}) : t('update.uptodate'))
+      u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest})
+                         : u.ahead ? t('update.ahead', {v: u.latest})
+                                   : t('update.uptodate'))
     : u.status === 'none' ? t('update.none')
     : u.status === 'error' ? t('update.error', {error: u.error || ''})
     : t('update.off');

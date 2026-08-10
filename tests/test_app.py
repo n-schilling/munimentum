@@ -4167,3 +4167,47 @@ setTimeout(function(){
 
 def test_onedrive_ordnerknoepfe_wirken_auf_die_eigene_quelle():
     _in_node(PRUEFUNG_OD_ORDNER)
+
+
+PRUEFUNG_VORABVERSION = GRUNDZUSTAND + """
+function lage(u){
+  // Beide Felder zuruecksetzen: der Browser ersetzt beim Setzen von innerHTML
+  // auch den Text, die Attrappe hier nicht - sonst schleppte ein Fall den
+  // Inhalt des vorigen mit.
+  var b = document.getElementById('update-banner');
+  b.textContent = ''; b.innerHTML = '';
+  zeigeUpdate(Object.assign({current: '4.0.0', releases_url: 'https://r'}, u));
+  return {text: document.getElementById('update-state').textContent, banner: b,
+          text_inhalt: b.textContent, html_inhalt: b.innerHTML};
+}
+
+// 1) Eigene Version ist hoeher als das neueste Release.
+var a = lage({status: 'ok', latest: '3.5.0', newer: false, ahead: true});
+pruefe(a.text.indexOf('3.5.0') >= 0, 'Nennt die veroeffentlichte Version nicht: ' + a.text);
+pruefe(a.text.toLowerCase().indexOf('latest version.') < 0,
+       'Behauptet weiterhin "auf dem neuesten Stand": ' + a.text);
+pruefe(!a.banner.classList.contains('hide'), 'Kein Hinweis eingeblendet');
+pruefe(a.banner.classList.contains('warn'), 'Hinweis ist nicht als Warnung erkennbar');
+pruefe(a.text_inhalt.length > 40, 'Hinweistext fehlt');
+
+// 2) Normales Update: unveraendert, und KEINE Warnfarbe.
+var b = lage({status: 'ok', latest: '5.0.0', newer: true, ahead: false});
+pruefe(!b.banner.classList.contains('hide'), 'Update-Hinweis fehlt');
+pruefe(!b.banner.classList.contains('warn'), 'Update faelschlich als Warnung');
+pruefe(b.html_inhalt.indexOf('5.0.0') >= 0, 'Neue Version nicht genannt');
+pruefe(b.html_inhalt.indexOf('<a href') >= 0, 'Link zum Release fehlt');
+
+// 3) Gleichstand: kein Hinweis, und der alte Text bleibt.
+var c = lage({status: 'ok', latest: '4.0.0', newer: false, ahead: false});
+pruefe(c.banner.classList.contains('hide'), 'Hinweis bei Gleichstand');
+pruefe(c.text.length > 0, 'Zustand gar nicht gemeldet');
+
+// 4) Kein Netz: nichts behaupten.
+var d = lage({status: 'error', latest: null, newer: false, ahead: false, error: 'weg'});
+pruefe(d.banner.classList.contains('hide'), 'Hinweis trotz Fehler');
+console.log('OK');
+"""
+
+
+def test_vorabversion_wird_nicht_als_aktuell_ausgegeben():
+    _in_node(PRUEFUNG_VORABVERSION)

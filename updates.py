@@ -14,13 +14,17 @@ diese eine Verbindung nach draußen soll niemand ungefragt bekommen.
 
 Vier Ausgänge, alle vier normal:
 
-    ok      Release gefunden – "newer" sagt, ob es neuer ist als die eigene
+    ok      Release gefunden. "newer" sagt, ob es neuer ist als die eigene;
+            "ahead" sagt das Gegenteil – die eigene ist HÖHER als alles
+            Veröffentlichte, man läuft also auf einem selbstgebauten Stand.
     none    Es gibt noch gar kein Release (GitHub antwortet dann mit 404)
     off     Prüfung ist abgeschaltet
     error   Kein Netz, Sperre wegen zu vieler Anfragen, o. ä.
 
-Nur "ok" mit newer=True ist eine Meldung wert. Alles andere ist entweder
-uninteressant oder nicht die Schuld des Benutzers.
+Meldenswert sind zwei Fälle: newer=True („es gibt etwas Neueres") und
+ahead=True („du bist voraus"). Der zweite ist kein Fehler, aber „du bist auf
+dem neuesten Stand" wäre dort schlicht unwahr – und wer eine unveröffentlichte
+Fassung benutzt, sollte das wissen.
 """
 
 import re
@@ -60,7 +64,7 @@ def check(current, repo, timeout=4.0, enabled=True):
     scheitern zu lassen, wie ein fehlendes Netz.
     """
     out = {"status": "off", "current": current, "latest": None,
-           "url": None, "newer": False, "error": None}
+           "url": None, "newer": False, "ahead": False, "error": None}
     if not enabled:
         return out
     try:
@@ -84,7 +88,11 @@ def check(current, repo, timeout=4.0, enabled=True):
         out["latest"] = tag.lstrip("vV")
         out["url"] = daten.get("html_url")
         out["newer"] = is_newer(tag, current)
+        # Umgekehrt gefragt – und bewusst nicht als "nicht newer" abgeleitet:
+        # bei gleicher Version und bei unvergleichbaren Nummern sind beide
+        # falsch, und das ist richtig so.
+        out["ahead"] = is_newer(current, tag)
     except Exception as e:
         out.update(status="error", latest=None, url=None, newer=False,
-                   error=f"{type(e).__name__}: {e}")
+                   ahead=False, error=f"{type(e).__name__}: {e}")
     return out
