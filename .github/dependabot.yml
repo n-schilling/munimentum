@@ -1,0 +1,50 @@
+# Dependabot – Aktualisierungen als Pull Request, nicht als Überraschung.
+#
+# Zwei Ökosysteme sind hier im Spiel:
+#   pip             die drei requirements-Dateien (Laufzeit, Tests, Bündelbau)
+#   github-actions  die Actions in .github/workflows/
+#
+# Warum gebündelt und nicht je Paket einzeln: jede Aktualisierung löst CI und
+# vier Bündelbauten aus. Ein Sammel-PR je Woche hält das im Rahmen und ist
+# leichter zu beurteilen als ein Dutzend Einzeländerungen.
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+      include: scope
+    labels: [dependencies]
+    groups:
+      # Kleine Sprünge zusammen: die brechen selten etwas und einzeln zu
+      # prüfen lohnt nicht.
+      patch-und-minor:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      # numpy 2.5 verlangt Python 3.12. Das README sagt 3.11 zu, und die CI
+      # prüft beide Enden – ein automatisches Anheben würde diese Zusage
+      # stillschweigend brechen. Beim Aufgeben von 3.11 diese Zeile streichen.
+      - dependency-name: numpy
+        versions: [">=2.5"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+      time: "06:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    labels: [dependencies, ci]
+    groups:
+      actions:
+        patterns: ["*"]

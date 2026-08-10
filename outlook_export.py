@@ -1081,7 +1081,21 @@ def pruefe_verschwundene(graph, out, done, bestand):
             "moved": verschoben}
 
 
+def _hilfe_gewuenscht(argv):
+    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
+
+    Diese Skripte deuten das erste freie Argument als Ausgabeordner. Ohne diese
+    Abfrage legte `python3 outlook_export.py --help` brav einen Ordner namens „--help“ an
+    und begann zu exportieren – einmal passiert und dann sogar eingecheckt.
+    """
+    return any(a in ("-h", "--help", "-help") for a in argv)
+
+
 def main():
+    if _hilfe_gewuenscht(sys.argv[1:]):
+        print(__doc__.strip())
+        return
+
     global OUT_ROOT, GATE, ASSUME_DEFAULT
     argv = sys.argv[1:]
     if any(a in ("-default", "--default") for a in argv):

@@ -119,3 +119,48 @@ def test_ausnahmen_sichern_ihre_ausgabe_wirklich_ab():
         quelle = (WURZEL / name).read_text(encoding="utf-8")
         assert "try:" in quelle and "except" in quelle, \
             f"{name} steht auf der Ausnahmeliste, fängt aber nichts ab"
+
+
+# --------------------------------------------------------------------------
+# --help darf nichts anlegen
+#
+# Aus der Praxis: im Repo lag ein Ordner namens „--help“ mit einer leeren
+# exported.tsv darin – und war sogar eingecheckt. outlook_export.py deutet das
+# erste freie Argument als Ausgabeordner, also legte `--help` brav einen an und
+# begann zu exportieren.
+# --------------------------------------------------------------------------
+EIGENE_ARGUMENTE = ["outlook_export.py", "teams_export.py", "combined_search.py"]
+
+
+@pytest.mark.parametrize("name", EIGENE_ARGUMENTE)
+def test_hilfe_legt_nichts_an(name, tmp_path):
+    """Ohne Argumentparser muss die Abfrage von Hand kommen – sonst wird der
+    Schalter zum Ordnernamen."""
+    import subprocess
+    import sys
+    # stdin zu: fehlt die Abfrage, landet das Skript in seiner interaktiven
+    # Auswahl. Mit offenem stdin bliebe der Test dort hängen statt zu scheitern –
+    # genau das ist beim Gegenprüfen einmal passiert.
+    r = subprocess.run([sys.executable, str(WURZEL / name), "--help"],
+                       capture_output=True, text=True, cwd=tmp_path,
+                       stdin=subprocess.DEVNULL, timeout=20)
+    assert r.returncode == 0, r.stderr[-500:]
+    assert r.stdout.strip(), "keine Hilfe ausgegeben"
+    angelegt = sorted(p.name for p in tmp_path.iterdir())
+    assert angelegt == [], f"{name} --help legte an: {angelegt}"
+
+
+@pytest.mark.parametrize("name", EIGENE_ARGUMENTE)
+def test_hilfe_kennt_die_ueblichen_schreibweisen(name):
+    quelle = (WURZEL / name).read_text(encoding="utf-8")
+    assert "_hilfe_gewuenscht" in quelle
+    for form in ('"-h"', '"--help"'):
+        assert form in quelle, f"{name} kennt {form} nicht"
+
+
+def test_kein_ordner_aus_einem_schalter():
+    """Wäre der Ordner je wieder da, hätte ihn jemand erneut erzeugt."""
+    for name in ("--help", "-h", "--default"):
+        assert not (WURZEL / name).exists(), (
+            f"Ordner „{name}“ im Projekt – ein Schalter wurde als Ausgabeordner "
+            f"gedeutet.")

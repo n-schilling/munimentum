@@ -1336,7 +1336,21 @@ def write_calendar_json(outlook_dir, ziel, reconstruct=True):
     return daten["counts"]
 
 
+def _hilfe_gewuenscht(argv):
+    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
+
+    Diese Skripte deuten das erste freie Argument als Ausgabeordner. Ohne diese
+    Abfrage legte `python3 combined_search.py --help` brav einen Ordner namens „--help“ an
+    und begann zu exportieren – einmal passiert und dann sogar eingecheckt.
+    """
+    return any(a in ("-h", "--help", "-help") for a in argv)
+
+
 def main():
+    if _hilfe_gewuenscht(sys.argv[1:]):
+        print(__doc__.strip())
+        return
+
     args = sys.argv[1:]
     output = None
     kalender_json = None
