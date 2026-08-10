@@ -28,12 +28,6 @@ updates:
       patch-und-minor:
         patterns: ["*"]
         update-types: [minor, patch]
-    ignore:
-      # numpy 2.5 verlangt Python 3.12. Das README sagt 3.11 zu, und die CI
-      # prüft beide Enden – ein automatisches Anheben würde diese Zusage
-      # stillschweigend brechen. Beim Aufgeben von 3.11 diese Zeile streichen.
-      - dependency-name: numpy
-        versions: [">=2.5"]
 
   - package-ecosystem: github-actions
     directory: /

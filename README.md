@@ -72,7 +72,7 @@ in almost every tenant.
 
 ## From source
 
-Python 3.11 or newer (CI tests 3.11 and 3.13). On Windows type `python`
+Python 3.12 or newer (CI tests 3.12 and 3.13). On Windows type `python`
 instead of `python3`.
 
 ```bash
@@ -182,7 +182,7 @@ pytest                             # ~840 tests
 ruff check .
 ```
 
-CI runs both on Python 3.11 and 3.13 with a coverage floor. Every release
+CI runs both on Python 3.12 and 3.13 with a coverage floor. Every release
 bundle additionally goes through `packaging/smoke_test.py`, which starts the
 built app, indexes, searches, builds the calendar and starts the MCP server —
 a bundle with a missing dependency never reaches a release.
