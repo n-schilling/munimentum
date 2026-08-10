@@ -2530,6 +2530,12 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .tag.herkunft{margin-left:8px;font-weight:400}
 /* Analytics: Kennzahlen als ruhiges Raster, nicht als Armaturenbrett. */
 .kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+/* Suchfeld und Knopf gehören zusammen und füllen die Zeile – das Bild, das
+   jeder aus anderen Programmen kennt. Alles Weitere liegt darunter. */
+.suchzeile{display:flex;gap:8px}
+.suchzeile input{flex:1;min-width:200px;font-size:15px;padding:9px 12px}
+.suchzeile button{flex:0 0 auto;padding:9px 20px}
+.feld{display:flex;align-items:center;gap:6px;color:var(--muted)}
 .kpi{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .kpi.klickbar{cursor:pointer}
 .kpi.klickbar:hover,.kpi.klickbar:focus{border-color:var(--accent);outline:none}
@@ -2679,40 +2685,51 @@ main{padding-bottom:60px}
     <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
     <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
     <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
+    <span class="chip" data-sicht="geloescht" id="chip-geloescht" onclick="sicht('geloescht')"
+          data-i18n="view.gone" data-i18n-title="search.gone.note">Gelöschtes</span>
   </div>
 
   <div id="sicht-treffer">
   <div class="card">
-    <h2 data-i18n="nav.search">Suche</h2>
-    <p class="sub" id="search-sub"></p>
-    <div class="row">
-      <input type="text" id="q" data-i18n-ph="search.query.ph" placeholder="Suchbegriff oder Frage" style="flex:1;min-width:240px" onkeydown="if(event.key==='Enter')doSearch(0)">
+    <div class="suchzeile">
+      <input type="search" id="q" data-i18n-ph="search.query.ph"
+             placeholder="Suchbegriff oder Frage" onkeydown="if(event.key==='Enter')doSearch(0)">
       <button class="act" onclick="doSearch(0)" data-i18n="search.go">Suchen</button>
-      <label class="chk hide" id="ai-wrap" style="margin-left:4px">
-        <input type="checkbox" id="ai-on" onchange="merkeKI()">
-        <span data-i18n="search.ai">Antwort formulieren</span></label>
     </div>
-    <div class="row" style="margin-top:10px">
-      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person" style="width:180px">
-      <select id="f-source">
+    <div class="row" style="margin-top:10px;gap:10px">
+      <button class="mini" id="filter-auf" aria-expanded="false"
+              onclick="filterUmschalten()" data-i18n="search.filter">Filter</button>
+      <button class="mini hide" id="filter-weg" onclick="filterLeeren()"
+              data-i18n="search.filter.clear">Zurücksetzen</button>
+    </div>
+    <div class="row hide" id="filter" style="margin-top:10px">
+      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
+             style="width:180px" onchange="doSearch(0)">
+      <select id="f-source" onchange="doSearch(0)">
         <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
         <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
         <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
         <option value="datei" data-i18n="search.source.datei">Dateien</option>
       </select>
-      <input type="date" id="f-from"><input type="date" id="f-to">
+      <label class="small feld"><span data-i18n="search.from">von</span>
+        <input type="date" id="f-from" onchange="doSearch(0)"></label>
+      <label class="small feld"><span data-i18n="search.to">bis</span>
+        <input type="date" id="f-to" onchange="doSearch(0)"></label>
       <select id="f-folder" onchange="doSearch(0)" style="max-width:260px">
         <option value="" data-i18n="search.folder.all">Alle Ordner</option>
       </select>
-      <label class="chk" id="gone-wrap"><input type="checkbox" id="f-gone" onchange="doSearch(0)">
-        <span data-i18n="search.gone.only">Nur Gelöschtes</span>
-        <span class="info" tabindex="0" data-i18n-title="search.gone.note"
-              role="img" aria-label="Info">i</span></label>
     </div>
+    <!-- Nicht mehr sichtbar: „Nur Gelöschtes“ ist jetzt eine Sicht in der
+         Leiste oben. Das Feld bleibt als Zustand, den doSearch abfragt. -->
+    <input type="checkbox" id="f-gone" class="hide">
   </div>
   <div class="answer hide" id="ai-box"></div>
-  <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
+  <div class="card">
+    <label class="chk hide" id="ai-wrap" style="margin-bottom:10px">
+      <input type="checkbox" id="ai-on" onchange="merkeKI()">
+      <span data-i18n="search.ai">Antwort formulieren</span></label>
+    <div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
   </div>
 
@@ -3109,16 +3126,48 @@ function tab(name){
   if(name === 'analytics') ladeAnalytics();
 }
 
+/* „Gelöschtes“ war ein Häkchen zwischen fünf Filtern und ist in Wahrheit eine
+   eigene Sicht auf denselben Bestand – wie Kalender und Adressbuch. Es teilt
+   sich deren Trefferliste, setzt aber den Filter. */
 function sicht(name){
   offeneSicht = name;
+  var geloescht = name === 'geloescht';
+  var zeigt = geloescht ? 'treffer' : name;
   SICHTEN.forEach(function(v){
-    el('sicht-' + v).classList.toggle('hide', v !== name);
+    el('sicht-' + v).classList.toggle('hide', v !== zeigt);
   });
   document.querySelectorAll('#sichten .chip').forEach(function(c){
     c.classList.toggle('on', c.dataset.sicht === name);
   });
+  if(zeigt === 'treffer' && el('f-gone').checked !== geloescht){
+    el('f-gone').checked = geloescht;
+    doSearch(0);
+  }
   // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
+}
+
+/* Wer nichts filtert – der Normalfall – soll ein Suchfeld und einen Knopf
+   sehen. Die Zahl am Schalter sagt, dass darunter etwas eingestellt ist;
+   ohne sie wäre ein zugeklappter Filter eine Falle. */
+function filterFelder(){
+  return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
+          el('f-from').value, el('f-to').value, el('f-folder').value].filter(Boolean);
+}
+function filterUmschalten(){
+  var zu = el('filter').classList.toggle('hide');      // true = jetzt versteckt
+  el('filter-auf').setAttribute('aria-expanded', zu ? 'false' : 'true');
+}
+function filterLeeren(){
+  el('f-person').value = ''; el('f-source').value = 'all';
+  el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
+  zeigeFilterstand();
+  doSearch(0);
+}
+function zeigeFilterstand(){
+  var n = filterFelder().length;
+  el('filter-auf').textContent = n ? t('search.filter.n', {n: n}) : t('search.filter');
+  el('filter-weg').classList.toggle('hide', !n);
 }
 
 function zeigeEinstellung(anker){
@@ -3391,6 +3440,7 @@ function doSearch(off){
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
     k: proSeite, offset: offset});
+  zeigeFilterstand();
   el('results').textContent = t('search.running');
   api('/api/search?' + p.toString()).then(function(r){
     renderHits(r);

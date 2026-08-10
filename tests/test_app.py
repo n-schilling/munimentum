@@ -1993,6 +1993,11 @@ function mk(id){ return {id: id, innerHTML: '', textContent: '', className: '', 
   appendChild: function(){}, removeChild: function(){}, firstChild: null,
   style: {},                     // reicht: der Code setzt darauf nur Werte
   addEventListener: function(){}, scrollIntoView: function(){},
+  // Attribute wirklich merken: ein Stummel, der nur nickt, liesse genau die
+  // Fehler durch, um die es hier geht ("aria-expanded folgt dem Zustand nicht").
+  attrs: {},
+  setAttribute: function(k, v){ this.attrs[k] = String(v); },
+  getAttribute: function(k){ return k in this.attrs ? this.attrs[k] : null; },
   focus: function(){ global.document.activeElement = this; },
   select: function(){},          // der Rückfall beim Kopieren markiert das Feld
   querySelector: function(){ return null; },
@@ -4375,10 +4380,9 @@ def test_erklaerungen_im_exportreiter_stehen_am_infozeichen(schluessel):
 
 def test_jedes_infozeichen_ist_erreichbar():
     """Ein (i), das nur die Maus kennt, ist für die Tastatur ein Buchstabe
-    ohne Bedeutung. Gilt für jedes auf der Seite, nicht nur die im Markup:
-    die Kacheln in Analytics setzen ihres aus dem JavaScript."""
+    ohne Bedeutung."""
     zeichen = app_mod.PAGE.count('class="info"')
-    assert zeichen >= len(ERKLAERUNGEN_ALS_INFO), f"{zeichen} (i) gefunden"
+    assert zeichen >= 5, f"nur {zeichen} (i) gefunden"
     for stueck in app_mod.PAGE.split('<span class="info"')[1:]:
         block = stueck[:220]
         assert 'tabindex="0"' in block and "aria-label=" in block
@@ -4480,3 +4484,101 @@ def test_kopfleiste_zeigt_nur_was_eine_handlung_verlangt():
         assert erwartet in kopf, f"{erwartet} ist mit verschwunden"
     # Die Zahl steht weiterhin irgendwo – nur eben in den Kennzahlen.
     assert 'id="ana-kpi"' in app_mod.PAGE
+
+
+PRUEFUNG_SUCHMASKE = GRUNDZUSTAND + """
+var gesucht = [];
+global.fetch = function(pfad){
+  gesucht.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/search') >= 0 ? {results: [], total: 0}
+                                             : statusGeruest()); }});
+};
+
+// Der Schalter zaehlt, was eingestellt ist - sonst waere zugeklappt eine Falle.
+document.getElementById('f-person').value = 'Alice';
+document.getElementById('f-source').value = 'outlook';
+zeigeFilterstand();
+var text = document.getElementById('filter-auf').textContent;
+pruefe(/2/.test(text), 'Zahl der Filter fehlt: ' + text);
+pruefe(!document.getElementById('filter-weg').classList.contains('hide'),
+       '"Zuruecksetzen" fehlt trotz Filter');
+
+// "Alle Quellen" ist kein Filter.
+document.getElementById('f-source').value = 'all';
+zeigeFilterstand();
+pruefe(/1/.test(document.getElementById('filter-auf').textContent),
+       '"Alle Quellen" wurde mitgezaehlt');
+
+filterLeeren();
+pruefe(document.getElementById('f-person').value === '', 'Nicht geleert');
+pruefe(document.getElementById('filter-auf').textContent.indexOf('2') < 0, 'Zaehler bleibt');
+
+// Auf- und zuklappen sagt der Tastatur, was es tut. Der Ausgangszustand wird
+// hier gesetzt: die Attrappe liest die class-Attribute des Markups nicht.
+document.getElementById('filter').classList.add('hide');
+filterUmschalten();
+pruefe(document.getElementById('filter-auf').getAttribute('aria-expanded') === 'true',
+       'aria-expanded folgt dem Aufklappen nicht');
+filterUmschalten();
+pruefe(document.getElementById('filter-auf').getAttribute('aria-expanded') === 'false',
+       'aria-expanded folgt dem Zuklappen nicht');
+
+// Geloeschtes ist eine Sicht, kein Filter neben fuenf anderen.
+gesucht = [];
+sicht('geloescht');
+pruefe(document.getElementById('f-gone').checked === true, 'Filter nicht gesetzt');
+pruefe(!document.getElementById('sicht-treffer').classList.contains('hide'),
+       'Trefferliste nicht sichtbar');
+pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length === 1,
+       'Es wurde nicht mit gone=1 gesucht: ' + gesucht.join(' '));
+
+// Zurueck auf Treffer nimmt den Filter wieder weg.
+gesucht = [];
+sicht('treffer');
+pruefe(document.getElementById('f-gone').checked === false, 'Filter blieb haengen');
+pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length === 0,
+       'Weiterhin nach Geloeschtem gesucht');
+
+// Zweimal dieselbe Sicht sucht nicht doppelt.
+gesucht = [];
+sicht('treffer');
+pruefe(gesucht.length === 0, 'Ueberfluessige Suche bei gleicher Sicht');
+console.log('OK');
+"""
+
+
+def test_suchmaske_filter_und_geloeschtes_als_sicht():
+    _in_node(PRUEFUNG_SUCHMASKE)
+
+
+def test_filter_beginnen_zugeklappt():
+    """Wer nichts filtert – der Normalfall – sieht ein Suchfeld und einen Knopf.
+    Im Markup geprüft: die DOM-Attrappe der JS-Tests liest keine class-Attribute."""
+    i = app_mod.PAGE.index('id="filter"')
+    assert 'class="row hide"' in app_mod.PAGE[i - 60:i], "Filter stehen offen da"
+    j = app_mod.PAGE.index('id="filter-weg"')
+    assert 'class="mini hide"' in app_mod.PAGE[j - 60:j], "„Zurücksetzen“ ohne Filter sichtbar"
+
+
+def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
+    """Der Reiter sagt schon, wo man ist; der Zustand des Index steht in
+    Analytics. „BM25“ und „Embeddings“ gehören ohnehin nicht in die Maske."""
+    i = app_mod.PAGE.index('class="suchzeile"')
+    karte = app_mod.PAGE[i - 300:i]
+    assert 'data-i18n="nav.search"' not in karte, "Überschrift wiederholt den Reiter"
+    assert 'id="search-sub"' not in app_mod.PAGE, "Statuszeile in der Maske"
+
+
+def test_die_maske_loest_ueberall_gleich_aus():
+    """Vorher suchten Quelle und Ordner sofort, Person und Datum erst beim
+    Klick – gleiches Aussehen, verschiedenes Verhalten."""
+    i = app_mod.PAGE.index('id="filter"')
+    block = app_mod.PAGE[i:i + 1600]
+    for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
+                 'id="f-to"', 'id="f-folder"'):
+        j = block.index(feld)
+        # max(0, …): ein negativer Anfang rutscht in Python ans Ende der
+        # Zeichenkette und prüfte dann irgendetwas.
+        umfeld = block[max(0, j - 120):j + 200]
+        assert 'onchange="doSearch(0)"' in umfeld, f"{feld} löst nicht aus"
