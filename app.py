@@ -221,6 +221,9 @@ DEFAULT_CONFIG = {
     "teams_dir": "teams_export",
     "outlook_dir": "outlook_export",
     "onedrive_dir": "onedrive_export",
+    # Aus, bis jemand es einschaltet: ein Laufwerk kann zweistellige
+    # Gigabyte haben, und niemand soll die beim ersten Klick ziehen.
+    "onedrive_enabled": False,
     # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
     "onedrive_rules": "",
     "onedrive_max_mb": 0,
@@ -2568,6 +2571,13 @@ main{padding-bottom:60px}
         <strong class="small" data-i18n="export.teams">Teams</strong>
         <div id="cat-teams"></div>
       </div>
+      <div>
+        <strong class="small" data-i18n="export.onedrive">OneDrive</strong>
+        <label class="chk"><input type="checkbox" id="c-onedrive_enabled" onchange="saveCats()">
+          <span data-i18n="export.cat.files">OneDrive-Dateien</span></label>
+        <p class="small muted" style="max-width:260px;margin:4px 0 0"
+           data-i18n="export.onedrive.note">Sichert die Dateien. Durchsuchbar sind Name und Ordner – nicht der Inhalt.</p>
+      </div>
     </div>
     <p class="small muted" id="teams-note" style="margin-top:10px"></p>
     <div class="row" style="margin-top:14px">
@@ -2629,6 +2639,7 @@ main{padding-bottom:60px}
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
         <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
         <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
+        <option value="datei" data-i18n="search.source.datei">Dateien</option>
       </select>
       <input type="date" id="f-from"><input type="date" id="f-to">
       <select id="f-folder" onchange="doSearch(0)" style="max-width:260px">
@@ -2739,6 +2750,24 @@ main{padding-bottom:60px}
     <div class="row" style="margin-top:8px">
       <button class="ghost" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
       <button class="ghost" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="settings.onedrive.title">OneDrive</h2>
+    <p class="sub" data-i18n="settings.onedrive.sub">Spiegelt dein Laufwerk hierher. Einschalten im Reiter „Exportieren“.</p>
+    <div class="banner" data-i18n-html="settings.onedrive.note">
+      Gesichert wird alles. <strong>Durchsuchbar sind Name und Ordner</strong> – der Inhalt der Dokumente steht noch nicht im Index.
+    </div>
+    <p class="small muted" data-i18n="settings.onedrive.mirror">Gelöschtes bleibt liegen; frühere Fassungen einer geänderten Datei nicht.</p>
+    <h3 style="margin:16px 0 4px;font-size:15px" data-i18n="settings.onedrive.rules.title">Welche Ordner gespiegelt werden</h3>
+    <textarea id="c-onedrive_rules" style="min-height:90px"
+      placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
+    <p class="small muted" data-i18n-html="settings.onedrive.rules.hint">Eine Regel je Zeile – wie beim Postfach, die <strong>letzte</strong> zutreffende gewinnt.</p>
+    <div class="row" style="margin-top:10px">
+      <label class="small"><span data-i18n="settings.onedrive.maxmb">Dateien überspringen ab</span>
+        <input type="number" id="c-onedrive_max_mb" min="0" step="10" style="width:90px"> MB</label>
+      <span class="small muted" data-i18n="settings.onedrive.maxmb.hint">0 = ohne Grenze.</span>
     </div>
   </div>
 
@@ -3076,6 +3105,7 @@ function renderStatus(s){
   if(first){
     fill('cat-outlook', ['mail','calendar','contacts'], s.config.outlook_categories, 'o');
     fill('cat-teams', ['1on1','group','meeting','channels'], s.config.teams_categories, 't');
+    el('c-onedrive_enabled').checked = !!s.config.onedrive_enabled;
     fuelleSprachen();
     el('s-enabled').checked = s.config.schedule.enabled;
     el('s-interval').value = s.config.schedule.interval_minutes;
@@ -3167,8 +3197,8 @@ function checked(pre){
     (pre === 'o' ? 'outlook' : 'teams') + ' input:checked')).map(function(i){ return i.value; });
 }
 function saveCats(){
-  post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t')})
-    .then(refresh);
+  post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
+                       onedrive_enabled: el('c-onedrive_enabled').checked}).then(refresh);
 }
 
 /* ---------- Läufe ---------- */
@@ -3181,10 +3211,11 @@ function run(what, label){
 }
 function runExport(){
   var o = checked('o').length > 0, tm = checked('t').length > 0;
-  if(!o && !tm){ alert(t('export.nothing')); return; }
+  var od = el('c-onedrive_enabled').checked;
+  if(!o && !tm && !od){ alert(t('export.nothing')); return; }
   // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
   // gelöschter Termine stammen ausschließlich aus dem Postfach.
-  run({outlook:o, teams:tm, index:true, calendar:o}, t('job.export'));
+  run({outlook:o, teams:tm, onedrive:od, index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Fortschritt ----------
@@ -3970,9 +4001,10 @@ function pruefeUpdate(){
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
-var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results'];
+var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
+                'onedrive_max_mb'];
 var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir',
-                'folder_rules'];
+                'folder_rules','onedrive_rules'];
 var cfgGefuellt = false;
 
 function fuelleEinstellungen(cfg){

@@ -134,6 +134,20 @@ def test_verschieben_statt_neu_laden(tmp_path):
     assert (tmp_path / "Dateien/Neu/a.pdf").exists() and not alt.exists()
 
 
+def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
+    """Beides zugleich: erst mitziehen, dann laden – sonst landete der neue
+    Inhalt neben einer verwaisten alten Datei."""
+    alt = tmp_path / "Dateien/Alt/a.pdf"
+    alt.parent.mkdir(parents=True)
+    alt.write_bytes(b"x" * 10)
+    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand.merke("1", "Dateien/Alt/a.pdf", "c1", 10)
+    plan = od.plane([_datei("1", "b.pdf", "/drive/root:/Neu", groesse=99, ctag="c2")],
+                    bestand, tmp_path, [], grenze=0)
+    assert plan["verschoben"] == [("Dateien/Alt/a.pdf", "Dateien/Neu/b.pdf")]
+    assert [a["rel"] for a in plan["laden"]] == ["Dateien/Neu/b.pdf"]
+
+
 def test_groessengrenze(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     gross = [_datei("1", "gross.pdf", groesse=5 * 1024 * 1024)]

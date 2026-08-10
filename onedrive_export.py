@@ -469,6 +469,12 @@ def plane(eintraege, bestand, wurzel, regeln, grenze=None):
             continue
         alt = bestand.eintraege.get(kennung)
         if alt and alt["rel"] != rel:
+            # Umbenennen und Verschieben behalten die ID; der cTag ändert sich
+            # nur beim INHALT. Deshalb reicht es, die Datei lokal mitzuziehen –
+            # sie noch einmal zu laden wäre bei einem umbenannten 300-MB-Video
+            # der teuerste denkbare Weg, nichts zu gewinnen. Hat sich der Inhalt
+            # zugleich geändert, steht sie unten trotzdem in `laden`, und der
+            # Download landet dann schon auf dem neuen Pfad.
             verschoben.append((alt["rel"], rel))
         if bestand.aktuell(kennung, e.get("cTag") or "", groesse, wurzel):
             if alt and alt["rel"] != rel:

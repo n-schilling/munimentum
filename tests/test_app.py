@@ -3966,3 +3966,112 @@ setTimeout(function(){
 
 def test_exportliste_zeigt_drei_gruppen_und_ueberlebt_den_statusabruf():
     _in_node(PRUEFUNG_EXPORTLISTE)
+
+
+# --------------------------------------------------------------------------
+# OneDrive in der Oberfläche
+# --------------------------------------------------------------------------
+def test_onedrive_ist_aus_bis_jemand_es_einschaltet(sandbox):
+    """Ein Laufwerk kann zweistellige Gigabyte haben – das zieht niemand
+    versehentlich mit dem ersten Klick."""
+    assert app_mod.load_config()["onedrive_enabled"] is False
+
+
+def test_onedrive_schritt_bekommt_regeln_und_grenze(sandbox):
+    cfg = app_mod.load_config()
+    cfg["onedrive_rules"] = "- Dateien/Fotos/**"
+    cfg["onedrive_max_mb"] = 50
+    schritt = next(s for s in app_mod.build_steps(cfg, onedrive=True)
+                   if s["key"] == "onedrive")
+    assert "onedrive_export" in " ".join(str(a) for a in schritt["argv"])
+    assert schritt["env"]["ONEDRIVE_RULES"] == "- Dateien/Fotos/**"
+    assert schritt["env"]["ONEDRIVE_MAX_MB"] == "50"
+
+
+def test_onedrive_regeln_werden_beim_speichern_normalisiert(server):
+    a, port = server
+    call(port, "POST", "/api/config",
+         {"onedrive_rules": "Dateien/A\n\n# Kommentar\n- Dateien/B"})
+    assert a.cfg["onedrive_rules"] == "+ Dateien/A\n- Dateien/B"
+
+
+def test_onedrive_leerer_schalter_setzt_die_variable_trotzdem(sandbox):
+    """Leer heißt „alles mitnehmen". Nicht gesetzt hieße „nimm, was in
+    app_config.json steht" – und das Skript liefe anders als die App anzeigt."""
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), onedrive=True)
+                   if s["key"] == "onedrive")
+    assert schritt["env"]["ONEDRIVE_RULES"] == ""
+    assert schritt["env"]["ONEDRIVE_MAX_MB"] == "0"
+
+
+def test_onedrive_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
+    a = app_mod.App()
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
+    ok, why = a.launch(onedrive=True, label="job.export")
+    assert not ok and schluessel(why) == "srv.notoken"
+
+
+def test_index_sieht_den_onedrive_ordner(sandbox):
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), index=True)
+                   if s["key"] == "index")
+    argv = [str(x) for x in schritt["argv"]]
+    assert "onedrive_export" in argv, "der Index findet die Dateien sonst nicht"
+
+
+PRUEFUNG_ONEDRIVE = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+var status = statusGeruest();
+status.config.outlook_categories = ['mail'];
+status.config.teams_categories = [];
+status.config.onedrive_enabled = true;
+// Die Auswahl wird NUR beim ersten Aufbau gesetzt - danach wuerde der Status
+// alle 2,5 Sekunden ein gerade gesetztes Haekchen wieder wegnehmen.
+S = null;
+renderStatus(status);
+
+pruefe(document.getElementById('c-onedrive_enabled').checked === true,
+       'Haekchen nicht aus dem Status gesetzt');
+
+// Genau das darf der naechste Statusabruf nicht rueckgaengig machen.
+document.getElementById('c-onedrive_enabled').checked = false;
+renderStatus(status);
+pruefe(document.getElementById('c-onedrive_enabled').checked === false,
+       'Statusabruf hat das Haekchen ueberschrieben');
+document.getElementById('c-onedrive_enabled').checked = true;
+
+// Der Lauf muss OneDrive mitschicken.
+runExport();
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+pruefe(lauf, 'Kein Lauf gestartet');
+pruefe(JSON.parse(lauf.body).onedrive === true, 'OneDrive fehlt im Lauf: ' + lauf.body);
+
+// Nur OneDrive, ohne Outlook und Teams: muss trotzdem starten.
+gesendet = [];
+document.querySelectorAll = function(){ return []; };   // keine Outlook-Haken mehr
+var gemeckert = false;
+global.alert = function(){ gemeckert = true; };
+runExport();
+pruefe(!gemeckert, 'Nur OneDrive wurde als "nichts gewaehlt" abgelehnt');
+var nur = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+pruefe(JSON.parse(nur.body).onedrive === true && JSON.parse(nur.body).outlook === false,
+       'Falscher Lauf: ' + nur.body);
+
+// Gar nichts gewaehlt: kein Lauf.
+gesendet = [];
+document.getElementById('c-onedrive_enabled').checked = false;
+gemeckert = false;
+runExport();
+pruefe(gemeckert, 'Ohne Auswahl wurde nicht gewarnt');
+pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; }).length === 0,
+       'Ohne Auswahl trotzdem gestartet');
+console.log('OK');
+"""
+
+
+def test_onedrive_haekchen_startet_den_lauf():
+    _in_node(PRUEFUNG_ONEDRIVE)
