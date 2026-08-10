@@ -4170,7 +4170,8 @@ function planZeile(e, zahl, mitArchiv){
   return '<li><span class="pfad">' + esc(e.pfad) + '</span>' +
     '<span class="zahl">' + (e[zahl] || 0).toLocaleString(LOC) + '</span>' +
     (mitArchiv && e.archiv
-      ? '<span class="regel">' + esc(t('plan.inarchive', {n: e.archiv.toLocaleString(LOC)})) + '</span>'
+      ? '<span class="regel">' + esc(t(planQuelle === 'onedrive' ? 'plan.here' : 'plan.inarchive',
+                                       {n: e.archiv.toLocaleString(LOC)})) + '</span>'
       : '') +
     (e.regel ? '<span class="regel">' + esc(e.regel) + '</span>' : '') + '</li>';
 }
@@ -4192,10 +4193,15 @@ function planListen(){
             return planZeile(e, zahl, mitArchiv); }).join('') + '</ul>'
         : '<p class="small muted">' + esc(t('plan.nothing')) + '</p>') + '</details>';
   }
+  // Beim Spiegel sind es Dateien, nicht Mails – und was hier liegt, ist keine
+  // Archivierung, sondern der Rest eines gelöschten Ordners. Ausgeschrieben
+  // statt zusammengesetzt, damit der Abgleich mit den Sprachdateien die
+  // Schlüssel findet.
+  var dat = planQuelle === 'onedrive';
   el('plan-listen').innerHTML =
-    gruppe('plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
-    gruppe('plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
-    gruppe('plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
+    gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
+    gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
+    gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
 }
 
 function planAbgleichen(quelle){

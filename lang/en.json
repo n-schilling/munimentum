@@ -438,9 +438,13 @@
   "plan.shown": "– {n} match the filter",
   "plan.nothing": "No folder in this group.",
   "plan.an": "Exported: {n} folders, {mails} mails",
+  "plan.an.files": "Mirrored: {n} folders, {mails} files",
   "plan.aus": "Left out: {n} folders, {mails} mails",
+  "plan.aus.files": "Left out: {n} folders, {mails} files",
   "plan.weg": "Only in the archive: {n} folders, {mails} mails",
+  "plan.weg.files": "Only here: {n} folders, {mails} files",
   "plan.inarchive": "{n} in the archive",
+  "plan.here": "{n} already here",
   "job.folders": "Folder structure",
   "job.step.folders": "Syncing folder structure"
 }

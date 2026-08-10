@@ -438,9 +438,13 @@
   "plan.shown": "– {n} passen zum Filter",
   "plan.nothing": "Kein Ordner in dieser Gruppe.",
   "plan.an": "Wird exportiert: {n} Ordner, {mails} Mails",
+  "plan.an.files": "Wird gespiegelt: {n} Ordner, {mails} Dateien",
   "plan.aus": "Wird ausgelassen: {n} Ordner, {mails} Mails",
+  "plan.aus.files": "Wird ausgelassen: {n} Ordner, {mails} Dateien",
   "plan.weg": "Nur noch im Archiv: {n} Ordner, {mails} Mails",
+  "plan.weg.files": "Nur noch hier: {n} Ordner, {mails} Dateien",
   "plan.inarchive": "{n} im Archiv",
+  "plan.here": "{n} liegen hier",
   "job.folders": "Ordnerstruktur",
   "job.step.folders": "Ordnerstruktur abgleichen"
 }

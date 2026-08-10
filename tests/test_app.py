@@ -4154,6 +4154,12 @@ setTimeout(function(){
   // Der Knopf im Fenster muss den OneDrive-Abgleich starten, nicht den anderen.
   pruefe(modal.innerHTML.indexOf('planAbgleichen(&quot;onedrive&quot;)') >= 0,
          'Abgleich im Fenster zeigt auf die falsche Quelle');
+
+  // Beim Spiegel sind es Dateien. "Mails" waere schlicht falsch.
+  var h = document.getElementById('plan-listen').innerHTML;
+  pruefe(h.indexOf('Mails') < 0 && h.indexOf('mails') < 0,
+         'Gruppenkopf spricht von Mails: ' + h.slice(0, 200));
+  pruefe(h.indexOf('Dateien') >= 0, 'Gruppenkopf nennt die Einheit nicht');
   console.log('OK');
 }, 20);
 """

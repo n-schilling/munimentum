@@ -438,9 +438,13 @@
   "plan.shown": "– {n} correspondent au filtre",
   "plan.nothing": "Aucun dossier dans ce groupe.",
   "plan.an": "Exportés : {n} dossiers, {mails} courriels",
+  "plan.an.files": "Copiés : {n} dossiers, {mails} fichiers",
   "plan.aus": "Laissés de côté : {n} dossiers, {mails} courriels",
+  "plan.aus.files": "Laissés de côté : {n} dossiers, {mails} fichiers",
   "plan.weg": "Seulement dans l’archive : {n} dossiers, {mails} courriels",
+  "plan.weg.files": "Seulement ici : {n} dossiers, {mails} fichiers",
   "plan.inarchive": "{n} dans l’archive",
+  "plan.here": "{n} déjà ici",
   "job.folders": "Arborescence",
   "job.step.folders": "Synchronisation de l’arborescence"
 }
