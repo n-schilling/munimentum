@@ -4394,3 +4394,47 @@ def test_infozeichen_ist_erreichbar_und_erklaert_sich():
     assert 'tabindex="0"' in block, "mit der Tastatur nicht erreichbar"
     assert 'aria-label=' in block, "ohne Namen für den Screenreader"
     assert ".info{" in app_mod.PAGE and "cursor:help" in app_mod.PAGE
+
+
+PRUEFUNG_ANALYTICS_KACHELN = GRUNDZUSTAND + """
+var a = {exists: true, nachrichten: 239093, gespraeche: 16550, mit_anhang: 4979,
+  personen: 3863, verschwunden: 18, von: 1551398400, bis: 1788134400,
+  quellen: [{src:'teams',nachrichten:196693},{src:'outlook',nachrichten:36852},
+            {src:'datei',nachrichten:629}],
+  groesse: {teams: 1000, outlook: 2000, onedrive: 3000, index: 500},
+  vollstaendigkeit: null, vollstaendigkeit_onedrive: null};
+zeigeAnalytics(a);
+var h = document.getElementById('ana-kpi').innerHTML;
+
+// Neue Kachel, aus dem Index gerechnet.
+pruefe(h.indexOf('OneDrive-Dateien') >= 0, 'Kachel fehlt');
+pruefe(h.indexOf('>629<') >= 0, 'Dateizahl fehlt: ' + h.slice(0, 200));
+
+// Der Knopf ist weg; die Kachel selbst fuehrt zur Suche.
+pruefe(h.indexOf('kpi-fuss') < 0, '"Show these" steht noch da');
+pruefe((h.match(/klickbar/g) || []).length === 1, 'Genau eine Kachel soll klickbar sein');
+pruefe(h.indexOf('role="button"') >= 0 && h.indexOf('onkeydown=') >= 0,
+       'Klickbare Kachel ist nicht mit der Tastatur bedienbar');
+
+// Erklaerungen am (i), Zahlen sichtbar.
+pruefe(h.indexOf('Related mails') < 0, 'Erklaerung steht noch als Text da');
+pruefe((h.match(/class="info"/g) || []).length === 4, 'Falsche Zahl an Infozeichen');
+// Ohne Tausendertrennzeichen geprueft: das haengt an der Sprache.
+pruefe(h.indexOf('Teams 196') >= 0, 'Aufteilung nach Quellen ist verschwunden');
+pruefe(h.indexOf('kpi-hint') >= 0, 'Sichtbare Zahlenzeile ganz weg');
+
+// Ohne Verschwundenes fuehrt die Kachel nirgendwohin – eine Sackgasse waere schlechter.
+a.verschwunden = 0;
+// Und ohne Spiegel gibt es die Dateikachel gar nicht: "0" waere fuer alle,
+// die OneDrive nicht nutzen, eine Zeile, die nichts sagt.
+a.quellen = [{src:'teams',nachrichten:1}];
+zeigeAnalytics(a);
+var h2 = document.getElementById('ana-kpi').innerHTML;
+pruefe((h2.match(/klickbar/g) || []).length === 0, 'Kachel ohne Treffer trotzdem klickbar');
+pruefe(h2.indexOf('OneDrive-Dateien') < 0, 'Leere Dateikachel wird gezeigt');
+console.log('OK');
+"""
+
+
+def test_analytics_kacheln_zeigen_zahlen_und_erklaeren_am_infozeichen():
+    _in_node(PRUEFUNG_ANALYTICS_KACHELN)

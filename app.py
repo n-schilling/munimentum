@@ -2527,6 +2527,9 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 /* Analytics: Kennzahlen als ruhiges Raster, nicht als Armaturenbrett. */
 .kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 .kpi{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.kpi.klickbar{cursor:pointer}
+.kpi.klickbar:hover,.kpi.klickbar:focus{border-color:var(--accent);outline:none}
+.kpi-titel{display:flex;align-items:center;gap:6px}
 .kpi-wert{font-size:26px;font-weight:650;letter-spacing:-.02em;
   font-variant-numeric:tabular-nums}
 .kpi-titel{font-size:13.5px;margin-top:2px}
@@ -3717,9 +3720,19 @@ function zahl(n){
   // null heisst „weiss ich nicht“ – 0 hiesse „keine“.
   return (n === null || n === undefined) ? '–' : Number(n).toLocaleString(LOC);
 }
-function kachelHtml(wert, titel, hinweis){
-  return '<div class="kpi"><div class="kpi-wert">' + esc(wert) + '</div>' +
-    '<div class="kpi-titel">' + esc(titel) + '</div>' +
+/* Zwei verschiedene Dinge standen bisher gleich aussehend unter jeder Kachel:
+   ZAHLEN (die Aufteilung nach Quellen, wie groß der Index ist) und
+   ERKLÄRUNGEN (was ein Gespräch ist, warum Gelöschtes noch da liegt). Nur die
+   Zahlen gehören dauerhaft hin; die Erklärung liest man einmal. Deshalb bleibt
+   `hinweis` sichtbar und `tip` wandert ans Infozeichen. */
+function kachelHtml(wert, titel, hinweis, tip, klick){
+  var info = tip ? ' <span class="info" tabindex="0" title="' + esc(tip) +
+                   '" role="img" aria-label="Info">i</span>' : '';
+  return '<div class="kpi' + (klick ? ' klickbar" role="button" tabindex="0"' +
+             ' onclick="' + klick + '" onkeydown="if(event.key===\'Enter\')' + klick + '"'
+           : '"') + '>' +
+    '<div class="kpi-wert">' + esc(wert) + '</div>' +
+    '<div class="kpi-titel">' + esc(titel) + info + '</div>' +
     (hinweis ? '<div class="kpi-hint">' + esc(hinweis) + '</div>' : '') + '</div>';
 }
 
@@ -3734,19 +3747,25 @@ function zeigeAnalytics(a){
   var zeitraum = (a.von && a.bis)
     ? fmtTag(a.von) + ' – ' + fmtTag(a.bis) : '–';
   var gesamt = (a.groesse || {});
-  var h = kachelHtml(zahl(a.nachrichten), t('ana.messages'), quellen) +
-    kachelHtml(zahl(a.gespraeche), t('ana.threads'), t('ana.threads.hint')) +
-    kachelHtml(zahl(a.mit_anhang), t('ana.attachments'), t('ana.attachments.hint')) +
+  var dateien = (a.quellen || []).filter(function(q){ return q.src === 'datei'; })[0];
+  // Anklickbar nur, wenn es auch etwas zu zeigen gibt – eine Kachel, die bei
+  // null Treffern in eine leere Suche führt, ist eine Sackgasse.
+  var klick = a.verschwunden ? 'zeigeVerschwundene()' : '';
+  el('ana-kpi').innerHTML =
+    kachelHtml(zahl(a.nachrichten), t('ana.messages'), quellen) +
+    kachelHtml(zahl(a.gespraeche), t('ana.threads'), '', t('ana.threads.hint')) +
+    kachelHtml(zahl(a.mit_anhang), t('ana.attachments'), '', t('ana.attachments.hint')) +
+    // Ohne Spiegel keine Kachel. „OneDrive-Dateien 0" wäre für alle, die
+    // OneDrive nicht nutzen, eine Zeile, die nichts sagt.
+    (dateien ? kachelHtml(zahl(dateien.nachrichten), t('ana.files'), '',
+                          t('ana.files.hint')) : '') +
     kachelHtml(zahl(a.personen), t('ana.people')) +
-    kachelHtml(zahl(a.verschwunden), t('ana.gone'), t('ana.gone.hint')) +
+    kachelHtml(zahl(a.verschwunden), t('ana.gone'), '',
+               t(klick ? 'ana.gone.hint.klick' : 'ana.gone.hint'), klick) +
     kachelHtml(zeitraum, t('ana.period')) +
-    kachelHtml(bytes((gesamt.teams || 0) + (gesamt.outlook || 0)), t('ana.size'),
+    kachelHtml(bytes((gesamt.teams || 0) + (gesamt.outlook || 0) +
+                     (gesamt.onedrive || 0)), t('ana.size'),
                t('ana.size.hint', {index: bytes(gesamt.index)}));
-  el('ana-kpi').innerHTML = h;
-  if(a.verschwunden) {
-    el('ana-kpi').innerHTML += '<div class="kpi-fuss"><button class="mini" ' +
-      'onclick="zeigeVerschwundene()">' + esc(t('ana.gone.show')) + '</button></div>';
-  }
   zeigeBericht(a.vollstaendigkeit);
   // Zwei Berichte, zwei Kästen: sie entstehen unabhängig voneinander,
   // und einer soll den anderen nicht verdecken.
