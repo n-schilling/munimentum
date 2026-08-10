@@ -2364,6 +2364,7 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .hit h3{margin:0 0 3px;font-size:14px;font-weight:600}
 .hit .meta{color:var(--muted);font-size:12.5px;margin-bottom:5px}
 .hit .prev{font-size:13.5px}
+mark{background:var(--warn);color:var(--bg);border-radius:3px;padding:0 2px}
 .tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 6px;
   font-size:11.5px;color:var(--muted);margin-right:6px}
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
@@ -2693,8 +2694,9 @@ main{padding-bottom:60px}
   <div class="card">
     <div class="suchzeile">
       <input type="search" id="q" data-i18n-ph="search.query.ph"
-             placeholder="Suchbegriff oder Frage" onkeydown="if(event.key==='Enter')doSearch(0)">
-      <button class="act" onclick="doSearch(0)" data-i18n="search.go">Suchen</button>
+             placeholder="Suchbegriff oder Frage" oninput="spaeterSuchen()"
+             onkeydown="if(event.key==='Enter'){sofortSuchen();}">
+      <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
     </div>
     <div class="row" style="margin-top:10px;gap:10px">
       <button class="mini" id="filter-auf" aria-expanded="false"
@@ -3431,6 +3433,21 @@ function trefferProSeite(){
   var n = S && S.config ? parseInt(S.config.search_results, 10) : NaN;
   return isNaN(n) ? 20 : Math.max(5, Math.min(n, 100));
 }
+/* Die Filter suchen sofort, das Suchfeld tat es nicht – wer erst ein Datum
+   wählte und dann einen Begriff tippte, sah eine Trefferliste, die zu dem
+   gehörte, was vorher im Feld stand. „Alle Nachrichten des Tages" statt der
+   gesuchten. Jetzt löst auch das Feld aus, mit kurzer Verzögerung: bei jedem
+   Tastendruck zu suchen wäre eine Anfrage je Buchstabe. */
+var suchTimer = null;
+function spaeterSuchen(){
+  clearTimeout(suchTimer);
+  suchTimer = setTimeout(function(){ doSearch(0); }, 350);
+}
+function sofortSuchen(){
+  clearTimeout(suchTimer);
+  doSearch(0);
+}
+
 function doSearch(off){
   offset = off || 0;
   var proSeite = trefferProSeite();
@@ -3448,6 +3465,21 @@ function doSearch(off){
     else abbrechenKI();
   });
 }
+/* Warum ein Treffer einer ist, muss man sehen können. Die Vorschau zeigt seit
+   Kurzem den Ausschnitt um die Fundstelle; hier wird der Begriff darin noch
+   markiert. Erst getrennt maskiert, dann markiert – andersherum wäre die
+   Markierung selbst wieder maskiert und stünde als <mark> im Text. */
+function hervor(text){
+  var roh = el('q').value.trim();
+  var h = esc(text);
+  if(!roh) return h;
+  roh.split(/\s+/).filter(Boolean).forEach(function(w){
+    var muster = new RegExp('(' + esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    h = h.replace(muster, '<mark>$1</mark>');
+  });
+  return h;
+}
+
 function renderHits(r){
   if(r.error){ el('results').innerHTML = '<span class="err">' + esc(mtext(r.error)) + '</span>'; return; }
   var hits = r.results || [];
@@ -3465,7 +3497,7 @@ function renderHits(r){
         esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
         esc(t('search.gone.tag')) + '</span>' : '') +
       esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
-      '<div class="prev">' + esc(h.preview || '') + '…</div>' +
+      '<div class="prev">' + hervor(h.preview || '') + '…</div>' +
       (h.thread && KANN_VERLAUF ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +
         '<button class="mini" onclick="zeigeVerlauf(' + (i + 1) + ',\'' +
         esc(h.thread).replace(/'/g, "\\'") + '\')">' +

@@ -4624,3 +4624,63 @@ console.log('OK');
 
 def test_ki_kasten_erscheint_und_pager_bleibt_stumm():
     _in_node(PRUEFUNG_KI_UND_PAGER)
+
+
+PRUEFUNG_SUCHFELD_LOEST_AUS = GRUNDZUSTAND + """
+var gesucht = [];
+global.fetch = function(pfad){
+  gesucht.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/search') >= 0 ? {results: [], total: 0}
+                                             : statusGeruest()); }});
+};
+global.setTimeout = function(fn){ fn(); return 1; };   // Verzoegerung ueberspringen
+global.clearTimeout = function(){};
+
+// Der Fall aus dem Betrieb: erst ein Datum waehlen (sucht sofort), dann den
+// Begriff tippen. Vorher blieb die Liste auf dem Stand der ersten Suche -
+// "alle Nachrichten des Tages" statt der gesuchten.
+document.getElementById('f-from').value = '2026-08-10';
+doSearch(0);
+pruefe(gesucht[gesucht.length-1].indexOf('q=&') >= 0 ||
+       gesucht[gesucht.length-1].indexOf('q=&') >= 0 ||
+       /[?&]q=(&|$)/.test(gesucht[gesucht.length-1]), 'Erste Suche hatte schon einen Begriff');
+
+gesucht = [];
+document.getElementById('q').value = 'Betriebsrat';
+spaeterSuchen();
+pruefe(gesucht.length === 1, 'Tippen loest keine Suche aus');
+pruefe(gesucht[0].indexOf('Betriebsrat') >= 0,
+       'Suche ohne den getippten Begriff: ' + gesucht[0]);
+
+// Der Knopf sucht sofort, ohne auf die Verzoegerung zu warten.
+gesucht = [];
+sofortSuchen();
+pruefe(gesucht.length === 1 && gesucht[0].indexOf('Betriebsrat') >= 0, 'Knopf sucht nicht');
+
+// Der Begriff wird in der Vorschau markiert - sonst sieht man nicht, warum
+// ein Treffer einer ist.
+var markiert = hervor('Hier steht Betriebsrat mittendrin');
+pruefe(markiert.indexOf('<mark>Betriebsrat</mark>') >= 0, 'Nicht markiert: ' + markiert);
+// Maskiert wird trotzdem: sonst waere die Vorschau ein Einfallstor.
+pruefe(hervor('<b>x</b>').indexOf('&lt;b&gt;') >= 0, 'Vorschau nicht maskiert');
+console.log('OK');
+"""
+
+
+def test_suchfeld_loest_aus_und_markiert():
+    _in_node(PRUEFUNG_SUCHFELD_LOEST_AUS)
+
+
+def test_suchfeld_und_markierung_sind_verdrahtet():
+    """Die Funktionen einzeln zu prüfen genügt nicht: beide Gegenproben liefen
+    durch, weil der Test sie direkt aufrief statt über die Seite. Geprüft wird
+    deshalb die Verdrahtung selbst."""
+    i = app_mod.PAGE.index('id="q"')
+    feld = app_mod.PAGE[i:i + 260]
+    assert 'oninput="spaeterSuchen()"' in feld, "Tippen löst keine Suche aus"
+    assert "sofortSuchen()" in feld, "Enter sucht nicht sofort"
+    assert 'onclick="sofortSuchen()"' in app_mod.PAGE, "Der Knopf wartet auf die Verzögerung"
+    # Die Vorschau geht durch hervor(), nicht an ihm vorbei.
+    j = app_mod.PAGE.index('class="prev"')
+    assert "hervor(h.preview" in app_mod.PAGE[j:j + 120], "Begriff wird nicht markiert"

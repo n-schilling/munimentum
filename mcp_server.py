@@ -374,7 +374,7 @@ def _source_uri(root, rel):
     return f"o365://{root}/{quote(rel, safe='')}"
 
 
-def _hit(row, score, preview_chars):
+def _hit(row, score, preview_chars, woerter=()):
     h = {
         "uid": row["uid"],
         "source": row["src"],
@@ -398,16 +398,43 @@ def _hit(row, score, preview_chars):
         "gone": (row["gone"] if "gone" in row.keys() else None),
     }
     if preview_chars > 0:
-        h["preview"] = (row["text"] or "")[:preview_chars]
+        h["preview"] = _ausschnitt(row["text"], woerter, preview_chars)
     return h
 
 
-def _rows_for(con, pairs, preview_chars):
+def _ausschnitt(text, woerter, laenge):
+    """Ein Stück Text um die erste Fundstelle – nicht stur der Anfang.
+
+    Der Grund ist eine Rückmeldung aus dem Betrieb: eine Suche nach
+    „Betriebsrat" lieferte Mails, in denen das Wort erst nach 900 Zeichen
+    steht. Die Vorschau zeigte die ersten 200 und damit nichts davon, und der
+    Treffer sah aus wie ein Fehlgriff, obwohl er goldrichtig war.
+
+    Ohne Fundstelle – etwa beim Blättern ohne Suchbegriff – bleibt es der
+    Anfang; der ist dann die beste Auskunft, die es gibt.
+    """
+    text = text or ""
+    if not woerter or laenge <= 0:
+        return text[:laenge]
+    tief = text.lower()
+    treffer = [i for i in (tief.find(w) for w in woerter) if i >= 0]
+    if not treffer:
+        return text[:laenge]
+    # Etwas Vorlauf, damit der Fund nicht am linken Rand klebt.
+    start = max(0, min(treffer) - laenge // 4)
+    if not start:
+        return text[:laenge]
+    # Das Auslassungszeichen zählt mit: preview_chars ist eine Zusage über die
+    # Länge, und ein Aufrufer, der mit 200 Zeichen rechnet, soll 200 bekommen.
+    return "…" + text[start:start + laenge - 1].lstrip()
+
+
+def _rows_for(con, pairs, preview_chars, woerter=()):
     hits = []
     for cid, score in pairs:
         row = con.execute("SELECT * FROM chunks WHERE id = ?", (cid,)).fetchone()
         if row is not None:
-            hits.append(_hit(row, score, preview_chars))
+            hits.append(_hit(row, score, preview_chars, woerter))
     return hits
 
 
@@ -519,7 +546,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                              f"Is Ollama running? Try mode='lexical'."}
         page = _dedupe_page(con, pairs, max(1, k), max(0, offset))
         return {"backend": used, "count": len(page), "offset": max(0, offset),
-                "results": _rows_for(con, page, max(0, min(preview_chars, 2000)))}
+                "results": _rows_for(con, page, max(0, min(preview_chars, 2000)),
+                                    _WORD.findall(query.lower()))}
     finally:
         con.close()
 

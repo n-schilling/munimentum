@@ -999,3 +999,28 @@ def test_list_folders_kennt_beide_quellen(state, tmp_path):
     pfade = {f["path"] for f in mcp_server.list_folders(limit=100)["folders"]}
     assert "Dateien/Kunden" in pfade, "OneDrive-Ordner fehlt im Filter"
     assert any(p.startswith("inbox") or "/" in p for p in pfade), "Postfach fehlt jetzt"
+
+
+def test_vorschau_zeigt_die_fundstelle(state):
+    """Rückmeldung aus dem Betrieb: eine Suche lieferte Mails, in denen das
+    Wort erst weit hinten steht. Die Vorschau zeigte die ersten 200 Zeichen und
+    damit nichts davon – der Treffer sah aus wie ein Fehlgriff, obwohl er
+    goldrichtig war."""
+    lang = "Vorspann ohne Bezug. " * 20 + "Hier steht Betriebsrat mittendrin."
+    assert "Betriebsrat" not in lang[:200]
+    v = mcp_server._ausschnitt(lang, ["betriebsrat"], 200)
+    assert "Betriebsrat" in v and v.startswith("…") and len(v) <= 200
+
+
+def test_vorschau_ohne_fundstelle_bleibt_der_anfang():
+    """Beim Blättern gibt es keinen Begriff – dann ist der Anfang die beste
+    Auskunft, die es gibt."""
+    text = "Erster Satz. Zweiter Satz."
+    assert mcp_server._ausschnitt(text, [], 12) == text[:12]
+    assert mcp_server._ausschnitt(text, ["kommtnichtvor"], 12) == text[:12]
+
+
+def test_vorschau_haelt_die_zugesagte_laenge(state):
+    for n in (10, 40, 200):
+        res = mcp_server.search_messages("Rechnung", mode="lexical", preview_chars=n)
+        assert all(len(h["preview"]) <= n for h in res["results"])
