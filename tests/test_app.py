@@ -2526,7 +2526,7 @@ st.mcp = {running: true, url: 'http://127.0.0.1:8365/mcp', error: null,
 renderStatus(st);
 
 var SYSTEMWORT = ['Chunk', 'chunk', 'MCP', 'Token', 'token', 'Ollama', 'Index'];
-['token', 'ollama', 'index', 'mcp'].forEach(function(id){
+['token', 'ollama', 'mcp'].forEach(function(id){
   var text = kachel(id);
   pruefe(text.length > 0, 'Kachel ' + id + ' ist leer');
   SYSTEMWORT.forEach(function(w){
@@ -2535,25 +2535,24 @@ var SYSTEMWORT = ['Chunk', 'chunk', 'MCP', 'Token', 'token', 'Ollama', 'Index'];
   });
 });
 
-// Nachrichten, nicht Textstellen: das ist die Einheit, in der jemand zaehlt.
-pruefe(kachel('index').indexOf('238.408') >= 0, 'Nachrichtenzahl fehlt: ' + kachel('index'));
-pruefe(kachel('index').indexOf('269.744') < 0,
-       'Textstellen gehoeren nicht auf die Kachel: ' + kachel('index'));
+// Der Zustand des Index steht im Analytics-Reiter, nicht im Kopf: zweimal
+// dieselbe Zahl an zwei Orten widerspricht sich irgendwann.
+pruefe(document.getElementById('pill-index') === null ||
+       modal.innerHTML.indexOf('pill-index') < 0, 'Kachel wieder im Kopf');
 
 // Der Fachbegriff bleibt erreichbar - eine Mausbewegung entfernt.
 pruefe(hinweis('token').indexOf('Access Token') >= 0, 'Tooltip nennt den Token nicht');
 pruefe(hinweis('token').indexOf('a@example.com') >= 0, 'Tooltip nennt das Konto nicht');
 pruefe(hinweis('ollama').indexOf('Ollama') >= 0, 'Tooltip nennt Ollama nicht');
 pruefe(hinweis('mcp').indexOf('MCP') >= 0, 'Tooltip nennt MCP nicht');
-pruefe(hinweis('index').indexOf('269.744') >= 0,
-       'Tooltip nennt die Textstellen nicht: ' + hinweis('index'));
 
-// Ohne Index: die Kachel sagt nicht nur, dass etwas fehlt, sondern was zu tun ist.
+// Ohne Index darf der Kopf nicht stolpern - er zeigt den Zustand nicht mehr,
+// aber renderStatus rechnet weiter damit (Suchhinweis, KI-Kasten).
 st.store = {exists: false, chunks: 0, messages: 0, semantic: false,
             built_at: null, model: null};
 renderStatus(st);
-pruefe(hinweis('index').indexOf('xportier') >= 0,
-       'Kein Weg nach vorn ohne Index: ' + hinweis('index'));
+pruefe(document.getElementById('search-sub').textContent.length > 0,
+       'Ohne Index sagt die Suche gar nichts mehr');
 console.log('OK');
 """
 
@@ -4469,3 +4468,16 @@ def test_infozeichen_behaelt_seine_groesse():
     regel = re.search(r"\.info\{([^}]*)\}", css).group(1)
     assert "width:17px" in regel and "height:17px" in regel
     assert "flex:0 0 auto" in regel, "sonst zieht der nächste Flex-Behälter daran"
+
+
+def test_kopfleiste_zeigt_nur_was_eine_handlung_verlangt():
+    """Der Zustand des Index stand als Kachel im Kopf und steht jetzt in
+    Analytics. Zweimal dieselbe Zahl an zwei Orten hilft niemandem – sie
+    widersprechen sich irgendwann. Im Kopf bleibt, was etwas von einem will:
+    Zugang, KI-Suche, Claude."""
+    kopf = app_mod.PAGE.split("<nav")[0]
+    assert 'id="pill-index"' not in kopf
+    for erwartet in ('id="pill-token"', 'id="pill-ollama"', 'id="pill-mcp"'):
+        assert erwartet in kopf, f"{erwartet} ist mit verschwunden"
+    # Die Zahl steht weiterhin irgendwo – nur eben in den Kennzahlen.
+    assert 'id="ana-kpi"' in app_mod.PAGE

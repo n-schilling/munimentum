@@ -2604,7 +2604,6 @@ main{padding-bottom:60px}
   <div class="pills">
     <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
     <button class="pill" id="pill-ollama" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
-    <button class="pill" id="pill-index" onclick="tab('suche')"><span class="dot" id="p-index"></span><span id="p-index-t">Archiv</span></button>
     <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
     <span class="pill-luecke"></span>
     <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
@@ -3157,17 +3156,11 @@ function renderStatus(s){
     o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model')) : t('pill.ollama.off'),
     t('pill.ollama.tip'));
 
-  // „Nachrichten“ ist die Einheit, in der jemand sein Archiv denkt. Die Zahl
-  // der Textstellen liegt deutlich höher (lange Mails werden geteilt) und
-  // gehört deshalb in den Tooltip, nicht auf die Kachel.
+  // Der Zustand des Index stand einmal als Kachel im Kopf. Er steht jetzt im
+  // Analytics-Reiter, wo auch alles andere über den Bestand steht – zweimal
+  // dieselbe Zahl an zwei Orten hilft niemandem, sie widersprechen sich nur
+  // irgendwann. Was der Kopf zeigt, sind Dinge, die eine Handlung verlangen.
   var st = s.store;
-  setPill('index', st.exists ? (st.semantic ? 'ok' : 'warn') : 'err',
-    st.exists ? t(st.semantic ? 'pill.index.ready' : 'pill.index.lexical',
-                  {n: (st.messages || 0).toLocaleString(LOC)})
-              : t('pill.index.none'),
-    st.exists ? t('pill.index.tip', {c: (st.chunks || 0).toLocaleString(LOC),
-                                     when: fmt(st.built_at)})
-              : t('pill.index.tip.none'));
 
   setPill('mcp', s.mcp.running ? 'ok' : '',
     t(s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'), t('pill.mcp.tip'));
