@@ -4576,9 +4576,11 @@ def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
     assert 'id="search-sub"' not in app_mod.PAGE, "Statuszeile in der Maske"
 
 
-def test_die_maske_loest_ueberall_gleich_aus():
-    """Vorher suchten Quelle und Ordner sofort, Person und Datum erst beim
-    Klick – gleiches Aussehen, verschiedenes Verhalten."""
+def test_kein_feld_sucht_von_selbst():
+    """Gesucht wird, wenn jemand danach fragt. Man soll in Ruhe Begriff,
+    Person, Zeitraum und Ordner eingeben können, ohne dass nach jeder Änderung
+    eine Suche losläuft – vorher taten das die Filter, und die Trefferliste
+    gehörte dann zu einem halb ausgefüllten Formular."""
     i = app_mod.PAGE.index('id="filter"')
     block = app_mod.PAGE[i:i + 1600]
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
@@ -4587,7 +4589,10 @@ def test_die_maske_loest_ueberall_gleich_aus():
         # max(0, …): ein negativer Anfang rutscht in Python ans Ende der
         # Zeichenkette und prüfte dann irgendetwas.
         umfeld = block[max(0, j - 120):j + 200]
-        assert 'onchange="doSearch(0)"' in umfeld, f"{feld} löst nicht aus"
+        assert "doSearch" not in umfeld, f"{feld} sucht von selbst"
+        assert 'onchange="zeigeFilterstand()"' in umfeld, f"{feld} zählt nicht mit"
+    q = app_mod.PAGE[app_mod.PAGE.index('id="q"'):][:260]
+    assert "oninput" not in q, "das Suchfeld sucht beim Tippen"
 
 
 PRUEFUNG_KI_UND_PAGER = GRUNDZUSTAND + """
@@ -4634,29 +4639,28 @@ global.fetch = function(pfad){
     String(pfad).indexOf('/api/search') >= 0 ? {results: [], total: 0}
                                              : statusGeruest()); }});
 };
-global.setTimeout = function(fn){ fn(); return 1; };   // Verzoegerung ueberspringen
-global.clearTimeout = function(){};
-
-// Der Fall aus dem Betrieb: erst ein Datum waehlen (sucht sofort), dann den
-// Begriff tippen. Vorher blieb die Liste auf dem Stand der ersten Suche -
-// "alle Nachrichten des Tages" statt der gesuchten.
+// Filter setzen und tippen loest KEINE Suche aus - man soll in Ruhe alles
+// eingeben koennen.
 document.getElementById('f-from').value = '2026-08-10';
-doSearch(0);
-pruefe(gesucht[gesucht.length-1].indexOf('q=&') >= 0 ||
-       gesucht[gesucht.length-1].indexOf('q=&') >= 0 ||
-       /[?&]q=(&|$)/.test(gesucht[gesucht.length-1]), 'Erste Suche hatte schon einen Begriff');
-
-gesucht = [];
+document.getElementById('f-person').value = 'Alice';
+zeigeFilterstand();
 document.getElementById('q').value = 'Betriebsrat';
-spaeterSuchen();
-pruefe(gesucht.length === 1, 'Tippen loest keine Suche aus');
-pruefe(gesucht[0].indexOf('Betriebsrat') >= 0,
-       'Suche ohne den getippten Begriff: ' + gesucht[0]);
+pruefe(gesucht.filter(function(u){ return u.indexOf('/api/search') >= 0; }).length === 0,
+       'Es wurde beim Ausfuellen schon gesucht: ' + gesucht.join(' '));
 
-// Der Knopf sucht sofort, ohne auf die Verzoegerung zu warten.
+// Erst der Knopf sucht - und zwar mit allem, was im Formular steht.
 gesucht = [];
 sofortSuchen();
-pruefe(gesucht.length === 1 && gesucht[0].indexOf('Betriebsrat') >= 0, 'Knopf sucht nicht');
+var u = gesucht.filter(function(x){ return x.indexOf('/api/search') >= 0; });
+pruefe(u.length === 1, 'Knopf sucht nicht');
+pruefe(u[0].indexOf('Betriebsrat') >= 0 && u[0].indexOf('Alice') >= 0 &&
+       u[0].indexOf('2026-08-10') >= 0, 'Formular nicht vollstaendig uebernommen: ' + u[0]);
+
+// "Zuruecksetzen" leert nur - gesucht wird auch dann erst auf Wunsch.
+gesucht = [];
+filterLeeren();
+pruefe(gesucht.filter(function(x){ return x.indexOf('/api/search') >= 0; }).length === 0,
+       'Zuruecksetzen hat gesucht');
 
 // Der Begriff wird in der Vorschau markiert - sonst sieht man nicht, warum
 // ein Treffer einer ist.
@@ -4673,13 +4677,12 @@ def test_suchfeld_loest_aus_und_markiert():
 
 
 def test_suchfeld_und_markierung_sind_verdrahtet():
-    """Die Funktionen einzeln zu prüfen genügt nicht: beide Gegenproben liefen
+    """Die Funktionen einzeln zu prüfen genügt nicht: die Gegenproben liefen
     durch, weil der Test sie direkt aufrief statt über die Seite. Geprüft wird
     deshalb die Verdrahtung selbst."""
     i = app_mod.PAGE.index('id="q"')
     feld = app_mod.PAGE[i:i + 260]
-    assert 'oninput="spaeterSuchen()"' in feld, "Tippen löst keine Suche aus"
-    assert "sofortSuchen()" in feld, "Enter sucht nicht sofort"
+    assert "sofortSuchen()" in feld, "Enter sucht nicht"
     assert 'onclick="sofortSuchen()"' in app_mod.PAGE, "Der Knopf wartet auf die Verzögerung"
     # Die Vorschau geht durch hervor(), nicht an ihm vorbei.
     j = app_mod.PAGE.index('class="prev"')

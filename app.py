@@ -2694,7 +2694,7 @@ main{padding-bottom:60px}
   <div class="card">
     <div class="suchzeile">
       <input type="search" id="q" data-i18n-ph="search.query.ph"
-             placeholder="Suchbegriff oder Frage" oninput="spaeterSuchen()"
+             placeholder="Suchbegriff oder Frage"
              onkeydown="if(event.key==='Enter'){sofortSuchen();}">
       <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
     </div>
@@ -2706,8 +2706,8 @@ main{padding-bottom:60px}
     </div>
     <div class="row hide" id="filter" style="margin-top:10px">
       <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
-             style="width:180px" onchange="doSearch(0)">
-      <select id="f-source" onchange="doSearch(0)">
+             style="width:180px" onchange="zeigeFilterstand()">
+      <select id="f-source" onchange="zeigeFilterstand()">
         <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
         <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
@@ -2715,10 +2715,10 @@ main{padding-bottom:60px}
         <option value="datei" data-i18n="search.source.datei">Dateien</option>
       </select>
       <label class="small feld"><span data-i18n="search.from">von</span>
-        <input type="date" id="f-from" onchange="doSearch(0)"></label>
+        <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
       <label class="small feld"><span data-i18n="search.to">bis</span>
-        <input type="date" id="f-to" onchange="doSearch(0)"></label>
-      <select id="f-folder" onchange="doSearch(0)" style="max-width:260px">
+        <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
+      <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
         <option value="" data-i18n="search.folder.all">Alle Ordner</option>
       </select>
     </div>
@@ -3164,7 +3164,6 @@ function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
   zeigeFilterstand();
-  doSearch(0);
 }
 function zeigeFilterstand(){
   var n = filterFelder().length;
@@ -3433,18 +3432,12 @@ function trefferProSeite(){
   var n = S && S.config ? parseInt(S.config.search_results, 10) : NaN;
   return isNaN(n) ? 20 : Math.max(5, Math.min(n, 100));
 }
-/* Die Filter suchen sofort, das Suchfeld tat es nicht – wer erst ein Datum
-   wählte und dann einen Begriff tippte, sah eine Trefferliste, die zu dem
-   gehörte, was vorher im Feld stand. „Alle Nachrichten des Tages" statt der
-   gesuchten. Jetzt löst auch das Feld aus, mit kurzer Verzögerung: bei jedem
-   Tastendruck zu suchen wäre eine Anfrage je Buchstabe. */
-var suchTimer = null;
-function spaeterSuchen(){
-  clearTimeout(suchTimer);
-  suchTimer = setTimeout(function(){ doSearch(0); }, 350);
-}
+/* Gesucht wird, wenn jemand danach fragt – mit dem Knopf oder mit Enter.
+   Nicht beim Tippen und nicht beim Setzen eines Filters: man soll in Ruhe
+   Begriff, Person, Zeitraum und Ordner eingeben können, ohne dass nach jeder
+   Änderung eine Suche losläuft. Die Filter melden nur ihren Stand an den
+   Schalter darüber. */
 function sofortSuchen(){
-  clearTimeout(suchTimer);
   doSearch(0);
 }
 
