@@ -1,0 +1,134 @@
+name: Build
+
+# Baut die fertige App für macOS, Windows und Linux.
+#
+#   Push auf main / manuell  → Dateien hängen als Artifact am Lauf
+#   Tag "v*"                 → zusätzlich ein GitHub-Release mit denselben Dateien
+#
+# Jedes Bündel durchläuft vorher packaging/smoke_test.py: startet die App,
+# baut einen Index (die gebündelte Datei ruft sich dafür selbst auf), sucht
+# darin und startet den MCP-Server. Ein Bündel, in dem eine Abhängigkeit fehlt,
+# kommt damit gar nicht erst in ein Release.
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.ziel }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14          # Apple Silicon
+            ziel: macos-arm64
+            exe: dist/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv
+          # macos-13 ist seit Dezember 2025 abgeschaltet – Jobs darauf warten
+          # ewig auf einen Runner, den es nicht mehr gibt. macos-15-intel ist
+          # der Ersatz und läuft bis August 2027; danach gibt es bei GitHub
+          # kein x86_64-macOS mehr und diese Zeile entfällt ersatzlos.
+          - os: macos-15-intel    # Intel
+            ziel: macos-x86_64
+            exe: dist/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv
+          - os: windows-latest
+            ziel: windows-x64
+            exe: dist/Microsoft365-Archiv/Microsoft365-Archiv.exe
+          - os: ubuntu-22.04      # ältere glibc = läuft auch auf neueren Systemen
+            ziel: linux-x64
+            exe: dist/Microsoft365-Archiv/Microsoft365-Archiv
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Version prüfen
+        # Bei einem Tag muss version.py dieselbe Zahl tragen. Sonst meldete die
+        # App eine andere Version als der Download – und die eingebaute
+        # Aktualisierungsprüfung riete dauerhaft zum Update auf sich selbst.
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          datei=$(python -c "import version; print(version.VERSION)")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "version.py: $datei · Tag: $tag"
+          test "$datei" = "$tag" || {
+            echo "::error::version.py sagt $datei, der Tag sagt $tag"; exit 1; }
+
+      - name: Abhängigkeiten installieren
+        run: pip install -r requirements-build.txt
+
+      - name: Bündel bauen
+        run: pyinstaller packaging/app.spec --noconfirm
+
+      - name: Rauchtest
+        run: python packaging/smoke_test.py "${{ matrix.exe }}"
+
+      - name: Packen (macOS)
+        if: startsWith(matrix.os, 'macos')
+        # ditto statt zip: erhält die Struktur des .app-Bündels samt
+        # Symlinks und Rechten, sonst startet die App nach dem Entpacken nicht.
+        run: ditto -c -k --keepParent "dist/Microsoft365-Archiv.app" "Microsoft365-Archiv-${{ matrix.ziel }}.zip"
+
+      - name: Packen (Windows)
+        if: startsWith(matrix.os, 'windows')
+        shell: pwsh
+        run: Compress-Archive -Path "dist/Microsoft365-Archiv" -DestinationPath "Microsoft365-Archiv-${{ matrix.ziel }}.zip"
+
+      - name: Packen (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: tar -czf "Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz" -C dist "Microsoft365-Archiv"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          # Bewusst NICHT wie die Datei darin benannt. GitHub packt jedes
+          # Artefakt noch einmal in ein ZIP; hießen beide gleich, wollte das
+          # Archivierungsprogramm beim Doppelklick eine Datei neben das Archiv
+          # legen, die genau so heißt wie das Archiv selbst. Heraus kommt dann
+          # "… 2.zip" statt der App – das sieht nach kaputtem Download aus.
+          # Die Namen der Release-Dateien ändert das nicht: die stammen aus den
+          # Dateien im Artefakt, nicht aus dessen Namen.
+          name: bundle-${{ matrix.ziel }}
+          path: |
+            Microsoft365-Archiv-${{ matrix.ziel }}.zip
+            Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write            # nötig, um das Release anzulegen
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: pakete
+          merge-multiple: true
+
+      - name: Prüfsummen
+        run: |
+          cd pakete
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Release anlegen
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" pakete/* \
+            --title "Microsoft 365 Archiv $GITHUB_REF_NAME" \
+            --notes-file .github/release-hinweise.md

@@ -1,0 +1,22 @@
+# Zugangsdaten. gx_token.txt ist der eingefügte Schlüssel, msal_cache.bin der
+# Refresh-Token aus der Anmeldung – letzterer entsteht erst beim ersten
+# Anmelden und wäre sonst weder ignoriert noch bemerkt worden.
+gx_token.txt
+msal_cache.bin
+outlook_export/*
+teams_export/*
+path/
+path/*
+.DS_Store
+combined_search.html
+__pycache__/
+__pycache__/*
+*_old
+*.zip
+rag_store
+rag_store/*
+.coverage
+app_config.json
+build/
+dist/
+*.spec.bak
