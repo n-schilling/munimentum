@@ -4361,26 +4361,25 @@ def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
 
 ERKLAERUNGEN_ALS_INFO = ["export.start.hint", "export.what.sub",
                          "export.index.only.when", "export.calendar.build.when",
-                         "export.page.build.when"]
+                         "export.page.build.when", "search.gone.note"]
 
 
 @pytest.mark.parametrize("schluessel", ERKLAERUNGEN_ALS_INFO)
 def test_erklaerungen_im_exportreiter_stehen_am_infozeichen(schluessel):
     """Absätze neben Knöpfen machen die Oberfläche unruhig; die Erklärung
     gehört auf Abruf. Der Text selbst bleibt – nur seine Form ändert sich."""
-    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
-    assert f'data-i18n="{schluessel}"' not in kopf, "steht wieder als Fließtext da"
-    assert f'data-i18n-title="{schluessel}"' in kopf
+    assert f'data-i18n="{schluessel}"' not in app_mod.PAGE, "steht wieder als Fließtext da"
+    assert f'data-i18n-title="{schluessel}"' in app_mod.PAGE
     assert i18n.strings("de")[schluessel]
 
 
 def test_jedes_infozeichen_ist_erreichbar():
     """Ein (i), das nur die Maus kennt, ist für die Tastatur ein Buchstabe
-    ohne Bedeutung."""
-    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
-    zeichen = kopf.count('class="info"')
-    assert zeichen == len(ERKLAERUNGEN_ALS_INFO), f"{zeichen} (i) gefunden"
-    for stueck in kopf.split('<span class="info"')[1:]:
+    ohne Bedeutung. Gilt für jedes auf der Seite, nicht nur die im Markup:
+    die Kacheln in Analytics setzen ihres aus dem JavaScript."""
+    zeichen = app_mod.PAGE.count('class="info"')
+    assert zeichen >= len(ERKLAERUNGEN_ALS_INFO), f"{zeichen} (i) gefunden"
+    for stueck in app_mod.PAGE.split('<span class="info"')[1:]:
         block = stueck[:220]
         assert 'tabindex="0"' in block and "aria-label=" in block
 

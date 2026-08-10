@@ -2706,9 +2706,10 @@ main{padding-bottom:60px}
         <option value="" data-i18n="search.folder.all">Alle Ordner</option>
       </select>
       <label class="chk" id="gone-wrap"><input type="checkbox" id="f-gone" onchange="doSearch(0)">
-        <span data-i18n="search.gone.only">Nur Gelöschtes</span></label>
+        <span data-i18n="search.gone.only">Nur Gelöschtes</span>
+        <span class="info" tabindex="0" data-i18n-title="search.gone.note"
+              role="img" aria-label="Info">i</span></label>
     </div>
-    <p class="small muted" id="gone-note" data-i18n="search.gone.note">Zeigt nur Nachrichten, die nicht mehr im Postfach stehen.</p>
   </div>
   <div class="answer hide" id="ai-box"></div>
   <div class="card"><div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
@@ -3191,7 +3192,6 @@ function renderStatus(s){
   // „Nur Gelöschtes“ und der Verlauf brauchen einen Index, der beides kennt.
   var kann = (st.features || []);
   el('gone-wrap').classList.toggle('hide', kann.indexOf('gone') < 0);
-  el('gone-note').classList.toggle('hide', kann.indexOf('gone') < 0);
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
