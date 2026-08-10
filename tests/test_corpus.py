@@ -423,3 +423,62 @@ def test_anhangnamen_nur_am_ersten_stueck():
     assert len(stuecke) > 1, "Testtext war zu kurz"
     assert stuecke[0]["att"] == "Vertrag.pdf"
     assert all("att" not in c for c in stuecke[1:])
+
+
+# --------------------------------------------------------------------------
+# OneDrive: ein Satz je gespiegelter Datei – Name und Pfad, kein Inhalt
+# --------------------------------------------------------------------------
+def _spiegel(tmp_path, *rel):
+    for r in rel:
+        p = tmp_path / "Dateien" / r
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x" * 10)
+    return tmp_path
+
+
+def test_load_onedrive_findet_jede_datei(tmp_path):
+    _spiegel(tmp_path, "Angebot.pdf", "Kunden/Vertrag.docx")
+    r = {x["rel"]: x for x in corpus.load_onedrive(tmp_path)}
+    assert set(r) == {"Dateien/Angebot.pdf", "Dateien/Kunden/Vertrag.docx"}
+    e = r["Dateien/Kunden/Vertrag.docx"]
+    assert e["src"] == "datei" and e["root"] == "onedrive"
+    assert e["title"] == "Vertrag.docx"
+    assert e["ctx"] == "Dateien/Kunden"          # Ordner als Suchkriterium
+    assert e["att"] == "Vertrag.docx"            # dieselbe Spalte wie Mailanhänge
+
+
+def test_load_onedrive_faellt_nicht_aus_dem_index(tmp_path):
+    """Der Satz muss Text tragen, sonst entsteht beim Chunking gar kein Eintrag
+    und die Datei wäre trotz Index unauffindbar."""
+    _spiegel(tmp_path, "Kunden/Vertrag.docx")
+    recs = corpus.load_onedrive(tmp_path)
+    chunks = corpus.chunk_records(recs)
+    assert len(chunks) == len(recs) == 1
+    assert "Kunden" in chunks[0]["text"], "der Ordner muss mitsuchbar sein"
+
+
+def test_load_onedrive_uebernimmt_den_grabstein(tmp_path):
+    _spiegel(tmp_path, "weg.pdf", "da.pdf")
+    (tmp_path / "verschwunden.tsv").write_text(
+        "Dateien/weg.pdf\t2026-01-01\n", encoding="utf-8")
+    r = {x["rel"]: x for x in corpus.load_onedrive(tmp_path)}
+    assert r["Dateien/weg.pdf"]["gone"] == "2026-01-01"
+    assert "gone" not in r["Dateien/da.pdf"]
+
+
+def test_load_onedrive_ignoriert_teildateien(tmp_path):
+    """Eine abgebrochene Übertragung gehört nicht in den Index."""
+    _spiegel(tmp_path, "fertig.pdf")
+    (tmp_path / "Dateien" / "halb.pdf.teil").write_bytes(b"x")
+    assert [x["title"] for x in corpus.load_onedrive(tmp_path)] == ["fertig.pdf"]
+
+
+def test_load_onedrive_ohne_ordner(tmp_path):
+    assert corpus.load_onedrive(tmp_path / "gibtsnicht") == []
+    assert corpus.load_onedrive(tmp_path) == []       # da, aber ohne Dateien/
+
+
+def test_load_records_nimmt_onedrive_mit(tmp_path):
+    _spiegel(tmp_path / "od", "a.pdf")
+    assert corpus.load_records(None, None, tmp_path / "od")[0]["src"] == "datei"
+    assert corpus.load_records(None, None, None) == []

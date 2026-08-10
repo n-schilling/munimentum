@@ -118,7 +118,7 @@ _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
                             openWorldHint=False)
 _WORD = re.compile(r"\w+", re.UNICODE)
-_SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail",
+_SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
                  "kalender": "Kalender", "kontakte": "Kontakte"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
@@ -490,7 +490,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             today (7 = today and the six days before). No need to work out the
             date yourself. Bounds the range at both ends, so upcoming calendar
             entries stay out. Ignored when date_from is given.
-        source: One of "all", "teams", "outlook", "kalender", "kontakte".
+        source: One of "all", "teams", "outlook", "kalender", "kontakte",
+            "datei" (files mirrored from OneDrive — name and path only,
+            their contents are not indexed).
         k: Number of results per page (default 12).
         offset: Results to skip, for pagination (default 0).
         mode: "auto" (hybrid if embeddings available, else lexical),
@@ -540,7 +542,9 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             today (7 = today and the six days before). No need to work out the
             date yourself. Bounds the range at both ends, so upcoming calendar
             entries stay out. Ignored when date_from is given.
-        source: One of "all", "teams", "outlook", "kalender", "kontakte".
+        source: One of "all", "teams", "outlook", "kalender", "kontakte",
+            "datei" (files mirrored from OneDrive — name and path only,
+            their contents are not indexed).
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
@@ -659,7 +663,9 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
     and browse_messages.
 
     Args:
-        source: One of "all", "teams", "outlook", "kalender", "kontakte".
+        source: One of "all", "teams", "outlook", "kalender", "kontakte",
+            "datei" (files mirrored from OneDrive — name and path only,
+            their contents are not indexed).
         contains: Optional. Only people whose name or email contains this text.
         limit: Max number of people to return, most frequent first (default 100).
     """

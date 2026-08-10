@@ -253,8 +253,8 @@ def retire_vectors(store):
 # Index bauen
 # --------------------------------------------------------------------------
 def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
-                embeddings=True):
-    recs = corpus.load_records(teams_dir, outlook_dir)
+                embeddings=True, onedrive_dir=None):
+    recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir)
     chunks = corpus.chunk_records(recs)
     if not chunks:
         raise SystemExit("Keine Inhalte gefunden – stimmen die Export-Ordner?")
@@ -328,6 +328,8 @@ def main():
     # sie aus (siehe settings.py).
     ap.add_argument("teams", nargs="?", default=settings.value("teams_dir", "teams_export"))
     ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", "outlook_export"))
+    ap.add_argument("onedrive", nargs="?",
+                    default=settings.value("onedrive_dir", "onedrive_export"))
     ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
     ap.add_argument("--model", default=settings.value("embed_model", DEFAULT_MODEL))
     ap.add_argument("--ollama", default=settings.value("ollama", DEFAULT_OLLAMA))
@@ -345,7 +347,8 @@ def main():
     else:
         print(f"Index → {a.store}  (Modell {a.model})")
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
-                              a.batch, embeddings=not a.no_embeddings)
+                              a.batch, embeddings=not a.no_embeddings,
+                              onedrive_dir=a.onedrive)
     if a.no_embeddings:
         print(f"\nFertig. {n} Chunks im Volltextindex – keine Embeddings.")
         print("Für die semantische/hybride Suche später ohne --no-embeddings "

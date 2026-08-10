@@ -133,7 +133,20 @@ Die Namen im Index waren deshalb bewusst Stufe eins: Sie kosten nichts und
 schließen den größten Teil der Lücke. Stufe zwei ist ein eigenes Vorhaben —
 aber ein absehbares.
 
-## V5: OneDrive als zweite Quelle
+## V5: OneDrive als zweite Quelle — Sicherung steht, Inhalte fehlen
+
+**Umgesetzt:** `onedrive_export.py` spiegelt das Laufwerk über
+`/me/drive/root/delta`, mit Include/Exclude-Regeln auf Pfaden, einer
+Größengrenze, Grabsteinen für in OneDrive Gelöschtes und Fortschritt.
+Umbenanntes und Verschobenes wird mitgezogen statt neu geladen. Der
+Index kennt die Dateien über **Name und Pfad**; `att:pdf` findet sie
+wie einen Mailanhang, der Ordner ist Suchkriterium.
+
+**Offen bleibt der Inhalt** – das ist V4 und gilt für Anhänge und
+OneDrive gemeinsam. Der Satzbau ist darauf vorbereitet: `text` trägt
+heute den Pfad und ist genau das Feld, das eine Extraktion später
+ersetzt. Ein alter Index wird dadurch nicht ungültig, nur ärmer.
+
 
 ### Entschieden: Spiegel, kein Versionsarchiv
 

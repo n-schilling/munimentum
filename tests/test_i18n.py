@@ -195,8 +195,8 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
 DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
-                     "meeting", "channels")),
-    ("progress.unit.", ("chats", "mails", "embeddings")),
+                     "meeting", "channels", "files")),
+    ("progress.unit.", ("chats", "mails", "embeddings", "files")),
 )
 
 

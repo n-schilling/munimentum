@@ -43,7 +43,7 @@ nothing. The path is shown in the UI and can be changed in *Settings*.
 One browser page with three tabs.
 
 **Export data** — pick what to fetch (mail, calendar, contacts; 1:1, group,
-meeting chats, team channels) and start. Every run fetches only what is new. A
+meeting chats, team channels; OneDrive files) and start. Every run fetches only what is new. A
 schedule can repeat it while the app is open, and index straight afterwards.
 
 **Search data** — full-text and, with [Ollama](https://ollama.com), semantic
@@ -100,6 +100,7 @@ Each one runs on its own, without the app:
 | `app.py` | Browser UI that drives everything else (start here) |
 | `teams_export.py` | Teams 1:1/group/meeting chats and channels → HTML |
 | `outlook_export.py` | Mail (`.eml`), calendar (`.ics`), contacts (`.vcf`) |
+| `onedrive_export.py` | OneDrive as a local mirror (delta-based, keeps deleted files) |
 | `combined_search.py` | Self-contained offline search page, and the calendar/contacts data the app shows |
 | `rag_index.py` | Builds the search index (`rag_store/`: SQLite + FTS5 + embeddings) |
 | `mcp_server.py` | MCP server — Claude searches and reads the exports itself |
@@ -118,6 +119,7 @@ python3 teams_export.py            # asks what to export
 python3 outlook_export.py --folders # sync the folder tree (once, then rarely)
 python3 outlook_export.py -default # no questions, default selection
 python3 outlook_export.py --check  # completeness against the mailbox
+python3 onedrive_export.py         # mirror OneDrive (only what changed)
 python3 rag_index.py               # build the index
 python3 combined_search.py         # → combined_search.html, opens anywhere
 ```

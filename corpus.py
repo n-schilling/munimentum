@@ -578,7 +578,63 @@ def load_contacts(root_dir):
 # --------------------------------------------------------------------------
 # Zusammenführen + Chunking
 # --------------------------------------------------------------------------
-def load_records(teams_dir, outlook_dir):
+# --------------------------------------------------------------------------
+# OneDrive: die gespiegelten Dateien
+#
+# Stufe eins ist bewusst der NAME, nicht der Inhalt: er kostet nichts, ist
+# sofort da und beantwortet die häufigste Frage („wo lag noch mal das Angebot").
+# Ein PDF zu öffnen ist eine andere Größenordnung – an einem echten Bestand
+# gemessen rund eine Stunde für Extraktion und Einbetten (siehe ROADMAP.md).
+#
+# Damit das nachrüstbar bleibt, ist `text` hier schon das INHALTSFELD und trägt
+# vorerst nur den Pfad. Wer später extrahiert, ersetzt genau diesen Wert; Aufbau,
+# Kennung und Suchfilter bleiben, wie sie sind, und ein alter Index wird nicht
+# ungültig, sondern nur ärmer.
+# --------------------------------------------------------------------------
+ONEDRIVE_DIR = "Dateien"
+
+
+def _datei_satz(p_str, root_str):
+    p, root = Path(p_str), Path(root_str)
+    rel = p.relative_to(root).as_posix()
+    try:
+        st = p.stat()
+        ts, groesse = st.st_mtime, st.st_size
+    except OSError:
+        ts, groesse = None, 0
+    ordner = rel.rsplit("/", 1)[0] if "/" in rel else ONEDRIVE_DIR
+    # Der Pfad als Text: so findet die Volltextsuche auch über den Ordnernamen,
+    # nicht nur über den Dateinamen. Zwei Wörter, kein Rauschen.
+    return {
+        "uid": f"datei:{rel}:0", "src": "datei", "root": "onedrive", "rel": rel,
+        "who": "", "ppl": "",
+        "ts": ts,
+        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "",
+        "title": p.name,
+        "ctx": ordner,
+        "att": p.name,          # dieselbe Spalte wie Mailanhänge: att:pdf findet beides
+        "text": rel.replace("/", " / "),
+        "groesse": groesse,
+    }
+
+
+def load_onedrive(root_dir):
+    """Ein Satz je gespiegelter Datei – Name und Pfad, kein Inhalt."""
+    root = Path(root_dir)
+    basis = root / ONEDRIVE_DIR
+    if not basis.is_dir():
+        return []
+    dateien = [p for p in sorted(basis.rglob("*"))
+               if p.is_file() and not p.name.endswith(".teil")]
+    recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
+    weg = lies_verschwunden(root)          # derselbe Leser wie beim Postfach
+    for r in recs:
+        if r["rel"] in weg:
+            r["gone"] = weg[r["rel"]]
+    return recs
+
+
+def load_records(teams_dir, outlook_dir, onedrive_dir=None):
     recs = []
     if teams_dir and Path(teams_dir).is_dir():
         recs += load_teams(teams_dir)
@@ -586,6 +642,8 @@ def load_records(teams_dir, outlook_dir):
         recs += load_outlook(outlook_dir)     # .eml
         recs += load_calendar(outlook_dir)    # .ics
         recs += load_contacts(outlook_dir)    # .vcf
+    if onedrive_dir and Path(onedrive_dir).is_dir():
+        recs += load_onedrive(onedrive_dir)   # gespiegelte Dateien
     return recs
 
 

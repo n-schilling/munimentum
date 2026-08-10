@@ -79,7 +79,7 @@ RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             # Anmeldeweg gilt, liegt ein Schlüssel vor, gibt es einen Cache.
             # Im Bündel ist das der einzige Weg, das ohne Netz zu prüfen –
             # der Rauchtest tut genau das.
-            "auth")
+            "auth", "onedrive_export")
 
 
 def resource_dir():
@@ -220,6 +220,10 @@ SKIP_FOLDERS_DEFAULT = {
 DEFAULT_CONFIG = {
     "teams_dir": "teams_export",
     "outlook_dir": "outlook_export",
+    "onedrive_dir": "onedrive_export",
+    # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
+    "onedrive_rules": "",
+    "onedrive_max_mb": 0,
     "store_dir": "rag_store",
     "outlook_categories": ["mail", "calendar", "contacts"],
     "teams_categories": ["1on1", "group", "meeting"],
@@ -277,11 +281,12 @@ SCOPE_FOR = {
     "group": "Chat.Read",
     "meeting": "Chat.Read",
     "channels": "ChannelMessage.Read.All",
+    "files": "Files.Read.All",
 }
 LABEL_FOR = {
     "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
     "1on1": "1:1-Chats", "group": "Gruppenchats",
-    "meeting": "Meeting-Chats", "channels": "Team-Kanäle",
+    "meeting": "Meeting-Chats", "channels": "Team-Kanäle", "files": "OneDrive",
 }
 
 # Weitere Berechtigungen, die die jeweils nötige mit abdecken. Der Graph
@@ -316,6 +321,7 @@ SCOPE_QUERY = {
     "Contacts.Read": "https://graph.microsoft.com/v1.0/me/contacts?$top=1",
     "Chat.Read": "https://graph.microsoft.com/v1.0/me/chats?$top=1",
     "ChannelMessage.Read.All": "https://graph.microsoft.com/v1.0/me/joinedTeams",
+    "Files.Read.All": "https://graph.microsoft.com/v1.0/me/drive/root/children?$top=1",
     "User.Read": "https://graph.microsoft.com/v1.0/me",
 }
 
@@ -815,7 +821,7 @@ def _auth_env(cfg):
 
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token="", reconstruct=None,
-                check=False, sync_folders=False):
+                check=False, sync_folders=False, onedrive=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -845,6 +851,16 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                     # nicht gesetzt hieße "Vorgabe des Skripts".
                     "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])},
         })
+    if onedrive:
+        steps.append({
+            "key": "onedrive", "label": "job.step.onedrive",
+            "argv": script_argv("onedrive_export", cfg["onedrive_dir"]),
+            "env": {**base_env,
+                    # Immer setzen, auch leer: leer heißt "alles mitnehmen",
+                    # nicht gesetzt hieße "was in app_config.json steht".
+                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
+                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
+        })
     if teams:
         cats = _clean_categories(cfg["teams_categories"],
                                  ["1on1", "group", "meeting", "channels"])
@@ -859,6 +875,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         })
     if index:
         argv = script_argv("rag_index", cfg["teams_dir"], cfg["outlook_dir"],
+                           cfg["onedrive_dir"],
                            "--store", cfg["store_dir"], "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
                            "--batch", cfg.get("index_batch", 64))
@@ -1518,19 +1535,19 @@ class App:
 
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, search_page=False, label="Lauf", reconstruct=None,
-               check=False, sync_folders=False):
+               check=False, sync_folders=False, onedrive=False):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
-        token = read_token() if (outlook or teams or check or sync_folders) else ""
+        braucht_zugang = outlook or teams or onedrive or check or sync_folders
+        token = read_token() if braucht_zugang else ""
         # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
         # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
         # verhindern.
-        if ((outlook or teams or check or sync_folders) and not token
-                and self.auth_modus() != "login"):
+        if braucht_zugang and not token and self.auth_modus() != "login":
             return False, {"k": "srv.notoken", "v": {}}
         if index and not embeddings:
             self.jobs.logk("srv.lexical.choice" if gewaehlt
@@ -1539,7 +1556,7 @@ class App:
                             calendar=calendar, embeddings=embeddings,
                             search_page=search_page, token=token,
                             reconstruct=reconstruct, check=check,
-                            sync_folders=sync_folders)
+                            sync_folders=sync_folders, onedrive=onedrive)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
@@ -1729,6 +1746,7 @@ class Handler(BaseHTTPRequestHandler):
                     search_page=bool(data.get("search_page")),
                     check=bool(data.get("check")),
                     sync_folders=bool(data.get("sync_folders")),
+                    onedrive=bool(data.get("onedrive")),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "job.export"),
                     reconstruct=rekonstruktion)
@@ -1837,6 +1855,9 @@ class Handler(BaseHTTPRequestHandler):
         if "folder_rules" in data:
             cfg["folder_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["folder_rules"] or "")))
+        if "onedrive_rules" in data:
+            cfg["onedrive_rules"] = folders.schreibe_regeln(
+                folders.lies_regeln(str(data["onedrive_rules"] or "")))
         if "skip_folders" in data:
             cfg["skip_folders"] = _clean_folders(data["skip_folders"])
         if "auth_mode" in data:

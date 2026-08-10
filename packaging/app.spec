@@ -37,7 +37,7 @@ _v = {}
 exec((ROOT / "version.py").read_text(encoding="utf-8"), _v)
 VERSION = _v["VERSION"]
 
-TEILPROGRAMME = ["outlook_export", "teams_export", "rag_index",
+TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index",
                  "combined_search", "mcp_server", "rag_server", "corpus",
                  "auth", "folders", "settings", "i18n", "updates", "version",
                  "progress", "answer"]
