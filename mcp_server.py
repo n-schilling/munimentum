@@ -51,6 +51,7 @@ Run (stdio – auto-launched per client, the classic setup):
     python3 mcp_server.py --transport stdio [--store …]
 """
 
+import os
 import re
 import sys
 import sqlite3
@@ -123,6 +124,19 @@ _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
+
+# Untergrenze für die Bedeutungssuche (Kosinus, normalisierte Vektoren).
+#
+# Ohne sie liefert sie IMMER die besten k innerhalb des Filters – auch wenn
+# nichts passt. Wer einen Tag eingrenzt und nach einem Wort sucht, bekommt dann
+# alle Nachrichten dieses Tages, nach Ähnlichkeit sortiert. Genau so berichtet:
+# 18 Treffer, wovon 2 das Wort enthielten.
+#
+# An einem echten Index gemessen (bge-m3): eine Unsinnsanfrage kommt über 0,435
+# nicht hinaus, während echte Anfragen noch beim 40. Treffer bei 0,50–0,63
+# liegen. Dazwischen ist Platz. Wer ein anderes Modell benutzt, stellt es um.
+SEM_MIN = float(os.environ.get("SEMANTIC_MIN")
+                or settings.value("semantic_min", 0.45) or 0.45)
 
 
 def _db():
@@ -294,7 +308,7 @@ def _semantic_rank(con, query, where, params, limit):
         take = min(limit, n)
         order = np.argpartition(-sims, take - 1)[:take]
         order = order[np.argsort(-sims[order])]
-        return [(int(o) + 1, float(sims[o])) for o in order]
+        return [(int(o) + 1, float(sims[o])) for o in order if sims[o] >= SEM_MIN]
 
     ids = np.fromiter((r[0] for r in
                        con.execute(f"SELECT id FROM chunks WHERE {where}", params)),
@@ -309,7 +323,7 @@ def _semantic_rank(con, query, where, params, limit):
     take = min(limit, ids.size)
     order = np.argpartition(-sims, take - 1)[:take]
     order = order[np.argsort(-sims[order])]
-    return [(int(ids[o]), float(sims[o])) for o in order]
+    return [(int(ids[o]), float(sims[o])) for o in order if sims[o] >= SEM_MIN]
 
 
 # --------------------------------------------------------------------------

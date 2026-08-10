@@ -348,7 +348,10 @@ def test_search_preview_chars(state):
 # search_messages – semantischer Pfad und Hybrid-Fusion (RRF)
 # --------------------------------------------------------------------------
 def test_search_semantic_ranks_by_stubbed_cosine(state, monkeypatch):
-    # Query-Vektor: Urlaubsmail am ähnlichsten, Rechnungsmail auf Platz 2
+    # Query-Vektor: Urlaubsmail am ähnlichsten, Rechnungsmail auf Platz 2.
+    # Die Untergrenze steht hier bewusst aus: Platz 2 liegt mit 0,45 genau auf
+    # ihr, und geprüft wird die Reihenfolge, nicht das Aussortieren.
+    monkeypatch.setattr(mcp_server, "SEM_MIN", 0.0)
     _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.5})
     res = mcp_server.search_messages("freie Tage im Sommer", mode="semantic")
     assert res["backend"] == "semantic"
@@ -1024,3 +1027,45 @@ def test_vorschau_haelt_die_zugesagte_laenge(state):
     for n in (10, 40, 200):
         res = mcp_server.search_messages("Rechnung", mode="lexical", preview_chars=n)
         assert all(len(h["preview"]) <= n for h in res["results"])
+
+
+# --------------------------------------------------------------------------
+# Untergrenze der Bedeutungssuche
+#
+# Ohne sie liefert sie IMMER die besten k innerhalb des Filters – auch wenn
+# nichts passt. Aus dem Betrieb berichtet: ein Tag eingegrenzt, ein Wort
+# gesucht, 18 Treffer bekommen; zwei davon enthielten das Wort, die übrigen
+# sechzehn waren schlicht alles, was an dem Tag ankam.
+# --------------------------------------------------------------------------
+def test_schwache_treffer_fallen_raus(state, monkeypatch):
+    _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.2})
+    monkeypatch.setattr(mcp_server, "SEM_MIN", 0.45)
+    uids = _uids(mcp_server.search_messages("freie Tage im Sommer", mode="semantic"))
+    assert UID_M2 in uids, "der starke Treffer fehlt"
+    assert UID_M1 not in uids, "der schwache Treffer ist geblieben"
+
+
+def test_ohne_grenze_kaeme_alles_zurueck(state, monkeypatch):
+    """Die Gegenprobe im Test selbst: mit Grenze 0 verhält es sich wie vorher."""
+    _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.2})
+    monkeypatch.setattr(mcp_server, "SEM_MIN", 0.0)
+    assert UID_M1 in _uids(mcp_server.search_messages("irgendwas", mode="semantic"))
+
+
+def test_grenze_gilt_auch_mit_filter(state, monkeypatch):
+    """Der berichtete Fall lief über den gefilterten Zweig – der hat eigenen
+    Code und hätte die Grenze sonst nicht angewandt."""
+    _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.2})
+    monkeypatch.setattr(mcp_server, "SEM_MIN", 0.45)
+    uids = _uids(mcp_server.search_messages("egal", mode="semantic", source="outlook"))
+    assert UID_M2 in uids and UID_M1 not in uids
+
+
+def test_nichts_passt_nichts_kommt(state, monkeypatch):
+    """Wenn nichts die Grenze schafft, kommt nichts – nicht die am wenigsten
+    unpassende Nachricht. (Die Grenze liegt hier über jedem möglichen Kosinus;
+    _stub_semantic normalisiert die Gewichte, „alles schwach" ließe sich damit
+    sonst nicht ausdrücken.)"""
+    _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.9})
+    monkeypatch.setattr(mcp_server, "SEM_MIN", 1.5)
+    assert mcp_server.search_messages("xylophon quastenflosser", mode="semantic")["count"] == 0
