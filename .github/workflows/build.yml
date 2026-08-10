@@ -75,9 +75,36 @@ jobs:
 
       - name: Packen (macOS)
         if: startsWith(matrix.os, 'macos')
-        # ditto statt zip: erhält die Struktur des .app-Bündels samt
-        # Symlinks und Rechten, sonst startet die App nach dem Entpacken nicht.
-        run: ditto -c -k --keepParent "dist/Microsoft365-Archiv.app" "Microsoft365-Archiv-${{ matrix.ziel }}.zip"
+        # DMG statt ZIP. Die .app enthält 36 Symlinks, die zwischen
+        # Contents/Resources und Contents/Frameworks in beide Richtungen zeigen
+        # – so baut PyInstaller ein macOS-Bündel. Ein ZIP kann das abbilden,
+        # aber jeder Entpacker muss es richtig machen, und das Archivierungs-
+        # programm von macOS tut es nicht zuverlässig: es brach mit „size of the
+        # extracted file does not match" ab und hinterließ eine App, der die
+        # Verweise fehlten. Beim DMG wird gar nicht entpackt – Doppelklick hängt
+        # es ein, der Finder kopiert, Symlinks bleiben.
+        run: |
+          mkdir -p dmg
+          cp -R "dist/Microsoft365-Archiv.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Microsoft365-Archiv" -srcfolder dmg \
+            -ov -format UDZO -quiet "Microsoft365-Archiv-${{ matrix.ziel }}.dmg"
+
+      - name: Rauchtest am fertigen DMG (macOS)
+        if: startsWith(matrix.os, 'macos')
+        # Der Rauchtest oben lief auf dem Baumverzeichnis. Dieser läuft auf dem,
+        # was der Nutzer wirklich bekommt: einhängen, herauskopieren wie ein
+        # Finder-Zug nach „Programme", dort starten. Genau der Schritt, an dem
+        # es mit dem ZIP scheiterte.
+        run: |
+          hdiutil attach "Microsoft365-Archiv-${{ matrix.ziel }}.dmg" \
+            -nobrowse -readonly -mountpoint /tmp/m365
+          mkdir -p geprueft
+          cp -R "/tmp/m365/Microsoft365-Archiv.app" geprueft/
+          hdiutil detach /tmp/m365 -quiet
+          tot=$(find geprueft/Microsoft365-Archiv.app -type l ! -exec test -e {} \; -print | head -5)
+          test -z "$tot" || { echo "::error::Tote Symlinks nach dem Kopieren:"; echo "$tot"; exit 1; }
+          python packaging/smoke_test.py "geprueft/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv"
 
       - name: Packen (Windows)
         if: startsWith(matrix.os, 'windows')
@@ -99,6 +126,7 @@ jobs:
           # Dateien im Artefakt, nicht aus dessen Namen.
           name: bundle-${{ matrix.ziel }}
           path: |
+            Microsoft365-Archiv-${{ matrix.ziel }}.dmg
             Microsoft365-Archiv-${{ matrix.ziel }}.zip
             Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz
           if-no-files-found: error

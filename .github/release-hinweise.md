@@ -29,8 +29,8 @@ Microsoft Graph und dein lokales Ollama.
 
 | Datei | Für |
 |---|---|
-| `Microsoft365-Archiv-macos-arm64.zip` | Mac mit Apple Silicon (M1–M4) |
-| `Microsoft365-Archiv-macos-x86_64.zip` | Mac mit Intel-Prozessor |
+| `Microsoft365-Archiv-macos-arm64.dmg` | Mac mit Apple Silicon (M1–M4) |
+| `Microsoft365-Archiv-macos-x86_64.dmg` | Mac mit Intel-Prozessor |
 | `Microsoft365-Archiv-windows-x64.zip` | Windows 10/11 (64 Bit) |
 | `Microsoft365-Archiv-linux-x64.tar.gz` | Linux (64 Bit, glibc ab 2.35) |
 
@@ -39,7 +39,9 @@ dann `arm64`, sonst `x86_64`.
 
 ## Starten
 
-**macOS** — ZIP entpacken, `Microsoft365-Archiv.app` nach „Programme“ ziehen, doppelklicken.
+**macOS** — DMG doppelklicken, im geöffneten Fenster `Microsoft365-Archiv.app`
+auf den Ordner *Programme* daneben ziehen, das Fenster schließen (auswerfen)
+und die App aus *Programme* starten.
 
 **Windows** — ZIP entpacken (Rechtsklick → „Alle extrahieren“, nicht nur hineinschauen),
 dann `Microsoft365-Archiv.exe` im entpackten Ordner doppelklicken.

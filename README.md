@@ -16,15 +16,18 @@ next section describes the scripts it is built from.
 ## Download and run
 
 Bundles for macOS, Windows and Linux are attached to every
-[release](../../releases). They contain their own Python and every dependency:
-download, unpack, double-click. The UI opens in your default browser.
+[release](../../releases). They contain their own Python and every dependency —
+no installation. The UI opens in your default browser.
 
 | File | For |
 |---|---|
-| `Microsoft365-Archiv-macos-arm64.zip` | Mac with Apple Silicon |
-| `Microsoft365-Archiv-macos-x86_64.zip` | Mac with an Intel CPU |
+| `Microsoft365-Archiv-macos-arm64.dmg` | Mac with Apple Silicon |
+| `Microsoft365-Archiv-macos-x86_64.dmg` | Mac with an Intel CPU |
 | `Microsoft365-Archiv-windows-x64.zip` | Windows 10/11, 64-bit |
 | `Microsoft365-Archiv-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
+
+On macOS, open the disk image and drag the app to *Applications*; on Windows
+and Linux, unpack the archive.
 
 The bundles are **not code-signed**, so both systems warn on first launch. The
 release notes walk through it — on macOS: *Done*, then System Settings →
