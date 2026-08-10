@@ -985,3 +985,17 @@ def test_days_ohne_wirkung_wenn_date_from_genannt(state, heute):
     """Ein genanntes Datum gewinnt – auch wenn es viel weiter zurückreicht."""
     res = mcp_server.browse_messages(days=1, date_from="2025-05-01", source="teams")
     assert _uids(res) == [UID_TX, UID_T2, UID_T1, UID_T0]
+
+
+def test_list_folders_kennt_beide_quellen(state, tmp_path):
+    """Der Ordnerfilter in der Suche lud nur Postfachordner – gespiegelte
+    OneDrive-Ordner fehlten, obwohl sie als ctx im Index stehen."""
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    con.execute("INSERT INTO chunks (uid, seq, msg_idx, src, root, rel, ctx, text) "
+                "VALUES ('datei:Dateien/Kunden/a.pdf:0', 0, 0, 'datei', 'onedrive', "
+                "'Dateien/Kunden/a.pdf', 'Dateien/Kunden', 'Dateien / Kunden / a.pdf')")
+    con.commit()
+    con.close()
+    pfade = {f["path"] for f in mcp_server.list_folders(limit=100)["folders"]}
+    assert "Dateien/Kunden" in pfade, "OneDrive-Ordner fehlt im Filter"
+    assert any(p.startswith("inbox") or "/" in p for p in pfade), "Postfach fehlt jetzt"

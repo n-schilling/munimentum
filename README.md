@@ -120,6 +120,8 @@ python3 outlook_export.py --folders # sync the folder tree (once, then rarely)
 python3 outlook_export.py -default # no questions, default selection
 python3 outlook_export.py --check  # completeness against the mailbox
 python3 onedrive_export.py         # mirror OneDrive (only what changed)
+python3 onedrive_export.py --folders  # just refresh the folder tree
+python3 onedrive_export.py --check    # completeness against the drive
 python3 rag_index.py               # build the index
 python3 combined_search.py         # → combined_search.html, opens anywhere
 ```

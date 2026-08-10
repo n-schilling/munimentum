@@ -280,3 +280,52 @@ def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
     baum = {e["id"]: e["pfad"] for e in folders.lade(tmp_path)["ordner"]}
     assert set(baum) == {"a", "b"}, "A ist aus dem Baum gefallen"
     assert baum["b"] == "Dateien/B neu"
+
+
+# --------------------------------------------------------------------------
+# Vollständigkeit: was das Laufwerk hat gegen das, was hier liegt
+# --------------------------------------------------------------------------
+def test_check_findet_die_fehlende_datei(tmp_path):
+    da = tmp_path / "Dateien/Ordner/da.pdf"
+    da.parent.mkdir(parents=True)
+    da.write_bytes(b"x" * 10)
+    b = od.pruefe_vollstaendigkeit(
+        [_datei("1", "da.pdf"), _datei("2", "weg.pdf")], tmp_path, [], grenze=0)
+    assert (b["erwartet"], b["vorhanden"], b["fehlt"]) == (2, 1, 1)
+    assert [z["ordner"] for z in b["ordner"] if z["fehlt"]] == ["Dateien/Ordner"]
+
+
+def test_check_erkennt_die_halb_uebertragene_datei(tmp_path):
+    """Vorhanden heißt gleich groß. Sonst zählte ein Abbruch als Erfolg."""
+    halb = tmp_path / "Dateien/Ordner/a.pdf"
+    halb.parent.mkdir(parents=True)
+    halb.write_bytes(b"x" * 3)                      # erwartet werden 10
+    b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf")], tmp_path, [], grenze=0)
+    assert b["fehlt"] == 1
+
+
+def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
+    """Sonst meldete die erste Prüfung Hunderte Fehlalarme für Ordner, die man
+    selbst ausgeschlossen hat – ein Bericht, der beim ersten Mal Unsinn zeigt,
+    wird nie wieder aufgemacht."""
+    regeln = folders.lies_regeln("- Dateien/Fotos/**")
+    b = od.pruefe_vollstaendigkeit(
+        [_datei("1", "a.jpg", "/drive/root:/Fotos"),
+         _datei("2", "gross.zip", groesse=99_000_000)],
+        tmp_path, regeln, grenze=1_000_000)
+    assert b["fehlt"] == 0 and b["erwartet"] == 0
+    assert b["ausgelassen"] == 2
+    assert any(z["ausgelassen"] for z in b["ordner"])
+
+
+def test_check_erklaert_geloeschtes_statt_es_zu_vermissen(tmp_path):
+    od.schreibe_verschwunden(tmp_path / od.GONE_FILE, {}, ["Dateien/Ordner/alt.pdf"],
+                             "2026-01-01")
+    b = od.pruefe_vollstaendigkeit([], tmp_path, [], grenze=0)
+    assert b["geloescht"] == 1 and b["fehlt"] == 0
+
+
+def test_check_schreibt_den_bericht_atomar(tmp_path):
+    od.schreibe_bericht(tmp_path, {"erwartet": 1})
+    assert (tmp_path / od.BERICHT_DATEI).exists()
+    assert not (tmp_path / (od.BERICHT_DATEI + ".tmp")).exists()

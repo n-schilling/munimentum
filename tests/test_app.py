@@ -4211,3 +4211,23 @@ console.log('OK');
 
 def test_vorabversion_wird_nicht_als_aktuell_ausgegeben():
     _in_node(PRUEFUNG_VORABVERSION)
+
+
+def test_onedrive_pruefschritt(sandbox):
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), check_onedrive=True)
+                   if s["key"] == "check_onedrive")
+    argv = [str(x) for x in schritt["argv"]]
+    assert "--check" in argv and "onedrive_export" in " ".join(argv)
+
+
+def test_analytics_liefert_beide_berichte(server, sandbox):
+    a, port = server
+    for schluessel, inhalt in (("outlook_dir", {"erwartet": 5, "fehlt": 1, "ordner": []}),
+                               ("onedrive_dir", {"erwartet": 9, "fehlt": 0, "ordner": []})):
+        ziel = sandbox / a.cfg[schluessel]
+        ziel.mkdir(parents=True, exist_ok=True)
+        (ziel / "vollstaendigkeit.json").write_text(json.dumps(inhalt), encoding="utf-8")
+    r = call(port, "GET", "/api/analytics")[1]
+    assert r["vollstaendigkeit"]["erwartet"] == 5
+    assert r["vollstaendigkeit_onedrive"]["erwartet"] == 9
+    assert "onedrive" in r["groesse"], "Belegter Platz für den Spiegel fehlt"

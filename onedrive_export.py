@@ -25,6 +25,7 @@ die Zuordnung ID -> Pfad wüsste niemand, WAS da verschwunden ist.
 Setup:   pip install msal requests
 Start:   python3 onedrive_export.py [ausgabe-ordner]
          --folders  nur die Ordnerstruktur abgleichen, nichts herunterladen
+         --check    nur melden, was fehlt (vollstaendigkeit.json)
 
 Schalter (Umgebung schlägt app_config.json schlägt Vorgabe, siehe settings.py):
     ONEDRIVE_RULES    Include/Exclude-Regeln auf Pfaden, eine je Zeile, wie beim
@@ -38,6 +39,7 @@ Resume: dateien.tsv und delta.txt im Ausgabeordner. Bricht ein Lauf ab, wird
     darf keine Änderung verschlucken.
 """
 
+import json
 import os
 import re
 import sys
@@ -593,6 +595,94 @@ def lauf(graph, out):
     return fertig
 
 
+BERICHT_DATEI = "vollstaendigkeit.json"
+
+
+def pruefe_vollstaendigkeit(eintraege, out, regeln, grenze=None):
+    """Was das Laufwerk hat gegen das, was hier liegt – je Ordner.
+
+    Dieselbe Form wie beim Postfach, damit die Oberfläche sie ohne eine zweite
+    Ansicht zeichnen kann. Der Unterschied steckt in der Frage: beim Postfach
+    zählt Graph die Elemente je Ordner, hier kennt das Delta jede einzelne
+    Datei – die Prüfung ist deshalb genauer und weiß auch, ob eine Datei nur
+    halb angekommen ist.
+    """
+    grenze = max_bytes() if grenze is None else grenze
+    weg = lies_verschwunden(Path(out) / GONE_FILE)
+    je = {}
+    ausgelassen = 0
+    ausgelassene = set()
+    for e in eintraege:
+        if "deleted" in e or "file" not in e or "root" in e:
+            continue
+        rel = rel_pfad(e)
+        ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
+        if not folders.gilt(rel, regeln) or zu_gross(int(e.get("size") or 0), grenze):
+            ausgelassen += 1
+            ausgelassene.add(ordner)
+            continue
+        z = je.setdefault(ordner, {"ordner": ordner, "erwartet": 0, "vorhanden": 0,
+                                   "geloescht": 0, "ausgelassen": False, "fehlt": 0})
+        z["erwartet"] += 1
+        datei = Path(out) / rel
+        try:
+            da = datei.stat().st_size == int(e.get("size") or 0)
+        except OSError:
+            da = False
+        if da:
+            z["vorhanden"] += 1
+    # Grabsteine gehören zur Bilanz: sie erklären, warum hier mehr liegt als
+    # das Laufwerk noch kennt – eine Lücke sind sie nicht.
+    for rel in weg:
+        ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
+        z = je.setdefault(ordner, {"ordner": ordner, "erwartet": 0, "vorhanden": 0,
+                                   "geloescht": 0, "ausgelassen": False, "fehlt": 0})
+        z["geloescht"] += 1
+    for o in ausgelassene:
+        je.setdefault(o, {"ordner": o, "erwartet": 0, "vorhanden": 0,
+                          "geloescht": 0, "ausgelassen": True, "fehlt": 0})
+    for z in je.values():
+        z["fehlt"] = max(0, z["erwartet"] - z["vorhanden"])
+    liste = sorted(je.values(), key=lambda z: (-z["fehlt"], z["ordner"]))
+    return {
+        "geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
+        "ordner": liste,
+        "erwartet": sum(z["erwartet"] for z in liste),
+        "vorhanden": sum(z["vorhanden"] for z in liste),
+        "geloescht": sum(z["geloescht"] for z in liste),
+        "fehlt": sum(z["fehlt"] for z in liste),
+        "ausgelassen": ausgelassen,
+        "ausgelassene_ordner": sorted(ausgelassene)[:20],
+    }
+
+
+def schreibe_bericht(out, bericht):
+    ziel = Path(out) / BERICHT_DATEI
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ziel.with_name(ziel.name + ".tmp")
+    tmp.write_text(json.dumps(bericht, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(ziel)
+    return ziel
+
+
+def nur_pruefen(graph, out):
+    """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
+    out = Path(out)
+    print(f"Prüfe den Spiegel gegen OneDrive: {out.resolve()}")
+    eintraege, _ = sammle(graph, None)
+    bericht = pruefe_vollstaendigkeit(eintraege, out, aktuelle_regeln())
+    ziel = schreibe_bericht(out, bericht)
+    print(f"\n{bericht['erwartet']} erwartet, {bericht['vorhanden']} vorhanden, "
+          f"{bericht['geloescht']} nicht mehr im Laufwerk, {bericht['fehlt']} fehlen.")
+    if bericht["ausgelassen"]:
+        print(f"Nicht gezählt: {bericht['ausgelassen']} Dateien, welche die Auswahl "
+              f"oder die Größengrenze auslässt.")
+    for z in bericht["ordner"][:10]:
+        if z["fehlt"]:
+            print(f"  {z['fehlt']:>7} fehlen in {z['ordner']}")
+    print(f"Bericht: {ziel}")
+
+
 def nur_ordner(graph, out):
     """--folders: nur die Struktur holen, nichts herunterladen.
 
@@ -638,10 +728,11 @@ def main():
     if hinweis:
         print(hinweis)
     struktur = "--folders" in argv
+    pruefen = "--check" in argv
     argv = [a for a in argv if not a.startswith("--")]
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
-    (nur_ordner if struktur else lauf)(graph, out)
+    (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
 
 
 if __name__ == "__main__":

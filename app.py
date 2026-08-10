@@ -628,13 +628,13 @@ def _zaehle(db):
     return zahlen
 
 
-def lies_bericht(cfg):
+def lies_bericht(cfg, schluessel="outlook_dir"):
     """Der letzte Vollständigkeitsbericht, falls es einen gibt.
 
     Er entsteht nur auf Knopfdruck: die Prüfung fragt Microsoft, und das soll
     niemand ungefragt tun, nur weil eine Ansicht aufgeht.
     """
-    pfad = BASE / cfg["outlook_dir"] / "vollstaendigkeit.json"
+    pfad = BASE / cfg[schluessel] / "vollstaendigkeit.json"
     try:
         return json.loads(pfad.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -656,7 +656,9 @@ def kennzahlen(cfg):
            "gespraeche": None, "mit_anhang": None, "personen": 0,
            "verschwunden": None, "von": None, "bis": None,
            "built_at": _mtime_iso(db), "groesse": {}}
-    for schluessel, ordner in (("teams", cfg["teams_dir"]), ("outlook", cfg["outlook_dir"])):
+    for schluessel, ordner in (("teams", cfg["teams_dir"]),
+                               ("outlook", cfg["outlook_dir"]),
+                               ("onedrive", cfg["onedrive_dir"])):
         out["groesse"][schluessel] = ordner_groesse(BASE / ordner)
     out["groesse"]["index"] = ordner_groesse(BASE / cfg["store_dir"])
     if not out["exists"]:
@@ -825,7 +827,7 @@ def _auth_env(cfg):
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token="", reconstruct=None,
                 check=False, sync_folders=False, onedrive=False,
-                sync_onedrive=False):
+                sync_onedrive=False, check_onedrive=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -908,6 +910,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "label": "job.step.calendar" if reconstruct else "job.step.calendar.plain",
             "argv": argv, "env": dict(base_env),
             "nur_bei_neuem": True, "ziel": calendar_file(cfg),
+        })
+    if check_onedrive:
+        steps.append({
+            "key": "check_onedrive", "label": "job.step.check",
+            "argv": script_argv("onedrive_export", "--check", cfg["onedrive_dir"]),
+            "env": {**base_env,
+                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
+                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
         })
     if sync_onedrive:
         steps.append({
@@ -1551,7 +1561,7 @@ class App:
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, search_page=False, label="Lauf", reconstruct=None,
                check=False, sync_folders=False, onedrive=False,
-               sync_onedrive=False):
+               sync_onedrive=False, check_onedrive=False):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
@@ -1559,7 +1569,7 @@ class App:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
         braucht_zugang = (outlook or teams or onedrive or check
-                          or sync_folders or sync_onedrive)
+                          or sync_folders or sync_onedrive or check_onedrive)
         token = read_token() if braucht_zugang else ""
         # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
         # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
@@ -1574,7 +1584,8 @@ class App:
                             search_page=search_page, token=token,
                             reconstruct=reconstruct, check=check,
                             sync_folders=sync_folders, onedrive=onedrive,
-                            sync_onedrive=sync_onedrive)
+                            sync_onedrive=sync_onedrive,
+                            check_onedrive=check_onedrive)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
@@ -1719,8 +1730,10 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/document":
                 return self._json(self._document(one))
             if u.path == "/api/analytics":
-                return self._json({**kennzahlen(app.cfg),
-                                   "vollstaendigkeit": lies_bericht(app.cfg)})
+                return self._json({
+                    **kennzahlen(app.cfg),
+                    "vollstaendigkeit": lies_bericht(app.cfg),
+                    "vollstaendigkeit_onedrive": lies_bericht(app.cfg, "onedrive_dir")})
             if u.path == "/api/calendar":
                 return self._calendar()
             if u.path == "/source":
@@ -1766,6 +1779,7 @@ class Handler(BaseHTTPRequestHandler):
                     sync_folders=bool(data.get("sync_folders")),
                     onedrive=bool(data.get("onedrive")),
                     sync_onedrive=bool(data.get("sync_onedrive")),
+                    check_onedrive=bool(data.get("check_onedrive")),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "job.export"),
                     reconstruct=rekonstruktion)
@@ -2734,10 +2748,12 @@ main{padding-bottom:60px}
     <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
     <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
     <div class="row">
-      <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
+      <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Postfach prüfen</button>
+      <button class="ghost" id="ana-check-od" onclick="pruefeVollstaendigkeit('onedrive')" data-i18n="ana.check.run.onedrive">OneDrive prüfen</button>
       <span class="small muted" id="ana-check-state"></span>
     </div>
     <div id="ana-check-box"></div>
+    <div id="ana-check-box-od"></div>
   </div>
 </section>
 
@@ -3714,6 +3730,9 @@ function zeigeAnalytics(a){
       'onclick="zeigeVerschwundene()">' + esc(t('ana.gone.show')) + '</button></div>';
   }
   zeigeBericht(a.vollstaendigkeit);
+  // Zwei Berichte, zwei Kästen: sie entstehen unabhängig voneinander,
+  // und einer soll den anderen nicht verdecken.
+  zeigeBericht(a.vollstaendigkeit_onedrive, 'ana-check-box-od');
 }
 
 function fmtTag(ts){
@@ -3726,11 +3745,17 @@ function zeigeVerschwundene(){
   tab('suche'); sicht('treffer'); doSearch(0);
 }
 
-function zeigeBericht(b){
-  var kasten = el('ana-check-box');
-  if(!b){ kasten.innerHTML = '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; return; }
+function zeigeBericht(b, id){
+  var kasten = el(id || 'ana-check-box');
+  var od = id === 'ana-check-box-od';
+  // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe der
+  // Kasten sonst dauerhaft stehen, obwohl OneDrive vielleicht gar nicht genutzt wird.
+  if(!b){ kasten.innerHTML = od ? '' :
+            '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; return; }
+  var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
+              esc(t(od ? 'ana.check.title.onedrive' : 'ana.check.title.mail')) + '</h3>';
   var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
-  var kopf = '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
+  var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
     esc(t(b.fehlt ? 'ana.check.gaps' : 'ana.check.complete',
           {n: zahl(b.fehlt), erwartet: zahl(b.erwartet), da: zahl(b.vorhanden),
            weg: zahl(b.geloescht)})) + '</p>' +
@@ -3753,9 +3778,10 @@ function zeigeBericht(b){
     }).join('') + '</tbody></table>';
 }
 
-function pruefeVollstaendigkeit(){
+function pruefeVollstaendigkeit(quelle){
   el('ana-check-state').textContent = t('ana.check.running');
-  post('/api/run', {check: true, label: 'job.check'}).then(function(r){
+  post('/api/run', quelle === 'onedrive' ? {check_onedrive: true, label: 'job.check'}
+                                         : {check: true, label: 'job.check'}).then(function(r){
     if(!r.ok){ el('ana-check-state').textContent = mtext(r.message); return; }
     warteAufLauf();
   });
