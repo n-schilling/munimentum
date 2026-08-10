@@ -3,6 +3,12 @@
 # Anmelden und wäre sonst weder ignoriert noch bemerkt worden.
 gx_token.txt
 msal_cache.bin
+# Signierschlüssel für macOS (siehe packaging/signieren.md). Sie gehören in die
+# GitHub-Secrets, nie ins Repository – ein öffentlich gewordener privater
+# Schlüssel lässt sich nur durch Widerrufen des Zertifikats reparieren.
+*.p12
+*.p8
+*.mobileprovision
 outlook_export/*
 teams_export/*
 path/

@@ -217,12 +217,15 @@ def zusammenfassung(daten, regeln):
     }
 
 
-def auf_platte(ordner, wurzeln=()):
+def auf_platte(ordner, wurzeln=(), endung=".eml"):
     """Was im Archiv wirklich liegt: {Ordnerpfad: Zahl der .eml-Dateien}.
 
     Nur unterhalb der genannten Wurzeln – sonst zählten `kalender/` und
     `kontakte/` als Postfachordner, die sie nie waren. Die Wurzeln kommen aus
     dem Baum selbst, damit hier kein Ordnername fest verdrahtet ist.
+
+    `endung` grenzt ein, was zählt: beim Postfach die `.eml`, beim
+    OneDrive-Spiegel alles außer halb übertragenen `.teil`-Dateien.
 
     Auf einem echten Archiv (rund 45.000 Mails, gut 400 Ordner) dauert das
     0,06 s – billig
@@ -233,13 +236,15 @@ def auf_platte(ordner, wurzeln=()):
     basis = Path(ordner)
     for wurzel in dict.fromkeys(wurzeln or ()):
         for verzeichnis, _unter, dateien in os.walk(basis / wurzel):
-            anzahl = sum(1 for d in dateien if d.lower().endswith(".eml"))
+            anzahl = sum(1 for d in dateien
+                         if (d.lower().endswith(endung) if endung
+                             else not d.endswith(".teil")))
             if anzahl:
                 gefunden[Path(verzeichnis).relative_to(basis).as_posix()] = anzahl
     return gefunden
 
 
-def plan(ordner, regeln, daten=None):
+def plan(ordner, regeln, daten=None, endung=".eml"):
     """Was der nächste Export täte – Ordner für Ordner, ohne ihn zu starten.
 
     Die Regeln sind mächtig genug, dass ihr Ergebnis nicht mehr im Kopf
@@ -257,7 +262,7 @@ def plan(ordner, regeln, daten=None):
     """
     daten = lade(ordner) if daten is None else daten
     eintraege = (daten or {}).get("ordner", [])
-    archiv = auf_platte(ordner, [e["pfad"].split("/")[0] for e in eintraege])
+    archiv = auf_platte(ordner, [e["pfad"].split("/")[0] for e in eintraege], endung)
     an, aus = [], []
     for e in eintraege:
         ja, regel = erklaere(e["pfad"], regeln)

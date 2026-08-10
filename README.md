@@ -112,7 +112,7 @@ Each one runs on its own, without the app:
 | `answer.py` | Prompt and streaming for the Ollama summary |
 | `progress.py` | Machine-readable progress, for the progress bar |
 | `i18n.py`, `lang/` | UI translations |
-| `packaging/` | PyInstaller spec and the smoke test that gates every release |
+| `packaging/` | PyInstaller spec, the smoke test that gates every release, and the macOS signing guide |
 
 ```bash
 python3 teams_export.py            # asks what to export

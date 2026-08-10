@@ -155,6 +155,17 @@ def test_groessengrenze(tmp_path):
     assert len(od.plane(gross, bestand, tmp_path, [], grenze=0)["laden"]) == 1
 
 
+def test_die_wurzel_steht_im_baum(tmp_path):
+    """Sonst gilt jede Datei direkt im Laufwerk als „nur noch lokal" – in der
+    Exportliste ein Fehlalarm, der genau einmal auftritt und dauerhaft irritiert."""
+    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    wurzel = {"id": "root!", "name": "root", "root": {}, "folder": {"childCount": 4},
+              "parentReference": {"driveId": "d"}}
+    plan = od.plane([wurzel], bestand, tmp_path, [], grenze=0)
+    assert [e["pfad"] for e in plan["baum"]] == [od.DATEI_DIR]
+    assert plan["laden"] == []
+
+
 def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
     """Ein Notizbuch ist kein Inhalt; seine .one-Dateien kommen einzeln vor."""
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)

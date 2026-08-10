@@ -24,6 +24,7 @@ die Zuordnung ID -> Pfad wüsste niemand, WAS da verschwunden ist.
 
 Setup:   pip install msal requests
 Start:   python3 onedrive_export.py [ausgabe-ordner]
+         --folders  nur die Ordnerstruktur abgleichen, nichts herunterladen
 
 Schalter (Umgebung schlägt app_config.json schlägt Vorgabe, siehe settings.py):
     ONEDRIVE_RULES    Include/Exclude-Regeln auf Pfaden, eine je Zeile, wie beim
@@ -452,6 +453,11 @@ def plane(eintraege, bestand, wurzel, regeln, grenze=None):
                 geloescht.append(alt["rel"])
             continue
         if "root" in e:
+            # Die Wurzel gehört in den Baum, obwohl Graph sie nicht als Ordner
+            # meldet. Fehlt sie, gilt jede Datei, die direkt im Laufwerk liegt,
+            # als „nur noch lokal vorhanden" – ein Fehlalarm in der Exportliste.
+            baum.append({"id": kennung, "pfad": DATEI_DIR, "name": DATEI_DIR,
+                         "elemente": int((e.get("folder") or {}).get("childCount") or 0)})
             continue
         rel = rel_pfad(e)
         if ist_ordner(e) or ist_paket(e):
@@ -587,6 +593,33 @@ def lauf(graph, out):
     return fertig
 
 
+def nur_ordner(graph, out):
+    """--folders: nur die Struktur holen, nichts herunterladen.
+
+    Zählt bewusst VOLLSTÄNDIG auf und ignoriert den gespeicherten Delta-Zeiger:
+    ein Abgleich soll den ganzen Baum zeigen, nicht die Handvoll Ordner, die
+    sich seit gestern geändert haben. Und er rückt den Zeiger nicht vor – sonst
+    hielte der nächste Export die noch nie geholten Dateien für erledigt.
+    """
+    out = Path(out)
+    print(f"Gleiche die OneDrive-Ordner ab: {out.resolve()}")
+    eintraege, _ = sammle(graph, None)
+    bestand = Bestand(out / BESTAND_DATEI)
+    plan = plane(eintraege, bestand, out, aktuelle_regeln())
+    alt = folders.lade(out)
+    daten = folders.speichere(out, baum_zusammenfuehren(alt, plan["baum"],
+                                                        plan["entfernt"]), alt)
+    z = folders.zusammenfassung(daten, aktuelle_regeln())
+    print(f"\n{z['ordner_gesamt']} Ordner im Laufwerk, "
+          f"{z['ordner_gewaehlt']} nach den Regeln gewählt.")
+    for art, liste in (("neu", daten["neu"]), ("nicht mehr da", daten["verschwunden"]),
+                       ("umbenannt", daten["umbenannt"])):
+        if liste:
+            print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
+                  + (" …" if len(liste) > 5 else ""))
+    print(f"Abgelegt: {folders.pfad(out)}")
+
+
 def _hilfe_gewuenscht(argv):
     return any(a in ("-h", "--help", "help") for a in argv)
 
@@ -604,9 +637,11 @@ def main():
     hinweis = settings.report()
     if hinweis:
         print(hinweis)
+    struktur = "--folders" in argv
+    argv = [a for a in argv if not a.startswith("--")]
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
-    lauf(graph, out)
+    (nur_ordner if struktur else lauf)(graph, out)
 
 
 if __name__ == "__main__":

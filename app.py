@@ -824,7 +824,8 @@ def _auth_env(cfg):
 
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token="", reconstruct=None,
-                check=False, sync_folders=False, onedrive=False):
+                check=False, sync_folders=False, onedrive=False,
+                sync_onedrive=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -907,6 +908,13 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "label": "job.step.calendar" if reconstruct else "job.step.calendar.plain",
             "argv": argv, "env": dict(base_env),
             "nur_bei_neuem": True, "ziel": calendar_file(cfg),
+        })
+    if sync_onedrive:
+        steps.append({
+            "key": "onedrive_folders", "label": "job.step.folders",
+            "argv": script_argv("onedrive_export", "--folders", cfg["onedrive_dir"]),
+            "env": {**base_env,
+                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or "")},
         })
     if sync_folders:
         steps.append({
@@ -1477,6 +1485,9 @@ class App:
             "folders": folders.zusammenfassung(
                 folders.lade(BASE / self.cfg["outlook_dir"]),
                 auswahlregeln(self.cfg)),
+            "folders_onedrive": folders.zusammenfassung(
+                folders.lade(BASE / self.cfg["onedrive_dir"]),
+                folders.lies_regeln(self.cfg.get("onedrive_rules") or "")),
         }
 
     def auth_modus(self):
@@ -1538,14 +1549,16 @@ class App:
 
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, search_page=False, label="Lauf", reconstruct=None,
-               check=False, sync_folders=False, onedrive=False):
+               check=False, sync_folders=False, onedrive=False,
+               sync_onedrive=False):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
             embeddings = self.ollama()["running"] and self.ollama()["has_model"]
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
-        braucht_zugang = outlook or teams or onedrive or check or sync_folders
+        braucht_zugang = (outlook or teams or onedrive or check
+                          or sync_folders or sync_onedrive)
         token = read_token() if braucht_zugang else ""
         # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
         # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
@@ -1559,7 +1572,8 @@ class App:
                             calendar=calendar, embeddings=embeddings,
                             search_page=search_page, token=token,
                             reconstruct=reconstruct, check=check,
-                            sync_folders=sync_folders, onedrive=onedrive)
+                            sync_folders=sync_folders, onedrive=onedrive,
+                            sync_onedrive=sync_onedrive)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
@@ -1750,6 +1764,7 @@ class Handler(BaseHTTPRequestHandler):
                     check=bool(data.get("check")),
                     sync_folders=bool(data.get("sync_folders")),
                     onedrive=bool(data.get("onedrive")),
+                    sync_onedrive=bool(data.get("sync_onedrive")),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "job.export"),
                     reconstruct=rekonstruktion)
@@ -2010,21 +2025,33 @@ class Handler(BaseHTTPRequestHandler):
                                 limit=min(int(q.get("limit", 300) or 300), 1000))
 
     def _ordnerplan(self, data):
-        """Was der nächste Export täte – ohne ihn zu starten.
+        """Was der nächste Lauf täte – ohne ihn zu starten.
 
         Nimmt die Regeln aus dem Formular, nicht die gespeicherten: sonst
         zeigte die Vorschau den Stand von vorhin, während daneben schon die
         neue Regel steht.
+
+        Zwei Quellen, eine Auswertung. Der Unterschied ist klein genug, dass
+        eine zweite Kopie sich nicht rechnet: beim Postfach zählen die `.eml`,
+        beim Spiegel alle Dateien.
         """
         cfg = self.app.cfg
-        regeln = auswahlregeln(cfg, data.get("folder_rules"),
-                               data.get("skip_folders"))
-        ordner = BASE / cfg["outlook_dir"]
+        onedrive = str(data.get("quelle") or "") == "onedrive"
+        if onedrive:
+            regeln = folders.lies_regeln(
+                data.get("onedrive_rules")
+                if data.get("onedrive_rules") is not None
+                else cfg.get("onedrive_rules") or "")
+            ordner, endung = BASE / cfg["onedrive_dir"], None
+        else:
+            regeln = auswahlregeln(cfg, data.get("folder_rules"),
+                                   data.get("skip_folders"))
+            ordner, endung = BASE / cfg["outlook_dir"], ".eml"
         daten = folders.lade(ordner)
         if not daten:
             return {"ok": False, "leer": True}
         return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(ordner, regeln, daten)}
+                **folders.plan(ordner, regeln, daten, endung)}
 
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -2575,8 +2602,6 @@ main{padding-bottom:60px}
         <strong class="small" data-i18n="export.onedrive">OneDrive</strong>
         <label class="chk"><input type="checkbox" id="c-onedrive_enabled" onchange="saveCats()">
           <span data-i18n="export.cat.files">OneDrive-Dateien</span></label>
-        <p class="small muted" style="max-width:260px;margin:4px 0 0"
-           data-i18n="export.onedrive.note">Sichert die Dateien. Durchsuchbar sind Name und Ordner – nicht der Inhalt.</p>
       </div>
     </div>
     <p class="small muted" id="teams-note" style="margin-top:10px"></p>
@@ -2761,6 +2786,11 @@ main{padding-bottom:60px}
     </div>
     <p class="small muted" data-i18n="settings.onedrive.mirror">Gelöschtes bleibt liegen; frühere Fassungen einer geänderten Datei nicht.</p>
     <h3 style="margin:16px 0 4px;font-size:15px" data-i18n="settings.onedrive.rules.title">Welche Ordner gespiegelt werden</h3>
+    <p class="small muted" id="od-folders-state"></p>
+    <div class="row" style="margin:6px 0">
+      <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+      <span class="small muted" id="od-folders-msg"></span>
+    </div>
     <textarea id="c-onedrive_rules" style="min-height:90px"
       placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
     <p class="small muted" data-i18n-html="settings.onedrive.rules.hint">Eine Regel je Zeile – wie beim Postfach, die <strong>letzte</strong> zutreffende gewinnt.</p>
@@ -2768,6 +2798,9 @@ main{padding-bottom:60px}
       <label class="small"><span data-i18n="settings.onedrive.maxmb">Dateien überspringen ab</span>
         <input type="number" id="c-onedrive_max_mb" min="0" step="10" style="width:90px"> MB</label>
       <span class="small muted" data-i18n="settings.onedrive.maxmb.hint">0 = ohne Grenze.</span>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button class="ghost" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
     </div>
   </div>
 
@@ -3130,6 +3163,7 @@ function renderStatus(s){
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   el('data-dir').textContent = s.data_dir;
   zeigeOrdnerstand(s.folders || {});
+  zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   el('data-dir2').textContent = s.data_dir;
   // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
   // 2,5 Sekunden, was gerade getippt wird.
@@ -4040,11 +4074,12 @@ function speichereEinstellungen(){
 }
 /* Der Ordnerbaum ist seit 3.0 ein eigenes Ergebnis, kein Nebenprodukt jedes
    Exports. Diese Zeile sagt, wie alt er ist und was die Regeln daraus machen. */
-function zeigeOrdnerstand(f){
-  var kasten = el('folders-state');
+function zeigeOrdnerstand(f, id){
+  var kasten = el(id || 'folders-state');
   if(!kasten) return;
   if(!f.abgeglichen){ kasten.textContent = t('folders.none'); return; }
-  var text = t('folders.state', {an: (f.ordner_gewaehlt || 0).toLocaleString(LOC),
+  var text = t(id ? 'folders.state.files' : 'folders.state',
+                              {an: (f.ordner_gewaehlt || 0).toLocaleString(LOC),
                                  gesamt: (f.ordner_gesamt || 0).toLocaleString(LOC),
                                  mails: (f.mails_gewaehlt || 0).toLocaleString(LOC),
                                  when: fmt(f.abgeglichen)});
@@ -4052,14 +4087,17 @@ function zeigeOrdnerstand(f){
   kasten.textContent = text;
 }
 
-function gleicheOrdnerAb(){
-  el('folders-msg').textContent = t('folders.syncing');
-  post('/api/run', {sync_folders: true, label: 'job.folders'}).then(function(r){
-    if(!r.ok){ el('folders-msg').textContent = mtext(r.message); return; }
+function gleicheOrdnerAb(quelle){
+  var od = quelle === 'onedrive';
+  var kasten = od ? 'od-folders-msg' : 'folders-msg';
+  el(kasten).textContent = t('folders.syncing');
+  post('/api/run', od ? {sync_onedrive: true, label: 'job.folders'}
+                      : {sync_folders: true, label: 'job.folders'}).then(function(r){
+    if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
         clearInterval(timer);
-        el('folders-msg').textContent = '';
+        el(kasten).textContent = '';
       }
     }, 1500);
   });
@@ -4090,13 +4128,16 @@ function ordnerZuruecksetzen(){
    ein. Hier läuft deshalb dieselbe Auswertung wie im Export – nur als Liste
    statt als Lauf, und mit dem, was gerade in den Feldern steht, nicht mit dem
    zuletzt Gespeicherten. */
-var planDaten = null;
+var planDaten = null, planQuelle = 'outlook';
 
-function zeigeExportliste(){
+function zeigeExportliste(quelle){
   planDaten = null;
+  planQuelle = quelle || 'outlook';
   planFenster();
-  post('/api/folder-plan', {folder_rules: el('c-folder_rules').value,
-                            skip_folders: el('c-skip_folders').value})
+  post('/api/folder-plan', planQuelle === 'onedrive'
+      ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
+      : {folder_rules: el('c-folder_rules').value,
+         skip_folders: el('c-skip_folders').value})
     .then(function(p){
       planDaten = p;
       if(wizardOffen === 'plan') planFenster();
@@ -4116,7 +4157,8 @@ function planFenster(){
       '<div id="plan-listen"></div>';
   }
   oeffneEigenes('plan', modalKopf(t('plan.title'), 'plan') + koerper +
-    modalFuss({text: t('folders.sync'), tun: 'planAbgleichen()'}));
+    modalFuss({text: t('folders.sync'),
+               tun: 'planAbgleichen(&quot;' + planQuelle + '&quot;)'}));
   if(p && p.ok) planListen();
 }
 
@@ -4156,9 +4198,9 @@ function planListen(){
     gruppe('plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
 }
 
-function planAbgleichen(){
+function planAbgleichen(quelle){
   closeWizard('plan');
-  gleicheOrdnerAb();
+  gleicheOrdnerAb(quelle);
 }
 
 /* ---------- Assistenten ---------- */

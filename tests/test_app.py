@@ -4075,3 +4075,89 @@ console.log('OK');
 
 def test_onedrive_haekchen_startet_den_lauf():
     _in_node(PRUEFUNG_ONEDRIVE)
+
+
+def test_onedrive_abgleich_ist_ein_eigener_schritt(sandbox):
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), sync_onedrive=True)
+                   if s["key"] == "onedrive_folders")
+    argv = [str(x) for x in schritt["argv"]]
+    assert "--folders" in argv and "onedrive_export" in " ".join(argv)
+    # Ohne Zugang darf er nicht starten – er fragt das Laufwerk ab.
+    assert "ONEDRIVE_RULES" in schritt["env"]
+
+
+def test_onedrive_abgleich_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
+    a = app_mod.App()
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
+    ok, why = a.launch(sync_onedrive=True, label="job.folders")
+    assert not ok and schluessel(why) == "srv.notoken"
+
+
+def test_exportliste_kennt_beide_quellen(server, sandbox):
+    """Dieselbe Auswertung, zwei Ordner – beim Postfach zählen die .eml, beim
+    Spiegel alle Dateien."""
+    a, port = server
+    _baum(sandbox, a.cfg,
+          [{"id": "1", "pfad": "Dateien/Kunden", "name": "Kunden", "elemente": 3}])
+    od = sandbox / a.cfg["onedrive_dir"]
+    folders_mod.speichere(od, [{"id": "1", "pfad": "Dateien/Kunden",
+                                "name": "Kunden", "elemente": 3}])
+    (od / "Dateien" / "Kunden").mkdir(parents=True, exist_ok=True)
+    for name in ("a.pdf", "b.docx"):
+        (od / "Dateien" / "Kunden" / name).write_text("x", encoding="utf-8")
+
+    r = call(port, "POST", "/api/folder-plan",
+             {"quelle": "onedrive", "onedrive_rules": ""})[1]
+    assert r["ok"] and [z["pfad"] for z in r["an"]] == ["Dateien/Kunden"]
+    assert r["an"][0]["archiv"] == 2, "beim Spiegel zählen alle Dateien, nicht nur .eml"
+
+    r = call(port, "POST", "/api/folder-plan",
+             {"quelle": "onedrive", "onedrive_rules": "- Dateien/Kunden/**"})[1]
+    assert [z["pfad"] for z in r["aus"]] == ["Dateien/Kunden"]
+    assert r["aus"][0]["regel"] == "- Dateien/Kunden/**"
+
+
+PRUEFUNG_OD_ORDNER = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  if(String(pfad).indexOf('/api/folder-plan') < 0)
+    return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+  return Promise.resolve({json: function(){ return Promise.resolve({
+    ok: true, abgeglichen: '2026-08-10T12:00:00',
+    an: [{pfad: 'Dateien/Kunden', elemente: 3, archiv: 3, regel: null}],
+    aus: [], weg: [], mails_an: 3, mails_aus: 0, mails_weg: 0}); }});
+};
+document.getElementById('c-onedrive_rules').value = '- Dateien/Fotos/**';
+
+// Abgleich: eigener Lauf, eigene Meldung.
+gleicheOrdnerAb('onedrive');
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+pruefe(JSON.parse(lauf.body).sync_onedrive === true, 'Falscher Abgleich: ' + lauf.body);
+pruefe(document.getElementById('od-folders-msg').textContent.length > 0,
+       'Meldung steht nicht an der OneDrive-Karte');
+pruefe(document.getElementById('folders-msg').textContent === '',
+       'Meldung landete beim Postfach');
+
+// Exportliste: mit den OneDrive-Regeln, nicht mit denen des Postfachs.
+gesendet = [];
+zeigeExportliste('onedrive');
+setTimeout(function(){
+  var frage = gesendet.filter(function(g){ return g.pfad.indexOf('folder-plan') >= 0; })[0];
+  var b = JSON.parse(frage.body);
+  pruefe(b.quelle === 'onedrive', 'Quelle fehlt: ' + frage.body);
+  pruefe(b.onedrive_rules === '- Dateien/Fotos/**', 'Regeln aus dem falschen Feld');
+  pruefe(b.folder_rules === undefined, 'Postfach-Regeln mitgeschickt');
+  pruefe(document.getElementById('plan-listen').innerHTML.indexOf('Dateien/Kunden') >= 0,
+         'Liste nicht gezeichnet');
+  // Der Knopf im Fenster muss den OneDrive-Abgleich starten, nicht den anderen.
+  pruefe(modal.innerHTML.indexOf('planAbgleichen(&quot;onedrive&quot;)') >= 0,
+         'Abgleich im Fenster zeigt auf die falsche Quelle');
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_onedrive_ordnerknoepfe_wirken_auf_die_eigene_quelle():
+    _in_node(PRUEFUNG_OD_ORDNER)
