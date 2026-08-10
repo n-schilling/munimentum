@@ -1069,3 +1069,12 @@ def test_nichts_passt_nichts_kommt(state, monkeypatch):
     _stub_semantic(monkeypatch, state["chunks"], {UID_M2: 1.0, UID_M1: 0.9})
     monkeypatch.setattr(mcp_server, "SEM_MIN", 1.5)
     assert mcp_server.search_messages("xylophon quastenflosser", mode="semantic")["count"] == 0
+
+
+def test_untergrenze_versteht_prozent_und_kosinus(monkeypatch):
+    """In der Oberfläche steht eine Prozentzahl, im Code ein Kosinus. Wer sie
+    von Hand in die Datei schreibt, tut es mal so, mal so."""
+    for roh, erwartet in (("45", 0.45), ("0.45", 0.45), ("60", 0.60),
+                          ("0", 0.0), ("unsinn", 0.45), ("500", 0.99)):
+        monkeypatch.setenv("SEMANTIC_MIN", roh)
+        assert mcp_server._sem_min() == pytest.approx(erwartet, abs=0.001), roh

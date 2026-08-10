@@ -32,8 +32,33 @@ CHARS_PER_SOURCE = 2000
 # Ollamas Vorgabe für num_ctx ist 2048 Token. Bei bis zu 20 Quellen à 2000
 # Zeichen sind das rund 40.000 Zeichen allein an Kontext – das Modell sähe
 # davon ein Zwanzigstel und antwortete auf Treffer, die es nie gelesen hat.
-# 32768 deckt den größten Fall mit Reserve.
-NUM_CTX = 32768
+#
+# Ein fest eingestelltes großes Fenster ist aber genauso falsch: Ollama legt
+# den Zwischenspeicher für die volle Länge an, ob sie gebraucht wird oder
+# nicht. Auf einem Rechner mit 24 GB und einem 17-GB-Modell drückt das ins
+# Auslagern, und die Antwort tröpfelt. Gemessen, mit acht Quellen:
+#
+#     32768 Token Fenster ->  2,4 Token/s   (Buchstabenkino)
+#      8192 Token Fenster ->  5,5 Token/s
+#
+# Deshalb wird das Fenster jetzt nach dem tatsächlichen Text bemessen.
+NUM_CTX_MIN, NUM_CTX_MAX = 4096, 32768
+ANTWORT_RESERVE = 1024          # Token, die die Antwort selbst braucht
+
+
+def num_ctx(messages):
+    """Ein Fenster, das zum Text passt – auf die nächste Zweierpotenz gerundet.
+
+    Vier Zeichen je Token ist grob, aber in der richtigen Richtung grob: die
+    Schätzung fällt eher zu groß aus, und zu groß heißt hier nur „etwas mehr
+    Reserve", während zu klein hieße, dass Quellen unter den Tisch fallen.
+    """
+    zeichen = sum(len(m.get("content") or "") for m in messages)
+    gebraucht = zeichen // 4 + ANTWORT_RESERVE
+    fenster = NUM_CTX_MIN
+    while fenster < gebraucht and fenster < NUM_CTX_MAX:
+        fenster *= 2
+    return min(fenster, NUM_CTX_MAX)
 
 # Qwen 3 denkt von Haus aus vor der Antwort. Für eine Zusammenfassung aus
 # bereits gefundenen Stellen kostet das nur Zeit – und der Gedankengang liefe
@@ -108,11 +133,12 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
     """
     import requests
     try:
+        messages = build_messages(query, quellen, lang, chars)
         r = requests.post(
             f"{ollama.rstrip('/')}/api/chat",
             json={"model": model, "stream": True, "think": THINK,
-                  "options": {"temperature": 0.2, "num_ctx": NUM_CTX},
-                  "messages": build_messages(query, quellen, lang, chars)},
+                  "options": {"temperature": 0.2, "num_ctx": num_ctx(messages)},
+                  "messages": messages},
             stream=True, timeout=timeout)
         if r.status_code == 404:
             yield {"error": "model", "detail": model}

@@ -250,6 +250,10 @@ DEFAULT_CONFIG = {
     "embed_model": "bge-m3",
     "chat_model": "qwen3.6:27b",            # formuliert die Antwort, lokal
     "answer_sources": 8,                    # wie viele Treffer sie dafür liest
+    # Untergrenze der Bedeutungssuche; siehe mcp_server.SEM_MIN. Als Ganzzahl
+    # in Prozent, damit die Oberfläche ein normales Zahlenfeld benutzen kann
+    # und niemand über ein Komma stolpert.
+    "semantic_min": 45,
     # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
     # eine längere Liste, durch die man erst einmal hindurchsehen muss.
     "search_results": 20,
@@ -1880,6 +1884,7 @@ class Handler(BaseHTTPRequestHandler):
         # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
         for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
                                ("index_batch", 1, 512), ("answer_sources", 1, 20),
+                               ("semantic_min", 0, 95),
                                ("search_results", 5, 100)):
             if key in data:
                 try:
@@ -2918,6 +2923,13 @@ main{padding-bottom:60px}
         <input type="number" id="c-answer_sources" min="1" max="20" style="width:80px"></label>
     </div>
     <p class="small muted" data-i18n="settings.chat_model.hint" style="margin-top:2px"></p>
+    <h3 style="margin:18px 0 4px;font-size:15px" data-i18n="settings.semantic.title">Wie ähnlich ein Treffer mindestens sein muss</h3>
+    <div class="row">
+      <label class="small"><span data-i18n="settings.semantic_min">Untergrenze</span>
+        <input type="number" id="c-semantic_min" min="0" max="95" step="5" style="width:80px"></label>
+      <span class="small muted">%</span>
+    </div>
+    <p class="small muted" data-i18n-html="settings.semantic.hint">Erklärung.</p>
   </div>
 
   <div class="card">
@@ -4191,7 +4203,7 @@ function pruefeUpdate(){
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb'];
+                'onedrive_max_mb','semantic_min'];
 var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir',
                 'folder_rules','onedrive_rules'];
 var cfgGefuellt = false;

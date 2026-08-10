@@ -135,8 +135,26 @@ _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
 # An einem echten Index gemessen (bge-m3): eine Unsinnsanfrage kommt über 0,435
 # nicht hinaus, während echte Anfragen noch beim 40. Treffer bei 0,50–0,63
 # liegen. Dazwischen ist Platz. Wer ein anderes Modell benutzt, stellt es um.
-SEM_MIN = float(os.environ.get("SEMANTIC_MIN")
-                or settings.value("semantic_min", 0.45) or 0.45)
+def _sem_min():
+    """Als Prozentzahl eingestellt (0–95), hier als Kosinus gebraucht.
+
+    Prozent, weil die Oberfläche dann ein normales Zahlenfeld benutzen kann und
+    niemand über ein Komma stolpert. Eine Zahl über 1 wird deshalb als Prozent
+    gelesen – auch wenn jemand sie in der Datei von Hand einträgt.
+    """
+    roh = os.environ.get("SEMANTIC_MIN")
+    if roh is None:
+        roh = settings.value("semantic_min", 45)
+    try:
+        wert = float(roh)
+    except (TypeError, ValueError):
+        return 0.45
+    if wert > 1:
+        wert /= 100.0
+    return min(max(wert, 0.0), 0.99)
+
+
+SEM_MIN = _sem_min()
 
 
 def _db():

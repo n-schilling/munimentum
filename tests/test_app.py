@@ -4687,3 +4687,34 @@ def test_suchfeld_und_markierung_sind_verdrahtet():
     # Die Vorschau geht durch hervor(), nicht an ihm vorbei.
     j = app_mod.PAGE.index('class="prev"')
     assert "hervor(h.preview" in app_mod.PAGE[j:j + 120], "Begriff wird nicht markiert"
+
+
+@pytest.mark.parametrize("wert,erwartet", [
+    (60, 60), (0, 0), (95, 95),
+    (200, 95),      # über den Rand: auf den Rand gezogen
+    (-5, 0),
+])
+def test_untergrenze_ist_einstellbar(server, wert, erwartet):
+    a, port = server
+    call(port, "POST", "/api/config", {"semantic_min": wert})
+    assert a.cfg["semantic_min"] == erwartet
+
+
+def test_unbrauchbare_untergrenze_laesst_den_wert_stehen(server):
+    """Nicht auf die Vorgabe zurückfallen: wer 60 eingestellt hat und sich
+    vertippt, soll nicht unbemerkt wieder bei 45 landen."""
+    a, port = server
+    call(port, "POST", "/api/config", {"semantic_min": 60})
+    call(port, "POST", "/api/config", {"semantic_min": "unsinn"})
+    assert a.cfg["semantic_min"] == 60
+
+
+def test_untergrenze_wird_erklaert():
+    """Eine Zahl ohne Erklärung stellt niemand um – und wer sie doch umstellt,
+    soll wissen, was zu hoch und was zu niedrig ist."""
+    text = i18n.strings("de")["settings.semantic.hint"]
+    assert len(text) > 400, "zu knapp für eine Einstellung, die die Suche verändert"
+    for stichwort in ("45", "0", "Volltextsuche"):
+        assert stichwort in text, f"„{stichwort}“ fehlt in der Erklärung"
+    for code in ("de", "en", "fr"):
+        assert i18n.strings(code)["settings.semantic.hint"] != text or code == "de"

@@ -168,8 +168,8 @@ missing or broken one is ignored. What it deliberately does **not** supply is
 answers with citations. Ranking is hybrid (BM25 + embeddings, merged with
 Reciprocal Rank Fusion) and falls back to pure full-text if Ollama is away.
 Semantic hits below a similarity floor are dropped (`SEMANTIC_MIN`, default
-0.45) — without it a narrow filter returns everything that passes it, sorted
-by similarity rather than matched.
+45 %, adjustable in *Settings*) — without it a narrow filter returns everything
+that passes it, sorted by similarity rather than matched.
 
 ```bash
 python3 mcp_server.py              # http://127.0.0.1:8365/mcp

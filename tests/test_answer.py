@@ -198,8 +198,26 @@ def test_kontextfenster_wird_gesetzt(ollama):
     gelesen hat."""
     gesehen = ollama(Strom(["ok"]))
     list(answer.stream("F", QUELLEN, "m", "http://o.test"))
-    assert gesehen[0]["json"]["options"]["num_ctx"] == answer.NUM_CTX
-    assert answer.NUM_CTX >= 32768
+    ktx = gesehen[0]["json"]["options"]["num_ctx"]
+    zeichen = sum(len(m["content"]) for m in gesehen[0]["json"]["messages"])
+    assert ktx >= zeichen / 4, "der Text passt nicht ins Fenster"
+    # … und ist nicht einfach immer das Maximum: genau daran hing die Langsamkeit.
+    assert ktx == answer.NUM_CTX_MIN < answer.NUM_CTX_MAX, (
+        f"kurzer Text bekommt ein Fenster von {ktx}")
+
+
+def test_kontextfenster_waechst_mit_dem_text():
+    """Ein fest eingestelltes grosses Fenster ist genauso falsch wie ein zu
+    kleines: Ollama legt den Zwischenspeicher fuer die volle Laenge an, ob sie
+    gebraucht wird oder nicht. Auf einem Rechner mit 24 GB und einem 17-GB-
+    Modell drueckt das ins Auslagern - gemessen 2,4 statt 5,5 Token je Sekunde."""
+    klein = answer.num_ctx([{"content": "x" * 400}])
+    gross = answer.num_ctx([{"content": "x" * 40000}])
+    assert klein == answer.NUM_CTX_MIN, "kurze Frage bekommt trotzdem ein grosses Fenster"
+    assert gross > klein and gross <= answer.NUM_CTX_MAX
+    # Der groesste Fall passt noch hinein.
+    assert answer.num_ctx([{"content": "x" * 20 * answer.CHARS_PER_SOURCE}]) \
+        <= answer.NUM_CTX_MAX
 
 
 def test_denken_ist_abgeschaltet(ollama):
@@ -217,5 +235,7 @@ def test_der_kontext_passt_ins_fenster():
                 "title": "Titel", "text": "x" * answer.CHARS_PER_SOURCE}
                for _ in range(20)]
     zeichen = len(answer.build_context(quellen))
-    assert zeichen / 4 < answer.NUM_CTX * 0.8, (
-        f"{zeichen} Zeichen passen nicht mit Reserve in {answer.NUM_CTX} Token")
+    fenster = answer.num_ctx([{"content": answer.build_context(quellen)}])
+    assert zeichen / 4 < fenster * 0.9, (
+        f"{zeichen} Zeichen passen nicht mit Reserve in {fenster} Token")
+    assert fenster <= answer.NUM_CTX_MAX
