@@ -3755,14 +3755,16 @@ function zeigeBericht(b, id){
               esc(t(od ? 'ana.check.title.onedrive' : 'ana.check.title.mail')) + '</h3>';
   var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
   var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
-    esc(t(b.fehlt ? 'ana.check.gaps' : 'ana.check.complete',
+    esc(t(b.fehlt ? (od ? 'ana.check.gaps.files' : 'ana.check.gaps')
+                  : 'ana.check.complete',
           {n: zahl(b.fehlt), erwartet: zahl(b.erwartet), da: zahl(b.vorhanden),
            weg: zahl(b.geloescht)})) + '</p>' +
     '<p class="small muted">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</p>' +
     // Ohne diese Zeile sähe es aus, als fehlten 20.000 Mails. Sie fehlen
     // nicht – sie wurden nie geholt, weil die Auswahl sie auslässt.
     (b.ausgelassen ? '<p class="small muted">' +
-      esc(t('ana.check.skipped', {n: zahl(b.ausgelassen),
+      esc(t(od ? 'ana.check.skipped.files' : 'ana.check.skipped',
+            {n: zahl(b.ausgelassen),
                                   ordner: (b.ausgelassene_ordner || []).join(', ')})) +
       '</p>' : '');
   if(!luecken.length){ kasten.innerHTML = kopf; return; }

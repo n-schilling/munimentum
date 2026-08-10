@@ -329,3 +329,26 @@ def test_check_schreibt_den_bericht_atomar(tmp_path):
     od.schreibe_bericht(tmp_path, {"erwartet": 1})
     assert (tmp_path / od.BERICHT_DATEI).exists()
     assert not (tmp_path / (od.BERICHT_DATEI + ".tmp")).exists()
+
+
+def test_null_heisst_ohne_grenze(monkeypatch):
+    """Regression: settings.number zieht auf mindestens 1 hoch. Bei „Parallele
+    Downloads" richtig, hier falsch – aus der ausgeschalteten Grenze wurde eine
+    von einem Megabyte, und der Spiegel ließ still jede größere Datei liegen.
+    Aufgefallen ist es erst am Bericht: „208 nicht gezählt", ohne dass jemand
+    etwas ausgeschlossen hatte."""
+    monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
+    assert od.max_bytes() == 0
+    assert od.zu_gross(500 * 1024 * 1024) is False, "0 muss ALLES durchlassen"
+    monkeypatch.setenv("ONEDRIVE_MAX_MB", "50")
+    assert od.max_bytes() == 50 * 1024 * 1024
+    assert od.zu_gross(60 * 1024 * 1024) is True
+
+
+def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
+    monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
+    gross = [_datei(str(i), f"f{i}.bin", groesse=99_000_000) for i in range(3)]
+    plan = od.plane(gross, od.Bestand(tmp_path / od.BESTAND_DATEI), tmp_path, [])
+    assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
+    b = od.pruefe_vollstaendigkeit(gross, tmp_path, [])
+    assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"

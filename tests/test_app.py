@@ -4282,3 +4282,27 @@ console.log('OK');
 
 def test_ein_pruefknopf_entscheidet_selbst_ueber_onedrive():
     _in_node(PRUEFUNG_PRUEFKNOPF)
+
+
+PRUEFUNG_BERICHT_EINHEIT = GRUNDZUSTAND + """
+var b = {geprueft: '2026-08-10T18:46:00', erwartet: 421, vorhanden: 420,
+         geloescht: 0, fehlt: 1, ausgelassen: 208,
+         ausgelassene_ordner: ['Dateien/Fotos'],
+         ordner: [{ordner: 'Dateien/Fotos', erwartet: 5, vorhanden: 4, fehlt: 1}]};
+zeigeBericht(b, 'ana-check-box-od');
+var h = document.getElementById('ana-check-box-od').innerHTML;
+pruefe(h.indexOf('Mails') < 0 && h.indexOf('mails') < 0,
+       'Bericht des Spiegels spricht von Mails: ' + h.slice(0, 220));
+pruefe(h.indexOf('Dateien fehlen') >= 0 || h.indexOf('files missing') >= 0,
+       'Einheit fehlt in der Luecken-Zeile');
+
+// Der Postfachbericht bleibt, wie er war.
+zeigeBericht(b);
+var m = document.getElementById('ana-check-box').innerHTML;
+pruefe(m.indexOf('Mails') >= 0, 'Postfachbericht spricht nicht mehr von Mails');
+console.log('OK');
+"""
+
+
+def test_bericht_nennt_die_richtige_einheit():
+    _in_node(PRUEFUNG_BERICHT_EINHEIT)

@@ -90,8 +90,15 @@ def workers():
 
 
 def max_bytes():
-    """Obergrenze je Datei; 0 heißt ohne Grenze."""
-    return max(0, settings.number("ONEDRIVE_MAX_MB", "onedrive_max_mb", 0)) * 1024 * 1024
+    """Obergrenze je Datei in Bytes; 0 heißt ohne Grenze.
+
+    low=0 ist hier entscheidend: settings.number zieht sonst auf mindestens 1
+    hoch. Das ist bei „Parallele Downloads" richtig und hier falsch – aus der
+    ausgeschalteten Grenze wurde eine von einem Megabyte, und der Spiegel ließ
+    still jede größere Datei liegen.
+    """
+    return max(0, settings.number("ONEDRIVE_MAX_MB", "onedrive_max_mb", 0,
+                                  low=0)) * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
