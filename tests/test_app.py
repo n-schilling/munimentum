@@ -4438,3 +4438,34 @@ console.log('OK');
 
 def test_analytics_kacheln_zeigen_zahlen_und_erklaeren_am_infozeichen():
     _in_node(PRUEFUNG_ANALYTICS_KACHELN)
+
+
+def test_kein_stylesheet_zieht_ein_infozeichen_auseinander():
+    """Regression: `.schritt span{flex:1;min-width:240px}` stammte vom
+    Erklärungstext, der dort einmal stand. Nach dem Umbau traf sie das (i) –
+    aus dem Kreis wurde eine 240 Pixel breite Ellipse quer durch die Zeile.
+
+    Geprüft wird deshalb allgemein: keine Regel, die *jedes* span in einem
+    Behälter breitzieht, darf auf einen Behälter treffen, in dem ein (i) sitzt.
+    """
+    # Kommentare erst weg: dieser hier zitiert die alte Regel im Wortlaut, und
+    # der Test soll auf das Stylesheet schauen, nicht auf seine Begründung.
+    css = re.sub(r"/\*.*?\*/", "",
+                 app_mod.PAGE.split("<style>")[1].split("</style>")[0], flags=re.S)
+    markup = app_mod.PAGE.split("</style>")[1]
+    gefaehrlich = re.findall(r"\.([\w-]+) span\{([^}]*)\}", css)
+    for klasse, regel in gefaehrlich:
+        if not re.search(r"flex:\s*1|min-width|width:", regel):
+            continue
+        for stueck in markup.split(f'class="{klasse}"')[1:]:
+            bis_ende = stueck.split("</div>")[0]
+            assert 'class="info"' not in bis_ende, (
+                f'.{klasse} span{{{regel}}} trifft das (i) darin')
+
+
+def test_infozeichen_behaelt_seine_groesse():
+    css = re.sub(r"/\*.*?\*/", "",
+                 app_mod.PAGE.split("<style>")[1].split("</style>")[0], flags=re.S)
+    regel = re.search(r"\.info\{([^}]*)\}", css).group(1)
+    assert "width:17px" in regel and "height:17px" in regel
+    assert "flex:0 0 auto" in regel, "sonst zieht der nächste Flex-Behälter daran"

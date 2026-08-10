@@ -2492,9 +2492,13 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 
 /* Einzelschritte: eingeklappt, jeder Knopf mit dem Satz, wann man ihn braucht */
 #einzelschritte summary{cursor:pointer;font-weight:650;font-size:15px}
-.schritt{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap;margin:10px 0}
+.schritt{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .schritt button{flex:0 0 auto;min-width:230px}
-.schritt span{flex:1;min-width:240px}
+/* Die frühere Regel .schritt span{flex:1;min-width:240px} stammte vom
+   Erklärungstext, der hier stand. Sie traf danach das (i) und zog den Kreis
+   auf 240 Pixel Breite auseinander – als flache Ellipse quer durch die Zeile.
+   Was hier steht, ist ein Zeichen und keine Textspalte. */
+.schritt .info{flex:0 0 auto}
 
 /* Berechtigungen im Token-Assistenten: eine unauffällige Zeile, solange sie
    nicht das Problem sind. */
