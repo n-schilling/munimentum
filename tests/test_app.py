@@ -4220,6 +4220,23 @@ def test_onedrive_pruefschritt(sandbox):
     assert "--check" in argv and "onedrive_export" in " ".join(argv)
 
 
+def test_ein_pruefknopf_prueft_beides_in_einem_lauf(sandbox):
+    """Das Postfach zuerst: es ist die Hauptquelle und gehört im Protokoll
+    nach oben."""
+    keys = [s["key"] for s in app_mod.build_steps(app_mod.load_config(),
+                                                  check=True, check_onedrive=True)]
+    assert keys == ["check", "check_onedrive"]
+
+
+def test_vollstaendigkeit_hat_genau_einen_knopf():
+    """Zwei Knöpfe zwangen den Nutzer erst zu einer Entscheidung darüber, was
+    er eigentlich wissen will – „prüfen" ist eine Frage an das Archiv, nicht
+    an eine Quelle."""
+    assert 'onclick="pruefeVollstaendigkeit()"' in app_mod.PAGE
+    assert "pruefeVollstaendigkeit('onedrive')" not in app_mod.PAGE
+    assert app_mod.PAGE.count("pruefeVollstaendigkeit(") == 2   # Aufruf + Definition
+
+
 def test_analytics_liefert_beide_berichte(server, sandbox):
     a, port = server
     for schluessel, inhalt in (("outlook_dir", {"erwartet": 5, "fehlt": 1, "ordner": []}),
@@ -4231,3 +4248,37 @@ def test_analytics_liefert_beide_berichte(server, sandbox):
     assert r["vollstaendigkeit"]["erwartet"] == 5
     assert r["vollstaendigkeit_onedrive"]["erwartet"] == 9
     assert "onedrive" in r["groesse"], "Belegter Platz für den Spiegel fehlt"
+
+
+PRUEFUNG_PRUEFKNOPF = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+function starte(){ gesendet = []; pruefeVollstaendigkeit();
+  return JSON.parse(gesendet.filter(function(g){
+    return g.pfad.indexOf('/api/run') >= 0; })[0].body); }
+
+// OneDrive wird nicht benutzt: nur das Postfach pruefen, keine Netzanfrage
+// fuer eine Antwort, die niemanden interessiert.
+S.config = {onedrive_enabled: false};
+S.folders_onedrive = {};
+var a = starte();
+pruefe(a.check === true && a.check_onedrive === false,
+       'Ohne OneDrive trotzdem geprueft: ' + JSON.stringify(a));
+
+// Haekchen gesetzt: beides.
+S.config.onedrive_enabled = true;
+pruefe(starte().check_onedrive === true, 'Mit Haekchen nicht mitgeprueft');
+
+// Haekchen aus, aber schon einmal gespiegelt: der Bericht ist weiter sinnvoll.
+S.config.onedrive_enabled = false;
+S.folders_onedrive = {abgeglichen: '2026-08-10T12:00:00'};
+pruefe(starte().check_onedrive === true, 'Vorhandener Spiegel wird uebergangen');
+console.log('OK');
+"""
+
+
+def test_ein_pruefknopf_entscheidet_selbst_ueber_onedrive():
+    _in_node(PRUEFUNG_PRUEFKNOPF)

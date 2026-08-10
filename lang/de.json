@@ -404,7 +404,6 @@
   "ana.check.title": "Vollständigkeit",
   "ana.check.sub": "Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt. Gelöschtes zählt nicht als Lücke – es liegt ja noch im Archiv.",
   "ana.check.run": "Jetzt prüfen",
-  "ana.check.run.onedrive": "OneDrive prüfen",
   "ana.check.title.mail": "Postfach",
   "ana.check.title.onedrive": "OneDrive",
   "ana.check.running": "Prüfung läuft…",

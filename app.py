@@ -911,14 +911,6 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "argv": argv, "env": dict(base_env),
             "nur_bei_neuem": True, "ziel": calendar_file(cfg),
         })
-    if check_onedrive:
-        steps.append({
-            "key": "check_onedrive", "label": "job.step.check",
-            "argv": script_argv("onedrive_export", "--check", cfg["onedrive_dir"]),
-            "env": {**base_env,
-                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
-                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
-        })
     if sync_onedrive:
         steps.append({
             "key": "onedrive_folders", "label": "job.step.folders",
@@ -937,6 +929,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "check", "label": "job.step.check",
             "argv": script_argv("outlook_export", "--check", cfg["outlook_dir"]),
             "env": dict(base_env),
+        })
+    if check_onedrive:
+        steps.append({
+            "key": "check_onedrive", "label": "job.step.check",
+            "argv": script_argv("onedrive_export", "--check", cfg["onedrive_dir"]),
+            "env": {**base_env,
+                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
+                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
         })
     if search_page:
         steps.append({
@@ -2748,8 +2748,7 @@ main{padding-bottom:60px}
     <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
     <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
     <div class="row">
-      <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Postfach prüfen</button>
-      <button class="ghost" id="ana-check-od" onclick="pruefeVollstaendigkeit('onedrive')" data-i18n="ana.check.run.onedrive">OneDrive prüfen</button>
+      <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
       <span class="small muted" id="ana-check-state"></span>
     </div>
     <div id="ana-check-box"></div>
@@ -3778,10 +3777,18 @@ function zeigeBericht(b, id){
     }).join('') + '</tbody></table>';
 }
 
-function pruefeVollstaendigkeit(quelle){
+/* Ein Knopf, nicht zwei. „Prüfen" ist eine Frage an das Archiv, keine an eine
+   Quelle – wer zwei Knöpfe sieht, muss erst entscheiden, was er eigentlich
+   wissen will. OneDrive kommt aber nur mit, wenn es benutzt wird: sonst wäre
+   es eine Netzanfrage für eine Antwort, die niemanden interessiert. */
+function nutztOneDrive(){
+  return !!((S.config && S.config.onedrive_enabled) ||
+            (S.folders_onedrive && S.folders_onedrive.abgeglichen));
+}
+function pruefeVollstaendigkeit(){
   el('ana-check-state').textContent = t('ana.check.running');
-  post('/api/run', quelle === 'onedrive' ? {check_onedrive: true, label: 'job.check'}
-                                         : {check: true, label: 'job.check'}).then(function(r){
+  post('/api/run', {check: true, check_onedrive: nutztOneDrive(),
+                    label: 'job.check'}).then(function(r){
     if(!r.ok){ el('ana-check-state').textContent = mtext(r.message); return; }
     warteAufLauf();
   });

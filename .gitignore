@@ -11,6 +11,7 @@ msal_cache.bin
 *.mobileprovision
 outlook_export/*
 teams_export/*
+onedrive_export/*
 path/
 path/*
 .DS_Store
