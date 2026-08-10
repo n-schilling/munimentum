@@ -1,5 +1,13 @@
 Fertige App zum Herunterladen — Python oder sonstige Installationen sind nicht nötig.
 
+## Neu in 2.0.1
+
+**Fehlerbehebung:** Stand die Anmeldung auf *Anmelden*, riss ein Export sofort
+das Anmeldefenster auf — auch dann, wenn ein gültiger Zugangsschlüssel bereitlag.
+Der Rückfall auf den Schlüssel gab es zwar, er griff aber erst, nachdem jemand
+das Fenster weggeklickt hatte. Jetzt wird zuerst still gefragt, dann der
+Schlüssel genommen, und das Fenster kommt nur, wenn es sonst keinen Weg gibt.
+
 ## Neu in 2.0.0
 
 **Anmelden statt Schlüssel einfügen — wahlweise.** Der Assistent bietet oben

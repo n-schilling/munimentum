@@ -340,20 +340,28 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print, nur_still=False):
     Cache da, und liegt ein Schlüssel bereit, wird der genommen. Umgekehrt nicht
     – wer den Schlüssel-Modus wählt, soll nicht überraschend ein Anmeldefenster
     sehen.
+
+    Im Login-Modus wird deshalb ZUERST still versucht. Ein Anmeldefenster ist
+    eine Unterbrechung; es aufzureißen, obwohl ein gültiger Schlüssel bereitliegt,
+    wäre genau die Überraschung, die der Rückfall verhindern soll.
     """
     gewaehlt = modus()
     if gewaehlt == "login":
         try:
-            klient = mit_login()
+            klient = mit_login(nur_still=True)      # ohne Rückfrage
             beschreibe(ausgabe)
             return klient
         except SystemExit:
-            schluessel = load_pasted_token()
-            if not schluessel:
-                raise
-            ausgabe("Keine gültige Anmeldung – nutze den hinterlegten "
-                    "Zugangsschlüssel für diesen Lauf.")
+            pass
+        schluessel = load_pasted_token()
+        if schluessel:
+            ausgabe("Keine gültige Anmeldung im Zwischenspeicher – nutze den "
+                    "hinterlegten Zugangsschlüssel für diesen Lauf.")
             return mit_schluessel(schluessel)
+        if nur_still:                               # Zeitplan: niemand sitzt davor
+            raise SystemExit("Keine gültige Anmeldung und kein Zugangsschlüssel.")
+        beschreibe(ausgabe)
+        return mit_login()                          # jetzt erst das Fenster
     schluessel = load_pasted_token()
     if schluessel:
         beschreibe(ausgabe)

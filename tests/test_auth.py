@@ -321,7 +321,7 @@ def test_angemeldet_nennt_das_konto(sauber, fake_msal, tmp_path):
 def wege():
     gesehen = []
     return gesehen, (lambda tok: gesehen.append(("schluessel", tok)) or "K"), \
-        (lambda: gesehen.append(("login", None)) or "L")
+        (lambda nur_still=False: gesehen.append(("login", nur_still)) or "L")
 
 
 def test_schluesselmodus_nimmt_den_schluessel(sauber, monkeypatch):
@@ -336,45 +336,56 @@ def test_schluesselmodus_ohne_schluessel_meldet_an(sauber):
     man vor einer Fehlermeldung ohne Weg nach vorn."""
     gesehen, k, ell = wege()
     assert auth.waehle_zugang(k, ell, ausgabe=lambda *_: None) == "L"
-    assert gesehen == [("login", None)]
+    assert gesehen == [("login", False)]
 
 
-def test_loginmodus_meldet_an(sauber, monkeypatch):
+def test_loginmodus_versucht_zuerst_still(sauber, monkeypatch):
+    """Aus der Praxis gemeldet: der Export riss sofort den Browser auf, obwohl
+    ein gültiger Schlüssel bereitlag. Der Rückfall hing an einem SystemExit –
+    und das kommt erst, nachdem das Fenster offen war. Also erst still fragen.
+    """
     monkeypatch.setenv("GRAPH_AUTH", "login")
-    monkeypatch.setenv("GRAPH_TOKEN", "abc")     # vorhanden, aber nicht dran
+    monkeypatch.setenv("GRAPH_TOKEN", "abc")
     gesehen, k, ell = wege()
     assert auth.waehle_zugang(k, ell, ausgabe=lambda *_: None) == "L"
-    assert gesehen == [("login", None)]
+    assert gesehen == [("login", True)], "nicht still versucht"
 
 
 def test_loginmodus_faellt_auf_den_schluessel_zurueck(sauber, monkeypatch):
-    """Cache weg, aber ein Schlüssel liegt bereit: dann läuft der Export, statt
-    zu scheitern."""
+    """Cache weg, aber ein Schlüssel liegt bereit: dann läuft der Export – und
+    zwar ohne dass jemand ein Anmeldefenster wegklicken muss."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.setenv("GRAPH_TOKEN", "abc")
     gesehen = []
 
-    def login_scheitert():
-        gesehen.append(("login", None))
-        raise SystemExit("kein Cache")
+    def login(nur_still=False):
+        gesehen.append(("login", nur_still))
+        if nur_still:
+            raise SystemExit("kein Cache")
+        raise AssertionError("Anmeldefenster trotz vorhandenem Schlüssel")
     zeilen = []
     ergebnis = auth.waehle_zugang(
         lambda tok: gesehen.append(("schluessel", tok)) or "K",
-        login_scheitert, ausgabe=zeilen.append)
+        login, ausgabe=zeilen.append)
     assert ergebnis == "K"
-    assert gesehen == [("login", None), ("schluessel", "abc")]
+    assert gesehen == [("login", True), ("schluessel", "abc")]
     assert any("Zugangsschlüssel" in z for z in zeilen)
 
 
-def test_loginmodus_ohne_ausweg_bricht_ab(sauber, monkeypatch):
+def test_loginmodus_ohne_ausweg_oeffnet_das_fenster(sauber, monkeypatch):
+    """Kein Cache, kein Schlüssel – dann ist das Fenster das einzig Sinnvolle.
+    Aber erst dann."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
-    gesehen, k, _ = wege()
+    gesehen = []
 
-    def login_scheitert():
-        raise SystemExit("kein Cache")
-    with pytest.raises(SystemExit):
-        auth.waehle_zugang(k, login_scheitert, ausgabe=lambda *_: None)
-    assert gesehen == []                    # der Schlüsselweg wurde nicht genommen
+    def login(nur_still=False):
+        gesehen.append(("login", nur_still))
+        if nur_still:
+            raise SystemExit("kein Cache")
+        return "L"
+    k = lambda tok: gesehen.append(("schluessel", tok)) or "K"   # noqa: E731
+    assert auth.waehle_zugang(k, login, ausgabe=lambda *_: None) == "L"
+    assert gesehen == [("login", True), ("login", False)]
 
 
 def test_beschreibe_nennt_den_weg(sauber, monkeypatch):
@@ -408,3 +419,94 @@ def test_skript_nutzt_auth(modul):
     assert "auth.waehle_zugang(" in quelle
     assert "msal.PublicClientApplication" not in quelle, "eigene Anmeldung übrig"
     assert "def load_pasted_token" not in quelle, "eigene Schlüsselfunktion übrig"
+
+
+# --------------------------------------------------------------------------
+# Login-Modus mit bereitliegendem Schlüssel
+#
+# Aus der Praxis gemeldet: „python3 outlook_export.py -default“ riss sofort den
+# Browser auf, obwohl ein gültiger Schlüssel in gx_token.txt lag. Der Rückfall
+# gab es zwar, aber er hing an einem SystemExit – und das kommt erst, nachdem
+# das Anmeldefenster offen war und jemand es weggeklickt hat.
+# --------------------------------------------------------------------------
+class _Protokoll:
+    def __init__(self):
+        self.zeilen = []
+
+    def __call__(self, *args):
+        self.zeilen.append(" ".join(str(a) for a in args))
+
+    def __contains__(self, text):
+        return any(text in z for z in self.zeilen)
+
+
+def _wege(cache_taugt, interaktiv_erlaubt=True):
+    """(mit_schluessel, mit_login, gesehen) – mit_login merkt sich das Wie."""
+    gesehen = []
+
+    def mit_login(nur_still=False):
+        gesehen.append("still" if nur_still else "fenster")
+        if nur_still and not cache_taugt:
+            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
+        if not nur_still and not interaktiv_erlaubt:
+            raise AssertionError("Anmeldefenster wurde geöffnet")
+        return "LOGIN"
+
+    return (lambda tok: f"KEY:{tok}"), mit_login, gesehen
+
+
+def test_login_modus_nimmt_den_schluessel_ohne_fenster(monkeypatch, tmp_path):
+    """Der gemeldete Fall. Zuerst still versuchen; scheitert das und liegt ein
+    Schlüssel bereit, wird der genommen – ohne Browser."""
+    monkeypatch.setenv("GRAPH_AUTH", "login")
+    monkeypatch.setenv("GRAPH_TOKEN", "eyJ0gueltig")
+    mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False,
+                                               interaktiv_erlaubt=False)
+    log = _Protokoll()
+    klient = auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=log)
+    assert klient == "KEY:eyJ0gueltig"
+    assert gesehen == ["still"], "es wurde mehr als still versucht"
+    assert "Zugangsschlüssel" in log
+
+
+def test_login_modus_nutzt_den_cache_wenn_er_traegt(monkeypatch):
+    monkeypatch.setenv("GRAPH_AUTH", "login")
+    monkeypatch.setenv("GRAPH_TOKEN", "eyJ0gueltig")
+    mit_schluessel, mit_login, gesehen = _wege(cache_taugt=True,
+                                               interaktiv_erlaubt=False)
+    assert auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll()) == "LOGIN"
+    assert gesehen == ["still"]
+
+
+def test_ohne_cache_und_ohne_schluessel_kommt_das_fenster(monkeypatch):
+    """Dann ist es das einzig Sinnvolle – aber erst dann."""
+    monkeypatch.setenv("GRAPH_AUTH", "login")
+    monkeypatch.delenv("GRAPH_TOKEN", raising=False)
+    mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False)
+    assert auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll()) == "LOGIN"
+    assert gesehen == ["still", "fenster"]
+
+
+def test_zeitplan_reisst_nie_ein_fenster_auf(monkeypatch):
+    """nur_still heißt: es sitzt niemand davor. Ein Anmeldefenster, das um drei
+    Uhr nachts aufgeht und bis zum Morgen wartet, hilft niemandem."""
+    monkeypatch.setenv("GRAPH_AUTH", "login")
+    monkeypatch.delenv("GRAPH_TOKEN", raising=False)
+    mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False,
+                                               interaktiv_erlaubt=False)
+    with pytest.raises(SystemExit):
+        auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll(),
+                           nur_still=True)
+    assert gesehen == ["still"]
+
+
+def test_schluesselmodus_oeffnet_nie_ungefragt_ein_fenster(monkeypatch):
+    """Die Gegenrichtung: wer den Schlüssel wählt, soll nicht überrascht
+    werden."""
+    monkeypatch.setenv("GRAPH_AUTH", "token")
+    monkeypatch.setenv("GRAPH_TOKEN", "eyJ0gueltig")
+    mit_schluessel, mit_login, gesehen = _wege(cache_taugt=True,
+                                               interaktiv_erlaubt=False)
+    assert auth.waehle_zugang(mit_schluessel, mit_login,
+                              ausgabe=_Protokoll()) == "KEY:eyJ0gueltig"
+    assert gesehen == [], "im Schlüssel-Modus wurde die Anmeldung angefasst"
