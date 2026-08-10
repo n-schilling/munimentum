@@ -375,7 +375,7 @@
   "view.hits": "Treffer",
   "settings.search.sub": "Beides läuft in deinem Ollama auf diesem Rechner: die semantische Hälfte der Suche und die Zusammenfassung der Treffer.",
   "export.start.hint": "Holt neue Mails und Chats, baut danach Index und Kalender neu auf. Mehr braucht es im Normalfall nicht.",
-  "export.steps.title": "Einzelne Schritte",
+  "export.steps.title": "Expertenmodus",
   "export.steps.sub": "Normalerweise nicht nötig – „Export starten“ erledigt das alles nacheinander. Einzeln braucht man sie nur in diesen Fällen:",
   "export.index.only.when": "Wenn du nichts Neues holen, aber den Suchindex neu bauen willst – etwa nachdem du in Ollama ein Embedding-Modell nachgeladen hast und die Suche nun auch semantisch arbeiten soll.",
   "export.calendar.build.when": "Liest alle Mails erneut, um gelöschte Termine daraus zurückzuholen. Läuft nach jedem Outlook-Export ohnehin mit; einzeln nur, wenn Kalender oder Adressbuch leer bleiben.",

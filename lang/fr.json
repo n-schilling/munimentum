@@ -375,7 +375,7 @@
   "view.hits": "Résultats",
   "settings.search.sub": "Les deux s’exécutent dans votre Ollama sur cette machine : la moitié sémantique de la recherche et le résumé des résultats.",
   "export.start.hint": "Récupère les nouveaux courriels et conversations, puis reconstruit l’index et le calendrier. Normalement, cela suffit.",
-  "export.steps.title": "Étapes individuelles",
+  "export.steps.title": "Mode expert",
   "export.steps.sub": "Normalement inutile — « Démarrer l’export » enchaîne tout cela. Vous n’en avez besoin séparément que dans ces cas :",
   "export.index.only.when": "Quand vous ne voulez rien récupérer de neuf mais reconstruire l’index — par exemple après avoir récupéré un modèle d’embedding dans Ollama pour que la recherche fonctionne aussi sémantiquement.",
   "export.calendar.build.when": "Relit tous les courriels pour en récupérer les rendez-vous supprimés. Cela s’exécute de toute façon après chaque export Outlook ; séparément uniquement si le calendrier ou les contacts restent vides.",

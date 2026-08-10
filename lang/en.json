@@ -375,7 +375,7 @@
   "view.hits": "Results",
   "settings.search.sub": "Both run in your Ollama on this machine: the semantic half of the search and the summary of the results.",
   "export.start.hint": "Fetches new mail and chats, then rebuilds index and calendar. Normally that is all you need.",
-  "export.steps.title": "Individual steps",
+  "export.steps.title": "Expert mode",
   "export.steps.sub": "Not normally needed — “Start export” does all of this in turn. You only need them separately in these cases:",
   "export.index.only.when": "When you do not want to fetch anything new but rebuild the search index — for instance after pulling an embedding model in Ollama so that search can work semantically too.",
   "export.calendar.build.when": "Re-reads every mail to recover deleted appointments from them. It runs after each Outlook export anyway; separately only if calendar or contacts stay empty.",

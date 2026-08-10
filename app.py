@@ -2322,6 +2322,7 @@ h1{font-size:17px;margin:0;font-weight:650}
 /* Erklärung auf Abruf statt Fließtext neben jedem Knopf. Der Text steckt im
    title-Attribut – das zeigt jeder Browser, liest jeder Screenreader vor, und
    es braucht kein eigenes Fenster, das aufgehen und wieder zugehen muss. */
+h2.mit-info{display:flex;align-items:center;gap:8px}
 .info{display:inline-flex;align-items:center;justify-content:center;
   width:17px;height:17px;border-radius:50%;border:1px solid var(--line);
   color:var(--muted);font-size:11.5px;font-style:italic;font-weight:600;
@@ -2616,8 +2617,8 @@ main{padding-bottom:60px}
 <section id="tab-export">
   <div class="banner hide" id="update-banner" style="margin-bottom:16px"></div>
   <div class="card">
-    <h2 data-i18n="export.what">Was soll exportiert werden?</h2>
-    <p class="sub" data-i18n="export.what.sub">Die Auswahl wird gespeichert und gilt auch für den Zeitplan.</p>
+    <h2 class="mit-info" data-i18n="export.what">Was soll exportiert werden?
+      <span class="info" tabindex="0" data-i18n-title="export.what.sub" role="img" aria-label="Info">i</span></h2>
     <div class="row" style="gap:36px;align-items:flex-start">
       <div>
         <strong class="small" data-i18n="export.outlook">Outlook</strong>
@@ -2649,20 +2650,20 @@ main{padding-bottom:60px}
   </div>
 
   <details class="card" id="einzelschritte">
-    <summary data-i18n="export.steps.title">Einzelne Schritte</summary>
+    <summary data-i18n="export.steps.title">Expertenmodus</summary>
     <p class="sub" style="margin-top:10px" data-i18n="export.steps.sub">Normalerweise nicht nötig – „Export starten“ erledigt das alles. Einzeln braucht man sie nur in den unten genannten Fällen.</p>
 
     <div class="schritt">
       <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
-      <span class="small muted" data-i18n="export.index.only.when"></span>
+      <span class="info" tabindex="0" data-i18n-title="export.index.only.when" role="img" aria-label="Info">i</span>
     </div>
     <div class="schritt">
       <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
-      <span class="small muted" data-i18n="export.calendar.build.when"></span>
+      <span class="info" tabindex="0" data-i18n-title="export.calendar.build.when" role="img" aria-label="Info">i</span>
     </div>
     <div class="schritt">
       <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
-      <span class="small muted" data-i18n="export.page.build.when"></span>
+      <span class="info" tabindex="0" data-i18n-title="export.page.build.when" role="img" aria-label="Info">i</span>
     </div>
   </details>
 </section>
