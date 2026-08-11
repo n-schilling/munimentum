@@ -13,5 +13,5 @@ Format: MAJOR.MINOR.PATCH, ohne führendes "v" (das trägt nur der Tag).
 VERSION = "4.2.0"
 
 # Für die Aktualisierungsprüfung: hier liegen die Releases.
-REPO = "n-schilling/office_365_exporter"
+REPO = "n-schilling/munimentum"
 RELEASES_URL = f"https://github.com/{REPO}/releases"

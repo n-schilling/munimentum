@@ -5,7 +5,7 @@
 Please report security issues **privately**, not as a public issue.
 
 Use GitHub's private reporting — [**Report a
-vulnerability**](https://github.com/n-schilling/office_365_exporter/security/advisories/new).
+vulnerability**](https://github.com/n-schilling/munimentum/security/advisories/new).
 It is enabled on this repository and goes straight to me. If you would rather
 not use it, write to <mail@nschilling.de>.
 

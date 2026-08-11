@@ -1,11 +1,17 @@
-# Office 365 Export
+# Munimentum
 
-Export your Microsoft 365 data — Teams chats and channels, Outlook mail,
-calendar, contacts — via Microsoft Graph, and search it offline: in the app, in
-a single portable HTML page, or through **Claude** (MCP).
+Export your own Microsoft 365 data — Teams chats and channels, Outlook mail,
+calendar, contacts, OneDrive files — through Microsoft Graph, and search it
+offline: in the app, in a single portable HTML page, or through **Claude** (MCP).
 
 Delegated access, no admin consent required. Nothing leaves your machine except
 the calls to Microsoft Graph.
+
+> **munimentum** *(Latin)* — a rampart; and, in medieval usage, a deed: the
+> document you keep because it is the proof of what is yours. The two senses are
+> the same idea. This is a walled place for records that would otherwise live
+> only in someone else's cloud, and that you would have a hard time getting at
+> once your access ends.
 
 **Just want to use it?** Grab the ready-made app from
 [Releases](../../releases) — no Python, nothing to install. Everything below the

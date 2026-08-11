@@ -115,7 +115,7 @@ mcp = MCPServer(
     "office365-export",
     title="Office 365 Export",
     version=version.VERSION,
-    website_url="https://github.com/n-schilling/office_365_exporter",
+    website_url="https://github.com/n-schilling/munimentum",
     instructions=_INSTRUCTIONS,
 )
 _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
