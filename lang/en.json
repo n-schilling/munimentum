@@ -3,7 +3,7 @@
     "code": "en",
     "name": "English"
   },
-  "app.title": "Munimentume",
+  "app.title": "Munimentum",
   "pill.token.missing": "No access",
   "pill.token.expired": "Access expired",
   "pill.token.scopes": "Access incomplete",

@@ -5,7 +5,11 @@ calendar, contacts, OneDrive files — through Microsoft Graph, and search it
 offline: in the app, in a single portable HTML page, or through **Claude** (MCP).
 
 Delegated access, no admin consent required. Nothing leaves your machine except
-the calls to Microsoft Graph.
+the calls to Microsoft Graph — see [PRIVACY.md](PRIVACY.md).
+
+> **Whether you may export this data is yours to check.** Delegated access makes
+> it technically possible; establishing that it is permitted in your case is not
+> something this app can do for you.
 
 > **munimentum** *(Latin)* — a rampart; and, in medieval usage, a deed: the
 > document you keep because it is the proof of what is yours. The two senses are
@@ -234,7 +238,7 @@ there rather than trusting a paraphrase here.
 ## Tests
 
 ```bash
-pytest                             # ~840 tests
+pytest                             # ~1100 tests
 ruff check .
 ```
 
