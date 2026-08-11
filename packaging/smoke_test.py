@@ -262,8 +262,12 @@ def signatur_ist_in_ordnung(exe, beglaubigt=False):
 
     roh = _codesign("-dv", "--verbose=4", str(ziel))
     aus = roh.stdout + roh.stderr
-    if roh.returncode != 0 or "not signed at all" in aus:
-        schritt("Signatur: unsigniert – übersprungen")
+    # "adhoc" ist der Normalfall ohne Zertifikat: PyInstaller signiert auf macOS
+    # immer, auf Apple Silicon muss es das sogar. Eine Ad-hoc-Signatur trägt
+    # keine Identität und ist für Gatekeeper so gut wie keine – hier also
+    # dasselbe wie unsigniert.
+    if roh.returncode != 0 or "not signed at all" in aus or "Signature=adhoc" in aus:
+        schritt("Signatur: ohne Zertifikat gebaut – übersprungen")
         return
 
     schritt(f"Signatur prüfen{' samt Beglaubigung' if beglaubigt else ''}")
