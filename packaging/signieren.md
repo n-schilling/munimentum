@@ -35,7 +35,17 @@ im Schlüsselbund liegt):
 Ohne Xcode geht es über [developer.apple.com](https://developer.apple.com/account/resources/certificates/list):
 im Schlüsselbund *Zertifikatsassistent → Zertifikat von einer
 Zertifizierungsinstanz anfordern* eine CSR erzeugen, hochladen, das Ergebnis
-laden und doppelklicken.
+laden und doppelklicken. Beim Doppelklick fragt macOS nach dem Schlüsselbund:
+**Anmeldung**, nicht iCloud. Dort liegt seit der CSR der private Schlüssel, und
+nur wenn beide Hälften im selben Bund liegen, werden sie zu einer Identität —
+sonst lässt sich der Eintrag später auch nicht als `.p12` exportieren.
+
+Auf diesem Weg fragt Apple zwischendurch nach der Zwischeninstanz („Select a
+Developer ID Certificate Intermediary"). **G2 Sub-CA** wählen, nicht *Previous*:
+Zertifikate an der alten Instanz laufen unabhängig von ihrer eigenen Laufzeit am
+**01.02.2027** ab, und es gibt sie nur noch für Xcode älter als 11.4.1. Hier
+wird gar nicht mit Xcode signiert. Mit G2 gilt das Zertifikat die vollen fünf
+Jahre.
 
 > Developer-ID-Zertifikate darf nur der **Account Holder** anlegen (bei einem
 > Einzelaccount bist du das). Ein Team hat davon höchstens fünf gleichzeitig.
@@ -49,6 +59,23 @@ security find-identity -v -p codesigning
 
 Die Zeichenkette in Anführungszeichen ist ab jetzt deine **Signatur-Identität**,
 `TEAMID` die zehnstellige Team-ID.
+
+Und einmal wirklich signieren, bevor du in die Schritte 2 bis 6 investierst —
+das prüft in dreißig Sekunden, was sonst erst im CI auffällt: dass der
+Schlüssel benutzbar ist, dass der Zeitstempel-Server erreichbar ist und dass
+die Härtung greift.
+
+```bash
+cp /bin/echo probe
+codesign --force --sign "$MACOS_SIGN_IDENTITY" --timestamp --options runtime probe
+codesign -dv --verbose=4 probe 2>&1 | grep -E "^Authority|^Timestamp|^Runtime"
+rm probe
+```
+
+Erwartet werden drei `Authority`-Zeilen (dein Zertifikat, die Zwischeninstanz,
+`Apple Root CA`), eine `Timestamp`-Zeile und eine `Runtime Version`. Fragt macOS
+dabei nach dem Schlüsselbund, einmal *Immer erlauben* — sonst bleibt später
+jeder Lauf an diesem Dialog stehen.
 
 ## 2. Schlüssel für die Beglaubigung
 
@@ -240,6 +267,26 @@ Namen.
 
 **`errSecInternalComponent` beim Signieren im CI.** Das ist die fehlende
 `set-key-partition-list`-Zeile.
+
+**„0 valid identities found", obwohl das Zertifikat im Schlüsselbund liegt.**
+Dann fehlt das Zwischenzertifikat und die Kette lässt sich nicht bilden. Der
+Test: `security find-identity -p codesigning` (ohne `-v`) zeigt die Identität,
+`mit -v` nicht. Nachrüsten:
+
+```bash
+security verify-cert -c ~/Downloads/developerID_application.cer
+# CSSMERR_TP_NOT_TRUSTED  -> Zwischenzertifikat fehlt
+curl -fsSLO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+security import DeveloperIDG2CA.cer -k ~/Library/Keychains/login.keychain-db
+```
+
+Danach meldet `verify-cert` „certificate verification successful". Welche Datei
+die richtige ist, sagt der Aussteller des eigenen Zertifikats — `OU=G2` heißt
+`DeveloperIDG2CA.cer`:
+
+```bash
+openssl x509 -inform DER -in ~/Downloads/developerID_application.cer -noout -issuer
+```
 
 **Alles läuft durch, der Nutzer sieht die Warnung trotzdem.** Dann wurde die
 Datei nach dem Beglaubigen noch einmal angefasst — jede Änderung, auch das
