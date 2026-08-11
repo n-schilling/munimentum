@@ -134,8 +134,10 @@ jobs:
           mkdir -p dmg
           cp -R "dist/Munimentum.app" dmg/
           ln -s /Applications dmg/Applications
+          # Ohne -quiet: schlägt hdiutil fehl, steht der Grund im Protokoll.
+          # Mit dem Schalter kam beim Umbenennungs-Release nur "exit code 1".
           hdiutil create -volname "Munimentum" -srcfolder dmg \
-            -ov -format UDZO -quiet "Munimentum-${{ matrix.ziel }}.dmg"
+            -ov -format UDZO "Munimentum-${{ matrix.ziel }}.dmg"
 
       - name: DMG signieren, beglaubigen und heften (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
