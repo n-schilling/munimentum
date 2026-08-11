@@ -3,7 +3,7 @@
     "code": "de",
     "name": "Deutsch"
   },
-  "app.title": "Microsoft-365-Archiv",
+  "app.title": "Munimentum",
   "pill.token.missing": "Kein Zugang",
   "pill.token.expired": "Zugang abgelaufen",
   "pill.token.scopes": "Zugang unvollständig",

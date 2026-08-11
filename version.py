@@ -10,7 +10,7 @@ Download trägt, und die Aktualisierungsprüfung riete dauerhaft zum Update.
 Format: MAJOR.MINOR.PATCH, ohne führendes "v" (das trägt nur der Tag).
 """
 
-VERSION = "4.2.0"
+VERSION = "5.0.0"
 
 # Für die Aktualisierungsprüfung: hier liegen die Releases.
 REPO = "n-schilling/munimentum"

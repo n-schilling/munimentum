@@ -1213,7 +1213,7 @@ class FakePopen:
         import io
         self.argv = argv
         self.kw = kw
-        self.stdout = io.BytesIO(b"office365-export MCP: 3 chunks\n")
+        self.stdout = io.BytesIO(b"munimentum MCP: 3 chunks\n")
         self._ende = threading.Event()
         self._code = None
 
@@ -1267,7 +1267,7 @@ def test_mcp_leitet_ausgabe_ins_protokoll(sandbox, store, fake_popen):
     ende = time.time() + 5
     while time.time() < ende and not any("[MCP]" in ln["text"] for ln in a.jobs.lines):
         time.sleep(0.02)
-    assert any("[MCP] office365-export MCP" in ln["text"] for ln in a.jobs.lines)
+    assert any("[MCP] munimentum MCP" in ln["text"] for ln in a.jobs.lines)
     a.mcp.stop()
 
 
@@ -1494,7 +1494,7 @@ def test_http_liefert_die_oberflaeche(server):
     body = r.read().decode("utf-8")
     con.close()
     assert r.status == 200 and r.getheader("Content-Type").startswith("text/html")
-    assert "Microsoft-365-Archiv" in body
+    assert "Munimentum" in body
 
 
 def test_http_status(server):
@@ -1803,7 +1803,7 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
 def frozen(monkeypatch, tmp_path):
     """Tut so, als liefe app.py als gebündelte Datei."""
     monkeypatch.setattr(app_mod, "FROZEN", True)
-    monkeypatch.setattr(sys, "executable", str(tmp_path / "Microsoft365-Archiv"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "Munimentum"))
     return tmp_path
 
 
@@ -1878,7 +1878,8 @@ def test_main_data_dir_haengt_die_pfade_um(monkeypatch, tmp_path):
 
 def test_data_dir_je_betriebssystem(monkeypatch):
     monkeypatch.setattr(app_mod, "FROZEN", True)
-    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
+        monkeypatch.delenv(_n, raising=False)
     # Ohne diese Zeile läse der Test den ECHTEN Zeiger im Benutzerordner: auf
     # einem Rechner, auf dem die App je einen Datenordner gesetzt hat, schlug er
     # deshalb fehl – auf der CI nie. Geprüft wird hier die Vorgabe je System,
@@ -1896,22 +1897,23 @@ def test_data_dir_je_betriebssystem(monkeypatch):
 
 
 def test_data_dir_per_umgebungsvariable(monkeypatch, tmp_path):
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     assert app_mod.data_dir() == tmp_path.resolve()
 
 
 def test_data_dir_als_skript_ist_der_projektordner(monkeypatch):
     monkeypatch.setattr(app_mod, "FROZEN", False)
-    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
+        monkeypatch.delenv(_n, raising=False)
     assert app_mod.data_dir() == Path(app_mod.__file__).resolve().parent
 
 
 def test_mcp_client_config_nennt_absolute_pfade(sandbox):
     cfg = app_mod.load_config()
     conf = app_mod.mcp_client_config(cfg, 8365)
-    assert conf["http"]["mcpServers"]["office365-export"]["url"] \
+    assert conf["http"]["mcpServers"]["munimentum"]["url"] \
         == "http://127.0.0.1:8365/mcp"
-    args = conf["stdio"]["mcpServers"]["office365-export"]["args"]
+    args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
     assert "--transport" in args and "stdio" in args
     # Claude startet den Befehl in einem unbekannten Arbeitsverzeichnis
     store = args[args.index("--store") + 1]
@@ -1920,7 +1922,7 @@ def test_mcp_client_config_nennt_absolute_pfade(sandbox):
 
 def test_mcp_client_config_gebuendelt(sandbox, frozen):
     conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
-    eintrag = conf["stdio"]["mcpServers"]["office365-export"]
+    eintrag = conf["stdio"]["mcpServers"]["munimentum"]
     assert eintrag["command"] == sys.executable          # die App selbst
     assert eintrag["args"][:2] == ["--run", "mcp_server"]
 
@@ -3395,7 +3397,8 @@ def standardort(tmp_path, monkeypatch):
     ort = tmp_path / "standard"
     ort.mkdir()
     monkeypatch.setattr(app_mod, "standard_data_dir", lambda: ort)
-    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
+        monkeypatch.delenv(_n, raising=False)
     return ort
 
 
@@ -3422,7 +3425,7 @@ def test_umgebung_schlaegt_den_zeiger(standardort, tmp_path, monkeypatch):
     app_mod.schreibe_zeiger(tmp_path)
     anders = tmp_path / "env"
     anders.mkdir()
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(anders))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(anders))
     assert app_mod.data_dir() == anders.resolve()
 
 
@@ -3611,7 +3614,7 @@ def test_mcp_eintrag_folgt_dem_datenordner(sandbox, monkeypatch, tmp_path):
     for ordner in (tmp_path / "platte-a", tmp_path / "platte-b"):
         app_mod.set_data_dir(ordner)
         conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
-        args = conf["stdio"]["mcpServers"]["office365-export"]["args"]
+        args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
         datenpfade = [a for a in args if a.endswith(("rag_store", "teams_export",
                                                      "outlook_export"))]
         assert len(datenpfade) == 3, args
@@ -3623,7 +3626,7 @@ def test_mcp_programmpfad_folgt_dem_datenordner_nicht(sandbox, tmp_path):
     """Das Programm liegt, wo es liegt – nur die Daten wandern."""
     app_mod.set_data_dir(tmp_path / "woanders")
     conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
-    eintrag = conf["stdio"]["mcpServers"]["office365-export"]
+    eintrag = conf["stdio"]["mcpServers"]["munimentum"]
     alles = " ".join([eintrag["command"], *eintrag["args"]])
     assert "mcp_server" in alles
     assert str(tmp_path / "woanders") not in alles.split("--store")[0]

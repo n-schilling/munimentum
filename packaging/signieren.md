@@ -194,7 +194,7 @@ Reihenfolge, und sie ist wichtig:
 
 ```bash
 # 1) App ist signiert (aus dem Build). Zum Einreichen packen.
-ditto -c -k --keepParent "dist/Microsoft365-Archiv.app" pruefling.zip
+ditto -c -k --keepParent "dist/Munimentum.app" pruefling.zip
 
 # 2) Einreichen und warten (dauert meist 1–5 Minuten)
 echo "$AC_API_KEY_P8" | base64 --decode > key.p8
@@ -203,16 +203,16 @@ xcrun notarytool submit pruefling.zip \
   --wait
 
 # 3) Ticket an die App heften – danach geht es auch OHNE Internet durch
-xcrun stapler staple "dist/Microsoft365-Archiv.app"
+xcrun stapler staple "dist/Munimentum.app"
 
 # 4) Erst jetzt das DMG bauen, aus der gehefteten App
 #    (der bestehende Schritt im Workflow)
 
 # 5) Das DMG selbst signieren, beglaubigen und heften
-codesign --sign "$MACOS_SIGN_IDENTITY" --timestamp Microsoft365-Archiv-*.dmg
-xcrun notarytool submit Microsoft365-Archiv-*.dmg \
+codesign --sign "$MACOS_SIGN_IDENTITY" --timestamp Munimentum-*.dmg
+xcrun notarytool submit Munimentum-*.dmg \
   --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
-xcrun stapler staple Microsoft365-Archiv-*.dmg
+xcrun stapler staple Munimentum-*.dmg
 rm key.p8
 ```
 
@@ -235,10 +235,10 @@ Auf dem Runner nach dem Bauen — und einmal von Hand auf einem Mac, der die
 Dateien frisch aus dem Netz geladen hat:
 
 ```bash
-codesign --verify --strict --verbose=2 Microsoft365-Archiv.app
-spctl -a -t exec -vvv Microsoft365-Archiv.app     # erwartet: accepted, source=Notarized Developer ID
-xcrun stapler validate Microsoft365-Archiv.app
-xcrun stapler validate Microsoft365-Archiv-macos-arm64.dmg
+codesign --verify --strict --verbose=2 Munimentum.app
+spctl -a -t exec -vvv Munimentum.app     # erwartet: accepted, source=Notarized Developer ID
+xcrun stapler validate Munimentum.app
+xcrun stapler validate Munimentum-macos-arm64.dmg
 ```
 
 Der eigentliche Beweis ist aber der Doppelklick auf einem **anderen** Mac, auf

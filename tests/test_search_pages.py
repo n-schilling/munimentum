@@ -783,7 +783,7 @@ def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch, capsys):
 def test_main_json_folgt_der_app_config(tmp_path, monkeypatch):
     """app_config.json trägt auch, wenn combined_search.py von Hand läuft."""
     import settings
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     (tmp_path / settings.CONFIG_NAME).write_text(
         json.dumps({"calendar_reconstruct": False}), encoding="utf-8")
     settings.reset()

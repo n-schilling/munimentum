@@ -37,7 +37,7 @@ Run (HTTP, default – one shared server for all Claude sessions):
     # → MCP endpoint at http://127.0.0.1:8365/mcp
 
     Register in Claude Code (.mcp.json):
-        {"mcpServers": {"office365-export":
+        {"mcpServers": {"munimentum":
             {"type": "http", "url": "http://127.0.0.1:8365/mcp"}}}
 
     The server binds to 127.0.0.1 and has no authentication – it serves your
@@ -112,8 +112,8 @@ be read as an MCP resource.
 """
 
 mcp = MCPServer(
-    "office365-export",
-    title="Office 365 Export",
+    "munimentum",
+    title="Munimentum",
     version=version.VERSION,
     website_url="https://github.com/n-schilling/munimentum",
     instructions=_INSTRUCTIONS,
@@ -975,7 +975,7 @@ def main():
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None
                else "lexical (FTS5/BM25) only")
-    print(f"office365-export MCP: {n_chunks} chunks · {backend}", file=sys.stderr)
+    print(f"munimentum MCP: {n_chunks} chunks · {backend}", file=sys.stderr)
     if a.transport == "http":
         security = _transport_security(a.host, a.port, a.allowed_host)
         print(f"MCP endpoint: http://{a.host}:{a.port}{_HTTP_PATH}",

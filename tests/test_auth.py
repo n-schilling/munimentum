@@ -26,7 +26,7 @@ import settings
 def sauber(tmp_path, monkeypatch):
     """Eigener Datenordner, leerer Puffer, keine geerbten Variablen."""
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     for v in ("GRAPH_TOKEN", "GRAPH_AUTH", "GRAPH_CLIENT_ID", "GRAPH_TENANT",
               "GRAPH_DEVICE_CODE"):
         monkeypatch.delenv(v, raising=False)

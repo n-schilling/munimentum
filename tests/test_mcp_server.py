@@ -719,7 +719,7 @@ def test_server_metadaten_werden_ausgeliefert():
             return c.server_info, c.instructions, c.protocol_version
 
     info, instr, proto = anyio.run(run)
-    assert info.name == "office365-export"
+    assert info.name == "munimentum"
     assert info.version                          # nicht leer
     assert proto == LATEST_PROTOCOL_VERSION      # neueste Revision, nicht 2025er
     # Die Instructions sollen bei der Tool-Auswahl helfen – der teure Ausweg

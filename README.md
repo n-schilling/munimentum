@@ -27,10 +27,10 @@ no installation. The UI opens in your default browser.
 
 | File | For |
 |---|---|
-| `Microsoft365-Archiv-macos-arm64.dmg` | Mac with Apple Silicon |
-| `Microsoft365-Archiv-macos-x86_64.dmg` | Mac with an Intel CPU |
-| `Microsoft365-Archiv-windows-x64.zip` | Windows 10/11, 64-bit |
-| `Microsoft365-Archiv-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
+| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon |
+| `Munimentum-macos-x86_64.dmg` | Mac with an Intel CPU |
+| `Munimentum-windows-x64.zip` | Windows 10/11, 64-bit |
+| `Munimentum-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
 
 On macOS, open the disk image and drag the app to *Applications*; on Windows
 and Linux, unpack the archive.
@@ -180,7 +180,7 @@ script that took a value from the file says so at startup. The names and
 defaults live in [`settings.py`](settings.py) and in each script's header —
 that is the one place they cannot drift out of date.
 
-The file is looked up in `OFFICE365_DATA_DIR`, otherwise next to the scripts; a
+The file is looked up in `MUNIMENTUM_DATA_DIR`, otherwise next to the scripts; a
 missing or broken one is ignored. What it deliberately does **not** supply is
 *what* to export — running a script directly should still ask.
 

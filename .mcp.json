@@ -1,6 +1,6 @@
 {
   "mcpServers": {
-    "office365-export": {
+    "munimentum": {
       "type": "http",
       "url": "http://127.0.0.1:8365/mcp"
     }

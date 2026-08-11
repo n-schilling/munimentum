@@ -21,7 +21,7 @@ import settings
 @pytest.fixture(autouse=True)
 def sauber(tmp_path, monkeypatch):
     """Jeder Test bekommt einen eigenen Datenordner und einen leeren Puffer."""
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     settings.reset()
     yield tmp_path
     settings.reset()
@@ -43,7 +43,8 @@ def test_config_path_folgt_dem_datenordner(sauber):
 def test_config_path_ohne_datenordner_liegt_neben_dem_modul(monkeypatch):
     """Gegen settings.__file__ prüfen, nicht gegen einen Ordnernamen: wie das
     Arbeitsverzeichnis heißt, ist Zufall – lokal anders als im Checkout der CI."""
-    monkeypatch.delenv("OFFICE365_DATA_DIR", raising=False)
+    for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
+        monkeypatch.delenv(_n, raising=False)
     settings.reset()
     erwartet = Path(settings.__file__).resolve().parent / settings.CONFIG_NAME
     assert settings.config_path() == erwartet
@@ -222,7 +223,7 @@ def _lies_konstanten(tmp_path, modul, felder, umgebung=None):
     repo = str(Path(__file__).resolve().parent.parent)
     code = SKRIPT.format(repo=repo, modul=modul,
                          felder=", ".join(f'"{f}": m.{f}' for f in felder))
-    env = {**os.environ, "OFFICE365_DATA_DIR": str(tmp_path), **(umgebung or {})}
+    env = {**os.environ, "MUNIMENTUM_DATA_DIR": str(tmp_path), **(umgebung or {})}
     r = subprocess.run([sys.executable, "-c", code], capture_output=True,
                        text=True, env=env, timeout=120)
     assert r.returncode == 0, r.stderr
@@ -257,3 +258,25 @@ def test_umgebung_sticht_die_datei_auch_im_skript_aus(sauber):
     werte = _lies_konstanten(sauber, "teams_export", ["EMBED_IMAGES", "CACHE_IMAGES"],
                              umgebung={"EMBED_IMAGES": "1", "CACHE_IMAGES": "1"})
     assert werte == {"EMBED_IMAGES": True, "CACHE_IMAGES": True}
+
+
+def test_alter_name_des_datenordners_gilt_weiter(tmp_path, monkeypatch):
+    """OFFICE365_DATA_DIR hieß der Schalter bis 4.2.0. Wer ihn in einem Skript
+    oder einer Verknüpfung stehen hat, soll nach der Umbenennung nicht plötzlich
+    in einem leeren Archiv landen."""
+    monkeypatch.delenv("MUNIMENTUM_DATA_DIR", raising=False)
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    (tmp_path / "app_config.json").write_text('{"workers": 7}', encoding="utf-8")
+    settings.reset()
+    assert settings.value("workers", 4) == 7
+
+
+def test_neuer_name_sticht_den_alten(tmp_path, monkeypatch):
+    neu = tmp_path / "neu"
+    neu.mkdir()
+    (neu / "app_config.json").write_text('{"workers": 9}', encoding="utf-8")
+    (tmp_path / "app_config.json").write_text('{"workers": 1}', encoding="utf-8")
+    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(neu))
+    settings.reset()
+    assert settings.value("workers", 4) == 9

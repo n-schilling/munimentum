@@ -29,20 +29,20 @@ jobs:
         include:
           - os: macos-14          # Apple Silicon
             ziel: macos-arm64
-            exe: dist/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv
+            exe: dist/Munimentum.app/Contents/MacOS/Munimentum
           # macos-13 ist seit Dezember 2025 abgeschaltet – Jobs darauf warten
           # ewig auf einen Runner, den es nicht mehr gibt. macos-15-intel ist
           # der Ersatz und läuft bis August 2027; danach gibt es bei GitHub
           # kein x86_64-macOS mehr und diese Zeile entfällt ersatzlos.
           - os: macos-15-intel    # Intel
             ziel: macos-x86_64
-            exe: dist/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv
+            exe: dist/Munimentum.app/Contents/MacOS/Munimentum
           - os: windows-latest
             ziel: windows-x64
-            exe: dist/Microsoft365-Archiv/Microsoft365-Archiv.exe
+            exe: dist/Munimentum/Munimentum.exe
           - os: ubuntu-22.04      # ältere glibc = läuft auch auf neueren Systemen
             ziel: linux-x64
-            exe: dist/Microsoft365-Archiv/Microsoft365-Archiv
+            exe: dist/Munimentum/Munimentum
 
     steps:
       - uses: actions/checkout@v7
@@ -109,16 +109,16 @@ jobs:
           AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
         run: |
           echo "$AC_API_KEY_P8" | base64 --decode > key.p8
-          ditto -c -k --keepParent "dist/Microsoft365-Archiv.app" pruefling.zip
+          ditto -c -k --keepParent "dist/Munimentum.app" pruefling.zip
           xcrun notarytool submit pruefling.zip \
             --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
-          xcrun stapler staple "dist/Microsoft365-Archiv.app"
+          xcrun stapler staple "dist/Munimentum.app"
           rm pruefling.zip
           # Lieber hier abbrechen als ein Bündel ausliefern, das beim Anwender
           # trotzdem die Warnung zeigt.
-          codesign --verify --strict --verbose=2 "dist/Microsoft365-Archiv.app"
-          xcrun stapler validate "dist/Microsoft365-Archiv.app"
-          spctl -a -t exec -vvv "dist/Microsoft365-Archiv.app"
+          codesign --verify --strict --verbose=2 "dist/Munimentum.app"
+          xcrun stapler validate "dist/Munimentum.app"
+          spctl -a -t exec -vvv "dist/Munimentum.app"
 
       - name: Packen (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -132,10 +132,10 @@ jobs:
         # es ein, der Finder kopiert, Symlinks bleiben.
         run: |
           mkdir -p dmg
-          cp -R "dist/Microsoft365-Archiv.app" dmg/
+          cp -R "dist/Munimentum.app" dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname "Microsoft365-Archiv" -srcfolder dmg \
-            -ov -format UDZO -quiet "Microsoft365-Archiv-${{ matrix.ziel }}.dmg"
+          hdiutil create -volname "Munimentum" -srcfolder dmg \
+            -ov -format UDZO -quiet "Munimentum-${{ matrix.ziel }}.dmg"
 
       - name: DMG signieren, beglaubigen und heften (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
@@ -144,7 +144,7 @@ jobs:
           AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
           AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
         run: |
-          dmg="Microsoft365-Archiv-${{ matrix.ziel }}.dmg"
+          dmg="Munimentum-${{ matrix.ziel }}.dmg"
           codesign --sign "$MACOS_SIGN_IDENTITY" --timestamp "$dmg"
           xcrun notarytool submit "$dmg" \
             --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
@@ -161,26 +161,26 @@ jobs:
         # Finder-Zug nach „Programme", dort starten. Genau der Schritt, an dem
         # es mit dem ZIP scheiterte.
         run: |
-          hdiutil attach "Microsoft365-Archiv-${{ matrix.ziel }}.dmg" \
+          hdiutil attach "Munimentum-${{ matrix.ziel }}.dmg" \
             -nobrowse -readonly -mountpoint /tmp/m365
           mkdir -p geprueft
-          cp -R "/tmp/m365/Microsoft365-Archiv.app" geprueft/
+          cp -R "/tmp/m365/Munimentum.app" geprueft/
           hdiutil detach /tmp/m365 -quiet
-          tot=$(find geprueft/Microsoft365-Archiv.app -type l ! -exec test -e {} \; -print | head -5)
+          tot=$(find geprueft/Munimentum.app -type l ! -exec test -e {} \; -print | head -5)
           test -z "$tot" || { echo "::error::Tote Symlinks nach dem Kopieren:"; echo "$tot"; exit 1; }
           # --beglaubigt: hier ist das Ticket schon angeheftet, hier muss es
           # halten. Bei unsignierten Läufen auf main greift der Schalter nicht.
           python packaging/smoke_test.py \
-            "geprueft/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv" --beglaubigt
+            "geprueft/Munimentum.app/Contents/MacOS/Munimentum" --beglaubigt
 
       - name: Packen (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: pwsh
-        run: Compress-Archive -Path "dist/Microsoft365-Archiv" -DestinationPath "Microsoft365-Archiv-${{ matrix.ziel }}.zip"
+        run: Compress-Archive -Path "dist/Munimentum" -DestinationPath "Munimentum-${{ matrix.ziel }}.zip"
 
       - name: Packen (Linux)
         if: startsWith(matrix.os, 'ubuntu')
-        run: tar -czf "Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz" -C dist "Microsoft365-Archiv"
+        run: tar -czf "Munimentum-${{ matrix.ziel }}.tar.gz" -C dist "Munimentum"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -193,9 +193,9 @@ jobs:
           # Dateien im Artefakt, nicht aus dessen Namen.
           name: bundle-${{ matrix.ziel }}
           path: |
-            Microsoft365-Archiv-${{ matrix.ziel }}.dmg
-            Microsoft365-Archiv-${{ matrix.ziel }}.zip
-            Microsoft365-Archiv-${{ matrix.ziel }}.tar.gz
+            Munimentum-${{ matrix.ziel }}.dmg
+            Munimentum-${{ matrix.ziel }}.zip
+            Munimentum-${{ matrix.ziel }}.tar.gz
           if-no-files-found: error
           retention-days: 30
 
@@ -225,5 +225,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" pakete/* \
-            --title "Microsoft 365 Archiv $GITHUB_REF_NAME" \
+            --title "Munimentum $GITHUB_REF_NAME" \
             --notes-file .github/release-hinweise.md

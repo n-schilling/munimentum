@@ -2,8 +2,8 @@
 #
 #     pyinstaller packaging/app.spec --noconfirm
 #
-# Ergebnis: dist/Microsoft365-Archiv/ (onedir) und auf macOS zusätzlich
-# dist/Microsoft365-Archiv.app. Onedir statt onefile mit Absicht: onefile
+# Ergebnis: dist/Munimentum/ (onedir) und auf macOS zusätzlich
+# dist/Munimentum.app. Onedir statt onefile mit Absicht: onefile
 # entpackt bei jedem Start ~80 MB in ein Temp-Verzeichnis (spürbar langsam)
 # und fällt Virenscannern häufiger auf.
 #
@@ -96,7 +96,7 @@ exe = EXE(                             # noqa: F821
     a.scripts,
     [],
     exclude_binaries=True,
-    name="Microsoft365-Archiv",
+    name="Munimentum",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -116,18 +116,18 @@ exe = EXE(                             # noqa: F821
 
 coll = COLLECT(                        # noqa: F821
     exe, a.binaries, a.datas,
-    strip=False, upx=False, name="Microsoft365-Archiv",
+    strip=False, upx=False, name="Munimentum",
 )
 
 if sys.platform == "darwin":
     app = BUNDLE(                      # noqa: F821
         coll,
-        name="Microsoft365-Archiv.app",
+        name="Munimentum.app",
         icon=str(ICON_ICNS),
-        bundle_identifier="de.nschilling.office365export",
+        bundle_identifier="de.nschilling.munimentum",
         info_plist={
-            "CFBundleName": "Microsoft365-Archiv",
-            "CFBundleDisplayName": "Microsoft 365 Archiv",
+            "CFBundleName": "Munimentum",
+            "CFBundleDisplayName": "Munimentum",
             "CFBundleShortVersionString": VERSION,
             "NSHighResolutionCapable": True,
             # false = normales Programm. Ein Dock-Symbol erscheint trotzdem

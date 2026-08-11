@@ -70,7 +70,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-APP_DIRNAME = "Microsoft365-Archiv"
+APP_DIRNAME = "Munimentum"
 FROZEN = bool(getattr(sys, "frozen", False))
 
 # Teilprogramme, die die gebündelte Datei über "--run <name>" selbst starten
@@ -140,11 +140,13 @@ def data_dir():
     """Verzeichnis für Exporte, Index, Konfiguration und Token.
 
     Reihenfolge wie überall im Projekt: Umgebung schlägt Datei schlägt Vorgabe.
-    Mit OFFICE365_DATA_DIR bzw. --data-dir für einen einzelnen Lauf, mit dem
+    Mit MUNIMENTUM_DATA_DIR bzw. --data-dir für einen einzelnen Lauf, mit dem
     Zeiger dauerhaft (z. B. eine externe Platte – ein Postfach kann
     zweistellige Gigabyte haben).
     """
-    env = os.environ.get("OFFICE365_DATA_DIR")
+    # MUNIMENTUM_DATA_DIR ist der Name seit 5.0.0; OFFICE365_DATA_DIR gilt
+    # weiter, damit vorhandene Skripte und Verknüpfungen nicht brechen.
+    env = os.environ.get("MUNIMENTUM_DATA_DIR") or os.environ.get("OFFICE365_DATA_DIR")
     if env:
         return Path(env).expanduser().resolve()
     return lies_zeiger() or standard_data_dir()
@@ -164,7 +166,7 @@ def set_data_dir(path):
     TOKEN_FILE = BASE / "gx_token.txt"
     # Die Teilprogramme suchen ihre Vorgaben über dieselbe Variable – sonst läse
     # ein Unterprozess die Datei neben dem Skript statt die hier gewählte.
-    os.environ["OFFICE365_DATA_DIR"] = str(BASE)
+    os.environ["MUNIMENTUM_DATA_DIR"] = str(BASE)
     settings.reset()
     return BASE
 
@@ -1351,9 +1353,9 @@ def mcp_client_config(cfg, port):
                        "--teams", str(BASE / cfg["teams_dir"]),
                        "--outlook", str(BASE / cfg["outlook_dir"]))
     return {
-        "http": {"mcpServers": {"office365-export": {
+        "http": {"mcpServers": {"munimentum": {
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
-        "stdio": {"mcpServers": {"office365-export": {
+        "stdio": {"mcpServers": {"munimentum": {
             "command": argv[0], "args": argv[1:]}}},
     }
 
@@ -1781,7 +1783,7 @@ class App:
 # HTTP
 # --------------------------------------------------------------------------
 class Handler(BaseHTTPRequestHandler):
-    server_version = "office365-export-app"
+    server_version = "munimentum-app"
     protocol_version = "HTTP/1.1"
     app = None                 # von serve() gesetzt
     allowed_hosts = ()
@@ -2423,7 +2425,7 @@ PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Microsoft-365-Archiv</title>
+<title>Munimentum</title>
 <!-- Der Archivkasten aus packaging/icon/icon.svg, klein nachgezeichnet. Als
      Datenadresse, damit auch das Bündel ohne zusätzliche Datei auskommt –
      sonst holt sich jeder Browser ein 404 auf /favicon.ico ab. -->
@@ -2738,7 +2740,7 @@ main{padding-bottom:60px}
 </head>
 <body>
 <header>
-  <h1 data-i18n="app.title">Microsoft-365-Archiv</h1>
+  <h1 data-i18n="app.title">Munimentum</h1>
   <!-- Die Kacheln sagen, was der Zustand für den Anwender bedeutet; der
        Fachbegriff (Token, Ollama, Chunks, MCP) steht im Tooltip, damit ihn
        findet, wer ihn braucht, ohne dass ihn lesen muss, wer ihn nicht kennt. -->

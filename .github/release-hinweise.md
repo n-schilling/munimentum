@@ -26,6 +26,38 @@ seven days”.
 Everything stays on your machine. The only connections outbound are Microsoft
 Graph and your local Ollama.
 
+## New in 5.0.0 — it becomes an app with a name of its own
+
+**The project is now called Munimentum.** *Munimentum* is Latin for a rampart,
+and in medieval usage it also meant a deed — the document you keep because it is
+the proof of what is yours. The two senses are one idea, and it is what this app
+does: a walled place for records that would otherwise live only in someone
+else's cloud, and that you would have a hard time getting at once your access
+ends. The old name described the source of the data; this one describes the
+point.
+
+**Two things change for you, and neither happens by itself:**
+
+*The data folder is new.* The app now uses `Munimentum` where it used to use
+`Microsoft365-Archiv`. It will not find your existing archive on its own — after
+updating, rename the folder once and everything is back, including exports,
+index and settings:
+
+* macOS: `~/Library/Application Support/Microsoft365-Archiv` → `…/Munimentum`
+* Windows: `%LOCALAPPDATA%\Microsoft365-Archiv` → `%LOCALAPPDATA%\Munimentum`
+* Linux: `~/.local/share/Microsoft365-Archiv` → `~/.local/share/Munimentum`
+
+Alternatively, leave the folder where it is and point *Settings → Data folder* at
+it. Nothing is deleted either way; a fresh start would only mean exporting again.
+
+*The MCP server is called `munimentum`.* If you registered it with Claude, the
+entry now reads `{"mcpServers": {"munimentum": …}}` — the snippet under
+*Settings → MCP* is already correct, so copy it across once.
+
+The downloads are named `Munimentum-*` accordingly, and on a Mac the app is
+`Munimentum.app`. The environment variable `MUNIMENTUM_DATA_DIR` replaces
+`OFFICE365_DATA_DIR`; the old name keeps working.
+
 ## New in 4.2.0
 
 **macOS opens without a warning.** The bundles are signed with a Developer ID
@@ -99,25 +131,25 @@ faster AI summary. The 4.0.0 release notes describe it.
 
 | File | For |
 |---|---|
-| `Microsoft365-Archiv-macos-arm64.dmg` | Mac with Apple Silicon (M1–M4) |
-| `Microsoft365-Archiv-macos-x86_64.dmg` | Mac with an Intel processor |
-| `Microsoft365-Archiv-windows-x64.zip` | Windows 10/11 (64-bit) |
-| `Microsoft365-Archiv-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
+| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1–M4) |
+| `Munimentum-macos-x86_64.dmg` | Mac with an Intel processor |
+| `Munimentum-windows-x64.zip` | Windows 10/11 (64-bit) |
+| `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
 
 Not sure which Mac? Apple menu → *About This Mac*: if it says *Apple M…*, take
 `arm64`, otherwise `x86_64`.
 
 ## Getting started
 
-**macOS** — double-click the DMG, drag `Microsoft365-Archiv.app` onto the
+**macOS** — double-click the DMG, drag `Munimentum.app` onto the
 *Applications* folder shown next to it, close (eject) the window, and start the
 app from *Applications*.
 
 **Windows** — unpack the ZIP (right-click → *Extract All*, not just looking
-inside), then double-click `Microsoft365-Archiv.exe` in the extracted folder.
+inside), then double-click `Munimentum.exe` in the extracted folder.
 
-**Linux** — `tar -xzf Microsoft365-Archiv-linux-x64.tar.gz`, then run
-`./Microsoft365-Archiv/Microsoft365-Archiv`.
+**Linux** — `tar -xzf Munimentum-linux-x64.tar.gz`, then run
+`./Munimentum/Munimentum`.
 
 The interface then opens by itself in your default browser. Everything else —
 fetching a token, exporting, searching — is explained there.
@@ -150,14 +182,14 @@ the tab — simply start the app again.
 
 Not into the app, but into your user folder — so an update overwrites nothing:
 
-* macOS: `~/Library/Application Support/Microsoft365-Archiv`
-* Windows: `%LOCALAPPDATA%\Microsoft365-Archiv`
-* Linux: `~/.local/share/Microsoft365-Archiv`
+* macOS: `~/Library/Application Support/Munimentum`
+* Windows: `%LOCALAPPDATA%\Munimentum`
+* Linux: `~/.local/share/Munimentum`
 
 The path is also shown in *Settings*. A mailbox can take up tens of gigabytes;
 to put it on another disk, change it directly in *Settings* (it takes effect
 after a restart and moves nothing). For a single run, `--data-dir FOLDER` and
-`OFFICE365_DATA_DIR` still work.
+`MUNIMENTUM_DATA_DIR` work.
 
 ## Language
 

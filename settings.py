@@ -20,7 +20,8 @@ Bewusst NICHT aus der Datei bedient wird die Auswahl, was exportiert werden
 soll (outlook_categories / teams_categories). Wer ein Skript direkt startet,
 will gefragt werden; sonst wäre der interaktive Modus faktisch abgeschafft.
 
-Gesucht wird die Datei in OFFICE365_DATA_DIR, sonst neben diesem Modul.
+Gesucht wird die Datei in MUNIMENTUM_DATA_DIR (früher OFFICE365_DATA_DIR),
+sonst neben diesem Modul.
 Nur Standardbibliothek.
 """
 
@@ -38,7 +39,8 @@ _uebernommen = []          # (Schlüssel, Anzeigewert) – alles, was aus der Da
 
 def config_path():
     """Wo die Konfiguration liegt: Datenordner der App, sonst neben dem Modul."""
-    env = os.environ.get("OFFICE365_DATA_DIR")
+    env = (os.environ.get("MUNIMENTUM_DATA_DIR")
+           or os.environ.get("OFFICE365_DATA_DIR"))    # der Name bis 4.2.0
     base = Path(env).expanduser() if env else Path(__file__).resolve().parent
     return base / CONFIG_NAME
 

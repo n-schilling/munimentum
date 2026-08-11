@@ -2,7 +2,7 @@
 """
 smoke_test.py – prüft ein gebautes Bündel, bevor es jemand herunterlädt.
 
-    python3 packaging/smoke_test.py dist/Microsoft365-Archiv/Microsoft365-Archiv
+    python3 packaging/smoke_test.py dist/Munimentum/Munimentum
 
 Läuft in der CI nach jedem Build. Getestet wird genau das, was beim Bündeln
 schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
@@ -370,7 +370,7 @@ def pruefe(exe, daten, port, proc):
     schritt("Oberfläche ausliefern")
     with urllib.request.urlopen(f"{basis}/", timeout=10) as r:   # noqa: S310
         seite = r.read().decode("utf-8")
-    if "Microsoft-365-Archiv" not in seite:
+    if "Munimentum" not in seite:
         raise Fehler("Die Oberfläche kam nicht vollständig zurück.")
 
     schritt("Als Bündel erkannt, Datenordner übernommen")

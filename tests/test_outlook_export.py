@@ -230,7 +230,7 @@ def test_load_pasted_token_aus_env_und_datei(tmp_path, monkeypatch):
     # Datenordner. Ohne die zweite Zeile fände sie das gx_token.txt des Repos –
     # der Test hinge dann an der Reihenfolge der Testläufe.
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     import settings
     settings.reset()
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
