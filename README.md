@@ -29,9 +29,9 @@ no installation. The UI opens in your default browser.
 On macOS, open the disk image and drag the app to *Applications*; on Windows
 and Linux, unpack the archive.
 
-The bundles are **not code-signed**, so both systems warn on first launch. The
-release notes walk through it — on macOS: *Done*, then System Settings →
-Privacy & Security → *Open Anyway*.
+The macOS bundles are signed and notarized by Apple and open without a warning.
+The Windows build is not signed, so SmartScreen asks once on first launch:
+*More info* → *Run anyway*. The release notes walk through it.
 
 Your data lives in your user folder, not in the app, so an update overwrites
 nothing. The path is shown in the UI and can be changed in *Settings*.

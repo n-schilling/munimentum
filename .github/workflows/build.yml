@@ -114,6 +114,11 @@ jobs:
             --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
           xcrun stapler staple "dist/Microsoft365-Archiv.app"
           rm pruefling.zip
+          # Lieber hier abbrechen als ein Bündel ausliefern, das beim Anwender
+          # trotzdem die Warnung zeigt.
+          codesign --verify --strict --verbose=2 "dist/Microsoft365-Archiv.app"
+          xcrun stapler validate "dist/Microsoft365-Archiv.app"
+          spctl -a -t exec -vvv "dist/Microsoft365-Archiv.app"
 
       - name: Packen (macOS)
         if: startsWith(matrix.os, 'macos')

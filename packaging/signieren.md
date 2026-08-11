@@ -1,11 +1,11 @@
 # macOS: signieren und beglaubigen
 
-> **Noch nicht in Betrieb.** Diese Anleitung ist vorbereitet, der Build
-> signiert bisher nicht — die Bündel tragen weiterhin den Hinweis „nicht
-> überprüft". Umgesetzt wird es in einem der nächsten Releases; bis dahin ist
-> hier nichts zu tun außer dem, was in Schritt 1 bis 3 steht.
+> **In Betrieb seit dem Release nach 4.1.1.** Der Build signiert und beglaubigt
+> die macOS-Bündel bei Tag-Läufen; Pushes auf `main` bauen weiter unsigniert.
+> Diese Anleitung beschreibt, wie es eingerichtet wurde und was zu tun ist, wenn
+> das Zertifikat abläuft oder etwas hakt.
 
-Was Nutzer heute sehen: *„Apple konnte nicht überprüfen, ob … frei von
+Was Nutzer vorher sahen: *„Apple konnte nicht überprüfen, ob … frei von
 Schadsoftware ist"*, dazu ein blauer Knopf **„In den Papierkorb legen"**. Das
 verschwindet erst, wenn das Bündel **signiert** *und* von Apple **beglaubigt**
 (notarisiert) ist. Beides zusammen, eines allein reicht nicht.
@@ -164,11 +164,13 @@ exe = EXE(
 ```
 
 Im Workflow davor der Schlüsselbund — ein eigener, temporärer, damit nichts am
-Runner hängen bleibt:
+Runner hängen bleibt. Die Bedingung ist der Tag, nicht das Vorhandensein des
+Secrets: so kommt das Zertifikat nur bei Releases auf einen Runner, und Pushes
+auf `main` bleiben schnell (Beglaubigen kostet je Bündel Minuten):
 
 ```yaml
 - name: Zertifikat einspielen (macOS)
-  if: startsWith(matrix.os, 'macos') && env.MACOS_CERT_P12 != ''
+  if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
   env:
     MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
     MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}

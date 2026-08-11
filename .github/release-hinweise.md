@@ -105,35 +105,16 @@ inside), then double-click `Microsoft365-Archiv.exe` in the extracted folder.
 The interface then opens by itself in your default browser. Everything else —
 fetching a token, exporting, searching — is explained there.
 
-## “Not verified” / “Windows protected your PC”
+## “Windows protected your PC”
 
-The files are **not code-signed** (signing certificates from Apple and
-Microsoft cost money). Both systems therefore warn on first launch. This is
-expected and happens once:
+**macOS is signed and notarized by Apple** — it opens on a double-click, with no
+warning and nothing to click past. That is new in this release; earlier versions
+needed a detour through *Privacy & Security*.
 
-**macOS** — the dialog reads *“Apple could not verify … is free of
-malware”* and offers **“Move to Trash”** as the blue button. Do not click it:
-
-1. Choose **“Done”** (the quiet button underneath).
-2. System Settings → *Privacy & Security* → scroll all the way down →
-   **“Open Anyway”**. That button only appears for about an hour after the
-   blocked attempt; if it is gone, double-click the app once more.
-3. Confirm with *“Open”* when asked again. After that you are left alone.
-
-The often-suggested *right-click → Open* has not worked reliably since
-macOS 15. The quick and safe way is the Terminal:
-
-```bash
-xattr -dr com.apple.quarantine "/Applications/Microsoft365-Archiv.app"
-```
-
-What that does: your browser marks every download with a quarantine flag, and
-for flagged programs macOS demands notarization by Apple. The app is only
-ad-hoc signed, not notarized — the command removes the flag. That is also why a
-copy that did not come through a browser starts without any questions.
-
-**Windows** — in the blue SmartScreen window click *“More info”*, then
-*“Run anyway”*.
+**Windows is not code-signed.** A certificate costs considerably more there, and
+SmartScreen additionally wants to see a download count before it goes quiet. So
+on first launch you get the blue window: click *“More info”*, then *“Run
+anyway”*. It happens once.
 
 If you would rather not, run it from source instead (`python3 app.py`, see the
 README) — the function and the result are identical.
