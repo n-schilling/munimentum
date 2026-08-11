@@ -45,7 +45,7 @@ import importlib
 import subprocess
 import threading
 import webbrowser
-import multiprocessing
+import multiprocessing.spawn
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
@@ -5003,7 +5003,15 @@ if __name__ == "__main__":
     # corpus überschritt – Postfach, Chats, Kalender oder Spiegel, je nachdem,
     # welche sie zuerst erreichte.
     #
+    # Bewusst spawn.freeze_support() und NICHT multiprocessing.freeze_support():
+    # letzteres prüft vor Python 3.14 zuerst sys.platform == "win32" und tut
+    # außerhalb von Windows gar nichts. PyInstaller ersetzt zwar beide Namen
+    # durch eine eigene, plattformunabhängige Fassung – dann hinge macOS und
+    # Linux aber daran, dass ein Werkzeug diesen Haken setzt und ihn behält.
+    # Der Weg über spawn trägt sich selbst, auf jeder Fassung und überall.
+    #
     # freeze_support() erkennt diesen Aufruf, arbeitet als Kind und beendet
-    # sich danach. Als Skript gestartet tut die Zeile nichts.
-    multiprocessing.freeze_support()
+    # sich danach. Als Skript gestartet tut die Zeile nichts – sie sieht nur
+    # nach, ob das erste Argument "--multiprocessing-fork" lautet.
+    multiprocessing.spawn.freeze_support()
     main()
