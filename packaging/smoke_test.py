@@ -17,7 +17,10 @@ schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
   7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
   8. Kalender und Adressbuch entstehen – ein zweiter Selbstaufruf, diesmal von
      combined_search, mit eigenen Parsern (E-Mail, iCalendar, vCard).
-  9. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
+  9. Windows: die EXE trägt unser Symbol – und nur unseres. Bis 1.1.0 zeigte
+     sie PyInstallers Python-Logo, und geprüft wurde das nie: die Tests sehen
+     die .ico im Repo und die Zeile in der Spec, nicht das Ergebnis.
+ 10. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
      startet ein Arbeitsprozess dieselbe ausführbare Datei noch einmal – das
      geht nur mit multiprocessing.freeze_support() in app.py. Deshalb liegen
      unten mehr Testdateien als die Schwelle, ab der der Pool aufgeht: mit den
@@ -32,6 +35,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -137,6 +141,99 @@ def warte_auf(bedingung, sekunden, was):
 def protokoll(basis):
     return "\n".join(f"  {zeile['level']:5} {zeile['text']}"
                      for zeile in hole(f"{basis}/api/log?since=0")["lines"])
+
+
+def _pe_ressourcen(exe):
+    """RT_ICON- und RT_GROUP_ICON-Einträge einer Windows-EXE.
+
+    Von Hand geparst statt mit einer Bibliothek: der Rauchtest soll außer dem
+    Bündel nichts brauchen. Geliefert wird {typ: {id: (offset, größe)}}.
+    """
+    roh = exe.read_bytes()
+    pe = struct.unpack("<I", roh[0x3C:0x40])[0]
+    if roh[pe:pe + 4] != b"PE\0\0":
+        raise Fehler(f"{exe.name} ist keine PE-Datei")
+    nsec, = struct.unpack("<H", roh[pe + 6:pe + 8])
+    optsize, = struct.unpack("<H", roh[pe + 20:pe + 22])
+    opt = pe + 24
+    magic, = struct.unpack("<H", roh[opt:opt + 2])
+    dd = opt + (112 if magic == 0x20B else 96)        # PE32+ oder PE32
+    res_rva, _ = struct.unpack("<II", roh[dd + 16:dd + 24])
+
+    abschnitte = []
+    so = opt + optsize
+    for i in range(nsec):
+        s = roh[so + i * 40: so + i * 40 + 40]
+        vsize, vaddr, rsize, raddr = struct.unpack("<IIII", s[8:24])
+        abschnitte.append((vaddr, max(vsize, rsize), raddr))
+
+    def datei_offset(rva):
+        for vaddr, groesse, raddr in abschnitte:
+            if vaddr <= rva < vaddr + groesse:
+                return raddr + (rva - vaddr)
+        raise Fehler(f"RVA {rva} liegt in keinem Abschnitt")
+
+    basis = datei_offset(res_rva)
+
+    def lauf(rel, pfad=()):
+        o = basis + rel
+        nname, nid = struct.unpack("<HH", roh[o + 12:o + 16])
+        for i in range(nname + nid):
+            nm, data = struct.unpack("<II", roh[o + 16 + i * 8: o + 24 + i * 8])
+            kennung = nm & 0x7FFFFFFF if not nm & 0x80000000 else None
+            if data & 0x80000000:
+                yield from lauf(data & 0x7FFFFFFF, pfad + (kennung,))
+            else:
+                p = basis + (data & 0x7FFFFFFF)
+                drva, dsize = struct.unpack("<II", roh[p:p + 8])
+                yield pfad + (kennung,), datei_offset(drva), dsize
+
+    out = {3: {}, 14: {}}
+    for pfad, o, groesse in lauf(0):
+        if pfad[0] in out:
+            out[pfad[0]][pfad[1]] = (o, groesse)
+    return roh, out
+
+
+def symbol_ist_in_der_exe(exe):
+    """Trägt die gebaute EXE unser Symbol – und zwar nur unseres?
+
+    Bis 1.1.0 stand icon=None in der Spec und Windows zeigte PyInstallers
+    Standardsymbol (Python-Logo). Dass das nicht zurückkommt, hat bisher
+    niemand geprüft: die Tests sehen nur die .ico im Repo und die Zeile in der
+    Spec, nicht das Ergebnis. Genau dazwischen liegt der Fehler, den ein
+    Anwender meldet – und die Windows-Shell nimmt die Gruppe mit der
+    NIEDRIGSTEN Kennung, eine übrig gebliebene Gruppe des Bootloaders würde
+    unsere also verdecken.
+    """
+    schritt("Symbol steckt in der EXE (Windows-Ressourcen)")
+    ico = Path(__file__).resolve().parent / "icon" / "icon.ico"
+    daten = ico.read_bytes()
+    anzahl, = struct.unpack("<H", daten[4:6])
+    erwartet = []
+    for i in range(anzahl):
+        b, h = daten[6 + i * 16], daten[7 + i * 16]
+        groesse, = struct.unpack("<I", daten[6 + i * 16 + 8: 6 + i * 16 + 12])
+        erwartet.append((b or 256, h or 256, groesse))
+
+    roh, res = _pe_ressourcen(exe)
+    gruppen, icons = res[14], res[3]
+    if len(gruppen) != 1:
+        raise Fehler(f"{len(gruppen)} Symbolgruppen in der EXE ({sorted(gruppen)}) – "
+                     f"Windows nähme die niedrigste, nicht unbedingt unsere.")
+    o, _ = gruppen[next(iter(gruppen))]
+    n, = struct.unpack("<H", roh[o + 4:o + 6])
+    gefunden = []
+    for i in range(n):
+        e = o + 6 + i * 14
+        groesse, kennung = struct.unpack("<IH", roh[e + 8:e + 14])
+        gefunden.append((roh[e] or 256, roh[e + 1] or 256, groesse))
+        if kennung not in icons:
+            raise Fehler(f"Die Symbolgruppe verweist auf Bild #{kennung}, "
+                         f"das es in der EXE nicht gibt.")
+    if gefunden != erwartet:
+        raise Fehler(f"Anderes Symbol in der EXE als in icon.ico:\n"
+                     f"  EXE:      {gefunden}\n  icon.ico: {erwartet}")
 
 
 def teilprogramm_aufrufbar(exe):
@@ -295,6 +392,10 @@ def main():
 
     teilprogramm_aufrufbar(exe)
     anmeldung_im_buendel(exe)
+    if sys.platform == "win32":
+        # Nur dort steckt das Symbol IN der ausführbaren Datei; macOS liest
+        # das .icns aus dem Bündel, Linux kennt gar keines.
+        symbol_ist_in_der_exe(exe)
     daten = Path(tempfile.mkdtemp(prefix="o365-rauchtest-"))
     port = freier_port()
     proc = None
