@@ -26,6 +26,23 @@ seven days”.
 Everything stays on your machine. The only connections outbound are Microsoft
 Graph and your local Ollama.
 
+## New in 4.2.0
+
+**macOS opens without a warning.** The bundles are signed with a Developer ID
+certificate and notarized by Apple, and the ticket is stapled to both the app
+and the DMG. Double-click, drag to *Applications*, done — no detour through
+*Privacy & Security*, no Terminal command. Because the ticket travels inside the
+file, it also works on a machine that is offline.
+
+The signature covers what it should: it is timestamped, so it stays valid after
+the certificate eventually expires, and the app runs under Apple's Hardened
+Runtime. Every release build verifies all of that on the finished DMG before it
+becomes a download.
+
+**Windows is unchanged** — still unsigned, still one SmartScreen prompt on first
+launch. A certificate costs considerably more there, and SmartScreen wants to
+see downloads before it goes quiet.
+
 ## New in 4.1.1
 
 **Indexing no longer fails while Claude is connected.** With the MCP server
