@@ -67,11 +67,53 @@ jobs:
       - name: Abhängigkeiten installieren
         run: pip install -r requirements-build.txt
 
+      # Nur bei Tag-Läufen: dann kommt das Zertifikat auf den Runner, dann
+      # kostet die Beglaubigung Wartezeit. Pushes auf main bauen unsigniert.
+      - name: Zertifikat einspielen (macOS)
+        if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          echo "$MACOS_CERT_P12" | base64 --decode > cert.p12
+          security create-keychain -p bauen build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p bauen build.keychain
+          security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          # Ohne diese Zeile fragt codesign nach dem Schlüsselbund-Passwort und
+          # der Lauf hängt bis zum Zeitlimit.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k bauen build.keychain
+          rm cert.p12
+          security find-identity -v -p codesigning
+
       - name: Bündel bauen
+        # Die Spec signiert mit, sobald MACOS_SIGN_IDENTITY gesetzt ist – leer
+        # außerhalb von Tag-Läufen, dann baut sie unsigniert wie bisher.
+        env:
+          MACOS_SIGN_IDENTITY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGN_IDENTITY || '' }}
         run: pyinstaller packaging/app.spec --noconfirm
 
       - name: Rauchtest
         run: python packaging/smoke_test.py "${{ matrix.exe }}"
+
+      # Reihenfolge: erst die App heften, dann daraus das DMG bauen. Wer das
+      # Ticket später anheftet, hat es nur am DMG – und wer die App herauszieht,
+      # bekommt ohne Netz wieder eine Warnung.
+      - name: App beglaubigen und heften (macOS)
+        if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: |
+          echo "$AC_API_KEY_P8" | base64 --decode > key.p8
+          ditto -c -k --keepParent "dist/Microsoft365-Archiv.app" pruefling.zip
+          xcrun notarytool submit pruefling.zip \
+            --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
+          xcrun stapler staple "dist/Microsoft365-Archiv.app"
+          rm pruefling.zip
 
       - name: Packen (macOS)
         if: startsWith(matrix.os, 'macos')
@@ -89,6 +131,23 @@ jobs:
           ln -s /Applications dmg/Applications
           hdiutil create -volname "Microsoft365-Archiv" -srcfolder dmg \
             -ov -format UDZO -quiet "Microsoft365-Archiv-${{ matrix.ziel }}.dmg"
+
+      - name: DMG signieren, beglaubigen und heften (macOS)
+        if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+        run: |
+          dmg="Microsoft365-Archiv-${{ matrix.ziel }}.dmg"
+          codesign --sign "$MACOS_SIGN_IDENTITY" --timestamp "$dmg"
+          xcrun notarytool submit "$dmg" \
+            --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
+          xcrun stapler staple "$dmg"
+          rm key.p8
+          # Danach wird an der Datei nichts mehr angefasst – jede Änderung,
+          # auch Umpacken, macht die Signatur ungültig.
+          spctl -a -t open --context context:primary-signature -vv "$dmg"
 
       - name: Rauchtest am fertigen DMG (macOS)
         if: startsWith(matrix.os, 'macos')
