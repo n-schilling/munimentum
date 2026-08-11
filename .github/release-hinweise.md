@@ -26,46 +26,37 @@ seven days”.
 Everything stays on your machine. The only connections outbound are Microsoft
 Graph and your local Ollama.
 
-## New in 4.0.0
+## New in 4.1.0
 
-**OneDrive is backed up.** Your own drive is mirrored locally — with the same
-include/exclude rules as the mailbox, a size limit and a folder-structure sync.
-Renamed and moved files are carried along instead of downloaded again; anything
-deleted in OneDrive **stays here** and gets a marker. Earlier versions of a
-changed file are not kept — the mirror holds the current one and remembers what
-disappeared.
+**Indexing works again on a real archive.** As soon as one source held more than
+200 files, the index step ended in `BrokenProcessPool` — before it had read a
+single one. Nothing was wrong with the files, and no setting helped.
 
-Searchable are **name and folder**, not the contents: `att:pdf` finds a file
-just like a mail attachment. Document contents will follow (see `ROADMAP.md`).
+Reading is spread across all cores, and a worker process starts by launching the
+app's own program file a second time. That call was not recognised as such, so
+every worker died the moment it started. This has been in every download since
+3.5.0 and affects mail, chats, the calendar and — since 4.0.0 — the OneDrive
+mirror alike: whichever source crossed 200 files first. Small archives stayed
+below the line and never noticed. Running from source was never affected.
 
-**macOS ships as a DMG.** It used to be a ZIP — and on some machines the macOS
-Archive Utility gave up halfway and left behind an unusable app. The cause was
-the 36 symlinks every PyInstaller bundle contains. A DMG is never unpacked:
-double-click, drag the app to *Applications*, done.
+If a worker cannot start for some other reason, reading now falls back to a
+single core and says so in the log, rather than abandoning the run.
 
-**Search finds what you meant.** Meaning-based search had no floor and always
-returned its best hits — even when nothing fitted. Narrow the search to a single
-day and you got every message of that day. There is now a measured floor (45 %,
-adjustable in *Settings*). Previews also show the passage **around the match**
-and highlight the term — before, they showed the first 200 characters, so a
-correct hit could look like a mistake.
+**The log can be copied.** *Copy* in the log bar at the bottom puts the whole
+log on the clipboard, one line per line. Until now it could only be selected by
+hand out of a scrolling box.
 
-**The AI summary is considerably faster.** The context window was fixed at
-32768 tokens, and Ollama reserves memory for it whether the text needs it or
-not. On a machine with 24 GB and a large model that pushed it into swapping.
-The window now follows the actual text — measured more than twice as fast,
-without changing a setting.
+**Report a problem.** Next to it — and in *Settings* — *Report a problem* fills
+in a GitHub issue with the log and the details that a bug report otherwise costs
+two rounds of e-mail to collect: version, operating system, cores, what the
+index holds. The app sends nothing itself. E-mail addresses and user names in
+paths are replaced, the whole text is shown for editing, and you are the one who
+submits the form. Folder names and subject lines are beyond what a pattern can
+spot, so read it before you post.
 
-**A tidier interface.** The search mask is one search box with a button; the
-filters sit below it behind a toggle that shows how many are set. Searching
-happens when you ask for it — not while typing. *Deleted* has become a view of
-its own next to Results, Calendar and Contacts. Explanations live on an **(i)**
-instead of a paragraph beside every button, and figures about the archive are
-in *Analytics* only, not repeated in the header.
-
-**Pre-releases say so.** Running a build newer than the latest release used to
-report “This is the latest version” — technically true, actually misleading.
-Now it says what it is.
+Coming from 3.5.0? Everything 4.0.0 brought is in this build too — the OneDrive
+mirror, the DMG for macOS, a similarity floor for meaning-based search and a
+faster AI summary. The 4.0.0 release notes describe it.
 
 ## Which file?
 
