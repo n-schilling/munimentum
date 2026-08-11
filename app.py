@@ -762,6 +762,116 @@ def store_status(cfg):
 
 
 # --------------------------------------------------------------------------
+# Fehlerbericht
+#
+# Ein Fehler wie „BrokenProcessPool" ist ohne Umgebung nicht zu beantworten:
+# Betriebssystem, gebündelt oder als Skript, wie viele Kerne, was der Index
+# gerade enthält. Diese Angaben von Hand zu erfragen kostet zwei Runden E-Mail;
+# hier stehen sie fertig da.
+#
+# Der Bestand dieser App ist Post und Chat – das Protokoll nennt zwangsläufig
+# Adressen und Pfade. Deshalb zwei Vorkehrungen, und beide sind ernst gemeint:
+# was offensichtlich persönlich ist, wird vorher ersetzt (unten), und was übrig
+# bleibt, bekommt der Mensch vor dem Absenden zu sehen und kann es ändern. Die
+# App schickt nichts selbst; sie füllt nur ein Formular auf GitHub aus.
+# --------------------------------------------------------------------------
+# Wie viel Protokoll in den Bericht kommt. Nach oben begrenzt, weil GitHub den
+# vorbelegten Text in der Adresse überträgt und lange Adressen abweist – und
+# weil die letzten Zeilen die interessanten sind.
+BERICHT_ZEILEN = 80
+BERICHT_ZEICHEN = 3000
+
+_MAIL = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+")
+# C:\Users\name\… und /Users/name/…, /home/name/… – der Anmeldename steckt in
+# fast jedem Pfad, den ein Protokoll nennt.
+_HOME_WIN = re.compile(r"([A-Za-z]:\\Users\\)[^\\/\r\n]+", re.I)
+_HOME_NIX = re.compile(r"(/(?:Users|home)/)[^/\s:\"']+")
+
+
+def anonymisiere(text):
+    """E-Mail-Adressen und Benutzernamen in Pfaden ersetzen.
+
+    Bewusst grob und ohne Anspruch auf Vollständigkeit: Ordnernamen,
+    Betreffzeilen und Anzeigenamen kann kein Muster erkennen. Das ist kein
+    Versehen, sondern die Aufgabenteilung – die Maschine nimmt das Sichere weg,
+    den Rest liest der Mensch, dem der Text vor dem Absenden im Fenster steht.
+    """
+    text = _MAIL.sub("…@…", text or "")
+    text = _HOME_WIN.sub(r"\1…", text)
+    return _HOME_NIX.sub(r"\1…", text)
+
+
+def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
+    """Die letzten Zeilen – dort steht, was schiefging."""
+    alle = (text or "").splitlines()
+    weg = max(0, len(alle) - zeilen)
+    rest = "\n".join(alle[weg:])
+    if len(rest) > zeichen:
+        rest = rest[-zeichen:]
+        weg = weg or 1
+    return (f"[… {weg} ältere Zeilen ausgelassen …]\n" + rest) if weg else rest
+
+
+def systemangaben(status, lang=None):
+    """Die Fakten eines Berichts als [{"k": Textschlüssel, "v": Wert}, …].
+
+    Übersetzt wird erst in der Oberfläche – wie bei den Protokollzeilen. So
+    liest der Melder den Bericht in seiner Sprache, statt in der eines
+    Servers, der keine hat.
+    """
+    store = status.get("store") or {}
+    oll = status.get("ollama") or {}
+    cfg = status.get("config") or {}
+    letzter = (status.get("jobs") or {}).get("last") or {}
+
+    def zeile(k, v):
+        # Nur der Rumpf des Schlüssels; die Oberfläche setzt "report.sys." davor
+        # und übersetzt – wie bei den Protokollzeilen wird hier nichts benannt,
+        # was eine Sprache hat.
+        return {"k": k, "v": str(v)}
+
+    art = "Bündel" if status.get("frozen") else "Skript"
+    kerne = os.cpu_count() or "?"
+    kats = sorted((cfg.get("outlook_categories") or [])
+                  + (cfg.get("teams_categories") or []))
+    if cfg.get("onedrive_enabled"):
+        kats.append("onedrive")
+    angaben = [
+        zeile("version", f"{version.VERSION} ({art})"),
+        zeile("os", f"{platform.platform()} / {platform.machine()}"),
+        zeile("python", platform.python_version()),
+        zeile("cores", kerne),
+        zeile("lang", lang or i18n.FALLBACK),
+        zeile("auth", cfg.get("auth_mode") or "token"),
+        zeile("categories", ", ".join(kats) or "–"),
+        zeile("index", f'{store.get("chunks", 0)} / {store.get("messages", 0)}, '
+                       f'{"hybrid" if store.get("semantic") else "BM25"}'),
+        zeile("model", store.get("model") or cfg.get("embed_model") or "–"),
+        zeile("ollama", f'{"läuft" if oll.get("running") else "aus"}, '
+                        f'Modell {"da" if oll.get("has_model") else "fehlt"}'),
+    ]
+    if letzter:
+        angaben.append(zeile("lastjob", f'{letzter.get("label", "?")}: '
+                                        f'{"ok" if letzter.get("ok") else "Fehler"}'))
+    # Der Datenordner nur, wenn er NICHT der Standard ist: sonst sagt er nichts,
+    # was oben nicht schon steht, und trägt bloß einen Benutzernamen mit sich.
+    if status.get("data_dir") != status.get("data_dir_default"):
+        angaben.append(zeile("datadir", anonymisiere(str(status.get("data_dir")))))
+    return angaben
+
+
+def fehlerbericht(status, log_text="", hint="", lang=None):
+    """Alles, was die Oberfläche für das GitHub-Formular braucht."""
+    titel = anonymisiere(str(hint or "").strip()).strip()
+    return {
+        "system": systemangaben(status, lang),
+        "log": anonymisiere(gekuerzt(log_text)),
+        "title": titel[:120],
+        "url": f"https://github.com/{version.REPO}/issues/new",
+    }
+
+
+# --------------------------------------------------------------------------
 # Schritte eines Laufs (rein – ohne Seiteneffekte, daher gut testbar)
 # --------------------------------------------------------------------------
 def script_argv(name, *args):
@@ -1824,6 +1934,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._save_schedule(data))
             if u.path == "/api/mcp":
                 return self._json(self._mcp(data))
+            if u.path == "/api/report":
+                # Das Protokoll kommt aus der Oberfläche, nicht aus dem Puffer
+                # hier: dort ist es bereits übersetzt (die Meldungen sind
+                # Textschlüssel, siehe Jobs.logk).
+                return self._json(fehlerbericht(
+                    app.status(), str(data.get("log") or ""),
+                    str(data.get("hint") or ""),
+                    i18n.negotiate(app.cfg.get("language"),
+                                   self.headers.get("Accept-Language"), RES)))
             if u.path == "/api/ollama-recheck":
                 return self._json(app.ollama(force=True))
             if u.path == "/api/answer":
@@ -2583,6 +2702,9 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 #protokoll.zu .pkopf .pfeil{transform:rotate(180deg)}
 #protokoll .pkopf #log-letzte{overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;flex:1}
+/* Die Knöpfe rechts: klein und ruhig, damit die Zeile weiter wie eine
+   Beschriftung wirkt und nicht wie eine Werkzeugleiste. */
+#protokoll .pkopf button.mini{flex:0 0 auto;padding:3px 10px;font-size:12px}
 #protokoll.zu #log{display:none}
 #protokoll #log{margin:0 12px 12px;height:220px}
 main{padding-bottom:60px}
@@ -2993,6 +3115,15 @@ main{padding-bottom:60px}
          style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
     </div>
   </div>
+
+  <!-- Derselbe Dialog wie der Knopf in der Protokollleiste. Zwei Wege, weil es
+       zwei Momente gibt: „das hier ist gerade kaputt" (unten, neben dem
+       Fehler) und „ich will etwas melden" (hier, wo man nachsieht). -->
+  <div class="card">
+    <h2 data-i18n="report.title">Fehler melden</h2>
+    <p class="sub" data-i18n="report.sub">Öffnet ein vorbereitetes Formular auf GitHub.</p>
+    <button class="ghost" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
+  </div>
   <div class="row" style="margin-bottom:24px">
     <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
     <span class="small" id="cfg-msg"></span>
@@ -3005,10 +3136,17 @@ main{padding-bottom:60px}
      auch Token-Zustand, MCP-Ausgabe und Meldungen des Zeitplans. Deshalb eine
      Leiste am unteren Rand, von überall erreichbar und normalerweise zu. -->
 <div id="protokoll" class="zu">
+  <!-- Die beiden Knöpfe liegen IN der Kopfzeile, die selbst das Auf- und
+       Zuklappen auslöst – deshalb hält jeder sein Klickereignis an. Sonst
+       klappte das Protokoll bei jedem Kopieren zu. -->
   <div class="pkopf" onclick="protokollUmschalten()">
     <span class="pfeil" id="p-pfeil">▴</span>
     <strong data-i18n="log.title">Protokoll</strong>
     <span class="small muted" id="log-letzte"></span>
+    <button class="mini" onclick="event.stopPropagation();kopiere('log', this)"
+            data-i18n="copy">Kopieren</button>
+    <button class="mini" onclick="event.stopPropagation();fehlerMelden()"
+            data-i18n="report.button">Fehler melden</button>
   </div>
   <div id="log"></div>
 </div>
@@ -3085,12 +3223,26 @@ uebersetzeSeite();
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 
+/* Was in einem Kasten steht, so wie es jemand lesen würde. Im Protokoll ist
+   jede Zeile ein eigenes Kind, und textContent klebte sie ohne Umbruch
+   aneinander – ein Protokoll, das als eine einzige Zeile in der Zwischenablage
+   landet, hilft niemandem. Eingabefelder gehen nicht hier durch, sondern über
+   inZwischenablage(feld.value, …): sie tragen ihren Text woanders. */
+function kopiertext(id){
+  var e = el(id);
+  if(!e) return '';
+  if(e.children && e.children.length) return [].map.call(e.children,
+    function(k){ return k.textContent; }).join('\n');
+  return e.textContent || '';
+}
+function kopiere(id, knopf){
+  inZwischenablage(kopiertext(id), knopf);
+}
 /* In die Zwischenablage. Auf 127.0.0.1 gilt die Seite als vertrauenswürdig,
    die Zwischenablage-Schnittstelle steht also zur Verfügung – aber nicht in
    jedem Browser und nicht, wenn das Fenster gerade nicht im Vordergrund ist.
    Deshalb der alte Weg als Rückfall, statt still nichts zu tun. */
-function kopiere(id, knopf){
-  var text = el(id).textContent || '';
+function inZwischenablage(text, knopf){
   function fertig(ok){
     var vorher = knopf.textContent;
     knopf.textContent = t(ok ? 'copy.done' : 'copy.failed');
@@ -3420,6 +3572,122 @@ function pullLog(){
     seen = r.seq;
     if(atEnd) box.scrollTop = box.scrollHeight;
   });
+}
+
+/* ---------- Fehler melden ----------
+   Die App verschickt nichts. Sie stellt einen Text zusammen, legt ihn offen
+   hin und öffnet damit das Formular auf GitHub – abgeschickt wird er vom
+   Menschen, im eigenen Browser, unter dessen eigenem Konto.
+
+   Deshalb steht der Bericht in einem Textfeld und nicht in einer hübschen
+   Vorschau: was man ändern können soll, muss auch aussehen wie etwas, das man
+   ändern kann. Was hier drin steht, ist Post und Chat – Ordnernamen und
+   Betreffzeilen erkennt kein Muster, das kann nur lesen, wer sie geschrieben
+   hat. Adressen und Benutzerpfade nimmt der Server vorher heraus
+   (app.anonymisiere). */
+var berichtDaten = null;
+
+function fehlerMelden(){
+  berichtDaten = null;
+  berichtFenster();                       // sofort etwas zeigen, dann füllen
+  api('/api/log?since=0').then(function(r){
+    var zeilen = r.lines || [];
+    var fehler = zeilen.filter(function(l){ return l.level === 'err'; });
+    return post('/api/report', {
+      log: zeilen.map(function(l){ return l.t + '  ' + mtext(l.text); }).join('\n'),
+      // Die letzte Fehlerzeile als Betreffvorschlag: „BrokenProcessPool …“
+      // sagt mehr als „Fehler in 4.0.0“, und geändert wird er ohnehin.
+      hint: fehler.length ? mtext(fehler[fehler.length - 1].text) : ''});
+  }).then(function(b){
+    berichtDaten = b;
+    if(wizardOffen === 'report') berichtFenster();
+  });
+}
+
+/* Markdown, weil GitHub es rendert: die Angaben als Tabelle, das Protokoll in
+   einem Codeblock (sonst zieht Markdown die Zeilen zusammen). */
+function berichtText(b){
+  var tabelle = b.system.map(function(s){
+    return '| ' + t('report.sys.' + s.k) + ' | ' +
+           String(s.v).replace(/\|/g, '\\|') + ' |';
+  }).join('\n');
+  return '### ' + t('report.body.what') + '\n\n' + t('report.body.hint') + '\n\n\n' +
+    '### ' + t('report.body.system') + '\n\n| | |\n|---|---|\n' + tabelle + '\n\n' +
+    '### ' + t('report.body.log') + '\n\n```\n' + b.log + '\n```\n';
+}
+
+function berichtFenster(){
+  var b = berichtDaten;
+  if(!b){
+    oeffneEigenes('report', modalKopf(t('report.title'), 'report') +
+      '<p class="small muted">' + esc(t('report.loading')) + '</p>');
+    return;
+  }
+  var koerper =
+    '<p class="small muted">' + esc(t('report.intro')) + '</p>' +
+    '<label class="small" for="rep-titel">' + esc(t('report.field.title')) + '</label>' +
+    '<input type="text" id="rep-titel" style="width:100%;margin:2px 0 12px" value="' +
+      esc(b.title) + '">' +
+    '<label class="small" for="rep-text">' + esc(t('report.field.body')) + '</label>' +
+    '<textarea id="rep-text" rows="14" spellcheck="false" style="width:100%;' +
+      'margin:2px 0 10px;font-family:ui-monospace,Menlo,Consolas,monospace;' +
+      'font-size:12.5px">' + esc(berichtText(b)) + '</textarea>' +
+    '<div class="banner warn" style="margin:0">' + esc(t('report.privacy')) + '</div>' +
+    '<p class="small muted" id="rep-hinweis" style="margin:8px 0 0"></p>';
+  oeffneEigenes('report', modalKopf(t('report.title'), 'report') + koerper +
+    modalFuss({text: t('report.open'), tun: 'berichtOeffnen()'},
+              {text: t('copy'),
+               tun: 'inZwischenablage(el(&quot;rep-text&quot;).value, this)'}));
+}
+
+/* GitHub bekommt den vorbelegten Text in der Adresse. Zu lange Adressen weist
+   der Server ab – mit einer leeren Seite, nicht mit einer Erklärung. Also
+   vorher kürzen und es dazusagen, statt es darauf ankommen zu lassen. */
+var URL_GRENZE = 7000;
+
+function berichtAdresse(basis, titel, text){
+  var gekuerzt = false;
+  // Der Vermerk über das Kürzen gehört mitgemessen. Ihn erst am Ende
+  // anzuhängen hieße, die Grenze genau um ihn zu überschreiten.
+  function adresse(){
+    return basis + '?title=' + encodeURIComponent(titel) + '&body=' +
+      encodeURIComponent(gekuerzt ? text + '\n\n' + t('report.cut') : text);
+  }
+  var url = adresse();
+  // Von OBEN aus dem Protokollblock nehmen: die letzten Zeilen sind die, um
+  // die es geht. Ein Bericht, dem der Absturz fehlt, wäre keiner.
+  while(url.length > URL_GRENZE){
+    var kurz = ohneAeltesteProtokollzeile(text);
+    if(kurz === null) break;
+    text = kurz;
+    gekuerzt = true;
+    url = adresse();
+  }
+  if(url.length > URL_GRENZE){          // von Hand umgebaut, kein Block mehr da
+    text = text.slice(0, 2500);
+    gekuerzt = true;
+    url = adresse();
+  }
+  return {url: url, gekuerzt: gekuerzt};
+}
+
+function ohneAeltesteProtokollzeile(text){
+  var auf = text.indexOf('\n```\n');
+  if(auf < 0) return null;
+  var start = auf + 5;
+  var ende = text.indexOf('\n', start);
+  // Nur eine Zeile übrig (die schließende Zäunung): hier ist Schluss.
+  if(ende < 0 || text.slice(start, ende).indexOf('```') === 0) return null;
+  return text.slice(0, start) + text.slice(ende + 1);
+}
+
+function berichtOeffnen(){
+  if(!berichtDaten) return;
+  var ziel = berichtAdresse(berichtDaten.url,
+                            el('rep-titel').value.trim() || t('report.title.fallback'),
+                            el('rep-text').value);
+  el('rep-hinweis').textContent = ziel.gekuerzt ? t('report.truncated') : '';
+  window.open(ziel.url, '_blank', 'noopener');
 }
 
 /* ---------- Suche ---------- */

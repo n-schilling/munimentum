@@ -71,6 +71,14 @@ rules, and *Show export list* spells out what they currently mean: what comes
 along, what is left out and why, and what is only in your archive because it is
 gone from the source.
 
+The log bar at the bottom is open from every tab. *Copy* puts it on the
+clipboard; *Report a problem* fills in a GitHub issue with the log and the
+details that a bug report otherwise costs two rounds of e-mail to collect —
+version, operating system, cores, what the index holds. The app sends nothing
+itself: e-mail addresses and user names in paths are replaced, the whole text
+is shown for editing, and it is you who submits the form. Folder names and
+subject lines are beyond what a pattern can spot, so read it before you post.
+
 ### Signing in
 
 Two ways, chosen in the assistant. Pasting a key stays the default.

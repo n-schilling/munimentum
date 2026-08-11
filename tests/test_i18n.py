@@ -188,7 +188,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "book.", "sched.", "mcp.mode.", "mcp.title", "mcp.sub", "mcp.start",
            "mcp.stop", "mcp.running", "mcp.stopped", "mcp.code.", "mcp.desktop.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
-           "progress.", "view.", "ana.", "folders.", "plan.")
+           "progress.", "view.", "ana.", "folders.", "plan.", "report.")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.
@@ -197,6 +197,11 @@ DYNAMISCH = (
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files")),
+    # Die Zeilen des Fehlerberichts: app.systemangaben liefert nur den Rumpf
+    # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
+    ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",
+                     "categories", "index", "model", "ollama", "lastjob",
+                     "datadir")),
 )
 
 

@@ -4718,3 +4718,319 @@ def test_untergrenze_wird_erklaert():
         assert stichwort in text, f"„{stichwort}“ fehlt in der Erklärung"
     for code in ("de", "en", "fr"):
         assert i18n.strings(code)["settings.semantic.hint"] != text or code == "de"
+
+
+# --------------------------------------------------------------------------
+# Fehlerbericht
+#
+# Der Bestand dieser App ist Post und Chat. Ein Bericht, der auf einer
+# öffentlichen Seite landet, darf deshalb nicht mitnehmen, wer mit wem
+# schreibt und wie der Anwender heißt. Zwei Vorkehrungen, beide geprüft:
+# was maschinell erkennbar ist, wird ersetzt – und der Rest liegt vor dem
+# Absenden offen zum Ändern (siehe die JS-Prüfungen weiter unten).
+# --------------------------------------------------------------------------
+def test_anonymisiere_nimmt_mailadressen_heraus():
+    text = app_mod.anonymisiere(
+        "Access found for vorname.nachname@example.com, valid for 11 h.")
+    assert "vorname.nachname" not in text and "example.com" not in text
+    assert "Access found for" in text, "der Rest der Zeile muss lesbar bleiben"
+
+
+def test_anonymisiere_nimmt_die_domaene_mit():
+    """Nur den Teil vor dem @ zu ersetzen reichte nicht: die Domäne ist der
+    Arbeitgeber, und der ist mindestens so verräterisch wie der Name."""
+    assert "contoso" not in app_mod.anonymisiere("a@contoso.example").lower()
+
+
+def test_anonymisiere_nimmt_den_benutzernamen_aus_pfaden():
+    """Der Anmeldename steckt in fast jedem Pfad, den ein Protokoll nennt."""
+    aus = app_mod.anonymisiere(
+        r"OneDrive-Spiegel: C:\Users\pmustermann\AppData\Local\Archiv\onedrive")
+    assert "pmustermann" not in aus
+    # Was danach kommt, ist technisch und muss bleiben – sonst wäre der Pfad
+    # als Angabe wertlos.
+    assert r"AppData\Local\Archiv\onedrive" in aus
+
+
+@pytest.mark.parametrize("pfad, weg", [
+    ("/Users/pmustermann/Library/Archiv", "pmustermann"),
+    ("/home/pmustermann/.local/share/Archiv", "pmustermann"),
+])
+def test_anonymisiere_kennt_auch_die_unix_pfade(pfad, weg):
+    assert weg not in app_mod.anonymisiere(f"Datenordner: {pfad}")
+    assert "Archiv" in app_mod.anonymisiere(f"Datenordner: {pfad}")
+
+
+def test_anonymisiere_vertraegt_leeres():
+    assert app_mod.anonymisiere(None) == ""
+
+
+def test_gekuerzt_behaelt_das_ende():
+    """Vorne steht der Start der App, hinten der Absturz. Wer kürzt, kürzt vorne."""
+    text = "\n".join(f"zeile {i}" for i in range(500))
+    aus = app_mod.gekuerzt(text, zeilen=10, zeichen=10_000)
+    assert "zeile 499" in aus and "zeile 490" in aus
+    assert "zeile 100" not in aus
+    assert "ausgelassen" in aus, "das Kürzen muss sichtbar sein"
+
+
+def test_gekuerzt_laesst_kurzes_unangetastet():
+    assert app_mod.gekuerzt("a\nb") == "a\nb"
+
+
+def test_gekuerzt_haelt_die_zeichengrenze():
+    aus = app_mod.gekuerzt("x" * 9000, zeilen=100, zeichen=1000)
+    assert len(aus) < 1200 and "ausgelassen" in aus
+
+
+def test_systemangaben_nennen_was_zur_einordnung_noetig_ist(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    angaben = {z["k"]: z["v"] for z in app_mod.systemangaben(a.status(), "de")}
+    # Genau die Fragen, die man sonst per Rückfrage stellen müsste.
+    assert {"version", "os", "python", "cores", "lang", "auth",
+            "categories", "index", "model", "ollama"} <= set(angaben)
+    assert app_mod.version.VERSION in angaben["version"]
+    assert "Skript" in angaben["version"], "gebündelt oder nicht ist die halbe Miete"
+    assert angaben["lang"] == "de"
+    assert angaben["cores"] == str(os.cpu_count())
+
+
+def test_systemangaben_nennen_den_datenordner_nur_wenn_er_abweicht(sandbox, with_ollama):
+    """Der Standardordner steht ohnehin fest und trüge bloß einen Benutzernamen
+    mit sich – der abweichende dagegen erklärt eine ganze Klasse von Fehlern."""
+    a = app_mod.App(app_mod.load_config())
+    st = a.status()
+    st["data_dir"] = st["data_dir_default"]
+    assert "datadir" not in {z["k"] for z in app_mod.systemangaben(st)}
+
+    st["data_dir"] = r"C:\Users\pmustermann\Woanders"
+    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(st)}
+    assert "Woanders" in zeilen["datadir"]
+    assert "pmustermann" not in zeilen["datadir"], "auch hier wird ersetzt"
+
+
+def test_systemangaben_sind_reine_schluesselruempfe(sandbox, with_ollama):
+    """Übersetzt wird in der Oberfläche – hier darf kein fertiger Satz stehen."""
+    a = app_mod.App(app_mod.load_config())
+    for z in app_mod.systemangaben(a.status()):
+        assert "." not in z["k"] and z["k"].islower(), z
+
+
+def test_fehlerbericht_reicht_nichts_ungefiltert_durch(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    b = app_mod.fehlerbericht(
+        a.status(),
+        log_text="Access found for chef@contoso.example\n"
+                 r"Spiegel: C:\Users\pmustermann\AppData",
+        hint="Fehler bei chef@contoso.example")
+    assert "chef@contoso.example" not in b["log"]
+    assert "pmustermann" not in b["log"]
+    assert "chef@contoso.example" not in b["title"], "auch der Betreff"
+    assert b["url"].startswith("https://github.com/")
+    assert b["url"].endswith("/issues/new")
+    assert app_mod.version.REPO in b["url"]
+
+
+def test_fehlerbericht_kappt_einen_endlosen_betreff(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    b = app_mod.fehlerbericht(a.status(), hint="x" * 400)
+    assert len(b["title"]) <= 120
+
+
+def test_http_report(server):
+    """Der Weg, den die Oberfläche geht."""
+    a, port = server
+    code, b = call(port, "POST", "/api/report",
+                   {"log": "09:00:00  Hallo welt@example.com", "hint": "Absturz"})
+    assert code == 200
+    assert b["title"] == "Absturz"
+    assert "welt@example.com" not in b["log"] and "Hallo" in b["log"]
+    assert [z["k"] for z in b["system"]][:2] == ["version", "os"]
+
+
+def test_http_report_ohne_angaben(server):
+    """Der Knopf in den Einstellungen wird auch bei leerem Protokoll gedrückt."""
+    _, port = server
+    code, b = call(port, "POST", "/api/report", {})
+    assert code == 200 and b["log"] == "" and b["title"] == ""
+    assert b["system"], "die Systemangaben stehen immer zur Verfügung"
+
+
+def test_http_report_folgt_der_browsersprache(server):
+    """Die Sprache steht im Bericht, weil sie erklärt, welche Texte der Melder
+    gesehen hat."""
+    _, port = server
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("POST", "/api/report", "{}",
+                {"Content-Type": "application/json", "Accept-Language": "fr-CH,fr;q=0.9"})
+    b = json.loads(con.getresponse().read())
+    con.close()
+    assert {z["k"]: z["v"] for z in b["system"]}["lang"] == "fr"
+
+
+# --------------------------------------------------------------------------
+# Protokoll kopieren
+#
+# Der Kasten hat je Zeile ein eigenes Kind. textContent klebte sie ohne
+# Umbruch aneinander – ein Protokoll, das als eine einzige Zeile in der
+# Zwischenablage landet, ist als Fehlermeldung wertlos.
+# --------------------------------------------------------------------------
+PRUEFUNG_LOG_KOPIEREN = GRUNDZUSTAND + """
+var kopiert = [];
+Object.defineProperty(global, 'navigator', {configurable: true, writable: true,
+  value: {clipboard: {writeText: function(t){ kopiert.push(t);
+                                              return Promise.resolve(); }}}});
+var kasten = document.getElementById('log');
+kasten.children = [{textContent: '09:00:00  erste Zeile'},
+                   {textContent: '09:00:01  zweite Zeile'}];
+kopiere('log', {textContent: 'Kopieren'});
+pruefe(kopiert.length === 1, 'Nichts kopiert');
+pruefe(kopiert[0] === '09:00:00  erste Zeile\\n09:00:01  zweite Zeile',
+       'Zeilen nicht getrennt: ' + JSON.stringify(kopiert[0]));
+console.log('OK');
+"""
+
+
+def test_protokoll_laesst_sich_zeilenweise_kopieren():
+    _in_node(PRUEFUNG_LOG_KOPIEREN)
+
+
+def test_kopierknopf_klappt_das_protokoll_nicht_zu():
+    """Die Knöpfe liegen in der Kopfzeile, die selbst auf- und zuklappt. Ohne
+    stopPropagation klappte das Protokoll bei jedem Kopieren zu – man sähe das
+    Ergebnis genau in dem Moment nicht mehr, in dem man es braucht."""
+    seite = app_mod.PAGE
+    kopf = seite.split('class="pkopf"')[1].split("</div>")[0]
+    for knopf in ("kopiere('log', this)", "fehlerMelden()"):
+        assert knopf in kopf, f"{knopf} steht nicht in der Protokollkopfzeile"
+    assert kopf.count("event.stopPropagation()") == 2, (
+        "Nicht jeder Knopf in der Kopfzeile hält sein Klickereignis an")
+
+
+# --------------------------------------------------------------------------
+# Fehler melden – die Seite dieses Vorgangs, die im Browser läuft
+# --------------------------------------------------------------------------
+BERICHT_GERUEST = GRUNDZUSTAND + """
+global.geoeffnet = [];
+// Im Browser IST window das globale Objekt; node bringt keines mit.
+global.window = {open: function(u){ geoeffnet.push(u); }};
+// Zwei Endpunkte, zwei Antworten: erst das Protokoll, dann der Bericht.
+global.gesendet = [];
+global.fetch = function(pfad, opt){
+  var antwort;
+  if(String(pfad).indexOf('/api/log') === 0){
+    antwort = {seq: 3, lines: [
+      {n: 1, level: 'info', t: '09:00:00', text: 'Export gestartet'},
+      {n: 2, level: 'err',  t: '09:24:36', text: 'BrokenProcessPool: abrupt beendet'}]};
+  } else if(String(pfad) === '/api/report'){
+    gesendet.push(JSON.parse(opt.body));
+    antwort = {system: [{k: 'version', v: '4.0.0 (Skript)'},
+                        {k: 'cores', v: '8'}],
+               log: '09:00:00  Export gestartet\\n09:24:36  BrokenProcessPool',
+               title: 'BrokenProcessPool: abrupt beendet',
+               url: 'https://github.com/beispiel/repo/issues/new'};
+  } else {
+    antwort = statusGeruest();
+  }
+  return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
+};
+"""
+
+PRUEFUNG_BERICHT = BERICHT_GERUEST + """
+fehlerMelden();
+// Solange nichts da ist, steht der Dialog trotzdem schon offen.
+pruefe(wizardOffen === 'report', 'Fenster nicht geoeffnet');
+
+setTimeout(function(){
+  var html = modal.innerHTML;
+  pruefe(html.indexOf('id="rep-text"') >= 0, 'Kein Textfeld: ' + html.slice(0, 200));
+  pruefe(html.indexOf('<textarea') >= 0, 'Der Bericht ist nicht aenderbar');
+
+  // Was mitgeschickt wurde: das uebersetzte Protokoll und die letzte
+  // Fehlerzeile als Betreffvorschlag.
+  pruefe(gesendet.length === 1, 'Kein Bericht angefordert');
+  pruefe(gesendet[0].log.indexOf('Export gestartet') >= 0, 'Protokoll fehlt');
+  pruefe(gesendet[0].hint.indexOf('BrokenProcessPool') >= 0,
+         'Betreffvorschlag kommt nicht aus der Fehlerzeile: ' + gesendet[0].hint);
+
+  // Der Text, den der Mensch vor sich hat: Angaben und Protokoll, beides drin.
+  // Geprueft wird am gezeichneten HTML - der DOM-Stummel zerlegt innerHTML
+  // nicht in Knoten, im Browser steht genau dieser Text im Feld.
+  pruefe(html.indexOf('4.0.0 (Skript)') >= 0, 'Systemangaben fehlen');
+  pruefe(html.indexOf('BrokenProcessPool') >= 0, 'Protokoll fehlt im Bericht');
+  pruefe(html.indexOf('| Kerne | 8 |') >= 0,
+         'Die Angaben sind nicht uebersetzt: ' + html);
+  pruefe(html.indexOf('value="BrokenProcessPool: abrupt beendet"') >= 0,
+         'Betreff nicht vorbelegt');
+
+  // Geaendert wird vor dem Absenden - und die Aenderung muss ankommen.
+  document.getElementById('rep-text').value = 'Von Hand umgeschrieben';
+  document.getElementById('rep-titel').value = 'Eigener Betreff';
+  berichtOeffnen();
+  pruefe(geoeffnet.length === 1, 'Kein Formular geoeffnet');
+  var u = geoeffnet[0];
+  pruefe(u.indexOf('https://github.com/beispiel/repo/issues/new?') === 0, 'Falsches Ziel: ' + u);
+  pruefe(u.indexOf('title=Eigener%20Betreff') >= 0, 'Eigener Betreff fehlt: ' + u);
+  pruefe(u.indexOf(encodeURIComponent('Von Hand umgeschrieben')) >= 0,
+         'Die Aenderung wurde nicht uebernommen: ' + u);
+  pruefe(u.indexOf('BrokenProcessPool') < 0,
+         'Der ersetzte Text steht trotzdem in der Adresse');
+  console.log('OK');
+}, 30);
+"""
+
+
+def test_fehlerbericht_zeigt_alles_und_laesst_es_aendern():
+    _in_node(PRUEFUNG_BERICHT)
+
+
+PRUEFUNG_BERICHT_LEER = BERICHT_GERUEST + """
+fehlerMelden();
+setTimeout(function(){
+  document.getElementById('rep-titel').value = '   ';
+  berichtOeffnen();
+  // Ein Entwurf ganz ohne Betreff waere auf GitHub nicht abzuschicken.
+  pruefe(geoeffnet[0].indexOf('title=') >= 0 &&
+         geoeffnet[0].indexOf('title=&') < 0, 'Leerer Betreff: ' + geoeffnet[0]);
+  console.log('OK');
+}, 30);
+"""
+
+
+def test_fehlerbericht_faellt_auf_einen_betreff_zurueck():
+    _in_node(PRUEFUNG_BERICHT_LEER)
+
+
+PRUEFUNG_BERICHT_LANG = BERICHT_GERUEST + """
+fehlerMelden();
+setTimeout(function(){
+  // Jemand fuegt ein sehr langes Protokoll ein. GitHub bekommt den Entwurf in
+  // der Adresse; zu lange Adressen weist der Server ab - mit einer leeren
+  // Seite, nicht mit einer Erklaerung.
+  var zeilen = [];
+  for(var i = 0; i < 900; i++) zeilen.push('09:00:00  Zeile ' + i + ' mit etwas Text');
+  zeilen.push('09:59:59  DAS HIER IST DER ABSTURZ');
+  document.getElementById('rep-text').value =
+    '### System\\n\\n| Version | 4.0.0 |\\n\\n### Protokoll\\n\\n```\\n' +
+    zeilen.join('\\n') + '\\n```\\n';
+  berichtOeffnen();
+
+  var u = geoeffnet[0];
+  pruefe(u.length <= 7000, 'Adresse zu lang: ' + u.length);
+  // Gekuerzt wird VORNE: die letzten Zeilen sind die, um die es geht.
+  pruefe(u.indexOf(encodeURIComponent('DAS HIER IST DER ABSTURZ')) >= 0,
+         'Der Absturz fehlt im gekuerzten Bericht');
+  pruefe(u.indexOf(encodeURIComponent('Zeile 0 mit')) < 0,
+         'Die aeltesten Zeilen stehen noch drin');
+  pruefe(u.indexOf(encodeURIComponent('| Version | 4.0.0 |')) >= 0,
+         'Die Systemangaben wurden mit weggekuerzt');
+  // Und es wird gesagt, statt es stillschweigend zu tun.
+  pruefe(document.getElementById('rep-hinweis').textContent.length > 0,
+         'Kein Hinweis auf das Kuerzen');
+  console.log('OK');
+}, 30);
+"""
+
+
+def test_fehlerbericht_kuerzt_vorne_und_sagt_es():
+    _in_node(PRUEFUNG_BERICHT_LANG)
