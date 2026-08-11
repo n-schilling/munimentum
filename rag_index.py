@@ -8,9 +8,12 @@ alles in einem Store-Ordner ab:
     corpus.db     SQLite: Chunks + Metadaten, FTS5-Volltextindex (BM25),
                   vorberechnete Personenliste. Wird von mcp_server.py und
                   rag_server.py abfragbar genutzt – kein Laden in den RAM nötig.
-    vectors.npy   Embedding-Matrix, float16 (halber Platz, praktisch gleiche
+    vectors-N.npy Embedding-Matrix, float16 (halber Platz, praktisch gleiche
                   Kosinus-Rangfolge). Zeile i gehört zu chunks.id = i+1.
-    info.json     Modell/Dimension/Format.
+                  Jeder Lauf schreibt eine NEUE Datei, statt die vorhandene
+                  zu ersetzen – sonst scheiterte er unter Windows, solange
+                  ein Leser sie abgebildet hält (siehe store_layout.py).
+    info.json     Modell/Dimension/Format – und welche Vektordatei gilt.
 
 Inkrementell: bei erneutem Lauf werden nur neue/geänderte Chunks neu berechnet
 (Abgleich über Inhalts-Hash), vorhandene Vektoren werden wiederverwendet.
@@ -39,6 +42,7 @@ import numpy as np
 import corpus
 import progress
 import settings
+import store_layout
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
 # und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
@@ -160,22 +164,38 @@ def write_db(store, chunks):
 
 
 def save_vectors(store, V):
-    """Normalisiert als float16 speichern (halber Platz, Rangfolge ~identisch)."""
+    """Normalisiert als float16 speichern (halber Platz, Rangfolge ~identisch).
+
+    Geschrieben wird unter einem NEUEN Namen, nie über die vorhandene Datei –
+    siehe store_layout. Liefert (Matrix, Pfad); der Name gehört anschließend in
+    info.json, sonst findet ihn niemand.
+    """
     V = V.astype("float32")
     norms = np.linalg.norm(V, axis=1, keepdims=True)
     norms[norms == 0] = 1.0
     V = (V / norms).astype("float16")
-    tmp = Path(store) / "vectors.npy.tmp"
+    ziel = store_layout.next_vectors_path(store)
+    tmp = ziel.with_suffix(".npy.tmp")
     with open(tmp, "wb") as f:                 # Dateiobjekt: np.save hängt kein .npy an
         np.save(f, V)
-    tmp.replace(Path(store) / "vectors.npy")
-    return V
+    # Auch hier über eine Zwischendatei, obwohl das Ziel neu ist: ein Abbruch
+    # mitten im Schreiben hinterlässt so keine halbe Matrix unter einem Namen,
+    # den der nächste Lauf für gültig halten könnte.
+    tmp.replace(ziel)
+    return V, ziel
 
 
-def write_info(store, model, dim, n):
+def write_info(store, model, dim, n, vectors=None):
+    """Der Schlusspunkt eines Laufs: erst hiermit gilt der neue Stand.
+
+    `vectors` ist der Dateiname der Embeddings – None heißt ausdrücklich „dieser
+    Index hat keine". Der Eintrag steht immer da, auch leer; store_layout
+    unterscheidet daran einen Lauf ohne Embeddings von einem alten Store.
+    """
     (Path(store) / "info.json").write_text(json.dumps({
         "model": model, "dim": int(dim), "chunks": int(n),
         "dtype": "float16", "format": FORMAT,
+        "vectors": Path(vectors).name if vectors else None,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -185,8 +205,11 @@ def write_info(store, model, dim, n):
 def _load_old_store(store):
     """(hashes_in_order, V) des vorhandenen Stores."""
     sp = Path(store)
-    vp = sp / "vectors.npy"
-    V = np.load(vp) if vp.exists() else None
+    vp = store_layout.vectors_path(sp)
+    # Ohne mmap: die Vektoren werden hier gleich vollständig gebraucht, und ein
+    # Lesehandle auf die alte Datei wäre genau das, was das Aufräumen am Ende
+    # des Laufs blockiert.
+    V = np.load(vp) if vp else None
     dbp = sp / "corpus.db"
     if dbp.exists():
         con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
@@ -211,7 +234,7 @@ def _load_stale(store):
 
 
 def load_old_vectors(store):
-    out = _load_stale(store)          # Fallback, von vectors.npy überstimmt
+    out = _load_stale(store)          # Fallback, von den Vektoren überstimmt
     try:
         hashes, V = _load_old_store(store)
         if V is None or not hashes:
@@ -225,17 +248,21 @@ def load_old_vectors(store):
 
 def retire_vectors(store):
     """Vor einem lexikalischen Rebuild: Embeddings hash-indiziert sichern und
-    vectors.npy entfernen. Liefert die Zahl der geretteten Vektoren.
+    die Vektordatei zurückziehen. Liefert die Zahl der geretteten Vektoren.
 
-    Nötig, weil vectors.npy zeilenweise an corpus.db hängt (Zeile i gehört zu
+    Nötig, weil die Vektoren zeilenweise an corpus.db hängen (Zeile i gehört zu
     id i+1). Wird die DB ohne Embeddings neu geschrieben, stimmt diese Zuordnung
     nicht mehr – die Datei einfach liegen zu lassen hieße, später falsche
     Vektoren zu ranken. Über den Inhalts-Hash bleiben sie dagegen gültig, und
     ein späterer Lauf mit Ollama muss nur wirklich Neues einbetten statt alles.
+
+    „Zurückziehen" heißt: der Eintrag in info.json fällt weg (das erledigt
+    write_info im Anschluss), und die Datei wird gelöscht, soweit sie sich
+    löschen lässt. Beides zusammen – gültig ist, was info.json nennt, nicht was
+    im Ordner liegt.
     """
     sp = Path(store)
-    vp = sp / "vectors.npy"
-    if not vp.exists():
+    if not store_layout.vectors_path(sp):
         return 0
     keep = load_old_vectors(store)
     if keep:
@@ -245,7 +272,7 @@ def retire_vectors(store):
             np.savez(f, hashes=np.array([h for h, _ in items]),
                      V=np.vstack([v for _, v in items]).astype("float16"))
         tmp.replace(sp / STALE_VECTORS)
-    vp.unlink()
+    store_layout.prune_vectors(sp)
     return len(keep)
 
 
@@ -269,8 +296,9 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
     Path(store).mkdir(parents=True, exist_ok=True)
     if not embeddings:
         # Nur corpus.db + FTS5: Volltextsuche (BM25) läuft ohne Ollama, die
-        # semantische Hälfte der Hybrid-Suche fehlt. mcp_server.py und app.py
-        # erkennen das fehlende vectors.npy und ranken rein lexikalisch.
+        # semantische Hälfte der Hybrid-Suche fehlt. write_info trägt unten
+        # ausdrücklich keine Vektordatei ein; mcp_server.py und app.py ranken
+        # daraufhin rein lexikalisch.
         saved = retire_vectors(store)
         if saved:
             print(f"{saved} vorhandene Embeddings nach {STALE_VECTORS} gesichert "
@@ -319,11 +347,16 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
                 print(f"  … {done}/{len(todo_texts)} eingebettet", end="\r", flush=True)
         print()
 
-    V = save_vectors(store, np.vstack(vectors))
+    V, vp = save_vectors(store, np.vstack(vectors))
     write_db(store, chunks)
-    write_info(store, model, V.shape[1], len(chunks))
-    # Alles wieder in vectors.npy – die Hash-Sicherung wird nicht mehr gebraucht.
+    write_info(store, model, V.shape[1], len(chunks), vp)
+    # Alles wieder in der Vektordatei – die Hash-Sicherung wird nicht mehr
+    # gebraucht.
     (Path(store) / STALE_VECTORS).unlink(missing_ok=True)
+    # Erst jetzt, nachdem info.json auf die neue Datei zeigt: die vorige darf
+    # weg. Wer sie noch abgebildet hat, behält sie – dann bleibt sie liegen und
+    # der nächste Lauf räumt sie ab (siehe store_layout.prune_vectors).
+    store_layout.prune_vectors(store, vp)
     return len(chunks), new_total, int(V.shape[1])
 
 

@@ -1,6 +1,6 @@
 """Tests für mcp_server.py – MCP-Tools über einem kleinen, echten Store.
 
-Der Store (corpus.db + vectors.npy) wird pro Test mit den Schreib-Helfern aus
+Der Store (corpus.db + Vektordatei) wird pro Test mit den Schreib-Helfern aus
 rag_index.py in tmp_path aufgebaut – damit ist das Schema garantiert identisch
 mit dem, was mcp_server.py erwartet. Es werden KEINE Netzwerkaufrufe gemacht:
 _embed_query wird immer gestubbt (Standard: wirft, wie bei "Ollama down");
@@ -23,6 +23,7 @@ from mcp.types import LATEST_PROTOCOL_VERSION
 import corpus
 import mcp_server
 import rag_index
+import store_layout
 
 # --------------------------------------------------------------------------
 # Testdaten: kleiner Korpus mit Teams-, Outlook-, Kalender- und Kontakt-Einträgen
@@ -129,8 +130,8 @@ def _build_store(tmp_path):
     for i in range(len(chunks)):
         V[i, i] = 1.0
     rag_index.write_db(store, chunks)
-    rag_index.save_vectors(store, V)
-    rag_index.write_info(store, "test-embed", DIM, len(chunks))
+    _, vp = rag_index.save_vectors(store, V)
+    rag_index.write_info(store, "test-embed", DIM, len(chunks), vp)
     return store, chunks, teams_dir, outlook_dir
 
 
@@ -144,7 +145,7 @@ def state(tmp_path, monkeypatch):
     store, chunks, teams_dir, outlook_dir = _build_store(tmp_path)
     old = dict(mcp_server.STATE)
     mcp_server.STATE.clear()
-    V = np.load(store / "vectors.npy", mmap_mode="r")
+    V = np.load(store_layout.vectors_path(store), mmap_mode="r")
     mcp_server.STATE.update(
         db=str(store / "corpus.db"), V=V, np=np, semantic=True,
         vector_dtype=str(V.dtype), teams_dir=str(teams_dir),

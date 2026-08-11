@@ -58,6 +58,7 @@ import folders
 import i18n
 import progress
 import settings
+import store_layout
 import updates
 import version
 
@@ -743,21 +744,17 @@ def store_status(cfg):
     """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
     store = BASE / cfg["store_dir"]
     db = store / "corpus.db"
-    vec = store / "vectors.npy"
+    info = store_layout.info(store)
     out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
            "features": [],
-           "semantic": vec.exists(), "built_at": _mtime_iso(db), "model": None}
+           "semantic": store_layout.vectors_path(store, info) is not None,
+           "built_at": _mtime_iso(db), "model": info.get("model")}
     if not out["exists"]:
         return out
     try:
         out.update(_zaehle(db))
     except sqlite3.Error as e:
         out["error"] = str(e)
-    try:
-        info = json.loads((store / "info.json").read_text(encoding="utf-8"))
-        out["model"] = info.get("model")
-    except (OSError, ValueError):
-        pass
     return out
 
 
@@ -1445,14 +1442,23 @@ class SearchBridge:
         self.lock = threading.Lock()
 
     def _store_stamp(self, cfg):
+        """Woran ein neuer Index zu erkennen ist.
+
+        Die Vektordatei heißt nach jedem Lauf anders (store_layout) – der Name
+        gehört deshalb selbst in den Stempel. Ohne ihn bliebe die alte, noch
+        abgebildete Datei stehen: gleiche Zeit, gleiche Größe, und die Suche in
+        der App zeigte weiter den Stand von vorhin.
+        """
         store = BASE / cfg["store_dir"]
         out = []
-        for name in ("corpus.db", "vectors.npy"):
-            p = store / name
+        for p in (store / "corpus.db", store_layout.vectors_path(store)):
+            if p is None:
+                out.append(("-", None, None))
+                continue
             try:
-                out.append((name, p.stat().st_mtime_ns, p.stat().st_size))
+                out.append((p.name, p.stat().st_mtime_ns, p.stat().st_size))
             except OSError:
-                out.append((name, None, None))
+                out.append((p.name, None, None))
         return tuple(out)
 
     def ensure(self, cfg):

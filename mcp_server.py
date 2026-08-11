@@ -9,8 +9,11 @@ Claude be the reasoning/answer layer. It reads the store built by rag_index.py:
     corpus.db     SQLite with all chunks + an FTS5 (BM25) full-text index and a
                   precomputed people table. Queried on demand – the server keeps
                   (almost) nothing in RAM and starts instantly.
-    vectors.npy   float16 embedding matrix, memory-mapped – the OS pages in only
-                  what a query touches.
+    vectors-N.npy float16 embedding matrix, memory-mapped – the OS pages in only
+                  what a query touches. info.json names the current one; a
+                  new index run writes a new file instead of replacing this
+                  one, which is what lets it run while this server holds the
+                  mapping (see store_layout.py).
 
 Ranking backends, per query:
   • hybrid   – default when embeddings are available: FTS5/BM25 and semantic
@@ -65,6 +68,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 import settings
+import store_layout
 import version
 
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
@@ -905,9 +909,15 @@ def _transport_security(host, port, allowed):
 
 
 def _open_vectors(store, n_chunks):
-    """Memory-map vectors.npy if numpy + the file are present."""
-    vp = Path(store) / "vectors.npy"
-    if not vp.exists():
+    """Memory-map the vector file if numpy + the file are present.
+
+    Its name comes from info.json and changes with every index run: the mapping
+    below stays open for as long as this process lives, and on Windows a mapped
+    file cannot be replaced. Writing a new one each time is what keeps indexing
+    possible while a reader is running (see store_layout).
+    """
+    vp = store_layout.vectors_path(store)
+    if not vp:
         return None, None
     try:
         import numpy as np

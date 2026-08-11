@@ -15,6 +15,7 @@ import requests
 
 import corpus
 import rag_index
+import store_layout
 
 
 # --------------------------------------------------------------------------
@@ -165,22 +166,46 @@ def test_write_db_ersetzt_vorhandene_db(tmp_path):
     con.close()
 
 
+def _speichere(store, V, modell="test"):
+    """Vektoren schreiben UND in info.json eintragen – wie build_index.
+
+    Ohne den Eintrag findet sie niemand: gültig ist, was info.json nennt,
+    nicht was im Ordner liegt (store_layout).
+    """
+    V, pfad = rag_index.save_vectors(store, V)
+    rag_index.write_info(store, modell, V.shape[1], len(V), pfad)
+    return V, pfad
+
+
 def test_save_vectors_normalisiert_und_speichert_float16(tmp_path):
     V = np.array([[3.0, 4.0], [0.0, 0.0]], dtype="float32")
-    out = rag_index.save_vectors(tmp_path, V)
-    stored = np.load(tmp_path / "vectors.npy")
+    out, pfad = rag_index.save_vectors(tmp_path, V)
+    stored = np.load(pfad)
     assert stored.dtype == np.float16
     assert np.allclose(stored[0].astype("float32"), [0.6, 0.8], atol=1e-3)
     assert np.all(stored[1] == 0)                       # Nullvektor: keine Division durch 0
     assert np.array_equal(out, stored)                  # Rückgabe == gespeicherte Matrix
-    assert not (tmp_path / "vectors.npy.tmp").exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    assert pfad.name != store_layout.LEGACY, (
+        "Der feste Name von früher ist genau der, über den nicht mehr geschrieben werden darf")
 
 
 def test_write_info(tmp_path):
-    rag_index.write_info(tmp_path, "bge-m3", np.int64(1024), 7)
+    rag_index.write_info(tmp_path, "bge-m3", np.int64(1024), 7,
+                         tmp_path / "vectors-3.npy")
     info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))
     assert info == {"model": "bge-m3", "dim": 1024, "chunks": 7,
-                    "dtype": "float16", "format": rag_index.FORMAT}
+                    "dtype": "float16", "format": rag_index.FORMAT,
+                    "vectors": "vectors-3.npy"}
+
+
+def test_write_info_ohne_vektoren_sagt_es_ausdruecklich(tmp_path):
+    """Der Eintrag steht auch dann da, wenn es keine Vektoren gibt – daran
+    unterscheidet store_layout einen Lauf ohne Embeddings von einem Store, der
+    noch vor der Umstellung gebaut wurde."""
+    rag_index.write_info(tmp_path, None, 0, 7)
+    info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))
+    assert "vectors" in info and info["vectors"] is None
 
 
 # --------------------------------------------------------------------------
@@ -189,7 +214,7 @@ def test_write_info(tmp_path):
 def test_load_old_store_und_vectors_roundtrip(tmp_path):
     chunks = [make_chunk(uid="u:0", text="eins"), make_chunk(uid="u:1", text="zwei")]
     rag_index.write_db(tmp_path, chunks)
-    rag_index.save_vectors(tmp_path, np.array([[1.0, 0.0], [0.0, 2.0]], dtype="float32"))
+    _speichere(tmp_path, np.array([[1.0, 0.0], [0.0, 2.0]], dtype="float32"))
 
     hashes, V = rag_index._load_old_store(tmp_path)
     assert hashes == [c["hash"] for c in chunks]        # in id-Reihenfolge
@@ -209,13 +234,13 @@ def test_load_old_store_leerer_ordner(tmp_path):
 def test_load_old_vectors_ignoriert_hashes_ohne_vektorzeile(tmp_path):
     chunks = [make_chunk(uid="u:0", text="eins"), make_chunk(uid="u:1", text="zwei")]
     rag_index.write_db(tmp_path, chunks)
-    rag_index.save_vectors(tmp_path, np.array([[1.0, 0.0]], dtype="float32"))
+    _speichere(tmp_path, np.array([[1.0, 0.0]], dtype="float32"))
     assert set(rag_index.load_old_vectors(tmp_path)) == {chunks[0]["hash"]}
 
 
 def test_load_old_vectors_unlesbarer_store(tmp_path, capsys):
     (tmp_path / "corpus.db").write_bytes(b"kein sqlite")
-    rag_index.save_vectors(tmp_path, np.ones((1, 2), dtype="float32"))
+    _speichere(tmp_path, np.ones((1, 2), dtype="float32"))
     assert rag_index.load_old_vectors(tmp_path) == {}
     assert "komplett neu" in capsys.readouterr().out
 
@@ -322,7 +347,7 @@ def test_build_index_erzeugt_kompletten_store(tmp_path, monkeypatch):
     assert (n, neu, dim) == (3, 3, DIM)                 # 2 Teams-Nachrichten + 1 Mail
     assert sum(len(c) for c in calls) == 3
 
-    V = np.load(store / "vectors.npy")
+    V = np.load(store_layout.vectors_path(store))
     assert V.dtype == np.float16 and V.shape == (3, DIM)
     norms = np.linalg.norm(V.astype("float32"), axis=1)
     assert np.allclose(norms, 1.0, atol=1e-2)           # Zeilen sind normalisiert
@@ -347,13 +372,13 @@ def test_build_index_inkrementell_und_nach_aenderung(tmp_path, monkeypatch):
     _make_exports(tmp_path)
     (_, neu1, _), _, store = _build(tmp_path, monkeypatch)
     assert neu1 == 3
-    V1 = np.load(store / "vectors.npy").astype("float32")
+    V1 = np.load(store_layout.vectors_path(store)).astype("float32")
 
     # Zweiter Lauf ohne Änderung: nichts wird neu eingebettet
     (_, neu2, _), calls2, _ = _build(tmp_path, monkeypatch)
     assert neu2 == 0
     assert calls2 == []                                 # kein einziger embed-Aufruf
-    V2 = np.load(store / "vectors.npy").astype("float32")
+    V2 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V1, V2, atol=1e-3)
 
     # Eine Mail ändern: nur dieser eine Chunk wird neu eingebettet
@@ -363,7 +388,7 @@ def test_build_index_inkrementell_und_nach_aenderung(tmp_path, monkeypatch):
     assert neu3 == 1
     assert sum(len(c) for c in calls3) == 1
     assert calls3[0] == ["Testmail\nkomplett neuer Inhalt."]
-    V3 = np.load(store / "vectors.npy").astype("float32")
+    V3 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V3[:2], V1[:2], atol=1e-3)       # Teams-Zeilen wiederverwendet
 
     con = sqlite3.connect(store / "corpus.db")
@@ -380,7 +405,7 @@ def test_build_index_bettet_identische_texte_nur_einmal_ein(tmp_path, monkeypatc
     (n, neu, _), calls, store = _build(tmp_path, monkeypatch)
     assert (n, neu) == (2, 2)
     assert sum(len(c) for c in calls) == 1              # nur ein eindeutiger Text
-    V = np.load(store / "vectors.npy")
+    V = np.load(store_layout.vectors_path(store))
     assert np.array_equal(V[0], V[1])                   # Vektor auf beide Chunks verteilt
 
 
@@ -451,7 +476,7 @@ def test_build_index_ohne_embeddings_schreibt_nur_die_db(tmp_path, monkeypatch):
 
     assert (n, neu, dim) == (3, 0, 0)
     assert (store / "corpus.db").exists()
-    assert not (store / "vectors.npy").exists()         # nichts eingebettet
+    assert store_layout.vectors_path(store) is None         # nichts eingebettet
 
     con = sqlite3.connect(store / "corpus.db")
     treffer = list(con.execute(
@@ -474,19 +499,19 @@ def test_build_index_ohne_embeddings_rettet_vorhandene_vektoren(tmp_path, monkey
     _make_exports(tmp_path)
     (_, neu1, _), _, store = _build(tmp_path, monkeypatch)
     assert neu1 == 3
-    V1 = np.load(store / "vectors.npy").astype("float32")
+    V1 = np.load(store_layout.vectors_path(store)).astype("float32")
 
     monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
     rag_index.build_index(str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
                           str(store), "test-modell", "http://ollama.test", embeddings=False)
-    assert not (store / "vectors.npy").exists()
+    assert store_layout.vectors_path(store) is None
     assert (store / rag_index.STALE_VECTORS).exists()
 
     # Wieder mit Ollama: alles kommt aus der Sicherung, kein neuer Aufruf
     (_, neu2, _), calls2, _ = _build(tmp_path, monkeypatch)
     assert neu2 == 0 and calls2 == []
     assert not (store / rag_index.STALE_VECTORS).exists()   # wird nicht mehr gebraucht
-    V2 = np.load(store / "vectors.npy").astype("float32")
+    V2 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V1, V2, atol=1e-3)
 
 
@@ -499,3 +524,75 @@ def test_load_stale_ignoriert_kaputte_datei(tmp_path, capsys):
     (tmp_path / rag_index.STALE_VECTORS).write_bytes(b"kein npz")
     assert rag_index._load_stale(tmp_path) == {}
     assert "unlesbar" in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Indizieren, während jemand den Index offen hat
+#
+# Aus der Praxis (Windows): der MCP-Server hält die Vektordatei per mmap offen,
+# solange er läuft. os.replace auf eine abgebildete Datei endet dort mit
+# „Zugriff verweigert" – der Lauf starb in der letzten Zeile, nachdem er sieben
+# Minuten lang alles eingebettet hatte, und zwar zuverlässig bei jedem Versuch.
+#
+# Nachstellen lässt sich diese Sperre auf macOS und Linux nicht: dort gelingt
+# das Umbenennen. Geprüft wird deshalb die Eigenschaft, die den Fehler
+# unmöglich macht, und die gilt überall: ein Lauf fasst die Datei, die ein
+# Leser geöffnet hat, überhaupt nicht mehr an.
+# --------------------------------------------------------------------------
+def test_ein_lauf_ruehrt_die_offene_vektordatei_nicht_an(tmp_path, monkeypatch):
+    _make_exports(tmp_path)
+    (_, _, _), _, store = _build(tmp_path, monkeypatch)
+
+    # Ein Leser wie der MCP-Server: Datei auf, Abbildung offen, bleibt so.
+    offen = store_layout.vectors_path(store)
+    leser = np.load(offen, mmap_mode="r")
+    vorher = np.asarray(leser).copy()
+
+    # Neuer Inhalt, zweiter Lauf – der Schritt, der unter Windows starb.
+    (tmp_path / "teams_export" / "1on1" / "neu__x.html").write_text(
+        TEAMS_HTML.replace("Rechnung 4711", "Rechnung 4712"), encoding="utf-8")
+    _build(tmp_path, monkeypatch)
+
+    jetzt = store_layout.vectors_path(store)
+    assert jetzt is not None and jetzt.name != offen.name, \
+        "der Lauf hat wieder dieselbe Datei benutzt – unter Windows scheitert er hier"
+    # Der Leser merkt vom Lauf nichts: was er in der Hand hat, gilt unverändert
+    # weiter. (Sein Pfad ist auf macOS/Linux inzwischen gelöscht – die Abbildung
+    # hält das Inode am Leben. Unter Windows ginge das Löschen nicht, dann bleibt
+    # die Datei bis zum nächsten Lauf liegen. Beides ist in Ordnung.)
+    assert np.array_equal(np.asarray(leser), vorher), \
+        "der Lauf hat der offenen Abbildung den Boden unter den Füßen weggezogen"
+    assert json.loads((store / "info.json").read_text(encoding="utf-8"))["vectors"] \
+        == jetzt.name
+
+
+def test_die_vorige_datei_wird_weggeraeumt(tmp_path, monkeypatch):
+    """Sonst wüchse der Store mit jedem Lauf um eine volle Matrix."""
+    _make_exports(tmp_path)
+    _build(tmp_path, monkeypatch)
+    _build(tmp_path, monkeypatch)
+    _build(tmp_path, monkeypatch)
+    store = tmp_path / "store"
+    assert len(list(store.glob("vectors-*.npy"))) == 1
+
+
+def test_store_von_frueher_wird_uebernommen(tmp_path, monkeypatch):
+    """Ein Index aus 4.1.0 oder älter trägt seine Vektoren unter dem festen
+    Namen und kennt den Eintrag in info.json nicht. Der erste Lauf danach muss
+    sie wiederverwenden statt alles neu einzubetten – und den alten Namen
+    hinterher abräumen."""
+    _make_exports(tmp_path)
+    (_, _, _), _, store = _build(tmp_path, monkeypatch)
+
+    # Zurück auf den Stand von früher: fester Name, kein Eintrag.
+    alt = store_layout.vectors_path(store)
+    alt.replace(store / store_layout.LEGACY)
+    info = json.loads((store / "info.json").read_text(encoding="utf-8"))
+    del info["vectors"]
+    (store / "info.json").write_text(json.dumps(info), encoding="utf-8")
+    assert store_layout.vectors_path(store).name == store_layout.LEGACY
+
+    (_, neu, _), calls, _ = _build(tmp_path, monkeypatch)
+    assert neu == 0 and calls == [], "die vorhandenen Embeddings wurden verworfen"
+    assert not (store / store_layout.LEGACY).exists(), "der alte Name blieb liegen"
+    assert store_layout.vectors_path(store).name.startswith("vectors-")

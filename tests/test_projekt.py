@@ -171,7 +171,8 @@ def test_spec_listet_die_geteilten_module():
     diese Liste ist das Sicherheitsnetz, und sie ist mir einmal durch ein
     `git checkout` bei einer Gegenprobe abhandengekommen."""
     text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
-    for modul in ("auth", "folders", "settings", "progress", "answer", "corpus"):
+    for modul in ("auth", "folders", "settings", "progress", "answer", "corpus",
+                  "store_layout"):
         assert f'"{modul}"' in text, f"{modul} fehlt in TEILPROGRAMME"
 
 

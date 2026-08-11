@@ -32,6 +32,7 @@ import requests
 
 import answer
 import corpus  # noqa: F401  (gleiche Umgebung wie der Index)
+import store_layout
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
 # und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
@@ -378,8 +379,10 @@ def load_store(store):
     con.row_factory = sqlite3.Row
     meta = [dict(r) for r in con.execute("SELECT * FROM chunks ORDER BY id")]
     con.close()
-    # Vektoren liegen als float16 – fürs Skalarprodukt nach float32
-    V = np.load(sp / "vectors.npy").astype("float32", copy=False)
+    # Vektoren liegen als float16 – fürs Skalarprodukt nach float32.
+    # Der Dateiname steht in info.json und wechselt mit jedem Indexlauf
+    # (store_layout erklärt, warum).
+    V = np.load(store_layout.vectors_path(sp)).astype("float32", copy=False)
     return meta, V
 
 
@@ -394,7 +397,7 @@ def main():
     ap.add_argument("--port", type=int, default=8000)
     a = ap.parse_args()
 
-    if not (Path(a.store) / "vectors.npy").exists():
+    if not store_layout.vectors_path(a.store):
         raise SystemExit(f"Kein Index in '{a.store}'. Zuerst: python3 rag_index.py")
     meta, V = load_store(a.store)
     STATE.update(meta=meta, V=V, teams_dir=a.teams, outlook_dir=a.outlook,
