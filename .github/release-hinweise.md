@@ -26,6 +26,26 @@ seven days”.
 Everything stays on your machine. The only connections outbound are Microsoft
 Graph and your local Ollama.
 
+## New in 4.1.1
+
+**Indexing no longer fails while Claude is connected.** With the MCP server
+running, every index run on Windows ended in “access denied” — after the
+embedding, so after all of the waiting, and reliably on every attempt. Every
+reader keeps the vector file memory-mapped, and Windows will not let a mapped
+file be replaced. It hit any run in which the MCP server was up, the search in
+the app had been used, or Claude Desktop had started a server of its own. macOS
+and Linux were never affected: there the rename simply works.
+
+A run now writes a new file instead of replacing the existing one. Nothing has
+to be embedded again — an index built by an earlier version is carried over as
+it is. Two things follow from it: inside `rag_store` the file is now called
+`vectors-N.npy` rather than `vectors.npy`, and on Windows the superseded one
+stays behind until the next index run, because that is the earliest it can be
+deleted.
+
+Everything below is unchanged from 4.1.0 — if you are coming from there, this
+is the only difference.
+
 ## New in 4.1.0
 
 **Indexing works again on a real archive.** As soon as one source held more than
