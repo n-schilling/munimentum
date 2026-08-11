@@ -173,3 +173,47 @@ def test_spec_listet_die_geteilten_module():
     text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
     for modul in ("auth", "folders", "settings", "progress", "answer", "corpus"):
         assert f'"{modul}"' in text, f"{modul} fehlt in TEILPROGRAMME"
+
+
+# --------------------------------------------------------------------------
+# Der Prozess-Pool im Bündel
+#
+# Aus der Praxis: das Indizieren endete mit BrokenProcessPool, sobald eine
+# Quelle genug Dateien hatte, dass corpus._pmap den Pool überhaupt aufmachte
+# (Schwelle 200). Der Grund lag nicht bei den Dateien: außerhalb von Linux
+# startet Python einen Arbeitsprozess, indem es
+# sich selbst noch einmal aufruft – gebündelt also die App-Datei, mit
+# "--multiprocessing-fork pipe_handle=…" statt eigener Argumente. Ohne
+# multiprocessing.freeze_support() lief das Kind in den Argumentparser von
+# app.main(), beendete sich mit Code 2 ("unrecognized arguments"), und der
+# Elternprozess sah nur noch einen abgestürzten Arbeiter.
+#
+# Zu prüfen ist deshalb nicht, ob die Zeile dasteht, sondern wohin der Aufruf
+# läuft: in den Arbeiterzweig oder in den Argumentparser.
+# --------------------------------------------------------------------------
+def test_app_beantwortet_den_aufruf_als_arbeitsprozess():
+    import subprocess
+    import sys
+
+    app = WURZEL / "app.py"
+    r = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, runpy\n"
+         # sys.frozen ist das Einzige, woran multiprocessing erkennt, dass es
+         # die ausführbare Datei selbst aufrufen muss statt python -c.
+         "sys.frozen = True\n"
+         f"sys.argv = [{str(app)!r}, '--multiprocessing-fork', 'pipe_handle=999999']\n"
+         f"runpy.run_path({str(app)!r}, run_name='__main__')\n"],
+        capture_output=True, text=True, timeout=120, cwd=WURZEL)
+    ausgabe = r.stdout + r.stderr
+
+    assert "unrecognized arguments" not in ausgabe, (
+        "app.py hält den Aufruf eines Arbeitsprozesses für Benutzereingabe und "
+        "gibt ihn an argparse weiter – genau so entsteht BrokenProcessPool.\n"
+        f"{ausgabe[-800:]}")
+    # Angekommen ist er stattdessen in multiprocessing. Dass er dort an einer
+    # ausgedachten Dateinummer scheitert, ist der Beweis und nicht der Fehler:
+    # weiter kommt man ohne echten Elternprozess nicht.
+    assert "multiprocessing" in ausgabe, (
+        f"Der Aufruf landete weder bei argparse noch bei multiprocessing:\n"
+        f"{ausgabe[-800:]}")

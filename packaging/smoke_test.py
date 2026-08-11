@@ -17,6 +17,12 @@ schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
   7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
   8. Kalender und Adressbuch entstehen – ein zweiter Selbstaufruf, diesmal von
      combined_search, mit eigenen Parsern (E-Mail, iCalendar, vCard).
+  9. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
+     startet ein Arbeitsprozess dieselbe ausführbare Datei noch einmal – das
+     geht nur mit multiprocessing.freeze_support() in app.py. Deshalb liegen
+     unten mehr Testdateien als die Schwelle, ab der der Pool aufgeht: mit den
+     drei Dateien von früher lief der Rauchtest immer seriell und hat den
+     Fehler nie gesehen.
 
 Ohne Netz, ohne Graph, ohne Ollama – nur das Bündel selbst.
 """
@@ -70,6 +76,21 @@ TEAMS_HTML = """<html><body>
   <div class="body">Die Rechnung 4711 ist bezahlt.</div>
 </div>
 </body></html>"""
+
+
+def pool_schwelle():
+    """Ab wie vielen Dateien corpus._pmap den Prozess-Pool aufmacht.
+
+    Aus dem Modul gelesen statt hier abgeschrieben: wer die Schwelle anhebt,
+    soll nicht versehentlich den einzigen Test entschärfen, der den Pool im
+    Bündel überhaupt anfasst.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    try:
+        import corpus
+        return corpus._PAR_THRESHOLD
+    except ImportError:
+        return 200
 
 
 class Fehler(RuntimeError):
@@ -153,6 +174,15 @@ def testdaten(ordner):
     (outlook / "kalender" / "Arbeit" / "termin.ics").write_text(ICS, encoding="utf-8")
     (outlook / "kontakte" / "Team").mkdir(parents=True)
     (outlook / "kontakte" / "Team" / "alice.vcf").write_text(VCF, encoding="utf-8")
+
+    # Über die Schwelle, damit der Index-Lauf den Prozess-Pool wirklich
+    # aufmacht (siehe pool_schwelle und Punkt 9 oben). OneDrive ist dafür der
+    # billigste Weg: corpus liest von diesen Dateien nur Name, Pfad und Größe.
+    dateien = Path(ordner) / "onedrive_export" / "Dateien" / "Projekte"
+    dateien.mkdir(parents=True)
+    for i in range(pool_schwelle() + 20):
+        (dateien / f"notiz-{i:04d}.txt").write_text(f"Rauchtest {i}\n",
+                                                    encoding="utf-8")
 
 
 def app_starten(exe, daten, port):

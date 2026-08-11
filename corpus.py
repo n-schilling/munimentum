@@ -21,7 +21,7 @@ from datetime import datetime, UTC
 from pathlib import Path
 from html.parser import HTMLParser
 from functools import partial
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
 
 CATS = {"1on1", "group", "meeting", "channels"}
 CAT_LABEL = {"1on1": "1:1-Chat", "group": "Gruppenchat",
@@ -32,6 +32,12 @@ SAFETY_CAP = 500_000   # absurd lange Einzeltexte begrenzen (vor dem Chunking)
 # Ab wie vielen Dateien sich der Prozess-Pool lohnt (Spawn-Overhead amortisiert).
 _PAR_THRESHOLD = 200
 
+# Warum der Pool nicht zustande kam – None, solange alles normal lief. Diese
+# Datei gibt selbst nichts aus (sie ist eine Bibliothek, siehe tests/
+# test_projekt.py); wer sie benutzt, liest die Notiz und meldet sie. rag_index
+# tut das nach dem Einlesen.
+POOL_FEHLER = None
+
 
 def _pmap(func, files, root_dir):
     """func(p_str, root_str) über alle Dateien – parallel über alle CPU-Kerne.
@@ -39,15 +45,32 @@ def _pmap(func, files, root_dir):
     Das Parsen der Exporte ist reine CPU-Arbeit und war bisher single-threaded
     der langsamste Teil vor dem (GPU-gebundenen) Einbetten. Bei vielen Dateien
     auf alle Kerne verteilen; bei wenigen seriell (Spawn lohnt nicht).
+
+    Scheitert der Pool, wird seriell weitergemacht. Das dauert länger, aber es
+    ist immer noch die Aufgabe, die hier zu erledigen ist – ein Index, der gar
+    nicht erst gebaut wird, weil ein Arbeitsprozess nicht starten konnte, hilft
+    niemandem. Die Ursache steht danach in POOL_FEHLER.
     """
+    global POOL_FEHLER
     paths = [str(p) for p in files]
-    if len(paths) < _PAR_THRESHOLD:
+
+    def seriell():
         return [func(p, root_dir) for p in paths]
+
+    if len(paths) < _PAR_THRESHOLD or POOL_FEHLER:
+        return seriell()
     workers = os.cpu_count() or 4
     chunksize = max(1, len(paths) // (workers * 8))
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(partial(func, root_str=root_dir), paths,
-                           chunksize=chunksize))
+    try:
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            return list(ex.map(partial(func, root_str=root_dir), paths,
+                               chunksize=chunksize))
+    except (BrokenExecutor, OSError) as e:
+        # BrokenExecutor: ein Arbeitsprozess ist gestorben, statt zu antworten.
+        # OSError: er ließ sich gar nicht erst starten (keine Handles mehr,
+        # gesperrt durch eine Sicherheitssoftware, kein /dev/shm im Container).
+        POOL_FEHLER = f"{type(e).__name__}: {e}"
+        return seriell()
 
 
 # --------------------------------------------------------------------------

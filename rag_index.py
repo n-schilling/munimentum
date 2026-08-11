@@ -255,6 +255,11 @@ def retire_vectors(store):
 def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
                 embeddings=True, onedrive_dir=None):
     recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir)
+    if corpus.POOL_FEHLER:
+        # Nicht verschweigen: der Index stimmt, aber das Einlesen lief auf
+        # einem Kern statt auf allen, und bei großen Beständen merkt man das.
+        print(f"Hinweis: Einlesen ohne Prozess-Pool, nur ein Kern "
+              f"({corpus.POOL_FEHLER}).")
     chunks = corpus.chunk_records(recs)
     if not chunks:
         raise SystemExit("Keine Inhalte gefunden – stimmen die Export-Ordner?")

@@ -482,3 +482,84 @@ def test_load_records_nimmt_onedrive_mit(tmp_path):
     _spiegel(tmp_path / "od", "a.pdf")
     assert corpus.load_records(None, None, tmp_path / "od")[0]["src"] == "datei"
     assert corpus.load_records(None, None, None) == []
+
+
+# --------------------------------------------------------------------------
+# Der Prozess-Pool beim Einlesen
+#
+# Aus der Praxis: gebündelt startete ein Arbeitsprozess die App-Datei erneut,
+# lief in deren Argumentparser und starb – der ganze Index-Lauf endete in
+# BrokenProcessPool, obwohl an den Dateien nichts falsch war. Behoben ist das
+# an der Wurzel (multiprocessing.freeze_support in app.py); hier steht das
+# Sicherheitsnetz: kommt der Pool nicht zustande, wird seriell weitergemacht
+# statt aufgegeben.
+# --------------------------------------------------------------------------
+@pytest.fixture(autouse=True)
+def pool_fehler_zuruecksetzen():
+    """POOL_FEHLER ist Modulzustand – sonst färbte ein Test auf den nächsten ab."""
+    corpus.POOL_FEHLER = None
+    yield
+    corpus.POOL_FEHLER = None
+
+
+def _viele(tmp_path, anzahl=None):
+    anzahl = anzahl if anzahl is not None else corpus._PAR_THRESHOLD + 5
+    return _spiegel(tmp_path, *[f"n{i:04d}.txt" for i in range(anzahl)])
+
+
+def test_pmap_unter_der_schwelle_ohne_pool(tmp_path, monkeypatch):
+    """Bei wenigen Dateien lohnt das Starten von Prozessen nicht."""
+    def kein_pool(*a, **k):
+        raise AssertionError("Pool trotz weniger Dateien geöffnet")
+    monkeypatch.setattr(corpus, "ProcessPoolExecutor", kein_pool)
+    _spiegel(tmp_path, "a.pdf", "b.pdf")
+    assert len(corpus.load_onedrive(tmp_path)) == 2
+
+
+def test_pmap_faellt_auf_seriell_zurueck(tmp_path, monkeypatch):
+    """Ein kaputter Pool darf keinen Index kosten – nur Geschwindigkeit."""
+    from concurrent.futures import BrokenExecutor
+
+    def kaputt(*a, **k):
+        raise BrokenExecutor("Arbeitsprozess abrupt beendet")
+    monkeypatch.setattr(corpus, "ProcessPoolExecutor", kaputt)
+
+    recs = corpus.load_onedrive(_viele(tmp_path))
+    assert len(recs) == corpus._PAR_THRESHOLD + 5, "Datensätze fehlen"
+    assert "BrokenExecutor" in corpus.POOL_FEHLER
+
+
+def test_pmap_faellt_auch_zurueck_wenn_kein_prozess_startet(tmp_path, monkeypatch):
+    """Keine Handles mehr, gesperrt durch eine Sicherheitssoftware, kein
+    /dev/shm – der Pool geht dann gar nicht erst auf."""
+    def geht_nicht(*a, **k):
+        raise OSError(24, "Too many open files")
+    monkeypatch.setattr(corpus, "ProcessPoolExecutor", geht_nicht)
+    assert len(corpus.load_onedrive(_viele(tmp_path))) == corpus._PAR_THRESHOLD + 5
+    assert "OSError" in corpus.POOL_FEHLER
+
+
+def test_pmap_versucht_es_nach_einem_fehlschlag_nicht_wieder(tmp_path, monkeypatch):
+    """load_records ruft _pmap bis zu viermal. Ist der Pool einmal als kaputt
+    erkannt, wäre jeder weitere Versuch nur Wartezeit für dieselbe Antwort."""
+    versuche = []
+
+    def kaputt(*a, **k):
+        versuche.append(1)
+        raise OSError("nein")
+    monkeypatch.setattr(corpus, "ProcessPoolExecutor", kaputt)
+
+    _viele(tmp_path)
+    corpus.load_onedrive(tmp_path)
+    corpus.load_onedrive(tmp_path)
+    assert len(versuche) == 1
+
+
+def test_pmap_ohne_stoerung_liefert_dasselbe(tmp_path):
+    """Der Pfad mit Pool und der ohne müssen dasselbe ergeben – sonst hinge
+    der Inhalt des Index an der Zahl der Dateien."""
+    _viele(tmp_path)
+    mit_pool = corpus.load_onedrive(tmp_path)
+    assert corpus.POOL_FEHLER is None, "der normale Weg darf nicht zurückfallen"
+    corpus.POOL_FEHLER = "erzwungen"          # ab hier seriell
+    assert corpus.load_onedrive(tmp_path) == mit_pool

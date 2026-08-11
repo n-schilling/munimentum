@@ -45,6 +45,7 @@ import importlib
 import subprocess
 import threading
 import webbrowser
+import multiprocessing
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
@@ -4719,4 +4720,22 @@ setInterval(pullLog, 1000);
 """
 
 if __name__ == "__main__":
+    # Muss die erste Anweisung bleiben.
+    #
+    # corpus._pmap verteilt das Parsen der Exporte auf einen Prozess-Pool.
+    # Außerhalb von Linux startet Python einen Arbeitsprozess nicht per fork,
+    # sondern indem es sich selbst noch einmal aufruft – gebündelt also diese
+    # ausführbare Datei, und zwar mit "--multiprocessing-fork pipe_handle=…"
+    # statt mit eigenen Argumenten. Ohne diese Zeile liefe das Kind in den
+    # Argumentparser in main(), stürbe dort an einer unbekannten Option, und
+    # der Pool meldete dem Aufrufer nur noch BrokenProcessPool – ohne jeden
+    # Hinweis darauf, dass gar keine Datei schuld war.
+    #
+    # Getroffen hat das jeden Bestand, bei dem eine Quelle die Schwelle in
+    # corpus überschritt – Postfach, Chats, Kalender oder Spiegel, je nachdem,
+    # welche sie zuerst erreichte.
+    #
+    # freeze_support() erkennt diesen Aufruf, arbeitet als Kind und beendet
+    # sich danach. Als Skript gestartet tut die Zeile nichts.
+    multiprocessing.freeze_support()
     main()
