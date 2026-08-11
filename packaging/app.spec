@@ -11,6 +11,7 @@
 # importiert – ohne hiddenimports landeten sie nicht im Bündel und
 # app.run_bundled() fände sie nicht.
 
+import os
 import sys
 from pathlib import Path
 
@@ -27,6 +28,12 @@ ROOT = Path(SPECPATH).parent          # noqa: F821  (SPECPATH setzt PyInstaller)
 #
 # Windows liest das .ico aus der EXE, macOS das .icns aus dem Bündel. Linux
 # kennt kein Symbol in der Binärdatei – dort bleibt es ohne Wirkung.
+# Ausnahmen von der Hardened Runtime. Ohne sie startet die signierte App nicht
+# (siehe packaging/signieren.md). Wird nur beim Signieren gebraucht, muss aber
+# da sein, sobald es losgeht.
+ENTITLEMENTS = ROOT / "packaging" / "entitlements.plist"
+assert ENTITLEMENTS.exists(), "entitlements.plist fehlt – signierte Bündel starten damit nicht"
+
 ICON_ICO = ROOT / "packaging" / "icon" / "icon.ico"
 ICON_ICNS = ROOT / "packaging" / "icon" / "icon.icns"
 for _p in (ICON_ICO, ICON_ICNS):
@@ -101,8 +108,10 @@ exe = EXE(                             # noqa: F821
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
+    # Signiert wird nur, wenn der Build die Identität mitgibt (Tag-Läufe, siehe
+    # den Workflow). Ohne sie baut alles wie bisher unsigniert durch.
+    codesign_identity=os.environ.get("MACOS_SIGN_IDENTITY") or None,
+    entitlements_file=str(ENTITLEMENTS),
 )
 
 coll = COLLECT(                        # noqa: F821

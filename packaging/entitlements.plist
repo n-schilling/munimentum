@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Ausnahmen von der Hardened Runtime. Beglaubigt wird nur mit ihr, und sie
+  schaltet ab, was CPython braucht – ohne diese drei Zeilen startet die
+  signierte App nicht mehr (siehe packaging/signieren.md, Schritt 4).
+
+  Bewusst so wenig wie möglich: wer eine Zeile entfernen kann, ohne dass die App
+  beim Start stirbt, soll es tun. Console.app nennt beim Fehlversuch den Grund.
+-->
+<plist version="1.0">
+<dict>
+  <!-- CPython erzeugt zur Laufzeit ausführbaren Speicher (ctypes, libffi). -->
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+  <!-- PyInstaller lädt über 200 .so/.dylib aus dem entpackten Bündel nach. -->
+  <key>com.apple.security.cs.disable-library-validation</key><true/>
+</dict>
+</plist>
