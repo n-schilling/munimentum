@@ -17,10 +17,13 @@ schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
   7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
   8. Kalender und Adressbuch entstehen – ein zweiter Selbstaufruf, diesmal von
      combined_search, mit eigenen Parsern (E-Mail, iCalendar, vCard).
-  9. Windows: die EXE trägt unser Symbol – und nur unseres. Bis 1.1.0 zeigte
+  9. macOS: die Signatur hält, mit Zeitstempel und Hardened Runtime – und am
+     fertigen DMG zusätzlich das angeheftete Ticket (--beglaubigt). Unsignierte
+     Bündel überspringen den Schritt, damit Läufe auf `main` durchlaufen.
+ 10. Windows: die EXE trägt unser Symbol – und nur unseres. Bis 1.1.0 zeigte
      sie PyInstallers Python-Logo, und geprüft wurde das nie: die Tests sehen
      die .ico im Repo und die Zeile in der Spec, nicht das Ergebnis.
- 10. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
+ 11. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
      startet ein Arbeitsprozess dieselbe ausführbare Datei noch einmal – das
      geht nur mit multiprocessing.freeze_support() in app.py. Deshalb liegen
      unten mehr Testdateien als die Schwelle, ab der der Pool aufgeht: mit den
@@ -236,6 +239,64 @@ def symbol_ist_in_der_exe(exe):
                      f"  EXE:      {gefunden}\n  icon.ico: {erwartet}")
 
 
+def _codesign(*args):
+    return subprocess.run(["codesign", *args], capture_output=True, text=True)
+
+
+def signatur_ist_in_ordnung(exe, beglaubigt=False):
+    """macOS: trägt das Bündel eine brauchbare Signatur – und ein Ticket?
+
+    Unsignierte Bündel überspringen den Schritt: Läufe auf `main` bauen
+    absichtlich ohne Zertifikat, und der Rauchtest soll dort nicht scheitern.
+    Ist aber signiert, wird streng geprüft — eine halbe Signatur ist schlimmer
+    als keine, weil sie erst beim Anwender auffällt.
+
+    `beglaubigt=True` verlangt zusätzlich das angeheftete Ticket. Das gibt es
+    erst nach der Beglaubigung, also nur beim zweiten Durchlauf am fertigen DMG.
+    """
+    ziel = exe
+    for eltern in exe.parents:                 # im Bündel die .app selbst prüfen
+        if eltern.suffix == ".app":
+            ziel = eltern
+            break
+
+    roh = _codesign("-dv", "--verbose=4", str(ziel))
+    aus = roh.stdout + roh.stderr
+    if roh.returncode != 0 or "not signed at all" in aus:
+        schritt("Signatur: unsigniert – übersprungen")
+        return
+
+    schritt(f"Signatur prüfen{' samt Beglaubigung' if beglaubigt else ''}")
+    pruefung = _codesign("--verify", "--strict", "--verbose=2", str(ziel))
+    if pruefung.returncode != 0:
+        raise Fehler(f"Signatur hält nicht:\n{pruefung.stdout}{pruefung.stderr}")
+
+    # Ohne Developer ID nimmt Gatekeeper das Bündel gar nicht erst an, und ohne
+    # Hardened Runtime lehnt Apple die Beglaubigung ab.
+    if "Authority=Developer ID Application" not in aus:
+        raise Fehler(f"Kein Developer-ID-Zertifikat in der Kette:\n{aus}")
+    for merkmal, warum in (("Timestamp=", "ohne Zeitstempel wird die Signatur "
+                            "ungültig, sobald das Zertifikat abläuft"),
+                           ("Runtime Version=", "ohne Hardened Runtime lehnt "
+                            "Apple die Beglaubigung ab")):
+        if merkmal not in aus:
+            raise Fehler(f"{merkmal} fehlt – {warum}")
+
+    if not beglaubigt:
+        return
+
+    ticket = subprocess.run(["xcrun", "stapler", "validate", str(ziel)],
+                            capture_output=True, text=True)
+    if ticket.returncode != 0:
+        raise Fehler(f"Kein angeheftetes Ticket:\n{ticket.stdout}{ticket.stderr}")
+
+    tor = subprocess.run(["spctl", "-a", "-t", "exec", "-vvv", str(ziel)],
+                         capture_output=True, text=True)
+    torlaut = tor.stdout + tor.stderr
+    if tor.returncode != 0 or "Notarized Developer ID" not in torlaut:
+        raise Fehler(f"Gatekeeper würde das Bündel nicht durchlassen:\n{torlaut}")
+
+
 def teilprogramm_aufrufbar(exe):
     schritt("Teilprogramm im Bündel aufrufen (--run rag_index --help)")
     r = subprocess.run([str(exe), "--run", "rag_index", "--help"],
@@ -384,9 +445,11 @@ def pruefe(exe, daten, port, proc):
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit(f"Aufruf: {sys.argv[0]} <pfad/zur/ausfuehrbaren/datei>")
-    exe = Path(sys.argv[1]).resolve()
+    argv = [a for a in sys.argv[1:] if a != "--beglaubigt"]
+    if not argv:
+        raise SystemExit(f"Aufruf: {sys.argv[0]} <pfad/zur/ausfuehrbaren/datei> "
+                         f"[--beglaubigt]")
+    exe = Path(argv[0]).resolve()
     if not exe.exists():
         raise SystemExit(f"Nicht gefunden: {exe}")
 
@@ -396,6 +459,8 @@ def main():
         # Nur dort steckt das Symbol IN der ausführbaren Datei; macOS liest
         # das .icns aus dem Bündel, Linux kennt gar keines.
         symbol_ist_in_der_exe(exe)
+    if sys.platform == "darwin":
+        signatur_ist_in_ordnung(exe, beglaubigt="--beglaubigt" in sys.argv)
     daten = Path(tempfile.mkdtemp(prefix="o365-rauchtest-"))
     port = freier_port()
     proc = None

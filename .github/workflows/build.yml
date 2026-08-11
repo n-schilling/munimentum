@@ -168,7 +168,10 @@ jobs:
           hdiutil detach /tmp/m365 -quiet
           tot=$(find geprueft/Microsoft365-Archiv.app -type l ! -exec test -e {} \; -print | head -5)
           test -z "$tot" || { echo "::error::Tote Symlinks nach dem Kopieren:"; echo "$tot"; exit 1; }
-          python packaging/smoke_test.py "geprueft/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv"
+          # --beglaubigt: hier ist das Ticket schon angeheftet, hier muss es
+          # halten. Bei unsignierten Läufen auf main greift der Schalter nicht.
+          python packaging/smoke_test.py \
+            "geprueft/Microsoft365-Archiv.app/Contents/MacOS/Microsoft365-Archiv" --beglaubigt
 
       - name: Packen (Windows)
         if: startsWith(matrix.os, 'windows')
