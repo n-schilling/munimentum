@@ -3119,6 +3119,14 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
   border:1px solid var(--line);border-radius:8px;padding:5px 10px}
 .gonefeld label{color:var(--muted);cursor:pointer;white-space:nowrap}
 .gonefeld input:checked ~ label,.gonefeld:hover label{color:var(--ink)}
+/* Kleine Zustandsanzeige neben einem Feld: der Punkt trägt die Farbe, das
+   Wort daneben die Auskunft. Beides zusammen, weil Farbe allein niemandem
+   hilft, der sie nicht unterscheiden kann. */
+.feldmitstand{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+.stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
+  color:var(--muted);white-space:nowrap}
+.stand .dot.ok{background:var(--ok)} .stand .dot.warn{background:var(--warn)}
+.stand .dot.err{background:var(--err)}
 .folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
 .speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
   border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
@@ -3509,14 +3517,14 @@ main{padding-bottom:60px}
 
     <div id="ollama-kinder">
       <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.ollama.url"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.url.i">i</span></span><input type="text" id="c-ollama" style="width:230px"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.ollama.url"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.url.i">i</span></span><span class="feldmitstand"><input type="text" id="c-ollama" style="width:230px"><span class="stand hide" id="st-ollama"></span></span></div>
       </div>
 
       <div class="gruppe unter">
         <h3><span data-i18n="settings.index.title">Index</span>
           <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.i">i</span></h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.index.kind"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.kind.i">i</span></span><div class="wahl2" role="group"><button id="ix-text" onclick="indexart(false)" data-i18n="settings.index.text">Nur Volltext</button><button id="ix-beides" onclick="indexart(true)" data-i18n="settings.index.both">Volltext und Bedeutung</button></div></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_model.i">i</span></span><input type="text" id="c-embed_model" style="width:160px"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_model.i">i</span></span><span class="feldmitstand"><input type="text" id="c-embed_model" style="width:160px"><span class="stand hide" id="st-embed_model"></span></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.batch"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.batch.i">i</span></span><input type="number" id="c-index_batch" min="1" max="512"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.semantic_min"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.semantic_min.i">i</span></span><span><input type="number" id="c-semantic_min" min="0" max="95" step="5"> <span class="muted small">%</span></span></div>
         <p class="folgen" id="index-folgen"></p>
@@ -3525,7 +3533,7 @@ main{padding-bottom:60px}
       <div class="gruppe unter">
         <h3><span data-i18n="settings.ki.title">KI-Zusammenfassung</span>
           <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ki.i">i</span></h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.chat_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.chat_model.i">i</span></span><input type="text" id="c-chat_model" style="width:210px"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.chat_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.chat_model.i">i</span></span><span class="feldmitstand"><input type="text" id="c-chat_model" style="width:210px"><span class="stand hide" id="st-chat_model"></span></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.answer_sources"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.answer_sources.i">i</span></span><input type="number" id="c-answer_sources" min="1" max="20"></div>
       </div>
     </div>
@@ -3813,11 +3821,34 @@ function zeigeFilterstand(){
   el('filter-weg').classList.toggle('hide', !n);
 }
 
-/* Abgeschaltet gibt es nichts einzurichten – dann führt die Kachel dorthin,
-   wo man es wieder anschalten kann. */
+/* Die Kachel führt immer dorthin, wo etwas zu ändern ist. Vorher öffnete sie
+   ein Fenster, das erklärte, was fehlt – aber ändern ließ sich dort nichts,
+   und die Hälfte der Angaben stand ohnehin nur in den Einstellungen. */
 function ollamaKachel(){
-  if(S && S.ollama && S.ollama.disabled) zeigeEinstellung('ollama');
-  else openWizard('ollama');
+  zeigeEinstellung('ollama');
+}
+
+/* Was hier steht, entscheidet dieselbe Prüfung, aus der die Kachel im Kopf
+   ihre Farbe bezieht – nur eben neben dem Feld, in dem man es richtet:
+   die Adresse, das Modell zum Einbetten, das Modell für die Antwort. */
+function zeigeOllamaStand(o, lage){
+  var teile = [
+    ['st-ollama', lage === 'aus' ? '' : o.running ? 'ok' : 'err',
+     o.running ? 'settings.stand.da' : 'settings.stand.weg'],
+    ['st-embed_model', lage === 'aus' || !o.running ? '' : o.has_model ? 'ok' : 'warn',
+     o.has_model ? 'settings.stand.geladen' : 'settings.stand.fehlt'],
+    ['st-chat_model', lage === 'aus' || !o.running ? '' : o.has_chat_model ? 'ok' : 'warn',
+     o.has_chat_model ? 'settings.stand.geladen' : 'settings.stand.fehlt']
+  ];
+  teile.forEach(function(z){
+    var kasten = el(z[0]);
+    if(!kasten) return;
+    // Ohne erreichbares Ollama ist „Modell fehlt“ keine Auskunft, sondern eine
+    // zweite Meldung über dieselbe Ursache.
+    kasten.className = 'stand ' + (z[1] || 'hide');
+    kasten.innerHTML = z[1]
+      ? '<span class="dot ' + z[1] + '"></span>' + esc(t(z[2])) : '';
+  });
 }
 
 /* Ollama abschalten heißt: die App sucht nicht mehr danach, die Bedeutungs-
@@ -3876,12 +3907,15 @@ function renderStatus(s){
   var o = s.ollama;
   // Abgeschaltet ist kein Fehler, sondern eine Entscheidung – deshalb grau
   // statt rot, und kein Assistent, der zur Installation drängt.
-  setPill('ollama',
-    o.disabled ? '' : (o.running ? (o.has_model ? 'ok' : 'warn') : 'err'),
-    o.disabled ? t('pill.ollama.disabled')
-      : (o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model'))
-                   : t('pill.ollama.off')),
-    t(o.disabled ? 'pill.ollama.tip.disabled' : 'pill.ollama.tip'));
+  // An oder aus – wie bei MCP. Warum es aus ist, steht im Mouseover, und was
+  // genau fehlt, in den Einstellungen neben dem Feld, in dem man es ändert.
+  // Drei Beschriftungen für drei Arten von „nicht verfügbar“ hießen: dieselbe
+  // Antwort in drei Wörtern, von denen keines sagt, was zu tun ist.
+  var oLage = o.disabled ? 'aus' : !o.running ? 'weg' : !o.has_model ? 'modell' : 'on';
+  setPill('ollama', {on: 'ok', modell: 'warn', weg: 'err', aus: ''}[oLage],
+    t(oLage === 'on' ? 'pill.ollama.on' : 'pill.ollama.off'),
+    t('pill.ollama.tip.' + oLage));
+  zeigeOllamaStand(o, oLage);
 
   // Der Zustand des Index stand einmal als Kachel im Kopf. Er steht jetzt im
   // Analytics-Reiter, wo auch alles andere über den Bestand steht – zweimal

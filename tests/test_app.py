@@ -6163,20 +6163,48 @@ def test_ausgegraut_statt_versteckt():
 
 
 PRUEFUNG_KACHEL_ZIEL = GRUNDZUSTAND + """
-// Abgeschaltet gibt es nichts einzurichten - die Kachel fuehrt dann dorthin,
-// wo man es wieder anschalten kann, statt zum Installations-Assistenten.
+// Die Kachel fuehrt immer dorthin, wo etwas zu aendern ist. Vorher oeffnete
+// sie ein Fenster, das erklaerte, was fehlt - aendern liess sich dort nichts.
 var gewechselt = [];
 tab = function(n){ gewechselt.push(n); };
-S = statusGeruest(); S.ollama.disabled = true;
-ollamaKachel();
-pruefe(gewechselt.indexOf('einstellungen') >= 0,
-       'Kachel fuehrt nicht zu den Einstellungen: ' + gewechselt.join(','));
-pruefe(!wizardOffen, 'Assistent ging trotzdem auf');
+S = statusGeruest();
+[true, false].forEach(function(aus){
+  gewechselt = []; S.ollama.disabled = aus;
+  ollamaKachel();
+  pruefe(gewechselt.indexOf('einstellungen') >= 0,
+         'Kachel fuehrt nicht zu den Einstellungen: ' + gewechselt.join(','));
+  pruefe(!wizardOffen, 'Assistent ging trotzdem auf');
+});
 
-// Laeuft Ollama nur gerade nicht, ist der Assistent richtig.
-S.ollama.disabled = false;
-ollamaKachel();
-pruefe(wizardOffen === 'ollama', 'Assistent fehlt, obwohl Ollama nur fehlt');
+// Und die Kachel selbst sagt nur an oder aus - warum, steht im Mouseover und
+// neben dem Feld, in dem man es richtet.
+function lage(o){
+  var st = statusGeruest();
+  st.ollama = o;
+  renderStatus(st);
+  return {text: document.getElementById('p-ollama-t').textContent,
+          tip: document.getElementById('pill-ollama').title || '',
+          // innerHTML, nicht textContent: die DOM-Attrappe zerlegt gesetztes
+          // Markup nicht in Kindknoten.
+          adresse: document.getElementById('st-ollama').innerHTML,
+          modell: document.getElementById('st-embed_model').innerHTML};
+}
+
+var an = lage({running: true, has_model: true, has_chat_model: true, models: []});
+pruefe(an.text === 'KI an', 'Laufend nicht als an bezeichnet: ' + an.text);
+pruefe(an.adresse.length > 0, 'Kein Stand neben der Adresse');
+pruefe(an.modell.length > 0, 'Kein Stand neben dem Modell');
+
+var fehlt = lage({running: true, has_model: false, has_chat_model: false, models: []});
+pruefe(fehlt.text === 'KI aus', 'Fehlendes Modell nicht als aus bezeichnet: ' + fehlt.text);
+pruefe(fehlt.tip.indexOf('Modell') >= 0, 'Mouseover nennt den Grund nicht: ' + fehlt.tip);
+pruefe(fehlt.adresse.length > 0, 'Adresse ist erreichbar, sagt es aber nicht');
+
+var weg = lage({running: false, has_model: false, has_chat_model: false, models: []});
+pruefe(weg.text === 'KI aus', 'Nicht erreichbar, aber nicht als aus bezeichnet');
+// Ohne erreichbares Ollama ist "Modell fehlt" eine zweite Meldung ueber
+// dieselbe Ursache - dann steht dort nichts.
+pruefe(weg.modell === '', 'Zweite Meldung ueber dieselbe Ursache: ' + weg.modell);
 console.log('OK');
 """
 

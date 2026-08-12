@@ -6,6 +6,14 @@ was only its own HTTP endpoint, while a client that launches the server itself
 kept full access. Three states now, and the transport is named only when it is
 the only thing missing: **MCP on**, **MCP HTTP off**, **MCP off**.
 
+**The AI tile says on or off, and the settings say why.** It used to read *AI
+search ready* / *model missing* / *off* — three labels for one question, none of
+them saying what to do. It now reads **AI on** or **AI off**, with the reason in
+the tooltip; and clicking it goes to the settings, where the address, the
+embedding model and the answer model each carry a small indicator of their own:
+reachable, loaded, not loaded. That replaces a window which explained what was
+missing but let you change nothing.
+
 **One switch that really means off.** *Settings → MCP server → Allow MCP
 access*: with it off, the server refuses to serve — over the HTTP endpoint and
 over the subprocess route (stdio) that Claude Desktop uses, whether or not this

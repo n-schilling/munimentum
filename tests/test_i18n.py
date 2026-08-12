@@ -208,6 +208,7 @@ DYNAMISCH = (
     # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
     # Die Kachel im Kopf hat drei Lagen und setzt den Schlüssel daraus zusammen.
     ("pill.mcp.", ("on", "off", "aus")),
+    ("pill.ollama.tip.", ("on", "aus", "weg", "modell")),
     ("pill.mcp.tip.", ("on", "off", "aus")),
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",
                      "categories", "index", "model", "ollama", "lastjob",
