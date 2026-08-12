@@ -1140,7 +1140,7 @@ def _auth_env(cfg):
 
 
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
-                embeddings=True, search_page=False, token="", reconstruct=None,
+                embeddings=True, token="", reconstruct=None,
                 check=False, sync_folders=False, onedrive=False,
                 sync_onedrive=False, check_onedrive=False,
                 sync_calendars=False):
@@ -1261,12 +1261,6 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "env": {**base_env,
                     "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
                     "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
-        })
-    if search_page:
-        steps.append({
-            "key": "search_page", "label": "job.step.searchpage",
-            "argv": script_argv("combined_search", TEAMS_DIR, OUTLOOK_DIR),
-            "env": dict(base_env),
         })
     return steps
 
@@ -1931,7 +1925,7 @@ class App:
         return self._calendar_cache[1], self._calendar_cache[2]
 
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
-               embeddings=None, search_page=False, label="Lauf", reconstruct=None,
+               embeddings=None, label="Lauf", reconstruct=None,
                check=False, sync_folders=False, onedrive=False,
                sync_onedrive=False, check_onedrive=False, sync_calendars=False):
         if self.jobs.busy:
@@ -1955,7 +1949,7 @@ class App:
                            else "srv.lexical.noollama", "warn")
         steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
                             calendar=calendar, embeddings=embeddings,
-                            search_page=search_page, token=token,
+                            token=token,
                             reconstruct=reconstruct, check=check,
                             sync_folders=sync_folders, onedrive=onedrive,
                             sync_onedrive=sync_onedrive,
@@ -2153,7 +2147,6 @@ class Handler(BaseHTTPRequestHandler):
                 ok, why = app.launch(
                     outlook=mit_outlook, teams=bool(data.get("teams")),
                     index=bool(data.get("index")), calendar=kalender,
-                    search_page=bool(data.get("search_page")),
                     check=bool(data.get("check")),
                     sync_folders=bool(data.get("sync_folders")),
                     sync_calendars=bool(data.get("sync_calendars")),
@@ -3254,10 +3247,6 @@ main{padding-bottom:60px}
     <div class="schritt">
       <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.calendar.build.when" role="img" aria-label="Info">i</span>
-    </div>
-    <div class="schritt">
-      <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.page.build.when" role="img" aria-label="Info">i</span>
     </div>
   </details>
 </section>

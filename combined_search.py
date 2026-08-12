@@ -37,6 +37,13 @@ Standard: teams_export, outlook_export. Die Ausgabe wird per Default in den
 gemeinsamen übergeordneten Ordner beider Exporte geschrieben (combined_search.html),
 damit die relativen Links funktionieren. Die Datei danach nicht relativ zu den
 Export-Ordnern verschieben, sonst brechen die Links.
+
+Die App bietet diese Seite seit 5.2 nicht mehr an: sie benutzt von hier nur
+--json (Kalender und Kontakte). Auf einem gewachsenen Archiv wurde die Seite
+dreistellig viele Megabyte groß, und dann muss ein Browser sie erst vollständig
+lesen, bevor irgendetwas erscheint – „ohne die App lesbar“ leisten die .eml,
+.ics und .vcf im Archiv besser. Wer sie trotzdem will, ruft dieses Skript auf;
+dafür ist es geblieben.
 """
 
 import os

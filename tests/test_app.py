@@ -588,12 +588,6 @@ def test_build_steps_reihenfolge_export_index_kalender(sandbox):
     assert [s["key"] for s in steps] == ["outlook", "teams", "index", "calendar"]
 
 
-def test_build_steps_suchseite(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), search_page=True)
-    assert steps[0]["key"] == "search_page"
-    assert steps[0]["argv"][1].endswith("combined_search.py")
-
-
 @pytest.mark.parametrize("last,jetzt,faellig", [
     (None, 1000, True),               # noch nie gelaufen
     (1000, 1000 + 59 * 60, False),
@@ -4937,7 +4931,7 @@ def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
 
 ERKLAERUNGEN_ALS_INFO = ["export.start.hint", "export.what.sub",
                          "export.index.only.when", "export.calendar.build.when",
-                         "export.page.build.when", "search.gone.note"]
+                         "search.gone.note"]
 
 
 @pytest.mark.parametrize("schluessel", ERKLAERUNGEN_ALS_INFO)
