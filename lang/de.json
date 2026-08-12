@@ -330,6 +330,7 @@
   "update.error": "Prüfung nicht möglich: {error}",
   "update.check": "Jetzt prüfen",
   "update.open": "Zur Releases-Seite",
+  "update.download": "Release herunterladen",
   "update.enabled": "Beim Start nach Aktualisierungen sehen",
   "update.banner": "Version {v} ist verfügbar – du hast {current}.",
   "srv.update.available": "Version {version} ist verfügbar ({url}).",

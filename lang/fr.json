@@ -330,6 +330,7 @@
   "update.error": "Vérification impossible : {error}",
   "update.check": "Vérifier maintenant",
   "update.open": "Aller à la page des versions",
+  "update.download": "Télécharger la version",
   "update.enabled": "Rechercher des mises à jour au démarrage",
   "update.banner": "La version {v} est disponible — vous avez {current}.",
   "srv.update.available": "La version {version} est disponible ({url}).",

@@ -2994,9 +2994,12 @@ details.rechte p{margin:6px 0}
 .wahl.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
 .wahl input{margin-top:3px}
 .wahl span{display:flex;flex-direction:column;gap:2px}
-button.mini{border:1px solid var(--line);background:transparent;color:inherit;
+button.mini,a.mini{border:1px solid var(--line);background:transparent;color:inherit;
   border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
-button.mini:hover{border-color:var(--accent);color:var(--accent)}
+/* Ein Link mit derselben Aufgabe soll auch gleich aussehen – als reiner Text
+   in Linkfarbe stand er neben den Knöpfen wie ein Fremdkörper. */
+a.mini{display:inline-block;text-decoration:none;line-height:1.5}
+button.mini:hover,a.mini:hover{border-color:var(--accent);color:var(--accent)}
 /* Kopierknopf im Eck des Kastens – sichtbar, ohne den Inhalt zu verdecken. */
 .mitkopie{position:relative}
 .mitkopie pre{padding-right:96px}
@@ -3529,8 +3532,7 @@ main{padding-bottom:60px}
       <span class="small muted" id="update-state"></span>
       <button class="mini" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
       <a class="mini" id="update-link" target="_blank" rel="noopener"
-         style="text-decoration:none" data-i18n="update.open">Releases</a>
-      <button class="mini" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
+         data-i18n="update.download">Release herunterladen</a>
     </div>
   </div>
 

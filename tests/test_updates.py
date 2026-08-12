@@ -214,3 +214,22 @@ def test_ahead_ist_bei_jedem_anderen_ausgang_falsch(github):
     github(RuntimeError("kein Netz"))
     assert updates.check("4.0.0", "n/x")["ahead"] is False
     assert updates.check("4.0.0", "n/x", enabled=False)["ahead"] is False
+
+
+def test_fehlermeldung_steht_nur_im_protokoll():
+    """Sie gehört zum Protokoll, das von jedem Reiter aus offen ist – in der
+    Update-Zeile war sie ein zweites Mal dasselbe an einer fremden Stelle."""
+    import app as app_mod
+    assert app_mod.PAGE.count('data-i18n="report.button"') == 1
+    kopf = app_mod.PAGE[app_mod.PAGE.index('id="protokoll"'):]
+    assert 'data-i18n="report.button"' in kopf[:1200]
+
+
+def test_zu_den_releases_sieht_aus_wie_ein_knopf():
+    """Ein Link mit derselben Aufgabe daneben soll auch gleich aussehen."""
+    import app as app_mod
+    i = app_mod.PAGE.index('id="update-link"')
+    zeile = app_mod.PAGE[app_mod.PAGE.rindex("<", 0, i):app_mod.PAGE.index(">", i) + 1]
+    assert 'class="mini"' in zeile
+    assert 'data-i18n="update.download"' in zeile
+    assert "button.mini,a.mini{" in app_mod.PAGE
