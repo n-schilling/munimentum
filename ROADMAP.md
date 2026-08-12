@@ -4,11 +4,34 @@ Kurze Liste — was ansteht und was bewusst fehlt, damit später niemand rätsel
 ob etwas vergessen wurde oder gewollt draußen ist. Wie es gebaut wird, steht
 nicht hier, sondern im Code.
 
+## Verschobene Mails gelten als gelöscht
+
+Der Filter *Gelöschtes* zeigt heute auch Mails, die nur in einen anderen Ordner
+gewandert sind — und zwar den überwiegenden Teil. Die Absicht war eine andere:
+Was aus dem Postfach verschwunden scheint, wird bei Microsoft nachgefragt, und
+nur ein 404 zählt als Löschung. Der Haken liegt darunter: Exchange vergibt beim
+**Verschieben eine neue Nachrichten-ID**. Unter der gespeicherten ist die Mail
+danach nicht mehr auffindbar, die Rückfrage antwortet 404, und die Prüfung
+kommt zum falschen Schluss.
+
+Die Lösung ist vorgesehen: Graph liefert auf `Prefer: IdType="ImmutableId"`
+Kennungen, die ein Verschieben überstehen. Sie anzufordern ist eine Zeile — der
+Umbau steckt woanders:
+
+* **Die bereits gespeicherten Schlüssel sind von der alten Sorte.** `exported.tsv`
+  führt eine Zeile je fertiger Mail; nach der Umstellung passt keine davon mehr,
+  und ein Lauf ohne Übergang lüde das ganze Postfach erneut herunter.
+* **Die bisherigen Löschvermerke sind unzuverlässig.** Sie müssten einmal neu
+  geprüft werden, statt als Wahrheit stehenzubleiben.
+
+Bis dahin sagt das (i) am Filter, was er wirklich zeigt — eine falsche Zahl
+kommentarlos anzuzeigen wäre schlechter als eine erklärte.
+
 ## Als Nächstes: Inhalte durchsuchen
 
-Heute stehen **Namen** im Index: `att:pdf` findet die Mail mit dem PDF,
-`Vertrag_Musterkunde.pdf` die eine, und seit dem OneDrive-Spiegel gilt dasselbe
-für die Dateien auf dem Laufwerk. Was fehlt, ist der **Inhalt** — ein Vertrag
+Heute stehen **Namen** im Index: der Dateityp-Filter findet die Mails mit einem
+PDF, `Vertrag_Musterkunde.pdf` die eine, und seit dem OneDrive-Spiegel gilt
+dasselbe für die Dateien auf dem Laufwerk. Was fehlt, ist der **Inhalt** — ein Vertrag
 liegt im Archiv, sein Text ist unsichtbar.
 
 Das betrifft beide Quellen gemeinsam und wird deshalb ein Schritt: Anhänge aus
@@ -33,15 +56,6 @@ einen Abhängigkeitsbaum nach, der das Bündel von 23 auf geschätzt 65 MB bring
 würde. Die schlanke Alternative aus einzelnen Bibliotheken ist ein Viertel so
 groß, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
 einem echten Bündel, nicht am Schreibtisch.
-
-## Signierte macOS-Bündel
-
-Der Developer-Account ist da, die Anleitung steht in `packaging/signieren.md` —
-umgesetzt ist sie noch nicht. Solange bleibt beim ersten Start die Warnung
-*„Apple konnte nicht überprüfen …"*, und die Release-Hinweise erklären den Weg
-daran vorbei. Der Aufwand steckt weniger im Signieren als in den
-Entitlements: Hardened Runtime ist Pflicht für die Beglaubigung und schaltet
-genau das ab, was CPython braucht.
 
 ## Kleineres
 
