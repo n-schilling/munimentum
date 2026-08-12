@@ -1079,3 +1079,63 @@ def test_untergrenze_versteht_prozent_und_kosinus(monkeypatch):
                           ("0", 0.0), ("unsinn", 0.45), ("500", 0.99)):
         monkeypatch.setenv("SEMANTIC_MIN", roh)
         assert mcp_server._sem_min() == pytest.approx(erwartet, abs=0.001), roh
+
+
+# --------------------------------------------------------------------------
+# Ähnliche zu einem Treffer
+#
+# Der Unterschied zur Bedeutungssuche ist der Ausgangsvektor: der liegt hier
+# schon im Index. Deshalb braucht das kein Ollama – und genau das macht den
+# Eintrag im Trefferemenü auch dann brauchbar, wenn die Variante oben gesperrt
+# ist.
+# --------------------------------------------------------------------------
+@pytest.fixture
+def aehnliche_vektoren(state):
+    """Der Testkorpus benutzt orthogonale Einheitsvektoren – dort ähnelt sich
+    nichts, und die Untergrenze wirft folgerichtig alles weg. Für diesen Test
+    also eine Matrix, in der die Zeilen einander wirklich nahe sind."""
+    V = mcp_server.STATE["V"]
+    n, dim = V.shape
+    nah = np.zeros((n, dim), dtype="float32")
+    for i in range(n):
+        nah[i, 0] = 1.0                       # gemeinsame Hauptrichtung
+        nah[i, 1 + (i % (dim - 1))] = 0.35    # etwas Eigenes je Zeile
+        nah[i] /= np.linalg.norm(nah[i])
+    alt = mcp_server.STATE["V"]
+    mcp_server.STATE["V"] = nah
+    yield
+    mcp_server.STATE["V"] = alt
+
+
+def test_aehnliche_brauchen_kein_ollama(aehnliche_vektoren, monkeypatch):
+    def kein_netz(text):
+        raise AssertionError("similar_messages hat eingebettet – das soll es nicht")
+    monkeypatch.setattr(mcp_server, "_embed_query", kein_netz)
+
+    erste = mcp_server.browse_messages(k=1)["results"][0]
+    cid = erste["cid"]
+    assert cid, "der Treffer trägt keine Chunk-Kennung"
+    r = mcp_server.similar_messages(cid=cid, k=5)
+    assert r["backend"] == "semantic"
+    assert r["count"] >= 1
+
+
+def test_aehnliche_geben_nicht_den_treffer_selbst_zurueck(aehnliche_vektoren):
+    cid = mcp_server.browse_messages(k=1)["results"][0]["cid"]
+    r = mcp_server.similar_messages(cid=cid, k=5)
+    assert cid not in [h["cid"] for h in r["results"]], \
+        "der Ausgangstreffer steht in seiner eigenen Ähnlichkeitsliste"
+
+
+def test_aehnliche_bei_unbekannter_kennung(state):
+    assert mcp_server.similar_messages(cid=99999, k=5)["results"] == []
+
+
+def test_aehnliche_ohne_embeddings(state):
+    alt = mcp_server.STATE.get("semantic")
+    mcp_server.STATE["semantic"] = False
+    try:
+        r = mcp_server.similar_messages(cid=1, k=5)
+        assert r["results"] == [] and "error" in r
+    finally:
+        mcp_server.STATE["semantic"] = alt

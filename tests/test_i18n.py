@@ -163,7 +163,9 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
     allein sagt keines der drei."""
     for code in SPRACHEN:
         d = roh(code)
-        for k in ("search.ai", "search.ai.label", "search.ai.note",
+        # "search.ai" war das Etikett der alten Checkbox; die Kennzeichnung
+        # steht jetzt in der Kopfzeile des Kastens selbst.
+        for k in ("search.ai.label", "search.ai.note",
                   "settings.chat_model.hint"):
             assert "llama" in d[k], f"{code}.json[{k}] nennt Ollama nicht"
         kopf = d["search.ai.label"] + " " + d["search.ai.tag"]
@@ -197,6 +199,8 @@ DYNAMISCH = (
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files")),
+    # Der Platzhalter im Suchfeld wechselt mit der Suchart.
+    ("search.ph.", ("text", "aehnlich", "ki")),
     # Die Zeilen des Fehlerberichts: app.systemangaben liefert nur den Rumpf
     # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",

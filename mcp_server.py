@@ -348,6 +348,45 @@ def _semantic_rank(con, query, where, params, limit):
     return [(int(ids[o]), float(sims[o])) for o in order if sims[o] >= SEM_MIN]
 
 
+def _rank_wie(con, cid, where, params, limit):
+    """Ähnlichste Chunks zu einem, der schon im Index steht.
+
+    Der Unterschied zu _semantic_rank ist der Ausgangsvektor: der liegt hier
+    fertig in der Matrix. Es muss nichts eingebettet werden, also braucht das
+    kein Ollama – und funktioniert auch dann, wenn die Bedeutungssuche über das
+    Eingabefeld gerade nicht zur Verfügung steht.
+    """
+    np, V = STATE["np"], STATE["V"]
+    zeile = cid - 1
+    if zeile < 0 or zeile >= V.shape[0]:
+        return []
+    qvec = V[zeile].astype(np.float32)
+    nrm = np.linalg.norm(qvec)
+    if nrm:
+        qvec = qvec / nrm
+
+    ids = np.fromiter((r[0] for r in
+                       con.execute(f"SELECT id FROM chunks WHERE {where}", params)),
+                      dtype=np.int64) if where != _WHERE_ALL or params else None
+    if ids is None:
+        sims = np.empty(V.shape[0], dtype=np.float32)
+        for s in range(0, V.shape[0], 32768):
+            sims[s:s + 32768] = V[s:s + 32768].astype(np.float32) @ qvec
+        ids = np.arange(1, V.shape[0] + 1)
+    else:
+        if ids.size == 0:
+            return []
+        sims = np.empty(ids.size, dtype=np.float32)
+        for s in range(0, ids.size, 32768):
+            sims[s:s + 32768] = V[ids[s:s + 32768] - 1].astype(np.float32) @ qvec
+    take = min(limit + 1, ids.size)                  # +1: der Treffer selbst
+    order = np.argpartition(-sims, take - 1)[:take]
+    order = order[np.argsort(-sims[order])]
+    # Sich selbst auszugeben wäre die trivialste und nutzloseste Antwort.
+    return [(int(ids[o]), float(sims[o])) for o in order
+            if int(ids[o]) != cid and sims[o] >= SEM_MIN][:limit]
+
+
 # --------------------------------------------------------------------------
 # Fusion, dedupe, result shaping
 # --------------------------------------------------------------------------
@@ -413,6 +452,9 @@ def _source_uri(root, rel):
 def _hit(row, score, preview_chars, woerter=()):
     h = {
         "uid": row["uid"],
+        # Die Zeile im Index. Nur damit lässt sich später "Ähnliche zu diesem
+        # Treffer" fragen, ohne die Anfrage neu einzubetten.
+        "cid": row["id"] if "id" in row.keys() else None,
         "source": row["src"],
         "source_label": _SOURCE_LABEL.get(row["src"], row["src"]),
         "who": row["who"],
@@ -584,6 +626,28 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         return {"backend": used, "count": len(page), "offset": max(0, offset),
                 "results": _rows_for(con, page, max(0, min(preview_chars, 2000)),
                                     _WORD.findall(query.lower()))}
+    finally:
+        con.close()
+
+
+def similar_messages(cid: int, k: int = 12, preview_chars: int = 200):
+    """Nachrichten, die dieser einen ähneln – ohne neue Anfrage.
+
+    Bewusst kein MCP-Werkzeug, sondern nur für die Oberfläche: Claude formuliert
+    seine Anfragen selbst und braucht diesen Umweg nicht. Der Wert liegt beim
+    Menschen, der einen Treffer vor sich hat und „mehr davon“ will.
+
+    Und es geht ohne Ollama: der Ausgangsvektor steht schon in der Matrix.
+    """
+    if not STATE.get("semantic"):
+        return {"error": "This index has no embeddings.", "count": 0, "results": []}
+    con = _db()
+    try:
+        pairs = _rank_wie(con, int(cid), _WHERE_ALL, [], max(1, k) * 3)
+        page = _dedupe_page(con, pairs, max(1, k), 0)
+        return {"backend": "semantic", "count": len(page), "offset": 0,
+                "results": _rows_for(con, page,
+                                     max(0, min(preview_chars, 2000)), ())}
     finally:
         con.close()
 

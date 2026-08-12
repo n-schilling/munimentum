@@ -1850,6 +1850,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"lines": lines, "seq": seq})
             if u.path == "/api/search":
                 return self._json(self._search(one))
+            if u.path == "/api/similar":
+                return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
             if u.path == "/api/folders":
@@ -2161,6 +2163,19 @@ class Handler(BaseHTTPRequestHandler):
             res = mod.browse_messages(**kw)
         res["semantic"] = bool(mod.STATE.get("semantic"))
         return res
+
+    def _similar(self, q):
+        """Ähnliche zu einem Treffer – braucht kein Ollama (siehe mcp_server)."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "results": [], "count": 0}
+        try:
+            cid = int(q.get("cid", 0))
+        except (TypeError, ValueError):
+            return {"error": {"k": "srv.badindex", "v": {"error": "cid"}},
+                    "results": [], "count": 0}
+        return mod.similar_messages(cid=cid,
+                                    k=min(int(q.get("k", 20) or 20), 100))
 
     def _thread(self, q):
         """Alle Nachrichten eines Gesprächs – dieselbe Auswertung wie im MCP."""
@@ -2492,12 +2507,53 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
   overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
 #log .l-head{color:#9ad0ff;font-weight:600} #log .l-ok{color:#7fdca4}
 #log .l-warn{color:#f0c674} #log .l-err{color:#ff9c94}
-.hit{border-top:1px solid var(--line);padding:12px 0}
+/* Trefferzeile: zwei Zeilen statt vier. Titel links, Herkunft und Datum rechts
+   in eigenen Spalten – so stehen die Daten untereinander und man tastet die
+   Liste am Rand entlang ab, statt sie zu lesen. Die Aktionen liegen im Menü:
+   sie sind je Treffer verschieden und beherrschten sonst die Liste. */
+.hit{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;
+  column-gap:14px;row-gap:3px;align-items:baseline;padding:10px 0;
+  border-top:1px solid var(--line)}
 .hit:first-child{border-top:0}
-.hit h3{margin:0 0 3px;font-size:14px;font-weight:600}
-.hit .meta{color:var(--muted);font-size:12.5px;margin-bottom:5px}
-.hit .prev{font-size:13.5px}
-mark{background:var(--warn);color:var(--bg);border-radius:3px;padding:0 2px}
+.hit h3{grid-column:1;margin:0;font-size:14px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hit .wer{grid-column:2;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.hit .wann{grid-column:3;color:var(--muted);font-size:12.5px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.hit .menuzelle{grid-column:4;position:relative;align-self:center}
+.hit .prev{grid-column:1/-1;font-size:13.5px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hit .verlauf{grid-column:1/-1}
+@media (max-width:720px){
+  .hit{grid-template-columns:minmax(0,1fr) auto}
+  .hit .wer{grid-column:1;grid-row:2} .hit .wann{grid-column:2;grid-row:2}
+  .hit .menuzelle{grid-column:2;grid-row:1} .hit .prev{grid-row:3}
+}
+.punkte-knopf{border:1px solid transparent;background:transparent;color:var(--muted);
+  border-radius:7px;padding:2px 8px;font-size:16px;line-height:1.2;cursor:pointer}
+.punkte-knopf:hover,.punkte-knopf[aria-expanded="true"]{border-color:var(--line);color:var(--ink)}
+.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:190px;
+  background:var(--card);border:1px solid var(--line);border-radius:10px;
+  box-shadow:0 6px 20px rgba(0,0,0,.14);padding:5px;display:flex;flex-direction:column}
+.menu button{border:0;background:transparent;color:inherit;font:inherit;font-size:13.5px;
+  text-align:left;padding:7px 10px;border-radius:7px;cursor:pointer}
+.menu button:hover:not(:disabled){background:var(--code)}
+.menu button:disabled{opacity:.4;cursor:not-allowed}
+.menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+/* Die Suchart: exklusive Wahl, beide Alternativen sichtbar. */
+.modi{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.modi button{border:0;background:transparent;color:var(--muted);font:inherit;
+  font-size:13.5px;padding:7px 16px;cursor:pointer}
+.modi button+button{border-left:1px solid var(--line)}
+.modi button.on{background:var(--accent);color:#fff;font-weight:600}
+.modi button:not(.on):not(:disabled):hover{color:var(--accent)}
+.modi button:disabled{opacity:.4;cursor:not-allowed}
+.modizeile{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
+/* Treffermarkierung: dezent. Die Vorschau ist gedämpft gesetzt, die Fundstelle
+   bekommt die volle Textfarbe und etwas Gewicht – das hebt sie heraus, ohne
+   dass eine lange Liste wie ein Textmarker-Unfall aussieht. */
+mark{background:var(--code);color:var(--ink);font-weight:600;
+  border-radius:3px;padding:0 3px}
 .tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 6px;
   font-size:11.5px;color:var(--muted);margin-right:6px}
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
@@ -2834,6 +2890,21 @@ main{padding-bottom:60px}
              onkeydown="if(event.key==='Enter'){sofortSuchen();}">
       <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
     </div>
+    <!-- Die Suchart steht direkt unter dem Feld, weil sie bestimmt, was man
+         dort sinnvoll eingibt – der Platzhalter wechselt mit ihr. Eine eigene
+         Erklärzeile gibt es nicht mehr; sie stand nur im Weg. -->
+    <div class="modizeile">
+      <div class="modi" role="group" aria-label="Suchart" data-i18n-title="search.mode">
+        <button id="m-text" class="on" onclick="suchmodus('text')"
+                data-i18n="search.mode.text">Textsuche</button>
+        <button id="m-aehnlich" onclick="suchmodus('aehnlich')"
+                data-i18n="search.mode.aehnlich">Ähnliche Suche</button>
+        <button id="m-ki" onclick="suchmodus('ki')"
+                data-i18n="search.mode.ki">KI-Zusammenfassung</button>
+      </div>
+      <span class="small muted hide" id="modus-fehlt"
+            data-i18n="search.mode.needs">Braucht Ollama.</span>
+    </div>
     <div class="row" style="margin-top:10px;gap:10px">
       <button class="mini" id="filter-auf" aria-expanded="false"
               onclick="filterUmschalten()" data-i18n="search.filter">Filter</button>
@@ -2864,9 +2935,11 @@ main{padding-bottom:60px}
   </div>
   <div class="answer hide" id="ai-box"></div>
   <div class="card">
-    <label class="chk hide" id="ai-wrap" style="margin-bottom:10px">
-      <input type="checkbox" id="ai-on" onchange="merkeKI()">
-      <span data-i18n="search.ai">Antwort formulieren</span></label>
+    <!-- In der KI-Variante steht die Antwort oben; die Treffer, auf die sie
+         sich stützt, sind einen Klick entfernt statt weg. -->
+    <div class="row hide" id="ki-klappe" style="margin-bottom:12px">
+      <button class="mini" id="ki-klappknopf" onclick="klappeTreffer()"></button>
+    </div>
     <div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
   </div>
@@ -3223,6 +3296,9 @@ function uebersetzeSeite(){
   });
   document.querySelectorAll('[data-i18n-title]').forEach(function(el){
     el.title = t(el.dataset.i18nTitle);
+    // Gruppen ohne sichtbare Beschriftung tragen denselben Text als aria-label:
+    // ein title allein wird von Screenreadern nicht zuverlässig vorgelesen.
+    if(el.hasAttribute('aria-label')) el.setAttribute('aria-label', t(el.dataset.i18nTitle));
   });
   document.title = t('app.title');
   document.documentElement.lang = LOC;
@@ -3441,9 +3517,9 @@ function renderStatus(s){
   el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
   el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
   // Die Antwort gibt es nur, wenn auch ein Modell sie formulieren kann.
-  var kiMoeglich = !!(o.running && o.has_chat_model && st.exists);
-  el('ai-wrap').classList.toggle('hide', !kiMoeglich);
-  if(!kiMoeglich) el('ai-on').checked = false;
+  // Die beiden hinteren Varianten hängen an Ollama: „Ähnliche Suche“ muss die
+  // Anfrage einbetten, die Zusammenfassung braucht zusätzlich ein Sprachmodell.
+  modiPruefen(!!(o.running && o.has_chat_model && st.exists && st.semantic));
 
   // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
   // und Adressbuch weiter den Stand von vor dem Lauf.
@@ -3726,6 +3802,55 @@ function trefferProSeite(){
    Begriff, Person, Zeitraum und Ordner eingeben können, ohne dass nach jeder
    Änderung eine Suche losläuft. Die Filter melden nur ihren Stand an den
    Schalter darüber. */
+/* Die Suchart. Textsuche ist die Vorgabe und bleibt es nach jedem Start:
+   Sie ist die einzige, die immer funktioniert, und die einzige, deren Ergebnis
+   sich vorhersagen lässt. Die anderen beiden sind eine bewusste Abzweigung.
+
+   Was die Oberfläche „Textsuche“ nennt, ist im Server mode=lexical; „Ähnliche
+   Suche“ ist semantic. Für die KI-Variante wird hybrid genommen: dort tippt man
+   eine Frage, und ganze Fragen findet BM25 allein schlecht. */
+var SUCHMODUS = 'text';
+var MODUS_ZU_SERVER = {text: 'lexical', aehnlich: 'semantic', ki: 'hybrid'};
+var TREFFER_OFFEN = true;
+
+function suchmodus(art){
+  SUCHMODUS = art;
+  ['text', 'aehnlich', 'ki'].forEach(function(a){
+    el('m-' + a).classList.toggle('on', a === art);
+  });
+  el('q').placeholder = t('search.ph.' + art);
+  TREFFER_OFFEN = art !== 'ki';
+  el('ki-klappe').classList.toggle('hide', art !== 'ki');
+  el('results').classList.toggle('hide', !TREFFER_OFFEN);
+  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
+  if(el('q').value.trim() || filterFelder().length) doSearch(0);
+  else abbrechenKI();
+}
+
+/* Ohne Ollama bleiben die beiden hinteren Varianten sichtbar, aber tot. Sie zu
+   verstecken hieße: wer sie nie sieht, erfährt auch nie, dass es sie gibt. */
+function modiPruefen(moeglich){
+  ['aehnlich', 'ki'].forEach(function(a){
+    var b = el('m-' + a);
+    b.disabled = !moeglich;
+    b.title = moeglich ? '' : t('search.mode.needs');
+  });
+  el('modus-fehlt').classList.toggle('hide', moeglich);
+  if(!moeglich && SUCHMODUS !== 'text') suchmodus('text');
+}
+
+function klappeTreffer(){
+  TREFFER_OFFEN = !TREFFER_OFFEN;
+  el('results').classList.toggle('hide', !TREFFER_OFFEN);
+  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
+  zeigeKlappknopf();
+}
+function zeigeKlappknopf(n){
+  if(n === undefined) n = el('results').querySelectorAll('.hit').length;
+  el('ki-klappknopf').textContent = TREFFER_OFFEN
+    ? t('search.ki.hide') : t('search.ki.show', {n: n});
+}
+
 function sofortSuchen(){
   doSearch(0);
 }
@@ -3736,14 +3861,15 @@ function doSearch(off){
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
-    k: proSeite, offset: offset});
+    mode: MODUS_ZU_SERVER[SUCHMODUS], k: proSeite, offset: offset});
   zeigeFilterstand();
   el('results').textContent = t('search.running');
   api('/api/search?' + p.toString()).then(function(r){
     renderHits(r);
-    // Erst die Treffer, dann die Antwort: die Suche ist sofort da, das Modell
-    // braucht eine Minute. Wer eine Rechnungsnummer sucht, soll nicht warten.
-    if(el('ai-on').checked && (r.results || []).length) frageKI();
+    // Nur die KI-Variante fragt das Modell – und zwar erst, nachdem die Treffer
+    // stehen. Die Suche ist sofort da, das Modell braucht eine Minute; wer eine
+    // Rechnungsnummer sucht, hat mit Textsuche damit nie zu tun.
+    if(SUCHMODUS === 'ki' && (r.results || []).length) frageKI();
     else abbrechenKI();
   });
 }
@@ -3754,12 +3880,58 @@ function doSearch(off){
 function hervor(text){
   var roh = el('q').value.trim();
   var h = esc(text);
-  if(!roh) return h;
+  // Nur die Textsuche trifft wörtlich. Bei der Bedeutungssuche wäre eine
+  // Markierung eine Behauptung: dort passt der Sinn, nicht das Wort.
+  if(!roh || SUCHMODUS !== 'text') return h;
   roh.split(/\s+/).filter(Boolean).forEach(function(w){
     var muster = new RegExp('(' + esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
     h = h.replace(muster, '<mark>$1</mark>');
   });
   return h;
+}
+
+/* Ein Menü je Treffer, aber immer nur eines offen. Klick daneben und ESC
+   schließen es – ohne das bliebe es beim Blättern stehen. */
+var offenesMenu = null;
+function menuZu(){
+  if(offenesMenu === null) return;
+  var m = el('menu-' + offenesMenu);
+  if(m){ m.classList.add('hide');
+         m.previousElementSibling.setAttribute('aria-expanded', 'false'); }
+  offenesMenu = null;
+}
+function menuAuf(ev, i){
+  ev.stopPropagation();
+  var war = offenesMenu;
+  menuZu();
+  if(war === i) return;                    // derselbe Knopf schließt wieder
+  el('menu-' + i).classList.remove('hide');
+  ev.currentTarget.setAttribute('aria-expanded', 'true');
+  offenesMenu = i;
+}
+document.addEventListener('click', menuZu);
+
+function filterPerson(wer){
+  menuZu();
+  el('f-person').value = wer;
+  el('filter').classList.remove('hide');
+  doSearch(0);
+}
+
+/* Ähnliche zu genau diesem Treffer. Anders als die Ähnliche Suche braucht das
+   kein Ollama: der Vektor dieser Textstelle liegt fertig im Index, es muss
+   nichts eingebettet werden. Deshalb steht der Eintrag auch dann bereit, wenn
+   die Variante oben ausgegraut ist. */
+function aehnlicheZu(cid){
+  menuZu();
+  el('q').value = '';
+  el('results').textContent = t('search.running');
+  api('/api/similar?cid=' + encodeURIComponent(cid) +
+      '&k=' + trefferProSeite()).then(function(r){
+    offset = 0;
+    renderHits(r);
+    abbrechenKI();
+  });
 }
 
 function renderHits(r){
@@ -3770,20 +3942,36 @@ function renderHits(r){
   el('results').innerHTML = hits.map(function(h, i){
     var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
     var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
+    var faden = h.thread && KANN_VERLAUF ? esc(h.thread).replace(/'/g, "\\'") : '';
     return '<div class="hit" id="treffer-' + (i + 1) + '">' +
       '<h3><span class="fussnote">[' + (i + 1) + ']</span>' +
       (link ? '<a href="' + link + '" target="_blank">' : '') +
       esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
-      '<div class="meta"><span class="tag">' + esc(h.source_label) + '</span>' +
+      '<div class="wer"><span class="tag">' + esc(h.source_label) + '</span>' +
       (h.gone ? '<span class="tag weg" title="' +
         esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
-        esc(t('search.gone.tag')) + '</span>' : '') +
-      esc(h.who || '') + ' · ' + esc(h.date || '') + '</div>' +
+        esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</div>' +
+      '<div class="wann">' + esc(h.date || '') + '</div>' +
+      '<div class="menuzelle">' +
+        '<button class="punkte-knopf" aria-haspopup="true" aria-expanded="false" ' +
+        'aria-label="' + esc(t('search.menu')) + '" onclick="menuAuf(event,' + i + ')">⋯</button>' +
+        '<div class="menu hide" id="menu-' + i + '">' +
+          (link ? '<a class="mini" href="' + link + '" target="_blank" ' +
+                  'style="text-decoration:none;border:0;padding:7px 10px">' +
+                  esc(t('search.menu.source')) + '</a>'
+                : '<button disabled>' + esc(t('search.menu.source')) + '</button>') +
+          '<button' + (faden ? ' onclick="zeigeVerlauf(' + (i + 1) + ',\'' + faden + '\')"'
+                             : ' disabled') + '>' +
+            esc(t('search.menu.thread')) + '</button>' +
+          '<button' + (h.cid ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"' : ' disabled') +
+            '>' + esc(t('search.menu.similar')) + '</button>' +
+          (h.who ? '<hr><button onclick="filterPerson(\'' +
+                   esc(h.who).replace(/'/g, "\\'") + '\')">' +
+                   esc(t('search.menu.person')) + '</button>' : '') +
+        '</div>' +
+      '</div>' +
       '<div class="prev">' + hervor(h.preview || '') + '…</div>' +
-      (h.thread && KANN_VERLAUF ? '<div class="verlauf" id="verlauf-' + (i + 1) + '">' +
-        '<button class="mini" onclick="zeigeVerlauf(' + (i + 1) + ',\'' +
-        esc(h.thread).replace(/'/g, "\\'") + '\')">' +
-        esc(t('search.thread.show')) + '</button></div>' : '') +
+      '<div class="verlauf" id="verlauf-' + (i + 1) + '"></div>' +
       '</div>';
   }).join('');
   // Auch das Blättern richtet sich nach der Einstellung – sonst übersprünge
@@ -3794,7 +3982,8 @@ function renderHits(r){
     (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '');
   // Hier stand "Ranking: hybrid". Bei einer Suche ohne Begriff gibt es gar
   // kein Ranking, also stand meistens ein Strich da; und "hybrid" ist ein
-  // Wort für Entwickler. Ob die Bedeutungssuche läuft, sagt die Kachel oben.
+  // Wort für Entwickler. Welche Suchart läuft, steht jetzt oben im Umschalter.
+  if(SUCHMODUS === 'ki') zeigeKlappknopf(hits.length);
 }
 
 /* Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
@@ -4318,14 +4507,6 @@ function zeigeKommunikation(name){
    Modell aus eben diesen Treffern geschrieben – das sagt der Kasten auch. */
 var kiLauf = null, kiQuellen = [];
 
-function merkeKI(){
-  // Die Wahl gilt für die nächste Suche, nicht rückwirkend – ein Haken soll
-  // nicht ungefragt ein Modell anwerfen.
-  try { localStorage.setItem('ki', el('ai-on').checked ? '1' : '0'); } catch(e){}
-}
-function stelleKIher(){
-  try { el('ai-on').checked = localStorage.getItem('ki') === '1'; } catch(e){}
-}
 function abbrechenKI(){
   if(kiLauf){ kiLauf.abort(); kiLauf = null; }
   el('ai-box').classList.add('hide');
@@ -4985,7 +5166,6 @@ function refresh(){
   if(beendet) return Promise.resolve();
   return api('/api/status').then(renderStatus);
 }
-stelleKIher();
 stelleProtokollHer();
 refresh();
 setInterval(refresh, 2500);

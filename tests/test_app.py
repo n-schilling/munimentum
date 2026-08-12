@@ -2325,16 +2325,25 @@ function zustand(chat, index){
   st.store = {exists: index, chunks: 5, semantic: true, built_at: null, model: null};
   return st;
 }
-var box = document.getElementById('ai-wrap');
-var versteckt = null;
-box.classList.toggle = function(c, an){ versteckt = (c === 'hide') ? an : versteckt; };
-
+// Die beiden hinteren Suchvarianten haengen an Ollama UND an einem Index mit
+// Embeddings. Fehlt eines davon, sind sie ausgegraut - aber sichtbar.
+function gesperrt(){
+  return document.getElementById('m-aehnlich').disabled &&
+         document.getElementById('m-ki').disabled;
+}
 renderStatus(zustand(false, true));
-pruefe(versteckt === true, 'Checkbox trotz fehlendem Modell sichtbar');
+pruefe(gesperrt(), 'Varianten trotz fehlendem Sprachmodell waehlbar');
 renderStatus(zustand(true, false));
-pruefe(versteckt === true, 'Checkbox trotz fehlendem Index sichtbar');
+pruefe(gesperrt(), 'Varianten trotz fehlendem Index waehlbar');
 renderStatus(zustand(true, true));
-pruefe(versteckt === false, 'Checkbox fehlt, obwohl alles da ist');
+pruefe(!gesperrt(), 'Varianten gesperrt, obwohl alles da ist');
+pruefe(document.getElementById('modus-fehlt').classList.contains('hide'),
+       'Hinweis auf Ollama steht da, obwohl es laeuft');
+
+// Wer in einer gesperrten Variante steht, faellt auf die Textsuche zurueck.
+suchmodus('ki');
+renderStatus(zustand(false, true));
+pruefe(SUCHMODUS === 'text', 'Gesperrte Variante blieb aktiv: ' + SUCHMODUS);
 
 // Fussnoten: [1] verweist auf den ersten Treffer, Unbekanntes bleibt Text
 kiQuellen = [{n: 1, uid: 'a'}, {n: 2, uid: 'b'}];
@@ -2558,8 +2567,8 @@ pruefe(hinweis('mcp').indexOf('MCP') >= 0, 'Tooltip nennt MCP nicht');
 st.store = {exists: false, chunks: 0, messages: 0, semantic: false,
             built_at: null, model: null, features: []};
 renderStatus(st);
-pruefe(document.getElementById('ai-wrap').classList.contains('hide'),
-       'KI-Kasten trotz fehlendem Index angeboten');
+pruefe(document.getElementById('m-ki').disabled,
+       'KI-Variante trotz fehlendem Index waehlbar');
 console.log('OK');
 """
 
@@ -4609,16 +4618,16 @@ renderStatus(st);
 
 // renderStatus muss BIS ANS ENDE laufen. Zeigt eine Zeile darin auf ein
 // Element, das es nicht gibt, wirft der Browser - und alles danach unterbleibt.
-pruefe(!document.getElementById('ai-wrap').classList.contains('hide'),
-       'KI-Kasten fehlt, obwohl ein Modell da ist');
+pruefe(!document.getElementById('m-ki').disabled,
+       'KI-Variante gesperrt, obwohl ein Modell da ist');
 pruefe(document.getElementById('mcp-json').textContent.length > 0,
        'renderStatus ist vorher abgebrochen');
 
-// Ohne Modell verschwindet er wieder.
+// Ohne Modell wird sie wieder gesperrt.
 st.ollama.has_chat_model = false;
 renderStatus(st);
-pruefe(document.getElementById('ai-wrap').classList.contains('hide'),
-       'KI-Kasten trotz fehlendem Modell');
+pruefe(document.getElementById('m-ki').disabled,
+       'KI-Variante trotz fehlendem Modell waehlbar');
 
 // Der Blaetterbereich nennt kein "Ranking" mehr - bei einer Suche ohne
 // Begriff gibt es keines, und "hybrid" ist ein Wort fuer Entwickler.
@@ -5037,3 +5046,133 @@ setTimeout(function(){
 
 def test_fehlerbericht_kuerzt_vorne_und_sagt_es():
     _in_node(PRUEFUNG_BERICHT_LANG)
+
+
+# --------------------------------------------------------------------------
+# Die drei Suchvarianten
+#
+# Bis 4.2.0 mischte jede Suche BM25 und Vektoren (hybrid) und die KI hing an
+# einer Checkbox, die bei JEDER Suche ein Modell anwarf. Beides ist ersetzt:
+# Textsuche ist die Vorgabe und rein lexikalisch, die anderen beiden sind eine
+# bewusste Abzweigung.
+# --------------------------------------------------------------------------
+PRUEFUNG_MODI = GRUNDZUSTAND + """
+var gesucht = [], gefragt = 0;
+global.fetch = function(pfad, opt){
+  var s = String(pfad);
+  if(s.indexOf('/api/search') >= 0){ gesucht.push(s); }
+  if(s.indexOf('/api/answer') >= 0){ gefragt++; return Promise.resolve({ok: false,
+    json: function(){ return Promise.resolve({error: 'x'}); }}); }
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    s.indexOf('/api/search') >= 0
+      ? {count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'Alice',
+                              date: '2026-03-04', source_label: 'Mail',
+                              preview: 'p', uri: 'o365://outlook/a.eml'}]}
+      : statusGeruest()); }});
+};
+document.getElementById('q').value = 'Rechnung';
+
+// Vorgabe ist die Textsuche, und die geht als lexical an den Server.
+pruefe(SUCHMODUS === 'text', 'Vorgabe ist nicht die Textsuche: ' + SUCHMODUS);
+sofortSuchen();
+pruefe(gesucht[0].indexOf('mode=lexical') >= 0, 'Textsuche nicht lexical: ' + gesucht[0]);
+
+// Jede Variante hat ihren eigenen Server-Modus.
+gesucht = []; suchmodus('aehnlich');
+pruefe(gesucht[0].indexOf('mode=semantic') >= 0, 'Aehnliche nicht semantic: ' + gesucht[0]);
+gesucht = []; suchmodus('ki');
+pruefe(gesucht[0].indexOf('mode=hybrid') >= 0, 'KI nicht hybrid: ' + gesucht[0]);
+
+// Der Platzhalter wechselt mit - er ist die einzige Erklaerung, die es gibt.
+var platz = {};
+['text','aehnlich','ki'].forEach(function(a){
+  suchmodus(a); platz[a] = document.getElementById('q').placeholder;
+});
+pruefe(platz.text && platz.aehnlich && platz.ki, 'Platzhalter fehlt');
+pruefe(platz.text !== platz.aehnlich && platz.aehnlich !== platz.ki,
+       'Platzhalter unterscheiden sich nicht');
+console.log('OK');
+"""
+
+
+def test_suchvarianten_gehen_an_den_richtigen_backend():
+    _in_node(PRUEFUNG_MODI)
+
+
+PRUEFUNG_KI_NUR_AUF_WUNSCH = GRUNDZUSTAND + """
+var gefragt = 0;
+global.fetch = function(pfad){
+  var s = String(pfad);
+  if(s.indexOf('/api/answer') >= 0){ gefragt++;
+    return Promise.resolve({ok: false, json: function(){
+      return Promise.resolve({error: 'x'}); }}); }
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    s.indexOf('/api/search') >= 0
+      ? {count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'A',
+                              date: '2026-03-04', source_label: 'Mail', preview: 'p'}]}
+      : statusGeruest()); }});
+};
+document.getElementById('q').value = 'Rechnung';
+
+// Das war die Klage: die Suche wartete auf das Modell. Text und Aehnliche
+// fragen es gar nicht erst.
+suchmodus('text'); sofortSuchen();
+suchmodus('aehnlich'); sofortSuchen();
+pruefe(gefragt === 0, 'Das Modell lief ungefragt: ' + gefragt);
+
+setTimeout(function(){
+  pruefe(gefragt === 0, 'Das Modell lief verspaetet doch: ' + gefragt);
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_die_ki_laeuft_nur_in_ihrer_eigenen_variante():
+    _in_node(PRUEFUNG_KI_NUR_AUF_WUNSCH)
+
+
+PRUEFUNG_TREFFERZEILE = GRUNDZUSTAND + """
+renderHits({count: 2, results: [
+  {uid: 'u:1', cid: 7, title: 'Rechnung 4711', who: 'Alice', date: '2026-03-04',
+   source_label: 'Mail', preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'x'},
+  {uid: 'u:2', cid: 8, title: 'Notiz.pdf', who: '', date: '2026-03-01',
+   source_label: 'Datei', preview: 'Pfad'}
+]});
+var h = document.getElementById('results').innerHTML;
+
+// Datum in eigener Spalte: nur so stehen die Daten untereinander.
+pruefe(h.indexOf('class="wann"') >= 0, 'Datum hat keine eigene Spalte');
+pruefe(h.indexOf('2026-03-04') >= 0, 'Datum fehlt');
+
+// Ein Menue je Treffer statt Knopfreihen.
+pruefe((h.match(/punkte-knopf/g) || []).length === 2, 'Nicht je Treffer ein Menue');
+pruefe(h.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt im Menue');
+
+// Was fuer diesen Treffer nicht geht, steht ausgegraut drin statt zu fehlen -
+// sonst wandern die Eintraege je Treffer an andere Stellen.
+var zweites = h.split('id="menu-1"')[1];
+pruefe(zweites.indexOf('disabled') >= 0, 'Unmoegliches fehlt statt ausgegraut zu sein');
+console.log('OK');
+"""
+
+
+def test_trefferzeile_ist_kompakt_und_hat_ein_menue():
+    _in_node(PRUEFUNG_TREFFERZEILE)
+
+
+PRUEFUNG_MARKIERUNG = GRUNDZUSTAND + """
+document.getElementById('q').value = 'Rechnung';
+suchmodus('text');
+pruefe(hervor('Die Rechnung liegt vor').indexOf('<mark>') >= 0,
+       'Textsuche markiert die Fundstelle nicht');
+// Bei der Bedeutungssuche waere eine Markierung eine Behauptung: dort passt
+// der Sinn, nicht das Wort.
+SUCHMODUS = 'aehnlich';
+pruefe(hervor('Die Rechnung liegt vor').indexOf('<mark>') < 0,
+       'Bedeutungssuche markiert woertlich');
+console.log('OK');
+"""
+
+
+def test_markiert_wird_nur_wo_woertlich_getroffen_wurde():
+    _in_node(PRUEFUNG_MARKIERUNG)
