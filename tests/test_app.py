@@ -4255,10 +4255,12 @@ def test_ordnerauswahl_folgt_der_quelle():
 PRUEFUNG_PERSONENVORSCHLAG = GRUNDZUSTAND + r"""
 var LEUTE = {
   bei: {people: [{name:'Alice Beispiel', messages:1240},
-                 {name:'Bob Beispiel', messages:87}], total_distinct: 2},
+                 {name:'Bob Beispiel', messages:87}],
+        total_distinct: 2, total_messages: 1327},
   viele: {people: [{name:'A', messages:9}, {name:'B', messages:8},
                    {name:'C', messages:7}, {name:'D', messages:6},
-                   {name:'E', messages:5}], total_distinct: 31},
+                   {name:'E', messages:5}], total_distinct: 31, total_messages: 900},
+  einer: {people: [{name:'Nur Eine', messages:4}], total_distinct: 1, total_messages: 4},
   xyz: {people: [], total_distinct: 0}
 };
 var gefragt = [];
@@ -4288,6 +4290,10 @@ setTimeout(function(){
     pruefe(kasten.innerHTML.indexOf('Alice Beispiel') >= 0, 'Vorschlag fehlt');
     pruefe(kasten.innerHTML.indexOf('1.240') >= 0, 'Zahl der Nachrichten fehlt');
     pruefe(!kasten.classList.contains('hide'), 'Liste bleibt zu');
+    // Die Liste zwingt zu keiner Wahl: unten steht das Muster selbst, mit der
+    // Summe aller Treffer - derselben Groesse wie in den Zeilen darueber.
+    pruefe(kasten.innerHTML.indexOf('bei*') >= 0, 'Sternzeile fehlt');
+    pruefe(kasten.innerHTML.indexOf('1.327') >= 0, 'Summe fehlt');
 
     // Tastatur: runter, Enter - der Name steht im Feld, die Liste ist zu.
     personTaste({key: 'ArrowDown', preventDefault: function(){}});
@@ -4300,6 +4306,16 @@ setTimeout(function(){
       pruefe(kasten.innerHTML.indexOf('26') >= 0,
              'Die uebrigen Namen werden verschwiegen: ' + kasten.innerHTML);
 
+      // Die letzte Zeile uebernimmt das Muster, nicht einen Namen.
+      personTaste({key: 'ArrowUp', preventDefault: function(){}});
+      personTaste({key: 'Enter', preventDefault: function(){}});
+      pruefe(feld.value === 'viele*', 'Sternzeile uebernimmt nicht: ' + feld.value);
+
+      tippe('einer', function(){
+        // Bei genau einem Treffer waere "alle" derselbe Treffer noch einmal.
+        pruefe(kasten.innerHTML.indexOf('einer*') < 0,
+               'Sternzeile bei einem einzigen Treffer: ' + kasten.innerHTML);
+
       tippe('xyz', function(){
         // Der eigentliche Zweck: einen Namen, den es nicht gibt, vor der
         // Suche als solchen erkennen.
@@ -4307,6 +4323,7 @@ setTimeout(function(){
                'Kein Hinweis auf den leeren Bestand: ' + kasten.innerHTML);
         pruefe(kasten.innerHTML.indexOf('<button') < 0, 'Leere Liste bietet Wahl an');
         console.log('OK');
+      });
       });
     });
   });

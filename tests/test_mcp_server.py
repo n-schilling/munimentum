@@ -200,8 +200,6 @@ def test_to_ts_parses_and_clamps_day_end():
     for schlecht in ("01.06.2025", "2021-06-31", "gestern"):
         with pytest.raises(ValueError):
             mcp_server._to_ts(schlecht, False)
-    with pytest.raises(ValueError):
-        mcp_server.browse_messages(date_to="2021-06-31")
 
 
 def test_where_builds_fragments():
@@ -1021,6 +1019,36 @@ def test_list_folders_kennt_auch_kalender(state):
     assert _uids(treffer) == [UID_CAL]
     assert mcp_server.search_messages("Quartalsplanung", folder="kalender/Privat",
                                       mode="lexical")["count"] == 0
+
+
+def test_person_mit_stern(state):
+    """Der Stern ist der Platzhalter – vorher wurde er woertlich gesucht."""
+    ohne = _uids(mcp_server.browse_messages(person="alice"))
+    assert ohne, "Teilstringsuche findet nichts mehr"
+    assert _uids(mcp_server.browse_messages(person="alice*")) == ohne
+    assert _uids(mcp_server.browse_messages(person="ali*spiel")) == ohne
+    assert mcp_server.browse_messages(person="zzz*")["count"] == 0
+    # Und was für SQL ein Platzhalter ist, ist hier keiner: "a_ice" traf
+    # vorher "alice", weil _ in LIKE für ein beliebiges Zeichen steht.
+    assert mcp_server.browse_messages(person="a_ice")["count"] == 0
+    assert mcp_server.browse_messages(person="%")["count"] == 0
+
+
+def test_list_people_zaehlt_auch_die_summe(state):
+    """Die Zeile „alle mit …“ nennt Nachrichten, wie die Zeilen darüber."""
+    r = mcp_server.list_people(contains="beispiel")
+    assert r["total_messages"] == sum(p["messages"] for p in r["people"])
+    assert r["total_distinct"] == len(r["people"])
+    # Der Stern wirkt auch in den Vorschlägen.
+    assert mcp_server.list_people(contains="bei*iel")["people"] == r["people"]
+    assert mcp_server.list_people(contains="zzz")["total_messages"] == 0
+
+
+def test_unmoegliches_datum_ist_ein_fehler(state):
+    """Sonst liefe die Suche ohne diese Grenze und gaebe das als Antwort aus."""
+    with pytest.raises(ValueError):
+        mcp_server.browse_messages(date_to="2021-06-31")
+    assert mcp_server.browse_messages(date_to="2021-06-30")["count"] >= 0
 
 
 def test_list_folders_je_quelle(state):

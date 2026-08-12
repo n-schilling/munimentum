@@ -2819,6 +2819,11 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 #personliste .zahl{color:var(--muted);font-size:12.5px;
   font-variant-numeric:tabular-nums;flex:0 0 auto}
 #personliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Die Sternzeile ist ein Muster, kein Name – in der Schrift, in der man
+   Muster liest. */
+#personliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  font-size:12.5px}
+#personliste hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
 #personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
 /* Die Suchart: exklusive Wahl, beide Alternativen sichtbar. */
 .modi{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
@@ -4402,21 +4407,36 @@ function personVorschlagen(){
         '&contains=' + encodeURIComponent(wort)).then(function(r){
       // Zwischenzeitlich weitergetippt: diese Antwort ist überholt.
       if(el('f-person').value.trim() !== wort) return;
-      personZeichnen(r.people || [], r.total_distinct || 0);
+      personZeichnen(r.people || [], r.total_distinct || 0, r.total_messages || 0);
     }).catch(personZu);
   }, 150);
 }
 
-function personZeichnen(liste, gesamt){
-  personVorschlaege = liste;
+/* Die Liste zwingt zu keiner Wahl: die Personensuche war immer schon eine
+   Teilstringsuche, man sah es ihr nur nicht an. Deshalb unter den Namen eine
+   Zeile, die das ausspricht – „schmi*“ statt eines bestimmten Schmidt. Sie
+   trägt dieselbe Größe wie die Zeilen darüber (Nachrichten, nicht Personen),
+   sonst stünden zwei Einheiten in einer Liste. */
+function personZeichnen(liste, gesamt, nachrichten){
+  var wort = el('f-person').value.trim();
+  var stern = wort.charAt(wort.length - 1) === '*' ? wort : wort + '*';
+  // Bei genau einem Treffer wäre „alle“ derselbe Treffer noch einmal.
+  var mitStern = gesamt > 1;
+  personVorschlaege = liste.map(function(p){
+    return {wert: p.name, name: p.name, zahl: p.messages};
+  });
+  if(mitStern) personVorschlaege.push({wert: stern, name: stern,
+                                       zahl: nachrichten, alle: true});
   personAktiv = -1;
   var kasten = el('personliste');
   kasten.innerHTML = liste.length
-    ? liste.map(function(p, i){
-        return '<button type="button" role="option" aria-selected="false" ' +
+    ? personVorschlaege.map(function(p, i){
+        return (p.alle ? '<hr>' : '') +
+          '<button type="button" role="option" aria-selected="false" ' +
           'id="personwahl-' + i + '" onclick="personWaehlen(' + i + ')">' +
-          '<span class="wer">' + esc(p.name) + '</span>' +
-          '<span class="zahl">' + p.messages.toLocaleString(LOC) + '</span></button>';
+          '<span class="wer' + (p.alle ? ' alle' : '') + '">' + esc(p.name) +
+          '</span><span class="zahl">' + p.zahl.toLocaleString(LOC) +
+          '</span></button>';
       }).join('') +
       // Mehr Namen als Plätze: sagen statt still abschneiden – sonst hielte
       // man die fünf für alle, die es gibt.
@@ -4440,7 +4460,7 @@ function personZu(){
 function personWaehlen(i){
   var p = personVorschlaege[i];
   if(!p) return;
-  el('f-person').value = p.name;
+  el('f-person').value = p.wert;
   personZu();
   zeigeFilterstand();
 }
@@ -4463,7 +4483,9 @@ function personTaste(ev){
   if(ev.key === 'ArrowDown'){
     personHervor((personAktiv + 1) % n); ev.preventDefault();
   } else if(ev.key === 'ArrowUp'){
-    personHervor((personAktiv - 1 + n) % n); ev.preventDefault();
+    // Von „nichts gewählt“ (-1) aus gehört ↑ ans Ende der Liste. Gerechnet
+    // sprang es auf den vorletzten Eintrag.
+    personHervor(personAktiv <= 0 ? n - 1 : personAktiv - 1); ev.preventDefault();
   } else if(ev.key === 'Enter' && personAktiv >= 0){
     personWaehlen(personAktiv); ev.preventDefault();
   }

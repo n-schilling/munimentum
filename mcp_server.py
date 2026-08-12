@@ -200,6 +200,19 @@ _TEAMS_OBERSTE = (
     "THEN substr(ctx, 1, instr(ctx, '/') - 1) ELSE ctx END")
 
 
+def _wie(text):
+    """Ein Suchwort als LIKE-Muster: `*` ist der Platzhalter, sonst nichts.
+
+    Die Personensuche war immer schon eine Teilstringsuche – nur konnte niemand
+    sie steuern. Wer `*` tippte, suchte den Stern und fand nichts. Umgekehrt
+    wirkten `%` und `_` unbeabsichtigt als Platzhalter, weil sie das für SQL
+    nun einmal sind: "a_b" fand auch "axb". Beides ist hier geradegezogen.
+    """
+    roh = (text or "").strip().lower()
+    fest = (roh.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
+    return "%" + fest.replace("*", "%") + "%"
+
+
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
     conds, params = [], []
     if filetype:
@@ -224,8 +237,8 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
         conds.append("src = ?")
         params.append(src)
     if person:
-        conds.append("ppl LIKE ?")
-        params.append(f"%{person.lower()}%")
+        conds.append("ppl LIKE ? ESCAPE '\\'")
+        params.append(_wie(person))
     if dfrom is not None:
         conds.append("ts >= ?")                # also excludes NULL timestamps
         params.append(dfrom)
@@ -840,7 +853,8 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
             "datei" (files mirrored from OneDrive — name and path only,
             their contents are not indexed).
-        contains: Optional. Only people whose name or email contains this text.
+        contains: Optional. Only people whose name or email contains this text;
+            `*` stands for any run of characters.
         limit: Max number of people to return, most frequent first (default 100).
     """
     con = _db()
@@ -857,18 +871,23 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
             con.create_function("py_lower", 1,
                                 lambda s: s.lower() if isinstance(s, str) else s,
                                 deterministic=True)
-            conds.append("(py_lower(who) LIKE ? OR ppl LIKE ?)")
-            pat = f"%{contains.strip().lower()}%"
+            conds.append("(py_lower(who) LIKE ? ESCAPE '\\' "
+                         "OR ppl LIKE ? ESCAPE '\\')")
+            pat = _wie(contains)
             params += [pat, pat]
         where = " AND ".join(conds)
         rows = con.execute(
             f"SELECT who, SUM(messages) AS m FROM people WHERE {where} "
             f"GROUP BY who ORDER BY m DESC, who LIMIT ?",
             [*params, max(1, limit)]).fetchall()
-        total = con.execute(
-            f"SELECT COUNT(DISTINCT who) FROM people WHERE {where}",
-            params).fetchone()[0]
+        # Auch die Summe: die Oberfläche bietet „alle mit diesem Namensteil“ als
+        # eigene Zeile an und muss dieselbe Größe nennen wie die Zeilen darüber
+        # – sonst stünden Nachrichten neben Personen in einer Liste.
+        total, nachrichten = con.execute(
+            f"SELECT COUNT(DISTINCT who), COALESCE(SUM(messages), 0) "
+            f"FROM people WHERE {where}", params).fetchone()
         return {"count": len(rows), "total_distinct": total,
+                "total_messages": nachrichten,
                 "people": [{"name": r[0], "messages": r[1]} for r in rows]}
     finally:
         con.close()
