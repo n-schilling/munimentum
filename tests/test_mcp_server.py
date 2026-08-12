@@ -15,6 +15,8 @@ import anyio
 import sqlite3
 
 import numpy as np
+import sys
+
 import pytest
 from mcp.client.client import Client
 from mcp.shared.exceptions import MCPError
@@ -1305,3 +1307,47 @@ def test_die_anleitung_verspricht_keine_embeddings():
     assert "lexical" in text, "der Fall ohne Embeddings kommt nicht vor"
     behauptung = "Ranks with BM25 and embeddings\nfused"
     assert behauptung not in text.replace("  ", " ")
+
+
+# --------------------------------------------------------------------------
+# Der harte Schalter: aus heißt aus, für beide Transporte
+# --------------------------------------------------------------------------
+def test_abgeschaltet_verweigert_der_server_den_dienst(state, monkeypatch, capsys):
+    """Ein Schalter, der nur den HTTP-Endpunkt anhielte, wäre genau das
+    Versprechen, das er nicht hält: über stdio startet der Client dieses
+    Programm selbst, ohne dass die App überhaupt läuft."""
+    gestartet = []
+    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: gestartet.append(kw))
+    monkeypatch.setenv("MCP_ENABLED", "0")
+
+    for transport in ("stdio", "http"):
+        monkeypatch.setattr(sys, "argv",
+                            ["mcp_server.py", "--data-dir", str(state["tmp"]),
+                             "--transport", transport, "--no-ollama"])
+        with pytest.raises(SystemExit) as e:
+            mcp_server.main()
+        assert "switched off" in str(e.value)
+        assert not gestartet, f"{transport} wurde trotzdem bedient"
+
+
+def test_force_serviert_trotzdem(state, monkeypatch):
+    """Wer das Programm von Hand startet, hat den Schalter nicht vor sich."""
+    gestartet = []
+    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: gestartet.append(kw))
+    monkeypatch.setenv("MCP_ENABLED", "0")
+    monkeypatch.setattr(sys, "argv",
+                        ["mcp_server.py", "--data-dir", str(state["tmp"]),
+                         "--transport", "stdio", "--no-ollama", "--force"])
+    mcp_server.main()
+    assert gestartet and gestartet[0]["transport"] == "stdio"
+
+
+def test_erlaubt_laeuft_wie_bisher(state, monkeypatch):
+    gestartet = []
+    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: gestartet.append(kw))
+    monkeypatch.setenv("MCP_ENABLED", "1")
+    monkeypatch.setattr(sys, "argv",
+                        ["mcp_server.py", "--data-dir", str(state["tmp"]),
+                         "--transport", "stdio", "--no-ollama"])
+    mcp_server.main()
+    assert gestartet and gestartet[0]["transport"] == "stdio"

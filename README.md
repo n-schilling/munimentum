@@ -78,8 +78,8 @@ appear. **AI summary** answers a question in a paragraph with source numbers and
 keeps the underlying hits one click away.
 
 Filters — person, source, date range, folder, file type, and messages no longer
-in the mailbox — sit behind a toggle
-that shows how many are set, and nothing searches until you ask for it. The
+in the mailbox — sit behind a toggle that shows how many are set, and nothing
+searches until you ask for it. The
 person field suggests names that actually occur, so a typo is not mistaken for
 an absence, and `*` stands for any run of characters when one name is too
 narrow. Picking a source narrows what the other two offer: calendars for
@@ -110,7 +110,8 @@ per folder against what is here, for both the mailbox and the drive.
 
 ### Settings
 
-Export options per source, the schedule, Ollama, Claude and the app itself. Each
+Export options per source, the schedule, Ollama, the MCP server and the app
+itself. Each
 setting is one line with an **(i)** that explains what it does and what happens
 if you change it. Ollama has a switch of its own: turned off, the app stops
 looking for it, the index is built as full text only, and the header says so.
@@ -141,10 +142,17 @@ pre-approved in almost every tenant.
 
 ## Search with Claude
 
-A built-in MCP server hands the archive to Claude Code or Claude Desktop:
-Claude searches it, reads the sources and answers with citations — over your own
-mail and chats, not over the open web. Start it in *Settings*, where the app also
-prints the exact snippet to paste into Claude.
+A built-in MCP server hands the archive to Claude Code or Claude Desktop — or
+any other MCP client: it searches, reads the sources and answers with citations
+— over your own mail and chats, not over the open web. *Settings* prints the
+exact snippet to paste into your client.
+
+There are two routes, and the app controls them differently. It runs the **HTTP
+endpoint** itself; *Start* / *Stop* and the autostart apply to that one. A client
+can also launch the server **as a subprocess** (stdio) — that is how Claude
+Desktop does it, and it works whether or not this app is running. One switch
+covers both: *Allow MCP access*, off, makes the server refuse to serve either
+way.
 
 > The server serves your complete mail and chat history and has **no
 > authentication**. It binds to `127.0.0.1` only and checks the `Host` and

@@ -299,6 +299,10 @@ DEFAULT_CONFIG = {
     # eine längere Liste, durch die man erst einmal hindurchsehen muss.
     "search_results": 20,
     "mcp_port": 8365,
+    # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
+    # über HTTP wie über stdio. Start/Stop daneben betrifft nur den
+    # HTTP-Endpunkt, den diese App selbst betreibt.
+    "mcp_enabled": True,
     "mcp_autostart": True,
     "update_check": True,   # einmal beim Start bei GitHub nachsehen
     # Wie sich die App anmeldet. "token" = eingefügter Zugangsschlüssel (keine
@@ -1586,6 +1590,9 @@ class McpProcess:
     def start(self, cfg):
         if self.running:
             return True, {"k": "srv.mcp.running", "v": {}}
+        if not cfg.get("mcp_enabled", True):
+            self.error = {"k": "srv.mcp.disabled", "v": {}}
+            return False, self.error
         db = BASE / STORE_DIR / "corpus.db"
         if not db.exists():
             self.error = {"k": "srv.mcp.noindex", "v": {}}
@@ -2013,7 +2020,7 @@ class App:
         Genau der Fall aus der Anforderung „ohne Ollama läuft der MCP-Server
         trotzdem“: der Server rankt dann rein lexikalisch weiter.
         """
-        if not self.cfg.get("mcp_autostart"):
+        if not self.cfg.get("mcp_autostart") or not self.cfg.get("mcp_enabled", True):
             return
         ok, why = self.mcp.start(self.cfg)
         if not ok:
@@ -2273,7 +2280,7 @@ class Handler(BaseHTTPRequestHandler):
                     cfg[key] = max(low, min(high, int(data[key])))
                 except (TypeError, ValueError):
                     pass
-        for key in ("mcp_autostart", "update_check", "embed_images", "cache_images",
+        for key in ("mcp_enabled", "mcp_autostart", "update_check", "embed_images", "cache_images",
                     "refresh_channels", "skip_empty_chats", "include_hidden",
                     "calendar_reconstruct", "ollama_enabled", "index_semantic"):
             if key in data:
@@ -2292,6 +2299,8 @@ class Handler(BaseHTTPRequestHandler):
                 folders.lies_regeln(str(data["onedrive_rules"] or "")))
         if "analytics_skip" in data:
             cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
+        if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
+            self.app.mcp.stop()
         if "filetype_hidden" in data:
             cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
         if "skip_folders" in data:
@@ -3525,7 +3534,10 @@ main{padding-bottom:60px}
   <div class="card">
     <h2 class="mit-info" id="mcp-karte"><span data-i18n="mcp.title">Claude (MCP)</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.i">i</span></h2>
-    <div class="row">
+    <div class="gruppe">
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_enabled.i">i</span></span><input type="checkbox" class="kipp" id="c-mcp_enabled" onchange="speichereEinstellungen()"></div>
+    </div>
+    <div class="row" style="margin-top:8px">
       <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
       <span class="small" id="mcp-state"></span>
     </div>
@@ -3877,8 +3889,13 @@ function renderStatus(s){
   // irgendwann. Was der Kopf zeigt, sind Dinge, die eine Handlung verlangen.
   var st = s.store;
 
-  setPill('mcp', s.mcp.running ? 'ok' : '',
-    t(s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'), t('pill.mcp.tip'));
+  // Drei Zustände, nicht zwei: der Endpunkt läuft, er läuft nicht, oder der
+  // Zugriff ist ganz abgeschaltet. „aus“ für alles hieße vorher, dass ein per
+  // stdio eingetragener Client keinen Zugriff hat – der hat ihn aber.
+  var mcpAus = s.config && s.config.mcp_enabled === false;
+  setPill('mcp', mcpAus ? '' : (s.mcp.running ? 'ok' : ''),
+    t(mcpAus ? 'pill.mcp.aus' : s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'),
+    t(mcpAus ? 'pill.mcp.tip.aus' : 'pill.mcp.tip'));
 
   /* Export-Tab */
   if(first){
@@ -3930,7 +3947,9 @@ function renderStatus(s){
   el('s-next').textContent = s.schedule_enabled && s.schedule_next
     ? t('sched.next', {when: fmt(s.schedule_next)}) : t('sched.none');
   el('mcp-toggle').textContent = t(s.mcp.running ? 'mcp.stop' : 'mcp.start');
-  el('mcp-state').textContent = s.mcp.running
+  el('mcp-toggle').disabled = mcpAus;
+  el('mcp-state').textContent = mcpAus ? t('mcp.aus')
+    : s.mcp.running
     ? t('mcp.running', {url: s.mcp.url, mode: t(st.semantic ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')})
     : (mtext(s.mcp.error) || t('mcp.stopped'));
   el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
@@ -5396,7 +5415,7 @@ function pruefeUpdate(){
 
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
-                'include_hidden','calendar_reconstruct','mcp_autostart','update_check',
+                'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','semantic_min'];

@@ -2585,7 +2585,7 @@ st.mcp = {running: true, url: 'http://127.0.0.1:8365/mcp', error: null,
           config: {http: {}, stdio: {}}};
 renderStatus(st);
 
-var SYSTEMWORT = ['Chunk', 'chunk', 'MCP', 'Token', 'token', 'Ollama', 'Index'];
+var SYSTEMWORT = ['Chunk', 'chunk', 'Token', 'token', 'Ollama', 'Index'];
 ['token', 'ollama', 'mcp'].forEach(function(id){
   var text = kachel(id);
   pruefe(text.length > 0, 'Kachel ' + id + ' ist leer');
@@ -2594,6 +2594,12 @@ var SYSTEMWORT = ['Chunk', 'chunk', 'MCP', 'Token', 'token', 'Ollama', 'Index'];
            'Kachel ' + id + ' spricht Systemsprache: "' + text + '"');
   });
 });
+// "MCP" ist hier die Ausnahme und steht nur dieser einen Kachel zu: sie nennt
+// einen Endpunkt, und die buergerliche Umschreibung ("Zugriff fuer Claude")
+// war schlicht falsch - MCP koennen auch andere Programme, und abgeschaltet
+// war nur der HTTP-Weg.
+pruefe(kachel('mcp').indexOf('MCP') >= 0, 'Kachel nennt das Protokoll nicht');
+pruefe(kachel('token').indexOf('MCP') < 0, 'Andere Kacheln bleiben ohne Fachwort');
 
 // Der Zustand des Index steht im Analytics-Reiter, nicht im Kopf: zweimal
 // dieselbe Zahl an zwei Orten widerspricht sich irgendwann.
@@ -4143,6 +4149,34 @@ def test_dateitypen_vorgabe_ist_sichtbar(server):
     assert s["filetype_hidden_default"] == sorted(app_mod.FILETYPE_HIDDEN_DEFAULT)
     assert s["config"]["filetype_hidden"] == s["filetype_hidden_default"]
     assert 'id="c-filetype_hidden"' in app_mod.PAGE
+
+
+def test_abgeschalteter_mcp_zugriff_startet_nichts(sandbox, monkeypatch):
+    """Der harte Schalter gilt auch für den HTTP-Endpunkt, den die App selbst
+    betreibt – und für den Autostart beim Programmstart."""
+    cfg = app_mod.load_config()
+    cfg["mcp_enabled"] = False
+    a = app_mod.App(cfg)
+    gestartet = []
+    monkeypatch.setattr(app_mod.subprocess, "Popen",
+                        lambda *x, **kw: gestartet.append(x) or (_ for _ in ()).throw(
+                            AssertionError("Prozess trotzdem gestartet")))
+
+    ok, why = a.mcp.start(cfg)
+    assert not ok and schluessel(why) == "srv.mcp.disabled"
+    cfg["mcp_autostart"] = True
+    a.autostart_mcp()                      # darf ebenfalls nichts starten
+    assert not gestartet
+
+
+def test_abschalten_haelt_den_laufenden_endpunkt_an(server, monkeypatch):
+    """Wer den Zugriff abschaltet, meint auch den, der gerade läuft."""
+    a, port = server
+    angehalten = []
+    monkeypatch.setattr(a.mcp, "stop", lambda: angehalten.append(True))
+    call(port, "POST", "/api/config", {"mcp_enabled": False})
+    assert a.cfg["mcp_enabled"] is False
+    assert angehalten, "Der laufende Endpunkt lief weiter"
 
 
 def test_auswahlregeln_regeln_schlagen_die_namensliste():

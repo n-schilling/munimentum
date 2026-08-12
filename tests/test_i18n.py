@@ -188,8 +188,7 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 # (t(x ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')), an denen ein Muster um t(…)
 # herum vorbeiliefe.
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.",
-           "book.", "sched.", "mcp.mode.", "mcp.title", "mcp.sub", "mcp.start",
-           "mcp.stop", "mcp.running", "mcp.stopped", "mcp.code.", "mcp.desktop.",
+           "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.")
 

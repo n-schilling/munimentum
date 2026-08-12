@@ -52,6 +52,11 @@ Run (HTTP, default – one shared server for all Claude sessions):
 
 Run (stdio – auto-launched per client, the classic setup):
     python3 mcp_server.py --transport stdio [--store …]
+
+Switched off in the app (Settings → MCP server), this program refuses to serve –
+over stdio as well as HTTP. The check sits in main() and nowhere else: the app
+calls the same functions in-process for its own search, and what is switched off
+is the SERVER, not reading the index. --force serves anyway.
 """
 
 import os
@@ -1144,6 +1149,10 @@ def main():
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
     ap.add_argument("--port", type=int, default=settings.value("mcp_port", 8365))
+    # Für den Aufruf von Hand: wer das Programm selbst startet, hat den
+    # Schalter nicht vor sich und soll nicht rätseln müssen, warum nichts geht.
+    ap.add_argument("--force", action="store_true",
+                    help="Serve even when MCP access is switched off in the app.")
     ap.add_argument("--allowed-host", action="append", default=[], metavar="HOST[:PORT]",
                     help="Hostname clients may use in the Host/Origin header. "
                          "Required when --host is not the loopback interface; "
@@ -1158,6 +1167,17 @@ def main():
     note = settings.report()
     if note:
         print(note, file=sys.stderr)
+
+    # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
+    # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
+    # abgeschaltet gehört der SERVER, nicht das Lesen des Index. Und er sitzt
+    # vor beiden Transporten: über stdio startet der Client dieses Programm
+    # selbst, ohne dass die App überhaupt läuft. Ein Schalter, der nur den
+    # HTTP-Endpunkt anhielte, wäre genau das Versprechen, das er nicht hält.
+    if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled", True):
+        raise SystemExit(
+            "MCP access is switched off in Munimentum (Settings → MCP server).\n"
+            "Nothing is served over stdio or HTTP until it is switched back on.")
 
     dbp = Path(a.store) / "corpus.db"
     if not dbp.exists():
