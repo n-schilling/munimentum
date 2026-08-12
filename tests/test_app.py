@@ -2612,6 +2612,22 @@ pruefe(hinweis('token').indexOf('a@example.com') >= 0, 'Tooltip nennt das Konto 
 pruefe(hinweis('ollama').indexOf('Ollama') >= 0, 'Tooltip nennt Ollama nicht');
 pruefe(hinweis('mcp').indexOf('MCP') >= 0, 'Tooltip nennt MCP nicht');
 
+// Drei Lagen, drei Aussagen. Den Transport nennt nur die mittlere: laeuft der
+// Endpunkt, sind beide Wege offen, und "MCP HTTP an" laese sich, als waere
+// stdio ausgenommen.
+pruefe(kachel('mcp').indexOf('HTTP') < 0, 'Laufend wird der Transport genannt: ' + kachel('mcp'));
+
+st.mcp.running = false;
+renderStatus(st);
+pruefe(kachel('mcp').indexOf('HTTP') >= 0, 'Der abgeschaltete Transport wird nicht benannt');
+pruefe(hinweis('mcp').indexOf('stdio') >= 0, 'Tooltip verschweigt den anderen Weg');
+
+st.config.mcp_enabled = false;
+renderStatus(st);
+pruefe(kachel('mcp').indexOf('HTTP') < 0, 'Ganz aus, aber der Transport steht da');
+pruefe(document.getElementById('p-mcp').className.indexOf('ok') < 0,
+       'Abgeschaltet und trotzdem gruen');
+
 // Ohne Index darf der Kopf nicht stolpern - er zeigt den Zustand nicht mehr,
 // aber renderStatus rechnet weiter damit (KI-Kasten, Sicht "Geloeschtes").
 st.store = {exists: false, chunks: 0, messages: 0, semantic: false,

@@ -3,8 +3,8 @@
 **The header says what is actually on.** It used to read *Claude access off* —
 wrong twice over. MCP is a protocol, not one program; and what the app switches
 was only its own HTTP endpoint, while a client that launches the server itself
-kept full access. It now reads **MCP HTTP on/off**, and the tooltip says what
-that does and does not cover.
+kept full access. Three states now, and the transport is named only when it is
+the only thing missing: **MCP on**, **MCP HTTP off**, **MCP off**.
 
 **One switch that really means off.** *Settings → MCP server → Allow MCP
 access*: with it off, the server refuses to serve — over the HTTP endpoint and

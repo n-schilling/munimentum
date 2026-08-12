@@ -206,6 +206,9 @@ DYNAMISCH = (
     ("search.folder.teams.", ("1on1", "group", "meeting", "channels")),
     # Die Zeilen des Fehlerberichts: app.systemangaben liefert nur den Rumpf
     # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
+    # Die Kachel im Kopf hat drei Lagen und setzt den Schlüssel daraus zusammen.
+    ("pill.mcp.", ("on", "off", "aus")),
+    ("pill.mcp.tip.", ("on", "off", "aus")),
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",
                      "categories", "index", "model", "ollama", "lastjob",
                      "datadir")),

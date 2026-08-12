@@ -3892,10 +3892,13 @@ function renderStatus(s){
   // Drei Zustände, nicht zwei: der Endpunkt läuft, er läuft nicht, oder der
   // Zugriff ist ganz abgeschaltet. „aus“ für alles hieße vorher, dass ein per
   // stdio eingetragener Client keinen Zugriff hat – der hat ihn aber.
+  // Den Transport nur nennen, wenn auch nur der eine fehlt: läuft der
+  // Endpunkt, sind beide Wege offen und „MCP HTTP an“ läse sich, als wäre
+  // stdio ausgenommen.
   var mcpAus = s.config && s.config.mcp_enabled === false;
-  setPill('mcp', mcpAus ? '' : (s.mcp.running ? 'ok' : ''),
-    t(mcpAus ? 'pill.mcp.aus' : s.mcp.running ? 'pill.mcp.on' : 'pill.mcp.off'),
-    t(mcpAus ? 'pill.mcp.tip.aus' : 'pill.mcp.tip'));
+  var mcpLage = mcpAus ? 'aus' : s.mcp.running ? 'on' : 'off';
+  setPill('mcp', mcpLage === 'on' ? 'ok' : '',
+    t('pill.mcp.' + mcpLage), t('pill.mcp.tip.' + mcpLage));
 
   /* Export-Tab */
   if(first){
