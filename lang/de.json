@@ -510,5 +510,19 @@
   "update.enabled.i": "Fragt einmal beim Start bei api.github.com nach einer neueren Version. Sonst spricht die App mit nichts außer Microsoft Graph und dem lokalen Ollama.",
   "pill.ollama.disabled": "Ollama deaktiviert",
   "pill.ollama.tip.disabled": "Ollama ist in den Einstellungen abgeschaltet. Suche und Export laufen weiter; Bedeutungssuche und KI-Zusammenfassung fehlen. Klick führt zur Einstellung.",
-  "search.mode.off": "Ollama ist abgeschaltet – nur die Textsuche steht zur Verfügung."
+  "search.mode.off": "Ollama ist abgeschaltet – nur die Textsuche steht zur Verfügung.",
+  "ana.verlauf": "Verlauf",
+  "ana.verlauf.sub": "Nachrichten je Monat, nach Quelle gestapelt. Eine fehlende Säule ist ein Monat ohne eine einzige Nachricht.",
+  "ana.andere": "Übriges",
+  "ana.luecken": "{n} Lücke(n) im Bestand: {liste}. Innerhalb des Zeitraums, in dem sonst Nachrichten liegen – vor der ersten und nach der letzten ist nichts zu vermissen.",
+  "ana.luecken.keine": "Keine Lücke: in jedem Monat zwischen der ersten und der letzten Nachricht liegt etwas.",
+  "ana.wachstum": "Wachstum",
+  "ana.wachstum.sub": "Wie der Bestand über die Zeit angewachsen ist, aufsummiert.",
+  "ana.typen.sub": "Welche Dateitypen als Anhang im Postfach liegen.",
+  "ana.dateien": "Größte Einzeldateien",
+  "ana.dateien.sub": "Was den Platz belegt – ein einzelner Gruppenchat kann hunderte Megabyte groß werden.",
+  "ana.personen.sub": "Mit wem am meisten Nachrichten gewechselt wurden.",
+  "ana.geloescht.sub": "Wann Nachrichten aus dem Postfach verschwunden sind. Hier liegen sie weiter.",
+  "ana.typen": "Anhänge nach Typ",
+  "ana.typen.rest": "übrige Typen"
 }

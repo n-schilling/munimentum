@@ -510,5 +510,19 @@
   "update.enabled.i": "Asks api.github.com once at startup whether a newer version exists. Otherwise the app talks to nothing but Microsoft Graph and your local Ollama.",
   "pill.ollama.disabled": "Ollama off",
   "pill.ollama.tip.disabled": "Ollama is switched off in Settings. Search and export keep working; meaning-based search and the AI summary are absent. Click to go to the setting.",
-  "search.mode.off": "Ollama is switched off — only text search is available."
+  "search.mode.off": "Ollama is switched off — only text search is available.",
+  "ana.verlauf": "Over time",
+  "ana.verlauf.sub": "Messages per month, stacked by source. A missing column is a month without a single message.",
+  "ana.andere": "Other",
+  "ana.luecken": "{n} gap(s) in the archive: {liste}. Within the period that otherwise holds messages — before the first and after the last there is nothing to miss.",
+  "ana.luecken.keine": "No gaps: every month between the first and the last message holds something.",
+  "ana.wachstum": "Growth",
+  "ana.wachstum.sub": "How the archive grew over time, cumulative.",
+  "ana.typen.sub": "Which file types are attached to mail in the archive.",
+  "ana.dateien": "Largest single files",
+  "ana.dateien.sub": "What takes up the room — one group chat can reach hundreds of megabytes.",
+  "ana.personen.sub": "Who you exchanged the most messages with.",
+  "ana.geloescht.sub": "When messages disappeared from the mailbox. They are still here.",
+  "ana.typen": "Attachments by type",
+  "ana.typen.rest": "other types"
 }

@@ -671,6 +671,100 @@ def lies_bericht(ordner=OUTLOOK_DIR):
         return None
 
 
+# Die Auswertungen unten gehen einmal quer über den Index. Gepuffert am
+# Änderungsdatum der Datenbank: sie ändern sich nur, wenn neu indiziert wurde,
+# und der Reiter wird mehrmals geöffnet.
+_AUSWERTUNG = {}
+
+
+def _monat(ts):
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m")
+
+
+def _luecken(monate, vorhanden):
+    """Zusammenhängende Monate ohne eine einzige Nachricht.
+
+    Nur INNERHALB des Bestands – vor der ersten und nach der letzten Nachricht
+    ist nichts zu vermissen. Genau das ist die Frage, die man an ein Archiv
+    stellt und die sonst nur Microsoft beantworten kann.
+    """
+    out, lauf = [], []
+    for m in monate:
+        if vorhanden.get(m):
+            if lauf:
+                out.append({"von": lauf[0], "bis": lauf[-1], "monate": len(lauf)})
+                lauf = []
+        else:
+            lauf.append(m)
+    return out
+
+
+def _monatsreihe(von, bis):
+    """Alle Monate von…bis, auch die leeren – sonst fiele eine Lücke nicht auf,
+    sie stünde einfach nicht da."""
+    j, m = int(von[:4]), int(von[5:7])
+    ende = (int(bis[:4]), int(bis[5:7]))
+    out = []
+    while (j, m) <= ende:
+        out.append(f"{j:04d}-{m:02d}")
+        j, m = (j + 1, 1) if m == 12 else (j, m + 1)
+    return out
+
+
+def auswertung(con, kennung):
+    """Verlauf, Lücken, Anhangstypen, Personen und Gelöschtes – am Stück."""
+    zwischen = _AUSWERTUNG.get("k")
+    if zwischen and zwischen[0] == kennung:
+        return zwischen[1]
+
+    spalten = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+    roh = con.execute(
+        "SELECT strftime('%Y-%m', ts, 'unixepoch') m, "
+        "       SUM(src = 'teams'), SUM(src = 'outlook'), COUNT(*) "
+        "FROM chunks WHERE seq = 0 AND ts IS NOT NULL GROUP BY m ORDER BY m"
+    ).fetchall()
+    verlauf, vorhanden = [], {}
+    if roh:
+        werte = {m: (te, ou, ge) for m, te, ou, ge in roh}
+        summe = 0
+        for m in _monatsreihe(roh[0][0], roh[-1][0]):
+            te, ou, ge = werte.get(m, (0, 0, 0))
+            summe += ge
+            vorhanden[m] = ge
+            verlauf.append({"m": m, "teams": te, "outlook": ou,
+                            "andere": ge - te - ou, "gesamt": ge, "summe": summe})
+
+    typen = {}
+    if "att" in spalten:
+        for (att,) in con.execute("SELECT att FROM chunks WHERE seq = 0 "
+                                  "AND att IS NOT NULL AND att != ''"):
+            for name in att.split(" "):
+                if "." in name:
+                    typen[name.rsplit(".", 1)[1].lower()[:8]] = \
+                        typen.get(name.rsplit(".", 1)[1].lower()[:8], 0) + 1
+    top_typen = sorted(typen.items(), key=lambda x: -x[1])[:10]
+    rest = sum(typen.values()) - sum(n for _, n in top_typen)
+
+    personen = [{"who": w, "src": s, "n": n} for w, s, n in con.execute(
+        "SELECT who, src, messages FROM people WHERE who != '' "
+        "ORDER BY messages DESC LIMIT 10")]
+
+    geloescht = []
+    if "gone" in spalten:
+        geloescht = [{"m": m, "n": n} for m, n in con.execute(
+            "SELECT substr(gone, 1, 7) m, COUNT(*) FROM chunks "
+            "WHERE seq = 0 AND gone IS NOT NULL AND gone != '' "
+            "GROUP BY m ORDER BY m")]
+
+    out = {"verlauf": verlauf,
+           "luecken": _luecken(list(vorhanden), vorhanden),
+           "anhang_typen": [{"typ": e, "n": n} for e, n in top_typen]
+                           + ([{"typ": "…", "n": rest}] if rest else []),
+           "top_personen": personen, "geloescht": geloescht}
+    _AUSWERTUNG["k"] = (kennung, out)
+    return out
+
+
 def kennzahlen(cfg):
     """Was steckt im Archiv? Eine Antwort aus dem Index, ohne Graph zu fragen.
 
@@ -718,15 +812,34 @@ def kennzahlen(cfg):
             out["verschwunden"] = con.execute(
                 "SELECT COUNT(*) FROM chunks WHERE seq = 0 "
                 "AND gone IS NOT NULL").fetchone()[0]
-    except sqlite3.Error as e:
+        s = db.stat()
+        out.update(auswertung(con, (s.st_mtime_ns, s.st_size)))
+    except (sqlite3.Error, OSError) as e:
         out["error"] = str(e)
     finally:
         con.close()
+    # Die größten Einzeldateien fallen beim Größenzählen oben mit ab.
+    out["grosse_dateien"] = sorted(
+        ({"quelle": s, "bytes": n, "pfad": pfad}
+         for s, ordner in (("teams", TEAMS_DIR), ("outlook", OUTLOOK_DIR),
+                           ("onedrive", ONEDRIVE_DIR))
+         for n, pfad in groesste_dateien(BASE / ordner)),
+        key=lambda x: -x["bytes"])[:GROESSTE_N]
     return out
 
 
 _GROESSE = {}          # Pfad -> (Zeitpunkt, Bytes)
 GROESSE_TTL = 120      # Sekunden
+
+
+GROESSTE_N = 8          # so viele der größten Dateien merkt sich der Gang
+
+
+def groesste_dateien(pfad):
+    """Die größten Einzeldateien – fällt bei ordner_groesse mit ab."""
+    ordner_groesse(pfad)                       # füllt den Puffer, falls nötig
+    eintrag = _GROESSE.get(str(pfad))
+    return eintrag[2] if eintrag and len(eintrag) > 2 else []
 
 
 def ordner_groesse(pfad, ttl=GROESSE_TTL):
@@ -745,16 +858,26 @@ def ordner_groesse(pfad, ttl=GROESSE_TTL):
     if alt and jetzt - alt[0] < ttl:
         return alt[1]
     gesamt = 0
+    # Die größten Dateien fallen beim Zählen ohnehin an – ein zweiter Gang über
+    # 45.000 Dateien nur für die Rangliste wäre reine Verschwendung.
+    groesste = []
+    wurzel = Path(pfad)
     try:
-        for p in Path(pfad).rglob("*"):
+        for p in wurzel.rglob("*"):
             try:
-                if p.is_file():
-                    gesamt += p.stat().st_size
+                if not p.is_file():
+                    continue
+                n = p.stat().st_size
             except OSError:
                 continue
+            gesamt += n
+            if len(groesste) < GROESSTE_N or n > groesste[-1][0]:
+                groesste.append((n, p.relative_to(wurzel).as_posix()))
+                groesste.sort(key=lambda x: -x[0])
+                del groesste[GROESSTE_N:]
     except OSError:
         return 0
-    _GROESSE[schluessel] = (jetzt, gesamt)
+    _GROESSE[schluessel] = (jetzt, gesamt, groesste)
     return gesamt
 
 
@@ -2832,6 +2955,36 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
   border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
 
+/* Diagramme. Zwei Reihen tragen Farbe – Teams und Mail –, alles andere ist
+   Menge und bekommt einen Ton. Die beiden Werte sind gegen die echten
+   Oberflächen der App geprüft (Kontrast, Farbfehlsichtigkeit); „andere" ist
+   bewusst keine dritte Farbe, sondern die Sammelspalte in Grau. */
+:root{ --serie-a:#2a78d6; --serie-b:#eb6834; --serie-c:#9aa4ae; }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --serie-a:#3987e5; --serie-b:#d95926; --serie-c:#5b6570; }
+}
+:root[data-theme="dark"]{ --serie-a:#3987e5; --serie-b:#d95926; --serie-c:#5b6570; }
+.dia{width:100%;height:auto;display:block;overflow:visible}
+.dia rect,.dia path{shape-rendering:crispEdges}
+.dia .achse{stroke:var(--line);stroke-width:1}
+.dia .tick{fill:var(--muted);font-size:10px}
+.dia .linie{fill:none;stroke:var(--serie-a);stroke-width:2;shape-rendering:geometricPrecision}
+.legende{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
+  margin:8px 0 2px}
+.legende span{display:inline-flex;align-items:center;gap:6px}
+.legende i{width:10px;height:10px;border-radius:2px;display:inline-block}
+/* Waagerechte Balken für Ranglisten: Beschriftung, Balken, Zahl – die Zahl
+   rechtsbündig mit Tabellenziffern, damit die Spalte steht. */
+.rang{display:grid;grid-template-columns:minmax(90px,auto) 1fr auto;gap:10px;
+  align-items:center;padding:4px 0;font-size:13px}
+.rang .bal{background:var(--code);border-radius:4px;height:9px;position:relative}
+.rang .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);
+  border-radius:4px;display:block}
+.rang .zahl{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px}
+.rang .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dia-titel{font-size:13px;font-weight:600;margin:18px 0 2px}
+.dia-sub{font-size:12.5px;color:var(--muted);margin:0 0 8px}
+
 /* Protokollleiste unten */
 #protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
   border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
@@ -3067,6 +3220,7 @@ main{padding-bottom:60px}
     <p class="sub" data-i18n="ana.sub">Alles aus dem Index gerechnet – ohne Microsoft zu fragen.</p>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
+    <div id="ana-dia"></div>
   </div>
 
   <div class="card">
@@ -4346,6 +4500,119 @@ function kachelHtml(wert, titel, hinweis, tip, klick){
     (hinweis ? '<div class="kpi-hint">' + esc(hinweis) + '</div>' : '') + '</div>';
 }
 
+
+/* ---------- Diagramme ----------
+   Von Hand gezeichnetes SVG statt einer Bibliothek: das Bündel soll nicht um
+   ein Diagrammpaket wachsen, und die drei Formen hier sind einfach. Bewusst
+   sparsam – dünne Marken, zurückhaltende Achsen, Zahlen nur dort, wo sie
+   gebraucht werden. Der Tooltip steckt in <title>: das zeigt jeder Browser und
+   liest jeder Screenreader vor, ohne eine eigene Ebene dafür. */
+
+/* Gestapelte Monatsbalken: Teams, Mail, alles Übrige. Eine Lücke ist eine
+   fehlende Säule – deshalb enthält die Reihe auch die leeren Monate. */
+function verlaufDia(reihe){
+  if(!reihe.length) return '';
+  var B = 720, H = 110, U = 16;
+  var hoch = Math.max.apply(null, reihe.map(function(r){ return r.gesamt; })) || 1;
+  var breite = B / reihe.length, lueck = reihe.length > 120 ? 0 : Math.min(2, breite * 0.25);
+  var teile = reihe.map(function(r, i){
+    var x = i * breite, y = H - U, s = '';
+    [['andere', 'var(--serie-c)'], ['outlook', 'var(--serie-b)'], ['teams', 'var(--serie-a)']]
+      .forEach(function(paar){
+        var h = (r[paar[0]] / hoch) * (H - U);
+        if(h <= 0) return;
+        y -= h;
+        s += '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' +
+             Math.max(0.5, breite - lueck).toFixed(2) + '" height="' + h.toFixed(2) +
+             '" fill="' + paar[1] + '"/>';
+      });
+    return '<g><title>' + esc(r.m + ': ' + zahl(r.gesamt)) + '</title>' +
+      '<rect x="' + x.toFixed(2) + '" y="0" width="' + breite.toFixed(2) +
+      '" height="' + (H - U) + '" fill="transparent"/>' + s + '</g>';
+  }).join('');
+  // Jahreswechsel als Marke – Monatsbeschriftungen wären bei 90 Säulen Brei.
+  var marken = reihe.map(function(r, i){
+    return r.m.slice(5) !== '01' ? ''
+      : '<text class="tick" x="' + (i * breite + 2).toFixed(1) + '" y="' + (H - 4) + '">' +
+        r.m.slice(0, 4) + '</text>';
+  }).join('');
+  return '<svg class="dia" viewBox="0 0 ' + B + ' ' + H + '" role="img" aria-label="' +
+    esc(t('ana.verlauf')) + '">' + teile +
+    '<line class="achse" x1="0" y1="' + (H - U) + '" x2="' + B + '" y2="' + (H - U) + '"/>' +
+    marken + '</svg>';
+}
+
+/* Wachstum: dieselbe Zeitachse, aber ein eigenes Bild. Beide Größen in EINE
+   Zeichnung zu legen hieße zwei Maßstäbe nebeneinander – das führt zuverlässig
+   in die Irre. */
+function wachstumDia(reihe){
+  if(reihe.length < 2) return '';
+  var B = 720, H = 90, U = 16, hoch = reihe[reihe.length - 1].summe || 1;
+  var punkte = reihe.map(function(r, i){
+    return (i * (B / (reihe.length - 1))).toFixed(2) + ',' +
+           ((H - U) - (r.summe / hoch) * (H - U)).toFixed(2);
+  }).join(' ');
+  return '<svg class="dia" viewBox="0 0 ' + B + ' ' + H + '" role="img" aria-label="' +
+    esc(t('ana.wachstum')) + '">' +
+    '<polyline class="linie" points="' + punkte + '"/>' +
+    '<line class="achse" x1="0" y1="' + (H - U) + '" x2="' + B + '" y2="' + (H - U) + '"/>' +
+    '<text class="tick" x="0" y="' + (H - 4) + '">' + esc(reihe[0].m) + '</text>' +
+    '<text class="tick" x="' + B + '" y="' + (H - 4) + '" text-anchor="end">' +
+    esc(reihe[reihe.length - 1].m + ' · ' + zahl(hoch)) + '</text></svg>';
+}
+
+/* Rangliste als waagerechte Balken – für alles, was reine Menge ist. */
+function rangListe(eintraege, nenner){
+  if(!eintraege.length) return '';
+  var hoch = Math.max.apply(null, eintraege.map(function(e){ return e.n; })) || 1;
+  return eintraege.map(function(e){
+    return '<div class="rang"><span class="name" title="' + esc(e.name) + '">' +
+      esc(e.name) + '</span>' +
+      '<span class="bal"><i style="width:' + ((e.n / hoch) * 100).toFixed(1) + '%"></i></span>' +
+      '<span class="zahl">' + esc(nenner ? nenner(e.n) : zahl(e.n)) + '</span></div>';
+  }).join('');
+}
+
+function diaBlock(titel, sub, inhalt){
+  if(!inhalt) return '';
+  return '<div class="dia-titel">' + esc(titel) + '</div>' +
+    (sub ? '<p class="dia-sub">' + esc(sub) + '</p>' : '') + inhalt;
+}
+
+function zeigeVerlaeufe(a){
+  var v = a.verlauf || [];
+  var luecken = (a.luecken || []).map(function(l){
+    return l.monate === 1 ? l.von : l.von + '–' + l.bis;
+  });
+  var legende = '<div class="legende">' +
+    '<span><i style="background:var(--serie-a)"></i>' + esc(t('search.source.teams')) + '</span>' +
+    '<span><i style="background:var(--serie-b)"></i>' + esc(t('search.source.outlook')) + '</span>' +
+    '<span><i style="background:var(--serie-c)"></i>' + esc(t('ana.andere')) + '</span></div>';
+  el('ana-dia').innerHTML =
+    diaBlock(t('ana.verlauf'), t('ana.verlauf.sub'), legende + verlaufDia(v)) +
+    (luecken.length
+      ? '<p class="dia-sub" style="margin-top:6px">' +
+        esc(t('ana.luecken', {n: luecken.length, liste: luecken.join(', ')})) + '</p>'
+      : (v.length ? '<p class="dia-sub" style="margin-top:6px">' +
+                    esc(t('ana.luecken.keine')) + '</p>' : '')) +
+    diaBlock(t('ana.wachstum'), t('ana.wachstum.sub'), wachstumDia(v)) +
+    diaBlock(t('ana.typen'), t('ana.typen.sub'),
+             rangListe((a.anhang_typen || []).map(function(x){
+               // Der Sammelposten braucht einen Namen: „…" sagt nichts, und er
+               // ist oft größer als die Einträge über ihm.
+               return {name: x.typ === '…' ? t('ana.typen.rest') : x.typ, n: x.n};
+             }))) +
+    diaBlock(t('ana.dateien'), t('ana.dateien.sub'),
+             rangListe((a.grosse_dateien || []).map(function(d){
+               return {name: d.pfad, n: d.bytes}; }), bytes)) +
+    diaBlock(t('ana.people'), t('ana.personen.sub'),
+             rangListe((a.top_personen || []).map(function(pe){
+               return {name: pe.who, n: pe.n}; }))) +
+    diaBlock(t('ana.gone'), t('ana.geloescht.sub'),
+             rangListe((a.geloescht || []).map(function(g){
+               return {name: g.m, n: g.n}; })));
+}
+
 function zeigeAnalytics(a){
   if(!a.exists){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('search.sub.none')) + '</p>';
@@ -4376,6 +4643,7 @@ function zeigeAnalytics(a){
     kachelHtml(bytes((gesamt.teams || 0) + (gesamt.outlook || 0) +
                      (gesamt.onedrive || 0)), t('ana.size'),
                t('ana.size.hint', {index: bytes(gesamt.index)}));
+  zeigeVerlaeufe(a);
   zeigeBericht(a.vollstaendigkeit);
   // Zwei Berichte, zwei Kästen: sie entstehen unabhängig voneinander,
   // und einer soll den anderen nicht verdecken.

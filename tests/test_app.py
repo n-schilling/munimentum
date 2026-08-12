@@ -5307,3 +5307,77 @@ def test_jede_einstellung_hat_eine_erklaerung():
     mit_info = abschnitt.count('class="info"')
     assert zeilen >= 25, f"nur {zeilen} Einstellungszeilen gefunden"
     assert mit_info >= zeilen, f"{zeilen} Zeilen, aber nur {mit_info} Erklärungen"
+
+
+# --------------------------------------------------------------------------
+# Auswertungen für die Analytics-Seite
+# --------------------------------------------------------------------------
+def _index_mit_zeitpunkten(sandbox, monate):
+    """Ein kleiner Store, dessen Nachrichten auf bestimmte Monate fallen."""
+    from datetime import UTC, datetime
+
+    import corpus
+    import rag_index
+    chunks = []
+    for i, (monat, quelle) in enumerate(monate):
+        ts = datetime.strptime(monat + "-15", "%Y-%m-%d").replace(tzinfo=UTC).timestamp()
+        c = {"uid": f"u:{i}", "cid": f"u:{i}#0", "src": quelle, "root": quelle,
+             "rel": f"{i}.eml", "who": f"Person {i % 2}", "ppl": "p",
+             "ts": ts, "date": monat, "title": f"T{i}", "ctx": "x",
+             "text": "Inhalt", "att": "vertrag.pdf bild.png" if i % 3 == 0 else None}
+        c["hash"] = corpus.chunk_hash(c)
+        chunks.append(c)
+    rag_index.write_db(sandbox / app_mod.STORE_DIR, chunks)
+    return chunks
+
+
+def test_verlauf_enthaelt_auch_die_leeren_monate(sandbox):
+    """Sonst fiele eine Lücke gar nicht auf – sie stünde einfach nicht da."""
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-04", "outlook")])
+    k = app_mod.kennzahlen(app_mod.load_config())
+    monate = [r["m"] for r in k["verlauf"]]
+    assert monate == ["2025-01", "2025-02", "2025-03", "2025-04"]
+    assert k["verlauf"][1]["gesamt"] == 0
+    # Aufsummiert – das ist die Wachstumskurve.
+    assert [r["summe"] for r in k["verlauf"]] == [1, 1, 1, 2]
+
+
+def test_luecken_nur_innerhalb_des_bestands(sandbox):
+    """Vor der ersten und nach der letzten Nachricht ist nichts zu vermissen."""
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-05", "teams")])
+    k = app_mod.kennzahlen(app_mod.load_config())
+    assert k["luecken"] == [{"von": "2025-02", "bis": "2025-04", "monate": 3}]
+
+
+def test_verlauf_trennt_die_quellen(sandbox):
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-01", "outlook"),
+                                     ("2025-01", "kalender")])
+    zeile = app_mod.kennzahlen(app_mod.load_config())["verlauf"][0]
+    assert (zeile["teams"], zeile["outlook"], zeile["andere"]) == (1, 1, 1)
+    assert zeile["gesamt"] == 3, "die Summe muss die Stapel tragen"
+
+
+def test_anhangstypen_werden_gezaehlt(sandbox):
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "outlook")] * 3)
+    typen = {x["typ"]: x["n"] for x in app_mod.kennzahlen(app_mod.load_config())["anhang_typen"]}
+    assert typen.get("pdf") == 1 and typen.get("png") == 1
+
+
+def test_auswertung_wird_gepuffert(sandbox, monkeypatch):
+    """Der Gang über den Index kostet auf einem echten Bestand Sekunden – er
+    darf nicht bei jedem Öffnen des Reiters neu laufen."""
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams")])
+    cfg = app_mod.load_config()
+    app_mod.kennzahlen(cfg)
+    laeufe = []
+    echt = app_mod.auswertung
+    monkeypatch.setattr(app_mod, "auswertung",
+                        lambda con, k: laeufe.append(1) or echt(con, k))
+    app_mod.kennzahlen(cfg)
+    assert len(laeufe) == 1, "die Auswertung wurde aufgerufen"
+    assert app_mod._AUSWERTUNG, "aber nichts gepuffert"

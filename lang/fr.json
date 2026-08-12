@@ -510,5 +510,19 @@
   "update.enabled.i": "Interroge api.github.com une fois au démarrage. Sinon l’application ne parle qu’à Microsoft Graph et à votre Ollama local.",
   "pill.ollama.disabled": "Ollama désactivé",
   "pill.ollama.tip.disabled": "Ollama est désactivé dans les réglages. Recherche et export continuent ; la recherche par similarité et le résumé par IA sont absents. Cliquez pour aller au réglage.",
-  "search.mode.off": "Ollama est désactivé — seule la recherche textuelle est disponible."
+  "search.mode.off": "Ollama est désactivé — seule la recherche textuelle est disponible.",
+  "ana.verlauf": "Dans le temps",
+  "ana.verlauf.sub": "Messages par mois, empilés par source. Une colonne absente est un mois sans le moindre message.",
+  "ana.andere": "Autres",
+  "ana.luecken": "{n} lacune(s) dans l’archive : {liste}. À l’intérieur de la période qui contient par ailleurs des messages — avant le premier et après le dernier, il n’y a rien à regretter.",
+  "ana.luecken.keine": "Aucune lacune : chaque mois entre le premier et le dernier message contient quelque chose.",
+  "ana.wachstum": "Croissance",
+  "ana.wachstum.sub": "Comment l’archive s’est étoffée au fil du temps, en cumul.",
+  "ana.typen.sub": "Quels types de fichiers sont joints aux courriels.",
+  "ana.dateien": "Plus gros fichiers",
+  "ana.dateien.sub": "Ce qui occupe la place — une seule conversation de groupe peut atteindre des centaines de mégaoctets.",
+  "ana.personen.sub": "Avec qui vous avez échangé le plus de messages.",
+  "ana.geloescht.sub": "Quand des messages ont disparu de la boîte. Ils sont toujours ici.",
+  "ana.typen": "Pièces jointes par type",
+  "ana.typen.rest": "autres types"
 }
