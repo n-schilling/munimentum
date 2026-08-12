@@ -57,6 +57,33 @@ würde. Die schlanke Alternative aus einzelnen Bibliotheken ist ein Viertel so
 groß, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
 einem echten Bündel, nicht am Schreibtisch.
 
+## Ein zweiter Modellserver neben Ollama
+
+Ollama ist heute die einzige Art, an Sprachmodelle zu kommen. Das ist keine
+Festlegung, sondern der Stand: Der Abschnitt in den Einstellungen heißt seit
+5.3.0 **KI** und nicht mehr *Ollama*, damit der Schalter darin später eine
+Auswahl werden kann, ohne dass die Überschrift wieder wandert.
+
+Entschieden ist die Richtung: **nicht „Ollama oder X"**, sondern die
+Schnittstelle. LM Studio, `llama-server`, Jan, LocalAI und vLLM sprechen alle
+die OpenAI-kompatible API — und Ollama tut es unter `/v1/` ebenfalls. Ein
+Adapter auf `POST /v1/embeddings` und `POST /v1/chat/completions` öffnet damit
+alle auf einmal, statt neben Ollama eine zweite Sonderbehandlung zu bauen. In
+den Einstellungen wäre das ein Feld *Art des Servers*: `ollama` (heutiges
+Verhalten) oder `openai-kompatibel` (Adresse und optionaler Schlüssel).
+
+Berührt sind genau drei Stellen — `/api/embed` in `rag_index.py` und
+`mcp_server.py`, `/api/chat` in `answer.py`. Die vierte ist die, die sich nicht
+übersetzen lässt: `/api/tags` beantwortet „ist dieses Modell hier geladen?“,
+und OpenAI-seitig gibt es dafür nur `/v1/models`, das auflistet, was der Server
+anbietet. Für die Statusanzeige neben den Feldern reicht das; die Hilfe beim
+Nachladen eines fehlenden Modells (`ollama pull`) bliebe Ollama vorbehalten und
+müsste dort ausgeblendet werden, statt ins Leere zu zeigen.
+
+Nur auf Apple Silicon wäre MLX deutlich schneller. Es steht hier trotzdem nicht
+als eigener Punkt: ein Weg, den es auf zwei von drei Plattformen nicht gibt,
+kostet mehr an Erklärung, als er an Geschwindigkeit bringt.
+
 ## Kleineres
 
 * **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene
