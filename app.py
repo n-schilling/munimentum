@@ -2409,7 +2409,8 @@ class Handler(BaseHTTPRequestHandler):
         if mod is None:
             return {"error": self.app.search.error, "folders": []}
         return mod.list_folders(contains=q.get("contains", ""),
-                                limit=min(int(q.get("limit", 300) or 300), 1000))
+                                limit=min(int(q.get("limit", 300) or 300), 1000),
+                                source=q.get("source", ""))
 
     def _ordnerplan(self, data):
         """Was der nächste Lauf täte – ohne ihn zu starten.
@@ -3205,7 +3206,7 @@ main{padding-bottom:60px}
     <div class="row hide" id="filter" style="margin-top:10px">
       <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
              style="width:180px" onchange="zeigeFilterstand()">
-      <select id="f-source" onchange="zeigeFilterstand()">
+      <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
         <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
         <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
@@ -4067,20 +4068,59 @@ function berichtOeffnen(){
 /* ---------- Suche ---------- */
 /* Die Ordnerliste einmal holen: sie ändert sich nur beim Indizieren, und ein
    Auswahlfeld, das bei jedem Tastendruck nachlädt, wäre reine Last. */
-var ordnerGeladen = false;
+var ordnerJeQuelle = {}, ordnerStand = null;
+
+/* Womit die leere Wahl beschriftet ist. „Alle Ordner“ stimmt bei Kalendern
+   und Chatarten nicht – und eine Auswahl, die sich falsch nennt, liest sich
+   wie ein Fehler. */
+var ORDNER_ALLE = {
+  kalender: 'search.folder.all.kalender',
+  teams:    'search.folder.all.teams',
+  kontakte: 'search.folder.all.kontakte'
+};
+
+/* Die vier Teams-Arten heißen im Index nach ihrem Ablageordner. Das ist
+   richtig zum Filtern und unlesbar zum Anzeigen – hier stehen die Namen, die
+   ein Mensch dafür kennt, und zwar in seiner Sprache statt in der, die beim
+   Indizieren gerade eingestellt war. */
+function ordnerName(pfad){
+  var s = t('search.folder.teams.' + pfad);
+  return s === 'search.folder.teams.' + pfad ? pfad : s;
+}
+
+/* Eine Auswahl mit einem einzigen Eintrag ist keine Auswahl: sie filtert
+   nichts weg und täuscht eine Entscheidung vor. Dann steht der eine Eintrag
+   da, ausgegraut. */
+function zeichneOrdner(liste){
+  var sel = el('f-folder'), vorher = sel.value;
+  var wahl = liste.length > 1;
+  var alle = t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all');
+  sel.disabled = !wahl;
+  sel.innerHTML = (liste.length === 0
+      ? '<option value="">' + esc(alle) + '</option>'
+      : (wahl ? '<option value="">' + esc(alle) + '</option>' : '')) +
+    liste.map(function(f){
+      return '<option value="' + esc(f.path) + '">' + esc(ordnerName(f.path)) +
+             ' (' + f.messages.toLocaleString(LOC) + ')</option>';
+    }).join('');
+  // Eine Wahl, die zur neuen Quelle nicht passt, fällt weg. Sie stehen zu
+  // lassen hieße, in einem Ordner zu suchen, den es in dieser Quelle nicht
+  // gibt – und das sieht aus wie ein leeres Archiv.
+  sel.value = wahl && liste.some(function(f){ return f.path === vorher; })
+    ? vorher : '';
+}
+
 function ladeOrdner(){
-  if(ordnerGeladen) return;
-  ordnerGeladen = true;
-  api('/api/folders?limit=300').then(function(r){
-    var sel = el('f-folder'), gewaehlt = sel.value;
-    var h = '<option value="">' + esc(t('search.folder.all')) + '</option>';
-    (r.folders || []).forEach(function(f){
-      h += '<option value="' + esc(f.path) + '">' + esc(f.path) +
-           ' (' + f.messages.toLocaleString(LOC) + ')</option>';
-    });
-    sel.innerHTML = h;
-    sel.value = gewaehlt;
-  }).catch(function(){ ordnerGeladen = false; });
+  var quelle = el('f-source').value || 'all';
+  // Nach einem Indexlauf ist die Liste eine andere: neue Ordner, neue Zahlen.
+  var stand = (S && S.store) ? S.store.built_at : null;
+  if(stand !== ordnerStand){ ordnerJeQuelle = {}; ordnerStand = stand; }
+  if(ordnerJeQuelle[quelle]){ zeichneOrdner(ordnerJeQuelle[quelle]); return; }
+  api('/api/folders?limit=300&source=' + encodeURIComponent(quelle))
+    .then(function(r){
+      ordnerJeQuelle[quelle] = r.folders || [];
+      if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
+    }).catch(function(){});
 }
 
 function trefferProSeite(){

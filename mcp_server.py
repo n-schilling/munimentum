@@ -110,11 +110,11 @@ Which tool to use:
     get_document with context for chat history.
 
 Notes: dates are "YYYY-MM-DD", and days=N is a shorthand for the last N days
-(no need to work out the date); folder="E-Mail/Kunden" restricts to a mailbox
-folder and everything below it, and folder="kalender/Privat" to one calendar –
-list_folders shows what exists; results are
-one hit per message – page with offset rather than raising k; a hit's "uri" can
-be read as an MCP resource.
+(no need to work out the date); folder restricts to one folder and everything
+below it – "E-Mail/Kunden", "kalender/Privat", "channels" for every Teams
+channel – and list_folders shows what exists, per source; results are one hit
+per message – page with offset rather than raising k; a hit's "uri" can be read
+as an MCP resource.
 """
 
 mcp = MCPServer(
@@ -184,6 +184,18 @@ def _hat_spalte(con, name):
     ein Klick auf „Nur Gelöschtes“ in einem SQL-Fehler statt in einem Hinweis.
     """
     return any(r[1] == name for r in con.execute("PRAGMA table_info(chunks)"))
+
+
+# Welche Quellen eine Ordnerauswahl anbieten – alle, deren ctx ein Pfad ist.
+_LISTBAR = ("outlook", "datei", "kalender", "teams", "kontakte")
+_LISTBAR_SQL = ", ".join(f"'{q}'" for q in _LISTBAR)
+
+# Kanäle werden zu einem Eintrag zusammengefasst: ein Team hat schnell zwanzig,
+# und "welcher Kanal" ist selten die Frage – "Kanäle statt Chats" dagegen oft.
+# Der Filter kann das ohne Zutun, weil ein Pfad immer auch alles darunter meint.
+_TEAMS_OBERSTE = (
+    "CASE WHEN src = 'teams' AND instr(ctx, '/') > 0 "
+    "THEN substr(ctx, 1, instr(ctx, '/') - 1) ELSE ctx END")
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder=""):
@@ -611,8 +623,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         preview_chars: Preview length per hit (default 200; 0 disables previews).
         only_gone: Only messages that are no longer in the mailbox (deleted from
             it after they were archived). Everything stays on disk either way.
-        folder: Restrict to one mailbox folder and everything below it, e.g.
-            "E-Mail/Kunden". Use list_folders to see what exists.
+        folder: Restrict to one folder and everything below it, e.g.
+            "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
+            channel. Use list_folders to see what exists.
     """
     con = _db()
     try:
@@ -684,8 +697,9 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         preview_chars: Preview length per hit (default 200; 0 disables previews).
         only_gone: Only messages that are no longer in the mailbox (deleted from
             it after they were archived). Everything stays on disk either way.
-        folder: Restrict to one mailbox folder and everything below it, e.g.
-            "E-Mail/Kunden". Use list_folders to see what exists.
+        folder: Restrict to one folder and everything below it, e.g.
+            "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
+            channel. Use list_folders to see what exists.
     """
     con = _db()
     try:
@@ -860,24 +874,39 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
 
 
 @mcp.tool(annotations=_READONLY)
-def list_folders(contains: str = "", limit: int = 200) -> dict:
+def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict:
     """List the folders present in the archive, with item counts.
 
     The counterpart to the `folder` filter on search_messages: it tells you
     what can be filtered on. Covers mailbox folders below "E-Mail/", mirrored
-    OneDrive folders below "Dateien/", and calendars below "kalender/".
+    OneDrive folders below "Dateien/", calendars below "kalender/", contact
+    folders below "kontakte/" and the four kinds of Teams conversation
+    ("1on1", "group", "meeting", "channels").
+
+    Args:
+        contains: Only folders whose path contains this text.
+        limit: How many folders to return, largest first.
+        source: Restrict to one source — "teams", "outlook", "kalender",
+            "kontakte" or "datei". Empty (or "all") lists every source.
     """
     con = _db()
     try:
         wo, params = "", []
         if contains.strip():
-            wo = "AND ctx LIKE ?"
+            wo = "AND ordner LIKE ?"
             params.append(f"%{contains.strip()}%")
+        quelle = (source or "").strip().lower()
+        if quelle and quelle != "all":
+            if quelle not in _LISTBAR:
+                return {"count": 0, "folders": []}
+            wo += " AND src = ?"
+            params.append(quelle)
         rows = con.execute(
-            f"SELECT ctx, COUNT(DISTINCT uid) FROM chunks "
-            f"WHERE src IN ('outlook', 'datei', 'kalender') "
-            f"AND ctx IS NOT NULL AND ctx != '' {wo} "
-            f"GROUP BY ctx ORDER BY 2 DESC LIMIT ?",
+            f"SELECT ordner, COUNT(DISTINCT uid) FROM "
+            f"(SELECT uid, src, {_TEAMS_OBERSTE} AS ordner FROM chunks "
+            f" WHERE src IN ({_LISTBAR_SQL}) AND ctx IS NOT NULL AND ctx != '') "
+            f"WHERE 1=1 {wo} "
+            f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
             [*params, max(1, min(int(limit), 1000))]).fetchall()
         return {"count": len(rows),
                 "folders": [{"path": r[0], "messages": r[1]} for r in rows]}

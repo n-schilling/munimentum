@@ -202,6 +202,9 @@ DYNAMISCH = (
     ("progress.unit.", ("chats", "mails", "embeddings", "files")),
     # Der Platzhalter im Suchfeld wechselt mit der Suchart.
     ("search.ph.", ("text", "aehnlich", "ki")),
+    # Die vier Teams-Arten heißen im Index nach ihrem Ablageordner; die
+    # Ordnerauswahl setzt den Namensraum davor und zeigt den lesbaren Namen.
+    ("search.folder.teams.", ("1on1", "group", "meeting", "channels")),
     # Die Zeilen des Fehlerberichts: app.systemangaben liefert nur den Rumpf
     # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",

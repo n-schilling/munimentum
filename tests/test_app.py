@@ -4125,6 +4125,85 @@ def test_kalenderliste_zeigt_bestand_statt_leerer_zahlen():
     _in_node(PRUEFUNG_KALENDERLISTE)
 
 
+# Die Quelle vorne bestimmt, was hinten zur Wahl steht. Eine Auswahl mit einem
+# einzigen Eintrag ist keine Auswahl - dann steht sie ausgegraut da.
+PRUEFUNG_ORDNERAUSWAHL = GRUNDZUSTAND + r"""
+S.store = {exists: true, built_at: '2026-08-12T10:00:00+00:00'};
+var ORDNER = {
+  outlook:  [{path:'E-Mail/Posteingang', messages:12480},
+             {path:'E-Mail/Kunden', messages:8102}],
+  kalender: [{path:'kalender/Arbeit', messages:4854},
+             {path:'kalender/Privat', messages:912}],
+  teams:    [{path:'1on1', messages:31204}, {path:'channels', messages:15302}],
+  kontakte: [{path:'kontakte/Team', messages:64}]
+};
+var gefragt = [];
+global.fetch = function(pfad){
+  gefragt.push(String(pfad));
+  var m = String(pfad).match(/source=(\w+)/);
+  return Promise.resolve({json: function(){
+    return Promise.resolve({folders: ORDNER[m ? m[1] : 'all'] || []}); }});
+};
+
+var feld = document.getElementById('f-folder');
+function optionen(){
+  return (feld.innerHTML.match(/<option[^>]*>[^<]*/g) || []).map(function(o){
+    return o.replace(/^<option[^>]*>/, ''); });
+}
+function warte(schritte, fertig){
+  if(schritte <= 0) return fertig();
+  setTimeout(function(){ warte(schritte - 1, fertig); }, 0);
+}
+function waehle(quelle, dann){
+  document.getElementById('f-source').value = quelle;
+  ladeOrdner();
+  warte(4, dann);
+}
+
+waehle('outlook', function(){
+  pruefe(gefragt.some(function(p){ return p.indexOf('source=outlook') >= 0; }),
+         'Quelle nicht mitgefragt: ' + gefragt.join(' '));
+  pruefe(optionen().length === 3, 'Erwartet: Vorgabe + zwei Ordner, ist ' + optionen());
+  pruefe(!feld.disabled, 'Zwei Ordner sind eine Wahl');
+  feld.value = 'E-Mail/Kunden';
+
+  waehle('kalender', function(){
+    // Die Wahl von vorhin gibt es in dieser Quelle nicht - sie faellt weg,
+    // sonst suchte man in einem Ordner, den diese Quelle nicht kennt.
+    pruefe(feld.value === '', 'Unpassende Ordnerwahl blieb stehen: ' + feld.value);
+    pruefe(optionen()[0] === 'Alle Kalender', 'Falsche Beschriftung: ' + optionen()[0]);
+
+    waehle('teams', function(){
+      var namen = optionen().map(function(o){ return o.split(' (')[0]; });
+      pruefe(namen.indexOf('Kan\u00e4le') > 0, 'Kanaele nicht lesbar benannt: ' + namen);
+      pruefe(namen.indexOf('1:1-Chats') > 0, 'Chatart nicht lesbar benannt: ' + namen);
+      pruefe(namen[0] === 'Alle Chatarten', 'Falsche Beschriftung: ' + namen[0]);
+      // Gefiltert wird weiter mit dem Ablagepfad, nicht mit dem Anzeigenamen.
+      pruefe(feld.innerHTML.indexOf('value="channels"') >= 0, 'Falscher Filterwert');
+
+      waehle('kontakte', function(){
+        // Ein einziger Ordner filtert nichts weg - eine Wahl vorzutaeuschen
+        // waere schlechter, als den einen Eintrag ausgegraut zu zeigen.
+        pruefe(feld.disabled, 'Ein einziger Eintrag ist keine Wahl');
+        pruefe(optionen().length === 1, 'Vorgabe neben dem einzigen Eintrag');
+
+        // Zweimal dieselbe Quelle fragt den Server nicht noch einmal.
+        var vorher = gefragt.length;
+        waehle('kontakte', function(){
+          pruefe(gefragt.length === vorher, 'Ordnerliste ohne Not neu geholt');
+          console.log('OK');
+        });
+      });
+    });
+  });
+});
+"""
+
+
+def test_ordnerauswahl_folgt_der_quelle():
+    _in_node(PRUEFUNG_ORDNERAUSWAHL)
+
+
 # --------------------------------------------------------------------------
 # OneDrive in der Oberfläche
 # --------------------------------------------------------------------------
@@ -4737,7 +4816,9 @@ def test_kein_feld_sucht_von_selbst():
         # Zeichenkette und prüfte dann irgendetwas.
         umfeld = block[max(0, j - 120):j + 200]
         assert "doSearch" not in umfeld, f"{feld} sucht von selbst"
-        assert 'onchange="zeigeFilterstand()"' in umfeld, f"{feld} zählt nicht mit"
+        # Die Quelle lädt zusätzlich die Ordnerliste nach – gesucht wird auch
+        # dann nicht, gezählt aber schon.
+        assert "zeigeFilterstand()" in umfeld, f"{feld} zählt nicht mit"
     q = app_mod.PAGE[app_mod.PAGE.index('id="q"'):][:260]
     assert "oninput" not in q, "das Suchfeld sucht beim Tippen"
 

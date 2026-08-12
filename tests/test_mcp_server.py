@@ -65,19 +65,19 @@ def _sample_records():
     return [
         _rec(UID_T0, "teams", "teams", "1on1/alice__chat.html", "Alice Beispiel",
              "alice beispiel projekt alpha", _ts("2025-06-01 09:30"),
-             "2025-06-01 09:30", "Projekt Alpha", "1:1-Chat",
+             "2025-06-01 09:30", "Projekt Alpha", "1on1",
              "Hallo Bob, die Rechnung 4711 für Projekt Alpha ist fertig."),
         _rec(UID_T1, "teams", "teams", "1on1/alice__chat.html", "Bob Baumeister",
              "bob baumeister projekt alpha", _ts("2025-06-01 09:35"),
-             "2025-06-01 09:35", "Projekt Alpha", "1:1-Chat",
+             "2025-06-01 09:35", "Projekt Alpha", "1on1",
              "Danke Alice, ich prüfe die Rechnung morgen früh."),
         _rec(UID_T2, "teams", "teams", "1on1/alice__chat.html", "Alice Beispiel",
              "alice beispiel projekt alpha", _ts("2025-06-01 09:40"),
-             "2025-06-01 09:40", "Projekt Alpha", "1:1-Chat",
+             "2025-06-01 09:40", "Projekt Alpha", "1on1",
              "Perfekt, dann bis morgen im Büro!"),
         _rec(UID_TX, "teams", "teams", "1on1/max__chat.html", "(unbekannt)",
              "max mustermann", _ts("2025-06-02 10:00"),
-             "2025-06-02 10:00", "Max", "1:1-Chat",
+             "2025-06-02 10:00", "Max", "1on1",
              "Kurze Notiz ohne bekannten Absender."),
         _rec(UID_M1, "outlook", "outlook", "inbox/mail1.eml", "Carla Chef",
              "carla chef carla@example.com alice beispiel alice@example.com",
@@ -97,7 +97,7 @@ def _sample_records():
              "kalender/Arbeit", "Ort: Raum 42. Agenda folgt."),
         _rec(UID_CON, "kontakte", "outlook", "kontakte/Team/alice.vcf", "",
              "alice beispiel alice@example.com", None, "", "Alice Beispiel",
-             "Kontakte: Team", "Firma GmbH · Entwicklung. E-Mail: alice@example.com"),
+             "kontakte/Team", "Firma GmbH · Entwicklung. E-Mail: alice@example.com"),
     ]
 
 
@@ -1014,6 +1014,46 @@ def test_list_folders_kennt_auch_kalender(state):
     assert _uids(treffer) == [UID_CAL]
     assert mcp_server.search_messages("Quartalsplanung", folder="kalender/Privat",
                                       mode="lexical")["count"] == 0
+
+
+def test_list_folders_je_quelle(state):
+    """Wer vorne eine Quelle waehlt, soll hinten nur deren Ordner sehen."""
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    con.execute("INSERT INTO chunks (uid, seq, msg_idx, src, root, rel, ctx, text) "
+                "VALUES ('datei:Dateien/Kunden/a.pdf:0', 0, 0, 'datei', 'onedrive', "
+                "'Dateien/Kunden/a.pdf', 'Dateien/Kunden', 'a')")
+    con.commit()
+    con.close()
+
+    def pfade(**kw):
+        return {f["path"] for f in mcp_server.list_folders(limit=100, **kw)["folders"]}
+
+    assert pfade(source="kalender") == {"kalender/Arbeit"}
+    assert pfade(source="datei") == {"Dateien/Kunden"}
+    assert pfade(source="kontakte") == {"kontakte/Team"}
+    assert "Dateien/Kunden" not in pfade(source="outlook")
+    # Leer und "all" sind dasselbe: alles, was aufzaehlbar ist.
+    assert pfade(source="all") == pfade() >= {"kalender/Arbeit", "Dateien/Kunden"}
+    # Unbekannte Quelle: lieber nichts als versehentlich alles.
+    assert pfade(source="gibtsnicht") == set()
+
+
+def test_list_folders_fasst_kanaele_zusammen(state):
+    """Ein Team hat schnell zwanzig Kanaele - zur Wahl stehen die vier Arten."""
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    for i, ctx in enumerate(["channels/Team A", "channels/Team B", "1on1"]):
+        con.execute("INSERT INTO chunks (uid, seq, msg_idx, src, root, rel, ctx, text) "
+                    f"VALUES ('teams:x{i}.html:0', 0, 0, 'teams', 'teams', "
+                    f"'x{i}.html', ?, 'a')", (ctx,))
+    con.commit()
+    con.close()
+    ordner = {f["path"]: f["messages"]
+              for f in mcp_server.list_folders(source="teams", limit=100)["folders"]}
+    assert set(ordner) == {"channels", "1on1"}
+    assert ordner["channels"] == 2          # beide Teams unter einem Eintrag
+    # Und der Filter kommt ohne Zutun damit klar: ein Pfad meint alles darunter.
+    assert mcp_server.browse_messages(folder="channels")["count"] == 2
+    assert mcp_server.browse_messages(folder="channels/Team A")["count"] == 1
 
 
 def test_vorschau_zeigt_die_fundstelle(state):

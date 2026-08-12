@@ -24,8 +24,6 @@ from functools import partial
 from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
 
 CATS = {"1on1", "group", "meeting", "channels"}
-CAT_LABEL = {"1on1": "1:1-Chat", "group": "Gruppenchat",
-             "meeting": "Besprechung", "channels": "Kanal"}
 _BLOCK = {"br", "p", "div", "li", "tr"}
 SAFETY_CAP = 500_000   # absurd lange Einzeltexte begrenzen (vor dem Chunking)
 
@@ -172,7 +170,11 @@ def _teams_file(p_str, root_str):
     rel = p.relative_to(root).as_posix()
     top = rel.split("/")[0]
     cat = top if top in CATS else "other"
-    ctx = f"Kanal: {title}" if cat == "channels" else CAT_LABEL.get(cat, "Teams")
+    # Der Ablageordner, nicht ein Schmuckname: ctx ist die Spalte, über die in
+    # der Suche gefiltert wird, und ein Pfad meint dort immer auch alles
+    # darunter. "channels" trifft damit jeden Kanal, ohne dass die Auswahl je
+    # Kanal einen Eintrag braucht – und "1on1" genau die 1:1-Chats.
+    ctx = rel.rsplit("/", 1)[0] if "/" in rel else cat
     out = []
     for i, m in enumerate(msgs):
         out.append({
@@ -596,7 +598,7 @@ def load_contacts(root_dir):
             "uid": f"kontakte:{rel}:0", "src": "kontakte", "root": "outlook", "rel": rel,
             "who": org or title or "Kontakt", "ppl": " ".join([fn] + emails).lower(),
             "ts": None, "date": "", "title": fn,
-            "ctx": f"Kontakte: {folder}" if folder else "Kontakte",
+            "ctx": f"kontakte/{folder}" if folder else "kontakte",
             "text": text[:SAFETY_CAP],
         })
     return recs

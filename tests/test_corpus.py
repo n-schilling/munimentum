@@ -147,7 +147,8 @@ def test_load_teams_builds_records(tmp_path):
     r = recs[0]
     assert r["uid"] == "teams:1on1/alice__abc123.html:0"
     assert r["src"] == "teams"
-    assert r["ctx"] == "1:1-Chat"
+    # Der Ablageordner: danach filtert die Suche, "channels" trifft alle Kanäle.
+    assert r["ctx"] == "1on1"
     assert r["who"] == "Alice Example"
     assert "alice example" in r["ppl"]
     assert r["ts"] is not None
@@ -249,7 +250,7 @@ def test_load_contacts_parses_vcf(tmp_path):
     assert len(recs) == 1
     r = recs[0]
     assert r["title"] == "Alice Example"
-    assert r["ctx"] == "Kontakte: Team"
+    assert r["ctx"] == "kontakte/Team"
     assert "Firma GmbH · Entwicklung" in r["text"]
     assert "Erste Zeileweiter gefaltet" in r["text"]  # RFC-Zeilenfaltung aufgelöst
     assert "alice@example.com" in r["ppl"]
