@@ -67,6 +67,20 @@ def sandbox(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _cfg_mit_kategorien(**extra):
+    """Konfiguration mit gewählten Kategorien.
+
+    Die Vorgabe wählt bewusst nichts: jede Kategorie kann zehntausende
+    Elemente bedeuten. Ein Test, der einen Exportschritt erwartet, muss also
+    sagen, was exportiert werden soll – so wie ein Anwender auch.
+    """
+    cfg = app_mod.load_config()
+    cfg["outlook_categories"] = ["mail", "calendar", "contacts"]
+    cfg["teams_categories"] = ["1on1", "group", "meeting"]
+    cfg.update(extra)
+    return cfg
+
+
 @pytest.fixture
 def no_ollama(monkeypatch):
     monkeypatch.setattr(app_mod, "check_ollama",
@@ -481,6 +495,26 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
     assert "--no-embeddings" not in steps[2]["argv"]
 
 
+def test_vorgabe_waehlt_nichts_aus(sandbox):
+    """Jede Kategorie kann zehntausende Elemente bedeuten – was geholt wird,
+    soll eine Entscheidung sein und nicht das, was zufällig angehakt war."""
+    cfg = app_mod.load_config()
+    assert cfg["outlook_categories"] == [] and cfg["teams_categories"] == []
+    assert cfg["onedrive_enabled"] is False
+
+
+def test_ohne_kategorie_kein_schritt(sandbox):
+    """Eine leere EXPORT_CATEGORIES liest das Skript als „nicht gesetzt“ und
+    holte dann alles. Der Zeitplan käme so an der Auswahl vorbei."""
+    cfg = app_mod.load_config()
+    assert app_mod.build_steps(cfg, outlook=True, teams=True) == []
+
+    cfg["outlook_categories"] = ["contacts"]
+    steps = app_mod.build_steps(cfg, outlook=True, teams=True)
+    assert [s["key"] for s in steps] == ["outlook"]
+    assert steps[0]["env"]["EXPORT_CATEGORIES"] == "contacts"
+
+
 def test_build_steps_verbietet_rueckfragen(sandbox):
     """Kein Exportschritt darf aus der App heraus etwas fragen können.
 
@@ -488,7 +522,7 @@ def test_build_steps_verbietet_rueckfragen(sandbox):
     interaktiv aussah – unter Windows tut das auch das Nullgerät. Der Lauf
     stand dann an einer Frage, die in der Oberfläche niemand beantworten kann.
     """
-    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, teams=True)
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True)
     assert [s["key"] for s in steps] == ["outlook", "teams"]
     for s in steps:
         assert "-default" in s["argv"]
@@ -512,7 +546,7 @@ def test_build_steps_leere_auswahl(sandbox):
 def test_build_steps_reicht_die_schalter_durch(sandbox):
     """Alles, was in der Oberfläche steht, muss auch beim Skript ankommen –
     sonst ändert ein Klick nur die Datei und nicht den Lauf."""
-    cfg = app_mod.load_config()
+    cfg = _cfg_mit_kategorien()
     cfg.update(embed_images=False, cache_images=False, refresh_channels=False,
                skip_empty_chats=False, include_hidden=True,
                skip_folders=["archiv", "drafts"], workers=2, index_batch=8)
@@ -534,14 +568,13 @@ def test_build_steps_reicht_die_schalter_durch(sandbox):
 def test_build_steps_leere_ordnerliste_wird_gesetzt(sandbox):
     """Leer heißt "nichts auslassen". Die Variable muss trotzdem gesetzt sein –
     nicht gesetzt hieße für outlook_export.py "nimm deine Vorgabe"."""
-    cfg = app_mod.load_config()
-    cfg["skip_folders"] = []
+    cfg = _cfg_mit_kategorien(skip_folders=[])
     env = app_mod.build_steps(cfg, outlook=True, token="t")[0]["env"]
     assert env["SKIP_FOLDERS"] == "" and "SKIP_FOLDERS" in env
 
 
 def test_build_steps_vorgaben_schalten_nichts_ab(sandbox):
-    cfg = app_mod.load_config()
+    cfg = _cfg_mit_kategorien()
     steps = {s["key"]: s for s in app_mod.build_steps(cfg, outlook=True, teams=True,
                                                       token="t")}
     assert steps["teams"]["env"]["EMBED_IMAGES"] == "1"
@@ -569,7 +602,7 @@ def test_app_setzt_alles_was_die_skripte_sonst_aus_der_datei_laesen(sandbox, mod
     noetig = _env_namen(modul)
     assert noetig, f"keine settings-Aufrufe in {modul}.py gefunden"
     steps = {s["key"]: s for s in app_mod.build_steps(
-        app_mod.load_config(), outlook=True, teams=True, token="t")}
+        _cfg_mit_kategorien(), outlook=True, teams=True, token="t")}
     assert noetig <= set(steps[key]["env"])
 
 
@@ -583,7 +616,7 @@ def test_build_steps_kalender(sandbox):
 
 
 def test_build_steps_reihenfolge_export_index_kalender(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, teams=True,
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True,
                                 index=True, calendar=True, token="t")
     assert [s["key"] for s in steps] == ["outlook", "teams", "index", "calendar"]
 
@@ -812,7 +845,7 @@ def test_jobrunner_indiziert_wenn_gar_kein_export_lief(sandbox):
 def test_build_steps_markiert_index_und_kalender(sandbox):
     """Die Marke samt Ergebnisdatei muss aus build_steps kommen – ohne sie
     greift die Ersparnis nie."""
-    cfg = app_mod.load_config()
+    cfg = _cfg_mit_kategorien()
     steps = {s["key"]: s for s in
              app_mod.build_steps(cfg, outlook=True, index=True, calendar=True)}
     assert steps["index"]["nur_bei_neuem"] and steps["index"]["ziel"].name == "corpus.db"
@@ -1023,7 +1056,7 @@ def test_status_fragt_bei_fehlenden_rechten_nicht_von_selbst(sandbox, with_ollam
     """Fehlende Rechte melden Kachel und Protokoll; ungefragt aufpoppen soll der
     Assistent deswegen nicht – der Token selbst ist ja gültig."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600, scp="Chat.Read"))
-    a = app_mod.App(app_mod.load_config())
+    a = app_mod.App(_cfg_mit_kategorien())
     s = a.status()
     assert s["wizard"] is None
     assert s["token"]["missing"]
@@ -1077,7 +1110,7 @@ def test_log_token_state_bei_abgelaufenem_token(sandbox, with_ollama):
 
 def test_log_token_state_nennt_fehlende_rechte(sandbox, with_ollama):
     app_mod.write_token(make_jwt(exp=time.time() + 3600, scp="Chat.Read"))
-    a = app_mod.App(app_mod.load_config())
+    a = app_mod.App(_cfg_mit_kategorien())
     a.log_token_state()
     assert a.jobs.lines[-1]["level"] == "warn"
     assert schluessel(a.jobs.lines[-1]["text"]) == "srv.token.scopes"
@@ -1469,7 +1502,9 @@ def test_antwort_begrenzt_die_quellenzahl(sandbox, with_ollama, store, monkeypat
 # --------------------------------------------------------------------------
 @pytest.fixture
 def server(sandbox, with_ollama):
-    a = app_mod.App(app_mod.load_config())
+    # Mit gewählten Kategorien: die Vorgabe wählt bewusst nichts, ein
+    # laufender Server gehört aber zu jemandem, der sich entschieden hat.
+    a = app_mod.App(_cfg_mit_kategorien())
     httpd = app_mod.make_server(a, 0)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
     t.start()
@@ -1838,7 +1873,7 @@ def test_script_argv_lehnt_unbekanntes_teilprogramm_ab(sandbox):
 
 
 def test_build_steps_gebuendelt(sandbox, frozen):
-    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, index=True,
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, index=True,
                                 token="tok")
     assert steps[0]["argv"][:3] == [sys.executable, "--run", "outlook_export"]
     assert steps[1]["argv"][:3] == [sys.executable, "--run", "rag_index"]
@@ -3115,8 +3150,8 @@ def test_login_fordert_nur_noetige_rechte(sandbox, monkeypatch, no_ollama):
 
 def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
     """Sonst führte die App eine Einstellung, von der der Export nichts weiß."""
-    cfg = app_mod.load_config()
-    cfg.update(auth_mode="login", client_id="eigene-id", tenant="contoso.example")
+    cfg = _cfg_mit_kategorien(auth_mode="login", client_id="eigene-id",
+                              tenant="contoso.example")
     env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
     assert env["GRAPH_AUTH"] == "login"
     assert env["GRAPH_CLIENT_ID"] == "eigene-id"
@@ -3125,7 +3160,7 @@ def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
 
 def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
     """Ein leeres Feld heißt „Microsofts Anwendung“, nicht „Client-ID ist ''“."""
-    cfg = app_mod.load_config()
+    cfg = _cfg_mit_kategorien()
     env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
     assert env["GRAPH_AUTH"] == "token"
     assert "GRAPH_CLIENT_ID" not in env and "GRAPH_TENANT" not in env
@@ -3134,7 +3169,7 @@ def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
 def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, monkeypatch):
     """Im Login-Modus trägt der Cache – das Fehlen eines Schlüssels darf keinen
     Lauf mehr verhindern."""
-    a = app_mod.App()
+    a = app_mod.App(_cfg_mit_kategorien())
     monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
 
@@ -3263,13 +3298,13 @@ PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """
 var st = statusGeruest();
 st.store.features = [];
 renderStatus(st);
-pruefe(document.getElementById('chip-geloescht').classList.contains('hide'),
-       'Sicht wird trotz altem Index angeboten');
+pruefe(document.getElementById('gone-feld').classList.contains('hide'),
+       'Filter wird trotz altem Index angeboten');
 pruefe(KANN_VERLAUF === false, 'Verlauf gilt trotz altem Index als moeglich');
 
 st.store.features = ['gone', 'thread'];
 renderStatus(st);
-pruefe(!document.getElementById('chip-geloescht').classList.contains('hide'),
+pruefe(!document.getElementById('gone-feld').classList.contains('hide'),
        'Filter fehlt trotz passendem Index');
 pruefe(KANN_VERLAUF === true, 'Verlauf fehlt trotz passendem Index');
 console.log('OK');
@@ -3948,7 +3983,7 @@ def test_verschwundenes_ueber_die_zeit_ist_weg():
     assert "geloescht" not in app_mod.auswertung.__doc__
     # Was bleibt: die Kachel mit der Gesamtzahl und die Sicht in der Suche.
     assert "ana.gone" in app_mod.PAGE
-    assert 'id="chip-geloescht"' in app_mod.PAGE
+    assert 'id="f-gone"' in app_mod.PAGE
 
 
 # --------------------------------------------------------------------------
@@ -5089,21 +5124,30 @@ filterUmschalten();
 pruefe(document.getElementById('filter-auf').getAttribute('aria-expanded') === 'false',
        'aria-expanded folgt dem Zuklappen nicht');
 
-// Geloeschtes ist eine Sicht, kein Filter neben fuenf anderen.
+// Geloeschtes ist ein Filter wie die anderen: er zaehlt mit, sucht nicht von
+// selbst und geht beim Zuruecksetzen weg. Als eigene Sicht neben Kalender und
+// Adressbuch stand er fuer eine Frage an dieselbe Trefferliste.
 gesucht = [];
-sicht('geloescht');
-pruefe(document.getElementById('f-gone').checked === true, 'Filter nicht gesetzt');
-pruefe(!document.getElementById('sicht-treffer').classList.contains('hide'),
-       'Trefferliste nicht sichtbar');
+document.getElementById('f-gone').checked = true;
+zeigeFilterstand();
+pruefe(gesucht.length === 0, 'Der Filter sucht von selbst');
+pruefe(/1/.test(document.getElementById('filter-auf').textContent),
+       'Geloeschtes wird nicht mitgezaehlt: ' +
+       document.getElementById('filter-auf').textContent);
+doSearch(0);
 pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length === 1,
        'Es wurde nicht mit gone=1 gesucht: ' + gesucht.join(' '));
 
-// Zurueck auf Treffer nimmt den Filter wieder weg.
-gesucht = [];
-sicht('treffer');
+filterLeeren();
 pruefe(document.getElementById('f-gone').checked === false, 'Filter blieb haengen');
-pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length === 0,
-       'Weiterhin nach Geloeschtem gesucht');
+
+// Von der Kachel in der Auswertung aus: Filter gesetzt UND aufgeklappt, sonst
+// wirkte er, ohne dass man ihn sieht.
+document.getElementById('filter').classList.add('hide');
+zeigeVerschwundene();
+pruefe(document.getElementById('f-gone').checked === true, 'Kachel setzt nichts');
+pruefe(!document.getElementById('filter').classList.contains('hide'),
+       'Filter wirkt, ohne sichtbar zu sein');
 
 // Zweimal dieselbe Sicht sucht nicht doppelt.
 gesucht = [];
@@ -5113,7 +5157,7 @@ console.log('OK');
 """
 
 
-def test_suchmaske_filter_und_geloeschtes_als_sicht():
+def test_suchmaske_filter_und_geloeschtes_als_filter():
     _in_node(PRUEFUNG_SUCHMASKE)
 
 
@@ -5144,7 +5188,7 @@ def test_kein_feld_sucht_von_selbst():
     # Bis zum letzten Feld der Zeile, nicht auf eine Zeichenzahl geraten.
     block = app_mod.PAGE[i:app_mod.PAGE.index('id="f-gone"', i) + 200]
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
-                 'id="f-to"', 'id="f-folder"', 'id="f-typ"'):
+                 'id="f-to"', 'id="f-folder"', 'id="f-typ"', 'id="f-gone"'):
         j = block.index(feld)
         # Das ganze Element, vom Anfang des Tags bis zu seinem Ende: eine feste
         # Zeichenzahl griff daneben, sobald ein Feld mehr Attribute bekam.

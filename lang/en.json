@@ -85,7 +85,7 @@
   "search.back": "Back",
   "search.next": "Next",
   "search.nosubject": "(no subject)",
-  "search.gone.note": "“Deleted only” shows messages that are no longer in the mailbox — they are still here in the archive. This is detected during export: anything that used to be there and is now missing is checked with Microsoft, so a moved message does not count as deleted.",
+  "search.gone.note": "Shows only messages that are no longer in the mailbox — they are still here in the archive. This is detected during export: anything that used to be there and is now missing is checked with Microsoft. Do not rely on it blindly: Exchange assigns a new id when a message is moved, so it can no longer be found under the old one — a message that was merely moved can show up here too.",
   "search.gone.tag": "deleted",
   "search.gone.since": "Gone from the mailbox since {when}",
   "search.thread.count": "{n} messages in this conversation",

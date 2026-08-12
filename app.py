@@ -254,8 +254,11 @@ DEFAULT_CONFIG = {
     # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
     "onedrive_rules": "",
     "onedrive_max_mb": 0,
-    "outlook_categories": ["mail", "calendar", "contacts"],
-    "teams_categories": ["1on1", "group", "meeting"],
+    # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
+    # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
+    # sein und nicht das, was beim ersten Start zufällig angehakt war.
+    "outlook_categories": [],
+    "teams_categories": [],
     "workers": 4,
     # Schalter der Export-Skripte (dort per Umgebungsvariable, siehe env_flag)
     "embed_images": True,
@@ -1162,8 +1165,11 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if token:
         base_env["GRAPH_TOKEN"] = token
 
-    if outlook:
-        cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
+    # Ohne gewählte Kategorie kein Schritt: eine leere EXPORT_CATEGORIES liest
+    # das Skript als „nicht gesetzt“ und holte dann alles. Der Zeitplan und die
+    # Schnittstelle kämen sonst an der Auswahl vorbei.
+    cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
+    if outlook and cats:
         steps.append({
             "key": "outlook", "label": "job.step.outlook",
             # -default: aus der App darf nie eine Rückfrage kommen – niemand
@@ -1185,9 +1191,9 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                     "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
                     "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
         })
-    if teams:
-        cats = _clean_categories(cfg["teams_categories"],
-                                 ["1on1", "group", "meeting", "channels"])
+    cats = _clean_categories(cfg["teams_categories"],
+                             ["1on1", "group", "meeting", "channels"])
+    if teams and cats:
         steps.append({
             "key": "teams", "label": "job.step.teams",
             "argv": script_argv("teams_export", "-default", TEAMS_DIR),
@@ -3097,6 +3103,13 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
   border-radius:50%;background:#fff;transition:transform .15s}
 .kipp:checked::after{transform:translateX(17px)}
 .kipp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* „Gelöschtes“ steht als Schalter in der Filterzeile: es ist kein Wert, den man
+   aus einer Liste wählt, sondern ein Zustand – an oder aus. Alles auf einer
+   Höhe mit den Auswahlfeldern daneben, die Erklärung dahinter statt darunter. */
+.gonefeld{display:inline-flex;align-items:center;gap:8px;
+  border:1px solid var(--line);border-radius:8px;padding:5px 10px}
+.gonefeld label{color:var(--muted);cursor:pointer;white-space:nowrap}
+.gonefeld input:checked ~ label,.gonefeld:hover label{color:var(--ink)}
 .folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
 .speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
   border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
@@ -3256,8 +3269,6 @@ main{padding-bottom:60px}
     <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
     <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
     <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
-    <span class="chip" data-sicht="geloescht" id="chip-geloescht" onclick="sicht('geloescht')"
-          data-i18n="view.gone" data-i18n-title="search.gone.note">Gelöschtes</span>
   </div>
 
   <div id="sicht-treffer">
@@ -3315,10 +3326,12 @@ main{padding-bottom:60px}
       <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
         <option value="" data-i18n="search.folder.all">Alle Ordner</option>
       </select>
+      <span class="gonefeld" id="gone-feld">
+        <label class="feld small" for="f-gone" data-i18n="view.gone">Gelöschtes</label>
+        <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
+        <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.gone.note">i</span>
+      </span>
     </div>
-    <!-- Nicht mehr sichtbar: „Nur Gelöschtes“ ist jetzt eine Sicht in der
-         Leiste oben. Das Feld bleibt als Zustand, den doSearch abfragt. -->
-    <input type="checkbox" id="f-gone" class="hide">
   </div>
   <div class="answer hide" id="ai-box"></div>
   <div class="card">
@@ -3734,18 +3747,12 @@ function tab(name){
    sich deren Trefferliste, setzt aber den Filter. */
 function sicht(name){
   offeneSicht = name;
-  var geloescht = name === 'geloescht';
-  var zeigt = geloescht ? 'treffer' : name;
   SICHTEN.forEach(function(v){
-    el('sicht-' + v).classList.toggle('hide', v !== zeigt);
+    el('sicht-' + v).classList.toggle('hide', v !== name);
   });
   document.querySelectorAll('#sichten .chip').forEach(function(c){
     c.classList.toggle('on', c.dataset.sicht === name);
   });
-  if(zeigt === 'treffer' && el('f-gone').checked !== geloescht){
-    el('f-gone').checked = geloescht;
-    doSearch(0);
-  }
   // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
 }
@@ -3756,7 +3763,7 @@ function sicht(name){
 function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
           el('f-from').value, el('f-to').value, el('f-folder').value,
-          el('f-typ').value].filter(Boolean);
+          el('f-typ').value, el('f-gone').checked ? 'gone' : ''].filter(Boolean);
 }
 function filterUmschalten(){
   var zu = el('filter').classList.toggle('hide');      // true = jetzt versteckt
@@ -3765,7 +3772,7 @@ function filterUmschalten(){
 function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
-  el('f-typ').value = '';
+  el('f-typ').value = ''; el('f-gone').checked = false;
   zeigeFilterstand();
 }
 /* Ein unmögliches Datum („31.06.“) nimmt der Browser entgegen, gibt aber einen
@@ -3899,7 +3906,9 @@ function renderStatus(s){
   // Die Sicht „Gelöschtes“ und der Verlauf brauchen einen Index, der beides
   // kennt. Ein alter kennt die Spalten nicht – dann gibt es den Chip nicht.
   var kann = (st.features || []);
-  el('chip-geloescht').classList.toggle('hide', kann.indexOf('gone') < 0);
+  var kannGone = kann.indexOf('gone') >= 0;
+  el('gone-feld').classList.toggle('hide', !kannGone);
+  if(!kannGone) el('f-gone').checked = false;
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   KANN_TYP = kann.indexOf('ext') >= 0;
   zeigeOrdnerstand(s.folders || {});
@@ -5056,7 +5065,8 @@ function fmtTag(ts){
 function zeigeVerschwundene(){
   el('f-gone').checked = true;
   el('q').value = ''; el('f-person').value = '';
-  tab('suche'); sicht('treffer'); doSearch(0);
+  el('filter').classList.remove('hide');   // sonst wirkt ein Filter, den man nicht sieht
+  tab('suche'); sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
 function zeigeBericht(b, id){

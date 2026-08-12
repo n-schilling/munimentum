@@ -85,7 +85,7 @@
   "search.back": "Précédent",
   "search.next": "Suivant",
   "search.nosubject": "(sans objet)",
-  "search.gone.note": "« Supprimés seulement » affiche les messages qui ne figurent plus dans la boîte aux lettres — ils restent présents dans l’archive. C’est détecté lors de l’export : tout ce qui était là et manque maintenant est vérifié auprès de Microsoft, afin qu’un message déplacé ne compte pas comme supprimé.",
+  "search.gone.note": "N’affiche que les messages qui ne sont plus dans la boîte — ils restent présents dans l’archive. C’est détecté à l’export : ce qui était là et manque maintenant est vérifié auprès de Microsoft. Ne vous y fiez pas aveuglément : Exchange attribue un nouvel identifiant lors d’un déplacement, l’ancien ne permet donc plus de retrouver le message — un message simplement déplacé peut apparaître ici.",
   "search.gone.tag": "supprimé",
   "search.gone.since": "Absent de la boîte aux lettres depuis {when}",
   "search.thread.count": "{n} messages dans cette conversation",
