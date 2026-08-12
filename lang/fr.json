@@ -524,5 +524,6 @@
   "ana.personen.sub": "Avec qui vous avez échangé le plus de messages.",
   "ana.geloescht.sub": "Quand des messages ont disparu de la boîte. Ils sont toujours ici.",
   "ana.typen": "Pièces jointes par type",
-  "ana.typen.rest": "autres types"
+  "ana.typen.rest": "autres types",
+  "search.menu.similar.aus": "Nécessite un index avec similarité — celui-ci est en plein texte seul."
 }

@@ -4157,6 +4157,11 @@ function renderHits(r){
   var hits = r.results || [];
   if(!hits.length){ el('results').textContent = t('search.nohits');
                     el('pager').innerHTML = ''; abbrechenKI(); return; }
+  // „Ähnliche finden" hängt an den VEKTOREN im Index, nicht an Ollama: der
+  // Vektor dieser Textstelle liegt fertig da, es wird nichts eingebettet.
+  // Ohne Vektoren – ein reiner Volltextindex – liefe der Eintrag ins Leere,
+  // also steht er ausgegraut da statt zu verschwinden.
+  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
   el('results').innerHTML = hits.map(function(h, i){
     var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
     var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
@@ -4181,7 +4186,9 @@ function renderHits(r){
           '<button' + (faden ? ' onclick="zeigeVerlauf(' + (i + 1) + ',\'' + faden + '\')"'
                              : ' disabled') + '>' +
             esc(t('search.menu.thread')) + '</button>' +
-          '<button' + (h.cid ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"' : ' disabled') +
+          '<button' + (h.cid && aehnlichMoeglich
+                       ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
+                       : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
             '>' + esc(t('search.menu.similar')) + '</button>' +
           (h.who ? '<hr><button onclick="filterPerson(\'' +
                    esc(h.who).replace(/'/g, "\\'") + '\')">' +

@@ -5134,6 +5134,9 @@ def test_die_ki_laeuft_nur_in_ihrer_eigenen_variante():
 
 
 PRUEFUNG_TREFFERZEILE = GRUNDZUSTAND + """
+// „Ähnliche finden" haengt an Vektoren im Index – ohne die waere der Eintrag
+// zu Recht gesperrt, und dieser Test prueft die Zeile, nicht die Sperre.
+S = statusGeruest(); S.store.semantic = true;
 renderHits({count: 2, results: [
   {uid: 'u:1', cid: 7, title: 'Rechnung 4711', who: 'Alice', date: '2026-03-04',
    source_label: 'Mail', preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'x'},
@@ -5570,3 +5573,36 @@ console.log('OK');
 
 def test_einstellungen_hin_und_zurueck():
     _in_node(PRUEFUNG_RUNDREISE)
+
+
+PRUEFUNG_AEHNLICHE_GESPERRT = GRUNDZUSTAND + """
+function zeichne(semantisch){
+  S = statusGeruest();
+  S.store.semantic = semantisch;
+  renderHits({count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'A',
+    date: '2026-03-04', source_label: 'Datei', preview: 'p'}]});
+  return document.getElementById('results').innerHTML;
+}
+
+// Mit Vektoren im Index ist der Eintrag bedienbar - auch wenn Ollama gerade
+// abgeschaltet ist: eingebettet wird dabei nichts, der Vektor liegt schon da.
+var mit = zeichne(true);
+pruefe(mit.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt trotz Vektoren');
+
+// Ohne Vektoren liefe der Aufruf ins Leere. Ausgegraut statt verschwunden -
+// sonst sucht man den Eintrag beim naechsten Mal an anderer Stelle.
+var ohne = zeichne(false);
+var menue = ohne.split('id="menu-0"')[1].split('</div>')[0];
+pruefe(menue.indexOf('aehnlicheZu(') < 0, 'Aehnliche finden ist noch anklickbar');
+pruefe(menue.indexOf('Find similar') >= 0 || menue.indexOf('hnliche finden') >= 0,
+       'Der Eintrag verschwand ganz statt auszugrauen');
+pruefe(menue.indexOf('disabled') >= 0, 'nicht gesperrt');
+pruefe(menue.indexOf('title=') >= 0, 'kein Grund genannt');
+console.log('OK');
+"""
+
+
+def test_aehnliche_finden_haengt_an_den_vektoren():
+    """Nicht an Ollama: der Vektor der Textstelle liegt im Index. Ohne
+    Vektoren – ein reiner Volltextindex – liefe der Eintrag ins Leere."""
+    _in_node(PRUEFUNG_AEHNLICHE_GESPERRT)

@@ -524,5 +524,6 @@
   "ana.personen.sub": "Mit wem am meisten Nachrichten gewechselt wurden.",
   "ana.geloescht.sub": "Wann Nachrichten aus dem Postfach verschwunden sind. Hier liegen sie weiter.",
   "ana.typen": "Anhänge nach Typ",
-  "ana.typen.rest": "übrige Typen"
+  "ana.typen.rest": "übrige Typen",
+  "search.menu.similar.aus": "Braucht einen Index mit Bedeutungssuche – dieser hier ist reiner Volltext."
 }
