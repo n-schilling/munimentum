@@ -1,31 +1,51 @@
-Ready-to-run app — no Python, nothing to install.
+## New in 5.2.0
 
-## What the app does
+**Calendars are chosen like folders.** *Settings → Calendars* holds the same
+kind of include/exclude rules the mailbox folders use, with *Show export list*
+as a preview. Without a rule only your own calendar comes along — a mailbox
+usually carries birthdays, holidays and calendars other people shared, and
+nobody meant those.
 
-**Export.** Teams chats and channels, Outlook mail, calendar, contacts and
-**OneDrive files** through Microsoft Graph — with your own access, without
-anyone in IT having to approve anything. Every run fetches only what is new.
-Which folders come along is a list of ordered include/exclude rules, and
-*Show export list* spells out what they currently mean.
+This grew out of a bug: on Windows an export could stop at a question about
+which calendars to fetch, printed into a log nobody could answer. The run looked
+frozen, then carried on by itself. Nothing launched from the app asks questions
+any more.
 
-**Search.** Three kinds, chosen above the results: text search finds the words
-that actually occur, similar search finds related wording, and the AI summary
-answers in a paragraph with sources. Filter by person, period, source and
-folder. Plus the whole conversation under a hit, a calendar including
-appointments recovered from invitation and cancellation mails, an address book,
-and a view for messages that are no longer in the mailbox.
+**The filters follow each other.** Pick a source and the folder list narrows to
+it: calendars for the calendar, the four kinds of conversation for Teams,
+mailbox folders for mail. Where there is nothing to choose, the field is gone
+instead of sitting there empty.
 
-**Analytics.** What the archive holds — messages per source, conversations,
-people, files, period, disk usage, and the timeline with its gaps. And, on
-request, a comparison against the mailbox and the drive: what Microsoft counts
-per folder against what is here.
+**A file type filter.** Find the mails that carry a PDF, or the spreadsheets in
+your OneDrive mirror. It works in all three kinds of search, and it needs one
+index run before it appears. *Settings* lists the types not worth offering —
+prefilled with the signature blocks mail programs attach by themselves, visible
+and editable.
 
-**Work with Claude.** A built-in MCP server makes the archive searchable for
-Claude — with citations, a folder filter and a `days` shorthand for “the last
-seven days”.
+**The person field suggests names** as you type, with the number of messages
+behind each, so a typo is not mistaken for someone who is not there. `*` is a
+wildcard: `schmi*` searches everyone matching rather than pinning you to one
+name, and the list offers that as its last row.
 
-Everything stays on your machine. The only connections outbound are Microsoft
-Graph and your local Ollama — and Ollama is optional.
+**A date that does not exist is now reported.** The 31st of June was accepted by
+the browser, handed over empty, and searched without that limit — the results
+looked wrong for no visible reason.
+
+**Analytics.** People are counted once each; whoever wrote both in Teams and by
+mail was listed twice before, each time with part of their messages. You can
+leave people out of the ranking in *Settings* — usually yourself, whose messages
+otherwise sit far at the top and say nothing about the exchange with others.
+All bars in a list start at the same place. *Disappeared over time* is gone; the
+count above it and the *Deleted* view answer that better.
+
+**Removed: the portable search page.** The app never used the file, and on a
+grown archive it reached several hundred megabytes — a page a browser has to
+read whole before anything appears. The archive is already readable without this
+app: `.eml`, `.ics`, `.vcf` and one index page per Teams folder. The script is
+still there for anyone who wants it.
+
+*After updating, run the index once* — the file type filter and the calendar
+entries in the folder list appear with it.
 
 ## New in 5.1.0
 
