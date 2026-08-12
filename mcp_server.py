@@ -236,16 +236,23 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
 
 
 def _to_ts(s, end):
+    """"YYYY-MM-DD" als Zeitstempel; None, wenn nichts angegeben wurde.
+
+    Ein angegebenes, aber unlesbares Datum ("2021-06-31" – den gibt es nicht)
+    ist ein Fehler und keine fehlende Angabe. Es stillschweigend fallen zu
+    lassen hieße, ohne diese Grenze zu suchen und das Ergebnis als Antwort auf
+    die gestellte Frage auszugeben.
+    """
     s = (s or "").strip()
     if not s:
         return None
     try:
         dt = datetime.strptime(s, "%Y-%m-%d")
-        if end:
-            dt = dt.replace(hour=23, minute=59, second=59)
-        return dt.timestamp()
     except ValueError:
-        return None
+        raise ValueError(f'Kein gültiges Datum: "{s}" (erwartet: YYYY-MM-DD)') from None
+    if end:
+        dt = dt.replace(hour=23, minute=59, second=59)
+    return dt.timestamp()
 
 
 def _seit_tagen(tage, heute=None):
@@ -616,7 +623,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
     Args:
         query: Natural-language query or keywords (German or English).
         person: Optional. Filter to messages involving this name or email.
-        date_from: Optional. Inclusive lower bound, "YYYY-MM-DD".
+        date_from: Optional. Inclusive lower bound, "YYYY-MM-DD". A date that
+            does not exist is an error, not an omission.
         date_to: Optional. Inclusive upper bound, "YYYY-MM-DD".
         days: Shorthand for a date range: only the last N days, counting
             today (7 = today and the six days before). No need to work out the

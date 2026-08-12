@@ -4392,6 +4392,51 @@ def test_dateitypfilter_folgt_quelle_und_index():
     _in_node(PRUEFUNG_DATEITYP)
 
 
+# Gemeldet: "von 01.01.2019 bis 31.06.2021" lieferte Treffer aus 2026. Den
+# 31. Juni gibt es nicht, das Feld liefert dann einen LEEREN Wert - und die
+# Suche lief ohne diese Grenze weiter, ohne es zu sagen.
+PRUEFUNG_DATUMSPRUEFUNG = GRUNDZUSTAND + r"""
+var gesucht = [];
+global.fetch = function(pfad){
+  gesucht.push(String(pfad));
+  return Promise.resolve({json: function(){
+    return Promise.resolve({results: [], count: 0}); }});
+};
+var von = document.getElementById('f-from'), bis = document.getElementById('f-to');
+var treffer = document.getElementById('results');
+
+// Der Browser hat den 31.06. entgegengenommen und gibt nichts heraus.
+von.value = '2019-01-01';
+bis.value = '';
+bis.validity = {badInput: true};
+doSearch(0);
+pruefe(gesucht.length === 0, 'Trotz unlesbarem Datum gesucht');
+pruefe(treffer.innerHTML.indexOf('gibt es nicht') >= 0,
+       'Kein Hinweis auf das unmoegliche Datum: ' + treffer.innerHTML);
+pruefe(bis.classList.contains('fehler'), 'Das falsche Feld ist nicht markiert');
+pruefe(!von.classList.contains('fehler'), 'Das richtige Feld ist markiert');
+
+// Berichtigt: die Markierung geht weg und es wird gesucht.
+bis.validity = {badInput: false};
+bis.value = '2021-06-30';
+doSearch(0);
+pruefe(!bis.classList.contains('fehler'), 'Markierung bleibt nach der Korrektur');
+pruefe(gesucht.length === 1, 'Nach der Korrektur nicht gesucht');
+pruefe(gesucht[0].indexOf('to=2021-06-30') >= 0, 'Obergrenze nicht mitgeschickt');
+
+// Vertauscht: liefert zuverlaessig nichts und sieht aus wie ein leeres Archiv.
+von.value = '2026-01-01';
+doSearch(0);
+pruefe(gesucht.length === 1, 'Bei vertauschtem Zeitraum trotzdem gesucht');
+pruefe(treffer.innerHTML.indexOf('bis') >= 0, 'Kein Hinweis auf den vertauschten Zeitraum');
+console.log('OK');
+"""
+
+
+def test_unmoegliches_datum_sucht_nicht_stillschweigend_ohne():
+    _in_node(PRUEFUNG_DATUMSPRUEFUNG)
+
+
 # --------------------------------------------------------------------------
 # OneDrive in der Oberfläche
 # --------------------------------------------------------------------------

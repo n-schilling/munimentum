@@ -60,6 +60,8 @@
   "search.filter.clear": "Clear",
   "search.from": "from",
   "search.to": "to",
+  "search.date.bad": "The date marked in red does not exist — please correct it. Nothing was searched; otherwise that limit would silently have been missing.",
+  "search.date.turned": "“from” is after “to” — nothing can lie between them.",
   "search.person.ph": "Person",
   "search.person.none": "Nobody by that name in the archive.",
   "search.person.more": "… and {n} more — type a little further.",

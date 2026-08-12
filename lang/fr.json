@@ -60,6 +60,8 @@
   "search.filter.clear": "Réinitialiser",
   "search.from": "du",
   "search.to": "au",
+  "search.date.bad": "La date en rouge n’existe pas — merci de la corriger. Aucune recherche n’a été lancée ; sinon cette limite aurait discrètement manqué.",
+  "search.date.turned": "« de » est postérieur à « à » — rien ne peut se trouver entre les deux.",
   "search.person.ph": "Personne",
   "search.person.none": "Personne de ce nom dans l’archive.",
   "search.person.more": "… et {n} autres — précisez un peu.",

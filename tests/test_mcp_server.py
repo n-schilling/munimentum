@@ -193,9 +193,15 @@ def _uids(res):
 def test_to_ts_parses_and_clamps_day_end():
     assert mcp_server._to_ts("2025-06-01", False) == datetime(2025, 6, 1).timestamp()
     assert mcp_server._to_ts("2025-06-01", True) == datetime(2025, 6, 1, 23, 59, 59).timestamp()
-    assert mcp_server._to_ts("01.06.2025", False) is None  # falsches Format
     assert mcp_server._to_ts("", False) is None
     assert mcp_server._to_ts(None, True) is None
+    # Angegeben, aber unlesbar: ein Fehler, keine fehlende Angabe. Sonst liefe
+    # die Suche ohne diese Grenze und gäbe das als Antwort aus.
+    for schlecht in ("01.06.2025", "2021-06-31", "gestern"):
+        with pytest.raises(ValueError):
+            mcp_server._to_ts(schlecht, False)
+    with pytest.raises(ValueError):
+        mcp_server.browse_messages(date_to="2021-06-31")
 
 
 def test_where_builds_fragments():

@@ -2870,6 +2870,10 @@ ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
 .banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
   border:1px solid var(--line)}
 .banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
+/* Ein Feld, dessen Inhalt der Browser nicht lesen kann. Bei einem Datumsfeld
+   sieht man das sonst nicht: es zeigt weiter, was getippt wurde, liefert aber
+   einen leeren Wert – und die Suche lief stillschweigend ohne diese Grenze. */
+input.fehler{border-color:var(--err)}
 .hide{display:none!important}
 
 /* ---- Kalender und Adressbuch (übernommen aus combined_search.py, an die
@@ -3736,7 +3740,27 @@ function filterLeeren(){
   el('f-typ').value = '';
   zeigeFilterstand();
 }
+/* Ein unmögliches Datum („31.06.“) nimmt der Browser entgegen, gibt aber einen
+   leeren Wert heraus. Ohne diese Prüfung suchte die App dann ohne diese Grenze
+   weiter – das Feld sah gefüllt aus, die Treffer lagen außerhalb, und nichts
+   sagte warum. Ein vertauschter Zeitraum ist derselbe Fall: er liefert
+   zuverlässig null Treffer, die wie ein leeres Archiv aussehen. */
+function datumPruefen(){
+  var kaputt = false;
+  ['f-from', 'f-to'].forEach(function(id){
+    var e = el(id);
+    var schlecht = !!(e.validity && e.validity.badInput);
+    e.classList.toggle('fehler', schlecht);
+    if(schlecht) kaputt = true;
+  });
+  if(kaputt) return t('search.date.bad');
+  var von = el('f-from').value, bis = el('f-to').value;
+  if(von && bis && von > bis) return t('search.date.turned');
+  return '';
+}
+
 function zeigeFilterstand(){
+  datumPruefen();                      // die Markierung sofort, nicht erst beim Suchen
   var n = filterFelder().length;
   el('filter-auf').textContent = n ? t('search.filter.n', {n: n}) : t('search.filter');
   el('filter-weg').classList.toggle('hide', !n);
@@ -4288,6 +4312,12 @@ function sofortSuchen(){
 }
 
 function doSearch(off){
+  var fehler = datumPruefen();
+  if(fehler){
+    el('results').innerHTML = '<div class="banner err">' + esc(fehler) + '</div>';
+    el('pager').classList.add('hide');
+    return;
+  }
   offset = off || 0;
   var proSeite = trefferProSeite();
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,

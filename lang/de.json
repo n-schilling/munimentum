@@ -60,6 +60,8 @@
   "search.filter.clear": "Zurücksetzen",
   "search.from": "von",
   "search.to": "bis",
+  "search.date.bad": "Das rot markierte Datum gibt es nicht – bitte berichtigen. Es wurde nicht gesucht, sonst hätte die Grenze stillschweigend gefehlt.",
+  "search.date.turned": "„von“ liegt nach „bis“ – so kann kein Treffer dazwischen liegen.",
   "search.person.ph": "Person",
   "search.person.none": "Niemanden mit diesem Namen im Archiv gefunden.",
   "search.person.more": "… und {n} weitere – tipp noch etwas dazu.",
