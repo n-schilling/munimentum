@@ -61,6 +61,8 @@
   "search.from": "from",
   "search.to": "to",
   "search.person.ph": "Person",
+  "search.person.none": "Nobody by that name in the archive.",
+  "search.person.more": "… and {n} more — type a little further.",
   "search.source.all": "All sources",
   "search.source.teams": "Teams",
   "search.source.outlook": "Mail",

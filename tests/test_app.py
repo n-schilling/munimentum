@@ -4216,6 +4216,74 @@ def test_ordnerauswahl_folgt_der_quelle():
     _in_node(PRUEFUNG_ORDNERAUSWAHL)
 
 
+# Das Personenfeld ist eine Freitexteingabe auf einen festen Bestand. Wer einen
+# Namen tippt, den es so nicht gibt, soll das vor der Suche erfahren.
+PRUEFUNG_PERSONENVORSCHLAG = GRUNDZUSTAND + r"""
+var LEUTE = {
+  bei: {people: [{name:'Alice Beispiel', messages:1240},
+                 {name:'Bob Beispiel', messages:87}], total_distinct: 2},
+  viele: {people: [{name:'A', messages:9}, {name:'B', messages:8},
+                   {name:'C', messages:7}, {name:'D', messages:6},
+                   {name:'E', messages:5}], total_distinct: 31},
+  xyz: {people: [], total_distinct: 0}
+};
+var gefragt = [];
+global.fetch = function(pfad){
+  gefragt.push(String(pfad));
+  var m = String(pfad).match(/contains=([^&]*)/);
+  return Promise.resolve({json: function(){
+    return Promise.resolve(LEUTE[m ? decodeURIComponent(m[1]) : ''] || {people: []}); }});
+};
+
+var feld = document.getElementById('f-person'), kasten = document.getElementById('personliste');
+function tippe(wort, dann){
+  feld.value = wort;
+  personVorschlagen();
+  setTimeout(function(){ setTimeout(dann, 0); }, 200);   // Wartezeit + Antwort
+}
+
+// Ein einzelner Buchstabe fragt noch nichts - das waere halb das Archiv.
+feld.value = 'b';
+personVorschlagen();
+setTimeout(function(){
+  pruefe(gefragt.length === 0, 'Bei einem Zeichen schon gefragt');
+
+  tippe('bei', function(){
+    pruefe(gefragt[0].indexOf('limit=5') >= 0, 'Nicht auf fuenf begrenzt: ' + gefragt[0]);
+    pruefe(gefragt[0].indexOf('contains=bei') >= 0, 'Suchwort nicht mitgeschickt');
+    pruefe(kasten.innerHTML.indexOf('Alice Beispiel') >= 0, 'Vorschlag fehlt');
+    pruefe(kasten.innerHTML.indexOf('1.240') >= 0, 'Zahl der Nachrichten fehlt');
+    pruefe(!kasten.classList.contains('hide'), 'Liste bleibt zu');
+
+    // Tastatur: runter, Enter - der Name steht im Feld, die Liste ist zu.
+    personTaste({key: 'ArrowDown', preventDefault: function(){}});
+    personTaste({key: 'Enter', preventDefault: function(){}});
+    pruefe(feld.value === 'Alice Beispiel', 'Enter uebernimmt nicht: ' + feld.value);
+    pruefe(kasten.classList.contains('hide'), 'Liste bleibt nach der Wahl offen');
+
+    tippe('viele', function(){
+      // Mehr Namen als Plaetze: sagen statt still abschneiden.
+      pruefe(kasten.innerHTML.indexOf('26') >= 0,
+             'Die uebrigen Namen werden verschwiegen: ' + kasten.innerHTML);
+
+      tippe('xyz', function(){
+        // Der eigentliche Zweck: einen Namen, den es nicht gibt, vor der
+        // Suche als solchen erkennen.
+        pruefe(kasten.innerHTML.indexOf('Niemanden') >= 0,
+               'Kein Hinweis auf den leeren Bestand: ' + kasten.innerHTML);
+        pruefe(kasten.innerHTML.indexOf('<button') < 0, 'Leere Liste bietet Wahl an');
+        console.log('OK');
+      });
+    });
+  });
+}, 200);
+"""
+
+
+def test_personenfeld_schlaegt_vor_und_meldet_unbekannte():
+    _in_node(PRUEFUNG_PERSONENVORSCHLAG)
+
+
 # --------------------------------------------------------------------------
 # OneDrive in der Oberfläche
 # --------------------------------------------------------------------------
@@ -4824,9 +4892,9 @@ def test_kein_feld_sucht_von_selbst():
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
                  'id="f-to"', 'id="f-folder"'):
         j = block.index(feld)
-        # max(0, …): ein negativer Anfang rutscht in Python ans Ende der
-        # Zeichenkette und prüfte dann irgendetwas.
-        umfeld = block[max(0, j - 120):j + 200]
+        # Das ganze Element, vom Anfang des Tags bis zu seinem Ende: eine feste
+        # Zeichenzahl griff daneben, sobald ein Feld mehr Attribute bekam.
+        umfeld = block[block.rfind("<", 0, j):block.index(">", j) + 1]
         assert "doSearch" not in umfeld, f"{feld} sucht von selbst"
         # Die Quelle lädt zusätzlich die Ordnerliste nach – gesucht wird auch
         # dann nicht, gezählt aber schon.

@@ -2765,6 +2765,20 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .menu button:hover:not(:disabled){background:var(--code)}
 .menu button:disabled{opacity:.4;cursor:not-allowed}
 .menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+/* Vorschläge zum Personenfeld. Das Feld ist eine Freitexteingabe auf einen
+   festen Bestand: wer einen Namen tippt, den es im Archiv nicht gibt, bekommt
+   null Treffer und weiß nicht, ob die Person fehlt oder er sich vertippt hat.
+   Die Liste beantwortet das, bevor gesucht wird. */
+.vorschlagfeld{position:relative;display:inline-block}
+.vorschlagfeld #f-person{width:180px}
+#personliste{left:0;right:auto;min-width:100%;max-width:320px}
+#personliste button{display:flex;gap:10px;align-items:baseline;
+  justify-content:space-between;width:100%}
+#personliste button[aria-selected="true"]{background:var(--code)}
+#personliste .zahl{color:var(--muted);font-size:12.5px;
+  font-variant-numeric:tabular-nums;flex:0 0 auto}
+#personliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
 /* Die Suchart: exklusive Wahl, beide Alternativen sichtbar. */
 .modi{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
 .modi button{border:0;background:transparent;color:var(--muted);font:inherit;
@@ -3204,8 +3218,14 @@ main{padding-bottom:60px}
               data-i18n="search.filter.clear">Zurücksetzen</button>
     </div>
     <div class="row hide" id="filter" style="margin-top:10px">
-      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
-             style="width:180px" onchange="zeigeFilterstand()">
+      <span class="vorschlagfeld">
+        <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
+               role="combobox" aria-expanded="false" aria-autocomplete="list"
+               aria-controls="personliste" autocomplete="off"
+               oninput="personVorschlagen()" onkeydown="personTaste(event)"
+               onchange="zeigeFilterstand()">
+        <div class="menu hide" id="personliste" role="listbox"></div>
+      </span>
       <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
         <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
@@ -4251,6 +4271,106 @@ function filterPerson(wer){
   el('filter').classList.remove('hide');
   doSearch(0);
 }
+
+/* ---------- Vorschläge zum Personenfeld ----------
+   Ein Freitextfeld auf einen festen Bestand: wer „Meier“ tippt, wo „Meyer“
+   steht, bekommt null Treffer und weiß nicht, ob die Person fehlt oder er sich
+   vertippt hat. Die Liste beantwortet das vor der Suche – und nennt zu jedem
+   Namen die Zahl der Nachrichten, damit man den richtigen Vorschlag erkennt,
+   wenn es zwei ähnliche gibt. */
+var VORSCHLAG_MAX = 5;
+var personVorschlaege = [], personAktiv = -1, personTimer = null;
+
+function personVorschlagen(){
+  clearTimeout(personTimer);
+  var wort = el('f-person').value.trim();
+  if(wort.length < 2){ personZu(); return; }
+  // Nicht bei jedem Anschlag fragen: die Abfrage geht über alle Personen des
+  // Archivs, und wer einen Namen tippt, tut das in einem Zug.
+  personTimer = setTimeout(function(){
+    api('/api/people?limit=' + VORSCHLAG_MAX +
+        '&source=' + encodeURIComponent(el('f-source').value) +
+        '&contains=' + encodeURIComponent(wort)).then(function(r){
+      // Zwischenzeitlich weitergetippt: diese Antwort ist überholt.
+      if(el('f-person').value.trim() !== wort) return;
+      personZeichnen(r.people || [], r.total_distinct || 0);
+    }).catch(personZu);
+  }, 150);
+}
+
+function personZeichnen(liste, gesamt){
+  personVorschlaege = liste;
+  personAktiv = -1;
+  var kasten = el('personliste');
+  kasten.innerHTML = liste.length
+    ? liste.map(function(p, i){
+        return '<button type="button" role="option" aria-selected="false" ' +
+          'id="personwahl-' + i + '" onclick="personWaehlen(' + i + ')">' +
+          '<span class="wer">' + esc(p.name) + '</span>' +
+          '<span class="zahl">' + p.messages.toLocaleString(LOC) + '</span></button>';
+      }).join('') +
+      // Mehr Namen als Plätze: sagen statt still abschneiden – sonst hielte
+      // man die fünf für alle, die es gibt.
+      (gesamt > liste.length
+        ? '<div class="leer">' + esc(t('search.person.more',
+                                       {n: gesamt - liste.length})) + '</div>'
+        : '')
+    : '<div class="leer">' + esc(t('search.person.none')) + '</div>';
+  kasten.classList.remove('hide');
+  el('f-person').setAttribute('aria-expanded', 'true');
+}
+
+function personZu(){
+  clearTimeout(personTimer);
+  personVorschlaege = [];
+  personAktiv = -1;
+  el('personliste').classList.add('hide');
+  el('f-person').setAttribute('aria-expanded', 'false');
+}
+
+function personWaehlen(i){
+  var p = personVorschlaege[i];
+  if(!p) return;
+  el('f-person').value = p.name;
+  personZu();
+  zeigeFilterstand();
+}
+
+function personHervor(i){
+  personAktiv = i;
+  personVorschlaege.forEach(function(_, j){
+    var b = el('personwahl-' + j);
+    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
+  });
+}
+
+/* Tastatur wie in jeder Vorschlagsliste: hoch, runter, Enter, Esc. Ohne das
+   müsste man zur Maus greifen, um einen Namen zu übernehmen. */
+function personTaste(ev){
+  var offen = !el('personliste').classList.contains('hide');
+  var n = personVorschlaege.length;
+  if(ev.key === 'Escape' && offen){ personZu(); ev.preventDefault(); return; }
+  if(!offen || !n) return;
+  if(ev.key === 'ArrowDown'){
+    personHervor((personAktiv + 1) % n); ev.preventDefault();
+  } else if(ev.key === 'ArrowUp'){
+    personHervor((personAktiv - 1 + n) % n); ev.preventDefault();
+  } else if(ev.key === 'Enter' && personAktiv >= 0){
+    personWaehlen(personAktiv); ev.preventDefault();
+  }
+}
+
+document.addEventListener('click', function(ev){
+  var feld = el('f-person');
+  if(!ev.target || !feld) return personZu();
+  if(ev.target === feld) return;
+  var knoten = ev.target;
+  while(knoten){
+    if(knoten.id === 'personliste') return;   // im Kasten geklickt
+    knoten = knoten.parentElement;
+  }
+  personZu();
+});
 
 /* Ähnliche zu genau diesem Treffer. Anders als die Ähnliche Suche braucht das
    kein Ollama: der Vektor dieser Textstelle liegt fertig im Index, es muss

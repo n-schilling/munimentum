@@ -61,6 +61,8 @@
   "search.from": "du",
   "search.to": "au",
   "search.person.ph": "Personne",
+  "search.person.none": "Personne de ce nom dans l’archive.",
+  "search.person.more": "… et {n} autres — précisez un peu.",
   "search.source.all": "Toutes les sources",
   "search.source.teams": "Teams",
   "search.source.outlook": "Courrier",
