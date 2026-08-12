@@ -56,7 +56,8 @@ One browser page with four tabs.
 ### Export data
 
 Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and channel
-chats; OneDrive files — and start. Every run fetches only what is new, so the
+chats; OneDrive files — and start. Nothing is preselected: any one of these can
+mean tens of thousands of items. Every run fetches only what is new, so the
 second one takes minutes rather than hours. Deleted messages **stay in the
 archive** and get a marker; that is the point of keeping one.
 
@@ -76,7 +77,8 @@ relevance. **Similar search** finds related wording even when your words do not
 appear. **AI summary** answers a question in a paragraph with source numbers and
 keeps the underlying hits one click away.
 
-Filters — person, source, date range, folder, file type — sit behind a toggle
+Filters — person, source, date range, folder, file type, and messages no longer
+in the mailbox — sit behind a toggle
 that shows how many are set, and nothing searches until you ask for it. The
 person field suggests names that actually occur, so a typo is not mistaken for
 an absence, and `*` stands for any run of characters when one name is too
@@ -85,9 +87,8 @@ the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. Every
 hit offers *Find similar*, the whole conversation it belongs to, and the
 original file.
-Four views live here: results, calendar (including appointments recovered from
-invitation and cancellation mails), the address book, and *Deleted* — messages
-no longer in the mailbox but still here.
+Three views live here: results, calendar (including appointments recovered from
+invitation and cancellation mails), and the address book.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works

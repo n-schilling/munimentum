@@ -27,6 +27,18 @@ behind each, so a typo is not mistaken for someone who is not there. `*` is a
 wildcard: `schmi*` searches everyone matching rather than pinning you to one
 name, and the list offers that as its last row.
 
+**Nothing is preselected in the export any more.** Mail, calendar, contacts and
+the kinds of chat all start unticked — each of them can mean tens of thousands
+of items, and what gets fetched should be a decision. An empty selection now
+produces no export step at all; it used to reach the script as “not set”, which
+it read as “everything”.
+
+**“Deleted” is a filter, not a view.** It never was a view of its own — it was
+this same result list with one filter set. It now sits in the filter row with
+the others, counts towards the number on the toggle, and clears with them. Its
+**(i)** is also honest about a limit: Exchange gives a message a new id when it
+is moved, so a message that merely changed folders can show up here.
+
 **A date that does not exist is now reported.** The 31st of June was accepted by
 the browser, handed over empty, and searched without that limit — the results
 looked wrong for no visible reason.
