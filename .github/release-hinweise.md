@@ -1,3 +1,24 @@
+## New in 5.3.0
+
+**The header says what is actually on.** It used to read *Claude access off* —
+wrong twice over. MCP is a protocol, not one program; and what the app switches
+was only its own HTTP endpoint, while a client that launches the server itself
+kept full access. It now reads **MCP HTTP on/off**, and the tooltip says what
+that does and does not cover.
+
+**One switch that really means off.** *Settings → MCP server → Allow MCP
+access*: with it off, the server refuses to serve — over the HTTP endpoint and
+over the subprocess route (stdio) that Claude Desktop uses, whether or not this
+app is running. It does not simply die: it answers with a single tool that
+explains it is switched off, so your client tells you in plain words instead of
+leaving a failed connection and a reason buried in a log file. No archive data
+is served either way; the index is not even opened.
+
+The entry you pasted into your client stays valid and works again the moment you
+allow access; nothing needs reconfiguring. And it is a safeguard against
+accident, not an access barrier — anyone who reaches this machine can switch it
+back.
+
 ## New in 5.2.0
 
 **Calendars are chosen like folders.** *Settings → Calendars* holds the same
