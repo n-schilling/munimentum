@@ -4176,7 +4176,12 @@ waehle('outlook', function(){
     waehle('teams', function(){
       var namen = optionen().map(function(o){ return o.split(' (')[0]; });
       pruefe(namen.indexOf('Kan\u00e4le') > 0, 'Kanaele nicht lesbar benannt: ' + namen);
-      pruefe(namen.indexOf('1:1-Chats') > 0, 'Chatart nicht lesbar benannt: ' + namen);
+      // Ohne das gezaehlte Wort im Namen: "1:1-Chats (89.273)" liest sich als
+      // Zahl der Chats, gezaehlt werden aber die Nachrichten - wie ueberall
+      // sonst in dieser Liste auch.
+      pruefe(namen.indexOf('1:1') > 0, 'Chatart nicht lesbar benannt: ' + namen);
+      pruefe(namen.join(' ').indexOf('Chats') < 0,
+             'Name zaehlt etwas anderes als die Zahl: ' + namen);
       pruefe(namen[0] === 'Alle Chatarten', 'Falsche Beschriftung: ' + namen[0]);
       // Gefiltert wird weiter mit dem Ablagepfad, nicht mit dem Anzeigenamen.
       pruefe(feld.innerHTML.indexOf('value="channels"') >= 0, 'Falscher Filterwert');
