@@ -4089,25 +4089,28 @@ function ordnerName(pfad){
 }
 
 /* Eine Auswahl mit einem einzigen Eintrag ist keine Auswahl: sie filtert
-   nichts weg und täuscht eine Entscheidung vor. Dann steht der eine Eintrag
-   da, ausgegraut. */
+   nichts weg. Dann verschwindet das Feld – ausgegraut stehen zu bleiben sah
+   aus, als sei etwas kaputt, und der eine Ordner ist ohnehin schon durch die
+   Quelle gesagt (bei „Kontakte“ ist er es immer, denn Kontaktordner hat kaum
+   ein Postfach). */
 function zeichneOrdner(liste){
   var sel = el('f-folder'), vorher = sel.value;
   var wahl = liste.length > 1;
   var alle = t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all');
-  sel.disabled = !wahl;
-  sel.innerHTML = (liste.length === 0
-      ? '<option value="">' + esc(alle) + '</option>'
-      : (wahl ? '<option value="">' + esc(alle) + '</option>' : '')) +
-    liste.map(function(f){
+  sel.classList.toggle('hide', !wahl);
+  sel.innerHTML = '<option value="">' + esc(alle) + '</option>' +
+    (wahl ? liste.map(function(f){
       return '<option value="' + esc(f.path) + '">' + esc(ordnerName(f.path)) +
              ' (' + f.messages.toLocaleString(LOC) + ')</option>';
-    }).join('');
+    }).join('') : '');
   // Eine Wahl, die zur neuen Quelle nicht passt, fällt weg. Sie stehen zu
   // lassen hieße, in einem Ordner zu suchen, den es in dieser Quelle nicht
   // gibt – und das sieht aus wie ein leeres Archiv.
   sel.value = wahl && liste.some(function(f){ return f.path === vorher; })
     ? vorher : '';
+  // Der Zähler an „Filter“ muss die weggefallene Wahl mitbekommen – die Liste
+  // kommt erst nach dem Umschalten der Quelle an.
+  zeigeFilterstand();
 }
 
 function ladeOrdner(){

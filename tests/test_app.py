@@ -4187,16 +4187,23 @@ waehle('outlook', function(){
       pruefe(feld.innerHTML.indexOf('value="channels"') >= 0, 'Falscher Filterwert');
 
       waehle('kontakte', function(){
-        // Ein einziger Ordner filtert nichts weg - eine Wahl vorzutaeuschen
-        // waere schlechter, als den einen Eintrag ausgegraut zu zeigen.
-        pruefe(feld.disabled, 'Ein einziger Eintrag ist keine Wahl');
-        pruefe(optionen().length === 1, 'Vorgabe neben dem einzigen Eintrag');
+        // Ein einziger Ordner filtert nichts weg. Ausgegraut sah das aus, als
+        // sei etwas kaputt - also verschwindet das Feld.
+        pruefe(feld.classList.contains('hide'),
+               'Feld bleibt stehen, obwohl es nichts zu waehlen gibt');
+        feld.value = 'kontakte/Team';   // von Hand gesetzt: darf nicht bleiben
 
         // Zweimal dieselbe Quelle fragt den Server nicht noch einmal.
         var vorher = gefragt.length;
         waehle('kontakte', function(){
           pruefe(gefragt.length === vorher, 'Ordnerliste ohne Not neu geholt');
-          console.log('OK');
+          pruefe(feld.value === '', 'Versteckte Wahl filtert weiter mit');
+
+          // Zurueck zu einer Quelle mit echter Auswahl: das Feld kommt wieder.
+          waehle('kalender', function(){
+            pruefe(!feld.classList.contains('hide'), 'Feld kommt nicht zurueck');
+            console.log('OK');
+          });
         });
       });
     });
