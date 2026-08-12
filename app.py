@@ -221,17 +221,24 @@ SKIP_FOLDERS_DEFAULT = {
     "postausgang", "outbox",
 }
 
+# Die vier Unterordner im Datenordner. Früher waren sie einstellbar – ein Erbe
+# aus der Zeit, als das hier lose Skripte waren, die jemand von Hand in einem
+# beliebigen Verzeichnis aufrief. Die App ruft sie längst selbst auf, und drei
+# Textfelder in den Einstellungen, die niemand anfasst, sind keine Freiheit,
+# sondern Ballast: sie müssen erklärt, gespeichert, an jeden Unterprozess
+# weitergereicht und in jede MCP-Konfiguration geschrieben werden.
+TEAMS_DIR = "teams_export"
+OUTLOOK_DIR = "outlook_export"
+ONEDRIVE_DIR = "onedrive_export"
+STORE_DIR = "rag_store"
+
 DEFAULT_CONFIG = {
-    "teams_dir": "teams_export",
-    "outlook_dir": "outlook_export",
-    "onedrive_dir": "onedrive_export",
     # Aus, bis jemand es einschaltet: ein Laufwerk kann zweistellige
     # Gigabyte haben, und niemand soll die beim ersten Klick ziehen.
     "onedrive_enabled": False,
     # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
     "onedrive_rules": "",
     "onedrive_max_mb": 0,
-    "store_dir": "rag_store",
     "outlook_categories": ["mail", "calendar", "contacts"],
     "teams_categories": ["1on1", "group", "meeting"],
     "workers": 4,
@@ -586,9 +593,9 @@ def export_status(cfg):
     Ordnergröße bleibt bewusst außen vor: ein Postfach kann zweistellige
     Gigabyte haben, das bei jedem Statusabruf durchzuzählen wäre teuer.
     """
-    teams = BASE / cfg["teams_dir"]
-    outlook = BASE / cfg["outlook_dir"]
-    onedrive = BASE / cfg["onedrive_dir"]
+    teams = BASE / TEAMS_DIR
+    outlook = BASE / OUTLOOK_DIR
+    onedrive = BASE / ONEDRIVE_DIR
     return {
         "teams": {"dir": str(teams), "exists": teams.is_dir(),
                   "last_run": _mtime_iso(teams / "export_state.json")},
@@ -642,13 +649,13 @@ def _zaehle(db):
     return zahlen
 
 
-def lies_bericht(cfg, schluessel="outlook_dir"):
+def lies_bericht(ordner=OUTLOOK_DIR):
     """Der letzte Vollständigkeitsbericht, falls es einen gibt.
 
     Er entsteht nur auf Knopfdruck: die Prüfung fragt Microsoft, und das soll
     niemand ungefragt tun, nur weil eine Ansicht aufgeht.
     """
-    pfad = BASE / cfg[schluessel] / "vollstaendigkeit.json"
+    pfad = BASE / ordner / "vollstaendigkeit.json"
     try:
         return json.loads(pfad.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -662,7 +669,7 @@ def kennzahlen(cfg):
     Reiter aufgeht. Was nur Microsoft beantworten kann – ob etwas FEHLT – ist
     ein eigener Schritt mit eigenem Knopf.
     """
-    db = BASE / cfg["store_dir"] / "corpus.db"
+    db = BASE / STORE_DIR / "corpus.db"
     # None heißt „weiß ich nicht“, 0 hieße „keine“. Ein Index aus einer
     # älteren Fassung kennt die Spalten nicht; „0 mit Anhang“ zu melden wäre
     # eine Behauptung statt einer Auskunft.
@@ -670,11 +677,11 @@ def kennzahlen(cfg):
            "gespraeche": None, "mit_anhang": None, "personen": 0,
            "verschwunden": None, "von": None, "bis": None,
            "built_at": _mtime_iso(db), "groesse": {}}
-    for schluessel, ordner in (("teams", cfg["teams_dir"]),
-                               ("outlook", cfg["outlook_dir"]),
-                               ("onedrive", cfg["onedrive_dir"])):
+    for schluessel, ordner in (("teams", TEAMS_DIR),
+                               ("outlook", OUTLOOK_DIR),
+                               ("onedrive", ONEDRIVE_DIR)):
         out["groesse"][schluessel] = ordner_groesse(BASE / ordner)
-    out["groesse"]["index"] = ordner_groesse(BASE / cfg["store_dir"])
+    out["groesse"]["index"] = ordner_groesse(BASE / STORE_DIR)
     if not out["exists"]:
         return out
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
@@ -744,7 +751,7 @@ def ordner_groesse(pfad, ttl=GROESSE_TTL):
 
 def store_status(cfg):
     """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
-    store = BASE / cfg["store_dir"]
+    store = BASE / STORE_DIR
     db = store / "corpus.db"
     info = store_layout.info(store)
     out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
@@ -907,7 +914,7 @@ def _flag(value):
 
 
 def calendar_file(cfg):
-    return BASE / cfg["store_dir"] / "calendar.json"
+    return BASE / STORE_DIR / "calendar.json"
 
 
 def calendar_plan(cfg):
@@ -970,7 +977,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
         steps.append({
             "key": "outlook", "label": "job.step.outlook",
-            "argv": script_argv("outlook_export", cfg["outlook_dir"]),
+            "argv": script_argv("outlook_export", OUTLOOK_DIR),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
                     # Immer setzen, auch leer: leer heißt "nichts auslassen",
@@ -980,7 +987,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if onedrive:
         steps.append({
             "key": "onedrive", "label": "job.step.onedrive",
-            "argv": script_argv("onedrive_export", cfg["onedrive_dir"]),
+            "argv": script_argv("onedrive_export", ONEDRIVE_DIR),
             "env": {**base_env,
                     # Immer setzen, auch leer: leer heißt "alles mitnehmen",
                     # nicht gesetzt hieße "was in app_config.json steht".
@@ -992,7 +999,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                                  ["1on1", "group", "meeting", "channels"])
         steps.append({
             "key": "teams", "label": "job.step.teams",
-            "argv": script_argv("teams_export", cfg["teams_dir"]),
+            "argv": script_argv("teams_export", TEAMS_DIR),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "EMBED_IMAGES": _flag(cfg.get("embed_images")),
                     "CACHE_IMAGES": _flag(cfg.get("cache_images")),
@@ -1000,9 +1007,9 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                     "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))},
         })
     if index:
-        argv = script_argv("rag_index", cfg["teams_dir"], cfg["outlook_dir"],
-                           cfg["onedrive_dir"],
-                           "--store", cfg["store_dir"], "--model", cfg["embed_model"],
+        argv = script_argv("rag_index", TEAMS_DIR, OUTLOOK_DIR,
+                           ONEDRIVE_DIR,
+                           "--store", STORE_DIR, "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
                            "--batch", cfg.get("index_batch", 64))
         if not embeddings:
@@ -1014,15 +1021,15 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             # Hat der Export nichts Neues gebracht, indiziert dieser Schritt
             # denselben Bestand ein zweites Mal. "ziel" ist die Bedingung, unter
             # der das Auslassen sicher ist: nur wenn es schon einen Index gibt.
-            "nur_bei_neuem": True, "ziel": BASE / cfg["store_dir"] / "corpus.db",
+            "nur_bei_neuem": True, "ziel": BASE / STORE_DIR / "corpus.db",
         })
     if calendar:
         # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
         # nur die Wiederherstellung gelöschter Termine: dafür wird jede .eml
         # gelesen, bei 45.000 Mails ein paar Minuten. Deshalb ein eigener
         # Schritt mit Ergebnisdatei – und abschaltbar.
-        argv = script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"],
-                           "--json", str(Path(cfg["store_dir"]) / "calendar.json"))
+        argv = script_argv("combined_search", TEAMS_DIR, OUTLOOK_DIR,
+                           "--json", str(Path(STORE_DIR) / "calendar.json"))
         if not reconstruct:
             argv.append("--no-reconstruct")
         steps.append({
@@ -1034,26 +1041,26 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if sync_onedrive:
         steps.append({
             "key": "onedrive_folders", "label": "job.step.folders",
-            "argv": script_argv("onedrive_export", "--folders", cfg["onedrive_dir"]),
+            "argv": script_argv("onedrive_export", "--folders", ONEDRIVE_DIR),
             "env": {**base_env,
                     "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or "")},
         })
     if sync_folders:
         steps.append({
             "key": "folders", "label": "job.step.folders",
-            "argv": script_argv("outlook_export", "--folders", cfg["outlook_dir"]),
+            "argv": script_argv("outlook_export", "--folders", OUTLOOK_DIR),
             "env": dict(base_env),
         })
     if check:
         steps.append({
             "key": "check", "label": "job.step.check",
-            "argv": script_argv("outlook_export", "--check", cfg["outlook_dir"]),
+            "argv": script_argv("outlook_export", "--check", OUTLOOK_DIR),
             "env": dict(base_env),
         })
     if check_onedrive:
         steps.append({
             "key": "check_onedrive", "label": "job.step.check",
-            "argv": script_argv("onedrive_export", "--check", cfg["onedrive_dir"]),
+            "argv": script_argv("onedrive_export", "--check", ONEDRIVE_DIR),
             "env": {**base_env,
                     "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
                     "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
@@ -1061,7 +1068,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if search_page:
         steps.append({
             "key": "search_page", "label": "job.step.searchpage",
-            "argv": script_argv("combined_search", cfg["teams_dir"], cfg["outlook_dir"]),
+            "argv": script_argv("combined_search", TEAMS_DIR, OUTLOOK_DIR),
             "env": dict(base_env),
         })
     return steps
@@ -1349,9 +1356,7 @@ def mcp_client_config(cfg, port):
     unbekannten Arbeitsverzeichnis.
     """
     argv = script_argv("mcp_server", "--transport", "stdio",
-                       "--store", str(BASE / cfg["store_dir"]),
-                       "--teams", str(BASE / cfg["teams_dir"]),
-                       "--outlook", str(BASE / cfg["outlook_dir"]))
+                       "--data-dir", str(BASE))
     return {
         "http": {"mcpServers": {"munimentum": {
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
@@ -1382,13 +1387,11 @@ class McpProcess:
     def start(self, cfg):
         if self.running:
             return True, {"k": "srv.mcp.running", "v": {}}
-        db = BASE / cfg["store_dir"] / "corpus.db"
+        db = BASE / STORE_DIR / "corpus.db"
         if not db.exists():
             self.error = {"k": "srv.mcp.noindex", "v": {}}
             return False, self.error
-        argv = script_argv("mcp_server",
-                           "--store", cfg["store_dir"], "--teams", cfg["teams_dir"],
-                           "--outlook", cfg["outlook_dir"],
+        argv = script_argv("mcp_server", "--data-dir", str(BASE),
                            "--embed-model", cfg["embed_model"],
                            "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
         try:
@@ -1451,7 +1454,7 @@ class SearchBridge:
         abgebildete Datei stehen: gleiche Zeit, gleiche Größe, und die Suche in
         der App zeigte weiter den Stand von vorhin.
         """
-        store = BASE / cfg["store_dir"]
+        store = BASE / STORE_DIR
         out = []
         for p in (store / "corpus.db", store_layout.vectors_path(store)):
             if p is None:
@@ -1469,7 +1472,7 @@ class SearchBridge:
             stamp = self._store_stamp(cfg)
             if self.module is not None and stamp == self.stamp:
                 return self.module
-            db = BASE / cfg["store_dir"] / "corpus.db"
+            db = BASE / STORE_DIR / "corpus.db"
             if not db.exists():
                 self.error = {"k": "srv.noindex", "v": {}}
                 self.module = None
@@ -1484,7 +1487,7 @@ class SearchBridge:
                 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
                 n = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
                 con.close()
-                np, V = mcp_server._open_vectors(str(BASE / cfg["store_dir"]), n)
+                np, V = mcp_server._open_vectors(str(BASE / STORE_DIR), n)
             except sqlite3.Error as e:
                 self.error = {"k": "srv.badindex", "v": {"error": str(e)}}
                 self.module = None
@@ -1492,8 +1495,8 @@ class SearchBridge:
             mcp_server.STATE.update(
                 db=str(db), V=V, np=np, semantic=(np is not None),
                 vector_dtype=str(V.dtype) if V is not None else None,
-                teams_dir=str(BASE / cfg["teams_dir"]),
-                outlook_dir=str(BASE / cfg["outlook_dir"]),
+                teams_dir=str(BASE / TEAMS_DIR),
+                outlook_dir=str(BASE / OUTLOOK_DIR),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
@@ -1623,10 +1626,10 @@ class App:
             "scope_queries": SCOPE_QUERY,
             "auth": self.auth_status(),
             "folders": folders.zusammenfassung(
-                folders.lade(BASE / self.cfg["outlook_dir"]),
+                folders.lade(BASE / OUTLOOK_DIR),
                 auswahlregeln(self.cfg)),
             "folders_onedrive": folders.zusammenfassung(
-                folders.lade(BASE / self.cfg["onedrive_dir"]),
+                folders.lade(BASE / ONEDRIVE_DIR),
                 folders.lies_regeln(self.cfg.get("onedrive_rules") or "")),
         }
 
@@ -1863,8 +1866,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/analytics":
                 return self._json({
                     **kennzahlen(app.cfg),
-                    "vollstaendigkeit": lies_bericht(app.cfg),
-                    "vollstaendigkeit_onedrive": lies_bericht(app.cfg, "onedrive_dir")})
+                    "vollstaendigkeit": lies_bericht(),
+                    "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR)})
             if u.path == "/api/calendar":
                 return self._calendar()
             if u.path == "/source":
@@ -2005,7 +2008,7 @@ class Handler(BaseHTTPRequestHandler):
         if "teams_categories" in data:
             cfg["teams_categories"] = _clean_categories(
                 data["teams_categories"], ["1on1", "group", "meeting", "channels"])
-        for key in ("teams_dir", "outlook_dir", "store_dir", "embed_model",
+        for key in ("embed_model",
                     "chat_model", "ollama"):
             if key in data and str(data[key]).strip():
                 cfg[key] = str(data[key]).strip()
@@ -2211,11 +2214,11 @@ class Handler(BaseHTTPRequestHandler):
                 data.get("onedrive_rules")
                 if data.get("onedrive_rules") is not None
                 else cfg.get("onedrive_rules") or "")
-            ordner, endung = BASE / cfg["onedrive_dir"], None
+            ordner, endung = BASE / ONEDRIVE_DIR, None
         else:
             regeln = auswahlregeln(cfg, data.get("folder_rules"),
                                    data.get("skip_folders"))
-            ordner, endung = BASE / cfg["outlook_dir"], ".eml"
+            ordner, endung = BASE / OUTLOOK_DIR, ".eml"
         daten = folders.lade(ordner)
         if not daten:
             return {"ok": False, "leer": True}
@@ -3161,13 +3164,8 @@ main{padding-bottom:60px}
 
   <div class="card">
     <h2 data-i18n="settings.dirs.title">Ordner</h2>
-    <p class="sub" data-i18n="settings.dirs.sub">Relativ zum Datenordner, oder absolut.</p>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.dir.teams">Teams</span> <input type="text" id="c-teams_dir" style="width:200px"></label>
-      <label class="small"><span data-i18n="settings.dir.outlook">Outlook</span> <input type="text" id="c-outlook_dir" style="width:200px"></label>
-      <label class="small"><span data-i18n="settings.dir.store">Index</span> <input type="text" id="c-store_dir" style="width:200px"></label>
-    </div>
-    <p class="small muted" style="margin-top:10px"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
+    <p class="sub" data-i18n="settings.dirs.sub">Alles liegt in einem Ordner.</p>
+    <p class="small muted"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
     <div class="row" style="margin-top:8px">
       <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
       <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
@@ -4662,7 +4660,7 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
                 'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','semantic_min'];
-var TEXTE    = ['ollama','embed_model','chat_model','teams_dir','outlook_dir','store_dir',
+var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules'];
 var cfgGefuellt = false;
 

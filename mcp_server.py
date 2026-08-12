@@ -1001,9 +1001,16 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     # Defaults come from app_config.json when it exists; flags win (settings.py).
-    ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
-    ap.add_argument("--teams", default=settings.value("teams_dir", "teams_export"))
-    ap.add_argument("--outlook", default=settings.value("outlook_dir", "outlook_export"))
+    # Ein Ordner statt drei. Die Unterordner heißen fest, wie überall im
+    # Projekt – Claude startet den Server in einem unbekannten Arbeits-
+    # verzeichnis, also muss dieser eine Pfad absolut mitkommen.
+    ap.add_argument("--data-dir", metavar="ORDNER",
+                    help="Datenordner mit rag_store/, teams_export/ und "
+                         "outlook_export/ darin. Ohne ihn gilt das aktuelle "
+                         "Verzeichnis.")
+    ap.add_argument("--store", help=argparse.SUPPRESS)
+    ap.add_argument("--teams", help=argparse.SUPPRESS)
+    ap.add_argument("--outlook", help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model", "bge-m3"))
     ap.add_argument("--ollama", default=settings.value("ollama", "http://localhost:11434"))
     ap.add_argument("--transport", choices=["http", "stdio"], default="http",
@@ -1018,6 +1025,12 @@ def main():
                          "Required when --host is not the loopback interface; "
                          "repeat for several. Port defaults to --port.")
     a = ap.parse_args()
+    # --store/--teams/--outlook gab es bis 5.0.0 einzeln; wer sie in einer alten
+    # Claude-Konfiguration stehen hat, soll nicht ins Leere laufen.
+    basis = Path(a.data_dir).expanduser() if a.data_dir else Path(".")
+    a.store = a.store or str(basis / "rag_store")
+    a.teams = a.teams or str(basis / "teams_export")
+    a.outlook = a.outlook or str(basis / "outlook_export")
     note = settings.report()
     if note:
         print(note, file=sys.stderr)

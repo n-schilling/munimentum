@@ -94,7 +94,6 @@ def test_load_config_ergaenzt_fehlende_schluessel(sandbox):
     assert cfg["workers"] == 2
     assert cfg["schedule"]["enabled"] is True
     assert cfg["schedule"]["interval_minutes"] == 60      # Vorgabe bleibt erhalten
-    assert cfg["teams_dir"] == "teams_export"
 
 
 def test_load_config_bei_kaputter_datei(sandbox):
@@ -1250,7 +1249,7 @@ def test_mcp_start_und_stop(sandbox, store, fake_popen):
 
     argv = fake_popen[0].argv
     assert argv[1].endswith("mcp_server.py")
-    assert "--store" in argv and "rag_store" in argv
+    assert "--data-dir" in argv
     assert "--port" in argv
 
     assert schluessel(a.mcp.start(a.cfg)[1]) == "srv.mcp.running"   # kein zweiter Prozess
@@ -1915,9 +1914,11 @@ def test_mcp_client_config_nennt_absolute_pfade(sandbox):
         == "http://127.0.0.1:8365/mcp"
     args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
     assert "--transport" in args and "stdio" in args
+    # Ein Ordner statt drei Pfaden: die Unterordner heißen fest.
+    assert "--data-dir" in args
     # Claude startet den Befehl in einem unbekannten Arbeitsverzeichnis
-    store = args[args.index("--store") + 1]
-    assert Path(store).is_absolute() and store.startswith(str(sandbox))
+    ordner = args[args.index("--data-dir") + 1]
+    assert Path(ordner).is_absolute() and ordner.startswith(str(sandbox))
 
 
 def test_mcp_client_config_gebuendelt(sandbox, frozen):
@@ -3624,11 +3625,9 @@ def test_mcp_eintrag_folgt_dem_datenordner(sandbox, monkeypatch, tmp_path):
         app_mod.set_data_dir(ordner)
         conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
         args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
-        datenpfade = [a for a in args if a.endswith(("rag_store", "teams_export",
-                                                     "outlook_export"))]
-        assert len(datenpfade) == 3, args
-        for pfad in datenpfade:
-            assert str(ordner.resolve()) in pfad, f"{pfad} folgt {ordner} nicht"
+        genannt = args[args.index("--data-dir") + 1]
+        assert Path(genannt).is_absolute()
+        assert Path(genannt) == ordner.resolve(), args
 
 
 def test_mcp_programmpfad_folgt_dem_datenordner_nicht(sandbox, tmp_path):
@@ -3638,7 +3637,7 @@ def test_mcp_programmpfad_folgt_dem_datenordner_nicht(sandbox, tmp_path):
     eintrag = conf["stdio"]["mcpServers"]["munimentum"]
     alles = " ".join([eintrag["command"], *eintrag["args"]])
     assert "mcp_server" in alles
-    assert str(tmp_path / "woanders") not in alles.split("--store")[0]
+    assert str(tmp_path / "woanders") not in alles.split("--data-dir")[0]
 
 
 PRUEFUNG_KOPIEREN = GRUNDZUSTAND + """
@@ -3859,7 +3858,7 @@ def test_analytics_zeigt_kennzahlen_und_trennt_ausgelassenes():
 # Exportliste: was der nächste Lauf täte, ohne ihn zu starten
 # --------------------------------------------------------------------------
 def _baum(sandbox, cfg, eintraege, mails=()):
-    ordner = sandbox / cfg["outlook_dir"]
+    ordner = sandbox / app_mod.OUTLOOK_DIR
     folders_mod.speichere(ordner, eintraege)
     for pfad, anzahl in mails:
         (ordner / pfad).mkdir(parents=True, exist_ok=True)
@@ -4122,7 +4121,7 @@ def test_exportliste_kennt_beide_quellen(server, sandbox):
     a, port = server
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "Dateien/Kunden", "name": "Kunden", "elemente": 3}])
-    od = sandbox / a.cfg["onedrive_dir"]
+    od = sandbox / app_mod.ONEDRIVE_DIR
     folders_mod.speichere(od, [{"id": "1", "pfad": "Dateien/Kunden",
                                 "name": "Kunden", "elemente": 3}])
     (od / "Dateien" / "Kunden").mkdir(parents=True, exist_ok=True)
@@ -4261,9 +4260,9 @@ def test_vollstaendigkeit_hat_genau_einen_knopf():
 
 def test_analytics_liefert_beide_berichte(server, sandbox):
     a, port = server
-    for schluessel, inhalt in (("outlook_dir", {"erwartet": 5, "fehlt": 1, "ordner": []}),
-                               ("onedrive_dir", {"erwartet": 9, "fehlt": 0, "ordner": []})):
-        ziel = sandbox / a.cfg[schluessel]
+    for ordner, inhalt in ((app_mod.OUTLOOK_DIR, {"erwartet": 5, "fehlt": 1, "ordner": []}),
+                           (app_mod.ONEDRIVE_DIR, {"erwartet": 9, "fehlt": 0, "ordner": []})):
+        ziel = sandbox / ordner
         ziel.mkdir(parents=True, exist_ok=True)
         (ziel / "vollstaendigkeit.json").write_text(json.dumps(inhalt), encoding="utf-8")
     r = call(port, "GET", "/api/analytics")[1]
@@ -4335,7 +4334,7 @@ def test_export_status_kennt_onedrive(sandbox):
     Änderung neu geschrieben und behauptete dann einen Abgleich, bei dem nichts
     geholt wurde."""
     cfg = app_mod.load_config()
-    od = sandbox / cfg["onedrive_dir"]
+    od = sandbox / app_mod.ONEDRIVE_DIR
     od.mkdir(parents=True, exist_ok=True)
     assert app_mod.export_status(cfg)["onedrive"]["last_run"] is None
     (od / "dateien.tsv").write_text("a\tb\tc\t1\n", encoding="utf-8")
