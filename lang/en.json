@@ -550,7 +550,6 @@
   "ana.dateien": "Largest single files",
   "ana.dateien.sub": "What takes up the room — one group chat can reach hundreds of megabytes.",
   "ana.personen.sub": "Who you exchanged the most messages with.",
-  "ana.geloescht.sub": "When messages disappeared from the mailbox. They are still here.",
   "ana.typen": "Attachments by type",
   "ana.typen.rest": "other types",
   "search.menu.similar.aus": "Needs an index built with meaning — this one is full text only."

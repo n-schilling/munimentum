@@ -762,7 +762,7 @@ def _monatsreihe(von, bis):
 
 
 def auswertung(con, kennung):
-    """Verlauf, Lücken, Anhangstypen, Personen und Gelöschtes – am Stück."""
+    """Verlauf, Lücken, Anhangstypen und Personen – am Stück."""
     zwischen = _AUSWERTUNG.get("k")
     if zwischen and zwischen[0] == kennung:
         return zwischen[1]
@@ -804,18 +804,11 @@ def auswertung(con, kennung):
         "SELECT who, SUM(messages) m FROM people WHERE who != '' "
         "GROUP BY who ORDER BY m DESC LIMIT 40")]
 
-    geloescht = []
-    if "gone" in spalten:
-        geloescht = [{"m": m, "n": n} for m, n in con.execute(
-            "SELECT substr(gone, 1, 7) m, COUNT(*) FROM chunks "
-            "WHERE seq = 0 AND gone IS NOT NULL AND gone != '' "
-            "GROUP BY m ORDER BY m")]
-
     out = {"verlauf": verlauf,
            "luecken": _luecken(list(vorhanden), vorhanden),
            "anhang_typen": [{"typ": e, "n": n} for e, n in top_typen]
                            + ([{"typ": "…", "n": rest}] if rest else []),
-           "top_personen": personen, "geloescht": geloescht}
+           "top_personen": personen}
     _AUSWERTUNG["k"] = (kennung, out)
     return out
 
@@ -3134,14 +3127,22 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .legende span{display:inline-flex;align-items:center;gap:6px}
 .legende i{width:10px;height:10px;border-radius:2px;display:inline-block}
 /* Waagerechte Balken für Ranglisten: Beschriftung, Balken, Zahl – die Zahl
-   rechtsbündig mit Tabellenziffern, damit die Spalte steht. */
-.rang{display:grid;grid-template-columns:minmax(90px,auto) 1fr auto;gap:10px;
-  align-items:center;padding:4px 0;font-size:13px}
-.rang .bal{background:var(--code);border-radius:4px;height:9px;position:relative}
-.rang .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);
+   rechtsbündig mit Tabellenziffern, damit die Spalte steht.
+
+   EIN Raster für die ganze Liste, nicht eins je Zeile: sonst richtet sich jede
+   Zeile nach ihrer eigenen Beschriftung, die Balken beginnen an neun
+   verschiedenen Stellen und lassen sich nicht mehr vergleichen – wozu sie da
+   sind. Die Namensspalte ist so breit wie ihr längster Eintrag, aber
+   höchstens 420px: ein Dateipfad soll den Balken nicht verdrängen. */
+.rangliste{display:grid;grid-template-columns:minmax(90px,max-content) 1fr auto;
+  gap:8px 10px;align-items:center;font-size:13px;margin:2px 0}
+.rangliste .bal{background:var(--code);border-radius:4px;height:9px;position:relative}
+.rangliste .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);
   border-radius:4px;display:block}
-.rang .zahl{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px}
-.rang .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rangliste .zahl{color:var(--muted);font-variant-numeric:tabular-nums;
+  font-size:12.5px;text-align:right}
+.rangliste .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:420px}
 .dia-titel{font-size:13px;font-weight:600;margin:18px 0 2px}
 .dia-sub{font-size:12.5px;color:var(--muted);margin:0 0 8px}
 
@@ -4976,12 +4977,13 @@ function wachstumDia(reihe){
 function rangListe(eintraege, nenner){
   if(!eintraege.length) return '';
   var hoch = Math.max.apply(null, eintraege.map(function(e){ return e.n; })) || 1;
-  return eintraege.map(function(e){
-    return '<div class="rang"><span class="name" title="' + esc(e.name) + '">' +
-      esc(e.name) + '</span>' +
+  // Die Zeilen liegen als Spalten in EINEM Raster, nicht als eigene Raster
+  // nebeneinander – nur so beginnen alle Balken an derselben Stelle.
+  return '<div class="rangliste">' + eintraege.map(function(e){
+    return '<span class="name" title="' + esc(e.name) + '">' + esc(e.name) + '</span>' +
       '<span class="bal"><i style="width:' + ((e.n / hoch) * 100).toFixed(1) + '%"></i></span>' +
-      '<span class="zahl">' + esc(nenner ? nenner(e.n) : zahl(e.n)) + '</span></div>';
-  }).join('');
+      '<span class="zahl">' + esc(nenner ? nenner(e.n) : zahl(e.n)) + '</span>';
+  }).join('') + '</div>';
 }
 
 function diaBlock(titel, sub, inhalt){
@@ -5018,10 +5020,7 @@ function zeigeVerlaeufe(a){
                return {name: d.pfad, n: d.bytes}; }), bytes)) +
     diaBlock(t('ana.people'), t('ana.personen.sub'),
              rangListe((a.top_personen || []).map(function(pe){
-               return {name: pe.who, n: pe.n}; }))) +
-    diaBlock(t('ana.gone'), t('ana.geloescht.sub'),
-             rangListe((a.geloescht || []).map(function(g){
-               return {name: g.m, n: g.n}; })));
+               return {name: pe.who, n: pe.n}; })));
 }
 
 function zeigeAnalytics(a){

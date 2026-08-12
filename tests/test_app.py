@@ -3914,6 +3914,49 @@ def test_analytics_zeigt_kennzahlen_und_trennt_ausgelassenes():
     _in_node(PRUEFUNG_ANALYTICS)
 
 
+# Gemeldet: die Balken begannen je Zeile an einer anderen Stelle, weil jede
+# Zeile ihr eigenes Raster war. Damit laesst sich nichts vergleichen - wozu
+# Balken da sind.
+PRUEFUNG_RANGLISTE = GRUNDZUSTAND + r"""
+var h = rangListe([{name: 'kurz', n: 100},
+                   {name: 'ein deutlich laengerer Name als der davor', n: 50},
+                   {name: 'mittel', n: 25}]);
+
+// EIN Raster fuer die ganze Liste, nicht eins je Zeile.
+pruefe(h.split('class="rangliste"').length - 1 === 1, 'Mehr als ein Raster: ' + h);
+pruefe(h.indexOf('class="rang"') < 0, 'Zeile bringt noch ihr eigenes Raster mit');
+pruefe((h.match(/class="name"/g) || []).length === 3, 'Nicht drei Zeilen');
+pruefe((h.match(/class="bal"/g) || []).length === 3, 'Nicht drei Balken');
+
+// Die Breiten stehen weiter im Verhaeltnis zum groessten Wert.
+var breiten = (h.match(/width:([\d.]+)%/g) || []).join(' ');
+pruefe(breiten.indexOf('100.0%') >= 0, 'Der groesste Balken ist nicht voll');
+pruefe(breiten.indexOf('50.0%') >= 0, 'Haelfte falsch berechnet: ' + breiten);
+pruefe(breiten.indexOf('25.0%') >= 0, 'Viertel falsch berechnet: ' + breiten);
+
+// Der volle Text bleibt am title, auch wenn die Spalte ihn abschneidet.
+pruefe(h.indexOf('title="ein deutlich laengerer Name als der davor"') >= 0,
+       'Voller Name nicht am title');
+pruefe(rangListe([]) === '', 'Leere Liste erzeugt ein leeres Raster');
+console.log('OK');
+"""
+
+
+def test_rangliste_teilt_sich_ein_raster():
+    _in_node(PRUEFUNG_RANGLISTE)
+
+
+def test_verschwundenes_ueber_die_zeit_ist_weg():
+    """Ein Balken bei einem einzigen Monat sagt nichts – die Kachel mit der
+    Gesamtzahl und die Sicht „Gelöschtes“ bleiben."""
+    assert "ana.geloescht.sub" not in app_mod.PAGE
+    assert "a.geloescht" not in app_mod.PAGE       # die Auswertung liefert es nicht mehr
+    assert "geloescht" not in app_mod.auswertung.__doc__
+    # Was bleibt: die Kachel mit der Gesamtzahl und die Sicht in der Suche.
+    assert "ana.gone" in app_mod.PAGE
+    assert 'id="chip-geloescht"' in app_mod.PAGE
+
+
 # --------------------------------------------------------------------------
 # Exportliste: was der nächste Lauf täte, ohne ihn zu starten
 # --------------------------------------------------------------------------

@@ -95,8 +95,8 @@ timeline. Messages per month by source show when your communication moved from
 mail to chat; the growth curve shows how the archive filled up; and **gaps** —
 months with no message at all between your first and your last — are named
 outright, which is the one question an archive should answer about itself.
-Below that: attachments by file type, the largest single files, who you exchange
-the most with, and when messages disappeared from the mailbox.
+Below that: attachments by file type, the largest single files, and who you
+exchange the most with.
 
 On request there is also a completeness check against Microsoft: what it counts
 per folder against what is here, for both the mailbox and the drive.
