@@ -71,12 +71,14 @@ relevance. **Similar search** finds related wording even when your words do not
 appear. **AI summary** answers a question in a paragraph with source numbers and
 keeps the underlying hits one click away.
 
-Filters — person, source, date range, folder — sit behind a toggle that shows
-how many are set, and nothing searches until you ask for it. Picking a source
-narrows the folder list to that source: calendars for the calendar, the four
-kinds of Teams conversation for Teams, and nothing at all where there is only
-one folder to choose from. Every hit offers *Find similar*, the whole
-conversation it belongs to, and the original file.
+Filters — person, source, date range, folder, file type — sit behind a toggle
+that shows how many are set, and nothing searches until you ask for it. The
+person field suggests names that actually occur, so a typo is not mistaken for
+an absence. Picking a source narrows what the other two offer: calendars for
+the calendar, the four kinds of Teams conversation for Teams, attachment types
+for mail, and nothing at all where there is only one thing to choose from. Every
+hit offers *Find similar*, the whole conversation it belongs to, and the
+original file.
 Four views live here: results, calendar (including appointments recovered from
 invitation and cancellation mails), the address book, and *Deleted* — messages
 no longer in the mailbox but still here.

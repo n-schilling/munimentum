@@ -104,6 +104,8 @@ Which tool to use:
     messages of the conversation.
   • list_people     – resolve a name before filtering; the person filter is a
     substring match over names and addresses.
+  • list_folders / list_filetypes – what the folder and filetype filters can
+    take, per source.
   • corpus_stats    – what is indexed and which ranking backend is live.
   • read_source_file – last resort: the raw .eml/.html file. Teams
     conversations can exceed 100 MB and come back windowed, so prefer
@@ -198,8 +200,15 @@ _TEAMS_OBERSTE = (
     "THEN substr(ctx, 1, instr(ctx, '/') - 1) ELSE ctx END")
 
 
-def _where(person, dfrom, dto, src, only_gone=False, folder=""):
+def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
     conds, params = [], []
+    if filetype:
+        # ext hält die Endungen einer Nachricht durch Leerzeichen getrennt
+        # ("pdf xlsx"). Mit Leerzeichen umschlossen trifft LIKE genau eine
+        # davon – "doc" fände sonst auch "docx". Zeilen ohne Anhang haben
+        # NULL und fallen damit von selbst heraus.
+        conds.append("(' ' || ext || ' ') LIKE ?")
+        params.append(f"% {str(filetype).strip().lower().lstrip('.')} %")
     if folder:
         # Der Ordner steht seit jeher als ctx im Index – er war nur nie
         # abfragbar. Ein Ordner meint immer auch seine Unterordner: wer
@@ -597,7 +606,7 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     date_to: str = "", days: int = 0, source: str = "all",
                     k: int = 12, offset: int = 0, mode: str = "auto",
                     preview_chars: int = 200, only_gone: bool = False,
-                    folder: str = "") -> dict:
+                    folder: str = "", filetype: str = "") -> dict:
     """Search the exported Teams messages and Outlook mail/calendar/contacts.
 
     Hybrid ranking (BM25 + semantic embeddings, fused) when available. Results
@@ -626,6 +635,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         folder: Restrict to one folder and everything below it, e.g.
             "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
             channel. Use list_folders to see what exists.
+        filetype: Restrict to messages carrying an attachment of this type, or
+            to mirrored files of it — "pdf", "xlsx". One type; use
+            list_filetypes to see what exists.
     """
     con = _db()
     try:
@@ -634,7 +646,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
-        where, params = _where(person.strip(), von, bis, source, only_gone, folder)
+        where, params = _where(person.strip(), von, bis, source, only_gone, folder,
+                               filetype)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -675,7 +688,8 @@ def similar_messages(cid: int, k: int = 12, preview_chars: int = 200):
 def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     days: int = 0, source: str = "all", k: int = 30,
                     offset: int = 0, preview_chars: int = 200,
-                    only_gone: bool = False, folder: str = "") -> dict:
+                    only_gone: bool = False, folder: str = "",
+                    filetype: str = "") -> dict:
     """List messages by filter, newest first, without a search query.
 
     Useful for "everything from <person> in <month>", "the last week in
@@ -700,6 +714,9 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         folder: Restrict to one folder and everything below it, e.g.
             "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
             channel. Use list_folders to see what exists.
+        filetype: Restrict to messages carrying an attachment of this type, or
+            to mirrored files of it — "pdf", "xlsx". One type; use
+            list_filetypes to see what exists.
     """
     con = _db()
     try:
@@ -708,7 +725,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
-        where, params = _where(person.strip(), von, bis, source, only_gone, folder)
+        where, params = _where(person.strip(), von, bis, source, only_gone, folder,
+                               filetype)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.
@@ -910,6 +928,44 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
             [*params, max(1, min(int(limit), 1000))]).fetchall()
         return {"count": len(rows),
                 "folders": [{"path": r[0], "messages": r[1]} for r in rows]}
+    finally:
+        con.close()
+
+
+@mcp.tool(annotations=_READONLY)
+def list_filetypes(limit: int = 40, source: str = "") -> dict:
+    """List the attachment and file types present in the archive, with counts.
+
+    The counterpart to the `filetype` filter. A count is the number of messages
+    carrying at least one attachment of that type — plus, under source
+    "datei", the mirrored OneDrive files themselves.
+
+    Args:
+        limit: How many types to return, most frequent first.
+        source: Restrict to one source — mainly "outlook" (mail attachments)
+            or "datei" (mirrored files). Empty lists every source.
+    """
+    con = _db()
+    try:
+        wo, params = "", []
+        quelle = (source or "").strip().lower()
+        if quelle and quelle != "all":
+            wo = "AND src = ?"
+            params.append(quelle)
+        # Eine Zeile trägt alle ihre Endungen ("pdf xlsx"); die Zahl je Typ
+        # entsteht daher hier und nicht in SQL. Verschiedene Kombinationen gibt
+        # es nur einige hundert, das ist billiger als es aussieht.
+        zahl = {}
+        for ext, n in con.execute(
+                f"SELECT ext, COUNT(DISTINCT uid) FROM chunks "
+                f"WHERE ext IS NOT NULL AND ext != '' {wo} GROUP BY ext", params):
+            for e in ext.split(" "):
+                if e:
+                    zahl[e] = zahl.get(e, 0) + n
+        oben = sorted(zahl.items(), key=lambda x: (-x[1], x[0]))
+        grenze = max(1, min(int(limit), 200))
+        return {"count": min(len(oben), grenze), "total_distinct": len(oben),
+                "filetypes": [{"type": e, "messages": n} for e, n in oben[:grenze]]}
     finally:
         con.close()
 

@@ -666,7 +666,7 @@ def _zaehle(db):
             # nicht; die Oberfläche bietet sie dann gar nicht erst an, statt
             # den Anwender in einen Fehler laufen zu lassen.
             "features": sorted({r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-                               & {"thread", "gone"}),
+                               & {"thread", "gone", "ext"}),
         }
     finally:
         con.close()
@@ -2061,6 +2061,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
+            if u.path == "/api/filetypes":
+                return self._json(self._filetypes(one))
             if u.path == "/api/folders":
                 return self._json(self._folders(one))
             if u.path == "/api/people":
@@ -2373,7 +2375,8 @@ class Handler(BaseHTTPRequestHandler):
                   k=min(int(q.get("k", 20) or 20), 100),
                   offset=max(int(q.get("offset", 0) or 0), 0),
                   only_gone=str(q.get("gone", "")).lower() in ("1", "true", "ja"),
-                  folder=str(q.get("folder", "") or ""))
+                  folder=str(q.get("folder", "") or ""),
+                  filetype=str(q.get("filetype", "") or ""))
         query = (q.get("q") or "").strip()
         if query:
             res = mod.search_messages(query=query, mode=q.get("mode", "auto"), **kw)
@@ -2446,6 +2449,13 @@ class Handler(BaseHTTPRequestHandler):
                                    data.get("skip_folders"))
         return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
                 **folders.plan(ordner, regeln, daten, endung, datei)}
+
+    def _filetypes(self, q):
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "filetypes": []}
+        return mod.list_filetypes(limit=min(int(q.get("limit", 40) or 40), 200),
+                                  source=q.get("source", ""))
 
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -3237,6 +3247,9 @@ main{padding-bottom:60px}
         <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
       <label class="small feld"><span data-i18n="search.to">bis</span>
         <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
+      <select id="f-typ" onchange="zeigeFilterstand()" style="max-width:170px">
+        <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
+      </select>
       <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
         <option value="" data-i18n="search.folder.all">Alle Ordner</option>
       </select>
@@ -3678,7 +3691,8 @@ function sicht(name){
    ohne sie wäre ein zugeklappter Filter eine Falle. */
 function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
-          el('f-from').value, el('f-to').value, el('f-folder').value].filter(Boolean);
+          el('f-from').value, el('f-to').value, el('f-folder').value,
+          el('f-typ').value].filter(Boolean);
 }
 function filterUmschalten(){
   var zu = el('filter').classList.toggle('hide');      // true = jetzt versteckt
@@ -3687,6 +3701,7 @@ function filterUmschalten(){
 function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
+  el('f-typ').value = '';
   zeigeFilterstand();
 }
 function zeigeFilterstand(){
@@ -3802,6 +3817,7 @@ function renderStatus(s){
   var kann = (st.features || []);
   el('chip-geloescht').classList.toggle('hide', kann.indexOf('gone') < 0);
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
+  KANN_TYP = kann.indexOf('ext') >= 0;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   zeigeKalenderstand(s.calendars || {});
@@ -4088,7 +4104,7 @@ function berichtOeffnen(){
 /* ---------- Suche ---------- */
 /* Die Ordnerliste einmal holen: sie ändert sich nur beim Indizieren, und ein
    Auswahlfeld, das bei jedem Tastendruck nachlädt, wäre reine Last. */
-var ordnerJeQuelle = {}, ordnerStand = null;
+var ordnerJeQuelle = {}, typenJeQuelle = {}, ordnerStand = null;
 
 /* Womit die leere Wahl beschriftet ist. „Alle Ordner“ stimmt bei Kalendern
    und Chatarten nicht – und eine Auswahl, die sich falsch nennt, liest sich
@@ -4112,37 +4128,67 @@ function ordnerName(pfad){
    nichts weg. Dann verschwindet das Feld – ausgegraut stehen zu bleiben sah
    aus, als sei etwas kaputt, und der eine Ordner ist ohnehin schon durch die
    Quelle gesagt (bei „Kontakte“ ist er es immer, denn Kontaktordner hat kaum
-   ein Postfach). */
-function zeichneOrdner(liste){
-  var sel = el('f-folder'), vorher = sel.value;
+   ein Postfach).
+
+   Ordner und Dateityp teilen sich das: beide hängen an der Quelle, beide
+   verschwinden, wenn nichts zu wählen ist, und beide dürfen keine Wahl
+   stehen lassen, die es in der neuen Quelle nicht gibt. */
+function fuelleAuswahl(id, liste, alle){
+  var sel = el(id), vorher = sel.value;
   var wahl = liste.length > 1;
-  var alle = t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all');
   sel.classList.toggle('hide', !wahl);
   sel.innerHTML = '<option value="">' + esc(alle) + '</option>' +
-    (wahl ? liste.map(function(f){
-      return '<option value="' + esc(f.path) + '">' + esc(ordnerName(f.path)) +
-             ' (' + f.messages.toLocaleString(LOC) + ')</option>';
+    (wahl ? liste.map(function(e){
+      return '<option value="' + esc(e.wert) + '">' + esc(e.name) +
+             ' (' + e.zahl.toLocaleString(LOC) + ')</option>';
     }).join('') : '');
-  // Eine Wahl, die zur neuen Quelle nicht passt, fällt weg. Sie stehen zu
-  // lassen hieße, in einem Ordner zu suchen, den es in dieser Quelle nicht
-  // gibt – und das sieht aus wie ein leeres Archiv.
-  sel.value = wahl && liste.some(function(f){ return f.path === vorher; })
+  sel.value = wahl && liste.some(function(e){ return e.wert === vorher; })
     ? vorher : '';
   // Der Zähler an „Filter“ muss die weggefallene Wahl mitbekommen – die Liste
   // kommt erst nach dem Umschalten der Quelle an.
   zeigeFilterstand();
 }
 
+function zeichneOrdner(liste){
+  fuelleAuswahl('f-folder', liste.map(function(f){
+    return {wert: f.path, name: ordnerName(f.path), zahl: f.messages};
+  }), t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all'));
+}
+
+/* Dateitypen gibt es nur, wo es Anhänge oder Dateien gibt – Chats, Termine und
+   Kontakte haben keine. Und nur, wenn der Index die Spalte kennt: ein älterer
+   tut es nicht, dann fehlt das Feld ganz statt ins Leere zu filtern. */
+var KANN_TYP = false;
+function typenMoeglich(quelle){
+  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' || quelle === 'datei');
+}
+function zeichneTypen(liste){
+  fuelleAuswahl('f-typ', liste.map(function(e){
+    return {wert: e.type, name: e.type.toUpperCase(), zahl: e.messages};
+  }), t('search.type.all'));
+}
+
 function ladeOrdner(){
   var quelle = el('f-source').value || 'all';
-  // Nach einem Indexlauf ist die Liste eine andere: neue Ordner, neue Zahlen.
+  // Nach einem Indexlauf sind die Listen andere: neue Ordner, neue Zahlen.
   var stand = (S && S.store) ? S.store.built_at : null;
-  if(stand !== ordnerStand){ ordnerJeQuelle = {}; ordnerStand = stand; }
+  if(stand !== ordnerStand){ ordnerJeQuelle = {}; typenJeQuelle = {}; ordnerStand = stand; }
+  ladeTypen(quelle);
   if(ordnerJeQuelle[quelle]){ zeichneOrdner(ordnerJeQuelle[quelle]); return; }
   api('/api/folders?limit=300&source=' + encodeURIComponent(quelle))
     .then(function(r){
       ordnerJeQuelle[quelle] = r.folders || [];
       if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
+    }).catch(function(){});
+}
+
+function ladeTypen(quelle){
+  if(!typenMoeglich(quelle)){ zeichneTypen([]); return; }
+  if(typenJeQuelle[quelle]){ zeichneTypen(typenJeQuelle[quelle]); return; }
+  api('/api/filetypes?limit=40&source=' + encodeURIComponent(quelle))
+    .then(function(r){
+      typenJeQuelle[quelle] = r.filetypes || [];
+      if((el('f-source').value || 'all') === quelle) zeichneTypen(typenJeQuelle[quelle]);
     }).catch(function(){});
 }
 
@@ -4215,6 +4261,7 @@ function doSearch(off){
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
+    filetype: el('f-typ').value,
     mode: MODUS_ZU_SERVER[SUCHMODUS], k: proSeite, offset: offset});
   zeigeFilterstand();
   el('results').textContent = t('search.running');

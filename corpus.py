@@ -368,6 +368,25 @@ def anhaenge(msg):
     return namen
 
 
+def endungen(att):
+    """Die Dateitypen hinter einer Anhangliste – entdoppelt, klein, sortiert.
+
+    Aus "Vertrag_Musterkunde.pdf Anlage.XLSX" wird "pdf xlsx". Gefiltert wird
+    danach in SQL und nicht über den Volltext: die Bedeutungssuche und die
+    KI-Antwort schränken dort ein, und ein Filter, der nur in der Textsuche
+    wirkt, wäre in zwei von drei Sucharten stillschweigend wirkungslos.
+
+    Nur was wie eine Endung aussieht: Buchstaben und Ziffern, höchstens acht
+    Zeichen. Ein Name wie "Bericht.2024-final" hat keine.
+    """
+    gefunden = set()
+    for name in (att or "").split(" "):
+        stueck = name.rsplit(".", 1)
+        if len(stueck) == 2 and stueck[1] and stueck[1].isalnum() and len(stueck[1]) <= 8:
+            gefunden.add(stueck[1].lower())
+    return " ".join(sorted(gefunden))
+
+
 def addr_people(msg, *headers):
     raw = []
     for h in headers:

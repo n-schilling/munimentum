@@ -689,7 +689,8 @@ def test_with_port_verwechselt_ipv6_nicht_mit_port():
 # Weg über die Leitung, den auch Claude nimmt.
 # --------------------------------------------------------------------------
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
-              "get_thread", "list_people", "list_folders", "read_source_file", "corpus_stats"}
+              "get_thread", "list_people", "list_folders", "list_filetypes",
+              "read_source_file", "corpus_stats"}
 
 
 def _via_client(fn):
@@ -745,7 +746,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     schema = next(t for t in tools if t.name == "search_messages").input_schema
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
-        "offset", "mode", "preview_chars", "only_gone", "folder"}
+        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype"}
     assert schema["required"] == ["query"]      # nur query ist Pflicht
 
 
@@ -1054,6 +1055,47 @@ def test_list_folders_fasst_kanaele_zusammen(state):
     # Und der Filter kommt ohne Zutun damit klar: ein Pfad meint alles darunter.
     assert mcp_server.browse_messages(folder="channels")["count"] == 2
     assert mcp_server.browse_messages(folder="channels/Team A")["count"] == 1
+
+
+def test_dateityp_filtert_in_allen_sucharten(state):
+    """Der Filter steht in SQL, nicht im Volltext - sonst waere er in der
+    Bedeutungssuche und der KI-Antwort stillschweigend wirkungslos."""
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    con.execute("UPDATE chunks SET att = 'Vertrag.pdf Anlage.xlsx', "
+                "ext = 'pdf xlsx' WHERE uid = ?", (UID_M1,))
+    con.execute("UPDATE chunks SET att = 'Notiz.doc', ext = 'doc' WHERE uid = ?",
+                (UID_M2,))
+    con.commit()
+    con.close()
+
+    assert _uids(mcp_server.browse_messages(filetype="pdf")) == [UID_M1]
+    assert _uids(mcp_server.browse_messages(filetype="xlsx")) == [UID_M1]
+    # "doc" darf nicht auf "docx" passen und umgekehrt.
+    assert _uids(mcp_server.browse_messages(filetype="doc")) == [UID_M2]
+    assert mcp_server.browse_messages(filetype="docx")["count"] == 0
+    # Ein Punkt davor ist eine naheliegende Eingabe und keine andere Frage.
+    assert _uids(mcp_server.browse_messages(filetype=".PDF")) == [UID_M1]
+    # Und in der Suche, kombiniert mit dem Suchwort.
+    assert _uids(mcp_server.search_messages("Rechnung", mode="lexical",
+                                            filetype="pdf")) == [UID_M1]
+    assert mcp_server.search_messages("Rechnung", mode="lexical",
+                                      filetype="xyz")["count"] == 0
+
+
+def test_list_filetypes_zaehlt_je_typ(state):
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    con.execute("UPDATE chunks SET ext = 'pdf xlsx' WHERE uid = ?", (UID_M1,))
+    con.execute("UPDATE chunks SET ext = 'pdf' WHERE uid = ?", (UID_M2,))
+    con.commit()
+    con.close()
+    r = mcp_server.list_filetypes()
+    zahl = {e["type"]: e["messages"] for e in r["filetypes"]}
+    # Eine Nachricht mit zwei Anhaengen zaehlt bei beiden Typen einmal.
+    assert zahl == {"pdf": 2, "xlsx": 1}
+    assert [e["type"] for e in r["filetypes"]] == ["pdf", "xlsx"]   # haeufigste zuerst
+    assert mcp_server.list_filetypes(limit=1)["filetypes"] == [{"type": "pdf", "messages": 2}]
+    assert mcp_server.list_filetypes(limit=1)["total_distinct"] == 2
+    assert mcp_server.list_filetypes(source="teams")["filetypes"] == []
 
 
 def test_vorschau_zeigt_die_fundstelle(state):

@@ -565,3 +565,16 @@ def test_pmap_ohne_stoerung_liefert_dasselbe(tmp_path):
     assert corpus.POOL_FEHLER is None, "der normale Weg darf nicht zurückfallen"
     corpus.POOL_FEHLER = "erzwungen"          # ab hier seriell
     assert corpus.load_onedrive(tmp_path) == mit_pool
+
+
+def test_endungen_aus_anhangnamen():
+    """Die Spalte, nach der der Dateityp-Filter fragt: entdoppelt und klein."""
+    assert corpus.endungen("Vertrag.pdf Anlage.XLSX Nachtrag.pdf") == "pdf xlsx"
+    assert corpus.endungen("Bild.jpeg") == "jpeg"
+    assert corpus.endungen("") == ""
+    assert corpus.endungen(None) == ""
+    # Was keine Endung ist, wird auch keine: sonst stünde "2024-final" als
+    # Dateityp zur Wahl.
+    assert corpus.endungen("Bericht.2024-final") == ""
+    assert corpus.endungen("Archiv.ohneinehrsehrlangeendung") == ""
+    assert corpus.endungen("ohnepunkt") == ""

@@ -4284,6 +4284,80 @@ def test_personenfeld_schlaegt_vor_und_meldet_unbekannte():
     _in_node(PRUEFUNG_PERSONENVORSCHLAG)
 
 
+# Dateitypen gibt es nur, wo Anhaenge oder Dateien liegen - und nur, wenn der
+# Index die Spalte ueberhaupt kennt.
+PRUEFUNG_DATEITYP = GRUNDZUSTAND + r"""
+S.store = {exists: true, built_at: '2026-08-12T10:00:00+00:00', features: ['ext']};
+KANN_TYP = true;
+var TYPEN = {
+  all:     [{type:'pdf', messages:4120}, {type:'xlsx', messages:880}],
+  outlook: [{type:'pdf', messages:4120}, {type:'xlsx', messages:880}],
+  datei:   [{type:'pdf', messages:12}]
+};
+var gefragt = [];
+global.fetch = function(pfad){
+  gefragt.push(String(pfad));
+  var m = String(pfad).match(/source=(\w+)/), quelle = m ? m[1] : 'all';
+  if(String(pfad).indexOf('/api/filetypes') >= 0){
+    return Promise.resolve({json: function(){
+      return Promise.resolve({filetypes: TYPEN[quelle] || []}); }});
+  }
+  return Promise.resolve({json: function(){
+    return Promise.resolve({folders: [{path:'E-Mail/A', messages:2},
+                                      {path:'E-Mail/B', messages:1}]}); }});
+};
+
+var feld = document.getElementById('f-typ');
+function warte(n, fertig){
+  if(n <= 0) return fertig();
+  setTimeout(function(){ warte(n - 1, fertig); }, 0);
+}
+function waehle(quelle, dann){
+  document.getElementById('f-source').value = quelle;
+  ladeOrdner();
+  warte(4, dann);
+}
+
+waehle('outlook', function(){
+  pruefe(gefragt.some(function(p){ return p.indexOf('/api/filetypes') >= 0; }),
+         'Dateitypen nicht geholt');
+  pruefe(feld.innerHTML.indexOf('PDF') >= 0, 'Typ fehlt: ' + feld.innerHTML);
+  pruefe(feld.innerHTML.indexOf('4.120') >= 0, 'Zahl fehlt');
+  pruefe(feld.innerHTML.indexOf('value="pdf"') >= 0, 'Gefiltert wird mit der Endung');
+  pruefe(!feld.classList.contains('hide'), 'Feld versteckt, obwohl es Typen gibt');
+  feld.value = 'pdf';
+  pruefe(filterFelder().length > 0, 'Dateityp zaehlt nicht als Filter');
+
+  // Chats haben keine Anhaenge - dort waere das Feld eine leere Verheissung.
+  waehle('teams', function(){
+    pruefe(feld.classList.contains('hide'), 'Feld bleibt bei Teams stehen');
+    pruefe(feld.value === '', 'Versteckter Dateityp filtert weiter mit');
+
+    // Ein einziger Typ ist keine Wahl - dieselbe Regel wie beim Ordner.
+    waehle('datei', function(){
+      pruefe(feld.classList.contains('hide'), 'Ein einziger Typ ist keine Wahl');
+
+      // Kennt der Index die Spalte nicht, gibt es das Feld gar nicht.
+      KANN_TYP = false;
+      var vorher = gefragt.length;
+      typenJeQuelle = {};
+      waehle('outlook', function(){
+        pruefe(feld.classList.contains('hide'), 'Feld ohne Spalte im Index');
+        pruefe(!gefragt.slice(vorher).some(function(p){
+                 return p.indexOf('/api/filetypes') >= 0; }),
+               'Ohne Spalte trotzdem gefragt');
+        console.log('OK');
+      });
+    });
+  });
+});
+"""
+
+
+def test_dateitypfilter_folgt_quelle_und_index():
+    _in_node(PRUEFUNG_DATEITYP)
+
+
 # --------------------------------------------------------------------------
 # OneDrive in der Oberfläche
 # --------------------------------------------------------------------------
@@ -4888,9 +4962,10 @@ def test_kein_feld_sucht_von_selbst():
     eine Suche losläuft – vorher taten das die Filter, und die Trefferliste
     gehörte dann zu einem halb ausgefüllten Formular."""
     i = app_mod.PAGE.index('id="filter"')
-    block = app_mod.PAGE[i:i + 1600]
+    # Bis zum letzten Feld der Zeile, nicht auf eine Zeichenzahl geraten.
+    block = app_mod.PAGE[i:app_mod.PAGE.index('id="f-gone"', i) + 200]
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
-                 'id="f-to"', 'id="f-folder"'):
+                 'id="f-to"', 'id="f-folder"', 'id="f-typ"'):
         j = block.index(feld)
         # Das ganze Element, vom Anfang des Tags bis zu seinem Ende: eine feste
         # Zeichenzahl griff daneben, sobald ein Feld mehr Attribute bekam.

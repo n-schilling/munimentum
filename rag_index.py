@@ -93,7 +93,10 @@ def _chunk_row(i, c):
     return (i + 1, c["uid"], seq, msg_idx, c["src"], c["root"], c["rel"],
             c.get("who"), c.get("ppl"), c.get("ts"), c.get("date"),
             c.get("title"), c.get("ctx"), c.get("text"), c.get("hash"),
-            c.get("thread"), c.get("gone"), c.get("att"))
+            c.get("thread"), c.get("gone"), c.get("att"),
+            # Aus denselben Namen wie att, aber als eigene Spalte: danach wird
+            # in SQL gefiltert, und das muss in allen drei Sucharten wirken.
+            corpus.endungen(c.get("att")) or None)
 
 
 def _people_rows(chunks):
@@ -130,7 +133,8 @@ def write_db(store, chunks):
             title TEXT, ctx TEXT, text TEXT, hash TEXT,
             thread TEXT,                  -- Gesprächskennung, siehe corpus.thread_key
             gone TEXT,                    -- seit wann nicht mehr im Postfach
-            att TEXT);                    -- Namen der Anhänge, siehe corpus.anhaenge
+            att TEXT,                     -- Namen der Anhänge, siehe corpus.anhaenge
+            ext TEXT);                    -- deren Dateitypen, siehe corpus.endungen
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         -- „Verlauf anzeigen“ holt alle Nachrichten eines Gesprächs. Ohne den
         -- Index wäre das ein voller Scan über alle Chunks.
@@ -141,6 +145,9 @@ def write_db(store, chunks):
         -- Der Ordner als Suchkriterium: ohne Index wäre jede Einschränkung
         -- ein voller Scan über alle Chunks.
         CREATE INDEX ix_chunks_ctx ON chunks(ctx);
+        -- Der Dateityp als Filter trifft nur Nachrichten mit Anhang und
+        -- Dateien – ein Teilindex ist damit schmal und spart den vollen Scan.
+        CREATE INDEX ix_chunks_ext ON chunks(ext) WHERE ext IS NOT NULL;
         CREATE INDEX ix_chunks_src_ts ON chunks(src, ts);
         CREATE INDEX ix_chunks_file ON chunks(root, rel, msg_idx);
         -- browse_messages listet Nachrichten (seq = 0) nach Datum. Ohne diesen
@@ -154,7 +161,7 @@ def write_db(store, chunks):
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             title, text, att, content='chunks', content_rowid='id');
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
