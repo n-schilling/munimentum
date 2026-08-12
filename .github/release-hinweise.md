@@ -35,8 +35,7 @@ looked wrong for no visible reason.
 mail was listed twice before, each time with part of their messages. You can
 leave people out of the ranking in *Settings* — usually yourself, whose messages
 otherwise sit far at the top and say nothing about the exchange with others.
-All bars in a list start at the same place. *Disappeared over time* is gone; the
-count above it and the *Deleted* view answer that better.
+All bars in a list start at the same place.
 
 **Removed: the portable search page.** The app never used the file, and on a
 grown archive it reached several hundred megabytes — a page a browser has to

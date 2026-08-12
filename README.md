@@ -2,20 +2,17 @@
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
 channels, Outlook mail, calendar, contacts and OneDrive files — exported through
-Microsoft Graph and searchable offline, in the app or through **Claude**.
+Microsoft Graph and searchable offline, in the app or through Claude via MCP.
 
-Delegated access, no admin consent required. Nothing leaves your machine except
-the calls to Microsoft Graph — see [PRIVACY.md](PRIVACY.md).
-
-> **Whether you may export this data is yours to check.** Delegated access makes
-> it technically possible; establishing that it is permitted in your case is not
-> something this app can do for you.
+**The magic:** All via delegated access, no admin consent required.
 
 > **munimentum** *(Latin)* — a rampart; and, in medieval usage, a deed: the
 > document you keep because it is the proof of what is yours. The two senses are
 > the same idea. This is a walled place for records that would otherwise live
 > only in someone else's cloud, and that you would have a hard time getting at
 > once your access ends.
+
+Nothing leaves your machine except the calls to Microsoft Graph — see [PRIVACY.md](PRIVACY.md).
 
 ---
 
@@ -35,12 +32,20 @@ nothing to install. The interface opens in your browser.
 On macOS, open the disk image and drag the app to *Applications*; on Windows and
 Linux, unpack the archive.
 
-The macOS bundles are signed and notarized by Apple and open without a warning.
-The Windows build is not signed, so SmartScreen asks once on first launch:
-*More info* → *Run anyway*.
+On Windows, SmartScreen asks once on first launch, because the build carries no
+code-signing certificate: *More info* → *Run anyway*.
 
 Your data lives in your user folder, not in the app, so an update overwrites
 nothing. The path is shown in *Settings*.
+
+---
+
+## Data Ownership
+
+A brief note on the ownership of the data that is exported: **whether you may
+export it is yours to check.** Delegated access makes it technically possible;
+establishing that it is permitted in your case is not something this app can do
+for you.
 
 ---
 
@@ -74,7 +79,8 @@ keeps the underlying hits one click away.
 Filters — person, source, date range, folder, file type — sit behind a toggle
 that shows how many are set, and nothing searches until you ask for it. The
 person field suggests names that actually occur, so a typo is not mistaken for
-an absence. Picking a source narrows what the other two offer: calendars for
+an absence, and `*` stands for any run of characters when one name is too
+narrow. Picking a source narrows what the other two offer: calendars for
 the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. Every
 hit offers *Find similar*, the whole conversation it belongs to, and the
