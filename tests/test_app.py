@@ -4723,12 +4723,15 @@ def test_unbrauchbare_untergrenze_laesst_den_wert_stehen(server):
 def test_untergrenze_wird_erklaert():
     """Eine Zahl ohne Erklärung stellt niemand um – und wer sie doch umstellt,
     soll wissen, was zu hoch und was zu niedrig ist."""
-    text = i18n.strings("de")["settings.semantic.hint"]
+    # Die Erklärung steht jetzt im (i) der Zeile statt als Fließtext darunter –
+    # ausführlich bleibt sie trotzdem: diese eine Zahl verändert, was die Suche
+    # überhaupt zeigt.
+    text = i18n.strings("de")["settings.semantic_min.i"]
     assert len(text) > 400, "zu knapp für eine Einstellung, die die Suche verändert"
     for stichwort in ("45", "0", "Volltextsuche"):
         assert stichwort in text, f"„{stichwort}“ fehlt in der Erklärung"
     for code in ("de", "en", "fr"):
-        assert i18n.strings(code)["settings.semantic.hint"] != text or code == "de"
+        assert i18n.strings(code)["settings.semantic_min.i"] != text or code == "de"
 
 
 # --------------------------------------------------------------------------
@@ -5175,3 +5178,132 @@ console.log('OK');
 
 def test_markiert_wird_nur_wo_woertlich_getroffen_wurde():
     _in_node(PRUEFUNG_MARKIERUNG)
+
+
+# --------------------------------------------------------------------------
+# Ollama ist optional – im ganzen System
+#
+# Bis 5.0.0 war Ollama eine stille Voraussetzung: fehlte es, fragte die App
+# trotzdem alle zehn Sekunden nach, der Assistent drängte zur Installation, und
+# der Indexlauf entschied selbst. Jetzt ist es eine Entscheidung.
+# --------------------------------------------------------------------------
+def test_abgeschaltet_wird_gar_nicht_erst_gefragt(sandbox, monkeypatch):
+    """Der eigentliche Gewinn: ohne Ollama lief bisher dauerhaft alle zehn
+    Sekunden ein Verbindungsversuch ins Leere."""
+    gefragt = []
+    monkeypatch.setattr(app_mod, "check_ollama",
+                        lambda *a, **k: gefragt.append(1) or {})
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["ollama_enabled"] = False
+    for _ in range(3):
+        zustand = a.ollama(force=True)
+    assert gefragt == [], "es wurde trotzdem nach Ollama gesucht"
+    assert zustand["disabled"] is True
+    assert zustand["running"] is False and zustand["has_model"] is False
+
+
+def test_abgeschaltet_kein_assistent(sandbox, with_ollama):
+    """Wer Ollama abwählt, will nicht bei jedem Start gefragt werden, ob er es
+    nicht doch installieren möchte."""
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["ollama_enabled"] = False
+    assert a.status()["wizard"] != "ollama"
+
+
+def test_abgeschaltet_baut_den_volltextindex(sandbox, with_ollama, monkeypatch, no_ollama):
+    """Auch wenn Ollama liefe: abgewählt ist abgewählt."""
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["ollama_enabled"] = False
+    assert a.semantisch_gewollt() is False
+
+
+def test_volltext_auch_mit_laufendem_ollama(sandbox, with_ollama):
+    """Einbetten kostet auf einem echten Bestand eine Stunde. Wer nur exakt
+    sucht, soll sie nicht zahlen müssen."""
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["index_semantic"] = False
+    assert a.semantisch_gewollt() is False
+    a.cfg["index_semantic"] = True
+    assert a.semantisch_gewollt() is True
+
+
+def test_mcp_bekommt_den_verzicht_mitgeteilt(sandbox):
+    """Sonst versucht der Server es bei jeder Anfrage neu und läuft jedes Mal
+    in denselben Fehler."""
+    cfg = app_mod.load_config()
+    cfg["ollama_enabled"] = False
+    args = app_mod.mcp_client_config(cfg, 8365)["stdio"]["mcpServers"]["munimentum"]["args"]
+    assert "--no-ollama" in args
+    cfg["ollama_enabled"] = True
+    args = app_mod.mcp_client_config(cfg, 8365)["stdio"]["mcpServers"]["munimentum"]["args"]
+    assert "--no-ollama" not in args
+
+
+def test_schalter_werden_gespeichert(server):
+    _, port = server
+    code, r = call(port, "POST", "/api/config",
+                   {"ollama_enabled": False, "index_semantic": False})
+    assert code == 200
+    code, s = call(port, "GET", "/api/status")
+    assert s["config"]["ollama_enabled"] is False
+    assert s["config"]["index_semantic"] is False
+    assert s["ollama"]["disabled"] is True, "die Prüfung von vorher wirkt nach"
+
+
+PRUEFUNG_OLLAMA_AUS = GRUNDZUSTAND + """
+var st = statusGeruest();
+st.ollama.disabled = true;
+st.ollama.running = false; st.ollama.has_model = false; st.ollama.has_chat_model = false;
+renderStatus(st);
+
+// Abgeschaltet ist kein Fehler, sondern eine Entscheidung: grau statt rot.
+var punkt = document.getElementById('p-ollama');
+pruefe(!punkt.className.match(/err|warn/), 'Abgeschaltet wird als Fehler gezeigt: ' + punkt.className);
+pruefe(document.getElementById('p-ollama-t').textContent.length > 0, 'Kachel ohne Text');
+
+// Und die Suchvarianten nennen die Ursache, nicht nur die Bedingung.
+pruefe(document.getElementById('m-ki').disabled, 'KI-Variante trotz Abschaltung waehlbar');
+var hinweis = document.getElementById('modus-fehlt').textContent;
+pruefe(hinweis.indexOf('Ollama') >= 0, 'Hinweis nennt Ollama nicht: ' + hinweis);
+console.log('OK');
+"""
+
+
+def test_kopfzeile_zeigt_abgeschaltet_nicht_als_fehler():
+    _in_node(PRUEFUNG_OLLAMA_AUS)
+
+
+PRUEFUNG_EINSTELLUNGEN = GRUNDZUSTAND + """
+// Der Schalter graut aus, was ohne ihn keine Wirkung hat - versteckt es aber
+// nicht: wer die Moeglichkeit nie sieht, vermisst sie auch nie.
+document.getElementById('c-ollama_enabled').checked = true;
+indexart(true); ollamaSchalter();
+pruefe(!document.getElementById('ollama-kinder').classList.contains('aus'),
+       'Untergruppen ausgegraut, obwohl Ollama an ist');
+pruefe(INDEX_SEMANTISCH === true, 'Indexart nicht gesetzt');
+
+document.getElementById('c-ollama_enabled').checked = false;
+ollamaSchalter();
+pruefe(document.getElementById('ollama-kinder').classList.contains('aus'),
+       'Untergruppen bleiben bedienbar, obwohl Ollama aus ist');
+pruefe(document.getElementById('ix-beides').disabled, 'Bedeutung trotz Abschaltung waehlbar');
+pruefe(INDEX_SEMANTISCH === false, 'Indexart nicht auf Volltext gefallen');
+pruefe(document.getElementById('ollama-folgen').textContent.length > 20,
+       'Es wird nicht gesagt, was das Abschalten bedeutet');
+console.log('OK');
+"""
+
+
+def test_einstellungen_ollama_schalter():
+    _in_node(PRUEFUNG_EINSTELLUNGEN)
+
+
+def test_jede_einstellung_hat_eine_erklaerung():
+    """Die Seite lebt jetzt vom (i): eine Zeile ohne Erklärung ist eine Zahl,
+    die niemand anfasst – oder schlimmer, blind umstellt."""
+    seite = app_mod.PAGE
+    abschnitt = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</section>\n</main>")]
+    zeilen = abschnitt.count('class="feldzeile')
+    mit_info = abschnitt.count('class="info"')
+    assert zeilen >= 25, f"nur {zeilen} Einstellungszeilen gefunden"
+    assert mit_info >= zeilen, f"{zeilen} Zeilen, aber nur {mit_info} Erklärungen"

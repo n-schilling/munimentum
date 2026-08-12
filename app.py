@@ -233,6 +233,15 @@ ONEDRIVE_DIR = "onedrive_export"
 STORE_DIR = "rag_store"
 
 DEFAULT_CONFIG = {
+    # Ollama ist optional. Aus heißt: es wird gar nicht mehr danach gesucht
+    # (bisher lief alle zehn Sekunden ein Verbindungsversuch ins Leere), die
+    # Bedeutungssuche und die KI-Zusammenfassung verschwinden, und der Index
+    # wird als reiner Volltextindex gebaut. Alles andere läuft unverändert.
+    "ollama_enabled": True,
+    # Auch mit Ollama kann man den Volltextindex wollen: Einbetten kostet auf
+    # einem echten Bestand eine gute Stunde, und wer nur exakt sucht, zahlt sie
+    # umsonst.
+    "index_semantic": True,
     # Aus, bis jemand es einschaltet: ein Laufwerk kann zweistellige
     # Gigabyte haben, und niemand soll die beim ersten Klick ziehen.
     "onedrive_enabled": False,
@@ -1357,6 +1366,8 @@ def mcp_client_config(cfg, port):
     """
     argv = script_argv("mcp_server", "--transport", "stdio",
                        "--data-dir", str(BASE))
+    if not cfg.get("ollama_enabled", True):
+        argv.append("--no-ollama")
     return {
         "http": {"mcpServers": {"munimentum": {
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
@@ -1394,6 +1405,8 @@ class McpProcess:
         argv = script_argv("mcp_server", "--data-dir", str(BASE),
                            "--embed-model", cfg["embed_model"],
                            "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
+        if not cfg.get("ollama_enabled", True):
+            argv.append("--no-ollama")
         try:
             self.proc = subprocess.Popen(
                 argv, cwd=str(BASE), env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -1527,14 +1540,32 @@ class App:
                                     ["1on1", "group", "meeting", "channels"]))
 
     def ollama(self, force=False):
-        """Ergebnis kurz zwischenspeichern – der Status wird im Sekundentakt abgefragt."""
+        """Ergebnis kurz zwischenspeichern – der Status wird im Sekundentakt abgefragt.
+
+        Abgeschaltet wird gar nicht erst gefragt. Das ist der eigentliche Zweck
+        des Schalters: ohne ihn versucht die App alle zehn Sekunden eine
+        Verbindung, die es nicht gibt – dauerhaft, auf jedem Rechner ohne
+        Ollama.
+        """
+        if not self.cfg.get("ollama_enabled", True):
+            return {"running": False, "models": [], "has_model": False,
+                    "has_chat_model": False, "error": None, "disabled": True,
+                    "model": self.cfg["embed_model"],
+                    "chat_model": self.cfg.get("chat_model"),
+                    "url": self.cfg["ollama"]}
         age, cached = self._ollama_cache
         if not force and cached is not None and time.time() - age < 10:
             return cached
         res = check_ollama(self.cfg["ollama"], self.cfg["embed_model"],
                            self.cfg.get("chat_model"))
+        res["disabled"] = False
         self._ollama_cache = (time.time(), res)
         return res
+
+    def semantisch_gewollt(self):
+        """Soll der nächste Index Vektoren enthalten?"""
+        return bool(self.cfg.get("ollama_enabled", True)
+                    and self.cfg.get("index_semantic", True))
 
     def check_updates(self, blockierend=False):
         """Einmal nachsehen, ob es ein neueres Release gibt.
@@ -1598,7 +1629,7 @@ class App:
         wizard = None
         if not tok["valid"] or jobs["token_expired"]:
             wizard = "token"
-        elif not oll["running"] or not oll["has_model"]:
+        elif not oll.get("disabled") and (not oll["running"] or not oll["has_model"]):
             wizard = "ollama"
         return {
             "token": tok,
@@ -1698,7 +1729,8 @@ class App:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
-            embeddings = self.ollama()["running"] and self.ollama()["has_model"]
+            embeddings = (self.semantisch_gewollt()
+                          and self.ollama()["running"] and self.ollama()["has_model"])
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
         braucht_zugang = (outlook or teams or onedrive or check
                           or sync_folders or sync_onedrive or check_onedrive)
@@ -2026,9 +2058,12 @@ class Handler(BaseHTTPRequestHandler):
                     pass
         for key in ("mcp_autostart", "update_check", "embed_images", "cache_images",
                     "refresh_channels", "skip_empty_chats", "include_hidden",
-                    "calendar_reconstruct"):
+                    "calendar_reconstruct", "ollama_enabled", "index_semantic"):
             if key in data:
                 cfg[key] = bool(data[key])
+        # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
+        if "ollama_enabled" in data:
+            self.app._ollama_cache = (0, None)
         if "folder_rules" in data:
             cfg["folder_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["folder_rules"] or "")))
@@ -2760,6 +2795,43 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .code-gross{display:inline-block;font-size:26px;letter-spacing:.14em;font-weight:700;
   background:var(--code);border-radius:8px;padding:8px 16px}
 
+/* Einstellungen: eine Zeile je Einstellung, überall gleich gebaut –
+   Beschriftung links mit (i), Bedienelement rechts. Die Erklärungen stehen im
+   (i) statt als Fließtext darunter; das macht die Seite abtastbar statt
+   lesbar und hat sie von zwölf Karten auf sieben gebracht. */
+.feldzeile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;
+  align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+.gruppe>.feldzeile:first-of-type{border-top:0}
+.feldzeile .bez{display:flex;align-items:center;gap:7px;font-size:14px}
+.feldzeile input[type=text],.feldzeile select{min-width:150px}
+.feldzeile input[type=number]{width:96px;text-align:right;font-variant-numeric:tabular-nums}
+.feldzeile.breit{grid-template-columns:1fr;gap:6px}
+.feldzeile.breit textarea{min-height:76px}
+.gruppe{margin-top:20px}
+.gruppe>h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--muted);margin:0 0 4px;display:flex;align-items:center;gap:7px}
+/* Was ohne den Schalter darüber keine Wirkung hätte, steht eingerückt
+   darunter – die Einrückung IST die Aussage. */
+.unter{margin-left:14px;padding-left:16px;border-left:2px solid var(--line)}
+.wahl2{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.wahl2 button{border:0;background:transparent;color:var(--muted);font:inherit;
+  font-size:13.5px;padding:6px 14px;cursor:pointer}
+.wahl2 button+button{border-left:1px solid var(--line)}
+.wahl2 button.on{background:var(--accent);color:#fff;font-weight:600}
+.wahl2 button:disabled{opacity:.4;cursor:not-allowed}
+.aus{opacity:.42;pointer-events:none}
+.kopfschalter{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.kipp{appearance:none;width:40px;height:23px;border-radius:12px;background:var(--line);
+  position:relative;cursor:pointer;transition:background .15s;flex:0 0 auto}
+.kipp:checked{background:var(--ok)}
+.kipp::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;
+  border-radius:50%;background:#fff;transition:transform .15s}
+.kipp:checked::after{transform:translateX(17px)}
+.kipp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
+.speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
+  border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
+
 /* Protokollleiste unten */
 #protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
   border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
@@ -2805,7 +2877,7 @@ main{padding-bottom:60px}
        findet, wer ihn braucht, ohne dass ihn lesen muss, wer ihn nicht kennt. -->
   <div class="pills">
     <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
-    <button class="pill" id="pill-ollama" onclick="openWizard('ollama')"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
+    <button class="pill" id="pill-ollama" onclick="ollamaKachel()"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
     <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
     <span class="pill-luecke"></span>
     <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
@@ -2826,7 +2898,7 @@ main{padding-bottom:60px}
   <div class="banner hide" id="update-banner" style="margin-bottom:16px"></div>
   <div class="card">
     <h2 class="mit-info" data-i18n="export.what">Was soll exportiert werden?
-      <span class="info" tabindex="0" data-i18n-title="export.what.sub" role="img" aria-label="Info">i</span></h2>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.what.sub" role="img" aria-label="Info">i</span></h2>
     <div class="row" style="gap:36px;align-items:flex-start">
       <div>
         <strong class="small" data-i18n="export.outlook">Outlook</strong>
@@ -2846,7 +2918,7 @@ main{padding-bottom:60px}
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
       <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
-      <span class="info" tabindex="0" data-i18n-title="export.start.hint"
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.start.hint"
             role="img" aria-label="Info">i</span>
     </div>
 
@@ -2863,15 +2935,15 @@ main{padding-bottom:60px}
 
     <div class="schritt">
       <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
-      <span class="info" tabindex="0" data-i18n-title="export.index.only.when" role="img" aria-label="Info">i</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.index.only.when" role="img" aria-label="Info">i</span>
     </div>
     <div class="schritt">
       <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
-      <span class="info" tabindex="0" data-i18n-title="export.calendar.build.when" role="img" aria-label="Info">i</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.calendar.build.when" role="img" aria-label="Info">i</span>
     </div>
     <div class="schritt">
       <button class="ghost" onclick="run({search_page:true}, t('job.searchpage'))" data-i18n="export.page.build">Portable Suchseite erzeugen</button>
-      <span class="info" tabindex="0" data-i18n-title="export.page.build.when" role="img" aria-label="Info">i</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.page.build.when" role="img" aria-label="Info">i</span>
     </div>
   </details>
 </section>
@@ -3011,199 +3083,153 @@ main{padding-bottom:60px}
 
 <section id="tab-einstellungen" class="hide">
   <div class="card">
-    <h2 data-i18n="settings.teams.title">Teams-Export</h2>
-    <p class="sub" data-i18n="settings.teams.sub">Wirkt auf den nächsten Lauf.</p>
-    <label class="chk"><input type="checkbox" id="c-embed_images"> <span data-i18n="settings.embed_images">Inline-Bilder einbetten</span>
-      <span class="small muted" data-i18n="settings.embed_images.hint">– aus: kleinere Dateien</span></label>
-    <label class="chk"><input type="checkbox" id="c-cache_images"> <span data-i18n="settings.cache_images">Bilder zwischenspeichern</span>
-      <span class="small muted" data-i18n="settings.cache_images.hint">– schnellerer Neu-Export</span></label>
-    <label class="chk"><input type="checkbox" id="c-refresh_channels"> <span data-i18n="settings.refresh_channels">Kanäle auf neue Antworten prüfen</span>
-      <span class="small muted" data-i18n="settings.refresh_channels.hint">– aus: Kanäle nur einmalig</span></label>
-    <label class="chk"><input type="checkbox" id="c-skip_empty_chats"> <span data-i18n="settings.skip_empty_chats">Chats ohne echte Nachricht überspringen</span>
-      <span class="small muted" data-i18n="settings.skip_empty_chats.hint">– nur Beitritte, Anrufe</span></label>
-  </div>
+    <h2 class="mit-info"><span data-i18n="settings.export.title">Export</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.export.i">i</span></h2>
 
-  <div class="card">
-    <h2 data-i18n="settings.outlook.title">Outlook-Export</h2>
-    <label class="chk"><input type="checkbox" id="c-include_hidden"> <span data-i18n="settings.include_hidden">Versteckte Systemordner mitnehmen</span>
-      <span class="small muted" data-i18n="settings.include_hidden.hint">– Conversation History …</span></label>
-    <label class="chk"><input type="checkbox" id="c-calendar_reconstruct"> <span data-i18n="settings.calendar_reconstruct">Gelöschte Termine aus Mails wiederherstellen</span></label>
-    <p class="small muted" style="margin:2px 0 0 24px" data-i18n="settings.calendar_reconstruct.hint">Liest jede Mail – der langsamste Schritt.</p>
-    <h3 style="margin:16px 0 4px;font-size:15px" data-i18n="folders.title">Welche Ordner exportiert werden</h3>
-    <p class="small muted" id="folders-state"></p>
-    <div class="row" style="margin:6px 0">
-      <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-      <span class="small muted" id="folders-msg"></span>
+    <div class="gruppe"><h3 data-i18n="settings.teams.title">Teams</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_images.i">i</span></span><input type="checkbox" id="c-embed_images"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
     </div>
-    <textarea id="c-folder_rules" style="min-height:110px"
-      placeholder="- E-Mail/Archiv/**&#10;+ E-Mail/Archiv/Wichtig/**"></textarea>
-    <p class="small muted" data-i18n-html="folders.rules.hint">Eine Regel je Zeile.</p>
 
-    <p class="sub" style="margin:12px 0 6px" data-i18n="settings.skip_folders.sub">Ordner, die die Standardauswahl auslässt.</p>
-    <textarea id="c-skip_folders" style="min-height:120px"></textarea>
-    <div class="row" style="margin-top:8px">
-      <button class="ghost" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
-      <button class="ghost" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
+    <div class="gruppe"><h3 data-i18n="settings.outlook.title">Outlook</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.include_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.include_hidden.i">i</span></span><input type="checkbox" id="c-include_hidden"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_reconstruct"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_reconstruct.i">i</span></span><input type="checkbox" id="c-calendar_reconstruct"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="folders.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="folders.rules.i">i</span></span><span class="small muted" id="folders-state"></span></div>
+      <div class="feldzeile breit">
+        <textarea id="c-folder_rules"
+          placeholder="- E-Mail/Archiv/**&#10;+ E-Mail/Archiv/Wichtig/**"></textarea>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_folders.sub"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_folders.i">i</span></span><span class="small muted"></span></div>
+      <div class="feldzeile breit"><textarea id="c-skip_folders"></textarea></div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+        <button class="mini" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
+        <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
+        <span class="small muted" id="folders-msg"></span>
+      </div>
     </div>
-  </div>
 
-  <div class="card">
-    <h2 data-i18n="settings.onedrive.title">OneDrive</h2>
-    <p class="sub" data-i18n="settings.onedrive.sub">Spiegelt dein Laufwerk hierher. Einschalten im Reiter „Exportieren“.</p>
-    <div class="banner" data-i18n-html="settings.onedrive.note">
-      Gesichert wird alles. <strong>Durchsuchbar sind Name und Ordner</strong> – der Inhalt der Dokumente steht noch nicht im Index.
+    <div class="gruppe"><h3 data-i18n="settings.onedrive.title">OneDrive</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.rules.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.rules.i">i</span></span><span class="small muted" id="od-folders-state"></span></div>
+      <div class="feldzeile breit">
+        <textarea id="c-onedrive_rules"
+          placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+        <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
+        <span class="small muted" id="od-folders-msg"></span>
+      </div>
     </div>
-    <p class="small muted" data-i18n="settings.onedrive.mirror">Gelöschtes bleibt liegen; frühere Fassungen einer geänderten Datei nicht.</p>
-    <h3 style="margin:16px 0 4px;font-size:15px" data-i18n="settings.onedrive.rules.title">Welche Ordner gespiegelt werden</h3>
-    <p class="small muted" id="od-folders-state"></p>
-    <div class="row" style="margin:6px 0">
-      <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-      <span class="small muted" id="od-folders-msg"></span>
-    </div>
-    <textarea id="c-onedrive_rules" style="min-height:90px"
-      placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
-    <p class="small muted" data-i18n-html="settings.onedrive.rules.hint">Eine Regel je Zeile – wie beim Postfach, die <strong>letzte</strong> zutreffende gewinnt.</p>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.onedrive.maxmb">Dateien überspringen ab</span>
-        <input type="number" id="c-onedrive_max_mb" min="0" step="10" style="width:90px"> MB</label>
-      <span class="small muted" data-i18n="settings.onedrive.maxmb.hint">0 = ohne Grenze.</span>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <button class="ghost" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
+
+    <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
     </div>
   </div>
 
   <div class="card">
-    <h2 data-i18n="sched.title">Regelmäßig exportieren</h2>
-    <p class="sub" data-i18n="sched.sub">Läuft nur, solange die App geöffnet ist.</p>
-    <label class="chk"><input type="checkbox" id="s-enabled"> <span data-i18n="sched.enabled">Zeitplan aktiv</span></label>
-    <div class="row" style="margin:10px 0">
-      <label class="small"><span data-i18n="sched.every">Alle</span> <input type="number" id="s-interval" min="5" step="5" value="60" style="width:80px"> <span data-i18n="sched.minutes">Minuten</span></label>
+    <h2 class="mit-info"><span data-i18n="sched.title">Zeitplan</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.i">i</span></h2>
+    <div class="gruppe" style="margin-top:8px">
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.enabled.i">i</span></span><input type="checkbox" id="s-enabled"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.every"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.every.i">i</span></span><span><input type="number" id="s-interval" min="5" step="5" value="60"> <span class="muted small" data-i18n="sched.minutes">Minuten</span></span></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.outlook"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.outlook.i">i</span></span><input type="checkbox" id="s-outlook"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.teams"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.teams.i">i</span></span><input type="checkbox" id="s-teams"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
     </div>
-    <label class="chk"><input type="checkbox" id="s-outlook"> <span data-i18n="sched.outlook">Outlook exportieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-teams"> <span data-i18n="sched.teams">Teams exportieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-index"> <span data-i18n="sched.index">Danach indizieren</span></label>
-    <label class="chk"><input type="checkbox" id="s-calendar"> <span data-i18n="sched.calendar">Kalender &amp; Kontakte neu aufbauen</span></label>
     <div class="row" style="margin-top:14px">
       <button class="act" onclick="saveSchedule()" data-i18n="sched.save">Zeitplan speichern</button>
       <span class="small muted" id="s-next"></span>
     </div>
-    <div class="banner warn" style="margin-top:14px" data-i18n="sched.token.note">
-      Der Zeitplan trägt nur so weit, wie der Access Token gültig ist.
+  </div>
+
+  <div class="card">
+    <h2 class="mit-info"><span data-i18n="settings.ollama.title">Ollama</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.i">i</span></h2>
+    <p class="sub" data-i18n="settings.ollama.sub">Alles darunter hängt daran.</p>
+    <div class="kopfschalter">
+      <input type="checkbox" class="kipp" id="c-ollama_enabled" onchange="ollamaSchalter()">
+      <label for="c-ollama_enabled" style="font-weight:600"
+             data-i18n="settings.ollama.use">Ollama verwenden</label>
+      <span class="small muted" id="ollama-stand"></span>
+    </div>
+    <p class="folgen" id="ollama-folgen"></p>
+
+    <div id="ollama-kinder">
+      <div class="gruppe" style="margin-top:8px">
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.ollama.url"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.url.i">i</span></span><input type="text" id="c-ollama" style="width:230px"></div>
+      </div>
+
+      <div class="gruppe unter">
+        <h3><span data-i18n="settings.index.title">Index</span>
+          <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.i">i</span></h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.index.kind"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.kind.i">i</span></span><div class="wahl2" role="group"><button id="ix-text" onclick="indexart(false)" data-i18n="settings.index.text">Nur Volltext</button><button id="ix-beides" onclick="indexart(true)" data-i18n="settings.index.both">Volltext und Bedeutung</button></div></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_model.i">i</span></span><input type="text" id="c-embed_model" style="width:160px"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.batch"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.batch.i">i</span></span><input type="number" id="c-index_batch" min="1" max="512"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.semantic_min"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.semantic_min.i">i</span></span><span><input type="number" id="c-semantic_min" min="0" max="95" step="5"> <span class="muted small">%</span></span></div>
+        <p class="folgen" id="index-folgen"></p>
+      </div>
+
+      <div class="gruppe unter">
+        <h3><span data-i18n="settings.ki.title">KI-Zusammenfassung</span>
+          <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ki.i">i</span></h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.chat_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.chat_model.i">i</span></span><input type="text" id="c-chat_model" style="width:210px"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.answer_sources"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.answer_sources.i">i</span></span><input type="number" id="c-answer_sources" min="1" max="20"></div>
+      </div>
     </div>
   </div>
 
   <div class="card">
-    <h2 data-i18n="settings.speed.title">Geschwindigkeit</h2>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.workers">Parallele Downloads</span>
-        <input type="number" id="c-workers" min="1" max="8" style="width:80px"></label>
-      <span class="small muted" data-i18n="settings.workers.hint">Graph erlaubt 4 gleichzeitige Anfragen je Postfach.</span>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.batch">Embeddings je Anfrage</span>
-        <input type="number" id="c-index_batch" min="1" max="512" style="width:90px"></label>
-      <span class="small muted" data-i18n="settings.batch.hint">Größer = weniger Anfragen an Ollama.</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="settings.hits.title">Suche</h2>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.search_results">Treffer je Seite</span>
-        <input type="number" id="c-search_results" min="5" max="100" step="5" style="width:80px"></label>
-      <span class="small muted" data-i18n="settings.search_results.hint">Mehr heißt weniger Blättern.</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="settings.search.title">KI-Suche (Ollama)</h2>
-    <p class="sub" data-i18n="settings.search.sub">Beides läuft in deinem Ollama auf diesem Rechner.</p>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.ollama">Ollama</span> <input type="text" id="c-ollama" style="width:230px"></label>
-      <label class="small"><span data-i18n="settings.embed_model">Embedding-Modell</span> <input type="text" id="c-embed_model" style="width:160px"></label>
-    </div>
-    <div class="row" style="margin-top:10px">
-      <label class="small"><span data-i18n="settings.chat_model">Antwort-Modell</span>
-        <input type="text" id="c-chat_model" style="width:210px"></label>
-      <label class="small"><span data-i18n="settings.answer_sources">Quellen je Antwort</span>
-        <input type="number" id="c-answer_sources" min="1" max="20" style="width:80px"></label>
-    </div>
-    <p class="small muted" data-i18n="settings.chat_model.hint" style="margin-top:2px"></p>
-    <h3 style="margin:18px 0 4px;font-size:15px" data-i18n="settings.semantic.title">Wie ähnlich ein Treffer mindestens sein muss</h3>
-    <div class="row">
-      <label class="small"><span data-i18n="settings.semantic_min">Untergrenze</span>
-        <input type="number" id="c-semantic_min" min="0" max="95" step="5" style="width:80px"></label>
-      <span class="small muted">%</span>
-    </div>
-    <p class="small muted" data-i18n-html="settings.semantic.hint">Erklärung.</p>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="mcp.title" id="mcp-karte">MCP-Server</h2>
-    <p class="sub" data-i18n="mcp.sub">Damit durchsucht Claude das Archiv selbst und antwortet mit Quellenangaben.</p>
+    <h2 class="mit-info" id="mcp-karte"><span data-i18n="mcp.title">Claude (MCP)</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.i">i</span></h2>
     <div class="row">
       <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
       <span class="small" id="mcp-state"></span>
     </div>
-    <div class="row" style="margin-top:12px">
-      <label class="small"><span data-i18n="settings.mcp_port">MCP-Port</span>
-        <input type="number" id="c-mcp_port" min="1024" max="65535" style="width:110px"></label>
-      <label class="chk"><input type="checkbox" id="c-mcp_autostart">
-        <span data-i18n="settings.mcp_autostart">MCP-Server beim Start mitstarten</span></label>
+    <div class="gruppe" style="margin-top:8px">
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_port"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_port.i">i</span></span><input type="number" id="c-mcp_port" min="1024" max="65535"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_autostart"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_autostart.i">i</span></span><input type="checkbox" id="c-mcp_autostart"></div>
     </div>
-    <p class="small muted" style="margin-top:6px" data-i18n="settings.mcp.note">Ein geänderter Port wirkt erst nach einem Neustart des MCP-Servers.</p>
     <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
     <div class="mitkopie"><pre id="mcp-json"></pre>
       <button class="mini kopie" onclick="kopiere('mcp-json', this)" data-i18n="copy">Kopieren</button></div>
     <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
     <div class="mitkopie"><pre id="mcp-stdio"></pre>
       <button class="mini kopie" onclick="kopiere('mcp-stdio', this)" data-i18n="copy">Kopieren</button></div>
-    <p class="small muted" data-i18n="mcp.paths.note">Die Pfade folgen dem Datenordner.</p>
   </div>
 
   <div class="card">
-    <h2 data-i18n="settings.dirs.title">Ordner</h2>
-    <p class="sub" data-i18n="settings.dirs.sub">Alles liegt in einem Ordner.</p>
-    <p class="small muted"><span data-i18n="settings.datadir">Datenordner:</span> <code id="data-dir2">…</code></p>
-    <div class="row" style="margin-top:8px">
-      <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
-      <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
-      <button class="mini" onclick="datenordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
-      <span class="small" id="datadir-msg"></span>
+    <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
+    <div class="gruppe" style="margin-top:8px">
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><code id="data-dir2" class="small">…</code></div>
+      <div class="feldzeile breit">
+        <div class="row">
+          <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
+          <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
+          <button class="mini" onclick="datenordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
+          <span class="small" id="datadir-msg"></span>
+        </div>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
     </div>
-    <p class="small muted" data-i18n="settings.datadir.note">Ein Wechsel verschiebt nichts.</p>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="settings.lang.title">Sprache</h2>
-    <p class="sub" data-i18n="settings.lang.sub">Gilt für diese Oberfläche.</p>
-    <select id="c-language" style="min-width:240px"></select>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="update.title">Version</h2>
-    <p class="small" id="update-current"></p>
-    <p class="small muted" id="update-state"></p>
-    <label class="chk"><input type="checkbox" id="c-update_check">
-      <span data-i18n="update.enabled">Beim Start nach Aktualisierungen sehen</span></label>
-    <p class="small muted" data-i18n="update.enabled.hint" style="margin:2px 0 12px 26px"></p>
-    <div class="row">
-      <button class="ghost" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
-      <a class="ghost" id="update-link" target="_blank" rel="noopener"
-         style="text-decoration:none" data-i18n="update.open">Zur Releases-Seite</a>
+    <div class="row" style="margin-top:14px">
+      <span class="small muted" id="update-current" style="flex:1"></span>
+      <span class="small muted" id="update-state"></span>
+      <button class="mini" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
+      <a class="mini" id="update-link" target="_blank" rel="noopener"
+         style="text-decoration:none" data-i18n="update.open">Releases</a>
+      <button class="mini" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
     </div>
   </div>
 
-  <!-- Derselbe Dialog wie der Knopf in der Protokollleiste. Zwei Wege, weil es
-       zwei Momente gibt: „das hier ist gerade kaputt" (unten, neben dem
-       Fehler) und „ich will etwas melden" (hier, wo man nachsieht). -->
-  <div class="card">
-    <h2 data-i18n="report.title">Fehler melden</h2>
-    <p class="sub" data-i18n="report.sub">Öffnet ein vorbereitetes Formular auf GitHub.</p>
-    <button class="ghost" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
-  </div>
-  <div class="row" style="margin-bottom:24px">
+  <div class="speichern">
     <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
     <span class="small" id="cfg-msg"></span>
   </div>
@@ -3418,6 +3444,35 @@ function zeigeFilterstand(){
   el('filter-weg').classList.toggle('hide', !n);
 }
 
+/* Abgeschaltet gibt es nichts einzurichten – dann führt die Kachel dorthin,
+   wo man es wieder anschalten kann. */
+function ollamaKachel(){
+  if(S && S.ollama && S.ollama.disabled) zeigeEinstellung('ollama');
+  else openWizard('ollama');
+}
+
+/* Ollama abschalten heißt: die App sucht nicht mehr danach, die Bedeutungs-
+   suche und die Zusammenfassung fallen weg, und der Index wird als reiner
+   Volltextindex gebaut. Was ohne Ollama keine Wirkung hätte, graut hier ab –
+   sichtbar bleiben soll es trotzdem, sonst weiß niemand, was er sich abschaltet. */
+var INDEX_SEMANTISCH = true;
+
+function indexart(semantisch){
+  if(semantisch && !el('c-ollama_enabled').checked) return;
+  INDEX_SEMANTISCH = !!semantisch;
+  el('ix-text').classList.toggle('on', !INDEX_SEMANTISCH);
+  el('ix-beides').classList.toggle('on', INDEX_SEMANTISCH);
+  el('index-folgen').textContent = INDEX_SEMANTISCH ? '' : t('settings.index.parked');
+}
+
+function ollamaSchalter(){
+  var an = el('c-ollama_enabled').checked;
+  el('ollama-kinder').classList.toggle('aus', !an);
+  el('ix-beides').disabled = !an;
+  el('ollama-folgen').textContent = an ? '' : t('settings.ollama.folgen');
+  if(!an) indexart(false);
+}
+
 function zeigeEinstellung(anker){
   // Die Kachel oben führt weiterhin direkt zu ihrem Thema – nur liegt das
   // jetzt in den Einstellungen statt in einem eigenen Reiter.
@@ -3450,9 +3505,14 @@ function renderStatus(s){
   else setPill('token','ok', t('pill.token.set'), tokTip);
 
   var o = s.ollama;
-  setPill('ollama', o.running ? (o.has_model ? 'ok' : 'warn') : 'err',
-    o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model')) : t('pill.ollama.off'),
-    t('pill.ollama.tip'));
+  // Abgeschaltet ist kein Fehler, sondern eine Entscheidung – deshalb grau
+  // statt rot, und kein Assistent, der zur Installation drängt.
+  setPill('ollama',
+    o.disabled ? '' : (o.running ? (o.has_model ? 'ok' : 'warn') : 'err'),
+    o.disabled ? t('pill.ollama.disabled')
+      : (o.running ? (o.has_model ? t('pill.ollama.ready') : t('pill.ollama.model'))
+                   : t('pill.ollama.off')),
+    t(o.disabled ? 'pill.ollama.tip.disabled' : 'pill.ollama.tip'));
 
   // Der Zustand des Index stand einmal als Kachel im Kopf. Er steht jetzt im
   // Analytics-Reiter, wo auch alles andere über den Bestand steht – zweimal
@@ -3517,7 +3577,8 @@ function renderStatus(s){
   // Die Antwort gibt es nur, wenn auch ein Modell sie formulieren kann.
   // Die beiden hinteren Varianten hängen an Ollama: „Ähnliche Suche“ muss die
   // Anfrage einbetten, die Zusammenfassung braucht zusätzlich ein Sprachmodell.
-  modiPruefen(!!(o.running && o.has_chat_model && st.exists && st.semantic));
+  modiPruefen(!!(o.running && o.has_chat_model && st.exists && st.semantic),
+              !!o.disabled);
 
   // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
   // und Adressbuch weiter den Stand von vor dem Lauf.
@@ -3827,12 +3888,13 @@ function suchmodus(art){
 
 /* Ohne Ollama bleiben die beiden hinteren Varianten sichtbar, aber tot. Sie zu
    verstecken hieße: wer sie nie sieht, erfährt auch nie, dass es sie gibt. */
-function modiPruefen(moeglich){
+function modiPruefen(moeglich, abgeschaltet){
   ['aehnlich', 'ki'].forEach(function(a){
     var b = el('m-' + a);
     b.disabled = !moeglich;
-    b.title = moeglich ? '' : t('search.mode.needs');
+    b.title = moeglich ? '' : t(abgeschaltet ? 'search.mode.off' : 'search.mode.needs');
   });
+  el('modus-fehlt').textContent = t(abgeschaltet ? 'search.mode.off' : 'search.mode.needs');
   el('modus-fehlt').classList.toggle('hide', moeglich);
   if(!moeglich && SUCHMODUS !== 'text') suchmodus('text');
 }
@@ -4657,7 +4719,8 @@ function pruefeUpdate(){
 
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
-                'include_hidden','calendar_reconstruct','mcp_autostart','update_check'];
+                'include_hidden','calendar_reconstruct','mcp_autostart','update_check',
+                'ollama_enabled'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','semantic_min'];
 var TEXTE    = ['ollama','embed_model','chat_model',
@@ -4673,6 +4736,10 @@ function fuelleEinstellungen(cfg){
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
+  // Zwei Zustände, die keine Formularfelder sind: der Ollama-Schalter graut die
+  // halbe Karte ab, die Index-Wahl ist ein Umschalter statt einer Checkbox.
+  indexart(cfg.index_semantic !== false);
+  ollamaSchalter();
   fuelleSprachen();
 }
 function speichereEinstellungen(){
@@ -4682,6 +4749,7 @@ function speichereEinstellungen(){
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
   TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
+  body.index_semantic = INDEX_SEMANTISCH;
   post('/api/config', body).then(function(r){
     // Die Sprache steckt in der ausgelieferten Seite – ein Wechsel braucht
     // einen Neuaufbau, alles andere wirkt sofort.

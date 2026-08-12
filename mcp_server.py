@@ -90,8 +90,13 @@ contacts. Everything is local and read-only; there is no live mailbox access,
 so anything not exported is simply absent.
 
 Which tool to use:
-  • search_messages – the default entry point. Ranks with BM25 and embeddings
-    fused, so exact tokens (invoice numbers, names) and paraphrases both work.
+  • search_messages – the default entry point. Ranking depends on this archive:
+    with embeddings it fuses BM25 and semantic scoring, so exact tokens and
+    paraphrases both work; without them it is BM25 only, and a paraphrase will
+    miss. Every result says which was used in its "backend" field ("hybrid",
+    "semantic" or "lexical") – when it reads "lexical", search with the words
+    that would literally appear in the text rather than describing the idea.
+    corpus_stats says the same thing up front.
   • browse_messages – when there is no query, only filters ("everything from
     Bob in June"). Newest first.
   • get_document    – full text of one hit, via the uid from a search/browse
@@ -1013,6 +1018,11 @@ def main():
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model", "bge-m3"))
     ap.add_argument("--ollama", default=settings.value("ollama", "http://localhost:11434"))
+    # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
+    # Server pro Anfrage neu und läuft jedes Mal in denselben Fehler.
+    ap.add_argument("--no-ollama", action="store_true",
+                    help="Nicht einbetten, auch wenn Vektoren vorhanden sind. "
+                         "Rankt rein lexikalisch.")
     ap.add_argument("--transport", choices=["http", "stdio"], default="http",
                     help="http: one shared server, register its URL in Claude "
                          "(default). stdio: launched per client via command.")
@@ -1044,7 +1054,10 @@ def main():
     n_chunks = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
     con.close()
 
-    np, V = _open_vectors(a.store, n_chunks)
+    np, V = (None, None) if a.no_ollama else _open_vectors(a.store, n_chunks)
+    if a.no_ollama:
+        print("Ollama abgeschaltet – es wird rein lexikalisch gerankt.",
+              file=sys.stderr)
     STATE.update(db=str(dbp), V=V, np=np, semantic=(np is not None),
                  vector_dtype=str(V.dtype) if V is not None else None,
                  teams_dir=a.teams, outlook_dir=a.outlook,

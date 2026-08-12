@@ -165,8 +165,9 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
         d = roh(code)
         # "search.ai" war das Etikett der alten Checkbox; die Kennzeichnung
         # steht jetzt in der Kopfzeile des Kastens selbst.
-        for k in ("search.ai.label", "search.ai.note",
-                  "settings.chat_model.hint"):
+        # settings.chat_model.hint hieß die Erklärung, solange sie als Fließtext
+        # unter dem Feld stand; sie steckt jetzt im (i) der Karte.
+        for k in ("search.ai.label", "search.ai.note", "settings.ki.i"):
             assert "llama" in d[k], f"{code}.json[{k}] nennt Ollama nicht"
         kopf = d["search.ai.label"] + " " + d["search.ai.tag"]
         assert re.search(r"\bKI\b|\bAI\b|\bIA\b", kopf), \
