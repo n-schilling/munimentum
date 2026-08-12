@@ -8,23 +8,80 @@ anyone in IT having to approve anything. Every run fetches only what is new.
 Which folders come along is a list of ordered include/exclude rules, and
 *Show export list* spells out what they currently mean.
 
-**Search.** Full text and — with [Ollama](https://ollama.com) — meaning-based
-search across everything exported, merged into a single ranking. Filter by
-person, period, source and folder. Plus the whole mail thread under a hit, a
-calendar including appointments recovered from invitation and cancellation
-mails, an address book, and a view for messages that are no longer in the
-mailbox.
+**Search.** Three kinds, chosen above the results: text search finds the words
+that actually occur, similar search finds related wording, and the AI summary
+answers in a paragraph with sources. Filter by person, period, source and
+folder. Plus the whole conversation under a hit, a calendar including
+appointments recovered from invitation and cancellation mails, an address book,
+and a view for messages that are no longer in the mailbox.
 
 **Analytics.** What the archive holds — messages per source, conversations,
-people, files, period, disk usage. And, on request, a comparison against the
-mailbox and the drive: what Microsoft counts per folder against what is here.
+people, files, period, disk usage, and the timeline with its gaps. And, on
+request, a comparison against the mailbox and the drive: what Microsoft counts
+per folder against what is here.
 
 **Work with Claude.** A built-in MCP server makes the archive searchable for
 Claude — with citations, a folder filter and a `days` shorthand for “the last
 seven days”.
 
 Everything stays on your machine. The only connections outbound are Microsoft
-Graph and your local Ollama.
+Graph and your local Ollama — and Ollama is optional.
+
+## New in 5.1.0
+
+**Search asks you what kind.** Until now every search quietly mixed exact
+matching and meaning into one ranking, which made both worse: a search for an
+invoice number came back padded with things that merely sounded similar. There
+are now three kinds, chosen above the results.
+
+*Text search* is the default and always available — the words that actually
+occur, ranked by relevance, no Ollama needed. *Similar search* finds related
+wording even when your words do not appear. *AI summary* answers a question in
+a paragraph with source numbers and keeps the hits it used one click away.
+
+The AI no longer runs on every search. It was a checkbox that made each search
+wait for a language model; now it is a kind of search you pick when you want it.
+Every hit also offers **Find similar** — more like this one — which works even
+without Ollama, because that message's vector is already in the index.
+
+The result list got out of its own way: two lines per hit instead of four, dates
+in a column of their own so the list can be scanned down the edge, and the
+actions moved into a menu at the end of the row.
+
+**Ollama is optional, and you can say so.** It was always possible to run without
+it, but the app kept looking: every ten seconds, forever, on machines that had
+none. There is now a switch in *Settings*. Turned off, the app stops looking, the
+header says *Ollama off*, the two kinds of search that need it are visibly
+switched off rather than hidden, and the index is built as full text only. You
+can also keep Ollama and still choose a full-text index — embedding a real
+archive costs an hour, and if you only ever search exactly, that hour buys you
+nothing. Switching back later re-uses the vectors that were set aside, so it
+costs one index run, not another hour.
+
+**Settings went from twelve cards to seven.** Every setting is one line now:
+what it is on the left, the control on the right, and an **(i)** that explains
+what it does and what happens if you change it — instead of a paragraph of grey
+text under each field. Index and AI sit indented under the Ollama switch,
+because that is what they depend on.
+
+The Teams, Outlook and index folder names are no longer settable. They were a
+leftover from when this was a handful of scripts someone ran by hand. *If you
+ever changed those names*, the app will look in the standard folders after this
+update and find nothing — your data is untouched, but you will want to rename
+the folders back or point the data folder at them.
+
+**Analytics can now show you time.** Messages per month, stacked by source, show
+when your communication moved from mail to chat. A growth curve shows how the
+archive filled up. And **gaps** are named outright: months between your first and
+your last message with nothing in them at all — the one question an archive
+should be able to answer about itself without asking Microsoft. Below that:
+attachments by file type, the largest single files, who you exchange the most
+with, and when messages disappeared from the mailbox.
+
+**A privacy document.** [PRIVACY.md](https://github.com/n-schilling/munimentum/blob/main/PRIVACY.md)
+states plainly what leaves this machine: Microsoft Graph, your local Ollama, and
+one update check you can switch off. Nothing else — no telemetry, no analytics,
+no account.
 
 ## New in 5.0.0 — it becomes an app with a name of its own
 

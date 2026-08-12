@@ -1,8 +1,8 @@
 # Munimentum
 
-Export your own Microsoft 365 data — Teams chats and channels, Outlook mail,
-calendar, contacts, OneDrive files — through Microsoft Graph, and search it
-offline: in the app, in a single portable HTML page, or through **Claude** (MCP).
+Your own Microsoft 365 data, kept where you can reach it: Teams chats and
+channels, Outlook mail, calendar, contacts and OneDrive files — exported through
+Microsoft Graph and searchable offline, in the app or through **Claude**.
 
 Delegated access, no admin consent required. Nothing leaves your machine except
 the calls to Microsoft Graph — see [PRIVACY.md](PRIVACY.md).
@@ -17,17 +17,13 @@ the calls to Microsoft Graph — see [PRIVACY.md](PRIVACY.md).
 > only in someone else's cloud, and that you would have a hard time getting at
 > once your access ends.
 
-**Just want to use it?** Grab the ready-made app from
-[Releases](../../releases) — no Python, nothing to install. Everything below the
-next section describes the scripts it is built from.
-
 ---
 
 ## Download and run
 
 Bundles for macOS, Windows and Linux are attached to every
 [release](../../releases). They contain their own Python and every dependency —
-no installation. The UI opens in your default browser.
+nothing to install. The interface opens in your browser.
 
 | File | For |
 |---|---|
@@ -36,60 +32,83 @@ no installation. The UI opens in your default browser.
 | `Munimentum-windows-x64.zip` | Windows 10/11, 64-bit |
 | `Munimentum-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
 
-On macOS, open the disk image and drag the app to *Applications*; on Windows
-and Linux, unpack the archive.
+On macOS, open the disk image and drag the app to *Applications*; on Windows and
+Linux, unpack the archive.
 
 The macOS bundles are signed and notarized by Apple and open without a warning.
 The Windows build is not signed, so SmartScreen asks once on first launch:
-*More info* → *Run anyway*. The release notes walk through it.
+*More info* → *Run anyway*.
 
 Your data lives in your user folder, not in the app, so an update overwrites
-nothing. The path is shown in the UI and can be changed in *Settings*.
+nothing. The path is shown in *Settings*.
 
 ---
 
-## What the app does
+## What it does
 
 One browser page with four tabs.
 
-**Export data** — pick what to fetch (mail, calendar, contacts; 1:1, group,
-meeting and channel chats; OneDrive files) and start. Every run fetches only
-what is new. A schedule can repeat it while the app is open, and index straight
-afterwards.
+### Export data
 
-**Search data** — a search box and a button; filters (person, source, date
-range, folder) sit behind a toggle that shows how many are set. Nothing
-searches until you ask. Full-text and, with [Ollama](https://ollama.com),
-semantic search are merged into one ranking; semantic hits below a similarity
-floor are dropped, so narrowing the search does not fill the list with
-everything that passes the filter. Previews show the passage around the match
-with the term highlighted. Four views sit here: results, calendar (including
-appointments recovered from invitation and cancellation mails), the address
-book, and *Deleted* — messages no longer in the mailbox but still in the
-archive. An AI summary of the hits, with source numbers, can be switched on
-above the results.
+Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and channel
+chats; OneDrive files — and start. Every run fetches only what is new, so the
+second one takes minutes rather than hours. Deleted messages **stay in the
+archive** and get a marker; that is the point of keeping one.
 
-**Analytics** — what the archive holds (messages per source, conversations,
-people, OneDrive files, period, disk usage) and, on request, a completeness
-check against the mailbox and the drive: what Microsoft counts per folder
-against what is here.
+Which folders come along is a list of ordered include/exclude rules, and *Show
+export list* spells out what they currently mean: what comes along, what is left
+out and why, and what is only in your archive because it is gone from the
+source. A schedule can repeat the whole thing while the app is open.
 
-**Settings** — everything the scripts can do: folders, categories, models,
-schedule, MCP server, language (German, English, French). Which folders get
-exported — from the mailbox and from OneDrive — is a list of include/exclude
-rules, and *Show export list* spells out what they currently mean: what comes
-along, what is left out and why, and what is only in your archive because it is
-gone from the source.
+### Search data
+
+Three kinds of search, chosen above the results. **Text search** is the default
+and always available: it finds the words that actually occur, ranked by
+relevance. **Similar search** finds related wording even when your words do not
+appear. **AI summary** answers a question in a paragraph with source numbers and
+keeps the underlying hits one click away.
+
+Filters — person, source, date range, folder — sit behind a toggle that shows
+how many are set, and nothing searches until you ask for it. Every hit offers
+*Find similar*, the whole conversation it belongs to, and the original file.
+Four views live here: results, calendar (including appointments recovered from
+invitation and cancellation mails), the address book, and *Deleted* — messages
+no longer in the mailbox but still here.
+
+The last two kinds of search need [Ollama](https://ollama.com). Without it they
+are visibly switched off rather than hidden, and everything else works
+unchanged.
+
+### Analytics
+
+What the archive holds, all computed from the index without asking Microsoft:
+messages per source, conversations, people, period, disk usage — plus the
+timeline. Messages per month by source show when your communication moved from
+mail to chat; the growth curve shows how the archive filled up; and **gaps** —
+months with no message at all between your first and your last — are named
+outright, which is the one question an archive should answer about itself.
+Below that: attachments by file type, the largest single files, who you exchange
+the most with, and when messages disappeared from the mailbox.
+
+On request there is also a completeness check against Microsoft: what it counts
+per folder against what is here, for both the mailbox and the drive.
+
+### Settings
+
+Export options per source, the schedule, Ollama, Claude and the app itself. Each
+setting is one line with an **(i)** that explains what it does and what happens
+if you change it. Ollama has a switch of its own: turned off, the app stops
+looking for it, the index is built as full text only, and the header says so.
 
 The log bar at the bottom is open from every tab. *Copy* puts it on the
 clipboard; *Report a problem* fills in a GitHub issue with the log and the
-details that a bug report otherwise costs two rounds of e-mail to collect —
-version, operating system, cores, what the index holds. The app sends nothing
-itself: e-mail addresses and user names in paths are replaced, the whole text
-is shown for editing, and it is you who submits the form. Folder names and
-subject lines are beyond what a pattern can spot, so read it before you post.
+details a bug report otherwise costs two rounds of e-mail to collect. The app
+sends nothing itself — addresses and user names in paths are replaced, the whole
+text is shown for editing, and you submit the form.
 
-### Signing in
+---
+
+## Signing in
 
 Two ways, chosen in the assistant. Pasting a key stays the default.
 
@@ -98,151 +117,51 @@ Two ways, chosen in the assistant. Pasting a key stays the default.
 | **Access key** | nothing but the [Graph Explorer](https://developer.microsoft.com/en-us/graph/graph-explorer) | a few hours, then paste again |
 | **Sign in** | one sign-in, optionally your own app registration | weeks — the schedule keeps running unattended |
 
-Signing in stores a refresh token in `msal_cache.bin` (mode `0600`); *Sign out*
-deletes it. Your password is never seen. Without your own registration it uses
-Microsoft's public `Graph Command Line Tools` application, which is pre-approved
-in almost every tenant.
+Signing in stores a refresh token on this machine, readable only by you; *Sign
+out* deletes it. Your password is never seen. Without your own registration it
+uses Microsoft's public *Graph Command Line Tools* application, which is
+pre-approved in almost every tenant.
+
+---
+
+## Search with Claude
+
+A built-in MCP server hands the archive to Claude Code or Claude Desktop:
+Claude searches it, reads the sources and answers with citations — over your own
+mail and chats, not over the open web. Start it in *Settings*, where the app also
+prints the exact snippet to paste into Claude.
+
+> The server serves your complete mail and chat history and has **no
+> authentication**. It binds to `127.0.0.1` only and checks the `Host` and
+> `Origin` headers, so a web page you happen to visit cannot reach it through
+> your browser. Leave it that way.
+
+---
+
+## Optional: Ollama
+
+Without [Ollama](https://ollama.com), Munimentum exports, indexes and searches
+by text — that is the whole app minus two features. With it, similar search and
+the AI summary become available, both running on your machine; nothing is sent
+anywhere. The app offers to help you install it, and you can switch it off for
+good in *Settings* if you would rather not.
 
 ---
 
 ## From source
 
-Python 3.12 or newer (CI tests 3.12 and 3.13). On Windows type `python`
-instead of `python3`.
+Python 3.12 or newer:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate          # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python3 app.py                     # the UI — drives everything below
+python3 app.py
 ```
 
-The static search page needs no packages at all; the export scripts need only
-`msal` and `requests`.
+That is the whole app. The individual export and index scripts still run on
+their own, and each explains itself with `--help`; how the pieces fit together
+is written in their headers rather than repeated here.
 
-### The scripts
-
-Each one runs on its own, without the app:
-
-| Script | Purpose |
-|---|---|
-| `app.py` | Browser UI that drives everything else (start here) |
-| `teams_export.py` | Teams 1:1/group/meeting chats and channels → HTML |
-| `outlook_export.py` | Mail (`.eml`), calendar (`.ics`), contacts (`.vcf`) |
-| `onedrive_export.py` | OneDrive as a local mirror (delta-based, keeps deleted files) |
-| `combined_search.py` | Self-contained offline search page, and the calendar/contacts data the app shows |
-| `rag_index.py` | Builds the search index (`rag_store/`: SQLite + FTS5 + embeddings) |
-| `mcp_server.py` | MCP server — Claude searches and reads the exports itself |
-| `rag_server.py` | Local web UI with AI answers, fully offline via Ollama |
-| `auth.py` | Signing in — pasted key or MSAL login, shared by every script |
-| `folders.py` | The mailbox folder tree and the include/exclude rules |
-| `corpus.py` | Shared export parsing |
-| `settings.py` | `app_config.json` as a defaults layer for every script |
-| `answer.py` | Prompt and streaming for the Ollama summary |
-| `progress.py` | Machine-readable progress, for the progress bar |
-| `i18n.py`, `lang/` | UI translations |
-| `packaging/` | PyInstaller spec, the smoke test that gates every release, and the macOS signing guide |
-
-```bash
-python3 teams_export.py            # asks what to export
-python3 outlook_export.py --folders # sync the folder tree (once, then rarely)
-python3 outlook_export.py -default # no questions, default selection
-python3 outlook_export.py --check  # completeness against the mailbox
-python3 onedrive_export.py         # mirror OneDrive (only what changed)
-python3 onedrive_export.py --folders  # just refresh the folder tree
-python3 onedrive_export.py --check    # completeness against the drive
-python3 rag_index.py               # build the index
-python3 combined_search.py         # → combined_search.html, opens anywhere
-```
-
-### Which folders get exported
-
-Ordered rules on paths, **last match wins** — the `.gitignore` idea:
-
-```
-- E-Mail/Archiv/**
-+ E-Mail/Archiv/Wichtig/**
-```
-
-`*` stays within one level, `**` reaches deeper. Set them in *Settings*, or via
-`FOLDER_RULES`. With none set, the older folder list still applies, so an
-upgrade changes nothing until you say so. The tree itself lives in
-`folders.json` next to the export and is refreshed only when you ask —
-see [`folders.py`](folders.py).
-
-### Configuration
-
-Every switch in the UI is also an environment variable, and `app_config.json`
-carries what you clicked in the app over to a direct script run:
-
-```
-environment variable   >   app_config.json   >   built-in default
-```
-
-So `INCLUDE_HIDDEN=0 python3 outlook_export.py` overrides a single run, and a
-script that took a value from the file says so at startup. The names and
-defaults live in [`settings.py`](settings.py) and in each script's header —
-that is the one place they cannot drift out of date.
-
-The file is looked up in `MUNIMENTUM_DATA_DIR`, otherwise next to the scripts; a
-missing or broken one is ignored. What it deliberately does **not** supply is
-*what* to export — running a script directly should still ask.
-
----
-
-## Search with Claude (MCP)
-
-`mcp_server.py` hands the exports to Claude Code or Claude Desktop as
-[MCP](https://modelcontextprotocol.io) tools: Claude searches, reads sources and
-answers with citations. Ranking is hybrid (BM25 + embeddings, merged with
-Reciprocal Rank Fusion) and falls back to pure full-text if Ollama is away.
-Semantic hits below a similarity floor are dropped (`SEMANTIC_MIN`, default
-45 %, adjustable in *Settings*) — without it a narrow filter returns everything
-that passes it, sorted by similarity rather than matched.
-
-```bash
-python3 mcp_server.py              # http://127.0.0.1:8365/mcp
-```
-
-> The server has **no authentication** and serves your complete mail and chat
-> history. Keep it on `127.0.0.1` — the default. On loopback it validates the
-> Host and Origin headers, so a web page you visit cannot reach it through your
-> browser. Binding anything else means naming the hostnames clients will use
-> (`--allowed-host nas.local`), otherwise it refuses to start.
-
-Claude Code: this repo's `.mcp.json` already registers it. Claude Desktop only
-accepts `command` entries — the app's *Settings* tab prints the exact snippet.
-
----
-
-## Offline AI
-
-With [Ollama](https://ollama.com) installed, two things become available: the
-semantic half of the search, and an AI summary of the hits.
-
-```bash
-ollama pull bge-m3                 # embeddings for semantic search
-ollama pull qwen3.6:27b            # answer model (~17 GB)
-```
-
-Everything runs on your machine. Without Ollama the export, the full-text search
-and the MCP server work exactly as before — the app says so and offers to help
-you install it.
-
-The summary is built only from the hits already on screen, with numbered source
-references. The prompt is short and lives in [`answer.py`](answer.py); read it
-there rather than trusting a paraphrase here.
-
----
-
-## Tests
-
-```bash
-pytest                             # ~1100 tests
-ruff check .
-```
-
-CI runs both on Python 3.12 and 3.13 with a coverage floor. Every release
-bundle additionally goes through `packaging/smoke_test.py`, which starts the
-built app, indexes, searches, builds the calendar and starts the MCP server —
-a bundle with a missing dependency never reaches a release.
+Bug reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the fastest
+way to send one, and [SECURITY.md](SECURITY.md) if it is a security issue.
