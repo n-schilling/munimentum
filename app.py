@@ -272,6 +272,11 @@ DEFAULT_CONFIG = {
     # exportiert und durchsuchbar bleibt alles, es steht nur nicht in der
     # Auswahlliste. Als sichtbare Vorgabe statt als Regel im Code.
     "filetype_hidden": sorted(FILETYPE_HIDDEN_DEFAULT),
+    # Personen, die in der Auswertung nicht gezählt werden – in aller Regel man
+    # selbst: die eigenen Nachrichten stehen sonst mit Abstand oben und sagen
+    # nichts über den Austausch mit anderen. Eine je Zeile, weil Namen Kommas
+    # enthalten („Schilling, Nico“).
+    "analytics_skip": [],
     # Ordnerauswahl als geordnete Regeln, letzte Übereinstimmung gewinnt.
     # Leer heißt: die alte Namensliste oben gilt weiter (siehe folders.py).
     "folder_rules": "",
@@ -422,6 +427,17 @@ def _clean_endungen(values):
         values = values.replace("\n", ",").split(",")
     return sorted({str(v).strip().lower().lstrip(".")
                    for v in (values or []) if str(v).strip().strip(".")})
+
+
+def _clean_zeilen(values):
+    """Eine Angabe je Zeile: kleingeschrieben, ohne Doppel, ohne Leerzeilen.
+
+    Nicht kommagetrennt wie die Ordnerliste – Namen enthalten Kommas, und
+    „Schilling, Nico“ wären sonst zwei Einträge, von denen keiner trifft.
+    """
+    if isinstance(values, str):
+        values = values.splitlines()
+    return sorted({str(v).strip().lower() for v in (values or []) if str(v).strip()})
 
 
 def _clean_folders(values):
@@ -779,9 +795,14 @@ def auswertung(con, kennung):
     top_typen = sorted(typen.items(), key=lambda x: -x[1])[:10]
     rest = sum(typen.values()) - sum(n for _, n in top_typen)
 
-    personen = [{"who": w, "src": s, "n": n} for w, s, n in con.execute(
-        "SELECT who, src, messages FROM people WHERE who != '' "
-        "ORDER BY messages DESC LIMIT 10")]
+    # Über die Quellen hinweg summiert: die people-Tabelle führt eine Zeile je
+    # (Quelle, Person), und wer in Teams UND per Mail schreibt, stand deshalb
+    # zweimal in der Liste – mit geteilter Zahl, was beides falsch aussah.
+    # Mehr als die zehn gezeigten, damit das Ausschließen (siehe kennzahlen)
+    # die Liste nicht kürzer macht, als sie sein soll.
+    personen = [{"who": w, "n": n} for w, n in con.execute(
+        "SELECT who, SUM(messages) m FROM people WHERE who != '' "
+        "GROUP BY who ORDER BY m DESC LIMIT 40")]
 
     geloescht = []
     if "gone" in spalten:
@@ -848,6 +869,12 @@ def kennzahlen(cfg):
                 "AND gone IS NOT NULL").fetchone()[0]
         s = db.stat()
         out.update(auswertung(con, (s.st_mtime_ns, s.st_size)))
+        # Außerhalb der Zwischenspeicherung: die Liste hängt am Index, wer
+        # ausgelassen wird an der Einstellung. Sonst wirkte eine Änderung erst
+        # nach dem nächsten Indexlauf.
+        aus = {str(n).strip().lower() for n in (cfg.get("analytics_skip") or [])}
+        out["top_personen"] = [pe for pe in out["top_personen"]
+                               if pe["who"].strip().lower() not in aus][:10]
     except (sqlite3.Error, OSError) as e:
         out["error"] = str(e)
     finally:
@@ -2271,6 +2298,8 @@ class Handler(BaseHTTPRequestHandler):
         if "onedrive_rules" in data:
             cfg["onedrive_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["onedrive_rules"] or "")))
+        if "analytics_skip" in data:
+            cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
         if "filetype_hidden" in data:
             cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
         if "skip_folders" in data:
@@ -3523,6 +3552,8 @@ main{padding-bottom:60px}
         </div>
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.analytics_skip"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.analytics_skip.i">i</span></span><span class="small muted"></span></div>
+      <div class="feldzeile breit"><textarea id="c-analytics_skip" style="min-height:70px"></textarea></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.filetype_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.filetype_hidden.i">i</span></span><span><input type="text" id="c-filetype_hidden" style="min-width:220px"> <button class="mini" onclick="typenZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
@@ -5385,6 +5416,7 @@ function fuelleEinstellungen(cfg){
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
+  el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
   // Zwei Zustände, die keine Formularfelder sind: der Ollama-Schalter graut die
   // halbe Karte ab, die Index-Wahl ist ein Umschalter statt einer Checkbox.
   indexart(cfg.index_semantic !== false);
@@ -5394,6 +5426,7 @@ function fuelleEinstellungen(cfg){
 function speichereEinstellungen(){
   var body = {skip_folders: el('c-skip_folders').value,
               filetype_hidden: el('c-filetype_hidden').value,
+              analytics_skip: el('c-analytics_skip').value,
               language: el('c-language').value};
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });

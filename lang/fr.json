@@ -530,6 +530,8 @@
   "settings.app.i": "Où sont les données, quelle langue parle l’interface et quelle version tourne.",
   "settings.datadir.i": "Exports, index et réglages se trouvent ici. Un changement ne déplace rien — il pointe ailleurs, et prend effet au redémarrage.",
   "settings.search_results.i": "Combien de résultats une page affiche. Davantage signifie moins de pagination.",
+  "settings.analytics_skip": "Personnes à exclure des analyses",
+  "settings.analytics_skip.i": "Une par ligne, orthographiée comme dans les analyses — en général votre propre nom. Elles n’apparaissent plus sous « avec qui vous échangez le plus » : vos propres messages figurent sinon largement en tête et ne disent rien de l’échange avec les autres. Le nom entier est comparé, sans tenir compte de la casse ; si vous apparaissez sous plusieurs orthographes, ajoutez-les toutes. L’export et la recherche ne sont pas touchés.",
   "settings.filetype_hidden": "Types de fichier à ne pas proposer",
   "settings.filetype_hidden.i": "Séparés par des virgules, par ex. « p7s, asc ». Ces types n’apparaissent pas dans le filtre de type de fichier — sinon la liste se remplit de ce que les logiciels de messagerie ajoutent d’eux-mêmes : blocs de signature, enveloppes de chiffrement. Affichage seulement : tout reste exporté et retrouvable, et un tel message se retrouve par le nom de sa pièce jointe.",
   "settings.lang.i": "S’applique à cette interface. Le contenu exporté n’est jamais touché.",

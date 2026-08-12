@@ -3785,6 +3785,52 @@ def test_kennzahlen_zaehlen_nachrichten_nicht_textstellen(sandbox):
     assert k["von"] == 1_000_000 and k["bis"] == 2_000_000
 
 
+def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
+    """Gemeldet: derselbe Name stand zweimal in der Liste.
+
+    Die people-Tabelle führt eine Zeile je (Quelle, Person). Wer in Teams UND
+    per Mail schreibt, stand deshalb doppelt da – mit geteilter Zahl, was
+    beides falsch aussah.
+    """
+    store = _analytics_db(sandbox)
+    con = sqlite3.connect(store / "corpus.db")
+    con.execute("INSERT INTO people VALUES ('teams', 'Alice', 40, '')")
+    con.commit()
+    con.close()
+    app_mod._AUSWERTUNG.clear()
+
+    k = app_mod.kennzahlen(app_mod.load_config())
+    namen = [pe["who"] for pe in k["top_personen"]]
+    assert namen == ["Alice", "Bob"]                   # jede Person einmal
+    assert namen.count("Alice") == 1
+    assert k["top_personen"][0]["n"] == 43             # 3 aus Mail + 40 aus Teams
+
+
+def test_ausgelassene_personen_fehlen_in_der_auswertung(sandbox):
+    """Man selbst steht sonst mit Abstand oben und sagt nichts über den
+    Austausch mit anderen."""
+    _analytics_db(sandbox)
+    app_mod._AUSWERTUNG.clear()
+    cfg = app_mod.load_config()
+    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Alice", "Bob"]
+
+    # Klein geschrieben und mit Leerraum: verglichen wird ohne Rücksicht darauf.
+    cfg["analytics_skip"] = ["  alice "]
+    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Bob"]
+    # Die Zwischenspeicherung hängt am Index, nicht an der Einstellung – eine
+    # Änderung darf nicht bis zum nächsten Indexlauf warten.
+    cfg["analytics_skip"] = []
+    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Alice", "Bob"]
+
+
+def test_namensliste_je_zeile(sandbox):
+    """Kommagetrennt wäre falsch: „Schilling, Nico“ sind keine zwei Personen."""
+    assert app_mod._clean_zeilen("Schilling, Nico\nBob\n\n  Bob  ") \
+        == ["bob", "schilling, nico"]
+    assert app_mod._clean_zeilen(["A", "a", ""]) == ["a"]
+    assert app_mod._clean_zeilen("") == []
+
+
 def test_kennzahlen_sagen_weiss_ich_nicht_statt_null(sandbox):
     """Ein Index aus einer älteren Fassung kennt die Spalten nicht. „0 mit
     Anhang“ wäre eine Behauptung, None ist eine Auskunft."""
@@ -5888,6 +5934,7 @@ def test_jedes_feld_ist_auch_gelistet():
     # Von Hand behandelt, jeweils mit eigenem Grund.
     ausnahmen = {"skip_folders",      # mehrzeiliger Text, eigene Behandlung
                  "filetype_hidden",   # Liste aus einer Zeile, eigene Behandlung
+                 "analytics_skip",    # mehrzeiliger Text, eigene Behandlung
                  "language",          # eigenes Auswahlfeld, fuelleSprachen()
                  "data-dir",          # kein Konfigurationswert, eigener Knopf
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
