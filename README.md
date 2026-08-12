@@ -110,11 +110,13 @@ per folder against what is here, for both the mailbox and the drive.
 
 ### Settings
 
-Export options per source, the schedule, Ollama, the MCP server and the app
-itself. Each
+Export options per source, the schedule, AI, the MCP server and the app itself. Each
 setting is one line with an **(i)** that explains what it does and what happens
-if you change it. Ollama has a switch of its own: turned off, the app stops
-looking for it, the index is built as full text only, and the header says so.
+if you change it. The **AI** section holds everything that needs a local model
+server — currently Ollama — and it has a switch of its own: turned off, the app
+stops looking, the index is built as full text only, and the header says so.
+Next to the address and the two model names, a small indicator says whether each
+is actually there.
 
 The log bar at the bottom is open from every tab. *Copy* puts it on the
 clipboard; *Report a problem* fills in a GitHub issue with the log and the

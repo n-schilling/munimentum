@@ -6176,6 +6176,7 @@ S = statusGeruest();
   pruefe(!wizardOffen, 'Assistent ging trotzdem auf');
 });
 
+
 // Und die Kachel selbst sagt nur an oder aus - warum, steht im Mouseover und
 // neben dem Feld, in dem man es richtet.
 function lage(o){
@@ -6211,6 +6212,14 @@ console.log('OK');
 
 def test_ollama_kachel_fuehrt_ans_richtige_ziel():
     _in_node(PRUEFUNG_KACHEL_ZIEL)
+
+
+def test_kacheln_springen_an_eine_stelle_die_es_gibt():
+    """Ohne Kennung im Markup findet zeigeEinstellung nichts und bleibt oben
+    in den Einstellungen stehen – gemeldet für die KI-Kachel."""
+    for ziel in ("ki-karte", "mcp-karte"):
+        assert f'id="{ziel}"' in app_mod.PAGE, f"Sprungziel {ziel} fehlt"
+        assert f"zeigeEinstellung('{ziel}')" in app_mod.PAGE, f"{ziel} wird nicht angesprungen"
 
 
 PRUEFUNG_RUNDREISE = GRUNDZUSTAND + """

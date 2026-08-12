@@ -12,7 +12,9 @@ them saying what to do. It now reads **AI on** or **AI off**, with the reason in
 the tooltip; and clicking it goes to the settings, where the address, the
 embedding model and the answer model each carry a small indicator of their own:
 reachable, loaded, not loaded. That replaces a window which explained what was
-missing but let you change nothing.
+missing but let you change nothing. The section itself is now called **AI**
+rather than *Ollama* — Ollama is what runs the models today, not the only thing
+that could.
 
 **One switch that really means off.** *Settings → MCP server → Allow MCP
 access*: with it off, the server refuses to serve — over the HTTP endpoint and

@@ -3504,7 +3504,7 @@ main{padding-bottom:60px}
   </div>
 
   <div class="card">
-    <h2 class="mit-info"><span data-i18n="settings.ollama.title">Ollama</span>
+    <h2 class="mit-info" id="ki-karte"><span data-i18n="settings.ollama.title">KI</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.i">i</span></h2>
     <p class="sub" data-i18n="settings.ollama.sub">Alles darunter hängt daran.</p>
     <div class="kopfschalter">
@@ -3825,7 +3825,7 @@ function zeigeFilterstand(){
    ein Fenster, das erklärte, was fehlt – aber ändern ließ sich dort nichts,
    und die Hälfte der Angaben stand ohnehin nur in den Einstellungen. */
 function ollamaKachel(){
-  zeigeEinstellung('ollama');
+  zeigeEinstellung('ki-karte');
 }
 
 /* Was hier steht, entscheidet dieselbe Prüfung, aus der die Kachel im Kopf
