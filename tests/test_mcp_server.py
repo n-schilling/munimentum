@@ -1139,3 +1139,42 @@ def test_aehnliche_ohne_embeddings(state):
         assert r["results"] == [] and "error" in r
     finally:
         mcp_server.STATE["semantic"] = alt
+
+
+# --------------------------------------------------------------------------
+# Ollama abgeschaltet
+#
+# Der Server entschied bisher pro Anfrage neu und fiel bei einem Fehler auf
+# BM25 zurück. Das funktionierte, war aber Zufall statt Absicht: wer Ollama
+# abgewählt hat, soll es gar nicht erst versucht bekommen.
+# --------------------------------------------------------------------------
+def test_ohne_ollama_wird_nicht_eingebettet(state, monkeypatch):
+    def kein_netz(text):
+        raise AssertionError("es wurde eingebettet, obwohl Ollama abgewählt ist")
+    monkeypatch.setattr(mcp_server, "_embed_query", kein_netz)
+    alt = dict(mcp_server.STATE)
+    mcp_server.STATE.update(semantic=False, V=None, np=None)
+    try:
+        r = mcp_server.search_messages(query="Rechnung", k=3)
+        assert r["backend"] == "lexical"
+        assert "results" in r
+    finally:
+        mcp_server.STATE.clear()
+        mcp_server.STATE.update(alt)
+
+
+def test_jeder_treffer_nennt_das_verfahren(state):
+    """Claude soll am Ergebnis sehen, womit gerankt wurde – die Anleitung
+    verspricht sonst Umschreibungen, die ein Volltextindex nicht einlöst."""
+    r = mcp_server.search_messages(query="Rechnung", k=3)
+    assert r["backend"] in ("hybrid", "semantic", "lexical")
+
+
+def test_die_anleitung_verspricht_keine_embeddings():
+    """Bis 5.0.0 stand dort, Umschreibungen würden gefunden. Bei einem Index
+    ohne Vektoren war das schlicht unwahr."""
+    text = mcp_server._INSTRUCTIONS
+    assert "backend" in text, "das Feld, an dem man es sieht, wird nicht genannt"
+    assert "lexical" in text, "der Fall ohne Embeddings kommt nicht vor"
+    behauptung = "Ranks with BM25 and embeddings\nfused"
+    assert behauptung not in text.replace("  ", " ")

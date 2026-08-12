@@ -5381,3 +5381,192 @@ def test_auswertung_wird_gepuffert(sandbox, monkeypatch):
     app_mod.kennzahlen(cfg)
     assert len(laeufe) == 1, "die Auswertung wurde aufgerufen"
     assert app_mod._AUSWERTUNG, "aber nichts gepuffert"
+
+
+# --------------------------------------------------------------------------
+# Der Vertrag zwischen Oberfläche und Formularfeldern
+#
+# Die Einstellungsseite wurde einmal komplett neu geschrieben. Genau dabei
+# passiert der Fehler, den kein anderer Test sieht: eine vertippte Kennung, und
+# eine Einstellung lässt sich still nicht mehr füllen oder speichern – bemerkt
+# wird es erst, wenn jemand sie umstellt und der Wert nach dem Neuladen wieder
+# dasteht wie vorher.
+# --------------------------------------------------------------------------
+def _feldlisten():
+    """Die drei Listen, aus denen die Oberfläche Formularfelder liest."""
+    quelle = app_mod.PAGE
+    listen = {}
+    for name in ("SCHALTER", "ZAHLEN", "TEXTE"):
+        m = re.search(rf"var {name}\s*=\s*\[(.*?)\];", quelle, re.S)
+        assert m, f"{name} nicht gefunden"
+        listen[name] = re.findall(r"'([\w_]+)'", m.group(1))
+    return listen
+
+
+def test_jedes_gelistete_feld_gibt_es_auch(sandbox):
+    """Jede Kennung in SCHALTER/ZAHLEN/TEXTE muss ein Element haben."""
+    fehlt = [k for liste in _feldlisten().values() for k in liste
+             if f'id="c-{k}"' not in app_mod.PAGE]
+    assert not fehlt, f"kein Bedienelement für: {fehlt}"
+
+
+def test_jedes_feld_ist_auch_gelistet():
+    """Und umgekehrt: ein Element, das in keiner Liste steht, wird nie
+    gespeichert – es sieht bedienbar aus und ist es nicht."""
+    gelistet = {k for liste in _feldlisten().values() for k in liste}
+    # Von Hand behandelt, jeweils mit eigenem Grund.
+    ausnahmen = {"skip_folders",      # mehrzeiliger Text, eigene Behandlung
+                 "language",          # eigenes Auswahlfeld, fuelleSprachen()
+                 "data-dir",          # kein Konfigurationswert, eigener Knopf
+                 "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
+                 "onedrive_enabled"}  # steht im Reiter „Exportieren", saveCats()
+    im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
+    verwaist = im_markup - gelistet - ausnahmen
+    assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"
+
+
+def test_jedes_gelistete_feld_wird_auch_serverseitig_angenommen(sandbox, server):
+    """Der Weg endet nicht im Browser: was die Oberfläche schickt, muss die
+    Konfiguration auch übernehmen."""
+    _, port = server
+    listen = _feldlisten()
+    body = {}
+    for k in listen["SCHALTER"]:
+        body[k] = False
+    for k in listen["ZAHLEN"]:
+        body[k] = 7 if k != "mcp_port" else 8400
+    code, _ = call(port, "POST", "/api/config", body)
+    assert code == 200
+    cfg = call(port, "GET", "/api/status")[1]["config"]
+    nicht_uebernommen = [k for k in listen["SCHALTER"] if cfg.get(k) is not False]
+    assert not nicht_uebernommen, f"Schalter ignoriert: {nicht_uebernommen}"
+    nicht_uebernommen = [k for k in listen["ZAHLEN"]
+                         if cfg.get(k) not in (7, 8400)]
+    assert not nicht_uebernommen, f"Zahlen ignoriert: {nicht_uebernommen}"
+
+
+# --------------------------------------------------------------------------
+# Der Ollama-Schalter, den ganzen Weg entlang
+# --------------------------------------------------------------------------
+def test_indexschritt_bekommt_ohne_ollama_den_volltextschalter(sandbox, with_ollama,
+                                                               monkeypatch):
+    """Nicht nur die Absicht zählt – der Unterprozess muss den Schalter tragen.
+    Ollama LÄUFT in diesem Test; abgewählt ist abgewählt."""
+    monkeypatch.setattr(app_mod, "read_token", lambda: make_jwt(exp=time.time() + 3600, scp='Mail.Read User.Read'))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["ollama_enabled"] = False
+    schritte = app_mod.build_steps(a.cfg, index=True,
+                                   embeddings=a.semantisch_gewollt())
+    index = [s for s in schritte if s["key"] == "index"][0]
+    assert "--no-embeddings" in index["argv"]
+
+
+def test_indexschritt_mit_ollama_bettet_ein(sandbox, with_ollama):
+    a = app_mod.App(app_mod.load_config())
+    schritte = app_mod.build_steps(a.cfg, index=True,
+                                   embeddings=a.semantisch_gewollt())
+    index = [s for s in schritte if s["key"] == "index"][0]
+    assert "--no-embeddings" not in index["argv"]
+
+
+def test_zeitplan_laeuft_auch_ohne_ollama(sandbox, with_ollama, monkeypatch):
+    """Ein nächtlicher Lauf soll den Volltextindex bauen statt zu scheitern."""
+    monkeypatch.setattr(app_mod, "read_token", lambda: make_jwt(exp=time.time() + 3600, scp='Mail.Read User.Read'))
+    gestartet = {}
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["ollama_enabled"] = False
+    a.cfg["schedule"].update(enabled=True, interval_minutes=5, index=True,
+                             outlook=False, teams=False, calendar=False)
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label: gestartet.update(steps=steps) or True)
+    a.scheduler.letzter = 0
+    a.scheduler._tick()
+    index = [s for s in gestartet.get("steps", []) if s["key"] == "index"]
+    assert index, "der Zeitplan hat gar nicht indiziert"
+    assert "--no-embeddings" in index[0]["argv"]
+
+
+PRUEFUNG_AUSGEGRAUT = GRUNDZUSTAND + """
+// Ausgegraut, nicht versteckt: wer die Moeglichkeit nie sieht, erfaehrt auch
+// nie, dass es sie gibt - und sucht sie beim naechsten Mal woanders.
+document.getElementById('c-ollama_enabled').checked = false;
+ollamaSchalter();
+['ollama-kinder', 'ix-beides', 'c-embed_model', 'c-chat_model'].forEach(function(id){
+  var e = document.getElementById(id);
+  pruefe(!e.classList.contains('hide'), id + ' wurde versteckt statt ausgegraut');
+});
+pruefe(document.getElementById('ollama-kinder').classList.contains('aus'),
+       'nicht ausgegraut');
+
+// Und wieder an: alles zurueck, ohne Neuladen.
+document.getElementById('c-ollama_enabled').checked = true;
+ollamaSchalter();
+pruefe(!document.getElementById('ollama-kinder').classList.contains('aus'),
+       'bleibt ausgegraut, obwohl Ollama wieder an ist');
+pruefe(!document.getElementById('ix-beides').disabled, 'Bedeutung bleibt gesperrt');
+console.log('OK');
+"""
+
+
+def test_ausgegraut_statt_versteckt():
+    _in_node(PRUEFUNG_AUSGEGRAUT)
+
+
+PRUEFUNG_KACHEL_ZIEL = GRUNDZUSTAND + """
+// Abgeschaltet gibt es nichts einzurichten - die Kachel fuehrt dann dorthin,
+// wo man es wieder anschalten kann, statt zum Installations-Assistenten.
+var gewechselt = [];
+tab = function(n){ gewechselt.push(n); };
+S = statusGeruest(); S.ollama.disabled = true;
+ollamaKachel();
+pruefe(gewechselt.indexOf('einstellungen') >= 0,
+       'Kachel fuehrt nicht zu den Einstellungen: ' + gewechselt.join(','));
+pruefe(!wizardOffen, 'Assistent ging trotzdem auf');
+
+// Laeuft Ollama nur gerade nicht, ist der Assistent richtig.
+S.ollama.disabled = false;
+ollamaKachel();
+pruefe(wizardOffen === 'ollama', 'Assistent fehlt, obwohl Ollama nur fehlt');
+console.log('OK');
+"""
+
+
+def test_ollama_kachel_fuehrt_ans_richtige_ziel():
+    _in_node(PRUEFUNG_KACHEL_ZIEL)
+
+
+PRUEFUNG_RUNDREISE = GRUNDZUSTAND + """
+// Eine Konfiguration hineingeben und wieder herausholen: was die Oberfléche
+// nicht zurueckgibt, kann der Nutzer nicht speichern.
+var cfg = statusGeruest().config;
+cfg.ollama_enabled = true; cfg.index_semantic = false;
+cfg.workers = 6; cfg.embed_model = 'bge-m3'; cfg.chat_model = 'qwen3.6:27b';
+cfg.ollama = 'http://x:1'; cfg.search_results = 25; cfg.semantic_min = 55;
+cfg.answer_sources = 3; cfg.index_batch = 32; cfg.mcp_port = 8400;
+cfgGefuellt = false;
+fuelleEinstellungen(cfg);
+
+// Der DOM-Stummel wandelt beim Zuweisen nicht in Text um, der Browser schon.
+pruefe(String(document.getElementById('c-workers').value) === '6', 'Zahl nicht gefuellt');
+pruefe(document.getElementById('c-embed_model').value === 'bge-m3', 'Text nicht gefuellt');
+pruefe(document.getElementById('c-ollama_enabled').checked === true, 'Schalter nicht gefuellt');
+pruefe(INDEX_SEMANTISCH === false, 'Indexart nicht uebernommen: ' + INDEX_SEMANTISCH);
+pruefe(document.getElementById('ix-text').classList.contains('on'),
+       'Umschalter zeigt die falsche Seite');
+
+// Und zurueck: speichern muss jeden Wert mitschicken.
+var geschickt = null;
+post = function(pfad, body){ geschickt = body; return Promise.resolve({ok: true}); };
+S = statusGeruest();
+speichereEinstellungen();
+['workers','embed_model','ollama_enabled','index_semantic','mcp_port','semantic_min']
+  .forEach(function(k){
+    pruefe(geschickt[k] !== undefined, 'nicht mitgeschickt: ' + k);
+  });
+pruefe(geschickt.index_semantic === false, 'Indexart falsch gespeichert');
+console.log('OK');
+"""
+
+
+def test_einstellungen_hin_und_zurueck():
+    _in_node(PRUEFUNG_RUNDREISE)

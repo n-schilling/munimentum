@@ -2173,6 +2173,10 @@ class Handler(BaseHTTPRequestHandler):
         for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
                                ("index_batch", 1, 512), ("answer_sources", 1, 20),
                                ("semantic_min", 0, 95),
+                               # Fehlte hier, seit es das Feld gibt: die Grenze
+                               # stand im Formular, ging an den Export, wurde
+                               # aber nie gespeichert.
+                               ("onedrive_max_mb", 0, 100000),
                                ("search_results", 5, 100)):
             if key in data:
                 try:
