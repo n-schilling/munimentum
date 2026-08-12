@@ -265,6 +265,9 @@ DEFAULT_CONFIG = {
     # Ordnerauswahl als geordnete Regeln, letzte Übereinstimmung gewinnt.
     # Leer heißt: die alte Namensliste oben gilt weiter (siehe folders.py).
     "folder_rules": "",
+    # Kalenderauswahl, dieselbe Mechanik wie oben. Leer heißt: nur der
+    # Standardkalender (siehe folders.nur_standard).
+    "calendar_rules": "",
     "index_batch": 64,
     "ollama": "http://localhost:11434",
     "embed_model": "bge-m3",
@@ -432,6 +435,19 @@ def auswahlregeln(cfg, roh=None, namen=None):
         return regeln
     return folders.aus_namensliste(
         _clean_folders(cfg.get("skip_folders") if namen is None else namen))
+
+
+def kalenderregeln(cfg, daten=None, roh=None):
+    """Dasselbe für die Kalender – siehe outlook_export.kalender_regeln.
+
+    Ohne eigene Regeln bleibt es beim Standardkalender. Das hängt an den Daten,
+    weil erst die Liste sagt, welcher das ist; deshalb kommt sie hier herein.
+    """
+    regeln = folders.lies_regeln(
+        (cfg.get("calendar_rules") if roh is None else roh) or "")
+    if regeln:
+        return regeln
+    return folders.nur_standard((daten or {}).get("ordner", []))
 
 
 # --------------------------------------------------------------------------
@@ -1075,6 +1091,8 @@ def _auth_env(cfg):
                           == "login" else "token")}
     if str(cfg.get("folder_rules") or "").strip():
         env["FOLDER_RULES"] = cfg["folder_rules"]
+    if str(cfg.get("calendar_rules") or "").strip():
+        env["CALENDAR_RULES"] = cfg["calendar_rules"]
     for schluessel, name in (("client_id", "GRAPH_CLIENT_ID"),
                              ("tenant", "GRAPH_TENANT")):
         wert = str(cfg.get(schluessel) or "").strip()
@@ -1086,7 +1104,8 @@ def _auth_env(cfg):
 def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 embeddings=True, search_page=False, token="", reconstruct=None,
                 check=False, sync_folders=False, onedrive=False,
-                sync_onedrive=False, check_onedrive=False):
+                sync_onedrive=False, check_onedrive=False,
+                sync_calendars=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -1183,6 +1202,12 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         steps.append({
             "key": "folders", "label": "job.step.folders",
             "argv": script_argv("outlook_export", "--folders", OUTLOOK_DIR),
+            "env": dict(base_env),
+        })
+    if sync_calendars:
+        steps.append({
+            "key": "calendars", "label": "job.step.calendars",
+            "argv": script_argv("outlook_export", "--calendars", OUTLOOK_DIR),
             "env": dict(base_env),
         })
     if check:
@@ -1784,9 +1809,29 @@ class App:
             "folders": folders.zusammenfassung(
                 folders.lade(BASE / OUTLOOK_DIR),
                 auswahlregeln(self.cfg)),
+            "calendars": self._kalenderstand(),
             "folders_onedrive": folders.zusammenfassung(
                 folders.lade(BASE / ONEDRIVE_DIR),
                 folders.lies_regeln(self.cfg.get("onedrive_rules") or "")),
+        }
+
+    def _kalenderstand(self):
+        """Wie viele Kalender es gibt und wie viele davon mitkommen.
+
+        Eigene Zahlen statt folders.zusammenfassung: dort zählen Elemente, und
+        wie viele Termine in einem Kalender liegen, sagt Graph beim Auflisten
+        nicht. Die Namen kommen mit, damit die Oberfläche die Auswahl nennen
+        kann statt nur zu zählen.
+        """
+        daten = folders.lade(BASE / OUTLOOK_DIR, folders.KALENDER)
+        alle = (daten or {}).get("ordner", [])
+        an = folders.gewaehlt(daten, kalenderregeln(self.cfg, daten))
+        return {
+            "abgeglichen": (daten or {}).get("abgeglichen"),
+            "gesamt": len(alle),
+            "gewaehlt": len(an),
+            "namen": [e.get("name") or e["pfad"] for e in an],
+            "neu": (daten or {}).get("neu", []),
         }
 
     def auth_modus(self):
@@ -1849,7 +1894,7 @@ class App:
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, search_page=False, label="Lauf", reconstruct=None,
                check=False, sync_folders=False, onedrive=False,
-               sync_onedrive=False, check_onedrive=False):
+               sync_onedrive=False, check_onedrive=False, sync_calendars=False):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
@@ -1858,7 +1903,8 @@ class App:
                           and self.ollama()["running"] and self.ollama()["has_model"])
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
         braucht_zugang = (outlook or teams or onedrive or check
-                          or sync_folders or sync_onedrive or check_onedrive)
+                          or sync_folders or sync_onedrive or check_onedrive
+                          or sync_calendars)
         token = read_token() if braucht_zugang else ""
         # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
         # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
@@ -1874,7 +1920,8 @@ class App:
                             reconstruct=reconstruct, check=check,
                             sync_folders=sync_folders, onedrive=onedrive,
                             sync_onedrive=sync_onedrive,
-                            check_onedrive=check_onedrive)
+                            check_onedrive=check_onedrive,
+                            sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         if not self.jobs.start(steps, label):
@@ -2068,6 +2115,7 @@ class Handler(BaseHTTPRequestHandler):
                     search_page=bool(data.get("search_page")),
                     check=bool(data.get("check")),
                     sync_folders=bool(data.get("sync_folders")),
+                    sync_calendars=bool(data.get("sync_calendars")),
                     onedrive=bool(data.get("onedrive")),
                     sync_onedrive=bool(data.get("sync_onedrive")),
                     check_onedrive=bool(data.get("check_onedrive")),
@@ -2193,6 +2241,9 @@ class Handler(BaseHTTPRequestHandler):
         # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
         if "ollama_enabled" in data:
             self.app._ollama_cache = (0, None)
+        if "calendar_rules" in data:
+            cfg["calendar_rules"] = folders.schreibe_regeln(
+                folders.lies_regeln(str(data["calendar_rules"] or "")))
         if "folder_rules" in data:
             cfg["folder_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["folder_rules"] or "")))
@@ -2367,27 +2418,33 @@ class Handler(BaseHTTPRequestHandler):
         zeigte die Vorschau den Stand von vorhin, während daneben schon die
         neue Regel steht.
 
-        Zwei Quellen, eine Auswertung. Der Unterschied ist klein genug, dass
-        eine zweite Kopie sich nicht rechnet: beim Postfach zählen die `.eml`,
-        beim Spiegel alle Dateien.
+        Drei Quellen, eine Auswertung. Der Unterschied ist klein genug, dass
+        weitere Kopien sich nicht rechnen: beim Postfach zählen die `.eml`, bei
+        den Kalendern die `.ics`, beim Spiegel alle Dateien.
         """
         cfg = self.app.cfg
-        onedrive = str(data.get("quelle") or "") == "onedrive"
-        if onedrive:
+        quelle = str(data.get("quelle") or "")
+        datei = folders.KALENDER if quelle == "calendar" else folders.DATEI
+        if quelle == "onedrive":
+            ordner, endung = BASE / ONEDRIVE_DIR, None
+        else:
+            ordner, endung = BASE / OUTLOOK_DIR, (
+                ".ics" if quelle == "calendar" else ".eml")
+        daten = folders.lade(ordner, datei)
+        if not daten:
+            return {"ok": False, "leer": True}
+        if quelle == "onedrive":
             regeln = folders.lies_regeln(
                 data.get("onedrive_rules")
                 if data.get("onedrive_rules") is not None
                 else cfg.get("onedrive_rules") or "")
-            ordner, endung = BASE / ONEDRIVE_DIR, None
+        elif quelle == "calendar":
+            regeln = kalenderregeln(cfg, daten, data.get("calendar_rules"))
         else:
             regeln = auswahlregeln(cfg, data.get("folder_rules"),
                                    data.get("skip_folders"))
-            ordner, endung = BASE / OUTLOOK_DIR, ".eml"
-        daten = folders.lade(ordner)
-        if not daten:
-            return {"ok": False, "leer": True}
         return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(ordner, regeln, daten, endung)}
+                **folders.plan(ordner, regeln, daten, endung, datei)}
 
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -3271,6 +3328,19 @@ main{padding-bottom:60px}
       </div>
     </div>
 
+    <div class="gruppe"><h3 data-i18n="settings.calendars.title">Kalender</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendars.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendars.rules.i">i</span></span><span class="small muted" id="cal-state"></span></div>
+      <div class="feldzeile breit">
+        <textarea id="c-calendar_rules"
+          placeholder="- kalender/**&#10;+ kalender/Privat"></textarea>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button class="mini" onclick="gleicheOrdnerAb('calendar')" data-i18n="settings.calendars.sync">Kalenderliste abgleichen</button>
+        <button class="mini" onclick="zeigeExportliste('calendar')" data-i18n="plan.open">Exportliste anzeigen</button>
+        <span class="small muted" id="cal-msg"></span>
+      </div>
+    </div>
+
     <div class="gruppe"><h3 data-i18n="settings.onedrive.title">OneDrive</h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.rules.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.rules.i">i</span></span><span class="small muted" id="od-folders-state"></span></div>
       <div class="feldzeile breit">
@@ -3713,6 +3783,7 @@ function renderStatus(s){
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
+  zeigeKalenderstand(s.calendars || {});
   el('data-dir2').textContent = s.data_dir;
   // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
   // 2,5 Sekunden, was gerade getippt wird.
@@ -5005,7 +5076,7 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','semantic_min'];
 var TEXTE    = ['ollama','embed_model','chat_model',
-                'folder_rules','onedrive_rules'];
+                'folder_rules','onedrive_rules','calendar_rules'];
 var cfgGefuellt = false;
 
 function fuelleEinstellungen(cfg){
@@ -5059,12 +5130,34 @@ function zeigeOrdnerstand(f, id){
   kasten.textContent = text;
 }
 
+/* Kalender zählen keine Termine: wie viele in einem liegen, sagt Graph beim
+   Auflisten nicht. Deshalb eine eigene Zeile statt zeigeOrdnerstand – sie nennt
+   dafür die gewählten Kalender beim Namen, was bei einer Handvoll mehr sagt
+   als jede Zahl. */
+function zeigeKalenderstand(c){
+  var kasten = el('cal-state');
+  if(!kasten) return;
+  if(!c || !c.abgeglichen){ kasten.textContent = t('settings.calendars.none'); return; }
+  var text = t('settings.calendars.state',
+               {an: (c.gewaehlt || 0).toLocaleString(LOC),
+                gesamt: (c.gesamt || 0).toLocaleString(LOC),
+                when: fmt(c.abgeglichen)});
+  if((c.namen || []).length) text += ' – ' + c.namen.join(', ');
+  if((c.neu || []).length) text += ' ' + t('folders.new', {n: c.neu.length});
+  kasten.textContent = text;
+}
+
+var ABGLEICH = {
+  onedrive: {msg: 'od-folders-msg', lauf: {sync_onedrive: true, label: 'job.folders'}},
+  calendar: {msg: 'cal-msg', lauf: {sync_calendars: true, label: 'job.calendars'}},
+  outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}}
+};
+
 function gleicheOrdnerAb(quelle){
-  var od = quelle === 'onedrive';
-  var kasten = od ? 'od-folders-msg' : 'folders-msg';
+  var wahl = ABGLEICH[quelle] || ABGLEICH.outlook;
+  var kasten = wahl.msg;
   el(kasten).textContent = t('folders.syncing');
-  post('/api/run', od ? {sync_onedrive: true, label: 'job.folders'}
-                      : {sync_folders: true, label: 'job.folders'}).then(function(r){
+  post('/api/run', wahl.lauf).then(function(r){
     if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
@@ -5108,6 +5201,8 @@ function zeigeExportliste(quelle){
   planFenster();
   post('/api/folder-plan', planQuelle === 'onedrive'
       ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
+      : planQuelle === 'calendar'
+      ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}
       : {folder_rules: el('c-folder_rules').value,
          skip_folders: el('c-skip_folders').value})
     .then(function(p){
@@ -5129,7 +5224,7 @@ function planFenster(){
       '<div id="plan-listen"></div>';
   }
   oeffneEigenes('plan', modalKopf(t('plan.title'), 'plan') + koerper +
-    modalFuss({text: t('folders.sync'),
+    modalFuss({text: t(planQuelle === 'calendar' ? 'settings.calendars.sync' : 'folders.sync'),
                tun: 'planAbgleichen(&quot;' + planQuelle + '&quot;)'}));
   if(p && p.ok) planListen();
 }
@@ -5169,11 +5264,20 @@ function planListen(){
   // Archivierung, sondern der Rest eines gelöschten Ordners. Ausgeschrieben
   // statt zusammengesetzt, damit der Abgleich mit den Sprachdateien die
   // Schlüssel findet.
-  var dat = planQuelle === 'onedrive';
-  el('plan-listen').innerHTML =
-    gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
-    gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
-    gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
+  var dat = planQuelle === 'onedrive', kal = planQuelle === 'calendar';
+  // Bei Kalendern gibt es nichts zu vergleichen: wie viele Termine drin
+  // stehen, verrät Graph beim Auflisten nicht. Gezählt wird deshalb, was schon
+  // auf der Platte liegt – die einzige Zahl, die hier ehrlich zu haben ist.
+  function ablage(liste){
+    return liste.reduce(function(a, e){ return a + (e.archiv || 0); }, 0);
+  }
+  el('plan-listen').innerHTML = kal
+    ? gruppe('plan.an.cal',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
+      gruppe('plan.aus.cal', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
+      gruppe('plan.weg.cal', p.weg, 'archiv', p.mails_weg,   'err',  false)
+    : gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
+      gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
+      gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
 }
 
 function planAbgleichen(quelle){

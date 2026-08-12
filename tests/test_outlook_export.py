@@ -11,6 +11,7 @@ from datetime import datetime
 import pytest
 import requests
 
+import folders
 import outlook_export
 
 
@@ -184,17 +185,51 @@ def test_select_mail_folders_interaktive_auswahl(monkeypatch):
     assert [t["folder"]["displayName"] for t in sel] == ["Inbox", "Projekte"]
 
 
-def test_select_calendars_default_und_auswahl(monkeypatch):
-    cals = [{"name": "B"}, {"name": "A", "isDefaultCalendar": True}]
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
-    assert outlook_export.select_calendars(cals) == [cals[1]]
-    # Ohne Standardkalender: erster Eintrag
-    assert outlook_export.select_calendars([{"name": "X"}, {"name": "Y"}]) == [{"name": "X"}]
-    assert outlook_export.select_calendars([]) == []
-    # Interaktiv: gezielte Auswahl
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: True)
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "1")
-    assert outlook_export.select_calendars(cals) == [cals[0]]
+def test_kalender_eintraege_tragen_den_ablagepfad():
+    """Der Pfad ist der, unter dem der Kalender auch auf der Platte landet."""
+    e = outlook_export.kalender_eintraege(
+        [{"id": "a", "name": "Team/Projekt"}, {"id": "b", "name": "A", "isDefaultCalendar": True}])
+    assert [x["pfad"] for x in e] == ["kalender/Team_Projekt", "kalender/A"]
+    assert [x["standard"] for x in e] == [False, True]
+    assert e[0]["name"] == "Team/Projekt"     # der echte Name bleibt lesbar
+
+
+def test_kalender_ohne_regeln_nur_der_standard(monkeypatch):
+    monkeypatch.delenv("CALENDAR_RULES", raising=False)
+    monkeypatch.setattr(outlook_export.settings, "value", lambda *a, **kw: None)
+    daten = {"ordner": outlook_export.kalender_eintraege(
+        [{"id": "a", "name": "B"}, {"id": "b", "name": "A", "isDefaultCalendar": True}])}
+    regeln = outlook_export.kalender_regeln(daten)
+    assert [e["name"] for e in folders.gewaehlt(daten, regeln)] == ["A"]
+
+
+def test_kalender_regeln_schlagen_die_vorgabe(monkeypatch):
+    monkeypatch.setenv("CALENDAR_RULES", "+ kalender/B")
+    daten = {"ordner": outlook_export.kalender_eintraege(
+        [{"id": "a", "name": "B"}, {"id": "b", "name": "A", "isDefaultCalendar": True}])}
+    gewaehlt = folders.gewaehlt(daten, outlook_export.kalender_regeln(daten))
+    # Ohne Ausschluss gilt "alles" – die Regel nimmt nichts weg, sie bestätigt nur.
+    assert [e["name"] for e in gewaehlt] == ["B", "A"]
+    monkeypatch.setenv("CALENDAR_RULES", "- kalender/**\n+ kalender/B")
+    gewaehlt = folders.gewaehlt(daten, outlook_export.kalender_regeln(daten))
+    assert [e["name"] for e in gewaehlt] == ["B"]
+
+
+def test_waehle_kalender_holt_die_liste_einmalig(tmp_path, monkeypatch):
+    """Fehlt calendars.json, wird sie einmal geholt – danach entscheidet die Datei."""
+    monkeypatch.delenv("CALENDAR_RULES", raising=False)
+    monkeypatch.setattr(outlook_export.settings, "value", lambda *a, **kw: None)
+    rufe = []
+
+    def fake(graph):
+        rufe.append(1)
+        return [{"id": "a", "name": "B"}, {"id": "b", "name": "A", "isDefaultCalendar": True}]
+
+    monkeypatch.setattr(outlook_export, "list_calendars", fake)
+    assert outlook_export.waehle_kalender(None, tmp_path) == [{"id": "b", "name": "A"}]
+    assert folders.pfad(tmp_path, folders.KALENDER).exists()
+    assert outlook_export.waehle_kalender(None, tmp_path) == [{"id": "b", "name": "A"}]
+    assert len(rufe) == 1
 
 
 def test_prompt_categories_env(monkeypatch, capsys):
@@ -1377,10 +1412,18 @@ def test_default_schalter_schlaegt_das_terminal(monkeypatch):
     assert outlook_export._interactive() is False
 
 
-def test_kalender_nimmt_ohne_terminal_den_standard(monkeypatch):
-    """Ohne Terminal wird nichts gedruckt und der Standardkalender genommen."""
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
-    cals = [{"id": "a", "name": "Zweiter"},
-            {"id": "b", "name": "Haupt", "isDefaultCalendar": True}]
-    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("hat gefragt"))
-    assert outlook_export.select_calendars(cals) == [cals[1]]
+
+
+def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys):
+    """Ohne Calendars.Read kommt nichts zurück – dann darf nichts einrasten."""
+    monkeypatch.setattr(outlook_export, "list_calendars", lambda graph: [])
+    assert outlook_export.waehle_kalender(None, tmp_path) == []
+    assert not folders.pfad(tmp_path, folders.KALENDER).exists()
+    assert "Keine Kalender lesbar" in capsys.readouterr().out
+
+
+def test_nur_standard_faellt_auf_den_ersten_zurueck():
+    """Markiert Graph keinen Standard, ist der erste besser als gar keiner."""
+    e = [{"pfad": "kalender/B"}, {"pfad": "kalender/A"}]
+    assert folders.nur_standard(e) == [(False, "**"), (True, "kalender/B")]
+    assert folders.nur_standard([]) == [(False, "**")]

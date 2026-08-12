@@ -22,6 +22,12 @@ Start:   python3 outlook_export.py [ausgabe-ordner] [-default]
          Archiv/Entwürfe/Gelöschte/Junk/Postausgang, Standardkalender, Kontakte).
          EXPORT_CATEGORIES="mail,calendar,contacts" wählt ohne Abfrage genau
          diese Kategorien (für app.py, Scheduler, Cron).
+         --folders bzw. --calendars holen nur die Ordnerstruktur bzw. die
+         Kalenderliste und legen sie ab, ohne etwas zu exportieren.
+
+Welche Ordner und welche Kalender mitkommen, entscheiden geordnete Regeln
+    (FOLDER_RULES, CALENDAR_RULES; siehe folders.py) über den abgelegten Listen
+    folders.json und calendars.json – nicht mehr eine Abfrage beim Start.
 
 Token-Modus (wenn der Tenant für neue Apps "Approval required" verlangt):
     Access Token im Graph Explorer holen (Mail.Read muss zugestimmt sein; für
@@ -89,6 +95,7 @@ PAGE = 50                   # $top für Listenabfragen
 OUT_ROOT = settings.value("outlook_dir", "outlook_export")  # fest -> Resume über Läufe
 DONE_FILE = "exported.tsv"
 MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu kalender/kontakte)
+KALENDER_DIR = "kalender"    # ein Unterordner je Kalender, darin die .ics
 
 # Diese Postfach-Ordner sind bei "alle" (Enter) standardmäßig NICHT dabei – nur per
 # expliziter Auswahl. Vergleich case-insensitive über den Anzeigenamen (DE + EN).
@@ -451,26 +458,79 @@ def select_mail_folders(tops):
     return [tops[i - 1] for i in idxs]
 
 
-def select_calendars(cals):
-    """Schritt 2b: welche Kalender. Enter = nur Standardkalender; Mehrfachauswahl möglich."""
-    if not cals:
-        return []
-    default = [c for c in cals if c.get("isDefaultCalendar")] or cals[:1]
-    if not _interactive():
-        return default
-    n = len(cals)
-    print("\nWelche Kalender? (Mehrfachauswahl; Enter = nur Standardkalender)")
-    for i, cal in enumerate(cals, 1):
-        mark = " (Standard)" if cal.get("isDefaultCalendar") else ""
-        print(f"  {i}) {cal.get('name', 'Kalender')}{mark} (.ics)")
-    raw = _read("Auswahl (Enter = nur Standardkalender): ").strip()
-    if not raw:
-        return default
-    idxs = parse_indices(raw, n)
-    if not idxs:
-        print("Keine gültige Auswahl – nehme den Standardkalender.")
-        return default
-    return [cals[i - 1] for i in idxs]
+def kalender_eintraege(cals):
+    """Die Kalenderliste in der Form, in der folders.py mit ihr rechnet.
+
+    Der Pfad ist der, unter dem der Kalender auch auf der Platte landet
+    (kalender/<Name>). Damit greifen dieselben Regeln, dieselbe Vorschau und
+    dieselbe Zählung wie bei den Postfach-Ordnern – und ein umbenannter
+    Kalender fällt in der Vorschau als „nur noch im Archiv“ auf, statt still
+    doppelt zu liegen.
+    """
+    return [{
+        "id": c.get("id") or f"{KALENDER_DIR}/{safe(c.get('name') or 'Kalender')}",
+        "pfad": f"{KALENDER_DIR}/{safe(c.get('name') or 'Kalender')}",
+        "name": c.get("name") or "Kalender",
+        "standard": bool(c.get("isDefaultCalendar")),
+        "elemente": 0,      # Graph zählt Termine nicht mit; die Vorschau zählt
+    } for c in cals or ()]  # stattdessen, was schon im Archiv liegt
+
+
+def kalender_regeln(daten=None):
+    """Welche Kalender exportiert werden – Umgebung schlägt Datei schlägt Vorgabe.
+
+    Ohne eigene Regeln bleibt es beim Standardkalender: ein Postfach hat neben
+    dem eigenen oft noch Geburtstage, Feiertage und fremde Freigaben, und die
+    hat niemand gemeint, der „Kalender“ ankreuzt.
+    """
+    roh = os.environ.get("CALENDAR_RULES")
+    if roh is None:
+        roh = settings.value("calendar_rules", None)
+    if roh and roh.strip():
+        return folders.lies_regeln(roh)
+    return folders.nur_standard((daten or {}).get("ordner", []))
+
+
+def waehle_kalender(graph, out):
+    """Kalender aus calendars.json auswählen; die Liste einmalig holen, wenn sie fehlt."""
+    daten = folders.lade(out, folders.KALENDER)
+    if daten is None:
+        print("Lade Kalenderliste…")
+        eintraege = kalender_eintraege(list_calendars(graph))
+        if not eintraege:
+            # Meist die fehlende Berechtigung Calendars.Read. Eine leere Liste
+            # abzulegen hieße, sie nie wieder zu holen – und der Export bliebe
+            # für immer still leer, ohne dass jemand den Grund sähe.
+            print("  Keine Kalender lesbar – die Liste wird nicht abgelegt.")
+            return []
+        daten = folders.speichere(out, eintraege, datei=folders.KALENDER)
+    regeln = kalender_regeln(daten)
+    gewaehlt = folders.gewaehlt(daten, regeln)
+    alle = daten.get("ordner", [])
+    print(f"Kalender: {len(gewaehlt)} von {len(alle)} gewählt"
+          + (" – " + ", ".join(e["name"] for e in gewaehlt) if gewaehlt else ""))
+    if daten.get("neu"):
+        print(f"  Hinweis: {len(daten['neu'])} Kalender sind seit dem Abgleich neu "
+              f"dazugekommen und folgen den Regeln automatisch.")
+    return [{"id": e["id"], "name": e["name"]} for e in gewaehlt]
+
+
+def gleiche_kalender_ab(argv):
+    """--calendars: nur die Kalenderliste holen und ablegen, nichts exportieren."""
+    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    print(f"Gleiche Kalenderliste ab: {out.resolve()}")
+    vorher = folders.lade(out, folders.KALENDER)
+    daten = folders.speichere(out, kalender_eintraege(list_calendars(graph)),
+                              vorher, datei=folders.KALENDER)
+    gewaehlt = folders.gewaehlt(daten, kalender_regeln(daten))
+    print(f"\n{len(daten['ordner'])} Kalender im Postfach, {len(gewaehlt)} gewählt.")
+    for art, liste in (("neu", daten["neu"]), ("nicht mehr da", daten["verschwunden"]),
+                       ("umbenannt", daten["umbenannt"])):
+        if liste:
+            print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
+                  + (" …" if len(liste) > 5 else ""))
+    print(f"Abgelegt: {folders.pfad(out, folders.KALENDER)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1313,10 +1373,15 @@ def main():
     if _hilfe_gewuenscht(sys.argv[1:]):
         print(__doc__.strip())
         return
+    # Für die Sonderläufe zählt nur der Ausgabeordner; Schalter wie -default
+    # sind hier ohne Bedeutung und dürften keinesfalls als Ordner durchgehen.
+    nur_ordner = [a for a in sys.argv[1:] if not a.startswith("-")]
     if "--check" in sys.argv[1:]:
-        return nur_pruefen([a for a in sys.argv[1:] if a != "--check"])
+        return nur_pruefen(nur_ordner)
     if "--folders" in sys.argv[1:]:
-        return gleiche_ordner_ab([a for a in sys.argv[1:] if a != "--folders"])
+        return gleiche_ordner_ab(nur_ordner)
+    if "--calendars" in sys.argv[1:]:
+        return gleiche_kalender_ab(nur_ordner)
 
     global OUT_ROOT, GATE, ASSUME_DEFAULT
     argv = sys.argv[1:]
@@ -1360,8 +1425,7 @@ def main():
         if "mail" in categories:
             selected_mail = waehle_ordner(graph, out)
         if "calendar" in categories:
-            print("\nLade Kalenderliste…")
-            sel_cals = select_calendars(list_calendars(graph))
+            sel_cals = waehle_kalender(graph, out)
         want_con = "contacts" in categories
 
         if selected_mail:

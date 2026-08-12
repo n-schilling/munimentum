@@ -218,7 +218,8 @@ def test_load_calendar_parses_ics(tmp_path):
     assert len(recs) == 1
     r = recs[0]
     assert r["title"] == "Planung, Quartal"
-    assert r["ctx"] == "Kalender: Arbeit"
+    # Der Ordnerpfad, damit die Suche danach filtern kann wie nach E-Mail/…
+    assert r["ctx"] == "kalender/Arbeit"
     assert r["who"] == "Alice Example"
     assert "bob@example.com" in r["ppl"]
     assert r["text"].startswith("Ort: Raum 42.")

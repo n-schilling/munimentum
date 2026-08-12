@@ -33,6 +33,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 DATEI = "folders.json"
+# Die Kalender eines Postfachs sind dieselbe Art Liste: Einträge mit Pfad und
+# ID, über die geordnete Regeln entscheiden. Nur die Datei ist eine andere,
+# weil beide im selben Ausgabeordner liegen.
+KALENDER = "calendars.json"
 
 # Was frühere Fassungen als Namensliste hatten. Wird beim ersten Lauf in Regeln
 # übersetzt (siehe aus_namensliste) – niemand soll seine Auswahl neu eintippen.
@@ -139,6 +143,25 @@ def erklaere(pfad, regeln, vorgabe=True):
     return ergebnis, treffer
 
 
+def nur_standard(eintraege):
+    """Regeln, die genau die als Standard markierten Einträge auswählen.
+
+    Für Listen, deren sinnvolle Vorgabe nicht „alles“ ist: von den Kalendern
+    eines Postfachs will man zunächst den eigenen, nicht zusätzlich die
+    Geburtstage und jeden geteilten Kalender, den einem mal jemand freigegeben
+    hat. Als ausgeschriebene Regeln statt als Sonderfall im Code – so steht in
+    der Oberfläche dasselbe, was auch gilt, und wer es ändern will, sieht
+    woran.
+
+    Ist nichts als Standard markiert, gilt der erste Eintrag. Sonst wäre die
+    Vorgabe „gar nichts“ – und ein Export, der schweigend nichts tut, ist die
+    schlechteste aller Antworten.
+    """
+    liste = list(eintraege or ())
+    an = [e for e in liste if e.get("standard")] or liste[:1]
+    return [(False, "**")] + [(True, e["pfad"]) for e in an]
+
+
 def aus_namensliste(namen):
     """Alte SKIP_FOLDERS in Regeln übersetzen.
 
@@ -152,14 +175,14 @@ def aus_namensliste(namen):
 # --------------------------------------------------------------------------
 # Der Baum auf der Platte
 # --------------------------------------------------------------------------
-def pfad(ordner):
-    return Path(ordner) / DATEI
+def pfad(ordner, datei=DATEI):
+    return Path(ordner) / datei
 
 
-def lade(ordner):
+def lade(ordner, datei=DATEI):
     """folders.json lesen. Fehlt sie oder ist kaputt: None, kein Krach."""
     try:
-        daten = json.loads(pfad(ordner).read_text(encoding="utf-8"))
+        daten = json.loads(pfad(ordner, datei).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not isinstance(daten, dict) or not isinstance(daten.get("ordner"), list):
@@ -167,7 +190,7 @@ def lade(ordner):
     return daten
 
 
-def speichere(ordner, eintraege, vorher=None):
+def speichere(ordner, eintraege, vorher=None, datei=DATEI):
     """Baum atomar ablegen und melden, was sich geändert hat.
 
     Neue Ordner sind der Grund für die Rückgabe: nach einem Abgleich soll die
@@ -189,7 +212,7 @@ def speichere(ordner, eintraege, vorher=None):
             f'{alt[k]["pfad"]} -> {e["pfad"]}'
             for k, e in jetzt.items() if k in alt and alt[k]["pfad"] != e["pfad"]),
     }
-    ziel = pfad(ordner)
+    ziel = pfad(ordner, datei)
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")
     tmp.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
@@ -244,7 +267,7 @@ def auf_platte(ordner, wurzeln=(), endung=".eml"):
     return gefunden
 
 
-def plan(ordner, regeln, daten=None, endung=".eml"):
+def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
     """Was der nächste Export täte – Ordner für Ordner, ohne ihn zu starten.
 
     Die Regeln sind mächtig genug, dass ihr Ergebnis nicht mehr im Kopf
@@ -260,7 +283,7 @@ def plan(ordner, regeln, daten=None, endung=".eml"):
     oder umbenannter Ordner verschwindet still aus dem Baum, seine Mails bleiben
     aber – zu Recht – auf der Platte liegen.
     """
-    daten = lade(ordner) if daten is None else daten
+    daten = lade(ordner, datei) if daten is None else daten
     eintraege = (daten or {}).get("ordner", [])
     archiv = auf_platte(ordner, [e["pfad"].split("/")[0] for e in eintraege], endung)
     an, aus = [], []

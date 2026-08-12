@@ -58,7 +58,10 @@ archive** and get a marker; that is the point of keeping one.
 Which folders come along is a list of ordered include/exclude rules, and *Show
 export list* spells out what they currently mean: what comes along, what is left
 out and why, and what is only in your archive because it is gone from the
-source. A schedule can repeat the whole thing while the app is open.
+source. Calendars work the same way — a mailbox usually carries birthdays,
+holidays and calendars other people shared, so by default only your own comes
+along until you say otherwise. A schedule can repeat the whole thing while the
+app is open.
 
 ### Search data
 

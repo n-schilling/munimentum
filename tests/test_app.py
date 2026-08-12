@@ -3922,6 +3922,77 @@ def test_exportliste_ohne_abgeglichenen_baum(server):
     assert code == 200 and r == {"ok": False, "leer": True}
 
 
+# --------------------------------------------------------------------------
+# Kalender: dieselbe Mechanik wie die Postfach-Ordner
+# --------------------------------------------------------------------------
+def _kalenderliste(sandbox, eintraege, termine=()):
+    ordner = sandbox / app_mod.OUTLOOK_DIR
+    folders_mod.speichere(ordner, eintraege, datei=folders_mod.KALENDER)
+    for pfad, anzahl in termine:
+        (ordner / pfad).mkdir(parents=True, exist_ok=True)
+        for i in range(anzahl):
+            (ordner / pfad / f"t{i}.ics").write_text("x", encoding="utf-8")
+    return ordner
+
+
+KALENDER = [{"id": "a", "pfad": "kalender/Privat", "name": "Privat", "standard": False,
+             "elemente": 0},
+            {"id": "b", "pfad": "kalender/Arbeit", "name": "Arbeit", "standard": True,
+             "elemente": 0}]
+
+
+def test_kalenderregeln_ohne_eintrag_nur_der_standard(sandbox):
+    """Ein Postfach hat oft Geburtstage und fremde Freigaben – die hat niemand gemeint."""
+    daten = {"ordner": KALENDER}
+    regeln = app_mod.kalenderregeln({"calendar_rules": ""}, daten)
+    assert [e["name"] for e in folders_mod.gewaehlt(daten, regeln)] == ["Arbeit"]
+    eigene = app_mod.kalenderregeln({"calendar_rules": "- kalender/**\n+ kalender/Privat"}, daten)
+    assert [e["name"] for e in folders_mod.gewaehlt(daten, eigene)] == ["Privat"]
+
+
+def test_kalenderliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
+    a, port = server
+    _kalenderliste(sandbox, KALENDER, [("kalender/Privat", 3), ("kalender/Weg", 2)])
+
+    code, r = call(port, "POST", "/api/folder-plan",
+                   {"quelle": "calendar", "calendar_rules": "- kalender/**\n+ kalender/Privat"})
+    assert code == 200 and r["ok"]
+    assert [z["pfad"] for z in r["an"]] == ["kalender/Privat"]
+    assert [z["pfad"] for z in r["aus"]] == ["kalender/Arbeit"]
+    # Gezählt wird, was auf der Platte liegt: Termine zählt Graph beim Auflisten nicht.
+    assert r["an"][0]["archiv"] == 3
+    assert r["weg"] == [{"pfad": "kalender/Weg", "archiv": 2}]
+    assert not a.cfg["calendar_rules"]
+
+
+def test_kalenderstand_nennt_die_gewaehlten_namen(server, sandbox):
+    a, port = server
+    _kalenderliste(sandbox, KALENDER)
+    c = call(port, "GET", "/api/status")[1]["calendars"]
+    assert (c["gesamt"], c["gewaehlt"], c["namen"]) == (2, 1, ["Arbeit"])
+    assert c["abgeglichen"]
+
+
+def test_kalenderstand_ohne_liste(server):
+    c = call(server[1], "GET", "/api/status")[1]["calendars"]
+    assert c == {"abgeglichen": None, "gesamt": 0, "gewaehlt": 0, "namen": [], "neu": []}
+
+
+def test_kalenderregeln_werden_gespeichert_und_weitergereicht(server, sandbox):
+    a, port = server
+    call(port, "POST", "/api/config", {"calendar_rules": "kalender/Privat"})
+    # Ohne Vorzeichen heißt einschließen – gespeichert wird die ausgeschriebene Regel.
+    assert a.cfg["calendar_rules"] == "+ kalender/Privat"
+    schritt = [s for s in app_mod.build_steps(a.cfg, outlook=True) if s["key"] == "outlook"][0]
+    assert schritt["env"]["CALENDAR_RULES"] == "+ kalender/Privat"
+
+
+def test_build_steps_kalenderabgleich(sandbox):
+    steps = app_mod.build_steps(app_mod.load_config(), sync_calendars=True)
+    assert [s["key"] for s in steps] == ["calendars"]
+    assert "--calendars" in steps[0]["argv"]
+
+
 def test_auswahlregeln_regeln_schlagen_die_namensliste():
     cfg = {"folder_rules": "+ E-Mail/Nur/**", "skip_folders": ["archiv"]}
     assert app_mod.auswahlregeln(cfg) == [(True, "E-Mail/Nur/**")]
@@ -4000,6 +4071,58 @@ setTimeout(function(){
 
 def test_exportliste_zeigt_drei_gruppen_und_ueberlebt_den_statusabruf():
     _in_node(PRUEFUNG_EXPORTLISTE)
+
+
+# Kalender sind dieselbe Liste mit derselben Vorschau - nur zaehlt hier, was
+# schon auf der Platte liegt, weil Graph beim Auflisten keine Termine zaehlt.
+PRUEFUNG_KALENDERLISTE = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  if(String(pfad).indexOf('/api/folder-plan') < 0){
+    return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
+  }
+  return Promise.resolve({json: function(){ return Promise.resolve({
+    ok: true, abgeglichen: '2026-08-10T09:33:51+00:00',
+    an:  [{pfad: 'kalender/Arbeit', elemente: 0, archiv: 1200, regel: null}],
+    aus: [{pfad: 'kalender/Geburtstage', elemente: 0, archiv: 0,
+           regel: '- kalender/**'}],
+    weg: [{pfad: 'kalender/Alt', archiv: 40}],
+    mails_an: 0, mails_aus: 0, mails_weg: 40}); }});
+};
+
+// Der Stand in den Einstellungen nennt die Kalender beim Namen: bei einer
+// Handvoll sagt das mehr als jede Zahl.
+zeigeKalenderstand({abgeglichen: '2026-08-10T09:33:51+00:00', gesamt: 3,
+                    gewaehlt: 1, namen: ['Arbeit'], neu: []});
+var stand = document.getElementById('cal-state').textContent;
+pruefe(stand.indexOf('Arbeit') >= 0, 'Kalendername fehlt: ' + stand);
+pruefe(stand.indexOf('3') >= 0, 'Gesamtzahl fehlt: ' + stand);
+
+document.getElementById('c-calendar_rules').value = '- kalender/**';
+zeigeExportliste('calendar');
+
+setTimeout(function(){
+  var frage = gesendet.filter(function(g){ return g.pfad.indexOf('folder-plan') >= 0; })[0];
+  pruefe(frage, 'Keine Anfrage an /api/folder-plan');
+  var b = JSON.parse(frage.body);
+  pruefe(b.quelle === 'calendar', 'Quelle nicht mitgeschickt: ' + frage.body);
+  pruefe(b.calendar_rules === '- kalender/**', 'Regeln aus dem Feld nicht mitgeschickt');
+
+  var h = document.getElementById('plan-listen').innerHTML;
+  pruefe(h.indexOf('kalender/Arbeit') >= 0, 'Gewaehlter Kalender fehlt');
+  pruefe(h.indexOf('kalender/Geburtstage') >= 0, 'Ausgelassener Kalender fehlt');
+  pruefe(h.indexOf('kalender/Alt') >= 0, 'Nur-noch-im-Archiv fehlt');
+  // Gezaehlt wird der Bestand, nicht die immer leere Elementzahl.
+  pruefe(h.indexOf('1.200') >= 0, 'Bestand des Kalenders fehlt');
+  pruefe(h.split('plangruppe').length - 1 === 3, 'Nicht drei Gruppen');
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_kalenderliste_zeigt_bestand_statt_leerer_zahlen():
+    _in_node(PRUEFUNG_KALENDERLISTE)
 
 
 # --------------------------------------------------------------------------

@@ -111,7 +111,8 @@ Which tool to use:
 
 Notes: dates are "YYYY-MM-DD", and days=N is a shorthand for the last N days
 (no need to work out the date); folder="E-Mail/Kunden" restricts to a mailbox
-folder and everything below it – list_folders shows what exists; results are
+folder and everything below it, and folder="kalender/Privat" to one calendar –
+list_folders shows what exists; results are
 one hit per message – page with offset rather than raising k; a hit's "uri" can
 be read as an MCP resource.
 """
@@ -863,8 +864,8 @@ def list_folders(contains: str = "", limit: int = 200) -> dict:
     """List the folders present in the archive, with item counts.
 
     The counterpart to the `folder` filter on search_messages: it tells you
-    what can be filtered on. Covers both sources — mailbox folders below
-    "E-Mail/" and mirrored OneDrive folders below "Dateien/".
+    what can be filtered on. Covers mailbox folders below "E-Mail/", mirrored
+    OneDrive folders below "Dateien/", and calendars below "kalender/".
     """
     con = _db()
     try:
@@ -874,7 +875,8 @@ def list_folders(contains: str = "", limit: int = 200) -> dict:
             params.append(f"%{contains.strip()}%")
         rows = con.execute(
             f"SELECT ctx, COUNT(DISTINCT uid) FROM chunks "
-            f"WHERE src IN ('outlook', 'datei') AND ctx IS NOT NULL AND ctx != '' {wo} "
+            f"WHERE src IN ('outlook', 'datei', 'kalender') "
+            f"AND ctx IS NOT NULL AND ctx != '' {wo} "
             f"GROUP BY ctx ORDER BY 2 DESC LIMIT ?",
             [*params, max(1, min(int(limit), 1000))]).fetchall()
         return {"count": len(rows),

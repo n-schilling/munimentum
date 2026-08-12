@@ -539,14 +539,18 @@ def _calendar_file(p_str, root_str):
     ts, disp = _ics_when(dtstart, dateonly)
     rel = p.relative_to(root).as_posix()
     segs = rel.split("/")
-    cal = segs[1] if len(segs) >= 3 and segs[0] == "kalender" else "Kalender"
+    # Der Ordnerpfad, nicht ein Schmuckname: ctx ist die Spalte, über die in
+    # der Suche nach Ordnern gefiltert wird. Als "kalender/Arbeit" steht der
+    # Kalender dort neben "E-Mail/Kunden" – dieselbe Auswahl wie im Export,
+    # mit demselben Pfad, unter dem er auch auf der Platte liegt.
+    cal = "/".join(segs[:2]) if len(segs) >= 3 and segs[0] == "kalender" else "kalender"
     ppl = " ".join(x for x in ([org_cn, org_mail] + att_names + att_mails) if x).lower()
     text = ((f"Ort: {location}. " if location else "") + description).strip()
     return {
         "uid": f"kalender:{rel}:0", "src": "kalender", "root": "outlook", "rel": rel,
         "who": org_cn or org_mail or "(unbekannt)", "ppl": ppl,
         "ts": ts, "date": disp, "title": summary or "(kein Betreff)",
-        "ctx": f"Kalender: {cal}", "text": text[:SAFETY_CAP],
+        "ctx": cal, "text": text[:SAFETY_CAP],
     }
 
 

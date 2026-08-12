@@ -94,7 +94,7 @@ def _sample_records():
         _rec(UID_CAL, "kalender", "outlook", "kalender/Arbeit/termin.ics",
              "Alice Beispiel", "alice beispiel bob baumeister",
              _ts("2025-06-15 14:00"), "2025-06-15 14:00", "Quartalsplanung",
-             "Kalender: Arbeit", "Ort: Raum 42. Agenda folgt."),
+             "kalender/Arbeit", "Ort: Raum 42. Agenda folgt."),
         _rec(UID_CON, "kontakte", "outlook", "kontakte/Team/alice.vcf", "",
              "alice beispiel alice@example.com", None, "", "Alice Beispiel",
              "Kontakte: Team", "Firma GmbH · Entwicklung. E-Mail: alice@example.com"),
@@ -1003,6 +1003,17 @@ def test_list_folders_kennt_beide_quellen(state, tmp_path):
     pfade = {f["path"] for f in mcp_server.list_folders(limit=100)["folders"]}
     assert "Dateien/Kunden" in pfade, "OneDrive-Ordner fehlt im Filter"
     assert any(p.startswith("inbox") or "/" in p for p in pfade), "Postfach fehlt jetzt"
+
+
+def test_list_folders_kennt_auch_kalender(state):
+    """Die Kalenderauswahl der Einstellungen muss sich in der Suche wiederfinden."""
+    pfade = {f["path"] for f in mcp_server.list_folders(limit=100)["folders"]}
+    assert "kalender/Arbeit" in pfade
+    treffer = mcp_server.search_messages("Quartalsplanung", folder="kalender/Arbeit",
+                                         mode="lexical")
+    assert _uids(treffer) == [UID_CAL]
+    assert mcp_server.search_messages("Quartalsplanung", folder="kalender/Privat",
+                                      mode="lexical")["count"] == 0
 
 
 def test_vorschau_zeigt_die_fundstelle(state):
