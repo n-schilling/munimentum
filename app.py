@@ -221,6 +221,12 @@ SKIP_FOLDERS_DEFAULT = {
     "postausgang", "outbox",
 }
 
+# Was eine Anhangliste aufbläht, ohne dass jemand danach sucht: die Signatur-
+# und Verschlüsselungsanhänge, die Mailprogramme selbst anhängen. Sie stehen als
+# Vorgabe im Feld und sind dort zu sehen und zu ändern – eine stille Regel im
+# Code wäre genau das, was man später nicht mehr findet.
+FILETYPE_HIDDEN_DEFAULT = {"p7s", "p7m", "asc", "pgp", "sig"}
+
 # Die vier Unterordner im Datenordner. Früher waren sie einstellbar – ein Erbe
 # aus der Zeit, als das hier lose Skripte waren, die jemand von Hand in einem
 # beliebigen Verzeichnis aufrief. Die App ruft sie längst selbst auf, und drei
@@ -262,6 +268,10 @@ DEFAULT_CONFIG = {
     # weil es Termine sichtbar macht, die es sonst nirgends mehr gibt.
     "calendar_reconstruct": True,
     "skip_folders": sorted(SKIP_FOLDERS_DEFAULT),
+    # Dateitypen, die im Suchfilter nicht angeboten werden. Rein kosmetisch:
+    # exportiert und durchsuchbar bleibt alles, es steht nur nicht in der
+    # Auswahlliste. Als sichtbare Vorgabe statt als Regel im Code.
+    "filetype_hidden": sorted(FILETYPE_HIDDEN_DEFAULT),
     # Ordnerauswahl als geordnete Regeln, letzte Übereinstimmung gewinnt.
     # Leer heißt: die alte Namensliste oben gilt weiter (siehe folders.py).
     "folder_rules": "",
@@ -404,6 +414,14 @@ def _clean_categories(values, allowed):
     """Nur bekannte Kategorien, in der Reihenfolge von `allowed`."""
     picked = {str(v).strip().lower() for v in (values or [])}
     return [k for k in allowed if k in picked]
+
+
+def _clean_endungen(values):
+    """Dateiendungen aus Liste oder Text: klein, ohne Punkt, ohne Doppel."""
+    if isinstance(values, str):
+        values = values.replace("\n", ",").split(",")
+    return sorted({str(v).strip().lower().lstrip(".")
+                   for v in (values or []) if str(v).strip().strip(".")})
 
 
 def _clean_folders(values):
@@ -1801,6 +1819,7 @@ class App:
             "frozen": FROZEN,
             "update": dict(self._update, releases_url=version.RELEASES_URL),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
+            "filetype_hidden_default": sorted(FILETYPE_HIDDEN_DEFAULT),
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
@@ -2252,6 +2271,8 @@ class Handler(BaseHTTPRequestHandler):
         if "onedrive_rules" in data:
             cfg["onedrive_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["onedrive_rules"] or "")))
+        if "filetype_hidden" in data:
+            cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
         if "skip_folders" in data:
             cfg["skip_folders"] = _clean_folders(data["skip_folders"])
         if "auth_mode" in data:
@@ -2454,8 +2475,18 @@ class Handler(BaseHTTPRequestHandler):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "filetypes": []}
-        return mod.list_filetypes(limit=min(int(q.get("limit", 40) or 40), 200),
-                                  source=q.get("source", ""))
+        # Ausgeblendet wird hier und nicht im Werkzeug: list_filetypes soll
+        # sagen, was im Archiv liegt – auch Claude gegenüber. Die Kürzung ist
+        # eine Frage der Oberfläche, keine des Bestands. Deshalb erst alles
+        # holen, dann ausblenden, dann auf die gewünschte Zahl kürzen.
+        wieviele = min(int(q.get("limit", 40) or 40), 200)
+        aus = set(self.app.cfg.get("filetype_hidden") or [])
+        r = mod.list_filetypes(limit=200, source=q.get("source", ""))
+        liste = [e for e in r.get("filetypes", []) if e["type"] not in aus]
+        return {"count": min(len(liste), wieviele),
+                "total_distinct": r.get("total_distinct", len(liste)),
+                "hidden": sorted(aus),
+                "filetypes": liste[:wieviele]}
 
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -3480,6 +3511,7 @@ main{padding-bottom:60px}
         </div>
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.filetype_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.filetype_hidden.i">i</span></span><span><input type="text" id="c-filetype_hidden" style="min-width:220px"> <button class="mini" onclick="typenZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
     </div>
@@ -5298,6 +5330,7 @@ function fuelleEinstellungen(cfg){
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
+  el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   // Zwei Zustände, die keine Formularfelder sind: der Ollama-Schalter graut die
   // halbe Karte ab, die Index-Wahl ist ein Umschalter statt einer Checkbox.
   indexart(cfg.index_semantic !== false);
@@ -5306,6 +5339,7 @@ function fuelleEinstellungen(cfg){
 }
 function speichereEinstellungen(){
   var body = {skip_folders: el('c-skip_folders').value,
+              filetype_hidden: el('c-filetype_hidden').value,
               language: el('c-language').value};
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
@@ -5318,6 +5352,10 @@ function speichereEinstellungen(){
     if(r.config.language !== spracheVorher){ location.reload(); return; }
     cfgGefuellt = false;                 // gespeicherte (und begrenzte) Werte zurückspielen
     fuelleEinstellungen(r.config);
+    // Die ausgeblendeten Typen wirken auf die Auswahlliste – die liegt
+    // zwischengespeichert vor und wäre sonst bis zum nächsten Indexlauf alt.
+    typenJeQuelle = {};
+    ladeTypen(el('f-source').value || 'all');
     var m = el('cfg-msg');
     m.className = 'small ok';
     m.textContent = t('settings.saved');
@@ -5394,6 +5432,10 @@ function datenordnerZurueck(){
 
 function ordnerZuruecksetzen(){
   el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');
+}
+function typenZuruecksetzen(){
+  el('c-filetype_hidden').value = (S.filetype_hidden_default || []).join(', ');
+  speichereEinstellungen();
 }
 
 /* ---------- Exportliste ----------

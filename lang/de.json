@@ -527,6 +527,8 @@
   "settings.app.i": "Wo die Daten liegen, wie die Oberfläche spricht und welche Version läuft.",
   "settings.datadir.i": "Hier liegen Exporte, Index und Einstellungen. Ein Wechsel verschiebt nichts – er zeigt nur woandershin und wirkt nach einem Neustart.",
   "settings.search_results.i": "Wie viele Treffer eine Seite der Suche zeigt. Mehr heißt weniger Blättern.",
+  "settings.filetype_hidden": "Dateitypen nicht anbieten",
+  "settings.filetype_hidden.i": "Kommagetrennt, z. B. „p7s, asc“. Diese Typen erscheinen im Dateityp-Filter der Suche nicht – sonst steht die Liste voll mit dem, was Mailprogramme selbst anhängen: Signaturblöcke, Verschlüsselungshüllen. Rein die Anzeige: exportiert wird weiter alles, gefunden wird weiter alles, und wer nach so einer Mail sucht, findet sie über den Namen des Anhangs.",
   "settings.lang.i": "Gilt für diese Oberfläche. Exportierte Inhalte werden nie angefasst.",
   "update.enabled.i": "Fragt einmal beim Start bei api.github.com nach einer neueren Version. Sonst spricht die App mit nichts außer Microsoft Graph und dem lokalen Ollama.",
   "pill.ollama.disabled": "Ollama deaktiviert",

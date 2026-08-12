@@ -15,6 +15,7 @@ import http.client
 import json
 import os
 import re
+import types
 import shutil
 import sqlite3
 import subprocess
@@ -3993,6 +3994,39 @@ def test_build_steps_kalenderabgleich(sandbox):
     assert "--calendars" in steps[0]["argv"]
 
 
+def test_ausgeblendete_dateitypen_nur_in_der_liste(server, sandbox, monkeypatch):
+    """Ausgeblendet heißt: nicht angeboten. Nicht: nicht da.
+
+    Das Werkzeug soll weiter sagen, was im Archiv liegt – auch Claude
+    gegenüber. Gekürzt wird nur die Liste, die die Oberfläche anbietet.
+    """
+    a, port = server
+    alle = {"count": 3, "total_distinct": 3, "filetypes": [
+        {"type": "pdf", "messages": 40}, {"type": "p7s", "messages": 12},
+        {"type": "xlsx", "messages": 3}]}
+    mod = types.SimpleNamespace(list_filetypes=lambda limit=40, source="": alle)
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: mod)
+
+    call(port, "POST", "/api/config", {"filetype_hidden": ".P7S, xlsx ,, "})
+    assert a.cfg["filetype_hidden"] == ["p7s", "xlsx"]      # klein, ohne Punkt
+
+    r = call(port, "GET", "/api/filetypes")[1]
+    assert [e["type"] for e in r["filetypes"]] == ["pdf"]
+    assert r["hidden"] == ["p7s", "xlsx"]
+    # Der Bestand wird nicht kleingeredet: es gibt weiterhin drei Typen.
+    assert r["total_distinct"] == 3
+    # Und die Suche danach bleibt möglich – ausgeblendet ist nur das Angebot.
+    assert mod.list_filetypes()["filetypes"] == alle["filetypes"]
+
+
+def test_dateitypen_vorgabe_ist_sichtbar(server):
+    """Die Vorgabe steht im Feld, nicht als stille Regel im Code."""
+    s = call(server[1], "GET", "/api/status")[1]
+    assert s["filetype_hidden_default"] == sorted(app_mod.FILETYPE_HIDDEN_DEFAULT)
+    assert s["config"]["filetype_hidden"] == s["filetype_hidden_default"]
+    assert 'id="c-filetype_hidden"' in app_mod.PAGE
+
+
 def test_auswahlregeln_regeln_schlagen_die_namensliste():
     cfg = {"folder_rules": "+ E-Mail/Nur/**", "skip_folders": ["archiv"]}
     assert app_mod.auswahlregeln(cfg) == [(True, "E-Mail/Nur/**")]
@@ -5791,6 +5825,7 @@ def test_jedes_feld_ist_auch_gelistet():
     gelistet = {k for liste in _feldlisten().values() for k in liste}
     # Von Hand behandelt, jeweils mit eigenem Grund.
     ausnahmen = {"skip_folders",      # mehrzeiliger Text, eigene Behandlung
+                 "filetype_hidden",   # Liste aus einer Zeile, eigene Behandlung
                  "language",          # eigenes Auswahlfeld, fuelleSprachen()
                  "data-dir",          # kein Konfigurationswert, eigener Knopf
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()

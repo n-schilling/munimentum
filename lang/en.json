@@ -527,6 +527,8 @@
   "settings.app.i": "Where the data lives, what language the interface speaks, and which version is running.",
   "settings.datadir.i": "Exports, index and settings live here. A change moves nothing — it just points elsewhere, and takes effect after a restart.",
   "settings.search_results.i": "How many hits one page of search results shows. More means less paging.",
+  "settings.filetype_hidden": "File types not to offer",
+  "settings.filetype_hidden.i": "Comma-separated, e.g. “p7s, asc”. These types do not appear in the file type filter — otherwise the list fills up with what mail programs attach by themselves: signature blocks, encryption envelopes. Display only: everything is still exported and still findable, and a mail like that is still found by its attachment name.",
   "settings.lang.i": "Applies to this interface. Exported content is never touched.",
   "update.enabled.i": "Asks api.github.com once at startup whether a newer version exists. Otherwise the app talks to nothing but Microsoft Graph and your local Ollama.",
   "pill.ollama.disabled": "Ollama off",
