@@ -139,12 +139,13 @@ def test_is_default_skip_vergleicht_case_insensitive():
 
 
 def test_interactive_beachtet_tty_und_default_flag(monkeypatch):
-    monkeypatch.setattr(outlook_export.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr(outlook_export.sys, "stdin", FakeStrom(True))
+    monkeypatch.setattr(outlook_export.sys, "stdout", FakeStrom(True))
     assert outlook_export._interactive()
     monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
     assert not outlook_export._interactive()
     monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
-    monkeypatch.setattr(outlook_export.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(outlook_export.sys, "stdin", FakeStrom(False))
     assert not outlook_export._interactive()
 
 
@@ -1332,3 +1333,54 @@ def test_alte_namensliste_gilt_ohne_regeln(monkeypatch):
 def test_umgebung_schlaegt_die_datei(monkeypatch):
     monkeypatch.setenv("FOLDER_RULES", "+ E-Mail/Nur/**")
     assert outlook_export.aktuelle_regeln() == [(True, "E-Mail/Nur/**")]
+
+
+# --------------------------------------------------------------------------
+# Rückfragen nur an einem echten Terminal
+# --------------------------------------------------------------------------
+class FakeStrom:
+    """Ein Ende der Ein-/Ausgabe, das isatty() nach Wunsch beantwortet."""
+
+    def __init__(self, tty):
+        self._tty = tty
+
+    def isatty(self):
+        return self._tty
+
+
+def _stroeme(monkeypatch, modul, stdin, stdout):
+    monkeypatch.setattr(modul.sys, "stdin", FakeStrom(stdin))
+    monkeypatch.setattr(modul.sys, "stdout", FakeStrom(stdout))
+
+
+def test_terminal_fragt(monkeypatch):
+    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
+    _stroeme(monkeypatch, outlook_export, True, True)
+    assert outlook_export._interactive() is True
+
+
+def test_nullgeraet_fragt_nicht(monkeypatch):
+    """Der gemeldete Fall: unter Windows meldet NUL isatty() == True.
+
+    Der Kalender-Export blieb deshalb an "Welche Kalender?" stehen, obwohl die
+    App stdin auf DEVNULL gelegt hatte. Ihre Ausgabe geht immer in eine Pipe –
+    daran ist zu erkennen, dass niemand antworten kann.
+    """
+    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
+    _stroeme(monkeypatch, outlook_export, True, False)
+    assert outlook_export._interactive() is False
+
+
+def test_default_schalter_schlaegt_das_terminal(monkeypatch):
+    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
+    _stroeme(monkeypatch, outlook_export, True, True)
+    assert outlook_export._interactive() is False
+
+
+def test_kalender_nimmt_ohne_terminal_den_standard(monkeypatch):
+    """Ohne Terminal wird nichts gedruckt und der Standardkalender genommen."""
+    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
+    cals = [{"id": "a", "name": "Zweiter"},
+            {"id": "b", "name": "Haupt", "isDefaultCalendar": True}]
+    monkeypatch.setattr("builtins.input", lambda *a: pytest.fail("hat gefragt"))
+    assert outlook_export.select_calendars(cals) == [cals[1]]

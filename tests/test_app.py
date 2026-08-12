@@ -476,8 +476,21 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
     assert all(s["env"]["GRAPH_TOKEN"] == "tok" for s in steps)
     assert all(s["env"]["PYTHONUNBUFFERED"] == "1" for s in steps)
     assert steps[0]["argv"][1].endswith("outlook_export.py")
-    assert steps[0]["argv"][2] == "outlook_export"        # Ausgabeordner
+    assert "outlook_export" in steps[0]["argv"][2:]       # Ausgabeordner
     assert "--no-embeddings" not in steps[2]["argv"]
+
+
+def test_build_steps_verbietet_rueckfragen(sandbox):
+    """Kein Exportschritt darf aus der App heraus etwas fragen können.
+
+    Ohne -default fragte outlook_export nach den Kalendern, sobald stdin
+    interaktiv aussah – unter Windows tut das auch das Nullgerät. Der Lauf
+    stand dann an einer Frage, die in der Oberfläche niemand beantworten kann.
+    """
+    steps = app_mod.build_steps(app_mod.load_config(), outlook=True, teams=True)
+    assert [s["key"] for s in steps] == ["outlook", "teams"]
+    for s in steps:
+        assert "-default" in s["argv"]
 
 
 def test_build_steps_ohne_embeddings(sandbox):

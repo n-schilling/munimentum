@@ -916,3 +916,24 @@ def test_run_parallel_catches_raising_runner():
 
 def test_run_parallel_empty_list_is_done():
     assert te.run_parallel([], {}, workers=4) == "done"
+
+
+class FakeStrom:
+    def __init__(self, tty):
+        self._tty = tty
+
+    def isatty(self):
+        return self._tty
+
+
+def test_nullgeraet_ist_nicht_interaktiv(monkeypatch):
+    """Unter Windows meldet auch NUL isatty() == True – die Pipe verrät es."""
+    monkeypatch.setattr(te.sys, "stdin", FakeStrom(True))
+    monkeypatch.setattr(te.sys, "stdout", FakeStrom(False))
+    assert te._interactive() is False
+
+
+def test_terminal_ist_interaktiv(monkeypatch):
+    monkeypatch.setattr(te.sys, "stdin", FakeStrom(True))
+    monkeypatch.setattr(te.sys, "stdout", FakeStrom(True))
+    assert te._interactive() is True

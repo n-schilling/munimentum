@@ -335,8 +335,23 @@ def _read(prompt):
 
 
 def _interactive():
-    """Nur fragen, wenn ein Terminal da ist und -default nicht gesetzt wurde."""
-    return sys.stdin.isatty() and not ASSUME_DEFAULT
+    """Nur fragen, wenn ein Terminal da ist und -default nicht gesetzt wurde.
+
+    stdin allein reicht als Nachweis nicht: unter Windows meldet auch das
+    Nullgerät isatty() == True, weil NUL ein Zeichengerät ist. Ein Aufruf aus
+    der App (stdin auf DEVNULL, stdout in einer Pipe) sähe damit interaktiv aus
+    und bliebe an einer Frage stehen, die niemand sieht. Ein echtes Terminal
+    hat beide Enden.
+    """
+    if ASSUME_DEFAULT:
+        return False
+    for strom in (sys.stdin, sys.stdout):
+        try:
+            if not strom.isatty():
+                return False
+        except (AttributeError, ValueError):
+            return False
+    return True
 
 
 def parse_indices(raw, n):

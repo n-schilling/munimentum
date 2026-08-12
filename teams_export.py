@@ -348,6 +348,24 @@ def _read(prompt):
         return ""
 
 
+def _interactive():
+    """Ob überhaupt jemand antworten kann.
+
+    stdin allein reicht als Nachweis nicht: unter Windows meldet auch das
+    Nullgerät isatty() == True, weil NUL ein Zeichengerät ist. Ein Aufruf aus
+    der App (stdin auf DEVNULL, stdout in einer Pipe) sähe damit interaktiv aus
+    und bliebe an einer Frage stehen, die niemand sieht. Ein echtes Terminal
+    hat beide Enden.
+    """
+    for strom in (sys.stdin, sys.stdout):
+        try:
+            if not strom.isatty():
+                return False
+        except (AttributeError, ValueError):
+            return False
+    return True
+
+
 def parse_indices(raw, n):
     out = []
     for tok in re.split(r"[\s,]+", raw.strip()):
@@ -383,7 +401,7 @@ def prompt_categories(options):
     if env is not None:
         print("Auswahl aus EXPORT_CATEGORIES – keine Abfrage.")
         return env
-    if not sys.stdin.isatty():
+    if not _interactive():
         print("Kein interaktives Terminal – nutze die Standardauswahl (1, 2, 3).")
         return default_categories(options)
     print("Was möchtest du exportieren?")
@@ -411,7 +429,7 @@ def select_teams(graph):
     if not teams:
         print("Keine Teams gefunden.")
         return []
-    if not sys.stdin.isatty():
+    if not _interactive():
         print(f"Kein interaktives Terminal – exportiere alle {len(teams)} Teams.")
         return teams
     print(f"\n{len(teams)} Teams gefunden. Welche exportieren? (jeweils alle Kanäle)")
