@@ -1312,22 +1312,42 @@ def test_die_anleitung_verspricht_keine_embeddings():
 # --------------------------------------------------------------------------
 # Der harte Schalter: aus heißt aus, für beide Transporte
 # --------------------------------------------------------------------------
-def test_abgeschaltet_verweigert_der_server_den_dienst(state, monkeypatch, capsys):
+def test_abgeschaltet_liefert_der_server_nichts_aus(state, monkeypatch):
     """Ein Schalter, der nur den HTTP-Endpunkt anhielte, wäre genau das
     Versprechen, das er nicht hält: über stdio startet der Client dieses
     Programm selbst, ohne dass die App überhaupt läuft."""
-    gestartet = []
-    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: gestartet.append(kw))
+    echt, aus = [], []
+    monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: echt.append(kw))
+
+    class FakeServer:
+        def run(self, **kw):
+            aus.append(kw)
+
+    monkeypatch.setattr(mcp_server, "_abgeschaltet_server", FakeServer)
     monkeypatch.setenv("MCP_ENABLED", "0")
 
     for transport in ("stdio", "http"):
+        aus.clear()
         monkeypatch.setattr(sys, "argv",
                             ["mcp_server.py", "--data-dir", str(state["tmp"]),
                              "--transport", transport, "--no-ollama"])
-        with pytest.raises(SystemExit) as e:
-            mcp_server.main()
-        assert "switched off" in str(e.value)
-        assert not gestartet, f"{transport} wurde trotzdem bedient"
+        mcp_server.main()
+        assert not echt, f"{transport}: der echte Server lief"
+        assert aus, f"{transport}: gar kein Server – der Client saehe nur einen Fehler"
+
+
+@pytest.mark.anyio
+async def test_abgeschalteter_server_hat_nur_die_auskunft():
+    """Ein Server, der stirbt, hinterlässt dem Menschen eine Logdatei. Dieser
+    hier sagt es dem Modell, und das Modell sagt es weiter."""
+    aus = mcp_server._abgeschaltet_server()
+    werkzeuge = await aus.list_tools()
+    assert [w.name for w in werkzeuge] == ["archive_unavailable"]
+    # Nichts, was Daten liest – auch nicht versehentlich.
+    assert not ({"search_messages", "browse_messages", "get_document",
+                 "read_source_file"} & {w.name for w in werkzeuge})
+    assert "switched off" in aus.instructions
+    assert "Settings" in aus.instructions
 
 
 def test_force_serviert_trotzdem(state, monkeypatch):

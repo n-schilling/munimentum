@@ -53,10 +53,13 @@ Run (HTTP, default – one shared server for all Claude sessions):
 Run (stdio – auto-launched per client, the classic setup):
     python3 mcp_server.py --transport stdio [--store …]
 
-Switched off in the app (Settings → MCP server), this program refuses to serve –
-over stdio as well as HTTP. The check sits in main() and nowhere else: the app
-calls the same functions in-process for its own search, and what is switched off
-is the SERVER, not reading the index. --force serves anyway.
+Switched off in the app (Settings → MCP server), this program serves nothing –
+over stdio as well as HTTP. It does not exit: it runs a server that offers a
+single tool saying so, which the client's model reads and passes on. Exiting
+would leave the user with a failed connection and the reason in a log file. The
+check sits in main() and nowhere else: the app calls the same functions
+in-process for its own search, and what is switched off is the SERVER, not
+reading the index. --force serves anyway.
 """
 
 import os
@@ -123,6 +126,43 @@ channel – and list_folders shows what exists, per source; results are one hit
 per message – page with offset rather than raising k; a hit's "uri" can be read
 as an MCP resource.
 """
+
+# Was der Client zu sehen bekommt, wenn der Zugriff abgeschaltet ist. Bewusst
+# als Anweisung an das Modell formuliert: es soll den Satz weitergeben und nicht
+# anfangen, den Fehler zu umgehen.
+AUS_TEXT = (
+    "MCP access to the Munimentum archive is switched off, so nothing is "
+    "served: no search, no documents, no statistics. This is a deliberate "
+    "setting, not a fault, and no other tool or path will get at the data. "
+    "Tell the user in plain words that access is off and that they can allow "
+    "it again in Munimentum under Settings -> MCP server -> \"Allow MCP "
+    "access\". The entry in this client stays valid and works again the moment "
+    "they do; nothing needs to be reconfigured."
+)
+
+
+def _abgeschaltet_server():
+    """Ein Server, der genau eine Auskunft gibt: dass er abgeschaltet ist.
+
+    Derselbe Name wie sonst – der Client hat ihn so eingetragen. Nur die
+    Werkzeugliste ist eine andere: eines statt neun, und dieses eine liest
+    nichts.
+    """
+    aus = MCPServer("munimentum", title="Munimentum", version=version.VERSION,
+                    website_url="https://github.com/n-schilling/munimentum",
+                    instructions=AUS_TEXT)
+
+    @aus.tool(annotations=_READONLY)
+    def archive_unavailable() -> dict:
+        """Why this archive is not answering. Report this to the user and stop.
+
+        There is no way around it from here: no other tool, no file path, no
+        retry. It is a setting in the Munimentum app.
+        """
+        return {"available": False, "reason": AUS_TEXT}
+
+    return aus
+
 
 mcp = MCPServer(
     "munimentum",
@@ -1174,10 +1214,24 @@ def main():
     # vor beiden Transporten: über stdio startet der Client dieses Programm
     # selbst, ohne dass die App überhaupt läuft. Ein Schalter, der nur den
     # HTTP-Endpunkt anhielte, wäre genau das Versprechen, das er nicht hält.
+    #
+    # Sich zu beenden wäre das Naheliegende und die schlechtere Antwort: der
+    # Client sähe nur einen Server, der nicht startet, und der Grund stünde in
+    # einer Logdatei. Stattdessen läuft ein Server, der genau eine Auskunft
+    # gibt – die liest das Sprachmodell und sagt sie dem Menschen im Klartext.
+    # Ausgeliefert wird dabei nichts: kein Werkzeug, das Daten liest, und der
+    # Index wird nicht einmal geöffnet.
     if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled", True):
-        raise SystemExit(
-            "MCP access is switched off in Munimentum (Settings → MCP server).\n"
-            "Nothing is served over stdio or HTTP until it is switched back on.")
+        print(AUS_TEXT, file=sys.stderr)
+        server = _abgeschaltet_server()
+        if a.transport == "http":
+            server.run(transport="streamable-http", host=a.host, port=a.port,
+                       streamable_http_path=_HTTP_PATH,
+                       transport_security=_transport_security(
+                           a.host, a.port, a.allowed_host))
+        else:
+            server.run(transport="stdio")
+        return
 
     dbp = Path(a.store) / "corpus.db"
     if not dbp.exists():
