@@ -42,66 +42,6 @@ allow access; nothing needs reconfiguring. And it is a safeguard against
 accident, not an access barrier — anyone who reaches this machine can switch it
 back.
 
-## New in 5.2.0
-
-**Calendars are chosen like folders.** *Settings → Calendars* holds the same
-kind of include/exclude rules the mailbox folders use, with *Show export list*
-as a preview. Without a rule only your own calendar comes along — a mailbox
-usually carries birthdays, holidays and calendars other people shared, and
-nobody meant those.
-
-This grew out of a bug: on Windows an export could stop at a question about
-which calendars to fetch, printed into a log nobody could answer. The run looked
-frozen, then carried on by itself. Nothing launched from the app asks questions
-any more.
-
-**The filters follow each other.** Pick a source and the folder list narrows to
-it: calendars for the calendar, the four kinds of conversation for Teams,
-mailbox folders for mail. Where there is nothing to choose, the field is gone
-instead of sitting there empty.
-
-**A file type filter.** Find the mails that carry a PDF, or the spreadsheets in
-your OneDrive mirror. It works in all three kinds of search, and it needs one
-index run before it appears. *Settings* lists the types not worth offering —
-prefilled with the signature blocks mail programs attach by themselves, visible
-and editable.
-
-**The person field suggests names** as you type, with the number of messages
-behind each, so a typo is not mistaken for someone who is not there. `*` is a
-wildcard: `schmi*` searches everyone matching rather than pinning you to one
-name, and the list offers that as its last row.
-
-**Nothing is preselected in the export any more.** Mail, calendar, contacts and
-the kinds of chat all start unticked — each of them can mean tens of thousands
-of items, and what gets fetched should be a decision. An empty selection now
-produces no export step at all; it used to reach the script as “not set”, which
-it read as “everything”.
-
-**“Deleted” is a filter, not a view.** It never was a view of its own — it was
-this same result list with one filter set. It now sits in the filter row with
-the others, counts towards the number on the toggle, and clears with them. Its
-**(i)** is also honest about a limit: Exchange gives a message a new id when it
-is moved, so a message that merely changed folders can show up here.
-
-**A date that does not exist is now reported.** The 31st of June was accepted by
-the browser, handed over empty, and searched without that limit — the results
-looked wrong for no visible reason.
-
-**Analytics.** People are counted once each; whoever wrote both in Teams and by
-mail was listed twice before, each time with part of their messages. You can
-leave people out of the ranking in *Settings* — usually yourself, whose messages
-otherwise sit far at the top and say nothing about the exchange with others.
-All bars in a list start at the same place.
-
-**Removed: the portable search page.** The app never used the file, and on a
-grown archive it reached several hundred megabytes — a page a browser has to
-read whole before anything appears. The archive is already readable without this
-app: `.eml`, `.ics`, `.vcf` and one index page per Teams folder. The script is
-still there for anyone who wants it.
-
-*After updating, run the index once* — the file type filter and the calendar
-entries in the folder list appear with it.
-
 ## Which file?
 
 | File | For |
