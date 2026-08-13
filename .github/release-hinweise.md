@@ -13,19 +13,11 @@ Microsoft about the old one answers "not found", and the export drew the wrong
 conclusion. It now compares the message id from the mail header instead, which
 survives a move and comes along with the folder listing at no extra cost.
 
-Old entries repair themselves, but not by themselves: *run one export with
-**Mail** ticked*. That withdraws the wrong markers — the log says how many — and
-the index run that follows carries the correction into search and analytics.
-Indexing alone does not do it; the markers are written during the export. A run
-in which a folder could not be listed completely skips the check entirely, on
-purpose: better no statement than a wrong one.
-
-**macOS no longer asks about the local network.** On first launch, macOS 15
-asked whether Munimentum may look for devices on local networks — a question
-this app has no business raising: it listens on 127.0.0.1 and otherwise talks
-only to Microsoft Graph. The cause was in Python's HTTP server, which resolves
-a name for its own address while binding; the result is never used. It no
-longer does, and startup is a fraction faster for it.
+**To make it take effect:** run one export with **Mail** ticked. That withdraws
+the wrong markers — the log says how many — and the index run that follows
+carries the correction into search. **Not needed:** a fresh export, a rebuild,
+deleting anything. Indexing alone will not do it; the markers are written during
+the export.
 
 **The AI tile says on or off, and the settings say why.** It used to read *AI
 search ready* / *model missing* / *off* — three labels for one question, none of
@@ -49,11 +41,6 @@ The entry you pasted into your client stays valid and works again the moment you
 allow access; nothing needs reconfiguring. And it is a safeguard against
 accident, not an access barrier — anyone who reaches this machine can switch it
 back.
-
-*After updating, run one export with **Mail** ticked.* That is what withdraws
-the wrong *Deleted* markers, and the index run that follows carries the
-correction into search and analytics. Since 5.2.0 nothing is preselected, so
-tick what you want first.
 
 ## New in 5.2.0
 
