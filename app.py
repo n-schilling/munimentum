@@ -2206,7 +2206,9 @@ class Handler(BaseHTTPRequestHandler):
                                # stand im Formular, ging an den Export, wurde
                                # aber nie gespeichert.
                                ("onedrive_max_mb", 0, 100000),
-                               ("search_results", 5, 100)):
+                               ("search_results", 5, 100),
+                               # 0 heißt: Userflow-Aufzeichnung aus.
+                               ("userflow_actions", 0, 50)):
             if key in data:
                 try:
                     cfg[key] = max(low, min(high, int(data[key])))
@@ -3204,7 +3206,7 @@ main{padding-bottom:60px}
     <p class="small muted" id="teams-note" style="margin-top:10px"></p>
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
-      <button class="ghost hide" id="btn-cancel" onclick="post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
+      <button class="ghost hide" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.start.hint"
             role="img" aria-label="Info">i</span>
     </div>
@@ -3530,6 +3532,7 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.filetype_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.filetype_hidden.i">i</span></span><span><input type="text" id="c-filetype_hidden" style="min-width:220px"> <button class="mini" onclick="typenZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.userflow_actions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.userflow_actions.i">i</span></span><input type="number" id="c-userflow_actions" min="0" max="50"></div>
     </div>
     <div class="row" style="margin-top:14px">
       <span class="small muted" id="update-current" style="flex:1"></span>
@@ -3703,7 +3706,38 @@ var REITER = ['export', 'suche', 'analytics', 'einstellungen'];
 var SICHTEN = ['treffer', 'kalender', 'adressbuch'];
 var offeneSicht = 'treffer';
 
+/* ---------- UI-Userflow-Aufzeichnung ----------
+   Die letzten Bedienschritte – nur die ART (Reiter, Suche, Lauf), nie Inhalte
+   wie Suchtexte oder Namen. Rein im Speicher dieser Seite, beim Schließen weg;
+   sichtbar wird die Liste nur im Fehlerbericht, als eigenes editierbares Feld.
+   Anzahl in den Einstellungen (userflow_actions), 0 schaltet ab. */
+var ablauf = [];
+
+function ablaufGrenze(){
+  return (S && S.config && typeof S.config.userflow_actions === 'number')
+    ? S.config.userflow_actions : 20;
+}
+
+function merke(schluessel, detail){
+  var n = ablaufGrenze();
+  if(n <= 0){ ablauf.length = 0; return; }
+  var d = new Date();
+  function zwei(x){ return (x < 10 ? '0' : '') + x; }
+  ablauf.push({t: zwei(d.getHours()) + ':' + zwei(d.getMinutes()) + ':' +
+                  zwei(d.getSeconds()),
+               k: schluessel, d: detail || ''});
+  while(ablauf.length > n) ablauf.shift();
+}
+
+function ablaufText(){
+  if(ablaufGrenze() <= 0) return '';
+  return ablauf.map(function(e){
+    return e.t + '  ' + t(e.k) + (e.d ? ': ' + e.d : '');
+  }).join('\n');
+}
+
 function tab(name){
+  merke('flow.tab', name);
   REITER.forEach(function(t){
     el('tab-' + t).classList.toggle('hide', t !== name);
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
@@ -3716,6 +3750,7 @@ function tab(name){
    eigene Sicht auf denselben Bestand – wie Kalender und Adressbuch. Es teilt
    sich deren Trefferliste, setzt aber den Filter. */
 function sicht(name){
+  if(name !== offeneSicht) merke('flow.view', name);   // tab() reicht die offene durch
   offeneSicht = name;
   SICHTEN.forEach(function(v){
     el('sicht-' + v).classList.toggle('hide', v !== name);
@@ -3985,6 +4020,7 @@ function checked(pre){
     (pre === 'o' ? 'outlook' : 'teams') + ' input:checked')).map(function(i){ return i.value; });
 }
 function saveCats(){
+  merke('flow.save', 'export');
   post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
                        onedrive_enabled: el('c-onedrive_enabled').checked}).then(refresh);
 }
@@ -3992,6 +4028,7 @@ function saveCats(){
 /* ---------- Läufe ---------- */
 function run(what, label){
   what.label = label;
+  merke('flow.run', label);
   post('/api/run', what).then(function(r){
     if(!r.ok) alert(mtext(r.message));
     refresh();
@@ -4143,6 +4180,9 @@ function berichtFenster(){
     '<label class="small" for="rep-system">' + esc(t('report.body.system')) + '</label>' +
     '<textarea id="rep-system" rows="6" spellcheck="false" style="' + mono + '">' +
       esc(berichtSystem(b)) + '</textarea>' +
+    '<label class="small" for="rep-ablauf">' + esc(t('report.body.actions')) + '</label>' +
+    '<textarea id="rep-ablauf" rows="4" spellcheck="false" style="' + mono + '">' +
+      esc(ablaufText()) + '</textarea>' +
     '<label class="small" for="rep-log">' + esc(t('report.body.log')) + '</label>' +
     '<textarea id="rep-log" rows="8" spellcheck="false" style="' + mono + '">' +
       esc(b.log) + '</textarea>' +
@@ -4154,11 +4194,12 @@ function berichtFenster(){
                tun: 'inZwischenablage(berichtGesamt(), this)'}));
 }
 
-/* Für die Zwischenablage: die drei Felder als ein lesbarer Text. */
+/* Für die Zwischenablage: die Felder als ein lesbarer Text. */
 function berichtGesamt(){
   return t('report.field.title') + ': ' + el('rep-titel').value + '\n\n' +
     t('report.body.what') + ':\n' + el('rep-was').value + '\n\n' +
     t('report.body.system') + ':\n' + el('rep-system').value + '\n\n' +
+    t('report.body.actions') + ':\n' + el('rep-ablauf').value + '\n\n' +
     t('report.body.log') + ':\n' + el('rep-log').value + '\n';
 }
 
@@ -4167,7 +4208,7 @@ function berichtGesamt(){
    Also vorher kürzen und es dazusagen, statt es darauf ankommen zu lassen. */
 var URL_GRENZE = 7000;
 
-function berichtAdresse(basis, titel, was, system, log){
+function berichtAdresse(basis, titel, was, system, aktionen, log){
   var gekuerzt = false;
   // Der Vermerk über das Kürzen gehört mitgemessen. Ihn erst am Ende
   // anzuhängen hieße, die Grenze genau um ihn zu überschreiten.
@@ -4176,6 +4217,7 @@ function berichtAdresse(basis, titel, was, system, log){
       '&title=' + encodeURIComponent(titel) +
       '&what=' + encodeURIComponent(was) +
       '&system=' + encodeURIComponent(system) +
+      '&actions=' + encodeURIComponent(aktionen) +
       '&log=' + encodeURIComponent(gekuerzt ? t('report.cut') + '\n' + log : log);
   }
   var url = adresse();
@@ -4191,6 +4233,7 @@ function berichtAdresse(basis, titel, was, system, log){
   if(url.length > URL_GRENZE){          // Riesenzeilen oder riesige Felder
     was = was.slice(0, 1000);
     system = system.slice(0, 1500);
+    aktionen = aktionen.slice(-1000);
     log = log.slice(-2000);
     gekuerzt = true;
     url = adresse();
@@ -4203,7 +4246,7 @@ function berichtOeffnen(){
   var ziel = berichtAdresse(berichtDaten.url,
                             el('rep-titel').value.trim() || t('report.title.fallback'),
                             el('rep-was').value, el('rep-system').value,
-                            el('rep-log').value);
+                            el('rep-ablauf').value, el('rep-log').value);
   el('rep-hinweis').textContent = ziel.gekuerzt ? t('report.truncated') : '';
   window.open(ziel.url, '_blank', 'noopener');
 }
@@ -4370,6 +4413,11 @@ function doSearch(off){
     return;
   }
   offset = off || 0;
+  // Nur die Art und die Zahl der Filter – nie der Suchtext oder ein Name.
+  var filter = ['f-person', 'f-source', 'f-from', 'f-to', 'f-folder', 'f-typ']
+    .filter(function(id){ return el(id).value; }).length +
+    (el('f-gone').checked ? 1 : 0);
+  merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
   var proSeite = trefferProSeite();
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
@@ -5362,12 +5410,14 @@ function zeigeTreffer(n){
 
 /* ---------- Zeitplan / MCP ---------- */
 function saveSchedule(){
+  merke('flow.save', 'schedule');
   post('/api/schedule', {enabled: el('s-enabled').checked,
     interval_minutes: parseInt(el('s-interval').value, 10) || 60,
     outlook: el('s-outlook').checked, teams: el('s-teams').checked,
     index: el('s-index').checked, calendar: el('s-calendar').checked}).then(refresh);
 }
 function toggleMcp(){
+  merke('flow.mcp', S.mcp.running ? 'stop' : 'start');
   post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
     if(!r.ok && r.message) alert(mtext(r.message));
     refresh();
@@ -5413,7 +5463,7 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb','semantic_min'];
+                'onedrive_max_mb','semantic_min','userflow_actions'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules'];
 var cfgGefuellt = false;
@@ -5436,6 +5486,7 @@ function fuelleEinstellungen(cfg){
   fuelleSprachen();
 }
 function speichereEinstellungen(){
+  merke('flow.save', 'settings');
   var body = {skip_folders: el('c-skip_folders').value,
               filetype_hidden: el('c-filetype_hidden').value,
               analytics_skip: el('c-analytics_skip').value,
@@ -5704,6 +5755,7 @@ function oeffneEigenes(kind, html){
 }
 
 function openWizard(kind, neuZeichnen){
+  if(!neuZeichnen) merke('flow.wizard', kind);
   var kennung = wizardKennung(kind);
   if(wizardOffen === kind && wizardStand === kennung && !neuZeichnen) return;
   var feld = document.getElementById('tok');       // bereits Eingefügtes retten

@@ -190,7 +190,7 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.",
            "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
-           "progress.", "view.", "ana.", "folders.", "plan.", "report.")
+           "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.

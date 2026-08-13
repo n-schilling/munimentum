@@ -1660,6 +1660,15 @@ def test_http_config_speichern(server, sandbox):
     assert app_mod.load_config()["workers"] == 2                          # persistiert
 
 
+def test_http_config_userflow_grenzen(server, sandbox):
+    """0 heißt aus und bleibt 0; nach oben ist bei 50 Schluss."""
+    _, port = server
+    code, r = call(port, "POST", "/api/config", {"userflow_actions": 99})
+    assert code == 200 and r["config"]["userflow_actions"] == 50
+    code, r = call(port, "POST", "/api/config", {"userflow_actions": 0})
+    assert code == 200 and r["config"]["userflow_actions"] == 0
+
+
 def test_http_config_schalter_und_ordner(server, sandbox):
     a, port = server
     code, r = call(port, "POST", "/api/config",
@@ -5641,8 +5650,8 @@ pruefe(wizardOffen === 'report', 'Fenster nicht geoeffnet');
 
 setTimeout(function(){
   var html = modal.innerHTML;
-  // Drei Felder, dieselben wie im Bug-Formular auf GitHub.
-  ['rep-was', 'rep-system', 'rep-log'].forEach(function(id){
+  // Vier Felder, dieselben wie im Bug-Formular auf GitHub.
+  ['rep-was', 'rep-system', 'rep-ablauf', 'rep-log'].forEach(function(id){
     pruefe(html.indexOf('id="' + id + '"') >= 0, id + ' fehlt: ' + html.slice(0, 200));
   });
 
@@ -5668,6 +5677,7 @@ setTimeout(function(){
   // DOM-Stummel liest vorbefuellte Textfelder nicht aus dem HTML.)
   document.getElementById('rep-was').value = 'Beim Export passiert';
   document.getElementById('rep-system').value = 'Von Hand umgeschrieben';
+  document.getElementById('rep-ablauf').value = 'Reiter: suche';
   document.getElementById('rep-log').value = '09:00:00  Export gestartet';
   document.getElementById('rep-titel').value = 'Eigener Betreff';
   berichtOeffnen();
@@ -5680,6 +5690,8 @@ setTimeout(function(){
          'Beschreibung nicht im what-Feld: ' + u);
   pruefe(u.indexOf('system=' + encodeURIComponent('Von Hand umgeschrieben')) >= 0,
          'Die Aenderung wurde nicht uebernommen: ' + u);
+  pruefe(u.indexOf('actions=' + encodeURIComponent('Reiter: suche')) >= 0,
+         'Ablauf nicht im actions-Feld: ' + u);
   pruefe(u.indexOf('log=' + encodeURIComponent('09:00:00')) >= 0,
          'Protokoll nicht im log-Feld: ' + u);
   pruefe(u.indexOf('4.0.0') < 0,
@@ -5691,6 +5703,32 @@ setTimeout(function(){
 
 def test_fehlerbericht_zeigt_alles_und_laesst_es_aendern():
     _in_node(PRUEFUNG_BERICHT)
+
+
+# Die Userflow-Aufzeichnung: nur die Art der Schritte, begrenzt, abschaltbar.
+PRUEFUNG_ABLAUF = GRUNDZUSTAND + """
+if(!S.config) S.config = {};
+S.config.userflow_actions = 3;
+merke('flow.tab', 'export');
+merke('flow.search', 'hybrid +2');
+merke('flow.run', 'job.export');
+merke('flow.mcp', 'start');
+pruefe(ablauf.length === 3, 'Grenze nicht angewendet: ' + ablauf.length);
+pruefe(ablauf[0].k === 'flow.search', 'Nicht die aeltesten verworfen');
+var text = ablaufText();
+pruefe(text.indexOf('Suche: hybrid +2') >= 0, 'Nicht uebersetzt: ' + text);
+pruefe(/\\d\\d:\\d\\d:\\d\\d/.test(text), 'Kein Zeitstempel: ' + text);
+// 0 heisst aus - und raeumt auch schon Gesammeltes weg.
+S.config.userflow_actions = 0;
+merke('flow.tab', 'suche');
+pruefe(ablauf.length === 0, 'Aus, aber es wird weiter gesammelt');
+pruefe(ablaufText() === '', 'Aus, aber der Bericht bekaeme etwas');
+console.log('OK');
+"""
+
+
+def test_userflow_aufzeichnung_begrenzt_und_abschaltbar():
+    _in_node(PRUEFUNG_ABLAUF)
 
 
 PRUEFUNG_BERICHT_LEER = BERICHT_GERUEST + """

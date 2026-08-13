@@ -127,6 +127,10 @@ VORGABEN = {
     # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
     # eine längere Liste, durch die man erst einmal hindurchsehen muss.
     "search_results": 20,
+    # UI-Userflow-Aufzeichnung: die letzten Bedienschritte für den Fehler-
+    # bericht – nur die Art (Reiter, Suche, Lauf), nie Inhalte, rein im
+    # Speicher der offenen Seite. 0 schaltet sie ab.
+    "userflow_actions": 20,
     "mcp_port": 8365,
     # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
     # über HTTP wie über stdio. Start/Stop daneben betrifft nur den

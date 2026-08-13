@@ -39,6 +39,14 @@ body:
     validations:
       required: true
   - type: textarea
+    id: actions
+    attributes:
+      label: Last actions (UI userflow)
+      description: >
+        What was done last in the app, newest at the bottom. The app's report
+        fills this in — action types only, never content.
+      render: text
+  - type: textarea
     id: log
     attributes:
       label: Log excerpt
