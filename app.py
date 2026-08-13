@@ -1231,9 +1231,9 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if calendar:
         # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
         # nur die Wiederherstellung gelöschter Termine: dafür wird jede .eml
-        # gelesen, bei 45.000 Mails ein paar Minuten. Deshalb ein eigener
-        # Schritt mit Ergebnisdatei – und abschaltbar.
-        argv = script_argv("combined_search", TEAMS_DIR, OUTLOOK_DIR,
+        # gelesen, bei einem großen Postfach ein paar Minuten. Deshalb ein
+        # eigener Schritt mit Ergebnisdatei – und abschaltbar.
+        argv = script_argv("combined_search", OUTLOOK_DIR,
                            "--json", str(Path(STORE_DIR) / "calendar.json"))
         if not reconstruct:
             argv.append("--no-reconstruct")
