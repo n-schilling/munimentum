@@ -5641,8 +5641,10 @@ pruefe(wizardOffen === 'report', 'Fenster nicht geoeffnet');
 
 setTimeout(function(){
   var html = modal.innerHTML;
-  pruefe(html.indexOf('id="rep-text"') >= 0, 'Kein Textfeld: ' + html.slice(0, 200));
-  pruefe(html.indexOf('<textarea') >= 0, 'Der Bericht ist nicht aenderbar');
+  // Drei Felder, dieselben wie im Bug-Formular auf GitHub.
+  ['rep-was', 'rep-system', 'rep-log'].forEach(function(id){
+    pruefe(html.indexOf('id="' + id + '"') >= 0, id + ' fehlt: ' + html.slice(0, 200));
+  });
 
   // Was mitgeschickt wurde: das uebersetzte Protokoll und die letzte
   // Fehlerzeile als Betreffvorschlag.
@@ -5653,25 +5655,34 @@ setTimeout(function(){
 
   // Der Text, den der Mensch vor sich hat: Angaben und Protokoll, beides drin.
   // Geprueft wird am gezeichneten HTML - der DOM-Stummel zerlegt innerHTML
-  // nicht in Knoten, im Browser steht genau dieser Text im Feld.
+  // nicht in Knoten, im Browser steht genau dieser Text in den Feldern.
   pruefe(html.indexOf('4.0.0 (Skript)') >= 0, 'Systemangaben fehlen');
   pruefe(html.indexOf('BrokenProcessPool') >= 0, 'Protokoll fehlt im Bericht');
-  pruefe(html.indexOf('| Kerne | 8 |') >= 0,
+  pruefe(html.indexOf('Kerne: 8') >= 0,
          'Die Angaben sind nicht uebersetzt: ' + html);
   pruefe(html.indexOf('value="BrokenProcessPool: abrupt beendet"') >= 0,
          'Betreff nicht vorbelegt');
 
-  // Geaendert wird vor dem Absenden - und die Aenderung muss ankommen.
-  document.getElementById('rep-text').value = 'Von Hand umgeschrieben';
+  // Geaendert wird vor dem Absenden - und die Aenderung muss ankommen,
+  // Feld fuer Feld im richtigen Parameter. (Die Werte von Hand setzen: der
+  // DOM-Stummel liest vorbefuellte Textfelder nicht aus dem HTML.)
+  document.getElementById('rep-was').value = 'Beim Export passiert';
+  document.getElementById('rep-system').value = 'Von Hand umgeschrieben';
+  document.getElementById('rep-log').value = '09:00:00  Export gestartet';
   document.getElementById('rep-titel').value = 'Eigener Betreff';
   berichtOeffnen();
   pruefe(geoeffnet.length === 1, 'Kein Formular geoeffnet');
   var u = geoeffnet[0];
-  pruefe(u.indexOf('https://github.com/beispiel/repo/issues/new?') === 0, 'Falsches Ziel: ' + u);
+  pruefe(u.indexOf('https://github.com/beispiel/repo/issues/new?template=bug.yml') === 0,
+         'Nicht das Bug-Formular: ' + u);
   pruefe(u.indexOf('title=Eigener%20Betreff') >= 0, 'Eigener Betreff fehlt: ' + u);
-  pruefe(u.indexOf(encodeURIComponent('Von Hand umgeschrieben')) >= 0,
+  pruefe(u.indexOf('what=' + encodeURIComponent('Beim Export passiert')) >= 0,
+         'Beschreibung nicht im what-Feld: ' + u);
+  pruefe(u.indexOf('system=' + encodeURIComponent('Von Hand umgeschrieben')) >= 0,
          'Die Aenderung wurde nicht uebernommen: ' + u);
-  pruefe(u.indexOf('BrokenProcessPool') < 0,
+  pruefe(u.indexOf('log=' + encodeURIComponent('09:00:00')) >= 0,
+         'Protokoll nicht im log-Feld: ' + u);
+  pruefe(u.indexOf('4.0.0') < 0,
          'Der ersetzte Text steht trotzdem in der Adresse');
   console.log('OK');
 }, 30);
@@ -5708,9 +5719,8 @@ setTimeout(function(){
   var zeilen = [];
   for(var i = 0; i < 900; i++) zeilen.push('09:00:00  Zeile ' + i + ' mit etwas Text');
   zeilen.push('09:59:59  DAS HIER IST DER ABSTURZ');
-  document.getElementById('rep-text').value =
-    '### System\\n\\n| Version | 4.0.0 |\\n\\n### Protokoll\\n\\n```\\n' +
-    zeilen.join('\\n') + '\\n```\\n';
+  document.getElementById('rep-system').value = 'Version: 4.0.0';
+  document.getElementById('rep-log').value = zeilen.join('\\n');
   berichtOeffnen();
 
   var u = geoeffnet[0];
@@ -5720,7 +5730,7 @@ setTimeout(function(){
          'Der Absturz fehlt im gekuerzten Bericht');
   pruefe(u.indexOf(encodeURIComponent('Zeile 0 mit')) < 0,
          'Die aeltesten Zeilen stehen noch drin');
-  pruefe(u.indexOf(encodeURIComponent('| Version | 4.0.0 |')) >= 0,
+  pruefe(u.indexOf(encodeURIComponent('Version: 4.0.0')) >= 0,
          'Die Systemangaben wurden mit weggekuerzt');
   // Und es wird gesagt, statt es stillschweigend zu tun.
   pruefe(document.getElementById('rep-hinweis').textContent.length > 0,

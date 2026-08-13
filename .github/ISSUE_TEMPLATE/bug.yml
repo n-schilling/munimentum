@@ -1,3 +1,6 @@
+# Die Feld-IDs (what, system, log) sind ein Vertrag mit der App: "Report a
+# problem" befüllt genau sie über die Adresse vor (app.py, berichtAdresse).
+# Umbenennen heißt, dass ältere App-Versionen im leeren Formular landen.
 name: Bug report
 description: Something does not work as described
 labels: [bug]

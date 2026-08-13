@@ -4114,16 +4114,13 @@ function fehlerMelden(){
   });
 }
 
-/* Markdown, weil GitHub es rendert: die Angaben als Tabelle, das Protokoll in
-   einem Codeblock (sonst zieht Markdown die Zeilen zusammen). */
-function berichtText(b){
-  var tabelle = b.system.map(function(s){
-    return '| ' + t('report.sys.' + s.k) + ' | ' +
-           String(s.v).replace(/\|/g, '\\|') + ' |';
+/* Die drei Felder hier sind dieselben wie im Bug-Formular auf GitHub
+   (.github/ISSUE_TEMPLATE/bug.yml): what, system, log. Die Adresse befüllt
+   sie über ihre Feld-IDs vor – was hier steht, steht drüben, Feld für Feld. */
+function berichtSystem(b){
+  return b.system.map(function(s){
+    return t('report.sys.' + s.k) + ': ' + s.v;
   }).join('\n');
-  return '### ' + t('report.body.what') + '\n\n' + t('report.body.hint') + '\n\n\n' +
-    '### ' + t('report.body.system') + '\n\n| | |\n|---|---|\n' + tabelle + '\n\n' +
-    '### ' + t('report.body.log') + '\n\n```\n' + b.log + '\n```\n';
 }
 
 function berichtFenster(){
@@ -4133,69 +4130,80 @@ function berichtFenster(){
       '<p class="small muted">' + esc(t('report.loading')) + '</p>');
     return;
   }
+  var mono = 'width:100%;margin:2px 0 10px;font-family:ui-monospace,Menlo,' +
+    'Consolas,monospace;font-size:12.5px';
   var koerper =
     '<p class="small muted">' + esc(t('report.intro')) + '</p>' +
     '<label class="small" for="rep-titel">' + esc(t('report.field.title')) + '</label>' +
     '<input type="text" id="rep-titel" style="width:100%;margin:2px 0 12px" value="' +
       esc(b.title) + '">' +
-    '<label class="small" for="rep-text">' + esc(t('report.field.body')) + '</label>' +
-    '<textarea id="rep-text" rows="14" spellcheck="false" style="width:100%;' +
-      'margin:2px 0 10px;font-family:ui-monospace,Menlo,Consolas,monospace;' +
-      'font-size:12.5px">' + esc(berichtText(b)) + '</textarea>' +
+    '<label class="small" for="rep-was">' + esc(t('report.body.what')) + '</label>' +
+    '<textarea id="rep-was" rows="3" style="' + mono + '" placeholder="' +
+      esc(t('report.body.hint')) + '"></textarea>' +
+    '<label class="small" for="rep-system">' + esc(t('report.body.system')) + '</label>' +
+    '<textarea id="rep-system" rows="6" spellcheck="false" style="' + mono + '">' +
+      esc(berichtSystem(b)) + '</textarea>' +
+    '<label class="small" for="rep-log">' + esc(t('report.body.log')) + '</label>' +
+    '<textarea id="rep-log" rows="8" spellcheck="false" style="' + mono + '">' +
+      esc(b.log) + '</textarea>' +
     '<div class="banner warn" style="margin:0">' + esc(t('report.privacy')) + '</div>' +
     '<p class="small muted" id="rep-hinweis" style="margin:8px 0 0"></p>';
   oeffneEigenes('report', modalKopf(t('report.title'), 'report') + koerper +
     modalFuss({text: t('report.open'), tun: 'berichtOeffnen()'},
               {text: t('copy'),
-               tun: 'inZwischenablage(el(&quot;rep-text&quot;).value, this)'}));
+               tun: 'inZwischenablage(berichtGesamt(), this)'}));
 }
 
-/* GitHub bekommt den vorbelegten Text in der Adresse. Zu lange Adressen weist
-   der Server ab – mit einer leeren Seite, nicht mit einer Erklärung. Also
-   vorher kürzen und es dazusagen, statt es darauf ankommen zu lassen. */
+/* Für die Zwischenablage: die drei Felder als ein lesbarer Text. */
+function berichtGesamt(){
+  return t('report.field.title') + ': ' + el('rep-titel').value + '\n\n' +
+    t('report.body.what') + ':\n' + el('rep-was').value + '\n\n' +
+    t('report.body.system') + ':\n' + el('rep-system').value + '\n\n' +
+    t('report.body.log') + ':\n' + el('rep-log').value + '\n';
+}
+
+/* GitHub bekommt die vorbelegten Felder in der Adresse. Zu lange Adressen
+   weist der Server ab – mit einer leeren Seite, nicht mit einer Erklärung.
+   Also vorher kürzen und es dazusagen, statt es darauf ankommen zu lassen. */
 var URL_GRENZE = 7000;
 
-function berichtAdresse(basis, titel, text){
+function berichtAdresse(basis, titel, was, system, log){
   var gekuerzt = false;
   // Der Vermerk über das Kürzen gehört mitgemessen. Ihn erst am Ende
   // anzuhängen hieße, die Grenze genau um ihn zu überschreiten.
   function adresse(){
-    return basis + '?title=' + encodeURIComponent(titel) + '&body=' +
-      encodeURIComponent(gekuerzt ? text + '\n\n' + t('report.cut') : text);
+    return basis + '?template=bug.yml' +
+      '&title=' + encodeURIComponent(titel) +
+      '&what=' + encodeURIComponent(was) +
+      '&system=' + encodeURIComponent(system) +
+      '&log=' + encodeURIComponent(gekuerzt ? t('report.cut') + '\n' + log : log);
   }
   var url = adresse();
-  // Von OBEN aus dem Protokollblock nehmen: die letzten Zeilen sind die, um
-  // die es geht. Ein Bericht, dem der Absturz fehlt, wäre keiner.
+  // Von OBEN aus dem Protokoll nehmen: die letzten Zeilen sind die, um die es
+  // geht. Ein Bericht, dem der Absturz fehlt, wäre keiner.
   while(url.length > URL_GRENZE){
-    var kurz = ohneAeltesteProtokollzeile(text);
-    if(kurz === null) break;
-    text = kurz;
+    var schnitt = log.indexOf('\n');
+    if(schnitt < 0) break;
+    log = log.slice(schnitt + 1);
     gekuerzt = true;
     url = adresse();
   }
-  if(url.length > URL_GRENZE){          // von Hand umgebaut, kein Block mehr da
-    text = text.slice(0, 2500);
+  if(url.length > URL_GRENZE){          // Riesenzeilen oder riesige Felder
+    was = was.slice(0, 1000);
+    system = system.slice(0, 1500);
+    log = log.slice(-2000);
     gekuerzt = true;
     url = adresse();
   }
   return {url: url, gekuerzt: gekuerzt};
 }
 
-function ohneAeltesteProtokollzeile(text){
-  var auf = text.indexOf('\n```\n');
-  if(auf < 0) return null;
-  var start = auf + 5;
-  var ende = text.indexOf('\n', start);
-  // Nur eine Zeile übrig (die schließende Zäunung): hier ist Schluss.
-  if(ende < 0 || text.slice(start, ende).indexOf('```') === 0) return null;
-  return text.slice(0, start) + text.slice(ende + 1);
-}
-
 function berichtOeffnen(){
   if(!berichtDaten) return;
   var ziel = berichtAdresse(berichtDaten.url,
                             el('rep-titel').value.trim() || t('report.title.fallback'),
-                            el('rep-text').value);
+                            el('rep-was').value, el('rep-system').value,
+                            el('rep-log').value);
   el('rep-hinweis').textContent = ziel.gekuerzt ? t('report.truncated') : '';
   window.open(ziel.url, '_blank', 'noopener');
 }
