@@ -49,15 +49,14 @@ import os
 import sys
 import re
 import html
-import hashlib
 import threading
 from datetime import datetime, UTC
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
-import json
 
 import auth
+import export_util
 import folders
 import graph_client
 import settings
@@ -72,15 +71,7 @@ except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
     raise SystemExit(1) from None
 
-# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
-# und bei Umleitung in eine Datei (python … > log.txt) die Locale-Kodierung. Beides
-# lässt print() an Unicode-Zeichen wie →, ✓, · oder Emoji mit UnicodeEncodeError
-# scheitern und bricht den Export ab. UTF-8 erzwingen (auf macOS/Linux ein No-op).
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+export_util.erzwinge_utf8()
 
 # ---------------------------------------------------------------------------
 # Konfiguration
@@ -176,43 +167,15 @@ class DoneLog:
 
 
 # ---------------------------------------------------------------------------
-# Interaktive Ordnerauswahl
+# Interaktive Ordnerauswahl (Helfer in export_util.py)
 # ---------------------------------------------------------------------------
-def _read(prompt):
-    try:
-        return input(prompt)
-    except EOFError:
-        return ""
+_read = export_util.lies_eingabe
+parse_indices = export_util.parse_indices
 
 
 def _interactive():
-    """Nur fragen, wenn ein Terminal da ist und -default nicht gesetzt wurde.
-
-    stdin allein reicht als Nachweis nicht: unter Windows meldet auch das
-    Nullgerät isatty() == True, weil NUL ein Zeichengerät ist. Ein Aufruf aus
-    der App (stdin auf DEVNULL, stdout in einer Pipe) sähe damit interaktiv aus
-    und bliebe an einer Frage stehen, die niemand sieht. Ein echtes Terminal
-    hat beide Enden.
-    """
-    if ASSUME_DEFAULT:
-        return False
-    for strom in (sys.stdin, sys.stdout):
-        try:
-            if not strom.isatty():
-                return False
-        except (AttributeError, ValueError):
-            return False
-    return True
-
-
-def parse_indices(raw, n):
-    out = []
-    for tok in re.split(r"[\s,]+", raw.strip()):
-        if tok.isdigit():
-            v = int(tok)
-            if 1 <= v <= n and v not in out:
-                out.append(v)
-    return out
+    """Nur fragen, wenn ein Terminal da ist und -default nicht gesetzt wurde."""
+    return not ASSUME_DEFAULT and export_util.ist_interaktiv()
 
 
 def list_calendars(graph):
@@ -229,19 +192,7 @@ def list_calendars(graph):
     return cals
 
 
-def env_categories(options):
-    """Auswahl aus EXPORT_CATEGORIES, z. B. "mail,contacts".
-
-    Für Aufrufer ohne Terminal (app.py, Scheduler, Cron), die nicht alles
-    wollen. Unbekannte Namen werden ignoriert; bleibt nichts übrig, zählt die
-    Variable als nicht gesetzt -> None (normale Abfrage bzw. Standardauswahl).
-    """
-    raw = os.environ.get("EXPORT_CATEGORIES")
-    if not raw:
-        return None
-    picked = {t.strip().lower() for t in raw.replace(";", ",").split(",")}
-    sel = {k for k, _ in options if k.lower() in picked}
-    return sel or None
+env_categories = export_util.env_categories
 
 
 def prompt_categories():
@@ -378,28 +329,16 @@ def gleiche_kalender_ab(argv):
 
 
 # ---------------------------------------------------------------------------
-# Helfer
+# Helfer (geteilt in export_util.py)
 # ---------------------------------------------------------------------------
-def safe(name, maxlen=80):
-    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", name or "").strip().strip(".")
-    name = re.sub(r"\s+", " ", name)
-    return name[:maxlen] or "unbenannt"
-
-
-def short_id(s):
-    return hashlib.sha1((s or "").encode()).hexdigest()[:8]
+safe = export_util.safe
+short_id = export_util.kuerzel
 
 
 def mail_filename(msg):
     dt = msg.get("receivedDateTime") or msg.get("sentDateTime") or ""
-    stamp = ""
-    if dt:
-        try:
-            s = dt.replace("Z", "+00:00")
-            s = re.sub(r"(\.\d{6})\d+", r"\1", s)
-            stamp = datetime.fromisoformat(s).astimezone().strftime("%Y-%m-%d_%H%M")
-        except Exception:
-            stamp = dt[:10]
+    geparst = export_util.graph_zeit(dt)
+    stamp = geparst.astimezone().strftime("%Y-%m-%d_%H%M") if geparst else dt[:10]
     subj = (msg.get("subject") or "").strip() or "(kein Betreff)"
     prefix = (stamp + "__") if stamp else ""
     return f"{prefix}{safe(subj, 90)}__{short_id(msg['id'])}.eml"
@@ -467,7 +406,7 @@ def build_tree(graph):
 # Verdacht bei Graph nachgefragt: 404 heißt wirklich weg, alles andere heißt
 # verschoben.
 # ---------------------------------------------------------------------------
-GONE_FILE = "verschwunden.tsv"
+GONE_FILE = export_util.GONE_FILE
 
 
 class Bestand:
@@ -586,29 +525,8 @@ def wirklich_weg(graph, kandidaten, grenze=2000):
     return weg, verschoben
 
 
-def lies_verschwunden(pfad):
-    """rel -> Zeitpunkt des ersten Fehlens."""
-    out = {}
-    try:
-        for zeile in pfad.read_text(encoding="utf-8").splitlines():
-            if "\t" in zeile:
-                rel, wann = zeile.split("\t", 1)
-                out[rel] = wann
-    except OSError:
-        pass
-    return out
-
-
-def schreibe_verschwunden(pfad, bekannt, neue, jetzt):
-    """Bestehende Vermerke behalten, neue ergänzen. Atomar."""
-    zusammen = dict(bekannt)
-    for rel in neue:
-        zusammen.setdefault(rel, jetzt)
-    tmp = pfad.with_name(pfad.name + ".tmp")
-    tmp.write_text("".join(f"{rel}\t{wann}\n" for rel, wann in sorted(zusammen.items())),
-                   encoding="utf-8")
-    tmp.replace(pfad)
-    return zusammen
+lies_verschwunden = export_util.lies_verschwunden
+schreibe_verschwunden = export_util.schreibe_verschwunden
 
 
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
@@ -1088,14 +1006,7 @@ def pruefe_verschwundene(graph, out, done, bestand):
             "moved": verschoben, "gone_healed": geheilt}
 
 
-def _hilfe_gewuenscht(argv):
-    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
-
-    Diese Skripte deuten das erste freie Argument als Ausgabeordner. Ohne diese
-    Abfrage legte `python3 outlook_export.py --help` brav einen Ordner namens „--help“ an
-    und begann zu exportieren – einmal passiert und dann sogar eingecheckt.
-    """
-    return any(a in ("-h", "--help", "-help") for a in argv)
+_hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
 
 # ---------------------------------------------------------------------------
@@ -1226,7 +1137,7 @@ def nur_pruefen(argv):
 # erzeugen eine Differenz, die keine Lücke ist. Erst zusammen mit
 # verschwunden.tsv wird daraus eine Bilanz, in der jede Zahl erklärt ist.
 # ---------------------------------------------------------------------------
-BERICHT_DATEI = "vollstaendigkeit.json"
+BERICHT_DATEI = export_util.BERICHT_DATEI
 
 
 def zaehle_dateien(ordner):
@@ -1289,13 +1200,7 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
     }
 
 
-def schreibe_bericht(out, bericht):
-    ziel = Path(out) / BERICHT_DATEI
-    ziel.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ziel.with_name(ziel.name + ".tmp")
-    tmp.write_text(json.dumps(bericht, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(ziel)
-    return ziel
+schreibe_bericht = export_util.schreibe_bericht
 
 
 def main():

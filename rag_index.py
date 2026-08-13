@@ -30,7 +30,6 @@ semantische Hälfte der Hybrid-Suche fehlt.
 Optionen: --model bge-m3  --ollama http://localhost:11434  --batch 64
 """
 
-import sys
 import json
 import sqlite3
 import argparse
@@ -40,19 +39,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
 
 import corpus
+import export_util
 import progress
 import settings
 import store_layout
 
-# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
-# und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
-# Unicode-Zeichen wie → oder … mit UnicodeEncodeError scheitern. UTF-8 erzwingen
-# (auf macOS/Linux ein No-op).
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+export_util.erzwinge_utf8()
 
 DEFAULT_MODEL = "bge-m3"
 DEFAULT_OLLAMA = "http://localhost:11434"

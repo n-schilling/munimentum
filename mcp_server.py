@@ -75,17 +75,14 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
+import export_util
 import settings
 import store_layout
 import version
 
 # Windows consoles default to a legacy code page; force UTF-8 so logging the
 # Unicode in messages never raises (no-op on macOS/Linux).
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+export_util.erzwinge_utf8()
 
 STATE = {}          # populated in main(): db path, V (mmap), np, dirs, flags
 

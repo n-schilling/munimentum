@@ -39,11 +39,9 @@ Resume: dateien.tsv und delta.txt im Ausgabeordner. Bricht ein Lauf ab, wird
     darf keine Änderung verschlucken.
 """
 
-import json
 import os
 import re
 import sys
-import hashlib
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +49,7 @@ from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import auth
+import export_util
 import folders
 import progress
 import settings
@@ -64,6 +63,8 @@ except ImportError:
 
 import graph_client
 
+export_util.erzwinge_utf8()
+
 GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Files.Read.All", RES + "User.Read"]
@@ -72,7 +73,7 @@ OUT_ROOT = settings.value("onedrive_dir", "onedrive_export")
 DATEI_DIR = "Dateien"           # Wurzel im Ausgabeordner; die Regeln greifen darauf
 BESTAND_DATEI = "dateien.tsv"
 DELTA_DATEI = "delta.txt"
-GONE_FILE = "verschwunden.tsv"
+GONE_FILE = export_util.GONE_FILE
 
 # Netz, Drosselung, Retry und Paging liegen in graph_client.py; eigen bleibt
 # nur der Download-Timeout – eine große Datei braucht länger als eine Seite.
@@ -164,8 +165,7 @@ class TokenClient(_Drive, graph_client.TokenClient):
 # ---------------------------------------------------------------------------
 # Pfade
 # ---------------------------------------------------------------------------
-def kuerzel(s):
-    return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
+kuerzel = export_util.kuerzel
 
 
 def safe(name, maxlen=120, kennung=None):
@@ -215,12 +215,9 @@ def geaendert_am(eintrag):
     """
     for roh in ((eintrag.get("fileSystemInfo") or {}).get("lastModifiedDateTime"),
                 eintrag.get("lastModifiedDateTime")):
-        if not roh:
-            continue
-        try:
-            return datetime.fromisoformat(str(roh).replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            continue
+        dt = export_util.graph_zeit(roh)
+        if dt is not None:
+            return dt.timestamp()
     return None
 
 
@@ -294,29 +291,8 @@ class Bestand:
         tmp.replace(self.pfad)
 
 
-def lies_verschwunden(pfad):
-    out = {}
-    try:
-        for zeile in Path(pfad).read_text(encoding="utf-8").splitlines():
-            if "\t" in zeile:
-                rel, wann = zeile.split("\t", 1)
-                out[rel] = wann
-    except OSError:
-        pass
-    return out
-
-
-def schreibe_verschwunden(pfad, bekannt, neue, jetzt):
-    zusammen = dict(bekannt)
-    for rel in neue:
-        zusammen.setdefault(rel, jetzt)
-    pfad = Path(pfad)
-    pfad.parent.mkdir(parents=True, exist_ok=True)
-    tmp = pfad.with_name(pfad.name + ".tmp")
-    tmp.write_text("".join(f"{rel}\t{wann}\n" for rel, wann in sorted(zusammen.items())),
-                   encoding="utf-8")
-    tmp.replace(pfad)
-    return zusammen
+lies_verschwunden = export_util.lies_verschwunden
+schreibe_verschwunden = export_util.schreibe_verschwunden
 
 
 def lies_delta(out):
@@ -327,13 +303,8 @@ def lies_delta(out):
 
 
 def schreibe_delta(out, link):
-    if not link:
-        return
-    ziel = Path(out) / DELTA_DATEI
-    ziel.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ziel.with_name(ziel.name + ".tmp")
-    tmp.write_text(link, encoding="utf-8")
-    tmp.replace(ziel)
+    if link:
+        export_util.schreibe_atomar(Path(out) / DELTA_DATEI, link)
 
 
 # ---------------------------------------------------------------------------
@@ -530,7 +501,7 @@ def lauf(graph, out):
     return fertig
 
 
-BERICHT_DATEI = "vollstaendigkeit.json"
+BERICHT_DATEI = export_util.BERICHT_DATEI
 
 
 def pruefe_vollstaendigkeit(eintraege, out, regeln, grenze=None):
@@ -591,13 +562,7 @@ def pruefe_vollstaendigkeit(eintraege, out, regeln, grenze=None):
     }
 
 
-def schreibe_bericht(out, bericht):
-    ziel = Path(out) / BERICHT_DATEI
-    ziel.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ziel.with_name(ziel.name + ".tmp")
-    tmp.write_text(json.dumps(bericht, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(ziel)
-    return ziel
+schreibe_bericht = export_util.schreibe_bericht
 
 
 def nur_pruefen(graph, out):
@@ -645,16 +610,10 @@ def nur_ordner(graph, out):
     print(f"Abgelegt: {folders.pfad(out)}")
 
 
-def _hilfe_gewuenscht(argv):
-    return any(a in ("-h", "--help", "help") for a in argv)
+_hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
 
 def main():
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
-            pass
     argv = sys.argv[1:]
     if _hilfe_gewuenscht(argv):
         print(__doc__)

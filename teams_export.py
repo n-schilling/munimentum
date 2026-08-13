@@ -57,6 +57,7 @@ from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import auth
+import export_util
 import graph_client
 import settings
 import progress
@@ -70,15 +71,7 @@ except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
     raise SystemExit(1) from None
 
-# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
-# und bei Umleitung in eine Datei (python … > log.txt) die Locale-Kodierung. Beides
-# lässt print() an Unicode-Zeichen wie →, ✓, · oder Emoji mit UnicodeEncodeError
-# scheitern und bricht den Export ab. UTF-8 erzwingen (auf macOS/Linux ein No-op).
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+export_util.erzwinge_utf8()
 
 # ---------------------------------------------------------------------------
 # Konfiguration
@@ -213,41 +206,11 @@ class TokenClient(_BildClient, graph_client.TokenClient):
 
 
 # ---------------------------------------------------------------------------
-# Interaktive Abfragen
+# Interaktive Abfragen (Helfer in export_util.py)
 # ---------------------------------------------------------------------------
-def _read(prompt):
-    try:
-        return input(prompt)
-    except EOFError:
-        return ""
-
-
-def _interactive():
-    """Ob überhaupt jemand antworten kann.
-
-    stdin allein reicht als Nachweis nicht: unter Windows meldet auch das
-    Nullgerät isatty() == True, weil NUL ein Zeichengerät ist. Ein Aufruf aus
-    der App (stdin auf DEVNULL, stdout in einer Pipe) sähe damit interaktiv aus
-    und bliebe an einer Frage stehen, die niemand sieht. Ein echtes Terminal
-    hat beide Enden.
-    """
-    for strom in (sys.stdin, sys.stdout):
-        try:
-            if not strom.isatty():
-                return False
-        except (AttributeError, ValueError):
-            return False
-    return True
-
-
-def parse_indices(raw, n):
-    out = []
-    for tok in re.split(r"[\s,]+", raw.strip()):
-        if tok.isdigit():
-            v = int(tok)
-            if 1 <= v <= n and v not in out:
-                out.append(v)
-    return out
+_read = export_util.lies_eingabe
+_interactive = export_util.ist_interaktiv
+parse_indices = export_util.parse_indices
 
 
 def default_categories(options):
@@ -255,19 +218,7 @@ def default_categories(options):
     return {k for k, _ in options[:3]}
 
 
-def env_categories(options):
-    """Auswahl aus EXPORT_CATEGORIES, z. B. "1on1,group,channels".
-
-    Für Aufrufer ohne Terminal (app.py, Scheduler, Cron), die mehr wollen als
-    die -default-Vorgabe. Unbekannte Namen werden ignoriert; bleibt nichts
-    übrig, zählt die Variable als nicht gesetzt -> None (normale Abfrage).
-    """
-    raw = os.environ.get("EXPORT_CATEGORIES")
-    if not raw:
-        return None
-    picked = {t.strip().lower() for t in raw.replace(";", ",").split(",")}
-    sel = {k for k, _ in options if k.lower() in picked}
-    return sel or None
+env_categories = export_util.env_categories
 
 
 def prompt_categories(options):
@@ -320,39 +271,19 @@ def select_teams(graph):
 
 
 # ---------------------------------------------------------------------------
-# Helfer
+# Helfer (geteilt in export_util.py)
 # ---------------------------------------------------------------------------
-def safe(name, maxlen=80):
-    name = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", name or "").strip().strip(".")
-    name = re.sub(r"\s+", " ", name)
-    return name[:maxlen] or "unbenannt"
-
-
-def short_id(s):
-    return hashlib.sha1((s or "").encode()).hexdigest()[:8]
+safe = export_util.safe
+short_id = export_util.kuerzel
+parse_ts = export_util.graph_zeit
 
 
 def human_time(iso):
-    if not iso:
-        return ""
-    try:
-        s = iso.replace("Z", "+00:00")
-        s = re.sub(r"(\.\d{6})\d+", r"\1", s)   # Sekundenbruchteile kürzen
-        return datetime.fromisoformat(s).astimezone().strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return iso
-
-
-def parse_ts(iso):
-    """ISO-8601 (Graph, UTC) -> vergleichbares datetime oder None."""
-    if not iso:
-        return None
-    try:
-        s = iso.replace("Z", "+00:00")
-        s = re.sub(r"(\.\d{6})\d+", r"\1", s)
-        return datetime.fromisoformat(s)
-    except Exception:
-        return None
+    """ISO-8601 (Graph, UTC) -> lokale Anzeige; Unparsebares unverändert zurück."""
+    dt = export_util.graph_zeit(iso)
+    if dt is None:
+        return iso or ""
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
 
 
 def newest_iso(strings):
@@ -572,9 +503,8 @@ def load_state(out):
 
 
 def save_state(out, state):
-    tmp = out / (STATE_FILE + ".tmp")
-    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, out / STATE_FILE)   # atomarer Austausch
+    export_util.schreibe_atomar(out / STATE_FILE,
+                                json.dumps(state, ensure_ascii=False, indent=2))
 
 
 def already_done(out, state, key):
@@ -872,14 +802,7 @@ def run_parallel(runners, stats, workers):
 # ---------------------------------------------------------------------------
 # Hauptablauf
 # ---------------------------------------------------------------------------
-def _hilfe_gewuenscht(argv):
-    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
-
-    Diese Skripte deuten das erste freie Argument als Ausgabeordner. Ohne diese
-    Abfrage legte `python3 teams_export.py --help` brav einen Ordner namens „--help“ an
-    und begann zu exportieren – einmal passiert und dann sogar eingecheckt.
-    """
-    return any(a in ("-h", "--help", "-help") for a in argv)
+_hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
 
 def main():

@@ -39,8 +39,10 @@ def test_es_gibt_startbare_skripte():
 @pytest.mark.parametrize("pfad", startbare_skripte(),
                          ids=lambda p: p.name)
 def test_startbares_skript_stellt_auf_utf8(pfad):
+    """Entweder der eigene Block (smoke_test.py läuft ohne Projektmodule) oder
+    der gemeinsame Helfer export_util.erzwinge_utf8()."""
     quelle = pfad.read_text(encoding="utf-8")
-    assert UMSTELLUNG.search(quelle), (
+    assert UMSTELLUNG.search(quelle) or "erzwinge_utf8()" in quelle, (
         f"{pfad.name} stellt seine Ausgabe nicht auf UTF-8 – auf Windows "
         f"beendet das erste Sonderzeichen den Lauf.")
 
@@ -157,8 +159,9 @@ def test_hilfe_legt_nichts_an(name, tmp_path):
 def test_hilfe_kennt_die_ueblichen_schreibweisen(name):
     quelle = (WURZEL / name).read_text(encoding="utf-8")
     assert "_hilfe_gewuenscht" in quelle
+    helfer = (WURZEL / "export_util.py").read_text(encoding="utf-8")
     for form in ('"-h"', '"--help"'):
-        assert form in quelle, f"{name} kennt {form} nicht"
+        assert form in helfer, f"export_util kennt {form} nicht"
 
 
 def test_kein_ordner_aus_einem_schalter():
@@ -174,8 +177,8 @@ def test_spec_listet_die_geteilten_module():
     diese Liste ist das Sicherheitsnetz, und sie ist mir einmal durch ein
     `git checkout` bei einer Gegenprobe abhandengekommen."""
     text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
-    for modul in ("auth", "folders", "graph_client", "settings", "progress",
-                  "answer", "corpus", "store_layout"):
+    for modul in ("auth", "export_util", "folders", "graph_client", "settings",
+                  "progress", "answer", "corpus", "store_layout"):
         assert f'"{modul}"' in text, f"{modul} fehlt in TEILPROGRAMME"
 
 

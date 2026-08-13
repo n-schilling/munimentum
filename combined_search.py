@@ -40,21 +40,14 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+import export_util
 import progress
 import settings
 # Die Parser-Primitive für .eml, iCalendar und vCard leben in corpus.py –
 # hier werden sie nur wiederverwendet, nicht noch einmal gepflegt.
 from corpus import addr_people, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
 
-# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
-# und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
-# Unicode-Zeichen wie →, · oder … mit UnicodeEncodeError scheitern. UTF-8 erzwingen
-# (auf macOS/Linux ein No-op).
-for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+export_util.erzwinge_utf8()
 
 BODY_CAP = 4000
 
@@ -457,14 +450,7 @@ def write_calendar_json(outlook_dir, ziel, reconstruct=True):
     return daten["counts"]
 
 
-def _hilfe_gewuenscht(argv):
-    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
-
-    Diese Skripte deuten das erste freie Argument als Ausgabeordner. Ohne diese
-    Abfrage legte `python3 combined_search.py --help` brav einen Ordner namens „--help“ an
-    und begann zu exportieren – einmal passiert und dann sogar eingecheckt.
-    """
-    return any(a in ("-h", "--help", "-help") for a in argv)
+_hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
 
 def main():

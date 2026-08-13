@@ -46,8 +46,8 @@ VERSION = _v["VERSION"]
 
 TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index",
                  "combined_search", "mcp_server", "corpus",
-                 "auth", "folders", "graph_client", "settings", "i18n",
-                 "updates", "version", "store_layout",
+                 "auth", "export_util", "folders", "graph_client", "settings",
+                 "i18n", "updates", "version", "store_layout",
                  "progress", "answer"]
 
 def ohne_cli(name):
