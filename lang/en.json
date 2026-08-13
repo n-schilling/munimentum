@@ -465,6 +465,7 @@
   "report.sys.index": "Index (chunks / messages)",
   "report.sys.model": "Embedding model",
   "report.sys.ollama": "Ollama",
+  "report.sys.settings": "Changed settings",
   "report.sys.lastjob": "Last run",
   "report.sys.datadir": "Data folder",
   "search.mode": "Kind of search",

@@ -465,6 +465,7 @@
   "report.sys.index": "Index (fragments / messages)",
   "report.sys.model": "Modèle d’embedding",
   "report.sys.ollama": "Ollama",
+  "report.sys.settings": "Réglages modifiés",
   "report.sys.lastjob": "Dernière exécution",
   "report.sys.datadir": "Dossier de données",
   "search.mode": "Type de recherche",

@@ -5480,6 +5480,40 @@ def test_systemangaben_sind_reine_schluesselruempfe(sandbox, with_ollama):
         assert "." not in z["k"] and z["k"].islower(), z
 
 
+def test_einstellungs_abweichungen_bei_vorgabe_leer(sandbox):
+    assert app_mod.einstellungs_abweichungen(app_mod.load_config()) == []
+    a = app_mod.App(app_mod.load_config())
+    assert "settings" not in {z["k"] for z in app_mod.systemangaben(a.status())}
+
+
+def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
+    """Verstellte Zahlen und Schalter stehen im Bericht; was jemanden benennt
+    (Ordnernamen, der eigene Name, der Tenant), schrumpft auf den Umfang."""
+    cfg = app_mod.load_config()
+    cfg.update(workers=8, embed_images=False,
+               folder_rules="+ E-Mail/Kunden/**\n- E-Mail/Privat/**",
+               analytics_skip=["schilling, nico"],
+               tenant="contoso.example",
+               schedule={**cfg["schedule"], "enabled": True, "interval_minutes": 30})
+    aus = "; ".join(app_mod.einstellungs_abweichungen(cfg))
+    assert "workers=8" in aus and "embed_images=false" in aus
+    assert "folder_rules: 2 Zeilen" in aus
+    assert "analytics_skip: 1 Eintrag" in aus
+    assert "tenant: gesetzt" in aus
+    assert "enabled=true" in aus and "interval_minutes=30" in aus
+    # die Inhalte selbst tauchen nirgends auf
+    for privat in ("Kunden", "Privat", "schilling", "contoso"):
+        assert privat not in aus
+
+
+def test_einstellungs_abweichungen_stehen_im_bericht(sandbox, with_ollama):
+    cfg = app_mod.load_config()
+    cfg["workers"] = 2
+    a = app_mod.App(cfg)
+    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(a.status())}
+    assert "workers=2" in zeilen["settings"]
+
+
 def test_fehlerbericht_reicht_nichts_ungefiltert_durch(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     b = app_mod.fehlerbericht(

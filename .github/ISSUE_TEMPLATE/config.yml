@@ -1,0 +1,8 @@
+# Freie Issues bleiben erlaubt: "Report a problem" in der App öffnet den
+# klassischen Editor mit vorbefülltem Bericht (?title=&body=), nicht ein
+# Formular. Ohne blank_issues_enabled landete dieser Weg im Auswahldialog.
+blank_issues_enabled: true
+contact_links:
+  - name: Security issue
+    url: https://github.com/n-schilling/munimentum/security/advisories/new
+    about: Please report security issues privately, not as a public issue.

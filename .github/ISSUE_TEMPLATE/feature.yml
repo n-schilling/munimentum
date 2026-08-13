@@ -1,0 +1,24 @@
+name: Idea / feature request
+description: Describe what you are trying to do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe **what you are trying to do**, rather than the
+        solution you have in mind — that keeps every option open, including
+        better ones. And a look at
+        [ROADMAP.md](https://github.com/n-schilling/munimentum/blob/main/ROADMAP.md)
+        first is worth it: some gaps are decisions rather than omissions.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to do?
+      description: The task or question, in your own words.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you handle it today?
+      description: Workarounds, other tools, or "not at all".

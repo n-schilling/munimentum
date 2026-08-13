@@ -1,0 +1,57 @@
+name: Bug report
+description: Something does not work as described
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **The fastest report comes from the app itself:** *Report a problem*
+        (log bar, bottom right) fills in everything this form asks for —
+        version, OS, log, changed settings — and shows you the text before
+        anything is sent. Use this form when the app will not start, or when
+        you noticed the problem later.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: >
+        What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Shown in Settings, at the bottom.
+      placeholder: "5.4.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+    validations:
+      required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: Running as
+      options:
+        - Bundle from a release
+        - From source (python3 app.py)
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log excerpt
+      description: >
+        Copy from the log bar (the last lines are the interesting ones).
+        Please check for names, addresses and folder names before posting —
+        this form does not redact anything.
+      render: text

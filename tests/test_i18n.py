@@ -211,8 +211,8 @@ DYNAMISCH = (
     ("pill.ollama.tip.", ("on", "aus", "weg", "modell")),
     ("pill.mcp.tip.", ("on", "off", "aus")),
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",
-                     "categories", "index", "model", "ollama", "lastjob",
-                     "datadir")),
+                     "categories", "index", "model", "ollama", "settings",
+                     "lastjob", "datadir")),
 )
 
 

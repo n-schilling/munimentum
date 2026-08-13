@@ -465,6 +465,7 @@
   "report.sys.index": "Index (Stellen / Nachrichten)",
   "report.sys.model": "Embedding-Modell",
   "report.sys.ollama": "Ollama",
+  "report.sys.settings": "Geänderte Einstellungen",
   "report.sys.lastjob": "Letzter Lauf",
   "report.sys.datadir": "Datenordner",
   "search.mode": "Suchart",

@@ -899,6 +899,47 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
     return (f"[… {weg} ältere Zeilen ausgelassen …]\n" + rest) if weg else rest
 
 
+# Einstellungen, deren INHALT jemanden benennt – Ordnernamen, der eigene Name
+# in analytics_skip, der Arbeitgeber im Tenant. Im Bericht steht nur, DASS sie
+# verstellt sind und in welchem Umfang, nie der Wert selbst.
+_UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules"}
+_UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
+_NUR_GESETZT = {"client_id", "tenant"}
+# Stehen schon als eigene Zeile im Bericht – nicht doppelt aufführen.
+_SCHON_BERICHTET = {"outlook_categories", "teams_categories", "auth_mode"}
+
+
+def einstellungs_abweichungen(cfg):
+    """Was von der Vorgabe abweicht – kompakt und ohne benennende Inhalte.
+
+    Ein Fehler hängt oft an einer verstellten Einstellung, und von selbst nennt
+    sie niemand. Pfade stehen nicht im Schema und tauchen hier also gar nicht
+    erst auf; Regel- und Namenslisten schrumpfen auf ihren Umfang.
+    """
+    aus = []
+    for key, vorgabe in settings.VORGABEN.items():
+        if key in _SCHON_BERICHTET:
+            continue
+        wert = cfg.get(key, vorgabe)
+        if wert == vorgabe:
+            continue
+        if key in _UMFANG_ZEILEN:
+            n = len([z for z in str(wert).splitlines() if z.strip()])
+            aus.append(f"{key}: {n} " + ("Zeile" if n == 1 else "Zeilen"))
+        elif key in _UMFANG_LISTE:
+            n = len(wert or [])
+            aus.append(f"{key}: {n} " + ("Eintrag" if n == 1 else "Einträge"))
+        elif key in _NUR_GESETZT:
+            aus.append(f"{key}: gesetzt")
+        elif isinstance(vorgabe, dict):
+            teile = [f"{k}={json.dumps((wert or {}).get(k))}"
+                     for k in vorgabe if (wert or {}).get(k) != vorgabe[k]]
+            aus.append(f"{key}: " + ", ".join(teile))
+        else:
+            aus.append(f"{key}={json.dumps(wert, ensure_ascii=False)}")
+    return aus
+
+
 def systemangaben(status, lang=None):
     """Die Fakten eines Berichts als [{"k": Textschlüssel, "v": Wert}, …].
 
@@ -937,6 +978,9 @@ def systemangaben(status, lang=None):
         zeile("ollama", f'{"läuft" if oll.get("running") else "aus"}, '
                         f'Modell {"da" if oll.get("has_model") else "fehlt"}'),
     ]
+    abweichungen = einstellungs_abweichungen(cfg)
+    if abweichungen:
+        angaben.append(zeile("settings", "; ".join(abweichungen)))
     if letzter:
         angaben.append(zeile("lastjob", f'{letzter.get("label", "?")}: '
                                         f'{"ok" if letzter.get("ok") else "Fehler"}'))
