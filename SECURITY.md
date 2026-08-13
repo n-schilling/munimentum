@@ -38,8 +38,9 @@ are deliberate.
 - **The MCP server works the same way** — loopback, no authentication, `Host`
   and `Origin` validated by the SDK. Binding it to any other address requires
   naming the allowed hostnames explicitly; it refuses to start otherwise.
-- **The release binaries are not code-signed.** Windows and macOS both warn on
-  first launch, and the release notes explain the way past it.
+- **The Windows binaries are not code-signed.** SmartScreen warns on first
+  launch, and the release notes explain the way past it. The macOS builds are
+  signed and notarized by Apple.
 - **The redaction in the bug reporter is best-effort.** It replaces e-mail
   addresses and user names in paths; folder names and subject lines can remain.
   The whole text is shown for editing, and the app sends nothing by itself — you

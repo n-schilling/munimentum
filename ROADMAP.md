@@ -39,6 +39,11 @@ einem echten Bündel, nicht am Schreibtisch.
 * **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene
   Ansprüche — die `.eml` dürfen auf einer langsamen Platte liegen, der Index
   nicht. Getrennte Pfade sind heute schon möglich, aber nirgends erklärt.
+* **app.py aufteilen.** Der letzte offene Punkt des Aufräumens in 5.4.0: gut
+  die Hälfte der Datei ist die Oberfläche als ein eingebetteter String, der
+  Rest Python (Konfiguration, Läufe, Routen, Auswertung). Die Trennung ist ein
+  eigener Umbau — etliche Tests prüfen die Seite als String, und die
+  Bündelung hängt mit daran — und nichts für nebenbei.
 
 ## Entschieden
 
