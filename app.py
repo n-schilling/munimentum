@@ -50,6 +50,7 @@ from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs
+import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
@@ -2629,6 +2630,24 @@ def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
     return isinstance(daten, dict) and "data_dir" in daten and "token" in daten
 
 
+class Server(ThreadingHTTPServer):
+    """Wie ThreadingHTTPServer, nur ohne Namensauflösung beim Binden.
+
+    http.server ruft dort `socket.getfqdn(host)` auf – einen Rückwärts-Lookup
+    für die eigene Adresse, dessen Ergebnis nur in `server_name` landet und
+    nirgends gebraucht wird. macOS 15 wertet das als Zugriff aufs lokale Netz
+    und fragt beim Start: „Darf Munimentum nach Geräten in lokalen Netzwerken
+    suchen?" – eine Frage, auf die diese App keinen Anspruch hat: Sie hört auf
+    127.0.0.1 und spricht sonst nur mit Microsoft Graph.
+
+    Nebenbei kostete der Lookup jedes Mal Zeit, bevor die Oberfläche kam.
+    """
+
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[0], self.server_address[1]
+
+
 def make_server(app, port, host="127.0.0.1", tries=12):
     """Server binden und die erlaubten Host-Header festlegen.
 
@@ -2641,7 +2660,7 @@ def make_server(app, port, host="127.0.0.1", tries=12):
     httpd = None
     for versuch in range(tries if port else 1):
         try:
-            httpd = ThreadingHTTPServer((host, port + versuch), Handler)
+            httpd = Server((host, port + versuch), Handler)
             break
         except OSError as e:
             if versuch == tries - 1:

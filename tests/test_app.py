@@ -6214,6 +6214,27 @@ def test_ollama_kachel_fuehrt_ans_richtige_ziel():
     _in_node(PRUEFUNG_KACHEL_ZIEL)
 
 
+def test_binden_loest_keine_namen_auf(sandbox, monkeypatch):
+    """Gemeldet: macOS fragte beim Start, ob die App im lokalen Netz suchen darf.
+
+    http.server macht beim Binden einen Rückwärts-Lookup für die eigene
+    Adresse (`socket.getfqdn`); das Ergebnis landet in `server_name` und wird
+    nirgends gebraucht. Die App hört auf 127.0.0.1 – sie hat im Netz nichts zu
+    suchen und soll auch nicht danach fragen.
+    """
+    def verboten(*a, **kw):
+        raise AssertionError("Namensauflösung beim Binden")
+
+    import socket
+    monkeypatch.setattr(socket, "getfqdn", verboten)
+    httpd = app_mod.make_server(app_mod.App(app_mod.load_config()), 0)
+    try:
+        assert httpd.server_address[0] == "127.0.0.1"
+        assert httpd.server_name == "127.0.0.1"      # statt eines aufgelösten Namens
+    finally:
+        httpd.server_close()
+
+
 def test_kacheln_springen_an_eine_stelle_die_es_gibt():
     """Ohne Kennung im Markup findet zeigeEinstellung nichts und bleibt oben
     in den Einstellungen stehen – gemeldet für die KI-Kachel."""

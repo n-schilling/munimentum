@@ -6,6 +6,13 @@ was only its own HTTP endpoint, while a client that launches the server itself
 kept full access. Three states now, and the transport is named only when it is
 the only thing missing: **MCP on**, **MCP HTTP off**, **MCP off**.
 
+**macOS no longer asks about the local network.** On first launch, macOS 15
+asked whether Munimentum may look for devices on local networks — a question
+this app has no business raising: it listens on 127.0.0.1 and otherwise talks
+only to Microsoft Graph. The cause was in Python's HTTP server, which resolves
+a name for its own address while binding; the result is never used. It no
+longer does, and startup is a fraction faster for it.
+
 **The AI tile says on or off, and the settings say why.** It used to read *AI
 search ready* / *model missing* / *off* — three labels for one question, none of
 them saying what to do. It now reads **AI on** or **AI off**, with the reason in
