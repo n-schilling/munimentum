@@ -287,7 +287,10 @@ DEFAULT_CONFIG = {
     # Kalenderauswahl, dieselbe Mechanik wie oben. Leer heißt: nur der
     # Standardkalender (siehe folders.nur_standard).
     "calendar_rules": "",
-    "index_batch": 64,
+    # 128 an einem echten Archiv gemessen: rund ein Fuenftel schneller
+    # als 64, und auch die laengsten Chunks gehen noch durch. 256 lehnt
+    # Ollama ab.
+    "index_batch": 128,
     "ollama": "http://localhost:11434",
     "embed_model": "bge-m3",
     "chat_model": "qwen3.6:27b",            # formuliert die Antwort, lokal
@@ -1213,7 +1216,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                            ONEDRIVE_DIR,
                            "--store", STORE_DIR, "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
-                           "--batch", cfg.get("index_batch", 64))
+                           "--batch", cfg.get("index_batch", 128))
         if not embeddings:
             argv.append("--no-embeddings")
         steps.append({

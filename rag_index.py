@@ -60,6 +60,19 @@ FORMAT = 2                     # 2 = corpus.db + float16-Vektoren
 PPL_TOKEN_CAP = 60             # Personen-Tokens pro Person in der people-Tabelle
 STALE_VECTORS = "vectors_stale.npz"   # beiseitegelegte Embeddings, hash-indiziert
 
+# Ab welcher Länge ein Chunk überhaupt eingebettet wird.
+#
+# Gemessen an einem echten Archiv: 22 % aller Chunks sind kürzer als das —
+# „ok", „danke", „bis morgen" — und kosten zusammen eine Viertelstunde je Lauf.
+# Eine Bedeutung, nach der jemand sucht, tragen sie nicht: Was sie enthalten,
+# steht in fast jedem Chat hundertfach und beantwortet keine Frage.
+#
+# Sie bleiben vollständig im Index und über die Textsuche auffindbar; nur ihr
+# Vektor bleibt null. Das ist kein Sonderfall im Suchcode: Kosinus 0 liegt
+# unter jeder sinnvollen Untergrenze (SEMANTIC_MIN, Vorgabe 0,45), solche
+# Zeilen können also gar nicht als Treffer erscheinen.
+MIN_EMBED_ZEICHEN = 40
+
 
 def embed(texts, model, url, timeout=600):
     import requests
@@ -286,7 +299,7 @@ def retire_vectors(store):
 # --------------------------------------------------------------------------
 # Index bauen
 # --------------------------------------------------------------------------
-def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
+def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None):
     recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir)
     if corpus.POOL_FEHLER:
@@ -316,6 +329,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
 
     old = load_old_vectors(store)
     vectors = [None] * len(chunks)
+    dim = len(next(iter(old.values()))) if old else None
     # Pro eindeutigem Inhalts-Hash nur EINMAL einbetten und das Ergebnis auf alle
     # gleichen Chunks verteilen (identische Signaturen/Disclaimer kommen oft vor).
     uniq = {}                       # hash -> Liste der Chunk-Indizes mit diesem Hash
@@ -327,10 +341,19 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
             uniq.setdefault(c["hash"], []).append(i)
 
     todo_groups = list(uniq.values())          # je eindeutiger Text: alle Zielindizes
-    todo_texts = [corpus.embed_text(chunks[idxs[0]]) for idxs in todo_groups]
     new_total = sum(len(g) for g in todo_groups)
+    # Zu kurz für eine Bedeutung: Vektor bleibt null (siehe MIN_EMBED_ZEICHEN).
+    zu_kurz = sum(len(g) for g in todo_groups
+                  if len(chunks[g[0]].get("text") or "") < MIN_EMBED_ZEICHEN)
+    todo_groups = [g for g in todo_groups
+                   if len(chunks[g[0]].get("text") or "") >= MIN_EMBED_ZEICHEN]
+    # Nach Länge sortiert: ein Stapel wird auf seine längste Sequenz aufgefüllt,
+    # und gemischte Längen zahlen diese Füllung bei jedem Stück mit.
+    todo_groups.sort(key=lambda g: len(chunks[g[0]].get("text") or ""))
+    todo_texts = [corpus.embed_text(chunks[idxs[0]]) for idxs in todo_groups]
     print(f"{len(chunks)} Chunks: {len(chunks) - new_total} wiederverwendet, "
-          f"{new_total} neu ({len(todo_texts)} eindeutig einzubetten).")
+          f"{new_total} neu ({len(todo_texts)} eindeutig einzubetten, "
+          f"{zu_kurz} zu kurz für Bedeutung).")
 
     if todo_texts:
         done = 0
@@ -350,9 +373,17 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=64,
                     for i in todo_groups[b + k]:
                         vectors[i] = arr
                 done += len(vecs)
+                dim = dim or len(vecs[0])
                 progress.melde(done, len(todo_texts), "embeddings")
                 print(f"  … {done}/{len(todo_texts)} eingebettet", end="\r", flush=True)
         print()
+
+    if dim is None:
+        # Weder Altbestand noch etwas Neues: nur zu kurze Texte. Die Länge
+        # einmal erfragen, damit die Matrix trotzdem die richtige Form bekommt.
+        dim = len(embed([corpus.embed_text(chunks[0])], model, url)[0])
+    leer = np.zeros(dim, dtype="float32")
+    vectors = [leer if v is None else v for v in vectors]
 
     V, vp = save_vectors(store, np.vstack(vectors))
     write_db(store, chunks)
@@ -378,7 +409,7 @@ def main():
     ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
     ap.add_argument("--model", default=settings.value("embed_model", DEFAULT_MODEL))
     ap.add_argument("--ollama", default=settings.value("ollama", DEFAULT_OLLAMA))
-    ap.add_argument("--batch", type=int, default=settings.value("index_batch", 64))
+    ap.add_argument("--batch", type=int, default=settings.value("index_batch", 128))
     ap.add_argument("--no-embeddings", action="store_true",
                     help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
                          "Suche und MCP laufen dann rein lexikalisch.")

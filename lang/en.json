@@ -517,7 +517,7 @@
   "settings.index.both": "Full text and meaning",
   "settings.index.parked": "Existing vectors are set aside on the next run, not deleted — switching back needs no re-embedding.",
   "settings.embed_model.i": "Turns text into vectors. bge-m3 understands German and English. Changing it invalidates the existing index.",
-  "settings.batch.i": "How many passages go to Ollama at once. Larger means fewer requests and usually faster, but needs more memory.",
+  "settings.batch.i": "How many passages go to Ollama at once. Measured on a real archive, 128 is about a fifth faster than 64; Ollama rejects 256. Larger means fewer requests but more memory.",
   "settings.semantic_min.i": "Meaning-based search also finds what does not contain your words — “applied for leave” finds the mail about the time-off request. That needs a floor: without one it always returns its best hits, even when nothing fits. Narrow the search to a single day and you get every message of that day, sorted by similarity. 45 % is measured and the default: a nonsense query never got above 43 %, while real queries were still above 50 % at the fortieth hit. Higher (60–70 %) makes search strict — related hits disappear and short queries often return nothing. Lower (below 35 %) brings back the old behaviour: plenty of noise, especially together with filters. 0 turns it off. Above 80 % is almost always too much. Full-text search is unaffected — anything containing your words literally is still found. A different embedding model has different distances and needs a different setting.",
   "settings.ki.title": "AI summary",
   "settings.ki.i": "Condenses the hits of a search into one paragraph, with source references. Runs in your Ollama; nothing leaves the machine.",

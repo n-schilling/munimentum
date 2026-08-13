@@ -303,7 +303,7 @@ TEAMS_HTML = """<html><body>
 <div class="msg">
   <span class="name">Alice Example</span>
   <span class="time">2025-06-01 09:30</span>
-  <div class="body">Bericht ist fertig.</div>
+  <div class="body">Der Bericht zum Quartal ist fertig und liegt im geteilten Ordner.</div>
 </div>
 <div class="msg">
   <span class="name">Bob</span>
@@ -313,7 +313,8 @@ TEAMS_HTML = """<html><body>
 </body></html>"""
 
 
-def _eml(subject="Testmail", body="hier die neue Nachricht."):
+def _eml(subject="Testmail",
+         body="Hier die neue Nachricht mit allen Angaben zum Vorgang."):
     return (f"From: Alice Example <alice@example.com>\n"
             f"To: Bob Builder <bob@example.com>\n"
             f"Subject: {subject}\n"
@@ -345,15 +346,18 @@ def test_build_index_erzeugt_kompletten_store(tmp_path, monkeypatch):
     _make_exports(tmp_path)
     (n, neu, dim), calls, store = _build(tmp_path, monkeypatch)
     assert (n, neu, dim) == (3, 3, DIM)                 # 2 Teams-Nachrichten + 1 Mail
-    assert sum(len(c) for c in calls) == 3
+    # Zwei statt drei: „Danke!" ist zu kurz für eine Bedeutung und bekommt
+    # einen Nullvektor, statt eine Anfrage zu kosten.
+    assert sum(len(c) for c in calls) == 2
 
     V = np.load(store_layout.vectors_path(store))
     assert V.dtype == np.float16 and V.shape == (3, DIM)
     norms = np.linalg.norm(V.astype("float32"), axis=1)
-    assert np.allclose(norms, 1.0, atol=1e-2)           # Zeilen sind normalisiert
+    # Normalisiert – außer den zu kurzen Chunks, die bewusst null bleiben.
+    assert np.allclose(norms[norms > 0], 1.0, atol=1e-2)
 
     # Zeile 0 gehört zum ersten Teams-Chunk (chunks.id = 1)
-    erwartet = np.asarray(det_vec("Projekt Alpha\nBericht ist fertig."), dtype="float32")
+    erwartet = np.asarray(det_vec("Projekt Alpha\nDer Bericht zum Quartal ist fertig und liegt im geteilten Ordner."), dtype="float32")
     erwartet /= np.linalg.norm(erwartet)
     assert np.allclose(V[0].astype("float32"), erwartet, atol=1e-2)
 
@@ -383,18 +387,18 @@ def test_build_index_inkrementell_und_nach_aenderung(tmp_path, monkeypatch):
 
     # Eine Mail ändern: nur dieser eine Chunk wird neu eingebettet
     (tmp_path / "outlook_export" / "inbox" / "mail.eml").write_bytes(
-        _eml(body="komplett neuer Inhalt."))
+        _eml(body="Ein komplett neuer Inhalt, lang genug zum Einbetten."))
     (_, neu3, _), calls3, _ = _build(tmp_path, monkeypatch)
     assert neu3 == 1
     assert sum(len(c) for c in calls3) == 1
-    assert calls3[0] == ["Testmail\nkomplett neuer Inhalt."]
+    assert calls3[0] == ["Testmail\nEin komplett neuer Inhalt, lang genug zum Einbetten."]
     V3 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V3[:2], V1[:2], atol=1e-3)       # Teams-Zeilen wiederverwendet
 
     con = sqlite3.connect(store / "corpus.db")
     rows = list(con.execute("SELECT text FROM chunks WHERE src = 'outlook'"))
     con.close()
-    assert rows == [("komplett neuer Inhalt.",)]
+    assert rows == [("Ein komplett neuer Inhalt, lang genug zum Einbetten.",)]
 
 
 def test_build_index_bettet_identische_texte_nur_einmal_ein(tmp_path, monkeypatch):
@@ -414,10 +418,54 @@ def test_build_index_batcht_embedding_aufrufe(tmp_path, monkeypatch):
     (outlook / "inbox").mkdir(parents=True)
     for i in range(5):
         (outlook / "inbox" / f"m{i}.eml").write_bytes(
-            _eml(subject=f"Mail {i}", body=f"Inhalt {i}."))
+            _eml(subject=f"Mail {i}",
+                 body=f"Inhalt {i} mit genug Text, um eingebettet zu werden."))
     (n, neu, _), calls, _ = _build(tmp_path, monkeypatch, batch=2)
     assert (n, neu) == (5, 5)
     assert sorted(len(c) for c in calls) == [1, 2, 2]   # 5 Texte in Batches zu 2
+
+
+def test_zu_kurze_chunks_bekommen_keinen_vektor(tmp_path, monkeypatch):
+    """22 % eines echten Archivs sind „ok", „danke", „bis morgen".
+
+    Sie kosten zusammen eine Viertelstunde je Lauf und tragen keine Bedeutung,
+    nach der jemand sucht. Sie bleiben im Index und in der Textsuche; nur ihr
+    Vektor bleibt null – und Kosinus 0 liegt unter jeder Untergrenze, sie
+    können also gar nicht als Bedeutungstreffer erscheinen.
+    """
+    _make_exports(tmp_path)
+    (n, neu, dim), calls, store = _build(tmp_path, monkeypatch)
+    assert (n, neu) == (3, 3)
+    assert sum(len(c) for c in calls) == 2          # „Danke!" war nicht dabei
+    assert all("Danke" not in t for c in calls for t in c)
+
+    con = sqlite3.connect(store / "corpus.db")
+    zeile = con.execute("SELECT id FROM chunks WHERE text LIKE '%Danke%'").fetchone()[0]
+    con.close()
+    V = np.load(store_layout.vectors_path(store))
+    assert not V[zeile - 1].any(), "Der kurze Chunk hat doch einen Vektor"
+    assert V[zeile - 1].shape == V[0].shape        # Form bleibt, nur der Inhalt ist null
+    assert V.shape[0] == 3                         # und die Matrix passt weiter zum Index
+
+
+def test_lange_texte_werden_nach_laenge_gestapelt(tmp_path, monkeypatch):
+    """Ein Stapel wird auf seine längste Sequenz aufgefüllt – gemischte Längen
+    zahlen diese Füllung bei jedem Stück mit."""
+    outlook = tmp_path / "outlook_export"
+    (outlook / "inbox").mkdir(parents=True)
+    for i, laenge in enumerate((900, 60, 600, 80)):
+        (outlook / "inbox" / f"m{i}.eml").write_bytes(
+            _eml(subject=f"Mail {i}", body="wort " * (laenge // 5)))
+    _, calls, _ = _build(tmp_path, monkeypatch, batch=2)
+    # Nicht die Reihenfolge der Antworten prüfen – die ist bei zwei Arbeitern
+    # nicht die der Anfragen. Was die Sortierung bewirkt, steht INNERHALB eines
+    # Stapels: dort liegen die Längen dicht beieinander, statt dass ein kurzer
+    # Text die Füllung eines langen mitbezahlt.
+    spannen = [max(map(len, c)) - min(map(len, c)) for c in calls if len(c) > 1]
+    assert spannen, "keine Stapel mit mehr als einem Text"
+    gesamt = max(len(t) for c in calls for t in c) - min(len(t) for c in calls for t in c)
+    assert max(spannen) < gesamt / 2, (
+        f"Stapel mischen die Längen weiter: {spannen} bei Gesamtspanne {gesamt}")
 
 
 def test_build_index_ohne_inhalte_bricht_ab(tmp_path):
