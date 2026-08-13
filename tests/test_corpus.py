@@ -267,6 +267,55 @@ def test_ics_when_variants():
     assert ts is None and disp == "unsinn"
 
 
+def test_ics_when_zeitzonen():
+    from datetime import datetime
+    utc = corpus.UTC
+    # Windows-Zeitzonenname aus Exchange-Einladungen: 15:00 London = 14:00 UTC
+    ts, _ = corpus._ics_when("20250610T150000", False, "GMT Standard Time")
+    assert datetime.fromtimestamp(ts, utc).hour == 14
+    ts, _ = corpus._ics_when("20250610T150000", False, "Pacific Standard Time")
+    assert datetime.fromtimestamp(ts, utc).hour == 22
+    # IANA-Namen direkt, "Z" schlägt TZID, Unbekanntes bleibt Lokalzeit
+    ts, _ = corpus._ics_when("20250610T150000", False, "America/New_York")
+    assert datetime.fromtimestamp(ts, utc).hour == 19
+    ts, _ = corpus._ics_when("20250610T150000Z", False, "Pacific Standard Time")
+    assert datetime.fromtimestamp(ts, utc).hour == 15
+    naiv = corpus._ics_when("20250610T150000", False)[0]
+    assert corpus._ics_when("20250610T150000", False, "Quatsch/Zone")[0] == naiv
+    assert corpus._zone("") is None
+
+
+def test_unfold_unescape_prop_pval_demail():
+    assert corpus._unfold("A:1\r\n b\nB:2\n\tc") == ["A:1b", "B:2c"]
+    assert corpus._unescape(r"a\,b\;c\nd\\e") == "a,b;c\nd\\e"
+    name, params, value = corpus._prop(
+        'ORGANIZER;CN="Alice; Ex":mailto:alice@example.com')
+    assert name == "ORGANIZER"
+    assert corpus._pval(params, "CN") == "Alice; Ex"  # Anführungszeichen schützen ;
+    assert value == "mailto:alice@example.com"
+    assert corpus._prop("zeile ohne doppelpunkt") == (None, None, None)
+    assert corpus._pval(";CN=Bob", "CN") == "Bob"
+    assert corpus._pval("", "CN") == ""
+    assert corpus._demail("MAILTO:Alice@Example.com") == "Alice@Example.com"
+    assert corpus._demail(None) == ""
+
+
+def test_calendar_file_folgt_der_tzid(tmp_path):
+    """Ein Termin mit Windows-TZID muss im Index dieselbe Zeit tragen wie in
+    der Kalenderansicht – vorher las der Index ihn als Lokalzeit."""
+    from datetime import datetime
+    d = tmp_path / "kalender" / "Arbeit"
+    d.mkdir(parents=True)
+    (d / "termin.ics").write_text("\r\n".join([
+        "BEGIN:VCALENDAR", "BEGIN:VEVENT",
+        "SUMMARY:Abstimmung",
+        "DTSTART;TZID=GMT Standard Time:20250610T150000",
+        "END:VEVENT", "END:VCALENDAR",
+    ]), encoding="utf-8")
+    recs = corpus.load_calendar(str(tmp_path))
+    assert datetime.fromtimestamp(recs[0]["ts"], corpus.UTC).hour == 14
+
+
 # --------------------------------------------------------------------------
 # Verlauf: welche Mails zusammengehören
 #

@@ -19,6 +19,7 @@ from email.parser import BytesParser
 from email.utils import getaddresses
 from datetime import datetime, UTC
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from html.parser import HTMLParser
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
@@ -514,7 +515,66 @@ def _demail(v):
     return re.sub(r"(?i)^mailto:", "", (v or "").strip())
 
 
-def _ics_when(val, dateonly):
+# Exchange schreibt in Einladungsmails Windows-Zeitzonennamen statt IANA-Namen.
+# Ohne Zuordnung landen Termine aus anderen Zeitzonen um deren Differenz versetzt
+# im Kalender. Die häufigsten Namen genügen – alles andere fällt auf Lokalzeit
+# zurück (wie bisher).
+WIN_TZ = {
+    "W. Europe Standard Time": "Europe/Berlin",
+    "Central Europe Standard Time": "Europe/Budapest",
+    "Central European Standard Time": "Europe/Warsaw",
+    "Romance Standard Time": "Europe/Paris",
+    "GMT Standard Time": "Europe/London",
+    "Greenwich Standard Time": "Etc/UTC",
+    "UTC": "Etc/UTC",
+    "GTB Standard Time": "Europe/Athens",
+    "FLE Standard Time": "Europe/Helsinki",
+    "Turkey Standard Time": "Europe/Istanbul",
+    "Russian Standard Time": "Europe/Moscow",
+    "Israel Standard Time": "Asia/Jerusalem",
+    "Arabian Standard Time": "Asia/Dubai",
+    "India Standard Time": "Asia/Kolkata",
+    "SE Asia Standard Time": "Asia/Bangkok",
+    "China Standard Time": "Asia/Shanghai",
+    "Singapore Standard Time": "Asia/Singapore",
+    "Tokyo Standard Time": "Asia/Tokyo",
+    "Korea Standard Time": "Asia/Seoul",
+    "AUS Eastern Standard Time": "Australia/Sydney",
+    "New Zealand Standard Time": "Pacific/Auckland",
+    "Eastern Standard Time": "America/New_York",
+    "US Eastern Standard Time": "America/Indiana/Indianapolis",
+    "Central Standard Time": "America/Chicago",
+    "Central Standard Time (Mexico)": "America/Mexico_City",
+    "Mountain Standard Time": "America/Denver",
+    "US Mountain Standard Time": "America/Phoenix",
+    "Pacific Standard Time": "America/Los_Angeles",
+    "Alaskan Standard Time": "America/Anchorage",
+    "Hawaiian Standard Time": "Pacific/Honolulu",
+    "E. South America Standard Time": "America/Sao_Paulo",
+    "Argentina Standard Time": "America/Argentina/Buenos_Aires",
+    "Pacific SA Standard Time": "America/Santiago",
+    "South Africa Standard Time": "Africa/Johannesburg",
+    "W. Central Africa Standard Time": "Africa/Lagos",
+    "E. Africa Standard Time": "Africa/Nairobi",
+}
+_ZONES = {}
+
+
+def _zone(tzid):
+    """TZID (Windows- oder IANA-Name) -> tzinfo, sonst None (= Lokalzeit)."""
+    tzid = (tzid or "").strip().strip('"')
+    if not tzid:
+        return None
+    if tzid not in _ZONES:
+        try:
+            _ZONES[tzid] = ZoneInfo(WIN_TZ.get(tzid, tzid))
+        except Exception:
+            # unbekannter Name oder fehlende Zeitzonendaten (Windows ohne tzdata)
+            _ZONES[tzid] = None
+    return _ZONES[tzid]
+
+
+def _ics_when(val, dateonly, tzid=""):
     if not val:
         return None, ""
     try:
@@ -523,8 +583,9 @@ def _ics_when(val, dateonly):
             return dt.timestamp(), dt.strftime("%Y-%m-%d")
         utc = val.endswith("Z")
         dt = datetime.strptime(val.rstrip("Z")[:15], "%Y%m%dT%H%M%S")
-        if utc:
-            dt = dt.replace(tzinfo=UTC)
+        zone = UTC if utc else _zone(tzid)
+        if zone is not None:
+            dt = dt.replace(tzinfo=zone)
             return dt.timestamp(), dt.astimezone().strftime("%Y-%m-%d %H:%M")
         return dt.timestamp(), dt.strftime("%Y-%m-%d %H:%M")
     except Exception:
@@ -533,7 +594,7 @@ def _ics_when(val, dateonly):
 
 def _calendar_file(p_str, root_str):
     p, root = Path(p_str), Path(root_str)
-    summary = location = description = org_cn = org_mail = dtstart = ""
+    summary = location = description = org_cn = org_mail = dtstart = tzstart = ""
     dateonly = False
     att_names, att_mails = [], []
     for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
@@ -549,6 +610,7 @@ def _calendar_file(p_str, root_str):
         elif name == "DTSTART":
             dtstart = value.strip()
             dateonly = "VALUE=DATE" in (params or "").upper()
+            tzstart = _pval(params, "TZID")
         elif name == "ORGANIZER":
             org_cn, org_mail = _pval(params, "CN"), _demail(value)
         elif name == "ATTENDEE":
@@ -557,7 +619,7 @@ def _calendar_file(p_str, root_str):
                 att_names.append(cn)
             if mail:
                 att_mails.append(mail)
-    ts, disp = _ics_when(dtstart, dateonly)
+    ts, disp = _ics_when(dtstart, dateonly, tzstart)
     rel = p.relative_to(root).as_posix()
     segs = rel.split("/")
     # Der Ordnerpfad, nicht ein Schmuckname: ctx ist die Spalte, über die in

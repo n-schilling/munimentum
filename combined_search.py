@@ -33,17 +33,18 @@ import os
 import sys
 import re
 import json
-import email
 from email import policy
 from email.parser import BytesParser
-from email.utils import getaddresses
-from datetime import datetime, UTC
-from zoneinfo import ZoneInfo
+from email.utils import parsedate_to_datetime
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote, unquote
 
 import progress
 import settings
+# Die Parser-Primitive für .eml, iCalendar und vCard leben in corpus.py –
+# hier werden sie nur wiederverwendet, nicht noch einmal gepflegt.
+from corpus import addr_people, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
 
 # Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage (z. B. cp1252),
 # und bei Umleitung in eine Datei die Locale-Kodierung. Beides lässt print() an
@@ -61,26 +62,6 @@ BODY_CAP = 4000
 # ===========================================================================
 # Outlook: Einladungs-/Absagemails (.eml mit text/calendar) einsammeln
 # ===========================================================================
-def hdr(msg, name):
-    v = msg[name]
-    return str(v).strip() if v is not None else ""
-
-
-def addr_people(msg, *headers):
-    raw = []
-    for h in headers:
-        vals = msg.get_all(h)
-        if vals:
-            raw += [str(v) for v in vals]
-    names, emails = [], []
-    for name, addr in getaddresses(raw):
-        if name.strip():
-            names.append(name.strip())
-        if addr.strip():
-            emails.append(addr.strip())
-    return names, emails
-
-
 def mail_ical(msg):
     """(METHOD, iCalendar-Text) aus dem text/calendar-Teil einer Mail."""
     for part in msg.walk():
@@ -126,7 +107,7 @@ def read_outlook(root, out_dir, invites):
         raw_date = hdr(msg, "date")
         ts, disp = None, raw_date
         try:
-            dt = email.utils.parsedate_to_datetime(raw_date)
+            dt = parsedate_to_datetime(raw_date)
             if dt is not None:
                 ts = dt.timestamp()
                 disp = dt.astimezone().strftime("%Y-%m-%d %H:%M")
@@ -141,129 +122,6 @@ def read_outlook(root, out_dir, invites):
 # ===========================================================================
 # Kalender (.ics) und Kontakte (.vcf) – liegen im Outlook-Export
 # ===========================================================================
-def _unfold(text):
-    text = text.replace("\r\n", "\n").replace("\r", "\n")
-    out = []
-    for line in text.split("\n"):
-        if line[:1] in (" ", "\t") and out:
-            out[-1] += line[1:]
-        else:
-            out.append(line)
-    return out
-
-
-def _unescape(v):
-    res, i = [], 0
-    while i < len(v):
-        ch = v[i]
-        if ch == "\\" and i + 1 < len(v):
-            res.append({"n": "\n", "N": "\n", ",": ",", ";": ";", "\\": "\\"}.get(v[i + 1], v[i + 1]))
-            i += 2
-        else:
-            res.append(ch)
-            i += 1
-    return "".join(res)
-
-
-def _prop(line):
-    in_q = False
-    for i, ch in enumerate(line):
-        if ch == '"':
-            in_q = not in_q
-        elif ch == ":" and not in_q:
-            name = line[:i].split(";", 1)[0].upper()
-            return name, line[:i][len(name):], line[i + 1:]
-    return None, None, None
-
-
-def _pval(params, key):
-    m = re.search(rf';{key}=("([^"]*)"|([^;:]*))', params or "", re.I)
-    if not m:
-        return ""
-    return m.group(2) if m.group(2) is not None else (m.group(3) or "")
-
-
-def _demail(v):
-    return re.sub(r"(?i)^mailto:", "", (v or "").strip())
-
-
-# Exchange schreibt in Einladungsmails Windows-Zeitzonennamen statt IANA-Namen.
-# Ohne Zuordnung landen Termine aus anderen Zeitzonen um deren Differenz versetzt
-# im Kalender. Die häufigsten Namen genügen – alles andere fällt auf Lokalzeit
-# zurück (wie bisher).
-WIN_TZ = {
-    "W. Europe Standard Time": "Europe/Berlin",
-    "Central Europe Standard Time": "Europe/Budapest",
-    "Central European Standard Time": "Europe/Warsaw",
-    "Romance Standard Time": "Europe/Paris",
-    "GMT Standard Time": "Europe/London",
-    "Greenwich Standard Time": "Etc/UTC",
-    "UTC": "Etc/UTC",
-    "GTB Standard Time": "Europe/Athens",
-    "FLE Standard Time": "Europe/Helsinki",
-    "Turkey Standard Time": "Europe/Istanbul",
-    "Russian Standard Time": "Europe/Moscow",
-    "Israel Standard Time": "Asia/Jerusalem",
-    "Arabian Standard Time": "Asia/Dubai",
-    "India Standard Time": "Asia/Kolkata",
-    "SE Asia Standard Time": "Asia/Bangkok",
-    "China Standard Time": "Asia/Shanghai",
-    "Singapore Standard Time": "Asia/Singapore",
-    "Tokyo Standard Time": "Asia/Tokyo",
-    "Korea Standard Time": "Asia/Seoul",
-    "AUS Eastern Standard Time": "Australia/Sydney",
-    "New Zealand Standard Time": "Pacific/Auckland",
-    "Eastern Standard Time": "America/New_York",
-    "US Eastern Standard Time": "America/Indiana/Indianapolis",
-    "Central Standard Time": "America/Chicago",
-    "Central Standard Time (Mexico)": "America/Mexico_City",
-    "Mountain Standard Time": "America/Denver",
-    "US Mountain Standard Time": "America/Phoenix",
-    "Pacific Standard Time": "America/Los_Angeles",
-    "Alaskan Standard Time": "America/Anchorage",
-    "Hawaiian Standard Time": "Pacific/Honolulu",
-    "E. South America Standard Time": "America/Sao_Paulo",
-    "Argentina Standard Time": "America/Argentina/Buenos_Aires",
-    "Pacific SA Standard Time": "America/Santiago",
-    "South Africa Standard Time": "Africa/Johannesburg",
-    "W. Central Africa Standard Time": "Africa/Lagos",
-    "E. Africa Standard Time": "Africa/Nairobi",
-}
-_ZONES = {}
-
-
-def _zone(tzid):
-    """TZID (Windows- oder IANA-Name) -> tzinfo, sonst None (= Lokalzeit)."""
-    tzid = (tzid or "").strip().strip('"')
-    if not tzid:
-        return None
-    if tzid not in _ZONES:
-        try:
-            _ZONES[tzid] = ZoneInfo(WIN_TZ.get(tzid, tzid))
-        except Exception:
-            # unbekannter Name oder fehlende Zeitzonendaten (Windows ohne tzdata)
-            _ZONES[tzid] = None
-    return _ZONES[tzid]
-
-
-def _ics_when(val, dateonly, tzid=""):
-    if not val:
-        return None, ""
-    try:
-        if dateonly or (len(val) == 8 and val.isdigit()):
-            dt = datetime.strptime(val[:8], "%Y%m%d")
-            return dt.timestamp(), dt.strftime("%Y-%m-%d")
-        utc = val.endswith("Z")
-        dt = datetime.strptime(val.rstrip("Z")[:15], "%Y%m%dT%H%M%S")
-        zone = UTC if utc else _zone(tzid)
-        if zone is not None:
-            dt = dt.replace(tzinfo=zone)
-            return dt.timestamp(), dt.astimezone().strftime("%Y-%m-%d %H:%M")
-        return dt.timestamp(), dt.strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        return None, val
-
-
 def parse_vevents(text):
     """iCalendar-Text -> (METHOD, [VEVENT-Felder, …]).
 

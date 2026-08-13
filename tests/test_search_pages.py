@@ -8,7 +8,6 @@ alles aus synthetischen Export-Bäumen in tmp_path. Keine Netzwerkzugriffe.
 import json
 import re
 import sys
-from datetime import datetime
 
 import pytest
 
@@ -108,35 +107,6 @@ def test_combined_link_kodiert_segmente(tmp_path):
     assert href == "export/Ordner%20mit%20Leerzeichen/datei%20%C3%A4.html"
 
 
-def test_combined_unfold_und_unescape():
-    assert combined_search._unfold("A:1\r\n b\nB:2\n\tc") == ["A:1b", "B:2c"]
-    assert combined_search._unescape(r"a\,b\;c\nd\\e") == "a,b;c\nd\\e"
-
-
-def test_combined_prop_pval_demail():
-    name, params, value = combined_search._prop(
-        'ORGANIZER;CN="Alice; Ex":mailto:alice@example.com')
-    assert name == "ORGANIZER"
-    assert combined_search._pval(params, "CN") == "Alice; Ex"  # Anführungszeichen schützen ;
-    assert value == "mailto:alice@example.com"
-    assert combined_search._prop("zeile ohne doppelpunkt") == (None, None, None)
-    assert combined_search._pval(";CN=Bob", "CN") == "Bob"
-    assert combined_search._pval("", "CN") == ""
-    assert combined_search._demail("MAILTO:Alice@Example.com") == "Alice@Example.com"
-    assert combined_search._demail(None) == ""
-
-
-def test_combined_ics_when_varianten():
-    ts, disp = combined_search._ics_when("20250601", dateonly=True)
-    assert disp == "2025-06-01" and ts is not None
-    ts, disp = combined_search._ics_when("20250601T120000", dateonly=False)
-    assert disp == "2025-06-01 12:00" and ts is not None
-    ts, disp = combined_search._ics_when("20250601T120000Z", dateonly=False)
-    assert ts is not None and re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", disp)
-    assert combined_search._ics_when("", dateonly=False) == (None, "")
-    assert combined_search._ics_when("unsinn", dateonly=False) == (None, "unsinn")
-
-
 # --------------------------------------------------------------------------
 # combined_search: Einleser (Kalender, Kontakte, Einladungsmails)
 # --------------------------------------------------------------------------
@@ -193,23 +163,6 @@ def test_combined_read_calendar_ganztaegig_und_status(tmp_path):
     w = recs["Workshop"]
     assert w["ad"] == 0 and w["st"] == "tentative"
     assert w["te"] - w["ts"] == 90 * 60
-
-
-def test_combined_ics_when_zeitzonen():
-    utc = combined_search.UTC
-    # Windows-Zeitzonenname aus Exchange-Einladungen: 15:00 London = 14:00 UTC
-    ts, _ = combined_search._ics_when("20250610T150000", False, "GMT Standard Time")
-    assert datetime.fromtimestamp(ts, utc).hour == 14
-    ts, _ = combined_search._ics_when("20250610T150000", False, "Pacific Standard Time")
-    assert datetime.fromtimestamp(ts, utc).hour == 22
-    # IANA-Namen direkt, "Z" schlägt TZID, Unbekanntes bleibt Lokalzeit
-    ts, _ = combined_search._ics_when("20250610T150000", False, "America/New_York")
-    assert datetime.fromtimestamp(ts, utc).hour == 19
-    ts, _ = combined_search._ics_when("20250610T150000Z", False, "Pacific Standard Time")
-    assert datetime.fromtimestamp(ts, utc).hour == 15
-    naiv = combined_search._ics_when("20250610T150000", False)[0]
-    assert combined_search._ics_when("20250610T150000", False, "Quatsch/Zone")[0] == naiv
-    assert combined_search._zone("") is None
 
 
 def test_combined_parse_vevents_ignoriert_vtimezone():
