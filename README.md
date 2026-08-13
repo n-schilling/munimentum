@@ -35,8 +35,10 @@ Linux, unpack the archive.
 On Windows, SmartScreen asks once on first launch, because the build carries no
 code-signing certificate: *More info* → *Run anyway*.
 
-Your data lives in your user folder, not in the app, so an update overwrites
-nothing. The path is shown in *Settings*.
+The app has no window of its own: it serves a page and lives in your browser.
+Quit it with **Quit** at the top right. Starting it a second time does not
+create a second copy — it opens the page of the one already running, which is
+also the way back if you closed the tab.
 
 ---
 
@@ -46,6 +48,20 @@ A brief note on the ownership of the data that is exported: **whether you may
 export it is yours to check.** Delegated access makes it technically possible;
 establishing that it is permitted in your case is not something this app can do
 for you.
+
+---
+
+## Where the data goes
+
+Not into the app, but into your user folder — so an update overwrites nothing:
+
+* macOS: `~/Library/Application Support/Munimentum`
+* Windows: `%LOCALAPPDATA%\Munimentum`
+* Linux: `~/.local/share/Munimentum`
+
+The path is shown in *Settings*. A mailbox can take up tens of gigabytes; to put
+it on another disk, change it there (it takes effect after a restart and moves
+nothing). For a single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` work.
 
 ---
 

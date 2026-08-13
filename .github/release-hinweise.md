@@ -131,9 +131,8 @@ fetching a token, exporting, searching — is explained there.
 
 ## “Windows protected your PC”
 
-**macOS is signed and notarized by Apple** — it opens on a double-click, with no
-warning and nothing to click past. That is new in this release; earlier versions
-needed a detour through *Privacy & Security*.
+**macOS is signed and notarized by Apple** — it opens on a double-click, with
+no warning and nothing to click past.
 
 **Windows is not code-signed.** A certificate costs considerably more there, and
 SmartScreen additionally wants to see a download count before it goes quiet. So
@@ -143,54 +142,14 @@ anyway”*. It happens once.
 If you would rather not, run it from source instead (`python3 app.py`, see the
 README) — the function and the result are identical.
 
-## Starting and quitting
-
-The app has no window of its own — it serves a page and lives in your browser.
-On a Mac it therefore does not stay in the Dock. Quit it with **“Quit”** at
-the top right; the MCP server goes with it.
-
-Starting it a second time does not create a second copy: the app notices one is
-already running and just opens its page. That is also the way back if you closed
-the tab — simply start the app again.
-
-## Where does the data go?
-
-Not into the app, but into your user folder — so an update overwrites nothing:
-
-* macOS: `~/Library/Application Support/Munimentum`
-* Windows: `%LOCALAPPDATA%\Munimentum`
-* Linux: `~/.local/share/Munimentum`
-
-The path is also shown in *Settings*. A mailbox can take up tens of gigabytes;
-to put it on another disk, change it directly in *Settings* (it takes effect
-after a restart and moves nothing). For a single run, `--data-dir FOLDER` and
-`MUNIMENTUM_DATA_DIR` work.
-
-## Language
-
-The interface comes in German, English and French and follows your browser's
-language by default. You can change it in *Settings*. Exported content is never
-touched by this.
-
 ## Optional: Ollama
 
 Without Ollama everything works except *meaning-based* search — export,
 full-text search and the MCP server for Claude run normally. The app asks at
 startup and explains the installation if you want it.
 
-With Ollama and a language model loaded, the *Search data* tab gains an
-**“AI summary (Ollama)”** checkbox: a model in your Ollama condenses the hits
-into a paragraph with citations. The box says so as well — the summary does not
-come from your archive but from the AI, and it relies solely on the hits below
-it. Nothing leaves your machine. The model and the number of sources are set in
-*Settings*.
-
-## Updates
-
-At startup the app asks GitHub once whether a newer version exists, and then
-just leaves a note with a link — nothing is downloaded or replaced. You can
-turn this off in *Settings*; it is the only connection the app makes apart from
-Microsoft Graph and your local Ollama.
+With Ollama, *Search data* gains two more kinds of search: *Similar search* and
+*AI summary*. Both run on your machine; nothing leaves it. See the README.
 
 ## Checksums
 
