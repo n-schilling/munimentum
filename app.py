@@ -3118,7 +3118,7 @@ main{padding-bottom:60px}
   <!-- Die Kacheln sagen, was der Zustand für den Anwender bedeutet; der
        Fachbegriff (Token, Ollama, Chunks, MCP) steht im Tooltip, damit ihn
        findet, wer ihn braucht, ohne dass ihn lesen muss, wer ihn nicht kennt. -->
-  <div class="pills">
+  <div class="pills" id="pills">
     <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
     <button class="pill" id="pill-ollama" onclick="ollamaKachel()"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
     <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
@@ -5908,7 +5908,10 @@ function beenden(){
   document.querySelector('main').innerHTML =
     '<div class="card"><p>' + esc(t('quit.done')) + '</p></div>';
   document.querySelector('nav').classList.add('hide');
-  el('btn-quit').classList.add('hide');
+  // Auch Pillen und Protokoll: sie zeigten sonst eingefrorene Zustände einer
+  // App, die nicht mehr läuft – und ihre Knöpfe riefen eine tote API.
+  el('pills').classList.add('hide');
+  el('protokoll').classList.add('hide');
 }
 
 /* ---------- Schleife ---------- */

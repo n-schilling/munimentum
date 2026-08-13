@@ -2537,6 +2537,11 @@ pruefe(String(global.gefragt).length > 10, 'Es wurde nicht rueckgefragt');
 pruefe(gesendet.indexOf('/api/quit') >= 0, 'Kein Beenden an den Server: ' + gesendet.join(','));
 pruefe(beendet === true, 'Zustand nicht gesetzt');
 
+// Pillen und Protokoll verschwinden mit: sie zeigten sonst eingefrorene
+// Zustaende, und "Fehler melden" riefe eine tote API.
+pruefe(el('pills').classList.contains('hide'), 'Pillen bleiben stehen');
+pruefe(el('protokoll').classList.contains('hide'), 'Protokoll bleibt stehen');
+
 // Danach darf nicht weiter abgefragt werden – sonst Fehler ohne Ende.
 var vorher = gesendet.length;
 refresh(); pullLog();
