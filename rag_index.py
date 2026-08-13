@@ -6,8 +6,8 @@ Liest beide Exporte (über corpus.py), bettet jeden Chunk per Ollama ein und leg
 alles in einem Store-Ordner ab:
 
     corpus.db     SQLite: Chunks + Metadaten, FTS5-Volltextindex (BM25),
-                  vorberechnete Personenliste. Wird von mcp_server.py und
-                  rag_server.py abfragbar genutzt – kein Laden in den RAM nötig.
+                  vorberechnete Personenliste. Wird von mcp_server.py
+                  abfragbar genutzt – kein Laden in den RAM nötig.
     vectors-N.npy Embedding-Matrix, float16 (halber Platz, praktisch gleiche
                   Kosinus-Rangfolge). Zeile i gehört zu chunks.id = i+1.
                   Jeder Lauf schreibt eine NEUE Datei, statt die vorhandene
@@ -431,7 +431,7 @@ def main():
               "erneut laufen lassen (Ollama nötig).")
     else:
         print(f"\nFertig. {n} Chunks im Index ({dim} Dimensionen), davon {new} neu berechnet.")
-    print(f"Jetzt: python3 rag_server.py --store {a.store}  oder  mcp_server.py")
+    print("Jetzt: python3 mcp_server.py")
 
 
 if __name__ == "__main__":

@@ -11,9 +11,6 @@ Antwort Dinge zitieren, die in der Trefferliste gar nicht stehen – und niemand
 könnte nachvollziehen, woher sie kommen. Die Nummern in eckigen Klammern
 verweisen deshalb genau auf die Treffer, die daneben zu sehen sind.
 
-Genutzt von app.py (Reiter „Suche“) und rag_server.py, damit die Antwortregeln
-nicht an zwei Stellen auseinanderlaufen.
-
 Alles läuft lokal: nichts geht an einen Dienst außerhalb des Rechners.
 """
 
@@ -158,15 +155,3 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
                 return
     except Exception as e:                    # noqa: BLE001 – nie den Aufrufer treffen
         yield {"error": "ollama", "detail": f"{type(e).__name__}: {e}"}
-
-
-def complete(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
-             timeout=STREAM_TIMEOUT):
-    """Dasselbe am Stück – für Aufrufer ohne Datenstrom (rag_server.py)."""
-    teile, fehler = [], None
-    for stueck in stream(query, quellen, model, ollama, lang, chars, timeout):
-        if "error" in stueck:
-            fehler = stueck
-            break
-        teile.append(stueck["text"])
-    return "".join(teile), fehler

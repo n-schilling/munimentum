@@ -175,21 +175,6 @@ def test_stream_endet_bei_done(ollama):
 
 
 # --------------------------------------------------------------------------
-# complete(): dasselbe am Stück
-# --------------------------------------------------------------------------
-def test_complete_fuegt_zusammen(ollama):
-    ollama(Strom(["Die ", "Antwort."]))
-    text, fehler = answer.complete("F", QUELLEN, "m", "http://o.test")
-    assert text == "Die Antwort." and fehler is None
-
-
-def test_complete_meldet_fehler(ollama):
-    ollama(ConnectionError("weg"))
-    text, fehler = answer.complete("F", QUELLEN, "m", "http://o.test")
-    assert text == "" and fehler["error"] == "ollama"
-
-
-# --------------------------------------------------------------------------
 # Was im Chat-Request steht – zwei Werte, an denen die Antwort haengt
 # --------------------------------------------------------------------------
 def test_kontextfenster_wird_gesetzt(ollama):

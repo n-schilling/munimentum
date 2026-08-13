@@ -3,8 +3,8 @@
 corpus.py – gemeinsame Datengrundlage für die lokale RAG-Suche.
 
 Liest Teams-Export (HTML) und Outlook-Export (.eml) in einheitliche Datensätze
-und zerlegt lange Texte in überlappende Chunks. Wird von rag_index.py (Embeddings)
-und rag_server.py (Retrieval/Antwort) genutzt. Nur Standardbibliothek.
+und zerlegt lange Texte in überlappende Chunks. Wird von rag_index.py
+(Embeddings) genutzt. Nur Standardbibliothek.
 """
 
 import os

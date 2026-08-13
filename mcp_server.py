@@ -2,9 +2,9 @@
 """
 mcp_server.py – expose the Teams + Outlook exports to Claude as an MCP server.
 
-Instead of generating answers with a local LLM (as rag_server.py does with
-qwen2.5), this server hands the *retrieval* to Claude as MCP tools and lets
-Claude be the reasoning/answer layer. It reads the store built by rag_index.py:
+Instead of generating answers with a local LLM, this server hands the
+*retrieval* to Claude as MCP tools and lets Claude be the reasoning/answer
+layer. It reads the store built by rag_index.py:
 
     corpus.db     SQLite with all chunks + an FTS5 (BM25) full-text index and a
                   precomputed people table. Queried on demand – the server keeps
