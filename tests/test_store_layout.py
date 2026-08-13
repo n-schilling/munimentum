@@ -11,6 +11,7 @@ Fällen stimmt – neuer Store, Lauf ohne Embeddings, Store von früher.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -140,3 +141,7 @@ def test_was_sich_nicht_loeschen_laesst_bleibt_liegen(tmp_path, monkeypatch):
 def test_aufraeumen_im_leeren_ordner(tmp_path, behalten):
     assert store_layout.prune_vectors(
         tmp_path, tmp_path / behalten if behalten else None) == 0
+
+
+def test_db_path():
+    assert store_layout.db_path("rag_store") == Path("rag_store") / "corpus.db"

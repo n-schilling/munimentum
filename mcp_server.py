@@ -1233,7 +1233,7 @@ def main():
             server.run(transport="stdio")
         return
 
-    dbp = Path(a.store) / "corpus.db"
+    dbp = store_layout.db_path(a.store)
     if not dbp.exists():
         raise SystemExit(f"No store at '{dbp}'. Build it first:\n"
                          f"  python3 rag_index.py {a.teams} {a.outlook}")

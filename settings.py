@@ -37,10 +37,20 @@ _cache = {"pfad": None, "daten": None}
 _uebernommen = []          # (Schlüssel, Anzeigewert) – alles, was aus der Datei kam
 
 
+def data_dir_env():
+    """Der per Umgebung gesetzte Datenordner – oder None.
+
+    MUNIMENTUM_DATA_DIR ist der Name seit 5.0.0; OFFICE365_DATA_DIR gilt
+    weiter, damit vorhandene Skripte und Verknüpfungen nicht brechen. app.py
+    fragt für seinen Datenordner dieselbe Stelle – die beiden Namen stehen
+    nur hier.
+    """
+    return os.environ.get("MUNIMENTUM_DATA_DIR") or os.environ.get("OFFICE365_DATA_DIR")
+
+
 def config_path():
     """Wo die Konfiguration liegt: Datenordner der App, sonst neben dem Modul."""
-    env = (os.environ.get("MUNIMENTUM_DATA_DIR")
-           or os.environ.get("OFFICE365_DATA_DIR"))    # der Name bis 4.2.0
+    env = data_dir_env()
     base = Path(env).expanduser() if env else Path(__file__).resolve().parent
     return base / CONFIG_NAME
 

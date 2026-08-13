@@ -31,6 +31,12 @@ import re
 from pathlib import Path
 
 INFO = "info.json"
+DB = "corpus.db"
+
+
+def db_path(store):
+    """Die Datenbank des Stores – ein Name, nicht neunmal dasselbe Literal."""
+    return Path(store) / DB
 
 # Der feste Name bis einschließlich 4.1.0. Ein Store von damals trägt keinen
 # Eintrag in info.json – dort gilt weiter diese Datei, sonst stünde nach dem

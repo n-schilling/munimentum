@@ -129,8 +129,8 @@ def _people_rows(chunks):
 
 def write_db(store, chunks):
     """corpus.db atomisch neu schreiben (erst .tmp, dann ersetzen)."""
-    dbp = Path(store) / "corpus.db"
-    tmp = dbp.with_name("corpus.db.tmp")
+    dbp = store_layout.db_path(store)
+    tmp = dbp.with_name(dbp.name + ".tmp")
     tmp.unlink(missing_ok=True)
     con = sqlite3.connect(tmp)
     con.executescript("""
@@ -230,7 +230,7 @@ def _load_old_store(store):
     # Lesehandle auf die alte Datei wäre genau das, was das Aufräumen am Ende
     # des Laufs blockiert.
     V = np.load(vp) if vp else None
-    dbp = sp / "corpus.db"
+    dbp = store_layout.db_path(sp)
     if dbp.exists():
         con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
         hashes = [r[0] for r in con.execute("SELECT hash FROM chunks ORDER BY id")]

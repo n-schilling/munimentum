@@ -145,9 +145,7 @@ def data_dir():
     Zeiger dauerhaft (z. B. eine externe Platte – ein Postfach kann
     zweistellige Gigabyte haben).
     """
-    # MUNIMENTUM_DATA_DIR ist der Name seit 5.0.0; OFFICE365_DATA_DIR gilt
-    # weiter, damit vorhandene Skripte und Verknüpfungen nicht brechen.
-    env = os.environ.get("MUNIMENTUM_DATA_DIR") or os.environ.get("OFFICE365_DATA_DIR")
+    env = settings.data_dir_env()
     if env:
         return Path(env).expanduser().resolve()
     return lies_zeiger() or standard_data_dir()
@@ -831,7 +829,7 @@ def kennzahlen(cfg):
     Reiter aufgeht. Was nur Microsoft beantworten kann – ob etwas FEHLT – ist
     ein eigener Schritt mit eigenem Knopf.
     """
-    db = BASE / STORE_DIR / "corpus.db"
+    db = store_layout.db_path(BASE / STORE_DIR)
     # None heißt „weiß ich nicht“, 0 hieße „keine“. Ein Index aus einer
     # älteren Fassung kennt die Spalten nicht; „0 mit Anhang“ zu melden wäre
     # eine Behauptung statt einer Auskunft.
@@ -949,7 +947,7 @@ def ordner_groesse(pfad, ttl=GROESSE_TTL):
 def store_status(cfg):
     """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
     store = BASE / STORE_DIR
-    db = store / "corpus.db"
+    db = store_layout.db_path(store)
     info = store_layout.info(store)
     out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
            "features": [],
@@ -1226,7 +1224,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             # Hat der Export nichts Neues gebracht, indiziert dieser Schritt
             # denselben Bestand ein zweites Mal. "ziel" ist die Bedingung, unter
             # der das Auslassen sicher ist: nur wenn es schon einen Index gibt.
-            "nur_bei_neuem": True, "ziel": BASE / STORE_DIR / "corpus.db",
+            "nur_bei_neuem": True, "ziel": store_layout.db_path(BASE / STORE_DIR),
         })
     if calendar:
         # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
@@ -1597,7 +1595,7 @@ class McpProcess:
         if not cfg.get("mcp_enabled", True):
             self.error = {"k": "srv.mcp.disabled", "v": {}}
             return False, self.error
-        db = BASE / STORE_DIR / "corpus.db"
+        db = store_layout.db_path(BASE / STORE_DIR)
         if not db.exists():
             self.error = {"k": "srv.mcp.noindex", "v": {}}
             return False, self.error
@@ -1668,7 +1666,7 @@ class SearchBridge:
         """
         store = BASE / STORE_DIR
         out = []
-        for p in (store / "corpus.db", store_layout.vectors_path(store)):
+        for p in (store_layout.db_path(store), store_layout.vectors_path(store)):
             if p is None:
                 out.append(("-", None, None))
                 continue
@@ -1684,7 +1682,7 @@ class SearchBridge:
             stamp = self._store_stamp(cfg)
             if self.module is not None and stamp == self.stamp:
                 return self.module
-            db = BASE / STORE_DIR / "corpus.db"
+            db = store_layout.db_path(BASE / STORE_DIR)
             if not db.exists():
                 self.error = {"k": "srv.noindex", "v": {}}
                 self.module = None
