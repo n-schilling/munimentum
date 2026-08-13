@@ -18,32 +18,21 @@ body:
         What did you do, what did you expect, and what happened instead?
     validations:
       required: true
-  - type: input
-    id: version
+  - type: textarea
+    id: system
     attributes:
-      label: Version
-      description: Shown in Settings, at the bottom.
-      placeholder: "5.4.0"
-    validations:
-      required: true
-  - type: dropdown
-    id: os
-    attributes:
-      label: Operating system
-      options:
-        - macOS (Apple Silicon)
-        - macOS (Intel)
-        - Windows
-        - Linux
-    validations:
-      required: true
-  - type: dropdown
-    id: how
-    attributes:
-      label: Running as
-      options:
-        - Bundle from a release
-        - From source (python3 app.py)
+      label: System
+      description: >
+        The same block the app's report carries: version, operating system,
+        bundle or from source — and whatever else applies: Python version,
+        what the index holds, Ollama on or off, changed settings.
+        *Settings* shows most of it.
+      placeholder: |
+        Version: 5.4.0 (bundle)
+        OS: macOS 15 (Apple Silicon)
+        Index: 250k chunks, hybrid
+        Ollama: running, model loaded
+      render: text
     validations:
       required: true
   - type: textarea
