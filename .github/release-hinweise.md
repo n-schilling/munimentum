@@ -1,46 +1,27 @@
-## New in 5.3.0
+## New in 5.4.0
 
-**The header says what is actually on.** It used to read *Claude access off* —
-wrong twice over. MCP is a protocol, not one program; and what the app switches
-was only its own HTTP endpoint, while a client that launches the server itself
-kept full access. Three states now, and the transport is named only when it is
-the only thing missing: **MCP on**, **MCP HTTP off**, **MCP off**.
+A clean-up release: what had grown as separate scripts now shares one Graph
+client, one model-server client and one configuration schema. No new buttons —
+but the tidying surfaced and fixed real faults:
 
-**Moved mail is no longer counted as deleted.** *Deleted* showed messages that
-had merely been dragged into another folder — in one real archive, 16 of 19
-entries were wrong. Exchange gives a message a new id when it moves, so asking
-Microsoft about the old one answers "not found", and the export drew the wrong
-conclusion. It now compares the message id from the mail header instead, which
-survives a move and comes along with the folder listing at no extra cost.
+**An expired access key stops a OneDrive run cleanly.** It used to end in a
+generic error the app could not interpret; now the app notices and asks for a
+fresh key, exactly as it does for mail and Teams.
 
-**To make it take effect:** run one export with **Mail** ticked. That withdraws
-the wrong markers — the log says how many — and the index run that follows
-carries the correction into search. **Not needed:** a fresh export, a rebuild,
-deleting anything. Indexing alone will not do it; the markers are written during
-the export.
+**Appointments from other time zones carry the right time in search.** An
+invitation with a Windows time-zone name landed in the search index at local
+time; search results and the calendar view now agree.
 
-**The AI tile says on or off, and the settings say why.** It used to read *AI
-search ready* / *model missing* / *off* — three labels for one question, none of
-them saying what to do. It now reads **AI on** or **AI off**, with the reason in
-the tooltip; and clicking it goes to the settings, where the address, the
-embedding model and the answer model each carry a small indicator of their own:
-reachable, loaded, not loaded. That replaces a window which explained what was
-missing but let you change nothing. The section itself is now called **AI**
-rather than *Ollama* — Ollama is what runs the models today, not the only thing
-that could.
+**Building calendar and contacts is faster.** That step no longer reads the
+full text of every mail — only the invitations it is actually after.
 
-**One switch that really means off.** *Settings → MCP server → Allow MCP
-access*: with it off, the server refuses to serve — over the HTTP endpoint and
-over the subprocess route (stdio) that Claude Desktop uses, whether or not this
-app is running. It does not simply die: it answers with a single tool that
-explains it is switched off, so your client tells you in plain words instead of
-leaving a failed connection and a reason buried in a log file. No archive data
-is served either way; the index is not even opened.
+**Exports are steadier on a flaky network.** A dropped connection no longer
+uses up the retries reserved for Microsoft's throttling, and OneDrive now paces
+its requests the way the other exports do.
 
-The entry you pasted into your client stays valid and works again the moment you
-allow access; nothing needs reconfiguring. And it is a safeguard against
-accident, not an access barrier — anyone who reaches this machine can switch it
-back.
+Removed: the generator for the standalone HTML search page. The app has not
+offered that page since 5.2; the script behind it now produces only the
+calendar and contact data.
 
 ## Which file?
 
