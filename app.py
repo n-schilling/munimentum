@@ -57,6 +57,7 @@ import answer
 import auth
 import folders
 import i18n
+import ollama_client
 import progress
 import settings
 import store_layout
@@ -585,14 +586,9 @@ def write_token(token, path=None):
 
 
 # --------------------------------------------------------------------------
-# Ollama
+# Ollama (HTTP in ollama_client.py)
 # --------------------------------------------------------------------------
-def _hat_modell(namen, gesucht):
-    """"bge-m3" in der Liste heißt "bge-m3:latest" – ohne Tag vergleichen."""
-    if not gesucht:
-        return False
-    rumpf = gesucht.split(":", 1)[0]
-    return any(n == gesucht or n.split(":", 1)[0] == rumpf for n in namen)
+_hat_modell = ollama_client.hat_modell
 
 
 def check_ollama(url, model, chat_model=None, timeout=1.5):
@@ -607,10 +603,7 @@ def check_ollama(url, model, chat_model=None, timeout=1.5):
            "has_chat_model": False, "error": None,
            "model": model, "chat_model": chat_model, "url": url}
     try:
-        import requests
-        r = requests.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
-        r.raise_for_status()
-        names = [m.get("name", "") for m in (r.json().get("models") or [])]
+        names = ollama_client.tags(url, timeout=timeout)
     except Exception as e:
         out["error"] = f"{type(e).__name__}: {e}"
         return out

@@ -40,6 +40,7 @@ import numpy as np
 
 import corpus
 import export_util
+import ollama_client
 import progress
 import settings
 import store_layout
@@ -47,7 +48,7 @@ import store_layout
 export_util.erzwinge_utf8()
 
 DEFAULT_MODEL = "bge-m3"
-DEFAULT_OLLAMA = "http://localhost:11434"
+DEFAULT_OLLAMA = ollama_client.DEFAULT_URL
 FORMAT = 2                     # 2 = corpus.db + float16-Vektoren
 PPL_TOKEN_CAP = 60             # Personen-Tokens pro Person in der people-Tabelle
 STALE_VECTORS = "vectors_stale.npz"   # beiseitegelegte Embeddings, hash-indiziert
@@ -67,23 +68,22 @@ MIN_EMBED_ZEICHEN = 40
 
 
 def embed(texts, model, url, timeout=600):
+    """Ein Stapel Texte -> Vektoren; Fehler enden hier mit klarer Meldung.
+
+    Der HTTP-Teil liegt in ollama_client; dieses Skript übersetzt nur in
+    Abbrüche, denn mitten im Indexlauf ist niemand, der einen Traceback liest.
+    """
     import requests
     try:
-        r = requests.post(f"{url}/api/embed",
-                          json={"model": model, "input": texts}, timeout=timeout)
+        return ollama_client.embed(texts, model, url, timeout=timeout)
     except requests.exceptions.ConnectionError:
         raise SystemExit(f"Keine Verbindung zu Ollama unter {url}. "
                          f"Läuft 'ollama serve'?") from None
-    if r.status_code == 404:
-        raise SystemExit(f"Modell '{model}' nicht gefunden. Vorher: ollama pull {model}")
-    r.raise_for_status()
-    data = r.json()
-    embs = data.get("embeddings")
-    if embs is None and "embedding" in data:      # ältere Single-Form
-        embs = [data["embedding"]]
-    if not embs:
-        raise SystemExit(f"Unerwartete Embedding-Antwort: {str(data)[:200]}")
-    return embs
+    except ollama_client.ModellFehlt:
+        raise SystemExit(f"Modell '{model}' nicht gefunden. "
+                         f"Vorher: ollama pull {model}") from None
+    except RuntimeError as e:
+        raise SystemExit(str(e)) from None
 
 
 # --------------------------------------------------------------------------

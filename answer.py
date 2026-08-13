@@ -14,7 +14,7 @@ verweisen deshalb genau auf die Treffer, die daneben zu sehen sind.
 Alles läuft lokal: nichts geht an einen Dienst außerhalb des Rechners.
 """
 
-import json
+import ollama_client
 
 # Ollama liefert seine Antwort tokenweise. Bei einem 14B-Modell dauert ein
 # Absatz je nach Rechner 20 bis 60 Sekunden – ohne Streaming starrt man so
@@ -126,32 +126,20 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
 
     Am Ende steht entweder nichts mehr (fertig) oder ein Fehlerstück – der
     Aufrufer soll sich nicht mit Ausnahmen aus einem laufenden Datenstrom
-    herumschlagen müssen.
+    herumschlagen müssen. Das HTTP dazu liegt in ollama_client.
     """
-    import requests
     try:
         messages = build_messages(query, quellen, lang, chars)
-        r = requests.post(
-            f"{ollama.rstrip('/')}/api/chat",
-            json={"model": model, "stream": True, "think": THINK,
-                  "options": {"temperature": 0.2, "num_ctx": num_ctx(messages)},
-                  "messages": messages},
-            stream=True, timeout=timeout)
-        if r.status_code == 404:
-            yield {"error": "model", "detail": model}
-            return
-        r.raise_for_status()
-        for zeile in r.iter_lines(decode_unicode=False):
-            if not zeile:
-                continue
-            try:
-                daten = json.loads(zeile.decode("utf-8", "replace"))
-            except ValueError:
-                continue                      # Ollama schickt gelegentlich Leerzeilen
+        for daten in ollama_client.chat_stream(
+                messages, model, ollama, think=THINK,
+                options={"temperature": 0.2, "num_ctx": num_ctx(messages)},
+                timeout=timeout):
             stueck = (daten.get("message") or {}).get("content") or ""
             if stueck:
                 yield {"text": stueck}
             if daten.get("done"):
                 return
+    except ollama_client.ModellFehlt:
+        yield {"error": "model", "detail": model}
     except Exception as e:                    # noqa: BLE001 – nie den Aufrufer treffen
         yield {"error": "ollama", "detail": f"{type(e).__name__}: {e}"}

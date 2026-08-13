@@ -50,11 +50,12 @@ damit es später niemand für einen Fehler hält.
 **Ein zweiter Modellserver käme über die Schnittstelle, nicht über den Namen.**
 Also ein Feld *Art des Servers* mit `openai-kompatibel`, das LM Studio,
 `llama-server`, Jan, LocalAI und vLLM auf einmal öffnet — Ollama spricht diese
-API unter `/v1/` ebenfalls. Betroffen sind drei Aufrufe (`/api/embed` in
-`rag_index.py` und `mcp_server.py`, `/api/chat` in `answer.py`). Nur `/api/tags`
-lässt sich nicht übersetzen: Die Hilfe beim Nachladen eines fehlenden Modells
-bliebe Ollama vorbehalten. Der Einstellungsabschnitt heißt seit 5.3.0 **KI**,
-damit der Schalter darin später eine Auswahl werden kann.
+API unter `/v1/` ebenfalls. Alle Aufrufe liegen inzwischen gebündelt in
+`ollama_client.py`; ein zweiter Servertyp lernt seine API an genau einer
+Stelle. Nur `/api/tags` lässt sich nicht übersetzen: Die Hilfe beim Nachladen
+eines fehlenden Modells bliebe Ollama vorbehalten. Der Einstellungsabschnitt
+heißt seit 5.3.0 **KI**, damit der Schalter darin später eine Auswahl werden
+kann.
 
 **MLX lohnt nicht** — gemessen, nicht vermutet: Einbetten 0,66× (also langsamer
 als Ollama), Chat 1,1× bei freier Generierung und ±0 bei langem Kontext, dem

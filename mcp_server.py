@@ -76,6 +76,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 import export_util
+import ollama_client
 import settings
 import store_layout
 import version
@@ -384,14 +385,9 @@ def _lexical_rank(con, query, where, params, limit):
 # Semantic backend: mmap'd float16 matrix, block-wise cosine scoring
 # --------------------------------------------------------------------------
 def _embed_query(text):
-    import requests
     np = STATE["np"]
-    r = requests.post(f"{STATE['ollama']}/api/embed",
-                      json={"model": STATE["embed_model"], "input": [text]},
-                      timeout=120)
-    r.raise_for_status()
-    data = r.json()
-    vec = (data.get("embeddings") or [data.get("embedding")])[0]
+    vec = ollama_client.embed([text], STATE["embed_model"], STATE["ollama"],
+                              timeout=120)[0]
     v = np.asarray(vec, dtype="float32")
     nrm = np.linalg.norm(v)
     return v / nrm if nrm else v
@@ -1173,7 +1169,7 @@ def main():
     ap.add_argument("--teams", help=argparse.SUPPRESS)
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model", "bge-m3"))
-    ap.add_argument("--ollama", default=settings.value("ollama", "http://localhost:11434"))
+    ap.add_argument("--ollama", default=settings.value("ollama", ollama_client.DEFAULT_URL))
     # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
     # Server pro Anfrage neu und läuft jedes Mal in denselben Fehler.
     ap.add_argument("--no-ollama", action="store_true",
