@@ -86,10 +86,9 @@ SCOPES_FULL = SCOPES_CHAT + [
 ]
 
 # Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
-EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images", True)
-WORKERS = 4                 # parallele Konversationen (sinnvoll: 4; per Env EXPORT_WORKERS)
+EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images")
 PAGE = 50                   # $top (Graph-Maximum für Nachrichten)
-OUT_ROOT = settings.value("teams_dir", "teams_export")  # fest -> Resume über Läufe hinweg
+OUT_ROOT = settings.value("teams_dir", settings.TEAMS_DIR)  # fest -> Resume über Läufe hinweg
 STATE_FILE = "export_state.json"
 
 # Inkrementelle Läufe (z. B. per Scheduler): Chats werden bei neuen Nachrichten
@@ -97,18 +96,18 @@ STATE_FILE = "export_state.json"
 # bieten keinen günstigen Änderungs-Indikator (neue Antworten in alten Threads),
 # daher werden gewählte Kanäle pro Lauf neu geholt und nur bei Änderung neu
 # geschrieben. Mit REFRESH_CHANNELS=0 abschaltbar (Kanäle dann nur einmalig).
-REFRESH_CHANNELS = settings.flag("REFRESH_CHANNELS", "refresh_channels", True)
+REFRESH_CHANNELS = settings.flag("REFRESH_CHANNELS", "refresh_channels")
 
 # Heruntergeladene Inline-Bilder zwischenspeichern (Ordner .imgcache). Bei erneutem
 # Export eines Chats werden so nur NEUE Bilder geladen statt aller. Kostet zusätzlichen
 # Plattenplatz (Bilder liegen dann doppelt: im Cache und eingebettet im HTML).
 # Mit CACHE_IMAGES=0 abschaltbar.
-CACHE_IMAGES = settings.flag("CACHE_IMAGES", "cache_images", True)
+CACHE_IMAGES = settings.flag("CACHE_IMAGES", "cache_images")
 
 # Chats, die NUR System-/Event-Nachrichten enthalten (Beitritte, Anrufe, Mitglieder-
 # Änderungen, …) und keine echte Nachricht, werden standardmäßig NICHT exportiert
 # und nicht in den Index aufgenommen. Mit SKIP_EMPTY_CHATS=0 doch exportieren.
-SKIP_EMPTY_CHATS = settings.flag("SKIP_EMPTY_CHATS", "skip_empty_chats", True)
+SKIP_EMPTY_CHATS = settings.flag("SKIP_EMPTY_CHATS", "skip_empty_chats")
 
 TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",
@@ -817,7 +816,7 @@ def main():
     if argv:
         OUT_ROOT = argv[0]
 
-    workers = settings.number("EXPORT_WORKERS", "workers", WORKERS)
+    workers = settings.number("EXPORT_WORKERS", "workers")
     print(f"Ausgabeordner: {OUT_ROOT}")
     hinweis = settings.report()
     if hinweis:

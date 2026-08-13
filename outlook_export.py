@@ -80,10 +80,9 @@ GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
 # Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
-INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden", False)
-WORKERS = 4                 # parallele Downloads; Exchange-Limit pro Postfach = 4
+INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden")
 PAGE = 50                   # $top für Listenabfragen
-OUT_ROOT = settings.value("outlook_dir", "outlook_export")  # fest -> Resume über Läufe
+OUT_ROOT = settings.value("outlook_dir", settings.OUTLOOK_DIR)  # fest -> Resume über Läufe
 DONE_FILE = "exported.tsv"
 MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu kalender/kontakte)
 KALENDER_DIR = "kalender"    # ein Unterordner je Kalender, darin die .ics
@@ -100,7 +99,7 @@ BUILTIN_SKIP_FOLDERS = {
 }
 
 
-DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders", BUILTIN_SKIP_FOLDERS)
+DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders")
 
 # Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
 # diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
@@ -1226,7 +1225,7 @@ def main():
     if argv:
         OUT_ROOT = argv[0]
 
-    workers = settings.number("EXPORT_WORKERS", "workers", WORKERS)
+    workers = settings.number("EXPORT_WORKERS", "workers")
     print(f"Ausgabeordner: {OUT_ROOT}")
     hinweis = settings.report()
     if hinweis:

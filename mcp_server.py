@@ -199,7 +199,7 @@ def _sem_min():
     """
     roh = os.environ.get("SEMANTIC_MIN")
     if roh is None:
-        roh = settings.value("semantic_min", 45)
+        roh = settings.value("semantic_min")
     try:
         wert = float(roh)
     except (TypeError, ValueError):
@@ -1168,8 +1168,8 @@ def main():
     ap.add_argument("--store", help=argparse.SUPPRESS)
     ap.add_argument("--teams", help=argparse.SUPPRESS)
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
-    ap.add_argument("--embed-model", default=settings.value("embed_model", "bge-m3"))
-    ap.add_argument("--ollama", default=settings.value("ollama", ollama_client.DEFAULT_URL))
+    ap.add_argument("--embed-model", default=settings.value("embed_model"))
+    ap.add_argument("--ollama", default=settings.value("ollama"))
     # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
     # Server pro Anfrage neu und läuft jedes Mal in denselben Fehler.
     ap.add_argument("--no-ollama", action="store_true",
@@ -1181,7 +1181,7 @@ def main():
     ap.add_argument("--host", default="127.0.0.1",
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
-    ap.add_argument("--port", type=int, default=settings.value("mcp_port", 8365))
+    ap.add_argument("--port", type=int, default=settings.value("mcp_port"))
     # Für den Aufruf von Hand: wer das Programm selbst startet, hat den
     # Schalter nicht vor sich und soll nicht rätseln müssen, warum nichts geht.
     ap.add_argument("--force", action="store_true",
@@ -1194,9 +1194,9 @@ def main():
     # --store/--teams/--outlook gab es bis 5.0.0 einzeln; wer sie in einer alten
     # Claude-Konfiguration stehen hat, soll nicht ins Leere laufen.
     basis = Path(a.data_dir).expanduser() if a.data_dir else Path(".")
-    a.store = a.store or str(basis / "rag_store")
-    a.teams = a.teams or str(basis / "teams_export")
-    a.outlook = a.outlook or str(basis / "outlook_export")
+    a.store = a.store or str(basis / settings.STORE_DIR)
+    a.teams = a.teams or str(basis / settings.TEAMS_DIR)
+    a.outlook = a.outlook or str(basis / settings.OUTLOOK_DIR)
     note = settings.report()
     if note:
         print(note, file=sys.stderr)
@@ -1214,7 +1214,7 @@ def main():
     # gibt – die liest das Sprachmodell und sagt sie dem Menschen im Klartext.
     # Ausgeliefert wird dabei nichts: kein Werkzeug, das Daten liest, und der
     # Index wird nicht einmal geöffnet.
-    if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled", True):
+    if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled"):
         print(AUS_TEXT, file=sys.stderr)
         server = _abgeschaltet_server()
         if a.transport == "http":

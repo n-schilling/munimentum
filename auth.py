@@ -61,19 +61,19 @@ def modus():
     auf den ein Tippfehler zurückfallen soll.
     """
     roh = (os.environ.get("GRAPH_AUTH")
-           or settings.value("auth_mode", "token") or "token")
+           or settings.value("auth_mode") or "token")
     roh = str(roh).strip().lower()
     return "login" if roh == "login" else "token"
 
 
 def client_id():
     return (os.environ.get("GRAPH_CLIENT_ID")
-            or settings.value("client_id", "") or STANDARD_CLIENT_ID)
+            or settings.value("client_id") or STANDARD_CLIENT_ID)
 
 
 def tenant():
     return (os.environ.get("GRAPH_TENANT")
-            or settings.value("tenant", "") or STANDARD_TENANT)
+            or settings.value("tenant") or STANDARD_TENANT)
 
 
 def authority():
@@ -87,7 +87,7 @@ def eigene_registrierung():
 
 def device_code():
     """Code-Login statt Browser – für Rechner ohne Anzeige."""
-    return settings.flag("GRAPH_DEVICE_CODE", "device_code", False)
+    return settings.flag("GRAPH_DEVICE_CODE", "device_code")
 
 
 # --------------------------------------------------------------------------

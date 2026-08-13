@@ -47,8 +47,9 @@ import store_layout
 
 export_util.erzwinge_utf8()
 
-DEFAULT_MODEL = "bge-m3"
-DEFAULT_OLLAMA = ollama_client.DEFAULT_URL
+# Aus dem Schema, nicht noch einmal hier: die Tests vergleichen dagegen.
+DEFAULT_MODEL = settings.VORGABEN["embed_model"]
+DEFAULT_OLLAMA = settings.VORGABEN["ollama"]
 FORMAT = 2                     # 2 = corpus.db + float16-Vektoren
 PPL_TOKEN_CAP = 60             # Personen-Tokens pro Person in der people-Tabelle
 STALE_VECTORS = "vectors_stale.npz"   # beiseitegelegte Embeddings, hash-indiziert
@@ -394,14 +395,14 @@ def main():
     ap = argparse.ArgumentParser()
     # Vorgaben aus app_config.json, sofern vorhanden – die Kommandozeile sticht
     # sie aus (siehe settings.py).
-    ap.add_argument("teams", nargs="?", default=settings.value("teams_dir", "teams_export"))
-    ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", "outlook_export"))
+    ap.add_argument("teams", nargs="?", default=settings.value("teams_dir", settings.TEAMS_DIR))
+    ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", settings.OUTLOOK_DIR))
     ap.add_argument("onedrive", nargs="?",
-                    default=settings.value("onedrive_dir", "onedrive_export"))
-    ap.add_argument("--store", default=settings.value("store_dir", "rag_store"))
-    ap.add_argument("--model", default=settings.value("embed_model", DEFAULT_MODEL))
-    ap.add_argument("--ollama", default=settings.value("ollama", DEFAULT_OLLAMA))
-    ap.add_argument("--batch", type=int, default=settings.value("index_batch", 128))
+                    default=settings.value("onedrive_dir", settings.ONEDRIVE_DIR))
+    ap.add_argument("--store", default=settings.value("store_dir", settings.STORE_DIR))
+    ap.add_argument("--model", default=settings.value("embed_model"))
+    ap.add_argument("--ollama", default=settings.value("ollama"))
+    ap.add_argument("--batch", type=int, default=settings.value("index_batch"))
     ap.add_argument("--no-embeddings", action="store_true",
                     help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
                          "Suche und MCP laufen dann rein lexikalisch.")

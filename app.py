@@ -208,123 +208,16 @@ def schreibe_zeiger(pfad):
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
 OLLAMA_SITE = "https://ollama.com/download"
 
-# Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
-# Bewusst hier gespiegelt statt outlook_export zu importieren: das Modul bricht
-# beim Import ohne msal/requests ab, und die App soll auch dann eine Oberfläche
-# zeigen. Ein Test hält beide Listen zusammen (test_app: gespiegelte_liste).
-SKIP_FOLDERS_DEFAULT = {
-    "archive", "archiv",
-    "entwürfe", "drafts",
-    "erneut erinnern aktiviert",
-    "gelöschte elemente", "deleted items",
-    "junk-e-mail", "junk email", "junk-email",
-    "postausgang", "outbox",
-}
-
-# Was eine Anhangliste aufbläht, ohne dass jemand danach sucht: die Signatur-
-# und Verschlüsselungsanhänge, die Mailprogramme selbst anhängen. Sie stehen als
-# Vorgabe im Feld und sind dort zu sehen und zu ändern – eine stille Regel im
-# Code wäre genau das, was man später nicht mehr findet.
-FILETYPE_HIDDEN_DEFAULT = {"p7s", "p7m", "asc", "pgp", "sig"}
-
-# Die vier Unterordner im Datenordner. Früher waren sie einstellbar – ein Erbe
-# aus der Zeit, als das hier lose Skripte waren, die jemand von Hand in einem
-# beliebigen Verzeichnis aufrief. Die App ruft sie längst selbst auf, und drei
-# Textfelder in den Einstellungen, die niemand anfasst, sind keine Freiheit,
-# sondern Ballast: sie müssen erklärt, gespeichert, an jeden Unterprozess
-# weitergereicht und in jede MCP-Konfiguration geschrieben werden.
-TEAMS_DIR = "teams_export"
-OUTLOOK_DIR = "outlook_export"
-ONEDRIVE_DIR = "onedrive_export"
-STORE_DIR = "rag_store"
-
-DEFAULT_CONFIG = {
-    # Ollama ist optional. Aus heißt: es wird gar nicht mehr danach gesucht
-    # (bisher lief alle zehn Sekunden ein Verbindungsversuch ins Leere), die
-    # Bedeutungssuche und die KI-Zusammenfassung verschwinden, und der Index
-    # wird als reiner Volltextindex gebaut. Alles andere läuft unverändert.
-    "ollama_enabled": True,
-    # Auch mit Ollama kann man den Volltextindex wollen: Einbetten kostet auf
-    # einem echten Bestand eine gute Stunde, und wer nur exakt sucht, zahlt sie
-    # umsonst.
-    "index_semantic": True,
-    # Aus, bis jemand es einschaltet: ein Laufwerk kann zweistellige
-    # Gigabyte haben, und niemand soll die beim ersten Klick ziehen.
-    "onedrive_enabled": False,
-    # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
-    "onedrive_rules": "",
-    "onedrive_max_mb": 0,
-    # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
-    # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
-    # sein und nicht das, was beim ersten Start zufällig angehakt war.
-    "outlook_categories": [],
-    "teams_categories": [],
-    "workers": 4,
-    # Schalter der Export-Skripte (dort per Umgebungsvariable, siehe env_flag)
-    "embed_images": True,
-    "cache_images": True,
-    "refresh_channels": True,
-    "skip_empty_chats": True,
-    "include_hidden": False,
-    # Holt gelöschte Termine aus Einladungs- und Absagemails zurück. Dafür wird
-    # jede .eml gelesen – der mit Abstand teuerste Schritt. Standardmäßig an,
-    # weil es Termine sichtbar macht, die es sonst nirgends mehr gibt.
-    "calendar_reconstruct": True,
-    "skip_folders": sorted(SKIP_FOLDERS_DEFAULT),
-    # Dateitypen, die im Suchfilter nicht angeboten werden. Rein kosmetisch:
-    # exportiert und durchsuchbar bleibt alles, es steht nur nicht in der
-    # Auswahlliste. Als sichtbare Vorgabe statt als Regel im Code.
-    "filetype_hidden": sorted(FILETYPE_HIDDEN_DEFAULT),
-    # Personen, die in der Auswertung nicht gezählt werden – in aller Regel man
-    # selbst: die eigenen Nachrichten stehen sonst mit Abstand oben und sagen
-    # nichts über den Austausch mit anderen. Eine je Zeile, weil Namen Kommas
-    # enthalten („Schilling, Nico“).
-    "analytics_skip": [],
-    # Ordnerauswahl als geordnete Regeln, letzte Übereinstimmung gewinnt.
-    # Leer heißt: die alte Namensliste oben gilt weiter (siehe folders.py).
-    "folder_rules": "",
-    # Kalenderauswahl, dieselbe Mechanik wie oben. Leer heißt: nur der
-    # Standardkalender (siehe folders.nur_standard).
-    "calendar_rules": "",
-    # 128 an einem echten Archiv gemessen: rund ein Fuenftel schneller
-    # als 64, und auch die laengsten Chunks gehen noch durch. 256 lehnt
-    # Ollama ab.
-    "index_batch": 128,
-    "ollama": "http://localhost:11434",
-    "embed_model": "bge-m3",
-    "chat_model": "qwen3.6:27b",            # formuliert die Antwort, lokal
-    "answer_sources": 8,                    # wie viele Treffer sie dafür liest
-    # Untergrenze der Bedeutungssuche; siehe mcp_server.SEM_MIN. Als Ganzzahl
-    # in Prozent, damit die Oberfläche ein normales Zahlenfeld benutzen kann
-    # und niemand über ein Komma stolpert.
-    "semantic_min": 45,
-    # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
-    # eine längere Liste, durch die man erst einmal hindurchsehen muss.
-    "search_results": 20,
-    "mcp_port": 8365,
-    # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
-    # über HTTP wie über stdio. Start/Stop daneben betrifft nur den
-    # HTTP-Endpunkt, den diese App selbst betreibt.
-    "mcp_enabled": True,
-    "mcp_autostart": True,
-    "update_check": True,   # einmal beim Start bei GitHub nachsehen
-    # Wie sich die App anmeldet. "token" = eingefügter Zugangsschlüssel (keine
-    # Rückfrage bei der IT nötig, gilt aber nur Stunden); "login" = richtige
-    # Anmeldung mit Refresh Token, damit der Zeitplan unbeaufsichtigt läuft.
-    "auth_mode": "token",
-    "client_id": "",        # leer = Microsofts öffentliche Anwendung
-    "tenant": "",           # leer = organizations
-    "device_code": False,   # Skripte im Terminal: Code statt Browserfenster
-    "language": "auto",   # "auto" = Browsersprache, sonst ein Code aus lang/
-    "schedule": {
-        "enabled": False,
-        "interval_minutes": 60,
-        "outlook": True,
-        "teams": True,
-        "index": True,
-        "calendar": True,
-    },
-}
+# Schema und Vorgaben von app_config.json liegen in settings.py – dieselbe
+# Quelle, aus der die Einzelskripte ihre Werte holen. Bis 5.3 stand hier eine
+# zweite Fassung, und nichts hielt die beiden zusammen.
+SKIP_FOLDERS_DEFAULT = settings.SKIP_FOLDERS_STANDARD
+FILETYPE_HIDDEN_DEFAULT = settings.FILETYPE_HIDDEN_STANDARD
+TEAMS_DIR = settings.TEAMS_DIR
+OUTLOOK_DIR = settings.OUTLOOK_DIR
+ONEDRIVE_DIR = settings.ONEDRIVE_DIR
+STORE_DIR = settings.STORE_DIR
+DEFAULT_CONFIG = settings.VORGABEN
 
 # Kategorie -> Graph-Berechtigung. Der Assistent prüft damit, ob der eingefügte
 # Token für das reicht, was ausgewählt ist (scp-Claim im JWT).

@@ -280,3 +280,40 @@ def test_neuer_name_sticht_den_alten(tmp_path, monkeypatch):
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(neu))
     settings.reset()
     assert settings.value("workers", 4) == 9
+
+
+# --------------------------------------------------------------------------
+# Das Schema (VORGABEN): eine Quelle für App und Skripte
+# --------------------------------------------------------------------------
+def test_vorgaben_gelten_ohne_eigenen_default(tmp_path, monkeypatch):
+    """Ohne dritten Parameter kommt die Vorgabe aus dem Schema – die
+    Aufrufstellen tragen keine eigene Kopie mehr."""
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
+    settings.reset()
+    try:
+        assert settings.flag("EMBED_IMAGES", "embed_images") is True
+        assert settings.number("EXPORT_WORKERS", "workers") == 4
+        assert settings.value("embed_model") == settings.VORGABEN["embed_model"]
+        assert settings.folders("SKIP_FOLDERS", "skip_folders") == \
+            set(settings.VORGABEN["skip_folders"])
+    finally:
+        settings.reset()
+
+
+def test_ausdrueckliches_none_bleibt_none(tmp_path, monkeypatch):
+    """value(key, None) heißt „nicht gesetzt erkennen" – die Regel-Schlüssel
+    unterscheiden darüber Datei-Fallback von leerer Regel."""
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
+    settings.reset()
+    try:
+        assert settings.value("folder_rules", None) is None
+        assert settings.value("folder_rules") == ""     # Schema-Vorgabe
+    finally:
+        settings.reset()
+
+
+def test_unbekannter_schluessel_ohne_default_schlaegt_fehl():
+    """Ein Tippfehler im Schlüssel soll laut scheitern, nicht still None liefern."""
+    import pytest
+    with pytest.raises(KeyError):
+        settings.value("gibt_es_nicht")

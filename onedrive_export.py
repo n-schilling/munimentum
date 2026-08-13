@@ -69,7 +69,7 @@ GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Files.Read.All", RES + "User.Read"]
 
-OUT_ROOT = settings.value("onedrive_dir", "onedrive_export")
+OUT_ROOT = settings.value("onedrive_dir", settings.ONEDRIVE_DIR)
 DATEI_DIR = "Dateien"           # Wurzel im Ausgabeordner; die Regeln greifen darauf
 BESTAND_DATEI = "dateien.tsv"
 DELTA_DATEI = "delta.txt"
@@ -85,7 +85,7 @@ def workers():
     """Parallele Downloads. settings.number liest Umgebung > Datei > Vorgabe –
     settings.value täte das NICHT, und ein Schalter, der still nichts tut, ist
     schlimmer als keiner."""
-    return max(1, min(settings.number("EXPORT_WORKERS", "workers", 4), 8))
+    return max(1, min(settings.number("EXPORT_WORKERS", "workers"), 8))
 
 
 def max_bytes():
@@ -96,7 +96,7 @@ def max_bytes():
     ausgeschalteten Grenze wurde eine von einem Megabyte, und der Spiegel ließ
     still jede größere Datei liegen.
     """
-    return max(0, settings.number("ONEDRIVE_MAX_MB", "onedrive_max_mb", 0,
+    return max(0, settings.number("ONEDRIVE_MAX_MB", "onedrive_max_mb",
                                   low=0)) * 1024 * 1024
 
 

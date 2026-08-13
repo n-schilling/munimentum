@@ -462,7 +462,7 @@ def main():
     kalender_json = None
     # Vorgabe aus app_config.json, damit der Einzelaufruf dieselbe Einstellung
     # trägt wie die App. --no-reconstruct schlägt sie auf der Zeile.
-    reconstruct = settings.flag("CALENDAR_RECONSTRUCT", "calendar_reconstruct", True)
+    reconstruct = settings.flag("CALENDAR_RECONSTRUCT", "calendar_reconstruct")
     pos = []
     i = 0
     while i < len(args):
@@ -477,7 +477,7 @@ def main():
             i += 1
     # Das letzte freie Argument ist der Outlook-Export: bis 5.3 kam davor noch
     # der Teams-Ordner (für die HTML-Seite) – alte Aufrufe laufen so weiter.
-    outlook_dir = pos[-1] if pos else settings.value("outlook_dir", "outlook_export")
+    outlook_dir = pos[-1] if pos else settings.value("outlook_dir", settings.OUTLOOK_DIR)
     hinweis = settings.report()
     if hinweis:
         print(hinweis)
