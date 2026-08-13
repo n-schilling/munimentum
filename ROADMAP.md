@@ -8,8 +8,8 @@ nicht hier, sondern im Code.
 
 Heute stehen **Namen** im Index: der Dateityp-Filter findet die Mails mit einem
 PDF, `Vertrag_Musterkunde.pdf` die eine, und seit dem OneDrive-Spiegel gilt
-dasselbe für die Dateien auf dem Laufwerk. Was fehlt, ist der **Inhalt** — ein Vertrag
-liegt im Archiv, sein Text ist unsichtbar.
+dasselbe für die Dateien auf dem Laufwerk. Was fehlt, ist der **Inhalt** — ein
+Vertrag liegt im Archiv, sein Text ist unsichtbar.
 
 Das betrifft beide Quellen gemeinsam und wird deshalb ein Schritt: Anhänge aus
 den `.eml` und gespiegelte OneDrive-Dateien laufen durch dieselbe Extraktion.
@@ -29,37 +29,10 @@ Drei Dinge sind daran entschieden:
 
 Offen ist die Werkzeugfrage: [markitdown](https://github.com/microsoft/markitdown)
 nimmt einem die Vollständigkeit ab (Tabellen, Notizen, Kopfzeilen), zieht aber
-einen Abhängigkeitsbaum nach, der das Bündel von 23 auf geschätzt 65 MB bringen
-würde. Die schlanke Alternative aus einzelnen Bibliotheken ist ein Viertel so
-groß, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
+einen Abhängigkeitsbaum nach, der das Bündel von 27 MB auf ein Vielfaches
+brächte. Die schlanke Alternative aus einzelnen Bibliotheken ist deutlich
+kleiner, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
 einem echten Bündel, nicht am Schreibtisch.
-
-## Ein zweiter Modellserver neben Ollama
-
-Ollama ist heute die einzige Art, an Sprachmodelle zu kommen. Das ist keine
-Festlegung, sondern der Stand: Der Abschnitt in den Einstellungen heißt seit
-5.3.0 **KI** und nicht mehr *Ollama*, damit der Schalter darin später eine
-Auswahl werden kann, ohne dass die Überschrift wieder wandert.
-
-Entschieden ist die Richtung: **nicht „Ollama oder X"**, sondern die
-Schnittstelle. LM Studio, `llama-server`, Jan, LocalAI und vLLM sprechen alle
-die OpenAI-kompatible API — und Ollama tut es unter `/v1/` ebenfalls. Ein
-Adapter auf `POST /v1/embeddings` und `POST /v1/chat/completions` öffnet damit
-alle auf einmal, statt neben Ollama eine zweite Sonderbehandlung zu bauen. In
-den Einstellungen wäre das ein Feld *Art des Servers*: `ollama` (heutiges
-Verhalten) oder `openai-kompatibel` (Adresse und optionaler Schlüssel).
-
-Berührt sind genau drei Stellen — `/api/embed` in `rag_index.py` und
-`mcp_server.py`, `/api/chat` in `answer.py`. Die vierte ist die, die sich nicht
-übersetzen lässt: `/api/tags` beantwortet „ist dieses Modell hier geladen?“,
-und OpenAI-seitig gibt es dafür nur `/v1/models`, das auflistet, was der Server
-anbietet. Für die Statusanzeige neben den Feldern reicht das; die Hilfe beim
-Nachladen eines fehlenden Modells (`ollama pull`) bliebe Ollama vorbehalten und
-müsste dort ausgeblendet werden, statt ins Leere zu zeigen.
-
-Nur auf Apple Silicon wäre MLX deutlich schneller. Es steht hier trotzdem nicht
-als eigener Punkt: ein Weg, den es auf zwei von drei Plattformen nicht gibt,
-kostet mehr an Erklärung, als er an Geschwindigkeit bringt.
 
 ## Kleineres
 
@@ -76,3 +49,24 @@ kostet mehr an Erklärung, als er an Geschwindigkeit bringt.
 aktuelle Fassung; in OneDrive Gelöschtes bleibt liegen und bekommt einen
 Vermerk. Frühere Fassungen einer geänderten Datei sind weg — das steht hier,
 damit es später niemand für einen Fehler hält.
+
+**Ein zweiter Modellserver käme über die Schnittstelle, nicht über den Namen.**
+Also ein Feld *Art des Servers* mit `openai-kompatibel`, das LM Studio,
+`llama-server`, Jan, LocalAI und vLLM auf einmal öffnet — Ollama spricht diese
+API unter `/v1/` ebenfalls. Betroffen sind drei Aufrufe (`/api/embed` in
+`rag_index.py` und `mcp_server.py`, `/api/chat` in `answer.py`). Nur `/api/tags`
+lässt sich nicht übersetzen: Die Hilfe beim Nachladen eines fehlenden Modells
+bliebe Ollama vorbehalten. Der Einstellungsabschnitt heißt seit 5.3.0 **KI**,
+damit der Schalter darin später eine Auswahl werden kann.
+
+**MLX lohnt nicht** — gemessen, nicht vermutet: Einbetten 0,66× (also langsamer
+als Ollama), Chat 1,1× bei freier Generierung und ±0 bei langem Kontext, dem
+Muster der KI-Antwort. `mlx_lm.server` hat gar keinen Embeddings-Endpunkt;
+eingebettet stünden 408 MB Abhängigkeiten gegen ein 27-MB-Bündel, dazu ein
+selbstgebautes Modellmanagement.
+
+**Beim Einbetten ist nichts mehr zu holen.** Mehr Parallelität, kleinerer
+Kontext, Stapel über 128, eine kleinere Quantisierung von bge-m3: gemessen und
+ohne Gewinn oder von Ollama abgelehnt. Was ging, ist drin — kurze Chunks ohne
+Vektor, Stapel nach Länge, 128 als Vorgabe. Der Boden ist das Modell selbst; ein
+kleineres wäre doppelt so schnell und schlechter im Deutschen.
