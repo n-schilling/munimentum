@@ -11,9 +11,14 @@ had merely been dragged into another folder — in one real archive, 16 of 19
 entries were wrong. Exchange gives a message a new id when it moves, so asking
 Microsoft about the old one answers "not found", and the export drew the wrong
 conclusion. It now compares the message id from the mail header instead, which
-survives a move and comes along with the folder listing at no extra cost. Old
-entries repair themselves: anything that turns up in the mailbox again has its
-marker withdrawn on the next export.
+survives a move and comes along with the folder listing at no extra cost.
+
+Old entries repair themselves, but not by themselves: *run one export with
+**Mail** ticked*. That withdraws the wrong markers — the log says how many — and
+the index run that follows carries the correction into search and analytics.
+Indexing alone does not do it; the markers are written during the export. A run
+in which a folder could not be listed completely skips the check entirely, on
+purpose: better no statement than a wrong one.
 
 **macOS no longer asks about the local network.** On first launch, macOS 15
 asked whether Munimentum may look for devices on local networks — a question
@@ -44,6 +49,11 @@ The entry you pasted into your client stays valid and works again the moment you
 allow access; nothing needs reconfiguring. And it is a safeguard against
 accident, not an access barrier — anyone who reaches this machine can switch it
 back.
+
+*After updating, run one export with **Mail** ticked.* That is what withdraws
+the wrong *Deleted* markers, and the index run that follows carries the
+correction into search and analytics. Since 5.2.0 nothing is preselected, so
+tick what you want first.
 
 ## New in 5.2.0
 
