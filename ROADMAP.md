@@ -4,29 +4,6 @@ Kurze Liste — was ansteht und was bewusst fehlt, damit später niemand rätsel
 ob etwas vergessen wurde oder gewollt draußen ist. Wie es gebaut wird, steht
 nicht hier, sondern im Code.
 
-## Verschobene Mails gelten als gelöscht
-
-Der Filter *Gelöschtes* zeigt heute auch Mails, die nur in einen anderen Ordner
-gewandert sind — und zwar den überwiegenden Teil. Die Absicht war eine andere:
-Was aus dem Postfach verschwunden scheint, wird bei Microsoft nachgefragt, und
-nur ein 404 zählt als Löschung. Der Haken liegt darunter: Exchange vergibt beim
-**Verschieben eine neue Nachrichten-ID**. Unter der gespeicherten ist die Mail
-danach nicht mehr auffindbar, die Rückfrage antwortet 404, und die Prüfung
-kommt zum falschen Schluss.
-
-Die Lösung ist vorgesehen: Graph liefert auf `Prefer: IdType="ImmutableId"`
-Kennungen, die ein Verschieben überstehen. Sie anzufordern ist eine Zeile — der
-Umbau steckt woanders:
-
-* **Die bereits gespeicherten Schlüssel sind von der alten Sorte.** `exported.tsv`
-  führt eine Zeile je fertiger Mail; nach der Umstellung passt keine davon mehr,
-  und ein Lauf ohne Übergang lüde das ganze Postfach erneut herunter.
-* **Die bisherigen Löschvermerke sind unzuverlässig.** Sie müssten einmal neu
-  geprüft werden, statt als Wahrheit stehenzubleiben.
-
-Bis dahin sagt das (i) am Filter, was er wirklich zeigt — eine falsche Zahl
-kommentarlos anzuzeigen wäre schlechter als eine erklärte.
-
 ## Als Nächstes: Inhalte durchsuchen
 
 Heute stehen **Namen** im Index: der Dateityp-Filter findet die Mails mit einem

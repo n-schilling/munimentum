@@ -6,6 +6,15 @@ was only its own HTTP endpoint, while a client that launches the server itself
 kept full access. Three states now, and the transport is named only when it is
 the only thing missing: **MCP on**, **MCP HTTP off**, **MCP off**.
 
+**Moved mail is no longer counted as deleted.** *Deleted* showed messages that
+had merely been dragged into another folder — in one real archive, 16 of 19
+entries were wrong. Exchange gives a message a new id when it moves, so asking
+Microsoft about the old one answers "not found", and the export drew the wrong
+conclusion. It now compares the message id from the mail header instead, which
+survives a move and comes along with the folder listing at no extra cost. Old
+entries repair themselves: anything that turns up in the mailbox again has its
+marker withdrawn on the next export.
+
 **macOS no longer asks about the local network.** On first launch, macOS 15
 asked whether Munimentum may look for devices on local networks — a question
 this app has no business raising: it listens on 127.0.0.1 and otherwise talks

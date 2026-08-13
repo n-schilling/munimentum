@@ -1427,3 +1427,109 @@ def test_nur_standard_faellt_auf_den_ersten_zurueck():
     e = [{"pfad": "kalender/B"}, {"pfad": "kalender/A"}]
     assert folders.nur_standard(e) == [(False, "**"), (True, "kalender/B")]
     assert folders.nur_standard([]) == [(False, "**")]
+
+
+# --------------------------------------------------------------------------
+# Verschoben ist nicht gelöscht
+#
+# Gemeldet und nachgemessen: In einem echten Archiv waren 16 von 19 Vermerken
+# falsch. Exchange vergibt beim Verschieben eine neue Nachrichten-ID; die
+# Rückfrage nach der alten beantwortet Graph mit 404, und der Export schloss
+# auf „gelöscht".
+# --------------------------------------------------------------------------
+def _eml_mit_kennung(pfad, kennung, faltung=False):
+    pfad.parent.mkdir(parents=True, exist_ok=True)
+    kopf = (f"Message-ID:\n {kennung}\n" if faltung
+            else f"Message-ID: {kennung}\n")
+    pfad.write_bytes((f"From: a@example.com\nSubject: Test\n{kopf}"
+                      f"\nInhalt der Mail\n").encode())
+
+
+def test_brief_kennung_liest_nur_den_kopf(tmp_path):
+    p = tmp_path / "a.eml"
+    _eml_mit_kennung(p, "<abc@example.com>")
+    assert outlook_export.brief_kennung(p) == "<abc@example.com>"
+
+    gefaltet = tmp_path / "b.eml"
+    _eml_mit_kennung(gefaltet, "<lang@example.com>", faltung=True)
+    assert outlook_export.brief_kennung(gefaltet) == "<lang@example.com>"
+
+    ohne = tmp_path / "c.eml"
+    ohne.write_bytes(b"From: a@example.com\n\nMessage-ID: <steht-im-text>\n")
+    assert outlook_export.brief_kennung(ohne) is None      # nur der Kopf zaehlt
+    assert outlook_export.brief_kennung(tmp_path / "gibtsnicht.eml") is None
+
+
+def test_verschobene_mail_gilt_nicht_als_geloescht(tmp_path):
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<verschoben@example.com>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Archiv/b.eml", "<wirklich-weg@example.com>")
+    bestand = outlook_export.Bestand()
+    bestand.briefe = {"<verschoben@example.com>"}          # taucht wieder auf
+
+    bleibt, verschoben = outlook_export.verschoben_statt_weg(
+        tmp_path, [("alte-id-1", "E-Mail/Posteingang/a.eml"),
+                   ("alte-id-2", "E-Mail/Archiv/b.eml")], bestand)
+    assert verschoben == 1
+    assert [rel for _, rel in bleibt] == ["E-Mail/Archiv/b.eml"]
+
+
+def test_ohne_kennungen_wird_nichts_entschieden(tmp_path):
+    """Ein Lauf ohne gelistete Briefe darf nicht alles fuer verschoben halten."""
+    bestand = outlook_export.Bestand()
+    kandidaten = [("id", "E-Mail/x.eml")]
+    assert outlook_export.verschoben_statt_weg(tmp_path, kandidaten, bestand) \
+        == (kandidaten, 0)
+    assert outlook_export.zuruecknehmen(tmp_path, {"E-Mail/x.eml": "gestern"}, bestand) \
+        == ({"E-Mail/x.eml": "gestern"}, 0)
+
+
+def test_falsche_vermerke_werden_zurueckgenommen(tmp_path):
+    """Die Vermerke von damals entstanden unter der falschen Annahme – ohne
+    dieses Aufräumen bliebe der Fehler für immer stehen."""
+    _eml_mit_kennung(tmp_path / "E-Mail/Alt/a.eml", "<liegt-wieder-da@example.com>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Alt/b.eml", "<bleibt-weg@example.com>")
+    bestand = outlook_export.Bestand()
+    bestand.briefe = {"<liegt-wieder-da@example.com>"}
+
+    behalten, geheilt = outlook_export.zuruecknehmen(
+        tmp_path, {"E-Mail/Alt/a.eml": "2026-01-01", "E-Mail/Alt/b.eml": "2026-01-01"},
+        bestand)
+    assert geheilt == 1
+    assert list(behalten) == ["E-Mail/Alt/b.eml"]
+
+
+def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
+    """Der gemeldete Fall am Stück: verschieben, löschen, und ein alter
+    Fehlvermerk, der sich von selbst auflöst."""
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<verschoben@x>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/b.eml", "<geloescht@x>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Alt/c.eml", "<frueher-falsch@x>")
+    (tmp_path / outlook_export.GONE_FILE).write_text(
+        "E-Mail/Alt/c.eml\t2026-01-01T00:00:00+00:00\n", encoding="utf-8")
+
+    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done.mark("alt-1", "E-Mail/Posteingang/a.eml")
+    done.mark("alt-2", "E-Mail/Posteingang/b.eml")
+
+    bestand = outlook_export.Bestand()
+    bestand.ordner_fertig("E-Mail/Posteingang")
+    # Die verschobene Mail steht jetzt unter neuer ID in einem anderen Ordner,
+    # die geloeschte nirgends mehr. Der alte Fehlvermerk taucht wieder auf.
+    bestand.briefe = {"<verschoben@x>", "<frueher-falsch@x>"}
+    bestand.gesehen = {"neu-1"}
+
+    class FakeGraph:
+        def get(self, *a, **kw):
+            raise RuntimeError("404 Not Found")       # alte ID ist tot
+
+    stats = outlook_export.pruefe_verschwundene(FakeGraph(), tmp_path, done, bestand)
+    done.close()
+
+    assert stats["moved"] == 1                        # a.eml: verschoben
+    assert stats["gone_new"] == 1                     # b.eml: wirklich weg
+    assert stats["gone_healed"] == 1                  # c.eml: Vermerk zurueckgenommen
+
+    vermerke = outlook_export.lies_verschwunden(tmp_path / outlook_export.GONE_FILE)
+    assert sorted(vermerke) == ["E-Mail/Posteingang/b.eml"]
+    text = capsys.readouterr().out
+    assert "1 frühere Vermerke zurückgenommen" in text

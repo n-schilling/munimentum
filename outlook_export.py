@@ -631,6 +631,7 @@ class Bestand:
 
     def __init__(self):
         self.gesehen = set()        # IDs aus vollständig gelisteten Ordnern
+        self.briefe = set()         # deren internetMessageId (überlebt ein Verschieben)
         self.vollstaendig = []      # deren Pfade, mit Schrägstrich am Ende
 
     def ordner_fertig(self, rel_path):
@@ -638,6 +639,74 @@ class Bestand:
 
     def aus_gelistetem_ordner(self, rel):
         return any(rel.startswith(p) for p in self.vollstaendig)
+
+
+def brief_kennung(pfad):
+    """Die Message-ID aus dem Kopf einer abgelegten .eml.
+
+    Nur der Kopf wird gelesen: eine .eml mit einem 40-MB-Anhang ganz zu laden,
+    um eine Zeile daraus zu holen, wäre bei hunderten Verdachtsfällen teuer.
+    Gefaltete Fortsetzungszeilen kommen bei dieser Kopfzeile praktisch nicht
+    vor, werden aber mitgenommen, damit ein Sonderfall keine falsche Antwort
+    erzeugt.
+    """
+    try:
+        with open(pfad, "rb") as f:
+            wert = None
+            for roh in f:
+                if roh in (b"\r\n", b"\n"):        # Ende des Kopfes
+                    break
+                if wert is not None:
+                    if roh[:1] in (b" ", b"\t"):     # Fortsetzung
+                        wert += roh.strip()
+                        continue
+                    break
+                if roh[:11].lower() == b"message-id:":
+                    wert = roh[11:].strip()
+            return wert.decode("utf-8", "replace").strip() if wert else None
+    except OSError:
+        return None
+
+
+def verschoben_statt_weg(out, kandidaten, bestand):
+    """Verdachtsfälle aussortieren, deren Brief im Postfach wieder auftaucht.
+
+    Exchange vergibt beim Verschieben eine NEUE Nachrichten-ID. Die Rückfrage
+    nach der alten beantwortet Graph deshalb mit 404 – und eine nur in einen
+    anderen Ordner geschobene Mail galt als gelöscht. An einem echten Archiv
+    waren so 16 von 19 Vermerken falsch.
+
+    Die internetMessageId übersteht das Verschieben. Sie steht in jeder
+    abgelegten .eml und kommt beim Listen ohne Zusatzkosten mit, also lässt
+    sich der Fall hier ohne eine einzige weitere Anfrage entscheiden.
+    """
+    if not bestand.briefe:
+        return kandidaten, 0
+    bleibt, verschoben = [], 0
+    for mid, rel in kandidaten:
+        kennung = brief_kennung(out / rel)
+        if kennung and kennung in bestand.briefe:
+            verschoben += 1
+        else:
+            bleibt.append((mid, rel))
+    return bleibt, verschoben
+
+
+def zuruecknehmen(out, bekannt, bestand):
+    """Frühere Vermerke prüfen: Was wieder im Postfach liegt, war nie gelöscht.
+
+    Ohne das bliebe der Fehler für immer stehen – die Vermerke von damals
+    entstanden unter der alten, falschen Annahme.
+    """
+    if not bestand.briefe:
+        return bekannt, 0
+    behalten = {}
+    for rel, wann in bekannt.items():
+        kennung = brief_kennung(out / rel)
+        if kennung and kennung in bestand.briefe:
+            continue
+        behalten[rel] = wann
+    return behalten, len(bekannt) - len(behalten)
 
 
 def verdaechtige(done, bestand):
@@ -701,7 +770,10 @@ def schreibe_verschwunden(pfad, bekannt, neue, jetzt):
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
     """Spiegelt die Ordner aufs Dateisystem und liefert (mid, rel) für jede
     noch nicht exportierte Mail. Listing läuft im Hauptthread (lazy)."""
-    select = "id,subject,receivedDateTime,sentDateTime,from,hasAttachments"
+    # internetMessageId kostet nichts extra und ist der einzige Schlüssel, der
+    # ein Verschieben übersteht – siehe brief_kennung und pruefe_verschwundene.
+    select = ("id,internetMessageId,subject,receivedDateTime,sentDateTime,"
+              "from,hasAttachments")
     for top in selected:
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
@@ -715,6 +787,8 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                     mid = msg["id"]
                     if bestand is not None:
                         bestand.gesehen.add(mid)
+                        if msg.get("internetMessageId"):
+                            bestand.briefe.add(msg["internetMessageId"].strip())
                     if done.is_done(out, mid):
                         stats["skipped"] += 1
                         continue
@@ -1143,20 +1217,31 @@ def pruefe_verschwundene(graph, out, done, bestand):
     unvollständig gelisteten Ordner wüssten wir nicht, ob etwas fehlt oder ob
     wir nur nicht hingesehen haben. Lieber gar keine Aussage als eine falsche.
     """
-    kandidaten = verdaechtige(done, bestand)
-    if not kandidaten:
-        return {}
-    print(f"\nPrüfe {len(kandidaten)} Mails, die nicht mehr im Postfach standen…")
-    weg, verschoben = wirklich_weg(graph, kandidaten)
     pfad = out / GONE_FILE
     bekannt = lies_verschwunden(pfad)
+    # Erst aufräumen, was unter der alten Annahme falsch vermerkt wurde.
+    bekannt, geheilt = zuruecknehmen(out, bekannt, bestand)
+    if geheilt:
+        schreibe_verschwunden(pfad, bekannt, [], "")
+        print(f"\n{geheilt} frühere Vermerke zurückgenommen: die Mails liegen "
+              f"wieder im Postfach, sie waren nur verschoben.")
+
+    kandidaten = verdaechtige(done, bestand)
+    if not kandidaten:
+        return {"gone_healed": geheilt} if geheilt else {}
+    print(f"\nPrüfe {len(kandidaten)} Mails, die nicht mehr im Postfach standen…")
+    # Ohne eine einzige Anfrage: Wer unter derselben Message-ID anderswo im
+    # Postfach steht, ist verschoben und nicht gelöscht.
+    kandidaten, verschoben_lokal = verschoben_statt_weg(out, kandidaten, bestand)
+    weg, verschoben = wirklich_weg(graph, kandidaten)
+    verschoben += verschoben_lokal
     neue = [rel for rel in weg if rel not in bekannt]
     if neue:
         schreibe_verschwunden(pfad, bekannt, neue,
                               datetime.now(UTC).isoformat(timespec="seconds"))
     print(f"  {len(weg)} gelöscht ({len(neue)} neu), {verschoben} nur verschoben.")
     return {"gone_new": len(neue), "gone_total": len(bekannt) + len(neue),
-            "moved": verschoben}
+            "moved": verschoben, "gone_healed": geheilt}
 
 
 def _hilfe_gewuenscht(argv):
