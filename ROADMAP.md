@@ -39,9 +39,6 @@ einem echten Bündel, nicht am Schreibtisch.
 * **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene
   Ansprüche — die `.eml` dürfen auf einer langsamen Platte liegen, der Index
   nicht. Getrennte Pfade sind heute schon möglich, aber nirgends erklärt.
-* **Der Graph-Client steckt dreimal im Projekt**, in jedem Exportskript einmal.
-  Die drei sind inzwischen wirklich verschieden; zusammenzulegen ist ein
-  eigener Umbau, kein Aufräumen nebenbei.
 
 ## Entschieden
 

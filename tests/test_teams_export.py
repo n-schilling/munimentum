@@ -47,7 +47,10 @@ class FakeSession:
 
     def get(self, url, headers=None, params=None, timeout=None):
         self.calls.append((url, params))
-        return self.responses.pop(0)
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):   # Netzwerkfehler simulieren
+            raise r
+        return r
 
 
 class FakeGraph:
@@ -81,8 +84,9 @@ def _clear_stop():
 @pytest.fixture
 def sleeps(monkeypatch):
     """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben."""
+    import graph_client
     calls = []
-    monkeypatch.setattr(te.time, "sleep", lambda s: calls.append(s))
+    monkeypatch.setattr(graph_client.time, "sleep", lambda s: calls.append(s))
     return calls
 
 
@@ -125,104 +129,57 @@ def test_hosted_re_matches_v1_and_beta():
 
 
 # --------------------------------------------------------------------------
-# TokenClient – Retry, Backoff, TokenExpired, Paging
+# get_bytes mit Bild-Semantik (_BildClient) – der generische Client samt
+# Retry/Backoff/Paging ist in test_graph_client.py abgedeckt
 # --------------------------------------------------------------------------
-def test_tokenclient_get_success_sends_bearer(monkeypatch):
-    sess = FakeSession([FakeResponse(200, {"ok": True})])
-    monkeypatch.setattr(te, "SESSION", sess)
-    tc = te.TokenClient("tok123", channels_enabled=False)
-    assert tc.get("https://x/y", {"$top": 5}) == {"ok": True}
-    assert sess.calls == [("https://x/y", {"$top": 5})]
+def _session(monkeypatch, responses):
+    import graph_client
+    sess = FakeSession(responses)
+    monkeypatch.setattr(graph_client, "SESSION", sess)
+    return sess
 
 
-def test_tokenclient_get_401_raises_tokenexpired(monkeypatch):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(401)]))
-    tc = te.TokenClient("tok", channels_enabled=False)
-    with pytest.raises(te.TokenExpired):
-        tc.get("https://x/y")
-
-
-def test_tokenclient_get_retries_429_with_retry_after(monkeypatch, sleeps):
-    sess = FakeSession([
-        FakeResponse(429, headers={"Retry-After": "3"}),
-        FakeResponse(200, {"ok": 1}),
-    ])
-    monkeypatch.setattr(te, "SESSION", sess)
-    tc = te.TokenClient("tok", channels_enabled=False)
-    assert tc.get("https://x/y") == {"ok": 1}
-    assert sleeps == [3]   # Retry-After-Header wird respektiert
-
-
-def test_tokenclient_get_retries_5xx_with_backoff(monkeypatch, sleeps):
-    sess = FakeSession([FakeResponse(503), FakeResponse(502), FakeResponse(200, {"ok": 1})])
-    monkeypatch.setattr(te, "SESSION", sess)
-    tc = te.TokenClient("tok", channels_enabled=False)
-    assert tc.get("https://x/y") == {"ok": 1}
-    assert sleeps == [1, 2]   # exponentielles Backoff 2**attempt
-
-
-def test_tokenclient_get_gives_up_after_six_attempts(monkeypatch, sleeps):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(429)] * 6))
-    tc = te.TokenClient("tok", channels_enabled=False)
-    with pytest.raises(RuntimeError, match="Zu viele Fehlversuche"):
-        tc.get("https://x/y")
-
-
-def test_tokenclient_get_raises_on_client_error(monkeypatch):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(404)]))
-    tc = te.TokenClient("tok", channels_enabled=False)
-    with pytest.raises(requests.HTTPError):
-        tc.get("https://x/y")
-
-
-def test_tokenclient_get_bytes_returns_content_and_type(monkeypatch):
-    sess = FakeSession([FakeResponse(200, headers={"Content-Type": "image/png"},
-                                     content=b"\x89PNG")])
-    monkeypatch.setattr(te, "SESSION", sess)
+def test_get_bytes_returns_content_and_type(monkeypatch):
+    _session(monkeypatch, [FakeResponse(200, headers={"Content-Type": "image/png"},
+                                        content=b"\x89PNG")])
     tc = te.TokenClient("tok", channels_enabled=False)
     assert tc.get_bytes("https://x/img") == (b"\x89PNG", "image/png")
 
 
-def test_tokenclient_get_bytes_5xx_is_image_unavailable(monkeypatch):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(502)]))
+def test_get_bytes_5xx_is_image_unavailable(monkeypatch):
+    _session(monkeypatch, [FakeResponse(502)])
     tc = te.TokenClient("tok", channels_enabled=False)
     with pytest.raises(te.ImageUnavailable):   # kein Retry bei Serverfehler
         tc.get_bytes("https://x/img")
 
 
-def test_tokenclient_get_bytes_persistent_429_is_image_unavailable(monkeypatch, sleeps):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(429)] * 4))
+def test_get_bytes_persistent_429_is_image_unavailable(monkeypatch, sleeps):
+    _session(monkeypatch, [FakeResponse(429)] * 4)
     tc = te.TokenClient("tok", channels_enabled=False)
     with pytest.raises(te.ImageUnavailable):
         tc.get_bytes("https://x/img")
     assert len(sleeps) == 4
 
 
-def test_tokenclient_get_bytes_401_raises_tokenexpired(monkeypatch):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(401)]))
+def test_get_bytes_netzfehler_is_image_unavailable(monkeypatch, sleeps):
+    """Netz nach allen Wiederholungen weg -> Platzhalter, kein Abbruch."""
+    import graph_client
+    fehler = [requests.exceptions.ReadTimeout("weg")] * graph_client.NET_RETRIES
+    _session(monkeypatch, fehler)
+    tc = te.TokenClient("tok", channels_enabled=False)
+    with pytest.raises(te.ImageUnavailable):
+        tc.get_bytes("https://x/img")
+
+
+def test_get_bytes_401_raises_tokenexpired(monkeypatch):
+    _session(monkeypatch, [FakeResponse(401)])
     tc = te.TokenClient("tok", channels_enabled=False)
     with pytest.raises(te.TokenExpired):
         tc.get_bytes("https://x/img")
 
 
-def test_tokenclient_paged_follows_nextlink(monkeypatch):
-    sess = FakeSession([
-        FakeResponse(200, {"value": [1, 2], "@odata.nextLink": "https://x/page2"}),
-        FakeResponse(200, {"value": [3]}),
-    ])
-    monkeypatch.setattr(te, "SESSION", sess)
-    tc = te.TokenClient("tok", channels_enabled=False)
-    assert list(tc.paged("https://x/page1", {"$top": 2})) == [1, 2, 3]
-    # nextLink wird absolut und ohne zusätzliche Parameter aufgerufen
-    assert sess.calls[1] == ("https://x/page2", None)
-
-
-# --------------------------------------------------------------------------
-# Graph – 401 löst Token-Refresh aus, Paging läuft über get()
-# --------------------------------------------------------------------------
 class _StubAnmeldung:
-    """Nur was die HTTP-Schicht von auth.Login braucht. Die Anmeldung selbst
-    hat eigene Tests (test_auth.py); hier geht es um Retry und Paging."""
+    """Nur was die HTTP-Schicht von auth.Login braucht."""
 
     def __init__(self, token="alt"):
         self.token = token
@@ -231,52 +188,13 @@ class _StubAnmeldung:
         return {"Authorization": f"Bearer {self.token}"}
 
 
-def _bare_graph():
-    """Graph-Instanz ohne interaktiven Login (kein __init__)."""
+def test_get_bytes_401_refresh_then_ok(monkeypatch):
+    _session(monkeypatch, [FakeResponse(401),
+                           FakeResponse(200, headers={"Content-Type": "image/gif"},
+                                        content=b"GIF")])
     g = object.__new__(te.Graph)
     g.anmeldung = _StubAnmeldung()
     g._refresh_lock = threading.Lock()
-    return g
-
-
-def test_graph_get_refreshes_token_on_401(monkeypatch):
-    sess = FakeSession([FakeResponse(401), FakeResponse(200, {"ok": 1})])
-    monkeypatch.setattr(te, "SESSION", sess)
-    g = _bare_graph()
-    refreshed = []
-
-    def fake_refresh():
-        refreshed.append(True)
-        g.anmeldung.token = "neu"
-
-    g._refresh = fake_refresh
-    assert g.get("https://x/y") == {"ok": 1}
-    assert refreshed == [True]
-
-
-def test_graph_get_retries_and_gives_up(monkeypatch, sleeps):
-    monkeypatch.setattr(te, "SESSION", FakeSession([FakeResponse(500)] * 6))
-    g = _bare_graph()
-    with pytest.raises(RuntimeError, match="Zu viele Fehlversuche"):
-        g.get("https://x/y")
-    assert len(sleeps) == 6
-
-
-def test_graph_paged_follows_nextlink(monkeypatch):
-    sess = FakeSession([
-        FakeResponse(200, {"value": ["a"], "@odata.nextLink": "https://x/n"}),
-        FakeResponse(200, {"value": ["b"]}),
-    ])
-    monkeypatch.setattr(te, "SESSION", sess)
-    g = _bare_graph()
-    assert list(g.paged("https://x/1")) == ["a", "b"]
-
-
-def test_graph_get_bytes_401_refresh_then_ok(monkeypatch):
-    sess = FakeSession([FakeResponse(401),
-                        FakeResponse(200, headers={"Content-Type": "image/gif"}, content=b"GIF")])
-    monkeypatch.setattr(te, "SESSION", sess)
-    g = _bare_graph()
     g._refresh = lambda: None
     assert g.get_bytes("https://x/img") == (b"GIF", "image/gif")
 

@@ -54,6 +54,9 @@ DUERFEN_AUSGEBEN = {
     # print steht in einem try/except – UnicodeEncodeError ist ein ValueError,
     # eine misslungene Fortschrittsmeldung hält also nie einen Lauf auf.
     "progress.py",
+    # Meldet Wartezeiten bei Drosselung/Netzfehlern über _meld(), das
+    # UnicodeEncodeError schluckt – die Meldung ist verzichtbar, der Lauf nicht.
+    "graph_client.py",
 }
 
 
@@ -171,8 +174,8 @@ def test_spec_listet_die_geteilten_module():
     diese Liste ist das Sicherheitsnetz, und sie ist mir einmal durch ein
     `git checkout` bei einer Gegenprobe abhandengekommen."""
     text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
-    for modul in ("auth", "folders", "settings", "progress", "answer", "corpus",
-                  "store_layout"):
+    for modul in ("auth", "folders", "graph_client", "settings", "progress",
+                  "answer", "corpus", "store_layout"):
         assert f'"{modul}"' in text, f"{modul} fehlt in TEILPROGRAMME"
 
 

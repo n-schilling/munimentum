@@ -43,7 +43,6 @@ import json
 import os
 import re
 import sys
-import time
 import hashlib
 import threading
 from datetime import UTC, datetime
@@ -58,12 +57,14 @@ import settings
 
 try:
     import msal  # noqa: F401
-    import requests
+    import requests  # noqa: F401 – früh prüfen, gebraucht in graph_client
 except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
     raise SystemExit(1) from None
 
-GRAPH = "https://graph.microsoft.com/v1.0"
+import graph_client
+
+GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Files.Read.All", RES + "User.Read"]
 
@@ -73,13 +74,10 @@ BESTAND_DATEI = "dateien.tsv"
 DELTA_DATEI = "delta.txt"
 GONE_FILE = "verschwunden.tsv"
 
-TIMEOUT_JSON = (30, 120)
+# Netz, Drosselung, Retry und Paging liegen in graph_client.py; eigen bleibt
+# nur der Download-Timeout – eine große Datei braucht länger als eine Seite.
 TIMEOUT_BYTES = (30, 600)
-HTTP_RETRIES = 6
-NET_RETRIES = 5
 SEITE = 999                     # $top: eine Seite statt vieler kleiner
-
-SESSION = requests.Session()
 
 
 def workers():
@@ -102,89 +100,41 @@ def max_bytes():
 
 
 # ---------------------------------------------------------------------------
-# HTTP
+# HTTP – der Client kommt aus graph_client.py, eigen ist nur OneDrive-Spezifik
 # ---------------------------------------------------------------------------
-def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label=""):
-    """Ein GET; wiederholt NUR bei Netzwerkfehlern. Status bewertet der Aufrufer."""
-    for net in range(NET_RETRIES):
-        try:
-            return SESSION.get(url, headers=headers, params=params,
-                               timeout=timeout, stream=stream)
-        except requests.exceptions.RequestException as e:
-            if net == NET_RETRIES - 1:
-                raise
-            w = min(2 ** net, 60)
-            print(f"    … Netzwerkfehler{label} ({type(e).__name__}), warte {w}s")
-            time.sleep(w)
-    raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")
-
-
-class _Basis:
-    """Was beide Zugangsarten teilen: Drosselung, Wiederholung, Paging."""
-
-    def _headers(self):
-        raise NotImplementedError
-
-    def _erneuern(self):
-        return False
-
-    def _warten(self, r, versuch, was=""):
-        ra = r.headers.get("Retry-After")
-        w = min(int(ra) if ra and ra.isdigit() else 2 ** versuch, 60)
-        print(f"    … HTTP {r.status_code}{was}, warte {w}s (Drosselung/Server)")
-        time.sleep(w)
-
-    def get(self, url, params=None):
-        for versuch in range(HTTP_RETRIES):
-            r = fetch(url, self._headers(), params, TIMEOUT_JSON)
-            if r.status_code == 401 and self._erneuern():
-                continue
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                self._warten(r, versuch)
-                continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
+class _Drive:
+    """OneDrive-Eigenes über dem gemeinsamen Client: Datei-Download und Delta."""
 
     def lade(self, item_id, ziel, geaendert=None):
         """Inhalt einer Datei nach `ziel` schreiben – stückweise, nicht am Stück.
 
-        Eine 300-MB-Datei komplett in den Speicher zu holen, nur um sie danach
+        Eine große Datei komplett in den Speicher zu holen, nur um sie danach
         auf die Platte zu schreiben, wäre auf einem kleinen Rechner der einzige
         Grund, warum ein Lauf scheitert. Geschrieben wird daneben und erst zum
         Schluss umbenannt: ein Abbruch hinterlässt dann keine halbe Datei, die
         beim nächsten Lauf als fertig gälte.
         """
         url = f"{GRAPH}/me/drive/items/{item_id}/content"
-        for versuch in range(HTTP_RETRIES):
-            r = fetch(url, self._headers(), timeout=TIMEOUT_BYTES,
-                      stream=True, label=" (Inhalt)")
-            if r.status_code == 401 and self._erneuern():
-                continue
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                self._warten(r, versuch, " (Inhalt)")
-                continue
-            r.raise_for_status()
-            ziel.parent.mkdir(parents=True, exist_ok=True)
-            tmp = ziel.with_name(ziel.name + ".teil")
-            groesse = 0
-            with open(tmp, "wb") as f:
-                for stueck in r.iter_content(chunk_size=1 << 20):
-                    if stueck:
-                        f.write(stueck)
-                        groesse += len(stueck)
-            os.replace(tmp, ziel)
-            # Die Änderungszeit aus OneDrive übernehmen. Ohne das trüge jede
-            # Datei den Zeitpunkt ihres Downloads, und im Index stünden 600
-            # Dateien mit demselben Datum – eine Sortierung nach Datum wäre
-            # wertlos, und ein Neuaufbau des Spiegels änderte sie erneut.
-            if geaendert:
-                try:
-                    os.utime(ziel, (geaendert, geaendert))
-                except OSError:
-                    pass
-            return groesse
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
+        r = self.stream(url, timeout=TIMEOUT_BYTES, label=" (Inhalt)")
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        tmp = ziel.with_name(ziel.name + ".teil")
+        groesse = 0
+        with open(tmp, "wb") as f:
+            for stueck in r.iter_content(chunk_size=1 << 20):
+                if stueck:
+                    f.write(stueck)
+                    groesse += len(stueck)
+        os.replace(tmp, ziel)
+        # Die Änderungszeit aus OneDrive übernehmen. Ohne das trüge jede
+        # Datei den Zeitpunkt ihres Downloads, und im Index stünden hunderte
+        # Dateien mit demselben Datum – eine Sortierung nach Datum wäre
+        # wertlos, und ein Neuaufbau des Spiegels änderte sie erneut.
+        if geaendert:
+            try:
+                os.utime(ziel, (geaendert, geaendert))
+            except OSError:
+                pass
+        return groesse
 
     def delta(self, weiter=None):
         """Alle Delta-Einträge, Seite für Seite. Gibt am Ende den neuen Link."""
@@ -200,37 +150,15 @@ class _Basis:
             url = nxt
 
 
-class Graph(_Basis):
+class Graph(_Drive, graph_client.Graph):
     """Angemeldeter Zugriff; die Anmeldung selbst steckt in auth.Login."""
 
     def __init__(self, nur_still=False):
-        self.anmeldung = auth.Login(SCOPES)
-        self._lock = threading.Lock()
-        if not self.anmeldung.anmelden(nur_still=nur_still):
-            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
-
-    @property
-    def account(self):
-        return self.anmeldung.account
-
-    def _headers(self):
-        return self.anmeldung.headers()
-
-    def _erneuern(self):
-        with self._lock:
-            self.anmeldung.erneuern()
-        return True
+        super().__init__(SCOPES, nur_still=nur_still)
 
 
-class TokenClient(_Basis):
-    """Fertiger Bearer-Token aus dem Graph Explorer; keine Erneuerung möglich."""
-
-    def __init__(self, token):
-        self.token = token
-        self.account = None
-
-    def _headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
+class TokenClient(_Drive, graph_client.TokenClient):
+    """Fertiger Bearer-Token aus dem Graph Explorer; 401 heißt TokenExpired."""
 
 
 # ---------------------------------------------------------------------------
@@ -738,8 +666,16 @@ def main():
     pruefen = "--check" in argv
     argv = [a for a in argv if not a.startswith("--")]
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    graph_client.konfiguriere(workers())
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
-    (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
+    try:
+        (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
+    except auth.TokenExpired:
+        # Dieselbe Meldung wie in den anderen Exporten – die App erkennt daran,
+        # dass der Zugangsschlüssel erneuert werden muss.
+        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
+              "setzen und erneut starten – bereits Gespiegeltes bleibt erhalten.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

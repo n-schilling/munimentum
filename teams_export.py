@@ -57,6 +57,7 @@ from collections import defaultdict, Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import auth
+import graph_client
 import settings
 import progress
 
@@ -82,7 +83,7 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
-GRAPH = "https://graph.microsoft.com/v1.0"
+GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES_CHAT = [RES + "Chat.Read", RES + "User.Read"]
 SCOPES_FULL = SCOPES_CHAT + [
@@ -120,8 +121,8 @@ TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",
            "meeting": "Meeting-Chat", "other": "Chat"}
 
-SESSION = requests.Session()                 # Keep-Alive/Connection-Pooling
-GATE = threading.BoundedSemaphore(WORKERS)   # gleichzeitige Postfach-/Graph-Calls <= WORKERS
+# Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
+# diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
 STOP = threading.Event()                      # Signal: Token tot -> nichts Neues mehr starten
 STATE_LOCK = threading.Lock()                 # serialisiert Schreiben der Fortschrittsdatei
 PRINT_LOCK = threading.Lock()                 # saubere, nicht ineinander laufende Fortschrittszeilen
@@ -148,11 +149,35 @@ class ImageUnavailable(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Graph-Client: Auth, Retry, Paging
+# Graph-Client: die Kanalfrage – der Rest steckt in graph_client.py
 # ---------------------------------------------------------------------------
-class Graph:
-    """Angemeldeter Zugriff. Die Anmeldung steckt in auth.Login; hier bleibt,
-    was dieses Skript eigen hat: die Kanalfrage, Drosselung, Paging.
+class _BildClient:
+    """get_bytes mit Bild-Semantik – bewusst nachsichtiger als der gemeinsame
+    Client: Teams lädt Bytes nur für Inline-Bilder (hostedContents), und ein
+    Serverfehler oder hartnäckige Drosselung wirft dort ImageUnavailable, damit
+    der Export mit Platzhalter weiterläuft, statt an einem Bild zu scheitern."""
+
+    def get_bytes(self, url, timeout=graph_client.TIMEOUT_BYTES, label=" (Bild)"):
+        for versuch in range(4):
+            try:
+                r = graph_client.fetch(url, self._headers(), timeout=timeout, label=label)
+            except requests.exceptions.RequestException as e:
+                raise ImageUnavailable(type(e).__name__) from e
+            if r.status_code == 401:
+                self._erneuern()
+                continue
+            if r.status_code == 429:          # echte Drosselung -> abwarten
+                graph_client.warte_auf(r, versuch, label)
+                continue
+            if 500 <= r.status_code < 600:    # Serverfehler -> Bild ist nicht ladbar
+                raise ImageUnavailable(r.status_code)
+            r.raise_for_status()
+            return r.content, r.headers.get("Content-Type", "")
+        raise ImageUnavailable("429")
+
+
+class Graph(_BildClient, graph_client.Graph):
+    """Angemeldeter Zugriff mit Kanalfrage.
 
     Die Kanalrechte werden erst angefragt und bei Misserfolg fallen gelassen –
     ChannelMessage.Read.All verlangt in vielen Tenants Admin-Zustimmung, und
@@ -161,181 +186,30 @@ class Graph:
     def __init__(self, want_channels, nur_still=False):
         self.want_channels = want_channels
         self.channels_enabled = False
-        self._refresh_lock = threading.Lock()
 
         if want_channels:
             print("Anmeldung – fordere Zugriff auf Chats + Kanäle an…")
-            self.anmeldung = auth.Login(SCOPES_FULL)
-            if self.anmeldung.anmelden(nur_still=nur_still, weich=True):
+            anmeldung = auth.Login(SCOPES_FULL)
+            if anmeldung.anmelden(nur_still=nur_still, weich=True):
                 self.channels_enabled = True
+                super().__init__(anmeldung=anmeldung)
                 return
             print("Kanal-Zugriff nicht gewährt – ChannelMessage.Read.All "
                   "erfordert evtl. Admin-Consent.")
-            if self.anmeldung.fehler:
-                print(f"  Details: {self.anmeldung.fehler.splitlines()[0]}")
+            if anmeldung.fehler:
+                print(f"  Details: {anmeldung.fehler.splitlines()[0]}")
             print("Melde mit reinem Chat-Zugriff an…")
         else:
             print("Anmeldung – fordere Chat-Zugriff an…")
-        self.anmeldung = auth.Login(SCOPES_CHAT)
-        if not self.anmeldung.anmelden(nur_still=nur_still):
-            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
-
-    @property
-    def account(self):
-        return self.anmeldung.account
-
-    @property
-    def token(self):
-        return self.anmeldung.token
-
-    @property
-    def scopes(self):
-        return self.anmeldung.scopes
-
-    def _refresh(self):
-        with self._refresh_lock:   # nur ein Thread erneuert gleichzeitig
-            self.anmeldung.erneuern()
-
-    def _headers(self):
-        return self.anmeldung.headers()
-
-    def get(self, url, params=None):
-        for attempt in range(6):
-            try:
-                with GATE:   # nur das eigentliche Request zählt gegen das Limit
-                    r = SESSION.get(url, headers=self._headers(), params=params, timeout=60)
-            except requests.exceptions.RequestException as e:
-                if attempt == 5:
-                    raise
-                w = min(2 ** attempt, 60)
-                print(f"    … Netzwerkfehler ({type(e).__name__}), warte {w}s")
-                time.sleep(w)
-                continue
-            if r.status_code == 401:
-                self._refresh()
-                continue
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code}, warte {w}s (Drosselung/Server)")
-                time.sleep(w)   # Pause OHNE belegten Slot
-                continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def get_bytes(self, url):
-        for attempt in range(4):
-            try:
-                with GATE:
-                    r = SESSION.get(url, headers=self._headers(), timeout=60)
-            except requests.exceptions.RequestException as e:
-                if attempt == 3:
-                    raise ImageUnavailable(type(e).__name__) from e
-                w = min(2 ** attempt, 30)
-                print(f"    … Netzwerkfehler (Bild, {type(e).__name__}), warte {w}s")
-                time.sleep(w)
-                continue
-            if r.status_code == 401:
-                self._refresh()
-                continue
-            if r.status_code == 429:          # echte Drosselung -> abwarten
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 30)
-                print(f"    … HTTP 429 (Bild), warte {w}s")
-                time.sleep(w)
-                continue
-            if 500 <= r.status_code < 600:    # Serverfehler -> Bild ist nicht ladbar
-                raise ImageUnavailable(r.status_code)
-            r.raise_for_status()
-            return r.content, r.headers.get("Content-Type", "")
-        raise ImageUnavailable("429")
-
-    def paged(self, url, params=None):
-        data = self.get(url, params)
-        while True:
-            yield from data.get("value", [])
-            nxt = data.get("@odata.nextLink")
-            if not nxt:
-                break
-            data = self.get(nxt)   # nextLink ist absolut & enthält Parameter
+        super().__init__(SCOPES_CHAT, nur_still=nur_still)
 
 
-# ---------------------------------------------------------------------------
-# Schlüssel-Modus: vorhandenen Access Token nutzen (Graph Explorer)
-# ---------------------------------------------------------------------------
-class TokenClient:
-    """Nutzt einen fertigen Bearer-Token; keine Anmeldung, kein Refresh."""
+class TokenClient(_BildClient, graph_client.TokenClient):
+    """Fertiger Bearer-Token; ob Kanäle gehen, weiß nur der Aufrufer."""
 
     def __init__(self, token, channels_enabled):
-        self.token = token
+        super().__init__(token)
         self.channels_enabled = channels_enabled
-        self.account = None
-
-    def _headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
-
-    def _expired(self):
-        raise TokenExpired()
-
-    def get(self, url, params=None):
-        for attempt in range(6):
-            try:
-                with GATE:
-                    r = SESSION.get(url, headers=self._headers(), params=params, timeout=60)
-            except requests.exceptions.RequestException as e:
-                if attempt == 5:
-                    raise
-                w = min(2 ** attempt, 60)
-                print(f"    … Netzwerkfehler ({type(e).__name__}), warte {w}s")
-                time.sleep(w)
-                continue
-            if r.status_code == 401:
-                self._expired()
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code}, warte {w}s (Drosselung/Server)")
-                time.sleep(w)
-                continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def get_bytes(self, url):
-        for attempt in range(4):
-            try:
-                with GATE:
-                    r = SESSION.get(url, headers=self._headers(), timeout=60)
-            except requests.exceptions.RequestException as e:
-                if attempt == 3:
-                    raise ImageUnavailable(type(e).__name__) from e
-                w = min(2 ** attempt, 30)
-                print(f"    … Netzwerkfehler (Bild, {type(e).__name__}), warte {w}s")
-                time.sleep(w)
-                continue
-            if r.status_code == 401:
-                self._expired()
-            if r.status_code == 429:          # echte Drosselung -> abwarten
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 30)
-                print(f"    … HTTP 429 (Bild), warte {w}s")
-                time.sleep(w)
-                continue
-            if 500 <= r.status_code < 600:    # Serverfehler -> Bild ist nicht ladbar
-                raise ImageUnavailable(r.status_code)
-            r.raise_for_status()
-            return r.content, r.headers.get("Content-Type", "")
-        raise ImageUnavailable("429")
-
-    def paged(self, url, params=None):
-        data = self.get(url, params)
-        while True:
-            yield from data.get("value", [])
-            nxt = data.get("@odata.nextLink")
-            if not nxt:
-                break
-            data = self.get(nxt)
 
 
 # ---------------------------------------------------------------------------
@@ -1013,7 +887,7 @@ def main():
         print(__doc__.strip())
         return
 
-    global _client, OUT_ROOT, GATE, IMGCACHE_DIR
+    global _client, OUT_ROOT, IMGCACHE_DIR
     argv = sys.argv[1:]
     use_default = any(a in ("-default", "--default") for a in argv)
     argv = [a for a in argv if a not in ("-default", "--default")]
@@ -1025,9 +899,7 @@ def main():
     hinweis = settings.report()
     if hinweis:
         print(hinweis)
-    GATE = threading.BoundedSemaphore(workers)
-    SESSION.mount("https://", requests.adapters.HTTPAdapter(
-        pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
+    graph_client.konfiguriere(workers)
 
     # 1) Kategorien abfragen (vor dem Login, damit der Kanal-Scope nur bei Bedarf kommt)
     cat_options = [("1on1", "1:1-Chats"), ("group", "Gruppenchats"),

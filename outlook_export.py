@@ -48,7 +48,6 @@ Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS
 import os
 import sys
 import re
-import time
 import html
 import hashlib
 import threading
@@ -60,6 +59,7 @@ import json
 
 import auth
 import folders
+import graph_client
 import settings
 import progress
 
@@ -85,7 +85,7 @@ for _stream in (sys.stdout, sys.stderr):
 # ---------------------------------------------------------------------------
 # Konfiguration
 # ---------------------------------------------------------------------------
-GRAPH = "https://graph.microsoft.com/v1.0"
+GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
 # Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
@@ -111,176 +111,20 @@ BUILTIN_SKIP_FOLDERS = {
 
 DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders", BUILTIN_SKIP_FOLDERS)
 
-# Netzwerk: getrennte Timeouts für Verbindungsaufbau und Antwort. Graph liefert
-# große Seiten und MIME-Downloads teils sehr träge; ein zu knapper Read-Timeout
-# bricht sonst einen stundenlangen Export grundlos ab.
-TIMEOUT_JSON = (30, 120)     # (connect, read) für Listen-/Metadaten-Abfragen
-TIMEOUT_BYTES = (30, 300)    # (connect, read) für .eml-Downloads
-NET_RETRIES = 6              # Wiederholungen bei Timeout/Verbindungsabbruch/TLS
-HTTP_RETRIES = 6             # Wiederholungen bei 429/5xx bzw. nach Token-Erneuerung
-
-# Geteilte HTTP-Session (Keep-Alive/Connection-Pooling) und Drossel-Gate.
-SESSION = requests.Session()
-GATE = threading.BoundedSemaphore(WORKERS)   # hält gleichzeitige Postfach-Calls <= WORKERS
+# Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
+# diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
 STOP = threading.Event()                     # Signal: Token tot -> nichts Neues mehr starten
 ASSUME_DEFAULT = False                       # -default: keine Abfragen, überall die Vorgabe
 
-
-# Anmeldung, Schlüsselmodus und Konfiguration liegen in auth.py – beide Export-
-# Skripte hatten das vorher Zeile für Zeile doppelt.
+# Anmeldung, Schlüsselmodus und Konfiguration liegen in auth.py.
 TokenExpired = auth.TokenExpired
 load_pasted_token = auth.load_pasted_token
+TokenClient = graph_client.TokenClient
 
 
-def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, label=""):
-    """Ein GET gegen Graph; wiederholt NUR bei Netzwerkfehlern (Timeout,
-    Verbindungsabbruch, TLS). Der HTTP-Status wird hier nicht bewertet.
-
-    Eigener Zähler: ein Netzaussetzer soll die Versuche für 429/5xx nicht
-    aufbrauchen. Ohne dieses Retry beendet ein einzelner ReadTimeout nach
-    Stunden den kompletten Export."""
-    for net in range(NET_RETRIES):
-        try:
-            with GATE:   # nur das eigentliche Request zählt gegen das Limit
-                return SESSION.get(url, headers=headers, params=params, timeout=timeout)
-        except requests.exceptions.RequestException as e:
-            if net == NET_RETRIES - 1:
-                raise
-            w = min(2 ** net, 60)
-            print(f"    … Netzwerkfehler{label} ({type(e).__name__}), warte {w}s "
-                  f"(Versuch {net + 2}/{NET_RETRIES})")
-            time.sleep(w)   # Pause OHNE belegten Slot
-    raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")   # nicht erreichbar
-
-
-# ---------------------------------------------------------------------------
-# Graph-Client (Anmeldung) – Auth, Retry, Paging
-# ---------------------------------------------------------------------------
-class Graph:
-    """Angemeldeter Zugriff. Die Anmeldung selbst steckt in auth.Login; hier
-    bleibt nur, was dieses Skript eigen hat: Timeouts, Drosselung, Paging."""
-
-    def __init__(self, nur_still=False):
-        self.anmeldung = auth.Login(SCOPES)
-        self._refresh_lock = threading.Lock()
-        if not self.anmeldung.anmelden(nur_still=nur_still):
-            raise SystemExit("Keine gültige Anmeldung im Zwischenspeicher.")
-
-    @property
-    def account(self):
-        return self.anmeldung.account
-
-    @property
-    def token(self):
-        return self.anmeldung.token
-
-    def _refresh(self):
-        with self._refresh_lock:   # nur ein Thread erneuert gleichzeitig
-            self.anmeldung.erneuern()
-
-    def _headers(self):
-        return self.anmeldung.headers()
-
-    def get(self, url, params=None, extra_headers=None):
-        headers = self._headers()
-        if extra_headers:
-            headers = {**headers, **extra_headers}
-        for attempt in range(HTTP_RETRIES):
-            r = fetch(url, headers, params, TIMEOUT_JSON)
-            if r.status_code == 401:
-                self._refresh()
-                headers = {**self._headers(), **(extra_headers or {})}
-                continue
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code}, warte {w}s (Drosselung/Server)")
-                time.sleep(w)   # Pause OHNE belegten Slot
-                continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def get_bytes(self, url):
-        for attempt in range(HTTP_RETRIES):
-            r = fetch(url, self._headers(), timeout=TIMEOUT_BYTES, label=" (MIME)")
-            if r.status_code == 401:
-                self._refresh()
-                continue
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code} (MIME), warte {w}s")
-                time.sleep(w)
-                continue
-            r.raise_for_status()
-            return r.content, r.headers.get("Content-Type", "")
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def paged(self, url, params=None, extra_headers=None):
-        data = self.get(url, params, extra_headers)
-        while True:
-            yield from data.get("value", [])
-            nxt = data.get("@odata.nextLink")
-            if not nxt:
-                break
-            data = self.get(nxt, extra_headers=extra_headers)
-
-
-# ---------------------------------------------------------------------------
-# Schlüssel-Modus: vorhandenen fertigen Bearer-Token nutzen (Graph Explorer)
-# ---------------------------------------------------------------------------
-class TokenClient:
-    """Nutzt einen fertigen Bearer-Token; keine Anmeldung, kein Refresh."""
-
-    def __init__(self, token):
-        self.token = token
-        self.account = None
-
-    def _headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
-
-    def get(self, url, params=None, extra_headers=None):
-        headers = self._headers()
-        if extra_headers:
-            headers = {**headers, **extra_headers}
-        for attempt in range(HTTP_RETRIES):
-            r = fetch(url, headers, params, TIMEOUT_JSON)
-            if r.status_code == 401:
-                raise TokenExpired()
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code}, warte {w}s (Drosselung/Server)")
-                time.sleep(w)
-                continue
-            r.raise_for_status()
-            return r.json()
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def get_bytes(self, url):
-        for attempt in range(HTTP_RETRIES):
-            r = fetch(url, self._headers(), timeout=TIMEOUT_BYTES, label=" (MIME)")
-            if r.status_code == 401:
-                raise TokenExpired()
-            if r.status_code == 429 or 500 <= r.status_code < 600:
-                ra = r.headers.get("Retry-After")
-                w = min(int(ra) if ra and ra.isdigit() else 2 ** attempt, 60)
-                print(f"    … HTTP {r.status_code} (MIME), warte {w}s")
-                time.sleep(w)
-                continue
-            r.raise_for_status()
-            return r.content, r.headers.get("Content-Type", "")
-        raise RuntimeError(f"Zu viele Fehlversuche: {url}")
-
-    def paged(self, url, params=None, extra_headers=None):
-        data = self.get(url, params, extra_headers)
-        while True:
-            yield from data.get("value", [])
-            nxt = data.get("@odata.nextLink")
-            if not nxt:
-                break
-            data = self.get(nxt, extra_headers=extra_headers)
+def graph_login(nur_still=False):
+    """Angemeldeter Zugriff mit den Mail-/Kalender-/Kontakte-Scopes."""
+    return graph_client.Graph(SCOPES, nur_still=nur_still)
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +362,7 @@ def waehle_kalender(graph, out):
 def gleiche_kalender_ab(argv):
     """--calendars: nur die Kalenderliste holen und ablegen, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
-    graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    graph = auth.waehle_zugang(TokenClient, graph_login)
     print(f"Gleiche Kalenderliste ab: {out.resolve()}")
     vorher = folders.lade(out, folders.KALENDER)
     daten = folders.speichere(out, kalender_eintraege(list_calendars(graph)),
@@ -818,7 +662,7 @@ def download_one(graph, out, done, mid, rel):
     if STOP.is_set():
         return ("stopped", mid)
     try:
-        content, _ = graph.get_bytes(f"{GRAPH}/me/messages/{mid}/$value")
+        content, _ = graph.get_bytes(f"{GRAPH}/me/messages/{mid}/$value", label=" (MIME)")
     except TokenExpired:
         return ("expired", mid)
     except Exception as e:
@@ -1280,7 +1124,7 @@ def baum_eintraege(graph):
 def gleiche_ordner_ab(argv):
     """--folders: nur die Struktur holen und ablegen, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
-    graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    graph = auth.waehle_zugang(TokenClient, graph_login)
     print(f"Gleiche Ordnerstruktur ab: {out.resolve()}")
     vorher = folders.lade(out)
     daten = folders.speichere(out, baum_eintraege(graph), vorher)
@@ -1357,7 +1201,7 @@ def aktuelle_regeln():
 def nur_pruefen(argv):
     """--check: nur die Vollständigkeit melden, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
-    graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    graph = auth.waehle_zugang(TokenClient, graph_login)
     print(f"Prüfe Vollständigkeit gegen das Postfach: {out.resolve()}")
     bericht = pruefe_vollstaendigkeit(
         graph, out, lies_verschwunden(out / GONE_FILE))
@@ -1468,7 +1312,7 @@ def main():
     if "--calendars" in sys.argv[1:]:
         return gleiche_kalender_ab(nur_ordner)
 
-    global OUT_ROOT, GATE, ASSUME_DEFAULT
+    global OUT_ROOT, ASSUME_DEFAULT
     argv = sys.argv[1:]
     if any(a in ("-default", "--default") for a in argv):
         ASSUME_DEFAULT = True
@@ -1486,11 +1330,9 @@ def main():
         print("Hinweis: Exchange Online erlaubt nur 4 gleichzeitige Anfragen pro "
               f"Postfach – {workers} Worker erzeugen v. a. Drosselung. 4 ist das "
               "sinnvolle Maximum.")
-    GATE = threading.BoundedSemaphore(workers)
-    SESSION.mount("https://", requests.adapters.HTTPAdapter(
-        pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
+    graph_client.konfiguriere(workers)
 
-    graph = auth.waehle_zugang(TokenClient, Graph)
+    graph = auth.waehle_zugang(TokenClient, graph_login)
 
     out = Path(OUT_ROOT)
     out.mkdir(parents=True, exist_ok=True)

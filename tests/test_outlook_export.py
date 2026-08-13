@@ -1,10 +1,9 @@
-"""Tests für outlook_export.py – Helfer, ICS/VCF-Erzeugung, DoneLog, Baum-Aufbau
-und HTTP-Verhalten der Graph-Clients. Alles ohne Netzwerk: SESSION bzw. die
-Graph-Objekte werden durch Fakes ersetzt."""
+"""Tests für outlook_export.py – Helfer, ICS/VCF-Erzeugung, DoneLog und
+Baum-Aufbau. Alles ohne Netzwerk: die Graph-Objekte werden durch Fakes ersetzt;
+die HTTP-Schicht selbst ist in test_graph_client.py abgedeckt."""
 
 import json
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -13,42 +12,6 @@ import requests
 
 import folders
 import outlook_export
-
-
-# --------------------------------------------------------------------------
-# Gemeinsame Fakes (kein Netzwerk)
-# --------------------------------------------------------------------------
-class FakeResponse:
-    """Nachgebaute requests-Response ohne Netzwerk."""
-
-    def __init__(self, status=200, payload=None, content=b"", headers=None):
-        self.status_code = status
-        self._payload = payload
-        self.content = content
-        self.headers = headers or {}
-
-    def json(self):
-        return self._payload
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f"HTTP {self.status_code}")
-
-
-class FakeSession:
-    """Liefert vorbereitete Antworten der Reihe nach und protokolliert Aufrufe."""
-
-    def __init__(self, responses):
-        self.responses = list(responses)
-        self.calls = []
-
-    def get(self, url, headers=None, params=None, timeout=None):
-        self.calls.append({"url": url, "headers": dict(headers or {}),
-                           "params": params, "timeout": timeout})
-        r = self.responses.pop(0)
-        if isinstance(r, Exception):   # Netzwerkfehler simulieren
-            raise r
-        return r
 
 
 def _unfold(text):
@@ -547,176 +510,6 @@ def test_donelog_paralleles_markieren(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# TokenClient: Retry, Drosselung, Paging, TokenExpired
-# --------------------------------------------------------------------------
-def test_tokenclient_get_sendet_bearer_und_params(monkeypatch):
-    fake = FakeSession([FakeResponse(payload={"value": [1]})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    tc = outlook_export.TokenClient("tok123")
-    assert tc.get("https://example.invalid/x", {"$top": 5},
-                  extra_headers={"Prefer": "utc"}) == {"value": [1]}
-    call = fake.calls[0]
-    assert call["headers"]["Authorization"] == "Bearer tok123"
-    assert call["headers"]["Prefer"] == "utc"
-    assert call["params"] == {"$top": 5}
-
-
-def test_tokenclient_get_wiederholt_nach_429(monkeypatch):
-    fake = FakeSession([FakeResponse(429, headers={"Retry-After": "0"}),
-                        FakeResponse(payload={"ok": 1})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    tc = outlook_export.TokenClient("t")
-    assert tc.get("https://example.invalid/x") == {"ok": 1}
-    assert len(fake.calls) == 2
-
-
-def test_tokenclient_401_wirft_tokenexpired(monkeypatch):
-    monkeypatch.setattr(outlook_export, "SESSION", FakeSession([FakeResponse(401)]))
-    tc = outlook_export.TokenClient("t")
-    with pytest.raises(outlook_export.TokenExpired):
-        tc.get("https://example.invalid/x")
-    monkeypatch.setattr(outlook_export, "SESSION", FakeSession([FakeResponse(401)]))
-    with pytest.raises(outlook_export.TokenExpired):
-        tc.get_bytes("https://example.invalid/x")
-
-
-def test_tokenclient_bricht_nach_sechs_serverfehlern_ab(monkeypatch):
-    fake = FakeSession([FakeResponse(500) for _ in range(6)])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    sleeps = []
-    monkeypatch.setattr(outlook_export.time, "sleep", sleeps.append)
-    tc = outlook_export.TokenClient("t")
-    with pytest.raises(RuntimeError, match="Zu viele Fehlversuche"):
-        tc.get("https://example.invalid/x")
-    assert len(fake.calls) == 6
-    assert sleeps == [1, 2, 4, 8, 16, 32]   # exponentielles Backoff, Kappe 60
-
-
-def test_tokenclient_4xx_wirft_httperror(monkeypatch):
-    monkeypatch.setattr(outlook_export, "SESSION", FakeSession([FakeResponse(404)]))
-    tc = outlook_export.TokenClient("t")
-    with pytest.raises(requests.HTTPError):
-        tc.get("https://example.invalid/x")
-
-
-def test_tokenclient_get_bytes_liefert_inhalt_und_contenttype(monkeypatch):
-    fake = FakeSession([FakeResponse(content=b"MIME",
-                                     headers={"Content-Type": "message/rfc822"})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    tc = outlook_export.TokenClient("t")
-    assert tc.get_bytes("https://example.invalid/m") == (b"MIME", "message/rfc822")
-
-
-def test_tokenclient_paged_folgt_nextlink(monkeypatch):
-    fake = FakeSession([
-        FakeResponse(payload={"value": [1, 2],
-                              "@odata.nextLink": "https://example.invalid/p2"}),
-        FakeResponse(payload={"value": [3]}),
-    ])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    tc = outlook_export.TokenClient("t")
-    assert list(tc.paged("https://example.invalid/p1", {"$top": 2})) == [1, 2, 3]
-    # Folgeseite ohne die ursprünglichen Params (nextLink enthält sie bereits)
-    assert fake.calls[1]["url"] == "https://example.invalid/p2"
-    assert fake.calls[1]["params"] is None
-
-
-# --------------------------------------------------------------------------
-# Netzwerkfehler: Timeout/Verbindungsabbruch werden wiederholt statt zu beenden
-# --------------------------------------------------------------------------
-def _timeout():
-    return requests.exceptions.ReadTimeout("read timed out")
-
-
-def test_fetch_wiederholt_nach_netzwerkfehler(monkeypatch):
-    fake = FakeSession([_timeout(), _timeout(), FakeResponse(payload={"ok": 1})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    sleeps = []
-    monkeypatch.setattr(outlook_export.time, "sleep", sleeps.append)
-    assert outlook_export.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
-    assert len(fake.calls) == 3
-    assert sleeps == [1, 2]
-
-
-def test_fetch_gibt_nach_allen_netzwerkversuchen_auf(monkeypatch):
-    fake = FakeSession([_timeout() for _ in range(outlook_export.NET_RETRIES)])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
-    with pytest.raises(requests.exceptions.ReadTimeout):
-        outlook_export.TokenClient("t").get("https://example.invalid/x")
-    assert len(fake.calls) == outlook_export.NET_RETRIES
-
-
-def test_netzwerkfehler_verbraucht_keinen_http_versuch(monkeypatch):
-    """Ein Aussetzer darf die Versuche für 429/5xx nicht aufbrauchen."""
-    fake = FakeSession([_timeout()]
-                       + [FakeResponse(500) for _ in range(outlook_export.HTTP_RETRIES - 1)]
-                       + [FakeResponse(payload={"ok": 1})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
-    assert outlook_export.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
-
-
-def test_get_bytes_wiederholt_nach_netzwerkfehler(monkeypatch):
-    fake = FakeSession([_timeout(), FakeResponse(content=b"MIME")])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    monkeypatch.setattr(outlook_export.time, "sleep", lambda s: None)
-    content, _ = outlook_export.TokenClient("t").get_bytes("https://example.invalid/m")
-    assert content == b"MIME"
-    assert fake.calls[0]["timeout"] == outlook_export.TIMEOUT_BYTES
-
-
-# --------------------------------------------------------------------------
-# Graph-Client: Token-Erneuerung bei 401 (ohne echte Anmeldung)
-# --------------------------------------------------------------------------
-class _StubAnmeldung:
-    """Nur was die HTTP-Schicht von auth.Login braucht. Die Anmeldung selbst
-    hat eigene Tests (test_auth.py); hier geht es um Retry und Paging."""
-
-    def __init__(self, token="alt"):
-        self.token = token
-
-    def headers(self):
-        return {"Authorization": f"Bearer {self.token}"}
-
-
-def _bare_graph():
-    """Graph-Instanz ohne interaktiven Login (kein __init__)."""
-    g = object.__new__(outlook_export.Graph)
-    g.anmeldung = _StubAnmeldung()
-    g._refresh_lock = threading.Lock()
-    return g
-
-
-def test_graph_get_erneuert_token_bei_401(monkeypatch):
-    fake = FakeSession([FakeResponse(401), FakeResponse(payload={"ok": True})])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    g = _bare_graph()
-    aufrufe = []
-
-    def refresh():
-        aufrufe.append(1)
-        g.anmeldung.token = "neu"
-    g._refresh = refresh
-
-    assert g.get("https://example.invalid/x", extra_headers={"Prefer": "utc"}) == {"ok": True}
-    assert aufrufe == [1]
-    assert fake.calls[0]["headers"]["Authorization"] == "Bearer alt"
-    assert fake.calls[1]["headers"]["Authorization"] == "Bearer neu"
-    assert fake.calls[1]["headers"]["Prefer"] == "utc"
-
-
-def test_graph_get_bytes_erneuert_token_bei_401(monkeypatch):
-    fake = FakeSession([FakeResponse(401), FakeResponse(content=b"X")])
-    monkeypatch.setattr(outlook_export, "SESSION", fake)
-    g = _bare_graph()
-    g._refresh = lambda: setattr(g.anmeldung, "token", "neu")
-    content, _ = g.get_bytes("https://example.invalid/m")
-    assert content == b"X"
-    assert fake.calls[1]["headers"]["Authorization"] == "Bearer neu"
-
-
-# --------------------------------------------------------------------------
 # Ordnerbaum und Mail-Iteration (mit Fake-Graph)
 # --------------------------------------------------------------------------
 class FakeTreeGraph:
@@ -850,7 +643,7 @@ class FakeExportGraph:
     def paged(self, url, params=None, extra_headers=None):
         yield from self.msgs
 
-    def get_bytes(self, url):
+    def get_bytes(self, url, timeout=None, label=""):
         if self.fail:
             raise outlook_export.TokenExpired()
         return b"MIME " + url.encode(), "message/rfc822"
