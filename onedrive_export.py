@@ -635,8 +635,9 @@ def main():
     try:
         (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
     except auth.TokenExpired:
-        # Dieselbe Meldung wie in den anderen Exporten – die App erkennt daran,
-        # dass der Zugangsschlüssel erneuert werden muss.
+        # Same structured ending as the other exports – the app reacts to the
+        # event, not to the prose.
+        progress.fehler("token_expired")
         print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
               "setzen und erneut starten – bereits Gespiegeltes bleibt erhalten.")
         sys.exit(1)

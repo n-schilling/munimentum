@@ -32,6 +32,7 @@ import os
 import sys
 from pathlib import Path
 
+import progress
 import settings
 
 # Microsofts eigene öffentliche Anwendung. Sie ist in praktisch jedem Tenant
@@ -329,21 +330,17 @@ def angemeldet(client=None, mandant=None):
 # --------------------------------------------------------------------------
 # Für die Skripte: einen Weg wählen und sagen, welcher es wurde
 # --------------------------------------------------------------------------
-def waehle_zugang(mit_schluessel, mit_login, ausgabe=print, nur_still=False):
-    """Den konfigurierten Weg gehen – mit einem Rückfall, der Läufe rettet.
+def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
+    """Pick the configured access path – silently, or fail with a clear reason.
 
-    `mit_schluessel(token)` und `mit_login()` bauen den jeweiligen Client; beide
-    Skripte tun das unterschiedlich (Teams braucht die Kanal-Frage), deshalb
-    kommen sie von dort.
+    `mit_schluessel(token)` and `mit_login()` build the respective client;
+    the scripts differ (Teams negotiates the channel scope), so they come
+    from there.
 
-    Der Rückfall geht nur in eine Richtung: ist „login“ eingestellt, aber kein
-    Cache da, und liegt ein Schlüssel bereit, wird der genommen. Umgekehrt nicht
-    – wer den Schlüssel-Modus wählt, soll nicht überraschend ein Anmeldefenster
-    sehen.
-
-    Im Login-Modus wird deshalb ZUERST still versucht. Ein Anmeldefenster ist
-    eine Unterbrechung; es aufzureißen, obwohl ein gültiger Schlüssel bereitliegt,
-    wäre genau die Überraschung, die der Rückfall verhindern soll.
+    The scripts only ever run as app subprocesses, so nothing here may open
+    a login window: the silent cache is tried first, a pasted key is the
+    fallback, and if neither carries, the run ends with a structured
+    token_expired event – the app then shows its token wizard.
     """
     gewaehlt = modus()
     if gewaehlt == "login":
@@ -358,18 +355,16 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print, nur_still=False):
             ausgabe("Keine gültige Anmeldung im Zwischenspeicher – nutze den "
                     "hinterlegten Zugangsschlüssel für diesen Lauf.")
             return mit_schluessel(schluessel)
-        if nur_still:                               # Zeitplan: niemand sitzt davor
-            raise SystemExit("Keine gültige Anmeldung und kein Zugangsschlüssel.")
-        beschreibe(ausgabe)
-        return mit_login()                          # jetzt erst das Fenster
+        progress.fehler("token_expired")
+        raise SystemExit("Keine gültige Anmeldung und kein Zugangsschlüssel – "
+                         "in der App anmelden oder einen Schlüssel einfügen.")
     schluessel = load_pasted_token()
     if schluessel:
         beschreibe(ausgabe)
         return mit_schluessel(schluessel)
-    # Kein Schlüssel im Schlüssel-Modus: von Hand im Terminal ist die Anmeldung
-    # das Naheliegende – sonst stünde man vor einer Fehlermeldung ohne Ausweg.
-    ausgabe("Kein Zugangsschlüssel hinterlegt – Anmeldung wird geöffnet.")
-    return mit_login()
+    progress.fehler("token_expired")
+    raise SystemExit("Kein Zugangsschlüssel hinterlegt – in der App einen "
+                     "Schlüssel einfügen oder auf Anmeldung umstellen.")
 
 
 

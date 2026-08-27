@@ -331,12 +331,14 @@ def test_schluesselmodus_nimmt_den_schluessel(sauber, monkeypatch):
     assert gesehen == [("schluessel", "abc")]
 
 
-def test_schluesselmodus_ohne_schluessel_meldet_an(sauber):
-    """Von Hand im Terminal ist die Anmeldung der einzige Ausweg – sonst stünde
-    man vor einer Fehlermeldung ohne Weg nach vorn."""
+def test_schluesselmodus_ohne_schluessel_bricht_ab(sauber, capsys):
+    """Kein Fenster aus einem Unterprozess: die App zeigt den Token-Assistenten,
+    sobald das strukturierte Ereignis kommt."""
     gesehen, k, ell = wege()
-    assert auth.waehle_zugang(k, ell, ausgabe=lambda *_: None) == "L"
-    assert gesehen == [("login", False)]
+    with pytest.raises(SystemExit):
+        auth.waehle_zugang(k, ell, ausgabe=lambda *_: None)
+    assert gesehen == []
+    assert "token_expired" in capsys.readouterr().out
 
 
 def test_loginmodus_versucht_zuerst_still(sauber, monkeypatch):
@@ -372,20 +374,20 @@ def test_loginmodus_faellt_auf_den_schluessel_zurueck(sauber, monkeypatch):
     assert any("Zugangsschlüssel" in z for z in zeilen)
 
 
-def test_loginmodus_ohne_ausweg_oeffnet_das_fenster(sauber, monkeypatch):
-    """Kein Cache, kein Schlüssel – dann ist das Fenster das einzig Sinnvolle.
-    Aber erst dann."""
+def test_loginmodus_ohne_ausweg_bricht_ab(sauber, monkeypatch, capsys):
+    """Kein Cache, kein Schlüssel – kein Fenster, sondern das Ereignis, auf das
+    die App mit ihrem Token-Assistenten reagiert."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     gesehen = []
 
     def login(nur_still=False):
         gesehen.append(("login", nur_still))
-        if nur_still:
-            raise SystemExit("kein Cache")
-        return "L"
+        raise SystemExit("kein Cache")
     k = lambda tok: gesehen.append(("schluessel", tok)) or "K"   # noqa: E731
-    assert auth.waehle_zugang(k, login, ausgabe=lambda *_: None) == "L"
-    assert gesehen == [("login", True), ("login", False)]
+    with pytest.raises(SystemExit):
+        auth.waehle_zugang(k, login, ausgabe=lambda *_: None)
+    assert gesehen == [("login", True)], "es wurde mehr als still versucht"
+    assert "token_expired" in capsys.readouterr().out
 
 
 def test_beschreibe_nennt_den_weg(sauber, monkeypatch):
@@ -478,25 +480,24 @@ def test_login_modus_nutzt_den_cache_wenn_er_traegt(monkeypatch):
     assert gesehen == ["still"]
 
 
-def test_ohne_cache_und_ohne_schluessel_kommt_das_fenster(monkeypatch):
-    """Dann ist es das einzig Sinnvolle – aber erst dann."""
+def test_ohne_cache_und_ohne_schluessel_bricht_ab(monkeypatch):
+    """Nie ein Fenster aus einem Unterprozess – die App übernimmt von hier."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False)
-    assert auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll()) == "LOGIN"
-    assert gesehen == ["still", "fenster"]
+    with pytest.raises(SystemExit):
+        auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll())
+    assert gesehen == ["still"]
 
 
 def test_zeitplan_reisst_nie_ein_fenster_auf(monkeypatch):
-    """nur_still heißt: es sitzt niemand davor. Ein Anmeldefenster, das um drei
-    Uhr nachts aufgeht und bis zum Morgen wartet, hilft niemandem."""
+    """Auch der Zeitplan endet still mit dem Ereignis – niemand sitzt davor."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False,
                                                interaktiv_erlaubt=False)
     with pytest.raises(SystemExit):
-        auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll(),
-                           nur_still=True)
+        auth.waehle_zugang(mit_schluessel, mit_login, ausgabe=_Protokoll())
     assert gesehen == ["still"]
 
 

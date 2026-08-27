@@ -141,3 +141,19 @@ def test_skript_meldet_fortschritt(modul, stelle):
     assert "import progress" in quelle, f"{modul} bindet progress nicht ein"
     assert 'progress.melde(' in quelle, f"{modul} meldet nichts"
     assert f'"{stelle}"' in quelle, f"{modul} meldet nicht als {stelle}"
+
+
+# --------------------------------------------------------------------------
+# Fehler-Ereignis: strukturiert statt Prosa-Muster
+# --------------------------------------------------------------------------
+def test_fehler_melden_und_lesen(capsys):
+    progress.fehler("token_expired")
+    zeile = capsys.readouterr().out.strip()
+    assert progress.lies_fehler(zeile) == {"error": "token_expired"}
+    assert progress.lies(zeile) is None and progress.lies_ergebnis(zeile) is None
+
+
+def test_lies_fehler_laesst_gewoehnliche_zeilen_durch():
+    assert progress.lies_fehler("Abgebrochen: Token abgelaufen.") is None
+    assert progress.lies_fehler('@@ERROR@@ kein json') is None
+    assert progress.lies_fehler(None) is None

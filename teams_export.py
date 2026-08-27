@@ -852,6 +852,7 @@ def main():
     done_total = sum(1 for r in state["conversations"].values()
                      if r.get("done") and not r.get("empty"))
     if result == "expired":
+        progress.fehler("token_expired")
         print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
               "setzen und erneut starten – bereits exportierte Konversationen bleiben "
               "erhalten.")

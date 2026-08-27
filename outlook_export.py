@@ -1174,12 +1174,20 @@ def main():
     # Für die Sonderläufe zählt nur der Ausgabeordner; Schalter wie -default
     # sind hier ohne Bedeutung und dürften keinesfalls als Ordner durchgehen.
     nur_ordner = [a for a in sys.argv[1:] if not a.startswith("-")]
-    if "--check" in sys.argv[1:]:
-        return nur_pruefen(nur_ordner)
-    if "--folders" in sys.argv[1:]:
-        return gleiche_ordner_ab(nur_ordner)
-    if "--calendars" in sys.argv[1:]:
-        return gleiche_kalender_ab(nur_ordner)
+    try:
+        if "--check" in sys.argv[1:]:
+            return nur_pruefen(nur_ordner)
+        if "--folders" in sys.argv[1:]:
+            return gleiche_ordner_ab(nur_ordner)
+        if "--calendars" in sys.argv[1:]:
+            return gleiche_kalender_ab(nur_ordner)
+    except TokenExpired:
+        # Same structured ending as the export below – the app reacts to the
+        # event, not to the prose.
+        progress.fehler("token_expired")
+        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token setzen "
+              "und erneut starten.")
+        sys.exit(1)
 
     global OUT_ROOT
     argv = sys.argv[1:]
@@ -1246,6 +1254,7 @@ def main():
         done.close()
 
     if result == "expired":
+        progress.fehler("token_expired")
         print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
               "setzen und erneut starten – bereits Exportiertes bleibt erhalten.")
         sys.exit(1)

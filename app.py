@@ -1215,9 +1215,6 @@ def due_now(last_run, interval_minutes, now):
 # --------------------------------------------------------------------------
 # Läufe ausführen: ein Job nach dem anderen, Ausgabe live in den Puffer
 # --------------------------------------------------------------------------
-_TOKEN_DEAD = re.compile(r"Token abgelaufen|Anmeldung fehlgeschlagen|InvalidAuthenticationToken")
-
-
 class JobRunner:
     """Führt eine Folge von Schritten als Unterprozesse aus, einer zur Zeit.
 
@@ -1408,8 +1405,13 @@ class JobRunner:
                 if step.get("corpus"):
                     self.neu = (self.neu or 0) + fazit["new"]
                 continue
-            if _TOKEN_DEAD.search(line):
-                self.token_expired = True
+            kaputt = progress.lies_fehler(line)
+            if kaputt is not None:
+                # Strukturiert statt Prosa-Muster: bis 5.4 stand hier eine
+                # Regex über den Meldungstext der Skripte.
+                if kaputt["error"] == "token_expired":
+                    self.token_expired = True
+                continue
             self.log(line)
         return self.proc.wait()
 

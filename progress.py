@@ -22,6 +22,7 @@ import json
 
 MARKE = "@@PROGRESS@@"
 MARKE_ERGEBNIS = "@@RESULT@@"
+MARKE_FEHLER = "@@ERROR@@"
 
 
 def melde(done, total=None, what=None):
@@ -65,6 +66,18 @@ def ergebnis(new, unchanged=None, excluded=None, errors=None, extra=None):
         pass
 
 
+def fehler(art):
+    """A structured failure event, e.g. "token_expired".
+
+    The app acts on this instead of pattern-matching the human log text –
+    the prose message stays for the log, this line carries the meaning.
+    """
+    try:
+        print(f"{MARKE_FEHLER} {json.dumps({'error': str(art)})}", flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def _lies(zeile, marke, pflicht):
     text = (zeile or "").strip()
     if not text.startswith(marke):
@@ -90,3 +103,8 @@ def lies(zeile):
 def lies_ergebnis(zeile):
     """Gegenstück zu ergebnis(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
     return _lies(zeile, MARKE_ERGEBNIS, "new")
+
+
+def lies_fehler(zeile):
+    """Gegenstück zu fehler(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    return _lies(zeile, MARKE_FEHLER, "error")

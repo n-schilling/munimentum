@@ -690,10 +690,25 @@ def test_jobrunner_bricht_bei_fehler_ab(sandbox):
 
 
 def test_jobrunner_erkennt_abgelaufenen_token(sandbox):
+    """Über das strukturierte Ereignis – nicht mehr über den Meldungstext."""
+    wurzel = str(Path(app_mod.__file__).resolve().parent)
+    r = app_mod.JobRunner()
+    r.start([_py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
+                      f"progress.fehler('token_expired'); "
+                      f"print('Abgebrochen: Token abgelaufen.'); raise SystemExit(1)")],
+            "Lauf")
+    _warte(r)
+    assert r.token_expired is True
+    texte = "\n".join(str(ln["text"]) for ln in r.lines)
+    assert "@@ERROR@@" not in texte, "das Ereignis selbst ist kein Protokoll"
+
+
+def test_jobrunner_prosa_allein_setzt_kein_token_flag(sandbox):
+    """Ein Skript, das nur den Satz druckt, meldet nichts – die Regex ist weg."""
     r = app_mod.JobRunner()
     r.start([_py_step("print('Abgebrochen: Token abgelaufen.'); raise SystemExit(1)")], "Lauf")
     _warte(r)
-    assert r.token_expired is True
+    assert r.token_expired is False
 
 
 def test_jobrunner_nimmt_nur_einen_lauf_gleichzeitig(sandbox):
