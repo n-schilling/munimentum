@@ -1308,7 +1308,10 @@ class JobRunner:
         return False
 
     def _run(self, steps, label):
-        self.logk("srv.job.start", "head", label=label)
+        # Beschriftungen als geschachtelte Meldung ({"k": …}): mtext() im
+        # Browser übersetzt sie dann – als nackte Zeichenkette stünde der
+        # Schlüssel selbst im Protokoll ("job.step.outlook").
+        self.logk("srv.job.start", "head", label={"k": label, "v": {}})
         hist = self.history
         run_id = hist.start_run(
             label, self._origin,
@@ -1324,12 +1327,13 @@ class JobRunner:
             self.job = {**self.job, "step": step["label"], "index": i,
                         "progress": None}      # jeder Schritt zählt bei null an
             if self._erspart(step):
-                self.logk("srv.job.skipped", "info", step=step["label"])
+                self.logk("srv.job.skipped", "info",
+                          step={"k": step["label"], "v": {}})
                 if hist:
                     hist.record_step(run_id, step["key"], step["label"],
                                      time.time(), skipped=True)
                 continue
-            self.logk("srv.job.step", "head", step=step["label"])
+            self.logk("srv.job.step", "head", step={"k": step["label"], "v": {}})
             begonnen = time.time()
             self._step_result = None
             code = self._exec(step)
@@ -1339,15 +1343,16 @@ class JobRunner:
                                  result=self._step_result, ok=(code == 0))
             if code != 0:
                 ok = False
-                detail = ({"k": "srv.job.aborted", "v": {"step": step["label"]}}
+                schritt = {"k": step["label"], "v": {}}
+                detail = ({"k": "srv.job.aborted", "v": {"step": schritt}}
                           if self.cancelled else
                           {"k": "srv.job.exitcode",
-                           "v": {"step": step["label"], "code": code}})
+                           "v": {"step": schritt, "code": code}})
                 self.logk("srv.job.stepfail", "err", detail=detail)
                 break
-            self.logk("srv.job.stepdone", "ok", step=step["label"])
+            self.logk("srv.job.stepdone", "ok", step={"k": step["label"], "v": {}})
         if ok:
-            self.logk("srv.job.done", "ok", label=label)
+            self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
         if hist:
             hist.finish_run(run_id,
                             "done" if ok

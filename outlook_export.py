@@ -248,7 +248,6 @@ def gleiche_kalender_ab(argv):
     """--calendars: nur die Kalenderliste holen und ablegen, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(TokenClient, graph_login)
-    print(f"Gleiche Kalenderliste ab: {out.resolve()}")
     vorher = folders.lade(out, folders.KALENDER)
     daten = folders.speichere(out, kalender_eintraege(list_calendars(graph)),
                               vorher, datei=folders.KALENDER)
@@ -974,7 +973,6 @@ def gleiche_ordner_ab(argv):
     """--folders: nur die Struktur holen und ablegen, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(TokenClient, graph_login)
-    print(f"Gleiche Ordnerstruktur ab: {out.resolve()}")
     vorher = folders.lade(out)
     daten = folders.speichere(out, baum_eintraege(graph), vorher)
     regeln = aktuelle_regeln()
@@ -1055,7 +1053,6 @@ def nur_pruefen(argv):
     """--check: nur die Vollständigkeit melden, nichts exportieren."""
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(TokenClient, graph_login)
-    print(f"Prüfe Vollständigkeit gegen das Postfach: {out.resolve()}")
     bericht = pruefe_vollstaendigkeit(
         graph, out, lies_verschwunden(out / GONE_FILE))
     ziel = schreibe_bericht(out, bericht)
@@ -1183,7 +1180,6 @@ def main():
         OUT_ROOT = argv[0]
 
     workers = settings.number("EXPORT_WORKERS", "workers")
-    print(f"Ausgabeordner: {OUT_ROOT}")
     if workers > 4:
         print("Hinweis: Exchange Online erlaubt nur 4 gleichzeitige Anfragen pro "
               f"Postfach – {workers} Worker erzeugen v. a. Drosselung. 4 ist das "
@@ -1200,10 +1196,6 @@ def main():
     result = "done"
 
     try:
-        me = graph.get(f"{GRAPH}/me")
-        print(f"Angemeldet als {me.get('displayName')} ({me.get('userPrincipalName')})")
-        print(f"Parallele Downloads: {workers} (Exchange-Limit pro Postfach)")
-
         categories = selected_categories()
         selected_mail, sel_cals, want_con = [], [], False
 
@@ -1267,7 +1259,6 @@ def main():
     if stats.get("gone_total"):
         print(f"Nicht mehr im Postfach: {stats['gone_total']} Mails "
               f"({stats.get('gone_new', 0)} neu erkannt) – die Dateien bleiben.")
-    print(f"Ordner: {out.resolve()}")
 
 
 if __name__ == "__main__":

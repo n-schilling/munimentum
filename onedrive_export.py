@@ -458,7 +458,6 @@ def lauf(graph, out):
     regeln = aktuelle_regeln()
     bestand = Bestand(out / BESTAND_DATEI)
     weiter = lies_delta(out)
-    print(f"OneDrive-Spiegel: {out.resolve()}")
     print("  Aufzählung: " + ("nur Änderungen seit dem letzten Lauf"
                               if weiter else "vollständig (erster Lauf)"))
 
@@ -564,7 +563,6 @@ schreibe_bericht = export_util.schreibe_bericht
 def nur_pruefen(graph, out):
     """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
     out = Path(out)
-    print(f"Prüfe den Spiegel gegen OneDrive: {out.resolve()}")
     eintraege, _ = sammle(graph, None)
     bericht = pruefe_vollstaendigkeit(eintraege, out, aktuelle_regeln())
     ziel = schreibe_bericht(out, bericht)
@@ -592,7 +590,6 @@ def nur_ordner(graph, out):
     hielte der nächste Export die noch nie geholten Dateien für erledigt.
     """
     out = Path(out)
-    print(f"Gleiche die OneDrive-Ordner ab: {out.resolve()}")
     eintraege, _ = sammle(graph, None)
     bestand = Bestand(out / BESTAND_DATEI)
     plan = plane(eintraege, bestand, out, aktuelle_regeln())

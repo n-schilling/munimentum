@@ -816,6 +816,11 @@ def test_jobrunner_ueberspringt_index_wenn_nichts_neu_ist(sandbox):
     assert r.last["ok"]
     assert "srv.job.skipped" in text          # und sagt auch, warum
     assert "@@RESULT@@" not in text           # die Meldung selbst ist kein Protokoll
+    # Der Schrittname ist eine geschachtelte Meldung – nur so übersetzt die
+    # Oberfläche ihn; als nackte Zeichenkette stünde "job.step.index" im Log.
+    eintraege = [ln["text"] for ln in r.lines if isinstance(ln["text"], dict)]
+    uebersprungen = [e for e in eintraege if e["k"] == "srv.job.skipped"][0]
+    assert uebersprungen["v"]["step"] == {"k": "job.step.index", "v": {}}
 
 
 def test_jobrunner_indiziert_wenn_es_etwas_neues_gibt(sandbox):
@@ -2594,6 +2599,20 @@ def _seiten_js():
     treffer = re.search(r"<script>(.*?)</script>", app_mod.PAGE, re.S)
     assert treffer, "Kein <script>-Block in der Seite"
     return treffer.group(1)
+
+
+# Schritt-Überschriften kommen als geschachtelte Meldung und werden im
+# Browser aufgelöst – vorher stand "job.step.outlook" wörtlich im Protokoll.
+PRUEFUNG_SCHRITTKOPF = GRUNDZUSTAND + """
+var zeile = mtext({k: 'srv.job.step', v: {step: {k: 'job.step.outlook', v: {}}}});
+pruefe(zeile.indexOf('Outlook') >= 0, 'Schritt nicht uebersetzt: ' + zeile);
+pruefe(zeile.indexOf('job.step.') < 0, 'Schluessel im Protokoll: ' + zeile);
+console.log('OK');
+"""
+
+
+def test_schrittkopf_wird_uebersetzt():
+    _in_node(PRUEFUNG_SCHRITTKOPF)
 
 
 PRUEFUNG_BEENDEN = GRUNDZUSTAND + """

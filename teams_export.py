@@ -776,7 +776,6 @@ def main():
         OUT_ROOT = argv[0]
 
     workers = settings.number("EXPORT_WORKERS", "workers")
-    print(f"Ausgabeordner: {OUT_ROOT}")
     graph_client.konfiguriere(workers)
 
     # 1) Kategorien bestimmen (vor dem Login, damit der Kanal-Scope nur bei
@@ -809,11 +808,7 @@ def main():
     result = "done"
 
     try:
-        me = graph.get(f"{GRAPH}/me")
-        my_id = me.get("id")
-        print(f"Angemeldet als {me.get('displayName')} ({me.get('userPrincipalName')})")
-        print(f"Parallele Konversationen: {workers}  "
-              f"(Teams-Limit: ~1 Anfrage/s je Chat/Kanal, 4/s je Team)")
+        my_id = graph.get(f"{GRAPH}/me").get("id")
 
         selected_teams = select_teams(graph) if want_channels else []
 
@@ -851,8 +846,6 @@ def main():
     # der Index kennt sie also in der alten Fassung.
     progress.ergebnis(stats["new"] + stats["updated"], unchanged=stats["skipped"],
                       extra={"updated": stats["updated"], "empty": stats["empty"]})
-    print(f"Ordner: {out.resolve()}")
-    print(f"Im Browser öffnen: {out.resolve() / 'index.html'}")
 
 
 if __name__ == "__main__":

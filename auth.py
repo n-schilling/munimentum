@@ -345,9 +345,7 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
     gewaehlt = modus()
     if gewaehlt == "login":
         try:
-            klient = mit_login(nur_still=True)      # ohne Rückfrage
-            beschreibe(ausgabe)
-            return klient
+            return mit_login(nur_still=True)        # ohne Rückfrage
         except SystemExit:
             pass
         schluessel = load_pasted_token()
@@ -360,7 +358,6 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
                          "in der App anmelden oder einen Schlüssel einfügen.")
     schluessel = load_pasted_token()
     if schluessel:
-        beschreibe(ausgabe)
         return mit_schluessel(schluessel)
     progress.fehler("token_expired")
     raise SystemExit("Kein Zugangsschlüssel hinterlegt – in der App einen "
