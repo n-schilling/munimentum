@@ -478,9 +478,6 @@ def main():
     # Das letzte freie Argument ist der Outlook-Export: bis 5.3 kam davor noch
     # der Teams-Ordner (für die HTML-Seite) – alte Aufrufe laufen so weiter.
     outlook_dir = pos[-1] if pos else settings.value("outlook_dir", settings.OUTLOOK_DIR)
-    hinweis = settings.report()
-    if hinweis:
-        print(hinweis)
 
     if not kalender_json:
         raise SystemExit("Nutzung: python3 combined_search.py [outlook-ordner] "

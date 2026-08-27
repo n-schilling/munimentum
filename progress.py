@@ -9,9 +9,9 @@ die nur die Zahlen enthält:
 
     @@PROGRESS@@ {"done": 37, "total": 1200, "what": "chats"}
 
-Nur wenn EXPORT_PROGRESS gesetzt ist. Beim Aufruf von Hand im Terminal bleibt
-die Ausgabe damit unverändert; die App setzt die Variable und filtert die
-Zeilen aus dem Protokoll wieder heraus.
+Die Marker werden immer gesendet – die App ist der einzige Aufrufer und
+filtert sie aus dem Protokoll heraus. Bis 5.4 hing das an EXPORT_PROGRESS,
+einer Weiche, die nur für Handaufrufe existierte.
 
 "total" darf fehlen. Der Outlook-Export entdeckt seine Mails erst beim Laufen –
 er kennt keine Gesamtzahl, und einen Prozentwert zu erfinden wäre schlechter
@@ -19,22 +19,13 @@ als keiner. Die App zeigt dann die Zahl statt eines gefüllten Balkens.
 """
 
 import json
-import os
 
 MARKE = "@@PROGRESS@@"
 MARKE_ERGEBNIS = "@@RESULT@@"
 
 
-def aktiv():
-    """Meldet die App gerade zu? Sonst bleibt die Ausgabe wie gewohnt."""
-    return os.environ.get("EXPORT_PROGRESS", "").strip().lower() not in (
-        "", "0", "false", "no", "nein", "off")
-
-
 def melde(done, total=None, what=None):
-    """Eine Fortschrittszeile ausgeben – tut nichts, wenn niemand zuhört."""
-    if not aktiv():
-        return
+    """Eine Fortschrittszeile ausgeben."""
     daten = {"done": int(done)}
     if total is not None:
         daten["total"] = int(total)
@@ -61,8 +52,6 @@ def ergebnis(new, unchanged=None, excluded=None, errors=None, extra=None):
     `new` == 0 means the corpus did not change, and the app can skip
     indexing and the calendar rebuild.
     """
-    if not aktiv():
-        return
     daten = {"new": int(new)}
     for key, wert in (("unchanged", unchanged), ("excluded", excluded),
                       ("errors", errors)):

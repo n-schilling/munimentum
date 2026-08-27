@@ -1097,7 +1097,6 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if reconstruct is None:
         reconstruct = bool(cfg.get("calendar_reconstruct", True))
     base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
-                "EXPORT_PROGRESS": "1",   # Zahlen für den Balken, siehe progress.py
                 **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token

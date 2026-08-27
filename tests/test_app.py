@@ -658,7 +658,7 @@ def test_stream_lines_ueberspringt_leerzeilen():
 # --------------------------------------------------------------------------
 def _py_step(code, label="Schritt"):
     return {"key": "t", "label": label, "argv": [sys.executable, "-c", code],
-            "env": {"EXPORT_PROGRESS": "1"}}
+            "env": {}}
 
 
 def _warte(runner, sekunden=15):

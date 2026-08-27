@@ -1,12 +1,10 @@
 """Tests für progress.py – Fortschritt maschinenlesbar melden.
 
 Der Kanal existiert, damit der Balken in der App nicht davon abhängt, wie ein
-Skript seine Fortschrittssätze formuliert. Zwei Zusagen tragen das:
-
-  * Ohne EXPORT_PROGRESS bleibt die Ausgabe unverändert. Wer die Skripte von
-    Hand im Terminal aufruft, soll die Protokollzeilen nicht sehen.
-  * lies() erkennt gewöhnliche Ausgabe als solche. Eine Skriptzeile, die
-    zufällig nach Fortschritt aussieht, darf nicht als Zahl gedeutet werden.
+Skript seine Fortschrittssätze formuliert. Die tragende Zusage: lies() erkennt
+gewöhnliche Ausgabe als solche – eine Skriptzeile, die zufällig nach
+Fortschritt aussieht, darf nicht als Zahl gedeutet werden. Gesendet wird
+immer; die App ist der einzige Aufrufer und filtert die Marker selbst.
 """
 
 import json
@@ -16,35 +14,10 @@ import pytest
 import progress
 
 
-@pytest.fixture(autouse=True)
-def leise(monkeypatch):
-    monkeypatch.delenv("EXPORT_PROGRESS", raising=False)
-
-
-# --------------------------------------------------------------------------
-# Nur melden, wenn jemand zuhört
-# --------------------------------------------------------------------------
-@pytest.mark.parametrize("wert,erwartet", [
-    (None, False), ("", False), ("0", False), ("false", False), ("no", False),
-    ("nein", False), ("off", False), ("1", True), ("true", True), ("ja", True),
-])
-def test_aktiv(monkeypatch, wert, erwartet):
-    if wert is not None:
-        monkeypatch.setenv("EXPORT_PROGRESS", wert)
-    assert progress.aktiv() is erwartet
-
-
-def test_melde_schweigt_ohne_variable(capsys):
-    """Beim Aufruf von Hand bleibt die Ausgabe genau wie zuvor."""
-    progress.melde(5, 10, "chats")
-    assert capsys.readouterr().out == ""
-
-
 # --------------------------------------------------------------------------
 # Melden
 # --------------------------------------------------------------------------
-def test_melde_mit_gesamtzahl(monkeypatch, capsys):
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+def test_melde_mit_gesamtzahl(capsys):
     progress.melde(37, 1200, "chats")
     zeile = capsys.readouterr().out.strip()
     assert zeile.startswith(progress.MARKE)
@@ -52,10 +25,9 @@ def test_melde_mit_gesamtzahl(monkeypatch, capsys):
         "done": 37, "total": 1200, "what": "chats"}
 
 
-def test_melde_ohne_gesamtzahl(monkeypatch, capsys):
+def test_melde_ohne_gesamtzahl(capsys):
     """Der Outlook-Export entdeckt seine Mails erst im Laufen – eine erfundene
     Prozentzahl wäre schlechter als gar keine."""
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
     progress.melde(1234, what="mails")
     daten = json.loads(capsys.readouterr().out.strip()[len(progress.MARKE):])
     assert daten == {"done": 1234, "what": "mails"}
@@ -64,7 +36,6 @@ def test_melde_ohne_gesamtzahl(monkeypatch, capsys):
 
 def test_melde_haelt_keinen_lauf_auf(monkeypatch, capsys):
     """Eine misslungene Meldung darf einen stundenlangen Export nicht beenden."""
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
 
     def kaputt(*a, **kw):
         raise OSError("Rohr zu")
@@ -93,8 +64,7 @@ def test_lies_gibt_gewoehnliche_zeilen_zurueck(zeile):
     assert progress.lies(zeile) is None
 
 
-def test_melden_und_lesen_passen_zusammen(monkeypatch, capsys):
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+def test_melden_und_lesen_passen_zusammen(capsys):
     progress.melde(7, 8, "embeddings")
     assert progress.lies(capsys.readouterr().out) == {
         "done": 7, "total": 8, "what": "embeddings"}
@@ -103,13 +73,7 @@ def test_melden_und_lesen_passen_zusammen(monkeypatch, capsys):
 # --------------------------------------------------------------------------
 # Ergebnis: was der Schritt bewirkt hat
 # --------------------------------------------------------------------------
-def test_ergebnis_schweigt_ohne_variable(capsys):
-    progress.ergebnis(0, unchanged=67)
-    assert capsys.readouterr().out == ""
-
-
-def test_ergebnis_melden_und_lesen(monkeypatch, capsys):
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
+def test_ergebnis_melden_und_lesen(capsys):
     progress.ergebnis(0, unchanged=67, excluded=4, errors=1,
                       extra={"moved": 2})
     assert progress.lies_ergebnis(capsys.readouterr().out) == {
@@ -118,7 +82,6 @@ def test_ergebnis_melden_und_lesen(monkeypatch, capsys):
 
 
 def test_ergebnis_haelt_keinen_lauf_auf(monkeypatch):
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
 
     def kaputt(*a, **kw):
         raise OSError("Rohr zu")
@@ -137,9 +100,8 @@ def test_lies_ergebnis_gibt_gewoehnliche_zeilen_zurueck(zeile):
     assert progress.lies_ergebnis(zeile) is None
 
 
-def test_die_beiden_kanaele_verwechseln_sich_nicht(monkeypatch, capsys):
+def test_die_beiden_kanaele_verwechseln_sich_nicht(capsys):
     """Beide laufen über dieselbe Leitung – jeder darf nur seine Zeile lesen."""
-    monkeypatch.setenv("EXPORT_PROGRESS", "1")
     progress.melde(5, 10)
     progress.ergebnis(7)
     fortschritt, fazit = capsys.readouterr().out.strip().splitlines()

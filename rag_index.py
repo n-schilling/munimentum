@@ -407,9 +407,6 @@ def main():
                     help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
                          "Suche und MCP laufen dann rein lexikalisch.")
     a = ap.parse_args()
-    hinweis = settings.report()
-    if hinweis:
-        print(hinweis)
 
     if a.no_embeddings:
         print(f"Index → {a.store}  (nur Volltext, ohne Embeddings)")

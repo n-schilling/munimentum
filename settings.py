@@ -1,28 +1,19 @@
 #!/usr/bin/env python3
 """
-settings.py – app_config.json als Vorgabeschicht für die Einzelskripte.
+settings.py – the configuration schema and the app_config.json access layer.
 
-Die Einstellungen aus der Oberfläche (app.py) landen in app_config.json. Ohne
-dieses Modul gälten sie nur für Läufe, die die App selbst startet: ruft jemand
-`python3 outlook_export.py` direkt auf, kennt das Skript nur seine eingebauten
-Vorgaben. Genau das überrascht – eine Konfigurationsdatei im Projektordner
-sollte gelten, egal wer startet.
+The settings edited in the interface (app.py) live in app_config.json; the
+subprograms read the same file through this module. Precedence, strongest
+first:
 
-Rangfolge, von stark nach schwach:
+    environment variable  >  app_config.json  >  built-in default (VORGABEN)
 
-    Umgebungsvariable  >  app_config.json  >  eingebaute Vorgabe
+The environment stays on top because the app hands its in-memory settings to
+every subprocess as variables – that keeps a run unambiguous even while the
+file is being edited.
 
-Die Umgebung bleibt oben, damit ein einzelner Lauf die Datei ausstechen kann
-(`INCLUDE_HIDDEN=0 python3 outlook_export.py`) – und damit die App, die alles
-als Umgebungsvariable mitgibt, unverändert eindeutig bleibt.
-
-Bewusst NICHT aus der Datei bedient wird die Auswahl, was exportiert werden
-soll (outlook_categories / teams_categories). Wer ein Skript direkt startet,
-will gefragt werden; sonst wäre der interaktive Modus faktisch abgeschafft.
-
-Gesucht wird die Datei in MUNIMENTUM_DATA_DIR (früher OFFICE365_DATA_DIR),
-sonst neben diesem Modul.
-Nur Standardbibliothek.
+The file is looked up in MUNIMENTUM_DATA_DIR (OFFICE365_DATA_DIR until
+4.2.0), otherwise next to this module. Standard library only.
 """
 
 import json
@@ -172,7 +163,6 @@ def _vorgabe(key, default):
 
 
 _cache = {"pfad": None, "daten": None}
-_uebernommen = []          # (Schlüssel, Anzeigewert) – alles, was aus der Datei kam
 
 
 def data_dir_env():
@@ -213,17 +203,12 @@ def load(path=None):
 
 
 def reset():
-    """Puffer und Merkliste leeren (Tests, erneutes Einlesen)."""
+    """Puffer leeren (Tests, erneutes Einlesen)."""
     _cache.update(pfad=None, daten=None)
-    _uebernommen.clear()
 
 
 def _truthy(raw):
     return str(raw).strip().lower() not in _FALSCH
-
-
-def _note(key, anzeige):
-    _uebernommen.append((key, anzeige))
 
 
 def flag(env_name, key, default=_AUS_SCHEMA):
@@ -233,8 +218,7 @@ def flag(env_name, key, default=_AUS_SCHEMA):
     if raw is not None:
         return _truthy(raw)
     val = load().get(key)
-    if isinstance(val, bool) and val is not default:
-        _note(key, "an" if val else "aus")
+    if isinstance(val, bool):
         return val
     return default
 
@@ -242,16 +226,13 @@ def flag(env_name, key, default=_AUS_SCHEMA):
 def number(env_name, key, default=_AUS_SCHEMA, low=1):
     """Zahl: Umgebung, sonst Datei, sonst Vorgabe. Unbrauchbares wird ignoriert."""
     default = _vorgabe(key, default)
-    for quelle, roh in (("env", os.environ.get(env_name)), ("datei", load().get(key))):
+    for roh in (os.environ.get(env_name), load().get(key)):
         if roh is None or isinstance(roh, bool):
             continue
         try:
-            zahl = max(low, int(roh))
+            return max(low, int(roh))
         except (TypeError, ValueError):
             continue
-        if quelle == "datei" and zahl != default:
-            _note(key, zahl)
-        return zahl
     return default
 
 
@@ -280,20 +261,5 @@ def folders(env_name, key, default=_AUS_SCHEMA):
         return {t.strip().lower() for t in raw.split(",") if t.strip()}
     val = load().get(key)
     if isinstance(val, list):
-        aus_datei = {str(t).strip().lower() for t in val if str(t).strip()}
-        if aus_datei != set(default):
-            _note(key, f"{len(aus_datei)} Ordner")
-        return aus_datei
+        return {str(t).strip().lower() for t in val if str(t).strip()}
     return set(default)
-
-
-def report():
-    """Einzeiler, was aus der Datei kam – oder "" wenn nichts.
-
-    Ohne diese Zeile wundert man sich später über eine Datei, die man vergessen
-    hat: das Skript verhielte sich anders als dokumentiert, ohne es zu sagen.
-    """
-    if not _uebernommen:
-        return ""
-    teile = ", ".join(f"{k}={v}" for k, v in _uebernommen)
-    return f"Aus {config_path().name} übernommen: {teile}"

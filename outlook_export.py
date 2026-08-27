@@ -1188,9 +1188,6 @@ def main():
 
     workers = settings.number("EXPORT_WORKERS", "workers")
     print(f"Ausgabeordner: {OUT_ROOT}")
-    hinweis = settings.report()
-    if hinweis:
-        print(hinweis)
     if workers > 4:
         print("Hinweis: Exchange Online erlaubt nur 4 gleichzeitige Anfragen pro "
               f"Postfach – {workers} Worker erzeugen v. a. Drosselung. 4 ist das "

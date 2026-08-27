@@ -792,9 +792,6 @@ def main():
 
     workers = settings.number("EXPORT_WORKERS", "workers")
     print(f"Ausgabeordner: {OUT_ROOT}")
-    hinweis = settings.report()
-    if hinweis:
-        print(hinweis)
     graph_client.konfiguriere(workers)
 
     # 1) Kategorien bestimmen (vor dem Login, damit der Kanal-Scope nur bei

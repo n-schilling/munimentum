@@ -155,52 +155,6 @@ def test_folders_ignoriert_unpassenden_typ(sauber):
     assert settings.folders("X_ORD", "x_ord", {"a"}) == {"a"}
 
 
-# --------------------------------------------------------------------------
-# report(): nur melden, was wirklich gegriffen hat
-# --------------------------------------------------------------------------
-def test_report_ohne_datei_ist_leer(sauber):
-    settings.flag("X_FLAG", "x_flag", True)
-    settings.number("X_ZAHL", "x_zahl", 4)
-    assert settings.report() == ""
-
-
-def test_report_nennt_die_uebernommenen_werte(sauber):
-    schreibe(sauber, x_flag=False, x_zahl=2, x_ord=["archiv"])
-    settings.flag("X_FLAG", "x_flag", True)
-    settings.number("X_ZAHL", "x_zahl", 4)
-    settings.folders("X_ORD", "x_ord", set())
-    text = settings.report()
-    assert text.startswith("Aus app_config.json übernommen:")
-    assert "x_flag=aus" in text and "x_zahl=2" in text and "x_ord=1 Ordner" in text
-
-
-def test_report_schweigt_bei_werten_wie_die_vorgabe(sauber):
-    """Eine Datei, die nur die Vorgaben wiederholt, ändert nichts – dann ist die
-    Meldung nur Rauschen."""
-    schreibe(sauber, x_flag=True, x_zahl=4, x_ord=["a"])
-    settings.flag("X_FLAG", "x_flag", True)
-    settings.number("X_ZAHL", "x_zahl", 4)
-    settings.folders("X_ORD", "x_ord", {"a"})
-    assert settings.report() == ""
-
-
-def test_report_schweigt_wenn_die_umgebung_gewinnt(sauber, monkeypatch):
-    """Genau der Fall der App: sie setzt alles als Umgebungsvariable, also darf
-    kein Skript behaupten, es habe etwas aus der Datei übernommen."""
-    schreibe(sauber, x_flag=False, x_zahl=2)
-    monkeypatch.setenv("X_FLAG", "1")
-    monkeypatch.setenv("X_ZAHL", "8")
-    settings.flag("X_FLAG", "x_flag", True)
-    settings.number("X_ZAHL", "x_zahl", 4)
-    assert settings.report() == ""
-
-
-def test_value_taucht_nie_im_report_auf(sauber):
-    """value() liefert nur Vorgaben für Argumente, die die Kommandozeile
-    aussticht – "übernommen" wäre dort falsch, sobald jemand sie mitgibt."""
-    schreibe(sauber, x_text="anders")
-    assert settings.value("x_text", "vorgabe") == "anders"
-    assert settings.report() == ""
 
 
 # --------------------------------------------------------------------------

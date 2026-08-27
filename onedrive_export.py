@@ -626,9 +626,6 @@ def main():
     if _hilfe_gewuenscht(argv):
         print(__doc__)
         return
-    hinweis = settings.report()
-    if hinweis:
-        print(hinweis)
     struktur = "--folders" in argv
     pruefen = "--check" in argv
     argv = [a for a in argv if not a.startswith("--")]

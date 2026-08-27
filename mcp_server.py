@@ -1197,9 +1197,6 @@ def main():
     a.store = a.store or str(basis / settings.STORE_DIR)
     a.teams = a.teams or str(basis / settings.TEAMS_DIR)
     a.outlook = a.outlook or str(basis / settings.OUTLOOK_DIR)
-    note = settings.report()
-    if note:
-        print(note, file=sys.stderr)
 
     # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
     # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
