@@ -148,7 +148,7 @@ def _abgeschaltet_server():
     """
     aus = MCPServer("munimentum", title="Munimentum", version=version.VERSION,
                     website_url="https://github.com/n-schilling/munimentum",
-                    instructions=AUS_TEXT)
+                    instructions=AUS_TEXT, log_level="WARNING")
 
     @aus.tool(annotations=_READONLY)
     def archive_unavailable() -> dict:
@@ -168,6 +168,9 @@ mcp = MCPServer(
     version=version.VERSION,
     website_url="https://github.com/n-schilling/munimentum",
     instructions=_INSTRUCTIONS,
+    # WARNING silences uvicorn's startup narration ("Started server process",
+    # "Press CTRL+C to quit" …) in the app log; real problems still surface.
+    log_level="WARNING",
 )
 _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 
@@ -1246,8 +1249,8 @@ def main():
     print(f"munimentum MCP: {n_chunks} chunks · {backend}", file=sys.stderr)
     if a.transport == "http":
         security = _transport_security(a.host, a.port, a.allowed_host)
-        print(f"MCP endpoint: http://{a.host}:{a.port}{_HTTP_PATH}",
-              file=sys.stderr)
+        # No endpoint echo here – the app already logs "MCP server started
+        # on port N", and the settings show the exact snippet to paste.
         if security is not None:
             print(f"Host/Origin restricted to: {', '.join(security.allowed_hosts)}",
                   file=sys.stderr)
