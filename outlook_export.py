@@ -325,6 +325,10 @@ def gleiche_kalender_ab(argv):
             print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
                   + (" …" if len(liste) > 5 else ""))
     print(f"Abgelegt: {folders.pfad(out, folders.KALENDER)}")
+    progress.ergebnis(len(daten["neu"]),
+                      extra={"total": len(daten["ordner"]),
+                             "chosen": len(gewaehlt),
+                             "gone": len(daten["verschwunden"])})
 
 
 # ---------------------------------------------------------------------------
@@ -1049,6 +1053,10 @@ def gleiche_ordner_ab(argv):
             print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
                   + (" …" if len(liste) > 5 else ""))
     print(f"Abgelegt: {folders.pfad(out)}")
+    progress.ergebnis(len(daten["neu"]),
+                      extra={"total": z["ordner_gesamt"],
+                             "gone": len(daten["verschwunden"]),
+                             "renamed": len(daten["umbenannt"])})
 
 
 def auswahl_aus_puffer(daten, regeln):
@@ -1126,6 +1134,10 @@ def nur_pruefen(argv):
         if z["fehlt"]:
             print(f"  {z['fehlt']:>7} fehlen in {z['ordner']}")
     print(f"Bericht: {ziel}")
+    progress.ergebnis(0, excluded=bericht["ausgelassen"],
+                      extra={"expected": bericht["erwartet"],
+                             "present": bericht["vorhanden"],
+                             "missing": bericht["fehlt"]})
 
 
 # ---------------------------------------------------------------------------
@@ -1300,7 +1312,10 @@ def main():
         return sum(1 for rel in done.done.values()
                    if rel.endswith(suffix) and (out / rel).exists())
     print(f"\nFertig. Neu exportiert: {stats['new']}, übersprungen: {stats['skipped']}.")
-    progress.ergebnis(stats["new"], uebersprungen=stats["skipped"])
+    progress.ergebnis(stats["new"], unchanged=stats["skipped"],
+                      errors=stats.get("folder_errors"),
+                      extra={k: v for k, v in stats.items()
+                             if k in ("gone_new", "moved", "gone_healed")})
     if stats.get("folder_errors"):
         print(f"{stats['folder_errors']} Ordner konnten nicht vollständig gelistet "
               "werden – Skript erneut starten, um den Rest zu holen.")

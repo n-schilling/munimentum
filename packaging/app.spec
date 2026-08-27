@@ -47,7 +47,7 @@ VERSION = _v["VERSION"]
 TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index",
                  "combined_search", "mcp_server", "corpus",
                  "auth", "export_util", "folders", "graph_client",
-                 "ollama_client", "settings",
+                 "ollama_client", "run_history", "settings",
                  "i18n", "updates", "version", "store_layout",
                  "progress", "answer"]
 

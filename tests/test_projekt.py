@@ -178,8 +178,8 @@ def test_spec_listet_die_geteilten_module():
     `git checkout` bei einer Gegenprobe abhandengekommen."""
     text = (WURZEL / "packaging" / "app.spec").read_text(encoding="utf-8")
     for modul in ("auth", "export_util", "folders", "graph_client",
-                  "ollama_client", "settings", "progress", "answer", "corpus",
-                  "store_layout"):
+                  "ollama_client", "run_history", "settings", "progress",
+                  "answer", "corpus", "store_layout"):
         assert f'"{modul}"' in text, f"{modul} fehlt in TEILPROGRAMME"
 
 

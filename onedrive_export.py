@@ -497,7 +497,7 @@ def lauf(graph, out):
     if fehler:
         print("  Wegen der Fehler wird beim nächsten Lauf noch einmal "
               "vollständig aufgezählt.")
-    progress.ergebnis(fertig, uebersprungen=plan["ausgelassen"], fehler=fehler)
+    progress.ergebnis(fertig, excluded=plan["ausgelassen"], errors=fehler)
     return fertig
 
 
@@ -581,6 +581,10 @@ def nur_pruefen(graph, out):
         if z["fehlt"]:
             print(f"  {z['fehlt']:>7} fehlen in {z['ordner']}")
     print(f"Bericht: {ziel}")
+    progress.ergebnis(0, excluded=bericht["ausgelassen"],
+                      extra={"expected": bericht["erwartet"],
+                             "present": bericht["vorhanden"],
+                             "missing": bericht["fehlt"]})
 
 
 def nur_ordner(graph, out):
@@ -608,6 +612,10 @@ def nur_ordner(graph, out):
             print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
                   + (" …" if len(liste) > 5 else ""))
     print(f"Abgelegt: {folders.pfad(out)}")
+    progress.ergebnis(len(daten["neu"]),
+                      extra={"total": z["ordner_gesamt"],
+                             "gone": len(daten["verschwunden"]),
+                             "renamed": len(daten["umbenannt"])})
 
 
 _hilfe_gewuenscht = export_util.hilfe_gewuenscht

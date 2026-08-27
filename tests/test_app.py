@@ -461,7 +461,7 @@ def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollam
     """Der gemeldete Fall, einmal durch den ganzen Weg: /api/run -> build_steps."""
     gesehen = {}
 
-    def merken(steps, label):
+    def merken(steps, label, **kw):
         gesehen["steps"] = steps
         return True
     app = app_mod.App()
@@ -775,8 +775,11 @@ def test_jobrunner_setzt_den_fortschritt_je_schritt_zurueck(sandbox):
 # --------------------------------------------------------------------------
 def _melde_step(neu, label="job.step.outlook"):
     wurzel = str(Path(app_mod.__file__).resolve().parent)
-    return _py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
-                    f"print('Fertig.'); progress.ergebnis({neu})", label)
+    schritt = _py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
+                       f"print('Fertig.'); progress.ergebnis({neu})", label)
+    # Wie in build_steps: nur Export-Schritte zählen für die Überspring-Logik.
+    schritt["corpus"] = True
+    return schritt
 
 
 def _folge(sandbox, neu, ziel_da=True, steps_extra=None):
@@ -828,6 +831,52 @@ def test_jobrunner_indiziert_wenn_der_export_nichts_meldet(sandbox):
     r.start([_py_step("print('Fertig.')"), folge], "job.export")
     _warte(r)
     assert "INDIZIERT" in "\n".join(str(ln["text"]) for ln in r.lines)
+
+
+def test_jobrunner_schreibt_die_lauf_historie(sandbox, tmp_path):
+    import run_history
+    h = run_history.RunHistory(tmp_path / "runs.db")
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('x')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner(h)
+    r.start([_melde_step(0), folge], "job.export", origin="schedule",
+            context={"elements": {"onedrive": True}, "semantic": False,
+                     "workers": 2})
+    _warte(r)
+
+    runs = h.list_runs()
+    assert len(runs) == 1
+    lauf = runs[0]
+    assert lauf["job_type"] == "job.export" and lauf["origin"] == "schedule"
+    assert lauf["result"] == "done" and lauf["workers"] == 2
+    assert lauf["semantic"] == 0 and lauf["elements"] == {"onedrive": True}
+    export, index = lauf["steps"]
+    assert export["label"] == "job.step.outlook"
+    assert export["new"] == 0 and export["ok"] == 1
+    assert export["duration_s"] is not None
+    assert index["label"] == "job.step.index" and index["skipped"] == 1
+
+
+def test_jobrunner_historie_nennt_den_fehlschlag(sandbox, tmp_path):
+    import run_history
+    h = run_history.RunHistory(tmp_path / "runs.db")
+    r = app_mod.JobRunner(h)
+    r.start([_py_step("import sys; sys.exit(3)", "job.step.outlook")],
+            "job.export")
+    _warte(r)
+    lauf = h.list_runs()[0]
+    assert lauf["result"] == "error"
+    assert lauf["steps"][0]["ok"] == 0
+
+
+def test_jobrunner_ohne_historie_laeuft_wie_immer(sandbox):
+    """Tests und Sonderfälle: kein runs.db, kein Unterschied im Verhalten."""
+    r = app_mod.JobRunner()
+    r.start([_py_step("print('ok')")], "job.export")
+    _warte(r)
+    assert r.last["ok"]
 
 
 def test_jobrunner_indiziert_wenn_gar_kein_export_lief(sandbox):
@@ -893,7 +942,7 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
     gearbeitet, nur eben ohne Embeddings, und der Grund steht im Protokoll."""
     gesehen = {}
     monkeypatch.setattr(app_mod.JobRunner, "start",
-                        lambda self, steps, label: gesehen.update(steps=steps) or True)
+                        lambda self, steps, label, **kw: gesehen.update(steps=steps) or True)
     a = app_mod.App(app_mod.load_config())
     ok, _ = a.launch(index=True, label="Index")
     assert ok
@@ -904,7 +953,7 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
 def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
         sandbox, with_ollama, monkeypatch):
     """Ollama läuft – der Volltextindex ist dann eine Entscheidung, kein Mangel."""
-    monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label: True)
+    monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label, **kw: True)
     a = app_mod.App(app_mod.load_config())
     assert a.launch(index=True, embeddings=False)[0]
     assert any(schluessel(ln["text"]) == "srv.lexical.choice" for ln in a.jobs.lines)
@@ -913,7 +962,7 @@ def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
 def test_launch_mit_ollama_baut_embeddings(sandbox, with_ollama, monkeypatch):
     gesehen = {}
     monkeypatch.setattr(app_mod.JobRunner, "start",
-                        lambda self, steps, label: gesehen.update(steps=steps) or True)
+                        lambda self, steps, label, **kw: gesehen.update(steps=steps) or True)
     a = app_mod.App(app_mod.load_config())
     assert a.launch(index=True)[0]
     assert "--no-embeddings" not in gesehen["steps"][0]["argv"]
@@ -1623,7 +1672,7 @@ def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwar
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
-                        lambda steps, label: gesehen.setdefault("steps", steps) or True)
+                        lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
 
     code, r = call(port, "POST", "/api/run",
                    {"outlook": True, "index": True, "calendar": True})
@@ -1639,7 +1688,7 @@ def test_http_kalenderknopf_bleibt_vollstaendig(server, monkeypatch):
     a.cfg["outlook_categories"] = ["contacts"]
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
-                        lambda steps, label: gesehen.setdefault("steps", steps) or True)
+                        lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
 
     code, r = call(port, "POST", "/api/run", {"calendar": True})
     assert code == 200 and r["ok"]
@@ -3206,7 +3255,7 @@ def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, mon
     """Im Login-Modus trägt der Cache – das Fehlen eines Schlüssels darf keinen
     Lauf mehr verhindern."""
     a = app_mod.App(_cfg_mit_kategorien())
-    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
 
     ok, why = a.launch(outlook=True, label="job.export")
@@ -3930,7 +3979,7 @@ def test_ordnergroesse_ohne_ordner(sandbox):
 def test_pruefschritt_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
     """Die Prüfung fragt das Postfach ab – ohne Zugang darf sie nicht starten."""
     a = app_mod.App()
-    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
     ok, why = a.launch(check=True, label="job.check")
     assert not ok and schluessel(why) == "srv.notoken"
@@ -4674,7 +4723,7 @@ def test_onedrive_leerer_schalter_setzt_die_variable_trotzdem(sandbox):
 
 def test_onedrive_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
     a = app_mod.App()
-    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
     ok, why = a.launch(onedrive=True, label="job.export")
     assert not ok and schluessel(why) == "srv.notoken"
@@ -4756,7 +4805,7 @@ def test_onedrive_abgleich_ist_ein_eigener_schritt(sandbox):
 
 def test_onedrive_abgleich_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
     a = app_mod.App()
-    monkeypatch.setattr(a.jobs, "start", lambda steps, label: True)
+    monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
     ok, why = a.launch(sync_onedrive=True, label="job.folders")
     assert not ok and schluessel(why) == "srv.notoken"
@@ -5544,6 +5593,20 @@ def test_fehlerbericht_kappt_einen_endlosen_betreff(sandbox, with_ollama):
     assert len(b["title"]) <= 120
 
 
+def test_http_runs(server):
+    """Die Lauf-Historie für die Analytics-Section, neueste zuerst."""
+    a, port = server
+    run_id = a.history.start_run("job.export", "manual", workers=4)
+    a.history.record_step(run_id, "outlook", "job.step.outlook", 0.0, 1.0,
+                          result={"new": 2})
+    a.history.finish_run(run_id, "done")
+    code, r = call(port, "GET", "/api/runs?limit=10")
+    assert code == 200
+    lauf = r["runs"][0]
+    assert lauf["job_type"] == "job.export" and lauf["result"] == "done"
+    assert lauf["steps"][0]["new"] == 2
+
+
 def test_http_report(server):
     """Der Weg, den die Oberfläche geht."""
     a, port = server
@@ -5729,6 +5792,38 @@ console.log('OK');
 
 def test_userflow_aufzeichnung_begrenzt_und_abschaltbar():
     _in_node(PRUEFUNG_ABLAUF)
+
+
+# Die Lauf-Historie in der Analytics-Section: Zeile je Lauf, Details je Schritt.
+PRUEFUNG_LAEUFE = GRUNDZUSTAND + """
+renderRuns([]);
+pruefe(el('ana-runs').innerHTML.indexOf('Noch keine') >= 0,
+       'Leerer Zustand fehlt: ' + el('ana-runs').innerHTML);
+
+renderRuns([{started_at: 1755000000, finished_at: 1755000065,
+  origin: 'schedule', result: 'done',
+  elements: {outlook: ['mail'], teams: [], onedrive: true},
+  steps: [
+    {key: 'outlook', label: 'job.step.outlook', started_at: 1755000000,
+     duration_s: 42, new: 3, unchanged: 10, excluded: null, errors: null,
+     skipped: 0, ok: 1, extra: null},
+    {key: 'index', label: 'job.step.index', started_at: 1755000042,
+     duration_s: null, new: null, unchanged: null, excluded: null,
+     errors: null, skipped: 1, ok: null, extra: null}
+  ]}]);
+var html = el('ana-runs').innerHTML;
+pruefe(html.indexOf('Outlook, OneDrive') >= 0, 'Elemente fehlen: ' + html);
+pruefe(html.indexOf('Zeitplan') >= 0, 'Ausloeser nicht uebersetzt: ' + html);
+pruefe(html.indexOf('fertig') >= 0, 'Ergebnis nicht uebersetzt: ' + html);
+pruefe(html.indexOf('42 s') >= 0, 'Schrittdauer fehlt: ' + html);
+pruefe(html.indexOf('bersprungen') >= 0, 'Uebersprungener Schritt fehlt: ' + html);
+pruefe(html.indexOf('1 min') >= 0, 'Gesamtdauer fehlt: ' + html);
+console.log('OK');
+"""
+
+
+def test_lauf_historie_wird_gerendert():
+    _in_node(PRUEFUNG_LAEUFE)
 
 
 PRUEFUNG_BERICHT_LEER = BERICHT_GERUEST + """
@@ -6215,7 +6310,7 @@ def test_zeitplan_laeuft_auch_ohne_ollama(sandbox, with_ollama, monkeypatch):
     a.cfg["schedule"].update(enabled=True, interval_minutes=5, index=True,
                              outlook=False, teams=False, calendar=False)
     monkeypatch.setattr(a.jobs, "start",
-                        lambda steps, label: gestartet.update(steps=steps) or True)
+                        lambda steps, label, **kw: gestartet.update(steps=steps) or True)
     a.scheduler.letzter = 0
     a.scheduler._tick()
     index = [s for s in gestartet.get("steps", []) if s["key"] == "index"]

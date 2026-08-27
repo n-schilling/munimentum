@@ -46,18 +46,30 @@ def melde(done, total=None, what=None):
         pass                       # eine Meldung darf nie einen Lauf aufhalten
 
 
-def ergebnis(neu, **weitere):
-    """Was der Schritt bewirkt hat – am Ende einmal, für den Aufrufer.
+def ergebnis(new, unchanged=None, excluded=None, errors=None, extra=None):
+    """What the step achieved – emitted once at the end, for the caller.
 
-    `neu` ist die Zahl der tatsächlich geschriebenen Stücke. Ist sie null, hat
-    sich am Bestand nichts geändert, und die App kann sich das Indizieren und
-    den Kalenderaufbau sparen. Die Skripte sagen das längst („Neu exportiert:
-    0“), nur eben in Prosa – die auszulesen bräche bei jeder Umformulierung.
+    One schema for every subprogram, so the app collects the same data
+    everywhere (run history, skip logic):
+
+        new        pieces actually written this run
+        unchanged  already present and left untouched
+        excluded   deliberately left out (rules, size limits)
+        errors     pieces that failed
+        extra      dict with step-specific counts (e.g. moved, healed)
+
+    `new` == 0 means the corpus did not change, and the app can skip
+    indexing and the calendar rebuild.
     """
     if not aktiv():
         return
-    daten = {"neu": int(neu)}
-    daten.update({k: int(v) for k, v in weitere.items()})
+    daten = {"new": int(new)}
+    for key, wert in (("unchanged", unchanged), ("excluded", excluded),
+                      ("errors", errors)):
+        if wert is not None:
+            daten[key] = int(wert)
+    if extra:
+        daten["extra"] = {k: int(v) for k, v in extra.items()}
     try:
         print(f"{MARKE_ERGEBNIS} {json.dumps(daten)}", flush=True)
     except (OSError, ValueError):
@@ -88,4 +100,4 @@ def lies(zeile):
 
 def lies_ergebnis(zeile):
     """Gegenstück zu ergebnis(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
-    return _lies(zeile, MARKE_ERGEBNIS, "neu")
+    return _lies(zeile, MARKE_ERGEBNIS, "new")

@@ -418,6 +418,9 @@ def main():
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
                               a.batch, embeddings=not a.no_embeddings,
                               onedrive_dir=a.onedrive)
+    # Same result schema as every other subprogram: "new" = freshly computed
+    # embeddings, "unchanged" = reused ones; the chunk total goes into extra.
+    progress.ergebnis(new, unchanged=max(0, n - new), extra={"chunks": n})
     if a.no_embeddings:
         print(f"\nFertig. {n} Chunks im Volltextindex – keine Embeddings.")
         print("Für die semantische/hybride Suche später ohne --no-embeddings "

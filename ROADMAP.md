@@ -44,6 +44,11 @@ einem echten Bündel, nicht am Schreibtisch.
   Rest Python (Konfiguration, Läufe, Routen, Auswertung). Die Trennung ist ein
   eigener Umbau — etliche Tests prüfen die Seite als String, und die
   Bündelung hängt mit daran — und nichts für nebenbei.
+* **Die Hand-Aufruf-Pfade ausbauen.** Entschieden ist: die App ist der einzige
+  Aufrufer der Teilprogramme. Damit dürfen die interaktiven Abfragen der
+  Exporte, die EXPORT_PROGRESS-Weiche und der Hinweis „aus app_config.json
+  übernommen" ersatzlos weichen, und die Token-Tod-Erkennung per Textmuster
+  kann ein strukturiertes Ereignis werden.
 
 ## Entschieden
 

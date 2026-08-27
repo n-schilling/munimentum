@@ -495,6 +495,12 @@ def main():
              if c["abgesagt_markiert"] else "")
           + (f" {c['doppel_verworfen']} als Doppel verworfen."
              if c["doppel_verworfen"] else ""))
+    # Same result schema as every other subprogram; the file is rebuilt as a
+    # whole, so "new" is everything it now contains.
+    progress.ergebnis(c["kalender"] + c["rekonstruiert"] + c["kontakte"],
+                      extra={"events": c["kalender"],
+                             "rebuilt": c["rekonstruiert"],
+                             "contacts": c["kontakte"]})
 
 
 if __name__ == "__main__":

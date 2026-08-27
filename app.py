@@ -59,6 +59,7 @@ import folders
 import i18n
 import ollama_client
 import progress
+import run_history
 import settings
 import store_layout
 import updates
@@ -1107,7 +1108,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
     if outlook and cats:
         steps.append({
-            "key": "outlook", "label": "job.step.outlook",
+            "key": "outlook", "label": "job.step.outlook", "corpus": True,
             # -default: aus der App darf nie eine Rückfrage kommen – niemand
             # sieht sie, und niemand könnte sie beantworten.
             "argv": script_argv("outlook_export", "-default", OUTLOOK_DIR),
@@ -1119,7 +1120,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         })
     if onedrive:
         steps.append({
-            "key": "onedrive", "label": "job.step.onedrive",
+            "key": "onedrive", "label": "job.step.onedrive", "corpus": True,
             "argv": script_argv("onedrive_export", ONEDRIVE_DIR),
             "env": {**base_env,
                     # Immer setzen, auch leer: leer heißt "alles mitnehmen",
@@ -1131,7 +1132,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                              ["1on1", "group", "meeting", "channels"])
     if teams and cats:
         steps.append({
-            "key": "teams", "label": "job.step.teams",
+            "key": "teams", "label": "job.step.teams", "corpus": True,
             "argv": script_argv("teams_export", "-default", TEAMS_DIR),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "EMBED_IMAGES": _flag(cfg.get("embed_images")),
@@ -1231,7 +1232,7 @@ class JobRunner:
 
     MAX_LINES = 4000
 
-    def __init__(self):
+    def __init__(self, history=None):
         self.lock = threading.Lock()
         self.lines = deque(maxlen=self.MAX_LINES)
         self.seq = 0
@@ -1245,6 +1246,12 @@ class JobRunner:
         # Laufs. None heißt „kein Export-Schritt hat sich geäußert“ – dann wird
         # nichts übersprungen, denn Unwissen ist kein Grund.
         self.neu = None
+        # Run history (run_history.RunHistory) – optional so tests can run
+        # without a database; every call is guarded on its side too.
+        self.history = history
+        self._origin = "manual"
+        self._context = {}
+        self._step_result = None   # last @@RESULT@@ dict of the current step
 
     # -- Protokoll ---------------------------------------------------------
     def log(self, text, level="info"):
@@ -1280,7 +1287,7 @@ class JobRunner:
                 "token_expired": self.token_expired, "seq": self.seq}
 
     # -- Steuerung ---------------------------------------------------------
-    def start(self, steps, label):
+    def start(self, steps, label, origin="manual", context=None):
         if self.busy:
             return False
         if not steps:
@@ -1288,6 +1295,8 @@ class JobRunner:
         self.cancelled = False
         self.token_expired = False
         self.neu = None
+        self._origin = origin
+        self._context = context or {}
         self.job = {"label": label, "steps": [s["label"] for s in steps],
                     "step": steps[0]["label"], "index": 0, "progress": None,
                     "started": datetime.now().isoformat(timespec="seconds")}
@@ -1306,6 +1315,12 @@ class JobRunner:
 
     def _run(self, steps, label):
         self.logk("srv.job.start", "head", label=label)
+        hist = self.history
+        run_id = hist.start_run(
+            label, self._origin,
+            elements=self._context.get("elements"),
+            semantic=self._context.get("semantic"),
+            workers=self._context.get("workers")) if hist else None
         ok = True
         detail = ""
         for i, step in enumerate(steps):
@@ -1316,9 +1331,18 @@ class JobRunner:
                         "progress": None}      # jeder Schritt zählt bei null an
             if self._erspart(step):
                 self.logk("srv.job.skipped", "info", step=step["label"])
+                if hist:
+                    hist.record_step(run_id, step["key"], step["label"],
+                                     time.time(), skipped=True)
                 continue
             self.logk("srv.job.step", "head", step=step["label"])
+            begonnen = time.time()
+            self._step_result = None
             code = self._exec(step)
+            if hist:
+                hist.record_step(run_id, step["key"], step["label"], begonnen,
+                                 duration_s=time.time() - begonnen,
+                                 result=self._step_result, ok=(code == 0))
             if code != 0:
                 ok = False
                 detail = ({"k": "srv.job.aborted", "v": {"step": step["label"]}}
@@ -1330,6 +1354,15 @@ class JobRunner:
             self.logk("srv.job.stepdone", "ok", step=step["label"])
         if ok:
             self.logk("srv.job.done", "ok", label=label)
+        if hist:
+            hist.finish_run(run_id,
+                            "done" if ok
+                            else "aborted" if self.cancelled
+                            else "token_expired" if self.token_expired
+                            else "error")
+            monate = self._context.get("retention_months")
+            if monate:
+                hist.prune(monate)
         self.last = {"label": label, "ok": ok, "detail": detail,
                      "finished": datetime.now().isoformat(timespec="seconds")}
         self.job = None
@@ -1372,7 +1405,11 @@ class JobRunner:
                 continue
             fazit = progress.lies_ergebnis(line)
             if fazit is not None:
-                self.neu = (self.neu or 0) + fazit["neu"]
+                self._step_result = fazit
+                # Nur Export-Schritte zählen für die Überspring-Logik: Index
+                # und Kalender melden zwar auch, ändern aber nicht den Bestand.
+                if step.get("corpus"):
+                    self.neu = (self.neu or 0) + fazit["new"]
                 continue
             if _TOKEN_DEAD.search(line):
                 self.token_expired = True
@@ -1467,7 +1504,8 @@ class Scheduler(threading.Thread):
         # ausschließlich von dort – und nur, wenn die Auswahl etwas hergibt.
         noetig, mit_mails = calendar_plan(self.app.cfg)
         kalender = bool(plan.get("outlook", True) and plan.get("calendar", True) and noetig)
-        ok, why = self.app.launch(outlook=plan.get("outlook", True),
+        ok, why = self.app.launch(origin="schedule",
+                                  outlook=plan.get("outlook", True),
                                   teams=plan.get("teams", True),
                                   index=plan.get("index", True),
                                   calendar=kalender,
@@ -1648,7 +1686,9 @@ class SearchBridge:
 class App:
     def __init__(self, cfg=None):
         self.cfg = cfg or load_config()
-        self.jobs = JobRunner()
+        self.history = run_history.RunHistory(BASE / run_history.DB_NAME)
+        self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
+        self.jobs = JobRunner(self.history)
         self.mcp = McpProcess(self.jobs)
         self.search = SearchBridge()
         self.scheduler = Scheduler(self)
@@ -1872,7 +1912,8 @@ class App:
     def launch(self, outlook=False, teams=False, index=False, calendar=False,
                embeddings=None, label="Lauf", reconstruct=None,
                check=False, sync_folders=False, onedrive=False,
-               sync_onedrive=False, check_onedrive=False, sync_calendars=False):
+               sync_onedrive=False, check_onedrive=False, sync_calendars=False,
+               origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
@@ -1902,7 +1943,23 @@ class App:
                             sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
-        if not self.jobs.start(steps, label):
+        # What the run history records about this run – switches and counts
+        # only, nothing personal.
+        kontext = {
+            "elements": {
+                "outlook": (_clean_categories(self.cfg["outlook_categories"],
+                                              ["mail", "calendar", "contacts"])
+                            if outlook else []),
+                "teams": (_clean_categories(self.cfg["teams_categories"],
+                                            ["1on1", "group", "meeting",
+                                             "channels"]) if teams else []),
+                "onedrive": bool(onedrive),
+            },
+            "semantic": bool(index and embeddings),
+            "workers": int(self.cfg.get("workers") or 4),
+            "retention_months": int(self.cfg.get("runs_retention_months") or 24),
+        }
+        if not self.jobs.start(steps, label, origin=origin, context=kontext):
             return False, {"k": "srv.nostart", "v": {}}
         return True, {"k": "srv.mcp.startok", "v": {}}
 
@@ -2052,6 +2109,12 @@ class Handler(BaseHTTPRequestHandler):
                     **kennzahlen(app.cfg),
                     "vollstaendigkeit": lies_bericht(),
                     "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR)})
+            if u.path == "/api/runs":
+                try:
+                    grenze = int(one.get("limit", 50))
+                except ValueError:
+                    grenze = 50
+                return self._json({"runs": app.history.list_runs(grenze)})
             if u.path == "/api/calendar":
                 return self._calendar()
             if u.path == "/source":
@@ -2208,7 +2271,8 @@ class Handler(BaseHTTPRequestHandler):
                                ("onedrive_max_mb", 0, 100000),
                                ("search_results", 5, 100),
                                # 0 heißt: Userflow-Aufzeichnung aus.
-                               ("userflow_actions", 0, 50)):
+                               ("userflow_actions", 0, 50),
+                               ("runs_retention_months", 1, 120)):
             if key in data:
                 try:
                     cfg[key] = max(low, min(high, int(data[key])))
@@ -3365,6 +3429,12 @@ main{padding-bottom:60px}
   </div>
 
   <div class="card">
+    <h2 data-i18n="ana.runs.title">Läufe</h2>
+    <p class="sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
+    <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
+  </div>
+
+  <div class="card">
     <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
     <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
     <div class="row">
@@ -3533,6 +3603,7 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.userflow_actions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.userflow_actions.i">i</span></span><input type="number" id="c-userflow_actions" min="0" max="50"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.runs_retention_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.runs_retention_months.i">i</span></span><input type="number" id="c-runs_retention_months" min="1" max="120"></div>
     </div>
     <div class="row" style="margin-top:14px">
       <span class="small muted" id="update-current" style="flex:1"></span>
@@ -4944,6 +5015,81 @@ function ladeAnalytics(neu){
   api('/api/analytics').then(zeigeAnalytics).catch(function(e){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
   });
+  api('/api/runs?limit=50').then(function(r){ renderRuns(r.runs || []); })
+    .catch(function(e){
+      el('ana-runs').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
+    });
+}
+
+/* ---------- Run history ----------
+   One row per app-driven run, expandable to the per-step details. The data
+   comes from runs.db (see run_history.py); counts and durations only. */
+function durationText(s){
+  if(s === null || s === undefined) return '–';
+  if(s < 60) return Math.round(s) + ' s';
+  return (s / 60).toFixed(s < 600 ? 1 : 0) + ' min';
+}
+
+function runElements(r){
+  var e = r.elements || {}, parts = [];
+  if((e.outlook || []).length) parts.push('Outlook');
+  if((e.teams || []).length) parts.push('Teams');
+  if(e.onedrive) parts.push('OneDrive');
+  (r.steps || []).forEach(function(s){
+    if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
+  });
+  return parts.join(', ') || '–';
+}
+
+function runStepLine(s){
+  if(s.skipped) return t(s.label) + ': ' + t('ana.runs.skipped');
+  var bits = [];
+  if(s.duration_s !== null && s.duration_s !== undefined) bits.push(durationText(s.duration_s));
+  if(s.new !== null && s.new !== undefined) bits.push(t('ana.runs.new') + ' ' + zahl(s.new));
+  if(s.unchanged !== null && s.unchanged !== undefined)
+    bits.push(t('ana.runs.unchanged') + ' ' + zahl(s.unchanged));
+  if(s.excluded) bits.push(t('ana.runs.excluded') + ' ' + zahl(s.excluded));
+  if(s.errors) bits.push(t('ana.runs.errors') + ' ' + zahl(s.errors));
+  if(s.ok === 0) bits.push(t('ana.runs.failed'));
+  return t(s.label) + ': ' + (bits.join(' · ') || '–');
+}
+
+function renderRuns(runs){
+  var box = el('ana-runs');
+  if(!runs.length){
+    box.innerHTML = '<p class="hint">' + esc(t('ana.runs.empty')) + '</p>';
+    return;
+  }
+  var ok = runs.filter(function(r){ return r.result === 'done'; }).length;
+  var html = '<p class="small muted">' +
+    esc(t('ana.runs.count', {n: runs.length, ok: ok})) + '</p>' +
+    '<table class="anatab"><thead><tr>' +
+    ['time', 'origin', 'elements', 'duration', 'new', 'result']
+      .map(function(k){ return '<th>' + esc(t('ana.runs.col.' + k)) + '</th>'; })
+      .join('') + '</tr></thead><tbody>';
+  runs.forEach(function(r, i){
+    var dauer = (r.finished_at && r.started_at) ? r.finished_at - r.started_at : null;
+    var neu = null;
+    (r.steps || []).forEach(function(s){
+      if(s.new !== null && s.new !== undefined) neu = (neu || 0) + s.new;
+    });
+    html += '<tr class="lauf" style="cursor:pointer" onclick="toggleRun(' + i + ')">' +
+      '<td>' + esc(new Date(r.started_at * 1000).toLocaleString(LOC)) + '</td>' +
+      '<td>' + esc(t('ana.runs.origin.' +
+                     (r.origin === 'schedule' ? 'schedule' : 'manual'))) + '</td>' +
+      '<td>' + esc(runElements(r)) + '</td>' +
+      '<td>' + esc(durationText(dauer)) + '</td>' +
+      '<td>' + esc(zahl(neu)) + '</td>' +
+      '<td>' + esc(t('ana.runs.result.' + (r.result || 'running'))) + '</td></tr>' +
+      '<tr class="hide" id="lauf-details-' + i + '"><td colspan="6" class="small muted">' +
+      (r.steps || []).map(runStepLine).map(esc).join('<br>') + '</td></tr>';
+  });
+  box.innerHTML = html + '</tbody></table>';
+}
+
+function toggleRun(i){
+  var d = el('lauf-details-' + i);
+  if(d) d.classList.toggle('hide');
 }
 
 function bytes(n){
@@ -5463,7 +5609,8 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled'];
 var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb','semantic_min','userflow_actions'];
+                'onedrive_max_mb','semantic_min','userflow_actions',
+                'runs_retention_months'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules'];
 var cfgGefuellt = false;

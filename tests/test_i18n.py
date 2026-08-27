@@ -213,6 +213,11 @@ DYNAMISCH = (
     ("report.sys.", ("version", "os", "python", "cores", "lang", "auth",
                      "categories", "index", "model", "ollama", "settings",
                      "lastjob", "datadir")),
+    ("ana.runs.col.", ("time", "origin", "elements", "duration", "new",
+                       "result")),
+    ("ana.runs.origin.", ("manual", "schedule")),
+    ("ana.runs.result.", ("done", "error", "aborted", "token_expired",
+                          "running")),
 )
 
 

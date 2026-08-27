@@ -104,15 +104,17 @@ def test_melden_und_lesen_passen_zusammen(monkeypatch, capsys):
 # Ergebnis: was der Schritt bewirkt hat
 # --------------------------------------------------------------------------
 def test_ergebnis_schweigt_ohne_variable(capsys):
-    progress.ergebnis(0, uebersprungen=67)
+    progress.ergebnis(0, unchanged=67)
     assert capsys.readouterr().out == ""
 
 
 def test_ergebnis_melden_und_lesen(monkeypatch, capsys):
     monkeypatch.setenv("EXPORT_PROGRESS", "1")
-    progress.ergebnis(0, uebersprungen=67)
+    progress.ergebnis(0, unchanged=67, excluded=4, errors=1,
+                      extra={"moved": 2})
     assert progress.lies_ergebnis(capsys.readouterr().out) == {
-        "neu": 0, "uebersprungen": 67}
+        "new": 0, "unchanged": 67, "excluded": 4, "errors": 1,
+        "extra": {"moved": 2}}
 
 
 def test_ergebnis_haelt_keinen_lauf_auf(monkeypatch):
@@ -143,16 +145,19 @@ def test_die_beiden_kanaele_verwechseln_sich_nicht(monkeypatch, capsys):
     fortschritt, fazit = capsys.readouterr().out.strip().splitlines()
     assert progress.lies(fortschritt) == {"done": 5, "total": 10}
     assert progress.lies_ergebnis(fortschritt) is None
-    assert progress.lies_ergebnis(fazit) == {"neu": 7}
+    assert progress.lies_ergebnis(fazit) == {"new": 7}
     assert progress.lies(fazit) is None
 
 
 # --------------------------------------------------------------------------
 # Die Skripte melden auch wirklich
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("modul", ["teams_export", "outlook_export"])
+@pytest.mark.parametrize("modul", ["teams_export", "outlook_export",
+                                   "onedrive_export", "rag_index",
+                                   "combined_search"])
 def test_export_meldet_sein_ergebnis(modul):
-    """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter."""
+    """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter –
+    und die Lauf-Historie bliebe für den Schritt leer."""
     from pathlib import Path
     quelle = (Path(__file__).resolve().parent.parent / f"{modul}.py").read_text(
         encoding="utf-8")

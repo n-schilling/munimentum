@@ -131,6 +131,9 @@ VORGABEN = {
     # bericht – nur die Art (Reiter, Suche, Lauf), nie Inhalte, rein im
     # Speicher der offenen Seite. 0 schaltet sie ab.
     "userflow_actions": 20,
+    # Wie lange die Lauf-Historie (runs.db) zurückreicht. Aufgeräumt wird beim
+    # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.
+    "runs_retention_months": 24,
     "mcp_port": 8365,
     # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
     # über HTTP wie über stdio. Start/Stop daneben betrifft nur den
