@@ -3421,7 +3421,10 @@ main{padding-bottom:60px}
 
 <section id="tab-analytics" class="hide">
   <div class="card">
-    <h2 data-i18n="ana.title">Was im Archiv steckt</h2>
+    <div class="row" style="justify-content:space-between">
+      <h2 data-i18n="ana.title" style="margin:0">Was im Archiv steckt</h2>
+      <button class="mini" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button>
+    </div>
     <p class="sub" data-i18n="ana.sub">Alles aus dem Index gerechnet – ohne Microsoft zu fragen.</p>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
@@ -5012,6 +5015,12 @@ var anaGeladen = false;
 function ladeAnalytics(neu){
   if(anaGeladen && !neu) return;
   anaGeladen = true;
+  if(neu){
+    // Visible feedback for the refresh button: back to the loading hint
+    // until the fresh numbers arrive.
+    el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+    el('ana-runs').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+  }
   api('/api/analytics').then(zeigeAnalytics).catch(function(e){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
   });

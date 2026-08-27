@@ -4024,6 +4024,13 @@ console.log('OK');
 """
 
 
+def test_analytics_hat_einen_aktualisieren_knopf():
+    """ladeAnalytics(true) umgeht den Zwischenspeicher – genau das ruft der
+    Knopf; ohne ihn zeigte der Reiter bis zum Neuladen der Seite alte Zahlen."""
+    assert 'onclick="ladeAnalytics(true)"' in app_mod.PAGE
+    assert 'data-i18n="ana.reload"' in app_mod.PAGE
+
+
 def test_analytics_zeigt_kennzahlen_und_trennt_ausgelassenes():
     _in_node(PRUEFUNG_ANALYTICS)
 
