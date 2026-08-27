@@ -86,14 +86,6 @@ def test_folder_params_beruecksichtigt_include_hidden(monkeypatch):
 # --------------------------------------------------------------------------
 # Auswahl-Logik (Indizes, Standard-Ausschlüsse, Prompts)
 # --------------------------------------------------------------------------
-def test_parse_indices_filtert_und_dedupliziert():
-    assert outlook_export.parse_indices("1, 3 2", 5) == [1, 3, 2]
-    assert outlook_export.parse_indices("2 2 2", 5) == [2]
-    assert outlook_export.parse_indices("0 6 -1 abc", 5) == []
-    assert outlook_export.parse_indices("", 5) == []
-    assert outlook_export.parse_indices("  4  ", 3) == []
-
-
 def test_is_default_skip_vergleicht_case_insensitive():
     assert outlook_export._is_default_skip({"folder": {"displayName": "Junk-E-Mail"}})
     assert outlook_export._is_default_skip({"folder": {"displayName": "  DRAFTS  "}})
@@ -102,50 +94,19 @@ def test_is_default_skip_vergleicht_case_insensitive():
     assert not outlook_export._is_default_skip({"folder": {}})
 
 
-def test_interactive_beachtet_tty_und_default_flag(monkeypatch):
-    monkeypatch.setattr(outlook_export.sys, "stdin", FakeStrom(True))
-    monkeypatch.setattr(outlook_export.sys, "stdout", FakeStrom(True))
-    assert outlook_export._interactive()
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
-    assert not outlook_export._interactive()
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
-    monkeypatch.setattr(outlook_export.sys, "stdin", FakeStrom(False))
-    assert not outlook_export._interactive()
+def test_selected_categories_folgt_der_umgebung(monkeypatch):
+    """EXPORT_CATEGORIES bestimmt die Auswahl; ohne sie kommt alles.
 
-
-def test_read_liefert_leerstring_bei_eof(monkeypatch):
-    def _eof(prompt):
-        raise EOFError
-    monkeypatch.setattr("builtins.input", _eof)
-    assert outlook_export._read("? ") == ""
-
-
-def _tops():
-    """Drei oberste Ordner, einer davon ein Standard-Ausschluss (Drafts)."""
-    return [
-        {"folder": {"displayName": "Projekte"}, "nfolders": 1, "items": 3},
-        {"folder": {"displayName": "Drafts"}, "nfolders": 1, "items": 2},
-        {"folder": {"displayName": "Inbox"}, "nfolders": 2, "items": 10},
-    ]
-
-
-def test_select_mail_folders_nicht_interaktiv_nimmt_default(monkeypatch):
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
-    sel = outlook_export.select_mail_folders(_tops())
-    names = [t["folder"]["displayName"] for t in sel]
-    assert names == ["Inbox", "Projekte"]  # sortiert, ohne Drafts
-
-
-def test_select_mail_folders_interaktive_auswahl(monkeypatch):
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: True)
-    # Nach Sortierung: 1) Drafts  2) Inbox  3) Projekte
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "1")
-    sel = outlook_export.select_mail_folders(_tops())
-    assert [t["folder"]["displayName"] for t in sel] == ["Drafts"]
-    # Ungültige Eingabe -> Default (ohne Ausschlüsse)
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "99")
-    sel = outlook_export.select_mail_folders(_tops())
-    assert [t["folder"]["displayName"] for t in sel] == ["Inbox", "Projekte"]
+    Rückfragen gibt es nicht mehr – die App ist der einzige Aufrufer, und
+    niemand sähe eine Frage, die ein Unterprozess stellt.
+    """
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail;CONTACTS")
+    assert outlook_export.selected_categories() == {"mail", "contacts"}
+    # Nur Unbekanntes zählt wie „nicht gesetzt" – dann greift die Vorgabe.
+    monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch")
+    assert outlook_export.selected_categories() == {"mail", "calendar", "contacts"}
+    monkeypatch.delenv("EXPORT_CATEGORIES")
+    assert outlook_export.selected_categories() == {"mail", "calendar", "contacts"}
 
 
 def test_kalender_eintraege_tragen_den_ablagepfad():
@@ -193,32 +154,6 @@ def test_waehle_kalender_holt_die_liste_einmalig(tmp_path, monkeypatch):
     assert folders.pfad(tmp_path, folders.KALENDER).exists()
     assert outlook_export.waehle_kalender(None, tmp_path) == [{"id": "b", "name": "A"}]
     assert len(rufe) == 1
-
-
-def test_prompt_categories_env(monkeypatch, capsys):
-    """EXPORT_CATEGORIES setzt die Auswahl ohne jede Abfrage (app.py, Zeitplan)."""
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: True)
-    monkeypatch.setenv("EXPORT_CATEGORIES", "mail;CONTACTS")
-    assert outlook_export.prompt_categories() == {"mail", "contacts"}
-    assert "EXPORT_CATEGORIES" in capsys.readouterr().out
-
-    # Nur Unbekanntes zählt wie „nicht gesetzt“ – dann greift die Standardauswahl
-    monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch")
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
-    assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
-
-
-def test_prompt_categories(monkeypatch):
-    monkeypatch.delenv("EXPORT_CATEGORIES", raising=False)
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: False)
-    assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
-    monkeypatch.setattr(outlook_export, "_interactive", lambda: True)
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "1 3")
-    assert outlook_export.prompt_categories() == {"mail", "contacts"}
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "")
-    assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
-    monkeypatch.setattr(outlook_export, "_read", lambda p: "abc")
-    assert outlook_export.prompt_categories() == {"mail", "calendar", "contacts"}
 
 
 # --------------------------------------------------------------------------
@@ -1161,50 +1096,6 @@ def test_alte_namensliste_gilt_ohne_regeln(monkeypatch):
 def test_umgebung_schlaegt_die_datei(monkeypatch):
     monkeypatch.setenv("FOLDER_RULES", "+ E-Mail/Nur/**")
     assert outlook_export.aktuelle_regeln() == [(True, "E-Mail/Nur/**")]
-
-
-# --------------------------------------------------------------------------
-# Rückfragen nur an einem echten Terminal
-# --------------------------------------------------------------------------
-class FakeStrom:
-    """Ein Ende der Ein-/Ausgabe, das isatty() nach Wunsch beantwortet."""
-
-    def __init__(self, tty):
-        self._tty = tty
-
-    def isatty(self):
-        return self._tty
-
-
-def _stroeme(monkeypatch, modul, stdin, stdout):
-    monkeypatch.setattr(modul.sys, "stdin", FakeStrom(stdin))
-    monkeypatch.setattr(modul.sys, "stdout", FakeStrom(stdout))
-
-
-def test_terminal_fragt(monkeypatch):
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
-    _stroeme(monkeypatch, outlook_export, True, True)
-    assert outlook_export._interactive() is True
-
-
-def test_nullgeraet_fragt_nicht(monkeypatch):
-    """Der gemeldete Fall: unter Windows meldet NUL isatty() == True.
-
-    Der Kalender-Export blieb deshalb an "Welche Kalender?" stehen, obwohl die
-    App stdin auf DEVNULL gelegt hatte. Ihre Ausgabe geht immer in eine Pipe –
-    daran ist zu erkennen, dass niemand antworten kann.
-    """
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", False)
-    _stroeme(monkeypatch, outlook_export, True, False)
-    assert outlook_export._interactive() is False
-
-
-def test_default_schalter_schlaegt_das_terminal(monkeypatch):
-    monkeypatch.setattr(outlook_export, "ASSUME_DEFAULT", True)
-    _stroeme(monkeypatch, outlook_export, True, True)
-    assert outlook_export._interactive() is False
-
-
 
 
 def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys):

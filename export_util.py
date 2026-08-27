@@ -51,43 +51,8 @@ def hilfe_gewuenscht(argv):
 
 
 # ---------------------------------------------------------------------------
-# Interaktive Abfragen
+# Kategorien-Auswahl der App (die Skripte fragen nie zurück)
 # ---------------------------------------------------------------------------
-def lies_eingabe(prompt):
-    try:
-        return input(prompt)
-    except EOFError:
-        return ""
-
-
-def ist_interaktiv():
-    """Ob überhaupt jemand antworten kann.
-
-    stdin allein reicht als Nachweis nicht: unter Windows meldet auch das
-    Nullgerät isatty() == True, weil NUL ein Zeichengerät ist. Ein Aufruf aus
-    der App (stdin auf DEVNULL, stdout in einer Pipe) sähe damit interaktiv aus
-    und bliebe an einer Frage stehen, die niemand sieht. Ein echtes Terminal
-    hat beide Enden.
-    """
-    for strom in (sys.stdin, sys.stdout):
-        try:
-            if not strom.isatty():
-                return False
-        except (AttributeError, ValueError):
-            return False
-    return True
-
-
-def parse_indices(raw, n):
-    out = []
-    for tok in re.split(r"[\s,]+", raw.strip()):
-        if tok.isdigit():
-            v = int(tok)
-            if 1 <= v <= n and v not in out:
-                out.append(v)
-    return out
-
-
 def env_categories(options):
     """Auswahl aus EXPORT_CATEGORIES, z. B. "mail,contacts" oder "1on1,group".
 

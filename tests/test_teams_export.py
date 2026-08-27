@@ -235,27 +235,14 @@ def test_load_pasted_token_missing_or_empty(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Interaktive Abfragen (ohne Terminal deterministisch)
+# Kategorien-Auswahl (ohne Rückfragen – die App ist der einzige Aufrufer)
 # --------------------------------------------------------------------------
-def test_read_returns_empty_on_eof(monkeypatch):
-    def raise_eof(prompt):
-        raise EOFError
-    monkeypatch.setattr("builtins.input", raise_eof)
-    assert te._read("? ") == ""
-
-
-class _NoTTY:
-    def isatty(self):
-        return False
-
-
-def test_prompt_categories_without_tty_uses_default(monkeypatch):
-    monkeypatch.setattr(te.sys, "stdin", _NoTTY())
-    options = [("1on1", "a"), ("group", "b"), ("meeting", "c"), ("channels", "d")]
-    assert te.prompt_categories(options) == {"1on1", "group", "meeting"}
-
-
 _OPTIONS = [("1on1", "a"), ("group", "b"), ("meeting", "c"), ("channels", "d")]
+
+
+def test_selected_categories_ohne_variable_nimmt_die_vorgabe(monkeypatch):
+    monkeypatch.delenv("EXPORT_CATEGORIES", raising=False)
+    assert te.selected_categories(_OPTIONS) == {"1on1", "group", "meeting"}
 
 
 def test_env_categories_liest_auswahl(monkeypatch):
@@ -272,17 +259,13 @@ def test_env_categories_ohne_variable_oder_ohne_treffer(monkeypatch):
     assert te.env_categories(_OPTIONS) is None          # nur Unbekanntes -> normale Abfrage
 
 
-def test_prompt_categories_env_schlaegt_terminal(monkeypatch, capsys):
-    """Die Variable gewinnt auch dann, wenn ein Terminal da wäre – sie kommt von
-    app.py bzw. dem Zeitplan und ist damit eine bewusste Vorgabe."""
-    monkeypatch.setattr(te.sys, "stdin", _NoTTY())
+def test_selected_categories_folgt_der_umgebung(monkeypatch):
+    """Die Variable kommt von app.py bzw. dem Zeitplan – eine bewusste Vorgabe."""
     monkeypatch.setenv("EXPORT_CATEGORIES", "channels")
-    assert te.prompt_categories(_OPTIONS) == {"channels"}
-    assert "EXPORT_CATEGORIES" in capsys.readouterr().out
+    assert te.selected_categories(_OPTIONS) == {"channels"}
 
 
-def test_select_teams_without_tty_takes_all_sorted(monkeypatch):
-    monkeypatch.setattr(te.sys, "stdin", _NoTTY())
+def test_select_teams_nimmt_alle_sortiert():
     graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": [
         {"displayName": "Beta"}, {"displayName": "alpha"}]})
     teams = te.select_teams(graph)
@@ -834,24 +817,3 @@ def test_run_parallel_catches_raising_runner():
 
 def test_run_parallel_empty_list_is_done():
     assert te.run_parallel([], {}, workers=4) == "done"
-
-
-class FakeStrom:
-    def __init__(self, tty):
-        self._tty = tty
-
-    def isatty(self):
-        return self._tty
-
-
-def test_nullgeraet_ist_nicht_interaktiv(monkeypatch):
-    """Unter Windows meldet auch NUL isatty() == True – die Pipe verrät es."""
-    monkeypatch.setattr(te.sys, "stdin", FakeStrom(True))
-    monkeypatch.setattr(te.sys, "stdout", FakeStrom(False))
-    assert te._interactive() is False
-
-
-def test_terminal_ist_interaktiv(monkeypatch):
-    monkeypatch.setattr(te.sys, "stdin", FakeStrom(True))
-    monkeypatch.setattr(te.sys, "stdout", FakeStrom(True))
-    assert te._interactive() is True

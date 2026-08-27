@@ -42,7 +42,6 @@ Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS,
     Vorgabe unten – siehe settings.py.
 """
 
-import os
 import sys
 import re
 import json
@@ -205,13 +204,9 @@ class TokenClient(_BildClient, graph_client.TokenClient):
 
 
 # ---------------------------------------------------------------------------
-# Interaktive Abfragen (Helfer in export_util.py)
+# Auswahl – ohne Rückfragen: die App ist der einzige Aufrufer, und niemand
+# sähe eine Frage, die ein Unterprozess stellt.
 # ---------------------------------------------------------------------------
-_read = export_util.lies_eingabe
-_interactive = export_util.ist_interaktiv
-parse_indices = export_util.parse_indices
-
-
 def default_categories(options):
     """Standardauswahl: die ersten drei Kategorien (1:1-, Gruppen-, Meeting-Chats)."""
     return {k for k, _ in options[:3]}
@@ -220,28 +215,21 @@ def default_categories(options):
 env_categories = export_util.env_categories
 
 
-def prompt_categories(options):
+def selected_categories(options):
+    """Which chat kinds to export – from EXPORT_CATEGORIES, else the default.
+
+    The app sets the variable on every run; the fallback keeps a run without
+    it deterministic (1:1, group and meeting chats, no channels).
+    """
     env = env_categories(options)
     if env is not None:
-        print("Auswahl aus EXPORT_CATEGORIES – keine Abfrage.")
         return env
-    if not _interactive():
-        print("Kein interaktives Terminal – nutze die Standardauswahl (1, 2, 3).")
-        return default_categories(options)
-    print("Was möchtest du exportieren?")
-    for i, (_k, label) in enumerate(options, 1):
-        print(f"  {i}) {label}")
-    raw = _read("Auswahl (Zahlen kommagetrennt, Enter = 1,2,3): ").strip()
-    if not raw:
-        return default_categories(options)
-    idxs = parse_indices(raw, len(options))
-    if not idxs:
-        print("Keine gültige Auswahl – nehme die Standardauswahl (1, 2, 3).")
-        return default_categories(options)
-    return {options[i - 1][0] for i in idxs}
+    print("Standardauswahl – exportiere 1:1-, Gruppen- und Meeting-Chats.")
+    return default_categories(options)
 
 
 def select_teams(graph):
+    """Every joined team – channels of all of them come along."""
     try:
         teams = list(graph.paged(f"{GRAPH}/me/joinedTeams", {"$top": PAGE}))
     except TokenExpired:
@@ -253,20 +241,8 @@ def select_teams(graph):
     if not teams:
         print("Keine Teams gefunden.")
         return []
-    if not _interactive():
-        print(f"Kein interaktives Terminal – exportiere alle {len(teams)} Teams.")
-        return teams
-    print(f"\n{len(teams)} Teams gefunden. Welche exportieren? (jeweils alle Kanäle)")
-    for i, t in enumerate(teams, 1):
-        print(f"  {i}) {t.get('displayName', 'Team')}")
-    raw = _read("Auswahl (Zahlen kommagetrennt, Enter = alle): ").strip()
-    if not raw:
-        return teams
-    idxs = parse_indices(raw, len(teams))
-    if not idxs:
-        print("Keine gültige Auswahl – nehme alle.")
-        return teams
-    return [teams[i - 1] for i in idxs]
+    print(f"{len(teams)} Teams gefunden – alle Kanäle kommen mit.")
+    return teams
 
 
 # ---------------------------------------------------------------------------
@@ -811,8 +787,6 @@ def main():
 
     global _client, OUT_ROOT, IMGCACHE_DIR
     argv = sys.argv[1:]
-    use_default = any(a in ("-default", "--default") for a in argv)
-    argv = [a for a in argv if a not in ("-default", "--default")]
     if argv:
         OUT_ROOT = argv[0]
 
@@ -823,14 +797,11 @@ def main():
         print(hinweis)
     graph_client.konfiguriere(workers)
 
-    # 1) Kategorien abfragen (vor dem Login, damit der Kanal-Scope nur bei Bedarf kommt)
+    # 1) Kategorien bestimmen (vor dem Login, damit der Kanal-Scope nur bei
+    #    Bedarf angefordert wird)
     cat_options = [("1on1", "1:1-Chats"), ("group", "Gruppenchats"),
                    ("meeting", "Meeting-Chats"), ("channels", "Team-Kanäle")]
-    if use_default and not os.environ.get("EXPORT_CATEGORIES"):
-        categories = default_categories(cat_options)
-        print("Standardauswahl (-default) aktiv – keine Abfrage.")
-    else:
-        categories = prompt_categories(cat_options)   # beachtet EXPORT_CATEGORIES
+    categories = selected_categories(cat_options)
     labels = {k: v for k, v in cat_options}
     print("Gewählt:", ", ".join(labels[k] for k in
                                  ["1on1", "group", "meeting", "channels"] if k in categories))

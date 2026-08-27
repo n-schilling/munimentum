@@ -1109,9 +1109,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if outlook and cats:
         steps.append({
             "key": "outlook", "label": "job.step.outlook", "corpus": True,
-            # -default: aus der App darf nie eine Rückfrage kommen – niemand
-            # sieht sie, und niemand könnte sie beantworten.
-            "argv": script_argv("outlook_export", "-default", OUTLOOK_DIR),
+            "argv": script_argv("outlook_export", OUTLOOK_DIR),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
                     # Immer setzen, auch leer: leer heißt "nichts auslassen",
@@ -1133,7 +1131,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if teams and cats:
         steps.append({
             "key": "teams", "label": "job.step.teams", "corpus": True,
-            "argv": script_argv("teams_export", "-default", TEAMS_DIR),
+            "argv": script_argv("teams_export", TEAMS_DIR),
             "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
                     "EMBED_IMAGES": _flag(cfg.get("embed_images")),
                     "CACHE_IMAGES": _flag(cfg.get("cache_images")),

@@ -104,7 +104,6 @@ DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders")
 # Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
 # diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
 STOP = threading.Event()                     # Signal: Token tot -> nichts Neues mehr starten
-ASSUME_DEFAULT = False                       # -default: keine Abfragen, überall die Vorgabe
 
 # Anmeldung, Schlüsselmodus und Konfiguration liegen in auth.py.
 TokenExpired = auth.TokenExpired
@@ -166,17 +165,9 @@ class DoneLog:
 
 
 # ---------------------------------------------------------------------------
-# Interaktive Ordnerauswahl (Helfer in export_util.py)
+# Auswahl – ohne Rückfragen: die App ist der einzige Aufrufer, und niemand
+# sähe eine Frage, die ein Unterprozess stellt.
 # ---------------------------------------------------------------------------
-_read = export_util.lies_eingabe
-parse_indices = export_util.parse_indices
-
-
-def _interactive():
-    """Nur fragen, wenn ein Terminal da ist und -default nicht gesetzt wurde."""
-    return not ASSUME_DEFAULT and export_util.ist_interaktiv()
-
-
 def list_calendars(graph):
     """Liest die Kalenderliste für die gezielte Auswahl. Leere Liste bei fehlender
     Berechtigung – dann erscheinen keine Kalender-Einträge im Menü."""
@@ -194,62 +185,18 @@ def list_calendars(graph):
 env_categories = export_util.env_categories
 
 
-def prompt_categories():
-    """Schritt 1: Was exportieren? Mehrfachauswahl (z. B. 1,2).
-    Liefert ein Set aus {"mail", "calendar", "contacts"}."""
-    options = [("mail", "E-Mail (Postfach-Ordner)"),
-               ("calendar", "Kalender"),
-               ("contacts", "Kontakte")]
+def selected_categories():
+    """Which of mail/calendar/contacts to export – from EXPORT_CATEGORIES.
+
+    The app sets the variable on every run; without it, everything is taken.
+    Returns a subset of {"mail", "calendar", "contacts"}.
+    """
+    options = [("mail", ""), ("calendar", ""), ("contacts", "")]
     env = env_categories(options)
     if env is not None:
-        print("Auswahl aus EXPORT_CATEGORIES – keine Abfrage.")
         return env
-    if not _interactive():
-        print("Standardauswahl – exportiere E-Mail, Standardkalender und Kontakte.")
-        return {k for k, _ in options}
-    print("\nWas möchtest du exportieren? (Mehrfachauswahl möglich, z. B. 1,2)")
-    for i, (_, label) in enumerate(options, 1):
-        print(f"  {i}) {label}")
-    raw = _read("Auswahl (Enter = alles): ").strip()
-    if not raw:
-        return {k for k, _ in options}
-    idxs = parse_indices(raw, len(options))
-    if not idxs:
-        print("Keine gültige Auswahl – nehme alles.")
-        return {k for k, _ in options}
-    return {options[i - 1][0] for i in idxs}
-
-
-def _is_default_skip(top):
-    name = (top["folder"].get("displayName") or "").strip().lower()
-    return name in DEFAULT_SKIP_FOLDERS
-
-
-def select_mail_folders(tops):
-    """Schritt 2a: welche Postfach-Ordner (jeweils inkl. Unterordner).
-    Enter = alle AUSSER den Standard-Ausschlüssen (Archiv, Entwürfe, Gelöschte
-    Elemente, Junk-E-Mail, Postausgang, „Erneut erinnern aktiviert"). Diese werden
-    angezeigt, aber nur auf explizite Auswahl exportiert. Mehrfachauswahl möglich."""
-    tops.sort(key=lambda t: (t["folder"].get("displayName") or "").lower())
-    default = [t for t in tops if not _is_default_skip(t)]
-    if not tops or not _interactive():
-        return default
-    n = len(tops)
-    print("\nWelche Postfach-Ordner? (Mehrfachauswahl; Enter = alle ohne die mit (aus); inkl. Unterordner)")
-    for i, t in enumerate(tops, 1):
-        name = t["folder"].get("displayName", "Ordner")
-        subs = t["nfolders"] - 1
-        extra = f", {subs} Unterordner" if subs > 0 else ""
-        flag = "  (aus)" if _is_default_skip(t) else ""
-        print(f"  {i}) {name}  ({t['items']} Elemente{extra}){flag}")
-    raw = _read("Auswahl (Enter = alle ohne die mit (aus)): ").strip()
-    if not raw:
-        return default
-    idxs = parse_indices(raw, n)
-    if not idxs:
-        print("Keine gültige Auswahl – nehme alle ohne die Standard-Ausschlüsse.")
-        return default
-    return [tops[i - 1] for i in idxs]
+    print("Standardauswahl – exportiere E-Mail, Standardkalender und Kontakte.")
+    return {k for k, _ in options}
 
 
 def kalender_eintraege(cals):
@@ -1158,6 +1105,12 @@ def zaehle_dateien(ordner):
         return 0
 
 
+def _is_default_skip(top):
+    """Ist der oberste Ordner einer der Standard-Ausschlüsse (Archiv, Junk …)?"""
+    name = (top["folder"].get("displayName") or "").strip().lower()
+    return name in DEFAULT_SKIP_FOLDERS
+
+
 def pruefe_vollstaendigkeit(graph, out, weg=None):
     """Je Postfachordner: erwartet, vorhanden, gelöscht, Differenz.
 
@@ -1228,12 +1181,8 @@ def main():
     if "--calendars" in sys.argv[1:]:
         return gleiche_kalender_ab(nur_ordner)
 
-    global OUT_ROOT, ASSUME_DEFAULT
+    global OUT_ROOT
     argv = sys.argv[1:]
-    if any(a in ("-default", "--default") for a in argv):
-        ASSUME_DEFAULT = True
-        print("Standardauswahl (-default) aktiv – keine Abfragen.")
-    argv = [a for a in argv if a not in ("-default", "--default")]
     if argv:
         OUT_ROOT = argv[0]
 
@@ -1262,7 +1211,7 @@ def main():
         print(f"Angemeldet als {me.get('displayName')} ({me.get('userPrincipalName')})")
         print(f"Parallele Downloads: {workers} (Exchange-Limit pro Postfach)")
 
-        categories = prompt_categories()
+        categories = selected_categories()
         selected_mail, sel_cals, want_con = [], [], False
 
         if "mail" in categories:

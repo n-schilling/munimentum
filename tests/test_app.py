@@ -515,17 +515,17 @@ def test_ohne_kategorie_kein_schritt(sandbox):
     assert steps[0]["env"]["EXPORT_CATEGORIES"] == "contacts"
 
 
-def test_build_steps_verbietet_rueckfragen(sandbox):
+def test_build_steps_setzt_die_kategorien_immer(sandbox):
     """Kein Exportschritt darf aus der App heraus etwas fragen können.
 
-    Ohne -default fragte outlook_export nach den Kalendern, sobald stdin
-    interaktiv aussah – unter Windows tut das auch das Nullgerät. Der Lauf
-    stand dann an einer Frage, die in der Oberfläche niemand beantworten kann.
+    Rückfragen gibt es in den Skripten nicht mehr; die Zusage ist jetzt, dass
+    die App ihre Auswahl vollständig über EXPORT_CATEGORIES mitgibt – sonst
+    exportierte ein Schritt still die Vorgabe statt der Einstellung.
     """
     steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True)
     assert [s["key"] for s in steps] == ["outlook", "teams"]
     for s in steps:
-        assert "-default" in s["argv"]
+        assert s["env"]["EXPORT_CATEGORIES"], s["key"]
 
 
 def test_build_steps_ohne_embeddings(sandbox):
