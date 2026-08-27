@@ -2,10 +2,6 @@
 """
 Teams/Chat-Export über Microsoft Graph (delegiert, kein Admin nötig).
 
-Beim Start fragt das Skript interaktiv ab:
-  1) was exportiert werden soll (1:1 / Gruppe / Meeting / Kanäle, Mehrfachauswahl)
-  2) falls Kanäle gewählt: welche Teams (jeweils alle Kanäle darin)
-
 Exportiert eine HTML pro Chat bzw. pro Kanal, unterteilt in:
     1on1/  group/  meeting/  channels/<Team>/   + index.html
 
@@ -17,29 +13,18 @@ PARALLEL: mehrere Chats/Kanäle gleichzeitig (Standard 4, per Env EXPORT_WORKERS
   das spart pro Kanal sehr viele Aufrufe. Drosselung (429) wird per Retry-After
   abgefangen.
 
-Setup:   pip install msal requests
-Start:   python3 teams_export.py [ausgabe-ordner] [-default]
-         -default überspringt die Abfrage und nutzt die Vorgabe (1, 2, 3 =
-         1:1-, Gruppen- und Meeting-Chats, keine Kanäle).
-         EXPORT_CATEGORIES="1on1,group,meeting,channels" wählt ohne Abfrage
-         genau diese Kategorien (für app.py, Scheduler, Cron).
+Runs as a subprogram of app.py: output folder as the only argument, every
+setting as an environment variable (EXPORT_CATEGORIES, EXPORT_WORKERS,
+EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS,
+GRAPH_TOKEN/GRAPH_AUTH; environment beats app_config.json, see settings.py).
+There are no prompts; with "channels" selected, every joined team comes
+along. Progress, results and failures are structured lines (progress.py).
 
-Token-Modus (wenn der Tenant für neue Apps "Approval required" verlangt):
-    Access Token im Graph Explorer holen (Chat.Read bzw. ChannelMessage.Read.All
-    zugestimmt), in gx_token.txt neben dieses Skript legen ODER
-    export GRAPH_TOKEN="eyJ0…"
-
-Resume / inkrementell: export_state.json im Ausgabeordner merkt sich pro
-    Konversation die letzte Aktivität. Bei erneutem Lauf (z. B. per Scheduler)
-    werden Chats mit NEUEN Nachrichten automatisch neu exportiert, unveränderte
-    übersprungen. Kanäle werden auf Aktualität geprüft und nur bei Änderung neu
-    geschrieben (REFRESH_CHANNELS=0 schaltet das ab). Token tot -> frischen Token
-    setzen, neu starten. Kompletter Neu-Export: Datei (oder Ordner) löschen.
-
-Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS,
-    EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS. Ohne
-    gesetzte Variable gilt app_config.json neben diesem Skript, sonst die
-    Vorgabe unten – siehe settings.py.
+Resume / incremental: export_state.json in the output folder remembers the
+last activity per conversation. A new run re-exports chats with NEW messages
+and skips unchanged ones; channels are re-checked each run and only written
+on change (REFRESH_CHANNELS=0 turns that off). Delete the file (or folder)
+for a full re-export.
 """
 
 import sys

@@ -200,9 +200,10 @@ pip install -r requirements.txt
 python3 app.py
 ```
 
-That is the whole app. The individual export and index scripts still run on
-their own, and each explains itself with `--help`; how the pieces fit together
-is written in their headers rather than repeated here.
+That is the whole app. The export and index scripts are its subprograms: the
+app starts them itself and hands them their settings, and they never ask
+questions of their own. Each still explains itself with `--help`; how the
+pieces fit together is written in their headers rather than repeated here.
 
 Bug reports are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the fastest
 way to send one, and [SECURITY.md](SECURITY.md) if it is a security issue.

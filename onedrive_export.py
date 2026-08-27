@@ -22,16 +22,12 @@ Die Löschung ist der Grund für das Bestandsverzeichnis (dateien.tsv): Graph
 meldet zu einer gelöschten Datei nur ihre ID, keinen Namen und keinen Pfad. Ohne
 die Zuordnung ID -> Pfad wüsste niemand, WAS da verschwunden ist.
 
-Setup:   pip install msal requests
-Start:   python3 onedrive_export.py [ausgabe-ordner]
-         --folders  nur die Ordnerstruktur abgleichen, nichts herunterladen
-         --check    nur melden, was fehlt (vollstaendigkeit.json)
-
-Schalter (Umgebung schlägt app_config.json schlägt Vorgabe, siehe settings.py):
-    ONEDRIVE_RULES    Include/Exclude-Regeln auf Pfaden, eine je Zeile, wie beim
-                      Postfach – "- Dateien/Fotos/**" lässt die Fotos aus.
-    ONEDRIVE_MAX_MB   Dateien darüber werden übersprungen (0 = ohne Grenze).
-    EXPORT_WORKERS    parallele Downloads.
+Runs as a subprogram of app.py: output folder as the only argument, settings
+as environment variables (ONEDRIVE_RULES – include/exclude rules on paths,
+one per line, like the mailbox; ONEDRIVE_MAX_MB – skip larger files, 0 = no
+limit; EXPORT_WORKERS – parallel downloads; environment beats
+app_config.json, see settings.py). Special runs: --folders syncs the folder
+tree, --check reports what is missing (vollstaendigkeit.json).
 
 Resume: dateien.tsv und delta.txt im Ausgabeordner. Bricht ein Lauf ab, wird
     delta.txt NICHT fortgeschrieben – der nächste Lauf zählt noch einmal auf und

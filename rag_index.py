@@ -18,16 +18,11 @@ alles in einem Store-Ordner ab:
 Inkrementell: bei erneutem Lauf werden nur neue/geänderte Chunks neu berechnet
 (Abgleich über Inhalts-Hash), vorhandene Vektoren werden wiederverwendet.
 
-    ollama serve                 # Ollama muss laufen
-    ollama pull bge-m3           # mehrsprachiges Embedding-Modell (DE/EN)
-    pip3 install numpy requests
-    python3 rag_index.py [teams_export] [outlook_export] [--store rag_store]
-
-Ohne Ollama: --no-embeddings baut nur corpus.db mit dem FTS5-Volltextindex.
-Suche und MCP-Server funktionieren dann rein lexikalisch (BM25), nur die
-semantische Hälfte der Hybrid-Suche fehlt.
-
-Optionen: --model bge-m3  --ollama http://localhost:11434  --batch 64
+Runs as a subprogram of app.py. Arguments: [teams] [outlook] [onedrive]
+--store --model --ollama --batch; defaults come from the schema in
+settings.py. Embeddings need a running Ollama; --no-embeddings builds only
+corpus.db with the FTS5 full-text index – search and the MCP server then
+work lexically (BM25), only the semantic half of hybrid ranking is missing.
 """
 
 import json

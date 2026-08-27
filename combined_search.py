@@ -15,9 +15,9 @@ Damit dabei keine Geisterkopien entstehen, werden in Exchange-IDs eingebettete
 Fremd-UIDs ausgepackt (siehe norm_uid) und Treffer verworfen, deren Titel und
 Startminute schon im Kalender stehen.
 
-Nur Standardbibliothek – keine Installation nötig.
+Runs as a subprogram of app.py; standard library only.
 
-    python3 combined_search.py [outlook-ordner] --json ziel.json
+    Arguments: [outlook-ordner] --json ziel.json [--no-reconstruct]
 
 --no-reconstruct lässt die Wiederherstellung gelöschter Termine aus Mails weg.
 Sie ist der mit Abstand teuerste Teil – jede .eml wird gelesen, bei einem

@@ -16,33 +16,21 @@ Outlook/Exchange-Export als .eml über Microsoft Graph (delegiert, kein Admin n�
   wiederholt; ein Ordner, der sich nicht vollständig listen lässt, wird
   übersprungen statt den Lauf abzubrechen (nächster Lauf holt ihn nach).
 
-Setup:   pip install msal requests
-Start:   python3 outlook_export.py [ausgabe-ordner] [-default]
-         -default überspringt alle Abfragen und nutzt die Vorgaben (E-Mail ohne
-         Archiv/Entwürfe/Gelöschte/Junk/Postausgang, Standardkalender, Kontakte).
-         EXPORT_CATEGORIES="mail,calendar,contacts" wählt ohne Abfrage genau
-         diese Kategorien (für app.py, Scheduler, Cron).
-         --folders bzw. --calendars holen nur die Ordnerstruktur bzw. die
-         Kalenderliste und legen sie ab, ohne etwas zu exportieren.
+Runs as a subprogram of app.py: the app passes the output folder as the only
+argument and every setting as an environment variable (EXPORT_CATEGORIES,
+FOLDER_RULES, CALENDAR_RULES, SKIP_FOLDERS, INCLUDE_HIDDEN, EXPORT_WORKERS,
+GRAPH_TOKEN/GRAPH_AUTH; environment beats app_config.json, see settings.py).
+There are no prompts; progress, results and failures come back as structured
+lines (see progress.py).
 
-Welche Ordner und welche Kalender mitkommen, entscheiden geordnete Regeln
-    (FOLDER_RULES, CALENDAR_RULES; siehe folders.py) über den abgelegten Listen
-    folders.json und calendars.json – nicht mehr eine Abfrage beim Start.
+Which folders and calendars come along is decided by ordered rules over the
+stored lists folders.json and calendars.json (see folders.py).
 
-Token-Modus (wenn der Tenant für neue Apps "Approval required" verlangt):
-    Access Token im Graph Explorer holen (Mail.Read muss zugestimmt sein; für
-    Kalender/Kontakte zusätzlich Calendars.Read und Contacts.Read),
-    in gx_token.txt neben dieses Skript legen ODER  export GRAPH_TOKEN="eyJ0…"
+Special runs, none of which exports: --folders and --calendars refresh those
+stored lists, --check reports completeness against the mailbox.
 
-Resume: exported.tsv im Ausgabeordner (eine Zeile pro fertige Mail). Bereits
-    exportierte Mails werden übersprungen. Token tot -> frischen Token setzen,
-    neu starten, es geht weiter. Kompletter Neu-Export: exported.tsv löschen.
-
-Schalter (alle per Umgebungsvariable, siehe README): EXPORT_WORKERS
-    (Parallelität, sinnvoll max 4), INCLUDE_HIDDEN (versteckte Systemordner),
-    SKIP_FOLDERS (Ordner, die die Standardauswahl auslässt, kommagetrennt).
-    Ohne gesetzte Variable gilt app_config.json neben diesem Skript, sonst die
-    Vorgabe unten – siehe settings.py.
+Resume: exported.tsv in the output folder, one line per finished mail –
+a new run skips everything already there. Delete it for a full re-export.
 """
 
 import os

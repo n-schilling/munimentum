@@ -44,13 +44,14 @@ einem echten Bündel, nicht am Schreibtisch.
   Rest Python (Konfiguration, Läufe, Routen, Auswertung). Die Trennung ist ein
   eigener Umbau — etliche Tests prüfen die Seite als String, und die
   Bündelung hängt mit daran — und nichts für nebenbei.
-* **Die Hand-Aufruf-Pfade ausbauen.** Entschieden ist: die App ist der einzige
-  Aufrufer der Teilprogramme. Damit dürfen die interaktiven Abfragen der
-  Exporte, die EXPORT_PROGRESS-Weiche und der Hinweis „aus app_config.json
-  übernommen" ersatzlos weichen, und die Token-Tod-Erkennung per Textmuster
-  kann ein strukturiertes Ereignis werden.
 
 ## Entschieden
+
+**Die App ist der einzige Aufrufer der Teilprogramme.** Seit 5.4 gibt es
+darum keine interaktiven Abfragen, keine EXPORT_PROGRESS-Weiche und keinen
+„übernommen"-Hinweis mehr; Ergebnisse und Fehler kommen als strukturierte
+Ereignisse (progress.py), und kein Unterprozess öffnet je ein
+Anmeldefenster.
 
 **OneDrive ist ein Spiegel, kein Versionsarchiv.** Gehalten wird die jeweils
 aktuelle Fassung; in OneDrive Gelöschtes bleibt liegen und bekommt einen
