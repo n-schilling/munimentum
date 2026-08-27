@@ -5814,6 +5814,14 @@ renderRuns([{started_at: 1755000000, finished_at: 1755000065,
     {key: 'outlook', label: 'job.step.outlook', started_at: 1755000000,
      duration_s: 42, new: 3, unchanged: 10, excluded: null, errors: null,
      skipped: 0, ok: 1, extra: null},
+    {key: 'onedrive', label: 'job.step.onedrive', started_at: 1755000020,
+     duration_s: 12, new: 5, unchanged: 90, excluded: null, errors: null,
+     skipped: 0, ok: 1, extra: null},
+    // Der Kalenderschritt meldet den GANZEN Neuaufbau – der zaehlt nicht
+    // als neu Exportiertes und darf weder Summe noch Aufteilung verzerren.
+    {key: 'calendar', label: 'job.step.calendar', started_at: 1755000040,
+     duration_s: 2, new: 5860, unchanged: null, excluded: null, errors: null,
+     skipped: 0, ok: 1, extra: null},
     {key: 'index', label: 'job.step.index', started_at: 1755000042,
      duration_s: null, new: null, unchanged: null, excluded: null,
      errors: null, skipped: 1, ok: null, extra: null}
@@ -5833,6 +5841,12 @@ pruefe(html.indexOf('fertig') >= 0, 'Ergebnis nicht uebersetzt: ' + html);
 pruefe(html.indexOf('42 s') >= 0, 'Schrittdauer fehlt: ' + html);
 pruefe(html.indexOf('bersprungen') >= 0, 'Uebersprungener Schritt fehlt: ' + html);
 pruefe(html.indexOf('1 min') >= 0, 'Gesamtdauer fehlt: ' + html);
+// "New" zaehlt nur die Exporte; das Mouseover teilt sie je Quelle auf.
+pruefe(html.indexOf('title="Outlook: 3\\nOneDrive: 5"') >= 0,
+       'Aufteilung je Quelle fehlt: ' + html);
+pruefe(html.indexOf('>8<') >= 0, 'Summe stimmt nicht (nur Exporte): ' + html);
+pruefe(html.indexOf('>5.868<') < 0 && html.indexOf('>5868<') < 0,
+       'Der Kalender-Neuaufbau steht in der Summe: ' + html);
 console.log('OK');
 """
 

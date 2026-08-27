@@ -5084,11 +5084,17 @@ function renderRuns(runs){
     ['time', 'origin', 'elements', 'duration', 'new', 'result']
       .map(function(k){ return '<th>' + esc(t('ana.runs.col.' + k)) + '</th>'; })
       .join('') + '</tr></thead><tbody>';
+  var QUELLE = {outlook: 'Outlook', teams: 'Teams', onedrive: 'OneDrive'};
   runs.forEach(function(r, i){
     var dauer = (r.finished_at && r.started_at) ? r.finished_at - r.started_at : null;
-    var neu = null;
+    // "New" counts the exports only – index and calendar report their own
+    // numbers, but those describe derived artefacts, not new archive items.
+    var neu = null, neuJe = [];
     (r.steps || []).forEach(function(s){
-      if(s.new !== null && s.new !== undefined) neu = (neu || 0) + s.new;
+      if(QUELLE[s.key] && s.new !== null && s.new !== undefined){
+        neu = (neu || 0) + s.new;
+        neuJe.push(QUELLE[s.key] + ': ' + zahl(s.new));
+      }
     });
     html += '<tr class="lauf" style="cursor:pointer" onclick="toggleRun(' + i + ')">' +
       '<td>' + esc(new Date(r.started_at * 1000).toLocaleString(LOC)) + '</td>' +
@@ -5096,7 +5102,8 @@ function renderRuns(runs){
                      (r.origin === 'schedule' ? 'schedule' : 'manual'))) + '</td>' +
       '<td>' + esc(runElements(r)) + '</td>' +
       '<td>' + esc(durationText(dauer)) + '</td>' +
-      '<td>' + esc(zahl(neu)) + '</td>' +
+      '<td' + (neuJe.length ? ' title="' + esc(neuJe.join('\n')) + '"' : '') +
+      '>' + esc(zahl(neu)) + '</td>' +
       '<td>' + esc(t('ana.runs.result.' + (r.result || 'running'))) + '</td></tr>' +
       '<tr class="hide" id="lauf-details-' + i + '"><td colspan="6" class="small muted">' +
       (r.steps || []).map(runStepLine).map(esc).join('<br>') + '</td></tr>';
