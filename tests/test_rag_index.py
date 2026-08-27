@@ -14,6 +14,7 @@ import pytest
 import requests
 
 import corpus
+import progress
 import rag_index
 import store_layout
 
@@ -492,7 +493,10 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
     rag_index.main()
     assert seen["args"] == ("t_dir", "o_dir", "s", rag_index.DEFAULT_MODEL,
                             rag_index.DEFAULT_OLLAMA, 7, True)
-    assert "3 Chunks" in capsys.readouterr().out
+    # Statt Prosa nur das strukturierte Ergebnis – die App baut die Logzeile.
+    fazit = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()]
+    fazit = [f for f in fazit if f is not None]
+    assert fazit == [{"new": 1, "unchanged": 2, "extra": {"chunks": 3}}]
 
 
 def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
@@ -507,8 +511,11 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["rag_index.py", "--no-embeddings"])
     rag_index.main()
     assert seen["embeddings"] is False
+    # Die Startzeile nennt den Modus; die Zahlen kommen als Ergebnis-Ereignis.
     out = capsys.readouterr().out
-    assert "ohne Embeddings" in out and "3 Chunks im Volltextindex" in out
+    assert "nur Volltext, ohne Embeddings" in out
+    assert progress.lies_ergebnis(out.splitlines()[-1]) == {
+        "new": 0, "unchanged": 3, "extra": {"chunks": 3}}
 
 
 # --------------------------------------------------------------------------

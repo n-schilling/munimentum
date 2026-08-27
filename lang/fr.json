@@ -259,6 +259,7 @@
   "srv.job.start": "▶ {label}",
   "srv.job.step": "— {step} —",
   "srv.job.stepdone": "✓ {step} terminé",
+  "srv.job.result": "Résultat : {ergebnis}",
   "srv.job.skipped": "Ignoré : {step} — l’export n’a rien apporté de nouveau.",
   "srv.job.stepfail": "✗ {detail}",
   "srv.job.done": "✓ {label} terminé",

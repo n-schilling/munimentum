@@ -12,6 +12,7 @@ import sys
 import pytest
 
 import combined_search
+import progress
 
 
 # --------------------------------------------------------------------------
@@ -432,7 +433,8 @@ def test_write_calendar_json_schreibt_atomar(tmp_path):
 
 def test_main_json_schreibt_die_daten(tmp_path, monkeypatch, capsys):
     """Alte Aufrufe übergaben davor noch den Teams-Ordner – der letzte freie
-    Parameter zählt, beide Formen laufen."""
+    Parameter zählt, beide Formen laufen. Statt Prosa meldet main() nur das
+    strukturierte Ergebnis; die App baut daraus die übersetzte Logzeile."""
     outlook = _kalender_export(tmp_path)
     ziel = tmp_path / "kal.json"
     monkeypatch.setattr(sys, "argv", ["combined_search.py", str(tmp_path / "fehlt"),
@@ -440,10 +442,13 @@ def test_main_json_schreibt_die_daten(tmp_path, monkeypatch, capsys):
     combined_search.main()
     assert ziel.exists()
     out = capsys.readouterr().out
-    assert "1 Termine" in out and "1 aus Mails rekonstruiert" in out
+    fazit = [progress.lies_ergebnis(z) for z in out.splitlines()]
+    fazit = [f for f in fazit if f is not None]
+    assert fazit and fazit[0]["extra"] == {"events": 1, "rebuilt": 1,
+                                          "contacts": 1}
 
 
-def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch, capsys):
+def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch):
     outlook = _kalender_export(tmp_path)
     ziel = tmp_path / "kal.json"
     monkeypatch.setattr(sys, "argv", ["combined_search.py", str(outlook),
@@ -451,7 +456,6 @@ def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch, capsys):
     combined_search.main()
     daten = json.loads(ziel.read_text(encoding="utf-8"))
     assert daten["reconstruct"] is False and daten["counts"]["rekonstruiert"] == 0
-    assert "ohne Wiederherstellung" in capsys.readouterr().out
 
 
 def test_main_json_folgt_der_app_config(tmp_path, monkeypatch):

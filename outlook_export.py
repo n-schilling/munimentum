@@ -1243,10 +1243,8 @@ def main():
               "der Export setzt bei der letzten Mail fort.")
         sys.exit(1)
 
-    def _count(suffix):
-        return sum(1 for rel in done.done.values()
-                   if rel.endswith(suffix) and (out / rel).exists())
-    print(f"\nFertig. Neu exportiert: {stats['new']}, übersprungen: {stats['skipped']}.")
+    # No prose summary: the numbers travel in the result event, and the app
+    # logs a translated line from it. The archive totals live in Analytics.
     progress.ergebnis(stats["new"], unchanged=stats["skipped"],
                       errors=stats.get("folder_errors"),
                       extra={k: v for k, v in stats.items()
@@ -1254,11 +1252,6 @@ def main():
     if stats.get("folder_errors"):
         print(f"{stats['folder_errors']} Ordner konnten nicht vollständig gelistet "
               "werden – Skript erneut starten, um den Rest zu holen.")
-    print(f"Im Archiv: {_count('.eml')} Mails, {_count('.ics')} Termine, "
-          f"{_count('.vcf')} Kontakte.")
-    if stats.get("gone_total"):
-        print(f"Nicht mehr im Postfach: {stats['gone_total']} Mails "
-              f"({stats.get('gone_new', 0)} neu erkannt) – die Dateien bleiben.")
 
 
 if __name__ == "__main__":

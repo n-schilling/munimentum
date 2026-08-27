@@ -1341,6 +1341,10 @@ class JobRunner:
                 hist.record_step(run_id, step["key"], step["label"], begonnen,
                                  duration_s=time.time() - begonnen,
                                  result=self._step_result, ok=(code == 0))
+            if self._step_result is not None:
+                # Die übersetzte Zusammenfassung baut die Oberfläche aus dem
+                # Ereignis – die Skripte drucken keine eigene Prosa mehr.
+                self.logk("srv.job.result", "info", ergebnis=self._step_result)
             if code != 0:
                 ok = False
                 schritt = {"k": step["label"], "v": {}}
@@ -3678,9 +3682,29 @@ function mtext(m){
   if(typeof m === 'string') return m;
   if(!m.k) return String(m);
   var v = {};
-  Object.keys(m.v || {}).forEach(function(k){ v[k] = mtext(m.v[k]); });
+  Object.keys(m.v || {}).forEach(function(k){
+    // A step's structured result renders as one translated line.
+    v[k] = (k === 'ergebnis' && m.v[k] && typeof m.v[k] === 'object')
+      ? ergebnisText(m.v[k]) : mtext(m.v[k]);
+  });
   if(m.v && m.v.minutes !== undefined) v.rest = restzeit(m.v.minutes);
   return t(m.k, v);
+}
+
+/* The labels are the same atoms the run history table uses; extras keep
+   their technical names (moved, chunks, events …). */
+function ergebnisText(e){
+  var bits = [];
+  [['new', 'ana.runs.new'], ['unchanged', 'ana.runs.unchanged'],
+   ['excluded', 'ana.runs.excluded'], ['errors', 'ana.runs.errors']]
+    .forEach(function(p){
+      if(e[p[0]] !== undefined && e[p[0]] !== null)
+        bits.push(t(p[1]) + ' ' + zahl(e[p[0]]));
+    });
+  Object.keys(e.extra || {}).forEach(function(k){
+    bits.push(k + ' ' + zahl(e.extra[k]));
+  });
+  return bits.join(' · ') || '–';
 }
 function restzeit(min){
   if(min === null || min === undefined) return t('unit.unknown');

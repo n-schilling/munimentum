@@ -473,8 +473,8 @@ def lauf(graph, out):
     bestand.schreibe()
 
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
-    weg = schreibe_verschwunden(out / GONE_FILE, lies_verschwunden(out / GONE_FILE),
-                                plan["geloescht"], jetzt)
+    schreibe_verschwunden(out / GONE_FILE, lies_verschwunden(out / GONE_FILE),
+                          plan["geloescht"], jetzt)
     alt_baum = folders.lade(out)
     baum = baum_zusammenfuehren(alt_baum, plan["baum"], plan["entfernt"])
     if baum or alt_baum:
@@ -483,16 +483,11 @@ def lauf(graph, out):
     if not fehler:
         schreibe_delta(out, neuer_link)
 
-    print(f"\n{fertig} Dateien geladen, {bewegt} verschoben, "
-          f"{len(plan['geloescht'])} nicht mehr in OneDrive, "
-          f"{plan['ausgelassen']} ausgelassen, {fehler} Fehler.")
-    if plan["geloescht"]:
-        print(f"  Vermerkt in {GONE_FILE} ({len(weg)} insgesamt) – "
-              f"die Dateien bleiben liegen.")
     if fehler:
         print("  Wegen der Fehler wird beim nächsten Lauf noch einmal "
               "vollständig aufgezählt.")
-    progress.ergebnis(fertig, excluded=plan["ausgelassen"], errors=fehler)
+    progress.ergebnis(fertig, excluded=plan["ausgelassen"], errors=fehler,
+                      extra={"moved": bewegt, "gone": len(plan["geloescht"])})
     return fertig
 
 

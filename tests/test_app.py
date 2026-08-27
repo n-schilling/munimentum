@@ -824,8 +824,12 @@ def test_jobrunner_ueberspringt_index_wenn_nichts_neu_ist(sandbox):
 
 
 def test_jobrunner_indiziert_wenn_es_etwas_neues_gibt(sandbox):
-    _, text = _folge(sandbox, neu=1)
+    r, text = _folge(sandbox, neu=1)
     assert "INDIZIERT" in text
+    # Die Ergebniszeile kommt von der App, aus dem strukturierten Ereignis.
+    eintraege = [ln["text"] for ln in r.lines if isinstance(ln["text"], dict)]
+    ergebnis = [e for e in eintraege if e["k"] == "srv.job.result"]
+    assert ergebnis and ergebnis[0]["v"]["ergebnis"]["new"] == 1
 
 
 def test_jobrunner_indiziert_ohne_vorhandenen_index(sandbox):
@@ -2607,6 +2611,15 @@ PRUEFUNG_SCHRITTKOPF = GRUNDZUSTAND + """
 var zeile = mtext({k: 'srv.job.step', v: {step: {k: 'job.step.outlook', v: {}}}});
 pruefe(zeile.indexOf('Outlook') >= 0, 'Schritt nicht uebersetzt: ' + zeile);
 pruefe(zeile.indexOf('job.step.') < 0, 'Schluessel im Protokoll: ' + zeile);
+
+// Die Ergebniszeile entsteht aus dem strukturierten Ereignis – uebersetzt,
+// mit den Atomen der Lauf-Historie; Extras behalten ihre technischen Namen.
+var erg = mtext({k: 'srv.job.result',
+                 v: {ergebnis: {new: 0, unchanged: 67, extra: {moved: 2}}}});
+pruefe(erg.indexOf('neu: 0') >= 0, 'neu fehlt: ' + erg);
+pruefe(erg.indexOf('unver') >= 0 && erg.indexOf('67') >= 0,
+       'unveraendert fehlt: ' + erg);
+pruefe(erg.indexOf('moved 2') >= 0, 'Extra fehlt: ' + erg);
 console.log('OK');
 """
 

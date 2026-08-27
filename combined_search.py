@@ -483,15 +483,7 @@ def main():
         raise SystemExit("Nutzung: python3 combined_search.py [outlook-ordner] "
                          "--json ziel.json [--no-reconstruct]")
 
-    print(f"Kalenderdaten → {kalender_json}"
-          + ("" if reconstruct else " (ohne Wiederherstellung aus Mails)"))
     c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct)
-    print(f"Fertig. {c['kalender']} Termine, {c['rekonstruiert']} aus Mails "
-          f"rekonstruiert, {c['kontakte']} Kontakte."
-          + (f" {c['abgesagt_markiert']} nachträglich als abgesagt markiert."
-             if c["abgesagt_markiert"] else "")
-          + (f" {c['doppel_verworfen']} als Doppel verworfen."
-             if c["doppel_verworfen"] else ""))
     # Same result schema as every other subprogram; the file is rebuilt as a
     # whole, so "new" is everything it now contains.
     progress.ergebnis(c["kalender"] + c["rekonstruiert"] + c["kontakte"],

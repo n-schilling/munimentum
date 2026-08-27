@@ -839,9 +839,6 @@ def main():
         print(f"Bisher im Archiv: {done_total}.")
         sys.exit(1)
 
-    print(f"\nFertig. Neu: {stats['new']}, aktualisiert: {stats['updated']}, "
-          f"unverändert: {stats['skipped']}, leer übersprungen: {stats['empty']}, "
-          f"gesamt im Archiv: {done_total}.")
     # Aktualisierte Konversationen zählen mit: ihre Dateien haben sich geändert,
     # der Index kennt sie also in der alten Fassung.
     progress.ergebnis(stats["new"] + stats["updated"], unchanged=stats["skipped"],

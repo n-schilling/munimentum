@@ -413,13 +413,6 @@ def main():
     # Same result schema as every other subprogram: "new" = freshly computed
     # embeddings, "unchanged" = reused ones; the chunk total goes into extra.
     progress.ergebnis(new, unchanged=max(0, n - new), extra={"chunks": n})
-    if a.no_embeddings:
-        print(f"\nFertig. {n} Chunks im Volltextindex – keine Embeddings.")
-        print("Für die semantische/hybride Suche später ohne --no-embeddings "
-              "erneut laufen lassen (Ollama nötig).")
-    else:
-        print(f"\nFertig. {n} Chunks im Index ({dim} Dimensionen), davon {new} neu berechnet.")
-    print("Jetzt: python3 mcp_server.py")
 
 
 if __name__ == "__main__":
