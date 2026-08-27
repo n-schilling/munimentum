@@ -39,6 +39,12 @@ einem echten Bündel, nicht am Schreibtisch.
 * **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene
   Ansprüche — die `.eml` dürfen auf einer langsamen Platte liegen, der Index
   nicht. Getrennte Pfade sind heute schon möglich, aber nirgends erklärt.
+* **Skript-Erzählung als Textschlüssel.** Die Ergebniszeilen übersetzt die
+  App inzwischen selbst (aus dem RESULT-Ereignis); was die Skripte während
+  des Laufs erzählen („Kontakte…", Ordner-Listings), ist noch fest deutsche
+  Prosa. Ein strukturierter Log-Kanal mit Textschlüsseln machte das
+  Protokoll durchgehend einsprachig — jede Zeile wird dabei ein Schlüssel in
+  drei Sprachen, deshalb ein eigenes Stück Arbeit.
 * **app.py aufteilen.** Der letzte offene Punkt des Aufräumens in 5.4.0: gut
   die Hälfte der Datei ist die Oberfläche als ein eingebetteter String, der
   Rest Python (Konfiguration, Läufe, Routen, Auswertung). Die Trennung ist ein
