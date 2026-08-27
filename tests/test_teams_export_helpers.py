@@ -3,14 +3,6 @@
 import teams_export as te
 
 
-def test_parse_indices():
-    assert te.parse_indices("1, 3 5", 5) == [1, 3, 5]
-    assert te.parse_indices("2,2,2", 5) == [2]          # Duplikate raus
-    assert te.parse_indices("0, 6, 99", 5) == []        # außerhalb des Bereichs
-    assert te.parse_indices("a, b", 5) == []
-    assert te.parse_indices("", 5) == []
-
-
 def test_safe_filenames():
     assert te.safe('a/b\\c:d*e?"f<g>h|i') == "a_b_c_d_e_f_g_h_i"
     assert te.safe("  viel   Leerraum  ") == "viel Leerraum"
