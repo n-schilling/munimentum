@@ -386,6 +386,7 @@
   "settings.runs_retention_months": "Conserver l’historique des exécutions (mois)",
   "settings.runs_retention_months.i": "Jusqu’où remonte l’aperçu des exécutions (Analytics → Exécutions). Seuls des nombres, durées et réglages sont conservés par exécution – localement dans runs.db du dossier de données. Les entrées plus anciennes sont supprimées au démarrage et après chaque exécution.",
   "ana.reload": "Actualiser",
+  "ana.runs.all": "tout",
   "ana.runs.title": "Exécutions",
   "ana.runs.sub": "Chaque exécution de l’application, avec durée et résultat par étape.",
   "ana.runs.empty": "Aucune exécution enregistrée pour l’instant – la première apparaîtra ici.",

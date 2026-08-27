@@ -386,6 +386,7 @@
   "settings.runs_retention_months": "Keep run history (months)",
   "settings.runs_retention_months.i": "How far back the run overview (Analytics → Runs) reaches. Only counts, durations and switches are stored per run – locally in runs.db in the data folder. Older entries are removed on start and after every run.",
   "ana.reload": "Refresh",
+  "ana.runs.all": "all",
   "ana.runs.title": "Runs",
   "ana.runs.sub": "Every run of the app, with duration and result per step.",
   "ana.runs.empty": "No runs recorded yet – the first one will appear here.",

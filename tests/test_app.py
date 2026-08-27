@@ -5819,8 +5819,16 @@ renderRuns([{started_at: 1755000000, finished_at: 1755000065,
      errors: null, skipped: 1, ok: null, extra: null}
   ]}]);
 var html = el('ana-runs').innerHTML;
-pruefe(html.indexOf('Outlook, OneDrive') >= 0, 'Elemente fehlen: ' + html);
+// Kategorien in Klammern, uebersetzt; alles aktiviert heisst "(alle)".
+pruefe(html.indexOf('Outlook (E-Mail), OneDrive (alle)') >= 0,
+       'Elemente ohne Kategorien: ' + html);
 pruefe(html.indexOf('Zeitplan') >= 0, 'Ausloeser nicht uebersetzt: ' + html);
+pruefe(runElements({elements: {outlook: ['mail', 'calendar', 'contacts'],
+                               teams: ['1on1', 'group'], onedrive: false}})
+       === 'Outlook (alle), Teams (1:1-Chats, Gruppenchats)',
+       'Vollauswahl nicht als "alle": ' +
+       runElements({elements: {outlook: ['mail', 'calendar', 'contacts'],
+                               teams: ['1on1', 'group'], onedrive: false}}));
 pruefe(html.indexOf('fertig') >= 0, 'Ergebnis nicht uebersetzt: ' + html);
 pruefe(html.indexOf('42 s') >= 0, 'Schrittdauer fehlt: ' + html);
 pruefe(html.indexOf('bersprungen') >= 0, 'Uebersprungener Schritt fehlt: ' + html);

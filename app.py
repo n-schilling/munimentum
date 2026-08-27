@@ -5041,9 +5041,17 @@ function durationText(s){
 
 function runElements(r){
   var e = r.elements || {}, parts = [];
-  if((e.outlook || []).length) parts.push('Outlook');
-  if((e.teams || []).length) parts.push('Teams');
-  if(e.onedrive) parts.push('OneDrive');
+  // Which categories, in brackets – "(all)" when every one was enabled.
+  function detail(cats, alle){
+    var namen = cats.length >= alle.length ? [t('ana.runs.all')]
+      : cats.map(function(c){ return t('export.cat.' + c); });
+    return ' (' + namen.join(', ') + ')';
+  }
+  if((e.outlook || []).length)
+    parts.push('Outlook' + detail(e.outlook, ['mail', 'calendar', 'contacts']));
+  if((e.teams || []).length)
+    parts.push('Teams' + detail(e.teams, ['1on1', 'group', 'meeting', 'channels']));
+  if(e.onedrive) parts.push('OneDrive (' + t('ana.runs.all') + ')');
   (r.steps || []).forEach(function(s){
     if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
   });

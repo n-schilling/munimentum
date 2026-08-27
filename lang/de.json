@@ -386,6 +386,7 @@
   "settings.runs_retention_months": "Lauf-Historie aufbewahren (Monate)",
   "settings.runs_retention_months.i": "Wie weit die Übersicht der Läufe (Analytics → Läufe) zurückreicht. Gespeichert werden je Lauf nur Zahlen, Dauern und Schalter – lokal in runs.db im Datenordner. Ältere Einträge werden beim Start und nach jedem Lauf entfernt.",
   "ana.reload": "Aktualisieren",
+  "ana.runs.all": "alle",
   "ana.runs.title": "Läufe",
   "ana.runs.sub": "Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.",
   "ana.runs.empty": "Noch keine Läufe aufgezeichnet – der erste erscheint hier.",
