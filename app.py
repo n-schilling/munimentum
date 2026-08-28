@@ -57,6 +57,7 @@ import answer
 import auth
 import folders
 import i18n
+import notify
 import ollama_client
 import progress
 import run_history
@@ -1357,17 +1358,37 @@ class JobRunner:
             self.logk("srv.job.stepdone", "ok", step={"k": step["label"], "v": {}})
         if ok:
             self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
+        art = ("done" if ok else "aborted" if self.cancelled
+               else "token_expired" if self.token_expired else "error")
         if hist:
-            hist.finish_run(run_id,
-                            "done" if ok
-                            else "aborted" if self.cancelled
-                            else "token_expired" if self.token_expired
-                            else "error")
+            hist.finish_run(run_id, art)
             monate = self._context.get("retention_months")
             if monate:
                 hist.prune(monate)
+        self._notify_user(art, label)
         self.last = {"label": label, "ok": ok, "detail": detail,
                      "finished": datetime.now().isoformat(timespec="seconds")}
+
+    def _notify_user(self, art, label):
+        """One system notification per run – or none: the mode decides.
+
+        "errors" (the default) keeps quiet on success; "all" also reports
+        finished runs – the scheduler case, where no tab is open. A cancelled
+        run is never reported: the user did that themselves.
+        """
+        try:
+            mode = self._context.get("notify") or "errors"
+            if (mode == "off" or art == "aborted"
+                    or (art == "done" and mode != "all")):
+                return
+            key = {"done": "srv.notify.done",
+                   "token_expired": "srv.notify.token"}.get(art, "srv.notify.failed")
+            texte = i18n.strings(self._context.get("lang") or i18n.FALLBACK, RES)
+            text = (texte.get(key) or key).replace(
+                "{label}", texte.get(label) or str(label))
+            notify.send("Munimentum", text)
+        except Exception:
+            pass                # a missed notification must never break a run
         self.job = None
         self.proc = None
 
@@ -1702,6 +1723,7 @@ class SearchBridge:
 class App:
     def __init__(self, cfg=None):
         self.cfg = cfg or load_config()
+        self.ui_lang = None      # language of the page served last
         self.history = run_history.RunHistory(BASE / run_history.DB_NAME)
         self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
         self.jobs = JobRunner(self.history)
@@ -1974,6 +1996,9 @@ class App:
             "semantic": bool(index and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
             "retention_months": int(self.cfg.get("runs_retention_months") or 24),
+            "notify": str(self.cfg.get("notifications") or "errors"),
+            "lang": self.ui_lang or i18n.negotiate(self.cfg.get("language"),
+                                                   None, RES),
         }
         if not self.jobs.start(steps, label, origin=origin, context=kontext):
             return False, {"k": "srv.nostart", "v": {}}
@@ -2241,6 +2266,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         code = i18n.negotiate(self.app.cfg.get("language"),
                               self.headers.get("Accept-Language"), RES)
+        self.app.ui_lang = code       # notifications speak the page language
         nutzlast = json.dumps({"lang": code, "strings": i18n.strings(code, RES),
                                "languages": i18n.available(RES)},
                               ensure_ascii=False).replace("<", "\\u003c")
@@ -2327,6 +2353,10 @@ class Handler(BaseHTTPRequestHandler):
         for key in ("client_id", "tenant"):
             if key in data:
                 cfg[key] = str(data[key] or "").strip()
+        if "notifications" in data:
+            wert = str(data["notifications"] or "").strip().lower()
+            if wert in ("off", "errors", "all"):
+                cfg["notifications"] = wert
         if "language" in data:
             # Nur bekannte Codes – ein Tippfehler sonst und die Oberfläche
             # spräche für immer die Notsprache.
@@ -3623,6 +3653,7 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.userflow_actions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.userflow_actions.i">i</span></span><input type="number" id="c-userflow_actions" min="0" max="50"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.runs_retention_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.runs_retention_months.i">i</span></span><input type="number" id="c-runs_retention_months" min="1" max="120"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications" style="min-width:200px"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
     </div>
     <div class="row" style="margin-top:14px">
       <span class="small muted" id="update-current" style="flex:1"></span>
@@ -5683,6 +5714,7 @@ function fuelleEinstellungen(cfg){
   SCHALTER.forEach(function(k){ el('c-'+k).checked = !!cfg[k]; });
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
+  el('c-notifications').value = cfg.notifications || 'errors';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -5697,7 +5729,8 @@ function speichereEinstellungen(){
   var body = {skip_folders: el('c-skip_folders').value,
               filetype_hidden: el('c-filetype_hidden').value,
               analytics_skip: el('c-analytics_skip').value,
-              language: el('c-language').value};
+              language: el('c-language').value,
+              notifications: el('c-notifications').value};
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });

@@ -141,6 +141,11 @@ stops looking, the index is built as full text only, and the header says so.
 Next to the address and the two model names, a small indicator says whether each
 is actually there.
 
+**System notifications** can report the end of a run through the operating
+system — useful when the schedule exports with no tab open. By default only
+failures and an expired access key are reported; "all runs" and "off" are a
+setting away. Everything stays on the machine; currently macOS only.
+
 The log bar at the bottom is open from every tab, and it speaks the interface
 language: the exports report events, the app puts them into words. *Copy* puts
 the log on the clipboard; *Report a problem* opens the matching GitHub issue

@@ -31,3 +31,8 @@ requests==2.34.2        # Graph-REST-Aufrufe und Ollama
 # GitHub die Intel-Runner abschaltet (August 2027), fällt diese Zeile weg.
 cryptography==48.0.1; sys_platform == "darwin" and platform_machine == "x86_64"
 
+# Native macOS notifications (UNUserNotificationCenter, notify.py). Only the
+# bundled app takes this path; run from source it falls back to osascript,
+# and other platforms are deliberate no-ops for now.
+pyobjc-framework-UserNotifications==12.2.2; sys_platform == "darwin"
+

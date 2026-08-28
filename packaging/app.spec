@@ -49,7 +49,7 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "auth", "export_util", "folders", "graph_client",
                  "ollama_client", "run_history", "settings",
                  "i18n", "updates", "version", "store_layout",
-                 "progress", "answer"]
+                 "progress", "answer", "notify"]
 
 def ohne_cli(name):
     """mcp.cli braucht typer – ein optionales Extra, das wir nicht mitliefern.
@@ -59,6 +59,9 @@ def ohne_cli(name):
 
 
 hidden = list(TEILPROGRAMME)
+if sys.platform == "darwin":
+    # PyObjC resolves its framework bindings by name at runtime.
+    hidden += ["objc", "Foundation", "UserNotifications"]
 # Der MCP-Server läuft über uvicorn/starlette; deren Protokoll- und
 # Lifecycle-Module werden erst zur Laufzeit nach Namen geladen.
 for paket in ("uvicorn", "mcp", "anyio", "sse_starlette"):

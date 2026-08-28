@@ -121,6 +121,7 @@ VORGABEN = {
     # UI-Userflow-Aufzeichnung: die letzten Bedienschritte für den Fehler-
     # bericht – nur die Art (Reiter, Suche, Lauf), nie Inhalte, rein im
     # Speicher der offenen Seite. 0 schaltet sie ab.
+    "notifications": "errors",  # system notifications: off | errors | all
     "userflow_actions": 20,
     # Wie lange die Lauf-Historie (runs.db) zurückreicht. Aufgeräumt wird beim
     # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.

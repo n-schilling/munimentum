@@ -678,6 +678,26 @@ def test_jobrunner_fuehrt_schritte_der_reihe_nach_aus(sandbox):
     assert text.index("eins") < text.index("zwei")
 
 
+def test_notify_user_mode_decides(monkeypatch, sandbox):
+    """"errors" keeps quiet on success, "all" reports it, cancelled is never
+    reported – and every body arrives translated, without raw keys."""
+    sent = []
+    monkeypatch.setattr(app_mod.notify, "send", lambda t, b: sent.append(b))
+    r = app_mod.JobRunner()
+    r._context = {"notify": "errors", "lang": "en"}
+    r._notify_user("done", "job.export")           # quiet on success
+    r._notify_user("aborted", "job.export")        # the user did that
+    r._notify_user("token_expired", "job.export")
+    r._notify_user("error", "job.export")
+    r._context["notify"] = "all"
+    r._notify_user("done", "job.export")
+    r._context["notify"] = "off"
+    r._notify_user("error", "job.export")          # off silences everything
+    assert len(sent) == 3
+    assert all("{label}" not in b and "srv." not in b for b in sent)
+    assert any("expired" in b for b in sent)
+
+
 def test_jobrunner_bricht_bei_fehler_ab(sandbox):
     r = app_mod.JobRunner()
     r.start([_py_step("raise SystemExit(3)", "Kaputt"), _py_step("print('nie')", "B")], "Lauf")
@@ -6327,6 +6347,7 @@ def test_jedes_feld_ist_auch_gelistet():
                  "filetype_hidden",   # Liste aus einer Zeile, eigene Behandlung
                  "analytics_skip",    # mehrzeiliger Text, eigene Behandlung
                  "language",          # eigenes Auswahlfeld, fuelleSprachen()
+                 "notifications",     # eigenes Auswahlfeld, von Hand gespeichert
                  "data-dir",          # kein Konfigurationswert, eigener Knopf
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
                  "onedrive_enabled"}  # steht im Reiter „Exportieren", saveCats()
