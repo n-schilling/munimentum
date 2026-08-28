@@ -124,6 +124,13 @@ exchange the most with.
 On request there is also a completeness check against Microsoft: what it counts
 per folder against what is here, for both the mailbox and the drive.
 
+**Runs** keeps the history of every export: when it ran, scheduled or by hand,
+which elements were enabled, how long each step took and what it produced —
+with the new pieces broken down by source on hover. The history lives in a
+small database next to the exports and holds nothing personal, only counts,
+durations and switches; how long it is kept is a setting (24 months by
+default).
+
 ### Settings
 
 Export options per source, the schedule, AI, the MCP server and the app itself. Each
@@ -134,11 +141,16 @@ stops looking, the index is built as full text only, and the header says so.
 Next to the address and the two model names, a small indicator says whether each
 is actually there.
 
-The log bar at the bottom is open from every tab. *Copy* puts it on the
-clipboard; *Report a problem* fills in a GitHub issue with the log and the
-details a bug report otherwise costs two rounds of e-mail to collect. The app
-sends nothing itself — addresses and user names in paths are replaced, the whole
-text is shown for editing, and you submit the form.
+The log bar at the bottom is open from every tab, and it speaks the interface
+language: the exports report events, the app puts them into words. *Copy* puts
+the log on the clipboard; *Report a problem* opens the matching GitHub issue
+form with description, system details and log filled in — including which
+settings differ from their defaults (rules and name lists only as their size,
+paths not at all) and, if
+enabled, the kind of your last steps in the interface (tab, search, run —
+never content). The app sends nothing itself — addresses and user names in
+paths are replaced, the whole text is shown for editing, and you submit the
+form.
 
 ---
 

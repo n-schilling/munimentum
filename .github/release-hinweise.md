@@ -1,27 +1,26 @@
-## New in 5.4.0
+## New in 5.5.0
 
-A clean-up release: what had grown as separate scripts now shares one Graph
-client, one model-server client and one configuration schema. No new buttons —
-but the tidying surfaced and fixed real faults:
+**Analytics has a new Runs view.** Every export now leaves an entry: when it
+ran, scheduled or by hand, which elements were enabled, how long each step took
+and what it produced — the new pieces broken down by source on hover. The
+history lives in a small database next to the exports and holds nothing
+personal, only counts, durations and switches; how long it is kept is a
+setting (24 months by default).
 
-**An expired access key stops a OneDrive run cleanly.** It used to end in a
-generic error the app could not interpret; now the app notices and asks for a
-fresh key, exactly as it does for mail and Teams.
+**Reporting a problem got easier.** *Report a problem* now opens the matching
+GitHub issue form with description, system details and log filled in — you
+review and edit everything before sending. The report also names which
+settings differ from their defaults (rules and name lists only as their size,
+paths not at all) and, if enabled, the kind of your last steps in the
+interface (tab, search, run — never content).
 
-**Appointments from other time zones carry the right time in search.** An
-invitation with a Windows time-zone name landed in the search index at local
-time; search results and the calendar view now agree.
+**The log speaks one language — yours.** The exports report events, the app
+puts them into words in the interface language; the mixed German/English lines
+are gone. The log is also quieter: settings the app already shows are no
+longer echoed at the start of every run.
 
-**Building calendar and contacts is faster.** That step no longer reads the
-full text of every mail — only the invitations it is actually after.
-
-**Exports are steadier on a flaky network.** A dropped connection no longer
-uses up the retries reserved for Microsoft's throttling, and OneDrive now paces
-its requests the way the other exports do.
-
-Removed: the generator for the standalone HTML search page. The app has not
-offered that page since 5.2; the script behind it now produces only the
-calendar and contact data.
+**Quit tidies up.** Closing the app from the interface now clears the whole
+page instead of leaving dead controls behind.
 
 ## Which file?
 
