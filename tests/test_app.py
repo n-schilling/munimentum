@@ -2081,7 +2081,9 @@ def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
     try:
         zweiter = app_mod.make_server(a, port)
         try:
-            assert zweiter.server_address[1] == port + 1
+            # Not exactly port+1: a neighbouring port may be busy on CI
+            # runners – any free port within the search range is correct.
+            assert port < zweiter.server_address[1] < port + 12
         finally:
             zweiter.server_close()
     finally:
