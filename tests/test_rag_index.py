@@ -243,7 +243,8 @@ def test_load_old_vectors_unlesbarer_store(tmp_path, capsys):
     (tmp_path / "corpus.db").write_bytes(b"kein sqlite")
     _speichere(tmp_path, np.ones((1, 2), dtype="float32"))
     assert rag_index.load_old_vectors(tmp_path) == {}
-    assert "komplett neu" in capsys.readouterr().out
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert {"k": "run.index.rebuild", "level": "warn"} in events
 
 
 # --------------------------------------------------------------------------
@@ -511,9 +512,8 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["rag_index.py", "--no-embeddings"])
     rag_index.main()
     assert seen["embeddings"] is False
-    # Die Startzeile nennt den Modus; die Zahlen kommen als Ergebnis-Ereignis.
+    # Den Modus kennt die App selbst; die Zahlen kommen als Ergebnis-Ereignis.
     out = capsys.readouterr().out
-    assert "nur Volltext, ohne Embeddings" in out
     assert progress.lies_ergebnis(out.splitlines()[-1]) == {
         "new": 0, "unchanged": 3, "extra": {"chunks": 3}}
 
@@ -578,7 +578,8 @@ def test_retire_vectors_ohne_vorhandene_datei(tmp_path):
 def test_load_stale_ignoriert_kaputte_datei(tmp_path, capsys):
     (tmp_path / rag_index.STALE_VECTORS).write_bytes(b"kein npz")
     assert rag_index._load_stale(tmp_path) == {}
-    assert "unlesbar" in capsys.readouterr().out
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert {"k": "run.index.stale_unreadable", "level": "warn"} in events
 
 
 # --------------------------------------------------------------------------

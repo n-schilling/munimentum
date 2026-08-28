@@ -12,6 +12,7 @@ import requests
 
 import folders
 import outlook_export
+import progress
 
 
 def _unfold(text):
@@ -779,9 +780,13 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
     assert not any(z.startswith("None\t") for z in log.splitlines())
 
 
-def test_default_skip_folders_stammt_aus_der_eingebauten_liste():
+def test_default_skip_folders_stammt_aus_der_eingebauten_liste(monkeypatch):
     """Ohne SKIP_FOLDERS und ohne app_config.json gilt die Liste im Skript."""
-    assert outlook_export.DEFAULT_SKIP_FOLDERS == outlook_export.BUILTIN_SKIP_FOLDERS
+    import settings
+    monkeypatch.delenv("SKIP_FOLDERS", raising=False)
+    monkeypatch.setattr(settings, "load", lambda path=None: {})
+    assert (settings.folders("SKIP_FOLDERS", "skip_folders")
+            == outlook_export.BUILTIN_SKIP_FOLDERS)
 
 
 # --------------------------------------------------------------------------
@@ -859,7 +864,8 @@ def test_grenze_bremst_die_nachfragen(capsys):
     weg, _ = outlook_export.wirklich_weg(
         g, [(f"m{i}", f"{i}.eml") for i in range(10)], grenze=3)
     assert len(g.gefragt) == 3 and len(weg) == 3
-    assert "7 weitere" in capsys.readouterr().out
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert {"k": "run.gone.deferred", "level": "info", "v": {"n": 7}} in events
 
 
 def test_verschwunden_datei_behaelt_den_ersten_zeitpunkt(tmp_path):
@@ -1103,7 +1109,8 @@ def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(outlook_export, "list_calendars", lambda graph: [])
     assert outlook_export.waehle_kalender(None, tmp_path) == []
     assert not folders.pfad(tmp_path, folders.KALENDER).exists()
-    assert "Keine Kalender lesbar" in capsys.readouterr().out
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert {"k": "run.calendars.none", "level": "warn"} in events
 
 
 def test_nur_standard_faellt_auf_den_ersten_zurueck():
@@ -1215,5 +1222,5 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
 
     vermerke = outlook_export.lies_verschwunden(tmp_path / outlook_export.GONE_FILE)
     assert sorted(vermerke) == ["E-Mail/Posteingang/b.eml"]
-    text = capsys.readouterr().out
-    assert "1 frühere Vermerke zurückgenommen" in text
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert {"k": "run.gone.healed", "level": "info", "v": {"n": 1}} in events

@@ -237,7 +237,7 @@ def _load_stale(store):
             V, hashes = z["V"], z["hashes"].tolist()
         return {h: V[i] for i, h in enumerate(hashes) if h and i < len(V)}
     except Exception:
-        print(f"  {STALE_VECTORS} unlesbar – wird ignoriert.")
+        progress.event("run.index.stale_unreadable", "warn")
         return {}
 
 
@@ -250,7 +250,7 @@ def load_old_vectors(store):
         out.update({h: V[i] for i, h in enumerate(hashes) if h and i < len(V)})
         return out
     except Exception:
-        print("  Alter Index unlesbar – baue komplett neu.")
+        progress.event("run.index.rebuild", "warn")
         return out
 
 
@@ -293,8 +293,8 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     if corpus.POOL_FEHLER:
         # Nicht verschweigen: der Index stimmt, aber das Einlesen lief auf
         # einem Kern statt auf allen, und bei großen Beständen merkt man das.
-        print(f"Hinweis: Einlesen ohne Prozess-Pool, nur ein Kern "
-              f"({corpus.POOL_FEHLER}).")
+        progress.event("run.index.no_pool", "warn",
+                       error=str(corpus.POOL_FEHLER))
     chunks = corpus.chunk_records(recs)
     if not chunks:
         raise SystemExit("Keine Inhalte gefunden – stimmen die Export-Ordner?")
@@ -309,8 +309,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
         # daraufhin rein lexikalisch.
         saved = retire_vectors(store)
         if saved:
-            print(f"{saved} vorhandene Embeddings nach {STALE_VECTORS} gesichert "
-                  f"– ein späterer Lauf mit Ollama nutzt sie wieder.")
+            progress.event("run.index.saved_stale", n=saved)
         write_db(store, chunks)
         write_info(store, None, 0, len(chunks))
         return len(chunks), 0, 0
@@ -339,9 +338,9 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     # und gemischte Längen zahlen diese Füllung bei jedem Stück mit.
     todo_groups.sort(key=lambda g: len(chunks[g[0]].get("text") or ""))
     todo_texts = [corpus.embed_text(chunks[idxs[0]]) for idxs in todo_groups]
-    print(f"{len(chunks)} Chunks: {len(chunks) - new_total} wiederverwendet, "
-          f"{new_total} neu ({len(todo_texts)} eindeutig einzubetten, "
-          f"{zu_kurz} zu kurz für Bedeutung).")
+    progress.event("run.index.plan", chunks=len(chunks),
+                   reused=len(chunks) - new_total, new=new_total,
+                   short=zu_kurz)
 
     if todo_texts:
         done = 0
@@ -363,8 +362,6 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 done += len(vecs)
                 dim = dim or len(vecs[0])
                 progress.melde(done, len(todo_texts), "embeddings")
-                print(f"  … {done}/{len(todo_texts)} eingebettet", end="\r", flush=True)
-        print()
 
     if dim is None:
         # Weder Altbestand noch etwas Neues: nur zu kurze Texte. Die Länge
@@ -403,10 +400,6 @@ def main():
                          "Suche und MCP laufen dann rein lexikalisch.")
     a = ap.parse_args()
 
-    if a.no_embeddings:
-        print(f"Index → {a.store}  (nur Volltext, ohne Embeddings)")
-    else:
-        print(f"Index → {a.store}  (Modell {a.model})")
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
                               a.batch, embeddings=not a.no_embeddings,
                               onedrive_dir=a.onedrive)

@@ -190,7 +190,13 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.",
            "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
-           "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.")
+           "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
+           "run.")
+
+# Seit die Skripte über progress.event() in Textschlüsseln erzählen, liegen
+# Schlüssel auch außerhalb von app.py.
+SKRIPTE = ("outlook_export.py", "teams_export.py", "onedrive_export.py",
+           "rag_index.py", "combined_search.py", "auth.py")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.
@@ -228,7 +234,10 @@ def benutzte_schluessel():
     serverseitigen Meldungen (logk("…"), {"k": "…"}, Schritt-Bezeichnungen).
     Von Hand gepflegt liefe die Liste unweigerlich weg.
     """
+    wurzel = Path(app_mod.__file__).resolve().parent
     quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
+    for name in SKRIPTE:
+        quelle += (wurzel / name).read_text(encoding="utf-8")
     keys = set(re.findall(r'data-i18n(?:-html|-ph|-title)?="([\w.]+)"', quelle))
     # Literale in einfachen/doppelten Anführungszeichen und in HTML-Attributen
     # (dort steht &quot; statt ").

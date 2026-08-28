@@ -23,6 +23,7 @@ import json
 MARKE = "@@PROGRESS@@"
 MARKE_ERGEBNIS = "@@RESULT@@"
 MARKE_FEHLER = "@@ERROR@@"
+MARKE_LOG = "@@LOG@@"
 
 
 def melde(done, total=None, what=None):
@@ -64,6 +65,27 @@ def ergebnis(new, unchanged=None, excluded=None, errors=None, extra=None):
         print(f"{MARKE_ERGEBNIS} {json.dumps(daten)}", flush=True)
     except (OSError, ValueError):
         pass
+
+
+def event(key, level="info", **vars):
+    """A translatable log line: a text key plus its variables.
+
+    The app resolves the key in the interface language (a variable may itself
+    be a nested {"k": …, "v": …} message). This is what replaced the scripts'
+    German prose – one vocabulary for every subprogram.
+    """
+    daten = {"k": str(key), "level": level}
+    if vars:
+        daten["v"] = vars
+    try:
+        print(f"{MARKE_LOG} {json.dumps(daten, ensure_ascii=False)}", flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def atom(key):
+    """A nested message with no variables – e.g. a unit or category name."""
+    return {"k": str(key), "v": {}}
 
 
 def fehler(art):
@@ -108,3 +130,8 @@ def lies_ergebnis(zeile):
 def lies_fehler(zeile):
     """Gegenstück zu fehler(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
     return _lies(zeile, MARKE_FEHLER, "error")
+
+
+def lies_event(zeile):
+    """Gegenstück zu event(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    return _lies(zeile, MARKE_LOG, "k")

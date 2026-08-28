@@ -421,7 +421,7 @@ def test_render_conversation_empty_blocks():
 def test_render_blocks_counts_images():
     msgs = [_msg("A", "eins", "2025-06-01T09:00:00Z"),
             _msg("B", "zwei", "2025-06-01T09:05:00Z")]
-    blocks, nimg = te.render_blocks(msgs, "lbl")
+    blocks, nimg = te.render_blocks(msgs)
     assert len(blocks) == 2 and nimg == 0
     assert "eins" in blocks[0] and "zwei" in blocks[1]
 

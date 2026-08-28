@@ -164,7 +164,8 @@ def list_calendars(graph):
     except TokenExpired:
         raise
     except Exception as e:
-        print(f"  Kalender nicht lesbar – fehlt die Berechtigung Calendars.Read? ({e})")
+        progress.event("run.unreadable", "warn",
+                       name=progress.atom("export.cat.calendar"), error=str(e))
         return []
     cals.sort(key=lambda c: (not c.get("isDefaultCalendar"), (c.get("name") or "").lower()))
     return cals
@@ -183,7 +184,7 @@ def selected_categories():
     env = env_categories(options)
     if env is not None:
         return env
-    print("Standardauswahl – exportiere E-Mail, Standardkalender und Kontakte.")
+    progress.event("run.default_selection")
     return {k for k, _ in options}
 
 
@@ -224,23 +225,22 @@ def waehle_kalender(graph, out):
     """Kalender aus calendars.json auswählen; die Liste einmalig holen, wenn sie fehlt."""
     daten = folders.lade(out, folders.KALENDER)
     if daten is None:
-        print("Lade Kalenderliste…")
+        progress.event("run.calendars.loading")
         eintraege = kalender_eintraege(list_calendars(graph))
         if not eintraege:
             # Meist die fehlende Berechtigung Calendars.Read. Eine leere Liste
             # abzulegen hieße, sie nie wieder zu holen – und der Export bliebe
             # für immer still leer, ohne dass jemand den Grund sähe.
-            print("  Keine Kalender lesbar – die Liste wird nicht abgelegt.")
+            progress.event("run.calendars.none", "warn")
             return []
         daten = folders.speichere(out, eintraege, datei=folders.KALENDER)
     regeln = kalender_regeln(daten)
     gewaehlt = folders.gewaehlt(daten, regeln)
     alle = daten.get("ordner", [])
-    print(f"Kalender: {len(gewaehlt)} von {len(alle)} gewählt"
-          + (" – " + ", ".join(e["name"] for e in gewaehlt) if gewaehlt else ""))
+    progress.event("run.selection", chosen=len(gewaehlt), total=len(alle),
+                   unit=progress.atom("progress.unit.calendars"))
     if daten.get("neu"):
-        print(f"  Hinweis: {len(daten['neu'])} Kalender sind seit dem Abgleich neu "
-              f"dazugekommen und folgen den Regeln automatisch.")
+        progress.event("run.selection.new", n=len(daten["neu"]))
     return [{"id": e["id"], "name": e["name"]} for e in gewaehlt]
 
 
@@ -252,13 +252,13 @@ def gleiche_kalender_ab(argv):
     daten = folders.speichere(out, kalender_eintraege(list_calendars(graph)),
                               vorher, datei=folders.KALENDER)
     gewaehlt = folders.gewaehlt(daten, kalender_regeln(daten))
-    print(f"\n{len(daten['ordner'])} Kalender im Postfach, {len(gewaehlt)} gewählt.")
-    for art, liste in (("neu", daten["neu"]), ("nicht mehr da", daten["verschwunden"]),
-                       ("umbenannt", daten["umbenannt"])):
-        if liste:
-            print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
-                  + (" …" if len(liste) > 5 else ""))
-    print(f"Abgelegt: {folders.pfad(out, folders.KALENDER)}")
+    progress.event("run.sync.result", total=len(daten["ordner"]),
+                   chosen=len(gewaehlt),
+                   unit=progress.atom("progress.unit.calendars"))
+    if daten["neu"] or daten["verschwunden"] or daten["umbenannt"]:
+        progress.event("run.sync.changed", new=len(daten["neu"]),
+                       gone=len(daten["verschwunden"]),
+                       renamed=len(daten["umbenannt"]))
     progress.ergebnis(len(daten["neu"]),
                       extra={"total": len(daten["ordner"]),
                              "chosen": len(gewaehlt),
@@ -296,7 +296,8 @@ def list_children(graph, folder):
     except TokenExpired:
         raise
     except Exception as e:
-        print(f"  Warnung: Unterordner von '{folder.get('displayName')}' nicht lesbar: {e}")
+        progress.event("run.unreadable", "warn",
+                       name=str(folder.get("displayName")), error=str(e))
         return []
 
 
@@ -325,8 +326,7 @@ def build_tree(graph):
         tops.append({"folder": tf, "rel": rel, "subtree": sub,
                      "items": items, "nfolders": len(sub)})
         count += len(sub)
-        print(f"  … {count} Ordner erfasst", end="\r", flush=True)
-    print(f"  {count} Ordner erfasst.            ")
+    progress.event("run.folders_listed", n=count)
     return tops
 
 
@@ -457,8 +457,7 @@ def wirklich_weg(graph, kandidaten, grenze=2000):
                 weg.append(rel)
             # sonst: unklar – nichts behaupten
     if len(kandidaten) > grenze:
-        print(f"  Hinweis: {len(kandidaten) - grenze} weitere Verdachtsfälle erst "
-              f"beim nächsten Lauf geprüft (Grenze {grenze}).")
+        progress.event("run.gone.deferred", n=len(kandidaten) - grenze)
     return weg, verschoben
 
 
@@ -477,7 +476,10 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
             total = folder.get("totalItemCount")
-            print(f"\nOrdner: {rel_path}" + (f"  ({total} Elemente)" if total is not None else ""))
+            if total is not None:
+                progress.event("run.folder", name=rel_path, n=int(total))
+            else:
+                progress.event("run.folder_plain", name=rel_path)
             seen = 0
             try:
                 for msg in graph.paged(f"{GRAPH}/me/mailFolders/{folder['id']}/messages",
@@ -499,15 +501,16 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                 # Rest überspringen, weiter mit dem nächsten. Was schon exportiert
                 # ist, steht in exported.tsv – der nächste Lauf holt den Rest.
                 stats["folder_errors"] = stats.get("folder_errors", 0) + 1
-                print(f"  ! Ordner unvollständig gelistet ({type(e).__name__}: {e})"
-                      f" – nach {seen} Mails abgebrochen, nächster Lauf setzt fort.")
+                progress.event("run.folder_incomplete", "err", name=rel_path,
+                               error=f"{type(e).__name__}: {e}")
                 continue
             # Nur ein vollständig durchlaufener Ordner taugt zum Vergleich –
             # nach einem Abbruch oben sind wir hier gar nicht.
             if bestand is not None:
                 bestand.ordner_fertig(rel_path)
             if seen:
-                print(f"  {seen} Mails gesichtet.")
+                progress.event("run.scanned", n=seen,
+                               unit=progress.atom("progress.unit.mails"))
 
 
 # ---------------------------------------------------------------------------
@@ -564,13 +567,11 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     # Ohne Gesamtzahl: der Generator entdeckt die Mails erst im
                     # Laufen. Gemeldet wird deshalb nur der Stand.
                     progress.melde(stats["new"], what="mails")
-                    if stats["new"] % 50 == 0:
-                        print(f"  … {stats['new']} Mails neu exportiert")
                 elif status == "expired":
                     expired = True
                     STOP.set()
                 elif status == "error":
-                    print(f"    Mail übersprungen ({info})")
+                    progress.event("run.mail_skipped", "warn", detail=str(info))
                 # "stopped" -> ignorieren
             if not expired:
                 fill()
@@ -752,7 +753,7 @@ def build_ics(ev):
 def export_calendar(graph, out, done, stats, cals):
     if not cals:
         return
-    print("\nKalender…")
+    progress.event("run.section", name=progress.atom("export.cat.calendar"))
     pref = {"Prefer": 'outlook.timezone="UTC"'}      # Zeiten in UTC -> korrekte .ics
     select = ("id,iCalUId,subject,start,end,isAllDay,location,organizer,attendees,"
               "body,showAs,isCancelled,recurrence,seriesMasterId,type,"
@@ -761,7 +762,7 @@ def export_calendar(graph, out, done, stats, cals):
         cname = safe(cal.get("name") or "Kalender")
         url = (f"{GRAPH}/me/calendars/{cal['id']}/events" if cal.get("id")
                else f"{GRAPH}/me/events")
-        print(f"\nKalender: {cname}")
+        progress.event("run.folder_plain", name=cname)
         seen = 0
         try:
             for ev in graph.paged(url, {"$top": PAGE, "$select": select}, extra_headers=pref):
@@ -777,19 +778,18 @@ def export_calendar(graph, out, done, stats, cals):
                 try:
                     (out / rel).write_text(build_ics(ev), encoding="utf-8")
                 except Exception as e:
-                    print(f"    Termin übersprungen ({e})")
+                    progress.event("run.event_skipped", "warn", detail=str(e))
                     continue
                 done.mark(key, rel)
                 stats["new"] += 1
-                if stats["new"] % 100 == 0:
-                    print(f"  … {stats['new']} neu exportiert")
         except TokenExpired:
             raise
         except Exception as e:
-            print(f"  Kalender '{cname}' abgebrochen: {e}")
+            progress.event("run.folder_incomplete", "err", name=cname, error=str(e))
             continue
         if seen:
-            print(f"  {seen} Termine gesichtet.")
+            progress.event("run.scanned", n=seen,
+                           unit=progress.atom("progress.unit.events"))
 
 
 def contact_filename(c):
@@ -828,14 +828,15 @@ def build_vcf(c):
 
 
 def export_contacts(graph, out, done, stats):
-    print("\nKontakte…")
+    progress.event("run.section", name=progress.atom("export.cat.contacts"))
     sources = [("", f"{GRAPH}/me/contacts")]          # Standardkontakte (kein Ordner)
     try:
         folders = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
     except TokenExpired:
         raise
     except Exception as e:
-        print(f"  Kontaktordner nicht lesbar – fehlt Contacts.Read? ({e})")
+        progress.event("run.unreadable", "warn",
+                       name=progress.atom("export.cat.contacts"), error=str(e))
         folders = []
     for f in folders:
         sources.append((safe(f.get("displayName") or "Ordner"),
@@ -859,17 +860,18 @@ def export_contacts(graph, out, done, stats):
                 try:
                     (out / rel).write_text(build_vcf(c), encoding="utf-8")
                 except Exception as e:
-                    print(f"    Kontakt übersprungen ({e})")
+                    progress.event("run.contact_skipped", "warn", detail=str(e))
                     continue
                 done.mark(key, rel)
                 stats["new"] += 1
         except TokenExpired:
             raise
         except Exception as e:
-            print(f"  '{rel_dir}' abgebrochen: {e}")
+            progress.event("run.folder_incomplete", "err", name=rel_dir, error=str(e))
             continue
         if seen:
-            print(f"  {rel_dir}: {seen} Kontakte gesichtet.")
+            progress.event("run.scanned_in", name=rel_dir, n=seen,
+                           unit=progress.atom("progress.unit.contacts"))
 
 
 # ---------------------------------------------------------------------------
@@ -898,15 +900,15 @@ def migrate_to_email_subdir(out, done):
             d.rename(dest)
             moved += 1
         except OSError as e:
-            print(f"  Migration: '{d.name}' nicht verschoben ({e})")
+            progress.event("run.migrate.failed", "warn", name=d.name,
+                           error=str(e))
     if not moved:
         return
 
     def fix(rel):
         return rel if rel.split("/", 1)[0] in reserved else f"{MAIL_DIR}/{rel}"
     done.remap(fix)
-    print(f"Struktur aktualisiert: {moved} Mail-Ordner nach '{MAIL_DIR}/' verschoben "
-          f"(Resume-Liste angepasst, kein erneuter Download).")
+    progress.event("run.migrate.done", n=moved, dir=MAIL_DIR)
 
 
 def pruefe_verschwundene(graph, out, done, bestand):
@@ -922,13 +924,12 @@ def pruefe_verschwundene(graph, out, done, bestand):
     bekannt, geheilt = zuruecknehmen(out, bekannt, bestand)
     if geheilt:
         schreibe_verschwunden(pfad, bekannt, [], "")
-        print(f"\n{geheilt} frühere Vermerke zurückgenommen: die Mails liegen "
-              f"wieder im Postfach, sie waren nur verschoben.")
+        progress.event("run.gone.healed", n=geheilt)
 
     kandidaten = verdaechtige(done, bestand)
     if not kandidaten:
         return {"gone_healed": geheilt} if geheilt else {}
-    print(f"\nPrüfe {len(kandidaten)} Mails, die nicht mehr im Postfach standen…")
+    progress.event("run.gone.checking", n=len(kandidaten))
     # Ohne eine einzige Anfrage: Wer unter derselben Message-ID anderswo im
     # Postfach steht, ist verschoben und nicht gelöscht.
     kandidaten, verschoben_lokal = verschoben_statt_weg(out, kandidaten, bestand)
@@ -938,7 +939,8 @@ def pruefe_verschwundene(graph, out, done, bestand):
     if neue:
         schreibe_verschwunden(pfad, bekannt, neue,
                               datetime.now(UTC).isoformat(timespec="seconds"))
-    print(f"  {len(weg)} gelöscht ({len(neue)} neu), {verschoben} nur verschoben.")
+    progress.event("run.gone.result", gone=len(weg), new=len(neue),
+                   moved=verschoben)
     return {"gone_new": len(neue), "gone_total": len(bekannt) + len(neue),
             "moved": verschoben, "gone_healed": geheilt}
 
@@ -977,15 +979,13 @@ def gleiche_ordner_ab(argv):
     daten = folders.speichere(out, baum_eintraege(graph), vorher)
     regeln = aktuelle_regeln()
     z = folders.zusammenfassung(daten, regeln)
-    print(f"\n{z['ordner_gesamt']} Ordner, {z['mails_gesamt']} Mails im Postfach.")
-    print(f"Nach den Regeln gewählt: {z['ordner_gewaehlt']} Ordner, "
-          f"{z['mails_gewaehlt']} Mails.")
-    for art, liste in (("neu", daten["neu"]), ("nicht mehr da", daten["verschwunden"]),
-                       ("umbenannt", daten["umbenannt"])):
-        if liste:
-            print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
-                  + (" …" if len(liste) > 5 else ""))
-    print(f"Abgelegt: {folders.pfad(out)}")
+    progress.event("run.sync.result", total=z["ordner_gesamt"],
+                   chosen=z["ordner_gewaehlt"],
+                   unit=progress.atom("progress.unit.folders"))
+    if daten["neu"] or daten["verschwunden"] or daten["umbenannt"]:
+        progress.event("run.sync.changed", new=len(daten["neu"]),
+                       gone=len(daten["verschwunden"]),
+                       renamed=len(daten["umbenannt"]))
     progress.ergebnis(len(daten["neu"]),
                       extra={"total": z["ordner_gesamt"],
                              "gone": len(daten["verschwunden"]),
@@ -1018,19 +1018,17 @@ def waehle_ordner(graph, out):
     daten = folders.lade(out)
     if daten:
         z = folders.zusammenfassung(daten, regeln)
-        print(f"\nOrdnerauswahl aus {folders.DATEI} (Stand {z['abgeglichen']}): "
-              f"{z['ordner_gewaehlt']} von {z['ordner_gesamt']} Ordnern, "
-              f"{z['mails_gewaehlt']} Mails.")
+        progress.event("run.selection", chosen=z["ordner_gewaehlt"],
+                       total=z["ordner_gesamt"],
+                       unit=progress.atom("progress.unit.folders"))
         if z["neu"]:
-            print(f"  Hinweis: {len(z['neu'])} Ordner sind seit dem Abgleich neu "
-                  f"dazugekommen und folgen den Regeln automatisch.")
+            progress.event("run.selection.new", n=len(z["neu"]))
         auswahl = auswahl_aus_puffer(daten, regeln)
         if auswahl:
             return auswahl
-        print("  Die Regeln wählen keinen Ordner aus – nichts zu tun.")
+        progress.event("run.selection.empty", "warn")
         return []
-    print("\nNoch kein Ordnerbaum – lade ihn einmalig (dauert bei großen "
-          "Postfächern ein paar Minuten)…")
+    progress.event("run.folders.initial")
     daten = folders.speichere(out, baum_eintraege(graph))
     return auswahl_aus_puffer(daten, regeln)
 
@@ -1055,17 +1053,9 @@ def nur_pruefen(argv):
     graph = auth.waehle_zugang(TokenClient, graph_login)
     bericht = pruefe_vollstaendigkeit(
         graph, out, lies_verschwunden(out / GONE_FILE))
-    ziel = schreibe_bericht(out, bericht)
-    print(f"\n{bericht['erwartet']} erwartet, {bericht['vorhanden']} vorhanden, "
-          f"{bericht['geloescht']} als gelöscht vermerkt, "
-          f"{bericht['fehlt']} fehlen.")
-    if bericht["ausgelassen"]:
-        print(f"Nicht gezählt: {bericht['ausgelassen']} Mails in Ordnern, welche "
-              f"die Auswahl auslässt ({', '.join(bericht['ausgelassene_ordner'])}).")
-    for z in bericht["ordner"][:10]:
-        if z["fehlt"]:
-            print(f"  {z['fehlt']:>7} fehlen in {z['ordner']}")
-    print(f"Bericht: {ziel}")
+    # No prose: the check UI renders the report file, the result event
+    # carries the counts.
+    schreibe_bericht(out, bericht)
     progress.ergebnis(0, excluded=bericht["ausgelassen"],
                       extra={"expected": bericht["erwartet"],
                              "present": bericht["vorhanden"],
@@ -1167,11 +1157,8 @@ def main():
         if "--calendars" in sys.argv[1:]:
             return gleiche_kalender_ab(nur_ordner)
     except TokenExpired:
-        # Same structured ending as the export below – the app reacts to the
-        # event, not to the prose.
+        # Structured ending – the app reacts to the event and shows its wizard.
         progress.fehler("token_expired")
-        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token setzen "
-              "und erneut starten.")
         sys.exit(1)
 
     global OUT_ROOT
@@ -1181,9 +1168,7 @@ def main():
 
     workers = settings.number("EXPORT_WORKERS", "workers")
     if workers > 4:
-        print("Hinweis: Exchange Online erlaubt nur 4 gleichzeitige Anfragen pro "
-              f"Postfach – {workers} Worker erzeugen v. a. Drosselung. 4 ist das "
-              "sinnvolle Maximum.")
+        progress.event("run.workers_hint", "warn", n=workers)
     graph_client.konfiguriere(workers)
 
     graph = auth.waehle_zugang(TokenClient, graph_login)
@@ -1226,21 +1211,18 @@ def main():
         # Netz endgültig weg (alle Wiederholungen aufgebraucht) – kein Traceback,
         # der Fortschritt in exported.tsv bleibt erhalten.
         result = "network"
-        print(f"\nAbgebrochen: Verbindung zu Graph nicht möglich ({type(e).__name__}: {e})")
+        progress.event("run.network_gone", "err",
+                       error=f"{type(e).__name__}: {e}")
     except KeyboardInterrupt:
         result = "aborted"
-        print("\nAbgebrochen durch Benutzer.")
     finally:
         done.close()
 
     if result == "expired":
         progress.fehler("token_expired")
-        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
-              "setzen und erneut starten – bereits Exportiertes bleibt erhalten.")
         sys.exit(1)
     if result in ("network", "aborted"):
-        print(f"Bis hier neu exportiert: {stats['new']}. Einfach neu starten – "
-              "der Export setzt bei der letzten Mail fort.")
+        progress.event("run.resume_hint", n=stats["new"])
         sys.exit(1)
 
     # No prose summary: the numbers travel in the result event, and the app
@@ -1250,8 +1232,7 @@ def main():
                       extra={k: v for k, v in stats.items()
                              if k in ("gone_new", "moved", "gone_healed")})
     if stats.get("folder_errors"):
-        print(f"{stats['folder_errors']} Ordner konnten nicht vollständig gelistet "
-              "werden – Skript erneut starten, um den Rest zu holen.")
+        progress.event("run.folders_failed", "warn", n=stats["folder_errors"])
 
 
 if __name__ == "__main__":

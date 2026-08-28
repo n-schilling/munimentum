@@ -444,7 +444,8 @@ def hole_alle(graph, wurzel, bestand, aufgaben):
                 fertig += 1
             except Exception as e:
                 fehler += 1
-                print(f"    ! {a['rel']}: {type(e).__name__}: {e}")
+                progress.event("run.file_failed", "err", name=a["rel"],
+                               error=f"{type(e).__name__}: {e}")
             if (fertig + fehler) % 10 == 0 or fertig + fehler == gesamt:
                 progress.melde(fertig + fehler, gesamt, "files")
                 bestand.schreibe()
@@ -458,11 +459,11 @@ def lauf(graph, out):
     regeln = aktuelle_regeln()
     bestand = Bestand(out / BESTAND_DATEI)
     weiter = lies_delta(out)
-    print("  Aufzählung: " + ("nur Änderungen seit dem letzten Lauf"
-                              if weiter else "vollständig (erster Lauf)"))
+    progress.event("run.onedrive.delta" if weiter else "run.onedrive.full")
 
     eintraege, neuer_link = sammle(graph, weiter)
-    print(f"  {len(eintraege)} Einträge von Graph.")
+    progress.event("run.scanned", n=len(eintraege),
+                   unit=progress.atom("progress.unit.entries"))
     plan = plane(eintraege, bestand, wurzel, regeln)
 
     bewegt = verschiebe(wurzel, plan["verschoben"])
@@ -484,8 +485,7 @@ def lauf(graph, out):
         schreibe_delta(out, neuer_link)
 
     if fehler:
-        print("  Wegen der Fehler wird beim nächsten Lauf noch einmal "
-              "vollständig aufgezählt.")
+        progress.event("run.onedrive.retry_full", "warn")
     progress.ergebnis(fertig, excluded=plan["ausgelassen"], errors=fehler,
                       extra={"moved": bewegt, "gone": len(plan["geloescht"])})
     return fertig
@@ -560,16 +560,9 @@ def nur_pruefen(graph, out):
     out = Path(out)
     eintraege, _ = sammle(graph, None)
     bericht = pruefe_vollstaendigkeit(eintraege, out, aktuelle_regeln())
-    ziel = schreibe_bericht(out, bericht)
-    print(f"\n{bericht['erwartet']} erwartet, {bericht['vorhanden']} vorhanden, "
-          f"{bericht['geloescht']} nicht mehr im Laufwerk, {bericht['fehlt']} fehlen.")
-    if bericht["ausgelassen"]:
-        print(f"Nicht gezählt: {bericht['ausgelassen']} Dateien, welche die Auswahl "
-              f"oder die Größengrenze auslässt.")
-    for z in bericht["ordner"][:10]:
-        if z["fehlt"]:
-            print(f"  {z['fehlt']:>7} fehlen in {z['ordner']}")
-    print(f"Bericht: {ziel}")
+    # No prose: the check UI renders the report file, the result event
+    # carries the counts.
+    schreibe_bericht(out, bericht)
     progress.ergebnis(0, excluded=bericht["ausgelassen"],
                       extra={"expected": bericht["erwartet"],
                              "present": bericht["vorhanden"],
@@ -592,14 +585,13 @@ def nur_ordner(graph, out):
     daten = folders.speichere(out, baum_zusammenfuehren(alt, plan["baum"],
                                                         plan["entfernt"]), alt)
     z = folders.zusammenfassung(daten, aktuelle_regeln())
-    print(f"\n{z['ordner_gesamt']} Ordner im Laufwerk, "
-          f"{z['ordner_gewaehlt']} nach den Regeln gewählt.")
-    for art, liste in (("neu", daten["neu"]), ("nicht mehr da", daten["verschwunden"]),
-                       ("umbenannt", daten["umbenannt"])):
-        if liste:
-            print(f"  {len(liste)} {art}: " + ", ".join(liste[:5])
-                  + (" …" if len(liste) > 5 else ""))
-    print(f"Abgelegt: {folders.pfad(out)}")
+    progress.event("run.sync.result", total=z["ordner_gesamt"],
+                   chosen=z["ordner_gewaehlt"],
+                   unit=progress.atom("progress.unit.folders"))
+    if daten["neu"] or daten["verschwunden"] or daten["umbenannt"]:
+        progress.event("run.sync.changed", new=len(daten["neu"]),
+                       gone=len(daten["verschwunden"]),
+                       renamed=len(daten["umbenannt"]))
     progress.ergebnis(len(daten["neu"]),
                       extra={"total": z["ordner_gesamt"],
                              "gone": len(daten["verschwunden"]),
@@ -623,11 +615,8 @@ def main():
     try:
         (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
     except auth.TokenExpired:
-        # Same structured ending as the other exports – the app reacts to the
-        # event, not to the prose.
+        # Structured ending – the app reacts to the event and shows its wizard.
         progress.fehler("token_expired")
-        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
-              "setzen und erneut starten – bereits Gespiegeltes bleibt erhalten.")
         sys.exit(1)
 
 

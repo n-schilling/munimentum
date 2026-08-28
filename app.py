@@ -1420,6 +1420,14 @@ class JobRunner:
                 # Regex über den Meldungstext der Skripte.
                 if kaputt["error"] == "token_expired":
                     self.token_expired = True
+                    self.logk("srv.job.token", "err")
+                continue
+            meldung = progress.lies_event(line)
+            if meldung is not None:
+                # Die Skripte erzählen in Textschlüsseln; übersetzt wird beim
+                # Anzeigen – wie bei den App-eigenen Zeilen.
+                self.log({"k": meldung["k"], "v": meldung.get("v", {})},
+                         meldung.get("level", "info"))
                 continue
             self.log(line)
         return self.proc.wait()

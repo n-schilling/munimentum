@@ -107,12 +107,6 @@ _client = None       # wird in main() gesetzt (für die Bild-Einbettung)
 IMGCACHE_DIR = None  # wird in main() gesetzt, wenn CACHE_IMAGES aktiv
 
 
-def log(msg):
-    """Threadsichere Fortschrittsausgabe (sofort sichtbar)."""
-    with PRINT_LOCK:
-        print(msg, flush=True)
-
-
 # Anmeldung und Schlüsselmodus liegen in auth.py – vorher stand das hier und in
 # outlook_export.py Zeile für Zeile doppelt.
 TokenExpired = auth.TokenExpired
@@ -164,19 +158,14 @@ class Graph(_BildClient, graph_client.Graph):
         self.channels_enabled = False
 
         if want_channels:
-            print("Anmeldung – fordere Zugriff auf Chats + Kanäle an…")
             anmeldung = auth.Login(SCOPES_FULL)
             if anmeldung.anmelden(nur_still=nur_still, weich=True):
                 self.channels_enabled = True
                 super().__init__(anmeldung=anmeldung)
                 return
-            print("Kanal-Zugriff nicht gewährt – ChannelMessage.Read.All "
-                  "erfordert evtl. Admin-Consent.")
-            if anmeldung.fehler:
-                print(f"  Details: {anmeldung.fehler.splitlines()[0]}")
-            print("Melde mit reinem Chat-Zugriff an…")
-        else:
-            print("Anmeldung – fordere Chat-Zugriff an…")
+            progress.event("run.teams.channels_denied", "warn",
+                           error=(anmeldung.fehler or "").splitlines()[0]
+                           if anmeldung.fehler else "")
         super().__init__(SCOPES_CHAT, nur_still=nur_still)
 
 
@@ -209,7 +198,7 @@ def selected_categories(options):
     env = env_categories(options)
     if env is not None:
         return env
-    print("Standardauswahl – exportiere 1:1-, Gruppen- und Meeting-Chats.")
+    progress.event("run.default_selection")
     return default_categories(options)
 
 
@@ -220,13 +209,13 @@ def select_teams(graph):
     except TokenExpired:
         raise
     except Exception as e:
-        print(f"Teams konnten nicht geladen werden: {e}")
+        progress.event("run.teams.list_failed", "warn", error=str(e))
         return []
     teams.sort(key=lambda t: (t.get("displayName") or "").lower())
     if not teams:
-        print("Keine Teams gefunden.")
+        progress.event("run.teams.none")
         return []
-    print(f"{len(teams)} Teams gefunden – alle Kanäle kommen mit.")
+    progress.event("run.teams.found", n=len(teams))
     return teams
 
 
@@ -458,7 +447,7 @@ def load_state(out):
             if isinstance(data, dict) and "conversations" in data:
                 return data
         except Exception:
-            print("Warnung: Fortschrittsdatei unlesbar – starte ohne Resume.")
+            progress.event("run.state_unreadable", "warn")
     return {"version": 1, "conversations": {}}
 
 
@@ -537,14 +526,11 @@ def write_index(out, state):
 # ---------------------------------------------------------------------------
 # Export EINER Konversation (läuft in einem Worker-Thread)
 # ---------------------------------------------------------------------------
-def render_blocks(msgs, label):
-    """Rendert Nachrichten-Blöcke mit Fortschritt; zeigt geladene Bilder an."""
-    img, blocks, total = [0], [], len(msgs)
-    for i, m in enumerate(msgs, 1):
+def render_blocks(msgs):
+    """Render every message block; returns (blocks, embedded image count)."""
+    img, blocks = [0], []
+    for m in msgs:
         blocks.append(render_message(m, img_counter=img))
-        if i % 1000 == 0:
-            extra = f", {img[0]} Bilder geladen" if img[0] else ""
-            log(f"   {label}: {i}/{total} gerendert{extra}…")
     return blocks, img[0]
 
 
@@ -553,14 +539,12 @@ def export_one_chat(graph, out, state, my_id, chat):
     key = chat["id"]
     folder = TYPEMAP.get(chat.get("chatType"), "other")
     title = chat_title(graph, chat, my_id)
-    lbl = title[:32]
     prior = get_record(out, state, key)
-    log(f"→ {lbl} [{SUBNAME.get(folder, 'Chat')}] – lade Nachrichten…")
     msgs = []
     for m in graph.paged(f"{GRAPH}/me/chats/{key}/messages", {"$top": PAGE}):
         msgs.append(m)
         if len(msgs) % 2000 == 0:
-            log(f"   {lbl}: {len(msgs)} Nachrichten geladen…")
+            pass
     msgs.sort(key=lambda m: m.get("createdDateTime") or "")
 
     # Nur System-/Event-Nachrichten und keine echte Nachricht? -> standardmäßig nicht exportieren
@@ -572,9 +556,7 @@ def export_one_chat(graph, out, state, my_id, chat):
                     last_activity=last_act, empty=True)
         return ("empty", folder, title, len(msgs), time.monotonic() - t0)
 
-    if len(msgs) >= 2000:
-        log(f"   {lbl}: {len(msgs)} Nachrichten geladen – rendere und lade Bilder…")
-    blocks, nimg = render_blocks(msgs, lbl)
+    blocks, nimg = render_blocks(msgs)
     meta = f"{len(msgs)} Nachrichten · Chat-ID {key}"
     fname = f"{safe(title)}__{short_id(key)}.html"
     new_rel = f"{folder}/{fname}"
@@ -593,10 +575,8 @@ def export_one_channel(graph, out, state, team, ch):
     t0 = time.monotonic()
     tname = team.get("displayName", "Team")
     cname = ch.get("displayName", "Kanal")
-    lbl = f"{tname}/{cname}"[:32]
     key = f"ch:{ch['id']}"
     prior = get_record(out, state, key)
-    log(f"→ {lbl} [Kanal] – prüfe/lade…")
     base = f"{GRAPH}/teams/{team['id']}/channels/{ch['id']}/messages"
     # Wurzel-Posts MIT eingebetteten Antworten (bis 1000 inline) holen
     roots = list(graph.paged(base, {"$top": PAGE, "$expand": "replies"}))
@@ -620,9 +600,6 @@ def export_one_channel(graph, out, state, team, ch):
             count += 1
             times.append(rep.get("createdDateTime"))
             times.append(rep.get("lastModifiedDateTime"))
-        if count % 1000 == 0:
-            extra = f", {img[0]} Bilder geladen" if img[0] else ""
-            log(f"   {lbl}: {count} Nachrichten verarbeitet{extra}…")
     fp = newest_iso(times)   # neueste Aktivität (inkl. Antworten/Bearbeitungen)
 
     # Unverändert seit letztem Lauf? -> nicht neu schreiben
@@ -664,7 +641,7 @@ def make_runner(graph, out, state, my_id, kind, a, b):
 # Job-Aufbau (im Hauptthread) + paralleler Treiber
 # ---------------------------------------------------------------------------
 def build_chat_jobs(graph, out, state, stats, my_id, chat_cats):
-    print("\nLade Chat-Liste… (mit letzter Aktivität je Chat)")
+    progress.event("run.teams.chats_loading")
     chats = []
     # members + lastMessagePreview inline -> richtige 1:1-Namen ohne Extra-Aufruf,
     # und der Aktivitäts-Zeitstempel je Chat für inkrementelle Läufe
@@ -672,7 +649,7 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats):
                          {"$top": PAGE, "$expand": "members,lastMessagePreview"}):
         chats.append(c)
         if len(chats) % 50 == 0:
-            print(f"  … {len(chats)} Chats geladen")
+            progress.melde(len(chats), what="chats")
     wanted = [c for c in chats if TYPEMAP.get(c.get("chatType"), "other") in chat_cats]
     jobs, new, upd = [], 0, 0
     for chat in wanted:
@@ -688,8 +665,8 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats):
             upd += 1
         else:
             stats["skipped"] += 1               # unverändert
-    print(f"{len(wanted)} passende Chats: {new} neu, {upd} mit neuen Nachrichten, "
-          f"{len(wanted) - len(jobs)} unverändert.")
+    progress.event("run.teams.chats", n=len(wanted), new=new, updated=upd,
+                   unchanged=len(wanted) - len(jobs))
     return jobs
 
 
@@ -702,7 +679,8 @@ def build_channel_jobs(graph, out, state, stats, selected_teams):
         except TokenExpired:
             raise
         except Exception as e:
-            print(f"  Kanäle von '{tname}' nicht ladbar ({e})")
+            progress.event("run.teams.channels_failed", "warn",
+                           name=tname, error=str(e))
             continue
         for ch in channels:
             if REFRESH_CHANNELS:
@@ -714,9 +692,9 @@ def build_channel_jobs(graph, out, state, stats, selected_teams):
             else:
                 jobs.append(("channel", team, ch))
     if REFRESH_CHANNELS:
-        print(f"{len(jobs)} Kanäle werden auf Aktualität geprüft.")
+        progress.event("run.teams.channels_check", n=len(jobs))
     else:
-        print(f"{len(jobs)} Kanäle zu exportieren.")
+        progress.event("run.teams.channels_export", n=len(jobs))
     return jobs
 
 
@@ -739,22 +717,30 @@ def run_parallel(runners, stats, workers):
             status, cat, label, count = res[0], res[1], res[2], res[3]
             secs = res[4] if len(res) > 4 else 0.0
             dur = f"{secs:.0f}s" if secs >= 1 else f"{secs * 1000:.0f}ms"
-            if status in ("new", "ok"):
-                stats["new"] += 1
-                log(f"✓ [{done_count}/{total}] neu · {cat}: {label} — {count} Nachrichten, {dur}")
-            elif status == "updated":
-                stats["updated"] += 1
-                log(f"✓ [{done_count}/{total}] aktualisiert · {cat}: {label} — {count} Nachrichten, {dur}")
-            elif status == "unchanged":
-                stats["skipped"] += 1   # geprüft, aber keine Änderung (v. a. Kanäle)
-                log(f"· [{done_count}/{total}] unverändert · {cat}: {label}")
-            elif status == "empty":
-                stats["empty"] += 1
-                log(f"· [{done_count}/{total}] leer – nur System-Nachrichten, übersprungen · {cat}: {label}")
-            elif status == "expired":
+            kind = progress.atom("export.cat." + cat) if cat else ""
+            with PRINT_LOCK:
+                # Threadsicher: eine ungebrochene Ereigniszeile je Konversation.
+                if status in ("new", "ok"):
+                    stats["new"] += 1
+                    progress.event("run.conv.new", i=done_count, total=total,
+                                   kind=kind, name=label, n=count, dur=dur)
+                elif status == "updated":
+                    stats["updated"] += 1
+                    progress.event("run.conv.updated", i=done_count, total=total,
+                                   kind=kind, name=label, n=count, dur=dur)
+                elif status == "unchanged":
+                    stats["skipped"] += 1   # geprüft, aber keine Änderung
+                    progress.event("run.conv.same", i=done_count, total=total,
+                                   kind=kind, name=label)
+                elif status == "empty":
+                    stats["empty"] += 1
+                    progress.event("run.conv.empty", i=done_count, total=total,
+                                   kind=kind, name=label)
+                elif status == "error":
+                    progress.event("run.conv.failed", "err", i=done_count,
+                                   total=total, name=label)
+            if status == "expired":
                 expired = True
-            elif status == "error":
-                log(f"✗ [{done_count}/{total}] Fehler: {label}")
             # "stopped" -> ignorieren
     return "expired" if expired else "done"
 
@@ -783,9 +769,6 @@ def main():
     cat_options = [("1on1", "1:1-Chats"), ("group", "Gruppenchats"),
                    ("meeting", "Meeting-Chats"), ("channels", "Team-Kanäle")]
     categories = selected_categories(cat_options)
-    labels = {k: v for k, v in cat_options}
-    print("Gewählt:", ", ".join(labels[k] for k in
-                                 ["1on1", "group", "meeting", "channels"] if k in categories))
     want_channels = "channels" in categories
 
     # 2) Login bzw. Token-Modus
@@ -794,7 +777,7 @@ def main():
         lambda: Graph(want_channels=want_channels))
     _client = graph
     if want_channels and not graph.channels_enabled:
-        print("Hinweis: Kanal-Zugriff nicht verfügbar – Kanäle werden übersprungen.")
+        progress.event("run.teams.channels_denied", "warn", error="")
         categories.discard("channels")
         want_channels = False
 
@@ -815,28 +798,22 @@ def main():
         chat_cats = categories & {"1on1", "group", "meeting"}
         chat_jobs = build_chat_jobs(graph, out, state, stats, my_id, chat_cats) if chat_cats else []
         if not chat_cats:
-            print("Keine Chat-Kategorie gewählt – überspringe Chats.")
+            progress.event("run.teams.chats_skipped")
         channel_jobs = (build_channel_jobs(graph, out, state, stats, selected_teams)
                         if (want_channels and selected_teams) else [])
 
         runners = [make_runner(graph, out, state, my_id, k, a, b)
                    for (k, a, b) in (chat_jobs + channel_jobs)]
         if runners:
-            print(f"\nExportiere {len(runners)} Konversationen mit {workers} parallel…")
+            progress.event("run.teams.exporting", n=len(runners))
         result = run_parallel(runners, stats, workers)
     except TokenExpired:
         result = "expired"
     finally:
         write_index(out, state)
 
-    done_total = sum(1 for r in state["conversations"].values()
-                     if r.get("done") and not r.get("empty"))
     if result == "expired":
         progress.fehler("token_expired")
-        print("\nAbgebrochen: Token abgelaufen. Frischen Access Token in gx_token.txt "
-              "setzen und erneut starten – bereits exportierte Konversationen bleiben "
-              "erhalten.")
-        print(f"Bisher im Archiv: {done_total}.")
         sys.exit(1)
 
     # Aktualisierte Konversationen zählen mit: ihre Dateien haben sich geändert,
