@@ -6,8 +6,8 @@ Bis 5.3 sprachen vier Stellen einzeln mit Ollama: das Einbetten beim
 Indexlauf (rag_index), das Einbetten der Suchanfrage (mcp_server), die
 formulierte Antwort (answer) und die Statusfrage der Oberfläche (app). Jede
 hatte ihre eigene URL-Vorgabe und ihr eigenes Fehlerbild. Hier liegt die
-API einmal – kommt ein zweiter Modellserver (openai-kompatibel, siehe
-ROADMAP.md), lernt genau dieses Modul seine Schnittstelle.
+API einmal – kommt ein zweiter Modellserver (openai-kompatibel), lernt
+genau dieses Modul seine Schnittstelle.
 
 Die Fehlerpolitik bleibt bei den Aufrufern: ein Indexlauf will mit klarer
 Meldung enden, die Suche still auf Volltext zurückfallen, die Antwort nie

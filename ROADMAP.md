@@ -1,81 +1,43 @@
-# Was als Nächstes kommt
+# What comes next
 
-Kurze Liste — was ansteht und was bewusst fehlt, damit später niemand rätselt,
-ob etwas vergessen wurde oder gewollt draußen ist. Wie es gebaut wird, steht
-nicht hier, sondern im Code.
+A short list of what is planned, so nobody has to guess later whether
+something was forgotten or left out on purpose. How things get built lives in
+the code, not here.
 
-## Als Nächstes: Inhalte durchsuchen
+## Next: searching file contents
 
-Heute stehen **Namen** im Index: der Dateityp-Filter findet die Mails mit einem
-PDF, `Vertrag_Musterkunde.pdf` die eine, und seit dem OneDrive-Spiegel gilt
-dasselbe für die Dateien auf dem Laufwerk. Was fehlt, ist der **Inhalt** — ein
-Vertrag liegt im Archiv, sein Text ist unsichtbar.
+Today the index knows **names**: the file-type filter finds mails with a PDF,
+`Vertrag_Musterkunde.pdf` finds the one, and the OneDrive mirror works the
+same way. What is missing is the **content** — a contract sits in the archive,
+its text invisible.
 
-Das betrifft beide Quellen gemeinsam und wird deshalb ein Schritt: Anhänge aus
-den `.eml` und gespiegelte OneDrive-Dateien laufen durch dieselbe Extraktion.
-Vorbereitet ist es — `text` trägt heute den Pfad und ist genau das Feld, das
-eine Extraktion später füllt. Ein bestehender Index wird dadurch nicht ungültig,
-nur reicher.
+Both sources share the problem, so it becomes one step: attachments from the
+`.eml` files and mirrored OneDrive files go through the same extraction. The
+ground is prepared — `text` currently carries the path and is exactly the
+field an extraction fills later. An existing index stays valid, it only gets
+richer.
 
-Drei Dinge sind daran entschieden:
+Three things are settled:
 
-* **Ein eigener, abschaltbarer Schritt.** Auf einem echten Archiv dauert das
-  rund eine Stunde, einmalig. Das läuft nicht nebenbei bei jedem Export mit.
-* **Zwischenspeicher nach Inhalts-Hash, nicht nach Pfad.** Dieselbe Datei in
-  zwölf Mails kostet dann eine Extraktion, und beide Quellen teilen sich den
-  Speicher.
-* **Nicht alles.** Rund 40 % der Anhänge sind Bilder, überwiegend
-  Signaturlogos. Ein Typfilter gehört dazu.
+* **A separate, switchable step.** On a real archive it takes about an hour,
+  once — not something to run with every export.
+* **Cache by content hash, not path.** The same file in twelve mails costs
+  one extraction, and both sources share the cache.
+* **Not everything.** Roughly 40 % of attachments are images, mostly
+  signature logos. A type filter is part of the deal.
 
-Offen ist die Werkzeugfrage: [markitdown](https://github.com/microsoft/markitdown)
-nimmt einem die Vollständigkeit ab (Tabellen, Notizen, Kopfzeilen), zieht aber
-einen Abhängigkeitsbaum nach, der das Bündel von 27 MB auf ein Vielfaches
-brächte. Die schlanke Alternative aus einzelnen Bibliotheken ist deutlich
-kleiner, dafür pflegt man die Vollständigkeit selbst. Entschieden wird das an
-einem echten Bündel, nicht am Schreibtisch.
+Open question: the tooling.
+[markitdown](https://github.com/microsoft/markitdown) covers completeness
+(tables, notes, headers) but drags in a dependency tree that would multiply
+the 27 MB bundle. The lean alternative of individual libraries is much
+smaller, but completeness becomes our job. To be decided against a real
+bundle, not at the desk.
 
-## Kleineres
+## Smaller
 
-* **Datenordner aufteilen.** Massendaten und Index haben ganz verschiedene
-  Ansprüche — die `.eml` dürfen auf einer langsamen Platte liegen, der Index
-  nicht. Getrennte Pfade sind heute schon möglich, aber nirgends erklärt.
-* **app.py aufteilen.** Der letzte offene Punkt des Aufräumens in 5.4.0: gut
-  die Hälfte der Datei ist die Oberfläche als ein eingebetteter String, der
-  Rest Python (Konfiguration, Läufe, Routen, Auswertung). Die Trennung ist ein
-  eigener Umbau — etliche Tests prüfen die Seite als String, und die
-  Bündelung hängt mit daran — und nichts für nebenbei.
-
-## Entschieden
-
-**Die App ist der einzige Aufrufer der Teilprogramme.** Seit 5.4 gibt es
-darum keine interaktiven Abfragen, keine EXPORT_PROGRESS-Weiche und keinen
-„übernommen"-Hinweis mehr; Ergebnisse und Fehler kommen als strukturierte
-Ereignisse (progress.py), und kein Unterprozess öffnet je ein
-Anmeldefenster.
-
-**OneDrive ist ein Spiegel, kein Versionsarchiv.** Gehalten wird die jeweils
-aktuelle Fassung; in OneDrive Gelöschtes bleibt liegen und bekommt einen
-Vermerk. Frühere Fassungen einer geänderten Datei sind weg — das steht hier,
-damit es später niemand für einen Fehler hält.
-
-**Ein zweiter Modellserver käme über die Schnittstelle, nicht über den Namen.**
-Also ein Feld *Art des Servers* mit `openai-kompatibel`, das LM Studio,
-`llama-server`, Jan, LocalAI und vLLM auf einmal öffnet — Ollama spricht diese
-API unter `/v1/` ebenfalls. Alle Aufrufe liegen inzwischen gebündelt in
-`ollama_client.py`; ein zweiter Servertyp lernt seine API an genau einer
-Stelle. Nur `/api/tags` lässt sich nicht übersetzen: Die Hilfe beim Nachladen
-eines fehlenden Modells bliebe Ollama vorbehalten. Der Einstellungsabschnitt
-heißt seit 5.3.0 **KI**, damit der Schalter darin später eine Auswahl werden
-kann.
-
-**MLX lohnt nicht** — gemessen, nicht vermutet: Einbetten 0,66× (also langsamer
-als Ollama), Chat 1,1× bei freier Generierung und ±0 bei langem Kontext, dem
-Muster der KI-Antwort. `mlx_lm.server` hat gar keinen Embeddings-Endpunkt;
-eingebettet stünden 408 MB Abhängigkeiten gegen ein 27-MB-Bündel, dazu ein
-selbstgebautes Modellmanagement.
-
-**Beim Einbetten ist nichts mehr zu holen.** Mehr Parallelität, kleinerer
-Kontext, Stapel über 128, eine kleinere Quantisierung von bge-m3: gemessen und
-ohne Gewinn oder von Ollama abgelehnt. Was ging, ist drin — kurze Chunks ohne
-Vektor, Stapel nach Länge, 128 als Vorgabe. Der Boden ist das Modell selbst; ein
-kleineres wäre doppelt so schnell und schlechter im Deutschen.
+* **Split the data directory.** Bulk data and index have different needs —
+  the `.eml` files may live on a slow disk, the index must not. Separate
+  paths already work, but nothing explains them.
+* **Split app.py.** Half the file is the interface as one embedded string,
+  the rest is Python (config, runs, routes, analytics). A rework of its own —
+  many tests check the page as a string, and bundling depends on it.

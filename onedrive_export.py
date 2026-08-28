@@ -2,8 +2,8 @@
 """
 OneDrive-Export: das eigene Laufwerk als lokaler Spiegel.
 
-Was das heißt, steht in ROADMAP.md und sei hier wiederholt, weil man es beim
-Lesen des Codes sonst falsch erwartet:
+Was das heißt, sei hier festgehalten, weil man es beim Lesen des Codes sonst
+falsch erwartet:
 
   Gehalten wird die JEWEILS AKTUELLE Fassung jeder Datei. Ändert sie sich,
   wird sie überschrieben – frühere Fassungen bewahrt dieser Spiegel nicht.
