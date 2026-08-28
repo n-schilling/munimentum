@@ -767,6 +767,10 @@ def export_calendar(graph, out, done, stats, cals):
         try:
             for ev in graph.paged(url, {"$top": PAGE, "$select": select}, extra_headers=pref):
                 seen += 1
+                if seen % 100 == 0:
+                    # Heartbeat: large calendars page for minutes with no
+                    # other line – the bar must show life.
+                    progress.melde(seen, what="events")
                 rel = f"kalender/{cname}/{event_filename(ev)}"
                 # Termine ohne Graph-ID: Dateipfad als stabiler Ersatzschlüssel,
                 # sonst landet der Schlüssel None im Log und Resume greift nie.
@@ -848,6 +852,8 @@ def export_contacts(graph, out, done, stats):
         seen = 0
         try:
             for c in graph.paged(url, {"$top": PAGE, "$select": select}):
+                if seen and seen % 100 == 0:
+                    progress.melde(seen, what="contacts")
                 seen += 1
                 rel = f"{rel_dir}/{contact_filename(c)}"
                 # Kontakte ohne Graph-ID: Dateipfad als stabiler Ersatzschlüssel

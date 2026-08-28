@@ -376,6 +376,8 @@
   "run.unreadable": "{name} not readable – missing permission? ({error})",
   "run.default_selection": "No selection passed in – exporting the default selection.",
   "run.workers_hint": "Exchange allows 4 concurrent requests per mailbox – {n} workers mostly cause throttling.",
+  "run.net_retry": "Network error: {error} – waiting {s} s (attempt {i}/{n}).",
+  "run.throttled": "HTTP {status} – waiting {s} s (throttling/server).",
   "run.network_gone": "Aborted: no connection to Graph ({error}).",
   "run.resume_hint": "{n} new so far – just start again, the run continues there.",
   "run.folders_failed": "{n} folders could not be listed completely – the next run fetches the rest.",

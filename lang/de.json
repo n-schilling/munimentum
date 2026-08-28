@@ -376,6 +376,8 @@
   "run.unreadable": "{name} nicht lesbar – fehlt eine Berechtigung? ({error})",
   "run.default_selection": "Keine Auswahl übergeben – exportiere die Standardauswahl.",
   "run.workers_hint": "Exchange erlaubt 4 gleichzeitige Anfragen pro Postfach – {n} Worker erzeugen vor allem Drosselung.",
+  "run.net_retry": "Netzwerkfehler: {error} – warte {s} s (Versuch {i}/{n}).",
+  "run.throttled": "HTTP {status} – warte {s} s (Drosselung/Server).",
   "run.network_gone": "Abgebrochen: Verbindung zu Graph nicht möglich ({error}).",
   "run.resume_hint": "Bis hier {n} neu – einfach neu starten, der Lauf setzt fort.",
   "run.folders_failed": "{n} Ordner konnten nicht vollständig gelistet werden – der nächste Lauf holt den Rest.",

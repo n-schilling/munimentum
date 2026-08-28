@@ -376,6 +376,8 @@
   "run.unreadable": "{name} illisible – permission manquante ? ({error})",
   "run.default_selection": "Aucune sélection transmise – export de la sélection par défaut.",
   "run.workers_hint": "Exchange autorise 4 requêtes simultanées par boîte – {n} workers provoquent surtout des limitations.",
+  "run.net_retry": "Erreur réseau : {error} – attente de {s} s (tentative {i}/{n}).",
+  "run.throttled": "HTTP {status} – attente de {s} s (limitation/serveur).",
   "run.network_gone": "Interrompu : connexion à Graph impossible ({error}).",
   "run.resume_hint": "{n} nouveaux jusqu’ici – relancez simplement, l’exécution reprendra là.",
   "run.folders_failed": "{n} dossiers n’ont pas pu être listés complètement – la prochaine exécution récupérera le reste.",

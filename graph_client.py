@@ -33,6 +33,7 @@ import time
 import requests
 
 import auth
+import progress
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
@@ -64,19 +65,6 @@ def konfiguriere(workers):
         pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
 
 
-def _meld(text):
-    """Fortschritt melden, ohne je einen Lauf aufzuhalten.
-
-    Die Exportskripte stellen ihre Ausgabe auf UTF-8; eine Bibliothek verlässt
-    sich nicht darauf. Auf einer Konsole mit Legacy-Codepage wirft print an
-    „…“ einen UnicodeEncodeError – die Meldung ist verzichtbar, der Lauf nicht.
-    """
-    try:
-        print(text)
-    except ValueError:
-        pass
-
-
 def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label=""):
     """Ein GET gegen Graph; wiederholt NUR bei Netzwerkfehlern.
 
@@ -96,8 +84,9 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
             if net == NET_RETRIES - 1:
                 raise
             w = min(2 ** net, 60)
-            _meld(f"    … Netzwerkfehler{label} ({type(e).__name__}), warte {w}s "
-                  f"(Versuch {net + 2}/{NET_RETRIES})")
+            progress.event("run.net_retry", "warn",
+                           error=f"{type(e).__name__}{label}", s=w,
+                           i=net + 2, n=NET_RETRIES)
             time.sleep(w)   # Pause OHNE belegten Slot
     raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")   # nicht erreichbar
 
@@ -106,7 +95,7 @@ def warte_auf(r, versuch, was=""):
     """Backoff nach 429/5xx: Retry-After wenn beziffert, sonst exponentiell."""
     ra = r.headers.get("Retry-After")
     w = min(int(ra) if ra and ra.isdigit() else 2 ** versuch, 60)
-    _meld(f"    … HTTP {r.status_code}{was}, warte {w}s (Drosselung/Server)")
+    progress.event("run.throttled", "warn", status=r.status_code, s=w)
     time.sleep(w)
 
 
