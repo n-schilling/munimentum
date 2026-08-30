@@ -26,6 +26,7 @@ the run: the affected site is reported and skipped.
 import os
 import re
 import sys
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit, unquote
@@ -267,6 +268,13 @@ def scope_sammler(prefixes):
 
     def sammler(graph, bestand):
         eintraege, gesehen = [], set()
+
+        def kinder(teile):
+            pfad = "/".join(quote(s, safe="") for s in teile)
+            return teile, list(graph.paged(
+                f"{graph.drive_base}/root:/{pfad}:/children",
+                {"$top": drive_mirror.SEITE}))
+
         for pf in sorted(prefixes):
             teile = [s for s in pf.split("/") if s]
             pfad = "/".join(quote(s, safe="") for s in teile)
@@ -280,17 +288,29 @@ def scope_sammler(prefixes):
                 continue
             eintraege.append(wurzel)
             gesehen.add(wurzel.get("id"))
-            stapel = [(teile, wurzel)]
-            while stapel:
-                eltern_teile, _ = stapel.pop()
-                kinder_pfad = "/".join(quote(s, safe="") for s in eltern_teile)
-                for e in graph.paged(
-                        f"{graph.drive_base}/root:/{kinder_pfad}:/children",
-                        {"$top": drive_mirror.SEITE}):
-                    eintraege.append(e)
-                    gesehen.add(e.get("id"))
-                    if "folder" in e and "file" not in e:
-                        stapel.append((eltern_teile + [e.get("name") or ""], e))
+            # One request per folder – but folders side by side don't wait
+            # for each other, and the bar ticks while the tree unfolds.
+            with ThreadPoolExecutor(max_workers=workers()) as pool:
+                offen = {pool.submit(kinder, teile)}
+                while offen:
+                    fertig, offen = wait(offen, return_when=FIRST_COMPLETED)
+                    for f in fertig:
+                        try:
+                            eltern, liste = f.result()
+                        except auth.TokenExpired:
+                            raise
+                        except Exception as e:
+                            progress.event("run.sharepoint.scope_missing",
+                                           "warn", path=pf,
+                                           error=f"{type(e).__name__}: {e}")
+                            continue
+                        for e in liste:
+                            eintraege.append(e)
+                            gesehen.add(e.get("id"))
+                            if "folder" in e and "file" not in e:
+                                offen = offen | {pool.submit(
+                                    kinder, eltern + [e.get("name") or ""])}
+                    progress.melde(len(eintraege), what="entries")
         # Inside the scope, missing from the walk, still in the inventory:
         # that is a deletion – delta would have said so, the diff says it now.
         for kennung, e in list(bestand.eintraege.items()):
