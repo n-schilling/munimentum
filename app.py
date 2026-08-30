@@ -5973,16 +5973,28 @@ function zeigeKalenderstand(c){
 
 var ABGLEICH = {
   onedrive: {msg: 'od-folders-msg', lauf: {sync_onedrive: true, label: 'job.folders'}},
-  sharepoint: {msg: 'sp-msg', lauf: {sync_sharepoint: true, label: 'job.folders'}},
+  sharepoint: {msg: 'sp-msg', lauf: {sync_sharepoint: true, label: 'job.folders'},
+               save: function(){ return speichereSharepointFelder(); }},
   calendar: {msg: 'cal-msg', lauf: {sync_calendars: true, label: 'job.calendars'}},
   outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}}
 };
 
+function speichereSharepointFelder(){
+  // The buttons must act on what the form shows, not on the last save –
+  // otherwise an edited URL list feels ignored until someone hits Save.
+  return post('/api/config', {
+    sharepoint_urls: el('c-sharepoint_urls').value,
+    sharepoint_types_include: el('c-sharepoint_types_include').value,
+    sharepoint_types_exclude: el('c-sharepoint_types_exclude').value,
+    sharepoint_max_mb: parseInt(el('c-sharepoint_max_mb').value, 10) || 0});
+}
 function sharepointVorschau(){
   // The check run enumerates without downloading; the merged report lands in
   // Analytics, the one-line summary right here next to the button.
   el('sp-msg').textContent = t('sharepoint.preview.running');
-  post('/api/run', {check_sharepoint: true, label: 'job.preview'}).then(function(r){
+  speichereSharepointFelder().then(function(){
+    return post('/api/run', {check_sharepoint: true, label: 'job.preview'});
+  }).then(function(r){
     if(!r.ok){ el('sp-msg').textContent = mtext(r.message); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
@@ -6020,7 +6032,12 @@ function gleicheOrdnerAb(quelle){
   var wahl = ABGLEICH[quelle] || ABGLEICH.outlook;
   var kasten = wahl.msg;
   el(kasten).textContent = t('folders.syncing');
-  post('/api/run', wahl.lauf).then(function(r){
+  // Only SharePoint saves its form first – the other sources start
+  // synchronously, their rules travel inside the request itself.
+  var start = wahl.save
+    ? function(){ return wahl.save().then(function(){ return post('/api/run', wahl.lauf); }); }
+    : function(){ return post('/api/run', wahl.lauf); };
+  start().then(function(r){
     if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
