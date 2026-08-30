@@ -1281,6 +1281,17 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     assert gestartet["index"] is True and gestartet["label"] == "job.scheduled"
 
 
+def test_scope_pruefung_kennt_die_schreibvarianten_der_spiegel():
+    """Der gemeldete Fall: Läufe funktionierten, die Prüfung warnte trotzdem –
+    der Schlüssel trug die ReadWrite-Varianten, nicht die exakten Namen."""
+    fehlt = app_mod.scope_missing(
+        ["Files.Read.All", "Sites.Read.All"],
+        ["Files.ReadWrite.All", "Sites.ReadWrite.All"])
+    assert fehlt == []
+    assert app_mod.scope_missing(["Sites.Read.All"], ["Files.Read.All"]) == [
+        "Sites.Read.All"]
+
+
 def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
     """Der Zeitplan-Haken grenzt ein, er schaltet die Quelle nicht ein: ohne
     den Haken im Export-Reiter spiegelt auch der Zeitplan nicht."""

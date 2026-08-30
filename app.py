@@ -259,6 +259,12 @@ SCOPE_COVERED_BY = {
     "Contacts.Read": ("Contacts.ReadWrite", "Contacts.Read.Shared",
                       "Contacts.ReadWrite.Shared"),
     "Chat.Read": ("Chat.ReadWrite",),
+    # Sites.Read.All liest auch Dateien (Bibliotheken SIND Drives), und die
+    # Schreibvarianten lesen erst recht.
+    "Files.Read.All": ("Files.ReadWrite.All", "Sites.Read.All",
+                       "Sites.ReadWrite.All", "Sites.FullControl.All"),
+    "Sites.Read.All": ("Sites.ReadWrite.All", "Sites.Manage.All",
+                       "Sites.FullControl.All"),
     # Graph erlaubt das Lesen von Kanalnachrichten auch mit den Gruppenrechten.
     "ChannelMessage.Read.All": ("Group.Read.All", "Group.ReadWrite.All"),
 }
