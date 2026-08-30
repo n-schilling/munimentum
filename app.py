@@ -3026,6 +3026,10 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
   column-gap:14px;row-gap:3px;align-items:baseline;padding:10px 0;
   border-top:1px solid var(--line)}
 .hit:first-child{border-top:0}
+.dateizeile{display:flex;gap:10px;align-items:baseline;padding:8px 0;
+  border-top:1px solid var(--line);cursor:default}
+.dateizeile:first-child{border-top:0}
+.dateizeile .muted{margin-left:auto;white-space:nowrap}
 .hit h3{grid-column:1;margin:0;font-size:14px;font-weight:600;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hit .wer{grid-column:2;color:var(--muted);font-size:12.5px;white-space:nowrap}
@@ -4130,10 +4134,10 @@ function zeichneDateien(r){
   if(r.roots){
     pfad.textContent = t('files.roots');
     box.innerHTML = r.roots.length ? r.roots.map(function(w, i){
-      return '<div class="hit" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
-        '<h3>' + esc(w.label) + '</h3>' +
-        '<div class="wer">' + esc(zahl(w.files)) + ' ' +
-        esc(t('progress.unit.files')) + '</div></div>';
+      return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
+        '<strong>' + esc(w.label) + '</strong>' +
+        '<span class="muted small">' + esc(zahl(w.files)) + ' ' +
+        esc(t('progress.unit.files')) + '</span></div>';
     }).join('') : '<p class="hint">' + esc(t('files.none')) + '</p>';
     return;
   }
@@ -4153,14 +4157,14 @@ function zeichneDateien(r){
   });
   pfad.innerHTML = krumen.join(' / ');
   var zeilen = (r.dirs || []).map(function(d, i){
-    return '<div class="hit" style="cursor:pointer;padding:8px 12px" onclick="dateiGehe(' + i + ')">' +
-      '📁 <strong>' + esc(d.name) + '</strong>' +
-      ' <span class="muted small">' + esc(zahl(d.files)) + ' ' +
+    return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
+      '<span>📁 <strong>' + esc(d.name) + '</strong></span>' +
+      '<span class="muted small">' + esc(zahl(d.files)) + ' ' +
       esc(t('progress.unit.files')) + '</span></div>';
   }).concat((r.files || []).map(function(f){
     var link = '/source?root=' + encodeURIComponent(dateiSicht.root) +
                '&path=' + encodeURIComponent(f.rel);
-    return '<div class="hit" style="padding:8px 12px"' +
+    return '<div class="dateizeile"' +
       (f.gone ? ' title="' + esc(t('search.gone.since', {when: fmt(f.gone)})) + '"' : '') + '>' +
       '<a href="' + link + '" target="_blank"' +
       (f.gone ? ' class="muted"' : '') + '>' + esc(f.name) + '</a>' +
