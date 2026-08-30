@@ -66,3 +66,20 @@ def test_center_unavailable_outside_the_bundle(monkeypatch):
         assert notify._center is None
     finally:
         _reset()
+
+
+def test_click_handler_unavailable_outside_the_bundle(monkeypatch):
+    """From source there is no native center – the caller must keep the
+    plain serve_forever path, so this has to say False, not raise."""
+    import types
+
+    bundle = types.SimpleNamespace(bundleIdentifier=lambda: None)
+    foundation = types.SimpleNamespace(
+        NSBundle=types.SimpleNamespace(mainBundle=lambda: bundle))
+    monkeypatch.setitem(sys.modules, "Foundation", foundation)
+    monkeypatch.setitem(sys.modules, "UserNotifications", types.SimpleNamespace())
+    _reset()
+    try:
+        assert notify.install_click_handler(lambda: None) is False
+    finally:
+        _reset()

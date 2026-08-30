@@ -547,7 +547,7 @@
   "report.body.system": "System",
   "report.body.log": "Protokoll",
   "settings.notifications": "Systemmeldungen",
-  "settings.notifications.i": "Meldet das Ende eines Laufs über die Mitteilungen des Betriebssystems – auch bei geschlossenem Browser-Tab, etwa wenn der Zeitplan exportiert. „Nur Fehler“ meldet Fehlschläge und einen abgelaufenen Zugangsschlüssel, „Alle Läufe“ auch jeden Abschluss. Alles bleibt auf diesem Rechner; derzeit nur unter macOS, das System fragt einmal um Erlaubnis.",
+  "settings.notifications.i": "Meldet das Ende eines Laufs über die Mitteilungen des Betriebssystems – auch bei geschlossenem Browser-Tab, etwa wenn der Zeitplan exportiert. „Nur Fehler“ meldet Fehlschläge und einen abgelaufenen Zugangsschlüssel, „Alle Läufe“ auch jeden Abschluss. Alles bleibt auf diesem Rechner; derzeit nur unter macOS, das System fragt einmal um Erlaubnis, und ein Klick auf die Meldung öffnet die Oberfläche im Browser.",
   "settings.notifications.off": "Aus",
   "settings.notifications.errors": "Nur Fehler",
   "settings.notifications.all": "Alle Läufe",

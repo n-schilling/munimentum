@@ -547,7 +547,7 @@
   "report.body.system": "System",
   "report.body.log": "Log",
   "settings.notifications": "System notifications",
-  "settings.notifications.i": "Reports the end of a run through the operating system’s notifications – even with the browser tab closed, e.g. when the schedule exports. “Errors only” reports failures and an expired access key, “All runs” every finish. Everything stays on this machine; currently macOS only, the system asks for permission once.",
+  "settings.notifications.i": "Reports the end of a run through the operating system’s notifications – even with the browser tab closed, e.g. when the schedule exports. “Errors only” reports failures and an expired access key, “All runs” every finish. Everything stays on this machine; currently macOS only, the system asks for permission once, and clicking the notification opens the interface in the browser.",
   "settings.notifications.off": "Off",
   "settings.notifications.errors": "Errors only",
   "settings.notifications.all": "All runs",

@@ -61,7 +61,8 @@ def ohne_cli(name):
 hidden = list(TEILPROGRAMME)
 if sys.platform == "darwin":
     # PyObjC resolves its framework bindings by name at runtime.
-    hidden += ["objc", "Foundation", "UserNotifications"]
+    hidden += ["objc", "Foundation", "UserNotifications",
+               "PyObjCTools.AppHelper"]
 # Der MCP-Server läuft über uvicorn/starlette; deren Protokoll- und
 # Lifecycle-Module werden erst zur Laufzeit nach Namen geladen.
 for paket in ("uvicorn", "mcp", "anyio", "sse_starlette"):

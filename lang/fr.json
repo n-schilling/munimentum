@@ -547,7 +547,7 @@
   "report.body.system": "Système",
   "report.body.log": "Journal",
   "settings.notifications": "Notifications système",
-  "settings.notifications.i": "Signale la fin d’une exécution via les notifications du système – même onglet fermé, par exemple quand la planification exporte. « Erreurs seulement » signale les échecs et une clé d’accès expirée, « Toutes les exécutions » chaque fin. Tout reste sur cette machine ; macOS uniquement pour l’instant, le système demande la permission une fois.",
+  "settings.notifications.i": "Signale la fin d’une exécution via les notifications du système – même onglet fermé, par exemple quand la planification exporte. « Erreurs seulement » signale les échecs et une clé d’accès expirée, « Toutes les exécutions » chaque fin. Tout reste sur cette machine ; macOS uniquement pour l’instant, le système demande la permission une fois, et un clic sur la notification ouvre l’interface dans le navigateur.",
   "settings.notifications.off": "Désactivé",
   "settings.notifications.errors": "Erreurs seulement",
   "settings.notifications.all": "Toutes les exécutions",

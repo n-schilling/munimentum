@@ -2734,6 +2734,24 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     print("Beenden mit Strg+C (schließt auch den MCP-Server).")
     if open_browser:
         threading.Timer(0.4, webbrowser.open, args=(url,)).start()
+    if notify.install_click_handler(lambda: webbrowser.open(url)):
+        # Bundled macOS app: a click on a notification reaches this process
+        # only through the system event loop, and that must own the main
+        # thread. The HTTP server moves to a worker; quitting shuts the
+        # server down, which in turn stops the loop.
+        def bedienen():
+            try:
+                httpd.serve_forever()
+            finally:
+                notify.stop_loop()
+        threading.Thread(target=bedienen, daemon=True).start()
+        try:
+            notify.run_loop()
+        finally:
+            httpd.shutdown()
+            app.shutdown()
+            httpd.server_close()
+        return httpd
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
