@@ -39,7 +39,7 @@
   "export.cat.channels": "Team channels",
   "export.cat.files": "OneDrive files",
   "export.onedrive": "OneDrive",
-  "export.channels.note": "Team channels: every team you are a member of is exported. That can take a long time.",
+  "export.channels.note": "Channels bring along the archives of whole teams – that grows very large, fast. Meant for the exceptional case, not for every run.",
   "export.start": "Start export",
   "export.index.only": "Index only",
   "export.calendar.build": "Build calendar & contacts",

@@ -2853,6 +2853,8 @@ h2.mit-info{display:flex;align-items:center;gap:8px}
   cursor:help;user-select:none;flex:0 0 auto}
 .info:hover,.info:focus{color:var(--ink);border-color:var(--muted);outline:none}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
+.chk-sep{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)}
+.chk-note{margin:4px 0 0;max-width:240px;color:var(--warn)}
 .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
 nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
 nav button{border:0;background:transparent;color:var(--muted);padding:8px 14px;
@@ -3331,7 +3333,6 @@ main{padding-bottom:60px}
           <span data-i18n="export.cat.files">OneDrive-Dateien</span></label>
       </div>
     </div>
-    <p class="small muted" id="teams-note" style="margin-top:10px"></p>
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
       <button class="ghost hide" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
@@ -4169,9 +4170,14 @@ function fmt(iso){
 
 function fill(id, keys, active, pre){
   el(id).innerHTML = keys.map(function(k){
-    return '<label class="chk"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
+    var box = '<label class="chk"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
       k + '"' + (active.indexOf(k) >= 0 ? ' checked' : '') +
       ' onchange="saveCats()"> ' + esc(t('export.cat.' + k)) + '</label>';
+    // Channels stand apart: they pull whole teams and grow the archive fast,
+    // so ticking them reveals a warning right below the box.
+    return k === 'channels'
+      ? '<div class="chk-sep">' + box + '<p class="small chk-note" id="teams-note"></p></div>'
+      : box;
   }).join('');
 }
 function checked(pre){

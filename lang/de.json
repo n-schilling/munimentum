@@ -39,7 +39,7 @@
   "export.cat.channels": "Team-Kanäle",
   "export.cat.files": "OneDrive-Dateien",
   "export.onedrive": "OneDrive",
-  "export.channels.note": "Team-Kanäle: es werden alle Teams exportiert, in denen du Mitglied bist. Das kann lange dauern.",
+  "export.channels.note": "Kanäle bringen die Archive ganzer Teams mit – das wird schnell sehr groß. Für den Ausnahmefall gedacht, nicht für jeden Lauf.",
   "export.start": "Export starten",
   "export.index.only": "Nur indizieren",
   "export.calendar.build": "Kalender & Kontakte aufbauen",
