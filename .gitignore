@@ -28,3 +28,9 @@ build/
 dist/
 *.spec.bak
 runs.db
+teams_export/
+outlook_export/
+onedrive_export/
+sharepoint_export/
+rag_store/
+app.log
