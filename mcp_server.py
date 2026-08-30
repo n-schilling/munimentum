@@ -178,6 +178,7 @@ _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
                             openWorldHint=False)
 _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
+                 "onedrive": "OneDrive", "sharepoint": "SharePoint",
                  "kalender": "Kalender", "kontakte": "Kontakte"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
@@ -235,7 +236,20 @@ def _hat_spalte(con, name):
 
 
 # Welche Quellen eine Ordnerauswahl anbieten – alle, deren ctx ein Pfad ist.
-_LISTBAR = ("outlook", "datei", "kalender", "teams", "kontakte")
+_LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "kalender",
+            "teams", "kontakte")
+
+
+def _quelle_cond(quelle):
+    """One source value as SQL condition – the mirrors are told apart.
+
+    "onedrive" and "sharepoint" are both src='datei' rows; the stored root
+    column separates them. "datei" stays as the umbrella for both, so old
+    clients and saved queries keep working.
+    """
+    if quelle in ("onedrive", "sharepoint"):
+        return "(src = 'datei' AND root = ?)", [quelle]
+    return "src = ?", [quelle]
 _LISTBAR_SQL = ", ".join(f"'{q}'" for q in _LISTBAR)
 
 # Kanäle werden zu einem Eintrag zusammengefasst: ein Team hat schnell zwanzig,
@@ -280,8 +294,9 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
         # ein Archiv überhaupt hat – und sie ist sonst nicht zu beantworten.
         conds.append("gone IS NOT NULL")
     if src and src != "all":
-        conds.append("src = ?")
-        params.append(src)
+        cond, werte = _quelle_cond(src)
+        conds.append(cond)
+        params.extend(werte)
     if person:
         conds.append("ppl LIKE ? ESCAPE '\\'")
         params.append(_wie(person))
@@ -544,7 +559,11 @@ def _hit(row, score, preview_chars, woerter=()):
         # Treffer" fragen, ohne die Anfrage neu einzubetten.
         "cid": row["id"] if "id" in row.keys() else None,
         "source": row["src"],
-        "source_label": _SOURCE_LABEL.get(row["src"], row["src"]),
+        # Files name their mirror: a hit from a SharePoint library should not
+        # wear the same tag as one from the personal drive.
+        "source_label": _SOURCE_LABEL.get(
+            row["root"] if row["src"] == "datei" else row["src"], row["src"]),
+        "root": row["root"],
         "who": row["who"],
         "date": row["date"],
         "title": row["title"],
@@ -630,9 +649,12 @@ def _message_text(con, uid):
 def _resolve_source(source_root, rel):
     """Sandboxed path resolution for an export file. Returns (Path, error_str)."""
     base = {"teams": STATE.get("teams_dir"),
-            "outlook": STATE.get("outlook_dir")}.get(source_root)
+            "outlook": STATE.get("outlook_dir"),
+            "onedrive": STATE.get("onedrive_dir"),
+            "sharepoint": STATE.get("sharepoint_dir")}.get(source_root)
     if not base:
-        return None, "source_root must be 'teams' or 'outlook'."
+        return None, ("source_root must be 'teams', 'outlook', 'onedrive' "
+                      "or 'sharepoint'.")
     base = Path(base).resolve()
     target = (base / rel).resolve()
     if base != target and base not in target.parents:      # prevent path escape
@@ -903,8 +925,9 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
         conds = ["who != '' AND who != '(unbekannt)'"]
         params = []
         if source != "all":
-            conds.append("src = ?")
-            params.append(source)
+            cond, werte = _quelle_cond(source)
+            conds.append(cond)
+            params.extend(werte)
         if contains.strip():
             # SQLite's LIKE/lower() are ASCII-only; register Python lower() so
             # umlaut-cased input ("MÜLLER") still matches. ppl is stored
@@ -985,12 +1008,14 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
         if quelle and quelle != "all":
             if quelle not in _LISTBAR:
                 return {"count": 0, "folders": []}
-            wo += " AND src = ?"
-            params.append(quelle)
+            cond, werte = _quelle_cond(quelle)
+            wo += f" AND {cond}"
+            params.extend(werte)
         rows = con.execute(
             f"SELECT ordner, COUNT(DISTINCT uid) FROM "
-            f"(SELECT uid, src, {_TEAMS_OBERSTE} AS ordner FROM chunks "
-            f" WHERE src IN ({_LISTBAR_SQL}) AND ctx IS NOT NULL AND ctx != '') "
+            f"(SELECT uid, src, root, {_TEAMS_OBERSTE} AS ordner FROM chunks "
+            f" WHERE src IN ('outlook', 'datei', 'kalender', 'teams', 'kontakte')"
+            f" AND ctx IS NOT NULL AND ctx != '') "
             f"WHERE 1=1 {wo} "
             f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
             [*params, max(1, min(int(limit), 1000))]).fetchall()
@@ -1018,8 +1043,9 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
         wo, params = "", []
         quelle = (source or "").strip().lower()
         if quelle and quelle != "all":
-            wo = "AND src = ?"
-            params.append(quelle)
+            cond, werte = _quelle_cond(quelle)
+            wo = f"AND {cond}"
+            params.extend(werte)
         # Eine Zeile trägt alle ihre Endungen ("pdf xlsx"); die Zahl je Typ
         # entsteht daher hier und nicht in SQL. Verschiedene Kombinationen gibt
         # es nur einige hundert, das ist billiger als es aussieht.
@@ -1057,6 +1083,66 @@ def corpus_stats() -> dict:
             "teams_dir": STATE.get("teams_dir"),
             "outlook_dir": STATE.get("outlook_dir"),
         }
+    finally:
+        con.close()
+
+
+def list_files(root="", path=""):
+    """One level of the mirrored file tree – the file browser's data.
+
+    Without a root: the entry points, "onedrive" plus one per mirrored
+    SharePoint site/library. With root (and optionally a folder path): the
+    immediate subfolders with their file counts, and the files sitting right
+    there – name, date, tombstone. Everything comes from the index; sizes
+    are the caller's business (the app stats the local mirror).
+    """
+    con = _db()
+    try:
+        if not root:
+            rows = con.execute("SELECT root, rel FROM chunks "
+                               "WHERE src = 'datei' AND seq = 0").fetchall()
+            eigene = sum(1 for r in rows if r[0] == "onedrive")
+            bibliotheken = {}
+            for wurzel, rel in rows:
+                if wurzel == "sharepoint":
+                    teile = rel.split("/")
+                    if len(teile) >= 2:
+                        k = "/".join(teile[:2])
+                        bibliotheken[k] = bibliotheken.get(k, 0) + 1
+            wurzeln = []
+            if eigene:
+                wurzeln.append({"root": "onedrive", "path": "",
+                                "label": "OneDrive", "files": eigene})
+            for k in sorted(bibliotheken):
+                wurzeln.append({"root": "sharepoint", "path": k,
+                                "label": k, "files": bibliotheken[k]})
+            return {"roots": wurzeln}
+        praefix = (path or "").strip("/")
+        wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
+        if praefix:
+            fest = (praefix.replace("\\", "\\\\")
+                    .replace("%", "\\%").replace("_", "\\_"))
+            wo += " AND rel LIKE ? ESCAPE '\\'"
+            params.append(fest + "/%")
+        rows = con.execute(
+            f"SELECT rel, date, gone FROM chunks WHERE {wo}", params).fetchall()
+        schnitt = len(praefix) + 1 if praefix else 0
+        ordner, dateien = {}, []
+        for rel, datum, weg in rows:
+            rest = rel[schnitt:]
+            if "/" in rest:
+                kopf = rest.split("/", 1)[0]
+                d = ordner.setdefault(kopf, {"name": kopf,
+                                             "path": f"{praefix}/{kopf}".strip("/"),
+                                             "files": 0})
+                d["files"] += 1
+            else:
+                dateien.append({"name": rest, "rel": rel, "date": datum,
+                                "gone": weg})
+        dateien.sort(key=lambda e: e["name"].lower())
+        return {"root": root, "path": praefix,
+                "dirs": sorted(ordner.values(), key=lambda e: e["name"].lower()),
+                "files": dateien[:2000]}
     finally:
         con.close()
 
@@ -1171,6 +1257,8 @@ def main():
     ap.add_argument("--store", help=argparse.SUPPRESS)
     ap.add_argument("--teams", help=argparse.SUPPRESS)
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
+    ap.add_argument("--onedrive", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--sharepoint", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
     # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
@@ -1242,6 +1330,10 @@ def main():
     STATE.update(db=str(dbp), V=V, np=np, semantic=(np is not None),
                  vector_dtype=str(V.dtype) if V is not None else None,
                  teams_dir=a.teams, outlook_dir=a.outlook,
+                 onedrive_dir=a.onedrive or str(
+                     Path(a.teams).parent / settings.ONEDRIVE_DIR),
+                 sharepoint_dir=a.sharepoint or str(
+                     Path(a.teams).parent / settings.SHAREPOINT_DIR),
                  embed_model=a.embed_model, ollama=a.ollama)
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None

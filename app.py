@@ -1770,6 +1770,8 @@ class SearchBridge:
                 vector_dtype=str(V.dtype) if V is not None else None,
                 teams_dir=str(BASE / TEAMS_DIR),
                 outlook_dir=str(BASE / OUTLOOK_DIR),
+                onedrive_dir=str(BASE / ONEDRIVE_DIR),
+                sharepoint_dir=str(BASE / SHAREPOINT_DIR),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
@@ -2208,6 +2210,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
+            if u.path == "/api/files":
+                return self._json(self._files(one))
             if u.path == "/api/filetypes":
                 return self._json(self._filetypes(one))
             if u.path == "/api/folders":
@@ -2658,6 +2662,21 @@ class Handler(BaseHTTPRequestHandler):
         daten = {"ordner": eintraege, "abgeglichen": stand}
         return {"ok": True, "regeln": "",
                 **folders.plan(wurzel, [], daten, None)}
+
+    def _files(self, q):
+        """One level of the mirrored file tree, sizes taken from disk."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error, "roots": []}
+        r = mod.list_files(root=q.get("root", ""), path=q.get("path", ""))
+        basis = {"onedrive": BASE / ONEDRIVE_DIR,
+                 "sharepoint": BASE / SHAREPOINT_DIR}.get(r.get("root"))
+        for e in r.get("files") or ():
+            try:
+                e["size"] = (basis / e["rel"]).stat().st_size if basis else None
+            except OSError:
+                e["size"] = None
+        return r
 
     def _filetypes(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -3487,6 +3506,7 @@ main{padding-bottom:60px}
     <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
     <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
     <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
+    <span class="chip" data-sicht="dateien" onclick="sicht('dateien')" data-i18n="view.files">Dateien</span>
   </div>
 
   <div id="sicht-treffer">
@@ -3532,7 +3552,8 @@ main{padding-bottom:60px}
         <option value="outlook" data-i18n="search.source.outlook">Mail</option>
         <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
         <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
-        <option value="datei" data-i18n="search.source.datei">Dateien</option>
+        <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
+        <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
       </select>
       <label class="small feld"><span data-i18n="search.from">von</span>
         <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
@@ -3560,6 +3581,15 @@ main{padding-bottom:60px}
     </div>
     <div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
     <div class="row" id="pager" style="margin-top:12px"></div></div>
+  </div>
+
+  <div id="sicht-dateien" class="hide">
+    <div class="row" style="margin:10px 0 6px;align-items:center">
+      <p class="small muted" id="dateien-pfad" style="flex:1;margin:0"></p>
+      <button class="mini hide" id="dateien-suchen" onclick="dateienSuchen()"
+              data-i18n="files.search.here">Hier suchen</button>
+    </div>
+    <div id="dateien-liste"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
   </div>
 
   <div id="sicht-kalender" class="hide">
@@ -4006,7 +4036,7 @@ function el(id){ return document.getElementById(id); }
    liegen deshalb eine Ebene darunter; Zeitplan und MCP sind Einstellungen. */
 var KANN_VERLAUF = false;   // hängt am Index, siehe store.features
 var REITER = ['export', 'suche', 'analytics', 'einstellungen'];
-var SICHTEN = ['treffer', 'kalender', 'adressbuch'];
+var SICHTEN = ['treffer', 'kalender', 'adressbuch', 'dateien'];
 var offeneSicht = 'treffer';
 
 /* ---------- UI-Userflow-Aufzeichnung ----------
@@ -4063,6 +4093,97 @@ function sicht(name){
   });
   // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
+  if(name === 'dateien') ladeDateien();
+}
+
+/* ---------- Dateibrowser: der Spiegel als Baum, alles aus dem Index ---- */
+var dateiSicht = {root: '', path: ''};
+var dateiDaten = null;
+
+function ladeDateien(root, path){
+  if(root !== undefined) dateiSicht = {root: root, path: path || ''};
+  api('/api/files?root=' + encodeURIComponent(dateiSicht.root) +
+      '&path=' + encodeURIComponent(dateiSicht.path))
+    .then(zeichneDateien).catch(function(){});
+}
+
+function dateiGehe(i){
+  var z = dateiDaten && (dateiDaten.roots ? dateiDaten.roots[i]
+                                          : dateiDaten.dirs[i]);
+  if(z) ladeDateien(z.root || dateiSicht.root, z.path);
+}
+
+function dateiHoch(n){
+  // n path segments survive; below the library root the crumb leads to the
+  // roots screen, not to a half-empty listing.
+  if(n <= 0 && dateiSicht.root !== 'onedrive') return ladeDateien('', '');
+  if(n < 0) return ladeDateien('', '');
+  var teile = dateiSicht.path.split('/').filter(Boolean).slice(0, n);
+  ladeDateien(dateiSicht.root, teile.join('/'));
+}
+
+function zeichneDateien(r){
+  dateiDaten = r;
+  var box = el('dateien-liste'), pfad = el('dateien-pfad');
+  el('dateien-suchen').classList.toggle('hide', !!r.roots);
+  if(r.error){ box.innerHTML = '<p class="hint">' + esc(mtext(r.error)) + '</p>'; return; }
+  if(r.roots){
+    pfad.textContent = t('files.roots');
+    box.innerHTML = r.roots.length ? r.roots.map(function(w, i){
+      return '<div class="hit" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
+        '<h3>' + esc(w.label) + '</h3>' +
+        '<div class="wer">' + esc(zahl(w.files)) + ' ' +
+        esc(t('progress.unit.files')) + '</div></div>';
+    }).join('') : '<p class="hint">' + esc(t('files.none')) + '</p>';
+    return;
+  }
+  // Brotkrumen: Quellen / Wurzel / Ordner…
+  var teile = (r.path || '').split('/').filter(Boolean);
+  var basis = dateiSicht.root === 'sharepoint' ? 2 : 0;  // Site/Lib bleiben zusammen
+  var krumen = ['<a href="javascript:void(0)" onclick="dateiHoch(-1)">' +
+                esc(t('files.roots')) + '</a>'];
+  if(basis && teile.length >= basis)
+    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(' + basis + ')">' +
+                esc(teile.slice(0, basis).join('/')) + '</a>');
+  if(dateiSicht.root === 'onedrive')
+    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(0)">OneDrive</a>');
+  teile.slice(basis).forEach(function(s, i){
+    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(' + (basis + i + 1) + ')">' +
+                esc(s) + '</a>');
+  });
+  pfad.innerHTML = krumen.join(' / ');
+  var zeilen = (r.dirs || []).map(function(d, i){
+    return '<div class="hit" style="cursor:pointer;padding:8px 12px" onclick="dateiGehe(' + i + ')">' +
+      '📁 <strong>' + esc(d.name) + '</strong>' +
+      ' <span class="muted small">' + esc(zahl(d.files)) + ' ' +
+      esc(t('progress.unit.files')) + '</span></div>';
+  }).concat((r.files || []).map(function(f){
+    var link = '/source?root=' + encodeURIComponent(dateiSicht.root) +
+               '&path=' + encodeURIComponent(f.rel);
+    return '<div class="hit" style="padding:8px 12px"' +
+      (f.gone ? ' title="' + esc(t('search.gone.since', {when: fmt(f.gone)})) + '"' : '') + '>' +
+      '<a href="' + link + '" target="_blank"' +
+      (f.gone ? ' class="muted"' : '') + '>' + esc(f.name) + '</a>' +
+      (f.gone ? ' <span class="tag weg">' + esc(t('search.gone.tag')) + '</span>' : '') +
+      ' <span class="muted small">' + esc(f.date || '') +
+      (f.size != null ? ' · ' + esc(bytes(f.size)) : '') + '</span></div>';
+  }));
+  box.innerHTML = zeilen.length ? zeilen.join('')
+    : '<p class="hint">' + esc(t('files.empty')) + '</p>';
+}
+
+function dateienSuchen(){
+  // The browser's spot becomes the search's filter: source and folder.
+  el('f-source').value = dateiSicht.root || 'all';
+  var sel = el('f-folder'), pfad = dateiSicht.path || '';
+  if(pfad && !Array.prototype.some.call(sel.options,
+      function(o){ return o.value === pfad; })){
+    var o = document.createElement('option');
+    o.value = pfad; o.textContent = pfad; sel.appendChild(o);
+  }
+  sel.value = pfad;
+  el('filter').classList.remove('hide');
+  sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
 /* Wer nichts filtert – der Normalfall – soll ein Suchfeld und einen Knopf
@@ -4627,7 +4748,8 @@ function zeichneOrdner(liste){
    tut es nicht, dann fehlt das Feld ganz statt ins Leere zu filtern. */
 var KANN_TYP = false;
 function typenMoeglich(quelle){
-  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' || quelle === 'datei');
+  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' ||
+                      quelle === 'onedrive' || quelle === 'sharepoint');
 }
 function zeichneTypen(liste){
   fuelleAuswahl('f-typ', liste.map(function(e){

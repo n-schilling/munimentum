@@ -191,7 +191,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
-           "run.", "sharepoint.")
+           "run.", "sharepoint.", "files.", "view.")
 
 # Seit die Skripte über progress.event() in Textschlüsseln erzählen, liegen
 # Schlüssel auch außerhalb von app.py.

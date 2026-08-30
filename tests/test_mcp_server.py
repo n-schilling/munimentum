@@ -553,7 +553,8 @@ def test_read_source_file_rejects_symlink_escape(state):
 
 def test_read_source_file_invalid_root_and_missing_file(state):
     out = mcp_server.read_source_file("kalender", "termin.ics")
-    assert out == {"error": "source_root must be 'teams' or 'outlook'."}
+    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive' "
+           "or 'sharepoint'."}
     out = mcp_server.read_source_file("teams", "1on1/fehlt.html")
     assert out == {"error": "File not found: 1on1/fehlt.html"}
     out = mcp_server.read_source_file("teams", "")  # Verzeichnis, keine Datei
@@ -582,7 +583,8 @@ def test_source_resource_rejects_traversal(state):
 def test_tools_without_initialized_state(empty_state):
     # read_source_file scheitert kontrolliert (kein Export-Verzeichnis bekannt) …
     out = mcp_server.read_source_file("teams", "x.html")
-    assert out == {"error": "source_root must be 'teams' or 'outlook'."}
+    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive' "
+           "or 'sharepoint'."}
     # … die DB-gestützten Tools werfen mangels STATE["db"] einen KeyError
     # (aktuelles Verhalten – hier festgenagelt)
     with pytest.raises(KeyError):
@@ -1371,3 +1373,62 @@ def test_erlaubt_laeuft_wie_bisher(state, monkeypatch):
                          "--transport", "stdio", "--no-ollama"])
     mcp_server.main()
     assert gestartet and gestartet[0]["transport"] == "stdio"
+
+
+# --------------------------------------------------------------------------
+# Getrennte Spiegel: OneDrive und SharePoint sind eigene Quellen
+# --------------------------------------------------------------------------
+def test_where_trennt_die_spiegel_ueber_root():
+    wo, params = mcp_server._where("", None, None, "onedrive")
+    assert "(src = 'datei' AND root = ?)" in wo and params == ["onedrive"]
+    wo, params = mcp_server._where("", None, None, "sharepoint")
+    assert params == ["sharepoint"]
+    # Die Sammelquelle bleibt: alte Aufrufer sehen weiter beide Spiegel.
+    wo, params = mcp_server._where("", None, None, "datei")
+    assert wo == "src = ?" and params == ["datei"]
+
+
+@pytest.fixture
+def spiegel_db(tmp_path, monkeypatch):
+    """Eine Minimal-DB nur mit gespiegelten Dateien beider Wurzeln."""
+    db = tmp_path / "corpus.db"
+    con = sqlite3.connect(db)
+    con.execute("CREATE TABLE chunks(id INTEGER PRIMARY KEY, uid TEXT,"
+                " seq INT, src TEXT, root TEXT, rel TEXT, who TEXT, ppl TEXT,"
+                " ts REAL, date TEXT, title TEXT, ctx TEXT, text TEXT,"
+                " gone TEXT, att TEXT, ext TEXT, thread TEXT)")
+    zeilen = [
+        ("od1", "onedrive", "Dateien/Doks/plan.pdf", None),
+        ("sp1", "sharepoint", "Team X/Projects/Dateien/N/x.pdf", None),
+        ("sp2", "sharepoint", "Team X/Projects/Dateien/N/tief/y.docx",
+         "2026-02-01"),
+    ]
+    for i, (uid, root, rel, gone) in enumerate(zeilen):
+        con.execute("INSERT INTO chunks(id, uid, seq, src, root, rel, date,"
+                    " gone, ctx) VALUES(?,?,0,'datei',?,?,?,?,?)",
+                    (i + 1, uid, root, rel, f"2026-01-0{i + 1}", gone,
+                     rel.rsplit("/", 1)[0]))
+    con.commit()
+    con.close()
+    alt = mcp_server.STATE.get("db")
+    mcp_server.STATE["db"] = str(db)
+    yield db
+    mcp_server.STATE["db"] = alt
+
+
+def test_list_files_wurzeln_und_ebene(spiegel_db):
+    wurzeln = mcp_server.list_files()["roots"]
+    assert [(w["root"], w["path"], w["files"]) for w in wurzeln] == [
+        ("onedrive", "", 1), ("sharepoint", "Team X/Projects", 2)]
+
+    ebene = mcp_server.list_files("sharepoint", "Team X/Projects/Dateien/N")
+    assert [d["name"] for d in ebene["dirs"]] == ["tief"]
+    assert [f["name"] for f in ebene["files"]] == ["x.pdf"]
+    assert ebene["dirs"][0]["files"] == 1
+
+
+def test_list_folders_kennt_die_spiegel_getrennt(spiegel_db):
+    nur_sp = mcp_server.list_folders(source="sharepoint")["folders"]
+    assert nur_sp and all(f["path"].startswith("Team X/") for f in nur_sp)
+    nur_od = mcp_server.list_folders(source="onedrive")["folders"]
+    assert [f["path"] for f in nur_od] == ["Dateien/Doks"]
