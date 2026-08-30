@@ -2612,6 +2612,8 @@ class Handler(BaseHTTPRequestHandler):
         """
         cfg = self.app.cfg
         quelle = str(data.get("quelle") or "")
+        if quelle == "sharepoint":
+            return self._sharepoint_plan()
         datei = folders.KALENDER if quelle == "calendar" else folders.DATEI
         if quelle == "onedrive":
             ordner, endung = BASE / ONEDRIVE_DIR, None
@@ -2633,6 +2635,27 @@ class Handler(BaseHTTPRequestHandler):
                                    data.get("skip_folders"))
         return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
                 **folders.plan(ordner, regeln, daten, endung, datei)}
+
+    def _sharepoint_plan(self):
+        """The export list for the SharePoint mirror: every library's tree,
+        paths prefixed with site/library. No path rules here – the URL list
+        does the choosing, so everything known simply shows as coming along."""
+        wurzel = BASE / SHAREPOINT_DIR
+        eintraege, stand = [], None
+        if wurzel.is_dir():
+            for lib in sorted(p for p in wurzel.glob("*/*") if p.is_dir()):
+                d = folders.lade(lib)
+                if not d:
+                    continue
+                praefix = lib.relative_to(wurzel).as_posix()
+                stand = max(stand or "", d.get("abgeglichen") or "") or None
+                for e in d.get("ordner", []):
+                    eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}"})
+        if not eintraege:
+            return {"ok": False, "leer": True}
+        daten = {"ordner": eintraege, "abgeglichen": stand}
+        return {"ok": True, "regeln": "",
+                **folders.plan(wurzel, [], daten, None)}
 
     def _filetypes(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -3679,8 +3702,11 @@ main{padding-bottom:60px}
       <div class="row" style="margin-top:8px">
         <button class="mini" onclick="gleicheOrdnerAb('sharepoint')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
         <button class="mini" onclick="sharepointVorschau()" data-i18n="sharepoint.preview">Größen-Vorschau</button>
+        <button class="mini" onclick="zeigeExportliste('sharepoint')" data-i18n="plan.open">Exportliste anzeigen</button>
+        <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
         <span class="small muted" id="sp-msg"></span>
       </div>
+      <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
@@ -5963,15 +5989,32 @@ function sharepointVorschau(){
         clearInterval(timer);
         fetch('/api/analytics').then(function(x){ return x.json(); }).then(function(a){
           var b = a.vollstaendigkeit_sharepoint;
-          el('sp-msg').textContent = b
+          el('sp-msg').textContent = b && (b.erwartet || b.ausgelassen)
             ? t('sharepoint.preview.result',
                 {n: zahl(b.erwartet), mb: zahl(Math.round((b.bytes || 0) / 1048576)),
                  skipped: zahl(b.ausgelassen || 0)})
-            : '';
+            : t('sharepoint.preview.empty');
+          malSharepointTypen(b);
         });
       }
     }, 1500);
   });
+}
+function zeigeSharepointTypen(){
+  fetch('/api/analytics').then(function(x){ return x.json(); }).then(function(a){
+    malSharepointTypen(a.vollstaendigkeit_sharepoint);
+  });
+}
+function malSharepointTypen(b){
+  var kasten = el('sp-typen');
+  if(!b || !(b.typen || []).length){
+    kasten.textContent = t('sharepoint.types.none'); return;
+  }
+  kasten.innerHTML = (b.typen || []).slice(0, 30).map(function(z){
+    return '<span style="display:inline-block;margin:2px 10px 2px 0">' +
+      '<code>' + esc(z.ext || '·') + '</code> ' + esc(zahl(z.n)) + ' · ' +
+      esc(bytes(z.bytes)) + '</span>';
+  }).join('');
 }
 function gleicheOrdnerAb(quelle){
   var wahl = ABGLEICH[quelle] || ABGLEICH.outlook;
@@ -6023,7 +6066,9 @@ function zeigeExportliste(quelle){
   planDaten = null;
   planQuelle = quelle || 'outlook';
   planFenster();
-  post('/api/folder-plan', planQuelle === 'onedrive'
+  post('/api/folder-plan', planQuelle === 'sharepoint'
+      ? {quelle: 'sharepoint'}
+      : planQuelle === 'onedrive'
       ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
       : planQuelle === 'calendar'
       ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}

@@ -222,6 +222,7 @@ def nur_pruefen(graph, out, drives, fehl=0):
     """
     wahl = auswahl()
     zeilen, ausgelassen, ausgelassen_bytes, fehl_summe = [], 0, 0, 0
+    typen = {}
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
         b = drive_mirror.nur_pruefen(graph, ziel, wahl, still=True)
@@ -232,6 +233,10 @@ def nur_pruefen(graph, out, drives, fehl=0):
         ausgelassen += b["ausgelassen"]
         ausgelassen_bytes += b.get("bytes_ausgelassen", 0)
         fehl_summe += b["fehlt"]
+        for z in b.get("typen") or ():
+            ganz = typen.setdefault(z["ext"], {"ext": z["ext"], "n": 0, "bytes": 0})
+            ganz["n"] += z["n"]
+            ganz["bytes"] += z["bytes"]
         progress.event("run.sharepoint.preview", site=d["site"], name=d["name"],
                        n=b["erwartet"], mb=round(b["bytes"] / 1048576),
                        skipped=b["ausgelassen"])
@@ -244,7 +249,8 @@ def nur_pruefen(graph, out, drives, fehl=0):
                "ausgelassen": ausgelassen,
                "ausgelassene_ordner": [],
                "bytes": sum(z["bytes"] for z in zeilen),
-               "bytes_ausgelassen": ausgelassen_bytes}
+               "bytes_ausgelassen": ausgelassen_bytes,
+               "typen": sorted(typen.values(), key=lambda z: -z["bytes"])}
     drive_mirror.schreibe_bericht(Path(out), bericht)
     progress.ergebnis(0, errors=fehl, excluded=ausgelassen,
                       extra={"expected": bericht["erwartet"],

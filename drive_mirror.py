@@ -463,6 +463,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
     """
     weg = lies_verschwunden(Path(out) / GONE_FILE)
     je = {}
+    typen = {}
     ausgelassen = 0
     ausgelassen_bytes = 0
     ausgelassene = set()
@@ -472,6 +473,13 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
         rel = rel_pfad(e)
         ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
         groesse = int(e.get("size") or 0)
+        # Counted BEFORE the filters: this list is what include/exclude gets
+        # decided on, so it must show what is there, not what survived.
+        name = rel.rsplit("/", 1)[-1]
+        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+        z = typen.setdefault(ext, {"ext": ext, "n": 0, "bytes": 0})
+        z["n"] += 1
+        z["bytes"] += groesse
         if not auswahl.takes(rel, groesse):
             ausgelassen += 1
             ausgelassen_bytes += groesse
@@ -515,6 +523,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
         "ausgelassene_ordner": sorted(ausgelassene)[:20],
         "bytes": sum(z["bytes"] for z in liste),
         "bytes_ausgelassen": ausgelassen_bytes,
+        "typen": sorted(typen.values(), key=lambda z: -z["bytes"]),
     }
 
 
