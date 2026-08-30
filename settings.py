@@ -156,6 +156,10 @@ VORGABEN = {
         "interval_minutes": 60,
         "outlook": True,
         "teams": True,
+        # The mirrors ride along only where their master switch is on –
+        # these toggles narrow a scheduled run, they cannot widen it.
+        "onedrive": True,
+        "sharepoint": True,
         "index": True,
         "calendar": True,
     },

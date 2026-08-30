@@ -1593,9 +1593,14 @@ class Scheduler(threading.Thread):
         # ausschließlich von dort – und nur, wenn die Auswahl etwas hergibt.
         noetig, mit_mails = calendar_plan(self.app.cfg)
         kalender = bool(plan.get("outlook", True) and plan.get("calendar", True) and noetig)
+        cfg = self.app.cfg
         ok, why = self.app.launch(origin="schedule",
                                   outlook=plan.get("outlook", True),
                                   teams=plan.get("teams", True),
+                                  onedrive=bool(plan.get("onedrive", True)
+                                                and cfg.get("onedrive_enabled")),
+                                  sharepoint=bool(plan.get("sharepoint", True)
+                                                  and cfg.get("sharepoint_enabled")),
                                   index=plan.get("index", True),
                                   calendar=kalender,
                                   reconstruct=None if mit_mails else False,
@@ -2452,7 +2457,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save_schedule(self, data):
         plan = self.app.cfg["schedule"]
-        for key in ("enabled", "outlook", "teams", "index", "calendar"):
+        for key in ("enabled", "outlook", "teams", "onedrive", "sharepoint",
+                    "index", "calendar"):
             if key in data:
                 plan[key] = bool(data[key])
         if "interval_minutes" in data:
@@ -3690,6 +3696,8 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.every"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.every.i">i</span></span><span><input type="number" id="s-interval" min="5" step="5" value="60"> <span class="muted small" data-i18n="sched.minutes">Minuten</span></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.outlook"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.outlook.i">i</span></span><input type="checkbox" id="s-outlook"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.teams"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.teams.i">i</span></span><input type="checkbox" id="s-teams"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.onedrive"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.onedrive.i">i</span></span><input type="checkbox" id="s-onedrive"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.sharepoint.i">i</span></span><input type="checkbox" id="s-sharepoint"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
     </div>
@@ -4196,6 +4204,8 @@ function renderStatus(s){
     el('s-interval').value = s.config.schedule.interval_minutes;
     el('s-outlook').checked = s.config.schedule.outlook;
     el('s-teams').checked = s.config.schedule.teams;
+    el('s-onedrive').checked = s.config.schedule.onedrive !== false;
+    el('s-sharepoint').checked = s.config.schedule.sharepoint !== false;
     el('s-index').checked = s.config.schedule.index;
     el('s-calendar').checked = s.config.schedule.calendar;
   }
@@ -5797,6 +5807,7 @@ function saveSchedule(){
   post('/api/schedule', {enabled: el('s-enabled').checked,
     interval_minutes: parseInt(el('s-interval').value, 10) || 60,
     outlook: el('s-outlook').checked, teams: el('s-teams').checked,
+    onedrive: el('s-onedrive').checked, sharepoint: el('s-sharepoint').checked,
     index: el('s-index').checked, calendar: el('s-calendar').checked}).then(refresh);
 }
 function toggleMcp(){

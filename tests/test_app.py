@@ -1281,6 +1281,29 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     assert gestartet["index"] is True and gestartet["label"] == "job.scheduled"
 
 
+def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
+    """Der Zeitplan-Haken grenzt ein, er schaltet die Quelle nicht ein: ohne
+    den Haken im Export-Reiter spiegelt auch der Zeitplan nicht."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["schedule"].update(enabled=True, interval_minutes=5)
+    gestartet = {}
+    a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
+    a.scheduler._tick()
+    assert gestartet["onedrive"] is False and gestartet["sharepoint"] is False
+
+    a.cfg["onedrive_enabled"] = True
+    a.cfg["sharepoint_enabled"] = True
+    a.scheduler.last_run = None
+    a.scheduler._tick()
+    assert gestartet["onedrive"] is True and gestartet["sharepoint"] is True
+
+    a.cfg["schedule"].update(onedrive=False, sharepoint=False)
+    a.scheduler.last_run = None
+    a.scheduler._tick()
+    assert gestartet["onedrive"] is False and gestartet["sharepoint"] is False
+
+
 @pytest.mark.parametrize("cats,kalender,rekonstruktion", [
     (["mail", "calendar"], True, None),    # None = wie eingestellt
     (["contacts"], True, False),           # aufbauen ja, Mails lesen nein
