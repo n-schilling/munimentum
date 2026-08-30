@@ -399,6 +399,7 @@
   "run.gone.result": "{gone} supprimés ({new} nouveaux), {moved} seulement déplacés.",
   "run.gone.healed": "{n} marquages de suppression retirés – les courriels étaient seulement déplacés.",
   "run.gone.deferred": "{n} autres cas suspects seront vérifiés à la prochaine exécution.",
+  "run.sharepoint.path_unmatched": "SharePoint : le chemin « {path} » de {url} ne correspond à aucune bibliothèque – tout le site est inclus.",
   "run.sharepoint.site_failed": "SharePoint : {url} inaccessible ({error}).",
   "run.sharepoint.denied": "Accès SharePoint refusé ({url}) – site ignoré.",
   "run.sharepoint.libraries": "{site} : {n} bibliothèques.",

@@ -399,6 +399,7 @@
   "run.gone.result": "{gone} deleted ({new} new), {moved} merely moved.",
   "run.gone.healed": "{n} earlier deletion markers withdrawn – the mails were only moved.",
   "run.gone.deferred": "{n} further candidates will be checked on the next run.",
+  "run.sharepoint.path_unmatched": "SharePoint: the path “{path}” from {url} matches no library – the whole site comes along.",
   "run.sharepoint.site_failed": "SharePoint: {url} unreachable ({error}).",
   "run.sharepoint.denied": "SharePoint access not granted ({url}) – skipping the site.",
   "run.sharepoint.libraries": "{site}: {n} libraries.",

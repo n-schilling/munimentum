@@ -24,10 +24,11 @@ the run: the affected site is reported and skipped.
 """
 
 import os
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit, unquote
+from urllib.parse import parse_qs, urlsplit, unquote
 
 import auth
 import export_util
@@ -105,40 +106,77 @@ class TokenClient(drive_mirror.DriveOps, graph_client.TokenClient):
 # ---------------------------------------------------------------------------
 # Addressing: URL -> site -> document libraries
 # ---------------------------------------------------------------------------
-def site_address(url):
-    """Turn a pasted URL into Graph's site address ("host:/sites/TeamX").
+def url_teile(url):
+    """(site address, path inside the site) from whatever the browser hands
+    out.
 
-    People paste whatever the browser shows – the plain site, a library view
-    with /Forms/AllItems.aspx, a folder deep inside. The site part is the
-    host plus the first two path segments when they follow the
-    sites/teams/personal convention, else the root site of the host.
+    People paste every shape SharePoint produces: the plain site, a library
+    view with /Forms/AllItems.aspx?id=…, a sharing link (/:f:/r/…), a folder
+    deep inside. The site part is the host plus the first two path segments
+    when they follow the sites/teams/personal convention, else the root
+    site; whatever follows names the library and folder – the run then
+    mirrors exactly that subtree instead of the whole site.
     """
     u = urlsplit(url if "://" in url else "https://" + url)
     host = u.netloc
     if not host:
         return None
-    stuecke = [s for s in unquote(u.path).split("/") if s]
+    stuecke = [unquote(s) for s in u.path.split("/") if s]
+    # Sharing links: /:f:/r/sites/… – the marker and its one-letter mode.
+    if stuecke and re.fullmatch(r":[a-z]:", stuecke[0]):
+        stuecke = stuecke[1:]
+        if stuecke and len(stuecke[0]) == 1:
+            stuecke = stuecke[1:]
+    # Library views: everything from Forms/… is view chrome, and the id= (or
+    # RootFolder=) parameter carries the real server-relative folder path.
+    if "Forms" in stuecke:
+        stuecke = stuecke[:stuecke.index("Forms")]
+    ziel = parse_qs(u.query)
+    kennung = (ziel.get("id") or ziel.get("RootFolder") or [None])[0]
+    if kennung:
+        stuecke = [s for s in unquote(kennung).split("/") if s]
     if stuecke and stuecke[0].lower() in ("sites", "teams", "personal") and len(stuecke) >= 2:
-        return f"{host}:/{stuecke[0]}/{stuecke[1]}"
-    return host
+        return f"{host}:/{stuecke[0]}/{stuecke[1]}", stuecke[2:]
+    return host, stuecke
+
+
+def site_address(url):
+    teile = url_teile(url)
+    return teile[0] if teile else None
+
+
+def _drive_pfad(drive, adresse):
+    """The library's own path segments, taken from its webUrl.
+
+    A library's URL segment and its display name differ ("Shared Documents"
+    vs "Documents"), so matching a pasted path against names would miss –
+    the webUrl carries the real segment.
+    """
+    wp = [unquote(s) for s in
+          urlsplit(drive.get("webUrl") or "").path.split("/") if s]
+    return wp[2:] if ":" in adresse else wp
 
 
 def resolve_drives(graph, urls):
-    """All document libraries behind the configured URLs, deduplicated.
+    """The document libraries behind the configured URLs, deduplicated.
 
+    A URL that points into one library (or a folder inside it) scopes the
+    mirror to exactly that subtree; a plain site URL brings every library.
     Broken URLs and denied sites are reported and skipped – one bad line
     must not cost the other mirrors. Returns (drives, failures) where each
-    drive is {"id", "site", "name"}.
+    drive is {"id", "site", "name", "prefixes"} and prefixes is None for the
+    whole library or a set of folder paths inside it.
     """
     gefunden, fehl = [], 0
-    gesehen = set()
+    nach_id = {}
     for url in urls:
-        adresse = site_address(url)
-        if not adresse:
+        teile = url_teile(url)
+        if not teile:
             progress.event("run.sharepoint.site_failed", "err", url=url,
                            error="invalid URL")
             fehl += 1
             continue
+        adresse, rest = teile
         try:
             site = graph.get(f"{GRAPH}/sites/{adresse}")
             drives = list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives"))
@@ -162,14 +200,51 @@ def resolve_drives(graph, urls):
         sname = site.get("displayName") or site.get("name") or adresse
         bibliotheken = [d for d in drives
                         if (d.get("driveType") or "") == "documentLibrary"]
+        kandidaten, unterpfad = bibliotheken, None
+        if rest:
+            for d in bibliotheken:
+                libsegs = _drive_pfad(d, adresse)
+                if libsegs and rest[:len(libsegs)] == libsegs:
+                    kandidaten = [d]
+                    unterpfad = "/".join(rest[len(libsegs):]) or None
+                    break
+            else:
+                # A path we cannot place: mirror the whole site rather than
+                # silently nothing, and say why.
+                progress.event("run.sharepoint.path_unmatched", "warn",
+                               url=url, path="/".join(rest))
         progress.event("run.sharepoint.libraries", site=sname,
-                       n=len(bibliotheken))
-        for d in bibliotheken:
-            if d.get("id") and d["id"] not in gesehen:
-                gesehen.add(d["id"])
-                gefunden.append({"id": d["id"], "site": sname,
-                                 "name": d.get("name") or "Bibliothek"})
+                       n=len(kandidaten))
+        for d in kandidaten:
+            if not d.get("id"):
+                continue
+            eintrag = nach_id.get(d["id"])
+            if eintrag is None:
+                eintrag = {"id": d["id"], "site": sname,
+                           "name": d.get("name") or "Bibliothek",
+                           "prefixes": None if unterpfad is None
+                           else {unterpfad}}
+                nach_id[d["id"]] = eintrag
+                gefunden.append(eintrag)
+            elif unterpfad is None:
+                eintrag["prefixes"] = None            # full scope wins
+            elif eintrag["prefixes"] is not None:
+                eintrag["prefixes"].add(unterpfad)
     return gefunden, fehl
+
+
+def drive_auswahl(basis, drive):
+    """The per-library Selection: the shared filters, plus the subtree scope
+    when the URL pointed below the library root."""
+    if not drive.get("prefixes"):
+        return basis
+    regeln = [(False, "**")]
+    for pf in sorted(drive["prefixes"]):
+        muster = "/".join(safe(s) for s in pf.split("/"))
+        regeln.append((True, f"{drive_mirror.DATEI_DIR}/{muster}/**"))
+    return Selection(rules=regeln, max_bytes=basis.max_bytes,
+                     include_ext=basis.include_ext,
+                     exclude_ext=basis.exclude_ext)
 
 
 def drive_ziel(out, drive):
@@ -191,7 +266,8 @@ def lauf(graph, out, drives, fehl=0):
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     for d in je_drive(graph, drives):
         progress.event("run.sharepoint.library", site=d["site"], name=d["name"])
-        zahlen = drive_mirror.lauf(graph, drive_ziel(out, d), wahl,
+        zahlen = drive_mirror.lauf(graph, drive_ziel(out, d),
+                                   drive_auswahl(wahl, d),
                                    workers(), still=True)
         for k in summe:
             summe[k] += zahlen[k]
@@ -202,10 +278,12 @@ def lauf(graph, out, drives, fehl=0):
 
 
 def nur_ordner(graph, out, drives, fehl=0):
+    wahl = auswahl()
     neu = gesamt = 0
     for d in je_drive(graph, drives):
         progress.event("run.sharepoint.library", site=d["site"], name=d["name"])
-        daten = drive_mirror.nur_ordner(graph, drive_ziel(out, d), auswahl(),
+        daten = drive_mirror.nur_ordner(graph, drive_ziel(out, d),
+                                        drive_auswahl(wahl, d),
                                         still=True)
         neu += len(daten["neu"])
         gesamt += len(daten.get("ordner") or ())
@@ -225,7 +303,8 @@ def nur_pruefen(graph, out, drives, fehl=0):
     typen = {}
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
-        b = drive_mirror.nur_pruefen(graph, ziel, wahl, still=True)
+        b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
+                                     still=True)
         zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
                        "geloescht": b["geloescht"], "fehlt": b["fehlt"],

@@ -399,6 +399,7 @@
   "run.gone.result": "{gone} gelöscht ({new} neu), {moved} nur verschoben.",
   "run.gone.healed": "{n} frühere Löschvermerke zurückgenommen – die Mails waren nur verschoben.",
   "run.gone.deferred": "{n} weitere Verdachtsfälle werden erst beim nächsten Lauf geprüft.",
+  "run.sharepoint.path_unmatched": "SharePoint: Der Pfad „{path}“ aus {url} passt zu keiner Bibliothek – es kommt die ganze Site mit.",
   "run.sharepoint.site_failed": "SharePoint: {url} nicht erreichbar ({error}).",
   "run.sharepoint.denied": "SharePoint-Zugriff nicht gewährt ({url}) – die Site wird übersprungen.",
   "run.sharepoint.libraries": "{site}: {n} Bibliotheken.",

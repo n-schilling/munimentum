@@ -36,6 +36,29 @@ def test_site_address_ohne_host_ist_none():
     assert sp.site_address("///nur/pfad") is None
 
 
+def test_url_teile_sharing_link_findet_site_und_pfad():
+    """Der gemeldete Fall: ein Sharing-Link (/:f:/r/…) landete auf der
+    Root-Site und fand dort nichts."""
+    url = ("https://firma.sharepoint.com/:f:/r/sites/PS-UK"
+           "/Projects/N/Nordwind?d=w46c78&csf=1&web=1&e=y7q8ln")
+    adresse, rest = sp.url_teile(url)
+    assert adresse == "firma.sharepoint.com:/sites/PS-UK"
+    assert rest == ["Projects", "N", "Nordwind"]
+
+
+def test_url_teile_forms_ansicht_nimmt_den_id_parameter():
+    url = ("https://firma.sharepoint.com/sites/PS-UK/Projects/Forms/AllItems.aspx"
+           "?id=%2Fsites%2FPS-UK%2FProjects%2FN%2FNordwind&viewid=x")
+    adresse, rest = sp.url_teile(url)
+    assert adresse == "firma.sharepoint.com:/sites/PS-UK"
+    assert rest == ["Projects", "N", "Nordwind"]
+
+
+def test_url_teile_site_ohne_pfad():
+    assert sp.url_teile("https://firma.sharepoint.com/sites/TeamX") == (
+        "firma.sharepoint.com:/sites/TeamX", [])
+
+
 # ---------------------------------------------------------------------------
 # Selection: the extension filters (the size cap is covered by the mirror tests)
 # ---------------------------------------------------------------------------
@@ -112,6 +135,39 @@ def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
     assert fehl == 0
     assert [d["id"] for d in drives] == ["d1", "d2"]      # dedupliziert, ohne Papierkorb
     assert drives[0]["site"] == "Team X"
+
+
+def test_resolve_drives_pfad_begrenzt_auf_eine_bibliothek(capsys):
+    """Eine Ordner-URL spiegelt genau diesen Teilbaum – nicht die ganze Site."""
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/PS-UK": {
+        "id": "s1", "name": "PS UK",
+        "drives": [
+            {"id": "d1", "name": "Dokumente", "driveType": "documentLibrary",
+             "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Freigegebene%20Dokumente"},
+            {"id": "d2", "name": "Projects", "driveType": "documentLibrary",
+             "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Projects"}]}})
+    drives, fehl = sp.resolve_drives(
+        g, ["https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Nordwind?web=1"])
+    assert fehl == 0 and [d["id"] for d in drives] == ["d2"]
+    assert drives[0]["prefixes"] == {"N/Nordwind"}
+
+    # Dieselbe Site komplett dazu: der volle Umfang gewinnt.
+    drives, _ = sp.resolve_drives(
+        g, ["https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Nordwind",
+            "https://firma.sharepoint.com/sites/PS-UK"])
+    d2 = next(d for d in drives if d["id"] == "d2")
+    assert d2["prefixes"] is None and len(drives) == 2
+
+
+def test_drive_auswahl_nimmt_nur_den_teilbaum():
+    basis = Selection(exclude_ext=["mp4"])
+    wahl = sp.drive_auswahl(basis, {"prefixes": {"N/Nordwind"}})
+    assert wahl.takes("Dateien/N/Nordwind/plan.pdf", 1)
+    assert wahl.takes("Dateien/N/Nordwind/tief/mehr.docx", 1)
+    assert not wahl.takes("Dateien/N/Anderes/plan.pdf", 1)
+    assert not wahl.takes("Dateien/oben.pdf", 1)
+    assert not wahl.takes("Dateien/N/Nordwind/film.mp4", 1)   # Filter gelten weiter
+    assert wahl.pfad_ok("Dateien/N/Nordwind/film.mp4")        # aber im Pfad-Scope
 
 
 def test_resolve_drives_403_wird_als_verweigert_gemeldet(capsys):

@@ -68,9 +68,13 @@ class Selection:
             return False
         return not self.include_ext or ext in self.include_ext
 
+    def pfad_ok(self, rel):
+        """Only the path scope – the type list counts inside it, unfiltered."""
+        return folders.gilt(rel, self.rules)
+
     def takes(self, rel, size):
         """One verdict per file – used identically by plan, check and preview."""
-        if not folders.gilt(rel, self.rules):
+        if not self.pfad_ok(rel):
             return False
         if self.max_bytes and int(size or 0) > self.max_bytes:
             return False
@@ -473,13 +477,15 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
         rel = rel_pfad(e)
         ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
         groesse = int(e.get("size") or 0)
-        # Counted BEFORE the filters: this list is what include/exclude gets
-        # decided on, so it must show what is there, not what survived.
-        name = rel.rsplit("/", 1)[-1]
-        ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
-        z = typen.setdefault(ext, {"ext": ext, "n": 0, "bytes": 0})
-        z["n"] += 1
-        z["bytes"] += groesse
+        # Counted inside the path scope but BEFORE type and size filters:
+        # this list is what include/exclude gets decided on, so it must show
+        # what is there, not what survived.
+        if auswahl.pfad_ok(rel):
+            name = rel.rsplit("/", 1)[-1]
+            ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+            z = typen.setdefault(ext, {"ext": ext, "n": 0, "bytes": 0})
+            z["n"] += 1
+            z["bytes"] += groesse
         if not auswahl.takes(rel, groesse):
             ausgelassen += 1
             ausgelassen_bytes += groesse
