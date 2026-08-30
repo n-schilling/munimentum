@@ -503,6 +503,22 @@ def test_vorgabe_waehlt_nichts_aus(sandbox):
     assert cfg["onedrive_enabled"] is False
 
 
+def test_api_files_ohne_index_meldet_den_grund(sandbox, server):
+    _, port = server
+    code, r = call(port, "GET", "/api/files")
+    assert code == 200 and (r.get("roots") == [] or r.get("roots"))
+    if r.get("error"):
+        assert r["error"]["k"] == "srv.noindex"
+
+
+def test_index_schritt_kennt_den_sharepoint_ordner(sandbox):
+    cfg = app_mod.load_config()
+    steps = app_mod.build_steps(cfg, index=True)
+    argv = steps[0]["argv"]
+    assert "--sharepoint" in argv
+    assert argv[argv.index("--sharepoint") + 1] == app_mod.SHAREPOINT_DIR
+
+
 def test_sharepoint_schritt_traegt_urls_und_filter(sandbox):
     cfg = app_mod.load_config()
     cfg["sharepoint_urls"] = "https://firma.sharepoint.com/sites/TeamX"

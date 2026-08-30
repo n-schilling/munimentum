@@ -327,3 +327,21 @@ def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
     kaputt = [e for e in events if e["k"] == "run.sharepoint.folder_failed"]
     assert len(kaputt) == 1 and kaputt[0]["v"]["path"] == "N/Nordwind/Unter"
     assert {e.get("id") for e in eintraege} == {"f1", "x1", "u1"}
+
+
+def test_zwei_sites_gleichen_namens_teilen_keinen_ordner(capsys):
+    """Zwei Sites können denselben Anzeigenamen tragen – ihre Spiegel dürfen
+    sich nicht in einem Zielordner vermischen."""
+    g = _FakeGraph(sites={
+        "firma.sharepoint.com:/sites/A": {"id": "s1", "name": "Projekte",
+            "drives": [{"id": "d1", "name": "Dokumente",
+                        "driveType": "documentLibrary"}]},
+        "firma.sharepoint.com:/sites/B": {"id": "s2", "name": "Projekte",
+            "drives": [{"id": "d2", "name": "Dokumente",
+                        "driveType": "documentLibrary"}]}})
+    drives, fehl = sp.resolve_drives(
+        g, ["https://firma.sharepoint.com/sites/A",
+            "https://firma.sharepoint.com/sites/B"])
+    assert fehl == 0 and len(drives) == 2
+    ziele = {str(sp.drive_ziel("out", d)) for d in drives}
+    assert len(ziele) == 2

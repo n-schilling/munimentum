@@ -49,7 +49,8 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "auth", "export_util", "folders", "graph_client",
                  "ollama_client", "run_history", "settings",
                  "i18n", "updates", "version", "store_layout",
-                 "progress", "answer", "notify"]
+                 "progress", "answer", "notify",
+                 "drive_mirror", "sharepoint_export"]
 
 def ohne_cli(name):
     """mcp.cli braucht typer – ein optionales Extra, das wir nicht mitliefern.

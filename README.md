@@ -112,8 +112,12 @@ the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. Every
 hit offers *Find similar*, the whole conversation it belongs to, and the
 original file.
-Three views live here: results, calendar (including appointments recovered from
-invitation and cancellation mails), and the address book.
+Four views live here: results, calendar (including appointments recovered from
+invitation and cancellation mails), the address book, and a **file browser**
+that walks the mirrored drives — OneDrive and each SharePoint library — folder
+by folder, straight from the index: originals one click away, deleted files
+marked, and *Search here* turns the current folder into a search filter. In
+the filters, OneDrive and SharePoint are their own sources.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works

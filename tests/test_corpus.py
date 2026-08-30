@@ -627,3 +627,34 @@ def test_endungen_aus_anhangnamen():
     assert corpus.endungen("Bericht.2024-final") == ""
     assert corpus.endungen("Archiv.ohneinehrsehrlangeendung") == ""
     assert corpus.endungen("ohnepunkt") == ""
+
+
+# --------------------------------------------------------------------------
+# SharePoint-Spiegel im Korpus: je Bibliothek ein Baum, Grabsteine mit Präfix
+# --------------------------------------------------------------------------
+def test_load_sharepoint_liest_bibliotheken_mit_grabsteinen(tmp_path):
+    lib = tmp_path / "Team X" / "Projects"
+    (lib / "Dateien" / "N").mkdir(parents=True)
+    (lib / "Dateien" / "N" / "plan.pdf").write_bytes(b"x")
+    (lib / "Dateien" / "weg.pdf").write_bytes(b"y")
+    (lib / "verschwunden.tsv").write_text(
+        "Dateien/weg.pdf\t2026-03-01T00:00:00+00:00\n", encoding="utf-8")
+
+    recs = corpus.load_sharepoint(tmp_path)
+    assert {r["rel"] for r in recs} == {"Team X/Projects/Dateien/N/plan.pdf",
+                                        "Team X/Projects/Dateien/weg.pdf"}
+    assert all(r["root"] == "sharepoint" for r in recs)
+    assert all(r["uid"].startswith("sharepoint:") for r in recs)
+    weg = next(r for r in recs if r["rel"].endswith("weg.pdf"))
+    assert weg.get("gone", "").startswith("2026-03-01")
+    da = next(r for r in recs if r["rel"].endswith("plan.pdf"))
+    assert "gone" not in da
+
+
+def test_load_records_nimmt_den_sharepoint_ordner_mit(tmp_path):
+    sp = tmp_path / "sharepoint_export" / "S" / "L" / "Dateien"
+    sp.mkdir(parents=True)
+    (sp / "a.txt").write_bytes(b"x")
+    recs = corpus.load_records(None, None,
+                               sharepoint_dir=tmp_path / "sharepoint_export")
+    assert [r["root"] for r in recs] == ["sharepoint"]

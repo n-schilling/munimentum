@@ -21,6 +21,10 @@ mirror run would fetch – count, size, and what the filters leave out
 
 Access needs Sites.Read.All. A pasted key without that scope does not kill
 the run: the affected site is reported and skipped.
+
+Narrowing a URL later (site -> one folder) stops syncing what is now out of
+scope; those files simply keep their last mirrored state, without tombstones –
+the mirror promise applies to what the URL list currently selects.
 """
 
 import os
@@ -176,6 +180,7 @@ def resolve_drives(graph, urls):
     """
     gefunden, fehl = [], 0
     nach_id = {}
+    seiten_namen = {}
     for url in urls:
         teile = url_teile(url)
         if not teile:
@@ -205,6 +210,12 @@ def resolve_drives(graph, urls):
             fehl += 1
             continue
         sname = site.get("displayName") or site.get("name") or adresse
+        # Two different sites can share a display name; their mirrors must
+        # not share a folder – the second one gets a suffix from its id.
+        kennung = site.get("id") or adresse
+        bekannt = seiten_namen.setdefault(sname, kennung)
+        if bekannt != kennung:
+            sname = f"{sname}__{export_util.kuerzel(kennung)}"
         bibliotheken = [d for d in drives
                         if (d.get("driveType") or "") == "documentLibrary"]
         kandidaten, unterpfad = bibliotheken, None
