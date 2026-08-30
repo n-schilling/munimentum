@@ -707,8 +707,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             date yourself. Bounds the range at both ends, so upcoming calendar
             entries stay out. Ignored when date_from is given.
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "datei" (files mirrored from OneDrive — name and path only,
-            their contents are not indexed).
+            "onedrive" or "sharepoint" (mirrored files — name and path only,
+            their contents are not indexed; "datei" still means both mirrors).
         k: Number of results per page (default 12).
         offset: Results to skip, for pagination (default 0).
         mode: "auto" (hybrid if embeddings available, else lexical),
@@ -788,8 +788,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             date yourself. Bounds the range at both ends, so upcoming calendar
             entries stay out. Ignored when date_from is given.
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "datei" (files mirrored from OneDrive — name and path only,
-            their contents are not indexed).
+            "onedrive" or "sharepoint" (mirrored files — name and path only,
+            their contents are not indexed; "datei" still means both mirrors).
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
@@ -914,8 +914,8 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
 
     Args:
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "datei" (files mirrored from OneDrive — name and path only,
-            their contents are not indexed).
+            "onedrive" or "sharepoint" (mirrored files — name and path only,
+            their contents are not indexed; "datei" still means both mirrors).
         contains: Optional. Only people whose name or email contains this text;
             `*` stands for any run of characters.
         limit: Max number of people to return, most frequent first (default 100).
@@ -968,7 +968,8 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
     chat conversations; it is far cheaper.
 
     Args:
-        source_root: "teams" or "outlook" (the export the file belongs to).
+        source_root: "teams", "outlook", "onedrive" or "sharepoint"
+            (the export the file belongs to).
         path: Relative path within that export, as returned in a hit's "path".
         max_chars: Max bytes to return (default 100000, cap 500000).
         offset: Byte position to start reading from (default 0).
@@ -988,15 +989,17 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
 
     The counterpart to the `folder` filter on search_messages: it tells you
     what can be filtered on. Covers mailbox folders below "E-Mail/", mirrored
-    OneDrive folders below "Dateien/", calendars below "kalender/", contact
-    folders below "kontakte/" and the four kinds of Teams conversation
-    ("1on1", "group", "meeting", "channels").
+    OneDrive folders below "Dateien/", SharePoint folders below
+    "<site>/<library>/", calendars below "kalender/", contact folders below
+    "kontakte/" and the four kinds of Teams conversation ("1on1", "group",
+    "meeting", "channels").
 
     Args:
         contains: Only folders whose path contains this text.
         limit: How many folders to return, largest first.
         source: Restrict to one source — "teams", "outlook", "kalender",
-            "kontakte" or "datei". Empty (or "all") lists every source.
+            "kontakte", "onedrive" or "sharepoint" ("datei" = both mirrors).
+            Empty (or "all") lists every source.
     """
     con = _db()
     try:
@@ -1035,8 +1038,9 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
 
     Args:
         limit: How many types to return, most frequent first.
-        source: Restrict to one source — mainly "outlook" (mail attachments)
-            or "datei" (mirrored files). Empty lists every source.
+        source: Restrict to one source — mainly "outlook" (mail
+            attachments), "onedrive" or "sharepoint" (mirrored files;
+            "datei" = both mirrors). Empty lists every source.
     """
     con = _db()
     try:
@@ -1072,9 +1076,13 @@ def corpus_stats() -> dict:
         by_src = {r[0]: {"chunks": r[1], "messages": r[2]} for r in con.execute(
             "SELECT src, COUNT(*), COUNT(DISTINCT uid) FROM chunks GROUP BY src")}
         n = sum(v["chunks"] for v in by_src.values())
+        dateien = {r[0]: r[1] for r in con.execute(
+            "SELECT root, COUNT(DISTINCT uid) FROM chunks "
+            "WHERE src = 'datei' GROUP BY root")}
         return {
             "chunks": n,
             "by_source": by_src,
+            "files_by_mirror": dateien,
             "default_backend": "hybrid" if STATE.get("semantic") else "lexical",
             "semantic_available": bool(STATE.get("semantic")),
             "embed_model": STATE.get("embed_model") if STATE.get("semantic") else None,
@@ -1082,19 +1090,27 @@ def corpus_stats() -> dict:
             "last_semantic_error": STATE.get("last_semantic_error"),
             "teams_dir": STATE.get("teams_dir"),
             "outlook_dir": STATE.get("outlook_dir"),
+            "onedrive_dir": STATE.get("onedrive_dir"),
+            "sharepoint_dir": STATE.get("sharepoint_dir"),
         }
     finally:
         con.close()
 
 
-def list_files(root="", path=""):
-    """One level of the mirrored file tree – the file browser's data.
+@mcp.tool(annotations=_READONLY)
+def list_files(root: str = "", path: str = "") -> dict:
+    """Browse the mirrored drives one folder level at a time.
 
-    Without a root: the entry points, "onedrive" plus one per mirrored
-    SharePoint site/library. With root (and optionally a folder path): the
-    immediate subfolders with their file counts, and the files sitting right
-    there – name, date, tombstone. Everything comes from the index; sizes
-    are the caller's business (the app stats the local mirror).
+    Without arguments: the entry points — "onedrive" plus one per mirrored
+    SharePoint site/library. With root ("onedrive" or "sharepoint") and a
+    folder path: the immediate subfolders with their file counts, and the
+    files sitting right there — name, date, tombstone (gone = no longer at
+    Microsoft). File contents are not indexed; fetch a file itself via
+    read_source_file with the matching source_root.
+
+    Args:
+        root: "" for the entry points, else "onedrive" or "sharepoint".
+        path: Folder path inside that mirror, as returned by this tool.
     """
     con = _db()
     try:
@@ -1154,8 +1170,9 @@ def list_files(root="", path=""):
 def source_resource(root: str, path: str) -> str:
     """Return a raw exported source file by URI.
 
-    URI form: o365://{root}/{path}, where {root} is "teams" or "outlook" and
-    {path} is the export-relative file path, percent-encoded (slashes as %2F).
+    URI form: o365://{root}/{path}, where {root} is "teams", "outlook",
+    "onedrive" or "sharepoint" and {path} is the export-relative file path,
+    percent-encoded (slashes as %2F).
     This is the "uri" field returned with every search/browse hit. Files larger
     than 500k characters are truncated – use the read_source_file tool with
     offset to page through the rest.
@@ -1288,6 +1305,8 @@ def main():
     a.store = a.store or str(basis / settings.STORE_DIR)
     a.teams = a.teams or str(basis / settings.TEAMS_DIR)
     a.outlook = a.outlook or str(basis / settings.OUTLOOK_DIR)
+    a.onedrive = a.onedrive or str(basis / settings.ONEDRIVE_DIR)
+    a.sharepoint = a.sharepoint or str(basis / settings.SHAREPOINT_DIR)
 
     # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
     # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
@@ -1330,10 +1349,7 @@ def main():
     STATE.update(db=str(dbp), V=V, np=np, semantic=(np is not None),
                  vector_dtype=str(V.dtype) if V is not None else None,
                  teams_dir=a.teams, outlook_dir=a.outlook,
-                 onedrive_dir=a.onedrive or str(
-                     Path(a.teams).parent / settings.ONEDRIVE_DIR),
-                 sharepoint_dir=a.sharepoint or str(
-                     Path(a.teams).parent / settings.SHAREPOINT_DIR),
+                 onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
                  embed_model=a.embed_model, ollama=a.ollama)
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None

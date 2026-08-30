@@ -698,7 +698,7 @@ def test_with_port_verwechselt_ipv6_nicht_mit_port():
 # --------------------------------------------------------------------------
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "get_thread", "list_people", "list_folders", "list_filetypes",
-              "read_source_file", "corpus_stats"}
+              "list_files", "read_source_file", "corpus_stats"}
 
 
 def _via_client(fn):
@@ -1432,3 +1432,16 @@ def test_list_folders_kennt_die_spiegel_getrennt(spiegel_db):
     assert nur_sp and all(f["path"].startswith("Team X/") for f in nur_sp)
     nur_od = mcp_server.list_folders(source="onedrive")["folders"]
     assert [f["path"] for f in nur_od] == ["Dateien/Doks"]
+
+
+def test_read_source_file_liest_die_spiegelwurzeln(state, tmp_path):
+    """Quelldatei-Links der Spiegel: beide Wurzeln liefern die Datei aus."""
+    for wurzel, schluessel in (("onedrive", "onedrive_dir"),
+                               ("sharepoint", "sharepoint_dir")):
+        basis = tmp_path / f"{wurzel}_export"
+        (basis / "Team X/Lib/Dateien").mkdir(parents=True)
+        datei = basis / "Team X/Lib/Dateien/a.txt"
+        datei.write_text("inhalt", encoding="utf-8")
+        mcp_server.STATE[schluessel] = str(basis)
+        out = mcp_server.read_source_file(wurzel, "Team X/Lib/Dateien/a.txt")
+        assert "error" not in out and "inhalt" in str(out)
