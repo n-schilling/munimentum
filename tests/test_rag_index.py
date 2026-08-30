@@ -483,7 +483,7 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
     seen = {}
 
     def fake_build(teams, outlook, store, model, url, batch, embeddings=True,
-                   onedrive_dir=None):
+                   onedrive_dir=None, sharepoint_dir=None):
         seen["args"] = (teams, outlook, store, model, url, batch, embeddings)
         seen["onedrive"] = onedrive_dir
         return 3, 1, 8
@@ -504,7 +504,7 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
     seen = {}
 
     def fake_build(teams, outlook, store, model, url, batch, embeddings=True,
-                   onedrive_dir=None):
+                   onedrive_dir=None, sharepoint_dir=None):
         seen["embeddings"] = embeddings
         return 3, 0, 0
 

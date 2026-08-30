@@ -704,7 +704,7 @@ def load_contacts(root_dir):
 ONEDRIVE_DIR = "Dateien"
 
 
-def _datei_satz(p_str, root_str):
+def _datei_satz(p_str, root_str, wurzelname="onedrive"):
     p, root = Path(p_str), Path(root_str)
     rel = p.relative_to(root).as_posix()
     try:
@@ -716,7 +716,10 @@ def _datei_satz(p_str, root_str):
     # Der Pfad als Text: so findet die Volltextsuche auch über den Ordnernamen,
     # nicht nur über den Dateinamen. Zwei Wörter, kein Rauschen.
     return {
-        "uid": f"datei:{rel}:0", "src": "datei", "root": "onedrive", "rel": rel,
+        "uid": f"datei:{rel}:0" if wurzelname == "onedrive"
+               else f"{wurzelname}:{rel}:0",
+        "src": "datei", "root": wurzelname,
+        "rel": rel,
         "who": "", "ppl": "",
         "ts": ts,
         "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "",
@@ -744,7 +747,35 @@ def load_onedrive(root_dir):
     return recs
 
 
-def load_records(teams_dir, outlook_dir, onedrive_dir=None):
+def load_sharepoint(root_dir):
+    """One record per mirrored SharePoint file – name and path, no content.
+
+    The mirror keeps one folder per library (<site>/<library>/Dateien/…),
+    each with its own tombstone file, so the walk goes per library and the
+    tombstone paths get the library prefix back.
+    """
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    recs = []
+    for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
+        dateien = [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
+                   if p.is_file() and not p.name.endswith(".teil")]
+        satz = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
+        praefix = lib.relative_to(root).as_posix()
+        weg = {f"{praefix}/{rel}": ts
+               for rel, ts in lies_verschwunden(lib).items()}
+        for r in satz:
+            r["root"] = "sharepoint"
+            r["uid"] = "sharepoint:" + r["uid"].split(":", 1)[1]
+            if r["rel"] in weg:
+                r["gone"] = weg[r["rel"]]
+        recs += satz
+    return recs
+
+
+def load_records(teams_dir, outlook_dir, onedrive_dir=None,
+                 sharepoint_dir=None):
     recs = []
     if teams_dir and Path(teams_dir).is_dir():
         recs += load_teams(teams_dir)
@@ -754,6 +785,8 @@ def load_records(teams_dir, outlook_dir, onedrive_dir=None):
         recs += load_contacts(outlook_dir)    # .vcf
     if onedrive_dir and Path(onedrive_dir).is_dir():
         recs += load_onedrive(onedrive_dir)   # gespiegelte Dateien
+    if sharepoint_dir and Path(sharepoint_dir).is_dir():
+        recs += load_sharepoint(sharepoint_dir)
     return recs
 
 

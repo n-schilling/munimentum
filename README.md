@@ -1,8 +1,9 @@
 # Munimentum
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
-channels, Outlook mail, calendar, contacts and OneDrive files — exported through
-Microsoft Graph and searchable offline, in the app or through Claude via MCP.
+channels, Outlook mail, calendar, contacts, OneDrive files and SharePoint
+libraries — exported through Microsoft Graph and searchable offline, in the app
+or through Claude via MCP.
 
 **The magic:** All via delegated access, no admin consent required.
 
@@ -72,7 +73,7 @@ One browser page with four tabs.
 ### Export data
 
 Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and channel
-chats; OneDrive files — and start. Nothing is preselected: any one of these can
+chats; OneDrive files; SharePoint libraries — and start. Nothing is preselected: any one of these can
 mean tens of thousands of items. Every run fetches only what is new, so the
 second one takes minutes rather than hours. Deleted messages **stay in the
 archive** and get a marker; that is the point of keeping one.
@@ -84,6 +85,14 @@ source. Calendars work the same way — a mailbox usually carries birthdays,
 holidays and calendars other people shared, so by default only your own comes
 along until you say otherwise. A schedule can repeat the whole thing while the
 app is open.
+
+**SharePoint** mirrors the document libraries behind the site URLs you list in
+the settings — same promises as the OneDrive mirror: the current version of
+every file, deletions stay with a tombstone note. Because team sites grow
+large, filters come along: only certain file extensions, never certain ones, a
+size cap — and a **size preview** that enumerates without downloading and
+tells you per library what a run would fetch, in files and megabytes, before
+you commit. Reading sites needs the Sites.Read.All permission.
 
 ### Search data
 

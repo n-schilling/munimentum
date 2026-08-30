@@ -288,8 +288,9 @@ def retire_vectors(store):
 # Index bauen
 # --------------------------------------------------------------------------
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
-                embeddings=True, onedrive_dir=None):
-    recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir)
+                embeddings=True, onedrive_dir=None, sharepoint_dir=None):
+    recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir,
+                               sharepoint_dir)
     if corpus.POOL_FEHLER:
         # Nicht verschweigen: der Index stimmt, aber das Einlesen lief auf
         # einem Kern statt auf allen, und bei großen Beständen merkt man das.
@@ -391,6 +392,9 @@ def main():
     ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", settings.OUTLOOK_DIR))
     ap.add_argument("onedrive", nargs="?",
                     default=settings.value("onedrive_dir", settings.ONEDRIVE_DIR))
+    ap.add_argument("--sharepoint",
+                    default=settings.value("sharepoint_dir",
+                                           settings.SHAREPOINT_DIR))
     ap.add_argument("--store", default=settings.value("store_dir", settings.STORE_DIR))
     ap.add_argument("--model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
@@ -402,7 +406,8 @@ def main():
 
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
                               a.batch, embeddings=not a.no_embeddings,
-                              onedrive_dir=a.onedrive)
+                              onedrive_dir=a.onedrive,
+                              sharepoint_dir=a.sharepoint)
     # Same result schema as every other subprogram: "new" = freshly computed
     # embeddings, "unchanged" = reused ones; the chunk total goes into extra.
     progress.ergebnis(new, unchanged=max(0, n - new), extra={"chunks": n})

@@ -503,6 +503,46 @@ def test_vorgabe_waehlt_nichts_aus(sandbox):
     assert cfg["onedrive_enabled"] is False
 
 
+def test_sharepoint_schritt_traegt_urls_und_filter(sandbox):
+    cfg = app_mod.load_config()
+    cfg["sharepoint_urls"] = "https://firma.sharepoint.com/sites/TeamX"
+    cfg["sharepoint_types_include"] = "pdf, docx"
+    cfg["sharepoint_types_exclude"] = "mp4"
+    cfg["sharepoint_max_mb"] = 200
+    steps = app_mod.build_steps(cfg, sharepoint=True)
+    assert [s["key"] for s in steps] == ["sharepoint"]
+    env = steps[0]["env"]
+    assert env["SHAREPOINT_URLS"].startswith("https://firma.sharepoint.com")
+    assert env["SHAREPOINT_TYPES_INCLUDE"] == "pdf, docx"
+    assert env["SHAREPOINT_TYPES_EXCLUDE"] == "mp4"
+    assert env["SHAREPOINT_MAX_MB"] == "200"
+    assert steps[0]["corpus"] is True
+
+    sync = app_mod.build_steps(cfg, sync_sharepoint=True)
+    check = app_mod.build_steps(cfg, check_sharepoint=True)
+    assert "--folders" in sync[0]["argv"] and "--check" in check[0]["argv"]
+
+
+def test_save_config_uebernimmt_spiegel_haken_und_sharepoint(sandbox, server):
+    """Regression: onedrive_enabled ging an den Lauf, überlebte aber keinen
+    Neuaufbau der Seite – gespeichert wurde der Haken nie."""
+    _, port = server
+    code, r = call(port, "POST", "/api/config", {
+        "onedrive_enabled": True, "sharepoint_enabled": True,
+        "sharepoint_urls": "  https://firma.sharepoint.com/sites/TeamX  \n\n",
+        "sharepoint_types_include": " .PDF, docx ,",
+        "sharepoint_types_exclude": "MP4",
+        "sharepoint_max_mb": 250})
+    assert code == 200
+    cfg = r["config"]
+    assert cfg["onedrive_enabled"] is True
+    assert cfg["sharepoint_enabled"] is True
+    assert cfg["sharepoint_urls"] == "https://firma.sharepoint.com/sites/TeamX"
+    assert cfg["sharepoint_types_include"] == "pdf, docx"
+    assert cfg["sharepoint_types_exclude"] == "mp4"
+    assert cfg["sharepoint_max_mb"] == 250
+
+
 def test_ohne_kategorie_kein_schritt(sandbox):
     """Eine leere EXPORT_CATEGORIES liest das Skript als „nicht gesetzt“ und
     holte dann alles. Der Zeitplan käme so an der Auswahl vorbei."""
@@ -6350,7 +6390,9 @@ def test_jedes_feld_ist_auch_gelistet():
                  "notifications",     # eigenes Auswahlfeld, von Hand gespeichert
                  "data-dir",          # kein Konfigurationswert, eigener Knopf
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
-                 "onedrive_enabled"}  # steht im Reiter „Exportieren", saveCats()
+                 "onedrive_enabled",  # steht im Reiter „Exportieren", saveCats()
+                 "sharepoint_enabled",   # ebenso, saveCats()
+                 "sharepoint_urls"}      # mehrzeiliger Text, eigene Behandlung
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"
