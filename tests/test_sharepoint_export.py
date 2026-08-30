@@ -305,3 +305,25 @@ def test_scope_sammler_erfindet_die_loeschung_aus_dem_bestand():
     eintraege, _ = sp.scope_sammler({"N/Nordwind"})(g, bestand)
     gel = [e for e in eintraege if "deleted" in e]
     assert [e["id"] for e in gel] == ["alt1"]      # außerhalb des Scopes: kein Urteil
+
+
+def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
+    """Ein Ordner, der nach allen Retries scheitert, ist ein Fehler mit
+    tiefem Pfad im Protokoll – kein sauberes Ergebnis über einem Loch."""
+    g = _TeilbaumGraph()
+    echte = g.paged
+
+    def paged(url, params=None):
+        if "Unter" in url:
+            raise RuntimeError("Zu viele Fehlversuche")
+        return echte(url, params)
+
+    g.paged = paged
+    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
+    s = sp.scope_sammler({"N/Nordwind"})
+    eintraege, _ = s(g, bestand)
+    assert s.fehler == 1
+    events = _events(capsys)
+    kaputt = [e for e in events if e["k"] == "run.sharepoint.folder_failed"]
+    assert len(kaputt) == 1 and kaputt[0]["v"]["path"] == "N/Nordwind/Unter"
+    assert {e.get("id") for e in eintraege} == {"f1", "x1", "u1"}

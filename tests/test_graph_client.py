@@ -56,10 +56,17 @@ def session(monkeypatch):
 
 @pytest.fixture
 def sleeps(monkeypatch):
-    """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben."""
+    """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben.
+
+    Die Drosselsperre ist prozessweit und rechnet mit der echten Uhr – vor
+    jedem Test auf null, sonst wartete ein Test auf die Sperre des vorigen.
+    Die mitgeschriebenen Zeiten sind Restzeiten (float), gerundet vergleichen.
+    """
+    graph_client._DROSSEL["bis"] = 0.0
     calls = []
     monkeypatch.setattr(graph_client.time, "sleep", lambda s: calls.append(s))
-    return calls
+    yield calls
+    graph_client._DROSSEL["bis"] = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -81,7 +88,8 @@ def test_tokenclient_get_wiederholt_nach_429(session, sleeps):
                          FakeResponse(payload={"ok": 1})]
     assert graph_client.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
     assert len(session.calls) == 2
-    assert sleeps == [3]   # Retry-After-Header wird respektiert
+    # Retry-After wird respektiert; gewartet wird vor dem Folge-Request.
+    assert [round(s) for s in sleeps] == [3]
 
 
 def test_tokenclient_401_wirft_tokenexpired(session):
@@ -102,7 +110,9 @@ def test_tokenclient_bricht_nach_sechs_serverfehlern_ab(session, sleeps):
     with pytest.raises(RuntimeError, match="Zu viele Fehlversuche"):
         graph_client.TokenClient("t").get("https://example.invalid/x")
     assert len(session.calls) == 6
-    assert sleeps == [1, 2, 4, 8, 16, 32]   # exponentielles Backoff, Kappe 60
+    # Exponentielles Backoff vor jedem Folge-Request; nach dem letzten
+    # Fehlversuch wird nicht mehr gewartet – aufgeben kostet keine 32 s.
+    assert [round(s) for s in sleeps] == [1, 2, 4, 8, 16]
 
 
 def test_tokenclient_4xx_wirft_httperror(session):
@@ -310,3 +320,22 @@ def test_threads_teilen_sich_das_gate(session):
     for t in threads:
         t.join()
     assert ergebnisse == [{"ok": 1}] * 8
+
+
+def test_drosselsperre_gilt_dem_ganzen_prozess(session, sleeps, capsys):
+    """Sechzehn Fäden, ein 429: gemeldet wird einmal, gewartet von jedem, der
+    danach anfragt – die Sperre gehört dem Prozess, nicht der Verbindung."""
+    import progress
+
+    session.responses = [FakeResponse(429, headers={"Retry-After": "7"}),
+                         FakeResponse(payload={"ok": 1}),
+                         FakeResponse(payload={"ok": 2})]
+    tc = graph_client.TokenClient("t")
+    assert tc.get("https://example.invalid/a") == {"ok": 1}
+    assert tc.get("https://example.invalid/b") == {"ok": 2}   # zweiter Aufruf
+    events = [e for e in (progress.lies_event(z) for z in
+                          capsys.readouterr().out.splitlines())
+              if e and e["k"] == "run.throttled"]
+    assert len(events) == 1 and events[0]["v"]["s"] == 7
+    # Beide Folge-Requests warteten die Sperre ab (Restzeit jeweils ~7 s).
+    assert [round(s) for s in sleeps] == [7, 7]

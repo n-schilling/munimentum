@@ -65,6 +65,19 @@ def konfiguriere(workers):
         pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
 
 
+# Eine Drosselsperre für den ganzen Prozess: Graph drosselt das Budget der
+# Anwendung, nicht die einzelne Verbindung. Feuern die Nachbar-Fäden weiter,
+# verlängern sie die Sperre nur – deshalb ruht vor jedem Request jeder.
+_DROSSEL = {"bis": 0.0}
+_DROSSEL_LOCK = threading.Lock()
+
+
+def _drossel_warten():
+    rest = _DROSSEL["bis"] - time.time()
+    if rest > 0:
+        time.sleep(rest)
+
+
 def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label=""):
     """Ein GET gegen Graph; wiederholt NUR bei Netzwerkfehlern.
 
@@ -76,6 +89,7 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
     # Session-Fakes in Tests ohne stream-Parameter gültig.
     extra = {"stream": True} if stream else {}
     for net in range(NET_RETRIES):
+        _drossel_warten()
         try:
             with GATE:   # nur das eigentliche Request zählt gegen das Limit
                 return SESSION.get(url, headers=headers, params=params,
@@ -92,11 +106,21 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
 
 
 def warte_auf(r, versuch, was=""):
-    """Backoff nach 429/5xx: Retry-After wenn beziffert, sonst exponentiell."""
+    """Backoff nach 429/5xx: Retry-After wenn beziffert, sonst exponentiell.
+
+    Gewartet wird nicht hier, sondern in _drossel_warten() vor dem nächsten
+    Request – und zwar von jedem Faden: die Sperre gilt dem Prozess. Gemeldet
+    wird nur, wer die Sperre verlängert; sechzehn gleichzeitige 429 sind eine
+    Zeile im Protokoll, nicht sechzehn."""
     ra = r.headers.get("Retry-After")
-    w = min(int(ra) if ra and ra.isdigit() else 2 ** versuch, 60)
-    progress.event("run.throttled", "warn", status=r.status_code, s=w)
-    time.sleep(w)
+    w = min(int(ra), 300) if ra and ra.isdigit() else min(2 ** versuch, 60)
+    bis = time.time() + w
+    with _DROSSEL_LOCK:
+        neu = bis > _DROSSEL["bis"]
+        if neu:
+            _DROSSEL["bis"] = bis
+    if neu:
+        progress.event("run.throttled", "warn", status=r.status_code, s=w)
 
 
 class Basis:

@@ -404,6 +404,7 @@
   "run.sharepoint.denied": "Accès SharePoint refusé ({url}) – site ignoré.",
   "run.sharepoint.libraries": "{site} : {n} bibliothèques.",
   "run.sharepoint.library_scoped": "{site} / {name} – seulement {scope}…",
+  "run.sharepoint.folder_failed": "SharePoint : dossier « {path} » lu incomplètement ({error}).",
   "run.sharepoint.scope_missing": "SharePoint : dossier « {path} » introuvable ({error}).",
   "run.sharepoint.library": "{site} / {name}…",
   "run.sharepoint.preview": "{site} / {name} : {n} fichiers, {mb} Mo – {skipped} filtrés.",

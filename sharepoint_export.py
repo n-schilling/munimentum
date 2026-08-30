@@ -272,6 +272,7 @@ def scope_sammler(prefixes):
     regeln = _scope_regeln(prefixes)
 
     def sammler(graph, bestand):
+        sammler.fehler = 0
         eintraege, gesehen = [], set()
 
         def kinder(teile):
@@ -294,27 +295,31 @@ def scope_sammler(prefixes):
             eintraege.append(wurzel)
             gesehen.add(wurzel.get("id"))
             # One request per folder – but folders side by side don't wait
-            # for each other, and the bar ticks while the tree unfolds.
+            # for each other, and the bar ticks while the tree unfolds. A
+            # folder that still fails after all retries is counted: the run
+            # must not report a clean zero over a hole in the walk.
             with ThreadPoolExecutor(max_workers=workers()) as pool:
-                offen = {pool.submit(kinder, teile)}
+                offen = {pool.submit(kinder, teile): teile}
                 while offen:
-                    fertig, offen = wait(offen, return_when=FIRST_COMPLETED)
+                    fertig, _ = wait(set(offen), return_when=FIRST_COMPLETED)
                     for f in fertig:
+                        wo = offen.pop(f)
                         try:
                             eltern, liste = f.result()
                         except auth.TokenExpired:
                             raise
                         except Exception as e:
-                            progress.event("run.sharepoint.scope_missing",
-                                           "warn", path=pf,
+                            sammler.fehler += 1
+                            progress.event("run.sharepoint.folder_failed",
+                                           "err", path="/".join(wo),
                                            error=f"{type(e).__name__}: {e}")
                             continue
                         for e in liste:
                             eintraege.append(e)
                             gesehen.add(e.get("id"))
                             if "folder" in e and "file" not in e:
-                                offen = offen | {pool.submit(
-                                    kinder, eltern + [e.get("name") or ""])}
+                                kind = eltern + [e.get("name") or ""]
+                                offen[pool.submit(kinder, kind)] = kind
                     progress.melde(len(eintraege), what="entries")
         # Inside the scope, missing from the walk, still in the inventory:
         # that is a deletion – delta would have said so, the diff says it now.
@@ -360,12 +365,13 @@ def lauf(graph, out, drives, fehl=0):
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     for d in je_drive(graph, drives):
         _library_event(d)
+        s = _drive_sammler(d)
         zahlen = drive_mirror.lauf(graph, drive_ziel(out, d),
                                    drive_auswahl(wahl, d),
-                                   workers(), still=True,
-                                   sammler=_drive_sammler(d))
+                                   workers(), still=True, sammler=s)
         for k in summe:
             summe[k] += zahlen[k]
+        summe["errors"] += getattr(s, "fehler", 0) if s else 0
     progress.ergebnis(summe["new"], excluded=summe["excluded"],
                       errors=summe["errors"] + fehl,
                       extra={"moved": summe["moved"], "gone": summe["gone"]})
@@ -377,10 +383,11 @@ def nur_ordner(graph, out, drives, fehl=0):
     neu = gesamt = 0
     for d in je_drive(graph, drives):
         _library_event(d)
+        s = _drive_sammler(d)
         daten = drive_mirror.nur_ordner(graph, drive_ziel(out, d),
                                         drive_auswahl(wahl, d),
-                                        still=True,
-                                        sammler=_drive_sammler(d))
+                                        still=True, sammler=s)
+        fehl += getattr(s, "fehler", 0) if s else 0
         neu += len(daten["neu"])
         gesamt += len(daten.get("ordner") or ())
     progress.ergebnis(neu, errors=fehl, extra={"total": gesamt})
@@ -400,8 +407,10 @@ def nur_pruefen(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         ziel = drive_ziel(out, d)
+        s = _drive_sammler(d)
         b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
-                                     still=True, sammler=_drive_sammler(d))
+                                     still=True, sammler=s)
+        fehl += getattr(s, "fehler", 0) if s else 0
         zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
                        "geloescht": b["geloescht"], "fehlt": b["fehlt"],

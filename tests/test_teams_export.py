@@ -85,9 +85,11 @@ def _clear_stop():
 def sleeps(monkeypatch):
     """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben."""
     import graph_client
+    graph_client._DROSSEL["bis"] = 0.0
     calls = []
     monkeypatch.setattr(graph_client.time, "sleep", lambda s: calls.append(s))
-    return calls
+    yield calls
+    graph_client._DROSSEL["bis"] = 0.0
 
 
 def _msg(name, text, ts, ctype="text", **extra):
@@ -158,7 +160,8 @@ def test_get_bytes_persistent_429_is_image_unavailable(monkeypatch, sleeps):
     tc = te.TokenClient("tok", channels_enabled=False)
     with pytest.raises(te.ImageUnavailable):
         tc.get_bytes("https://x/img")
-    assert len(sleeps) == 4
+    # Gewartet wird vor dem Folge-Request; nach dem letzten Fehlversuch nicht.
+    assert len(sleeps) == 3
 
 
 def test_get_bytes_netzfehler_is_image_unavailable(monkeypatch, sleeps):
