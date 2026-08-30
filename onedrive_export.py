@@ -24,7 +24,7 @@ settings feed the Selection.
 Runs as a subprogram of app.py: output folder as the only argument, settings
 as environment variables (ONEDRIVE_RULES – include/exclude rules on paths,
 one per line, like the mailbox; ONEDRIVE_MAX_MB – skip larger files, 0 = no
-limit; EXPORT_WORKERS – parallel downloads; environment beats
+limit; MIRROR_WORKERS – parallel requests; environment beats
 app_config.json, see settings.py). Special runs: --folders syncs the folder
 tree, --check reports what is missing (vollstaendigkeit.json).
 
@@ -71,10 +71,12 @@ OUT_ROOT = settings.value("onedrive_dir", settings.ONEDRIVE_DIR)
 
 
 def workers():
-    """Parallele Downloads. settings.number liest Umgebung > Datei > Vorgabe –
-    settings.value täte das NICHT, und ein Schalter, der still nichts tut, ist
-    schlimmer als keiner."""
-    return max(1, min(settings.number("EXPORT_WORKERS", "workers"), 8))
+    """Parallel drive requests – the mirrors' own knob (mirror_workers).
+
+    Drives are throttled by request budget, not by the mailbox's four-slot
+    limit; Graph documents no fixed concurrency, so the cap of 16 is our own
+    restraint and 429 waits stay visible in the log."""
+    return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
 
 
 def max_bytes():

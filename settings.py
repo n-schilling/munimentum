@@ -87,6 +87,10 @@ VORGABEN = {
     "outlook_categories": [],
     "teams_categories": [],
     "workers": 4,
+    # Drive mirrors (OneDrive/SharePoint) take their own concurrency: Graph
+    # documents no fixed limit for drives – throttling is budget-based and
+    # answered with visible waits – so more than the mailbox's four is fine.
+    "mirror_workers": 8,
     # Schalter der Export-Skripte (dort per Umgebungsvariable, siehe env_flag)
     "embed_images": True,
     "cache_images": True,

@@ -1123,6 +1123,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if reconstruct is None:
         reconstruct = bool(cfg.get("calendar_reconstruct", True))
     base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
+                "MIRROR_WORKERS": str(cfg.get("mirror_workers") or 8),
                 **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token
@@ -2378,7 +2379,8 @@ class Handler(BaseHTTPRequestHandler):
         # Grenzen, damit eine vertippte Zahl den nächsten Lauf nicht lahmlegt:
         # Graph erlaubt 4 gleichzeitige Anfragen pro Postfach, alles darüber
         # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
-        for key, low, high in (("workers", 1, 8), ("mcp_port", 1024, 65535),
+        for key, low, high in (("workers", 1, 8), ("mirror_workers", 1, 16),
+                               ("mcp_port", 1024, 65535),
                                ("index_batch", 1, 512), ("answer_sources", 1, 20),
                                ("semantic_min", 0, 95),
                                # Fehlte hier, seit es das Feld gibt: die Grenze
@@ -3711,6 +3713,7 @@ main{padding-bottom:60px}
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
     </div>
   </div>
 
@@ -5882,7 +5885,7 @@ function pruefeUpdate(){
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled'];
-var ZAHLEN   = ['workers','index_batch','mcp_port','answer_sources','search_results',
+var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months'];
 var TEXTE    = ['ollama','embed_model','chat_model',

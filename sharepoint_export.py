@@ -13,8 +13,8 @@ Runs as a subprogram of app.py: output folder as the only argument, settings
 as environment variables (SHAREPOINT_URLS – one site or library URL per
 line; SHAREPOINT_TYPES_INCLUDE / SHAREPOINT_TYPES_EXCLUDE – comma-separated
 file extensions, include empty = every type, exclude wins;
-SHAREPOINT_MAX_MB – skip larger files, 0 = no limit; EXPORT_WORKERS –
-parallel downloads). Special runs: --folders syncs the folder trees,
+SHAREPOINT_MAX_MB – skip larger files, 0 = no limit; MIRROR_WORKERS –
+parallel requests). Special runs: --folders syncs the folder trees,
 --check enumerates without downloading and reports per library what a
 mirror run would fetch – count, size, and what the filters leave out
 (the size preview) – plus what is missing locally.
@@ -59,7 +59,12 @@ BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
 def workers():
-    return max(1, min(settings.number("EXPORT_WORKERS", "workers"), 8))
+    """Parallel drive requests – the mirrors' own knob (mirror_workers).
+
+    Drives are throttled by request budget, not by the mailbox's four-slot
+    limit; Graph documents no fixed concurrency, so the cap of 16 is our own
+    restraint and 429 waits stay visible in the log."""
+    return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
 
 
 def configured_urls():

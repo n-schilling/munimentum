@@ -642,6 +642,8 @@
   "settings.onedrive.rules.i": "Le même mécanisme que pour la boîte aux lettres, sur les chemins du lecteur. Le miroir garde l’état actuel ; ce qui est supprimé reste ici avec une marque.",
   "settings.onedrive.maxmb.i": "Ignorer les gros fichiers. 0 signifie sans limite.",
   "settings.workers.i": "Combien de requêtes partent en même temps vers Microsoft Graph. Graph n’en autorise pas plus de quatre par boîte.",
+  "settings.mirror_workers": "Requêtes parallèles des miroirs",
+  "settings.mirror_workers.i": "S’applique à OneDrive et SharePoint. Contrairement à la boîte aux lettres, Microsoft ne documente aucune limite fixe ici – la limitation se fait par budget de requêtes, et l’exécution attend alors visiblement (HTTP 429 dans le journal). 16 est le plafond de l’application ; réduisez la valeur si les attentes s’accumulent.",
   "sched.i": "Répète l’export à intervalle fixe tant que l’application est ouverte. Avec une clé collée, cela s’arrête à son expiration — sans surveillance, il faut se connecter.",
   "sched.enabled.i": "Tant que l’application est ouverte, elle répète l’exécution choisie.",
   "sched.every.i": "Intervalle entre deux exécutions. Moins de cinq minutes n’est pas possible.",

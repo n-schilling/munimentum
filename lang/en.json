@@ -642,6 +642,8 @@
   "settings.onedrive.rules.i": "The same mechanism as for the mailbox, on drive paths. The mirror holds the current state; anything deleted stays here and gets a marker.",
   "settings.onedrive.maxmb.i": "Skip large files. 0 means no limit.",
   "settings.workers.i": "How many requests go to Microsoft Graph at once. Graph allows no more than four per mailbox.",
+  "settings.mirror_workers": "Parallel mirror requests",
+  "settings.mirror_workers.i": "Applies to OneDrive and SharePoint. Unlike the mailbox, Microsoft documents no fixed limit here – throttling is budget-based, and the run then waits visibly (HTTP 429 in the log). 16 is the app's ceiling; lower the value if wait lines pile up.",
   "sched.i": "Repeats the export at a fixed interval while the app is open. With a pasted access key it ends when the key expires — unattended runs need signing in.",
   "sched.enabled.i": "While the app is open it repeats the chosen run.",
   "sched.every.i": "Time between two runs. Shorter than five minutes is not possible.",

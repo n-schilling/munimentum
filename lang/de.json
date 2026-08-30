@@ -642,6 +642,8 @@
   "settings.onedrive.rules.i": "Dieselbe Mechanik wie beim Postfach, nur auf Pfaden im Laufwerk. Gespiegelt wird der aktuelle Stand; Gelöschtes bleibt hier liegen und bekommt einen Vermerk.",
   "settings.onedrive.maxmb.i": "Große Dateien auslassen. 0 heißt: keine Grenze.",
   "settings.workers.i": "Wie viele Anfragen gleichzeitig an Microsoft Graph gehen. Mehr als vier je Postfach lässt Graph nicht zu.",
+  "settings.mirror_workers": "Parallele Anfragen der Spiegel",
+  "settings.mirror_workers.i": "Gilt für OneDrive und SharePoint. Anders als beim Postfach nennt Microsoft hier kein festes Limit – gedrosselt wird nach Anfrage-Budget, und der Lauf wartet dann sichtbar (HTTP 429 im Protokoll). 16 ist die Obergrenze der App; bei häufigen Wartezeilen den Wert senken.",
   "sched.i": "Wiederholt den Export in festem Abstand, solange die App läuft. Mit eingefügtem Zugangsschlüssel endet das, wenn der Schlüssel abläuft – unbeaufsichtigt läuft es nur mit Anmeldung.",
   "sched.enabled.i": "Solange die App offen ist, wiederholt sie den gewählten Lauf.",
   "sched.every.i": "Abstand zwischen zwei Läufen. Kürzer als fünf Minuten geht nicht.",
