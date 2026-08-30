@@ -115,8 +115,8 @@ def test_die_beiden_kanaele_verwechseln_sich_nicht(capsys):
 # Die Skripte melden auch wirklich
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("modul", ["teams_export", "outlook_export",
-                                   "onedrive_export", "rag_index",
-                                   "combined_search"])
+                                   "onedrive_export", "sharepoint_export",
+                                   "rag_index", "combined_search"])
 def test_export_meldet_sein_ergebnis(modul):
     """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter –
     und die Lauf-Historie bliebe für den Schritt leer."""

@@ -33,6 +33,7 @@ CONFIG_NAME = "app_config.json"
 TEAMS_DIR = "teams_export"
 OUTLOOK_DIR = "outlook_export"
 ONEDRIVE_DIR = "onedrive_export"
+SHAREPOINT_DIR = "sharepoint_export"
 STORE_DIR = "rag_store"
 
 # Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
@@ -71,6 +72,15 @@ VORGABEN = {
     # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
     "onedrive_rules": "",
     "onedrive_max_mb": 0,
+    # Off until someone turns it on – the same caution as with the drive.
+    "sharepoint_enabled": False,
+    # Site or library URLs, one per line; each resolves to its libraries.
+    "sharepoint_urls": "",
+    # Extension filters, comma-separated ("pdf, docx"). Include empty means
+    # every type; exclude wins when both name the same extension.
+    "sharepoint_types_include": "",
+    "sharepoint_types_exclude": "",
+    "sharepoint_max_mb": 0,
     # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
     # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
     # sein und nicht das, was beim ersten Start zufällig angehakt war.
