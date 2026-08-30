@@ -27,12 +27,9 @@ page instead of leaving dead controls behind.
 | File | For |
 |---|---|
 | `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1–M4) |
-| `Munimentum-macos-x86_64.dmg` | Mac with an Intel processor |
 | `Munimentum-windows-x64.zip` | Windows 10/11 (64-bit) |
 | `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
 
-Not sure which Mac? Apple menu → *About This Mac*: if it says *Apple M…*, take
-`arm64`, otherwise `x86_64`.
 
 ## Getting started
 

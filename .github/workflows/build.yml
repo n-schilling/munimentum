@@ -30,13 +30,6 @@ jobs:
           - os: macos-14          # Apple Silicon
             ziel: macos-arm64
             exe: dist/Munimentum.app/Contents/MacOS/Munimentum
-          # macos-13 ist seit Dezember 2025 abgeschaltet – Jobs darauf warten
-          # ewig auf einen Runner, den es nicht mehr gibt. macos-15-intel ist
-          # der Ersatz und läuft bis August 2027; danach gibt es bei GitHub
-          # kein x86_64-macOS mehr und diese Zeile entfällt ersatzlos.
-          - os: macos-15-intel    # Intel
-            ziel: macos-x86_64
-            exe: dist/Munimentum.app/Contents/MacOS/Munimentum
           - os: windows-latest
             ziel: windows-x64
             exe: dist/Munimentum/Munimentum.exe

@@ -25,8 +25,7 @@ nothing to install. The interface opens in your browser.
 
 | File | For |
 |---|---|
-| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon |
-| `Munimentum-macos-x86_64.dmg` | Mac with an Intel CPU |
+| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1 or newer) |
 | `Munimentum-windows-x64.zip` | Windows 10/11, 64-bit |
 | `Munimentum-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
 
