@@ -121,8 +121,11 @@ def test_export_meldet_sein_ergebnis(modul):
     """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter –
     und die Lauf-Historie bliebe für den Schritt leer."""
     from pathlib import Path
-    quelle = (Path(__file__).resolve().parent.parent / f"{modul}.py").read_text(
-        encoding="utf-8")
+    wurzel = Path(__file__).resolve().parent.parent
+    quelle = (wurzel / f"{modul}.py").read_text(encoding="utf-8")
+    if "import drive_mirror" in quelle:
+        # Der Spiegel meldet über den gemeinsamen Kern – der Vertrag gilt dort.
+        quelle += (wurzel / "drive_mirror.py").read_text(encoding="utf-8")
     assert "progress.ergebnis(" in quelle, f"{modul} meldet sein Ergebnis nicht"
 
 

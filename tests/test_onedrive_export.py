@@ -89,7 +89,7 @@ def test_plane_trennt_laden_auslassen_und_geloescht(tmp_path):
          "parentReference": {"path": "/drive/root:"}},
     ]
     regeln = folders.lies_regeln("- Dateien/Fotos/**")
-    plan = od.plane(eintraege, bestand, tmp_path, regeln, grenze=0)
+    plan = od.plane(eintraege, bestand, tmp_path, od.Selection(rules=regeln))
     assert [a["rel"] for a in plan["laden"]] == ["Dateien/Ordner/neu.pdf"]
     assert plan["ausgelassen"] == 1
     assert plan["geloescht"] == ["Dateien/Ordner/alt.pdf"]
@@ -102,10 +102,10 @@ def test_plane_ueberspringt_was_unveraendert_daliegt(tmp_path):
     ziel.write_bytes(b"x" * 10)
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
-    plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, [], grenze=0)
+    plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
     assert plan["laden"] == []
     # Anderer cTag = neuer Inhalt, also doch laden.
-    plan = od.plane([_datei("1", "a.pdf", ctag="c2")], bestand, tmp_path, [], grenze=0)
+    plan = od.plane([_datei("1", "a.pdf", ctag="c2")], bestand, tmp_path, od.Selection())
     assert len(plan["laden"]) == 1
 
 
@@ -116,7 +116,7 @@ def test_halbe_datei_gilt_nicht_als_fertig(tmp_path):
     ziel.write_bytes(b"x" * 3)                      # erwartet werden 10
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
-    plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, [], grenze=0)
+    plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
     assert len(plan["laden"]) == 1
 
 
@@ -127,7 +127,7 @@ def test_verschieben_statt_neu_laden(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     bestand.merke("1", "Dateien/Alt/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf", "/drive/root:/Neu")], bestand, tmp_path,
-                    [], grenze=0)
+                    od.Selection())
     assert plan["verschoben"] == [("Dateien/Alt/a.pdf", "Dateien/Neu/a.pdf")]
     assert plan["laden"] == [], "verschieben, nicht noch einmal herunterladen"
     assert od.verschiebe(tmp_path, plan["verschoben"]) == 1
@@ -143,7 +143,7 @@ def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     bestand.merke("1", "Dateien/Alt/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "b.pdf", "/drive/root:/Neu", groesse=99, ctag="c2")],
-                    bestand, tmp_path, [], grenze=0)
+                    bestand, tmp_path, od.Selection())
     assert plan["verschoben"] == [("Dateien/Alt/a.pdf", "Dateien/Neu/b.pdf")]
     assert [a["rel"] for a in plan["laden"]] == ["Dateien/Neu/b.pdf"]
 
@@ -151,8 +151,8 @@ def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
 def test_groessengrenze(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     gross = [_datei("1", "gross.pdf", groesse=5 * 1024 * 1024)]
-    assert od.plane(gross, bestand, tmp_path, [], grenze=1024 * 1024)["laden"] == []
-    assert len(od.plane(gross, bestand, tmp_path, [], grenze=0)["laden"]) == 1
+    assert od.plane(gross, bestand, tmp_path, od.Selection(max_bytes=1024 * 1024))["laden"] == []
+    assert len(od.plane(gross, bestand, tmp_path, od.Selection())["laden"]) == 1
 
 
 def test_die_wurzel_steht_im_baum(tmp_path):
@@ -161,7 +161,7 @@ def test_die_wurzel_steht_im_baum(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     wurzel = {"id": "root!", "name": "root", "root": {}, "folder": {"childCount": 4},
               "parentReference": {"driveId": "d"}}
-    plan = od.plane([wurzel], bestand, tmp_path, [], grenze=0)
+    plan = od.plane([wurzel], bestand, tmp_path, od.Selection())
     assert [e["pfad"] for e in plan["baum"]] == [od.DATEI_DIR]
     assert plan["laden"] == []
 
@@ -171,7 +171,7 @@ def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
     bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
     paket = {"id": "p", "name": "Notizbuch", "package": {"type": "oneNote"},
              "folder": {"childCount": 3}, "parentReference": {"path": "/drive/root:"}}
-    plan = od.plane([paket], bestand, tmp_path, [], grenze=0)
+    plan = od.plane([paket], bestand, tmp_path, od.Selection())
     assert plan["laden"] == [] and [e["pfad"] for e in plan["baum"]] == ["Dateien/Notizbuch"]
 
 
@@ -237,7 +237,7 @@ class FakeGraph:
 
 def test_lauf_spiegelt_und_merkt_sich_den_zeiger(tmp_path):
     g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
-    assert od.lauf(g, tmp_path) == 2
+    assert od.lauf(g, tmp_path)["new"] == 2
     assert (tmp_path / "Dateien/Ordner/a.pdf").read_bytes() == b"x" * 10
     assert od.lies_delta(tmp_path) == "https://delta/neu"
     assert not (tmp_path / "folders.json").exists(), \
@@ -290,7 +290,7 @@ def test_check_findet_die_fehlende_datei(tmp_path):
     da.parent.mkdir(parents=True)
     da.write_bytes(b"x" * 10)
     b = od.pruefe_vollstaendigkeit(
-        [_datei("1", "da.pdf"), _datei("2", "weg.pdf")], tmp_path, [], grenze=0)
+        [_datei("1", "da.pdf"), _datei("2", "weg.pdf")], tmp_path, od.Selection())
     assert (b["erwartet"], b["vorhanden"], b["fehlt"]) == (2, 1, 1)
     assert [z["ordner"] for z in b["ordner"] if z["fehlt"]] == ["Dateien/Ordner"]
 
@@ -300,7 +300,7 @@ def test_check_erkennt_die_halb_uebertragene_datei(tmp_path):
     halb = tmp_path / "Dateien/Ordner/a.pdf"
     halb.parent.mkdir(parents=True)
     halb.write_bytes(b"x" * 3)                      # erwartet werden 10
-    b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf")], tmp_path, [], grenze=0)
+    b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf")], tmp_path, od.Selection())
     assert b["fehlt"] == 1
 
 
@@ -312,7 +312,7 @@ def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
     b = od.pruefe_vollstaendigkeit(
         [_datei("1", "a.jpg", "/drive/root:/Fotos"),
          _datei("2", "gross.zip", groesse=99_000_000)],
-        tmp_path, regeln, grenze=1_000_000)
+        tmp_path, od.Selection(rules=regeln, max_bytes=1_000_000))
     assert b["fehlt"] == 0 and b["erwartet"] == 0
     assert b["ausgelassen"] == 2
     assert any(z["ausgelassen"] for z in b["ordner"])
@@ -321,7 +321,7 @@ def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
 def test_check_erklaert_geloeschtes_statt_es_zu_vermissen(tmp_path):
     od.schreibe_verschwunden(tmp_path / od.GONE_FILE, {}, ["Dateien/Ordner/alt.pdf"],
                              "2026-01-01")
-    b = od.pruefe_vollstaendigkeit([], tmp_path, [], grenze=0)
+    b = od.pruefe_vollstaendigkeit([], tmp_path, od.Selection())
     assert b["geloescht"] == 1 and b["fehlt"] == 0
 
 
@@ -339,16 +339,19 @@ def test_null_heisst_ohne_grenze(monkeypatch):
     etwas ausgeschlossen hatte."""
     monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
     assert od.max_bytes() == 0
-    assert od.zu_gross(500 * 1024 * 1024) is False, "0 muss ALLES durchlassen"
+    wahl = od.Selection(max_bytes=od.max_bytes())
+    assert wahl.takes("Dateien/a.bin", 500 * 1024 * 1024), "0 muss ALLES durchlassen"
     monkeypatch.setenv("ONEDRIVE_MAX_MB", "50")
     assert od.max_bytes() == 50 * 1024 * 1024
-    assert od.zu_gross(60 * 1024 * 1024) is True
+    assert not od.Selection(max_bytes=od.max_bytes()).takes(
+        "Dateien/a.bin", 60 * 1024 * 1024)
 
 
 def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
     monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
     gross = [_datei(str(i), f"f{i}.bin", groesse=99_000_000) for i in range(3)]
-    plan = od.plane(gross, od.Bestand(tmp_path / od.BESTAND_DATEI), tmp_path, [])
+    wahl = od.Selection(max_bytes=od.max_bytes())
+    plan = od.plane(gross, od.Bestand(tmp_path / od.BESTAND_DATEI), tmp_path, wahl)
     assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
-    b = od.pruefe_vollstaendigkeit(gross, tmp_path, [])
+    b = od.pruefe_vollstaendigkeit(gross, tmp_path, wahl)
     assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"
