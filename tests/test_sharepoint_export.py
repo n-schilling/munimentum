@@ -195,7 +195,7 @@ def test_lauf_summiert_ueber_bibliotheken(tmp_path, monkeypatch, capsys):
     drives = [{"id": "d1", "site": "S", "name": "A"},
               {"id": "d2", "site": "S", "name": "B"}]
 
-    def fake_lauf(graph, out, wahl, arbeiter, still=False):
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, sammler=None):
         assert still, "je Bibliothek darf kein eigenes RESULT kommen"
         return {"new": 2, "excluded": 1, "errors": 0, "moved": 0, "gone": 1}
 
@@ -233,7 +233,8 @@ def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys)
         {"erwartet": 5, "vorhanden": 5, "geloescht": 1, "fehlt": 0,
          "ausgelassen": 0, "bytes": 1048576, "bytes_ausgelassen": 0}])
     monkeypatch.setattr(sp.drive_mirror, "nur_pruefen",
-                        lambda graph, out, wahl, still=False: next(berichte))
+                        lambda graph, out, wahl, still=False, sammler=None:
+                        next(berichte))
 
     class G:
         pass
@@ -246,3 +247,61 @@ def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys)
     events = _events(capsys)
     vorschau = [e for e in events if e["k"] == "run.sharepoint.preview"]
     assert len(vorschau) == 2 and vorschau[0]["v"]["mb"] == 3
+
+
+# ---------------------------------------------------------------------------
+# The scoped collector: subtree walk instead of whole-library delta
+# ---------------------------------------------------------------------------
+class _TeilbaumGraph:
+    """A drive that knows /root:/path and /root:/path:/children lookups."""
+
+    drive_base = "https://graph.example/drives/d2"
+
+    def __init__(self):
+        self.ordner = {"N/Nordwind": {"id": "f1", "name": "Nordwind",
+                                     "folder": {"childCount": 2},
+                                     "parentReference": {"path": "/drive/root:/N"}}}
+        self.kinder = {"N/Nordwind": [
+            {"id": "x1", "name": "plan.pdf", "file": {}, "size": 10,
+             "parentReference": {"path": "/drive/root:/N/Nordwind"}},
+            {"id": "u1", "name": "Unter", "folder": {"childCount": 1},
+             "parentReference": {"path": "/drive/root:/N/Nordwind"}}],
+            "N/Nordwind/Unter": [
+            {"id": "x2", "name": "mehr.docx", "file": {}, "size": 20,
+             "parentReference": {"path": "/drive/root:/N/Nordwind/Unter"}}]}
+        self.angefragt = []
+
+    def _pfad(self, url):
+        import urllib.parse
+        rest = url.split("/root:/", 1)[1]
+        rest = rest.split(":/children")[0]
+        return "/".join(urllib.parse.unquote(s) for s in rest.split("/"))
+
+    def get(self, url):
+        self.angefragt.append(url)
+        return self.ordner[self._pfad(url)]
+
+    def paged(self, url, params=None):
+        self.angefragt.append(url)
+        yield from self.kinder[self._pfad(url)]
+
+
+def test_scope_sammler_geht_nur_durch_den_teilbaum(capsys):
+    g = _TeilbaumGraph()
+    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
+    eintraege, link = sp.scope_sammler({"N/Nordwind"})(g, bestand)
+    assert link is None                     # kein Delta-Zeiger im Scope-Modus
+    ids = {e.get("id") for e in eintraege}
+    assert ids == {"f1", "x1", "u1", "x2"}
+    assert all("/root:/" in u for u in g.angefragt)
+
+
+def test_scope_sammler_erfindet_die_loeschung_aus_dem_bestand():
+    g = _TeilbaumGraph()
+    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
+    bestand.eintraege = {
+        "alt1": {"rel": "Dateien/N/Nordwind/weg.pdf", "ctag": "c", "size": 5},
+        "fremd": {"rel": "Dateien/Anderswo/bleibt.pdf", "ctag": "c", "size": 5}}
+    eintraege, _ = sp.scope_sammler({"N/Nordwind"})(g, bestand)
+    gel = [e for e in eintraege if "deleted" in e]
+    assert [e["id"] for e in gel] == ["alt1"]      # außerhalb des Scopes: kein Urteil

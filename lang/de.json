@@ -403,6 +403,8 @@
   "run.sharepoint.site_failed": "SharePoint: {url} nicht erreichbar ({error}).",
   "run.sharepoint.denied": "SharePoint-Zugriff nicht gewährt ({url}) – die Site wird übersprungen.",
   "run.sharepoint.libraries": "{site}: {n} Bibliotheken.",
+  "run.sharepoint.library_scoped": "{site} / {name} – nur {scope}…",
+  "run.sharepoint.scope_missing": "SharePoint: Ordner „{path}“ nicht gefunden ({error}).",
   "run.sharepoint.library": "{site} / {name}…",
   "run.sharepoint.preview": "{site} / {name}: {n} Dateien, {mb} MB – {skipped} ausgefiltert.",
   "run.sharepoint.none": "Keine SharePoint-URLs konfiguriert – nichts zu tun.",

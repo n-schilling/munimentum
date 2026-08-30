@@ -28,10 +28,11 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit, unquote
+from urllib.parse import parse_qs, quote, urlsplit, unquote
 
 import auth
 import export_util
+import folders
 import progress
 import settings
 
@@ -233,18 +234,86 @@ def resolve_drives(graph, urls):
     return gefunden, fehl
 
 
+def _scope_regeln(prefixes):
+    regeln = [(False, "**")]
+    for pf in sorted(prefixes):
+        muster = "/".join(safe(s) for s in pf.split("/"))
+        regeln.append((True, f"{drive_mirror.DATEI_DIR}/{muster}/**"))
+    return regeln
+
+
 def drive_auswahl(basis, drive):
     """The per-library Selection: the shared filters, plus the subtree scope
     when the URL pointed below the library root."""
     if not drive.get("prefixes"):
         return basis
-    regeln = [(False, "**")]
-    for pf in sorted(drive["prefixes"]):
-        muster = "/".join(safe(s) for s in pf.split("/"))
-        regeln.append((True, f"{drive_mirror.DATEI_DIR}/{muster}/**"))
-    return Selection(rules=regeln, max_bytes=basis.max_bytes,
+    return Selection(rules=_scope_regeln(drive["prefixes"]),
+                     max_bytes=basis.max_bytes,
                      include_ext=basis.include_ext,
                      exclude_ext=basis.exclude_ext)
+
+
+def scope_sammler(prefixes):
+    """A collector for one folder of a big library.
+
+    Delta only exists on a drive's root – for a URL that points at one
+    project folder it would enumerate the whole library on every run. The
+    collector instead lists exactly the configured subtrees (one request per
+    folder inside the scope) and synthesises the deletions from the
+    inventory: what the walk no longer sees but dateien.tsv still knows is
+    gone. No delta pointer is used or advanced.
+    """
+    regeln = _scope_regeln(prefixes)
+
+    def sammler(graph, bestand):
+        eintraege, gesehen = [], set()
+        for pf in sorted(prefixes):
+            teile = [s for s in pf.split("/") if s]
+            pfad = "/".join(quote(s, safe="") for s in teile)
+            try:
+                wurzel = graph.get(f"{graph.drive_base}/root:/{pfad}")
+            except auth.TokenExpired:
+                raise
+            except Exception as e:
+                progress.event("run.sharepoint.scope_missing", "warn",
+                               path=pf, error=f"{type(e).__name__}: {e}")
+                continue
+            eintraege.append(wurzel)
+            gesehen.add(wurzel.get("id"))
+            stapel = [(teile, wurzel)]
+            while stapel:
+                eltern_teile, _ = stapel.pop()
+                kinder_pfad = "/".join(quote(s, safe="") for s in eltern_teile)
+                for e in graph.paged(
+                        f"{graph.drive_base}/root:/{kinder_pfad}:/children",
+                        {"$top": drive_mirror.SEITE}):
+                    eintraege.append(e)
+                    gesehen.add(e.get("id"))
+                    if "folder" in e and "file" not in e:
+                        stapel.append((eltern_teile + [e.get("name") or ""], e))
+        # Inside the scope, missing from the walk, still in the inventory:
+        # that is a deletion – delta would have said so, the diff says it now.
+        for kennung, e in list(bestand.eintraege.items()):
+            if kennung not in gesehen and folders.gilt(e["rel"], regeln,
+                                                       vorgabe=False):
+                eintraege.append({"id": kennung, "deleted": {}})
+        return eintraege, None
+
+    return sammler
+
+
+def _drive_sammler(drive):
+    return scope_sammler(drive["prefixes"]) if drive.get("prefixes") else None
+
+
+def _library_event(drive):
+    if drive.get("prefixes"):
+        progress.event("run.sharepoint.library_scoped", site=drive["site"],
+                       name=drive["name"],
+                       scope=", ".join(sorted(drive["prefixes"])))
+    else:
+        progress.event("run.sharepoint.library", site=drive["site"],
+                       name=drive["name"])
 
 
 def drive_ziel(out, drive):
@@ -265,10 +334,11 @@ def lauf(graph, out, drives, fehl=0):
     wahl = auswahl()
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     for d in je_drive(graph, drives):
-        progress.event("run.sharepoint.library", site=d["site"], name=d["name"])
+        _library_event(d)
         zahlen = drive_mirror.lauf(graph, drive_ziel(out, d),
                                    drive_auswahl(wahl, d),
-                                   workers(), still=True)
+                                   workers(), still=True,
+                                   sammler=_drive_sammler(d))
         for k in summe:
             summe[k] += zahlen[k]
     progress.ergebnis(summe["new"], excluded=summe["excluded"],
@@ -281,10 +351,11 @@ def nur_ordner(graph, out, drives, fehl=0):
     wahl = auswahl()
     neu = gesamt = 0
     for d in je_drive(graph, drives):
-        progress.event("run.sharepoint.library", site=d["site"], name=d["name"])
+        _library_event(d)
         daten = drive_mirror.nur_ordner(graph, drive_ziel(out, d),
                                         drive_auswahl(wahl, d),
-                                        still=True)
+                                        still=True,
+                                        sammler=_drive_sammler(d))
         neu += len(daten["neu"])
         gesamt += len(daten.get("ordner") or ())
     progress.ergebnis(neu, errors=fehl, extra={"total": gesamt})
@@ -302,9 +373,10 @@ def nur_pruefen(graph, out, drives, fehl=0):
     zeilen, ausgelassen, ausgelassen_bytes, fehl_summe = [], 0, 0, 0
     typen = {}
     for d in je_drive(graph, drives):
+        _library_event(d)
         ziel = drive_ziel(out, d)
         b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
-                                     still=True)
+                                     still=True, sammler=_drive_sammler(d))
         zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
                        "geloescht": b["geloescht"], "fehlt": b["fehlt"],

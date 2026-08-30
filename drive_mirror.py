@@ -410,19 +410,26 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
     return fertig, fehler
 
 
-def lauf(graph, out, auswahl, arbeiter, still=False):
+def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
     """One full mirror pass for one drive; returns the result counts.
 
     ``still`` suppresses the result event – sharepoint_export mirrors several
     drives in one step and reports one combined result at the end.
+
+    ``sammler(graph, bestand)`` replaces the delta walk where delta cannot
+    work: SharePoint scoped to one folder lists just that subtree (delta only
+    exists on a drive's root). A collector returns (entries, delta link or
+    None) and synthesises deletions itself – the pointer then never moves.
     """
     out = Path(out)
     wurzel = out
     bestand = Bestand(out / BESTAND_DATEI)
-    weiter = lies_delta(out)
-    progress.event("run.drive.delta" if weiter else "run.drive.full")
-
-    eintraege, neuer_link = sammle(graph, weiter)
+    if sammler is None:
+        weiter = lies_delta(out)
+        progress.event("run.drive.delta" if weiter else "run.drive.full")
+        eintraege, neuer_link = sammle(graph, weiter)
+    else:
+        eintraege, neuer_link = sammler(graph, bestand)
     progress.event("run.scanned", n=len(eintraege),
                    unit=progress.atom("progress.unit.entries"))
     plan = plane(eintraege, bestand, wurzel, auswahl)
@@ -533,10 +540,13 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
     }
 
 
-def nur_pruefen(graph, out, auswahl, still=False):
+def nur_pruefen(graph, out, auswahl, still=False, sammler=None):
     """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
     out = Path(out)
-    eintraege, _ = sammle(graph, None)
+    if sammler is None:
+        eintraege, _ = sammle(graph, None)
+    else:
+        eintraege, _ = sammler(graph, Bestand(out / BESTAND_DATEI))
     bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl)
     schreibe_bericht(out, bericht)
     if not still:
@@ -547,7 +557,7 @@ def nur_pruefen(graph, out, auswahl, still=False):
     return bericht
 
 
-def nur_ordner(graph, out, auswahl, still=False):
+def nur_ordner(graph, out, auswahl, still=False, sammler=None):
     """--folders: nur die Struktur holen, nichts herunterladen.
 
     Zählt bewusst VOLLSTÄNDIG auf und ignoriert den gespeicherten Delta-Zeiger:
@@ -556,8 +566,11 @@ def nur_ordner(graph, out, auswahl, still=False):
     hielte der nächste Export die noch nie geholten Dateien für erledigt.
     """
     out = Path(out)
-    eintraege, _ = sammle(graph, None)
     bestand = Bestand(out / BESTAND_DATEI)
+    if sammler is None:
+        eintraege, _ = sammle(graph, None)
+    else:
+        eintraege, _ = sammler(graph, bestand)
     plan = plane(eintraege, bestand, out, auswahl)
     alt = folders.lade(out)
     daten = folders.speichere(out, baum_zusammenfuehren(alt, plan["baum"],
