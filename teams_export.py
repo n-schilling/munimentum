@@ -3,7 +3,7 @@
 Teams/Chat-Export über Microsoft Graph (delegiert, kein Admin nötig).
 
 Exportiert eine HTML pro Chat bzw. pro Kanal, unterteilt in:
-    1on1/  group/  meeting/  channels/<Team>/   + index.html
+    1on1/  group/  meeting/  channels/<Team>/
 
 PARALLEL: mehrere Chats/Kanäle gleichzeitig (Standard 4, per Env EXPORT_WORKERS).
   Teams-Throttling: ~1 Anfrage/s je einzelnem Chat oder Kanal, 4/s je Team, und
@@ -37,7 +37,7 @@ import threading
 import html as html_lib
 from datetime import datetime
 from pathlib import Path
-from collections import defaultdict, Counter
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import auth
@@ -413,12 +413,6 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 60px}
 .att a{color:#2b6cb0;text-decoration:none}
 .react{margin-top:4px;color:#8a8f98;font-size:12px}
 .empty{color:#9aa0a6}
-.index-group{max-width:860px;margin:0 auto;padding:8px 16px}
-.index-group h2{font-size:15px;margin:22px 0 8px;color:#3b3f46}
-.index-group ul{list-style:none;padding:0;margin:0}
-.index-group li{padding:6px 0;border-bottom:1px solid #ececef}
-.index-group a{color:#2b6cb0;text-decoration:none}
-.index-group .c{color:#9aa0a6;font-size:12px;margin-left:6px}
 """
 
 
@@ -496,31 +490,6 @@ def record_done(out, state, key, category, title, rel, count, last_activity=None
             "last_activity": last_activity,   # neueste Nachricht -> Basis für inkrementelle Läufe
         }
         save_state(out, state)
-
-
-def write_index(out, state):
-    groups = [("1:1-Chats", "1on1"), ("Gruppenchats", "group"),
-              ("Meeting-Chats", "meeting"), ("Team-Kanäle", "channels")]
-    by_cat = defaultdict(list)
-    for rec in state["conversations"].values():
-        if rec.get("done") and not rec.get("empty") and rec.get("rel"):
-            by_cat[rec["category"]].append((rec["title"], rec["rel"], rec["count"]))
-    parts = [f'<header><h1>Teams-Export</h1>'
-             f'<p class="sub">Stand {datetime.now():%Y-%m-%d %H:%M}</p></header>']
-    for label, key in groups:
-        entries = by_cat.get(key, [])
-        if not entries:
-            continue
-        parts.append(f'<div class="index-group"><h2>{html_lib.escape(label)} '
-                     f'({len(entries)})</h2><ul>')
-        for title, rel, count in sorted(entries, key=lambda x: x[0].lower()):
-            parts.append(f'<li><a href="{html_lib.escape(rel)}">{html_lib.escape(title)}</a>'
-                         f'<span class="c">{count} Nachrichten</span></li>')
-        parts.append("</ul></div>")
-    html = (f'<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">'
-            f'<title>Teams-Export</title><style>{CSS}</style></head>'
-            f'<body>{"".join(parts)}</body></html>')
-    (out / "index.html").write_text(html, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -809,8 +778,6 @@ def main():
         result = run_parallel(runners, stats, workers)
     except TokenExpired:
         result = "expired"
-    finally:
-        write_index(out, state)
 
     if result == "expired":
         progress.fehler("token_expired")

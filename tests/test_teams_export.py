@@ -563,28 +563,6 @@ def test_record_done_persists_record(tmp_path):
     assert rec["last_activity"] == "2025-06-01T09:30:00Z"
 
 
-def test_write_index_groups_and_skips_empty(tmp_path):
-    state = {"version": 1, "conversations": {
-        "a": {"done": True, "empty": False, "category": "1on1",
-              "title": "Alice & Bob", "rel": "1on1/a.html", "count": 3},
-        "b": {"done": True, "empty": False, "category": "channels",
-              "title": "Team / Allgemein", "rel": "channels/T/a.html", "count": 12},
-        "c": {"done": True, "empty": True, "category": "group",
-              "title": "Leer", "rel": None, "count": 2},
-        "d": {"done": False, "category": "group", "title": "Offen",
-              "rel": "group/x.html", "count": 1},
-    }}
-    te.write_index(tmp_path, state)
-    html = (tmp_path / "index.html").read_text(encoding="utf-8")
-    assert "1:1-Chats" in html and "(1)" in html
-    assert "Alice &amp; Bob" in html                 # Titel wird escaped
-    assert 'href="1on1/a.html"' in html
-    assert "3 Nachrichten" in html
-    assert "Team-Kanäle" in html and "12 Nachrichten" in html
-    assert "Leer" not in html and "Offen" not in html
-    assert "Gruppenchats" not in html                # keine sichtbaren Einträge -> Gruppe fehlt
-
-
 # --------------------------------------------------------------------------
 # Export einer Konversation (Chat und Kanal) mit gefaktem Graph
 # --------------------------------------------------------------------------
