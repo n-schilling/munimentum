@@ -352,6 +352,8 @@ def sammle(graph, weiter):
     for eintrag, fertig in graph.delta(weiter):
         if eintrag is not None:
             eintraege.append(eintrag)
+            if len(eintraege) % 2000 == 0:
+                progress.event("run.drive.walking", n=len(eintraege))
         else:
             link = fertig
     return eintraege, link

@@ -565,6 +565,24 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
     assert zahlen["new"] == 0 and g.aufrufe == [None, "delta-1"]
 
 
+def test_lange_aufzaehlung_meldet_zwischenstand(capsys):
+    """A first walk over a big drive is minutes of silence otherwise – every
+    2000 entries one line proves the run is alive."""
+    import drive_mirror
+
+    def delta(weiter=None):
+        for i in range(4100):
+            yield {"id": str(i)}, None
+        yield None, "link"
+
+    eintraege, link = drive_mirror.sammle(
+        type("G", (), {"delta": staticmethod(delta)})(), None)
+    assert len(eintraege) == 4100 and link == "link"
+    takt = [e["v"]["n"] for e in _events(capsys)
+            if e["k"] == "run.drive.walking"]
+    assert takt == [2000, 4000]
+
+
 # ---------------------------------------------------------------------------
 # Cadence: units below their interval are skipped, with a clear line
 # ---------------------------------------------------------------------------
