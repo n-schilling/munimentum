@@ -119,6 +119,21 @@ class RunHistory:
         self._schreibe("UPDATE runs SET finished_at = ?, result = ? WHERE id = ?",
                        (time.time(), str(result), run_id))
 
+    def last_step_ok(self, key):
+        """When the step last finished successfully – the cadence gate's
+        question. None when it never did (or history is unreadable)."""
+        try:
+            con = self._connect()
+            try:
+                row = con.execute(
+                    "SELECT MAX(started_at) FROM steps WHERE key = ? AND ok = 1",
+                    (str(key),)).fetchone()
+                return row[0] if row and row[0] is not None else None
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            return None
+
     # -- housekeeping ------------------------------------------------------
     def prune(self, months):
         """Drop runs older than the retention window, steps included."""

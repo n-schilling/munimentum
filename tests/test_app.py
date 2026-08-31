@@ -1326,6 +1326,46 @@ def test_scope_pruefung_kennt_die_schreibvarianten_der_spiegel():
         "Sites.Read.All"]
 
 
+def test_cadence_faellig_rechnet_mit_periode_und_slack():
+    jetzt = 1_000_000.0
+    assert app_mod.cadence_faellig("always", jetzt - 1, jetzt)
+    assert app_mod.cadence_faellig("daily", None, jetzt)
+    assert app_mod.cadence_faellig("daily", jetzt - 86400, jetzt)
+    assert app_mod.cadence_faellig("daily", jetzt - 86400 + 30, jetzt)  # Slack
+    assert not app_mod.cadence_faellig("daily", jetzt - 3600, jetzt)
+    assert not app_mod.cadence_faellig("monthly", jetzt - 86400, jetzt)
+
+
+def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
+    """The cadence gate applies to EVERY run – a manual export click too –
+    and says so in the log instead of silently dropping the source."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["outlook_categories"] = ["mail"]
+    a.cfg["onedrive_enabled"] = True
+    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
+    a.history.last_step_ok = lambda key: time.time() - 3600   # vor einer Stunde
+    gebaut = {}
+
+    def fake_build(cfg, **kw):
+        gebaut.update(kw)
+        return []
+
+    a.jobs.start = lambda *args, **kw: True
+    alt_build = app_mod.build_steps
+    app_mod.build_steps = fake_build
+    try:
+        a.launch(outlook=True, onedrive=True)
+    finally:
+        app_mod.build_steps = alt_build
+    assert gebaut["onedrive"] is False and gebaut["outlook"] is True
+    zeilen = [z for z in a.jobs.lines
+              if isinstance(z.get("text"), dict)
+              and z["text"].get("k") == "srv.cadence.skip"]
+    assert len(zeilen) == 1
+    assert zeilen[0]["text"]["v"]["cadence"]["k"] == "cadence.weekly"
+
+
 def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
     """The schedule toggle narrows, it does not switch a source on: without
     the Export-tab checkbox the schedule does not mirror either."""
@@ -6489,7 +6529,9 @@ def test_jedes_feld_ist_auch_gelistet():
                  "sharepoint_enabled",   # ebenso, saveCats()
                  "sharepoint_pages_enabled",  # ebenso, saveCats()
                  "sharepoint_urls",      # mehrzeiliger Text, eigene Behandlung
-                 "sharepoint_pages_urls"}     # ebenso
+                 "sharepoint_pages_urls",     # ebenso
+                 "cadence-onedrive",     # Kadenz-Selects, leseKadenzen()
+                 "cadence-teams"}
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"

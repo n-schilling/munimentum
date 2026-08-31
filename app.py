@@ -1297,6 +1297,19 @@ def _sharepoint_env(cfg):
             "SHAREPOINT_MAX_MB": str(int(cfg.get("sharepoint_max_mb") or 0))}
 
 
+# Cadence: how often a source gets synced at most. 0 = always; the minute
+# of slack keeps an hourly schedule from missing the daily boundary by a hair.
+CADENCE_S = {"always": 0, "daily": 86400, "weekly": 7 * 86400,
+             "monthly": 30 * 86400}
+
+
+def cadence_faellig(cadence, letzter, jetzt=None):
+    periode = CADENCE_S.get(cadence or "always", 0)
+    if not periode or letzter is None:
+        return True
+    return (jetzt if jetzt is not None else time.time()) - letzter >= periode - 60
+
+
 def due_now(last_run, interval_minutes, now):
     """Ist der nächste geplante Lauf fällig? (last_run None = sofort)"""
     if last_run is None:
@@ -2071,6 +2084,22 @@ class App:
             embeddings = (self.semantisch_gewollt()
                           and self.ollama()["running"] and self.ollama()["has_model"])
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
+        # The cadence gate narrows EVERY run, scheduled and manual alike –
+        # a source below its interval is skipped with a clear log line.
+        kadenzen = self.cfg.get("sync_cadence") or {}
+        angefragt = {"onedrive": onedrive, "teams": teams}
+        for dienst, label in (("onedrive", "job.step.onedrive"),
+                              ("teams", "job.step.teams")):
+            kadenz = kadenzen.get(dienst) or "always"
+            if kadenz == "always" or not angefragt[dienst]:
+                continue
+            if cadence_faellig(kadenz, self.history.last_step_ok(dienst)):
+                continue
+            angefragt[dienst] = False
+            self.jobs.logk("srv.cadence.skip", "info",
+                           step={"k": label, "v": {}},
+                           cadence={"k": f"cadence.{kadenz}", "v": {}})
+        onedrive, teams = angefragt["onedrive"], angefragt["teams"]
         braucht_zugang = (outlook or teams or onedrive or check
                           or sharepoint or sync_sharepoint or check_sharepoint
                           or sharepoint_pages or check_pages
@@ -2510,6 +2539,10 @@ class Handler(BaseHTTPRequestHandler):
         for key in ("client_id", "tenant"):
             if key in data:
                 cfg[key] = str(data[key] or "").strip()
+        if "sync_cadence" in data and isinstance(data["sync_cadence"], dict):
+            cfg["sync_cadence"] = {
+                str(k): v for k, v in data["sync_cadence"].items()
+                if v in ("always", "daily", "weekly", "monthly")}
         if "notifications" in data:
             wert = str(data["notifications"] or "").strip().lower()
             if wert in ("off", "errors", "all"):
@@ -3767,6 +3800,7 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-teams" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.outlook.title">Outlook</h3>
@@ -3812,6 +3846,7 @@ main{padding-bottom:60px}
         <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
         <span class="small muted" id="od-folders-msg"></span>
       </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.sharepoint.title">SharePoint</h3>
@@ -6162,6 +6197,9 @@ function fuelleEinstellungen(cfg){
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-notifications').value = cfg.notifications || 'errors';
   el('c-sharepoint_urls').value = cfg.sharepoint_urls || '';
+  var kad = cfg.sync_cadence || {};
+  el('c-cadence-onedrive').value = kad.onedrive || 'always';
+  el('c-cadence-teams').value = kad.teams || 'always';
   el('c-sharepoint_pages_urls').value = cfg.sharepoint_pages_urls || '';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
@@ -6172,6 +6210,13 @@ function fuelleEinstellungen(cfg){
   ollamaSchalter();
   fuelleSprachen();
 }
+function leseKadenzen(){
+  var kad = Object.assign({}, (S && S.config && S.config.sync_cadence) || {});
+  kad.onedrive = el('c-cadence-onedrive').value;
+  kad.teams = el('c-cadence-teams').value;
+  return kad;
+}
+
 function speichereEinstellungen(){
   merke('flow.save', 'settings');
   var body = {skip_folders: el('c-skip_folders').value,
@@ -6180,7 +6225,8 @@ function speichereEinstellungen(){
               language: el('c-language').value,
               notifications: el('c-notifications').value,
               sharepoint_urls: el('c-sharepoint_urls').value,
-              sharepoint_pages_urls: el('c-sharepoint_pages_urls').value};
+              sharepoint_pages_urls: el('c-sharepoint_pages_urls').value,
+              sync_cadence: leseKadenzen()};
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });

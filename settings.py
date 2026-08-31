@@ -87,6 +87,11 @@ VORGABEN = {
     "sharepoint_pages_urls": "",
     # Embed images up to this size; larger ones stay links. 0 = no limit.
     "sharepoint_pages_image_max_mb": 4,
+    # Sync cadence per source or per SharePoint unit ("onedrive", "teams",
+    # "sharepoint:<drive-id>", "pages:<site-id>") -> always|daily|weekly|
+    # monthly. Missing key means always; the toggle narrows every run,
+    # scheduled and manual alike.
+    "sync_cadence": {},
     # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
     # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
     # sein und nicht das, was beim ersten Start zufällig angehakt war.
