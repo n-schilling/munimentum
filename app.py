@@ -1178,8 +1178,11 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "sharepoint_pages", "label": "job.step.pages", "corpus": True,
             "argv": script_argv("sharepoint_export", "--pages",
                                 SHAREPOINT_PAGES_DIR),
-            "env": {**base_env, "SHAREPOINT_PAGES_URLS":
-                    str(cfg.get("sharepoint_pages_urls") or "")},
+            "env": {**base_env,
+                    "SHAREPOINT_PAGES_URLS":
+                    str(cfg.get("sharepoint_pages_urls") or ""),
+                    "SHAREPOINT_PAGES_IMAGE_MAX_MB":
+                    str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))},
         })
     cats = _clean_categories(cfg["teams_categories"],
                              ["1on1", "group", "meeting", "channels"])
@@ -2426,6 +2429,7 @@ class Handler(BaseHTTPRequestHandler):
                                # aber nie gespeichert.
                                ("onedrive_max_mb", 0, 100000),
                                ("sharepoint_max_mb", 0, 100000),
+                               ("sharepoint_pages_image_max_mb", 0, 100),
                                ("search_results", 5, 100),
                                # 0 heißt: Userflow-Aufzeichnung aus.
                                ("userflow_actions", 0, 50),
@@ -3771,11 +3775,6 @@ main{padding-bottom:60px}
         <textarea id="c-sharepoint_urls" style="min-height:70px"
           placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
       </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-sharepoint_pages_urls" style="min-height:50px"
-          placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
-      </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" style="min-width:220px" placeholder="pdf, docx, xlsx"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" style="min-width:220px" placeholder="mp4, iso"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
@@ -3787,6 +3786,15 @@ main{padding-bottom:60px}
         <span class="small muted" id="sp-msg"></span>
       </div>
       <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
+    </div>
+
+    <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span></span></div>
+      <div class="feldzeile breit">
+        <textarea id="c-sharepoint_pages_urls" style="min-height:50px"
+          placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
@@ -6073,7 +6081,8 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled'];
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb','sharepoint_max_mb','semantic_min',
+                'onedrive_max_mb','sharepoint_max_mb',
+                'sharepoint_pages_image_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules',

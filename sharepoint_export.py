@@ -71,7 +71,6 @@ SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
 OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
 SEITEN_BESTAND = "seiten.tsv"
-BILD_MAX = 4 * 1024 * 1024      # larger images stay a link, not a data URI
 BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
@@ -601,11 +600,19 @@ def _lade_bild(graph, url):
                            label=" (Bild)")
 
 
-def bilder_einbetten(graph, html, host, zaehler):
+def bild_max():
+    """Embed images up to this size (sharepoint_pages_image_max_mb);
+    0 means no limit."""
+    return max(0, settings.number("SHAREPOINT_PAGES_IMAGE_MAX_MB",
+                                  "sharepoint_pages_image_max_mb",
+                                  low=0)) * 1024 * 1024
+
+
+def bilder_einbetten(graph, html, host, zaehler, grenze=0):
     """Embed the page's images as data URIs so the file stands alone.
 
     Failures keep the original URL: signed in, the browser may still show
-    it – better than a hole. Oversized images stay links on purpose."""
+    it – better than a hole. Images over `grenze` stay links on purpose."""
     import html as html_lib
 
     def ersetze(m):
@@ -623,7 +630,7 @@ def bilder_einbetten(graph, html, host, zaehler):
         except Exception:
             zaehler["fehl"] += 1
             return m.group(0)
-        if len(inhalt) > BILD_MAX:
+        if grenze and len(inhalt) > grenze:
             return m.group(0)
         zaehler["bilder"] += 1
         b64 = base64.b64encode(inhalt).decode()
@@ -639,6 +646,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
     bestand = Seitenbestand(out / SEITEN_BESTAND)
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}
+    grenze = bild_max()
     gesehen = set()
     for s in sites:
         try:
@@ -681,7 +689,8 @@ def seiten_lauf(graph, out, sites, fehl=0):
             ziel = out / rel
             ziel.parent.mkdir(parents=True, exist_ok=True)
             html = render_page(voll, voll.get("canvasLayout"))
-            html = bilder_einbetten(graph, html, s.get("host") or "", zaehler)
+            html = bilder_einbetten(graph, html, s.get("host") or "", zaehler,
+                                    grenze)
             export_util.schreibe_atomar(ziel, html)
             bestand.eintraege[sid] = {"rel": rel, "etag": etag}
             neu += 1

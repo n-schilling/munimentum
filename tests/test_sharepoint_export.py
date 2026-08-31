@@ -472,10 +472,13 @@ def test_bilder_einbetten_laesst_bei_fehler_den_link_stehen():
 
 
 def test_bilder_einbetten_ueberspringt_zu_grosse():
-    g = _BildGraph(inhalt=b"x" * (sp.BILD_MAX + 1))
+    g = _BildGraph(inhalt=b"x" * 9)
     z = {"bilder": 0, "fehl": 0}
-    aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z)
+    aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z, grenze=8)
     assert 'src="/a/b.png"' in aus and z == {"bilder": 0, "fehl": 0}
+    # 0 heißt ohne Grenze
+    aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z, grenze=0)
+    assert "data:image/png" in aus
 
 
 def test_webpart_mit_imagesources_wird_zum_img():

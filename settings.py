@@ -85,6 +85,8 @@ VORGABEN = {
     # Site pages as HTML – its own list: pages and libraries rarely overlap.
     "sharepoint_pages_enabled": False,
     "sharepoint_pages_urls": "",
+    # Embed images up to this size; larger ones stay links. 0 = no limit.
+    "sharepoint_pages_image_max_mb": 4,
     # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
     # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
     # sein und nicht das, was beim ersten Start zufällig angehakt war.

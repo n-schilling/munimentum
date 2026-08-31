@@ -518,6 +518,7 @@ def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
     assert [s["key"] for s in steps] == ["sharepoint_pages"]
     assert "--pages" in steps[0]["argv"]
     assert steps[0]["env"]["SHAREPOINT_PAGES_URLS"].startswith("https://")
+    assert steps[0]["env"]["SHAREPOINT_PAGES_IMAGE_MAX_MB"] == "4"
     assert steps[0]["corpus"] is True
 
 
