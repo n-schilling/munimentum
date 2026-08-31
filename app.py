@@ -2086,8 +2086,8 @@ class App:
         # a source below its interval is skipped with a clear log line.
         kadenzen = self.cfg.get("sync_cadence") or {}
         angefragt = {"onedrive": onedrive, "teams": teams}
-        for dienst, label in (("onedrive", "job.step.onedrive"),
-                              ("teams", "job.step.teams")):
+        for dienst, dienst_label in (("onedrive", "job.step.onedrive"),
+                                     ("teams", "job.step.teams")):
             kadenz = kadenzen.get(dienst) or "always"
             if kadenz == "always" or not angefragt[dienst]:
                 continue
@@ -2095,7 +2095,7 @@ class App:
                 continue
             angefragt[dienst] = False
             self.jobs.logk("srv.cadence.skip", "info",
-                           step={"k": label, "v": {}},
+                           step={"k": dienst_label, "v": {}},
                            cadence={"k": f"cadence.{kadenz}", "v": {}})
         onedrive, teams = angefragt["onedrive"], angefragt["teams"]
         braucht_zugang = (outlook or teams or onedrive or check

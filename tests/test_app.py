@@ -1356,16 +1356,22 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
 
     def fake_build(cfg, **kw):
         gebaut.update(kw)
-        return []
+        return [{"key": "outlook", "label": "job.step.outlook", "argv": [],
+                 "env": {}}]
 
-    a.jobs.start = lambda *args, **kw: True
+    gestartet = {}
+    a.jobs.start = (lambda steps, label, **kw:
+                    gestartet.update(label=label) or True)
     alt_build = app_mod.build_steps
     app_mod.build_steps = fake_build
     try:
-        a.launch(outlook=True, onedrive=True)
+        a.launch(outlook=True, onedrive=True, label="job.export")
     finally:
         app_mod.build_steps = alt_build
     assert gebaut["onedrive"] is False and gebaut["outlook"] is True
+    # The gate's loop variable must not shadow the run label – every run
+    # was suddenly called "Teams export".
+    assert gestartet["label"] == "job.export"
     zeilen = [z for z in a.jobs.lines
               if isinstance(z.get("text"), dict)
               and z["text"].get("k") == "srv.cadence.skip"]
