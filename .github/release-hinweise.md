@@ -13,8 +13,8 @@ permission; the token wizard lists it.
 (news included) of the listed sites and all their subsites become standalone
 HTML files — text kept, images embedded, other web parts as named
 placeholders — incremental,
-with tombstones for deleted pages, and full-text searchable under their own
-source "Pages".
+with tombstones for deleted pages, full-text searchable under their own
+source, and covered by the completeness check.
 
 **A file browser joins the search views.** OneDrive and each SharePoint
 library, folder by folder straight from the index: originals one click away,

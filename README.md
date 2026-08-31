@@ -138,8 +138,9 @@ outright, which is the one question an archive should answer about itself.
 Below that: attachments by file type, the largest single files, and who you
 exchange the most with.
 
-On request there is also a completeness check against Microsoft: what it counts
-per folder against what is here, for both the mailbox and the drive.
+On request there is also a completeness check against Microsoft: what it
+counts against what is here — per mailbox folder, per mirrored drive, and per
+site for the exported SharePoint pages.
 
 **Runs** keeps the history of every export: when it ran, scheduled or by hand,
 which elements were enabled, how long each step took and what it produced —
