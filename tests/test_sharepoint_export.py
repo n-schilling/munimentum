@@ -345,3 +345,90 @@ def test_zwei_sites_gleichen_namens_teilen_keinen_ordner(capsys):
     assert fehl == 0 and len(drives) == 2
     ziele = {str(sp.drive_ziel("out", d)) for d in drives}
     assert len(ziele) == 2
+
+
+# ---------------------------------------------------------------------------
+# Site pages: rendering, incremental run, tombstones
+# ---------------------------------------------------------------------------
+def test_render_page_haelt_text_und_benennt_platzhalter():
+    layout = {"horizontalSections": [{"columns": [{"webparts": [
+        {"@odata.type": "#microsoft.graph.textWebPart",
+         "innerHtml": "<p>Hallo <b>Welt</b></p>"},
+        {"@odata.type": "#microsoft.graph.standardWebPart",
+         "data": {"title": "Quick Links"}}]}]}],
+        "verticalSection": {"webparts": [
+            {"@odata.type": "#microsoft.graph.textWebPart",
+             "innerHtml": "<p>Seitenleiste</p>"}]}}
+    html = sp.render_page({"title": "Start <x>", "lastModifiedDateTime":
+                           "2026-08-01T00:00:00Z"}, layout)
+    assert "Hallo <b>Welt</b>" in html and "Seitenleiste" in html
+    assert "[Quick Links]" in html
+    assert "<title>Start &lt;x></title>" in html
+
+
+class _SeitenGraph:
+    def __init__(self):
+        self.seiten = [{"id": "p1", "name": "Home.aspx", "title": "Home",
+                        "eTag": "e1"}]
+        self.layout = {"horizontalSections": [{"columns": [{"webparts": [
+            {"@odata.type": "#microsoft.graph.textWebPart",
+             "innerHtml": "<p>Inhalt der Startseite</p>"}]}]}]}
+        self.detailabrufe = 0
+
+    def paged(self, url, params=None):
+        assert "/pages/microsoft.graph.sitePage" in url
+        yield from self.seiten
+
+    def get(self, url):
+        self.detailabrufe += 1
+        s = dict(self.seiten[0])
+        s["canvasLayout"] = self.layout
+        return s
+
+
+def test_seiten_lauf_schreibt_und_ueberspringt(tmp_path, capsys):
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"]}]
+    assert sp.seiten_lauf(g, tmp_path, sites) == 1
+    dateien = list(tmp_path.rglob("*.html"))
+    assert len(dateien) == 1 and dateien[0].parent.name == "Team X"
+    assert "Inhalt der Startseite" in dateien[0].read_text(encoding="utf-8")
+
+    # Zweiter Lauf, gleicher eTag: kein Detailabruf, nichts neu.
+    capsys.readouterr()
+    assert sp.seiten_lauf(g, tmp_path, sites) == 0
+    assert g.detailabrufe == 1
+    e = progress.lies_ergebnis(
+        [z for z in capsys.readouterr().out.splitlines()
+         if progress.lies_ergebnis(z)][0])
+    assert e["new"] == 0 and e["unchanged"] == 1
+
+
+def test_seiten_lauf_setzt_grabsteine(tmp_path, capsys):
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"]}]
+    sp.seiten_lauf(g, tmp_path, sites)
+    g.seiten = []                                   # Seite bei Microsoft weg
+    sp.seiten_lauf(g, tmp_path, sites)
+    weg = sp.drive_mirror.lies_verschwunden(tmp_path / sp.drive_mirror.GONE_FILE)
+    assert len(weg) == 1 and next(iter(weg)).startswith("Team X/")
+    # Die Datei selbst bleibt liegen – dieselbe Zusage wie überall.
+    assert list(tmp_path.rglob("*.html"))
+
+
+def test_resolve_page_sites_steigt_ab_und_dedupliziert(capsys):
+    class G:
+        def get(self, url):
+            assert "/sites/firma.sharepoint.com:/sites/TeamX" in url
+            return {"id": "s1", "displayName": "Team X"}
+
+        def paged(self, url, params=None):
+            if "/sites/s1/sites" in url:
+                yield {"id": "s2", "displayName": "Unter"}
+            elif "/sites/s2/sites" in url:
+                return
+    sites, fehl = sp.resolve_page_sites(
+        G(), ["https://firma.sharepoint.com/sites/TeamX",
+              "https://firma.sharepoint.com/sites/TeamX"])
+    assert fehl == 0
+    assert [s["pfad"] for s in sites] == [["Team X"], ["Team X", "Unter"]]

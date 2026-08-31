@@ -219,6 +219,7 @@ TEAMS_DIR = settings.TEAMS_DIR
 OUTLOOK_DIR = settings.OUTLOOK_DIR
 ONEDRIVE_DIR = settings.ONEDRIVE_DIR
 SHAREPOINT_DIR = settings.SHAREPOINT_DIR
+SHAREPOINT_PAGES_DIR = settings.SHAREPOINT_PAGES_DIR
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
 
@@ -574,6 +575,7 @@ def export_status(cfg):
     outlook = BASE / OUTLOOK_DIR
     onedrive = BASE / ONEDRIVE_DIR
     sharepoint = BASE / SHAREPOINT_DIR
+    seiten = BASE / SHAREPOINT_PAGES_DIR
     return {
         "teams": {"dir": str(teams), "exists": teams.is_dir(),
                   "last_run": _mtime_iso(teams / "export_state.json")},
@@ -587,6 +589,8 @@ def export_status(cfg):
         # One inventory per mirrored library – the newest one dates the run.
         "sharepoint": {"dir": str(sharepoint), "exists": sharepoint.is_dir(),
                        "last_run": _sharepoint_stand(sharepoint)},
+        "pages": {"dir": str(seiten), "exists": seiten.is_dir(),
+                  "last_run": _mtime_iso(seiten / "seiten.tsv")},
     }
 
 
@@ -753,7 +757,8 @@ def kennzahlen(cfg):
     for schluessel, ordner in (("teams", TEAMS_DIR),
                                ("outlook", OUTLOOK_DIR),
                                ("onedrive", ONEDRIVE_DIR),
-                               ("sharepoint", SHAREPOINT_DIR)):
+                               ("sharepoint", SHAREPOINT_DIR),
+                               ("pages", SHAREPOINT_PAGES_DIR)):
         out["groesse"][schluessel] = ordner_groesse(BASE / ordner)
     out["groesse"]["index"] = ordner_groesse(BASE / STORE_DIR)
     if not out["exists"]:
@@ -800,7 +805,8 @@ def kennzahlen(cfg):
         ({"quelle": s, "bytes": n, "pfad": pfad}
          for s, ordner in (("teams", TEAMS_DIR), ("outlook", OUTLOOK_DIR),
                            ("onedrive", ONEDRIVE_DIR),
-                           ("sharepoint", SHAREPOINT_DIR))
+                           ("sharepoint", SHAREPOINT_DIR),
+                           ("pages", SHAREPOINT_PAGES_DIR))
          for n, pfad in groesste_dateien(BASE / ordner)),
         key=lambda x: -x["bytes"])[:GROESSTE_N]
     return out
@@ -932,7 +938,7 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
 # in analytics_skip, der Arbeitgeber im Tenant. Im Bericht steht nur, DASS sie
 # verstellt sind und in welchem Umfang, nie der Wert selbst.
 _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
-                  "sharepoint_urls"}
+                  "sharepoint_urls", "sharepoint_pages_urls"}
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 _NUR_GESETZT = {"client_id", "tenant"}
 # Stehen schon als eigene Zeile im Bericht – nicht doppelt aufführen.
@@ -996,6 +1002,8 @@ def systemangaben(status, lang=None):
         kats.append("onedrive")
     if cfg.get("sharepoint_enabled"):
         kats.append("sharepoint")
+    if cfg.get("sharepoint_pages_enabled"):
+        kats.append("pages")
     angaben = [
         zeile("version", f"{version.VERSION} ({art})"),
         zeile("os", f"{platform.platform()} / {platform.machine()}"),
@@ -1115,7 +1123,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 check=False, sync_folders=False, onedrive=False,
                 sync_onedrive=False, check_onedrive=False,
                 sync_calendars=False, sharepoint=False,
-                sync_sharepoint=False, check_sharepoint=False):
+                sync_sharepoint=False, check_sharepoint=False,
+                sharepoint_pages=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -1164,6 +1173,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "argv": script_argv("sharepoint_export", SHAREPOINT_DIR),
             "env": {**base_env, **_sharepoint_env(cfg)},
         })
+    if sharepoint_pages:
+        steps.append({
+            "key": "sharepoint_pages", "label": "job.step.pages", "corpus": True,
+            "argv": script_argv("sharepoint_export", "--pages",
+                                SHAREPOINT_PAGES_DIR),
+            "env": {**base_env, "SHAREPOINT_PAGES_URLS":
+                    str(cfg.get("sharepoint_pages_urls") or "")},
+        })
     cats = _clean_categories(cfg["teams_categories"],
                              ["1on1", "group", "meeting", "channels"])
     if teams and cats:
@@ -1179,6 +1196,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     if index:
         argv = script_argv("rag_index", TEAMS_DIR, OUTLOOK_DIR,
                            ONEDRIVE_DIR, "--sharepoint", SHAREPOINT_DIR,
+                           "--pages", SHAREPOINT_PAGES_DIR,
                            "--store", STORE_DIR, "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
                            "--batch", cfg.get("index_batch", 128))
@@ -1608,6 +1626,9 @@ class Scheduler(threading.Thread):
                                                 and cfg.get("onedrive_enabled")),
                                   sharepoint=bool(plan.get("sharepoint", True)
                                                   and cfg.get("sharepoint_enabled")),
+                                  sharepoint_pages=bool(
+                                      plan.get("sharepoint", True)
+                                      and cfg.get("sharepoint_pages_enabled")),
                                   index=plan.get("index", True),
                                   calendar=kalender,
                                   reconstruct=None if mit_mails else False,
@@ -1778,6 +1799,7 @@ class SearchBridge:
                 outlook_dir=str(BASE / OUTLOOK_DIR),
                 onedrive_dir=str(BASE / ONEDRIVE_DIR),
                 sharepoint_dir=str(BASE / SHAREPOINT_DIR),
+                pages_dir=str(BASE / SHAREPOINT_PAGES_DIR),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
@@ -1813,7 +1835,8 @@ class App:
         # wizard asks this list which permissions the run will need.
         if self.cfg.get("onedrive_enabled"):
             kats.append("files")
-        if self.cfg.get("sharepoint_enabled"):
+        if (self.cfg.get("sharepoint_enabled")
+                or self.cfg.get("sharepoint_pages_enabled")):
             kats.append("sites")
         return kats
 
@@ -2025,6 +2048,7 @@ class App:
                check=False, sync_folders=False, onedrive=False,
                sync_onedrive=False, check_onedrive=False, sync_calendars=False,
                sharepoint=False, sync_sharepoint=False, check_sharepoint=False,
+               sharepoint_pages=False,
                origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
@@ -2035,6 +2059,7 @@ class App:
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
         braucht_zugang = (outlook or teams or onedrive or check
                           or sharepoint or sync_sharepoint or check_sharepoint
+                          or sharepoint_pages
                           or sync_folders or sync_onedrive or check_onedrive
                           or sync_calendars)
         token = read_token() if braucht_zugang else ""
@@ -2056,6 +2081,7 @@ class App:
                             sharepoint=sharepoint,
                             sync_sharepoint=sync_sharepoint,
                             check_sharepoint=check_sharepoint,
+                            sharepoint_pages=sharepoint_pages,
                             sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
@@ -2071,6 +2097,7 @@ class App:
                                              "channels"]) if teams else []),
                 "onedrive": bool(onedrive),
                 "sharepoint": bool(sharepoint),
+                "sharepoint_pages": bool(sharepoint_pages),
             },
             "semantic": bool(index and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
@@ -2285,6 +2312,7 @@ class Handler(BaseHTTPRequestHandler):
                     sync_onedrive=bool(data.get("sync_onedrive")),
                     check_onedrive=bool(data.get("check_onedrive")),
                     sharepoint=bool(data.get("sharepoint")),
+                    sharepoint_pages=bool(data.get("sharepoint_pages")),
                     sync_sharepoint=bool(data.get("sync_sharepoint")),
                     check_sharepoint=bool(data.get("check_sharepoint")),
                     embeddings=data.get("embeddings"),
@@ -2412,7 +2440,8 @@ class Handler(BaseHTTPRequestHandler):
                     "calendar_reconstruct", "ollama_enabled", "index_semantic",
                     # Fehlte hier, seit es den Haken gibt: der Zustand ging an
                     # den Lauf, überlebte aber keinen Neuaufbau der Seite.
-                    "onedrive_enabled", "sharepoint_enabled"):
+                    "onedrive_enabled", "sharepoint_enabled",
+                    "sharepoint_pages_enabled"):
             if key in data:
                 cfg[key] = bool(data[key])
         # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
@@ -2424,10 +2453,11 @@ class Handler(BaseHTTPRequestHandler):
         if "folder_rules" in data:
             cfg["folder_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["folder_rules"] or "")))
-        if "sharepoint_urls" in data:
-            cfg["sharepoint_urls"] = "\n".join(
-                z.strip() for z in str(data["sharepoint_urls"] or "").splitlines()
-                if z.strip())
+        for key in ("sharepoint_urls", "sharepoint_pages_urls"):
+            if key in data:
+                cfg[key] = "\n".join(
+                    z.strip() for z in str(data[key] or "").splitlines()
+                    if z.strip())
         for key in ("sharepoint_types_include", "sharepoint_types_exclude"):
             if key in data:
                 cfg[key] = ", ".join(
@@ -3479,6 +3509,8 @@ main{padding-bottom:60px}
         <strong class="small" data-i18n="export.sharepoint">SharePoint</strong>
         <label class="chk"><input type="checkbox" id="c-sharepoint_enabled" onchange="saveCats()">
           <span data-i18n="export.cat.sharepoint">SharePoint-Bibliotheken</span></label>
+        <label class="chk"><input type="checkbox" id="c-sharepoint_pages_enabled" onchange="saveCats()">
+          <span data-i18n="export.cat.pages">Site-Seiten</span></label>
         <p class="small muted" id="sp-export-note" style="max-width:240px;margin:4px 0 0"></p>
       </div>
     </div>
@@ -3564,6 +3596,7 @@ main{padding-bottom:60px}
         <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
         <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
         <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
+        <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
       </select>
       <label class="small feld"><span data-i18n="search.from">von</span>
         <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
@@ -3736,6 +3769,11 @@ main{padding-bottom:60px}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span></span></div>
       <div class="feldzeile breit">
         <textarea id="c-sharepoint_urls" style="min-height:70px"
+          placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span></span></div>
+      <div class="feldzeile breit">
+        <textarea id="c-sharepoint_pages_urls" style="min-height:50px"
           placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" style="min-width:220px" placeholder="pdf, docx, xlsx"></div>
@@ -4359,6 +4397,7 @@ function renderStatus(s){
     fill('cat-teams', ['1on1','group','meeting','channels'], s.config.teams_categories, 't');
     el('c-onedrive_enabled').checked = !!s.config.onedrive_enabled;
     el('c-sharepoint_enabled').checked = !!s.config.sharepoint_enabled;
+    el('c-sharepoint_pages_enabled').checked = !!s.config.sharepoint_pages_enabled;
     fuelleSprachen();
     el('s-enabled').checked = s.config.schedule.enabled;
     el('s-interval').value = s.config.schedule.interval_minutes;
@@ -4380,6 +4419,7 @@ function renderStatus(s){
   parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
   parts.push(t('export.state.onedrive', {when: wann(ex.onedrive && ex.onedrive.last_run)}));
   parts.push(t('export.state.sharepoint', {when: wann(ex.sharepoint && ex.sharepoint.last_run)}));
+  parts.push(t('export.state.pages', {when: wann(ex.pages && ex.pages.last_run)}));
   parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
   el('export-state').textContent = parts.join('  ·  ');
   // Die Sicht „Gelöschtes“ und der Verlauf brauchen einen Index, der beides
@@ -4468,7 +4508,8 @@ function saveCats(){
   merke('flow.save', 'export');
   post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
                        onedrive_enabled: el('c-onedrive_enabled').checked,
-                       sharepoint_enabled: el('c-sharepoint_enabled').checked}).then(refresh);
+                       sharepoint_enabled: el('c-sharepoint_enabled').checked,
+                       sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked}).then(refresh);
 }
 
 /* ---------- Läufe ---------- */
@@ -4484,11 +4525,12 @@ function runExport(){
   var o = checked('o').length > 0, tm = checked('t').length > 0;
   var od = el('c-onedrive_enabled').checked;
   var sp = el('c-sharepoint_enabled').checked;
-  if(!o && !tm && !od && !sp){ alert(t('export.nothing')); return; }
+  var sps = el('c-sharepoint_pages_enabled').checked;
+  if(!o && !tm && !od && !sp && !sps){ alert(t('export.nothing')); return; }
   // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
   // gelöschter Termine stammen ausschließlich aus dem Postfach.
-  run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, index:true, calendar:o},
-      t('job.export'));
+  run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
+       index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Fortschritt ----------
@@ -5428,6 +5470,7 @@ function runElements(r){
     parts.push('Teams' + detail(e.teams, ['1on1', 'group', 'meeting', 'channels']));
   if(e.onedrive) parts.push('OneDrive (' + t('ana.runs.all') + ')');
   if(e.sharepoint) parts.push('SharePoint (' + t('ana.runs.all') + ')');
+  if(e.sharepoint_pages) parts.push(t('search.source.pages'));
   (r.steps || []).forEach(function(s){
     if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
   });
@@ -5461,7 +5504,7 @@ function renderRuns(runs){
       .map(function(k){ return '<th>' + esc(t('ana.runs.col.' + k)) + '</th>'; })
       .join('') + '</tr></thead><tbody>';
   var QUELLE = {outlook: 'Outlook', teams: 'Teams', onedrive: 'OneDrive',
-                sharepoint: 'SharePoint'};
+                sharepoint: 'SharePoint', sharepoint_pages: 'Pages'};
   runs.forEach(function(r, i){
     var dauer = (r.finished_at && r.started_at) ? r.finished_at - r.started_at : null;
     // "New" counts the exports only – index and calendar report their own
@@ -5658,7 +5701,8 @@ function zeigeAnalytics(a){
                t(klick ? 'ana.gone.hint.klick' : 'ana.gone.hint'), klick) +
     kachelHtml(zeitraum, t('ana.period')) +
     kachelHtml(bytes((gesamt.teams || 0) + (gesamt.outlook || 0) +
-                     (gesamt.onedrive || 0) + (gesamt.sharepoint || 0)), t('ana.size'),
+                     (gesamt.onedrive || 0) + (gesamt.sharepoint || 0) +
+                     (gesamt.pages || 0)), t('ana.size'),
                t('ana.size.hint', {index: bytes(gesamt.index)}));
   zeigeVerlaeufe(a);
   zeigeBericht(a.vollstaendigkeit);
@@ -6035,6 +6079,7 @@ function fuelleEinstellungen(cfg){
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-notifications').value = cfg.notifications || 'errors';
   el('c-sharepoint_urls').value = cfg.sharepoint_urls || '';
+  el('c-sharepoint_pages_urls').value = cfg.sharepoint_pages_urls || '';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -6051,7 +6096,8 @@ function speichereEinstellungen(){
               analytics_skip: el('c-analytics_skip').value,
               language: el('c-language').value,
               notifications: el('c-notifications').value,
-              sharepoint_urls: el('c-sharepoint_urls').value};
+              sharepoint_urls: el('c-sharepoint_urls').value,
+              sharepoint_pages_urls: el('c-sharepoint_pages_urls').value};
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });

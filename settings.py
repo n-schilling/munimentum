@@ -34,6 +34,7 @@ TEAMS_DIR = "teams_export"
 OUTLOOK_DIR = "outlook_export"
 ONEDRIVE_DIR = "onedrive_export"
 SHAREPOINT_DIR = "sharepoint_export"
+SHAREPOINT_PAGES_DIR = "sharepoint_pages"
 STORE_DIR = "rag_store"
 
 # Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
@@ -81,6 +82,9 @@ VORGABEN = {
     "sharepoint_types_include": "",
     "sharepoint_types_exclude": "",
     "sharepoint_max_mb": 0,
+    # Site pages as HTML – its own list: pages and libraries rarely overlap.
+    "sharepoint_pages_enabled": False,
+    "sharepoint_pages_urls": "",
     # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
     # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
     # sein und nicht das, was beim ersten Start zufällig angehakt war.

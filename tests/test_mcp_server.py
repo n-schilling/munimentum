@@ -553,8 +553,8 @@ def test_read_source_file_rejects_symlink_escape(state):
 
 def test_read_source_file_invalid_root_and_missing_file(state):
     out = mcp_server.read_source_file("kalender", "termin.ics")
-    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive' "
-           "or 'sharepoint'."}
+    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
+           "'sharepoint' or 'pages'."}
     out = mcp_server.read_source_file("teams", "1on1/fehlt.html")
     assert out == {"error": "File not found: 1on1/fehlt.html"}
     out = mcp_server.read_source_file("teams", "")  # Verzeichnis, keine Datei
@@ -583,8 +583,8 @@ def test_source_resource_rejects_traversal(state):
 def test_tools_without_initialized_state(empty_state):
     # read_source_file scheitert kontrolliert (kein Export-Verzeichnis bekannt) …
     out = mcp_server.read_source_file("teams", "x.html")
-    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive' "
-           "or 'sharepoint'."}
+    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
+           "'sharepoint' or 'pages'."}
     # … die DB-gestützten Tools werfen mangels STATE["db"] einen KeyError
     # (aktuelles Verhalten – hier festgenagelt)
     with pytest.raises(KeyError):

@@ -511,6 +511,16 @@ def test_api_files_ohne_index_meldet_den_grund(sandbox, server):
         assert r["error"]["k"] == "srv.noindex"
 
 
+def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
+    cfg = app_mod.load_config()
+    cfg["sharepoint_pages_urls"] = "https://firma.sharepoint.com/sites/TeamX"
+    steps = app_mod.build_steps(cfg, sharepoint_pages=True)
+    assert [s["key"] for s in steps] == ["sharepoint_pages"]
+    assert "--pages" in steps[0]["argv"]
+    assert steps[0]["env"]["SHAREPOINT_PAGES_URLS"].startswith("https://")
+    assert steps[0]["corpus"] is True
+
+
 def test_index_schritt_kennt_den_sharepoint_ordner(sandbox):
     cfg = app_mod.load_config()
     steps = app_mod.build_steps(cfg, index=True)
@@ -6321,7 +6331,9 @@ def test_jede_einstellung_hat_eine_erklaerung():
     die niemand anfasst – oder schlimmer, blind umstellt."""
     seite = app_mod.PAGE
     abschnitt = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</section>\n</main>")]
-    zeilen = abschnitt.count('class="feldzeile')
+    # „feldzeile breit" ist die Textarea unter ihrer Titelzeile – die Erklärung
+    # sitzt am Titel, nicht am Eingabefeld.
+    zeilen = abschnitt.count('class="feldzeile "')
     mit_info = abschnitt.count('class="info"')
     assert zeilen >= 25, f"nur {zeilen} Einstellungszeilen gefunden"
     assert mit_info >= zeilen, f"{zeilen} Zeilen, aber nur {mit_info} Erklärungen"
@@ -6442,7 +6454,9 @@ def test_jedes_feld_ist_auch_gelistet():
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
                  "onedrive_enabled",  # steht im Reiter „Exportieren", saveCats()
                  "sharepoint_enabled",   # ebenso, saveCats()
-                 "sharepoint_urls"}      # mehrzeiliger Text, eigene Behandlung
+                 "sharepoint_pages_enabled",  # ebenso, saveCats()
+                 "sharepoint_urls",      # mehrzeiliger Text, eigene Behandlung
+                 "sharepoint_pages_urls"}     # ebenso
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"

@@ -9,6 +9,12 @@ preview** tells you per library what a run would fetch — files and megabytes �
 before anything is downloaded. Reading sites needs the Sites.Read.All
 permission; the token wizard lists it.
 
+**Site pages are exported as HTML.** A separate URL list; the modern pages
+(news included) of the listed sites and all their subsites become standalone
+HTML files — text kept, other web parts as named placeholders — incremental,
+with tombstones for deleted pages, and full-text searchable under their own
+source "Pages".
+
 **A file browser joins the search views.** OneDrive and each SharePoint
 library, folder by folder straight from the index: originals one click away,
 deleted files marked, and *Search here* turns the current folder into a

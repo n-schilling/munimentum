@@ -774,8 +774,43 @@ def load_sharepoint(root_dir):
     return recs
 
 
+def load_pages(root_dir):
+    """One record per rendered site page – full text, straight from the HTML.
+
+    Unlike the file mirrors, the content is right there: the pages export
+    writes the text web parts into the file, so the page body goes into the
+    index and the full-text search reads SharePoint pages like mail.
+    """
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    weg = lies_verschwunden(root)
+    recs = []
+    for p in sorted(root.rglob("*.html")):
+        rel = p.relative_to(root).as_posix()
+        try:
+            roh = p.read_text(encoding="utf-8", errors="replace")
+            ts = p.stat().st_mtime
+        except OSError:
+            continue
+        m = re.search(r"<title>(.*?)</title>", roh, re.S | re.I)
+        titel = collapse(html_lib.unescape(m.group(1))) if m else p.stem
+        satz = {
+            "uid": f"pages:{rel}:0", "src": "pages", "root": "pages",
+            "rel": rel, "who": "", "ppl": "", "ts": ts,
+            "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+            "title": titel,
+            "ctx": rel.rsplit("/", 1)[0] if "/" in rel else "",
+            "text": collapse(strip_html(roh)),
+        }
+        if rel in weg:
+            satz["gone"] = weg[rel]
+        recs.append(satz)
+    return recs
+
+
 def load_records(teams_dir, outlook_dir, onedrive_dir=None,
-                 sharepoint_dir=None):
+                 sharepoint_dir=None, pages_dir=None):
     recs = []
     if teams_dir and Path(teams_dir).is_dir():
         recs += load_teams(teams_dir)
@@ -787,6 +822,8 @@ def load_records(teams_dir, outlook_dir, onedrive_dir=None,
         recs += load_onedrive(onedrive_dir)   # gespiegelte Dateien
     if sharepoint_dir and Path(sharepoint_dir).is_dir():
         recs += load_sharepoint(sharepoint_dir)
+    if pages_dir and Path(pages_dir).is_dir():
+        recs += load_pages(pages_dir)              # gerenderte Site-Seiten
     return recs
 
 

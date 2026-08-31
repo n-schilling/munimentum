@@ -658,3 +658,20 @@ def test_load_records_nimmt_den_sharepoint_ordner_mit(tmp_path):
     recs = corpus.load_records(None, None,
                                sharepoint_dir=tmp_path / "sharepoint_export")
     assert [r["root"] for r in recs] == ["sharepoint"]
+
+
+def test_load_pages_liest_titel_text_und_grabstein(tmp_path):
+    (tmp_path / "Team X").mkdir()
+    (tmp_path / "Team X" / "Home.html").write_text(
+        "<!doctype html><html><head><title>Start &amp; Ziel</title></head>"
+        "<body><h1>Start</h1><p>Inhalt der Seite</p></body></html>",
+        encoding="utf-8")
+    (tmp_path / "verschwunden.tsv").write_text(
+        "Team X/Home.html\t2026-04-01T00:00:00+00:00\n", encoding="utf-8")
+    recs = corpus.load_pages(tmp_path)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["src"] == "pages" and r["root"] == "pages"
+    assert r["title"] == "Start & Ziel"
+    assert "Inhalt der Seite" in r["text"]
+    assert r["gone"].startswith("2026-04-01")

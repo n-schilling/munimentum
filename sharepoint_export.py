@@ -19,6 +19,13 @@ parallel requests). Special runs: --folders syncs the folder trees,
 mirror run would fetch – count, size, and what the filters leave out
 (the size preview) – plus what is missing locally.
 
+--pages is a separate export with its own configuration
+(SHAREPOINT_PAGES_URLS): the modern site pages of the listed sites and all
+their subsites, rendered to standalone HTML from the Graph Pages API
+(canvasLayout). Text web parts keep their content, everything else becomes a
+named placeholder; classic wiki pages are not part of that API. Incremental
+via eTag, deleted pages get the usual tombstone note.
+
 Access needs Sites.Read.All. A pasted key without that scope does not kill
 the run: the affected site is reported and skipped.
 
@@ -59,6 +66,8 @@ RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 
 OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
+OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
+SEITEN_BESTAND = "seiten.tsv"
 BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
@@ -71,13 +80,22 @@ def workers():
     return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
 
 
-def configured_urls():
-    """One URL per line, environment over file; blanks and comments drop out."""
-    roh = os.environ.get("SHAREPOINT_URLS")
+def _url_liste(env_name, key):
+    roh = os.environ.get(env_name)
     if roh is None:
-        roh = settings.value("sharepoint_urls", "") or ""
+        roh = settings.value(key, "") or ""
     zeilen = [z.strip() for z in str(roh).splitlines()]
     return [z for z in zeilen if z and not z.startswith("#")]
+
+
+def configured_urls():
+    """One URL per line, environment over file; blanks and comments drop out."""
+    return _url_liste("SHAREPOINT_URLS", "sharepoint_urls")
+
+
+def pages_urls():
+    """The pages export has its own list – sites, not libraries."""
+    return _url_liste("SHAREPOINT_PAGES_URLS", "sharepoint_pages_urls")
 
 
 def _types(env_name, key):
@@ -456,6 +474,174 @@ def nur_pruefen(graph, out, drives, fehl=0):
     return bericht
 
 
+# ---------------------------------------------------------------------------
+# Site pages: rendered to HTML from the Graph Pages API
+# ---------------------------------------------------------------------------
+class Seitenbestand:
+    """page id -> (rel, etag). Same promise as the mirrors: what is recorded
+    here exists on disk in exactly that version."""
+
+    def __init__(self, pfad):
+        self.pfad = Path(pfad)
+        self.eintraege = {}
+        try:
+            for zeile in self.pfad.read_text(encoding="utf-8").splitlines():
+                teile = zeile.split("\t")
+                if len(teile) >= 3:
+                    self.eintraege[teile[0]] = {"rel": teile[1], "etag": teile[2]}
+        except OSError:
+            pass
+
+    def schreibe(self):
+        self.pfad.parent.mkdir(parents=True, exist_ok=True)
+        export_util.schreibe_atomar(self.pfad, "".join(
+            f'{k}\t{e["rel"]}\t{e["etag"]}\n'
+            for k, e in sorted(self.eintraege.items())))
+
+
+def resolve_page_sites(graph, urls):
+    """The sites behind the URLs plus all their subsites, depth first.
+
+    Returns ({"id", "name", "pfad"}…, failures); pfad is the folder chain the
+    rendered pages land in.
+    """
+    gefunden, fehl, gesehen = [], 0, set()
+
+    def absteigen(sid, pfad):
+        if sid in gesehen:
+            return
+        gesehen.add(sid)
+        gefunden.append({"id": sid, "pfad": pfad})
+        try:
+            unter = list(graph.paged(f"{GRAPH}/sites/{sid}/sites"))
+        except auth.TokenExpired:
+            raise
+        except Exception:
+            unter = []          # keine Unterseiten oder nicht gelistet – egal
+        for u in unter:
+            if u.get("id"):
+                absteigen(u["id"], pfad + [safe(u.get("displayName")
+                                                or u.get("name") or "Site", 80)])
+
+    for url in urls:
+        teile = url_teile(url)
+        if not teile:
+            progress.event("run.pages.site_failed", "err", url=url,
+                           error="invalid URL")
+            fehl += 1
+            continue
+        adresse, _ = teile
+        try:
+            site = graph.get(f"{GRAPH}/sites/{adresse}")
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.pages.site_failed", "err", url=url,
+                           error=f"{type(e).__name__}: {e}")
+            fehl += 1
+            continue
+        name = safe(site.get("displayName") or site.get("name") or adresse, 80)
+        absteigen(site["id"], [name])
+    return gefunden, fehl
+
+
+def _webpart_html(wp):
+    if str(wp.get("@odata.type", "")).endswith("textWebPart"):
+        return wp.get("innerHtml") or ""
+    titel = ((wp.get("data") or {}).get("title")
+             or wp.get("webPartType") or "web part")
+    return ('<p class="webpart">[' +
+            str(titel).replace("<", "&lt;") + "]</p>")
+
+
+def render_page(seite, layout):
+    """One standalone HTML file per page – content over fidelity.
+
+    Text web parts keep their HTML; everything else (lists, embeds, quick
+    links) becomes a named placeholder, the same stance the Teams export
+    takes with unloadable images. The file opens offline and indexes well."""
+    teile = []
+    for sec in (layout or {}).get("horizontalSections") or ():
+        for col in sec.get("columns") or ():
+            teile += [_webpart_html(wp) for wp in col.get("webparts") or ()]
+    vert = (layout or {}).get("verticalSection") or {}
+    teile += [_webpart_html(wp) for wp in vert.get("webparts") or ()]
+    titel = str(seite.get("title") or seite.get("name") or "Seite")
+    kopf = titel.replace("<", "&lt;")
+    stand = seite.get("lastModifiedDateTime") or ""
+    return ("<!doctype html><html><head><meta charset=\"utf-8\">"
+            f"<title>{kopf}</title></head><body>"
+            f"<h1>{kopf}</h1>"
+            f'<p class="meta">{stand}</p>'
+            + "\n".join(teile) + "</body></html>")
+
+
+def seiten_lauf(graph, out, sites, fehl=0):
+    out = Path(out)
+    bestand = Seitenbestand(out / SEITEN_BESTAND)
+    neu = unveraendert = fehler = 0
+    gesehen = set()
+    for s in sites:
+        try:
+            seiten = list(graph.paged(
+                f"{GRAPH}/sites/{s['id']}/pages/microsoft.graph.sitePage"))
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.pages.site_failed", "err",
+                           url="/".join(s["pfad"]),
+                           error=f"{type(e).__name__}: {e}")
+            fehl += 1
+            continue
+        progress.event("run.pages.site", name="/".join(s["pfad"]),
+                       n=len(seiten))
+        for seite in seiten:
+            sid = seite.get("id")
+            if not sid:
+                continue
+            gesehen.add(sid)
+            name = safe((seite.get("name") or "Seite").removesuffix(".aspx"),
+                        100, kennung=sid) + ".html"
+            rel = "/".join([*s["pfad"], name])
+            alt = bestand.eintraege.get(sid)
+            etag = seite.get("eTag") or seite.get("lastModifiedDateTime") or ""
+            if alt and alt["etag"] == etag and (out / alt["rel"]).is_file():
+                unveraendert += 1
+                continue
+            try:
+                voll = graph.get(
+                    f"{GRAPH}/sites/{s['id']}/pages/{sid}"
+                    "/microsoft.graph.sitePage?$expand=canvasLayout")
+            except auth.TokenExpired:
+                raise
+            except Exception as e:
+                fehler += 1
+                progress.event("run.pages.page_failed", "err", name=rel,
+                               error=f"{type(e).__name__}: {e}")
+                continue
+            ziel = out / rel
+            ziel.parent.mkdir(parents=True, exist_ok=True)
+            export_util.schreibe_atomar(
+                ziel, render_page(voll, voll.get("canvasLayout")))
+            bestand.eintraege[sid] = {"rel": rel, "etag": etag}
+            neu += 1
+        bestand.schreibe()
+    # Verschwundene Seiten: im Bestand, aber von keiner Site mehr gemeldet.
+    weg = [e["rel"] for k, e in bestand.eintraege.items() if k not in gesehen]
+    for k in [k for k in bestand.eintraege if k not in gesehen]:
+        del bestand.eintraege[k]
+    if weg:
+        jetzt = datetime.now(UTC).isoformat(timespec="seconds")
+        drive_mirror.schreibe_verschwunden(
+            out / drive_mirror.GONE_FILE,
+            drive_mirror.lies_verschwunden(out / drive_mirror.GONE_FILE),
+            weg, jetzt)
+    bestand.schreibe()
+    progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
+                      extra={"sites": len(sites), "gone": len(weg)})
+    return neu
+
+
 def main():
     argv = sys.argv[1:]
     if export_util.hilfe_gewuenscht(argv):
@@ -463,16 +649,25 @@ def main():
         return
     struktur = "--folders" in argv
     pruefen = "--check" in argv
+    seiten = "--pages" in argv
     argv = [a for a in argv if not a.startswith("--")]
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
-    urls = configured_urls()
+    out = Path(argv[0]) if argv else Path(OUT_PAGES if seiten else OUT_ROOT)
+    urls = pages_urls() if seiten else configured_urls()
     if not urls:
-        progress.event("run.sharepoint.none", "warn")
+        progress.event("run.pages.none" if seiten else "run.sharepoint.none",
+                       "warn")
         progress.ergebnis(0)
         return
     graph_client.konfiguriere(workers())
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
     try:
+        if seiten:
+            sites, fehl = resolve_page_sites(graph, urls)
+            if not sites:
+                progress.ergebnis(0, errors=fehl)
+                return
+            seiten_lauf(graph, out, sites, fehl)
+            return
         drives, fehl = resolve_drives(graph, urls)
         if not drives:
             progress.ergebnis(0, errors=fehl)

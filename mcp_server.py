@@ -179,7 +179,8 @@ _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
 _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
-                 "kalender": "Kalender", "kontakte": "Kontakte"}
+                 "pages": "Pages", "kalender": "Kalender",
+                 "kontakte": "Kontakte"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
@@ -236,8 +237,8 @@ def _hat_spalte(con, name):
 
 
 # Welche Quellen eine Ordnerauswahl anbieten – alle, deren ctx ein Pfad ist.
-_LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "kalender",
-            "teams", "kontakte")
+_LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
+            "kalender", "teams", "kontakte")
 
 
 def _quelle_cond(quelle):
@@ -651,10 +652,11 @@ def _resolve_source(source_root, rel):
     base = {"teams": STATE.get("teams_dir"),
             "outlook": STATE.get("outlook_dir"),
             "onedrive": STATE.get("onedrive_dir"),
-            "sharepoint": STATE.get("sharepoint_dir")}.get(source_root)
+            "sharepoint": STATE.get("sharepoint_dir"),
+            "pages": STATE.get("pages_dir")}.get(source_root)
     if not base:
-        return None, ("source_root must be 'teams', 'outlook', 'onedrive' "
-                      "or 'sharepoint'.")
+        return None, ("source_root must be 'teams', 'outlook', 'onedrive', "
+                      "'sharepoint' or 'pages'.")
     base = Path(base).resolve()
     target = (base / rel).resolve()
     if base != target and base not in target.parents:      # prevent path escape
@@ -708,7 +710,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             entries stay out. Ignored when date_from is given.
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
             "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors).
+            their contents are not indexed; "datei" still means both mirrors),
+            or "pages" (SharePoint site pages, full text).
         k: Number of results per page (default 12).
         offset: Results to skip, for pagination (default 0).
         mode: "auto" (hybrid if embeddings available, else lexical),
@@ -789,7 +792,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             entries stay out. Ignored when date_from is given.
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
             "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors).
+            their contents are not indexed; "datei" still means both mirrors),
+            or "pages" (SharePoint site pages, full text).
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
@@ -915,7 +919,8 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
     Args:
         source: One of "all", "teams", "outlook", "kalender", "kontakte",
             "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors).
+            their contents are not indexed; "datei" still means both mirrors),
+            or "pages" (SharePoint site pages, full text).
         contains: Optional. Only people whose name or email contains this text;
             `*` stands for any run of characters.
         limit: Max number of people to return, most frequent first (default 100).
@@ -1017,7 +1022,7 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
         rows = con.execute(
             f"SELECT ordner, COUNT(DISTINCT uid) FROM "
             f"(SELECT uid, src, root, {_TEAMS_OBERSTE} AS ordner FROM chunks "
-            f" WHERE src IN ('outlook', 'datei', 'kalender', 'teams', 'kontakte')"
+            f" WHERE src IN ('outlook', 'datei', 'pages', 'kalender', 'teams', 'kontakte')"
             f" AND ctx IS NOT NULL AND ctx != '') "
             f"WHERE 1=1 {wo} "
             f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
@@ -1092,6 +1097,7 @@ def corpus_stats() -> dict:
             "outlook_dir": STATE.get("outlook_dir"),
             "onedrive_dir": STATE.get("onedrive_dir"),
             "sharepoint_dir": STATE.get("sharepoint_dir"),
+            "pages_dir": STATE.get("pages_dir"),
         }
     finally:
         con.close()
@@ -1276,6 +1282,7 @@ def main():
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
     ap.add_argument("--onedrive", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--sharepoint", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--pages", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
     # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
@@ -1307,6 +1314,7 @@ def main():
     a.outlook = a.outlook or str(basis / settings.OUTLOOK_DIR)
     a.onedrive = a.onedrive or str(basis / settings.ONEDRIVE_DIR)
     a.sharepoint = a.sharepoint or str(basis / settings.SHAREPOINT_DIR)
+    a.pages = a.pages or str(basis / settings.SHAREPOINT_PAGES_DIR)
 
     # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
     # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
@@ -1350,6 +1358,7 @@ def main():
                  vector_dtype=str(V.dtype) if V is not None else None,
                  teams_dir=a.teams, outlook_dir=a.outlook,
                  onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
+                 pages_dir=a.pages,
                  embed_model=a.embed_model, ollama=a.ollama)
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None

@@ -72,7 +72,7 @@ One browser page with four tabs.
 ### Export data
 
 Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and channel
-chats; OneDrive files; SharePoint libraries — and start. Nothing is preselected: any one of these can
+chats; OneDrive files; SharePoint libraries and site pages — and start. Nothing is preselected: any one of these can
 mean tens of thousands of items. Every run fetches only what is new, so the
 second one takes minutes rather than hours. Deleted messages **stay in the
 archive** and get a marker; that is the point of keeping one.
@@ -92,6 +92,11 @@ large, filters come along: only certain file extensions, never certain ones, a
 size cap — and a **size preview** that enumerates without downloading and
 tells you per library what a run would fetch, in files and megabytes, before
 you commit. Reading sites needs the Sites.Read.All permission.
+
+**Site pages** are a separate export with their own URL list: the modern
+pages (news included) of the listed sites and all their subsites, rendered to
+standalone HTML — text kept, other web parts as named placeholders — and
+full-text searchable afterwards.
 
 ### Search data
 
