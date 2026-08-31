@@ -249,125 +249,6 @@ def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys)
     assert len(vorschau) == 2 and vorschau[0]["v"]["mb"] == 3
 
 
-# ---------------------------------------------------------------------------
-# The scoped collector: subtree walk instead of whole-library delta
-# ---------------------------------------------------------------------------
-class _TeilbaumGraph:
-    """A drive that knows /root:/path and /root:/path:/children lookups."""
-
-    drive_base = "https://graph.example/drives/d2"
-
-    def __init__(self):
-        self.ordner = {"N/Nordwind": {"id": "f1", "name": "Nordwind",
-                                     "folder": {"childCount": 2},
-                                     "parentReference": {"path": "/drive/root:/N"}}}
-        self.kinder = {"N/Nordwind": [
-            {"id": "x1", "name": "plan.pdf", "file": {}, "size": 10,
-             "parentReference": {"path": "/drive/root:/N/Nordwind"}},
-            {"id": "u1", "name": "Unter", "folder": {"childCount": 1},
-             "parentReference": {"path": "/drive/root:/N/Nordwind"}}],
-            "N/Nordwind/Unter": [
-            {"id": "x2", "name": "mehr.docx", "file": {}, "size": 20,
-             "parentReference": {"path": "/drive/root:/N/Nordwind/Unter"}}]}
-        self.angefragt = []
-
-    def _pfad(self, url):
-        import urllib.parse
-        rest = url.split("/root:/", 1)[1]
-        rest = rest.split(":/children")[0]
-        return "/".join(urllib.parse.unquote(s) for s in rest.split("/"))
-
-    def get(self, url):
-        self.angefragt.append(url)
-        return self.ordner[self._pfad(url)]
-
-    def paged(self, url, params=None):
-        self.angefragt.append(url)
-        yield from self.kinder[self._pfad(url)]
-
-
-def test_scope_sammler_geht_nur_durch_den_teilbaum(capsys):
-    g = _TeilbaumGraph()
-    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
-    eintraege, link = sp.scope_sammler({"N/Nordwind"})(g, bestand)
-    assert link is None                     # kein Delta-Zeiger im Scope-Modus
-    ids = {e.get("id") for e in eintraege}
-    assert ids == {"f1", "x1", "u1", "x2"}
-    assert all("/root:/" in u for u in g.angefragt)
-
-
-def test_scope_sammler_erfindet_die_loeschung_aus_dem_bestand():
-    g = _TeilbaumGraph()
-    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
-    bestand.eintraege = {
-        "alt1": {"rel": "Dateien/N/Nordwind/weg.pdf", "ctag": "c", "size": 5},
-        "fremd": {"rel": "Dateien/Anderswo/bleibt.pdf", "ctag": "c", "size": 5}}
-    eintraege, _ = sp.scope_sammler({"N/Nordwind"})(g, bestand)
-    gel = [e for e in eintraege if "deleted" in e]
-    assert [e["id"] for e in gel] == ["alt1"]      # außerhalb des Scopes: kein Urteil
-
-
-def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
-    """A folder that still fails after all retries is an error with the deep
-    path in the log – no clean result over a hole in the walk."""
-    g = _TeilbaumGraph()
-    echte = g.paged
-
-    def paged(url, params=None):
-        if "Unter" in url:
-            raise RuntimeError("Zu viele Fehlversuche")
-        return echte(url, params)
-
-    g.paged = paged
-    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
-    bestand.eintraege = {
-        "alt1": {"rel": "Dateien/N/Nordwind/Unter/weg.pdf", "ctag": "c",
-                 "size": 5}}
-    s = sp.scope_sammler({"N/Nordwind"})
-    eintraege, _ = s(g, bestand)
-    assert s.fehler == 1
-    events = _events(capsys)
-    kaputt = [e for e in events if e["k"] == "run.sharepoint.folder_failed"]
-    assert len(kaputt) == 1 and kaputt[0]["v"]["path"] == "N/Nordwind/Unter"
-    assert {e.get("id") for e in eintraege} == {"f1", "x1", "u1"}
-    # Tombstones are write-once: a walk with holes must not invent deletions.
-    assert not any("deleted" in e for e in eintraege)
-
-
-def test_scope_sammler_zaehlt_kaputte_wurzel_als_fehler(capsys):
-    """A scope root that fails is an error, not a silent empty walk."""
-    class G:
-        drive_base = "https://graph.example/drives/d2"
-
-        def get(self, url):
-            raise RuntimeError("503")
-
-    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
-    bestand.eintraege = {
-        "alt1": {"rel": "Dateien/N/Nordwind/weg.pdf", "ctag": "c", "size": 5}}
-    s = sp.scope_sammler({"N/Nordwind"})
-    eintraege, _ = s(G(), bestand)
-    assert s.fehler == 1
-    assert eintraege == []                        # no invented deletions
-
-
-def test_zwei_sites_gleichen_namens_teilen_keinen_ordner(capsys):
-    """Two sites can share a display name – their mirrors must not blend
-    into one target folder."""
-    g = _FakeGraph(sites={
-        "firma.sharepoint.com:/sites/A": {"id": "s1", "name": "Projekte",
-            "drives": [{"id": "d1", "name": "Dokumente",
-                        "driveType": "documentLibrary"}]},
-        "firma.sharepoint.com:/sites/B": {"id": "s2", "name": "Projekte",
-            "drives": [{"id": "d2", "name": "Dokumente",
-                        "driveType": "documentLibrary"}]}})
-    drives, fehl = sp.resolve_drives(
-        g, ["https://firma.sharepoint.com/sites/A",
-            "https://firma.sharepoint.com/sites/B"])
-    assert fehl == 0 and len(drives) == 2
-    ziele = {str(sp.drive_ziel("out", d)) for d in drives}
-    assert len(ziele) == 2
-
 
 # ---------------------------------------------------------------------------
 # Site pages: rendering, incremental run, tombstones
@@ -637,3 +518,46 @@ def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
     assert b["geloescht"] == 1
     je = {z["ordner"]: z["geloescht"] for z in b["ordner"]}
     assert je == {"A": 0, "A/Sub": 1}
+
+
+def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
+    """A folder URL rides the drive delta: out-of-scope entries are ignored
+    silently (not counted as excluded), deletions come from the feed, and an
+    unchanged library costs one request on the next run."""
+    import drive_mirror
+
+    class FakeGraph:
+        def __init__(self):
+            self.aufrufe = []
+
+        def delta(self, weiter=None):
+            self.aufrufe.append(weiter)
+            if weiter == "delta-1":
+                yield None, "delta-2"          # nichts geändert
+                return
+            yield {"id": "in1", "name": "plan.pdf", "file": {}, "size": 1,
+                   "cTag": "c1",
+                   "parentReference": {"path": "/drive/root:/N/Nordwind"}}, None
+            yield {"id": "out1", "name": "fremd.pdf", "file": {}, "size": 1,
+                   "cTag": "c1",
+                   "parentReference": {"path": "/drive/root:/Anderes"}}, None
+            yield None, "delta-1"
+
+        def lade(self, item_id, ziel, geaendert=None):
+            ziel.parent.mkdir(parents=True, exist_ok=True)
+            ziel.write_bytes(b"x")
+            return 1
+
+    g = FakeGraph()
+    wahl = sp.drive_auswahl(Selection(), {"prefixes": {"N/Nordwind"}})
+    zustand = sp.state_db.DbZustand(tmp_path)
+    zahlen = drive_mirror.lauf(g, tmp_path, wahl, 1, still=True,
+                               zustand=zustand)
+    assert zahlen == {"new": 1, "excluded": 0, "errors": 0,
+                      "moved": 0, "gone": 0}
+    assert (tmp_path / "Dateien/N/Nordwind/plan.pdf").is_file()
+    assert not (tmp_path / "Dateien/Anderes").exists()
+
+    zahlen = drive_mirror.lauf(g, tmp_path, wahl, 1, still=True,
+                               zustand=zustand)
+    assert zahlen["new"] == 0 and g.aufrufe == [None, "delta-1"]

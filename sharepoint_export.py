@@ -31,9 +31,12 @@ the usual tombstone note.
 Access needs Sites.Read.All. A pasted key without that scope does not kill
 the run: the affected site is reported and skipped.
 
-Narrowing a URL later (site -> one folder) stops syncing what is now out of
-scope; those files simply keep their last mirrored state, without tombstones –
-the mirror promise applies to what the URL list currently selects.
+A folder URL narrows a library to that subtree. Scoped mirrors use the
+same drive delta as everything else – the first run enumerates the library
+once, every later run costs one request when nothing changed, and deletions
+come from the authoritative delta feed. Entries outside the scope are
+ignored silently; narrowing a URL later just stops syncing what fell out,
+those files keep their last mirrored state.
 """
 
 import base64
@@ -41,15 +44,14 @@ import os
 import re
 import sys
 import threading
-from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor,
-                                as_completed, wait)
+from concurrent.futures import (ThreadPoolExecutor,
+                                as_completed)
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import parse_qs, quote, urlsplit, unquote
+from urllib.parse import parse_qs, urlsplit, unquote
 
 import auth
 import export_util
-import folders
 import progress
 import settings
 
@@ -293,92 +295,10 @@ def drive_auswahl(basis, drive):
     when the URL pointed below the library root."""
     if not drive.get("prefixes"):
         return basis
-    return Selection(rules=_scope_regeln(drive["prefixes"]),
+    return Selection(scope=_scope_regeln(drive["prefixes"]),
                      max_bytes=basis.max_bytes,
                      include_ext=basis.include_ext,
                      exclude_ext=basis.exclude_ext)
-
-
-def scope_sammler(prefixes):
-    """A collector for one folder of a big library.
-
-    Delta only exists on a drive's root – for a URL that points at one
-    project folder it would enumerate the whole library on every run. The
-    collector instead lists exactly the configured subtrees (one request per
-    folder inside the scope) and synthesises the deletions from the
-    inventory: what the walk no longer sees but dateien.tsv still knows is
-    gone. No delta pointer is used or advanced.
-    """
-    regeln = _scope_regeln(prefixes)
-
-    def sammler(graph, bestand):
-        sammler.fehler = 0
-        eintraege, gesehen = [], set()
-
-        def kinder(teile):
-            pfad = "/".join(quote(s, safe="") for s in teile)
-            return teile, list(graph.paged(
-                f"{graph.drive_base}/root:/{pfad}:/children",
-                {"$top": drive_mirror.SEITE}))
-
-        for pf in sorted(prefixes):
-            teile = [s for s in pf.split("/") if s]
-            pfad = "/".join(quote(s, safe="") for s in teile)
-            try:
-                wurzel = graph.get(f"{graph.drive_base}/root:/{pfad}")
-            except auth.TokenExpired:
-                raise
-            except Exception as e:
-                sammler.fehler += 1
-                progress.event("run.sharepoint.scope_missing", "warn",
-                               path=pf, error=f"{type(e).__name__}: {e}")
-                continue
-            eintraege.append(wurzel)
-            gesehen.add(wurzel.get("id"))
-            # One request per folder – but folders side by side don't wait
-            # for each other, and the bar ticks while the tree unfolds. A
-            # folder that still fails after all retries is counted: the run
-            # must not report a clean zero over a hole in the walk.
-            with ThreadPoolExecutor(max_workers=workers()) as pool:
-                offen = {pool.submit(kinder, teile): teile}
-                while offen:
-                    fertig, _ = wait(set(offen), return_when=FIRST_COMPLETED)
-                    for f in fertig:
-                        wo = offen.pop(f)
-                        try:
-                            eltern, liste = f.result()
-                        except auth.TokenExpired:
-                            raise
-                        except Exception as e:
-                            sammler.fehler += 1
-                            progress.event("run.sharepoint.folder_failed",
-                                           "err", path="/".join(wo),
-                                           error=f"{type(e).__name__}: {e}")
-                            continue
-                        for e in liste:
-                            eintraege.append(e)
-                            gesehen.add(e.get("id"))
-                            if "folder" in e and "file" not in e:
-                                kind = eltern + [e.get("name") or ""]
-                                offen[pool.submit(kinder, kind)] = kind
-                    progress.melde(len(eintraege), what="entries")
-        # Inside the scope, missing from the walk, still in the inventory:
-        # that is a deletion – delta would have said so, the diff says it now.
-        # But ONLY from a clean walk: tombstones are write-once, and a walk
-        # with holes (failed root or folder listing) proves nothing about the
-        # files it never saw. Deletions then wait for the next clean run.
-        if not sammler.fehler:
-            for kennung, e in list(bestand.eintraege.items()):
-                if kennung not in gesehen and folders.gilt(e["rel"], regeln,
-                                                           vorgabe=False):
-                    eintraege.append({"id": kennung, "deleted": {}})
-        return eintraege, None
-
-    return sammler
-
-
-def _drive_sammler(drive):
-    return scope_sammler(drive["prefixes"]) if drive.get("prefixes") else None
 
 
 def _library_event(drive):
@@ -410,14 +330,12 @@ def lauf(graph, out, drives, fehl=0):
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     for d in je_drive(graph, drives):
         _library_event(d)
-        s = _drive_sammler(d)
         ziel = drive_ziel(out, d)
         zahlen = drive_mirror.lauf(graph, ziel, drive_auswahl(wahl, d),
-                                   workers(), still=True, sammler=s,
+                                   workers(), still=True,
                                    zustand=state_db.DbZustand(ziel))
         for k in summe:
             summe[k] += zahlen[k]
-        summe["errors"] += getattr(s, "fehler", 0) if s else 0
     progress.ergebnis(summe["new"], excluded=summe["excluded"],
                       errors=summe["errors"] + fehl,
                       extra={"moved": summe["moved"], "gone": summe["gone"]})
@@ -429,12 +347,10 @@ def nur_ordner(graph, out, drives, fehl=0):
     neu = gesamt = 0
     for d in je_drive(graph, drives):
         _library_event(d)
-        s = _drive_sammler(d)
         ziel = drive_ziel(out, d)
         daten = drive_mirror.nur_ordner(graph, ziel, drive_auswahl(wahl, d),
-                                        still=True, sammler=s,
+                                        still=True,
                                         zustand=state_db.DbZustand(ziel))
-        fehl += getattr(s, "fehler", 0) if s else 0
         neu += len(daten["neu"])
         gesamt += len(daten.get("ordner") or ())
     progress.ergebnis(neu, errors=fehl, extra={"total": gesamt})
@@ -455,11 +371,9 @@ def nur_pruefen(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         ziel = drive_ziel(out, d)
-        s = _drive_sammler(d)
         b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
-                                     still=True, sammler=s,
+                                     still=True,
                                      zustand=state_db.DbZustand(ziel))
-        fehl += getattr(s, "fehler", 0) if s else 0
         zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
                        "geloescht": b["geloescht"], "fehlt": b["fehlt"],

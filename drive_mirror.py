@@ -66,8 +66,13 @@ class Selection:
     """
 
     def __init__(self, rules=None, max_bytes=0, include_ext=None,
-                 exclude_ext=None):
+                 exclude_ext=None, scope=None):
         self.rules = rules or []
+        # Scope rules are machinery (a folder URL narrowing a library), not
+        # user choice: what falls outside is IGNORED silently, never counted
+        # as "excluded" – the report would otherwise drown in the rest of
+        # the library.
+        self.scope = scope or []
         self.max_bytes = max(0, int(max_bytes or 0))
         self.include_ext = {e.lower().lstrip(".") for e in (include_ext or ())
                             if str(e).strip()}
@@ -80,13 +85,17 @@ class Selection:
             return False
         return not self.include_ext or ext in self.include_ext
 
+    def im_scope(self, rel):
+        """Inside the narrowed subtree? Without scope rules: always."""
+        return not self.scope or folders.gilt(rel, self.scope)
+
     def pfad_ok(self, rel):
         """Only the path scope – the type list counts inside it, unfiltered."""
         return folders.gilt(rel, self.rules)
 
     def takes(self, rel, size):
         """One verdict per file – used identically by plan, check and preview."""
-        if not self.pfad_ok(rel):
+        if not self.im_scope(rel) or not self.pfad_ok(rel):
             return False
         if self.max_bytes and int(size or 0) > self.max_bytes:
             return False
@@ -374,6 +383,8 @@ def plane(eintraege, bestand, wurzel, auswahl):
                          "elemente": int((e.get("folder") or {}).get("childCount") or 0)})
             continue
         rel = rel_pfad(e)
+        if not auswahl.im_scope(rel):
+            continue                    # outside the narrowed subtree: silent
         if ist_ordner(e) or ist_paket(e):
             baum.append({"id": kennung, "pfad": rel, "name": e.get("name") or "",
                          "elemente": int((e.get("folder") or {}).get("childCount") or 0)})
@@ -543,6 +554,8 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
         if "deleted" in e or "file" not in e or "root" in e:
             continue
         rel = rel_pfad(e)
+        if not auswahl.im_scope(rel):
+            continue                    # outside the narrowed subtree: silent
         ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
         groesse = int(e.get("size") or 0)
         # Counted inside the path scope but BEFORE type and size filters:
