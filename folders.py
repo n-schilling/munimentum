@@ -190,19 +190,14 @@ def lade(ordner, datei=DATEI):
     return daten
 
 
-def speichere(ordner, eintraege, vorher=None, datei=DATEI):
-    """Baum atomar ablegen und melden, was sich geändert hat.
-
-    Neue Ordner sind der Grund für die Rückgabe: nach einem Abgleich soll die
-    Oberfläche sagen können „4 neue Ordner“, statt dass sie unbemerkt
-    dazukommen und je nach Regel mitlaufen oder fehlen.
-    """
+def baum_diff(eintraege, vorher=None):
+    """The tree data plus what changed – pure, for every storage backend."""
     alt = {e["id"]: e for e in (vorher or {}).get("ordner", [])}
     jetzt = {e["id"]: e for e in eintraege}
     # Beim allerersten Abgleich ist nichts „neu“ – es war ja vorher nichts da.
     # „400 Ordner neu dazugekommen“ wäre formal wahr und trotzdem Unsinn.
     erster = not alt
-    daten = {
+    return {
         "abgeglichen": datetime.now(UTC).isoformat(timespec="seconds"),
         "ordner": eintraege,
         "neu": [] if erster else sorted(
@@ -212,6 +207,16 @@ def speichere(ordner, eintraege, vorher=None, datei=DATEI):
             f'{alt[k]["pfad"]} -> {e["pfad"]}'
             for k, e in jetzt.items() if k in alt and alt[k]["pfad"] != e["pfad"]),
     }
+
+
+def speichere(ordner, eintraege, vorher=None, datei=DATEI):
+    """Baum atomar ablegen und melden, was sich geändert hat.
+
+    Neue Ordner sind der Grund für die Rückgabe: nach einem Abgleich soll die
+    Oberfläche sagen können „4 neue Ordner“, statt dass sie unbemerkt
+    dazukommen und je nach Regel mitlaufen oder fehlen.
+    """
+    daten = baum_diff(eintraege, vorher)
     ziel = pfad(ordner, datei)
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")

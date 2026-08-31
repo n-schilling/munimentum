@@ -637,8 +637,9 @@ def test_load_sharepoint_liest_bibliotheken_mit_grabsteinen(tmp_path):
     (lib / "Dateien" / "N").mkdir(parents=True)
     (lib / "Dateien" / "N" / "plan.pdf").write_bytes(b"x")
     (lib / "Dateien" / "weg.pdf").write_bytes(b"y")
-    (lib / "verschwunden.tsv").write_text(
-        "Dateien/weg.pdf\t2026-03-01T00:00:00+00:00\n", encoding="utf-8")
+    import state_db
+    state_db.StateDb(lib).verschwunden_ergaenzen(
+        ["Dateien/weg.pdf"], "2026-03-01T00:00:00+00:00")
 
     recs = corpus.load_sharepoint(tmp_path)
     assert {r["rel"] for r in recs} == {"Team X/Projects/Dateien/N/plan.pdf",
@@ -666,8 +667,9 @@ def test_load_pages_liest_titel_text_und_grabstein(tmp_path):
         "<!doctype html><html><head><title>Start &amp; Ziel</title></head>"
         "<body><h1>Start</h1><p>Inhalt der Seite</p></body></html>",
         encoding="utf-8")
-    (tmp_path / "verschwunden.tsv").write_text(
-        "Team X/Home.html\t2026-04-01T00:00:00+00:00\n", encoding="utf-8")
+    import state_db
+    state_db.StateDb(tmp_path).verschwunden_ergaenzen(
+        ["Team X/Home.html"], "2026-04-01T00:00:00+00:00")
     recs = corpus.load_pages(tmp_path)
     assert len(recs) == 1
     r = recs[0]

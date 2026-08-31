@@ -756,13 +756,15 @@ def load_sharepoint(root_dir):
     root = Path(root_dir)
     if not root.is_dir():
         return []
+    import state_db
     dateien, weg = [], {}
     for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
         dateien += [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
                     if p.is_file() and not p.name.endswith(".teil")]
         praefix = lib.relative_to(root).as_posix()
         weg.update({f"{praefix}/{rel}": ts
-                    for rel, ts in lies_verschwunden(lib).items()})
+                    for rel, ts in
+                    state_db.StateDb(lib).verschwunden_lesen().items()})
     recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
     for r in recs:
         r["root"] = "sharepoint"
@@ -803,10 +805,11 @@ def load_pages(root_dir):
     index and the full-text search reads SharePoint pages like mail. The
     parse fans out like every sibling loader.
     """
+    import state_db
     root = Path(root_dir)
     if not root.is_dir():
         return []
-    weg = lies_verschwunden(root)
+    weg = state_db.StateDb(root).verschwunden_lesen()
     dateien = sorted(root.rglob("*.html"))
     recs = [r for r in _pmap(_seiten_satz, dateien, str(root)) if r]
     for satz in recs:

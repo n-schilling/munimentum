@@ -282,6 +282,46 @@ schreibe_verschwunden = export_util.schreibe_verschwunden
 schreibe_bericht = export_util.schreibe_bericht
 
 
+class DateiZustand:
+    """File-backed state – the historical layout OneDrive archives carry.
+
+    The runs below only talk to this interface; the SharePoint exports pass
+    a SQLite-backed twin (state_db.DbZustand) instead. New backends
+    implement exactly these methods.
+    """
+
+    def __init__(self, out):
+        self.out = Path(out)
+
+    def bestand(self):
+        return Bestand(self.out / BESTAND_DATEI)
+
+    def delta_lesen(self):
+        return lies_delta(self.out)
+
+    def delta_schreiben(self, link, bestand=None):
+        schreibe_delta(self.out, link)
+
+    def delta_loeschen(self):
+        (self.out / DELTA_DATEI).unlink(missing_ok=True)
+
+    def verschwunden_lesen(self):
+        return lies_verschwunden(self.out / GONE_FILE)
+
+    def verschwunden_ergaenzen(self, rels, jetzt):
+        schreibe_verschwunden(self.out / GONE_FILE,
+                              self.verschwunden_lesen(), rels, jetzt)
+
+    def baum_lesen(self):
+        return folders.lade(self.out)
+
+    def baum_schreiben(self, eintraege, vorher):
+        return folders.speichere(self.out, eintraege, vorher)
+
+    def bericht_schreiben(self, bericht):
+        schreibe_bericht(self.out, bericht)
+
+
 def lies_delta(out):
     try:
         return (Path(out) / DELTA_DATEI).read_text(encoding="utf-8").strip() or None
@@ -420,7 +460,8 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
     return fertig, fehler
 
 
-def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
+def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None,
+         zustand=None):
     """One full mirror pass for one drive; returns the result counts.
 
     ``still`` suppresses the result event – sharepoint_export mirrors several
@@ -433,9 +474,10 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
     """
     out = Path(out)
     wurzel = out
-    bestand = Bestand(out / BESTAND_DATEI)
+    zustand = zustand or DateiZustand(out)
+    bestand = zustand.bestand()
     if sammler is None:
-        weiter = lies_delta(out)
+        weiter = zustand.delta_lesen()
         progress.event("run.drive.delta" if weiter else "run.drive.full")
         try:
             eintraege, neuer_link = sammle(graph, weiter)
@@ -445,7 +487,7 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
             if weiter is None or getattr(e.response, "status_code", 0) != 410:
                 raise
             progress.event("run.drive.resync", "warn")
-            (out / DELTA_DATEI).unlink(missing_ok=True)
+            zustand.delta_loeschen()
             eintraege, neuer_link = sammle(graph, None)
     else:
         eintraege, neuer_link = sammler(graph, bestand)
@@ -461,15 +503,14 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
     bestand.schreibe()
 
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
-    schreibe_verschwunden(out / GONE_FILE, lies_verschwunden(out / GONE_FILE),
-                          plan["geloescht"], jetzt)
-    alt_baum = folders.lade(out)
+    zustand.verschwunden_ergaenzen(plan["geloescht"], jetzt)
+    alt_baum = zustand.baum_lesen()
     baum = baum_zusammenfuehren(alt_baum, plan["baum"], plan["entfernt"])
     if baum or alt_baum:
-        folders.speichere(out, baum, alt_baum)
+        zustand.baum_schreiben(baum, alt_baum)
     # Erst jetzt: ein abgebrochener Lauf darf den Delta-Zeiger nicht vorrücken.
-    if not fehler:
-        schreibe_delta(out, neuer_link)
+    if not fehler and neuer_link:
+        zustand.delta_schreiben(neuer_link, bestand=bestand)
 
     if fehler:
         progress.event("run.drive.retry_full", "warn")
@@ -481,7 +522,7 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
     return zahlen
 
 
-def pruefe_vollstaendigkeit(eintraege, out, auswahl):
+def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
     """Was das Laufwerk hat gegen das, was hier liegt – je Ordner.
 
     Dieselbe Form wie beim Postfach, damit die Oberfläche sie ohne eine zweite
@@ -491,7 +532,8 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
     halb angekommen ist. Die Byte-Summen daneben machen sie zugleich zur
     Größen-Vorschau: was würde ein Spiegel-Lauf holen, was ließe er aus.
     """
-    weg = lies_verschwunden(Path(out) / GONE_FILE)
+    if weg is None:
+        weg = lies_verschwunden(Path(out) / GONE_FILE)
     je = {}
     typen = {}
     ausgelassen = 0
@@ -559,15 +601,18 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl):
     }
 
 
-def nur_pruefen(graph, out, auswahl, still=False, sammler=None):
+def nur_pruefen(graph, out, auswahl, still=False, sammler=None,
+                zustand=None):
     """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
     out = Path(out)
+    zustand = zustand or DateiZustand(out)
     if sammler is None:
         eintraege, _ = sammle(graph, None)
     else:
-        eintraege, _ = sammler(graph, Bestand(out / BESTAND_DATEI))
-    bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl)
-    schreibe_bericht(out, bericht)
+        eintraege, _ = sammler(graph, zustand.bestand())
+    bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl,
+                                      weg=zustand.verschwunden_lesen())
+    zustand.bericht_schreiben(bericht)
     if not still:
         progress.ergebnis(0, excluded=bericht["ausgelassen"],
                           extra={"expected": bericht["erwartet"],
@@ -576,7 +621,8 @@ def nur_pruefen(graph, out, auswahl, still=False, sammler=None):
     return bericht
 
 
-def nur_ordner(graph, out, auswahl, still=False, sammler=None):
+def nur_ordner(graph, out, auswahl, still=False, sammler=None,
+               zustand=None):
     """--folders: nur die Struktur holen, nichts herunterladen.
 
     Zählt bewusst VOLLSTÄNDIG auf und ignoriert den gespeicherten Delta-Zeiger:
@@ -585,15 +631,16 @@ def nur_ordner(graph, out, auswahl, still=False, sammler=None):
     hielte der nächste Export die noch nie geholten Dateien für erledigt.
     """
     out = Path(out)
-    bestand = Bestand(out / BESTAND_DATEI)
+    zustand = zustand or DateiZustand(out)
+    bestand = zustand.bestand()
     if sammler is None:
         eintraege, _ = sammle(graph, None)
     else:
         eintraege, _ = sammler(graph, bestand)
     plan = plane(eintraege, bestand, out, auswahl)
-    alt = folders.lade(out)
-    daten = folders.speichere(out, baum_zusammenfuehren(alt, plan["baum"],
-                                                        plan["entfernt"]), alt)
+    alt = zustand.baum_lesen()
+    daten = zustand.baum_schreiben(
+        baum_zusammenfuehren(alt, plan["baum"], plan["entfernt"]), alt)
     z = folders.zusammenfassung(daten, auswahl.rules)
     progress.event("run.sync.result", total=z["ordner_gesamt"],
                    chosen=z["ordner_gewaehlt"],

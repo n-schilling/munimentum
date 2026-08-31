@@ -5,7 +5,6 @@ SharePoint's own: URL -> site -> libraries, the extension filters, and that
 several libraries add up to one result event.
 """
 
-import json
 
 import pytest
 import requests
@@ -195,7 +194,8 @@ def test_lauf_summiert_ueber_bibliotheken(tmp_path, monkeypatch, capsys):
     drives = [{"id": "d1", "site": "S", "name": "A"},
               {"id": "d2", "site": "S", "name": "B"}]
 
-    def fake_lauf(graph, out, wahl, arbeiter, still=False, sammler=None):
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, sammler=None,
+                  zustand=None):
         assert still, "je Bibliothek darf kein eigenes RESULT kommen"
         return {"new": 2, "excluded": 1, "errors": 0, "moved": 0, "gone": 1}
 
@@ -233,8 +233,8 @@ def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys)
         {"erwartet": 5, "vorhanden": 5, "geloescht": 1, "fehlt": 0,
          "ausgelassen": 0, "bytes": 1048576, "bytes_ausgelassen": 0}])
     monkeypatch.setattr(sp.drive_mirror, "nur_pruefen",
-                        lambda graph, out, wahl, still=False, sammler=None:
-                        next(berichte))
+                        lambda graph, out, wahl, still=False, sammler=None,
+                        zustand=None: next(berichte))
 
     class G:
         pass
@@ -242,7 +242,7 @@ def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys)
     bericht = sp.nur_pruefen(G(), tmp_path, drives)
     assert bericht["erwartet"] == 15 and bericht["fehlt"] == 6
     assert bericht["bytes"] == 4 * 1048576
-    gespeichert = json.loads((tmp_path / sp.BERICHT_DATEI).read_text(encoding="utf-8"))
+    gespeichert = sp.state_db.StateDb(tmp_path).bericht_lesen()
     assert {z["ordner"] for z in gespeichert["ordner"]} == {"S/A", "S/B"}
     events = _events(capsys)
     vorschau = [e for e in events if e["k"] == "run.sharepoint.preview"]
@@ -432,7 +432,7 @@ def test_seiten_lauf_setzt_grabsteine(tmp_path, capsys):
     sp.seiten_lauf(g, tmp_path, sites)
     g.seiten = []                                   # page gone at Microsoft
     sp.seiten_lauf(g, tmp_path, sites)
-    weg = sp.drive_mirror.lies_verschwunden(tmp_path / sp.drive_mirror.GONE_FILE)
+    weg = sp.state_db.StateDb(tmp_path).verschwunden_lesen()
     assert len(weg) == 1 and next(iter(weg)).startswith("Team X/")
     # The file itself stays – the same promise as everywhere.
     assert list(tmp_path.rglob("*.html"))
@@ -557,7 +557,7 @@ def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
     b = sp.seiten_pruefen(g, tmp_path, sites)
     assert b["erwartet"] == 2 and b["vorhanden"] == 1 and b["fehlt"] == 1
     assert b["ordner"][0]["ordner"] == "Team X"
-    assert (tmp_path / "vollstaendigkeit.json").exists()
+    assert sp.state_db.StateDb(tmp_path).bericht_lesen()["erwartet"] == 2
     e = progress.lies_ergebnis(
         [z for z in capsys.readouterr().out.splitlines()
          if progress.lies_ergebnis(z)][0])
@@ -576,14 +576,13 @@ def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
 
     g.paged = kaputt
     sp.seiten_lauf(g, tmp_path, sites)
-    weg = sp.drive_mirror.lies_verschwunden(tmp_path / sp.drive_mirror.GONE_FILE)
-    assert weg == {}
-    assert sp.Seitenbestand(tmp_path / sp.SEITEN_BESTAND).eintraege
+    db = sp.state_db.StateDb(tmp_path)
+    assert db.verschwunden_lesen() == {}
+    assert db.seiten_lesen()
 
     # URL removed from the configuration: same promise.
     sp.seiten_lauf(g, tmp_path, [])
-    assert sp.drive_mirror.lies_verschwunden(
-        tmp_path / sp.drive_mirror.GONE_FILE) == {}
+    assert db.verschwunden_lesen() == {}
 
 
 def test_praefix_aufnehmen_haelt_die_menge_flach():
@@ -623,8 +622,7 @@ def test_seiten_lauf_zieht_umbenannte_seite_um(tmp_path):
     sp.seiten_lauf(g, tmp_path, sites)
     namen = sorted(p.name for p in tmp_path.rglob("*.html"))
     assert len(namen) == 1 and namen[0].startswith("Neu")
-    assert sp.drive_mirror.lies_verschwunden(
-        tmp_path / sp.drive_mirror.GONE_FILE) == {}
+    assert sp.state_db.StateDb(tmp_path).verschwunden_lesen() == {}
 
 
 def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
@@ -633,8 +631,7 @@ def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
     g.seiten = []
     sites = [{"id": "s1", "pfad": ["A"], "host": "h"},
              {"id": "s2", "pfad": ["A", "Sub"], "host": "h"}]
-    sp.drive_mirror.schreibe_verschwunden(
-        tmp_path / sp.drive_mirror.GONE_FILE, {},
+    sp.state_db.StateDb(tmp_path).verschwunden_ergaenzen(
         ["A/Sub/page.html"], "2026-08-01T00:00:00+00:00")
     b = sp.seiten_pruefen(g, tmp_path, sites)
     assert b["geloescht"] == 1

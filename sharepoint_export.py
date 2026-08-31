@@ -62,6 +62,7 @@ except ImportError:
 
 import drive_mirror
 import graph_client
+import state_db
 from drive_mirror import Selection, safe
 
 export_util.erzwinge_utf8()
@@ -72,7 +73,6 @@ SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 
 OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
 OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
-SEITEN_BESTAND = "seiten.tsv"
 BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
@@ -411,9 +411,10 @@ def lauf(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         s = _drive_sammler(d)
-        zahlen = drive_mirror.lauf(graph, drive_ziel(out, d),
-                                   drive_auswahl(wahl, d),
-                                   workers(), still=True, sammler=s)
+        ziel = drive_ziel(out, d)
+        zahlen = drive_mirror.lauf(graph, ziel, drive_auswahl(wahl, d),
+                                   workers(), still=True, sammler=s,
+                                   zustand=state_db.DbZustand(ziel))
         for k in summe:
             summe[k] += zahlen[k]
         summe["errors"] += getattr(s, "fehler", 0) if s else 0
@@ -429,9 +430,10 @@ def nur_ordner(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         s = _drive_sammler(d)
-        daten = drive_mirror.nur_ordner(graph, drive_ziel(out, d),
-                                        drive_auswahl(wahl, d),
-                                        still=True, sammler=s)
+        ziel = drive_ziel(out, d)
+        daten = drive_mirror.nur_ordner(graph, ziel, drive_auswahl(wahl, d),
+                                        still=True, sammler=s,
+                                        zustand=state_db.DbZustand(ziel))
         fehl += getattr(s, "fehler", 0) if s else 0
         neu += len(daten["neu"])
         gesamt += len(daten.get("ordner") or ())
@@ -455,7 +457,8 @@ def nur_pruefen(graph, out, drives, fehl=0):
         ziel = drive_ziel(out, d)
         s = _drive_sammler(d)
         b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
-                                     still=True, sammler=s)
+                                     still=True, sammler=s,
+                                     zustand=state_db.DbZustand(ziel))
         fehl += getattr(s, "fehler", 0) if s else 0
         zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
@@ -484,7 +487,7 @@ def nur_pruefen(graph, out, drives, fehl=0):
                "bytes": sum(z["bytes"] for z in zeilen),
                "bytes_ausgelassen": ausgelassen_bytes,
                "typen": sorted(typen.values(), key=lambda z: -z["bytes"])}
-    drive_mirror.schreibe_bericht(Path(out), bericht)
+    state_db.StateDb(out).bericht_schreiben(bericht)
     progress.ergebnis(0, errors=fehl, excluded=ausgelassen,
                       extra={"expected": bericht["erwartet"],
                              "present": bericht["vorhanden"],
@@ -496,28 +499,6 @@ def nur_pruefen(graph, out, drives, fehl=0):
 # ---------------------------------------------------------------------------
 # Site pages: rendered to HTML from the Graph Pages API
 # ---------------------------------------------------------------------------
-class Seitenbestand:
-    """page id -> (rel, etag). Same promise as the mirrors: what is recorded
-    here exists on disk in exactly that version."""
-
-    def __init__(self, pfad):
-        self.pfad = Path(pfad)
-        self.eintraege = {}
-        try:
-            for zeile in self.pfad.read_text(encoding="utf-8").splitlines():
-                teile = zeile.split("\t")
-                if len(teile) >= 3:
-                    self.eintraege[teile[0]] = {"rel": teile[1], "etag": teile[2]}
-        except OSError:
-            pass
-
-    def schreibe(self):
-        self.pfad.parent.mkdir(parents=True, exist_ok=True)
-        export_util.schreibe_atomar(self.pfad, "".join(
-            f'{k}\t{e["rel"]}\t{e["etag"]}\n'
-            for k, e in sorted(self.eintraege.items())))
-
-
 def resolve_page_sites(graph, urls):
     """The sites behind the URLs plus all their subsites, depth first.
 
@@ -696,7 +677,8 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
 
 def seiten_lauf(graph, out, sites, fehl=0):
     out = Path(out)
-    bestand = Seitenbestand(out / SEITEN_BESTAND)
+    db = state_db.StateDb(out)
+    eintraege_bestand = db.seiten_lesen()
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}
     grenze = bild_max()
@@ -739,7 +721,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
             name = safe((seite.get("name") or "Seite").removesuffix(".aspx"),
                         100, kennung=sid) + ".html"
             rel = "/".join([*s["pfad"], name])
-            alt = bestand.eintraege.get(sid)
+            alt = eintraege_bestand.get(sid)
             etag = seite.get("eTag") or seite.get("lastModifiedDateTime") or ""
             if alt and alt["etag"] == etag and (out / alt["rel"]).is_file():
                 unveraendert += 1
@@ -765,9 +747,9 @@ def seiten_lauf(graph, out, sites, fehl=0):
                     # Renamed, not deleted: the old file would otherwise
                     # linger untracked as a stale duplicate in the index.
                     (out / alt["rel"]).unlink(missing_ok=True)
-                bestand.eintraege[sid] = {"rel": rel, "etag": etag}
+                eintraege_bestand[sid] = {"rel": rel, "etag": etag}
                 neu += 1
-        bestand.schreibe()
+        db.seiten_schreiben(eintraege_bestand)
     # Pages gone at Microsoft: in the inventory, reported by no site.
     # Judged ONLY below sites whose listing succeeded this run – a failed
     # listing (or a URL removed from the config) proves nothing about its
@@ -775,16 +757,13 @@ def seiten_lauf(graph, out, sites, fehl=0):
     def beurteilt(rel):
         return any(rel.startswith(pfad + "/") for pfad in sauber)
 
-    weg_ids = [k for k, e in bestand.eintraege.items()
+    weg_ids = [k for k, e in eintraege_bestand.items()
                if k not in gesehen and beurteilt(e["rel"])]
-    weg = [bestand.eintraege.pop(k)["rel"] for k in weg_ids]
+    weg = [eintraege_bestand.pop(k)["rel"] for k in weg_ids]
     if weg:
         jetzt = datetime.now(UTC).isoformat(timespec="seconds")
-        drive_mirror.schreibe_verschwunden(
-            out / drive_mirror.GONE_FILE,
-            drive_mirror.lies_verschwunden(out / drive_mirror.GONE_FILE),
-            weg, jetzt)
-    bestand.schreibe()
+        db.verschwunden_ergaenzen(weg, jetzt)
+    db.seiten_schreiben(eintraege_bestand)
     if zaehler["fehl"]:
         progress.event("run.pages.images_failed", "warn", n=zaehler["fehl"])
     progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
@@ -800,8 +779,9 @@ def seiten_pruefen(graph, out, sites, fehl=0):
     without a second renderer. Nothing is rendered or written except the
     report file."""
     out = Path(out)
-    bestand = Seitenbestand(out / SEITEN_BESTAND)
-    weg = drive_mirror.lies_verschwunden(out / drive_mirror.GONE_FILE)
+    db = state_db.StateDb(out)
+    eintraege_bestand = db.seiten_lesen()
+    weg = db.verschwunden_lesen()
     zeilen = []
     for s in sites:
         try:
@@ -818,7 +798,7 @@ def seiten_pruefen(graph, out, sites, fehl=0):
         pfad = "/".join(s["pfad"])
         vorhanden = sum(
             1 for seite in seiten
-            if (e := bestand.eintraege.get(seite.get("id") or ""))
+            if (e := eintraege_bestand.get(seite.get("id") or ""))
             and (out / e["rel"]).is_file())
         zeilen.append({"ordner": pfad, "erwartet": len(seiten),
                        "vorhanden": vorhanden, "geloescht": 0,
@@ -839,7 +819,7 @@ def seiten_pruefen(graph, out, sites, fehl=0):
                "geloescht": sum(z["geloescht"] for z in zeilen),
                "fehlt": sum(z["fehlt"] for z in zeilen),
                "ausgelassen": 0, "ausgelassene_ordner": []}
-    drive_mirror.schreibe_bericht(out, bericht)
+    db.bericht_schreiben(bericht)
     progress.ergebnis(0, errors=fehl,
                       extra={"expected": bericht["erwartet"],
                              "present": bericht["vorhanden"],

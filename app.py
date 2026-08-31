@@ -62,6 +62,7 @@ import ollama_client
 import progress
 import run_history
 import settings
+import state_db
 import store_layout
 import updates
 import version
@@ -560,9 +561,9 @@ def _mtime_iso(p):
 
 
 def _sharepoint_stand(wurzel):
-    """The newest per-library inventory dates the last mirror run."""
+    """The newest per-library state.db dates the last mirror run."""
     try:
-        pfade = list(wurzel.glob("*/*/dateien.tsv"))
+        pfade = list(wurzel.glob(f"*/*/{state_db.DB_NAME}"))
     except OSError:
         return None
     if not pfade:
@@ -596,7 +597,7 @@ def export_status(cfg):
         "sharepoint": {"dir": str(sharepoint), "exists": sharepoint.is_dir(),
                        "last_run": _sharepoint_stand(sharepoint)},
         "pages": {"dir": str(seiten), "exists": seiten.is_dir(),
-                  "last_run": _mtime_iso(seiten / "seiten.tsv")},
+                  "last_run": _mtime_iso(seiten / state_db.DB_NAME)},
     }
 
 
@@ -2261,7 +2262,8 @@ class Handler(BaseHTTPRequestHandler):
                 # The preview/type views need only this one small file –
                 # not the full analytics aggregation behind /api/analytics.
                 return self._json(
-                    {"bericht": lies_bericht(SHAREPOINT_DIR)})
+                    {"bericht": state_db.StateDb(
+                        BASE / SHAREPOINT_DIR).bericht_lesen()})
             if u.path == "/api/files":
                 return self._json(self._files(one))
             if u.path == "/api/filetypes":
@@ -2277,9 +2279,11 @@ class Handler(BaseHTTPRequestHandler):
                     **kennzahlen(app.cfg),
                     "vollstaendigkeit": lies_bericht(),
                     "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR),
-                    "vollstaendigkeit_sharepoint": lies_bericht(SHAREPOINT_DIR),
+                    "vollstaendigkeit_sharepoint":
+                        state_db.StateDb(BASE / SHAREPOINT_DIR).bericht_lesen(),
                     "vollstaendigkeit_pages":
-                        lies_bericht(SHAREPOINT_PAGES_DIR)})
+                        state_db.StateDb(BASE / SHAREPOINT_PAGES_DIR)
+                        .bericht_lesen()})
             if u.path == "/api/runs":
                 try:
                     grenze = int(one.get("limit", 50))
@@ -2709,7 +2713,7 @@ class Handler(BaseHTTPRequestHandler):
         eintraege, stand = [], None
         if wurzel.is_dir():
             for lib in sorted(p for p in wurzel.glob("*/*") if p.is_dir()):
-                d = folders.lade(lib)
+                d = state_db.StateDb(lib).baum_lesen()
                 if not d:
                     continue
                 praefix = lib.relative_to(wurzel).as_posix()
