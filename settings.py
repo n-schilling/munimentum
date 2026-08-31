@@ -170,6 +170,7 @@ VORGABEN = {
         # these toggles narrow a scheduled run, they cannot widen it.
         "onedrive": True,
         "sharepoint": True,
+        "sharepoint_pages": True,
         "index": True,
         "calendar": True,
     },

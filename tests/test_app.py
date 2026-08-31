@@ -1339,14 +1339,22 @@ def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
 
     a.cfg["onedrive_enabled"] = True
     a.cfg["sharepoint_enabled"] = True
+    a.cfg["sharepoint_pages_enabled"] = True
     a.scheduler.last_run = None
     a.scheduler._tick()
     assert gestartet["onedrive"] is True and gestartet["sharepoint"] is True
+    assert gestartet["sharepoint_pages"] is True
 
     a.cfg["schedule"].update(onedrive=False, sharepoint=False)
     a.scheduler.last_run = None
     a.scheduler._tick()
     assert gestartet["onedrive"] is False and gestartet["sharepoint"] is False
+    # Pages have their own schedule toggle, independent of the libraries.
+    assert gestartet["sharepoint_pages"] is True
+    a.cfg["schedule"].update(sharepoint_pages=False)
+    a.scheduler.last_run = None
+    a.scheduler._tick()
+    assert gestartet["sharepoint_pages"] is False
 
 
 @pytest.mark.parametrize("cats,kalender,rekonstruktion", [
