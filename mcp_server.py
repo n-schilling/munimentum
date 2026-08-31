@@ -177,10 +177,12 @@ _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
                             openWorldHint=False)
 _WORD = re.compile(r"\w+", re.UNICODE)
-_SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
+# English throughout: these labels go to MCP clients; the app's interface
+# translates its own tags from the source value instead.
+_SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "File",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
-                 "pages": "SharePoint page", "kalender": "Kalender",
-                 "kontakte": "Kontakte"}
+                 "pages": "SharePoint page", "kalender": "Calendar",
+                 "kontakte": "Contacts"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging

@@ -5114,6 +5114,16 @@ function renderHits(r){
   // Ohne Vektoren – ein reiner Volltextindex – liefe der Eintrag ins Leere,
   // also steht er ausgegraut da statt zu verschwinden.
   var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
+  // The tag speaks the interface language – the server label is only the
+  // fallback for sources this page does not know yet.
+  function quellTag(h){
+    var key = h.source === 'datei'
+      ? (h.root === 'sharepoint' ? 'search.source.sharepoint'
+                                 : 'search.source.onedrive')
+      : 'search.source.' + h.source;
+    var wert = t(key);
+    return wert === key ? (h.source_label || h.source || '') : wert;
+  }
   el('results').innerHTML = hits.map(function(h, i){
     var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
     var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
@@ -5122,7 +5132,7 @@ function renderHits(r){
       '<h3><span class="fussnote">[' + (i + 1) + ']</span>' +
       (link ? '<a href="' + link + '" target="_blank">' : '') +
       esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
-      '<div class="wer"><span class="tag">' + esc(h.source_label) + '</span>' +
+      '<div class="wer"><span class="tag">' + esc(quellTag(h)) + '</span>' +
       (h.gone ? '<span class="tag weg" title="' +
         esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
         esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</div>' +
