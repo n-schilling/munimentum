@@ -321,6 +321,7 @@ def scope_sammler(prefixes):
             except auth.TokenExpired:
                 raise
             except Exception as e:
+                sammler.fehler += 1
                 progress.event("run.sharepoint.scope_missing", "warn",
                                path=pf, error=f"{type(e).__name__}: {e}")
                 continue
@@ -355,10 +356,14 @@ def scope_sammler(prefixes):
                     progress.melde(len(eintraege), what="entries")
         # Inside the scope, missing from the walk, still in the inventory:
         # that is a deletion – delta would have said so, the diff says it now.
-        for kennung, e in list(bestand.eintraege.items()):
-            if kennung not in gesehen and folders.gilt(e["rel"], regeln,
-                                                       vorgabe=False):
-                eintraege.append({"id": kennung, "deleted": {}})
+        # But ONLY from a clean walk: tombstones are write-once, and a walk
+        # with holes (failed root or folder listing) proves nothing about the
+        # files it never saw. Deletions then wait for the next clean run.
+        if not sammler.fehler:
+            for kennung, e in list(bestand.eintraege.items()):
+                if kennung not in gesehen and folders.gilt(e["rel"], regeln,
+                                                           vorgabe=False):
+                    eintraege.append({"id": kennung, "deleted": {}})
         return eintraege, None
 
     return sammler
@@ -648,6 +653,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
     zaehler = {"bilder": 0, "fehl": 0}
     grenze = bild_max()
     gesehen = set()
+    sauber = []      # sites whose page listing succeeded this run
     for s in sites:
         try:
             seiten = list(graph.paged(
@@ -662,6 +668,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
             continue
         progress.event("run.pages.site", name="/".join(s["pfad"]),
                        n=len(seiten))
+        sauber.append("/".join(s["pfad"]))
         for seite in seiten:
             sid = seite.get("id")
             if not sid:
@@ -695,10 +702,16 @@ def seiten_lauf(graph, out, sites, fehl=0):
             bestand.eintraege[sid] = {"rel": rel, "etag": etag}
             neu += 1
         bestand.schreibe()
-    # Verschwundene Seiten: im Bestand, aber von keiner Site mehr gemeldet.
-    weg = [e["rel"] for k, e in bestand.eintraege.items() if k not in gesehen]
-    for k in [k for k in bestand.eintraege if k not in gesehen]:
-        del bestand.eintraege[k]
+    # Pages gone at Microsoft: in the inventory, reported by no site.
+    # Judged ONLY below sites whose listing succeeded this run – a failed
+    # listing (or a URL removed from the config) proves nothing about its
+    # pages, and tombstones are write-once.
+    def beurteilt(rel):
+        return any(rel.startswith(pfad + "/") for pfad in sauber)
+
+    weg_ids = [k for k, e in bestand.eintraege.items()
+               if k not in gesehen and beurteilt(e["rel"])]
+    weg = [bestand.eintraege.pop(k)["rel"] for k in weg_ids]
     if weg:
         jetzt = datetime.now(UTC).isoformat(timespec="seconds")
         drive_mirror.schreibe_verschwunden(

@@ -932,9 +932,11 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
         conds = ["who != '' AND who != '(unbekannt)'"]
         params = []
         if source != "all":
-            cond, werte = _quelle_cond(source)
-            conds.append(cond)
-            params.extend(werte)
+            # The people table has no root column – and mirrored files carry
+            # no people anyway, so both mirrors fold into their src here.
+            quelle = "datei" if source in ("onedrive", "sharepoint") else source
+            conds.append("src = ?")
+            params.append(quelle)
         if contains.strip():
             # SQLite's LIKE/lower() are ASCII-only; register Python lower() so
             # umlaut-cased input ("MÜLLER") still matches. ppl is stored

@@ -1456,6 +1456,8 @@ class JobRunner:
         self._notify_user(art, label)
         self.last = {"label": label, "ok": ok, "detail": detail,
                      "finished": datetime.now().isoformat(timespec="seconds")}
+        self.job = None
+        self.proc = None
 
     def _notify_user(self, art, label):
         """One system notification per run – or none: the mode decides.
@@ -1477,8 +1479,6 @@ class JobRunner:
             notify.send("Munimentum", text)
         except Exception:
             pass                # a missed notification must never break a run
-        self.job = None
-        self.proc = None
 
     def _erspart(self, step):
         """Darf dieser Schritt entfallen, weil der Export nichts Neues brachte?

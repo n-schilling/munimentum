@@ -747,6 +747,9 @@ def test_jobrunner_fuehrt_schritte_der_reihe_nach_aus(sandbox):
     assert "eins" in text and "zwei" in text
     assert r.last["ok"] and r.last["label"] == "Lauf"
     assert text.index("eins") < text.index("zwei")
+    # Regression: the notify refactor swallowed this cleanup – with default
+    # notification mode ("errors"), job and proc must still reset to None.
+    assert r.job is None and r.proc is None
 
 
 def test_notify_user_mode_decides(monkeypatch, sandbox):

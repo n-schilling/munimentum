@@ -1445,3 +1445,11 @@ def test_read_source_file_liest_die_spiegelwurzeln(state, tmp_path):
         mcp_server.STATE[schluessel] = str(basis)
         out = mcp_server.read_source_file(wurzel, "Team X/Lib/Dateien/a.txt")
         assert "error" not in out and "inhalt" in str(out)
+
+
+def test_list_people_vertraegt_die_spiegelquellen(state):
+    """The people table has no root column – the mirror sources must fold
+    into src='datei' instead of raising OperationalError."""
+    for quelle in ("onedrive", "sharepoint"):
+        out = mcp_server.list_people(source=quelle)
+        assert "people" in out

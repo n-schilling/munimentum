@@ -308,8 +308,8 @@ def test_scope_sammler_erfindet_die_loeschung_aus_dem_bestand():
 
 
 def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
-    """Ein Ordner, der nach allen Retries scheitert, ist ein Fehler mit
-    tiefem Pfad im Protokoll – kein sauberes Ergebnis über einem Loch."""
+    """A folder that still fails after all retries is an error with the deep
+    path in the log – no clean result over a hole in the walk."""
     g = _TeilbaumGraph()
     echte = g.paged
 
@@ -320,6 +320,9 @@ def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
 
     g.paged = paged
     bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
+    bestand.eintraege = {
+        "alt1": {"rel": "Dateien/N/Nordwind/Unter/weg.pdf", "ctag": "c",
+                 "size": 5}}
     s = sp.scope_sammler({"N/Nordwind"})
     eintraege, _ = s(g, bestand)
     assert s.fehler == 1
@@ -327,6 +330,25 @@ def test_scope_sammler_zaehlt_kaputte_ordner(capsys):
     kaputt = [e for e in events if e["k"] == "run.sharepoint.folder_failed"]
     assert len(kaputt) == 1 and kaputt[0]["v"]["path"] == "N/Nordwind/Unter"
     assert {e.get("id") for e in eintraege} == {"f1", "x1", "u1"}
+    # Tombstones are write-once: a walk with holes must not invent deletions.
+    assert not any("deleted" in e for e in eintraege)
+
+
+def test_scope_sammler_zaehlt_kaputte_wurzel_als_fehler(capsys):
+    """A scope root that fails is an error, not a silent empty walk."""
+    class G:
+        drive_base = "https://graph.example/drives/d2"
+
+        def get(self, url):
+            raise RuntimeError("503")
+
+    bestand = __import__("drive_mirror").Bestand("/nonexistent/x.tsv")
+    bestand.eintraege = {
+        "alt1": {"rel": "Dateien/N/Nordwind/weg.pdf", "ctag": "c", "size": 5}}
+    s = sp.scope_sammler({"N/Nordwind"})
+    eintraege, _ = s(G(), bestand)
+    assert s.fehler == 1
+    assert eintraege == []                        # keine erfundenen Löschungen
 
 
 def test_zwei_sites_gleichen_namens_teilen_keinen_ordner(capsys):
@@ -518,3 +540,25 @@ def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
         [z for z in capsys.readouterr().out.splitlines()
          if progress.lies_ergebnis(z)][0])
     assert e["extra"] == {"expected": 2, "present": 1, "missing": 1}
+
+
+def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
+    """A failed page listing (or a removed URL) proves nothing about the
+    site's pages – no tombstones, no inventory eviction."""
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
+    sp.seiten_lauf(g, tmp_path, sites)
+
+    def kaputt(url, params=None):
+        raise RuntimeError("503")
+
+    g.paged = kaputt
+    sp.seiten_lauf(g, tmp_path, sites)
+    weg = sp.drive_mirror.lies_verschwunden(tmp_path / sp.drive_mirror.GONE_FILE)
+    assert weg == {}
+    assert sp.Seitenbestand(tmp_path / sp.SEITEN_BESTAND).eintraege
+
+    # URL aus der Konfiguration entfernt: gleiche Zusage.
+    sp.seiten_lauf(g, tmp_path, [])
+    assert sp.drive_mirror.lies_verschwunden(
+        tmp_path / sp.drive_mirror.GONE_FILE) == {}
