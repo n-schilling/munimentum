@@ -384,3 +384,22 @@ def test_lauf_erneuert_abgelaufenen_delta_zeiger(tmp_path, capsys):
     events = [progress.lies_event(z)
               for z in capsys.readouterr().out.splitlines()]
     assert any(e and e["k"] == "run.drive.resync" for e in events)
+
+
+def test_datei_zustand_traegt_die_walk_ablage(tmp_path):
+    """The file-backed walk staging: resumable, and a torn tail line from a
+    crash mid-append costs nothing – the page repeats anyway."""
+    z = od.drive_mirror.DateiZustand(tmp_path)
+    assert z.walk_status() == {"cursor": None, "fertig": None, "n": 0}
+    z.walk_ergaenzen([{"id": "1"}], "seite-2")
+    with open(tmp_path / od.drive_mirror.WALK_DATEI, "a",
+              encoding="utf-8") as f:
+        f.write('{"id": "2"')                      # Absturz mitten im Schreiben
+    z.walk_ergaenzen([{"id": "2"}, {"id": "3"}], None)
+    assert z.walk_status()["cursor"] == "seite-2"
+    assert [e["id"] for e in z.walk_eintraege()] == ["1", "2", "3"]
+    z.walk_abschliessen("delta-9")
+    status = z.walk_status()
+    assert status["fertig"] == "delta-9" and status["cursor"] is None
+    z.walk_leeren()
+    assert z.walk_status() == {"cursor": None, "fertig": None, "n": 0}

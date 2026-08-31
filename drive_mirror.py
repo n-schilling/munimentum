@@ -18,6 +18,7 @@ docstrings on the moved functions are original OneDrive history – the
 reasoning applies to every drive.
 """
 
+import json
 import os
 import re
 import threading
@@ -39,6 +40,9 @@ GRAPH = graph_client.GRAPH
 DATEI_DIR = "Dateien"           # Wurzel im Ausgabeordner; die Regeln greifen darauf
 BESTAND_DATEI = "dateien.tsv"
 DELTA_DATEI = "delta.txt"
+WALK_DATEI = "walk.jsonl"
+WALK_CURSOR_DATEI = "walk_cursor.txt"
+WALK_FERTIG_DATEI = "walk_fertig.txt"
 GONE_FILE = export_util.GONE_FILE
 BERICHT_DATEI = export_util.BERICHT_DATEI
 
@@ -145,18 +149,30 @@ class DriveOps:
                 pass
         return groesse
 
-    def delta(self, weiter=None):
-        """Alle Delta-Einträge, Seite für Seite. Gibt am Ende den neuen Link."""
+    def delta_seiten(self, weiter=None):
+        """Delta page by page: (entries, resume link, final delta link).
+
+        The nextLink of every page is a valid resumption point – exactly
+        what a checkpointed walk persists so a killed run continues where
+        it stopped instead of walking 300k entries again."""
         url = weiter or f"{self.drive_base}/root/delta?$top={SEITE}"
         while True:
             d = self.get(url)
-            for eintrag in d.get("value", []):
-                yield eintrag, None
             nxt = d.get("@odata.nextLink")
-            if not nxt:
-                yield None, d.get("@odata.deltaLink")
+            if nxt:
+                yield d.get("value", []), nxt, None
+                url = nxt
+            else:
+                yield d.get("value", []), None, d.get("@odata.deltaLink")
                 return
-            url = nxt
+
+    def delta(self, weiter=None):
+        """Alle Delta-Einträge, Seite für Seite. Gibt am Ende den neuen Link."""
+        for eintraege, cursor, fertig in self.delta_seiten(weiter):
+            for eintrag in eintraege:
+                yield eintrag, None
+            if cursor is None:
+                yield None, fertig
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +346,65 @@ class DateiZustand:
     def bericht_schreiben(self, bericht):
         schreibe_bericht(self.out, bericht)
 
+    # -- walk staging (checkpointed enumeration) ---------------------------
+    def walk_status(self):
+        n = 0
+        try:
+            with open(self.out / WALK_DATEI, encoding="utf-8") as f:
+                n = sum(1 for zeile in f if zeile.strip())
+        except OSError:
+            pass
+        return {"cursor": _lies_zeile(self.out / WALK_CURSOR_DATEI),
+                "fertig": _lies_zeile(self.out / WALK_FERTIG_DATEI), "n": n}
+
+    def walk_ergaenzen(self, eintraege, cursor):
+        # Entries first, cursor second: a crash in between repeats the page
+        # on resume – plane() deduplicates by id, nothing is lost.
+        self.out.mkdir(parents=True, exist_ok=True)
+        with open(self.out / WALK_DATEI, "a+b") as f:
+            # Nach einem Absturz mitten im Schreiben endet die Datei ohne
+            # Zeilenumbruch. Erst abschließen – sonst verschmilzt die
+            # wiederholte Seite mit dem Riss und ihr erster Eintrag ginge
+            # verloren.
+            f.seek(0, 2)
+            if f.tell() > 0:
+                f.seek(-1, 2)
+                if f.read(1) != b"\n":
+                    f.write(b"\n")
+            for e in eintraege:
+                f.write(json.dumps(e, ensure_ascii=False).encode("utf-8")
+                        + b"\n")
+        if cursor:
+            export_util.schreibe_atomar(self.out / WALK_CURSOR_DATEI, cursor)
+
+    def walk_abschliessen(self, delta_link):
+        if delta_link:
+            export_util.schreibe_atomar(self.out / WALK_FERTIG_DATEI,
+                                        delta_link)
+        (self.out / WALK_CURSOR_DATEI).unlink(missing_ok=True)
+
+    def walk_eintraege(self):
+        try:
+            with open(self.out / WALK_DATEI, encoding="utf-8") as f:
+                for zeile in f:
+                    try:
+                        yield json.loads(zeile)
+                    except ValueError:
+                        continue       # torn tail line – the page repeated
+        except OSError:
+            return
+
+    def walk_leeren(self):
+        for name in (WALK_DATEI, WALK_CURSOR_DATEI, WALK_FERTIG_DATEI):
+            (self.out / name).unlink(missing_ok=True)
+
+
+def _lies_zeile(pfad):
+    try:
+        return pfad.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
 
 def lies_delta(out):
     try:
@@ -346,12 +421,70 @@ def schreibe_delta(out, link):
 # ---------------------------------------------------------------------------
 # Der Lauf
 # ---------------------------------------------------------------------------
+_EINTRAG_FELDER = ("id", "name", "size", "cTag", "lastModifiedDateTime")
+
+
+def verschlanke(e):
+    """Keep only what plan and check read – a raw Graph entry is about ten
+    times bigger, and 300k of them once held 1.3 GB of RAM."""
+    s = {k: e[k] for k in _EINTRAG_FELDER if k in e}
+    for k in ("deleted", "root", "file", "package"):
+        if k in e:
+            s[k] = {}                  # only membership is ever tested
+    if "folder" in e:
+        s["folder"] = {"childCount": (e.get("folder") or {}).get("childCount")}
+    if "parentReference" in e:
+        s["parentReference"] = {
+            "path": (e.get("parentReference") or {}).get("path")}
+    zeit = (e.get("fileSystemInfo") or {}).get("lastModifiedDateTime")
+    if zeit:
+        s["fileSystemInfo"] = {"lastModifiedDateTime": zeit}
+    return s
+
+
+def seiten(graph, weiter):
+    """Delta pages with their resume cursor.
+
+    Falls back to the entry-wise ``delta()`` – one page, no mid-walk
+    cursor – so the lean graph fakes in tests stay valid."""
+    if hasattr(graph, "delta_seiten"):
+        yield from graph.delta_seiten(weiter)
+        return
+    seite = []
+    for eintrag, fertig in graph.delta(weiter):
+        if eintrag is not None:
+            seite.append(eintrag)
+        else:
+            yield seite, None, fertig
+
+
+def walk(graph, zustand, weiter):
+    """Den Delta-Feed seitenweise in die Ablage schreiben – je Seite mit dem
+    Wiederaufsetz-Link, damit ein abgebrochener Lauf fortsetzt statt neu zu
+    laufen. Liefert den neuen Delta-Link."""
+    gesamt = zustand.walk_status()["n"]
+    fertig = None
+    for eintraege, cursor, delta_link in seiten(graph, weiter):
+        vorher = gesamt
+        zustand.walk_ergaenzen([verschlanke(e) for e in eintraege], cursor)
+        gesamt += len(eintraege)
+        if gesamt // 2000 > vorher // 2000:
+            progress.event("run.drive.walking", n=gesamt)
+        if cursor is None:
+            fertig = delta_link
+    zustand.walk_abschliessen(fertig)
+    return fertig
+
+
 def sammle(graph, weiter):
-    """Delta einmal durchlaufen; liefert (Einträge, neuer Link)."""
+    """Delta einmal durchlaufen; liefert (Einträge, neuer Link).
+
+    In-Memory-Variante für die reinen Prüfläufe – der Spiegel selbst läuft
+    über walk() und die Ablage im Zustands-Backend."""
     eintraege, link = [], None
     for eintrag, fertig in graph.delta(weiter):
         if eintrag is not None:
-            eintraege.append(eintrag)
+            eintraege.append(verschlanke(eintrag))
             if len(eintraege) % 2000 == 0:
                 progress.event("run.drive.walking", n=len(eintraege))
         else:
@@ -412,6 +545,10 @@ def plane(eintraege, bestand, wurzel, auswahl):
             continue
         laden.append({"id": kennung, "rel": rel, "ctag": e.get("cTag") or "",
                       "size": groesse, "mtime": geaendert_am(e)})
+    # Ein Delta darf denselben Eintrag mehrfach nennen (und ein wieder
+    # aufgesetzter Walk eine Seite doppelt): es zählt die letzte Fassung –
+    # sonst schrieben zwei Threads gleichzeitig an derselben Zieldatei.
+    laden = list({a["id"]: a for a in laden}.values())
     return {"laden": laden, "verschoben": verschoben, "geloescht": geloescht,
             "ausgelassen": ausgelassen, "baum": baum, "entfernt": entfernt}
 
@@ -473,40 +610,47 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
     return fertig, fehler
 
 
-def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None,
-         zustand=None):
+def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     """One full mirror pass for one drive; returns the result counts.
 
     ``still`` suppresses the result event – sharepoint_export mirrors several
     drives in one step and reports one combined result at the end.
 
-    ``sammler(graph, bestand)`` replaces the delta walk where delta cannot
-    work: SharePoint scoped to one folder lists just that subtree (delta only
-    exists on a drive's root). A collector returns (entries, delta link or
-    None) and synthesises deletions itself – the pointer then never moves.
+    The walk is checkpointed: every delta page lands in the state backend
+    together with its resume link, so a killed run continues mid-walk
+    instead of starting over – and when only the downloads were left, the
+    next run replans from the stored walk without asking Graph at all.
     """
     out = Path(out)
     wurzel = out
     zustand = zustand or DateiZustand(out)
     bestand = zustand.bestand()
-    if sammler is None:
-        weiter = zustand.delta_lesen()
-        progress.event("run.drive.delta" if weiter else "run.drive.full")
+    status = zustand.walk_status()
+    if status["fertig"]:
+        # Der abgebrochene Lauf war mit der Aufzählung schon durch – nur die
+        # Arbeit danach fehlte. Nicht noch einmal fragen, nur nachholen.
+        progress.event("run.drive.replan", n=status["n"])
+        neuer_link = status["fertig"]
+    else:
+        weiter = status["cursor"] or zustand.delta_lesen()
+        if status["cursor"]:
+            progress.event("run.drive.resume", n=status["n"])
+        else:
+            progress.event("run.drive.delta" if weiter else "run.drive.full")
         try:
-            eintraege, neuer_link = sammle(graph, weiter)
+            neuer_link = walk(graph, zustand, weiter)
         except requests.HTTPError as e:
-            # 410 Gone: Graph expired the delta link (likely after a long
-            # scoped phase, which never advances it). Resync once, in full.
+            # 410 Gone: Graph expired the link – the saved delta pointer or
+            # a stale walk cursor. Resync once, in full.
             if weiter is None or getattr(e.response, "status_code", 0) != 410:
                 raise
             progress.event("run.drive.resync", "warn")
             zustand.delta_loeschen()
-            eintraege, neuer_link = sammle(graph, None)
-    else:
-        eintraege, neuer_link = sammler(graph, bestand)
-    progress.event("run.scanned", n=len(eintraege),
+            zustand.walk_leeren()
+            neuer_link = walk(graph, zustand, None)
+    progress.event("run.scanned", n=zustand.walk_status()["n"],
                    unit=progress.atom("progress.unit.entries"))
-    plan = plane(eintraege, bestand, wurzel, auswahl)
+    plan = plane(zustand.walk_eintraege(), bestand, wurzel, auswahl)
 
     bewegt = verschiebe(wurzel, plan["verschoben"])
     fertig, fehler = hole_alle(graph, wurzel, bestand, plan["laden"], arbeiter)
@@ -521,12 +665,16 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None,
     baum = baum_zusammenfuehren(alt_baum, plan["baum"], plan["entfernt"])
     if baum or alt_baum:
         zustand.baum_schreiben(baum, alt_baum)
-    # Erst jetzt: ein abgebrochener Lauf darf den Delta-Zeiger nicht vorrücken.
-    if not fehler and neuer_link:
-        zustand.delta_schreiben(neuer_link, bestand=bestand)
-
-    if fehler:
-        progress.event("run.drive.retry_full", "warn")
+    if not fehler:
+        # Erst jetzt: ein abgebrochener Lauf darf den Delta-Zeiger nicht
+        # vorrücken. Die Ablage hat ihren Dienst getan und geht mit.
+        if neuer_link:
+            zustand.delta_schreiben(neuer_link, bestand=bestand)
+        zustand.walk_leeren()
+    else:
+        # Ablage und Fertig-Link bleiben liegen: der nächste Lauf plant
+        # daraus neu und holt nur nach, was fehlt.
+        progress.event("run.drive.retry", "warn")
     zahlen = {"new": fertig, "excluded": plan["ausgelassen"], "errors": fehler,
               "moved": bewegt, "gone": len(plan["geloescht"])}
     if not still:
@@ -616,15 +764,11 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
     }
 
 
-def nur_pruefen(graph, out, auswahl, still=False, sammler=None,
-                zustand=None):
+def nur_pruefen(graph, out, auswahl, still=False, zustand=None):
     """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
     out = Path(out)
     zustand = zustand or DateiZustand(out)
-    if sammler is None:
-        eintraege, _ = sammle(graph, None)
-    else:
-        eintraege, _ = sammler(graph, zustand.bestand())
+    eintraege, _ = sammle(graph, None)
     bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl,
                                       weg=zustand.verschwunden_lesen())
     zustand.bericht_schreiben(bericht)
@@ -636,8 +780,7 @@ def nur_pruefen(graph, out, auswahl, still=False, sammler=None,
     return bericht
 
 
-def nur_ordner(graph, out, auswahl, still=False, sammler=None,
-               zustand=None):
+def nur_ordner(graph, out, auswahl, still=False, zustand=None):
     """--folders: nur die Struktur holen, nichts herunterladen.
 
     Zählt bewusst VOLLSTÄNDIG auf und ignoriert den gespeicherten Delta-Zeiger:
@@ -648,10 +791,7 @@ def nur_ordner(graph, out, auswahl, still=False, sammler=None,
     out = Path(out)
     zustand = zustand or DateiZustand(out)
     bestand = zustand.bestand()
-    if sammler is None:
-        eintraege, _ = sammle(graph, None)
-    else:
-        eintraege, _ = sammler(graph, bestand)
+    eintraege, _ = sammle(graph, None)
     plan = plane(eintraege, bestand, out, auswahl)
     alt = zustand.baum_lesen()
     daten = zustand.baum_schreiben(

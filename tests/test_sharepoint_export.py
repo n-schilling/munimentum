@@ -565,6 +565,163 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
     assert zahlen["new"] == 0 and g.aufrufe == [None, "delta-1"]
 
 
+def _drive_datei(kennung, name, ctag="c1"):
+    return {"id": kennung, "name": name, "file": {}, "size": 1, "cTag": ctag,
+            "parentReference": {"path": "/drive/root:"}}
+
+
+def _lade_x(item_id, ziel, geaendert=None):
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    ziel.write_bytes(b"x")
+    return 1
+
+
+def test_walk_setzt_nach_abbruch_am_cursor_fort(tmp_path, capsys):
+    """A killed first walk does not start over: the next run resumes at the
+    stored page link and both halves add up to one complete mirror."""
+    import drive_mirror
+
+    class G:
+        def __init__(self):
+            self.aufrufe = []
+
+        def delta_seiten(self, weiter=None):
+            self.aufrufe.append(weiter)
+            if weiter is None:
+                yield [_drive_datei("a", "a.pdf")], "seite-2", None
+                raise requests.HTTPError(response=_Antwort(500))
+            assert weiter == "seite-2"
+            yield [_drive_datei("b", "b.pdf")], None, "delta-1"
+
+        lade = staticmethod(_lade_x)
+
+    g = G()
+    zustand = sp.state_db.DbZustand(tmp_path)
+    with pytest.raises(requests.HTTPError):
+        drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
+                          zustand=zustand)
+    db = sp.state_db.StateDb(tmp_path)
+    assert db.walk_status() == {"cursor": "seite-2", "fertig": None, "n": 1}
+
+    capsys.readouterr()
+    zahlen = drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
+                               zustand=zustand)
+    assert g.aufrufe == [None, "seite-2"]
+    assert zahlen["new"] == 2 and zahlen["errors"] == 0
+    assert (tmp_path / "Dateien/a.pdf").is_file()
+    assert (tmp_path / "Dateien/b.pdf").is_file()
+    assert db.delta_lesen() == "delta-1"
+    assert db.walk_status() == {"cursor": None, "fertig": None, "n": 0}
+    assert any(e["k"] == "run.drive.resume" and e["v"]["n"] == 1
+               for e in _events(capsys))
+
+
+def test_download_fehler_fuehrt_zu_replan_ohne_neue_aufzaehlung(tmp_path,
+                                                                capsys):
+    """When only downloads failed, the stored walk is complete: the next run
+    plans from it, retries just the missing file and only then advances the
+    delta pointer."""
+    import drive_mirror
+
+    class G:
+        def __init__(self):
+            self.walks = 0
+            self.kaputt = True
+
+        def delta_seiten(self, weiter=None):
+            self.walks += 1
+            yield [_drive_datei("a", "a.pdf"), _drive_datei("b", "b.pdf")], \
+                None, "delta-1"
+
+        def lade(self, item_id, ziel, geaendert=None):
+            if self.kaputt and item_id == "b":
+                raise RuntimeError("kaputt")
+            return _lade_x(item_id, ziel, geaendert)
+
+    g = G()
+    zustand = sp.state_db.DbZustand(tmp_path)
+    zahlen = drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
+                               zustand=zustand)
+    assert zahlen["new"] == 1 and zahlen["errors"] == 1
+    db = sp.state_db.StateDb(tmp_path)
+    assert db.delta_lesen() is None               # Zeiger rückt nicht vor
+    assert db.walk_status()["fertig"] == "delta-1"
+
+    g.kaputt = False
+    capsys.readouterr()
+    zahlen = drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
+                               zustand=zustand)
+    assert g.walks == 1                           # keine zweite Aufzählung
+    assert zahlen["new"] == 1 and zahlen["errors"] == 0
+    assert (tmp_path / "Dateien/b.pdf").is_file()
+    assert db.delta_lesen() == "delta-1"
+    assert db.walk_status() == {"cursor": None, "fertig": None, "n": 0}
+    assert any(e["k"] == "run.drive.replan" for e in _events(capsys))
+
+
+def test_veralteter_cursor_faellt_auf_volle_aufzaehlung_zurueck(tmp_path,
+                                                                capsys):
+    """410 on a stored walk cursor: staging is dropped and the walk restarts
+    in full – without doubling the entries it had already stored."""
+    import drive_mirror
+
+    db = sp.state_db.StateDb(tmp_path)
+    db.walk_ergaenzen([_drive_datei("alt", "alt.pdf")], "cursor-alt")
+
+    class G:
+        def __init__(self):
+            self.aufrufe = []
+
+        def delta_seiten(self, weiter=None):
+            self.aufrufe.append(weiter)
+            if weiter == "cursor-alt":
+                raise requests.HTTPError(response=_Antwort(410))
+            yield [_drive_datei("a", "a.pdf")], None, "delta-2"
+
+        lade = staticmethod(_lade_x)
+
+    g = G()
+    zahlen = drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
+                               zustand=sp.state_db.DbZustand(tmp_path))
+    assert g.aufrufe == ["cursor-alt", None]
+    assert zahlen["new"] == 1
+    assert not (tmp_path / "Dateien/alt.pdf").exists()
+    assert db.delta_lesen() == "delta-2"
+
+
+def test_verschlanke_behaelt_nur_die_gelesenen_felder():
+    import drive_mirror
+
+    roh = {"id": "1", "name": "a.pdf", "size": 5, "cTag": "c",
+           "file": {"mimeType": "application/pdf",
+                    "hashes": {"quickXorHash": "x"}},
+           "parentReference": {"path": "/drive/root:/A", "driveId": "d",
+                               "id": "p", "siteId": "s"},
+           "fileSystemInfo": {"lastModifiedDateTime": "2026-01-01T00:00:00Z",
+                              "createdDateTime": "2020-01-01T00:00:00Z"},
+           "createdBy": {"user": {"displayName": "Jemand"}},
+           "webUrl": "https://firma.sharepoint.com/x", "eTag": "e"}
+    s = drive_mirror.verschlanke(roh)
+    assert s == {"id": "1", "name": "a.pdf", "size": 5, "cTag": "c",
+                 "file": {}, "parentReference": {"path": "/drive/root:/A"},
+                 "fileSystemInfo":
+                 {"lastModifiedDateTime": "2026-01-01T00:00:00Z"}}
+    assert drive_mirror.rel_pfad(s) == "Dateien/A/a.pdf"
+
+
+def test_plane_dedupliziert_wiederholte_eintraege(tmp_path):
+    """Delta may name the same item twice (and a resumed walk repeats a
+    page) – the plan must hold one download, not two threads on one file."""
+    import drive_mirror
+
+    bestand = drive_mirror.Bestand(tmp_path / "dateien.tsv")
+    plan = drive_mirror.plane(
+        [_drive_datei("a", "a.pdf", ctag="c1"),
+         _drive_datei("a", "a.pdf", ctag="c2")],
+        bestand, tmp_path, Selection())
+    assert len(plan["laden"]) == 1 and plan["laden"][0]["ctag"] == "c2"
+
+
 def test_lange_aufzaehlung_meldet_zwischenstand(capsys):
     """A first walk over a big drive is minutes of silence otherwise – every
     2000 entries one line proves the run is alive."""

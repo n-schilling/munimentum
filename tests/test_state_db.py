@@ -66,6 +66,19 @@ def test_dbbestand_traegt_die_bestandsschnittstelle(tmp_path):
     assert db.delta_lesen() == "link-9"
 
 
+def test_walk_ablage_haelt_seiten_cursor_und_abschluss(tmp_path):
+    db = state_db.StateDb(tmp_path)
+    assert db.walk_status() == {"cursor": None, "fertig": None, "n": 0}
+    db.walk_ergaenzen([{"id": "1"}, {"id": "2"}], "seite-2")
+    db.walk_ergaenzen([{"id": "3"}], None)
+    assert db.walk_status() == {"cursor": "seite-2", "fertig": None, "n": 3}
+    assert [e["id"] for e in db.walk_eintraege()] == ["1", "2", "3"]
+    db.walk_abschliessen("delta-9")
+    assert db.walk_status() == {"cursor": None, "fertig": "delta-9", "n": 3}
+    db.walk_leeren()
+    assert db.walk_status() == {"cursor": None, "fertig": None, "n": 0}
+
+
 def test_kaputte_datei_bricht_leser_kontrolliert(tmp_path):
     (tmp_path / state_db.DB_NAME).write_bytes(b"kein sqlite")
     db = state_db.StateDb(tmp_path)

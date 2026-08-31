@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS kv(
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS walk(
+    nr    INTEGER PRIMARY KEY AUTOINCREMENT,
+    daten TEXT NOT NULL
+);
 """
 
 
@@ -211,6 +215,73 @@ class StateDb:
     def bericht_schreiben(self, bericht):
         self._kv_schreiben("bericht", json.dumps(bericht, ensure_ascii=False))
 
+    # -- walk staging (checkpointed enumeration) ---------------------------
+    def walk_status(self):
+        con = self._verbinden(lesend=True)
+        n = 0
+        if con is not None:
+            try:
+                n = con.execute("SELECT COUNT(*) FROM walk").fetchone()[0]
+            finally:
+                con.close()
+        return {"cursor": self._kv_lesen("walk_cursor"),
+                "fertig": self._kv_lesen("walk_fertig"), "n": n}
+
+    def walk_ergaenzen(self, eintraege, cursor):
+        """One delta page and its resume link in ONE transaction – a crash
+        never leaves entries without the cursor that follows them."""
+        con = self._verbinden()
+        try:
+            with con:
+                con.executemany(
+                    "INSERT INTO walk(daten) VALUES(?)",
+                    [(json.dumps(e, ensure_ascii=False),) for e in eintraege])
+                if cursor:
+                    con.execute(
+                        "INSERT INTO kv(key, value) VALUES('walk_cursor', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (cursor,))
+        finally:
+            con.close()
+
+    def walk_abschliessen(self, delta_link):
+        con = self._verbinden()
+        try:
+            with con:
+                con.execute("DELETE FROM kv WHERE key = 'walk_cursor'")
+                if delta_link:
+                    con.execute(
+                        "INSERT INTO kv(key, value) VALUES('walk_fertig', ?) "
+                        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                        (delta_link,))
+        finally:
+            con.close()
+
+    def walk_eintraege(self):
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return
+        try:
+            for (roh,) in con.execute("SELECT daten FROM walk ORDER BY nr"):
+                try:
+                    yield json.loads(roh)
+                except ValueError:
+                    continue
+        finally:
+            con.close()
+
+    def walk_leeren(self):
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return
+        try:
+            with con:
+                con.execute("DELETE FROM walk")
+                con.execute("DELETE FROM kv WHERE key IN "
+                            "('walk_cursor', 'walk_fertig')")
+        finally:
+            con.close()
+
 
 class DbBestand(drive_mirror.Bestand):
     """The mirror inventory, backed by the folder's state.db.
@@ -265,3 +336,18 @@ class DbZustand:
 
     def bericht_schreiben(self, bericht):
         self.db.bericht_schreiben(bericht)
+
+    def walk_status(self):
+        return self.db.walk_status()
+
+    def walk_ergaenzen(self, eintraege, cursor):
+        self.db.walk_ergaenzen(eintraege, cursor)
+
+    def walk_abschliessen(self, delta_link):
+        self.db.walk_abschliessen(delta_link)
+
+    def walk_eintraege(self):
+        return self.db.walk_eintraege()
+
+    def walk_leeren(self):
+        self.db.walk_leeren()
