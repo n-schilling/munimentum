@@ -22,9 +22,11 @@ mirror run would fetch – count, size, and what the filters leave out
 --pages is a separate export with its own configuration
 (SHAREPOINT_PAGES_URLS): the modern site pages of the listed sites and all
 their subsites, rendered to standalone HTML from the Graph Pages API
-(canvasLayout). Text web parts keep their content, everything else becomes a
-named placeholder; classic wiki pages are not part of that API. Incremental
-via eTag, deleted pages get the usual tombstone note.
+(canvasLayout). Text web parts keep their content, images are embedded as
+data URIs (fetched via the Graph shares endpoint, which resolves any asset
+URL the user can read), everything else becomes a named placeholder; classic
+wiki pages are not part of that API. Incremental via eTag, deleted pages get
+the usual tombstone note.
 
 Access needs Sites.Read.All. A pasted key without that scope does not kill
 the run: the affected site is reported and skipped.
@@ -34,6 +36,7 @@ scope; those files simply keep their last mirrored state, without tombstones –
 the mirror promise applies to what the URL list currently selects.
 """
 
+import base64
 import os
 import re
 import sys
@@ -68,6 +71,7 @@ SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
 OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
 SEITEN_BESTAND = "seiten.tsv"
+BILD_MAX = 4 * 1024 * 1024      # larger images stay a link, not a data URI
 BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
@@ -507,11 +511,11 @@ def resolve_page_sites(graph, urls):
     """
     gefunden, fehl, gesehen = [], 0, set()
 
-    def absteigen(sid, pfad):
+    def absteigen(sid, pfad, host):
         if sid in gesehen:
             return
         gesehen.add(sid)
-        gefunden.append({"id": sid, "pfad": pfad})
+        gefunden.append({"id": sid, "pfad": pfad, "host": host})
         try:
             unter = list(graph.paged(f"{GRAPH}/sites/{sid}/sites"))
         except auth.TokenExpired:
@@ -521,7 +525,8 @@ def resolve_page_sites(graph, urls):
         for u in unter:
             if u.get("id"):
                 absteigen(u["id"], pfad + [safe(u.get("displayName")
-                                                or u.get("name") or "Site", 80)])
+                                                or u.get("name") or "Site", 80)],
+                          host)
 
     for url in urls:
         teile = url_teile(url)
@@ -541,14 +546,23 @@ def resolve_page_sites(graph, urls):
             fehl += 1
             continue
         name = safe(site.get("displayName") or site.get("name") or adresse, 80)
-        absteigen(site["id"], [name])
+        host = urlsplit(site.get("webUrl") or "").netloc or adresse.split(":")[0]
+        absteigen(site["id"], [name], host)
     return gefunden, fehl
 
 
 def _webpart_html(wp):
     if str(wp.get("@odata.type", "")).endswith("textWebPart"):
         return wp.get("innerHtml") or ""
-    titel = ((wp.get("data") or {}).get("title")
+    daten = wp.get("data") or {}
+    quellen = [q.get("value") for q in
+               ((daten.get("serverProcessedContent") or {})
+                .get("imageSources") or ())
+               if q.get("value")]
+    if quellen:
+        return "".join('<img src="' + u.replace('"', "&quot;") + '" alt="">'
+                       for u in quellen)
+    titel = (daten.get("title")
              or wp.get("webPartType") or "web part")
     return ('<p class="webpart">[' +
             str(titel).replace("<", "&lt;") + "]</p>")
@@ -576,10 +590,55 @@ def render_page(seite, layout):
             + "\n".join(teile) + "</body></html>")
 
 
+_IMG_SRC = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.I)
+
+
+def _lade_bild(graph, url):
+    """Any asset URL the user can read, fetched via the shares endpoint –
+    no need to work out which drive the image lives in."""
+    token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
+    return graph.get_bytes(f"{GRAPH}/shares/u!{token}/driveItem/content",
+                           label=" (Bild)")
+
+
+def bilder_einbetten(graph, html, host, zaehler):
+    """Embed the page's images as data URIs so the file stands alone.
+
+    Failures keep the original URL: signed in, the browser may still show
+    it – better than a hole. Oversized images stay links on purpose."""
+    import html as html_lib
+
+    def ersetze(m):
+        roh = html_lib.unescape(m.group(2))
+        if roh.startswith("data:"):
+            return m.group(0)
+        voll = (roh if "://" in roh
+                else f"https://{host}{roh}" if roh.startswith("/") else None)
+        if not voll:
+            return m.group(0)
+        try:
+            inhalt, ctype = _lade_bild(graph, voll)
+        except auth.TokenExpired:
+            raise
+        except Exception:
+            zaehler["fehl"] += 1
+            return m.group(0)
+        if len(inhalt) > BILD_MAX:
+            return m.group(0)
+        zaehler["bilder"] += 1
+        b64 = base64.b64encode(inhalt).decode()
+        return (m.group(1) +
+                f"data:{(ctype or 'image/png').split(';')[0]};base64,{b64}" +
+                m.group(3))
+
+    return _IMG_SRC.sub(ersetze, html)
+
+
 def seiten_lauf(graph, out, sites, fehl=0):
     out = Path(out)
     bestand = Seitenbestand(out / SEITEN_BESTAND)
     neu = unveraendert = fehler = 0
+    zaehler = {"bilder": 0, "fehl": 0}
     gesehen = set()
     for s in sites:
         try:
@@ -621,8 +680,9 @@ def seiten_lauf(graph, out, sites, fehl=0):
                 continue
             ziel = out / rel
             ziel.parent.mkdir(parents=True, exist_ok=True)
-            export_util.schreibe_atomar(
-                ziel, render_page(voll, voll.get("canvasLayout")))
+            html = render_page(voll, voll.get("canvasLayout"))
+            html = bilder_einbetten(graph, html, s.get("host") or "", zaehler)
+            export_util.schreibe_atomar(ziel, html)
             bestand.eintraege[sid] = {"rel": rel, "etag": etag}
             neu += 1
         bestand.schreibe()
@@ -637,8 +697,11 @@ def seiten_lauf(graph, out, sites, fehl=0):
             drive_mirror.lies_verschwunden(out / drive_mirror.GONE_FILE),
             weg, jetzt)
     bestand.schreibe()
+    if zaehler["fehl"]:
+        progress.event("run.pages.images_failed", "warn", n=zaehler["fehl"])
     progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
-                      extra={"sites": len(sites), "gone": len(weg)})
+                      extra={"sites": len(sites), "gone": len(weg),
+                             "images": zaehler["bilder"]})
     return neu
 
 

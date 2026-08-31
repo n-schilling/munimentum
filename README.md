@@ -95,8 +95,8 @@ you commit. Reading sites needs the Sites.Read.All permission.
 
 **Site pages** are a separate export with their own URL list: the modern
 pages (news included) of the listed sites and all their subsites, rendered to
-standalone HTML — text kept, other web parts as named placeholders — and
-full-text searchable afterwards.
+standalone HTML — text kept, images embedded, other web parts as named
+placeholders — and full-text searchable afterwards.
 
 ### Search data
 

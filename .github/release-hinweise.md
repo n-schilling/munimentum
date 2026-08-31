@@ -11,7 +11,8 @@ permission; the token wizard lists it.
 
 **Site pages are exported as HTML.** A separate URL list; the modern pages
 (news included) of the listed sites and all their subsites become standalone
-HTML files — text kept, other web parts as named placeholders — incremental,
+HTML files — text kept, images embedded, other web parts as named
+placeholders — incremental,
 with tombstones for deleted pages, and full-text searchable under their own
 source "Pages".
 

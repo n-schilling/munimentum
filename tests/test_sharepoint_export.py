@@ -432,3 +432,67 @@ def test_resolve_page_sites_steigt_ab_und_dedupliziert(capsys):
               "https://firma.sharepoint.com/sites/TeamX"])
     assert fehl == 0
     assert [s["pfad"] for s in sites] == [["Team X"], ["Team X", "Unter"]]
+
+
+# ---------------------------------------------------------------------------
+# Images in pages: embedded as data URIs, failures keep the link
+# ---------------------------------------------------------------------------
+class _BildGraph:
+    def __init__(self, inhalt=b"PNGDATEN", fehler=False):
+        self.inhalt = inhalt
+        self.fehler = fehler
+        self.urls = []
+
+    def get_bytes(self, url, label=""):
+        self.urls.append(url)
+        if self.fehler:
+            raise RuntimeError("403")
+        return self.inhalt, "image/png"
+
+
+def test_bilder_einbetten_ersetzt_relative_und_absolute_quellen():
+    g = _BildGraph()
+    html = ('<p><img class="x" src="/sites/TeamX/SiteAssets/logo.png"></p>'
+            '<img src="https://firma.sharepoint.com/bild.jpg">'
+            '<img src="data:image/gif;base64,AA==">')
+    z = {"bilder": 0, "fehl": 0}
+    aus = sp.bilder_einbetten(g, html, "firma.sharepoint.com", z)
+    assert z == {"bilder": 2, "fehl": 0}
+    assert aus.count("data:image/png;base64,") == 2
+    assert "data:image/gif;base64,AA==" in aus          # war schon eingebettet
+    # Der Shares-Umweg trägt die volle URL, base64url-kodiert.
+    assert all("/shares/u!" in u for u in g.urls)
+
+
+def test_bilder_einbetten_laesst_bei_fehler_den_link_stehen():
+    g = _BildGraph(fehler=True)
+    z = {"bilder": 0, "fehl": 0}
+    aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z)
+    assert 'src="/a/b.png"' in aus and z["fehl"] == 1
+
+
+def test_bilder_einbetten_ueberspringt_zu_grosse():
+    g = _BildGraph(inhalt=b"x" * (sp.BILD_MAX + 1))
+    z = {"bilder": 0, "fehl": 0}
+    aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z)
+    assert 'src="/a/b.png"' in aus and z == {"bilder": 0, "fehl": 0}
+
+
+def test_webpart_mit_imagesources_wird_zum_img():
+    wp = {"@odata.type": "#microsoft.graph.standardWebPart",
+          "data": {"serverProcessedContent": {"imageSources": [
+              {"key": "imageSource", "value": "/sites/T/SiteAssets/foto.jpg"}]}}}
+    aus = sp._webpart_html(wp)
+    assert '<img src="/sites/T/SiteAssets/foto.jpg"' in aus
+
+
+def test_seiten_lauf_bettet_bilder_ein(tmp_path):
+    g = _SeitenGraph()
+    g.layout = {"horizontalSections": [{"columns": [{"webparts": [
+        {"@odata.type": "#microsoft.graph.textWebPart",
+         "innerHtml": '<p><img src="/sites/T/SiteAssets/logo.png"></p>'}]}]}]}
+    g.get_bytes = lambda url, label="": (b"BILD", "image/png")
+    sites = [{"id": "s1", "pfad": ["Team X"], "host": "firma.sharepoint.com"}]
+    sp.seiten_lauf(g, tmp_path, sites)
+    html = next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")
+    assert "data:image/png;base64," in html
