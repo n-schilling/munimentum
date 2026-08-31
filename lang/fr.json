@@ -147,7 +147,7 @@
   "book.show.comm": "Afficher les échanges",
   "settings.cadence": "Fréquence de synchronisation",
   "settings.cadence.i": "Fréquence maximale de synchronisation de cette source – vaut pour les exécutions planifiées ET manuelles. Sous son intervalle, elle est sautée avec une ligne claire dans le journal ; « toujours » est la valeur par défaut.",
-  "cadence.units.none": "Aucune unité résolue pour l’instant – après la première exécution, elles apparaissent ici avec leur propre fréquence.",
+  "cadence.units.none": "Aucune URL pour l’instant – ajoutez-en une avec +.",
   "cadence.sync_now": "Synchroniser maintenant",
   "cadence.always": "toujours",
   "cadence.daily": "quotidienne",

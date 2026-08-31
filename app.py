@@ -1177,7 +1177,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "sharepoint", "label": "job.step.sharepoint", "corpus": True,
             "argv": script_argv("sharepoint_export", SHAREPOINT_DIR),
             "env": {**base_env, **_sharepoint_env(cfg),
-                    **({"SHAREPOINT_ONLY": nur_einheit} if nur_einheit else {})},
+                    **({"SHAREPOINT_URLS": nur_einheit, "SYNC_NOW": "1"}
+                       if nur_einheit else {})},
         })
     if sharepoint_pages:
         steps.append({
@@ -1185,11 +1186,11 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "argv": script_argv("sharepoint_export", "--pages",
                                 SHAREPOINT_PAGES_DIR),
             "env": {**base_env,
-                    **({"SHAREPOINT_PAGES_ONLY": nur_einheit}
-                       if nur_einheit else {}),
                     "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
                     "SHAREPOINT_PAGES_URLS":
-                    str(cfg.get("sharepoint_pages_urls") or ""),
+                    (nur_einheit if nur_einheit
+                     else str(cfg.get("sharepoint_pages_urls") or "")),
+                    **({"SYNC_NOW": "1"} if nur_einheit else {}),
                     "SHAREPOINT_PAGES_IMAGE_MAX_MB":
                     str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))},
         })
@@ -2285,19 +2286,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
-            if u.path == "/api/sharepoint-units":
-                # What the URLs resolved to last time, for the cadence tables.
-                def einheiten(dirname):
-                    roh = state_db.StateDb(BASE / dirname)._kv_lesen("einheiten")
-                    try:
-                        daten = json.loads(roh) if roh else []
-                    except ValueError:
-                        daten = []
-                    return daten if isinstance(daten, list) else []
-                return self._json({
-                    "libraries": einheiten(SHAREPOINT_DIR),
-                    "sites": einheiten(SHAREPOINT_PAGES_DIR),
-                    "cadence": app.cfg.get("sync_cadence") or {}})
             if u.path == "/api/sharepoint-report":
                 # The preview/type views need only this one small file –
                 # not the full analytics aggregation behind /api/analytics.
@@ -3160,6 +3148,12 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
   border-top:1px solid var(--line);cursor:default}
 .dateizeile:first-child{border-top:0}
 .dateizeile .muted{margin-left:auto;white-space:nowrap}
+.urltab .zeile{display:flex;gap:8px;align-items:center;padding:5px 0;
+  border-top:1px solid var(--line)}
+.urltab .zeile:first-child{border-top:0}
+.urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.urltab input[type=text]{flex:1;min-width:0}
+.urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
 .hit h3{grid-column:1;margin:0;font-size:14px;font-weight:600;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .hit .wer{grid-column:2;color:var(--muted);font-size:12.5px;white-space:nowrap}
@@ -3854,20 +3848,19 @@ main{padding-bottom:60px}
           placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
       <div class="row" style="margin-top:8px">
         <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
         <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
         <span class="small muted" id="od-folders-msg"></span>
       </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.sharepoint.title">SharePoint</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-sharepoint_urls" style="min-height:70px"
-          placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
-      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span>
+        <button class="mini" onclick="urlZeile('sp-urls', '')" title="+">+</button>
+        <button class="mini" onclick="urlZeileWeg('sp-urls')" title="&minus;">&minus;</button></span></div>
+      <div id="sp-urls" class="urltab" data-praefix="sharepoint-url"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" style="min-width:220px" placeholder="pdf, docx, xlsx"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" style="min-width:220px" placeholder="mp4, iso"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
@@ -3879,17 +3872,14 @@ main{padding-bottom:60px}
         <span class="small muted" id="sp-msg"></span>
       </div>
       <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
-      <div id="sp-einheiten" style="margin-top:8px"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-sharepoint_pages_urls" style="min-height:50px"
-          placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
-      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
+        <button class="mini" onclick="urlZeile('pg-urls', '')" title="+">+</button>
+        <button class="mini" onclick="urlZeileWeg('pg-urls')" title="&minus;">&minus;</button></span></div>
+      <div id="pg-urls" class="urltab" data-praefix="pages-url"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
-      <div id="pg-einheiten" style="margin-top:8px"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
@@ -4228,7 +4218,6 @@ function tab(name){
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
   });
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); }
-  if(name === 'einstellungen') ladeEinheiten();
   if(name === 'analytics') ladeAnalytics();
 }
 
@@ -6212,11 +6201,11 @@ function fuelleEinstellungen(cfg){
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
   el('c-notifications').value = cfg.notifications || 'errors';
-  el('c-sharepoint_urls').value = cfg.sharepoint_urls || '';
   var kad = cfg.sync_cadence || {};
+  fuelleUrlTabelle('sp-urls', cfg.sharepoint_urls, kad, 'sharepoint-url');
+  fuelleUrlTabelle('pg-urls', cfg.sharepoint_pages_urls, kad, 'pages-url');
   el('c-cadence-onedrive').value = kad.onedrive || 'always';
   el('c-cadence-teams').value = kad.teams || 'always';
-  el('c-sharepoint_pages_urls').value = cfg.sharepoint_pages_urls || '';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -6227,64 +6216,70 @@ function fuelleEinstellungen(cfg){
   fuelleSprachen();
 }
 function leseKadenzen(){
-  var kad = Object.assign({}, (S && S.config && S.config.sync_cadence) || {});
-  kad.onedrive = el('c-cadence-onedrive').value;
-  kad.teams = el('c-cadence-teams').value;
-  document.querySelectorAll('[data-kadenz]').forEach(function(sel){
-    kad[sel.dataset.kadenz] = sel.value;
-  });
-  return kad;
+  // Rebuilt from scratch: URL keys always mirror the current tables, so a
+  // removed or edited row cannot leave a stale cadence behind.
+  return {onedrive: el('c-cadence-onedrive').value,
+          teams: el('c-cadence-teams').value};
 }
 
-var EINHEITEN = {libraries: [], sites: []};
-
-function ladeEinheiten(){
-  api('/api/sharepoint-units').then(function(r){
-    EINHEITEN = r;
-    zeichneEinheiten('sp-einheiten', r.libraries || [], 'sharepoint',
-                     {sharepoint: true}, r.cadence || {});
-    zeichneEinheiten('pg-einheiten', r.sites || [], 'pages',
-                     {sharepoint_pages: true}, r.cadence || {});
-  }).catch(function(){});
-}
-
-function zeichneEinheiten(boxId, liste, art, lauf, kadenzen){
-  var box = el(boxId);
-  if(!liste.length){
-    box.innerHTML = '<p class="small muted">' +
-      esc(t('cadence.units.none')) + '</p>';
-    return;
-  }
+function urlZeile(tabId, wert, kadenz){
+  // One row per source URL: the address, its sync cadence, and "sync now".
+  var tab = el(tabId);
+  var zeile = document.createElement('div');
+  zeile.className = 'zeile';
+  zeile.onclick = function(){
+    tab.querySelectorAll('.zeile').forEach(function(z){ z.classList.remove('an'); });
+    zeile.classList.add('an');
+  };
   var optionen = ['always', 'daily', 'weekly', 'monthly'];
-  box.innerHTML = liste.map(function(e, i){
-    var key = art + ':' + e.id;
-    var name = e.site ? e.site + ' / ' + e.name : e.name;
-    var wert = kadenzen[key] || 'always';
-    return '<div class="dateizeile"><span>' + esc(name) + '</span>' +
-      '<span class="muted">' +
-      '<select data-kadenz="' + esc(key) + '" onchange="speichereEinstellungen()">' +
-      optionen.map(function(o){
-        return '<option value="' + o + '"' + (o === wert ? ' selected' : '') +
-          '>' + esc(t('cadence.' + o)) + '</option>';
-      }).join('') + '</select> ' +
-      '<button class="mini" onclick="syncJetzt(\'' + boxId + '\',' + i + ')" ' +
-      'data-einheit data-i18n="cadence.sync_now">' + esc(t('cadence.sync_now')) +
-      '</button></span></div>';
-  }).join('');
+  zeile.innerHTML =
+    '<input type="text" placeholder="https://firma.sharepoint.com/sites/TeamX">' +
+    '<select>' + optionen.map(function(o){
+      return '<option value="' + o + '"' + (o === (kadenz || 'always') ? ' selected' : '') +
+        '>' + esc(t('cadence.' + o)) + '</option>';
+    }).join('') + '</select>' +
+    '<button class="mini">' + esc(t('cadence.sync_now')) + '</button>';
+  zeile.querySelector('input').value = wert || '';
+  zeile.querySelector('select').onchange = speichereEinstellungen;
+  zeile.querySelector('input').onchange = speichereEinstellungen;
+  zeile.querySelector('button').onclick = function(ev){
+    ev.stopPropagation();
+    var url = zeile.querySelector('input').value.trim();
+    if(!url) return;
+    var lauf = tabId === 'sp-urls' ? {sharepoint: true} : {sharepoint_pages: true};
+    merke('flow.run', 'sync_now');
+    post('/api/run', Object.assign({nur_einheit: url, label: 'job.export'}, lauf))
+      .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+  };
+  tab.appendChild(zeile);
+  return zeile;
 }
 
-function syncJetzt(boxId, i){
-  var art = boxId === 'sp-einheiten'
-    ? {liste: EINHEITEN.libraries, lauf: {sharepoint: true}}
-    : {liste: EINHEITEN.sites, lauf: {sharepoint_pages: true}};
-  var e = (art.liste || [])[i];
-  if(!e) return;
-  var body = Object.assign({nur_einheit: e.id, label: 'job.export'}, art.lauf);
-  merke('flow.run', 'sync_now');
-  post('/api/run', body).then(function(r){
-    if(!r.ok) alert(mtext(r.message));
-    refresh();
+function urlZeileWeg(tabId){
+  var an = el(tabId).querySelector('.zeile.an');
+  if(an){ an.remove(); speichereEinstellungen(); }
+}
+
+function fuelleUrlTabelle(tabId, text, kadenzen, praefix){
+  var tab = el(tabId);
+  tab.innerHTML = '';
+  tab.dataset.leer = t('cadence.units.none');
+  String(text || '').split('\n').map(function(z){ return z.trim(); })
+    .filter(Boolean).forEach(function(url){
+      urlZeile(tabId, url, kadenzen[praefix + ':' + url]);
+    });
+}
+
+function liesUrlTabelle(tabId, kadenzen, praefix){
+  var urls = [];
+  el(tabId).querySelectorAll('.zeile').forEach(function(z){
+    var url = z.querySelector('input').value.trim();
+    if(!url) return;
+    urls.push(url);
+    var wert = z.querySelector('select').value;
+    if(wert !== 'always') kadenzen[praefix + ':' + url] = wert;
   });
+  return urls.join('\n');
 }
 
 function speichereEinstellungen(){
@@ -6294,9 +6289,11 @@ function speichereEinstellungen(){
               analytics_skip: el('c-analytics_skip').value,
               language: el('c-language').value,
               notifications: el('c-notifications').value,
-              sharepoint_urls: el('c-sharepoint_urls').value,
-              sharepoint_pages_urls: el('c-sharepoint_pages_urls').value,
               sync_cadence: leseKadenzen()};
+  body.sharepoint_urls = liesUrlTabelle('sp-urls', body.sync_cadence,
+                                        'sharepoint-url');
+  body.sharepoint_pages_urls = liesUrlTabelle('pg-urls', body.sync_cadence,
+                                              'pages-url');
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
@@ -6362,8 +6359,11 @@ var ABGLEICH = {
 function speichereSharepointFelder(){
   // The buttons must act on what the form shows, not on the last save –
   // otherwise an edited URL list feels ignored until someone hits Save.
+  var kad = leseKadenzen();
   return post('/api/config', {
-    sharepoint_urls: el('c-sharepoint_urls').value,
+    sharepoint_urls: liesUrlTabelle('sp-urls', kad, 'sharepoint-url'),
+    sharepoint_pages_urls: liesUrlTabelle('pg-urls', kad, 'pages-url'),
+    sync_cadence: kad,
     sharepoint_types_include: el('c-sharepoint_types_include').value,
     sharepoint_types_exclude: el('c-sharepoint_types_exclude').value,
     sharepoint_max_mb: parseInt(el('c-sharepoint_max_mb').value, 10) || 0});

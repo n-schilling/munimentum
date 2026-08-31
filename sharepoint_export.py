@@ -113,7 +113,7 @@ def max_bytes():
 
 
 def kadenzen():
-    """The per-unit sync cadence map ("sharepoint:<id>" / "pages:<id>")."""
+    """Cadence per source URL ("sharepoint-url:<url>" / "pages-url:<url>")."""
     roh = os.environ.get("SYNC_CADENCE")
     if roh is None:
         roh = json.dumps(settings.value("sync_cadence", {}) or {})
@@ -124,18 +124,26 @@ def kadenzen():
     return daten if isinstance(daten, dict) else {}
 
 
-def _nur_einheit(env_name):
-    return (os.environ.get(env_name) or "").strip() or None
+def sync_jetzt():
+    """The per-row "Sync now" button: the run carries just that URL and
+    this flag – the cadence gate steps aside once."""
+    return bool((os.environ.get("SYNC_NOW") or "").strip())
 
 
-def einheit_faellig(db, schluessel, kv_key="last_sync"):
-    """Due under its cadence? "Sync now" (the ONLY env) bypasses this."""
-    kadenz = kadenzen().get(schluessel) or "always"
-    if kadenz == "always":
-        return True, kadenz
+_KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}
+
+
+def _haeufigere(a, b):
+    """Two URLs feeding one unit: the more frequent cadence wins."""
+    return a if _KADENZ_RANG.get(a, 0) <= _KADENZ_RANG.get(b, 0) else b
+
+
+def einheit_faellig(db, kadenz, kv_key="last_sync"):
+    if sync_jetzt() or (kadenz or "always") == "always":
+        return True
     roh = db._kv_lesen(kv_key)
     letzter = float(roh) if roh else None
-    return export_util.cadence_faellig(kadenz, letzter), kadenz
+    return export_util.cadence_faellig(kadenz, letzter)
 
 
 def auswahl():
@@ -227,7 +235,9 @@ def resolve_drives(graph, urls):
     gefunden, fehl = [], 0
     nach_id = {}
     seiten_namen = {}
+    kadenz_map = kadenzen()
     for url in urls:
+        kadenz = kadenz_map.get(f"sharepoint-url:{url}") or "always"
         teile = url_teile(url)
         if not teile:
             progress.event("run.sharepoint.site_failed", "err", url=url,
@@ -286,13 +296,16 @@ def resolve_drives(graph, urls):
             if eintrag is None:
                 eintrag = {"id": d["id"], "site": sname,
                            "name": d.get("name") or "Bibliothek",
+                           "kadenz": kadenz,
                            "prefixes": None if unterpfad is None
                            else {unterpfad}}
                 nach_id[d["id"]] = eintrag
                 gefunden.append(eintrag)
             elif unterpfad is None:
+                eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
                 eintrag["prefixes"] = None            # full scope wins
             elif eintrag["prefixes"] is not None:
+                eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
                 _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
     return gefunden, fehl
 
@@ -354,22 +367,18 @@ def je_drive(graph, drives):
 # ---------------------------------------------------------------------------
 def lauf(graph, out, drives, fehl=0):
     wahl = auswahl()
-    nur = _nur_einheit("SHAREPOINT_ONLY")
-    if nur:
-        drives = [d for d in drives if d["id"] == nur]
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     uebersprungen = 0
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
         db = state_db.StateDb(ziel)
-        if not nur:
-            faellig, kadenz = einheit_faellig(db, f'sharepoint:{d["id"]}')
-            if not faellig:
-                uebersprungen += 1
-                progress.event("run.cadence.skip",
-                               name=f'{d["site"]} / {d["name"]}',
-                               cadence=progress.atom(f"cadence.{kadenz}"))
-                continue
+        kadenz = d.get("kadenz") or "always"
+        if not einheit_faellig(db, kadenz):
+            uebersprungen += 1
+            progress.event("run.cadence.skip",
+                           name=f'{d["site"]} / {d["name"]}',
+                           cadence=progress.atom(f"cadence.{kadenz}"))
+            continue
         _library_event(d)
         zahlen = drive_mirror.lauf(graph, ziel, drive_auswahl(wahl, d),
                                    workers(), still=True,
@@ -465,6 +474,7 @@ def resolve_page_sites(graph, urls):
     """
     gefunden, fehl, gesehen = [], 0, set()
 
+    kadenz_map = kadenzen()
     belegt = {}       # tuple(pfad) -> site id, guards name collisions
 
     def eindeutig(pfad, sid):
@@ -477,12 +487,13 @@ def resolve_page_sites(graph, urls):
         belegt[tuple(pfad)] = sid
         return pfad
 
-    def absteigen(sid, pfad, host):
+    def absteigen(sid, pfad, host, kadenz):
         if sid in gesehen:
             return
         gesehen.add(sid)
         pfad = eindeutig(pfad, sid)
-        gefunden.append({"id": sid, "pfad": pfad, "host": host})
+        gefunden.append({"id": sid, "pfad": pfad, "host": host,
+                         "kadenz": kadenz})
         try:
             unter = list(graph.paged(f"{GRAPH}/sites/{sid}/sites"))
         except auth.TokenExpired:
@@ -493,7 +504,7 @@ def resolve_page_sites(graph, urls):
             if u.get("id"):
                 absteigen(u["id"], pfad + [safe(u.get("displayName")
                                                 or u.get("name") or "Site", 80)],
-                          host)
+                          host, kadenz)
 
     for url in urls:
         teile = url_teile(url)
@@ -514,7 +525,8 @@ def resolve_page_sites(graph, urls):
             continue
         name = safe(site.get("displayName") or site.get("name") or adresse, 80)
         host = urlsplit(site.get("webUrl") or "").netloc or adresse.split(":")[0]
-        absteigen(site["id"], [name], host)
+        absteigen(site["id"], [name], host,
+                  kadenz_map.get(f"pages-url:{url}") or "always")
     return gefunden, fehl
 
 
@@ -655,24 +667,19 @@ def seiten_lauf(graph, out, sites, fehl=0):
         ziel.parent.mkdir(parents=True, exist_ok=True)
         export_util.schreibe_atomar(ziel, html)
 
-    nur = _nur_einheit("SHAREPOINT_PAGES_ONLY")
-    if nur:
-        sites = [s for s in sites if s["id"] == nur]
     uebersprungen = 0
     for s in sites:
-        if not nur:
-            faellig, kadenz = einheit_faellig(db, f'pages:{s["id"]}',
-                                              kv_key=f'last_sync:{s["id"]}')
-            if not faellig:
-                uebersprungen += 1
-                pfad = "/".join(s["pfad"])
-                progress.event("run.cadence.skip", name=pfad,
-                               cadence=progress.atom(f"cadence.{kadenz}"))
-                # Not judged this run: the site's pages stay untouched.
-                for sid in [k for k, e in eintraege_bestand.items()
-                            if e["rel"].startswith(pfad + "/")]:
-                    gesehen.add(sid)
-                continue
+        kadenz = s.get("kadenz") or "always"
+        if not einheit_faellig(db, kadenz, kv_key=f'last_sync:{s["id"]}'):
+            uebersprungen += 1
+            pfad = "/".join(s["pfad"])
+            progress.event("run.cadence.skip", name=pfad,
+                           cadence=progress.atom(f"cadence.{kadenz}"))
+            # Not judged this run: the site's pages stay untouched.
+            for sid in [k for k, e in eintraege_bestand.items()
+                        if e["rel"].startswith(pfad + "/")]:
+                gesehen.add(sid)
+            continue
         try:
             seiten = list(graph.paged(
                 f"{GRAPH}/sites/{s['id']}/pages/microsoft.graph.sitePage"))
@@ -829,10 +836,6 @@ def main():
     try:
         if seiten:
             sites, fehl = resolve_page_sites(graph, urls)
-            state_db.StateDb(out)._kv_schreiben(
-                "einheiten", json.dumps(
-                    [{"id": s["id"], "name": "/".join(s["pfad"])}
-                     for s in sites], ensure_ascii=False))
             if not sites:
                 progress.ergebnis(0, errors=fehl)
                 return
@@ -840,12 +843,6 @@ def main():
                 graph, out, sites, fehl)
             return
         drives, fehl = resolve_drives(graph, urls)
-        # The units registry: the settings tables list what the URLs resolve
-        # to, with a cadence choice per row.
-        state_db.StateDb(out)._kv_schreiben(
-            "einheiten", json.dumps(
-                [{"id": d["id"], "site": d["site"], "name": d["name"]}
-                 for d in drives], ensure_ascii=False))
         if not drives:
             progress.ergebnis(0, errors=fehl)
             return

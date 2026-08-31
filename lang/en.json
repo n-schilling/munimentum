@@ -147,7 +147,7 @@
   "book.show.comm": "Show communication",
   "settings.cadence": "Sync cadence",
   "settings.cadence.i": "How often this source is synced at most – applies to scheduled AND manual runs. Below its interval it is skipped with a clear log line; “always” is the default.",
-  "cadence.units.none": "No resolved units yet – after the first run they appear here with their own sync cadence.",
+  "cadence.units.none": "No URLs yet – add one with +.",
   "cadence.sync_now": "Sync now",
   "cadence.always": "always",
   "cadence.daily": "daily",
