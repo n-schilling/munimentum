@@ -449,6 +449,7 @@
   "run.conv.failed": "✗ [{i}/{total}] failed: {name}",
   "run.drive.delta": "Enumeration: only changes since the last run.",
   "run.drive.full": "Enumeration: complete (first run or rebuild).",
+  "run.drive.resync": "Delta pointer expired – the library is re-enumerated in full once.",
   "run.drive.retry_full": "Because of the errors, the next run enumerates completely again.",
   "run.file_failed": "{name}: {error}",
   "run.index.plan": "{chunks} chunks: {reused} reused, {new} new ({short} too short to carry meaning).",

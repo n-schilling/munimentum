@@ -268,8 +268,20 @@ def resolve_drives(graph, urls):
             elif unterpfad is None:
                 eintrag["prefixes"] = None            # full scope wins
             elif eintrag["prefixes"] is not None:
-                eintrag["prefixes"].add(unterpfad)
+                _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
     return gefunden, fehl
+
+
+def _praefix_aufnehmen(vorhanden, neu):
+    """Merge a scope prefix without nesting: an ancestor covers its
+    descendants, and covered entries would make the walk visit (and
+    download) the same files twice."""
+    for p in vorhanden:
+        if neu == p or neu.startswith(p + "/"):
+            return
+    for p in [p for p in vorhanden if p.startswith(neu + "/")]:
+        vorhanden.discard(p)
+    vorhanden.add(neu)
 
 
 def _scope_regeln(prefixes):
@@ -440,6 +452,7 @@ def nur_pruefen(graph, out, drives, fehl=0):
     """
     wahl = auswahl()
     zeilen, ausgelassen, ausgelassen_bytes, fehl_summe = [], 0, 0, 0
+    ausgelassene = []
     typen = {}
     for d in je_drive(graph, drives):
         _library_event(d)
@@ -455,6 +468,8 @@ def nur_pruefen(graph, out, drives, fehl=0):
         ausgelassen += b["ausgelassen"]
         ausgelassen_bytes += b.get("bytes_ausgelassen", 0)
         fehl_summe += b["fehlt"]
+        ausgelassene += [f'{d["site"]}/{d["name"]}/{o}'
+                         for o in b.get("ausgelassene_ordner") or ()]
         for z in b.get("typen") or ():
             ganz = typen.setdefault(z["ext"], {"ext": z["ext"], "n": 0, "bytes": 0})
             ganz["n"] += z["n"]
@@ -469,7 +484,7 @@ def nur_pruefen(graph, out, drives, fehl=0):
                "geloescht": sum(z["geloescht"] for z in zeilen),
                "fehlt": fehl_summe,
                "ausgelassen": ausgelassen,
-               "ausgelassene_ordner": [],
+               "ausgelassene_ordner": sorted(ausgelassene)[:20],
                "bytes": sum(z["bytes"] for z in zeilen),
                "bytes_ausgelassen": ausgelassen_bytes,
                "typen": sorted(typen.values(), key=lambda z: -z["bytes"])}
@@ -515,10 +530,23 @@ def resolve_page_sites(graph, urls):
     """
     gefunden, fehl, gesehen = [], 0, set()
 
+    belegt = {}       # tuple(pfad) -> site id, gegen Namenskollisionen
+
+    def eindeutig(pfad, sid):
+        halter = belegt.setdefault(tuple(pfad), sid)
+        if halter == sid:
+            return pfad
+        # Same display name, different site: the second one gets a suffix
+        # from its id – two sites must never share one output folder.
+        pfad = pfad[:-1] + [f"{pfad[-1]}__{export_util.kuerzel(sid)}"]
+        belegt[tuple(pfad)] = sid
+        return pfad
+
     def absteigen(sid, pfad, host):
         if sid in gesehen:
             return
         gesehen.add(sid)
+        pfad = eindeutig(pfad, sid)
         gefunden.append({"id": sid, "pfad": pfad, "host": host})
         try:
             unter = list(graph.paged(f"{GRAPH}/sites/{sid}/sites"))
@@ -699,6 +727,10 @@ def seiten_lauf(graph, out, sites, fehl=0):
             html = bilder_einbetten(graph, html, s.get("host") or "", zaehler,
                                     grenze)
             export_util.schreibe_atomar(ziel, html)
+            if alt and alt["rel"] != rel:
+                # Renamed, not deleted: the old file would otherwise linger
+                # untracked and haunt the index as a stale duplicate.
+                (out / alt["rel"]).unlink(missing_ok=True)
             bestand.eintraege[sid] = {"rel": rel, "etag": etag}
             neu += 1
         bestand.schreibe()
@@ -755,11 +787,17 @@ def seiten_pruefen(graph, out, sites, fehl=0):
             if (e := bestand.eintraege.get(seite.get("id") or ""))
             and (out / e["rel"]).is_file())
         zeilen.append({"ordner": pfad, "erwartet": len(seiten),
-                       "vorhanden": vorhanden,
-                       "geloescht": sum(1 for rel in weg
-                                        if rel.startswith(pfad + "/")),
+                       "vorhanden": vorhanden, "geloescht": 0,
                        "ausgelassen": False,
                        "fehlt": max(0, len(seiten) - vorhanden)})
+    # Each tombstone counts exactly once, on its deepest matching site –
+    # subsites are rows of their own, nested under the parent's path.
+    nach_tiefe = sorted(zeilen, key=lambda z: -z["ordner"].count("/"))
+    for rel in weg:
+        for z in nach_tiefe:
+            if rel.startswith(z["ordner"] + "/"):
+                z["geloescht"] += 1
+                break
     bericht = {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
                "ordner": sorted(zeilen, key=lambda z: (-z["fehlt"], z["ordner"])),
                "erwartet": sum(z["erwartet"] for z in zeilen),

@@ -26,6 +26,8 @@ from pathlib import Path
 from urllib.parse import unquote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import requests
+
 import export_util
 import folders
 import graph_client
@@ -427,7 +429,16 @@ def lauf(graph, out, auswahl, arbeiter, still=False, sammler=None):
     if sammler is None:
         weiter = lies_delta(out)
         progress.event("run.drive.delta" if weiter else "run.drive.full")
-        eintraege, neuer_link = sammle(graph, weiter)
+        try:
+            eintraege, neuer_link = sammle(graph, weiter)
+        except requests.HTTPError as e:
+            # 410 Gone: Graph expired the delta link (likely after a long
+            # scoped phase, which never advances it). Resync once, in full.
+            if weiter is None or getattr(e.response, "status_code", 0) != 410:
+                raise
+            progress.event("run.drive.resync", "warn")
+            (out / DELTA_DATEI).unlink(missing_ok=True)
+            eintraege, neuer_link = sammle(graph, None)
     else:
         eintraege, neuer_link = sammler(graph, bestand)
     progress.event("run.scanned", n=len(eintraege),

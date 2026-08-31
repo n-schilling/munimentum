@@ -562,3 +562,59 @@ def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
     sp.seiten_lauf(g, tmp_path, [])
     assert sp.drive_mirror.lies_verschwunden(
         tmp_path / sp.drive_mirror.GONE_FILE) == {}
+
+
+def test_praefix_aufnehmen_haelt_die_menge_flach():
+    """Nested prefixes would walk (and download) the same files twice."""
+    menge = {"A"}
+    sp._praefix_aufnehmen(menge, "A/B")
+    assert menge == {"A"}
+    menge = {"A/B", "C"}
+    sp._praefix_aufnehmen(menge, "A")
+    assert menge == {"A", "C"}
+
+
+def test_resolve_page_sites_trennt_gleichnamige_sites():
+    """Two sites sharing a display name must not share an output folder."""
+    class G:
+        def get(self, url):
+            kennung = "s1" if "/sites/A" in url else "s2"
+            return {"id": kennung, "displayName": "Projekte",
+                    "webUrl": "https://firma.sharepoint.com/sites/x"}
+
+        def paged(self, url, params=None):
+            return iter(())
+
+    sites, fehl = sp.resolve_page_sites(
+        G(), ["https://firma.sharepoint.com/sites/A",
+              "https://firma.sharepoint.com/sites/B"])
+    assert fehl == 0 and len(sites) == 2
+    assert len({tuple(s["pfad"]) for s in sites}) == 2
+
+
+def test_seiten_lauf_zieht_umbenannte_seite_um(tmp_path):
+    """A renamed page must not leave its old file behind as a stale twin."""
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
+    sp.seiten_lauf(g, tmp_path, sites)
+    g.seiten[0] = {**g.seiten[0], "name": "Neu.aspx", "eTag": "e2"}
+    sp.seiten_lauf(g, tmp_path, sites)
+    namen = sorted(p.name for p in tmp_path.rglob("*.html"))
+    assert len(namen) == 1 and namen[0].startswith("Neu")
+    assert sp.drive_mirror.lies_verschwunden(
+        tmp_path / sp.drive_mirror.GONE_FILE) == {}
+
+
+def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
+    """A tombstone under a subsite belongs to the deepest row only."""
+    g = _SeitenGraph()
+    g.seiten = []
+    sites = [{"id": "s1", "pfad": ["A"], "host": "h"},
+             {"id": "s2", "pfad": ["A", "Sub"], "host": "h"}]
+    sp.drive_mirror.schreibe_verschwunden(
+        tmp_path / sp.drive_mirror.GONE_FILE, {},
+        ["A/Sub/page.html"], "2026-08-01T00:00:00+00:00")
+    b = sp.seiten_pruefen(g, tmp_path, sites)
+    assert b["geloescht"] == 1
+    je = {z["ordner"]: z["geloescht"] for z in b["ordner"]}
+    assert je == {"A": 0, "A/Sub": 1}

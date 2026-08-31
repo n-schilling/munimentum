@@ -16,6 +16,7 @@ import pytest
 
 import folders
 import onedrive_export as od
+import progress
 
 
 def _datei(kennung, name, pfad="/drive/root:/Ordner", groesse=10, ctag="c1", **extra):
@@ -355,3 +356,31 @@ def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
     assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
     b = od.pruefe_vollstaendigkeit(gross, tmp_path, wahl)
     assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"
+
+
+def test_lauf_erneuert_abgelaufenen_delta_zeiger(tmp_path, capsys):
+    """410 Gone on a stale delta link: re-enumerate once instead of dying
+    identically on every run."""
+    import requests as _requests
+
+    class Antwort:
+        status_code = 410
+
+    class G:
+        def __init__(self):
+            self.aufrufe = []
+
+        def delta(self, weiter=None):
+            self.aufrufe.append(weiter)
+            if weiter:
+                raise _requests.HTTPError(response=Antwort())
+            yield None, "neuer-link"
+
+    od.schreibe_delta(tmp_path, "alter-link")
+    g = G()
+    ergebnis = od.drive_mirror.lauf(g, tmp_path, od.Selection(), 1)
+    assert ergebnis["new"] == 0 and g.aufrufe == ["alter-link", None]
+    assert od.lies_delta(tmp_path) == "neuer-link"
+    events = [progress.lies_event(z)
+              for z in capsys.readouterr().out.splitlines()]
+    assert any(e and e["k"] == "run.drive.resync" for e in events)

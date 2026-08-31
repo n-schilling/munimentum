@@ -2712,8 +2712,13 @@ class Handler(BaseHTTPRequestHandler):
         if not eintraege:
             return {"ok": False, "leer": True}
         daten = {"ordner": eintraege, "abgeglichen": stand}
-        return {"ok": True, "regeln": "",
-                **folders.plan(wurzel, [], daten, None)}
+        plan = folders.plan(wurzel, [], daten, None)
+        # The walk under the site roots also sees each library's bookkeeping
+        # (dateien.tsv, delta.txt, …) – real content lives below Dateien/.
+        plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
+                       if "/Dateien/" in z["pfad"] + "/"]
+        plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
+        return {"ok": True, "regeln": "", **plan}
 
     def _files(self, q):
         """One level of the mirrored file tree, sizes taken from disk."""
@@ -5725,7 +5730,10 @@ function zeigeAnalytics(a){
     return;
   }
   var quellen = (a.quellen || []).map(function(q){
-    return t('search.source.' + q.src, {}) + ' ' + zahl(q.nachrichten);
+    // src 'datei' spans both mirrors; the search sources split it, so the
+    // tile uses the files label instead of a key that no longer exists.
+    var name = q.src === 'datei' ? t('ana.files') : t('search.source.' + q.src);
+    return name + ' ' + zahl(q.nachrichten);
   }).join(' · ');
   var zeitraum = (a.von && a.bis)
     ? fmtTag(a.von) + ' – ' + fmtTag(a.bis) : '–';

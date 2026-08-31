@@ -449,6 +449,7 @@
   "run.conv.failed": "✗ [{i}/{total}] échec : {name}",
   "run.drive.delta": "Énumération : seulement les changements depuis la dernière exécution.",
   "run.drive.full": "Énumération : complète (première exécution ou reconstruction).",
+  "run.drive.resync": "Pointeur delta expiré – la bibliothèque est réénumérée entièrement une fois.",
   "run.drive.retry_full": "À cause des erreurs, la prochaine exécution énumérera de nouveau complètement.",
   "run.file_failed": "{name} : {error}",
   "run.index.plan": "{chunks} fragments : {reused} réutilisés, {new} nouveaux ({short} trop courts pour porter du sens).",

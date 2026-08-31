@@ -449,6 +449,7 @@
   "run.conv.failed": "✗ [{i}/{total}] Fehler: {name}",
   "run.drive.delta": "Aufzählung: nur Änderungen seit dem letzten Lauf.",
   "run.drive.full": "Aufzählung: vollständig (erster Lauf oder Neuaufbau).",
+  "run.drive.resync": "Delta-Zeiger abgelaufen – die Bibliothek wird einmal vollständig neu aufgezählt.",
   "run.drive.retry_full": "Wegen der Fehler wird beim nächsten Lauf noch einmal vollständig aufgezählt.",
   "run.file_failed": "{name}: {error}",
   "run.index.plan": "{chunks} Chunks: {reused} wiederverwendet, {new} neu ({short} zu kurz für Bedeutung).",
