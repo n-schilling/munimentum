@@ -260,8 +260,8 @@ SCOPE_COVERED_BY = {
     "Contacts.Read": ("Contacts.ReadWrite", "Contacts.Read.Shared",
                       "Contacts.ReadWrite.Shared"),
     "Chat.Read": ("Chat.ReadWrite",),
-    # Sites.Read.All liest auch Dateien (Bibliotheken SIND Drives), und die
-    # Schreibvarianten lesen erst recht.
+    # Sites.Read.All also reads files (libraries ARE drives), and the
+    # write variants read all the more.
     "Files.Read.All": ("Files.ReadWrite.All", "Sites.Read.All",
                        "Sites.ReadWrite.All", "Sites.FullControl.All"),
     "Sites.Read.All": ("Sites.ReadWrite.All", "Sites.Manage.All",
@@ -2459,8 +2459,8 @@ class Handler(BaseHTTPRequestHandler):
         for key in ("mcp_enabled", "mcp_autostart", "update_check", "embed_images", "cache_images",
                     "refresh_channels", "skip_empty_chats", "include_hidden",
                     "calendar_reconstruct", "ollama_enabled", "index_semantic",
-                    # Fehlte hier, seit es den Haken gibt: der Zustand ging an
-                    # den Lauf, überlebte aber keinen Neuaufbau der Seite.
+                    # Missing since the checkbox exists: the state reached
+                    # the run but never survived a page rebuild.
                     "onedrive_enabled", "sharepoint_enabled",
                     "sharepoint_pages_enabled"):
             if key in data:
@@ -4189,7 +4189,7 @@ function sicht(name){
   if(name === 'dateien') ladeDateien();
 }
 
-/* ---------- Dateibrowser: der Spiegel als Baum, alles aus dem Index ---- */
+/* ---------- File browser: the mirrors as a tree, all from the index --- */
 var dateiSicht = {root: '', path: ''};
 var dateiDaten = null;
 

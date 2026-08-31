@@ -56,11 +56,11 @@ def session(monkeypatch):
 
 @pytest.fixture
 def sleeps(monkeypatch):
-    """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben.
+    """Disarm time.sleep and record the requested wait times.
 
-    Die Drosselsperre ist prozessweit und rechnet mit der echten Uhr – vor
-    jedem Test auf null, sonst wartete ein Test auf die Sperre des vorigen.
-    Die mitgeschriebenen Zeiten sind Restzeiten (float), gerundet vergleichen.
+    The throttle gate is process-wide and uses the real clock – reset to
+    zero before every test, or one test waits out the previous test's gate.
+    The recorded values are remainders (float); compare rounded.
     """
     graph_client._DROSSEL["bis"] = 0.0
     calls = []
@@ -88,7 +88,7 @@ def test_tokenclient_get_wiederholt_nach_429(session, sleeps):
                          FakeResponse(payload={"ok": 1})]
     assert graph_client.TokenClient("t").get("https://example.invalid/x") == {"ok": 1}
     assert len(session.calls) == 2
-    # Retry-After wird respektiert; gewartet wird vor dem Folge-Request.
+    # Retry-After is honoured; the wait happens before the follow-up.
     assert [round(s) for s in sleeps] == [3]
 
 
@@ -110,8 +110,8 @@ def test_tokenclient_bricht_nach_sechs_serverfehlern_ab(session, sleeps):
     with pytest.raises(RuntimeError, match="Zu viele Fehlversuche"):
         graph_client.TokenClient("t").get("https://example.invalid/x")
     assert len(session.calls) == 6
-    # Exponentielles Backoff vor jedem Folge-Request; nach dem letzten
-    # Fehlversuch wird nicht mehr gewartet – aufgeben kostet keine 32 s.
+    # Exponential backoff before each follow-up; no wait after the final
+    # failure – giving up must not cost another 32 s.
     assert [round(s) for s in sleeps] == [1, 2, 4, 8, 16]
 
 
@@ -323,8 +323,8 @@ def test_threads_teilen_sich_das_gate(session):
 
 
 def test_drosselsperre_gilt_dem_ganzen_prozess(session, sleeps, capsys):
-    """Sechzehn Fäden, ein 429: gemeldet wird einmal, gewartet von jedem, der
-    danach anfragt – die Sperre gehört dem Prozess, nicht der Verbindung."""
+    """Sixteen threads, one 429: reported once, awaited by everyone who
+    asks afterwards – the gate belongs to the process, not the connection."""
     import progress
 
     session.responses = [FakeResponse(429, headers={"Retry-After": "7"}),
@@ -337,5 +337,5 @@ def test_drosselsperre_gilt_dem_ganzen_prozess(session, sleeps, capsys):
                           capsys.readouterr().out.splitlines())
               if e and e["k"] == "run.throttled"]
     assert len(events) == 1 and events[0]["v"]["s"] == 7
-    # Beide Folge-Requests warteten die Sperre ab (Restzeit jeweils ~7 s).
+    # Both follow-up requests waited out the gate (~7 s remainder each).
     assert [round(s) for s in sleeps] == [7, 7]

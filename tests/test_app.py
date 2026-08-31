@@ -555,8 +555,8 @@ def test_sharepoint_schritt_traegt_urls_und_filter(sandbox):
 
 
 def test_save_config_uebernimmt_spiegel_haken_und_sharepoint(sandbox, server):
-    """Regression: onedrive_enabled ging an den Lauf, überlebte aber keinen
-    Neuaufbau der Seite – gespeichert wurde der Haken nie."""
+    """Regression: onedrive_enabled reached the run but never survived a
+    page rebuild – the checkbox was never saved."""
     _, port = server
     code, r = call(port, "POST", "/api/config", {
         "onedrive_enabled": True, "sharepoint_enabled": True,
@@ -1327,8 +1327,8 @@ def test_scope_pruefung_kennt_die_schreibvarianten_der_spiegel():
 
 
 def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
-    """Der Zeitplan-Haken grenzt ein, er schaltet die Quelle nicht ein: ohne
-    den Haken im Export-Reiter spiegelt auch der Zeitplan nicht."""
+    """The schedule toggle narrows, it does not switch a source on: without
+    the Export-tab checkbox the schedule does not mirror either."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"].update(enabled=True, interval_minutes=5)

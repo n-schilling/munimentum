@@ -37,8 +37,8 @@ def test_site_address_ohne_host_ist_none():
 
 
 def test_url_teile_sharing_link_findet_site_und_pfad():
-    """Der gemeldete Fall: ein Sharing-Link (/:f:/r/…) landete auf der
-    Root-Site und fand dort nichts."""
+    """The reported case: a sharing link (/:f:/r/…) landed on the root
+    site and found nothing there."""
     url = ("https://firma.sharepoint.com/:f:/r/sites/PS-UK"
            "/Projects/N/Nordwind?d=w46c78&csf=1&web=1&e=y7q8ln")
     adresse, rest = sp.url_teile(url)
@@ -138,7 +138,7 @@ def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
 
 
 def test_resolve_drives_pfad_begrenzt_auf_eine_bibliothek(capsys):
-    """Eine Ordner-URL spiegelt genau diesen Teilbaum – nicht die ganze Site."""
+    """A folder URL mirrors exactly that subtree – not the whole site."""
     g = _FakeGraph(sites={"firma.sharepoint.com:/sites/PS-UK": {
         "id": "s1", "name": "PS UK",
         "drives": [
@@ -151,7 +151,7 @@ def test_resolve_drives_pfad_begrenzt_auf_eine_bibliothek(capsys):
     assert fehl == 0 and [d["id"] for d in drives] == ["d2"]
     assert drives[0]["prefixes"] == {"N/Nordwind"}
 
-    # Dieselbe Site komplett dazu: der volle Umfang gewinnt.
+    # The same site in full on top: the wider scope wins.
     drives, _ = sp.resolve_drives(
         g, ["https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Nordwind",
             "https://firma.sharepoint.com/sites/PS-UK"])
@@ -348,12 +348,12 @@ def test_scope_sammler_zaehlt_kaputte_wurzel_als_fehler(capsys):
     s = sp.scope_sammler({"N/Nordwind"})
     eintraege, _ = s(G(), bestand)
     assert s.fehler == 1
-    assert eintraege == []                        # keine erfundenen Löschungen
+    assert eintraege == []                        # no invented deletions
 
 
 def test_zwei_sites_gleichen_namens_teilen_keinen_ordner(capsys):
-    """Zwei Sites können denselben Anzeigenamen tragen – ihre Spiegel dürfen
-    sich nicht in einem Zielordner vermischen."""
+    """Two sites can share a display name – their mirrors must not blend
+    into one target folder."""
     g = _FakeGraph(sites={
         "firma.sharepoint.com:/sites/A": {"id": "s1", "name": "Projekte",
             "drives": [{"id": "d1", "name": "Dokumente",
@@ -416,7 +416,7 @@ def test_seiten_lauf_schreibt_und_ueberspringt(tmp_path, capsys):
     assert len(dateien) == 1 and dateien[0].parent.name == "Team X"
     assert "Inhalt der Startseite" in dateien[0].read_text(encoding="utf-8")
 
-    # Zweiter Lauf, gleicher eTag: kein Detailabruf, nichts neu.
+    # Second run, same eTag: no detail fetch, nothing new.
     capsys.readouterr()
     assert sp.seiten_lauf(g, tmp_path, sites) == 0
     assert g.detailabrufe == 1
@@ -430,11 +430,11 @@ def test_seiten_lauf_setzt_grabsteine(tmp_path, capsys):
     g = _SeitenGraph()
     sites = [{"id": "s1", "pfad": ["Team X"]}]
     sp.seiten_lauf(g, tmp_path, sites)
-    g.seiten = []                                   # Seite bei Microsoft weg
+    g.seiten = []                                   # page gone at Microsoft
     sp.seiten_lauf(g, tmp_path, sites)
     weg = sp.drive_mirror.lies_verschwunden(tmp_path / sp.drive_mirror.GONE_FILE)
     assert len(weg) == 1 and next(iter(weg)).startswith("Team X/")
-    # Die Datei selbst bleibt liegen – dieselbe Zusage wie überall.
+    # The file itself stays – the same promise as everywhere.
     assert list(tmp_path.rglob("*.html"))
 
 
@@ -489,8 +489,8 @@ def test_bilder_einbetten_ersetzt_relative_und_absolute_quellen():
     aus = sp.bilder_einbetten(g, html, "firma.sharepoint.com", z)
     assert z == {"bilder": 2, "fehl": 0}
     assert aus.count("data:image/png;base64,") == 2
-    assert "data:image/gif;base64,AA==" in aus          # war schon eingebettet
-    # Der Shares-Umweg trägt die volle URL, base64url-kodiert.
+    assert "data:image/gif;base64,AA==" in aus          # already embedded
+    # The shares detour carries the full URL, base64url-encoded.
     assert all("/shares/u!" in u for u in g.urls)
 
 
@@ -546,8 +546,8 @@ def test_seiten_lauf_bettet_bilder_ein(tmp_path):
 
 
 def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
-    """Der Seiten-Check: was Microsoft je Site listet gegen das, was hier
-    liegt – gleiche Berichtsform wie beim Spiegel."""
+    """The pages check: what Microsoft lists per site against what lies
+    here – same report shape as the mirror check."""
     g = _SeitenGraph()
     sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
     sp.seiten_lauf(g, tmp_path, sites)          # eine Seite liegt jetzt hier
@@ -580,7 +580,7 @@ def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
     assert weg == {}
     assert sp.Seitenbestand(tmp_path / sp.SEITEN_BESTAND).eintraege
 
-    # URL aus der Konfiguration entfernt: gleiche Zusage.
+    # URL removed from the configuration: same promise.
     sp.seiten_lauf(g, tmp_path, [])
     assert sp.drive_mirror.lies_verschwunden(
         tmp_path / sp.drive_mirror.GONE_FILE) == {}

@@ -65,9 +65,9 @@ def konfiguriere(workers):
         pool_connections=max(workers, 4), pool_maxsize=max(workers, 4)))
 
 
-# Eine Drosselsperre für den ganzen Prozess: Graph drosselt das Budget der
-# Anwendung, nicht die einzelne Verbindung. Feuern die Nachbar-Fäden weiter,
-# verlängern sie die Sperre nur – deshalb ruht vor jedem Request jeder.
+# One throttle gate for the whole process: Graph throttles the app's
+# budget, not the single connection. Neighbouring threads that keep firing
+# only extend the gate – so every thread rests before every request.
 _DROSSEL = {"bis": 0.0}
 _DROSSEL_LOCK = threading.Lock()
 
@@ -106,12 +106,12 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
 
 
 def warte_auf(r, versuch, was=""):
-    """Backoff nach 429/5xx: Retry-After wenn beziffert, sonst exponentiell.
+    """Backoff after 429/5xx: Retry-After when given, exponential otherwise.
 
-    Gewartet wird nicht hier, sondern in _drossel_warten() vor dem nächsten
-    Request – und zwar von jedem Faden: die Sperre gilt dem Prozess. Gemeldet
-    wird nur, wer die Sperre verlängert; sechzehn gleichzeitige 429 sind eine
-    Zeile im Protokoll, nicht sechzehn."""
+    The waiting happens in _drossel_warten() before the next request – by
+    every thread: the gate belongs to the process. Only whoever extends the
+    gate reports it; sixteen simultaneous 429s are one log line, not
+    sixteen."""
     ra = r.headers.get("Retry-After")
     w = min(int(ra), 300) if ra and ra.isdigit() else min(2 ** versuch, 60)
     bis = time.time() + w

@@ -1376,21 +1376,21 @@ def test_erlaubt_laeuft_wie_bisher(state, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Getrennte Spiegel: OneDrive und SharePoint sind eigene Quellen
+# Split mirrors: OneDrive and SharePoint are sources of their own
 # --------------------------------------------------------------------------
 def test_where_trennt_die_spiegel_ueber_root():
     wo, params = mcp_server._where("", None, None, "onedrive")
     assert "(src = 'datei' AND root = ?)" in wo and params == ["onedrive"]
     wo, params = mcp_server._where("", None, None, "sharepoint")
     assert params == ["sharepoint"]
-    # Die Sammelquelle bleibt: alte Aufrufer sehen weiter beide Spiegel.
+    # The umbrella source stays: old callers keep seeing both mirrors.
     wo, params = mcp_server._where("", None, None, "datei")
     assert wo == "src = ?" and params == ["datei"]
 
 
 @pytest.fixture
 def spiegel_db(tmp_path, monkeypatch):
-    """Eine Minimal-DB nur mit gespiegelten Dateien beider Wurzeln."""
+    """A minimal DB holding only mirrored files of both roots."""
     db = tmp_path / "corpus.db"
     con = sqlite3.connect(db)
     con.execute("CREATE TABLE chunks(id INTEGER PRIMARY KEY, uid TEXT,"

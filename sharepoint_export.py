@@ -532,7 +532,7 @@ def resolve_page_sites(graph, urls):
     """
     gefunden, fehl, gesehen = [], 0, set()
 
-    belegt = {}       # tuple(pfad) -> site id, gegen Namenskollisionen
+    belegt = {}       # tuple(pfad) -> site id, guards name collisions
 
     def eindeutig(pfad, sid):
         halter = belegt.setdefault(tuple(pfad), sid)
@@ -555,7 +555,7 @@ def resolve_page_sites(graph, urls):
         except auth.TokenExpired:
             raise
         except Exception:
-            unter = []          # keine Unterseiten oder nicht gelistet – egal
+            unter = []          # no subsites, or not listable – fine
         for u in unter:
             if u.get("id"):
                 absteigen(u["id"], pfad + [safe(u.get("displayName")
@@ -688,7 +688,7 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
             return m.group(0)
         if inhalt is None or (grenze and len(inhalt) > grenze):
             with lock:
-                cache[voll] = None      # zu groß: Link bleibt, kein Fehler
+                cache[voll] = None      # too big: stays a link, no error
             return m.group(0)
         b64 = base64.b64encode(inhalt).decode()
         daten = f"data:{(ctype or 'image/png').split(';')[0]};base64,{b64}"

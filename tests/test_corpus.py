@@ -630,7 +630,7 @@ def test_endungen_aus_anhangnamen():
 
 
 # --------------------------------------------------------------------------
-# SharePoint-Spiegel im Korpus: je Bibliothek ein Baum, Grabsteine mit Präfix
+# SharePoint mirror in the corpus: one tree per library, prefixed tombstones
 # --------------------------------------------------------------------------
 def test_load_sharepoint_liest_bibliotheken_mit_grabsteinen(tmp_path):
     lib = tmp_path / "Team X" / "Projects"
