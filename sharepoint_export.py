@@ -40,6 +40,7 @@ those files keep their last mirrored state.
 """
 
 import base64
+import json
 import os
 import re
 import sys
@@ -109,6 +110,32 @@ def _types(env_name, key):
 def max_bytes():
     return max(0, settings.number("SHAREPOINT_MAX_MB", "sharepoint_max_mb",
                                   low=0)) * 1024 * 1024
+
+
+def kadenzen():
+    """The per-unit sync cadence map ("sharepoint:<id>" / "pages:<id>")."""
+    roh = os.environ.get("SYNC_CADENCE")
+    if roh is None:
+        roh = json.dumps(settings.value("sync_cadence", {}) or {})
+    try:
+        daten = json.loads(roh)
+    except ValueError:
+        return {}
+    return daten if isinstance(daten, dict) else {}
+
+
+def _nur_einheit(env_name):
+    return (os.environ.get(env_name) or "").strip() or None
+
+
+def einheit_faellig(db, schluessel, kv_key="last_sync"):
+    """Due under its cadence? "Sync now" (the ONLY env) bypasses this."""
+    kadenz = kadenzen().get(schluessel) or "always"
+    if kadenz == "always":
+        return True, kadenz
+    roh = db._kv_lesen(kv_key)
+    letzter = float(roh) if roh else None
+    return export_util.cadence_faellig(kadenz, letzter), kadenz
 
 
 def auswahl():
@@ -327,18 +354,35 @@ def je_drive(graph, drives):
 # ---------------------------------------------------------------------------
 def lauf(graph, out, drives, fehl=0):
     wahl = auswahl()
+    nur = _nur_einheit("SHAREPOINT_ONLY")
+    if nur:
+        drives = [d for d in drives if d["id"] == nur]
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
+    uebersprungen = 0
     for d in je_drive(graph, drives):
-        _library_event(d)
         ziel = drive_ziel(out, d)
+        db = state_db.StateDb(ziel)
+        if not nur:
+            faellig, kadenz = einheit_faellig(db, f'sharepoint:{d["id"]}')
+            if not faellig:
+                uebersprungen += 1
+                progress.event("run.cadence.skip",
+                               name=f'{d["site"]} / {d["name"]}',
+                               cadence=progress.atom(f"cadence.{kadenz}"))
+                continue
+        _library_event(d)
         zahlen = drive_mirror.lauf(graph, ziel, drive_auswahl(wahl, d),
                                    workers(), still=True,
                                    zustand=state_db.DbZustand(ziel))
+        if not zahlen["errors"]:
+            db._kv_schreiben("last_sync", str(datetime.now(UTC).timestamp()))
         for k in summe:
             summe[k] += zahlen[k]
+    extras = {"moved": summe["moved"], "gone": summe["gone"]}
+    if uebersprungen:
+        extras["skipped"] = uebersprungen
     progress.ergebnis(summe["new"], excluded=summe["excluded"],
-                      errors=summe["errors"] + fehl,
-                      extra={"moved": summe["moved"], "gone": summe["gone"]})
+                      errors=summe["errors"] + fehl, extra=extras)
     return summe
 
 
@@ -611,7 +655,24 @@ def seiten_lauf(graph, out, sites, fehl=0):
         ziel.parent.mkdir(parents=True, exist_ok=True)
         export_util.schreibe_atomar(ziel, html)
 
+    nur = _nur_einheit("SHAREPOINT_PAGES_ONLY")
+    if nur:
+        sites = [s for s in sites if s["id"] == nur]
+    uebersprungen = 0
     for s in sites:
+        if not nur:
+            faellig, kadenz = einheit_faellig(db, f'pages:{s["id"]}',
+                                              kv_key=f'last_sync:{s["id"]}')
+            if not faellig:
+                uebersprungen += 1
+                pfad = "/".join(s["pfad"])
+                progress.event("run.cadence.skip", name=pfad,
+                               cadence=progress.atom(f"cadence.{kadenz}"))
+                # Not judged this run: the site's pages stay untouched.
+                for sid in [k for k, e in eintraege_bestand.items()
+                            if e["rel"].startswith(pfad + "/")]:
+                    gesehen.add(sid)
+                continue
         try:
             seiten = list(graph.paged(
                 f"{GRAPH}/sites/{s['id']}/pages/microsoft.graph.sitePage"))
@@ -664,6 +725,8 @@ def seiten_lauf(graph, out, sites, fehl=0):
                 eintraege_bestand[sid] = {"rel": rel, "etag": etag}
                 neu += 1
         db.seiten_schreiben(eintraege_bestand)
+        db._kv_schreiben(f'last_sync:{s["id"]}',
+                         str(datetime.now(UTC).timestamp()))
     # Pages gone at Microsoft: in the inventory, reported by no site.
     # Judged ONLY below sites whose listing succeeded this run – a failed
     # listing (or a URL removed from the config) proves nothing about its
@@ -680,9 +743,12 @@ def seiten_lauf(graph, out, sites, fehl=0):
     db.seiten_schreiben(eintraege_bestand)
     if zaehler["fehl"]:
         progress.event("run.pages.images_failed", "warn", n=zaehler["fehl"])
+    extras = {"sites": len(sites), "gone": len(weg),
+              "images": zaehler["bilder"]}
+    if uebersprungen:
+        extras["skipped"] = uebersprungen
     progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
-                      extra={"sites": len(sites), "gone": len(weg),
-                             "images": zaehler["bilder"]})
+                      extra=extras)
     return neu
 
 
@@ -763,6 +829,10 @@ def main():
     try:
         if seiten:
             sites, fehl = resolve_page_sites(graph, urls)
+            state_db.StateDb(out)._kv_schreiben(
+                "einheiten", json.dumps(
+                    [{"id": s["id"], "name": "/".join(s["pfad"])}
+                     for s in sites], ensure_ascii=False))
             if not sites:
                 progress.ergebnis(0, errors=fehl)
                 return
@@ -770,6 +840,12 @@ def main():
                 graph, out, sites, fehl)
             return
         drives, fehl = resolve_drives(graph, urls)
+        # The units registry: the settings tables list what the URLs resolve
+        # to, with a cadence choice per row.
+        state_db.StateDb(out)._kv_schreiben(
+            "einheiten", json.dumps(
+                [{"id": d["id"], "site": d["site"], "name": d["name"]}
+                 for d in drives], ensure_ascii=False))
         if not drives:
             progress.ergebnis(0, errors=fehl)
             return

@@ -55,6 +55,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
 import auth
+import export_util
 import folders
 import i18n
 import notify
@@ -1127,7 +1128,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 sync_onedrive=False, check_onedrive=False,
                 sync_calendars=False, sharepoint=False,
                 sync_sharepoint=False, check_sharepoint=False,
-                sharepoint_pages=False, check_pages=False):
+                sharepoint_pages=False, check_pages=False,
+                nur_einheit=None):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -1174,7 +1176,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         steps.append({
             "key": "sharepoint", "label": "job.step.sharepoint", "corpus": True,
             "argv": script_argv("sharepoint_export", SHAREPOINT_DIR),
-            "env": {**base_env, **_sharepoint_env(cfg)},
+            "env": {**base_env, **_sharepoint_env(cfg),
+                    **({"SHAREPOINT_ONLY": nur_einheit} if nur_einheit else {})},
         })
     if sharepoint_pages:
         steps.append({
@@ -1182,6 +1185,9 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "argv": script_argv("sharepoint_export", "--pages",
                                 SHAREPOINT_PAGES_DIR),
             "env": {**base_env,
+                    **({"SHAREPOINT_PAGES_ONLY": nur_einheit}
+                       if nur_einheit else {}),
+                    "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
                     "SHAREPOINT_PAGES_URLS":
                     str(cfg.get("sharepoint_pages_urls") or ""),
                     "SHAREPOINT_PAGES_IMAGE_MAX_MB":
@@ -1291,23 +1297,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
 def _sharepoint_env(cfg):
     # Always set, even empty: empty means "no filter", unset would mean
     # "whatever app_config.json says" – the run must mirror the form.
-    return {"SHAREPOINT_URLS": str(cfg.get("sharepoint_urls") or ""),
+    return {"SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+            "SHAREPOINT_URLS": str(cfg.get("sharepoint_urls") or ""),
             "SHAREPOINT_TYPES_INCLUDE": str(cfg.get("sharepoint_types_include") or ""),
             "SHAREPOINT_TYPES_EXCLUDE": str(cfg.get("sharepoint_types_exclude") or ""),
             "SHAREPOINT_MAX_MB": str(int(cfg.get("sharepoint_max_mb") or 0))}
 
 
-# Cadence: how often a source gets synced at most. 0 = always; the minute
-# of slack keeps an hourly schedule from missing the daily boundary by a hair.
-CADENCE_S = {"always": 0, "daily": 86400, "weekly": 7 * 86400,
-             "monthly": 30 * 86400}
-
-
-def cadence_faellig(cadence, letzter, jetzt=None):
-    periode = CADENCE_S.get(cadence or "always", 0)
-    if not periode or letzter is None:
-        return True
-    return (jetzt if jetzt is not None else time.time()) - letzter >= periode - 60
+cadence_faellig = export_util.cadence_faellig
 
 
 def due_now(last_run, interval_minutes, now):
@@ -2075,7 +2072,7 @@ class App:
                check=False, sync_folders=False, onedrive=False,
                sync_onedrive=False, check_onedrive=False, sync_calendars=False,
                sharepoint=False, sync_sharepoint=False, check_sharepoint=False,
-               sharepoint_pages=False, check_pages=False,
+               sharepoint_pages=False, check_pages=False, nur_einheit=None,
                origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
@@ -2126,6 +2123,7 @@ class App:
                             check_sharepoint=check_sharepoint,
                             sharepoint_pages=sharepoint_pages,
                             check_pages=check_pages,
+                            nur_einheit=nur_einheit,
                             sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
@@ -2287,6 +2285,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
+            if u.path == "/api/sharepoint-units":
+                # What the URLs resolved to last time, for the cadence tables.
+                def einheiten(dirname):
+                    roh = state_db.StateDb(BASE / dirname)._kv_lesen("einheiten")
+                    try:
+                        daten = json.loads(roh) if roh else []
+                    except ValueError:
+                        daten = []
+                    return daten if isinstance(daten, list) else []
+                return self._json({
+                    "libraries": einheiten(SHAREPOINT_DIR),
+                    "sites": einheiten(SHAREPOINT_PAGES_DIR),
+                    "cadence": app.cfg.get("sync_cadence") or {}})
             if u.path == "/api/sharepoint-report":
                 # The preview/type views need only this one small file –
                 # not the full analytics aggregation behind /api/analytics.
@@ -2368,6 +2379,8 @@ class Handler(BaseHTTPRequestHandler):
                     sharepoint=bool(data.get("sharepoint")),
                     sharepoint_pages=bool(data.get("sharepoint_pages")),
                     check_pages=bool(data.get("check_pages")),
+                    nur_einheit=(str(data.get("nur_einheit") or "").strip()
+                                 or None),
                     sync_sharepoint=bool(data.get("sync_sharepoint")),
                     check_sharepoint=bool(data.get("check_sharepoint")),
                     embeddings=data.get("embeddings"),
@@ -3866,6 +3879,7 @@ main{padding-bottom:60px}
         <span class="small muted" id="sp-msg"></span>
       </div>
       <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
+      <div id="sp-einheiten" style="margin-top:8px"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
@@ -3875,6 +3889,7 @@ main{padding-bottom:60px}
           placeholder="https://firma.sharepoint.com/sites/TeamX"></textarea>
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
+      <div id="pg-einheiten" style="margin-top:8px"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
@@ -4213,6 +4228,7 @@ function tab(name){
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
   });
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); }
+  if(name === 'einstellungen') ladeEinheiten();
   if(name === 'analytics') ladeAnalytics();
 }
 
@@ -6214,7 +6230,61 @@ function leseKadenzen(){
   var kad = Object.assign({}, (S && S.config && S.config.sync_cadence) || {});
   kad.onedrive = el('c-cadence-onedrive').value;
   kad.teams = el('c-cadence-teams').value;
+  document.querySelectorAll('[data-kadenz]').forEach(function(sel){
+    kad[sel.dataset.kadenz] = sel.value;
+  });
   return kad;
+}
+
+var EINHEITEN = {libraries: [], sites: []};
+
+function ladeEinheiten(){
+  api('/api/sharepoint-units').then(function(r){
+    EINHEITEN = r;
+    zeichneEinheiten('sp-einheiten', r.libraries || [], 'sharepoint',
+                     {sharepoint: true}, r.cadence || {});
+    zeichneEinheiten('pg-einheiten', r.sites || [], 'pages',
+                     {sharepoint_pages: true}, r.cadence || {});
+  }).catch(function(){});
+}
+
+function zeichneEinheiten(boxId, liste, art, lauf, kadenzen){
+  var box = el(boxId);
+  if(!liste.length){
+    box.innerHTML = '<p class="small muted">' +
+      esc(t('cadence.units.none')) + '</p>';
+    return;
+  }
+  var optionen = ['always', 'daily', 'weekly', 'monthly'];
+  box.innerHTML = liste.map(function(e, i){
+    var key = art + ':' + e.id;
+    var name = e.site ? e.site + ' / ' + e.name : e.name;
+    var wert = kadenzen[key] || 'always';
+    return '<div class="dateizeile"><span>' + esc(name) + '</span>' +
+      '<span class="muted">' +
+      '<select data-kadenz="' + esc(key) + '" onchange="speichereEinstellungen()">' +
+      optionen.map(function(o){
+        return '<option value="' + o + '"' + (o === wert ? ' selected' : '') +
+          '>' + esc(t('cadence.' + o)) + '</option>';
+      }).join('') + '</select> ' +
+      '<button class="mini" onclick="syncJetzt(\'' + boxId + '\',' + i + ')" ' +
+      'data-einheit data-i18n="cadence.sync_now">' + esc(t('cadence.sync_now')) +
+      '</button></span></div>';
+  }).join('');
+}
+
+function syncJetzt(boxId, i){
+  var art = boxId === 'sp-einheiten'
+    ? {liste: EINHEITEN.libraries, lauf: {sharepoint: true}}
+    : {liste: EINHEITEN.sites, lauf: {sharepoint_pages: true}};
+  var e = (art.liste || [])[i];
+  if(!e) return;
+  var body = Object.assign({nur_einheit: e.id, label: 'job.export'}, art.lauf);
+  merke('flow.run', 'sync_now');
+  post('/api/run', body).then(function(r){
+    if(!r.ok) alert(mtext(r.message));
+    refresh();
+  });
 }
 
 function speichereEinstellungen(){

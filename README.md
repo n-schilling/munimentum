@@ -87,6 +87,13 @@ along until you say otherwise. A schedule can repeat the whole thing — the
 mirrors and the pages export included, each with its own toggle — while the
 app is open.
 
+Not everything needs syncing every run: a **sync cadence** (always, daily,
+weekly, monthly) can be set per source — OneDrive, Teams — and per SharePoint
+library or pages site, right where they are configured. It applies to
+scheduled and manual runs alike; below its interval a source is skipped with
+a clear log line, and *Sync now* next to any SharePoint unit runs exactly
+that one immediately, cadence ignored.
+
 **SharePoint libraries** mirror the document libraries behind the site or
 folder URLs you list in the settings (sharing links work too; a folder URL
 mirrors exactly that subtree) — same promises as the OneDrive mirror: the

@@ -145,3 +145,19 @@ def schreibe_bericht(out, bericht):
     """Das Ergebnis der Vollständigkeitsprüfung ablegen – für die App."""
     return schreibe_atomar(Path(out) / BERICHT_DATEI,
                            json.dumps(bericht, ensure_ascii=False))
+
+
+# Sync cadence: how often a source gets synced at most. 0 = always; the
+# minute of slack keeps an hourly schedule from missing the daily boundary
+# by a hair. Shared between the app (service level) and the SharePoint
+# export (per library/site).
+CADENCE_S = {"always": 0, "daily": 86400, "weekly": 7 * 86400,
+             "monthly": 30 * 86400}
+
+
+def cadence_faellig(cadence, letzter, jetzt=None):
+    periode = CADENCE_S.get(cadence or "always", 0)
+    if not periode or letzter is None:
+        return True
+    import time as _time
+    return (jetzt if jetzt is not None else _time.time()) - letzter >= periode - 60

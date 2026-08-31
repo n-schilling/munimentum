@@ -523,6 +523,11 @@ def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
     check = app_mod.build_steps(cfg, check_pages=True)
     assert "--check-pages" in check[0]["argv"]
     assert check[0]["env"]["SHAREPOINT_PAGES_URLS"].startswith("https://")
+
+    cfg["sync_cadence"] = {"sharepoint:d1": "weekly"}
+    nur = app_mod.build_steps(cfg, sharepoint=True, nur_einheit="d1")
+    assert nur[0]["env"]["SHAREPOINT_ONLY"] == "d1"
+    assert '"sharepoint:d1": "weekly"' in nur[0]["env"]["SYNC_CADENCE"]
     assert steps[0]["corpus"] is True
 
 

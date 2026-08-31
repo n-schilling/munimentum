@@ -561,3 +561,79 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
     zahlen = drive_mirror.lauf(g, tmp_path, wahl, 1, still=True,
                                zustand=zustand)
     assert zahlen["new"] == 0 and g.aufrufe == [None, "delta-1"]
+
+
+# ---------------------------------------------------------------------------
+# Cadence: units below their interval are skipped, with a clear line
+# ---------------------------------------------------------------------------
+def test_lauf_ueberspringt_bibliothek_unter_ihrer_kadenz(tmp_path, monkeypatch,
+                                                         capsys):
+    drives = [{"id": "d1", "site": "S", "name": "A"},
+              {"id": "d2", "site": "S", "name": "B"}]
+    gelaufen = []
+
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None):
+        gelaufen.append(str(out))
+        return {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
+
+    monkeypatch.setattr(sp.drive_mirror, "lauf", fake_lauf)
+    monkeypatch.setenv("SYNC_CADENCE", '{"sharepoint:d1": "weekly"}')
+    # d1 lief gerade eben – unter der Wochen-Kadenz nicht fällig.
+    import time
+    sp.state_db.StateDb(sp.drive_ziel(tmp_path, drives[0]))._kv_schreiben(
+        "last_sync", str(time.time()))
+
+    class G:
+        pass
+
+    summe = sp.lauf(G(), tmp_path, drives)
+    assert len(gelaufen) == 1 and gelaufen[0].endswith("B")
+    events = _events(capsys)
+    skip = [e for e in events if e["k"] == "run.cadence.skip"]
+    assert len(skip) == 1 and skip[0]["v"]["name"] == "S / A"
+    assert skip[0]["v"]["cadence"]["k"] == "cadence.weekly"
+    assert summe["new"] == 1
+
+
+def test_sync_jetzt_ignoriert_kadenz_und_filtert(tmp_path, monkeypatch):
+    """SHAREPOINT_ONLY is the "sync now" button: exactly this unit, cadence
+    bypassed."""
+    drives = [{"id": "d1", "site": "S", "name": "A"},
+              {"id": "d2", "site": "S", "name": "B"}]
+    gelaufen = []
+
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None):
+        gelaufen.append(str(out))
+        return {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
+
+    monkeypatch.setattr(sp.drive_mirror, "lauf", fake_lauf)
+    monkeypatch.setenv("SYNC_CADENCE", '{"sharepoint:d1": "monthly"}')
+    monkeypatch.setenv("SHAREPOINT_ONLY", "d1")
+    import time
+    sp.state_db.StateDb(sp.drive_ziel(tmp_path, drives[0]))._kv_schreiben(
+        "last_sync", str(time.time()))
+
+    class G:
+        pass
+
+    sp.lauf(G(), tmp_path, drives)
+    assert len(gelaufen) == 1 and gelaufen[0].endswith("A")
+
+
+def test_seiten_lauf_ueberspringt_site_unter_kadenz(tmp_path, monkeypatch,
+                                                    capsys):
+    """A skipped site keeps its pages untouched – no tombstones, no
+    re-render, and the skip is one clear log line."""
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
+    sp.seiten_lauf(g, tmp_path, sites)
+    import time
+    monkeypatch.setenv("SYNC_CADENCE", '{"pages:s1": "monthly"}')
+    capsys.readouterr()
+    sp.seiten_lauf(g, tmp_path, sites)
+    db = sp.state_db.StateDb(tmp_path)
+    assert db.verschwunden_lesen() == {} and db.seiten_lesen()
+    events = _events(capsys)
+    assert any(e["k"] == "run.cadence.skip" and e["v"]["name"] == "Team X"
+               for e in events)
+    assert g.detailabrufe == 1                      # nichts erneut geholt
