@@ -1124,7 +1124,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 sync_onedrive=False, check_onedrive=False,
                 sync_calendars=False, sharepoint=False,
                 sync_sharepoint=False, check_sharepoint=False,
-                sharepoint_pages=False):
+                sharepoint_pages=False, check_pages=False):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
     Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
@@ -1273,6 +1273,14 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             "key": "check_sharepoint", "label": "job.step.preview",
             "argv": script_argv("sharepoint_export", "--check", SHAREPOINT_DIR),
             "env": {**base_env, **_sharepoint_env(cfg)},
+        })
+    if check_pages:
+        steps.append({
+            "key": "check_pages", "label": "job.step.check",
+            "argv": script_argv("sharepoint_export", "--check-pages",
+                                SHAREPOINT_PAGES_DIR),
+            "env": {**base_env, "SHAREPOINT_PAGES_URLS":
+                    str(cfg.get("sharepoint_pages_urls") or "")},
         })
     return steps
 
@@ -2051,7 +2059,7 @@ class App:
                check=False, sync_folders=False, onedrive=False,
                sync_onedrive=False, check_onedrive=False, sync_calendars=False,
                sharepoint=False, sync_sharepoint=False, check_sharepoint=False,
-               sharepoint_pages=False,
+               sharepoint_pages=False, check_pages=False,
                origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
@@ -2062,7 +2070,7 @@ class App:
         # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
         braucht_zugang = (outlook or teams or onedrive or check
                           or sharepoint or sync_sharepoint or check_sharepoint
-                          or sharepoint_pages
+                          or sharepoint_pages or check_pages
                           or sync_folders or sync_onedrive or check_onedrive
                           or sync_calendars)
         token = read_token() if braucht_zugang else ""
@@ -2085,6 +2093,7 @@ class App:
                             sync_sharepoint=sync_sharepoint,
                             check_sharepoint=check_sharepoint,
                             sharepoint_pages=sharepoint_pages,
+                            check_pages=check_pages,
                             sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
@@ -2261,7 +2270,9 @@ class Handler(BaseHTTPRequestHandler):
                     **kennzahlen(app.cfg),
                     "vollstaendigkeit": lies_bericht(),
                     "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR),
-                    "vollstaendigkeit_sharepoint": lies_bericht(SHAREPOINT_DIR)})
+                    "vollstaendigkeit_sharepoint": lies_bericht(SHAREPOINT_DIR),
+                    "vollstaendigkeit_pages":
+                        lies_bericht(SHAREPOINT_PAGES_DIR)})
             if u.path == "/api/runs":
                 try:
                     grenze = int(one.get("limit", 50))
@@ -2316,6 +2327,7 @@ class Handler(BaseHTTPRequestHandler):
                     check_onedrive=bool(data.get("check_onedrive")),
                     sharepoint=bool(data.get("sharepoint")),
                     sharepoint_pages=bool(data.get("sharepoint_pages")),
+                    check_pages=bool(data.get("check_pages")),
                     sync_sharepoint=bool(data.get("sync_sharepoint")),
                     check_sharepoint=bool(data.get("check_sharepoint")),
                     embeddings=data.get("embeddings"),
@@ -3709,6 +3721,7 @@ main{padding-bottom:60px}
     <div id="ana-check-box"></div>
     <div id="ana-check-box-od"></div>
     <div id="ana-check-box-sp"></div>
+    <div id="ana-check-box-pg"></div>
   </div>
 </section>
 
@@ -5729,6 +5742,7 @@ function zeigeAnalytics(a){
   // und einer soll den anderen nicht verdecken.
   zeigeBericht(a.vollstaendigkeit_onedrive, 'ana-check-box-od');
   zeigeBericht(a.vollstaendigkeit_sharepoint, 'ana-check-box-sp');
+  zeigeBericht(a.vollstaendigkeit_pages, 'ana-check-box-pg');
 }
 
 function fmtTag(ts){
@@ -5744,13 +5758,15 @@ function zeigeVerschwundene(){
 
 function zeigeBericht(b, id){
   var kasten = el(id || 'ana-check-box');
-  var od = id === 'ana-check-box-od' || id === 'ana-check-box-sp';
+  var od = id === 'ana-check-box-od' || id === 'ana-check-box-sp' ||
+           id === 'ana-check-box-pg';
   // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe der
   // Kasten sonst dauerhaft stehen, obwohl OneDrive vielleicht gar nicht genutzt wird.
   if(!b){ kasten.innerHTML = od ? '' :
             '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; return; }
   var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
               esc(t(id === 'ana-check-box-sp' ? 'ana.check.title.sharepoint'
+                    : id === 'ana-check-box-pg' ? 'ana.check.title.pages'
                     : od ? 'ana.check.title.onedrive' : 'ana.check.title.mail')) + '</h3>';
   var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
   var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
@@ -5790,10 +5806,15 @@ function nutztSharePoint(){
   return !!(S.config && S.config.sharepoint_enabled &&
             (S.config.sharepoint_urls || '').trim());
 }
+function nutztPages(){
+  return !!(S.config && S.config.sharepoint_pages_enabled &&
+            (S.config.sharepoint_pages_urls || '').trim());
+}
 function pruefeVollstaendigkeit(){
   el('ana-check-state').textContent = t('ana.check.running');
   post('/api/run', {check: true, check_onedrive: nutztOneDrive(),
                     check_sharepoint: nutztSharePoint(),
+                    check_pages: nutztPages(),
                     label: 'job.check'}).then(function(r){
     if(!r.ok){ el('ana-check-state').textContent = mtext(r.message); return; }
     warteAufLauf();

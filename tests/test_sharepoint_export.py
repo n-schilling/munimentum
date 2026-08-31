@@ -499,3 +499,22 @@ def test_seiten_lauf_bettet_bilder_ein(tmp_path):
     sp.seiten_lauf(g, tmp_path, sites)
     html = next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")
     assert "data:image/png;base64," in html
+
+
+def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
+    """Der Seiten-Check: was Microsoft je Site listet gegen das, was hier
+    liegt – gleiche Berichtsform wie beim Spiegel."""
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
+    sp.seiten_lauf(g, tmp_path, sites)          # eine Seite liegt jetzt hier
+    g.seiten.append({"id": "p2", "name": "Neu.aspx", "title": "Neu",
+                     "eTag": "e2"})
+    capsys.readouterr()
+    b = sp.seiten_pruefen(g, tmp_path, sites)
+    assert b["erwartet"] == 2 and b["vorhanden"] == 1 and b["fehlt"] == 1
+    assert b["ordner"][0]["ordner"] == "Team X"
+    assert (tmp_path / "vollstaendigkeit.json").exists()
+    e = progress.lies_ergebnis(
+        [z for z in capsys.readouterr().out.splitlines()
+         if progress.lies_ergebnis(z)][0])
+    assert e["extra"] == {"expected": 2, "present": 1, "missing": 1}

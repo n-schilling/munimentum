@@ -714,6 +714,54 @@ def seiten_lauf(graph, out, sites, fehl=0):
     return neu
 
 
+def seiten_pruefen(graph, out, sites, fehl=0):
+    """--check-pages: what Microsoft lists against what lies here, per site.
+
+    The same shape as the mirror check, so the completeness view draws it
+    without a second renderer. Nothing is rendered or written except the
+    report file."""
+    out = Path(out)
+    bestand = Seitenbestand(out / SEITEN_BESTAND)
+    weg = drive_mirror.lies_verschwunden(out / drive_mirror.GONE_FILE)
+    zeilen = []
+    for s in sites:
+        try:
+            seiten = list(graph.paged(
+                f"{GRAPH}/sites/{s['id']}/pages/microsoft.graph.sitePage"))
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.pages.site_failed", "err",
+                           url="/".join(s["pfad"]),
+                           error=f"{type(e).__name__}: {e}")
+            fehl += 1
+            continue
+        pfad = "/".join(s["pfad"])
+        vorhanden = sum(
+            1 for seite in seiten
+            if (e := bestand.eintraege.get(seite.get("id") or ""))
+            and (out / e["rel"]).is_file())
+        zeilen.append({"ordner": pfad, "erwartet": len(seiten),
+                       "vorhanden": vorhanden,
+                       "geloescht": sum(1 for rel in weg
+                                        if rel.startswith(pfad + "/")),
+                       "ausgelassen": False,
+                       "fehlt": max(0, len(seiten) - vorhanden)})
+    bericht = {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
+               "ordner": sorted(zeilen, key=lambda z: (-z["fehlt"], z["ordner"])),
+               "erwartet": sum(z["erwartet"] for z in zeilen),
+               "vorhanden": sum(z["vorhanden"] for z in zeilen),
+               "geloescht": sum(z["geloescht"] for z in zeilen),
+               "fehlt": sum(z["fehlt"] for z in zeilen),
+               "ausgelassen": 0, "ausgelassene_ordner": []}
+    drive_mirror.schreibe_bericht(out, bericht)
+    progress.ergebnis(0, errors=fehl,
+                      extra={"expected": bericht["erwartet"],
+                             "present": bericht["vorhanden"],
+                             "missing": bericht["fehlt"]})
+    return bericht
+
+
 def main():
     argv = sys.argv[1:]
     if export_util.hilfe_gewuenscht(argv):
@@ -721,7 +769,8 @@ def main():
         return
     struktur = "--folders" in argv
     pruefen = "--check" in argv
-    seiten = "--pages" in argv
+    seiten_pruefung = "--check-pages" in argv
+    seiten = "--pages" in argv or seiten_pruefung
     argv = [a for a in argv if not a.startswith("--")]
     out = Path(argv[0]) if argv else Path(OUT_PAGES if seiten else OUT_ROOT)
     urls = pages_urls() if seiten else configured_urls()
@@ -738,7 +787,8 @@ def main():
             if not sites:
                 progress.ergebnis(0, errors=fehl)
                 return
-            seiten_lauf(graph, out, sites, fehl)
+            (seiten_pruefen if seiten_pruefung else seiten_lauf)(
+                graph, out, sites, fehl)
             return
         drives, fehl = resolve_drives(graph, urls)
         if not drives:
