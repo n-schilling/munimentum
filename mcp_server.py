@@ -179,7 +179,7 @@ _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
 _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "Datei",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
-                 "pages": "Pages", "kalender": "Kalender",
+                 "pages": "SharePoint page", "kalender": "Kalender",
                  "kontakte": "Kontakte"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant

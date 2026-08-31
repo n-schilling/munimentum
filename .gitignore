@@ -32,5 +32,6 @@ teams_export/
 outlook_export/
 onedrive_export/
 sharepoint_export/
+sharepoint_pages/
 rag_store/
 app.log

@@ -5469,7 +5469,7 @@ function runElements(r){
   if((e.teams || []).length)
     parts.push('Teams' + detail(e.teams, ['1on1', 'group', 'meeting', 'channels']));
   if(e.onedrive) parts.push('OneDrive (' + t('ana.runs.all') + ')');
-  if(e.sharepoint) parts.push('SharePoint (' + t('ana.runs.all') + ')');
+  if(e.sharepoint) parts.push(t('search.source.sharepoint') + ' (' + t('ana.runs.all') + ')');
   if(e.sharepoint_pages) parts.push(t('search.source.pages'));
   (r.steps || []).forEach(function(s){
     if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
@@ -5504,7 +5504,8 @@ function renderRuns(runs){
       .map(function(k){ return '<th>' + esc(t('ana.runs.col.' + k)) + '</th>'; })
       .join('') + '</tr></thead><tbody>';
   var QUELLE = {outlook: 'Outlook', teams: 'Teams', onedrive: 'OneDrive',
-                sharepoint: 'SharePoint', sharepoint_pages: 'Pages'};
+                sharepoint: t('search.source.sharepoint'),
+                sharepoint_pages: t('search.source.pages')};
   runs.forEach(function(r, i){
     var dauer = (r.finished_at && r.started_at) ? r.finished_at - r.started_at : null;
     // "New" counts the exports only – index and calendar report their own
