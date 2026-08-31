@@ -704,7 +704,7 @@ def load_contacts(root_dir):
 ONEDRIVE_DIR = "Dateien"
 
 
-def _datei_satz(p_str, root_str, wurzelname="onedrive"):
+def _datei_satz(p_str, root_str):
     p, root = Path(p_str), Path(root_str)
     rel = p.relative_to(root).as_posix()
     try:
@@ -716,9 +716,7 @@ def _datei_satz(p_str, root_str, wurzelname="onedrive"):
     # Der Pfad als Text: so findet die Volltextsuche auch über den Ordnernamen,
     # nicht nur über den Dateinamen. Zwei Wörter, kein Rauschen.
     return {
-        "uid": f"datei:{rel}:0" if wurzelname == "onedrive"
-               else f"{wurzelname}:{rel}:0",
-        "src": "datei", "root": wurzelname,
+        "uid": f"datei:{rel}:0", "src": "datei", "root": "onedrive",
         "rel": rel,
         "who": "", "ppl": "",
         "ts": ts,

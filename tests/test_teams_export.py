@@ -83,13 +83,11 @@ def _clear_stop():
 
 @pytest.fixture
 def sleeps(monkeypatch):
-    """time.sleep abklemmen und die gewünschten Wartezeiten mitschreiben."""
+    """Disarm time.sleep and record the waits (gate reset: conftest.py)."""
     import graph_client
-    graph_client._DROSSEL["bis"] = 0.0
     calls = []
     monkeypatch.setattr(graph_client.time, "sleep", lambda s: calls.append(s))
-    yield calls
-    graph_client._DROSSEL["bis"] = 0.0
+    return calls
 
 
 def _msg(name, text, ts, ctype="text", **extra):

@@ -5848,14 +5848,10 @@ function pruefeVollstaendigkeit(){
   });
 }
 function warteAufLauf(){
-  // Der Lauf meldet sich über den Statusabruf; danach den Bericht neu holen.
-  var timer = setInterval(function(){
-    if(S && S.jobs && !S.jobs.busy){
-      clearInterval(timer);
-      el('ana-check-state').textContent = '';
-      ladeAnalytics(true);
-    }
-  }, 1500);
+  wennLaufFertig(function(){
+    el('ana-check-state').textContent = '';
+    ladeAnalytics(true);
+  });
 }
 
 /* ---------- Adressbuch ---------- */
@@ -6288,12 +6284,7 @@ function gleicheOrdnerAb(quelle){
     : function(){ return post('/api/run', wahl.lauf); };
   start().then(function(r){
     if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
-    var timer = setInterval(function(){
-      if(S && S.jobs && !S.jobs.busy){
-        clearInterval(timer);
-        el(kasten).textContent = '';
-      }
-    }, 1500);
+    wennLaufFertig(function(){ el(kasten).textContent = ''; });
   });
 }
 

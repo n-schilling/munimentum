@@ -253,14 +253,19 @@ def _quelle_cond(quelle):
     if quelle in ("onedrive", "sharepoint"):
         return "(src = 'datei' AND root = ?)", [quelle]
     return "src = ?", [quelle]
-_LISTBAR_SQL = ", ".join(f"'{q}'" for q in _LISTBAR)
-
 # Kanäle werden zu einem Eintrag zusammengefasst: ein Team hat schnell zwanzig,
 # und "welcher Kanal" ist selten die Frage – "Kanäle statt Chats" dagegen oft.
 # Der Filter kann das ohne Zutun, weil ein Pfad immer auch alles darunter meint.
 _TEAMS_OBERSTE = (
     "CASE WHEN src = 'teams' AND instr(ctx, '/') > 0 "
     "THEN substr(ctx, 1, instr(ctx, '/') - 1) ELSE ctx END")
+
+
+def _like_fest(text):
+    """Escape SQL-LIKE specials – one helper, because the sequence is
+    correctness-sensitive: a folder named "a%b" must not act as a wildcard."""
+    return (str(text).replace("\\", "\\\\")
+            .replace("%", "\\%").replace("_", "\\_"))
 
 
 def _wie(text):
@@ -272,8 +277,7 @@ def _wie(text):
     nun einmal sind: "a_b" fand auch "axb". Beides ist hier geradegezogen.
     """
     roh = (text or "").strip().lower()
-    fest = (roh.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_"))
-    return "%" + fest.replace("*", "%") + "%"
+    return "%" + _like_fest(roh).replace("*", "%") + "%"
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
@@ -1146,10 +1150,8 @@ def list_files(root: str = "", path: str = "") -> dict:
         praefix = (path or "").strip("/")
         wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
         if praefix:
-            fest = (praefix.replace("\\", "\\\\")
-                    .replace("%", "\\%").replace("_", "\\_"))
             wo += " AND rel LIKE ? ESCAPE '\\'"
-            params.append(fest + "/%")
+            params.append(_like_fest(praefix) + "/%")
         rows = con.execute(
             f"SELECT rel, date, gone FROM chunks WHERE {wo}", params).fetchall()
         schnitt = len(praefix) + 1 if praefix else 0

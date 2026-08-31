@@ -76,13 +76,7 @@ SEITEN_BESTAND = "seiten.tsv"
 BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
-def workers():
-    """Parallel drive requests – the mirrors' own knob (mirror_workers).
-
-    Drives are throttled by request budget, not by the mailbox's four-slot
-    limit; Graph documents no fixed concurrency, so the cap of 16 is our own
-    restraint and 429 waits stay visible in the log."""
-    return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
+workers = drive_mirror.workers
 
 
 def _url_liste(env_name, key):

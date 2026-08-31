@@ -29,6 +29,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 import export_util
+import settings
 import folders
 import graph_client
 import progress
@@ -44,6 +45,15 @@ BERICHT_DATEI = export_util.BERICHT_DATEI
 # Netz, Drosselung, Retry und Paging liegen in graph_client.py; eigen bleibt
 # nur der Download-Timeout – eine große Datei braucht länger als eine Seite.
 TIMEOUT_BYTES = (30, 600)
+
+
+def workers():
+    """Parallel drive requests – the mirrors' shared knob (mirror_workers).
+
+    Drives are throttled by request budget, not by the mailbox's four-slot
+    limit; Graph documents no fixed concurrency, so the cap of 16 is our own
+    restraint and 429 waits stay visible in the log."""
+    return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
 SEITE = 999                     # $top: eine Seite statt vieler kleiner
 
 
@@ -262,11 +272,9 @@ class Bestand:
         """Atomar – ein Abbruch mitten im Schreiben darf den Bestand nicht
         halbieren, sonst lädt der nächste Lauf alles noch einmal."""
         self.pfad.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self.pfad.with_name(self.pfad.name + ".tmp")
-        tmp.write_text("".join(
+        export_util.schreibe_atomar(self.pfad, "".join(
             f'{k}\t{e["rel"]}\t{e["ctag"]}\t{e["size"]}\n'
-            for k, e in sorted(self.eintraege.items())), encoding="utf-8")
-        tmp.replace(self.pfad)
+            for k, e in sorted(self.eintraege.items())))
 
 
 lies_verschwunden = export_util.lies_verschwunden

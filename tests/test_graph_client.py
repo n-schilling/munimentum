@@ -58,15 +58,12 @@ def session(monkeypatch):
 def sleeps(monkeypatch):
     """Disarm time.sleep and record the requested wait times.
 
-    The throttle gate is process-wide and uses the real clock – reset to
-    zero before every test, or one test waits out the previous test's gate.
-    The recorded values are remainders (float); compare rounded.
+    The gate reset lives in conftest.py; the recorded values are remainders
+    (float) – compare rounded.
     """
-    graph_client._DROSSEL["bis"] = 0.0
     calls = []
     monkeypatch.setattr(graph_client.time, "sleep", lambda s: calls.append(s))
-    yield calls
-    graph_client._DROSSEL["bis"] = 0.0
+    return calls
 
 
 # --------------------------------------------------------------------------

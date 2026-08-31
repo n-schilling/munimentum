@@ -53,11 +53,10 @@ except ImportError:
 
 import drive_mirror
 import graph_client
-from drive_mirror import (  # noqa: F401 – re-exported: shared core, one home
-    BESTAND_DATEI, BERICHT_DATEI, DATEI_DIR, DELTA_DATEI, GONE_FILE, SEITE,
-    Bestand, Selection, baum_zusammenfuehren, geaendert_am, hole_alle,
-    ist_ordner, ist_paket, kuerzel, lies_delta, lies_verschwunden, plane,
-    pruefe_vollstaendigkeit, rel_pfad, safe, sammle, schreibe_bericht,
+from drive_mirror import (  # noqa: F401 – re-exported for the tests' benefit
+    BESTAND_DATEI, BERICHT_DATEI, DATEI_DIR, GONE_FILE,
+    Bestand, Selection, geaendert_am, lies_delta, lies_verschwunden, plane,
+    pruefe_vollstaendigkeit, rel_pfad, safe, schreibe_bericht,
     schreibe_delta, schreibe_verschwunden, verschiebe,
 )
 
@@ -70,13 +69,7 @@ SCOPES = [RES + "Files.Read.All", RES + "User.Read"]
 OUT_ROOT = settings.value("onedrive_dir", settings.ONEDRIVE_DIR)
 
 
-def workers():
-    """Parallel drive requests – the mirrors' own knob (mirror_workers).
-
-    Drives are throttled by request budget, not by the mailbox's four-slot
-    limit; Graph documents no fixed concurrency, so the cap of 16 is our own
-    restraint and 429 waits stay visible in the log."""
-    return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
+workers = drive_mirror.workers
 
 
 def max_bytes():
