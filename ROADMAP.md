@@ -38,6 +38,13 @@ bundle, not at the desk.
 * **Split the data directory.** Bulk data and index have different needs —
   the `.eml` files may live on a slow disk, the index must not. Separate
   paths already work, but nothing explains them.
+* **One state.db per export folder.** Each export keeps 3–5 loose state
+  files (inventory, delta pointer, tombstones, tree, report) next to its
+  data. One SQLite per folder would keep the locality, make
+  inventory-plus-delta a single transaction, and feel consistent — at the
+  price of a delicate migration of exactly the resume data, WAL discipline
+  across app/subprocess/MCP readers, and less grep-ability. Its own release,
+  with a dual-read transition.
 * **A step registry.** Every export action is hand-threaded through four
   layers (API handler, launch, build_steps, run record); a declarative table
   keyed by step name would collapse them. Best done together with the app.py
