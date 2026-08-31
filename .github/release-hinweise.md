@@ -1,26 +1,33 @@
-## New in 5.5.0
+## New in 6.0.0
 
-**Analytics has a new Runs view.** Every export now leaves an entry: when it
-ran, scheduled or by hand, which elements were enabled, how long each step took
-and what it produced — the new pieces broken down by source on hover. The
-history lives in a small database next to the exports and holds nothing
-personal, only counts, durations and switches; how long it is kept is a
-setting (24 months by default).
+**SharePoint sites are mirrored.** List site or folder URLs in the settings —
+sharing links included — and the document libraries behind them are kept like
+the OneDrive mirror: the current version of every file, deletions stay with a
+tombstone note. A URL that points into one folder mirrors exactly that
+subtree. Extension filters and a size cap narrow the haul, and a **size
+preview** tells you per library what a run would fetch — files and megabytes —
+before anything is downloaded. Reading sites needs the Sites.Read.All
+permission; the token wizard lists it.
 
-**Reporting a problem got easier.** *Report a problem* now opens the matching
-GitHub issue form with description, system details and log filled in — you
-review and edit everything before sending. The report also names which
-settings differ from their defaults (rules and name lists only as their size,
-paths not at all) and, if enabled, the kind of your last steps in the
-interface (tab, search, run — never content).
+**A file browser joins the search views.** OneDrive and each SharePoint
+library, folder by folder straight from the index: originals one click away,
+deleted files marked, and *Search here* turns the current folder into a
+search filter. In search filters and over MCP, OneDrive and SharePoint are
+now separate sources, and Claude can walk the mirrors with the new
+`list_files` tool.
 
-**The log speaks one language — yours.** The exports report events, the app
-puts them into words in the interface language; the mixed German/English lines
-are gone. The log is also quieter: settings the app already shows are no
-longer echoed at the start of every run.
+**System notifications on macOS.** The end of a run — or an expired access
+key — is reported through the notification center even with the browser tab
+closed; clicking the notification opens the interface. Off, errors-only or
+all runs: your choice in the settings.
 
-**Quit tidies up.** Closing the app from the interface now clears the whole
-page instead of leaving dead controls behind.
+**Smaller things.** The schedule can include both mirrors; the OneDrive
+checkbox no longer forgets itself on reload; throttling by Microsoft is
+answered once per process instead of per connection, which keeps big mirror
+runs from collapsing into retry storms.
+
+**Discontinued:** the macOS Intel build. 5.5.0 remains the last x86_64
+release; Apple Silicon, Windows and Linux continue.
 
 ## Which file?
 

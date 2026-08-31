@@ -82,8 +82,8 @@ export list* spells out what they currently mean: what comes along, what is left
 out and why, and what is only in your archive because it is gone from the
 source. Calendars work the same way — a mailbox usually carries birthdays,
 holidays and calendars other people shared, so by default only your own comes
-along until you say otherwise. A schedule can repeat the whole thing while the
-app is open.
+along until you say otherwise. A schedule can repeat the whole thing — the
+mirrors included — while the app is open.
 
 **SharePoint** mirrors the document libraries behind the site URLs you list in
 the settings — same promises as the OneDrive mirror: the current version of
@@ -154,18 +154,19 @@ Next to the address and the two model names, a small indicator says whether each
 is actually there.
 
 **System notifications** can report the end of a run through the operating
-system — useful when the schedule exports with no tab open. By default only
-failures and an expired access key are reported; "all runs" and "off" are a
-setting away. Everything stays on the machine; currently macOS only.
+system — useful when the schedule exports with no tab open; clicking one opens
+the interface. By default only failures and an expired access key are
+reported; "all runs" and "off" are a setting away. Everything stays on the
+machine; currently macOS only.
 
 The log bar at the bottom is open from every tab, and it speaks the interface
 language: the exports report events, the app puts them into words. *Copy* puts
 the log on the clipboard; *Report a problem* opens the matching GitHub issue
 form with description, system details and log filled in — including which
 settings differ from their defaults (rules and name lists only as their size,
-paths not at all) and, if
-enabled, the kind of your last steps in the interface (tab, search, run —
-never content). The app sends nothing itself — addresses and user names in
+paths not at all) and, if enabled, the kind of your last steps in the
+interface (tab, search, run — never content). The app sends nothing itself —
+addresses and user names in
 paths are replaced, the whole text is shown for editing, and you submit the
 form.
 
@@ -190,7 +191,8 @@ pre-approved in almost every tenant.
 ## Search with Claude
 
 A built-in MCP server hands the archive to Claude Code or Claude Desktop — or
-any other MCP client: it searches, reads the sources and answers with citations
+any other MCP client: it searches, browses the mirrored drives, reads the
+sources and answers with citations
 — over your own mail and chats, not over the open web. *Settings* prints the
 exact snippet to paste into your client.
 

@@ -18,14 +18,17 @@ tracking, no fonts or scripts loaded from a CDN.
 
 Exports, search index, settings and the access token live in a folder in your
 user profile — the path is shown in *Settings*. The app serves its interface on
-`127.0.0.1` and is not reachable from your network. Delete the folder and
-nothing of it remains.
+`127.0.0.1` and is not reachable from your network. System notifications are
+posted locally through the operating system. Delete the folder and nothing of
+it remains.
 
 ## Two places worth knowing about
 
-**Report a problem** builds a GitHub issue from the log and some system details.
-The app sends nothing: e-mail addresses and user names in paths are replaced,
-the full text is shown for you to edit, and you submit the form yourself.
+**Report a problem** builds a GitHub issue from the log and some system
+details — optionally including the kind of your last interface actions (tab,
+search, run; never content, kept only in the memory of the open page). The app
+sends nothing: e-mail addresses and user names in paths are replaced, the
+full text is shown for you to edit, and you submit the form yourself.
 Folder names and subject lines are beyond what a pattern can catch, so read it
 before posting.
 

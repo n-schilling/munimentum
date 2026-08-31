@@ -7,12 +7,12 @@ the code, not here.
 ## Next: searching file contents
 
 Today the index knows **names**: the file-type filter finds mails with a PDF,
-`Vertrag_Musterkunde.pdf` finds the one, and the OneDrive mirror works the
-same way. What is missing is the **content** — a contract sits in the archive,
-its text invisible.
+`Vertrag_Musterkunde.pdf` finds the one, and the OneDrive and SharePoint
+mirrors work the same way. What is missing is the **content** — a contract
+sits in the archive, its text invisible.
 
-Both sources share the problem, so it becomes one step: attachments from the
-`.eml` files and mirrored OneDrive files go through the same extraction. The
+All sources share the problem, so it becomes one step: attachments from the
+`.eml` files and mirrored drive files go through the same extraction. The
 ground is prepared — `text` currently carries the path and is exactly the
 field an extraction fills later. An existing index stays valid, it only gets
 richer.

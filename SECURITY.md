@@ -56,8 +56,8 @@ are deliberate.
   resource handlers — both serve files out of the export folders by design, so
   the boundary matters.
 - Code execution triggered by exported content: a crafted `.eml`, `.html`,
-  `.ics` or `.vcf`, or a file mirrored from OneDrive, that runs code while being
-  parsed or while being shown in the interface.
+  `.ics` or `.vcf`, or a file mirrored from OneDrive or SharePoint, that runs
+  code while being parsed or while being shown in the interface.
 - Anything that moves archive content, tokens or telemetry off the machine. The
   only outbound connections are Microsoft Graph, your local Ollama, and — unless
   you switch it off — one update check against `api.github.com` at startup.
