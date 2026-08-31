@@ -84,7 +84,8 @@ out and why, and what is only in your archive because it is gone from the
 source. Calendars work the same way — a mailbox usually carries birthdays,
 holidays and calendars other people shared, so by default only your own comes
 along until you say otherwise. A schedule can repeat the whole thing — the
-mirrors included — while the app is open.
+mirrors and the pages export included, each with its own toggle — while the
+app is open.
 
 **SharePoint libraries** mirror the document libraries behind the site or
 folder URLs you list in the settings (sharing links work too; a folder URL
@@ -93,7 +94,8 @@ current version of every file, deletions stay with a tombstone note. Because
 team sites grow large, filters come along: only certain file extensions,
 never certain ones, a size cap — and a **size preview** that enumerates
 without downloading and tells you per library what a run would fetch, in
-files and megabytes, before you commit.
+files and megabytes, before you commit. Each library keeps its state in a
+single `state.db` next to its data.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all

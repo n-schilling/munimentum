@@ -29,10 +29,10 @@ closed; clicking the notification opens the interface. Off, errors-only or
 all runs: your choice in the settings.
 
 **Smaller things.** The schedule can include the mirrors and the pages
-export; the OneDrive
-checkbox no longer forgets itself on reload; throttling by Microsoft is
-answered once per process instead of per connection, which keeps big mirror
-runs from collapsing into retry storms.
+export, each with its own toggle; the SharePoint exports keep their state in
+one `state.db` per folder; the OneDrive checkbox no longer forgets itself on
+reload; throttling by Microsoft is answered once per process instead of per
+connection, which keeps big mirror runs from collapsing into retry storms.
 
 **Discontinued:** the macOS Intel build. 5.5.0 remains the last x86_64
 release; Apple Silicon, Windows and Linux continue.
