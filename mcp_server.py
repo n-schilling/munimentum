@@ -1148,6 +1148,13 @@ def list_files(root: str = "", path: str = "") -> dict:
                                 "label": k, "files": bibliotheken[k]})
             return {"roots": wurzeln}
         praefix = (path or "").strip("/")
+        # The fixed prefix depth and the level label travel with the answer:
+        # the client renders breadcrumbs generically instead of knowing that
+        # SharePoint paths start with site/library.
+        basis = 2 if root == "sharepoint" else 0
+        teile = praefix.split("/") if praefix else []
+        label = ("/".join(teile[:basis]) if basis and len(teile) >= basis
+                 else "OneDrive" if root == "onedrive" else root)
         wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
         if praefix:
             wo += " AND rel LIKE ? ESCAPE '\\'"
@@ -1168,7 +1175,7 @@ def list_files(root: str = "", path: str = "") -> dict:
                 dateien.append({"name": rest, "rel": rel, "date": datum,
                                 "gone": weg})
         dateien.sort(key=lambda e: e["name"].lower())
-        return {"root": root, "path": praefix,
+        return {"root": root, "path": praefix, "base": basis, "label": label,
                 "dirs": sorted(ordner.values(), key=lambda e: e["name"].lower()),
                 "files": dateien[:2000]}
     finally:

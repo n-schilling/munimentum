@@ -38,6 +38,10 @@ bundle, not at the desk.
 * **Split the data directory.** Bulk data and index have different needs —
   the `.eml` files may live on a slow disk, the index must not. Separate
   paths already work, but nothing explains them.
+* **A step registry.** Every export action is hand-threaded through four
+  layers (API handler, launch, build_steps, run record); a declarative table
+  keyed by step name would collapse them. Best done together with the app.py
+  split below.
 * **Split app.py.** Half the file is the interface as one embedded string,
   the rest is Python (config, runs, routes, analytics). A rework of its own —
   many tests check the page as a string, and bundling depends on it.

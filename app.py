@@ -236,6 +236,12 @@ SCOPE_FOR = {
     "files": "Files.Read.All",
     "sites": "Sites.Read.All",
 }
+# One row per mirror-style source: config switch -> (scope category for the
+# token wizard, name in the system report). New sources register here.
+SPIEGEL_QUELLEN = (("onedrive_enabled", "files", "onedrive"),
+                   ("sharepoint_enabled", "sites", "sharepoint"),
+                   ("sharepoint_pages_enabled", "sites", "pages"))
+
 LABEL_FOR = {
     "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
     "1on1": "1:1-Chats", "group": "Gruppenchats",
@@ -998,12 +1004,8 @@ def systemangaben(status, lang=None):
     kerne = os.cpu_count() or "?"
     kats = sorted((cfg.get("outlook_categories") or [])
                   + (cfg.get("teams_categories") or []))
-    if cfg.get("onedrive_enabled"):
-        kats.append("onedrive")
-    if cfg.get("sharepoint_enabled"):
-        kats.append("sharepoint")
-    if cfg.get("sharepoint_pages_enabled"):
-        kats.append("pages")
+    kats += [name for flag, _kategorie, name in SPIEGEL_QUELLEN
+             if cfg.get(flag)]
     angaben = [
         zeile("version", f"{version.VERSION} ({art})"),
         zeile("os", f"{platform.platform()} / {platform.machine()}"),
@@ -1843,12 +1845,12 @@ class App:
                 + _clean_categories(self.cfg["teams_categories"],
                                     ["1on1", "group", "meeting", "channels"]))
         # The mirrors are plain switches, not category lists – but the token
-        # wizard asks this list which permissions the run will need.
-        if self.cfg.get("onedrive_enabled"):
-            kats.append("files")
-        if (self.cfg.get("sharepoint_enabled")
-                or self.cfg.get("sharepoint_pages_enabled")):
-            kats.append("sites")
+        # wizard asks this list which permissions the run will need. One
+        # table (SPIEGEL_QUELLEN) names every switch, so a new source cannot
+        # forget the scope request.
+        for flag, kategorie, _name in SPIEGEL_QUELLEN:
+            if self.cfg.get(flag) and kategorie not in kats:
+                kats.append(kategorie)
         return kats
 
     def ollama(self, force=False):
@@ -2731,8 +2733,10 @@ class Handler(BaseHTTPRequestHandler):
         if mod is None:
             return {"error": self.app.search.error, "roots": []}
         r = mod.list_files(root=q.get("root", ""), path=q.get("path", ""))
-        basis = {"onedrive": BASE / ONEDRIVE_DIR,
-                 "sharepoint": BASE / SHAREPOINT_DIR}.get(r.get("root"))
+        # The root->directory knowledge lives in one place: the resolver's
+        # STATE, which /source uses too – no second hand-copied map here.
+        ordner = mod.STATE.get(f'{r.get("root")}_dir')
+        basis = Path(ordner) if ordner else None
         for e in r.get("files") or ():
             try:
                 e["size"] = (basis / e["rel"]).stat().st_size if basis else None
@@ -4207,10 +4211,9 @@ function dateiGehe(i){
 }
 
 function dateiHoch(n){
-  // n path segments survive; below the library root the crumb leads to the
-  // roots screen, not to a half-empty listing.
-  if(n <= 0 && dateiSicht.root !== 'onedrive') return ladeDateien('', '');
-  if(n < 0) return ladeDateien('', '');
+  // n path segments survive; above the level root the crumb leads back to
+  // the sources screen, not to a half-empty listing.
+  if(n < 0 || n < (dateiSicht.base || 0)) return ladeDateien('', '');
   var teile = dateiSicht.path.split('/').filter(Boolean).slice(0, n);
   ladeDateien(dateiSicht.root, teile.join('/'));
 }
@@ -4230,16 +4233,15 @@ function zeichneDateien(r){
     }).join('') : '<p class="hint">' + esc(t('files.none')) + '</p>';
     return;
   }
-  // Brotkrumen: Quellen / Wurzel / Ordner…
+  // Breadcrumbs: sources / root / folders… – depth and label come from
+  // the answer, the client holds no per-root layout knowledge.
   var teile = (r.path || '').split('/').filter(Boolean);
-  var basis = dateiSicht.root === 'sharepoint' ? 2 : 0;  // Site/Lib bleiben zusammen
+  var basis = r.base || 0;
+  dateiSicht.base = basis;
   var krumen = ['<a href="javascript:void(0)" onclick="dateiHoch(-1)">' +
-                esc(t('files.roots')) + '</a>'];
-  if(basis && teile.length >= basis)
-    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(' + basis + ')">' +
-                esc(teile.slice(0, basis).join('/')) + '</a>');
-  if(dateiSicht.root === 'onedrive')
-    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(0)">OneDrive</a>');
+                esc(t('files.roots')) + '</a>',
+                '<a href="javascript:void(0)" onclick="dateiHoch(' + basis + ')">' +
+                esc(r.label || dateiSicht.root) + '</a>'];
   teile.slice(basis).forEach(function(s, i){
     krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(' + (basis + i + 1) + ')">' +
                 esc(s) + '</a>');
@@ -5764,12 +5766,11 @@ function zeigeAnalytics(a){
                      (gesamt.pages || 0)), t('ana.size'),
                t('ana.size.hint', {index: bytes(gesamt.index)}));
   zeigeVerlaeufe(a);
-  zeigeBericht(a.vollstaendigkeit);
-  // Zwei Berichte, zwei Kästen: sie entstehen unabhängig voneinander,
-  // und einer soll den anderen nicht verdecken.
-  zeigeBericht(a.vollstaendigkeit_onedrive, 'ana-check-box-od');
-  zeigeBericht(a.vollstaendigkeit_sharepoint, 'ana-check-box-sp');
-  zeigeBericht(a.vollstaendigkeit_pages, 'ana-check-box-pg');
+  // One box per report; the registry below is the only place a new
+  // checkable source needs to appear on this side.
+  Object.keys(BERICHTKAESTEN).forEach(function(feld){
+    zeigeBericht(a[feld], BERICHTKAESTEN[feld].box);
+  });
 }
 
 function fmtTag(ts){
@@ -5783,18 +5784,29 @@ function zeigeVerschwundene(){
   tab('suche'); sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
+var BERICHTKAESTEN = {
+  vollstaendigkeit:            {box: '',                 titel: 'ana.check.title.mail'},
+  vollstaendigkeit_onedrive:   {box: 'ana-check-box-od', titel: 'ana.check.title.onedrive'},
+  vollstaendigkeit_sharepoint: {box: 'ana-check-box-sp', titel: 'ana.check.title.sharepoint'},
+  vollstaendigkeit_pages:      {box: 'ana-check-box-pg', titel: 'ana.check.title.pages'}
+};
+
+function berichtTitel(id){
+  var eintrag = Object.keys(BERICHTKAESTEN).map(function(k){
+    return BERICHTKAESTEN[k];
+  }).filter(function(e){ return e.box === (id || ''); })[0];
+  return eintrag ? eintrag.titel : 'ana.check.title.mail';
+}
+
 function zeigeBericht(b, id){
   var kasten = el(id || 'ana-check-box');
-  var od = id === 'ana-check-box-od' || id === 'ana-check-box-sp' ||
-           id === 'ana-check-box-pg';
+  var od = !!id;   // alle Spiegel-/Seitenkästen sprechen von Dateien
   // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe der
   // Kasten sonst dauerhaft stehen, obwohl OneDrive vielleicht gar nicht genutzt wird.
   if(!b){ kasten.innerHTML = od ? '' :
             '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; return; }
   var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
-              esc(t(id === 'ana-check-box-sp' ? 'ana.check.title.sharepoint'
-                    : id === 'ana-check-box-pg' ? 'ana.check.title.pages'
-                    : od ? 'ana.check.title.onedrive' : 'ana.check.title.mail')) + '</h3>';
+              esc(t(berichtTitel(id))) + '</h3>';
   var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
   var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
     esc(t(b.fehlt ? (od ? 'ana.check.gaps.files' : 'ana.check.gaps')
