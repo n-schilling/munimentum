@@ -1,6 +1,6 @@
 ## New in 6.0.0
 
-**SharePoint sites are mirrored.** List site or folder URLs in the settings —
+**SharePoint libraries are mirrored.** List site or folder URLs in the settings —
 sharing links included — and the document libraries behind them are kept like
 the OneDrive mirror: the current version of every file, deletions stay with a
 tombstone note. A URL that points into one folder mirrors exactly that
@@ -9,26 +9,27 @@ preview** tells you per library what a run would fetch — files and megabytes �
 before anything is downloaded. Reading sites needs the Sites.Read.All
 permission; the token wizard lists it.
 
-**SharePoint pages are exported as HTML.** A separate URL list; the modern pages
-(news included) of the listed sites and all their subsites become standalone
-HTML files — text kept, images embedded, other web parts as named
-placeholders — incremental,
-with tombstones for deleted pages, full-text searchable under their own
-source, and covered by the completeness check.
+**SharePoint pages are exported as HTML.** A separate settings section and
+URL list; the modern pages (news included) of the listed sites and all their
+subsites become standalone HTML files — text kept, images embedded up to a
+configurable size, other web parts as named placeholders. Incremental, with
+tombstones for deleted pages, full-text searchable under their own source,
+and covered by the completeness check.
 
 **A file browser joins the search views.** OneDrive and each SharePoint
 library, folder by folder straight from the index: originals one click away,
 deleted files marked, and *Search here* turns the current folder into a
-search filter. In search filters and over MCP, OneDrive and SharePoint are
-now separate sources, and Claude can walk the mirrors with the new
-`list_files` tool.
+search filter. In search filters and over MCP, OneDrive, SharePoint files
+and SharePoint pages are each their own source, and Claude can walk the
+mirrors with the new `list_files` tool.
 
 **System notifications on macOS.** The end of a run — or an expired access
 key — is reported through the notification center even with the browser tab
 closed; clicking the notification opens the interface. Off, errors-only or
 all runs: your choice in the settings.
 
-**Smaller things.** The schedule can include both mirrors; the OneDrive
+**Smaller things.** The schedule can include the mirrors and the pages
+export; the OneDrive
 checkbox no longer forgets itself on reload; throttling by Microsoft is
 answered once per process instead of per connection, which keeps big mirror
 runs from collapsing into retry storms.
@@ -40,7 +41,7 @@ release; Apple Silicon, Windows and Linux continue.
 
 | File | For |
 |---|---|
-| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1–M4) |
+| `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1 or newer) |
 | `Munimentum-windows-x64.zip` | Windows 10/11 (64-bit) |
 | `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
 

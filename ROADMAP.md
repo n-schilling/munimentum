@@ -22,7 +22,7 @@ Three things are settled:
 * **A separate, switchable step.** On a real archive it takes about an hour,
   once — not something to run with every export.
 * **Cache by content hash, not path.** The same file in twelve mails costs
-  one extraction, and both sources share the cache.
+  one extraction, and all sources share the cache.
 * **Not everything.** Roughly 40 % of attachments are images, mostly
   signature logos. A type filter is part of the deal.
 

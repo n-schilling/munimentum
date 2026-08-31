@@ -31,7 +31,7 @@ body:
         what the index holds, Ollama on or off, changed settings.
         *Settings* shows most of it.
       placeholder: |
-        Version: 5.4.0 (bundle)
+        Version: 6.0.0 (bundle)
         OS: macOS 15 (Apple Silicon)
         Index: 250k chunks, hybrid
         Ollama: running, model loaded
