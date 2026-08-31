@@ -464,9 +464,17 @@ class _BildGraph:
         self.inhalt = inhalt
         self.fehler = fehler
         self.urls = []
+        self.inhaltsabrufe = 0
+
+    def get(self, url):
+        if self.fehler:
+            raise RuntimeError("403")
+        assert "$select=size" in url
+        return {"size": len(self.inhalt)}
 
     def get_bytes(self, url, label=""):
         self.urls.append(url)
+        self.inhaltsabrufe += 1
         if self.fehler:
             raise RuntimeError("403")
         return self.inhalt, "image/png"
@@ -493,14 +501,28 @@ def test_bilder_einbetten_laesst_bei_fehler_den_link_stehen():
     assert 'src="/a/b.png"' in aus and z["fehl"] == 1
 
 
-def test_bilder_einbetten_ueberspringt_zu_grosse():
+def test_bilder_einbetten_ueberspringt_zu_grosse_ohne_download():
     g = _BildGraph(inhalt=b"x" * 9)
     z = {"bilder": 0, "fehl": 0}
     aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z, grenze=8)
     assert 'src="/a/b.png"' in aus and z == {"bilder": 0, "fehl": 0}
-    # 0 heißt ohne Grenze
+    # The size probe must have answered this – no wasted content download.
+    assert g.inhaltsabrufe == 0
+    # 0 means no limit: fetched directly, no probe.
     aus = sp.bilder_einbetten(g, '<img src="/a/b.png">', "h", z, grenze=0)
-    assert "data:image/png" in aus
+    assert "data:image/png" in aus and g.inhaltsabrufe == 1
+
+
+def test_bilder_einbetten_laedt_jede_quelle_nur_einmal():
+    """A shared banner on every page must cost one download per run."""
+    g = _BildGraph()
+    z = {"bilder": 0, "fehl": 0}
+    cache = {}
+    for _ in range(3):
+        aus = sp.bilder_einbetten(g, '<img src="/a/logo.png">', "h", z,
+                                  cache=cache)
+        assert "data:image/png" in aus
+    assert g.inhaltsabrufe == 1 and z["bilder"] == 3
 
 
 def test_webpart_mit_imagesources_wird_zum_img():

@@ -2255,6 +2255,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
                 return self._json(self._thread(one))
+            if u.path == "/api/sharepoint-report":
+                # The preview/type views need only this one small file –
+                # not the full analytics aggregation behind /api/analytics.
+                return self._json(
+                    {"bericht": lies_bericht(SHAREPOINT_DIR)})
             if u.path == "/api/files":
                 return self._json(self._files(one))
             if u.path == "/api/filetypes":
@@ -6243,8 +6248,8 @@ function sharepointVorschau(){
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
         clearInterval(timer);
-        fetch('/api/analytics').then(function(x){ return x.json(); }).then(function(a){
-          var b = a.vollstaendigkeit_sharepoint;
+        api('/api/sharepoint-report').then(function(r){
+          var b = r.bericht;
           el('sp-msg').textContent = b && (b.erwartet || b.ausgelassen)
             ? t('sharepoint.preview.result',
                 {n: zahl(b.erwartet), mb: zahl(Math.round((b.bytes || 0) / 1048576)),
@@ -6257,9 +6262,9 @@ function sharepointVorschau(){
   });
 }
 function zeigeSharepointTypen(){
-  fetch('/api/analytics').then(function(x){ return x.json(); }).then(function(a){
-    malSharepointTypen(a.vollstaendigkeit_sharepoint);
-  });
+  api('/api/sharepoint-report').then(function(r){
+    malSharepointTypen(r.bericht);
+  }).catch(function(){});
 }
 function malSharepointTypen(b){
   var kasten = el('sp-typen');

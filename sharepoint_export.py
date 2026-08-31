@@ -40,7 +40,9 @@ import base64
 import os
 import re
 import sys
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+import threading
+from concurrent.futures import (FIRST_COMPLETED, ThreadPoolExecutor,
+                                as_completed, wait)
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit, unquote
@@ -625,10 +627,18 @@ def render_page(seite, layout):
 _IMG_SRC = re.compile(r'(<img\b[^>]*?\bsrc=")([^"]+)(")', re.I)
 
 
-def _lade_bild(graph, url):
+def _lade_bild(graph, url, grenze=0):
     """Any asset URL the user can read, fetched via the shares endpoint –
-    no need to work out which drive the image lives in."""
+    no need to work out which drive the image lives in.
+
+    With a size cap, a tiny metadata probe runs first: downloading a 50 MB
+    photo just to discard it against a 4 MB cap wastes the whole transfer.
+    Returns (None, None) for images the cap excludes."""
     token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
+    if grenze:
+        meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem?$select=size")
+        if int(meta.get("size") or 0) > grenze:
+            return None, None
     return graph.get_bytes(f"{GRAPH}/shares/u!{token}/driveItem/content",
                            label=" (Bild)")
 
@@ -641,12 +651,17 @@ def bild_max():
                                   low=0)) * 1024 * 1024
 
 
-def bilder_einbetten(graph, html, host, zaehler, grenze=0):
+def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
+                     lock=None):
     """Embed the page's images as data URIs so the file stands alone.
 
     Failures keep the original URL: signed in, the browser may still show
-    it – better than a hole. Images over `grenze` stay links on purpose."""
+    it – better than a hole. Images over `grenze` stay links on purpose.
+    The run-scoped cache matters: a site logo appears on every page, and
+    without it every page re-downloads the same bytes."""
     import html as html_lib
+    cache = {} if cache is None else cache
+    lock = lock or threading.Lock()
 
     def ersetze(m):
         roh = html_lib.unescape(m.group(2))
@@ -656,20 +671,31 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0):
                 else f"https://{host}{roh}" if roh.startswith("/") else None)
         if not voll:
             return m.group(0)
+        with lock:
+            if voll in cache:
+                ersatz = cache[voll]
+                if ersatz is not None:
+                    zaehler["bilder"] += 1
+                return m.group(1) + ersatz + m.group(3) if ersatz else m.group(0)
         try:
-            inhalt, ctype = _lade_bild(graph, voll)
+            inhalt, ctype = _lade_bild(graph, voll, grenze)
         except auth.TokenExpired:
             raise
         except Exception:
-            zaehler["fehl"] += 1
+            with lock:
+                zaehler["fehl"] += 1
+                cache[voll] = None
             return m.group(0)
-        if grenze and len(inhalt) > grenze:
+        if inhalt is None or (grenze and len(inhalt) > grenze):
+            with lock:
+                cache[voll] = None      # zu groß: Link bleibt, kein Fehler
             return m.group(0)
-        zaehler["bilder"] += 1
         b64 = base64.b64encode(inhalt).decode()
-        return (m.group(1) +
-                f"data:{(ctype or 'image/png').split(';')[0]};base64,{b64}" +
-                m.group(3))
+        daten = f"data:{(ctype or 'image/png').split(';')[0]};base64,{b64}"
+        with lock:
+            zaehler["bilder"] += 1
+            cache[voll] = daten
+        return m.group(1) + daten + m.group(3)
 
     return _IMG_SRC.sub(ersetze, html)
 
@@ -680,8 +706,21 @@ def seiten_lauf(graph, out, sites, fehl=0):
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}
     grenze = bild_max()
+    cache = {}
+    lock = threading.Lock()
     gesehen = set()
     sauber = []      # sites whose page listing succeeded this run
+
+    def exportiere(site, sid, rel):
+        voll = graph.get(f"{GRAPH}/sites/{site['id']}/pages/{sid}"
+                         "/microsoft.graph.sitePage?$expand=canvasLayout")
+        html = render_page(voll, voll.get("canvasLayout"))
+        html = bilder_einbetten(graph, html, site.get("host") or "", zaehler,
+                                grenze, cache=cache, lock=lock)
+        ziel = out / rel
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        export_util.schreibe_atomar(ziel, html)
+
     for s in sites:
         try:
             seiten = list(graph.paged(
@@ -697,6 +736,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
         progress.event("run.pages.site", name="/".join(s["pfad"]),
                        n=len(seiten))
         sauber.append("/".join(s["pfad"]))
+        auftraege = []
         for seite in seiten:
             sid = seite.get("id")
             if not sid:
@@ -710,29 +750,29 @@ def seiten_lauf(graph, out, sites, fehl=0):
             if alt and alt["etag"] == etag and (out / alt["rel"]).is_file():
                 unveraendert += 1
                 continue
-            try:
-                voll = graph.get(
-                    f"{GRAPH}/sites/{s['id']}/pages/{sid}"
-                    "/microsoft.graph.sitePage?$expand=canvasLayout")
-            except auth.TokenExpired:
-                raise
-            except Exception as e:
-                fehler += 1
-                progress.event("run.pages.page_failed", "err", name=rel,
-                               error=f"{type(e).__name__}: {e}")
-                continue
-            ziel = out / rel
-            ziel.parent.mkdir(parents=True, exist_ok=True)
-            html = render_page(voll, voll.get("canvasLayout"))
-            html = bilder_einbetten(graph, html, s.get("host") or "", zaehler,
-                                    grenze)
-            export_util.schreibe_atomar(ziel, html)
-            if alt and alt["rel"] != rel:
-                # Renamed, not deleted: the old file would otherwise linger
-                # untracked and haunt the index as a stale duplicate.
-                (out / alt["rel"]).unlink(missing_ok=True)
-            bestand.eintraege[sid] = {"rel": rel, "etag": etag}
-            neu += 1
+            auftraege.append((sid, rel, etag, alt))
+        # Pages fetch and render side by side – the same worker budget the
+        # file mirrors use; the inventory is written by this thread only.
+        with ThreadPoolExecutor(max_workers=workers()) as pool:
+            offen = {pool.submit(exportiere, s, sid, rel): (sid, rel, etag, alt)
+                     for sid, rel, etag, alt in auftraege}
+            for f in as_completed(offen):
+                sid, rel, etag, alt = offen[f]
+                try:
+                    f.result()
+                except auth.TokenExpired:
+                    raise
+                except Exception as e:
+                    fehler += 1
+                    progress.event("run.pages.page_failed", "err", name=rel,
+                                   error=f"{type(e).__name__}: {e}")
+                    continue
+                if alt and alt["rel"] != rel:
+                    # Renamed, not deleted: the old file would otherwise
+                    # linger untracked as a stale duplicate in the index.
+                    (out / alt["rel"]).unlink(missing_ok=True)
+                bestand.eintraege[sid] = {"rel": rel, "etag": etag}
+                neu += 1
         bestand.schreibe()
     # Pages gone at Microsoft: in the inventory, reported by no site.
     # Judged ONLY below sites whose listing succeeded this run – a failed

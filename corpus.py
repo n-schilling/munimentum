@@ -751,27 +751,50 @@ def load_sharepoint(root_dir):
     """One record per mirrored SharePoint file – name and path, no content.
 
     The mirror keeps one folder per library (<site>/<library>/Dateien/…),
-    each with its own tombstone file, so the walk goes per library and the
-    tombstone paths get the library prefix back.
+    each with its own tombstone file. All libraries feed ONE parallel pass –
+    a pool per library would pay the spawn cost once per library, every
+    index run – and the tombstone paths get their library prefix back.
     """
     root = Path(root_dir)
     if not root.is_dir():
         return []
-    recs = []
+    dateien, weg = [], {}
     for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
-        dateien = [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
-                   if p.is_file() and not p.name.endswith(".teil")]
-        satz = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
+        dateien += [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
+                    if p.is_file() and not p.name.endswith(".teil")]
         praefix = lib.relative_to(root).as_posix()
-        weg = {f"{praefix}/{rel}": ts
-               for rel, ts in lies_verschwunden(lib).items()}
-        for r in satz:
-            r["root"] = "sharepoint"
-            r["uid"] = "sharepoint:" + r["uid"].split(":", 1)[1]
-            if r["rel"] in weg:
-                r["gone"] = weg[r["rel"]]
-        recs += satz
+        weg.update({f"{praefix}/{rel}": ts
+                    for rel, ts in lies_verschwunden(lib).items()})
+    recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
+    for r in recs:
+        r["root"] = "sharepoint"
+        r["uid"] = "sharepoint:" + r["uid"].split(":", 1)[1]
+        if r["rel"] in weg:
+            r["gone"] = weg[r["rel"]]
     return recs
+
+
+def _seiten_satz(p_str, root_str):
+    p, root = Path(p_str), Path(root_str)
+    rel = p.relative_to(root).as_posix()
+    try:
+        roh = p.read_text(encoding="utf-8", errors="replace")
+        ts = p.stat().st_mtime
+    except OSError:
+        return None
+    # Embedded data URIs are megabytes of base64 that never contain
+    # searchable text – dropping them first makes the parse cheap.
+    roh = re.sub(r'"data:[^"]*"', '""', roh)
+    m = re.search(r"<title>(.*?)</title>", roh, re.S | re.I)
+    titel = collapse(html_lib.unescape(m.group(1))) if m else p.stem
+    return {
+        "uid": f"pages:{rel}:0", "src": "pages", "root": "pages",
+        "rel": rel, "who": "", "ppl": "", "ts": ts,
+        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+        "title": titel,
+        "ctx": rel.rsplit("/", 1)[0] if "/" in rel else "",
+        "text": collapse(strip_html(roh)),
+    }
 
 
 def load_pages(root_dir):
@@ -779,33 +802,18 @@ def load_pages(root_dir):
 
     Unlike the file mirrors, the content is right there: the pages export
     writes the text web parts into the file, so the page body goes into the
-    index and the full-text search reads SharePoint pages like mail.
+    index and the full-text search reads SharePoint pages like mail. The
+    parse fans out like every sibling loader.
     """
     root = Path(root_dir)
     if not root.is_dir():
         return []
     weg = lies_verschwunden(root)
-    recs = []
-    for p in sorted(root.rglob("*.html")):
-        rel = p.relative_to(root).as_posix()
-        try:
-            roh = p.read_text(encoding="utf-8", errors="replace")
-            ts = p.stat().st_mtime
-        except OSError:
-            continue
-        m = re.search(r"<title>(.*?)</title>", roh, re.S | re.I)
-        titel = collapse(html_lib.unescape(m.group(1))) if m else p.stem
-        satz = {
-            "uid": f"pages:{rel}:0", "src": "pages", "root": "pages",
-            "rel": rel, "who": "", "ppl": "", "ts": ts,
-            "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
-            "title": titel,
-            "ctx": rel.rsplit("/", 1)[0] if "/" in rel else "",
-            "text": collapse(strip_html(roh)),
-        }
-        if rel in weg:
-            satz["gone"] = weg[rel]
-        recs.append(satz)
+    dateien = sorted(root.rglob("*.html"))
+    recs = [r for r in _pmap(_seiten_satz, dateien, str(root)) if r]
+    for satz in recs:
+        if satz["rel"] in weg:
+            satz["gone"] = weg[satz["rel"]]
     return recs
 
 
