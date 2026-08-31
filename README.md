@@ -1,9 +1,9 @@
 # Munimentum
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
-channels, Outlook mail, calendar, contacts, OneDrive files and SharePoint
-libraries — exported through Microsoft Graph and searchable offline, in the app
-or through Claude via MCP.
+channels, Outlook mail, calendar, contacts, OneDrive files, SharePoint
+libraries and SharePoint pages — exported through Microsoft Graph and
+searchable offline, in the app or through Claude via MCP.
 
 **The magic:** All via delegated access, no admin consent required.
 
@@ -71,11 +71,12 @@ One browser page with four tabs.
 
 ### Export data
 
-Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and channel
-chats; OneDrive files; SharePoint libraries and site pages — and start. Nothing is preselected: any one of these can
-mean tens of thousands of items. Every run fetches only what is new, so the
-second one takes minutes rather than hours. Deleted messages **stay in the
-archive** and get a marker; that is the point of keeping one.
+Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and
+channel chats; OneDrive files; SharePoint libraries and SharePoint pages —
+and start. Nothing is preselected: any one of these can mean tens of
+thousands of items. Every run fetches only what is new, so the second one
+takes minutes rather than hours. Deleted items **stay in the archive** and
+get a marker; that is the point of keeping one.
 
 Which folders come along is a list of ordered include/exclude rules, and *Show
 export list* spells out what they currently mean: what comes along, what is left
@@ -85,18 +86,22 @@ holidays and calendars other people shared, so by default only your own comes
 along until you say otherwise. A schedule can repeat the whole thing — the
 mirrors included — while the app is open.
 
-**SharePoint** mirrors the document libraries behind the site URLs you list in
-the settings — same promises as the OneDrive mirror: the current version of
-every file, deletions stay with a tombstone note. Because team sites grow
-large, filters come along: only certain file extensions, never certain ones, a
-size cap — and a **size preview** that enumerates without downloading and
-tells you per library what a run would fetch, in files and megabytes, before
-you commit. Reading sites needs the Sites.Read.All permission.
+**SharePoint libraries** mirror the document libraries behind the site or
+folder URLs you list in the settings (sharing links work too; a folder URL
+mirrors exactly that subtree) — same promises as the OneDrive mirror: the
+current version of every file, deletions stay with a tombstone note. Because
+team sites grow large, filters come along: only certain file extensions,
+never certain ones, a size cap — and a **size preview** that enumerates
+without downloading and tells you per library what a run would fetch, in
+files and megabytes, before you commit.
 
-**Site pages** are a separate export with their own URL list: the modern
-pages (news included) of the listed sites and all their subsites, rendered to
-standalone HTML — text kept, images embedded, other web parts as named
-placeholders — and full-text searchable afterwards.
+**SharePoint pages** are a separate export with their own settings section
+and URL list: the modern pages (news included) of the listed sites and all
+their subsites, rendered to standalone HTML — text kept, images embedded up
+to a configurable size, other web parts as named placeholders. Unlike the
+mirrored files, the page text itself lands in the index and is full-text
+searchable. Both SharePoint exports need the Sites.Read.All permission; the
+token wizard lists it.
 
 ### Search data
 
@@ -116,12 +121,14 @@ the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. Every
 hit offers *Find similar*, the whole conversation it belongs to, and the
 original file.
-Four views live here: results, calendar (including appointments recovered from
-invitation and cancellation mails), the address book, and a **file browser**
-that walks the mirrored drives — OneDrive and each SharePoint library — folder
-by folder, straight from the index: originals one click away, deleted files
-marked, and *Search here* turns the current folder into a search filter. In
-the filters, OneDrive and SharePoint are their own sources.
+
+Four views live here: results, calendar (including appointments recovered
+from invitation and cancellation mails), the address book, and a **file
+browser** that walks the mirrored drives — OneDrive and each SharePoint
+library — folder by folder, straight from the index: originals one click
+away, deleted files marked, and *Search here* turns the current folder into
+a search filter. In the filters, OneDrive, SharePoint files and SharePoint
+pages are each their own source.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
@@ -139,8 +146,8 @@ Below that: attachments by file type, the largest single files, and who you
 exchange the most with.
 
 On request there is also a completeness check against Microsoft: what it
-counts against what is here — per mailbox folder, per mirrored drive, and per
-site for the exported SharePoint pages.
+counts against what is here — per mailbox folder, per mirrored library, and
+per site for the SharePoint pages.
 
 **Runs** keeps the history of every export: when it ran, scheduled or by hand,
 which elements were enabled, how long each step took and what it produced —
