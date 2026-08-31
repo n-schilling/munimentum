@@ -627,7 +627,6 @@ def test_seiten_lauf_ueberspringt_site_unter_kadenz(tmp_path, monkeypatch,
     g = _SeitenGraph()
     sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
     sp.seiten_lauf(g, tmp_path, sites)
-    import time
     monkeypatch.setenv("SYNC_CADENCE", '{"pages:s1": "monthly"}')
     capsys.readouterr()
     sp.seiten_lauf(g, tmp_path, sites)
