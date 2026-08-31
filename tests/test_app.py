@@ -2197,6 +2197,23 @@ def test_ensure_streams_laesst_vorhandene_konsole_in_ruhe(sandbox):
     assert sys.stdout is vorher
 
 
+def test_server_schweigt_bei_verbindungsabbruch(capsys):
+    """Reloads und geschlossene Tabs resetten Sockets ständig – der volle
+    Traceback dafür begrub echte Fehler im Rauschen."""
+    srv = app_mod.Server.__new__(app_mod.Server)
+    try:
+        raise ConnectionResetError(54, "Connection reset by peer")
+    except ConnectionResetError:
+        srv.handle_error(None, ("127.0.0.1", 1234))
+    assert capsys.readouterr().err == ""
+
+    try:
+        raise ValueError("echter Fehler")
+    except ValueError:
+        srv.handle_error(None, ("127.0.0.1", 1234))
+    assert "ValueError" in capsys.readouterr().err
+
+
 def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
     """Zweiter Start bzw. belegter Port: ein Doppelklick soll nicht mit einem
     Traceback enden, den in einer fensterlosen App niemand sieht."""

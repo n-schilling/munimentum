@@ -2875,6 +2875,20 @@ class Server(ThreadingHTTPServer):
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
+    def handle_error(self, request, client_address):
+        """A browser dropping its keep-alive connection is not an error.
+
+        Reloads and closed tabs reset sockets all the time; the default
+        handler prints a full traceback for each one and buries real errors
+        in noise. Everything else still gets the standard report.
+        """
+        art = sys.exc_info()[0]
+        if art is not None and issubclass(
+                art, (ConnectionResetError, BrokenPipeError,
+                      ConnectionAbortedError, TimeoutError)):
+            return
+        super().handle_error(request, client_address)
+
 
 def make_server(app, port, host="127.0.0.1", tries=12):
     """Server binden und die erlaubten Host-Header festlegen.
