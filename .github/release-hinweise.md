@@ -1,41 +1,19 @@
-## New in 6.0.0
+## New in 6.1.0
 
-**SharePoint libraries are mirrored.** List site or folder URLs in the settings —
-sharing links included — and the document libraries behind them are kept like
-the OneDrive mirror: the current version of every file, deletions stay with a
-tombstone note. A URL that points into one folder mirrors exactly that
-subtree. Extension filters and a size cap narrow the haul, and a **size
-preview** tells you per library what a run would fetch — files and megabytes —
-before anything is downloaded. Reading sites needs the Sites.Read.All
-permission; the token wizard lists it.
+**A sync cadence per source.** Not everything needs syncing every run:
+OneDrive, Teams and every single SharePoint URL can be set to always, daily,
+weekly or monthly. The cadence applies to scheduled and manual runs alike —
+below its interval the source is skipped with a clear log line saying so.
 
-**SharePoint pages are exported as HTML.** A separate settings section and
-URL list; the modern pages (news included) of the listed sites and all their
-subsites become standalone HTML files — text kept, images embedded up to a
-configurable size, other web parts as named placeholders. Incremental, with
-tombstones for deleted pages, full-text searchable under their own source,
-and covered by the completeness check.
+**URL tables for SharePoint.** Libraries and pages are configured as a small
+table instead of a text field: one row per URL, with its cadence and a *Sync
+now* button that runs exactly that one immediately, cadence ignored.
 
-**A file browser joins the search views.** OneDrive and each SharePoint
-library, folder by folder straight from the index: originals one click away,
-deleted files marked, and *Search here* turns the current folder into a
-search filter. In search filters and over MCP, OneDrive, SharePoint files
-and SharePoint pages are each their own source, and Claude can walk the
-mirrors with the new `list_files` tool.
-
-**System notifications on macOS.** The end of a run — or an expired access
-key — is reported through the notification center even with the browser tab
-closed; clicking the notification opens the interface. Off, errors-only or
-all runs: your choice in the settings.
-
-**Smaller things.** The schedule can include the mirrors and the pages
-export, each with its own toggle; the SharePoint exports keep their state in
-one `state.db` per folder; the OneDrive checkbox no longer forgets itself on
-reload; throttling by Microsoft is answered once per process instead of per
-connection, which keeps big mirror runs from collapsing into retry storms.
-
-**Discontinued:** the macOS Intel build. 5.5.0 remains the last x86_64
-release; Apple Silicon, Windows and Linux continue.
+**Cheaper folder mirrors.** A URL that points into one folder now rides the
+library's change feed: the first run still walks the whole library once —
+and says what it is doing while it walks — but every later run asks
+Microsoft only for what has changed since. An unchanged library costs about
+one request.
 
 ## Which file?
 

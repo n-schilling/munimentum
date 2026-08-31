@@ -89,10 +89,10 @@ app is open.
 
 Not everything needs syncing every run: a **sync cadence** (always, daily,
 weekly, monthly) can be set per source — OneDrive, Teams — and per SharePoint
-library or pages site, right where they are configured. It applies to
-scheduled and manual runs alike; below its interval a source is skipped with
-a clear log line, and *Sync now* next to any SharePoint unit runs exactly
-that one immediately, cadence ignored.
+URL. Libraries and pages are configured as a small table, one row per URL
+with its cadence and a *Sync now* button that runs exactly that one
+immediately, cadence ignored. Cadences apply to scheduled and manual runs
+alike; below its interval a source is skipped with a clear log line.
 
 **SharePoint libraries** mirror the document libraries behind the site or
 folder URLs you list in the settings (sharing links work too; a folder URL
@@ -102,7 +102,8 @@ team sites grow large, filters come along: only certain file extensions,
 never certain ones, a size cap — and a **size preview** that enumerates
 without downloading and tells you per library what a run would fetch, in
 files and megabytes, before you commit. Each library keeps its state in a
-single `state.db` next to its data.
+single `state.db` next to its data; the first run walks the library once,
+every later run asks Microsoft only for what has changed since.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all
