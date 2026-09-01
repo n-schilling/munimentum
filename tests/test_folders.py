@@ -143,19 +143,25 @@ def test_umbenennen_faellt_nicht_aus_dem_export(tmp_path):
 
 
 def test_laden_und_speichern(tmp_path):
+    import state_db
     folders.speichere(tmp_path, [_eintrag(1, "E-Mail/A", 5)])
     d = folders.lade(tmp_path)
     assert d["ordner"][0]["pfad"] == "E-Mail/A"
-    assert not folders.pfad(tmp_path).with_name(folders.DATEI + ".tmp").exists()
+    # Der Baum wohnt in der state.db des Ordners, nicht in einer losen Datei.
+    assert (tmp_path / state_db.DB_NAME).exists()
+    assert not (tmp_path / folders.DATEI).exists()
 
 
-def test_kaputte_datei_macht_keinen_krach(tmp_path):
-    folders.pfad(tmp_path).write_text("kein json", encoding="utf-8")
+def test_kaputter_eintrag_macht_keinen_krach(tmp_path):
+    import state_db
+    state_db.StateDb(tmp_path).kv_schreiben("baum", "kein json")
     assert folders.lade(tmp_path) is None
 
 
-def test_fremde_datei_wird_nicht_geglaubt(tmp_path):
-    folders.pfad(tmp_path).write_text(json.dumps({"etwas": "anderes"}), encoding="utf-8")
+def test_fremder_eintrag_wird_nicht_geglaubt(tmp_path):
+    import state_db
+    state_db.StateDb(tmp_path).kv_schreiben(
+        "baum", json.dumps({"etwas": "anderes"}))
     assert folders.lade(tmp_path) is None
 
 

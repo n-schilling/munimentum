@@ -20,10 +20,10 @@ GRAPH_TOKEN/GRAPH_AUTH; environment beats app_config.json, see settings.py).
 There are no prompts; with "channels" selected, every joined team comes
 along. Progress, results and failures are structured lines (progress.py).
 
-Resume / incremental: export_state.json in the output folder remembers the
-last activity per conversation. A new run re-exports chats with NEW messages
-and skips unchanged ones; channels are re-checked each run and only written
-on change (REFRESH_CHANNELS=0 turns that off). Delete the file (or folder)
+Resume / incremental: the output folder's state.db remembers the last
+activity per conversation. A new run re-exports chats with NEW messages and
+skips unchanged ones; channels are re-checked each run and only written on
+change (REFRESH_CHANNELS=0 turns that off). Delete the database (or folder)
 for a full re-export.
 """
 
@@ -42,6 +42,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import auth
 import export_util
+import state_db
 import graph_client
 import settings
 import progress
@@ -73,7 +74,6 @@ SCOPES_FULL = SCOPES_CHAT + [
 EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images")
 PAGE = 50                   # $top (Graph-Maximum für Nachrichten)
 OUT_ROOT = settings.value("teams_dir", settings.TEAMS_DIR)  # fest -> Resume über Läufe hinweg
-STATE_FILE = "export_state.json"
 
 # Inkrementelle Läufe (z. B. per Scheduler): Chats werden bei neuen Nachrichten
 # automatisch neu exportiert (günstig über lastMessagePreview erkannt). Kanäle
@@ -434,10 +434,10 @@ def render_conversation(title, subtitle, meta, blocks):
 # Fortschritt (thread-sicher)
 # ---------------------------------------------------------------------------
 def load_state(out):
-    p = out / STATE_FILE
-    if p.exists():
+    roh = state_db.StateDb(out).kv_lesen("state")
+    if roh:
         try:
-            data = json.loads(p.read_text(encoding="utf-8"))
+            data = json.loads(roh)
             if isinstance(data, dict) and "conversations" in data:
                 return data
         except Exception:
@@ -446,8 +446,8 @@ def load_state(out):
 
 
 def save_state(out, state):
-    export_util.schreibe_atomar(out / STATE_FILE,
-                                json.dumps(state, ensure_ascii=False, indent=2))
+    state_db.StateDb(out).kv_schreiben(
+        "state", json.dumps(state, ensure_ascii=False))
 
 
 def already_done(out, state, key):

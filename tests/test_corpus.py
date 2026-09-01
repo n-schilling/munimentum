@@ -398,8 +398,9 @@ def test_verschwundene_werden_markiert(tmp_path):
     for name in ("weg.eml", "da.eml"):
         (post / name).write_bytes(
             b"From: a@b.c\nTo: d@e.f\nSubject: X\nDate: Sun, 1 Jun 2025 10:00:00 +0000\n\nText\n")
-    (tmp_path / "verschwunden.tsv").write_text(
-        "E-Mail/Posteingang/weg.eml\t2026-03-12T09:00:00\n", encoding="utf-8")
+    import state_db
+    state_db.StateDb(tmp_path).verschwunden_ergaenzen(
+        ["E-Mail/Posteingang/weg.eml"], "2026-03-12T09:00:00")
 
     recs = {r["rel"]: r for r in corpus.load_outlook(str(tmp_path))}
     assert recs["E-Mail/Posteingang/weg.eml"]["gone"] == "2026-03-12T09:00:00"
@@ -510,8 +511,9 @@ def test_load_onedrive_faellt_nicht_aus_dem_index(tmp_path):
 
 def test_load_onedrive_uebernimmt_den_grabstein(tmp_path):
     _spiegel(tmp_path, "weg.pdf", "da.pdf")
-    (tmp_path / "verschwunden.tsv").write_text(
-        "Dateien/weg.pdf\t2026-01-01\n", encoding="utf-8")
+    import state_db
+    state_db.StateDb(tmp_path).verschwunden_ergaenzen(
+        ["Dateien/weg.pdf"], "2026-01-01")
     r = {x["rel"]: x for x in corpus.load_onedrive(tmp_path)}
     assert r["Dateien/weg.pdf"]["gone"] == "2026-01-01"
     assert "gone" not in r["Dateien/da.pdf"]

@@ -714,7 +714,7 @@ def test_plane_dedupliziert_wiederholte_eintraege(tmp_path):
     page) – the plan must hold one download, not two threads on one file."""
     import drive_mirror
 
-    bestand = drive_mirror.Bestand(tmp_path / "dateien.tsv")
+    bestand = drive_mirror.Bestand()
     plan = drive_mirror.plane(
         [_drive_datei("a", "a.pdf", ctag="c1"),
          _drive_datei("a", "a.pdf", ctag="c2")],

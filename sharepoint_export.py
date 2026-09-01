@@ -4,7 +4,7 @@ SharePoint mirror: configured sites and document libraries as local copies.
 
 To Graph a document library is a drive, so the machinery is drive_mirror.py –
 the same promises as the OneDrive mirror: the CURRENT version of every file
-is kept, deletions leave a tombstone in verschwunden.tsv. What is SharePoint
+is kept, deletions leave a tombstone in the state.db. What is SharePoint
 here is only the addressing: URLs are resolved to sites, sites list their
 libraries, and every library is mirrored into its own folder
 (``<site>/<library>/Dateien/…``) with its own delta pointer and inventory.
@@ -76,7 +76,6 @@ SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 
 OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
 OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
-BERICHT_DATEI = drive_mirror.BERICHT_DATEI
 
 
 workers = drive_mirror.workers

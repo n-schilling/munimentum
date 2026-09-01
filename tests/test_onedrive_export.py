@@ -17,6 +17,7 @@ import pytest
 import folders
 import onedrive_export as od
 import progress
+import state_db
 
 
 def _datei(kennung, name, pfad="/drive/root:/Ordner", groesse=10, ctag="c1", **extra):
@@ -80,7 +81,7 @@ def test_kurze_namen_bleiben_unangetastet():
 # Planung: was der Lauf täte, ohne Netz
 # --------------------------------------------------------------------------
 def test_plane_trennt_laden_auslassen_und_geloescht(tmp_path):
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     bestand.merke("weg", "Dateien/Ordner/alt.pdf", "c1", 10)
     eintraege = [
         _datei("neu", "neu.pdf"),
@@ -101,7 +102,7 @@ def test_plane_ueberspringt_was_unveraendert_daliegt(tmp_path):
     ziel = tmp_path / "Dateien/Ordner/a.pdf"
     ziel.parent.mkdir(parents=True)
     ziel.write_bytes(b"x" * 10)
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
     assert plan["laden"] == []
@@ -115,7 +116,7 @@ def test_halbe_datei_gilt_nicht_als_fertig(tmp_path):
     ziel = tmp_path / "Dateien/Ordner/a.pdf"
     ziel.parent.mkdir(parents=True)
     ziel.write_bytes(b"x" * 3)                      # erwartet werden 10
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
     assert len(plan["laden"]) == 1
@@ -125,7 +126,7 @@ def test_verschieben_statt_neu_laden(tmp_path):
     alt = tmp_path / "Dateien/Alt/a.pdf"
     alt.parent.mkdir(parents=True)
     alt.write_bytes(b"x" * 10)
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     bestand.merke("1", "Dateien/Alt/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf", "/drive/root:/Neu")], bestand, tmp_path,
                     od.Selection())
@@ -141,7 +142,7 @@ def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
     alt = tmp_path / "Dateien/Alt/a.pdf"
     alt.parent.mkdir(parents=True)
     alt.write_bytes(b"x" * 10)
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     bestand.merke("1", "Dateien/Alt/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "b.pdf", "/drive/root:/Neu", groesse=99, ctag="c2")],
                     bestand, tmp_path, od.Selection())
@@ -150,7 +151,7 @@ def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
 
 
 def test_groessengrenze(tmp_path):
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     gross = [_datei("1", "gross.pdf", groesse=5 * 1024 * 1024)]
     assert od.plane(gross, bestand, tmp_path, od.Selection(max_bytes=1024 * 1024))["laden"] == []
     assert len(od.plane(gross, bestand, tmp_path, od.Selection())["laden"]) == 1
@@ -159,7 +160,7 @@ def test_groessengrenze(tmp_path):
 def test_die_wurzel_steht_im_baum(tmp_path):
     """Sonst gilt jede Datei direkt im Laufwerk als „nur noch lokal" – in der
     Exportliste ein Fehlalarm, der genau einmal auftritt und dauerhaft irritiert."""
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     wurzel = {"id": "root!", "name": "root", "root": {}, "folder": {"childCount": 4},
               "parentReference": {"driveId": "d"}}
     plan = od.plane([wurzel], bestand, tmp_path, od.Selection())
@@ -169,7 +170,7 @@ def test_die_wurzel_steht_im_baum(tmp_path):
 
 def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
     """Ein Notizbuch ist kein Inhalt; seine .one-Dateien kommen einzeln vor."""
-    bestand = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    bestand = od.Bestand()
     paket = {"id": "p", "name": "Notizbuch", "package": {"type": "oneNote"},
              "folder": {"childCount": 3}, "parentReference": {"path": "/drive/root:"}}
     plan = od.plane([paket], bestand, tmp_path, od.Selection())
@@ -180,20 +181,19 @@ def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
 # Bestand und Grabsteine
 # --------------------------------------------------------------------------
 def test_bestand_ueberlebt_das_schreiben(tmp_path):
-    b = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    db = state_db.StateDb(tmp_path)
+    b = state_db.DbBestand(db)
     b.merke("1", "Dateien/a.pdf", "c1", 10)
     b.schreibe()
-    assert od.Bestand(tmp_path / od.BESTAND_DATEI).eintraege["1"]["rel"] == "Dateien/a.pdf"
-    assert not (tmp_path / (od.BESTAND_DATEI + ".tmp")).exists()
+    assert state_db.DbBestand(db).eintraege["1"]["rel"] == "Dateien/a.pdf"
 
 
 def test_grabstein_wird_gesetzt_und_die_datei_bleibt(tmp_path):
-    weg = od.schreibe_verschwunden(tmp_path / od.GONE_FILE, {}, ["Dateien/a.pdf"], "2026-01-01")
-    assert weg == {"Dateien/a.pdf": "2026-01-01"}
+    db = state_db.StateDb(tmp_path)
+    db.verschwunden_ergaenzen(["Dateien/a.pdf"], "2026-01-01")
     # Ein zweiter Lauf überschreibt den Zeitpunkt nicht.
-    weg = od.schreibe_verschwunden(tmp_path / od.GONE_FILE, weg, ["Dateien/a.pdf"], "2026-06-06")
-    assert weg["Dateien/a.pdf"] == "2026-01-01"
-    assert od.lies_verschwunden(tmp_path / od.GONE_FILE) == weg
+    db.verschwunden_ergaenzen(["Dateien/a.pdf"], "2026-06-06")
+    assert db.verschwunden_lesen() == {"Dateien/a.pdf": "2026-01-01"}
 
 
 def test_geaendert_am_bevorzugt_die_zeit_des_clients():
@@ -206,11 +206,12 @@ def test_geaendert_am_bevorzugt_die_zeit_des_clients():
 
 
 def test_delta_zeiger(tmp_path):
-    assert od.lies_delta(tmp_path) is None
-    od.schreibe_delta(tmp_path, "https://weiter")
-    assert od.lies_delta(tmp_path) == "https://weiter"
-    od.schreibe_delta(tmp_path, None)                 # nichts zu merken
-    assert od.lies_delta(tmp_path) == "https://weiter"
+    z = state_db.DbZustand(tmp_path)
+    assert z.delta_lesen() is None
+    z.delta_schreiben("https://weiter")
+    assert z.delta_lesen() == "https://weiter"
+    z.delta_schreiben(None)                           # nichts zu merken
+    assert z.delta_lesen() == "https://weiter"
 
 
 # --------------------------------------------------------------------------
@@ -240,8 +241,8 @@ def test_lauf_spiegelt_und_merkt_sich_den_zeiger(tmp_path):
     g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
     assert od.lauf(g, tmp_path)["new"] == 2
     assert (tmp_path / "Dateien/Ordner/a.pdf").read_bytes() == b"x" * 10
-    assert od.lies_delta(tmp_path) == "https://delta/neu"
-    assert not (tmp_path / "folders.json").exists(), \
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "https://delta/neu"
+    assert folders.lade(tmp_path) is None, \
         "ohne Ordner im Delta darf kein leerer Baum entstehen"
 
 
@@ -250,18 +251,19 @@ def test_abgebrochener_lauf_rueckt_den_zeiger_nicht_vor(tmp_path):
     verloren – still, und erst Monate später bemerkbar."""
     g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")], fehlerhaft={"2"})
     od.lauf(g, tmp_path)
-    assert od.lies_delta(tmp_path) is None
+    assert state_db.DbZustand(tmp_path).delta_lesen() is None
 
 
 def test_lauf_schreibt_den_bestand_auch_ohne_download(tmp_path):
     """Regression: eine Löschung ohne gleichzeitigen Download blieb ungemerkt –
     beim nächsten Lauf stand die Datei noch im Bestand."""
-    b = od.Bestand(tmp_path / od.BESTAND_DATEI)
+    db = state_db.StateDb(tmp_path)
+    b = state_db.DbBestand(db)
     b.merke("weg", "Dateien/alt.pdf", "c1", 10)
     b.schreibe()
     od.lauf(FakeGraph([{"id": "weg", "deleted": {"state": "deleted"}}]), tmp_path)
-    assert "weg" not in od.Bestand(tmp_path / od.BESTAND_DATEI).eintraege
-    assert "Dateien/alt.pdf" in od.lies_verschwunden(tmp_path / od.GONE_FILE)
+    assert "weg" not in db.bestand_lesen()
+    assert "Dateien/alt.pdf" in db.verschwunden_lesen()
 
 
 def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
@@ -320,16 +322,15 @@ def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
 
 
 def test_check_erklaert_geloeschtes_statt_es_zu_vermissen(tmp_path):
-    od.schreibe_verschwunden(tmp_path / od.GONE_FILE, {}, ["Dateien/Ordner/alt.pdf"],
-                             "2026-01-01")
+    state_db.StateDb(tmp_path).verschwunden_ergaenzen(
+        ["Dateien/Ordner/alt.pdf"], "2026-01-01")
     b = od.pruefe_vollstaendigkeit([], tmp_path, od.Selection())
     assert b["geloescht"] == 1 and b["fehlt"] == 0
 
 
-def test_check_schreibt_den_bericht_atomar(tmp_path):
-    od.schreibe_bericht(tmp_path, {"erwartet": 1})
-    assert (tmp_path / od.BERICHT_DATEI).exists()
-    assert not (tmp_path / (od.BERICHT_DATEI + ".tmp")).exists()
+def test_check_schreibt_den_bericht_in_die_db(tmp_path):
+    state_db.StateDb(tmp_path).bericht_schreiben({"erwartet": 1})
+    assert state_db.StateDb(tmp_path).bericht_lesen() == {"erwartet": 1}
 
 
 def test_null_heisst_ohne_grenze(monkeypatch):
@@ -352,7 +353,7 @@ def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
     monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
     gross = [_datei(str(i), f"f{i}.bin", groesse=99_000_000) for i in range(3)]
     wahl = od.Selection(max_bytes=od.max_bytes())
-    plan = od.plane(gross, od.Bestand(tmp_path / od.BESTAND_DATEI), tmp_path, wahl)
+    plan = od.plane(gross, od.Bestand(), tmp_path, wahl)
     assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
     b = od.pruefe_vollstaendigkeit(gross, tmp_path, wahl)
     assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"
@@ -376,30 +377,11 @@ def test_lauf_erneuert_abgelaufenen_delta_zeiger(tmp_path, capsys):
                 raise _requests.HTTPError(response=Antwort())
             yield None, "neuer-link"
 
-    od.schreibe_delta(tmp_path, "alter-link")
+    state_db.DbZustand(tmp_path).delta_schreiben("alter-link")
     g = G()
     ergebnis = od.drive_mirror.lauf(g, tmp_path, od.Selection(), 1)
     assert ergebnis["new"] == 0 and g.aufrufe == ["alter-link", None]
-    assert od.lies_delta(tmp_path) == "neuer-link"
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "neuer-link"
     events = [progress.lies_event(z)
               for z in capsys.readouterr().out.splitlines()]
     assert any(e and e["k"] == "run.drive.resync" for e in events)
-
-
-def test_datei_zustand_traegt_die_walk_ablage(tmp_path):
-    """The file-backed walk staging: resumable, and a torn tail line from a
-    crash mid-append costs nothing – the page repeats anyway."""
-    z = od.drive_mirror.DateiZustand(tmp_path)
-    assert z.walk_status() == {"cursor": None, "fertig": None, "n": 0}
-    z.walk_ergaenzen([{"id": "1"}], "seite-2")
-    with open(tmp_path / od.drive_mirror.WALK_DATEI, "a",
-              encoding="utf-8") as f:
-        f.write('{"id": "2"')                      # Absturz mitten im Schreiben
-    z.walk_ergaenzen([{"id": "2"}, {"id": "3"}], None)
-    assert z.walk_status()["cursor"] == "seite-2"
-    assert [e["id"] for e in z.walk_eintraege()] == ["1", "2", "3"]
-    z.walk_abschliessen("delta-9")
-    status = z.walk_status()
-    assert status["fertig"] == "delta-9" and status["cursor"] is None
-    z.walk_leeren()
-    assert z.walk_status() == {"cursor": None, "fertig": None, "n": 0}

@@ -11,7 +11,7 @@ Entscheidung: ganz oder gar nicht.
 
 Hier liegt deshalb beides getrennt:
 
-  Der Baum   wird auf Wunsch abgerufen und als folders.json abgelegt. Er ändert
+  Der Baum   wird auf Wunsch abgerufen und in der state.db abgelegt. Er ändert
              sich selten; ein Export liest ihn von der Platte.
 
   Die Regeln sind eine geordnete Liste aus Include und Exclude auf Pfaden mit
@@ -173,16 +173,23 @@ def aus_namensliste(namen):
 
 
 # --------------------------------------------------------------------------
-# Der Baum auf der Platte
+# Der Baum auf der Platte – seit 6.2 in der state.db des Exportordners
 # --------------------------------------------------------------------------
-def pfad(ordner, datei=DATEI):
-    return Path(ordner) / datei
+# Die alten Dateinamen bleiben die Adressen der Aufrufer; hier werden sie zu
+# kv-Schlüsseln. state_db wird spät importiert (es importiert selbst dieses
+# Modul für baum_diff).
+SCHLUESSEL = {DATEI: "baum", KALENDER: "kalender"}
+
+
+def _db(ordner):
+    import state_db
+    return state_db.StateDb(ordner)
 
 
 def lade(ordner, datei=DATEI):
-    """folders.json lesen. Fehlt sie oder ist kaputt: None, kein Krach."""
+    """Den Baum lesen. Fehlt er oder ist er kaputt: None, kein Krach."""
     try:
-        daten = json.loads(pfad(ordner, datei).read_text(encoding="utf-8"))
+        daten = json.loads(_db(ordner).kv_lesen(SCHLUESSEL[datei]) or "")
     except (OSError, ValueError):
         return None
     if not isinstance(daten, dict) or not isinstance(daten.get("ordner"), list):
@@ -210,18 +217,15 @@ def baum_diff(eintraege, vorher=None):
 
 
 def speichere(ordner, eintraege, vorher=None, datei=DATEI):
-    """Baum atomar ablegen und melden, was sich geändert hat.
+    """Baum ablegen und melden, was sich geändert hat.
 
     Neue Ordner sind der Grund für die Rückgabe: nach einem Abgleich soll die
     Oberfläche sagen können „4 neue Ordner“, statt dass sie unbemerkt
     dazukommen und je nach Regel mitlaufen oder fehlen.
     """
     daten = baum_diff(eintraege, vorher)
-    ziel = pfad(ordner, datei)
-    ziel.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ziel.with_name(ziel.name + ".tmp")
-    tmp.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(ziel)
+    _db(ordner).kv_schreiben(SCHLUESSEL[datei],
+                             json.dumps(daten, ensure_ascii=False))
     return daten
 
 
@@ -313,7 +317,7 @@ def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
 
 
 def main():
-    """Zeigt, was in folders.json steht – und was die Regeln daraus machen."""
+    """Zeigt den gespeicherten Baum – und was die Regeln daraus machen."""
     import sys
     for _stream in (sys.stdout, sys.stderr):
         try:
@@ -324,7 +328,7 @@ def main():
         "OUTLOOK_DIR", "outlook_export")
     daten = lade(ordner)
     if not daten:
-        print(f"Kein Ordnerbaum in {pfad(ordner)} – erst abgleichen "
+        print(f"Kein Ordnerbaum in {ordner} – erst abgleichen "
               f"(outlook_export.py --folders).")
         return
     regeln = lies_regeln(os.environ.get("FOLDER_RULES", ""))

@@ -9,7 +9,7 @@ falsch erwartet:
   wird sie überschrieben – frühere Fassungen bewahrt dieser Spiegel nicht.
 
   Wird eine Datei in OneDrive gelöscht, BLEIBT sie hier liegen und bekommt
-  einen Vermerk in verschwunden.tsv. Dieselbe Zusage wie beim Postfach: ein
+  einen Grabstein-Vermerk in der state.db. Dieselbe Zusage wie beim Postfach: ein
   Archiv, das nur wächst, beantwortet die wichtigste Frage nicht – was war
   hier einmal und ist jetzt weg?
 
@@ -26,12 +26,12 @@ as environment variables (ONEDRIVE_RULES – include/exclude rules on paths,
 one per line, like the mailbox; ONEDRIVE_MAX_MB – skip larger files, 0 = no
 limit; MIRROR_WORKERS – parallel requests; environment beats
 app_config.json, see settings.py). Special runs: --folders syncs the folder
-tree, --check reports what is missing (vollstaendigkeit.json).
+tree, --check reports what is missing.
 
-Resume: dateien.tsv und delta.txt im Ausgabeordner. Bricht ein Lauf ab, wird
-    delta.txt NICHT fortgeschrieben – der nächste Lauf zählt noch einmal auf und
-    überspringt anhand des cTag alles, was schon liegt. Ein abgebrochener Lauf
-    darf keine Änderung verschlucken.
+Resume: the output folder's state.db (inventory, delta pointer, walk
+    staging). An aborted run does NOT advance the delta pointer – the next
+    run picks the stored walk back up and skips, by cTag, everything that
+    already lies here. An aborted run must never swallow a change.
 """
 
 import os
@@ -54,10 +54,8 @@ except ImportError:
 import drive_mirror
 import graph_client
 from drive_mirror import (  # noqa: F401 – re-exported for the tests' benefit
-    BESTAND_DATEI, BERICHT_DATEI, DATEI_DIR, GONE_FILE,
-    Bestand, Selection, geaendert_am, lies_delta, lies_verschwunden, plane,
-    pruefe_vollstaendigkeit, rel_pfad, safe, schreibe_bericht,
-    schreibe_delta, schreibe_verschwunden, verschiebe,
+    DATEI_DIR, Bestand, Selection, geaendert_am, plane,
+    pruefe_vollstaendigkeit, rel_pfad, safe, verschiebe,
 )
 
 export_util.erzwinge_utf8()

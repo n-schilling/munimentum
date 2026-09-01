@@ -4,12 +4,12 @@ drive_mirror.py – the shared mirror core for Graph drives.
 
 To Graph, OneDrive and a SharePoint document library are the same thing: a
 drive with a delta feed. This module holds everything a mirror needs – delta
-walk, download, inventory (dateien.tsv), tombstones (verschwunden.tsv),
-folder tree, completeness check – parametrised by three things the callers
-(onedrive_export.py, sharepoint_export.py) supply:
+walk, download, inventory, tombstones, folder tree, completeness check –
+parametrised by three things the callers (onedrive_export.py,
+sharepoint_export.py) supply:
 
   * the drive base URL (``/me/drive`` or ``/drives/{id}``) on the client,
-  * the output folder (one per drive; state files live inside it),
+  * the output folder (one per drive; its state.db lives inside it),
   * a Selection – path rules, size limit, extension include/exclude.
 
 The mirror promise is the same everywhere: the CURRENT version of every
@@ -18,7 +18,6 @@ docstrings on the moved functions are original OneDrive history – the
 reasoning applies to every drive.
 """
 
-import json
 import os
 import re
 import threading
@@ -38,13 +37,6 @@ import progress
 GRAPH = graph_client.GRAPH
 
 DATEI_DIR = "Dateien"           # Wurzel im Ausgabeordner; die Regeln greifen darauf
-BESTAND_DATEI = "dateien.tsv"
-DELTA_DATEI = "delta.txt"
-WALK_DATEI = "walk.jsonl"
-WALK_CURSOR_DATEI = "walk_cursor.txt"
-WALK_FERTIG_DATEI = "walk_fertig.txt"
-GONE_FILE = export_util.GONE_FILE
-BERICHT_DATEI = export_util.BERICHT_DATEI
 
 # Netz, Drosselung, Retry und Paging liegen in graph_client.py; eigen bleibt
 # nur der Download-Timeout – eine große Datei braucht länger als eine Seite.
@@ -257,22 +249,13 @@ class Bestand:
     Metadaten). Genau das ist die Frage vor jedem Download, also wird er
     gespeichert. Die Größe steht daneben, damit eine abgebrochene Datei nicht
     als vollständig durchgeht.
+
+    In-Memory-Basis; die Persistenz liefert state_db.DbBestand.
     """
 
-    def __init__(self, pfad):
-        self.pfad = Path(pfad)
+    def __init__(self):
         self.eintraege = {}
         self._lock = threading.Lock()
-        try:
-            for zeile in self.pfad.read_text(encoding="utf-8").splitlines():
-                teile = zeile.split("\t")
-                if len(teile) >= 4:
-                    kennung, rel, ctag, groesse = teile[:4]
-                    self.eintraege[kennung] = {
-                        "rel": rel, "ctag": ctag,
-                        "size": int(groesse) if groesse.isdigit() else -1}
-        except OSError:
-            pass
 
     def aktuell(self, kennung, ctag, groesse, wurzel):
         """Liegt genau diese Fassung schon hier?"""
@@ -294,128 +277,9 @@ class Bestand:
             return self.eintraege.pop(kennung, None)
 
     def schreibe(self):
-        """Atomar – ein Abbruch mitten im Schreiben darf den Bestand nicht
-        halbieren, sonst lädt der nächste Lauf alles noch einmal."""
-        self.pfad.parent.mkdir(parents=True, exist_ok=True)
-        export_util.schreibe_atomar(self.pfad, "".join(
-            f'{k}\t{e["rel"]}\t{e["ctag"]}\t{e["size"]}\n'
-            for k, e in sorted(self.eintraege.items())))
+        pass                   # das Backend persistiert (state_db.DbBestand)
 
 
-lies_verschwunden = export_util.lies_verschwunden
-schreibe_verschwunden = export_util.schreibe_verschwunden
-schreibe_bericht = export_util.schreibe_bericht
-
-
-class DateiZustand:
-    """File-backed state – the historical layout OneDrive archives carry.
-
-    The runs below only talk to this interface; the SharePoint exports pass
-    a SQLite-backed twin (state_db.DbZustand) instead. New backends
-    implement exactly these methods.
-    """
-
-    def __init__(self, out):
-        self.out = Path(out)
-
-    def bestand(self):
-        return Bestand(self.out / BESTAND_DATEI)
-
-    def delta_lesen(self):
-        return lies_delta(self.out)
-
-    def delta_schreiben(self, link, bestand=None):
-        schreibe_delta(self.out, link)
-
-    def delta_loeschen(self):
-        (self.out / DELTA_DATEI).unlink(missing_ok=True)
-
-    def verschwunden_lesen(self):
-        return lies_verschwunden(self.out / GONE_FILE)
-
-    def verschwunden_ergaenzen(self, rels, jetzt):
-        schreibe_verschwunden(self.out / GONE_FILE,
-                              self.verschwunden_lesen(), rels, jetzt)
-
-    def baum_lesen(self):
-        return folders.lade(self.out)
-
-    def baum_schreiben(self, eintraege, vorher):
-        return folders.speichere(self.out, eintraege, vorher)
-
-    def bericht_schreiben(self, bericht):
-        schreibe_bericht(self.out, bericht)
-
-    # -- walk staging (checkpointed enumeration) ---------------------------
-    def walk_status(self):
-        n = 0
-        try:
-            with open(self.out / WALK_DATEI, encoding="utf-8") as f:
-                n = sum(1 for zeile in f if zeile.strip())
-        except OSError:
-            pass
-        return {"cursor": _lies_zeile(self.out / WALK_CURSOR_DATEI),
-                "fertig": _lies_zeile(self.out / WALK_FERTIG_DATEI), "n": n}
-
-    def walk_ergaenzen(self, eintraege, cursor):
-        # Entries first, cursor second: a crash in between repeats the page
-        # on resume – plane() deduplicates by id, nothing is lost.
-        self.out.mkdir(parents=True, exist_ok=True)
-        with open(self.out / WALK_DATEI, "a+b") as f:
-            # Nach einem Absturz mitten im Schreiben endet die Datei ohne
-            # Zeilenumbruch. Erst abschließen – sonst verschmilzt die
-            # wiederholte Seite mit dem Riss und ihr erster Eintrag ginge
-            # verloren.
-            f.seek(0, 2)
-            if f.tell() > 0:
-                f.seek(-1, 2)
-                if f.read(1) != b"\n":
-                    f.write(b"\n")
-            for e in eintraege:
-                f.write(json.dumps(e, ensure_ascii=False).encode("utf-8")
-                        + b"\n")
-        if cursor:
-            export_util.schreibe_atomar(self.out / WALK_CURSOR_DATEI, cursor)
-
-    def walk_abschliessen(self, delta_link):
-        if delta_link:
-            export_util.schreibe_atomar(self.out / WALK_FERTIG_DATEI,
-                                        delta_link)
-        (self.out / WALK_CURSOR_DATEI).unlink(missing_ok=True)
-
-    def walk_eintraege(self):
-        try:
-            with open(self.out / WALK_DATEI, encoding="utf-8") as f:
-                for zeile in f:
-                    try:
-                        yield json.loads(zeile)
-                    except ValueError:
-                        continue       # torn tail line – the page repeated
-        except OSError:
-            return
-
-    def walk_leeren(self):
-        for name in (WALK_DATEI, WALK_CURSOR_DATEI, WALK_FERTIG_DATEI):
-            (self.out / name).unlink(missing_ok=True)
-
-
-def _lies_zeile(pfad):
-    try:
-        return pfad.read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
-def lies_delta(out):
-    try:
-        return (Path(out) / DELTA_DATEI).read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
-def schreibe_delta(out, link):
-    if link:
-        export_util.schreibe_atomar(Path(out) / DELTA_DATEI, link)
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +487,7 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     """
     out = Path(out)
     wurzel = out
-    zustand = zustand or DateiZustand(out)
+    zustand = zustand or _db_zustand(out)
     bestand = zustand.bestand()
     status = zustand.walk_status()
     if status["fertig"]:
@@ -683,6 +547,13 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     return zahlen
 
 
+def _db_zustand(out):
+    """Default state backend: the folder's state.db. Imported lazily –
+    state_db imports this module for the Bestand base class."""
+    import state_db
+    return state_db.DbZustand(out)
+
+
 def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
     """Was das Laufwerk hat gegen das, was hier liegt – je Ordner.
 
@@ -694,7 +565,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
     Größen-Vorschau: was würde ein Spiegel-Lauf holen, was ließe er aus.
     """
     if weg is None:
-        weg = lies_verschwunden(Path(out) / GONE_FILE)
+        weg = _db_zustand(out).verschwunden_lesen()
     je = {}
     typen = {}
     ausgelassen = 0
@@ -767,7 +638,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
 def nur_pruefen(graph, out, auswahl, still=False, zustand=None):
     """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
     out = Path(out)
-    zustand = zustand or DateiZustand(out)
+    zustand = zustand or _db_zustand(out)
     eintraege, _ = sammle(graph, None)
     bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl,
                                       weg=zustand.verschwunden_lesen())
@@ -789,7 +660,7 @@ def nur_ordner(graph, out, auswahl, still=False, zustand=None):
     hielte der nächste Export die noch nie geholten Dateien für erledigt.
     """
     out = Path(out)
-    zustand = zustand or DateiZustand(out)
+    zustand = zustand or _db_zustand(out)
     bestand = zustand.bestand()
     eintraege, _ = sammle(graph, None)
     plan = plane(eintraege, bestand, out, auswahl)

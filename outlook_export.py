@@ -24,13 +24,15 @@ There are no prompts; progress, results and failures come back as structured
 lines (see progress.py).
 
 Which folders and calendars come along is decided by ordered rules over the
-stored lists folders.json and calendars.json (see folders.py).
+stored folder and calendar lists (folders.py; they live in the output
+folder's state.db).
 
 Special runs, none of which exports: --folders and --calendars refresh those
 stored lists, --check reports completeness against the mailbox.
 
-Resume: exported.tsv in the output folder, one line per finished mail –
-a new run skips everything already there. Delete it for a full re-export.
+Resume: the done log in the output folder's state.db, one row per finished
+mail – a new run skips everything already there. Delete the database for a
+full re-export.
 """
 
 import os
@@ -46,6 +48,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 import auth
 import export_util
 import folders
+import state_db
 import graph_client
 import settings
 import progress
@@ -71,7 +74,6 @@ SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES 
 INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden")
 PAGE = 50                   # $top für Listenabfragen
 OUT_ROOT = settings.value("outlook_dir", settings.OUTLOOK_DIR)  # fest -> Resume über Läufe
-DONE_FILE = "exported.tsv"
 MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu kalender/kontakte)
 KALENDER_DIR = "kalender"    # ein Unterordner je Kalender, darin die .ics
 
@@ -107,49 +109,7 @@ def graph_login(nur_still=False):
 # ---------------------------------------------------------------------------
 # Fortschritt: append-only Log, thread-sicher (skaliert auf zehntausende Mails)
 # ---------------------------------------------------------------------------
-class DoneLog:
-    def __init__(self, path):
-        self.path = path
-        self.done = {}
-        self._lock = threading.Lock()
-        if path.exists():
-            for line in path.read_text(encoding="utf-8").splitlines():
-                if "\t" in line:
-                    mid, rel = line.split("\t", 1)
-                    self.done[mid] = rel
-        self._fh = open(path, "a", encoding="utf-8")
-
-    def is_done(self, out, mid):
-        rel = self.done.get(mid)
-        return bool(rel) and (out / rel).exists()
-
-    def mark(self, mid, rel):
-        with self._lock:
-            self.done[mid] = rel
-            self._fh.write(f"{mid}\t{rel}\n")
-            self._fh.flush()
-
-    def remap(self, fn):
-        """Wendet fn(rel)->rel auf alle Einträge an und schreibt die Datei atomar neu.
-        Für einmalige Pfad-Migrationen (Resume bleibt erhalten)."""
-        with self._lock:
-            self.done = {mid: fn(rel) for mid, rel in self.done.items()}
-            try:
-                self._fh.close()
-            except Exception:
-                pass
-            tmp = self.path.with_name(self.path.name + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                for mid, rel in self.done.items():
-                    f.write(f"{mid}\t{rel}\n")
-            os.replace(tmp, self.path)
-            self._fh = open(self.path, "a", encoding="utf-8")
-
-    def close(self):
-        try:
-            self._fh.close()
-        except Exception:
-            pass
+DoneLog = state_db.DbDoneLog     # resume log, one row per mail in state.db
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +182,7 @@ def kalender_regeln(daten=None):
 
 
 def waehle_kalender(graph, out):
-    """Kalender aus calendars.json auswählen; die Liste einmalig holen, wenn sie fehlt."""
+    """Kalender aus der gespeicherten Liste wählen; einmalig holen, wenn sie fehlt."""
     daten = folders.lade(out, folders.KALENDER)
     if daten is None:
         progress.event("run.calendars.loading")
@@ -343,7 +303,6 @@ def build_tree(graph):
 # Verdacht bei Graph nachgefragt: 404 heißt wirklich weg, alles andere heißt
 # verschoben.
 # ---------------------------------------------------------------------------
-GONE_FILE = export_util.GONE_FILE
 
 
 class Bestand:
@@ -461,8 +420,6 @@ def wirklich_weg(graph, kandidaten, grenze=2000):
     return weg, verschoben
 
 
-lies_verschwunden = export_util.lies_verschwunden
-schreibe_verschwunden = export_util.schreibe_verschwunden
 
 
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
@@ -499,7 +456,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
             except Exception as e:
                 # Ein dauerhaft hängender Ordner darf nicht den ganzen Lauf killen:
                 # Rest überspringen, weiter mit dem nächsten. Was schon exportiert
-                # ist, steht in exported.tsv – der nächste Lauf holt den Rest.
+                # ist, steht im Erledigt-Log – der nächste Lauf holt den Rest.
                 stats["folder_errors"] = stats.get("folder_errors", 0) + 1
                 progress.event("run.folder_incomplete", "err", name=rel_path,
                                error=f"{type(e).__name__}: {e}")
@@ -924,12 +881,12 @@ def pruefe_verschwundene(graph, out, done, bestand):
     unvollständig gelisteten Ordner wüssten wir nicht, ob etwas fehlt oder ob
     wir nur nicht hingesehen haben. Lieber gar keine Aussage als eine falsche.
     """
-    pfad = out / GONE_FILE
-    bekannt = lies_verschwunden(pfad)
+    db = state_db.StateDb(out)
+    bekannt = db.verschwunden_lesen()
     # Erst aufräumen, was unter der alten Annahme falsch vermerkt wurde.
     bekannt, geheilt = zuruecknehmen(out, bekannt, bestand)
     if geheilt:
-        schreibe_verschwunden(pfad, bekannt, [], "")
+        db.verschwunden_ersetzen(bekannt)
         progress.event("run.gone.healed", n=geheilt)
 
     kandidaten = verdaechtige(done, bestand)
@@ -943,8 +900,8 @@ def pruefe_verschwundene(graph, out, done, bestand):
     verschoben += verschoben_lokal
     neue = [rel for rel in weg if rel not in bekannt]
     if neue:
-        schreibe_verschwunden(pfad, bekannt, neue,
-                              datetime.now(UTC).isoformat(timespec="seconds"))
+        db.verschwunden_ergaenzen(
+            neue, datetime.now(UTC).isoformat(timespec="seconds"))
     progress.event("run.gone.result", gone=len(weg), new=len(neue),
                    moved=verschoben)
     return {"gone_new": len(neue), "gone_total": len(bekannt) + len(neue),
@@ -999,7 +956,7 @@ def gleiche_ordner_ab(argv):
 
 
 def auswahl_aus_puffer(daten, regeln):
-    """Aus folders.json die Auswahl bauen – in der Form, die der Export erwartet.
+    """Aus dem gespeicherten Baum die Auswahl bauen – wie der Export sie erwartet.
 
     Ein einziger Eintrag mit allen gewählten Ordnern: der Export braucht keine
     Gruppierung nach oberster Ebene, die stammt noch aus der interaktiven
@@ -1058,10 +1015,10 @@ def nur_pruefen(argv):
     out = Path(argv[0]) if argv else Path(OUT_ROOT)
     graph = auth.waehle_zugang(TokenClient, graph_login)
     bericht = pruefe_vollstaendigkeit(
-        graph, out, lies_verschwunden(out / GONE_FILE))
+        graph, out, state_db.StateDb(out).verschwunden_lesen())
     # No prose: the check UI renders the report file, the result event
     # carries the counts.
-    schreibe_bericht(out, bericht)
+    state_db.StateDb(out).bericht_schreiben(bericht)
     progress.ergebnis(0, excluded=bericht["ausgelassen"],
                       extra={"expected": bericht["erwartet"],
                              "present": bericht["vorhanden"],
@@ -1074,7 +1031,7 @@ def nur_pruefen(argv):
 # Graph liefert totalItemCount ohnehin mit der Ordnerliste – der Abgleich
 # kostet also nichts extra. Allein wäre er nur ein Indikator: gelöschte Mails
 # erzeugen eine Differenz, die keine Lücke ist. Erst zusammen mit
-# verschwunden.tsv wird daraus eine Bilanz, in der jede Zahl erklärt ist.
+# den Grabsteinen wird daraus eine Bilanz, in der jede Zahl erklärt ist.
 # ---------------------------------------------------------------------------
 BERICHT_DATEI = export_util.BERICHT_DATEI
 
@@ -1145,7 +1102,6 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
     }
 
 
-schreibe_bericht = export_util.schreibe_bericht
 
 
 def main():
@@ -1181,7 +1137,7 @@ def main():
 
     out = Path(OUT_ROOT)
     out.mkdir(parents=True, exist_ok=True)
-    done = DoneLog(out / DONE_FILE)
+    done = DoneLog(state_db.StateDb(out))
     migrate_to_email_subdir(out, done)   # einmalig: Alt-Struktur -> E-Mail/
     stats = {"new": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
@@ -1215,7 +1171,7 @@ def main():
         result = "expired"
     except (requests.exceptions.RequestException, RuntimeError) as e:
         # Netz endgültig weg (alle Wiederholungen aufgebraucht) – kein Traceback,
-        # der Fortschritt in exported.tsv bleibt erhalten.
+        # der Fortschritt im Erledigt-Log bleibt erhalten.
         result = "network"
         progress.event("run.network_gone", "err",
                        error=f"{type(e).__name__}: {e}")

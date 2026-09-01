@@ -20,6 +20,7 @@ from pathlib import Path
 
 # Dateinamen, die Outlook- und OneDrive-Export gleich benutzen: was aus der
 # Quelle verschwunden ist, und der Bericht der Vollständigkeitsprüfung.
+# Legacy-Dateinamen von vor 6.2 – nur noch migrate_state.py liest sie.
 GONE_FILE = "verschwunden.tsv"
 BERICHT_DATEI = "vollstaendigkeit.json"
 

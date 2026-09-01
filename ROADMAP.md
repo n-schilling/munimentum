@@ -4,13 +4,6 @@ A short list of what is planned, so nobody has to guess later whether
 something was forgotten or left out on purpose. How things get built lives in
 the code, not here.
 
-## Next: one state.db per export folder — for the older exports
-
-The two SharePoint exports already keep their state in one SQLite per folder
-(state_db.py); Outlook, Teams and OneDrive still use the loose files their
-existing archives are built on. Extending the pattern means a careful
-migration of exactly the resume data — its own release.
-
 ## Smaller
 
 * **Split the data directory.** Bulk data and index have different needs —

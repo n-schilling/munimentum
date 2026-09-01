@@ -2,7 +2,6 @@
 Baum-Aufbau. Alles ohne Netzwerk: die Graph-Objekte werden durch Fakes ersetzt;
 die HTTP-Schicht selbst ist in test_graph_client.py abgedeckt."""
 
-import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -12,6 +11,7 @@ import requests
 
 import folders
 import outlook_export
+import state_db
 import progress
 
 
@@ -152,7 +152,7 @@ def test_waehle_kalender_holt_die_liste_einmalig(tmp_path, monkeypatch):
 
     monkeypatch.setattr(outlook_export, "list_calendars", fake)
     assert outlook_export.waehle_kalender(None, tmp_path) == [{"id": "b", "name": "A"}]
-    assert folders.pfad(tmp_path, folders.KALENDER).exists()
+    assert folders.lade(tmp_path, folders.KALENDER) is not None
     assert outlook_export.waehle_kalender(None, tmp_path) == [{"id": "b", "name": "A"}]
     assert len(rufe) == 1
 
@@ -402,11 +402,14 @@ def test_contact_filename_varianten():
 
 
 # --------------------------------------------------------------------------
-# DoneLog (Resume-Datei)
+# DoneLog (Resume-Log in der state.db)
 # --------------------------------------------------------------------------
+def _donelog(tmp_path):
+    return outlook_export.DoneLog(state_db.StateDb(tmp_path))
+
+
 def test_donelog_roundtrip_und_is_done(tmp_path):
-    p = tmp_path / "exported.tsv"
-    log = outlook_export.DoneLog(p)
+    log = _donelog(tmp_path)
     assert not log.is_done(tmp_path, "m1")
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "x.eml").write_bytes(b"x")
@@ -414,7 +417,7 @@ def test_donelog_roundtrip_und_is_done(tmp_path):
     log.mark("m2", "a/fehlt.eml")
     log.close()
 
-    log2 = outlook_export.DoneLog(p)
+    log2 = _donelog(tmp_path)
     assert log2.done == {"m1": "a/x.eml", "m2": "a/fehlt.eml"}
     assert log2.is_done(tmp_path, "m1")
     assert not log2.is_done(tmp_path, "m2")   # Zieldatei existiert nicht
@@ -423,23 +426,22 @@ def test_donelog_roundtrip_und_is_done(tmp_path):
 
 
 def test_donelog_remap_schreibt_neu_und_bleibt_beschreibbar(tmp_path):
-    p = tmp_path / "exported.tsv"
-    log = outlook_export.DoneLog(p)
+    log = _donelog(tmp_path)
     log.mark("m1", "Alt/x.eml")
     log.remap(lambda rel: f"E-Mail/{rel}")
     log.mark("m2", "E-Mail/y.eml")   # Anhängen nach remap funktioniert weiter
     log.close()
-    log2 = outlook_export.DoneLog(p)
+    log2 = _donelog(tmp_path)
     assert log2.done == {"m1": "E-Mail/Alt/x.eml", "m2": "E-Mail/y.eml"}
     log2.close()
 
 
 def test_donelog_paralleles_markieren(tmp_path):
-    log = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    log = _donelog(tmp_path)
     with ThreadPoolExecutor(max_workers=4) as ex:
         list(ex.map(lambda i: log.mark(f"m{i}", f"a/{i}.eml"), range(100)))
     log.close()
-    log2 = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    log2 = _donelog(tmp_path)
     assert len(log2.done) == 100
     assert log2.done["m42"] == "a/42.eml"
     log2.close()
@@ -511,7 +513,7 @@ def test_iter_messages_ueberspringt_erledigte_und_legt_ordner_an(tmp_path):
     selected = [{"subtree": [(folder, "E-Mail/Posteingang")]}]
     m1 = {"id": "m1", "subject": "alt"}
     m2 = {"id": "m2", "subject": "neu"}
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     (tmp_path / "E-Mail" / "Posteingang").mkdir(parents=True)
     (tmp_path / "E-Mail" / "Posteingang" / "alt.eml").write_bytes(b"x")
     done.mark("m1", "E-Mail/Posteingang/alt.eml")
@@ -541,7 +543,7 @@ def test_iter_messages_ueberspringt_ordner_mit_netzwerkfehler(tmp_path):
                 raise requests.exceptions.ReadTimeout("read timed out")
             yield {"id": "m2", "subject": "danach"}
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     got = list(outlook_export.iter_messages_to_export(
         HalbKaputt(), tmp_path, done, stats, selected))
@@ -559,7 +561,7 @@ def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
             raise outlook_export.TokenExpired()
             yield   # pragma: no cover – macht paged zum Generator
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     with pytest.raises(outlook_export.TokenExpired):
         list(outlook_export.iter_messages_to_export(
             Abgelaufen(), tmp_path, done, {"new": 0, "skipped": 0}, selected))
@@ -586,7 +588,7 @@ class FakeExportGraph:
 
 
 def test_download_one_schreibt_datei_und_markiert(tmp_path):
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     (tmp_path / "E-Mail").mkdir()
     status, rel = outlook_export.download_one(
         FakeExportGraph([]), tmp_path, done, "m1", "E-Mail/a.eml")
@@ -597,7 +599,7 @@ def test_download_one_schreibt_datei_und_markiert(tmp_path):
 
 
 def test_download_one_meldet_expired_stopped_und_fehler(tmp_path):
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     # Token abgelaufen
     status, info = outlook_export.download_one(
         FakeExportGraph([], fail=True), tmp_path, done, "m1", "E-Mail/a.eml")
@@ -619,7 +621,7 @@ def test_run_export_laedt_alle_neuen_mails(tmp_path):
     folder = {"id": "f1", "displayName": "Inbox", "totalItemCount": 3}
     msgs = [{"id": f"m{i}", "subject": f"Mail {i}"} for i in range(3)]
     selected = [{"subtree": [(folder, "E-Mail/Inbox")]}]
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     result = outlook_export.run_export(
         FakeExportGraph(msgs), tmp_path, done, stats, selected, workers=2)
@@ -633,7 +635,7 @@ def test_run_export_laedt_alle_neuen_mails(tmp_path):
 def test_run_export_meldet_expired_und_setzt_stop(tmp_path):
     folder = {"id": "f1", "displayName": "Inbox", "totalItemCount": 1}
     selected = [{"subtree": [(folder, "E-Mail/Inbox")]}]
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     result = outlook_export.run_export(
         FakeExportGraph([{"id": "m1", "subject": "x"}], fail=True),
@@ -655,7 +657,7 @@ def test_export_calendar_schreibt_ics_und_markiert(tmp_path):
             assert extra_headers == {"Prefer": 'outlook.timezone="UTC"'}
             yield EVENT
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     outlook_export.export_calendar(KalGraph(), tmp_path, done, stats,
                                    [{"id": "cal1", "name": "Arbeit"}])
@@ -681,7 +683,7 @@ def test_export_contacts_standard_und_ordner(tmp_path):
             elif "/contactFolders/cf1/contacts" in url:
                 yield {"id": "c2", "displayName": "Bob Builder"}
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     outlook_export.export_contacts(KonGraph(), tmp_path, done, stats)
     done.close()
@@ -716,7 +718,7 @@ def test_migrate_verschiebt_ordner_und_remappt_pfade(tmp_path):
     (tmp_path / "Posteingang").mkdir()
     (tmp_path / "Posteingang" / "m.eml").write_bytes(b"x")
     (tmp_path / "kalender").mkdir()
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     done.mark("m1", "Posteingang/m.eml")
     done.mark("e1", "kalender/t.ics")
 
@@ -728,7 +730,7 @@ def test_migrate_verschiebt_ordner_und_remappt_pfade(tmp_path):
     done.close()
 
     # Persistiert: neue DoneLog-Instanz liest die remappten Pfade
-    log2 = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    log2 = _donelog(tmp_path)
     assert log2.done["m1"] == "E-Mail/Posteingang/m.eml"
     log2.close()
 
@@ -736,7 +738,7 @@ def test_migrate_verschiebt_ordner_und_remappt_pfade(tmp_path):
 def test_migrate_ist_noop_bei_neuer_struktur(tmp_path):
     (tmp_path / "E-Mail").mkdir()
     (tmp_path / "kontakte").mkdir()
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     done.mark("m1", "E-Mail/Inbox/a.eml")
     outlook_export.migrate_to_email_subdir(tmp_path, done)
     assert done.done["m1"] == "E-Mail/Inbox/a.eml"
@@ -754,7 +756,7 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
         def paged(self, url, params=None, extra_headers=None):
             yield ev
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     for _ in range(2):
         outlook_export.export_calendar(KalGraph(), tmp_path, done, stats,
@@ -776,8 +778,9 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
     assert stats == {"new": 1, "skipped": 1}
     assert len(list((tmp_path / "kontakte").glob("*.vcf"))) == 1
     # Der Schlüssel None darf nie im Log stehen
-    log = (tmp_path / "exported.tsv").read_text(encoding="utf-8")
-    assert not any(z.startswith("None\t") for z in log.splitlines())
+    log = _donelog(tmp_path)
+    assert None not in log.done and "None" not in log.done
+    log.close()
 
 
 def test_default_skip_folders_stammt_aus_der_eingebauten_liste(monkeypatch):
@@ -868,21 +871,15 @@ def test_grenze_bremst_die_nachfragen(capsys):
     assert {"k": "run.gone.deferred", "level": "info", "v": {"n": 7}} in events
 
 
-def test_verschwunden_datei_behaelt_den_ersten_zeitpunkt(tmp_path):
+def test_verschwunden_behaelt_den_ersten_zeitpunkt(tmp_path):
     """Sonst wanderte das Datum bei jedem Lauf nach vorn und die Angabe
     „seit wann“ wäre wertlos."""
-    pfad = tmp_path / "verschwunden.tsv"
-    outlook_export.schreibe_verschwunden(pfad, {}, ["a.eml"], "2026-01-01T10:00:00")
-    zusammen = outlook_export.schreibe_verschwunden(
-        pfad, outlook_export.lies_verschwunden(pfad), ["a.eml", "b.eml"],
-        "2026-06-01T10:00:00")
+    db = state_db.StateDb(tmp_path)
+    db.verschwunden_ergaenzen(["a.eml"], "2026-01-01T10:00:00")
+    db.verschwunden_ergaenzen(["a.eml", "b.eml"], "2026-06-01T10:00:00")
+    zusammen = db.verschwunden_lesen()
     assert zusammen["a.eml"] == "2026-01-01T10:00:00"
     assert zusammen["b.eml"] == "2026-06-01T10:00:00"
-    assert not pfad.with_name(pfad.name + ".tmp").exists()
-
-
-def test_verschwunden_datei_ueberlebt_fehlen(tmp_path):
-    assert outlook_export.lies_verschwunden(tmp_path / "gibtsnicht.tsv") == {}
 
 
 class _ListenGraph:
@@ -901,7 +898,7 @@ class _ListenGraph:
 def _lauf(graph, tmp_path):
     """Einen Ordner listen lassen und den Bestand zurückgeben."""
     bestand = outlook_export.Bestand()
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0, "folder_errors": 0}
     selected = [{"subtree": [({"id": "f1", "totalItemCount": 3}, "E-Mail/Posteingang")]}]
     list(outlook_export.iter_messages_to_export(
@@ -1002,10 +999,9 @@ def test_ordner_ohne_zahl_wird_uebergangen(tmp_path, monkeypatch):
     assert outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})["ordner"] == []
 
 
-def test_bericht_wird_atomar_geschrieben(tmp_path):
-    ziel = outlook_export.schreibe_bericht(tmp_path, {"fehlt": 0, "ordner": []})
-    assert ziel.exists() and not ziel.with_name(ziel.name + ".tmp").exists()
-    assert json.loads(ziel.read_text(encoding="utf-8"))["fehlt"] == 0
+def test_bericht_landet_in_der_db(tmp_path):
+    state_db.StateDb(tmp_path).bericht_schreiben({"fehlt": 0, "ordner": []})
+    assert state_db.StateDb(tmp_path).bericht_lesen()["fehlt"] == 0
 
 
 def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
@@ -1108,7 +1104,7 @@ def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys
     """Ohne Calendars.Read kommt nichts zurück – dann darf nichts einrasten."""
     monkeypatch.setattr(outlook_export, "list_calendars", lambda graph: [])
     assert outlook_export.waehle_kalender(None, tmp_path) == []
-    assert not folders.pfad(tmp_path, folders.KALENDER).exists()
+    assert folders.lade(tmp_path, folders.KALENDER) is None
     events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
     assert {"k": "run.calendars.none", "level": "warn"} in events
 
@@ -1195,10 +1191,10 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
     _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<verschoben@x>")
     _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/b.eml", "<geloescht@x>")
     _eml_mit_kennung(tmp_path / "E-Mail/Alt/c.eml", "<frueher-falsch@x>")
-    (tmp_path / outlook_export.GONE_FILE).write_text(
-        "E-Mail/Alt/c.eml\t2026-01-01T00:00:00+00:00\n", encoding="utf-8")
+    state_db.StateDb(tmp_path).verschwunden_ergaenzen(
+        ["E-Mail/Alt/c.eml"], "2026-01-01T00:00:00+00:00")
 
-    done = outlook_export.DoneLog(tmp_path / "exported.tsv")
+    done = _donelog(tmp_path)
     done.mark("alt-1", "E-Mail/Posteingang/a.eml")
     done.mark("alt-2", "E-Mail/Posteingang/b.eml")
 
@@ -1220,7 +1216,7 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
     assert stats["gone_new"] == 1                     # b.eml: wirklich weg
     assert stats["gone_healed"] == 1                  # c.eml: Vermerk zurueckgenommen
 
-    vermerke = outlook_export.lies_verschwunden(tmp_path / outlook_export.GONE_FILE)
+    vermerke = state_db.StateDb(tmp_path).verschwunden_lesen()
     assert sorted(vermerke) == ["E-Mail/Posteingang/b.eml"]
     events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
     assert {"k": "run.gone.healed", "level": "info", "v": {"n": 1}} in events

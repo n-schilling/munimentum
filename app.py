@@ -61,6 +61,7 @@ import i18n
 import notify
 import ollama_client
 import progress
+import migrate_state
 import run_history
 import settings
 import state_db
@@ -585,15 +586,14 @@ def export_status(cfg):
     sharepoint = BASE / SHAREPOINT_DIR
     seiten = BASE / SHAREPOINT_PAGES_DIR
     return {
+        # Die state.db datiert den letzten Lauf: jeder Export schreibt sie
+        # am Ende, auch wenn nichts Neues kam.
         "teams": {"dir": str(teams), "exists": teams.is_dir(),
-                  "last_run": _mtime_iso(teams / "export_state.json")},
+                  "last_run": _mtime_iso(teams / state_db.DB_NAME)},
         "outlook": {"dir": str(outlook), "exists": outlook.is_dir(),
-                    "last_run": _mtime_iso(outlook / "exported.tsv")},
-        # Der Bestand, nicht der Delta-Zeiger: der wird auch nach einem Lauf
-        # ohne Änderung neu geschrieben und behauptete dann einen Abgleich,
-        # bei dem nichts geholt wurde.
+                    "last_run": _mtime_iso(outlook / state_db.DB_NAME)},
         "onedrive": {"dir": str(onedrive), "exists": onedrive.is_dir(),
-                     "last_run": _mtime_iso(onedrive / "dateien.tsv")},
+                     "last_run": _mtime_iso(onedrive / state_db.DB_NAME)},
         # One inventory per mirrored library – the newest one dates the run.
         "sharepoint": {"dir": str(sharepoint), "exists": sharepoint.is_dir(),
                        "last_run": _sharepoint_stand(sharepoint)},
@@ -648,11 +648,7 @@ def lies_bericht(ordner=OUTLOOK_DIR):
     Er entsteht nur auf Knopfdruck: die Prüfung fragt Microsoft, und das soll
     niemand ungefragt tun, nur weil eine Ansicht aufgeht.
     """
-    pfad = BASE / ordner / "vollstaendigkeit.json"
-    try:
-        return json.loads(pfad.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    return state_db.StateDb(BASE / ordner).bericht_lesen()
 
 
 # Die Auswertungen unten gehen einmal quer über den Index. Gepuffert am
@@ -1846,9 +1842,39 @@ class App:
         self._ollama_cache = (0.0, None)
         self._calendar_cache = None      # (Kennung, roh, gzip)
         self.device_login = None         # laufende Gerätecode-Anmeldung
+        self.migration = False           # True, solange Alt-State einwandert
         self._update = {"status": "off", "current": version.VERSION,
                         "latest": None, "url": None, "newer": False,
                         "ahead": False, "error": None}
+
+    def starte_migration(self):
+        """6.2: the historical loose state files move into state.db – found
+        at startup, run in the background, clearly logged, and no export
+        (manual or scheduled) starts before it is done: launch() checks the
+        flag."""
+        faellig = migrate_state.noetig(BASE / OUTLOOK_DIR, BASE / TEAMS_DIR,
+                                       BASE / ONEDRIVE_DIR)
+        if not faellig:
+            return
+        self.migration = True
+        self.jobs.logk("srv.migrate.start", "head",
+                       stores=", ".join(name for name, _ in faellig))
+
+        def _lauf():
+            try:
+                migrate_state.lauf(
+                    faellig,
+                    melde=lambda name, n: self.jobs.logk(
+                        "srv.migrate.store", "info", name=name, n=n))
+                self.jobs.logk("srv.migrate.done", "ok")
+                self.migration = False
+            except Exception as e:
+                # The flag deliberately stays set: exports keep waiting, the
+                # loose files are untouched, the next app start tries again.
+                self.jobs.logk("srv.migrate.failed", "err",
+                               error=f"{type(e).__name__}: {e}")
+
+        threading.Thread(target=_lauf, daemon=True).start()
 
     # -- abgeleiteter Zustand ---------------------------------------------
     def selected_categories(self):
@@ -2077,6 +2103,8 @@ class App:
                origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
+        if self.migration:
+            return False, {"k": "srv.migrate.busy", "v": {}}
         gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
         if embeddings is None:
             embeddings = (self.semantisch_gewollt()
@@ -2759,7 +2787,7 @@ class Handler(BaseHTTPRequestHandler):
         daten = {"ordner": eintraege, "abgeglichen": stand}
         plan = folders.plan(wurzel, [], daten, None)
         # The walk under the site roots also sees each library's bookkeeping
-        # (dateien.tsv, delta.txt, …) – real content lives below Dateien/.
+        # (state.db und Reste von vor 6.2) – real content lives below Dateien/.
         plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
                        if "/Dateien/" in z["pfad"] + "/"]
         plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
@@ -2978,6 +3006,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
     app.log_token_state()
+    app.starte_migration()
     app.check_updates()
     app.scheduler.start()
     app.autostart_mcp()

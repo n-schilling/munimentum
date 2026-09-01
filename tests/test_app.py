@@ -338,10 +338,9 @@ def test_export_status_ohne_ordner(sandbox):
 
 
 def test_export_status_mit_fortschrittsdateien(sandbox):
-    (sandbox / "teams_export").mkdir()
-    (sandbox / "teams_export" / "export_state.json").write_text("{}", encoding="utf-8")
-    (sandbox / "outlook_export").mkdir()
-    (sandbox / "outlook_export" / "exported.tsv").write_text("x\n", encoding="utf-8")
+    import state_db
+    state_db.StateDb(sandbox / "teams_export").kv_schreiben("state", "{}")
+    state_db.StateDb(sandbox / "outlook_export").done_ersetzen([("m", "a.eml")])
     st = app_mod.export_status(app_mod.load_config())
     assert st["teams"]["exists"] and st["teams"]["last_run"]
     assert st["outlook"]["exists"] and st["outlook"]["last_run"]
@@ -1341,6 +1340,39 @@ def test_cadence_faellig_rechnet_mit_periode_und_slack():
     assert app_mod.cadence_faellig("daily", jetzt - 86400 + 30, jetzt)  # Slack
     assert not app_mod.cadence_faellig("daily", jetzt - 3600, jetzt)
     assert not app_mod.cadence_faellig("monthly", jetzt - 86400, jetzt)
+
+
+def test_migration_sperrt_exporte_und_meldet_sich(sandbox):
+    """Old state layout at startup: the migration runs by itself, says so in
+    the log, and NO export starts before it is done – manual or scheduled,
+    both go through launch()."""
+    ordner = sandbox / app_mod.OUTLOOK_DIR
+    ordner.mkdir(parents=True, exist_ok=True)
+    (ordner / "exported.tsv").write_text("m1\ta.eml\n", encoding="utf-8")
+    a = app_mod.App(app_mod.load_config())
+
+    a.migration = True                     # der Moment, bevor der Thread endet
+    ok, why = a.launch(outlook=True)
+    assert not ok and why["k"] == "srv.migrate.busy"
+
+    a.migration = False
+    a.starte_migration()
+    for _ in range(200):
+        if not a.migration:
+            break
+        time.sleep(0.05)
+    assert not a.migration, "Migration wurde nicht fertig"
+    schluessel = [z["text"]["k"] for z in a.jobs.lines
+                  if isinstance(z.get("text"), dict)]
+    assert "srv.migrate.start" in schluessel
+    assert "srv.migrate.store" in schluessel
+    assert "srv.migrate.done" in schluessel
+    assert not (ordner / "exported.tsv").exists()
+    assert (ordner / "exported.tsv.bak").exists()
+    import state_db
+    log = state_db.DbDoneLog(state_db.StateDb(ordner))
+    assert log.done == {"m1": "a.eml"}
+    log.close()
 
 
 def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
@@ -5218,11 +5250,10 @@ def test_vollstaendigkeit_hat_genau_einen_knopf():
 
 def test_analytics_liefert_beide_berichte(server, sandbox):
     a, port = server
+    import state_db
     for ordner, inhalt in ((app_mod.OUTLOOK_DIR, {"erwartet": 5, "fehlt": 1, "ordner": []}),
                            (app_mod.ONEDRIVE_DIR, {"erwartet": 9, "fehlt": 0, "ordner": []})):
-        ziel = sandbox / ordner
-        ziel.mkdir(parents=True, exist_ok=True)
-        (ziel / "vollstaendigkeit.json").write_text(json.dumps(inhalt), encoding="utf-8")
+        state_db.StateDb(sandbox / ordner).bericht_schreiben(inhalt)
     r = call(port, "GET", "/api/analytics")[1]
     assert r["vollstaendigkeit"]["erwartet"] == 5
     assert r["vollstaendigkeit_onedrive"]["erwartet"] == 9
@@ -5288,14 +5319,15 @@ def test_bericht_nennt_die_richtige_einheit():
 
 
 def test_export_status_kennt_onedrive(sandbox):
-    """Der Bestand, nicht der Delta-Zeiger: der wird auch nach einem Lauf ohne
-    Änderung neu geschrieben und behauptete dann einen Abgleich, bei dem nichts
-    geholt wurde."""
+    """Die state.db datiert den letzten Lauf – jeder Export schreibt sie am
+    Ende, auch wenn nichts Neues kam."""
+    import state_db
     cfg = app_mod.load_config()
     od = sandbox / app_mod.ONEDRIVE_DIR
     od.mkdir(parents=True, exist_ok=True)
     assert app_mod.export_status(cfg)["onedrive"]["last_run"] is None
-    (od / "dateien.tsv").write_text("a\tb\tc\t1\n", encoding="utf-8")
+    state_db.StateDb(od).bestand_schreiben(
+        {"a": {"rel": "Dateien/a.pdf", "ctag": "c", "size": 1}})
     assert app_mod.export_status(cfg)["onedrive"]["last_run"]
 
 

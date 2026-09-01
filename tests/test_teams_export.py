@@ -501,13 +501,15 @@ def test_load_state_defaults_and_roundtrip(tmp_path):
     state["conversations"]["k"] = {"done": True, "rel": "1on1/a.html"}
     te.save_state(tmp_path, state)
     assert te.load_state(tmp_path) == state
-    assert not (tmp_path / (te.STATE_FILE + ".tmp")).exists()   # atomarer Austausch
+    import state_db
+    assert (tmp_path / state_db.DB_NAME).exists()   # wohnt in der state.db
 
 
-def test_load_state_ignores_corrupt_file(tmp_path):
-    (tmp_path / te.STATE_FILE).write_text("{kaputt", encoding="utf-8")
+def test_load_state_ignores_corrupt_entry(tmp_path):
+    import state_db
+    state_db.StateDb(tmp_path).kv_schreiben("state", "{kaputt")
     assert te.load_state(tmp_path) == {"version": 1, "conversations": {}}
-    (tmp_path / te.STATE_FILE).write_text('["falsche form"]', encoding="utf-8")
+    state_db.StateDb(tmp_path).kv_schreiben("state", '["falsche form"]')
     assert te.load_state(tmp_path) == {"version": 1, "conversations": {}}
 
 
@@ -556,7 +558,9 @@ def test_record_done_persists_record(tmp_path):
     state = te.load_state(tmp_path)
     te.record_done(tmp_path, state, "k1", "1on1", "Alice", "1on1/a.html", 7,
                    last_activity="2025-06-01T09:30:00Z")
-    rec = json.loads((tmp_path / te.STATE_FILE).read_text(encoding="utf-8"))["conversations"]["k1"]
+    import state_db
+    roh = state_db.StateDb(tmp_path).kv_lesen("state")
+    rec = json.loads(roh)["conversations"]["k1"]
     assert rec["category"] == "1on1" and rec["title"] == "Alice"
     assert rec["rel"] == "1on1/a.html" and rec["count"] == 7
     assert rec["done"] is True and rec["empty"] is False

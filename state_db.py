@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
 """
-state_db.py – one state.db per export folder, for the SharePoint exports.
+state_db.py – one state.db per export folder.
 
-The OneDrive mirror keeps its historical loose files (dateien.tsv, delta.txt,
-verschwunden.tsv, folders.json – users have archives built on them). The two
-SharePoint exports shipped later and carry no legacy, so their state lives in
-ONE SQLite file per folder: the library mirror keeps a state.db per
-<site>/<library>, the pages export one at its root.
+Every export keeps its state in ONE SQLite file inside its output folder:
+the library mirrors one per <site>/<library>, the pages export one at its
+root, and since 6.2 Outlook, Teams and OneDrive as well (migrate_state.py
+moves their historical loose files in once, at app start).
 
-What the file holds mirrors the loose files one to one:
+What the file holds, by export:
 
-    bestand       inventory, id -> (rel, ctag, size)   [library mirrors]
+    bestand       inventory, id -> (rel, ctag, size)   [drive mirrors]
     seiten        inventory, id -> (rel, etag)         [pages export]
+    done          resume log, mail id -> rel           [Outlook]
     verschwunden  tombstones, rel -> gone-since        (append-only)
-    kv            delta pointer, folder tree (JSON), completeness report
+    walk          checkpointed enumeration            [drive mirrors]
+    kv            delta pointer, folder tree, calendar list, completeness
+                  report, Teams conversation state (JSON blobs)
 
 The win over the loose files is the transaction: inventory and delta pointer
 advance atomically instead of by documented write order. Locality stays –
 delete the folder and its state is gone with it.
 
 Writes happen from one thread per run (the collectors already funnel through
-the main loop); readers elsewhere (app, corpus, MCP) open read-only.
+the main loop) except the Outlook resume log, which keeps its own locked
+connection; readers elsewhere (app, corpus, MCP) open read-only.
 """
 
 import json
@@ -57,6 +60,10 @@ CREATE TABLE IF NOT EXISTS walk(
     nr    INTEGER PRIMARY KEY AUTOINCREMENT,
     daten TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS done(
+    mid TEXT PRIMARY KEY,
+    rel TEXT NOT NULL
+);
 """
 
 
@@ -67,11 +74,14 @@ class StateDb:
         self.pfad = Path(ordner) / DB_NAME
 
     # -- plumbing ----------------------------------------------------------
-    def _verbinden(self, lesend=False):
+    def _verbinden(self, lesend=False, threadsafe=False):
+        # threadsafe: the caller serialises access itself (DbDoneLog's lock)
+        # – needed because mark() runs from the export's worker threads.
         if lesend and not self.pfad.exists():
             return None
         self.pfad.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(self.pfad, timeout=10)
+        con = sqlite3.connect(self.pfad, timeout=10,
+                              check_same_thread=not threadsafe)
         con.executescript(_SCHEMA)
         return con
 
@@ -95,6 +105,11 @@ class StateDb:
                             (key, value))
         finally:
             con.close()
+
+    # Public names for the exports that store whole JSON blobs (Teams state,
+    # folder trees) – the underscore pair stays for compatibility.
+    kv_lesen = _kv_lesen
+    kv_schreiben = _kv_schreiben
 
     # -- inventory (library mirror) ---------------------------------------
     def bestand_lesen(self):
@@ -174,6 +189,19 @@ class StateDb:
         finally:
             con.close()
 
+    def verschwunden_ersetzen(self, eintraege):
+        """Replace the tombstones wholesale – Outlook's healing path: a mail
+        that reappears (it was merely moved) gets its marker withdrawn."""
+        con = self._verbinden()
+        try:
+            with con:
+                con.execute("DELETE FROM verschwunden")
+                con.executemany(
+                    "INSERT INTO verschwunden(rel, seit) VALUES(?, ?)",
+                    list(eintraege.items()))
+        finally:
+            con.close()
+
     # -- delta pointer, tree, report --------------------------------------
     def delta_lesen(self):
         return self._kv_lesen("delta") or None
@@ -214,6 +242,20 @@ class StateDb:
 
     def bericht_schreiben(self, bericht):
         self._kv_schreiben("bericht", json.dumps(bericht, ensure_ascii=False))
+
+    # -- resume log (Outlook) ----------------------------------------------
+    def done_ersetzen(self, paare):
+        """Seed the resume log wholesale – the migration's path; a repeated
+        mail id keeps the last entry, like the appended TSV did."""
+        con = self._verbinden()
+        try:
+            with con:
+                con.execute("DELETE FROM done")
+                con.executemany(
+                    "INSERT OR REPLACE INTO done(mid, rel) VALUES(?, ?)",
+                    list(paare))
+        finally:
+            con.close()
 
     # -- walk staging (checkpointed enumeration) ---------------------------
     def walk_status(self):
@@ -283,6 +325,52 @@ class StateDb:
             con.close()
 
 
+class DbDoneLog:
+    """Outlook's resume log – one row per finished mail, same interface as
+    the historical DoneLog on exported.tsv.
+
+    mark() runs once per exported mail, so this class keeps one connection
+    open (WAL, synchronous=NORMAL) instead of reconnecting 45k times."""
+
+    def __init__(self, db):
+        self.db = db
+        self._lock = threading.Lock()
+        self._con = db._verbinden(threadsafe=True)
+        self._con.execute("PRAGMA journal_mode=WAL")
+        self._con.execute("PRAGMA synchronous=NORMAL")
+        self.done = dict(self._con.execute("SELECT mid, rel FROM done"))
+
+    def is_done(self, out, mid):
+        rel = self.done.get(mid)
+        return bool(rel) and (Path(out) / rel).exists()
+
+    def mark(self, mid, rel):
+        with self._lock:
+            self.done[mid] = rel
+            with self._con:
+                self._con.execute(
+                    "INSERT INTO done(mid, rel) VALUES(?, ?) "
+                    "ON CONFLICT(mid) DO UPDATE SET rel = excluded.rel",
+                    (mid, rel))
+
+    def remap(self, fn):
+        """fn(rel)->rel over every entry, in one transaction – for one-off
+        path migrations (resume survives)."""
+        with self._lock:
+            self.done = {mid: fn(rel) for mid, rel in self.done.items()}
+            with self._con:
+                self._con.execute("DELETE FROM done")
+                self._con.executemany(
+                    "INSERT INTO done(mid, rel) VALUES(?, ?)",
+                    list(self.done.items()))
+
+    def close(self):
+        try:
+            self._con.close()
+        except Exception:
+            pass
+
+
 class DbBestand(drive_mirror.Bestand):
     """The mirror inventory, backed by the folder's state.db.
 
@@ -312,6 +400,8 @@ class DbZustand:
         return self.db.delta_lesen()
 
     def delta_schreiben(self, link, bestand=None):
+        if not link:
+            return             # nichts zu merken heißt: der alte Zeiger gilt
         if isinstance(bestand, DbBestand):
             # The transactional win over the loose files: inventory and
             # pointer can never disagree after a crash.
