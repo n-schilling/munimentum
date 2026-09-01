@@ -3527,8 +3527,12 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
    Beschriftung wirkt und nicht wie eine Werkzeugleiste. */
 #protokoll .pkopf button.mini{flex:0 0 auto;padding:3px 10px;font-size:12px}
 #protokoll.zu #log{display:none}
-#protokoll #log{margin:0 12px 12px;height:220px}
-main{padding-bottom:60px}
+#protokoll #log{margin:0 12px 12px;height:var(--loghoehe,220px)}
+/* Der Griff zum Ziehen: ein schmaler Streifen auf der Oberkante. */
+#protokoll .pgriff{position:absolute;left:0;right:0;top:-4px;height:9px;
+  cursor:ns-resize;touch-action:none}
+#protokoll.zu .pgriff,#protokoll.hide .pgriff{display:none}
+main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
 
 /* Antwortkasten. Bewusst anders als eine Trefferkarte: was hier steht, hat
    kein Mensch geschrieben, sondern ein Modell aus den Treffern darunter
@@ -4015,6 +4019,7 @@ main{padding-bottom:60px}
      auch Token-Zustand, MCP-Ausgabe und Meldungen des Zeitplans. Deshalb eine
      Leiste am unteren Rand, von überall erreichbar und normalerweise zu. -->
 <div id="protokoll" class="zu">
+  <div class="pgriff" onpointerdown="protokollZiehen(event)"></div>
   <!-- Die beiden Knöpfe liegen IN der Kopfzeile, die selbst das Auf- und
        Zuklappen auslöst – deshalb hält jeder sein Klickereignis an. Sonst
        klappte das Protokoll bei jedem Kopieren zu. -->
@@ -4674,6 +4679,16 @@ function einheit(was){
 }
 
 /* ---------- Protokoll ---------- */
+function protokollPlatz(){
+  // Der Kasten liegt fixiert über der Seite – der Inhalt bekommt genau so
+  // viel Fußraum, dass nichts hinter ihm verschwindet: das Protokoll ist
+  // aus Sicht der Seite ihr Ende.
+  var haupt = document.querySelector('main');
+  if(!haupt) return;
+  var p = el('protokoll');
+  haupt.style.paddingBottom = p.classList.contains('hide')
+    ? '20px' : (p.offsetHeight + 16) + 'px';
+}
 function protokollUmschalten(){
   var p = el('protokoll');
   p.classList.toggle('zu');
@@ -4681,11 +4696,36 @@ function protokollUmschalten(){
   if(!p.classList.contains('zu')){
     var box = el('log'); box.scrollTop = box.scrollHeight;
   }
+  protokollPlatz();
+}
+function protokollHoehe(h){
+  var grenze = Math.max(80, Math.min(Math.round(window.innerHeight * 0.7), h));
+  el('protokoll').style.setProperty('--loghoehe', grenze + 'px');
+  return grenze;
+}
+function protokollZiehen(ev){
+  ev.preventDefault();
+  var start = ev.clientY, hoehe = el('log').offsetHeight;
+  function bewegt(e){
+    protokollHoehe(hoehe + (start - e.clientY));
+    protokollPlatz();
+  }
+  function ende(e){
+    document.removeEventListener('pointermove', bewegt);
+    document.removeEventListener('pointerup', ende);
+    var h = protokollHoehe(hoehe + (start - e.clientY));
+    try { localStorage.setItem('protokoll_hoehe', String(h)); } catch(e2){}
+  }
+  document.addEventListener('pointermove', bewegt);
+  document.addEventListener('pointerup', ende);
 }
 function stelleProtokollHer(){
   try {
     if(localStorage.getItem('protokoll') === 'auf') el('protokoll').classList.remove('zu');
+    var h = parseInt(localStorage.getItem('protokoll_hoehe'), 10);
+    if(h) protokollHoehe(h);
   } catch(e){}
+  protokollPlatz();
 }
 
 function pullLog(){
@@ -6880,6 +6920,7 @@ function beenden(){
   // App, die nicht mehr läuft – und ihre Knöpfe riefen eine tote API.
   el('pills').classList.add('hide');
   el('protokoll').classList.add('hide');
+  protokollPlatz();
 }
 
 /* ---------- Schleife ---------- */
