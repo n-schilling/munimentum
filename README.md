@@ -177,10 +177,11 @@ Next to the address and the two model names, a small indicator says whether each
 is actually there.
 
 **System notifications** can report the end of a run through the operating
-system — useful when the schedule exports with no tab open; clicking one opens
-the interface. By default only failures and an expired access key are
+system — useful when the schedule exports with no tab open. On macOS and
+Windows, clicking one opens the interface; on Linux they go through
+`notify-send`, plain. By default only failures and an expired access key are
 reported; "all runs" and "off" are a setting away. Everything stays on the
-machine; currently macOS only.
+machine.
 
 The log bar at the bottom is open from every tab, and it speaks the interface
 language: the exports report events, the app puts them into words. *Copy* puts

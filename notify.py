@@ -7,26 +7,41 @@ finished or failed while the browser tab may well be closed – which is the
 normal state when the scheduler does the work. Everything stays on the
 machine; nothing is sent anywhere.
 
-Only macOS is implemented, deliberately in two tiers:
+One backend per OS:
 
-  * Bundled app (Munimentum.app has a bundle identifier): the notification
-    center API (UNUserNotificationCenter via PyObjC). Proper attribution,
-    app icon, the system asks for permission with the first notification –
-    and a click on the notification opens the interface in the browser.
+  * macOS, bundled app (Munimentum.app has a bundle identifier): the
+    notification center API (UNUserNotificationCenter via PyObjC). Proper
+    attribution, app icon, the system asks for permission with the first
+    notification – and a click on the notification opens the interface.
     Click delivery needs the process main thread to run the system event
     loop; app.py hands it over via install_click_handler()/run_loop().
-  * Run from source: `osascript` – no dependencies, generic icon, no click
-    action. Good enough for development; the DMG never takes this path.
-
-Windows and Linux are conscious no-ops for now: the plumbing (setting,
-translations, JobRunner hook) is platform-neutral, only this module needs
-a backend per OS.
+  * macOS, run from source: `osascript` – no dependencies, generic icon,
+    no click action. Good enough for development; the DMG never takes this
+    path.
+  * Windows: a toast via PowerShell and WinRT – no dependency, no COM
+    registration. The toast declares protocol activation, so a click opens
+    the interface in the browser; attribution is PowerShell's (Windows
+    shows unpackaged apps under the posting host's identity).
+  * Linux: `notify-send` (libnotify) when present, silently nothing when
+    not. No click action – portable actions would need a D-Bus listener.
 
 send() never raises – a missed notification must never break a run.
 """
 
+import os
+import shutil
 import subprocess
 import sys
+
+# The interface address a clicked notification should open. macOS delivers
+# clicks through install_click_handler(); Windows bakes the URL into the
+# toast itself, so app.py deposits it here once at startup.
+_open_url = ""
+
+
+def set_open_url(url):
+    global _open_url
+    _open_url = str(url or "")
 
 # Lazily resolved once: a UNUserNotificationCenter, or None after a failed
 # attempt (not bundled, PyObjC missing) – then osascript takes over.
@@ -89,6 +104,45 @@ def _mac_osascript(title, body):
               "display notification (item 2 of argv) with title (item 1 of argv)\n"
               "end run")
     subprocess.run(["osascript", "-e", script, title, body],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                   timeout=10, check=False)
+
+
+# Values travel as environment variables, never interpolated into the
+# script: titles can then carry quotes without becoming PowerShell, and the
+# XML escape happens on the receiving side.
+_WIN_TOAST = r"""
+$esc = [System.Security.SecurityElement]
+$titel = $esc::Escape($env:MUNI_TITLE)
+$text = $esc::Escape($env:MUNI_BODY)
+$url = $esc::Escape($env:MUNI_URL)
+$aktion = if ($env:MUNI_URL) { " activationType=`"protocol`" launch=`"$url`"" } else { "" }
+$xml = "<toast$aktion><visual><binding template=`"ToastGeneric`"><text>$titel</text><text>$text</text></binding></visual></toast>"
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime] | Out-Null
+[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType=WindowsRuntime] | Out-Null
+$doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+$doc.LoadXml($xml)
+$aumid = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($aumid).Show(
+    [Windows.UI.Notifications.ToastNotification]::new($doc))
+"""
+
+
+def _win_toast(title, body):
+    umgebung = {**os.environ, "MUNI_TITLE": title, "MUNI_BODY": body,
+                "MUNI_URL": _open_url}
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", _WIN_TOAST],
+        env=umgebung, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        timeout=15, check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def _linux_notify(title, body):
+    werkzeug = shutil.which("notify-send")
+    if not werkzeug:
+        return                     # headless or minimal system: stay quiet
+    subprocess.run([werkzeug, "--app-name=Munimentum", title, body],
                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                    timeout=10, check=False)
 
@@ -156,10 +210,13 @@ def stop_loop():
 def send(title, body):
     """Show one system notification; silently does nothing where unsupported."""
     try:
-        if sys.platform != "darwin":
-            return          # Windows/Linux: see module docstring
         title, body = str(title), str(body)
-        if not _mac_native(title, body):
-            _mac_osascript(title, body)
+        if sys.platform == "darwin":
+            if not _mac_native(title, body):
+                _mac_osascript(title, body)
+        elif sys.platform == "win32":
+            _win_toast(title, body)
+        elif sys.platform.startswith("linux"):
+            _linux_notify(title, body)
     except Exception:
         pass
