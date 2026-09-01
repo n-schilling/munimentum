@@ -1,17 +1,16 @@
-## New in 6.1.1
+## New in 6.2.0
 
-**Notifications on Windows and Linux.** The end of a run is reported through
-the system on all three platforms now: on Windows a click on the toast opens
-the interface, Linux uses `notify-send` where present. macOS is unchanged.
+**One state.db per export folder.** Outlook, Teams and OneDrive now keep
+their bookkeeping the way the SharePoint exports always did: one SQLite
+file inside the output folder instead of loose TSV/JSON files. Inventory
+and resume data advance in transactions, and deleting an export folder
+still takes its state with it.
 
-**A sturdier mirror walk.** The enumeration of a large library saves its
-progress as it goes: an interrupted run resumes where it stopped instead of
-starting over, and when only downloads were left, the next run skips the
-enumeration entirely. The walk also needs a fraction of the memory it did.
-
-**Smaller things.** The log panel can be dragged taller and remembers its
-size, page content ends above it instead of disappearing behind it, and the
-app icon now sits next to the title.
+**The move is automatic.** On first start the app finds the old layout,
+says so in the log, and migrates everything by itself — resume data
+included, so a half-finished export continues exactly where it stopped.
+Until it is done, the whole interface waits (exports, search, everything);
+the old files remain next to the data as `.bak` copies.
 
 ## Which file?
 

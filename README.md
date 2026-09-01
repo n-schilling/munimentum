@@ -78,6 +78,11 @@ thousands of items. Every run fetches only what is new, so the second one
 takes minutes rather than hours. Deleted items **stay in the archive** and
 get a marker; that is the point of keeping one.
 
+Every export keeps its bookkeeping in a single `state.db` inside its output
+folder. The first start after updating moves the older loose state files in
+automatically — the app says so in the log and everything waits until it is
+done; the originals stay next to the data as `.bak` copies.
+
 Which folders come along is a list of ordered include/exclude rules, and *Show
 export list* spells out what they currently mean: what comes along, what is left
 out and why, and what is only in your archive because it is gone from the
@@ -101,10 +106,9 @@ current version of every file, deletions stay with a tombstone note. Because
 team sites grow large, filters come along: only certain file extensions,
 never certain ones, a size cap — and a **size preview** that enumerates
 without downloading and tells you per library what a run would fetch, in
-files and megabytes, before you commit. Each library keeps its state in a
-single `state.db` next to its data; the first run walks the library once,
-every later run asks Microsoft only for what has changed since — and an
-interrupted run resumes where it stopped instead of starting over.
+files and megabytes, before you commit. The first run walks the library
+once, every later run asks Microsoft only for what has changed since — and
+an interrupted run resumes where it stopped instead of starting over.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all
