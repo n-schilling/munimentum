@@ -1,19 +1,17 @@
-## New in 6.1.0
+## New in 6.1.1
 
-**A sync cadence per source.** Not everything needs syncing every run:
-OneDrive, Teams and every single SharePoint URL can be set to always, daily,
-weekly or monthly. The cadence applies to scheduled and manual runs alike —
-below its interval the source is skipped with a clear log line saying so.
+**Notifications on Windows and Linux.** The end of a run is reported through
+the system on all three platforms now: on Windows a click on the toast opens
+the interface, Linux uses `notify-send` where present. macOS is unchanged.
 
-**URL tables for SharePoint.** Libraries and pages are configured as a small
-table instead of a text field: one row per URL, with its cadence and a *Sync
-now* button that runs exactly that one immediately, cadence ignored.
+**A sturdier mirror walk.** The enumeration of a large library saves its
+progress as it goes: an interrupted run resumes where it stopped instead of
+starting over, and when only downloads were left, the next run skips the
+enumeration entirely. The walk also needs a fraction of the memory it did.
 
-**Cheaper folder mirrors.** A URL that points into one folder now rides the
-library's change feed: the first run still walks the whole library once —
-and says what it is doing while it walks — but every later run asks
-Microsoft only for what has changed since. An unchanged library costs about
-one request.
+**Smaller things.** The log panel can be dragged taller and remembers its
+size, page content ends above it instead of disappearing behind it, and the
+app icon now sits next to the title.
 
 ## Which file?
 

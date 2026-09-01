@@ -103,7 +103,8 @@ never certain ones, a size cap — and a **size preview** that enumerates
 without downloading and tells you per library what a run would fetch, in
 files and megabytes, before you commit. Each library keeps its state in a
 single `state.db` next to its data; the first run walks the library once,
-every later run asks Microsoft only for what has changed since.
+every later run asks Microsoft only for what has changed since — and an
+interrupted run resumes where it stopped instead of starting over.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all
@@ -184,7 +185,8 @@ reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
 
 The log bar at the bottom is open from every tab, and it speaks the interface
-language: the exports report events, the app puts them into words. *Copy* puts
+language: the exports report events, the app puts them into words. Drag its
+top edge to resize it; the size sticks. *Copy* puts
 the log on the clipboard; *Report a problem* opens the matching GitHub issue
 form with description, system details and log filled in — including which
 settings differ from their defaults (rules and name lists only as their size,
