@@ -61,6 +61,7 @@ import i18n
 import notify
 import ollama_client
 import progress
+import analytics_db
 import migrate_state
 import run_history
 import settings
@@ -651,222 +652,45 @@ def lies_bericht(ordner=OUTLOOK_DIR):
     return state_db.StateDb(BASE / ordner).bericht_lesen()
 
 
-# Die Auswertungen unten gehen einmal quer über den Index. Gepuffert am
-# Änderungsdatum der Datenbank: sie ändern sich nur, wenn neu indiziert wurde,
-# und der Reiter wird mehrmals geöffnet.
-_AUSWERTUNG = {}
+# Die Analytics-Zahlen kommen materialisiert aus dem Index (analytics_db):
+# der Indexlauf schreibt sie, hier wird nur gelesen. "Aktualisieren" baut sie
+# auf Wunsch neu – der einzige Moment, in dem hier gerechnet wird.
+_ANALYTICS_LOCK = threading.Lock()
 
 
-def _monat(ts):
-    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m")
+def analytics_ordner():
+    return {"teams": BASE / TEAMS_DIR, "outlook": BASE / OUTLOOK_DIR,
+            "onedrive": BASE / ONEDRIVE_DIR,
+            "sharepoint": BASE / SHAREPOINT_DIR,
+            "pages": BASE / SHAREPOINT_PAGES_DIR}
 
 
-def _luecken(monate, vorhanden):
-    """Zusammenhängende Monate ohne eine einzige Nachricht.
-
-    Nur INNERHALB des Bestands – vor der ersten und nach der letzten Nachricht
-    ist nichts zu vermissen. Genau das ist die Frage, die man an ein Archiv
-    stellt und die sonst nur Microsoft beantworten kann.
-    """
-    out, lauf = [], []
-    for m in monate:
-        if vorhanden.get(m):
-            if lauf:
-                out.append({"von": lauf[0], "bis": lauf[-1], "monate": len(lauf)})
-                lauf = []
-        else:
-            lauf.append(m)
+def analytics_daten(cfg, neu=False):
+    """The Analytics payload: the materialised block plus the completeness
+    reports, with the person skip list applied at read time so a settings
+    change acts immediately."""
+    store = BASE / STORE_DIR
+    daten = None if neu else analytics_db.lies(store)
+    if daten is None:
+        # Erster Aufruf nach einem Update (oder ausdrückliches Aktualisieren):
+        # einmal rechnen, dann liegt der Block wieder im Index.
+        with _ANALYTICS_LOCK:
+            daten = (None if neu else analytics_db.lies(store)) \
+                or analytics_db.baue(store, analytics_ordner())
+    out = dict(daten or {})
+    out["exists"] = daten is not None
+    aus = {str(n).strip().lower() for n in (cfg.get("analytics_skip") or [])}
+    out["top_personen"] = [pe for pe in out.get("top_personen") or []
+                           if pe["who"].strip().lower() not in aus][:10]
+    out.update({
+        "vollstaendigkeit": lies_bericht(),
+        "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR),
+        "vollstaendigkeit_sharepoint":
+            state_db.StateDb(BASE / SHAREPOINT_DIR).bericht_lesen(),
+        "vollstaendigkeit_pages":
+            state_db.StateDb(BASE / SHAREPOINT_PAGES_DIR).bericht_lesen(),
+    })
     return out
-
-
-def _monatsreihe(von, bis):
-    """Alle Monate von…bis, auch die leeren – sonst fiele eine Lücke nicht auf,
-    sie stünde einfach nicht da."""
-    j, m = int(von[:4]), int(von[5:7])
-    ende = (int(bis[:4]), int(bis[5:7]))
-    out = []
-    while (j, m) <= ende:
-        out.append(f"{j:04d}-{m:02d}")
-        j, m = (j + 1, 1) if m == 12 else (j, m + 1)
-    return out
-
-
-def auswertung(con, kennung):
-    """Verlauf, Lücken, Anhangstypen und Personen – am Stück."""
-    zwischen = _AUSWERTUNG.get("k")
-    if zwischen and zwischen[0] == kennung:
-        return zwischen[1]
-
-    spalten = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-    roh = con.execute(
-        "SELECT strftime('%Y-%m', ts, 'unixepoch') m, "
-        "       SUM(src = 'teams'), SUM(src = 'outlook'), COUNT(*) "
-        "FROM chunks WHERE seq = 0 AND ts IS NOT NULL GROUP BY m ORDER BY m"
-    ).fetchall()
-    verlauf, vorhanden = [], {}
-    if roh:
-        werte = {m: (te, ou, ge) for m, te, ou, ge in roh}
-        summe = 0
-        for m in _monatsreihe(roh[0][0], roh[-1][0]):
-            te, ou, ge = werte.get(m, (0, 0, 0))
-            summe += ge
-            vorhanden[m] = ge
-            verlauf.append({"m": m, "teams": te, "outlook": ou,
-                            "andere": ge - te - ou, "gesamt": ge, "summe": summe})
-
-    typen = {}
-    if "att" in spalten:
-        for (att,) in con.execute("SELECT att FROM chunks WHERE seq = 0 "
-                                  "AND att IS NOT NULL AND att != ''"):
-            for name in att.split(" "):
-                if "." in name:
-                    typen[name.rsplit(".", 1)[1].lower()[:8]] = \
-                        typen.get(name.rsplit(".", 1)[1].lower()[:8], 0) + 1
-    top_typen = sorted(typen.items(), key=lambda x: -x[1])[:10]
-    rest = sum(typen.values()) - sum(n for _, n in top_typen)
-
-    # Über die Quellen hinweg summiert: die people-Tabelle führt eine Zeile je
-    # (Quelle, Person), und wer in Teams UND per Mail schreibt, stand deshalb
-    # zweimal in der Liste – mit geteilter Zahl, was beides falsch aussah.
-    # Mehr als die zehn gezeigten, damit das Ausschließen (siehe kennzahlen)
-    # die Liste nicht kürzer macht, als sie sein soll.
-    personen = [{"who": w, "n": n} for w, n in con.execute(
-        "SELECT who, SUM(messages) m FROM people WHERE who != '' "
-        "GROUP BY who ORDER BY m DESC LIMIT 40")]
-
-    out = {"verlauf": verlauf,
-           "luecken": _luecken(list(vorhanden), vorhanden),
-           "anhang_typen": [{"typ": e, "n": n} for e, n in top_typen]
-                           + ([{"typ": "…", "n": rest}] if rest else []),
-           "top_personen": personen}
-    _AUSWERTUNG["k"] = (kennung, out)
-    return out
-
-
-def kennzahlen(cfg):
-    """Was steckt im Archiv? Eine Antwort aus dem Index, ohne Graph zu fragen.
-
-    Bewusst alles aus corpus.db: die Zahlen sollen sofort dastehen, wenn der
-    Reiter aufgeht. Was nur Microsoft beantworten kann – ob etwas FEHLT – ist
-    ein eigener Schritt mit eigenem Knopf.
-    """
-    db = store_layout.db_path(BASE / STORE_DIR)
-    # None heißt „weiß ich nicht“, 0 hieße „keine“. Ein Index aus einer
-    # älteren Fassung kennt die Spalten nicht; „0 mit Anhang“ zu melden wäre
-    # eine Behauptung statt einer Auskunft.
-    out = {"exists": db.exists(), "quellen": [], "nachrichten": 0,
-           "gespraeche": None, "mit_anhang": None, "personen": 0,
-           "verschwunden": None, "von": None, "bis": None,
-           "built_at": _mtime_iso(db), "groesse": {}}
-    for schluessel, ordner in (("teams", TEAMS_DIR),
-                               ("outlook", OUTLOOK_DIR),
-                               ("onedrive", ONEDRIVE_DIR),
-                               ("sharepoint", SHAREPOINT_DIR),
-                               ("pages", SHAREPOINT_PAGES_DIR)):
-        out["groesse"][schluessel] = ordner_groesse(BASE / ordner)
-    out["groesse"]["index"] = ordner_groesse(BASE / STORE_DIR)
-    if not out["exists"]:
-        return out
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-        spalten = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-        out["quellen"] = [
-            {"src": src, "nachrichten": n}
-            for src, n in con.execute(
-                "SELECT src, COUNT(DISTINCT uid) FROM chunks GROUP BY src "
-                "ORDER BY 2 DESC")]
-        out["nachrichten"] = sum(q["nachrichten"] for q in out["quellen"])
-        out["personen"] = con.execute("SELECT COUNT(*) FROM people").fetchone()[0]
-        von, bis = con.execute(
-            "SELECT MIN(ts), MAX(ts) FROM chunks WHERE ts IS NOT NULL").fetchone()
-        out["von"], out["bis"] = von, bis
-        if "thread" in spalten:
-            out["gespraeche"] = con.execute(
-                "SELECT COUNT(DISTINCT thread) FROM chunks "
-                "WHERE thread IS NOT NULL AND thread != ''").fetchone()[0]
-        if "att" in spalten:
-            out["mit_anhang"] = con.execute(
-                "SELECT COUNT(*) FROM chunks WHERE seq = 0 AND att IS NOT NULL "
-                "AND att != ''").fetchone()[0]
-        if "gone" in spalten:
-            out["verschwunden"] = con.execute(
-                "SELECT COUNT(*) FROM chunks WHERE seq = 0 "
-                "AND gone IS NOT NULL").fetchone()[0]
-        s = db.stat()
-        out.update(auswertung(con, (s.st_mtime_ns, s.st_size)))
-        # Außerhalb der Zwischenspeicherung: die Liste hängt am Index, wer
-        # ausgelassen wird an der Einstellung. Sonst wirkte eine Änderung erst
-        # nach dem nächsten Indexlauf.
-        aus = {str(n).strip().lower() for n in (cfg.get("analytics_skip") or [])}
-        out["top_personen"] = [pe for pe in out["top_personen"]
-                               if pe["who"].strip().lower() not in aus][:10]
-    except (sqlite3.Error, OSError) as e:
-        out["error"] = str(e)
-    finally:
-        con.close()
-    # Die größten Einzeldateien fallen beim Größenzählen oben mit ab.
-    out["grosse_dateien"] = sorted(
-        ({"quelle": s, "bytes": n, "pfad": pfad}
-         for s, ordner in (("teams", TEAMS_DIR), ("outlook", OUTLOOK_DIR),
-                           ("onedrive", ONEDRIVE_DIR),
-                           ("sharepoint", SHAREPOINT_DIR),
-                           ("pages", SHAREPOINT_PAGES_DIR))
-         for n, pfad in groesste_dateien(BASE / ordner)),
-        key=lambda x: -x["bytes"])[:GROESSTE_N]
-    return out
-
-
-_GROESSE = {}          # Pfad -> (Zeitpunkt, Bytes)
-GROESSE_TTL = 120      # Sekunden
-
-
-GROESSTE_N = 8          # so viele der größten Dateien merkt sich der Gang
-
-
-def groesste_dateien(pfad):
-    """Die größten Einzeldateien – fällt bei ordner_groesse mit ab."""
-    ordner_groesse(pfad)                       # füllt den Puffer, falls nötig
-    eintrag = _GROESSE.get(str(pfad))
-    return eintrag[2] if eintrag and len(eintrag) > 2 else []
-
-
-def ordner_groesse(pfad, ttl=GROESSE_TTL):
-    """Belegter Platz in Bytes, kurz gepuffert.
-
-    Der Gang über 45.000 Dateien kostet kalt ein paar Sekunden. Für eine
-    Ansicht, die man mehrmals öffnet, ist das jedes Mal zu viel – und so schnell
-    ändert sich die Größe eines Archivs nicht.
-
-    Fehlerhafte Einträge werden übergangen: eine Größenangabe darf keine
-    Ansicht zum Absturz bringen.
-    """
-    schluessel = str(pfad)
-    jetzt = time.time()
-    alt = _GROESSE.get(schluessel)
-    if alt and jetzt - alt[0] < ttl:
-        return alt[1]
-    gesamt = 0
-    # Die größten Dateien fallen beim Zählen ohnehin an – ein zweiter Gang über
-    # 45.000 Dateien nur für die Rangliste wäre reine Verschwendung.
-    groesste = []
-    wurzel = Path(pfad)
-    try:
-        for p in wurzel.rglob("*"):
-            try:
-                if not p.is_file():
-                    continue
-                n = p.stat().st_size
-            except OSError:
-                continue
-            gesamt += n
-            if len(groesste) < GROESSTE_N or n > groesste[-1][0]:
-                groesste.append((n, p.relative_to(wurzel).as_posix()))
-                groesste.sort(key=lambda x: -x[0])
-                del groesste[GROESSTE_N:]
-    except OSError:
-        return 0
-    _GROESSE[schluessel] = (jetzt, gesamt, groesste)
-    return gesamt
 
 
 def store_status(cfg):
@@ -2350,15 +2174,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/document":
                 return self._json(self._document(one))
             if u.path == "/api/analytics":
-                return self._json({
-                    **kennzahlen(app.cfg),
-                    "vollstaendigkeit": lies_bericht(),
-                    "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR),
-                    "vollstaendigkeit_sharepoint":
-                        state_db.StateDb(BASE / SHAREPOINT_DIR).bericht_lesen(),
-                    "vollstaendigkeit_pages":
-                        state_db.StateDb(BASE / SHAREPOINT_PAGES_DIR)
-                        .bericht_lesen()})
+                return self._json(analytics_daten(app.cfg))
             if u.path == "/api/runs":
                 try:
                     grenze = int(one.get("limit", 50))
@@ -2388,6 +2204,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/token":
                 return self._json(self._save_token(data))
+            if u.path == "/api/analytics-refresh":
+                return self._json(analytics_daten(app.cfg, neu=True))
             if u.path == "/api/wizard-seen":
                 # "Später": die Merkung eines totgelaufenen Tokens zurücksetzen,
                 # sonst ginge der Assistent bei jedem Statusabruf wieder auf.
@@ -3833,31 +3651,34 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
   <div class="card">
     <div class="row" style="justify-content:space-between">
       <h2 data-i18n="ana.title" style="margin:0">Was im Archiv steckt</h2>
-      <button class="mini" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button>
+      <span class="row" style="gap:10px"><span class="small muted" id="ana-stand"></span>
+      <button class="mini" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button></span>
     </div>
-    <p class="sub" data-i18n="ana.sub">Alles aus dem Index gerechnet – ohne Microsoft zu fragen.</p>
+    <p class="sub" data-i18n="ana.sub">Beim Indexlauf gerechnet – ohne Microsoft zu fragen.</p>
+    <div class="dia-titel" data-i18n="ana.komm.title">Kommunikation</div>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
+    <div class="dia-titel" data-i18n="ana.dateien.title">Dateien &amp; Platz</div>
+    <div id="ana-kpi-dateien" class="kpis"></div>
     <p class="small muted" style="margin-top:10px" id="export-state"></p>
+  </div>
+
+  <div class="card">
+    <h2 data-i18n="ana.verlauf.titel">Verlauf</h2>
     <div id="ana-dia"></div>
   </div>
 
   <div class="card">
-    <h2 data-i18n="ana.runs.title">Läufe</h2>
-    <p class="sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
+    <h2 data-i18n="ana.health.title">Gesundheit</h2>
+    <div class="dia-titel" data-i18n="ana.runs.title">Läufe</div>
+    <p class="dia-sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
     <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
-    <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
+    <div class="dia-titel" data-i18n="ana.check.title">Vollständigkeit</div>
+    <p class="dia-sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
     <div class="row">
       <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
       <span class="small muted" id="ana-check-state"></span>
     </div>
-    <div id="ana-check-box"></div>
-    <div id="ana-check-box-od"></div>
-    <div id="ana-check-box-sp"></div>
-    <div id="ana-check-box-pg"></div>
+    <div id="ana-checks"></div>
   </div>
 </section>
 
@@ -5638,11 +5459,14 @@ function ladeAnalytics(neu){
   anaGeladen = true;
   if(neu){
     // Visible feedback for the refresh button: back to the loading hint
-    // until the fresh numbers arrive.
+    // until the fresh numbers arrive. Refresh recomputes on the server –
+    // the ONE way to invalidate everything at once.
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+    el('ana-kpi-dateien').innerHTML = '';
     el('ana-runs').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
   }
-  api('/api/analytics').then(zeigeAnalytics).catch(function(e){
+  (neu ? post('/api/analytics-refresh', {}) : api('/api/analytics'))
+    .then(zeigeAnalytics).catch(function(e){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
   });
   api('/api/runs?limit=50').then(function(r){ renderRuns(r.runs || []); })
@@ -5784,7 +5608,7 @@ function verlaufDia(reihe){
   var breite = B / reihe.length, lueck = reihe.length > 120 ? 0 : Math.min(2, breite * 0.25);
   var teile = reihe.map(function(r, i){
     var x = i * breite, y = H - U, s = '';
-    [['andere', 'var(--serie-c)'], ['outlook', 'var(--serie-b)'], ['teams', 'var(--serie-a)']]
+    [['outlook', 'var(--serie-b)'], ['teams', 'var(--serie-a)']]
       .forEach(function(paar){
         var h = (r[paar[0]] / hoch) * (H - U);
         if(h <= 0) return;
@@ -5854,8 +5678,7 @@ function zeigeVerlaeufe(a){
   });
   var legende = '<div class="legende">' +
     '<span><i style="background:var(--serie-a)"></i>' + esc(t('search.source.teams')) + '</span>' +
-    '<span><i style="background:var(--serie-b)"></i>' + esc(t('search.source.outlook')) + '</span>' +
-    '<span><i style="background:var(--serie-c)"></i>' + esc(t('ana.andere')) + '</span></div>';
+    '<span><i style="background:var(--serie-b)"></i>' + esc(t('search.source.outlook')) + '</span></div>';
   el('ana-dia').innerHTML =
     diaBlock(t('ana.verlauf'), t('ana.verlauf.sub'), legende + verlaufDia(v)) +
     (luecken.length
@@ -5870,6 +5693,9 @@ function zeigeVerlaeufe(a){
                // ist oft größer als die Einträge über ihm.
                return {name: x.typ === '…' ? t('ana.typen.rest') : x.typ, n: x.n};
              }))) +
+    diaBlock(t('ana.dateitypen'), t('ana.dateitypen.sub'),
+             rangListe((a.datei_typen || []).map(function(x){
+               return {name: x.typ, n: x.n}; }))) +
     diaBlock(t('ana.dateien'), t('ana.dateien.sub'),
              rangListe((a.grosse_dateien || []).map(function(d){
                return {name: d.pfad, n: d.bytes}; }), bytes)) +
@@ -5879,45 +5705,58 @@ function zeigeVerlaeufe(a){
 }
 
 function zeigeAnalytics(a){
+  el('ana-stand').textContent = a.built_at
+    ? t('ana.stand', {when: fmt(a.built_at)}) : '';
+  zeigeBerichte(a);
   if(!a.exists){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('search.sub.none')) + '</p>';
+    el('ana-kpi-dateien').innerHTML = '';
+    el('ana-dia').innerHTML = '';
     return;
   }
-  var quellen = (a.quellen || []).map(function(q){
-    // src 'datei' spans both mirrors; the search sources split it, so the
-    // tile uses the files label instead of a key that no longer exists.
-    var name = q.src === 'datei' ? t('ana.files') : t('search.source.' + q.src);
-    return name + ' ' + zahl(q.nachrichten);
-  }).join(' · ');
-  var zeitraum = (a.von && a.bis)
-    ? fmtTag(a.von) + ' – ' + fmtTag(a.bis) : '–';
-  var gesamt = (a.groesse || {});
-  var dateien = (a.quellen || []).filter(function(q){ return q.src === 'datei'; })[0];
+  var k = a.komm || {}, je = {};
+  (a.quellen || []).forEach(function(q){ je[q.src] = q.n; });
+  var zeitraum = (k.von && k.bis)
+    ? fmtTag(k.von) + ' – ' + fmtTag(k.bis) : '–';
   // Anklickbar nur, wenn es auch etwas zu zeigen gibt – eine Kachel, die bei
   // null Treffern in eine leere Suche führt, ist eine Sackgasse.
-  var klick = a.verschwunden ? 'zeigeVerschwundene()' : '';
+  var klick = k.verschwunden ? 'zeigeVerschwundene()' : '';
   el('ana-kpi').innerHTML =
-    kachelHtml(zahl(a.nachrichten), t('ana.messages'), quellen) +
-    kachelHtml(zahl(a.gespraeche), t('ana.threads'), '', t('ana.threads.hint')) +
-    kachelHtml(zahl(a.mit_anhang), t('ana.attachments'), '', t('ana.attachments.hint')) +
-    // Ohne Spiegel keine Kachel. „OneDrive-Dateien 0" wäre für alle, die
-    // OneDrive nicht nutzen, eine Zeile, die nichts sagt.
-    (dateien ? kachelHtml(zahl(dateien.nachrichten), t('ana.files'), '',
-                          t('ana.files.hint')) : '') +
-    kachelHtml(zahl(a.personen), t('ana.people')) +
-    kachelHtml(zahl(a.verschwunden), t('ana.gone'), '',
-               t(klick ? 'ana.gone.hint.klick' : 'ana.gone.hint'), klick) +
+    kachelHtml(zahl(k.nachrichten), t('ana.messages'),
+               t('search.source.teams') + ' ' + zahl(je.teams || 0) + ' · ' +
+               t('search.source.outlook') + ' ' + zahl(je.outlook || 0)) +
+    kachelHtml(zahl(k.gespraeche), t('ana.threads'), '', t('ana.threads.hint')) +
+    kachelHtml(zahl(k.mit_anhang), t('ana.attachments'), '', t('ana.attachments.hint')) +
+    kachelHtml(zahl(k.personen), t('ana.people')) +
     kachelHtml(zeitraum, t('ana.period')) +
-    kachelHtml(bytes((gesamt.teams || 0) + (gesamt.outlook || 0) +
-                     (gesamt.onedrive || 0) + (gesamt.sharepoint || 0) +
-                     (gesamt.pages || 0)), t('ana.size'),
-               t('ana.size.hint', {index: bytes(gesamt.index)}));
+    kachelHtml(zahl(k.verschwunden), t('ana.gone'), '',
+               t(klick ? 'ana.gone.hint.klick' : 'ana.gone.hint'), klick);
+  var d = a.dateien || {}, g = a.groesse || {};
+  var teile = [];
+  if(d.onedrive) teile.push('OneDrive ' + zahl(d.onedrive));
+  if(d.sharepoint)
+    teile.push(t('search.source.sharepoint') + ' ' + zahl(d.sharepoint));
+  el('ana-kpi-dateien').innerHTML =
+    // Ohne Spiegel keine Datei-Kacheln – „0 Dateien" sagt niemandem etwas.
+    (d.n ? kachelHtml(zahl(d.n), t('ana.files'), teile.join(' · '),
+                      t('ana.files.hint')) : '') +
+    (d.pages ? kachelHtml(zahl(d.pages), t('ana.pages')) : '') +
+    (d.n || d.pages
+      ? kachelHtml(zahl(d.verschwunden), t('ana.gone.files'), '',
+                   t('ana.gone.files.hint')) : '') +
+    kachelHtml(bytes((g.teams || 0) + (g.outlook || 0) + (g.onedrive || 0) +
+                     (g.sharepoint || 0) + (g.pages || 0)), t('ana.size'),
+               t('ana.size.hint', {index: bytes(g.index)}));
   zeigeVerlaeufe(a);
-  // One box per report; the registry below is the only place a new
-  // checkable source needs to appear on this side.
-  Object.keys(BERICHTKAESTEN).forEach(function(feld){
-    zeigeBericht(a[feld], BERICHTKAESTEN[feld].box);
-  });
+}
+
+function zeigeBerichte(a){
+  // One block per report, straight from the registry – adding a checkable
+  // source is one line there, not a fourth hand-wired box.
+  el('ana-checks').innerHTML = Object.keys(BERICHTKAESTEN).map(function(feld){
+    return berichtHtml(a[feld], BERICHTKAESTEN[feld].titel,
+                       feld !== 'vollstaendigkeit');
+  }).join('');
 }
 
 function fmtTag(ts){
@@ -5932,28 +5771,20 @@ function zeigeVerschwundene(){
 }
 
 var BERICHTKAESTEN = {
-  vollstaendigkeit:            {box: '',                 titel: 'ana.check.title.mail'},
-  vollstaendigkeit_onedrive:   {box: 'ana-check-box-od', titel: 'ana.check.title.onedrive'},
-  vollstaendigkeit_sharepoint: {box: 'ana-check-box-sp', titel: 'ana.check.title.sharepoint'},
-  vollstaendigkeit_pages:      {box: 'ana-check-box-pg', titel: 'ana.check.title.pages'}
+  vollstaendigkeit:            {titel: 'ana.check.title.mail'},
+  vollstaendigkeit_onedrive:   {titel: 'ana.check.title.onedrive'},
+  vollstaendigkeit_sharepoint: {titel: 'ana.check.title.sharepoint'},
+  vollstaendigkeit_pages:      {titel: 'ana.check.title.pages'}
 };
 
-function berichtTitel(id){
-  var eintrag = Object.keys(BERICHTKAESTEN).map(function(k){
-    return BERICHTKAESTEN[k];
-  }).filter(function(e){ return e.box === (id || ''); })[0];
-  return eintrag ? eintrag.titel : 'ana.check.title.mail';
-}
-
-function zeigeBericht(b, id){
-  var kasten = el(id || 'ana-check-box');
-  var od = !!id;   // alle Spiegel-/Seitenkästen sprechen von Dateien
-  // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe der
-  // Kasten sonst dauerhaft stehen, obwohl OneDrive vielleicht gar nicht genutzt wird.
-  if(!b){ kasten.innerHTML = od ? '' :
-            '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; return; }
+function berichtHtml(b, titelKey, od){
+  // od: alle Spiegel-/Seitenberichte sprechen von Dateien statt Mails.
+  // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe
+  // sonst dauerhaft ein Block stehen, obwohl die Quelle gar nicht genutzt wird.
+  if(!b){ return od ? '' :
+            '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; }
   var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
-              esc(t(berichtTitel(id))) + '</h3>';
+              esc(t(titelKey)) + '</h3>';
   var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
   var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
     esc(t(b.fehlt ? (od ? 'ana.check.gaps.files' : 'ana.check.gaps')
@@ -5968,8 +5799,8 @@ function zeigeBericht(b, id){
             {n: zahl(b.ausgelassen),
                                   ordner: (b.ausgelassene_ordner || []).join(', ')})) +
       '</p>' : '');
-  if(!luecken.length){ kasten.innerHTML = kopf; return; }
-  kasten.innerHTML = kopf + '<table class="anatab"><thead><tr>' +
+  if(!luecken.length){ return kopf; }
+  return kopf + '<table class="anatab"><thead><tr>' +
     '<th>' + esc(t('ana.check.folder')) + '</th><th>' + esc(t('ana.check.expected')) +
     '</th><th>' + esc(t('ana.check.present')) + '</th><th>' + esc(t('ana.check.missing')) +
     '</th></tr></thead><tbody>' +

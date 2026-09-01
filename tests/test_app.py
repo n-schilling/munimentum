@@ -4166,7 +4166,6 @@ def _analytics_db(sandbox, spalten_neu=True):
     store = sandbox / "rag_store"
     store.mkdir(exist_ok=True)
     app_mod._ZAEHLUNG.clear()
-    app_mod._GROESSE.clear()
     con = sqlite3.connect(store / "corpus.db")
     extra = ", thread TEXT, gone TEXT, att TEXT" if spalten_neu else ""
     con.execute(f"CREATE TABLE chunks(uid TEXT, seq INTEGER, src TEXT, ts REAL{extra})")
@@ -4190,16 +4189,23 @@ def _analytics_db(sandbox, spalten_neu=True):
     return store
 
 
-def test_kennzahlen_zaehlen_nachrichten_nicht_textstellen(sandbox):
-    _analytics_db(sandbox)
-    k = app_mod.kennzahlen(app_mod.load_config())
-    assert k["exists"] and k["nachrichten"] == 3        # nicht 4 Textstellen
-    assert {q["src"]: q["nachrichten"] for q in k["quellen"]} == {"outlook": 2, "teams": 1}
-    assert k["personen"] == 2
-    assert k["gespraeche"] == 2
-    assert k["mit_anhang"] == 1
-    assert k["verschwunden"] == 1
-    assert k["von"] == 1_000_000 and k["bis"] == 2_000_000
+def test_analytics_zaehlt_nachrichten_nicht_textstellen(sandbox):
+    import analytics_db
+    store = _analytics_db(sandbox)
+    (sandbox / "spiegel").mkdir(exist_ok=True)
+    (sandbox / "spiegel" / "a.bin").write_bytes(b"x" * 7)
+    a = analytics_db.baue(store, {"onedrive": sandbox / "spiegel"})
+    assert a["groesse"]["onedrive"] == 7 and "index" in a["groesse"]
+    assert a["grosse_dateien"][0]["pfad"] == "a.bin"
+    assert a["komm"]["nachrichten"] == 3                # nicht 4 Textstellen
+    assert {q["src"]: q["n"] for q in a["quellen"]} == {"outlook": 2, "teams": 1}
+    assert a["komm"]["personen"] == 2
+    assert a["komm"]["gespraeche"] == 2
+    assert a["komm"]["mit_anhang"] == 1
+    assert a["komm"]["verschwunden"] == 1
+    assert a["komm"]["von"] == 1_000_000 and a["komm"]["bis"] == 2_000_000
+    # Materialisiert: der nächste Aufruf liest nur noch.
+    assert analytics_db.lies(store)["komm"]["nachrichten"] == 3
 
 
 def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
@@ -4209,14 +4215,15 @@ def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
     per Mail schreibt, stand deshalb doppelt da – mit geteilter Zahl, was
     beides falsch aussah.
     """
+    import analytics_db
     store = _analytics_db(sandbox)
     con = sqlite3.connect(store / "corpus.db")
     con.execute("INSERT INTO people VALUES ('teams', 'Alice', 40, '')")
     con.commit()
     con.close()
-    app_mod._AUSWERTUNG.clear()
+    analytics_db.baue(store, {})
 
-    k = app_mod.kennzahlen(app_mod.load_config())
+    k = app_mod.analytics_daten(app_mod.load_config())
     namen = [pe["who"] for pe in k["top_personen"]]
     assert namen == ["Alice", "Bob"]                   # jede Person einmal
     assert namen.count("Alice") == 1
@@ -4226,18 +4233,21 @@ def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
 def test_ausgelassene_personen_fehlen_in_der_auswertung(sandbox):
     """Man selbst steht sonst mit Abstand oben und sagt nichts über den
     Austausch mit anderen."""
-    _analytics_db(sandbox)
-    app_mod._AUSWERTUNG.clear()
+    import analytics_db
+    analytics_db.baue(_analytics_db(sandbox), {})
     cfg = app_mod.load_config()
-    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Alice", "Bob"]
+    assert [pe["who"] for pe in
+            app_mod.analytics_daten(cfg)["top_personen"]] == ["Alice", "Bob"]
 
     # Klein geschrieben und mit Leerraum: verglichen wird ohne Rücksicht darauf.
+    # Gefiltert wird beim LESEN – eine Änderung der Einstellung darf nicht bis
+    # zum nächsten Indexlauf warten.
     cfg["analytics_skip"] = ["  alice "]
-    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Bob"]
-    # Die Zwischenspeicherung hängt am Index, nicht an der Einstellung – eine
-    # Änderung darf nicht bis zum nächsten Indexlauf warten.
+    assert [pe["who"] for pe in
+            app_mod.analytics_daten(cfg)["top_personen"]] == ["Bob"]
     cfg["analytics_skip"] = []
-    assert [pe["who"] for pe in app_mod.kennzahlen(cfg)["top_personen"]] == ["Alice", "Bob"]
+    assert [pe["who"] for pe in
+            app_mod.analytics_daten(cfg)["top_personen"]] == ["Alice", "Bob"]
 
 
 def test_namensliste_je_zeile(sandbox):
@@ -4248,35 +4258,33 @@ def test_namensliste_je_zeile(sandbox):
     assert app_mod._clean_zeilen("") == []
 
 
-def test_kennzahlen_sagen_weiss_ich_nicht_statt_null(sandbox):
+def test_analytics_sagt_weiss_ich_nicht_statt_null(sandbox):
     """Ein Index aus einer älteren Fassung kennt die Spalten nicht. „0 mit
     Anhang“ wäre eine Behauptung, None ist eine Auskunft."""
-    _analytics_db(sandbox, spalten_neu=False)
-    k = app_mod.kennzahlen(app_mod.load_config())
-    assert k["nachrichten"] == 3                        # das geht weiterhin
-    assert k["gespraeche"] is None
-    assert k["mit_anhang"] is None
-    assert k["verschwunden"] is None
+    import analytics_db
+    a = analytics_db.baue(_analytics_db(sandbox, spalten_neu=False), {})
+    assert a["komm"]["nachrichten"] == 3                # das geht weiterhin
+    assert a["komm"]["gespraeche"] is None
+    assert a["komm"]["mit_anhang"] is None
+    assert a["komm"]["verschwunden"] is None
 
 
-def test_kennzahlen_ohne_index(sandbox):
-    k = app_mod.kennzahlen(app_mod.load_config())
-    assert k["exists"] is False and k["nachrichten"] == 0
+def test_analytics_ohne_index(sandbox):
+    k = app_mod.analytics_daten(app_mod.load_config())
+    assert k["exists"] is False and k["top_personen"] == []
 
 
-def test_ordnergroesse_wird_gepuffert(sandbox):
+def test_groesse_zaehlt_und_findet_die_groessten(sandbox):
+    import analytics_db
     ordner = sandbox / "gross"
-    ordner.mkdir()
+    (ordner / "tief").mkdir(parents=True)
     (ordner / "a.bin").write_bytes(b"x" * 1000)
-    app_mod._GROESSE.clear()
-    assert app_mod.ordner_groesse(ordner) == 1000
-    (ordner / "b.bin").write_bytes(b"y" * 500)
-    assert app_mod.ordner_groesse(ordner) == 1000, "Puffer greift nicht"
-    assert app_mod.ordner_groesse(ordner, ttl=0) == 1500
-
-
-def test_ordnergroesse_ohne_ordner(sandbox):
-    assert app_mod.ordner_groesse(sandbox / "gibtsnicht") == 0
+    (ordner / "tief" / "b.bin").write_bytes(b"y" * 500)
+    gesamt, groesste = analytics_db._groesse(ordner)
+    assert gesamt == 1500
+    assert [(n, rel) for n, rel in groesste] == [(1000, "a.bin"),
+                                                 (500, "tief/b.bin")]
+    assert analytics_db._groesse(sandbox / "gibtsnicht") == (0, [])
 
 
 def test_pruefschritt_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
@@ -4295,10 +4303,12 @@ def test_pruefschritt_ruft_outlook_mit_check(sandbox):
 
 
 PRUEFUNG_ANALYTICS = GRUNDZUSTAND + """
-zeigeAnalytics({exists: true, nachrichten: 238408,
-  quellen: [{src: 'teams', nachrichten: 196668}, {src: 'outlook', nachrichten: 36827}],
-  gespraeche: 16545, mit_anhang: null, personen: 3860, verschwunden: 12,
-  von: 1568851200, bis: 1789603200,
+zeigeAnalytics({exists: true, built_at: '2026-09-01T10:00:00+00:00',
+  komm: {nachrichten: 238408, gespraeche: 16545, mit_anhang: null,
+         personen: 3860, verschwunden: 12,
+         von: 1568851200, bis: 1789603200},
+  quellen: [{src: 'teams', n: 196668}, {src: 'outlook', n: 36827}],
+  dateien: {n: 0, pages: 0, onedrive: 0, sharepoint: 0, verschwunden: null},
   groesse: {teams: 3758096384, outlook: 28879134720, index: 966367641},
   vollstaendigkeit: {geprueft: '2026-08-10T20:00:00', erwartet: 40000,
     vorhanden: 39994, geloescht: 12, fehlt: 6, ausgelassen: 15000,
@@ -4314,9 +4324,15 @@ pruefe(kpi.indexOf('16.545') >= 0, 'Gespraeche fehlen');
 // null heisst „weiss ich nicht“ – keinesfalls 0.
 pruefe(kpi.indexOf('>0<') < 0, 'Unbekanntes wurde als 0 gezeigt');
 pruefe(kpi.indexOf('–') >= 0, 'Unbekanntes nicht als Strich gezeigt');
-pruefe(kpi.indexOf('GB') >= 0, 'Groesse fehlt: ' + kpi.slice(0, 200));
+var dat = document.getElementById('ana-kpi-dateien').innerHTML;
+pruefe(dat.indexOf('GB') >= 0, 'Groesse fehlt: ' + dat.slice(0, 200));
+// Ohne Spiegel: nur die Groessenkachel, keine leeren Datei-Kacheln.
+pruefe((dat.match(/kpi-wert/g) || []).length === 1,
+       'Leere Datei-Kacheln werden gezeigt: ' + dat.slice(0, 200));
+pruefe(document.getElementById('ana-stand').textContent.length > 0,
+       'Stand-Zeile fehlt');
 
-var pruef = document.getElementById('ana-check-box').innerHTML;
+var pruef = document.getElementById('ana-checks').innerHTML;
 pruefe(pruef.indexOf('15.000') >= 0, 'Ausgelassene Ordner nicht erklaert');
 pruefe(pruef.indexOf('Archiv') >= 0, 'Ausgelassene Ordner nicht benannt');
 // Der ausgelassene Ordner darf NICHT in der Luecken-Tabelle stehen.
@@ -4374,8 +4390,6 @@ def test_verschwundenes_ueber_die_zeit_ist_weg():
     """Ein Balken bei einem einzigen Monat sagt nichts – die Kachel mit der
     Gesamtzahl und die Sicht „Gelöschtes“ bleiben."""
     assert "ana.geloescht.sub" not in app_mod.PAGE
-    assert "a.geloescht" not in app_mod.PAGE       # die Auswertung liefert es nicht mehr
-    assert "geloescht" not in app_mod.auswertung.__doc__
     # Was bleibt: die Kachel mit der Gesamtzahl und die Sicht in der Suche.
     assert "ana.gone" in app_mod.PAGE
     assert 'id="f-gone"' in app_mod.PAGE
@@ -5273,7 +5287,6 @@ def test_analytics_liefert_beide_berichte(server, sandbox):
     r = call(port, "GET", "/api/analytics")[1]
     assert r["vollstaendigkeit"]["erwartet"] == 5
     assert r["vollstaendigkeit_onedrive"]["erwartet"] == 9
-    assert "onedrive" in r["groesse"], "Belegter Platz für den Spiegel fehlt"
 
 
 PRUEFUNG_PRUEFKNOPF = GRUNDZUSTAND + """
@@ -5315,17 +5328,20 @@ var b = {geprueft: '2026-08-10T18:46:00', erwartet: 421, vorhanden: 420,
          geloescht: 0, fehlt: 1, ausgelassen: 208,
          ausgelassene_ordner: ['Dateien/Fotos'],
          ordner: [{ordner: 'Dateien/Fotos', erwartet: 5, vorhanden: 4, fehlt: 1}]};
-zeigeBericht(b, 'ana-check-box-od');
-var h = document.getElementById('ana-check-box-od').innerHTML;
+var h = berichtHtml(b, 'ana.check.title.onedrive', true);
 pruefe(h.indexOf('Mails') < 0 && h.indexOf('mails') < 0,
        'Bericht des Spiegels spricht von Mails: ' + h.slice(0, 220));
 pruefe(h.indexOf('Dateien fehlen') >= 0 || h.indexOf('files missing') >= 0,
        'Einheit fehlt in der Luecken-Zeile');
 
 // Der Postfachbericht bleibt, wie er war.
-zeigeBericht(b);
-var m = document.getElementById('ana-check-box').innerHTML;
+var m = berichtHtml(b, 'ana.check.title.mail', false);
 pruefe(m.indexOf('Mails') >= 0, 'Postfachbericht spricht nicht mehr von Mails');
+// Ohne Bericht: der Spiegel-Block verschwindet, das Postfach sagt "nie geprueft".
+pruefe(berichtHtml(null, 'ana.check.title.onedrive', true) === '',
+       'Leerer Spiegelbericht erzeugt einen Block');
+pruefe(berichtHtml(null, 'ana.check.title.mail', false).indexOf('hint') >= 0,
+       'Postfach ohne Bericht sagt nichts');
 console.log('OK');
 """
 
@@ -5422,18 +5438,22 @@ def test_infozeichen_ist_erreichbar_und_erklaert_sich():
 
 
 PRUEFUNG_ANALYTICS_KACHELN = GRUNDZUSTAND + """
-var a = {exists: true, nachrichten: 123456, gespraeche: 12000, mit_anhang: 3400,
-  personen: 2500, verschwunden: 18, von: 1551398400, bis: 1788134400,
-  quellen: [{src:'teams',nachrichten:100000},{src:'outlook',nachrichten:23000},
-            {src:'datei',nachrichten:629}],
+var a = {exists: true, built_at: '2026-09-01T10:00:00+00:00',
+  komm: {nachrichten: 123456, gespraeche: 12000, mit_anhang: 3400,
+         personen: 2500, verschwunden: 18, von: 1551398400, bis: 1788134400},
+  quellen: [{src:'teams',n:100000},{src:'outlook',n:23000}],
+  dateien: {n: 629, onedrive: 600, sharepoint: 29, pages: 3, verschwunden: 2},
   groesse: {teams: 1000, outlook: 2000, onedrive: 3000, index: 500},
   vollstaendigkeit: null, vollstaendigkeit_onedrive: null};
 zeigeAnalytics(a);
 var h = document.getElementById('ana-kpi').innerHTML;
+var dat = document.getElementById('ana-kpi-dateien').innerHTML;
 
-// Neue Kachel, aus dem Index gerechnet.
-pruefe(h.indexOf('OneDrive-Dateien') >= 0, 'Kachel fehlt');
-pruefe(h.indexOf('>629<') >= 0, 'Dateizahl fehlt: ' + h.slice(0, 200));
+// Die Dateiwelt steht in der eigenen Reihe, mit Aufteilung nach Spiegeln.
+pruefe(dat.indexOf('>629<') >= 0, 'Dateizahl fehlt: ' + dat.slice(0, 200));
+pruefe(dat.indexOf('OneDrive 600') >= 0, 'Aufteilung nach Spiegeln fehlt');
+pruefe(dat.indexOf('>3<') >= 0, 'Seitenzahl fehlt');
+pruefe(dat.indexOf('>2<') >= 0, 'Verschwundene Dateien fehlen');
 
 // Der Knopf ist weg; die Kachel selbst fuehrt zur Suche.
 pruefe(h.indexOf('kpi-fuss') < 0, '"Show these" steht noch da');
@@ -5443,20 +5463,22 @@ pruefe(h.indexOf('role="button"') >= 0 && h.indexOf('onkeydown=') >= 0,
 
 // Erklaerungen am (i), Zahlen sichtbar.
 pruefe(h.indexOf('Related mails') < 0, 'Erklaerung steht noch als Text da');
-pruefe((h.match(/class="info"/g) || []).length === 4, 'Falsche Zahl an Infozeichen');
+pruefe((h.match(/class="info"/g) || []).length === 3, 'Falsche Zahl an Infozeichen');
 // Ohne Tausendertrennzeichen geprueft: das haengt an der Sprache.
 pruefe(h.indexOf('Teams 100') >= 0, 'Aufteilung nach Quellen ist verschwunden');
 pruefe(h.indexOf('kpi-hint') >= 0, 'Sichtbare Zahlenzeile ganz weg');
 
 // Ohne Verschwundenes fuehrt die Kachel nirgendwohin – eine Sackgasse waere schlechter.
-a.verschwunden = 0;
-// Und ohne Spiegel gibt es die Dateikachel gar nicht: "0" waere fuer alle,
-// die OneDrive nicht nutzen, eine Zeile, die nichts sagt.
-a.quellen = [{src:'teams',nachrichten:1}];
+a.komm.verschwunden = 0;
+// Und ohne Spiegel gibt es die Datei-Kacheln gar nicht: "0" waere fuer alle,
+// die keinen Spiegel nutzen, Zeilen, die nichts sagen.
+a.dateien = {n: 0, onedrive: 0, sharepoint: 0, pages: 0, verschwunden: null};
 zeigeAnalytics(a);
 var h2 = document.getElementById('ana-kpi').innerHTML;
+var dat2 = document.getElementById('ana-kpi-dateien').innerHTML;
 pruefe((h2.match(/klickbar/g) || []).length === 0, 'Kachel ohne Treffer trotzdem klickbar');
-pruefe(h2.indexOf('OneDrive-Dateien') < 0, 'Leere Dateikachel wird gezeigt');
+pruefe((dat2.match(/kpi-wert/g) || []).length === 1,
+       'Leere Datei-Kacheln werden gezeigt: ' + dat2.slice(0, 200));
 console.log('OK');
 """
 
@@ -6495,11 +6517,16 @@ def _index_mit_zeitpunkten(sandbox, monate):
     return chunks
 
 
+def _analytics(sandbox):
+    import analytics_db
+    return analytics_db.baue(sandbox / app_mod.STORE_DIR, {})
+
+
 def test_verlauf_enthaelt_auch_die_leeren_monate(sandbox):
     """Sonst fiele eine Lücke gar nicht auf – sie stünde einfach nicht da."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-04", "outlook")])
-    k = app_mod.kennzahlen(app_mod.load_config())
+    k = _analytics(sandbox)
     monate = [r["m"] for r in k["verlauf"]]
     assert monate == ["2025-01", "2025-02", "2025-03", "2025-04"]
     assert k["verlauf"][1]["gesamt"] == 0
@@ -6511,40 +6538,58 @@ def test_luecken_nur_innerhalb_des_bestands(sandbox):
     """Vor der ersten und nach der letzten Nachricht ist nichts zu vermissen."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-05", "teams")])
-    k = app_mod.kennzahlen(app_mod.load_config())
+    k = _analytics(sandbox)
     assert k["luecken"] == [{"von": "2025-02", "bis": "2025-04", "monate": 3}]
 
 
-def test_verlauf_trennt_die_quellen(sandbox):
+def test_verlauf_zaehlt_nur_kommunikation(sandbox):
+    """Mail und Chat – Kalender zählt hier nicht mit."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-01", "outlook"),
                                      ("2025-01", "kalender")])
-    zeile = app_mod.kennzahlen(app_mod.load_config())["verlauf"][0]
-    assert (zeile["teams"], zeile["outlook"], zeile["andere"]) == (1, 1, 1)
-    assert zeile["gesamt"] == 3, "die Summe muss die Stapel tragen"
+    zeile = _analytics(sandbox)["verlauf"][0]
+    assert (zeile["teams"], zeile["outlook"]) == (1, 1)
+    assert zeile["gesamt"] == 2, "Kalender darf den Stapel nicht tragen"
+
+
+def test_dateien_verfaelschen_verlauf_und_luecken_nicht(sandbox):
+    """Der Kernfehler der alten Seite: eine gespiegelte Datei trägt ihr
+    Datei-Änderungsdatum als Zeitstempel und füllte damit Kommunikations-
+    Lücken – ein PDF von 2025-03 machte den mail-leeren März „voll“."""
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-05", "teams"),
+                                     ("2025-03", "datei")])
+    k = _analytics(sandbox)
+    assert [r["gesamt"] for r in k["verlauf"]] == [1, 0, 0, 0, 1]
+    assert k["luecken"] == [{"von": "2025-02", "bis": "2025-04", "monate": 3}]
+    assert k["komm"]["nachrichten"] == 2
+    assert k["dateien"]["n"] == 1
 
 
 def test_anhangstypen_werden_gezaehlt(sandbox):
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "outlook")] * 3)
-    typen = {x["typ"]: x["n"] for x in app_mod.kennzahlen(app_mod.load_config())["anhang_typen"]}
+    typen = {x["typ"]: x["n"] for x in _analytics(sandbox)["anhang_typen"]}
     assert typen.get("pdf") == 1 and typen.get("png") == 1
 
 
-def test_auswertung_wird_gepuffert(sandbox, monkeypatch):
-    """Der Gang über den Index kostet auf einem echten Bestand Sekunden – er
-    darf nicht bei jedem Öffnen des Reiters neu laufen."""
+def test_analytics_liest_nur_und_aktualisieren_baut_neu(sandbox, monkeypatch):
+    """Der Reiter darf keine Sekunden mehr kosten: /api/analytics liest den
+    materialisierten Block; nur „Aktualisieren“ (und der erste Aufruf nach
+    einem Update) rechnet."""
+    import analytics_db
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams")])
     cfg = app_mod.load_config()
-    app_mod.kennzahlen(cfg)
     laeufe = []
-    echt = app_mod.auswertung
-    monkeypatch.setattr(app_mod, "auswertung",
-                        lambda con, k: laeufe.append(1) or echt(con, k))
-    app_mod.kennzahlen(cfg)
-    assert len(laeufe) == 1, "die Auswertung wurde aufgerufen"
-    assert app_mod._AUSWERTUNG, "aber nichts gepuffert"
+    echt = analytics_db.baue
+    monkeypatch.setattr(analytics_db, "baue",
+                        lambda *a, **kw: laeufe.append(1) or echt(*a, **kw))
+    app_mod.analytics_daten(cfg)           # Block fehlt noch: einmal rechnen
+    app_mod.analytics_daten(cfg)           # jetzt nur noch lesen
+    assert len(laeufe) == 1
+    app_mod.analytics_daten(cfg, neu=True)
+    assert len(laeufe) == 2
 
 
 # --------------------------------------------------------------------------

@@ -151,14 +151,15 @@ unchanged.
 
 ### Analytics
 
-What the archive holds, all computed from the index without asking Microsoft:
-messages per source, conversations, people, period, disk usage — plus the
-timeline. Messages per month by source show when your communication moved from
-mail to chat; the growth curve shows how the archive filled up; and **gaps** —
-months with no message at all between your first and your last — are named
+What the archive holds, computed once per index run without asking
+Microsoft, so the tab opens instantly. Communication and files are kept
+apart: messages, conversations, people and period on one row; the mirrored
+files, pages and disk usage on their own. The timeline covers mail and chat
+only — a mirrored PDF must not fill a communication gap — and **gaps**,
+months with no message at all between your first and your last, are named
 outright, which is the one question an archive should answer about itself.
-Below that: attachments by file type, the largest single files, and who you
-exchange the most with.
+Below that: attachments by type, the mirrored files by type, the largest
+single files, and who you exchange the most with.
 
 On request there is also a completeness check against Microsoft: what it
 counts against what is here — per mailbox folder, per mirrored library, and

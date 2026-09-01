@@ -33,6 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 
+import analytics_db
 import corpus
 import export_util
 import ollama_client
@@ -412,6 +413,16 @@ def main():
                               a.batch, embeddings=not a.no_embeddings,
                               onedrive_dir=a.onedrive,
                               sharepoint_dir=a.sharepoint, pages_dir=a.pages)
+    # The Analytics tab reads a materialised block instead of aggregating on
+    # every visit – this run just touched everything, so build it now. Its
+    # failure must not fail the index.
+    try:
+        analytics_db.baue(a.store, {
+            "teams": a.teams, "outlook": a.outlook, "onedrive": a.onedrive,
+            "sharepoint": a.sharepoint, "pages": a.pages})
+    except Exception as e:
+        progress.event("run.index.analytics_failed", "warn",
+                       error=f"{type(e).__name__}: {e}")
     # Same result schema as every other subprogram: "new" = freshly computed
     # embeddings, "unchanged" = reused ones; the chunk total goes into extra.
     progress.ergebnis(new, unchanged=max(0, n - new), extra={"chunks": n})
