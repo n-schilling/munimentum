@@ -1033,7 +1033,6 @@ def nur_pruefen(argv):
 # erzeugen eine Differenz, die keine Lücke ist. Erst zusammen mit
 # den Grabsteinen wird daraus eine Bilanz, in der jede Zahl erklärt ist.
 # ---------------------------------------------------------------------------
-BERICHT_DATEI = export_util.BERICHT_DATEI
 
 
 def zaehle_dateien(ordner):

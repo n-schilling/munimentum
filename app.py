@@ -1868,6 +1868,9 @@ class App:
                         "srv.migrate.store", "info", name=name, n=n))
                 self.jobs.logk("srv.migrate.done", "ok")
                 self.migration = False
+                # Deferred from serve(): the MCP server searches the archive
+                # and waits like everything else until the state is whole.
+                self.autostart_mcp()
             except Exception as e:
                 # The flag deliberately stays set: exports keep waiting, the
                 # loose files are untouched, the next app start tries again.
@@ -1985,6 +1988,7 @@ class App:
             wizard = "ollama"
         return {
             "token": tok,
+            "migration": self.migration,
             "ollama": oll,
             "ollama_hint": ollama_hint(),
             "store": store,
@@ -2276,6 +2280,19 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+    def _migration_sperrt(self, pfad):
+        """While the state migration runs, the WHOLE interface waits – only
+        the page itself, the status (it carries the log) and quitting work.
+        No domain code may see half-moved state."""
+        offen = ("/api/status", "/api/log", "/api/quit")
+        return (self.app.migration and pfad.startswith("/api/")
+                and pfad not in offen)
+
+    def _migration_antwort(self):
+        meldung = {"k": "srv.migrate.busy", "v": {}}
+        return self._json({"ok": False, "message": meldung, "error": meldung,
+                           "roots": [], "hits": []})
+
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str))
 
@@ -2300,6 +2317,8 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         one = {k: v[0] for k, v in q.items()}
         app = self.app
+        if self._migration_sperrt(u.path):
+            return self._migration_antwort()
         try:
             if u.path in ("/", "/index.html"):
                 return self._send(200, self._page(), "text/html; charset=utf-8")
@@ -2363,6 +2382,8 @@ class Handler(BaseHTTPRequestHandler):
                               "text/plain; charset=utf-8")
         u = urlsplit(self.path)
         app = self.app
+        if self._migration_sperrt(u.path):
+            return self._migration_antwort()
         data = self._body()
         try:
             if u.path == "/api/token":
@@ -3009,7 +3030,8 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     app.starte_migration()
     app.check_updates()
     app.scheduler.start()
-    app.autostart_mcp()
+    if not app.migration:
+        app.autostart_mcp()
     print(f"Office-365-Export läuft: {url}")
     print("Beenden mit Strg+C (schließt auch den MCP-Server).")
     if open_browser:
@@ -3119,6 +3141,8 @@ header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
 h1{font-size:17px;margin:0;font-weight:650}
 header .marke{width:26px;height:26px;flex:0 0 auto;border-radius:6px;
   margin-right:-6px}
+#migrationshinweis{padding:9px 20px;background:color-mix(in srgb, var(--accent) 12%, var(--card));
+  border-bottom:1px solid var(--line);font-size:13.5px}
 .pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
@@ -3586,6 +3610,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
 </style>
 </head>
 <body>
+<div id="migrationshinweis" class="hide" data-i18n="ui.migrate.wait"></div>
 <header>
   <!-- The same small redraw of packaging/icon/icon.svg as the favicon –
        inline, so the bundled app needs no asset route for it. -->
@@ -4573,7 +4598,8 @@ function renderStatus(s){
   zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
 
-  var busy = s.jobs.busy;
+  el('migrationshinweis').classList.toggle('hide', !s.migration);
+  var busy = s.jobs.busy || s.migration;
   el('btn-run').disabled = busy;
   el('btn-cancel').classList.toggle('hide', !busy);
   zeigeFortschritt(s.jobs);

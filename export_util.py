@@ -13,16 +13,12 @@ Nur Standardbibliothek.
 import os
 import re
 import sys
-import json
 import hashlib
 from datetime import datetime
 from pathlib import Path
 
 # Dateinamen, die Outlook- und OneDrive-Export gleich benutzen: was aus der
 # Quelle verschwunden ist, und der Bericht der Vollständigkeitsprüfung.
-# Legacy-Dateinamen von vor 6.2 – nur noch migrate_state.py liest sie.
-GONE_FILE = "verschwunden.tsv"
-BERICHT_DATEI = "vollstaendigkeit.json"
 
 
 def erzwinge_utf8():
@@ -117,36 +113,6 @@ def schreibe_atomar(ziel, text):
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(ziel)
     return ziel
-
-
-def lies_verschwunden(pfad):
-    """rel -> Zeitpunkt des ersten Fehlens."""
-    out = {}
-    try:
-        for zeile in Path(pfad).read_text(encoding="utf-8").splitlines():
-            if "\t" in zeile:
-                rel, wann = zeile.split("\t", 1)
-                out[rel] = wann
-    except OSError:
-        pass
-    return out
-
-
-def schreibe_verschwunden(pfad, bekannt, neue, jetzt):
-    """Bestehende Vermerke behalten, neue ergänzen. Atomar."""
-    zusammen = dict(bekannt)
-    for rel in neue:
-        zusammen.setdefault(rel, jetzt)
-    schreibe_atomar(pfad, "".join(f"{rel}\t{wann}\n"
-                                  for rel, wann in sorted(zusammen.items())))
-    return zusammen
-
-
-def schreibe_bericht(out, bericht):
-    """Das Ergebnis der Vollständigkeitsprüfung ablegen – für die App."""
-    return schreibe_atomar(Path(out) / BERICHT_DATEI,
-                           json.dumps(bericht, ensure_ascii=False))
-
 
 # Sync cadence: how often a source gets synced at most. 0 = always; the
 # minute of slack keeps an hourly schedule from missing the daily boundary

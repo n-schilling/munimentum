@@ -17,7 +17,6 @@ migration again simply overwrites the half-written database.
 import json
 from pathlib import Path
 
-import export_util
 import state_db
 
 # The legacy files per export root. OneDrive additionally carries the
@@ -67,6 +66,19 @@ def _lies_tsv(pfad, felder):
     return zeilen
 
 
+def _lies_verschwunden(pfad):
+    """The pre-6.2 tombstone file: rel<TAB>gone-since, one line each."""
+    out = {}
+    try:
+        for zeile in Path(pfad).read_text(encoding="utf-8").splitlines():
+            if "\t" in zeile:
+                rel, wann = zeile.split("\t", 1)
+                out[rel] = wann
+    except OSError:
+        pass
+    return out
+
+
 def _lies_text(pfad):
     try:
         return Path(pfad).read_text(encoding="utf-8").strip() or None
@@ -88,7 +100,7 @@ def _outlook(ordner):
     if done:
         db.done_ersetzen(done)
         n += len(done)
-    weg = export_util.lies_verschwunden(ordner / "verschwunden.tsv")
+    weg = _lies_verschwunden(ordner / "verschwunden.tsv")
     if weg:
         db.verschwunden_ersetzen(weg)
         n += len(weg)
@@ -123,7 +135,7 @@ def _onedrive(ordner):
     if bestand:
         db.bestand_schreiben(bestand, delta_link=_lies_text(ordner / "delta.txt"))
         n += len(bestand)
-    weg = export_util.lies_verschwunden(ordner / "verschwunden.tsv")
+    weg = _lies_verschwunden(ordner / "verschwunden.tsv")
     if weg:
         db.verschwunden_ersetzen(weg)
         n += len(weg)

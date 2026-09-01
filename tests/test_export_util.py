@@ -35,13 +35,16 @@ def test_schreibe_atomar_legt_ordner_an_und_laesst_kein_tmp(tmp_path):
     assert not ziel.with_name(ziel.name + ".tmp").exists()
 
 
-def test_verschwunden_roundtrip_behaelt_alte_vermerke(tmp_path):
+def test_alte_verschwunden_datei_wird_fuer_die_migration_gelesen(tmp_path):
+    """Der Legacy-Leser wohnt in migrate_state – der einzige Code, der die
+    Dateien von vor 6.2 noch anfasst."""
+    import migrate_state
     pfad = tmp_path / "verschwunden.tsv"
-    stand = export_util.schreibe_verschwunden(pfad, {}, ["a.eml"], "2025-01-01")
-    stand = export_util.schreibe_verschwunden(pfad, stand, ["a.eml", "b.eml"],
-                                              "2025-02-02")
-    gelesen = export_util.lies_verschwunden(pfad)
-    assert gelesen == {"a.eml": "2025-01-01", "b.eml": "2025-02-02"}
+    pfad.write_text("a.eml\t2025-01-01\nb.eml\t2025-02-02\nkaputt\n",
+                    encoding="utf-8")
+    assert migrate_state._lies_verschwunden(pfad) == {
+        "a.eml": "2025-01-01", "b.eml": "2025-02-02"}
+    assert migrate_state._lies_verschwunden(tmp_path / "fehlt.tsv") == {}
 
 
 def test_safe_und_kuerzel():

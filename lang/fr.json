@@ -330,6 +330,7 @@
   "srv.migrate.done": "✓ Migration d’état terminée – les exports sont de nouveau disponibles.",
   "srv.migrate.failed": "Échec de la migration d’état ({error}) – les exports restent bloqués ; les anciens fichiers sont intacts. Redémarrez l’application pour réessayer.",
   "srv.migrate.busy": "Une migration d’état est en cours – les exports reprendront dès qu’elle sera terminée.",
+  "ui.migrate.wait": "L’état d’export enregistré est en cours de migration vers son nouveau format – tout sera de nouveau disponible dans un instant. Le journal ci-dessous montre la progression.",
   "srv.notoken": "Aucun jeton enregistré — merci de passer par l’assistant.",
   "srv.nothing": "Rien de sélectionné.",
   "srv.nostart": "La tâche n’a pas pu être démarrée.",

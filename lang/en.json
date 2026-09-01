@@ -330,6 +330,7 @@
   "srv.migrate.done": "✓ State migration finished – exports are available again.",
   "srv.migrate.failed": "State migration failed ({error}) – exports stay blocked; the old files are untouched. Restart the app to retry.",
   "srv.migrate.busy": "A state migration is running – exports start again once it finishes.",
+  "ui.migrate.wait": "The stored export state is being migrated to its new format – everything is available again in a moment. The log below shows the progress.",
   "srv.notoken": "No token stored — please go through the assistant.",
   "srv.nothing": "Nothing selected.",
   "srv.nostart": "The job could not be started.",

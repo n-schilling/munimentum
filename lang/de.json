@@ -330,6 +330,7 @@
   "srv.migrate.done": "✓ State-Migration abgeschlossen – Exporte sind wieder verfügbar.",
   "srv.migrate.failed": "State-Migration fehlgeschlagen ({error}) – Exporte bleiben gesperrt; die alten Dateien sind unangetastet. Ein Neustart der App versucht es erneut.",
   "srv.migrate.busy": "Eine State-Migration läuft – Exporte starten wieder, sobald sie fertig ist.",
+  "ui.migrate.wait": "Der gespeicherte Export-Zustand wird gerade in sein neues Format überführt – gleich ist alles wieder verfügbar. Das Protokoll unten zeigt den Fortschritt.",
   "srv.notoken": "Kein Token hinterlegt – bitte den Assistenten durchlaufen.",
   "srv.nothing": "Nichts ausgewählt.",
   "srv.nostart": "Auftrag konnte nicht gestartet werden.",

@@ -1375,6 +1375,22 @@ def test_migration_sperrt_exporte_und_meldet_sich(sandbox):
     log.close()
 
 
+def test_migration_sperrt_auch_die_api(server):
+    """While the migration runs, the WHOLE interface waits – search included.
+    Only the status (with the log) and quitting stay reachable."""
+    a, port = server
+    a.migration = True
+    try:
+        code, r = call(port, "GET", "/api/search?q=x")
+        assert r["error"]["k"] == "srv.migrate.busy"
+        code, r = call(port, "POST", "/api/run", {"outlook": True})
+        assert r["ok"] is False and r["message"]["k"] == "srv.migrate.busy"
+        code, r = call(port, "GET", "/api/status")
+        assert code == 200 and r["migration"] is True
+    finally:
+        a.migration = False
+
+
 def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
     """The cadence gate applies to EVERY run – a manual export click too –
     and says so in the log instead of silently dropping the source."""
