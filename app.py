@@ -3087,6 +3087,8 @@ body{margin:0;background:var(--bg);color:var(--ink);
 header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
   padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
 h1{font-size:17px;margin:0;font-weight:650}
+header .marke{width:26px;height:26px;flex:0 0 auto;border-radius:6px;
+  margin-right:-6px}
 .pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
   border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
@@ -3551,6 +3553,9 @@ main{padding-bottom:60px}
 </head>
 <body>
 <header>
+  <!-- The same small redraw of packaging/icon/icon.svg as the favicon –
+       inline, so the bundled app needs no asset route for it. -->
+  <svg class="marke" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="229" fill="#2f6fed"/><rect x="196" y="330" width="632" height="158" rx="34" fill="#fff"/><rect x="246" y="500" width="532" height="300" rx="34" fill="#fff" opacity=".93"/><rect x="430" y="596" width="164" height="44" rx="22" fill="#2f6fed"/></svg>
   <h1 data-i18n="app.title">Munimentum</h1>
   <!-- Die Kacheln sagen, was der Zustand für den Anwender bedeutet; der
        Fachbegriff (Token, Ollama, Chunks, MCP) steht im Tooltip, damit ihn
