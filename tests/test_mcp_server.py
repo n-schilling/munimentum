@@ -1453,3 +1453,35 @@ def test_list_people_vertraegt_die_spiegelquellen(state):
     for quelle in ("onedrive", "sharepoint"):
         out = mcp_server.list_people(source=quelle)
         assert "people" in out
+
+
+def test_list_folders_einheiten_je_spiegelquelle(state):
+    """Ein Board, eine Library, eine Site = EIN Ordnereintrag – die tiefen
+    Unterpfade gehören der jeweiligen Quelle, nicht dem Filtermenü."""
+    con = sqlite3.connect(mcp_server.STATE["db"])
+    zeilen = [
+        ("planner:x/t1:0", "planner", "planner", "x/board.html",
+         "Team X Board/Offen"),
+        ("planner:x/t2:0", "planner", "planner", "x/board.html",
+         "Team X Board/Erledigt"),
+        ("sharepoint:Nordwind/Projects/Dateien/N/a.pdf:0", "datei",
+         "sharepoint", "Nordwind/Projects/Dateien/N/a.pdf",
+         "Nordwind/Projects/Dateien/N"),
+        ("pages:Team X/Sub/seite.html:0", "pages", "pages",
+         "Team X/Sub/seite.html", "Team X/Sub"),
+    ]
+    con.executemany(
+        "INSERT INTO chunks (uid, seq, msg_idx, src, root, rel, ctx, text) "
+        "VALUES (?, 0, 0, ?, ?, ?, ?, 'x')", zeilen)
+    con.commit()
+    con.close()
+
+    def pfade(**kw):
+        return {f["path"] for f in
+                mcp_server.list_folders(limit=100, **kw)["folders"]}
+
+    assert pfade(source="planner") == {"Team X Board"}
+    assert pfade(source="sharepoint") == {"Nordwind/Projects"}
+    assert pfade(source="pages") == {"Team X"}
+    # OneDrive bleibt beim vollen Ordnerbaum.
+    assert "Dateien/Kunden" not in pfade(source="sharepoint")

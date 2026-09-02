@@ -256,9 +256,19 @@ def _quelle_cond(quelle):
 # Kanäle werden zu einem Eintrag zusammengefasst: ein Team hat schnell zwanzig,
 # und "welcher Kanal" ist selten die Frage – "Kanäle statt Chats" dagegen oft.
 # Der Filter kann das ohne Zutun, weil ein Pfad immer auch alles darunter meint.
-_TEAMS_OBERSTE = (
-    "CASE WHEN src = 'teams' AND instr(ctx, '/') > 0 "
-    "THEN substr(ctx, 1, instr(ctx, '/') - 1) ELSE ctx END")
+# The folder DROPDOWN unit per source: chat kinds, Planner boards and pages
+# sites are the unit, not their sub-paths; a SharePoint library is
+# "site/library" (two segments). OneDrive and the mailbox keep their full
+# folder tree – there the folders themselves are the point.
+_OBERSTE_EINHEIT = (
+    "CASE "
+    "WHEN src IN ('teams', 'planner', 'pages') AND instr(ctx, '/') > 0 "
+    "THEN substr(ctx, 1, instr(ctx, '/') - 1) "
+    "WHEN src = 'datei' AND root = 'sharepoint' "
+    "AND instr(substr(ctx, instr(ctx, '/') + 1), '/') > 0 "
+    "THEN substr(ctx, 1, instr(ctx, '/') + "
+    "instr(substr(ctx, instr(ctx, '/') + 1), '/') - 1) "
+    "ELSE ctx END")
 
 
 def _like_fest(text):
@@ -1002,11 +1012,11 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
     """List the folders present in the archive, with item counts.
 
     The counterpart to the `folder` filter on search_messages: it tells you
-    what can be filtered on. Covers mailbox folders below "E-Mail/", mirrored
-    OneDrive folders below "Dateien/", SharePoint folders below
-    "<site>/<library>/", calendars below "kalender/", contact folders below
-    "kontakte/" and the four kinds of Teams conversation ("1on1", "group",
-    "meeting", "channels").
+    what can be filtered on. The unit depends on the source: mailbox folders
+    below "E-Mail/", mirrored OneDrive folders below "Dateien/", ONE entry
+    per SharePoint library ("<site>/<library>"), per pages site, per Planner
+    board, calendars below "kalender/", contact folders below "kontakte/"
+    and the four kinds of Teams conversation.
 
     Args:
         contains: Only folders whose path contains this text.
@@ -1030,8 +1040,9 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
             params.extend(werte)
         rows = con.execute(
             f"SELECT ordner, COUNT(DISTINCT uid) FROM "
-            f"(SELECT uid, src, root, {_TEAMS_OBERSTE} AS ordner FROM chunks "
-            f" WHERE src IN ('outlook', 'datei', 'pages', 'kalender', 'teams', 'kontakte')"
+            f"(SELECT uid, src, root, {_OBERSTE_EINHEIT} AS ordner FROM chunks "
+            f" WHERE src IN ('outlook', 'datei', 'pages', 'kalender', 'teams',"
+            f" 'kontakte', 'planner')"
             f" AND ctx IS NOT NULL AND ctx != '') "
             f"WHERE 1=1 {wo} "
             f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
