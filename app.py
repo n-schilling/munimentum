@@ -49,7 +49,7 @@ import multiprocessing.spawn
 from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, quote
 import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -2802,6 +2802,26 @@ class Handler(BaseHTTPRequestHandler):
         # dagegen eine Mail mit Anhängen. Dasselbe gilt für .ics und .vcf.
         endung = target.suffix.lower()
         ctype = _CONTENT_TYPE.get(endung, "application/octet-stream")
+        # Das Planner-Board verlinkt seine Anhänge relativ ("Anhaenge/…"),
+        # damit die Datei offline für sich steht. Durch diese Route betrachtet
+        # liefe das gegen die App-Wurzel ins Leere – beim Ausliefern werden
+        # die Links deshalb auf die Route selbst umgeschrieben.
+        wurzel, pfad = q.get("root", ""), q.get("path", "")
+        if wurzel == "planner" and pfad.endswith("board.html"):
+            basis = quote(pfad.rsplit("/", 1)[0], safe="")
+            inhalt = target.read_bytes().replace(
+                b'href="Anhaenge/',
+                b'href="/source?root=planner&path=' + basis.encode()
+                + b'%2FAnhaenge%2F')
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(inhalt)))
+            self.send_header("Content-Security-Policy", "sandbox")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(inhalt)
+            return
         size = target.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", ctype)

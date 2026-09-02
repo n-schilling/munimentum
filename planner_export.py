@@ -202,6 +202,9 @@ def _referenzen_laden(graph, db, ziel, task, det):
             meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem"
                              "?$select=name,cTag")
             roh_name = export_util.safe(str(meta.get("name") or "datei"))
+            # Zusätzlich URL-tauglich: der Name steht im relativen Link des
+            # Boards und im path-Parameter der /source-Route.
+            roh_name = re.sub(r"[&#%?]", "_", roh_name)
             stamm, punkt, endung = roh_name.rpartition(".")
             kurz = export_util.kuerzel(url)
             # Das URL-Kürzel im Namen: zwei gleichnamige Dateien aus zwei

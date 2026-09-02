@@ -1421,6 +1421,30 @@ def test_api_run_log_liefert_das_gespeicherte_protokoll(server):
     assert call(port, "GET", "/api/run-log?id=abc")[1]["lines"] == []
 
 
+def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
+    """Regression: der relative Anhang-Link des Boards lief über /source
+    betrachtet gegen die App-Wurzel ("Unbekannter Pfad"). Beim Ausliefern
+    wird er auf die Route selbst umgeschrieben – die Datei auf der Platte
+    bleibt offline-tauglich relativ."""
+    a, port = server
+    ordner = sandbox / app_mod.PLANNER_DIR / "Team_X__abc123"
+    (ordner / "Anhaenge").mkdir(parents=True)
+    (ordner / "Anhaenge" / "Angebot 1__k.pdf").write_bytes(b"PDF")
+    (ordner / "board.html").write_text(
+        '<html><a href="Anhaenge/Angebot 1__k.pdf">Angebot</a></html>',
+        encoding="utf-8")
+    (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
+    _index_mit_zeitpunkten(sandbox, [("2025-01", "teams")])
+
+    code, roh = call_roh(port, "/source?root=planner&path=Team_X__abc123/board.html")
+    assert code == 200
+    assert b'href="/source?root=planner&path=Team_X__abc123%2FAnhaenge%2F' in roh
+    code, roh = call_roh(
+        port, "/source?root=planner&path=Team_X__abc123%2FAnhaenge%2F"
+              "Angebot%201__k.pdf")
+    assert code == 200 and roh == b"PDF"
+
+
 def test_migration_sperrt_auch_die_api(server):
     """While the migration runs, the WHOLE interface waits – search included.
     Only the status (with the log) and quitting stay reachable."""
@@ -1882,6 +1906,15 @@ def call(port, method, path, body=None, host=None):
         return r.status, json.loads(raw)
     except ValueError:
         return r.status, raw.decode("utf-8", "replace")
+
+
+def call_roh(port, path):
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", path)
+    r = con.getresponse()
+    raw = r.read()
+    con.close()
+    return r.status, raw
 
 
 def test_http_liefert_die_oberflaeche(server):
