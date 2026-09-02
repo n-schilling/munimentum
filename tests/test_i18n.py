@@ -206,7 +206,7 @@ DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
-    ("progress.unit.", ("chats", "mails", "embeddings", "files")),
+    ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks")),
     # Der Platzhalter im Suchfeld wechselt mit der Suchart.
     ("search.ph.", ("text", "aehnlich", "ki")),
     # Die vier Teams-Arten heißen im Index nach ihrem Ablageordner; die

@@ -482,6 +482,7 @@
   "progress.unit.events": "events",
   "progress.unit.contacts": "contacts",
   "progress.unit.entries": "entries",
+  "progress.unit.tasks": "tasks",
   "progress.unit.folders": "folders",
   "progress.unit.calendars": "calendars",
   "progress.unit.chats": "chats",
@@ -784,5 +785,6 @@
   "run.planner.task_failed": "Task “{name}” not refreshed ({error}).",
   "run.planner.ref_failed": "Attachment of “{name}” not fetched ({error}) – the card keeps the online link.",
   "run.planner.plan": "{name}: {n} tasks.",
+  "run.planner.start": "{name}: {n} tasks, {m} to refresh…",
   "run.planner.none": "No board URLs configured for the Planner export – nothing to do."
 }

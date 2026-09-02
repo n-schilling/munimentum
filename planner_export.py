@@ -437,6 +437,10 @@ def plan_lauf(graph, out, plan, threads_cache):
         (time.time() - float(db.kv_lesen("sweep") or 0)) > SWEEP_S
     neu = unveraendert = fehler = 0
     gesehen = set()
+    # Erst entscheiden, dann arbeiten: so kennt der Fortschrittsbalken sein
+    # Ziel, und die Startzeile sagt, wie viel dieser Lauf wirklich vorhat –
+    # beim Erstlauf sind das 2–3 Anfragen je Aufgabe, minutenlang.
+    faellig = []
     for t in tasks:
         tid = t.get("id")
         if not tid:
@@ -452,6 +456,13 @@ def plan_lauf(graph, out, plan, threads_cache):
         if not (geaendert or legacy_neu or sweep):
             unveraendert += 1
             continue
+        faellig.append((t, alt, etag_neu, geaendert, thread))
+    progress.event("run.planner.start", name=plan["titel"], n=len(tasks),
+                   m=len(faellig))
+    if faellig:
+        progress.melde(0, len(faellig), "tasks")
+    for lfd, (t, alt, etag_neu, geaendert, thread) in enumerate(faellig):
+        tid = t["id"]
         eintrag = {"etag": etag_neu, "task": t, "deleted": None,
                    "details": alt.get("details"),
                    "anhaenge": alt.get("anhaenge") or {},
@@ -480,6 +491,7 @@ def plan_lauf(graph, out, plan, threads_cache):
             eintrag["kommentare"] = kommentare
             eintraege[tid] = eintrag
             neu += 1
+            progress.melde(lfd + 1, len(faellig), "tasks")
         except auth.TokenExpired:
             raise
         except Exception as e:

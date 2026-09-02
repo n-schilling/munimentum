@@ -482,6 +482,7 @@
   "progress.unit.events": "Termine",
   "progress.unit.contacts": "Kontakte",
   "progress.unit.entries": "Einträge",
+  "progress.unit.tasks": "Aufgaben",
   "progress.unit.folders": "Ordner",
   "progress.unit.calendars": "Kalender",
   "progress.unit.chats": "Chats",
@@ -784,5 +785,6 @@
   "run.planner.task_failed": "Aufgabe „{name}“ nicht aufgefrischt ({error}).",
   "run.planner.ref_failed": "Anhang von „{name}“ nicht geholt ({error}) – die Karte behält den Online-Link.",
   "run.planner.plan": "{name}: {n} Aufgaben.",
+  "run.planner.start": "{name}: {n} Aufgaben, davon {m} aufzufrischen…",
   "run.planner.none": "Keine Board-URLs für den Planner-Export eingetragen – nichts zu tun."
 }
