@@ -167,10 +167,10 @@ per site for the SharePoint pages.
 
 **Runs** keeps the history of every export: when it ran, scheduled or by hand,
 which elements were enabled, how long each step took and what it produced —
-with the new pieces broken down by source on hover. The history lives in a
-small database next to the exports and holds nothing personal, only counts,
-durations and switches; how long it is kept is a setting (24 months by
-default).
+with the new pieces broken down by source on hover, and each run's full log
+stored alongside, shown inline on demand. The history lives in a small
+database next to the exports; how long the run rows and the log lines are
+kept are two separate settings (24 months and 14 days by default).
 
 ### Settings
 

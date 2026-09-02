@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS runs(
     app_version TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_runs_started ON runs(started_at);
+CREATE TABLE IF NOT EXISTS log(
+    run_id INTEGER,                     -- NULL: app line outside any run
+    ts     REAL NOT NULL,
+    level  TEXT NOT NULL,
+    text   TEXT NOT NULL                -- JSON: raw line, or {k, v} to translate
+);
+CREATE INDEX IF NOT EXISTS ix_log_run ON log(run_id);
+CREATE INDEX IF NOT EXISTS ix_log_ts ON log(ts);
 CREATE TABLE IF NOT EXISTS steps(
     run_id     INTEGER NOT NULL,
     key        TEXT NOT NULL,           -- outlook | teams | index | calendar | …
@@ -112,6 +120,56 @@ class RunHistory:
              result.get("excluded"), result.get("errors"),
              int(bool(skipped)), None if ok is None else int(bool(ok)),
              json.dumps(extra, ensure_ascii=False) if extra else None))
+
+    def log_lines(self, zeilen):
+        """A batch of log lines: [(run_id, ts, level, text_json)].
+
+        Batched by the JobRunner – a big export emits thousands of lines,
+        and one commit per line would fsync its way through the run."""
+        if not zeilen:
+            return
+        try:
+            con = self._connect()
+            try:
+                con.executemany(
+                    "INSERT INTO log(run_id, ts, level, text) VALUES(?,?,?,?)",
+                    zeilen)
+                con.commit()
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            pass
+
+    def run_log(self, run_id, limit=4000):
+        """The stored log of one run, oldest first."""
+        try:
+            con = self._connect()
+            try:
+                zeilen = []
+                for ts, level, text in con.execute(
+                        "SELECT ts, level, text FROM log WHERE run_id = ?"
+                        " ORDER BY rowid LIMIT ?",
+                        (int(run_id), max(1, min(int(limit), 10000)))):
+                    try:
+                        text = json.loads(text)
+                    except ValueError:
+                        pass               # eine rohe Zeile bleibt eine rohe
+                    zeilen.append({"ts": ts, "level": level, "text": text})
+                return zeilen
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError, TypeError):
+            return []
+
+    def prune_log(self, days):
+        """Drop log lines older than the log's own retention window – it is
+        configured separately from the run rows: the counts stay light, the
+        lines are the heavy part."""
+        try:
+            grenze = time.time() - max(1, int(days)) * 86400
+        except (TypeError, ValueError):
+            return
+        self._schreibe("DELETE FROM log WHERE ts < ?", (grenze,))
 
     def finish_run(self, run_id, result):
         if run_id is None:

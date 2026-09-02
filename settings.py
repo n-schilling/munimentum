@@ -151,6 +151,7 @@ VORGABEN = {
     # Wie lange die Lauf-Historie (runs.db) zurückreicht. Aufgeräumt wird beim
     # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.
     "runs_retention_months": 24,
+    "log_retention_days": 14,
     "mcp_port": 8365,
     # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
     # über HTTP wie über stdio. Start/Stop daneben betrifft nur den

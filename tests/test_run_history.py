@@ -90,3 +90,51 @@ def test_record_step_without_run_is_a_noop(tmp_path):
     h.record_step(None, "k", "l", 0.0)         # start_run failed upstream
     h.finish_run(None, "done")
     assert h.list_runs() == []
+
+
+# --------------------------------------------------------------------------
+# Das gespeicherte Protokoll je Lauf
+# --------------------------------------------------------------------------
+def test_log_zeilen_roundtrip_je_lauf(tmp_path):
+    h = _history(tmp_path)
+    lauf = h.start_run("job.export", "manual")
+    anderer = h.start_run("job.export", "manual")
+    h.log_lines([(lauf, 1000.0, "head", '{"k": "srv.job.start", "v": {}}'),
+                 (lauf, 1001.0, "err", '"rohe Zeile"'),
+                 (anderer, 1002.0, "info", '"fremd"'),
+                 (None, 1003.0, "info", '"App-Zeile ohne Lauf"')])
+    zeilen = h.run_log(lauf)
+    assert [z["level"] for z in zeilen] == ["head", "err"]
+    assert zeilen[0]["text"] == {"k": "srv.job.start", "v": {}}
+    assert zeilen[1]["text"] == "rohe Zeile"
+    assert h.run_log(anderer) == [{"ts": 1002.0, "level": "info",
+                                   "text": "fremd"}]
+    h.log_lines([])                                    # leer: kein Krach
+
+
+def test_log_aufbewahrung_ist_eigenstaendig(tmp_path):
+    """Die Zeilen sind der schwere Teil – sie haben ihr eigenes Fenster,
+    unabhängig von der Aufbewahrung der Läufe selbst."""
+    h = _history(tmp_path)
+    lauf = h.start_run("job.export", "manual")
+    alt = time.time() - 10 * 86400
+    h.log_lines([(lauf, alt, "info", '"alt"'),
+                 (lauf, time.time(), "info", '"frisch"')])
+    h.prune_log(7)
+    assert [z["text"] for z in h.run_log(lauf)] == ["frisch"]
+    assert len(h.list_runs()) == 1                     # der Lauf bleibt
+
+
+def test_kaputte_logzeile_bleibt_roh(tmp_path):
+    h = _history(tmp_path)
+    lauf = h.start_run("job.export", "manual")
+    h.log_lines([(lauf, 1.0, "info", "{kein json")])
+    assert h.run_log(lauf) == [{"ts": 1.0, "level": "info",
+                                "text": "{kein json"}]
+
+
+def test_log_schreiben_wirft_nie(tmp_path):
+    kaputt = run_history.RunHistory(tmp_path)          # Pfad ist ein Ordner
+    kaputt.log_lines([(1, 1.0, "info", '"x"')])
+    kaputt.prune_log(7)
+    assert kaputt.run_log(1) == []

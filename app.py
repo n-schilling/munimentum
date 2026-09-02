@@ -1169,15 +1169,34 @@ class JobRunner:
         self._origin = "manual"
         self._context = {}
         self._step_result = None   # last @@RESULT@@ dict of the current step
+        self._run_id = None        # tags log lines with the current run
+        self._log_puffer = []      # lines waiting for runs.db, see _log_flush
 
     # -- Protokoll ---------------------------------------------------------
     def log(self, text, level="info"):
-        """Rohe Protokollzeile – so, wie die Export-Skripte sie ausgeben."""
+        """Rohe Protokollzeile – so, wie die Export-Skripte sie ausgeben.
+
+        Neben dem Ringpuffer für die Oberfläche wandert jede Zeile in die
+        log-Tabelle der runs.db – Zeilen eines Laufs tragen dessen id, die
+        Gesundheits-Sektion zeigt sie später je Lauf. Geschrieben wird
+        gebündelt; App-Zeilen außerhalb eines Laufs sind selten und gehen
+        sofort."""
         with self.lock:
             self.seq += 1
             self.lines.append({"n": self.seq, "level": level,
                                "t": datetime.now().strftime("%H:%M:%S"),
                                "text": text})
+            self._log_puffer.append((self._run_id, time.time(), level,
+                                     json.dumps(text, ensure_ascii=False)))
+            voll = self._run_id is None or len(self._log_puffer) >= 50
+        if voll:
+            self._log_flush()
+
+    def _log_flush(self):
+        with self.lock:
+            puffer, self._log_puffer = self._log_puffer, []
+        if puffer and self.history:
+            self.history.log_lines(puffer)
 
     def logk(self, key, level="info", **vars):
         """Protokollzeile als Textschlüssel; übersetzt wird erst beim Anzeigen.
@@ -1231,16 +1250,17 @@ class JobRunner:
         return False
 
     def _run(self, steps, label):
-        # Beschriftungen als geschachtelte Meldung ({"k": …}): mtext() im
-        # Browser übersetzt sie dann – als nackte Zeichenkette stünde der
-        # Schlüssel selbst im Protokoll ("job.step.outlook").
-        self.logk("srv.job.start", "head", label={"k": label, "v": {}})
         hist = self.history
         run_id = hist.start_run(
             label, self._origin,
             elements=self._context.get("elements"),
             semantic=self._context.get("semantic"),
             workers=self._context.get("workers")) if hist else None
+        self._run_id = run_id
+        # Beschriftungen als geschachtelte Meldung ({"k": …}): mtext() im
+        # Browser übersetzt sie dann – als nackte Zeichenkette stünde der
+        # Schlüssel selbst im Protokoll ("job.step.outlook").
+        self.logk("srv.job.start", "head", label={"k": label, "v": {}})
         ok = True
         detail = ""
         for i, step in enumerate(steps):
@@ -1282,11 +1302,14 @@ class JobRunner:
             self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
         art = ("done" if ok else "aborted" if self.cancelled
                else "token_expired" if self.token_expired else "error")
+        self._run_id = None
+        self._log_flush()          # der Rest des Laufs, bevor jemand liest
         if hist:
             hist.finish_run(run_id, art)
             monate = self._context.get("retention_months")
             if monate:
                 hist.prune(monate)
+            hist.prune_log(self._context.get("log_retention_days") or 14)
         self._notify_user(art, label)
         self.last = {"label": label, "ok": ok, "detail": detail,
                      "finished": datetime.now().isoformat(timespec="seconds")}
@@ -1659,6 +1682,7 @@ class App:
         self.ui_lang = None      # language of the page served last
         self.history = run_history.RunHistory(BASE / run_history.DB_NAME)
         self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
+        self.history.prune_log(int(self.cfg.get("log_retention_days") or 14))
         self.jobs = JobRunner(self.history)
         self.mcp = McpProcess(self.jobs)
         self.search = SearchBridge()
@@ -2001,6 +2025,7 @@ class App:
             "semantic": bool(index and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
             "retention_months": int(self.cfg.get("runs_retention_months") or 24),
+            "log_retention_days": int(self.cfg.get("log_retention_days") or 14),
             "notify": str(self.cfg.get("notifications") or "errors"),
             "lang": self.ui_lang or i18n.negotiate(self.cfg.get("language"),
                                                    None, RES),
@@ -2173,6 +2198,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._people(one))
             if u.path == "/api/document":
                 return self._json(self._document(one))
+            if u.path == "/api/run-log":
+                try:
+                    kennung = int(one.get("id") or 0)
+                except ValueError:
+                    kennung = 0
+                return self._json({"lines": app.history.run_log(kennung)})
             if u.path == "/api/analytics":
                 return self._json(analytics_daten(app.cfg))
             if u.path == "/api/runs":
@@ -2353,7 +2384,8 @@ class Handler(BaseHTTPRequestHandler):
                                ("search_results", 5, 100),
                                # 0 heißt: Userflow-Aufzeichnung aus.
                                ("userflow_actions", 0, 50),
-                               ("runs_retention_months", 1, 120)):
+                               ("runs_retention_months", 1, 120),
+                               ("log_retention_days", 1, 365)):
             if key in data:
                 try:
                     cfg[key] = max(low, min(high, int(data[key])))
@@ -3008,8 +3040,16 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
 #log{background:#0d1013;color:#cbd3da;border-radius:10px;padding:12px;height:230px;
   overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
-#log .l-head{color:#9ad0ff;font-weight:600} #log .l-ok{color:#7fdca4}
-#log .l-warn{color:#f0c674} #log .l-err{color:#ff9c94}
+#log .l-head,.lauflog .l-head{color:#9ad0ff;font-weight:600}
+#log .l-ok,.lauflog .l-ok{color:#7fdca4}
+#log .l-warn,.lauflog .l-warn{color:#f0c674}
+#log .l-err,.lauflog .l-err{color:#ff9c94}
+/* Das gespeicherte Protokoll eines Laufs, inline in der Läufe-Tabelle –
+   dieselbe dunkle Konsole wie die Leiste unten. */
+.lauflog{background:#0d1013;color:#cbd3da;border-radius:10px;padding:10px 12px;
+  margin-top:8px;max-height:280px;overflow:auto;text-align:left;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  white-space:pre-wrap}
 /* Trefferzeile: zwei Zeilen statt vier. Titel links, Herkunft und Datum rechts
    in eigenen Spalten – so stehen die Daten untereinander und man tastet die
    Liste am Rand entlang ab, statt sie zu lesen. Die Aktionen liegen im Menü:
@@ -3872,6 +3912,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
       <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.userflow_actions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.userflow_actions.i">i</span></span><input type="number" id="c-userflow_actions" min="0" max="50"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.runs_retention_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.runs_retention_months.i">i</span></span><input type="number" id="c-runs_retention_months" min="1" max="120"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.log_retention_days"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.log_retention_days.i">i</span></span><input type="number" id="c-log_retention_days" min="1" max="365"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications" style="min-width:200px"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
     </div>
     <div class="row" style="margin-top:14px">
@@ -5555,7 +5596,11 @@ function renderRuns(runs){
       '>' + esc(zahl(neu)) + '</td>' +
       '<td>' + esc(t('ana.runs.result.' + (r.result || 'running'))) + '</td></tr>' +
       '<tr class="hide" id="lauf-details-' + i + '"><td colspan="6" class="small muted">' +
-      (r.steps || []).map(runStepLine).map(esc).join('<br>') + '</td></tr>';
+      (r.steps || []).map(runStepLine).map(esc).join('<br>') +
+      '<div class="row" style="margin-top:8px"><button class="mini" ' +
+      'onclick="event.stopPropagation();zeigeRunLog(' + r.id + ', ' + i + ')">' +
+      esc(t('ana.runs.log')) + '</button></div>' +
+      '<div id="lauf-log-' + i + '" class="lauflog hide"></div></td></tr>';
   });
   box.innerHTML = html + '</tbody></table>';
 }
@@ -5563,6 +5608,30 @@ function renderRuns(runs){
 function toggleRun(i){
   var d = el('lauf-details-' + i);
   if(d) d.classList.toggle('hide');
+}
+
+function zeigeRunLog(id, i){
+  // The stored log of one run, inline below its steps. Second click folds
+  // it away again; the lines come from runs.db and translate on display,
+  // like the live log bar.
+  var box = el('lauf-log-' + i);
+  if(!box.classList.contains('hide')){ box.classList.add('hide'); return; }
+  box.classList.remove('hide');
+  box.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+  api('/api/run-log?id=' + id).then(function(r){
+    var zeilen = r.lines || [];
+    if(!zeilen.length){
+      box.innerHTML = '<p class="hint">' + esc(t('ana.runs.log.empty')) + '</p>';
+      return;
+    }
+    box.innerHTML = zeilen.map(function(l){
+      return '<div class="l-' + esc(l.level) + '">' +
+        esc(new Date(l.ts * 1000).toLocaleTimeString(LOC)) + '  ' +
+        esc(mtext(l.text)) + '</div>';
+    }).join('');
+  }).catch(function(e){
+    box.innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
+  });
 }
 
 function bytes(n){
@@ -6118,7 +6187,7 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb',
                 'sharepoint_pages_image_max_mb','semantic_min',
-                'userflow_actions','runs_retention_months'];
+                'userflow_actions','runs_retention_months','log_retention_days'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules',
                 'sharepoint_types_include','sharepoint_types_exclude'];

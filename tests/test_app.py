@@ -1375,6 +1375,32 @@ def test_migration_sperrt_exporte_und_meldet_sich(sandbox):
     log.close()
 
 
+def test_lauf_protokoll_landet_in_der_runs_db(sandbox):
+    """Jede Zeile eines Laufs steht mit dessen id in der log-Tabelle –
+    gebündelt geschrieben, der Rest am Laufende; App-Zeilen außerhalb eines
+    Laufs gehen sofort und ohne Lauf-id."""
+    import run_history as rh
+    hist = rh.RunHistory(sandbox / "runs.db")
+    jobs = app_mod.JobRunner(hist)
+    jobs.logk("srv.mcp.started", "ok", port=1)         # außerhalb eines Laufs
+    jobs._run([], "job.export")
+    runs = hist.list_runs()
+    assert runs and runs[0]["result"] == "done"
+    schluessel = [z["text"].get("k") for z in hist.run_log(runs[0]["id"])]
+    assert schluessel[0] == "srv.job.start"
+    assert "srv.job.done" in schluessel
+    assert "srv.mcp.started" not in schluessel, "App-Zeile klebt am Lauf"
+
+
+def test_api_run_log_liefert_das_gespeicherte_protokoll(server):
+    a, port = server
+    lauf = a.history.start_run("job.export", "manual")
+    a.history.log_lines([(lauf, 1.0, "info", '"zeile"')])
+    code, r = call(port, "GET", "/api/run-log?id=" + str(lauf))
+    assert code == 200 and r["lines"][0]["text"] == "zeile"
+    assert call(port, "GET", "/api/run-log?id=abc")[1]["lines"] == []
+
+
 def test_migration_sperrt_auch_die_api(server):
     """While the migration runs, the WHOLE interface waits – search included.
     Only the status (with the log) and quitting stay reachable."""
