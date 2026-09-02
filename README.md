@@ -156,7 +156,9 @@ browser** that walks the mirrored drives — OneDrive, each SharePoint
 library and the Planner boards — folder by folder, straight from the index:
 originals one click away, deleted files marked, and *Search here* turns the
 current folder into a search filter. In the filters, OneDrive, SharePoint
-files, SharePoint pages and Planner are each their own source.
+files, SharePoint pages and Planner are each their own source, and their
+folder filter lists whole units — a board, a library, a site — rather than
+every sub-path.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works

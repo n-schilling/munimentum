@@ -1,26 +1,16 @@
-## New in 6.3.0
+## New in 6.3.1
 
-**Planner boards are archived — comments included.** List board addresses in
-the settings, one per row with its own sync cadence, and every plan becomes
-a standalone `board.html`: swimlane chips up top, lanes that open into a
-compact task list, cards that unfold into description, checklist and — one
-more click — the comments, the legacy ones from the group conversation as
-well as the new chat-based ones. A task that leaves the board stays in the
-archive, greyed. Files a task references can be downloaded next to the
-board on request. Task texts, comments and attachment names are searchable
-under their own source, the boards appear in the file browser, and reading
-needs Tasks.Read plus Group.Read.All for the legacy comments.
+**The first Planner comment sync no longer stalls.** It used to page through
+the owning group's ENTIRE conversation store before fetching a board — on
+big Teams-connected groups that was minutes of silence. The first sync now
+skips that listing entirely (every post is fetched anyway), and later runs
+page it in far bigger steps and say so in the log.
 
-**The Analytics tab opens instantly.** Its numbers are computed once per
-index run and stored, instead of being recalculated on every visit — and
-communication and files are kept apart now: a mirrored PDF no longer fills
-a gap in the message timeline, and the mirrors get their own tiles and
-type ranking. Runs and completeness checks live together under Health.
-
-**Every run keeps its log.** The log lines of each run are stored in the
-run history and can be unfolded inline under Analytics → Health; how long
-they are kept is its own setting (14 days by default), separate from the
-run rows themselves.
+**The folder filter thinks in units.** For Planner, SharePoint libraries
+and SharePoint pages, the folder dropdown lists whole boards, libraries
+("site/library") and sites instead of every sub-path — with labels to
+match: "All boards", "All libraries", "All sites". Picking one filters
+everything below it; OneDrive and the mailbox keep their full folder tree.
 
 ## Which file?
 
