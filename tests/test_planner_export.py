@@ -243,3 +243,27 @@ def test_corpus_traegt_referenznamen_als_anhang(tmp_path, monkeypatch):
     pl.plan_lauf(g, tmp_path, PLAN, {})
     satz = corpus.load_planner(tmp_path)[0]
     assert satz["att"] == "Angebot.pdf"
+
+
+def test_board_ist_dreistufig_zugeklappt(tmp_path):
+    """Chips oben nennen die Swimlanes; Lane, Karte und Kommentare sind je
+    eine <details>-Stufe und starten alle zugeklappt."""
+    g = _graph_fuer_plan(
+        [_task("t1", "Aufgabe A", thread="th1")],
+        posts=[{"from": {"emailAddress": {"name": "Bob"}},
+                "receivedDateTime": "2026-07-01T10:00:00Z",
+                "body": {"content": "<div>Hallo</div>"}}],
+        threads="2026-07-01T10:00:00Z")
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    html = (pl.plan_ziel(tmp_path, PLAN) / "board.html").read_text(
+        encoding="utf-8")
+    assert '<nav class="lanes">' in html and ">Offen</b><span>1</span>" in html
+    assert '<details class="lane"' in html
+    assert '<details class="karte"><summary>' in html
+    assert "<summary>Kommentare (1)</summary>" in html
+    karte_kopf = html.split('<details class="karte"><summary>')[1] \
+        .split("</summary>")[0]
+    assert "1 Kommentar" in karte_kopf, \
+        "Kommentarzahl fehlt in der zugeklappten Zeile"
+    assert "<details open" not in html and " open>" not in html, \
+        "nichts darf aufgeklappt starten"

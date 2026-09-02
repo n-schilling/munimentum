@@ -283,35 +283,58 @@ _PRIO = {1: "urgent", 3: "important", 5: "medium", 9: "low"}
 _STIL = """
 body{font-family:-apple-system,'Segoe UI',sans-serif;margin:24px;color:#222;
   background:#fafafa;max-width:1100px}
-h1{font-size:22px} h2{font-size:16px;margin:26px 0 10px;border-bottom:1px solid #ddd;
-  padding-bottom:4px}
-.karte{background:#fff;border:1px solid #e2e2e2;border-radius:10px;
-  padding:12px 14px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.karte.weg{opacity:.55;background:#f2f2f2}
-.kopf{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+h1{font-size:22px;margin-bottom:2px}
+.meta{color:#777;font-size:12px;margin:4px 0}
+.lanes{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px}
+.lanes a{font-size:13px;padding:4px 12px;border-radius:99px;background:#fff;
+  border:1px solid #d8d8d8;color:#222;text-decoration:none}
+.lanes a b{font-weight:600}
+.lanes a span{color:#888;margin-left:4px}
+details.lane{margin:10px 0}
+details.lane>summary{font-size:16px;font-weight:600;cursor:pointer;
+  padding:8px 4px;border-bottom:1px solid #ddd}
+details.karte{background:#fff;border:1px solid #e2e2e2;border-radius:10px;
+  margin:8px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+details.karte>summary{cursor:pointer;padding:10px 14px;display:block}
+details.karte[open]>summary{border-bottom:1px dashed #eee}
+details.karte.weg{opacity:.55;background:#f2f2f2}
+.rumpf{padding:10px 14px}
+.kopf{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
 .kopf b{font-size:14px}
 .label{font-size:11px;padding:1px 8px;border-radius:99px;color:#222}
-.meta{color:#777;font-size:12px;margin:4px 0}
+.zeile{color:#777;font-size:12px;margin-top:3px}
 .beschreibung{font-size:13px;white-space:pre-wrap;margin:6px 0}
 ul.check{list-style:none;padding-left:2px;font-size:13px;margin:6px 0}
 ul.check .done{text-decoration:line-through;color:#888}
-.kommentare{border-top:1px dashed #ddd;margin-top:8px;padding-top:6px}
+details.kommentare{border-top:1px dashed #ddd;margin-top:8px;padding-top:4px}
+details.kommentare>summary{cursor:pointer;font-size:12.5px;color:#555;
+  padding:4px 0}
 .kommentar{font-size:13px;margin:6px 0}
 .kommentar .wer{font-weight:600}
 .kommentar .wann{color:#999;font-size:11px;margin-left:6px}
 .refs a{font-size:12px;margin-right:10px}
 """
 
+# Die Chips oben sollen die Lane nicht nur anspringen, sondern aufklappen.
+_SKRIPT = """<script>
+document.querySelectorAll('.lanes a').forEach(function(chip){
+  chip.addEventListener('click', function(){
+    var lane = document.getElementById(chip.getAttribute('href').slice(1));
+    if(lane) lane.open = true;
+  });
+});
+</script>"""
+
 
 def _task_html(eintrag, labels, namen, weg=False):
+    """One card: closed, only title, labels and the one meta line show;
+    the body opens on click, the comments need a second one."""
     t, det = eintrag.get("task") or {}, eintrag.get("details") or {}
-    teile = ['<div class="karte%s">' % (" weg" if weg else "")]
     kopf = [f"<b>{html_lib.escape(str(t.get('title') or '?'))}</b>"]
     for cat in sorted(t.get("appliedCategories") or {}):
         name = labels.get(cat) or cat
         kopf.append(f'<span class="label" style="background:'
                     f'{FARBEN.get(cat, "#ddd")}">{html_lib.escape(name)}</span>')
-    teile.append('<div class="kopf">' + " ".join(kopf) + "</div>")
     meta = []
     zu = [namen.get(k, k) for k in (t.get("assignments") or {})]
     if zu:
@@ -324,7 +347,14 @@ def _task_html(eintrag, labels, namen, weg=False):
         meta.append("fällig " + str(t["dueDateTime"])[:10])
     if weg and eintrag.get("deleted"):
         meta.append("nicht mehr im Board seit " + str(eintrag["deleted"])[:10])
-    teile.append('<div class="meta">' + " · ".join(meta) + "</div>")
+    kommentare = eintrag.get("kommentare") or []
+    if kommentare:
+        meta.append(f"{len(kommentare)} Kommentar"
+                    + ("e" if len(kommentare) != 1 else ""))
+    teile = ['<details class="karte%s"><summary>' % (" weg" if weg else ""),
+             '<span class="kopf">' + " ".join(kopf) + "</span>",
+             '<div class="zeile">' + " · ".join(meta) + "</div>",
+             '</summary><div class="rumpf">']
     if det.get("description"):
         teile.append('<div class="beschreibung">'
                      + html_lib.escape(str(det["description"])) + "</div>")
@@ -348,49 +378,64 @@ def _task_html(eintrag, labels, namen, weg=False):
                 f'{html_lib.escape(str((ref or {}).get("alias") or "Link"))}'
                 "</a>")
         teile.append('<div class="refs">' + " ".join(glieder) + "</div>")
-    kommentare = eintrag.get("kommentare") or []
     if kommentare:
-        teile.append('<div class="kommentare">' + "".join(
-            '<div class="kommentar"><span class="wer">'
-            + html_lib.escape(namen.get(k["wer"], k["wer"])) + "</span>"
-            + f'<span class="wann">{html_lib.escape(str(k["wann"])[:16])}</span>'
-            + f'<div>{k["html"]}</div></div>'
-            for k in sorted(kommentare, key=lambda k: k["wann"])) + "</div>")
-    teile.append("</div>")
+        teile.append(
+            '<details class="kommentare"><summary>Kommentare ('
+            + str(len(kommentare)) + ")</summary>" + "".join(
+                '<div class="kommentar"><span class="wer">'
+                + html_lib.escape(namen.get(k["wer"], k["wer"])) + "</span>"
+                + f'<span class="wann">{html_lib.escape(str(k["wann"])[:16])}'
+                  "</span>"
+                + f'<div>{k["html"]}</div></div>'
+                for k in sorted(kommentare, key=lambda k: k["wann"]))
+            + "</details>")
+    teile.append("</div></details>")
     return "".join(teile)
 
 
 def render_board(plan, buckets, eintraege, labels, namen):
+    """Three collapsed levels: the chip row up top says which swimlanes the
+    board has, a lane opens into its task list, a task into its body, the
+    comments into their thread – native <details>, no library."""
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
-    teile = ["<!doctype html><html><head><meta charset=\"utf-8\">"
-             f"<title>{html_lib.escape(plan['titel'])}</title>"
-             f"<style>{_STIL}</style></head><body>"
-             f"<h1>{html_lib.escape(plan['titel'])}</h1>"
-             f'<p class="meta">Stand {jetzt}</p>']
     lebend = [e for e in eintraege.values() if not e.get("deleted")]
     reihen = sorted(buckets.values(), key=lambda b: str(b.get("orderHint") or ""))
-    for b in reihen:
+    lanes = []
+    for i, b in enumerate(reihen):
         im_bucket = sorted(
             (e for e in lebend
              if (e.get("task") or {}).get("bucketId") == b["id"]),
             key=lambda e: str((e.get("task") or {}).get("orderHint") or ""))
-        if not im_bucket:
-            continue
-        teile.append(f"<h2>{html_lib.escape(str(b.get('name') or '?'))} "
-                     f"({len(im_bucket)})</h2>")
-        teile += [_task_html(e, labels, namen) for e in im_bucket]
+        if im_bucket:
+            lanes.append((f"lane-{i}", str(b.get("name") or "?"), im_bucket,
+                          False))
     ohne = [e for e in lebend
             if (e.get("task") or {}).get("bucketId") not in
             {b["id"] for b in reihen}]
     if ohne:
-        teile.append("<h2>Ohne Bucket</h2>")
-        teile += [_task_html(e, labels, namen) for e in ohne]
+        lanes.append(("lane-ohne", "Ohne Bucket", ohne, False))
     weg = sorted((e for e in eintraege.values() if e.get("deleted")),
                  key=lambda e: str(e.get("deleted")), reverse=True)
     if weg:
-        teile.append("<h2>Nicht mehr im Board</h2>")
-        teile += [_task_html(e, labels, namen, weg=True) for e in weg]
-    teile.append("</body></html>")
+        lanes.append(("lane-weg", "Nicht mehr im Board", weg, True))
+
+    chips = "".join(
+        f'<a href="#{kennung}"><b>{html_lib.escape(name)}</b>'
+        f"<span>{len(gruppe)}</span></a>"
+        for kennung, name, gruppe, _w in lanes)
+    teile = ["<!doctype html><html><head><meta charset=\"utf-8\">"
+             f"<title>{html_lib.escape(plan['titel'])}</title>"
+             f"<style>{_STIL}</style></head><body>"
+             f"<h1>{html_lib.escape(plan['titel'])}</h1>"
+             f'<p class="meta">Stand {jetzt}</p>'
+             f'<nav class="lanes">{chips}</nav>']
+    for kennung, name, gruppe, weg_lane in lanes:
+        teile.append(f'<details class="lane" id="{kennung}">'
+                     f"<summary>{html_lib.escape(name)} ({len(gruppe)})"
+                     "</summary>")
+        teile += [_task_html(e, labels, namen, weg=weg_lane) for e in gruppe]
+        teile.append("</details>")
+    teile.append(_SKRIPT + "</body></html>")
     return "".join(teile)
 
 
