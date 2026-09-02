@@ -12,6 +12,7 @@ msal_cache.bin
 outlook_export/*
 teams_export/*
 onedrive_export/*
+planner_export/*
 path/
 path/*
 .DS_Store
@@ -33,5 +34,6 @@ outlook_export/
 onedrive_export/
 sharepoint_export/
 sharepoint_pages/
+planner_export/
 rag_store/
 app.log
