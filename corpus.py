@@ -838,6 +838,11 @@ def load_planner(root_dir):
             task = e.get("task") or {}
             det = e.get("details") or {}
             kommentare = e.get("kommentare") or []
+            # Referenz-Aliase wie Mail-Anhänge: Namen durchsuchbar, und der
+            # Dateityp-Filter (att:pdf) trifft auch Planner-Karten.
+            anhaenge = " ".join(
+                str((ref or {}).get("alias") or "").replace(" ", "_")
+                for ref in (det.get("references") or {}).values()).strip()
             leute = sorted({k.get("wer") or "" for k in kommentare} - {""})
             text = "\n".join(
                 [str(det.get("description") or "")]
@@ -859,6 +864,7 @@ def load_planner(root_dir):
                 "ctx": f'{titel_plan}/'
                        f'{buckets.get(task.get("bucketId"), "?")}',
                 "text": text.strip(),
+                "att": anhaenge or None,
             }
             if e.get("deleted"):
                 satz["gone"] = e["deleted"]

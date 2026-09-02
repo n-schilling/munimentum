@@ -28,6 +28,7 @@ SYNC_CADENCE/SYNC_NOW – see export_util). Progress, results and failures
 are structured lines (progress.py).
 """
 
+import base64
 import html as html_lib
 import json
 import os
@@ -36,6 +37,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 import auth
 import export_util
@@ -83,9 +85,18 @@ def plan_id_aus(url):
     return m.group(1) if m else None
 
 
+def anhaenge_laden():
+    """Download the files a task references? The boards' libraries are
+    typically never mirrored on their own – opt-in, off by default."""
+    return settings.flag("PLANNER_ATTACHMENTS", "planner_attachments")
+
+
 class Graph(graph_client.Graph):
     def __init__(self, nur_still=False):
-        super().__init__(SCOPES, nur_still=nur_still)
+        scopes = list(SCOPES)
+        if anhaenge_laden():
+            scopes.append(RES + "Files.Read.All")
+        super().__init__(scopes, nur_still=nur_still)
 
 
 class TokenClient(graph_client.TokenClient):
@@ -166,6 +177,56 @@ def _namen(graph, db, ids):
     if neu:
         db.kv_schreiben("namen", json.dumps(cache, ensure_ascii=False))
     return cache
+
+
+ANHANG_DIR = "Anhaenge"
+
+
+def _referenzen_laden(graph, db, ziel, task, det):
+    """The task's referenced files, downloaded next to the board.
+
+    Returns {url: rel} for the cards to link locally. Refreshed by the
+    driveItem cTag whenever the task itself is refreshed; a file that will
+    not come (gone, no permission, not a drive item) keeps its cloud link
+    and says so once in the log."""
+    try:
+        stand = json.loads(db.kv_lesen("anhaenge") or "{}")
+    except ValueError:
+        stand = {}
+    lokal = {}
+    for roh in (det.get("references") or {}):
+        url = unquote(roh)
+        token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
+        alt = stand.get(url) or {}
+        try:
+            meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem"
+                             "?$select=name,cTag")
+            roh_name = export_util.safe(str(meta.get("name") or "datei"))
+            stamm, punkt, endung = roh_name.rpartition(".")
+            kurz = export_util.kuerzel(url)
+            # Das URL-Kürzel im Namen: zwei gleichnamige Dateien aus zwei
+            # Referenzen dürfen sich nicht überschreiben.
+            name = f"{stamm}__{kurz}.{endung}" if punkt else \
+                f"{roh_name}__{kurz}"
+            rel = f"{ANHANG_DIR}/{name}"
+            if alt.get("ctag") == (meta.get("cTag") or "") and                     (ziel / rel).exists():
+                lokal[url] = rel
+                continue
+            daten, _typ = graph.get_bytes(
+                f"{GRAPH}/shares/u!{token}/driveItem/content",
+                label=" (Anhang)")
+            (ziel / ANHANG_DIR).mkdir(parents=True, exist_ok=True)
+            (ziel / rel).write_bytes(daten)
+            stand[url] = {"rel": rel, "ctag": meta.get("cTag") or ""}
+            lokal[url] = rel
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.planner.ref_failed", "warn",
+                           name=str(task.get("title") or "?")[:60],
+                           error=f"{type(e).__name__}: {e}")
+    db.kv_schreiben("anhaenge", json.dumps(stand, ensure_ascii=False))
+    return lokal
 
 
 def _saeubere(html):
@@ -277,10 +338,16 @@ def _task_html(eintrag, labels, namen, weg=False):
             for c in punkte) + "</ul>")
     refs = det.get("references") or {}
     if refs:
-        teile.append('<div class="refs">' + " ".join(
-            f'<a href="{html_lib.escape(url_encoded)}">'
-            f'{html_lib.escape(str((r or {}).get("alias") or "Link"))}</a>'
-            for url_encoded, r in refs.items()) + "</div>")
+        lokal = eintrag.get("anhaenge") or {}
+        glieder = []
+        for roh, ref in refs.items():
+            url = unquote(roh)                  # Graph kodiert die Schlüssel
+            ziel_url = lokal.get(url, url)
+            glieder.append(
+                f'<a href="{html_lib.escape(ziel_url)}">'
+                f'{html_lib.escape(str((ref or {}).get("alias") or "Link"))}'
+                "</a>")
+        teile.append('<div class="refs">' + " ".join(glieder) + "</div>")
     kommentare = eintrag.get("kommentare") or []
     if kommentare:
         teile.append('<div class="kommentare">' + "".join(
@@ -387,11 +454,17 @@ def plan_lauf(graph, out, plan, threads_cache):
             continue
         eintrag = {"etag": etag_neu, "task": t, "deleted": None,
                    "details": alt.get("details"),
+                   "anhaenge": alt.get("anhaenge") or {},
                    "kommentare": alt.get("kommentare") or []}
         try:
             if geaendert or not eintrag["details"]:
                 eintrag["details"] = graph.get(
                     f"{GRAPH}/planner/tasks/{tid}/details")
+                if anhaenge_laden():
+                    eintrag["anhaenge"] = _referenzen_laden(
+                        graph, db, ziel, t, eintrag["details"])
+                else:
+                    eintrag["anhaenge"] = alt.get("anhaenge") or {}
             kommentare = []
             if thread and gruppe and threads is not None:
                 kommentare += _legacy_posts(graph, gruppe, thread)

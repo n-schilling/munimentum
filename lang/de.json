@@ -772,6 +772,8 @@
   "settings.planner.title": "Planner",
   "settings.planner.urls.title": "Board-URLs",
   "settings.planner.urls.i": "Ein Planner-Board je Zeile – die Adresse des Boards aus dem Browser einfügen (neuer oder klassischer Planner). Jede Zeile hat ihre eigene Sync-Häufigkeit; Kommentare kommen mit, alte wie chatbasierte. Zum Lesen braucht es Tasks.Read und für die alten Kommentare Group.Read.All; der Token-Assistent listet beide.",
+  "settings.planner.attachments": "Referenzierte Dateien mitladen",
+  "settings.planner.attachments.i": "Aufgaben verweisen auf Dateien in der Board-eigenen SharePoint-Library – die meist nicht eigenständig gespiegelt wird. Eingeschaltet lädt der Export jede referenzierte Datei neben das Board, und die Karten verlinken die lokale Kopie; aktuell gehalten über die Änderungsmarke. Braucht die Berechtigung Files.Read.All; der Token-Assistent listet sie.",
   "job.step.planner": "Planner-Export",
   "search.source.planner": "Planner",
   "ana.planner": "Planner-Aufgaben",
@@ -780,6 +782,7 @@
   "run.planner.plan_failed": "Planner: {url} nicht erreichbar ({error}).",
   "run.planner.comments_failed": "{name}: Gruppen-Konversation nicht lesbar ({error}) – die alten Kommentare bleiben wie sie waren.",
   "run.planner.task_failed": "Aufgabe „{name}“ nicht aufgefrischt ({error}).",
+  "run.planner.ref_failed": "Anhang von „{name}“ nicht geholt ({error}) – die Karte behält den Online-Link.",
   "run.planner.plan": "{name}: {n} Aufgaben.",
   "run.planner.none": "Keine Board-URLs für den Planner-Export eingetragen – nichts zu tun."
 }

@@ -189,3 +189,57 @@ def test_corpus_liest_tasks_samt_kommentaren(tmp_path):
     assert satz["ctx"].startswith("Team X Board/")
     assert satz["rel"].endswith("board.html")
     assert "gone" not in satz
+
+
+def _graph_mit_referenz(tasks, ctag="c-1"):
+    g = _graph_fuer_plan(tasks)
+    g.antworten["/planner/tasks/t1/details"] = {
+        "description": "", "checklist": {},
+        "references": {"https%3A//firma%2Esharepoint%2Ecom/x/Angebot%2Epdf":
+                       {"alias": "Angebot.pdf"}}}
+    g.antworten["/shares/u!"] = {"name": "Angebot.pdf", "cTag": ctag}
+    g.geladen = []
+    g.get_bytes = lambda url, label="": (g.geladen.append(url)
+                                         or (b"PDF", "application/pdf"))
+    return g
+
+
+def test_referenzen_werden_optional_mitgeladen(tmp_path, monkeypatch):
+    """Die Board-Libraries werden nie eigenständig gespiegelt – eingeschaltet
+    holt der Export die referenzierten Dateien und verlinkt lokal; die
+    Graph-kodierten Referenz-Schlüssel werden dabei entschärft."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    dateien = list((ziel / pl.ANHANG_DIR).glob("*"))
+    assert len(dateien) == 1 and dateien[0].read_bytes() == b"PDF"
+    html = (ziel / "board.html").read_text(encoding="utf-8")
+    assert f'href="{pl.ANHANG_DIR}/' in html
+    assert "firma.sharepoint.com" not in html.split("refs")[1].split("</div>")[0]
+
+    # Zweiter Lauf, Task geändert, Datei nicht: der cTag spart den Download.
+    g2 = _graph_mit_referenz([_task("t1", "Aufgabe A", etag="e2")])
+    pl.plan_lauf(g2, tmp_path, PLAN, {})
+    assert g2.geladen == [], "unveränderte Referenz erneut geladen"
+
+
+def test_referenzen_bleiben_ohne_option_online_links(tmp_path, monkeypatch):
+    monkeypatch.delenv("PLANNER_ATTACHMENTS", raising=False)
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "0")
+    g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    assert not (ziel / pl.ANHANG_DIR).exists()
+    html = (ziel / "board.html").read_text(encoding="utf-8")
+    assert 'href="https://firma.sharepoint.com/x/Angebot.pdf"' in html
+    assert "Angebot.pdf" in html
+
+
+def test_corpus_traegt_referenznamen_als_anhang(tmp_path, monkeypatch):
+    import corpus
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "0")
+    g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    satz = corpus.load_planner(tmp_path)[0]
+    assert satz["att"] == "Angebot.pdf"

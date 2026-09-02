@@ -772,6 +772,8 @@
   "settings.planner.title": "Planner",
   "settings.planner.urls.title": "URLs des tableaux",
   "settings.planner.urls.i": "Un tableau Planner par ligne – collez l’adresse du tableau depuis le navigateur (nouveau ou classique). Chaque ligne a sa propre fréquence ; les commentaires suivent, anciens comme ceux du chat. La lecture demande Tasks.Read et, pour les anciens commentaires, Group.Read.All ; l’assistant de jeton liste les deux.",
+  "settings.planner.attachments": "Télécharger les fichiers référencés",
+  "settings.planner.attachments.i": "Les tâches référencent des fichiers de la bibliothèque SharePoint du tableau – rarement mise en miroir seule. Activé, l’export télécharge chaque fichier référencé à côté du tableau et les cartes pointent vers la copie locale, tenue à jour par la marque de modification. Demande la permission Files.Read.All ; l’assistant de jeton la liste.",
   "job.step.planner": "Export Planner",
   "search.source.planner": "Planner",
   "ana.planner": "Tâches Planner",
@@ -780,6 +782,7 @@
   "run.planner.plan_failed": "Planner : {url} injoignable ({error}).",
   "run.planner.comments_failed": "{name} : conversation de groupe illisible ({error}) – les anciens commentaires restent en l’état.",
   "run.planner.task_failed": "Tâche « {name} » non rafraîchie ({error}).",
+  "run.planner.ref_failed": "Pièce jointe de « {name} » non récupérée ({error}) – la carte garde le lien en ligne.",
   "run.planner.plan": "{name} : {n} tâches.",
   "run.planner.none": "Aucune URL de tableau pour l’export Planner – rien à faire."
 }

@@ -153,6 +153,7 @@ VORGABEN = {
     # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.
     "planner_enabled": False,
     "planner_urls": "",
+    "planner_attachments": False,
     "runs_retention_months": 24,
     "log_retention_days": 14,
     "mcp_port": 8365,

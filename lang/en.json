@@ -772,6 +772,8 @@
   "settings.planner.title": "Planner",
   "settings.planner.urls.title": "Board URLs",
   "settings.planner.urls.i": "One Planner board per row – paste the board's address from the browser (new or classic Planner). Each row has its own sync cadence; comments come along, legacy and chat-based alike. Reading needs Tasks.Read plus Group.Read.All for the legacy comments; the token wizard lists both.",
+  "settings.planner.attachments": "Download referenced files",
+  "settings.planner.attachments.i": "Tasks reference files that live in the board's own SharePoint library – one that is usually not mirrored on its own. Switched on, the export downloads every referenced file next to the board and the cards link the local copy; kept current by change tag. Needs the Files.Read.All permission; the token wizard lists it.",
   "job.step.planner": "Planner export",
   "search.source.planner": "Planner",
   "ana.planner": "Planner tasks",
@@ -780,6 +782,7 @@
   "run.planner.plan_failed": "Planner: {url} unreachable ({error}).",
   "run.planner.comments_failed": "{name}: group conversation not readable ({error}) – legacy comments stay as they were.",
   "run.planner.task_failed": "Task “{name}” not refreshed ({error}).",
+  "run.planner.ref_failed": "Attachment of “{name}” not fetched ({error}) – the card keeps the online link.",
   "run.planner.plan": "{name}: {n} tasks.",
   "run.planner.none": "No board URLs configured for the Planner export – nothing to do."
 }

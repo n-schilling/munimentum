@@ -1031,6 +1031,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                     "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
                     "PLANNER_URLS": (nur_einheit if nur_einheit else
                                      str(cfg.get("planner_urls") or "")),
+                    "PLANNER_ATTACHMENTS": _flag(
+                        cfg.get("planner_attachments")),
                     **({"SYNC_NOW": "1"} if nur_einheit else {})},
         })
     if sharepoint_pages:
@@ -1777,9 +1779,12 @@ class App:
             if self.cfg.get(flag) and kategorie not in kats:
                 kats.append(kategorie)
         # Planner liest die Legacy-Kommentare aus den Gruppen-Konversationen –
-        # ein zweiter Scope am selben Schalter.
+        # ein zweiter Scope am selben Schalter; das Anhang-Laden einen dritten.
         if self.cfg.get("planner_enabled") and "groups" not in kats:
             kats.append("groups")
+        if self.cfg.get("planner_enabled") and \
+                self.cfg.get("planner_attachments") and "files" not in kats:
+            kats.append("files")
         return kats
 
     def ollama(self, force=False):
@@ -2439,7 +2444,8 @@ class Handler(BaseHTTPRequestHandler):
                     # Missing since the checkbox exists: the state reached
                     # the run but never survived a page rebuild.
                     "onedrive_enabled", "sharepoint_enabled",
-                    "sharepoint_pages_enabled", "planner_enabled"):
+                    "sharepoint_pages_enabled", "planner_enabled",
+                    "planner_attachments"):
             if key in data:
                 cfg[key] = bool(data[key])
         # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
@@ -3861,6 +3867,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
         <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
         <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
       <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
     </div>
 
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
@@ -6248,7 +6255,7 @@ function pruefeUpdate(){
 /* ---------- Einstellungen ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
-                'ollama_enabled'];
+                'ollama_enabled','planner_attachments'];
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb',
                 'sharepoint_pages_image_max_mb','semantic_min',

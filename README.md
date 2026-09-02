@@ -116,7 +116,9 @@ buckets, cards with labels, assignees, checklists, descriptions — and the
 comments, the legacy ones from the group conversation as well as the new
 chat-based ones. List the board addresses in the settings, one per row with
 its own sync cadence; a task that disappears from the board stays in the
-archive, greyed, in a section of its own. Task texts and comments are
+archive, greyed, in a section of its own. Files a task references can be
+downloaded next to the board on request — the cards then link the local
+copies — since the library behind a board is rarely mirrored on its own. Task texts and comments are
 full-text searchable under their own source. Reading needs Tasks.Read plus
 Group.Read.All for the legacy comments; the token wizard lists both.
 
