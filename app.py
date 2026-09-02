@@ -4921,9 +4921,12 @@ function ordnerName(pfad){
    Ordner und Dateityp teilen sich das: beide hängen an der Quelle, beide
    verschwinden, wenn nichts zu wählen ist, und beide dürfen keine Wahl
    stehen lassen, die es in der neuen Quelle nicht gibt. */
-function fuelleAuswahl(id, liste, alle){
+function fuelleAuswahl(id, liste, alle, einzeln){
   var sel = el(id), vorher = sel.value;
-  var wahl = liste.length > 1;
+  // Ein einzelner Ordner filtert nichts weg – das Feld verschwindet. Für
+  // Einheiten-Quellen (`einzeln`) gilt das Gegenteil: das eine Board, die
+  // eine Library IST die Auskunft, was hier filterbar ist.
+  var wahl = liste.length > (einzeln ? 0 : 1);
   sel.classList.toggle('hide', !wahl);
   sel.innerHTML = '<option value="">' + esc(alle) + '</option>' +
     (wahl ? liste.map(function(e){
@@ -4938,9 +4941,11 @@ function fuelleAuswahl(id, liste, alle){
 }
 
 function zeichneOrdner(liste){
+  var quelle = el('f-source').value;
   fuelleAuswahl('f-folder', liste.map(function(f){
     return {wert: f.path, name: ordnerName(f.path), zahl: f.messages};
-  }), t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all'));
+  }), t(ORDNER_ALLE[quelle] || 'search.folder.all'),
+  ['planner', 'sharepoint', 'pages'].indexOf(quelle) >= 0);
 }
 
 /* Dateitypen gibt es nur, wo es Anhänge oder Dateien gibt – Chats, Termine und
