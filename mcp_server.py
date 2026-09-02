@@ -182,7 +182,7 @@ _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "File",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
                  "pages": "SharePoint page", "kalender": "Calendar",
-                 "kontakte": "Contacts"}
+                 "kontakte": "Contacts", "planner": "Planner task"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
@@ -240,7 +240,7 @@ def _hat_spalte(con, name):
 
 # Welche Quellen eine Ordnerauswahl anbieten – alle, deren ctx ein Pfad ist.
 _LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
-            "kalender", "teams", "kontakte")
+            "kalender", "teams", "kontakte", "planner")
 
 
 def _quelle_cond(quelle):
@@ -659,10 +659,11 @@ def _resolve_source(source_root, rel):
             "outlook": STATE.get("outlook_dir"),
             "onedrive": STATE.get("onedrive_dir"),
             "sharepoint": STATE.get("sharepoint_dir"),
-            "pages": STATE.get("pages_dir")}.get(source_root)
+            "pages": STATE.get("pages_dir"),
+            "planner": STATE.get("planner_dir")}.get(source_root)
     if not base:
         return None, ("source_root must be 'teams', 'outlook', 'onedrive', "
-                      "'sharepoint' or 'pages'.")
+                      "'sharepoint', 'pages' or 'planner'.")
     base = Path(base).resolve()
     target = (base / rel).resolve()
     if base != target and base not in target.parents:      # prevent path escape
@@ -1106,6 +1107,7 @@ def corpus_stats() -> dict:
             "onedrive_dir": STATE.get("onedrive_dir"),
             "sharepoint_dir": STATE.get("sharepoint_dir"),
             "pages_dir": STATE.get("pages_dir"),
+            "planner_dir": STATE.get("planner_dir"),
         }
     finally:
         con.close()
@@ -1296,6 +1298,7 @@ def main():
     ap.add_argument("--onedrive", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--sharepoint", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--pages", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--planner", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
     # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
@@ -1328,6 +1331,7 @@ def main():
     a.onedrive = a.onedrive or str(basis / settings.ONEDRIVE_DIR)
     a.sharepoint = a.sharepoint or str(basis / settings.SHAREPOINT_DIR)
     a.pages = a.pages or str(basis / settings.SHAREPOINT_PAGES_DIR)
+    a.planner = a.planner or str(basis / settings.PLANNER_DIR)
 
     # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
     # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
@@ -1371,7 +1375,7 @@ def main():
                  vector_dtype=str(V.dtype) if V is not None else None,
                  teams_dir=a.teams, outlook_dir=a.outlook,
                  onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
-                 pages_dir=a.pages,
+                 pages_dir=a.pages, planner_dir=a.planner,
                  embed_model=a.embed_model, ollama=a.ollama)
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None

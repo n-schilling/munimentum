@@ -35,6 +35,7 @@ OUTLOOK_DIR = "outlook_export"
 ONEDRIVE_DIR = "onedrive_export"
 SHAREPOINT_DIR = "sharepoint_export"
 SHAREPOINT_PAGES_DIR = "sharepoint_pages"
+PLANNER_DIR = "planner_export"
 STORE_DIR = "rag_store"
 
 # Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
@@ -150,6 +151,8 @@ VORGABEN = {
     "userflow_actions": 20,
     # Wie lange die Lauf-Historie (runs.db) zurückreicht. Aufgeräumt wird beim
     # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.
+    "planner_enabled": False,
+    "planner_urls": "",
     "runs_retention_months": 24,
     "log_retention_days": 14,
     "mcp_port": 8365,
@@ -177,6 +180,7 @@ VORGABEN = {
         "onedrive": True,
         "sharepoint": True,
         "sharepoint_pages": True,
+        "planner": True,
         "index": True,
         "calendar": True,
     },

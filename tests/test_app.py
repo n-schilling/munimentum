@@ -6660,7 +6660,9 @@ def test_jedes_feld_ist_auch_gelistet():
                  "onedrive_enabled",  # steht im Reiter „Exportieren", saveCats()
                  "sharepoint_enabled",   # ebenso, saveCats()
                  "sharepoint_pages_enabled",  # ebenso, saveCats()
+                 "planner_enabled",   # ebenso, saveCats()
                  "sharepoint_urls",      # mehrzeiliger Text, eigene Behandlung
+                 "planner_urls",         # URL-Tabelle, liesUrlTabelle()
                  "sharepoint_pages_urls",     # ebenso
                  "cadence-onedrive",     # Kadenz-Selects, leseKadenzen()
                  "cadence-teams"}

@@ -7,6 +7,7 @@ und zerlegt lange Texte in überlappende Chunks. Wird von rag_index.py
 (Embeddings) genutzt. Nur Standardbibliothek.
 """
 
+import json
 import os
 import base64
 import binascii
@@ -23,6 +24,8 @@ from zoneinfo import ZoneInfo
 from html.parser import HTMLParser
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
+
+import export_util
 
 CATS = {"1on1", "group", "meeting", "channels"}
 _BLOCK = {"br", "p", "div", "li", "tr"}
@@ -810,8 +813,61 @@ def load_pages(root_dir):
     return recs
 
 
+def load_planner(root_dir):
+    """One record per Planner task, straight from the per-plan state.db –
+    title, description, checklist and the COMMENTS are the searchable text;
+    the source file is the plan's board.html."""
+    import state_db
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    recs = []
+    for ordner in sorted(pf for pf in root.iterdir() if pf.is_dir()):
+        db = state_db.StateDb(ordner)
+        try:
+            plan = json.loads(db.kv_lesen("plan") or "{}")
+            eintraege = json.loads(db.kv_lesen("tasks") or "{}")
+        except ValueError:
+            continue
+        if not eintraege:
+            continue
+        rel = f"{ordner.name}/board.html"
+        buckets = plan.get("buckets") or {}
+        titel_plan = str(plan.get("titel") or ordner.name)
+        for tid, e in eintraege.items():
+            task = e.get("task") or {}
+            det = e.get("details") or {}
+            kommentare = e.get("kommentare") or []
+            leute = sorted({k.get("wer") or "" for k in kommentare} - {""})
+            text = "\n".join(
+                [str(det.get("description") or "")]
+                + [str(c.get("title") or "") for c in
+                   (det.get("checklist") or {}).values()]
+                + [strip_html(k.get("html") or "") for k in kommentare])
+            ts = export_util.graph_zeit(task.get("createdDateTime"))
+            for k in kommentare:
+                kt = export_util.graph_zeit(k.get("wann"))
+                if kt and (not ts or kt > ts):
+                    ts = kt
+            satz = {
+                "uid": f"planner:{ordner.name}/{tid}:0", "src": "planner",
+                "root": "planner", "rel": rel,
+                "who": ", ".join(leute[:3]), "ppl": " ".join(leute).lower(),
+                "ts": ts.timestamp() if ts else None,
+                "date": ts.strftime("%Y-%m-%d %H:%M") if ts else "",
+                "title": str(task.get("title") or "(ohne Titel)"),
+                "ctx": f'{titel_plan}/'
+                       f'{buckets.get(task.get("bucketId"), "?")}',
+                "text": text.strip(),
+            }
+            if e.get("deleted"):
+                satz["gone"] = e["deleted"]
+            recs.append(satz)
+    return recs
+
+
 def load_records(teams_dir, outlook_dir, onedrive_dir=None,
-                 sharepoint_dir=None, pages_dir=None):
+                 sharepoint_dir=None, pages_dir=None, planner_dir=None):
     recs = []
     if teams_dir and Path(teams_dir).is_dir():
         recs += load_teams(teams_dir)
@@ -825,6 +881,8 @@ def load_records(teams_dir, outlook_dir, onedrive_dir=None,
         recs += load_sharepoint(sharepoint_dir)
     if pages_dir and Path(pages_dir).is_dir():
         recs += load_pages(pages_dir)              # gerenderte Site-Seiten
+    if planner_dir and Path(planner_dir).is_dir():
+        recs += load_planner(planner_dir)          # Boards samt Kommentaren
     return recs
 
 

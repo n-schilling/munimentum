@@ -40,7 +40,6 @@ those files keep their last mirrored state.
 """
 
 import base64
-import json
 import os
 import re
 import sys
@@ -111,38 +110,11 @@ def max_bytes():
                                   low=0)) * 1024 * 1024
 
 
-def kadenzen():
-    """Cadence per source URL ("sharepoint-url:<url>" / "pages-url:<url>")."""
-    roh = os.environ.get("SYNC_CADENCE")
-    if roh is None:
-        roh = json.dumps(settings.value("sync_cadence", {}) or {})
-    try:
-        daten = json.loads(roh)
-    except ValueError:
-        return {}
-    return daten if isinstance(daten, dict) else {}
-
-
-def sync_jetzt():
-    """The per-row "Sync now" button: the run carries just that URL and
-    this flag – the cadence gate steps aside once."""
-    return bool((os.environ.get("SYNC_NOW") or "").strip())
-
-
-_KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}
-
-
-def _haeufigere(a, b):
-    """Two URLs feeding one unit: the more frequent cadence wins."""
-    return a if _KADENZ_RANG.get(a, 0) <= _KADENZ_RANG.get(b, 0) else b
-
-
-def einheit_faellig(db, kadenz, kv_key="last_sync"):
-    if sync_jetzt() or (kadenz or "always") == "always":
-        return True
-    roh = db._kv_lesen(kv_key)
-    letzter = float(roh) if roh else None
-    return export_util.cadence_faellig(kadenz, letzter)
+# Die Kadenz-Mechanik teilen sich die URL-basierten Exporte (export_util).
+kadenzen = export_util.kadenzen
+sync_jetzt = export_util.sync_jetzt
+_haeufigere = export_util.haeufigere
+einheit_faellig = export_util.einheit_faellig
 
 
 def auswahl():

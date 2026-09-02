@@ -224,6 +224,7 @@ OUTLOOK_DIR = settings.OUTLOOK_DIR
 ONEDRIVE_DIR = settings.ONEDRIVE_DIR
 SHAREPOINT_DIR = settings.SHAREPOINT_DIR
 SHAREPOINT_PAGES_DIR = settings.SHAREPOINT_PAGES_DIR
+PLANNER_DIR = settings.PLANNER_DIR
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
 
@@ -239,18 +240,21 @@ SCOPE_FOR = {
     "channels": "ChannelMessage.Read.All",
     "files": "Files.Read.All",
     "sites": "Sites.Read.All",
+    "tasks": "Tasks.Read",
+    "groups": "Group.Read.All",       # Planner: die Legacy-Kommentare
 }
 # One row per mirror-style source: config switch -> (scope category for the
 # token wizard, name in the system report). New sources register here.
 SPIEGEL_QUELLEN = (("onedrive_enabled", "files", "onedrive"),
                    ("sharepoint_enabled", "sites", "sharepoint"),
-                   ("sharepoint_pages_enabled", "sites", "pages"))
+                   ("sharepoint_pages_enabled", "sites", "pages"),
+                   ("planner_enabled", "tasks", "planner"))
 
 LABEL_FOR = {
     "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
     "1on1": "1:1-Chats", "group": "Gruppenchats",
     "meeting": "Meeting-Chats", "channels": "Team-Kanäle", "files": "OneDrive",
-    "sites": "SharePoint",
+    "sites": "SharePoint", "tasks": "Planner", "groups": "Planner-Kommentare",
 }
 
 # Weitere Berechtigungen, die die jeweils nötige mit abdecken. Der Graph
@@ -264,6 +268,8 @@ LABEL_FOR = {
 # NICHT enthalten sind Varianten, die weniger können, als der Export braucht:
 # Chat.ReadBasic und Mail.ReadBasic liefern keine Nachrichteninhalte.
 SCOPE_COVERED_BY = {
+    "Tasks.Read": ("Tasks.ReadWrite",),
+    "Group.Read.All": ("Group.ReadWrite.All",),
     "Mail.Read": ("Mail.ReadWrite", "Mail.Read.Shared", "Mail.ReadWrite.Shared"),
     "Calendars.Read": ("Calendars.ReadWrite", "Calendars.Read.Shared",
                        "Calendars.ReadWrite.Shared"),
@@ -293,6 +299,8 @@ SCOPE_QUERY = {
     "ChannelMessage.Read.All": "https://graph.microsoft.com/v1.0/me/joinedTeams",
     "Files.Read.All": "https://graph.microsoft.com/v1.0/me/drive/root/children?$top=1",
     "Sites.Read.All": "https://graph.microsoft.com/v1.0/sites?search=*",
+    "Tasks.Read": "https://graph.microsoft.com/v1.0/me/planner/plans?$top=1",
+    "Group.Read.All": "https://graph.microsoft.com/v1.0/groups?$top=1",
     "User.Read": "https://graph.microsoft.com/v1.0/me",
 }
 
@@ -563,6 +571,16 @@ def _mtime_iso(p):
         return None
 
 
+def _planner_stand(wurzel):
+    """The newest per-plan state.db dates the last board run."""
+    try:
+        pfade = list(wurzel.glob(f"*/{state_db.DB_NAME}"))
+    except OSError:
+        return None
+    return _mtime_iso(max(pfade, key=lambda pf: pf.stat().st_mtime)) \
+        if pfade else None
+
+
 def _sharepoint_stand(wurzel):
     """The newest per-library state.db dates the last mirror run."""
     try:
@@ -586,6 +604,7 @@ def export_status(cfg):
     onedrive = BASE / ONEDRIVE_DIR
     sharepoint = BASE / SHAREPOINT_DIR
     seiten = BASE / SHAREPOINT_PAGES_DIR
+    planner = BASE / PLANNER_DIR
     return {
         # Die state.db datiert den letzten Lauf: jeder Export schreibt sie
         # am Ende, auch wenn nichts Neues kam.
@@ -600,6 +619,9 @@ def export_status(cfg):
                        "last_run": _sharepoint_stand(sharepoint)},
         "pages": {"dir": str(seiten), "exists": seiten.is_dir(),
                   "last_run": _mtime_iso(seiten / state_db.DB_NAME)},
+        # One state.db per plan – the newest one dates the run.
+        "planner": {"dir": str(planner), "exists": planner.is_dir(),
+                    "last_run": _planner_stand(planner)},
     }
 
 
@@ -662,7 +684,8 @@ def analytics_ordner():
     return {"teams": BASE / TEAMS_DIR, "outlook": BASE / OUTLOOK_DIR,
             "onedrive": BASE / ONEDRIVE_DIR,
             "sharepoint": BASE / SHAREPOINT_DIR,
-            "pages": BASE / SHAREPOINT_PAGES_DIR}
+            "pages": BASE / SHAREPOINT_PAGES_DIR,
+            "planner": BASE / PLANNER_DIR}
 
 
 def analytics_daten(cfg, neu=False):
@@ -766,7 +789,7 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
 # in analytics_skip, der Arbeitgeber im Tenant. Im Bericht steht nur, DASS sie
 # verstellt sind und in welchem Umfang, nie der Wert selbst.
 _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
-                  "sharepoint_urls", "sharepoint_pages_urls"}
+                  "sharepoint_urls", "sharepoint_pages_urls", "planner_urls"}
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 _NUR_GESETZT = {"client_id", "tenant"}
 # Stehen schon als eigene Zeile im Bericht – nicht doppelt aufführen.
@@ -948,7 +971,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 sync_onedrive=False, check_onedrive=False,
                 sync_calendars=False, sharepoint=False,
                 sync_sharepoint=False, check_sharepoint=False,
-                sharepoint_pages=False, check_pages=False,
+                sharepoint_pages=False, check_pages=False, planner=False,
                 nur_einheit=None):
     """Kommandozeilen für einen Lauf zusammenstellen.
 
@@ -1000,6 +1023,16 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                     **({"SHAREPOINT_URLS": nur_einheit, "SYNC_NOW": "1"}
                        if nur_einheit else {})},
         })
+    if planner:
+        steps.append({
+            "key": "planner", "label": "job.step.planner", "corpus": True,
+            "argv": script_argv("planner_export", PLANNER_DIR),
+            "env": {**base_env,
+                    "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+                    "PLANNER_URLS": (nur_einheit if nur_einheit else
+                                     str(cfg.get("planner_urls") or "")),
+                    **({"SYNC_NOW": "1"} if nur_einheit else {})},
+        })
     if sharepoint_pages:
         steps.append({
             "key": "sharepoint_pages", "label": "job.step.pages", "corpus": True,
@@ -1030,6 +1063,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
         argv = script_argv("rag_index", TEAMS_DIR, OUTLOOK_DIR,
                            ONEDRIVE_DIR, "--sharepoint", SHAREPOINT_DIR,
                            "--pages", SHAREPOINT_PAGES_DIR,
+                           "--planner", PLANNER_DIR,
                            "--store", STORE_DIR, "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
                            "--batch", cfg.get("index_batch", 128))
@@ -1497,6 +1531,8 @@ class Scheduler(threading.Thread):
                                   sharepoint_pages=bool(
                                       plan.get("sharepoint_pages", True)
                                       and cfg.get("sharepoint_pages_enabled")),
+                                  planner=bool(plan.get("planner", True)
+                                               and cfg.get("planner_enabled")),
                                   index=plan.get("index", True),
                                   calendar=kalender,
                                   reconstruct=None if mit_mails else False,
@@ -1740,6 +1776,10 @@ class App:
         for flag, kategorie, _name in SPIEGEL_QUELLEN:
             if self.cfg.get(flag) and kategorie not in kats:
                 kats.append(kategorie)
+        # Planner liest die Legacy-Kommentare aus den Gruppen-Konversationen –
+        # ein zweiter Scope am selben Schalter.
+        if self.cfg.get("planner_enabled") and "groups" not in kats:
+            kats.append("groups")
         return kats
 
     def ollama(self, force=False):
@@ -1951,8 +1991,8 @@ class App:
                check=False, sync_folders=False, onedrive=False,
                sync_onedrive=False, check_onedrive=False, sync_calendars=False,
                sharepoint=False, sync_sharepoint=False, check_sharepoint=False,
-               sharepoint_pages=False, check_pages=False, nur_einheit=None,
-               origin="manual"):
+               sharepoint_pages=False, check_pages=False, planner=False,
+               nur_einheit=None, origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         if self.migration:
@@ -1978,7 +2018,7 @@ class App:
                            step={"k": dienst_label, "v": {}},
                            cadence={"k": f"cadence.{kadenz}", "v": {}})
         onedrive, teams = angefragt["onedrive"], angefragt["teams"]
-        braucht_zugang = (outlook or teams or onedrive or check
+        braucht_zugang = (outlook or teams or onedrive or check or planner
                           or sharepoint or sync_sharepoint or check_sharepoint
                           or sharepoint_pages or check_pages
                           or sync_folders or sync_onedrive or check_onedrive
@@ -2003,7 +2043,7 @@ class App:
                             sync_sharepoint=sync_sharepoint,
                             check_sharepoint=check_sharepoint,
                             sharepoint_pages=sharepoint_pages,
-                            check_pages=check_pages,
+                            check_pages=check_pages, planner=planner,
                             nur_einheit=nur_einheit,
                             sync_calendars=sync_calendars)
         if not steps:
@@ -2021,6 +2061,7 @@ class App:
                 "onedrive": bool(onedrive),
                 "sharepoint": bool(sharepoint),
                 "sharepoint_pages": bool(sharepoint_pages),
+                "planner": bool(planner),
             },
             "semantic": bool(index and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
@@ -2264,6 +2305,7 @@ class Handler(BaseHTTPRequestHandler):
                     check_onedrive=bool(data.get("check_onedrive")),
                     sharepoint=bool(data.get("sharepoint")),
                     sharepoint_pages=bool(data.get("sharepoint_pages")),
+                    planner=bool(data.get("planner")),
                     check_pages=bool(data.get("check_pages")),
                     nur_einheit=(str(data.get("nur_einheit") or "").strip()
                                  or None),
@@ -2397,7 +2439,7 @@ class Handler(BaseHTTPRequestHandler):
                     # Missing since the checkbox exists: the state reached
                     # the run but never survived a page rebuild.
                     "onedrive_enabled", "sharepoint_enabled",
-                    "sharepoint_pages_enabled"):
+                    "sharepoint_pages_enabled", "planner_enabled"):
             if key in data:
                 cfg[key] = bool(data[key])
         # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
@@ -2409,7 +2451,8 @@ class Handler(BaseHTTPRequestHandler):
         if "folder_rules" in data:
             cfg["folder_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["folder_rules"] or "")))
-        for key in ("sharepoint_urls", "sharepoint_pages_urls"):
+        for key in ("sharepoint_urls", "sharepoint_pages_urls",
+                    "planner_urls"):
             if key in data:
                 cfg[key] = "\n".join(
                     z.strip() for z in str(data[key] or "").splitlines()
@@ -2460,7 +2503,7 @@ class Handler(BaseHTTPRequestHandler):
     def _save_schedule(self, data):
         plan = self.app.cfg["schedule"]
         for key in ("enabled", "outlook", "teams", "onedrive", "sharepoint",
-                    "sharepoint_pages", "index", "calendar"):
+                    "sharepoint_pages", "planner", "index", "calendar"):
             if key in data:
                 plan[key] = bool(data[key])
         if "interval_minutes" in data:
@@ -3523,6 +3566,11 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
           <span data-i18n="export.cat.pages">Site-Seiten</span></label>
         <p class="small muted" id="sp-export-note" style="max-width:240px;margin:4px 0 0"></p>
       </div>
+      <div>
+        <strong class="small" data-i18n="export.planner">Planner</strong>
+        <label class="chk"><input type="checkbox" id="c-planner_enabled" onchange="saveCats()">
+          <span data-i18n="export.cat.planner">Boards</span></label>
+      </div>
     </div>
     <div class="row" style="margin-top:14px">
       <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
@@ -3607,6 +3655,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
         <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
         <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
         <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
+        <option value="planner" data-i18n="search.source.planner">Planner</option>
       </select>
       <label class="small feld"><span data-i18n="search.from">von</span>
         <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
@@ -3807,6 +3856,13 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
     </div>
 
+    <div class="gruppe"><h3 data-i18n="settings.planner.title">Planner</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span>
+        <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
+        <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
+      <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
+    </div>
+
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
@@ -3824,6 +3880,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.onedrive"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.onedrive.i">i</span></span><input type="checkbox" id="s-onedrive"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.sharepoint.i">i</span></span><input type="checkbox" id="s-sharepoint"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.pages"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.pages.i">i</span></span><input type="checkbox" id="s-sharepoint_pages"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.planner"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.planner.i">i</span></span><input type="checkbox" id="s-planner"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
     </div>
@@ -4417,6 +4474,7 @@ function renderStatus(s){
     el('c-onedrive_enabled').checked = !!s.config.onedrive_enabled;
     el('c-sharepoint_enabled').checked = !!s.config.sharepoint_enabled;
     el('c-sharepoint_pages_enabled').checked = !!s.config.sharepoint_pages_enabled;
+    el('c-planner_enabled').checked = !!s.config.planner_enabled;
     fuelleSprachen();
     el('s-enabled').checked = s.config.schedule.enabled;
     el('s-interval').value = s.config.schedule.interval_minutes;
@@ -4425,6 +4483,7 @@ function renderStatus(s){
     el('s-onedrive').checked = s.config.schedule.onedrive !== false;
     el('s-sharepoint').checked = s.config.schedule.sharepoint !== false;
     el('s-sharepoint_pages').checked = s.config.schedule.sharepoint_pages !== false;
+    el('s-planner').checked = s.config.schedule.planner !== false;
     el('s-index').checked = s.config.schedule.index;
     el('s-calendar').checked = s.config.schedule.calendar;
   }
@@ -4530,7 +4589,8 @@ function saveCats(){
   post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
                        onedrive_enabled: el('c-onedrive_enabled').checked,
                        sharepoint_enabled: el('c-sharepoint_enabled').checked,
-                       sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked}).then(refresh);
+                       sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked,
+                       planner_enabled: el('c-planner_enabled').checked}).then(refresh);
 }
 
 /* ---------- Läufe ---------- */
@@ -4547,11 +4607,12 @@ function runExport(){
   var od = el('c-onedrive_enabled').checked;
   var sp = el('c-sharepoint_enabled').checked;
   var sps = el('c-sharepoint_pages_enabled').checked;
-  if(!o && !tm && !od && !sp && !sps){ alert(t('export.nothing')); return; }
+  var pl = el('c-planner_enabled').checked;
+  if(!o && !tm && !od && !sp && !sps && !pl){ alert(t('export.nothing')); return; }
   // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
   // gelöschter Termine stammen ausschließlich aus dem Postfach.
   run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
-       index:true, calendar:o}, t('job.export'));
+       planner:pl, index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Fortschritt ----------
@@ -5805,17 +5866,20 @@ function zeigeAnalytics(a){
   if(d.onedrive) teile.push('OneDrive ' + zahl(d.onedrive));
   if(d.sharepoint)
     teile.push(t('search.source.sharepoint') + ' ' + zahl(d.sharepoint));
+  var pl = a.planner || {};
   el('ana-kpi-dateien').innerHTML =
     // Ohne Spiegel keine Datei-Kacheln – „0 Dateien" sagt niemandem etwas.
     (d.n ? kachelHtml(zahl(d.n), t('ana.files'), teile.join(' · '),
                       t('ana.files.hint')) : '') +
     (d.pages ? kachelHtml(zahl(d.pages), t('ana.pages')) : '') +
-    (d.n || d.pages
-      ? kachelHtml(zahl(d.verschwunden), t('ana.gone.files'), '',
-                   t('ana.gone.files.hint')) : '') +
+    (pl.n ? kachelHtml(zahl(pl.n), t('ana.planner'), '',
+                       t('ana.planner.hint')) : '') +
+    (d.n || d.pages || pl.n
+      ? kachelHtml(zahl((d.verschwunden || 0) + (pl.verschwunden || 0)),
+                   t('ana.gone.files'), '', t('ana.gone.files.hint')) : '') +
     kachelHtml(bytes((g.teams || 0) + (g.outlook || 0) + (g.onedrive || 0) +
-                     (g.sharepoint || 0) + (g.pages || 0)), t('ana.size'),
-               t('ana.size.hint', {index: bytes(g.index)}));
+                     (g.sharepoint || 0) + (g.pages || 0) + (g.planner || 0)),
+               t('ana.size'), t('ana.size.hint', {index: bytes(g.index)}));
   zeigeVerlaeufe(a);
 }
 
@@ -6136,6 +6200,7 @@ function saveSchedule(){
     outlook: el('s-outlook').checked, teams: el('s-teams').checked,
     onedrive: el('s-onedrive').checked, sharepoint: el('s-sharepoint').checked,
     sharepoint_pages: el('s-sharepoint_pages').checked,
+    planner: el('s-planner').checked,
     index: el('s-index').checked, calendar: el('s-calendar').checked}).then(refresh);
 }
 function toggleMcp(){
@@ -6205,6 +6270,7 @@ function fuelleEinstellungen(cfg){
   var kad = cfg.sync_cadence || {};
   fuelleUrlTabelle('sp-urls', cfg.sharepoint_urls, kad, 'sharepoint-url');
   fuelleUrlTabelle('pg-urls', cfg.sharepoint_pages_urls, kad, 'pages-url');
+  fuelleUrlTabelle('pl-urls', cfg.planner_urls, kad, 'planner-url');
   el('c-cadence-onedrive').value = kad.onedrive || 'always';
   el('c-cadence-teams').value = kad.teams || 'always';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
@@ -6247,7 +6313,8 @@ function urlZeile(tabId, wert, kadenz){
     ev.stopPropagation();
     var url = zeile.querySelector('input').value.trim();
     if(!url) return;
-    var lauf = tabId === 'sp-urls' ? {sharepoint: true} : {sharepoint_pages: true};
+    var lauf = tabId === 'sp-urls' ? {sharepoint: true}
+      : tabId === 'pl-urls' ? {planner: true} : {sharepoint_pages: true};
     merke('flow.run', 'sync_now');
     post('/api/run', Object.assign({nur_einheit: url, label: 'job.export'}, lauf))
       .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
@@ -6295,6 +6362,8 @@ function speichereEinstellungen(){
                                         'sharepoint-url');
   body.sharepoint_pages_urls = liesUrlTabelle('pg-urls', body.sync_cadence,
                                               'pages-url');
+  body.planner_urls = liesUrlTabelle('pl-urls', body.sync_cadence,
+                                     'planner-url');
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });

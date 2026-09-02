@@ -198,6 +198,13 @@ def baue(store, ordner):
                 "AND gone IS NOT NULL "
                 "AND src IN ('datei', 'pages')").fetchone()[0]
 
+        out["planner"] = {"n": je_quelle.get("planner", 0),
+                          "verschwunden": None}
+        if "gone" in spalten:
+            out["planner"]["verschwunden"] = con.execute(
+                "SELECT COUNT(*) FROM chunks WHERE seq = 0 "
+                "AND gone IS NOT NULL AND src = 'planner'").fetchone()[0]
+
         verlauf, luecken = _verlauf(con)
         out["verlauf"], out["luecken"] = verlauf, luecken
         out["anhang_typen"] = _anhang_typen(con) if "att" in spalten else None

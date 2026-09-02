@@ -290,9 +290,9 @@ def retire_vectors(store):
 # --------------------------------------------------------------------------
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None, sharepoint_dir=None,
-                pages_dir=None):
+                pages_dir=None, planner_dir=None):
     recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir,
-                               sharepoint_dir, pages_dir)
+                               sharepoint_dir, pages_dir, planner_dir)
     if corpus.POOL_FEHLER:
         # Nicht verschweigen: der Index stimmt, aber das Einlesen lief auf
         # einem Kern statt auf allen, und bei großen Beständen merkt man das.
@@ -400,6 +400,9 @@ def main():
     ap.add_argument("--pages",
                     default=settings.value("sharepoint_pages_dir",
                                            settings.SHAREPOINT_PAGES_DIR))
+    ap.add_argument("--planner",
+                    default=settings.value("planner_dir",
+                                           settings.PLANNER_DIR))
     ap.add_argument("--store", default=settings.value("store_dir", settings.STORE_DIR))
     ap.add_argument("--model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
@@ -412,14 +415,16 @@ def main():
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,
                               a.batch, embeddings=not a.no_embeddings,
                               onedrive_dir=a.onedrive,
-                              sharepoint_dir=a.sharepoint, pages_dir=a.pages)
+                              sharepoint_dir=a.sharepoint, pages_dir=a.pages,
+                              planner_dir=a.planner)
     # The Analytics tab reads a materialised block instead of aggregating on
     # every visit – this run just touched everything, so build it now. Its
     # failure must not fail the index.
     try:
         analytics_db.baue(a.store, {
             "teams": a.teams, "outlook": a.outlook, "onedrive": a.onedrive,
-            "sharepoint": a.sharepoint, "pages": a.pages})
+            "sharepoint": a.sharepoint, "pages": a.pages,
+            "planner": a.planner})
     except Exception as e:
         progress.event("run.index.analytics_failed", "warn",
                        error=f"{type(e).__name__}: {e}")

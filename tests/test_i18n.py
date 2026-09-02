@@ -198,7 +198,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
 SKRIPTE = ("outlook_export.py", "teams_export.py", "onedrive_export.py",
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",
-           "sharepoint_export.py")
+           "sharepoint_export.py", "planner_export.py")
 
 # Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
 # nirgends vollständig im Quelltext stehen.

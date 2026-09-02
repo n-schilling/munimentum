@@ -2,8 +2,8 @@
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
 channels, Outlook mail, calendar, contacts, OneDrive files, SharePoint
-libraries and SharePoint pages — exported through Microsoft Graph and
-searchable offline, in the app or through Claude via MCP.
+libraries and pages, and Planner boards — exported through Microsoft Graph
+and searchable offline, in the app or through Claude via MCP.
 
 **The magic:** All via delegated access, no admin consent required.
 
@@ -72,7 +72,8 @@ One browser page with four tabs.
 ### Export data
 
 Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and
-channel chats; OneDrive files; SharePoint libraries and SharePoint pages —
+channel chats; OneDrive files; SharePoint libraries and pages; Planner
+boards —
 and start. Nothing is preselected: any one of these can mean tens of
 thousands of items. Every run fetches only what is new, so the second one
 takes minutes rather than hours. Deleted items **stay in the archive** and
@@ -109,6 +110,15 @@ without downloading and tells you per library what a run would fetch, in
 files and megabytes, before you commit. The first run walks the library
 once, every later run asks Microsoft only for what has changed since — and
 an interrupted run resumes where it stopped instead of starting over.
+
+**Planner boards** are archived one standalone `board.html` per plan:
+buckets, cards with labels, assignees, checklists, descriptions — and the
+comments, the legacy ones from the group conversation as well as the new
+chat-based ones. List the board addresses in the settings, one per row with
+its own sync cadence; a task that disappears from the board stays in the
+archive, greyed, in a section of its own. Task texts and comments are
+full-text searchable under their own source. Reading needs Tasks.Read plus
+Group.Read.All for the legacy comments; the token wizard lists both.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all

@@ -10,6 +10,7 @@ Abweichung je gewollt war – hier steht jede Antwort einmal.
 Nur Standardbibliothek.
 """
 
+import json
 import os
 import re
 import sys
@@ -128,3 +129,42 @@ def cadence_faellig(cadence, letzter, jetzt=None):
         return True
     import time as _time
     return (jetzt if jetzt is not None else _time.time()) - letzter >= periode - 60
+
+
+# ---------------------------------------------------------------------------
+# Sync-Kadenz je Quell-URL – geteilt von den SharePoint- und Planner-Exporten
+# ---------------------------------------------------------------------------
+def kadenzen():
+    """Cadence per source URL, e.g. "planner-url:<url>" – from the app via
+    the SYNC_CADENCE environment, from settings when run without it."""
+    import settings
+    roh = os.environ.get("SYNC_CADENCE")
+    if roh is None:
+        roh = json.dumps(settings.value("sync_cadence", {}) or {})
+    try:
+        daten = json.loads(roh)
+    except ValueError:
+        return {}
+    return daten if isinstance(daten, dict) else {}
+
+
+def sync_jetzt():
+    """The per-row "Sync now" button: the run carries just that URL and
+    this flag – the cadence gate steps aside once."""
+    return bool((os.environ.get("SYNC_NOW") or "").strip())
+
+
+_KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}
+
+
+def haeufigere(a, b):
+    """Two URLs feeding one unit: the more frequent cadence wins."""
+    return a if _KADENZ_RANG.get(a, 0) <= _KADENZ_RANG.get(b, 0) else b
+
+
+def einheit_faellig(db, kadenz, kv_key="last_sync"):
+    if sync_jetzt() or (kadenz or "always") == "always":
+        return True
+    roh = db.kv_lesen(kv_key)
+    letzter = float(roh) if roh else None
+    return cadence_faellig(kadenz, letzter)

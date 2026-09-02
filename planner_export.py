@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""
+planner_export.py – Microsoft Planner boards as a local archive.
+
+One folder per plan, holding a standalone board.html (buckets, cards with
+labels, assignees, checklists, descriptions – and the COMMENTS) plus the
+plan's state.db with the raw task data. The mirror promise is the same as
+everywhere: the current version of the board is kept, and a task that
+disappears from the board stays here, rendered into a greyed "no longer on
+the board" section.
+
+Comments live in two worlds, and both come along:
+  * legacy: posts in the owning M365 group's conversation
+    (task.conversationThreadId) – read via /groups/{gid}/threads/{tid}/posts.
+    Change detection is cheap: one listing of the group's threads carries
+    lastDeliveredDateTime per thread.
+  * new (chat-based): GET /beta/planner/tasks/{id}/messages. There is no
+    change signal, so changed tasks are asked immediately and everything
+    else at most once per day (a full sweep per plan).
+
+Planner has no delta feed, but boards are small: every run lists all tasks
+(one paged call) and refreshes only what changed, by task etag. Absence in
+a clean listing is the deletion signal.
+
+Runs as a subprogram of app.py: output folder as the only argument,
+settings as environment variables (PLANNER_URLS – one plan URL per line;
+SYNC_CADENCE/SYNC_NOW – see export_util). Progress, results and failures
+are structured lines (progress.py).
+"""
+
+import html as html_lib
+import json
+import os
+import re
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+import auth
+import export_util
+import graph_client
+import progress
+import settings
+import state_db
+
+export_util.erzwinge_utf8()
+
+GRAPH = graph_client.GRAPH
+BETA = "https://graph.microsoft.com/beta"
+RES = "https://graph.microsoft.com/"
+SCOPES = [RES + "Tasks.Read", RES + "Group.Read.All", RES + "User.Read"]
+
+OUT_ROOT = settings.value("planner_dir", settings.PLANNER_DIR)
+SWEEP_S = 24 * 3600            # full new-comment sweep at most this often
+
+# Planner's fixed label palette – the plan's details name the categories,
+# the colours are Planner's own.
+FARBEN = {"category1": "#e8919b", "category2": "#eb8f5b", "category3": "#edc23e",
+          "category4": "#7bcf6f", "category5": "#4fc3ae", "category6": "#6fc4e8",
+          "category7": "#9db6e8", "category8": "#b89ae8", "category9": "#e094d8",
+          "category10": "#a8aeb8", "category11": "#8fd8b0", "category12": "#c9b98f",
+          "category13": "#95a5c6", "category14": "#c695a5", "category15": "#85c6c0",
+          "category16": "#c6b285", "category17": "#b0c685", "category18": "#c68585",
+          "category19": "#8595c6", "category20": "#a5c695",
+          "category21": "#c6a585", "category22": "#85c695", "category23": "#9585c6",
+          "category24": "#c68595", "category25": "#95c6b5"}
+
+
+def planner_urls():
+    roh = os.environ.get("PLANNER_URLS")
+    if roh is None:
+        roh = settings.value("planner_urls", "") or ""
+    return [z.strip() for z in str(roh).splitlines() if z.strip()]
+
+
+def plan_id_aus(url):
+    """The plan id from either Planner address – the new web UI
+    (…/webui/v1/plan/<id>/…) or the legacy one (…planId=<id>)."""
+    m = re.search(r"/plan/([A-Za-z0-9_-]{10,})", url)
+    if not m:
+        m = re.search(r"[?&]planId=([A-Za-z0-9_-]{10,})", url)
+    return m.group(1) if m else None
+
+
+class Graph(graph_client.Graph):
+    def __init__(self, nur_still=False):
+        super().__init__(SCOPES, nur_still=nur_still)
+
+
+class TokenClient(graph_client.TokenClient):
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Auflösen: URL -> Plan samt Kadenz
+# ---------------------------------------------------------------------------
+def resolve_plans(graph, urls):
+    """[(plan, kadenz)] for the configured URLs; broken URLs cost the others
+    nothing."""
+    kadenz_map = export_util.kadenzen()
+    plaene, fehl, gesehen = [], 0, {}
+    for url in urls:
+        pid = plan_id_aus(url)
+        if not pid:
+            progress.event("run.planner.bad_url", "err", url=url)
+            fehl += 1
+            continue
+        kadenz = kadenz_map.get(f"planner-url:{url}") or "always"
+        if pid in gesehen:
+            gesehen[pid]["kadenz"] = export_util.haeufigere(
+                gesehen[pid]["kadenz"], kadenz)
+            continue
+        try:
+            plan = graph.get(f"{GRAPH}/planner/plans/{pid}")
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.planner.plan_failed", "err", url=url,
+                           error=f"{type(e).__name__}: {e}")
+            fehl += 1
+            continue
+        container = plan.get("container") or {}
+        eintrag = {"id": pid, "titel": str(plan.get("title") or pid),
+                   "gruppe": (container.get("containerId")
+                              if container.get("type", "").lower() == "group"
+                              else plan.get("owner")),
+                   "kadenz": kadenz}
+        gesehen[pid] = eintrag
+        plaene.append(eintrag)
+    return plaene, fehl
+
+
+def plan_ziel(out, plan):
+    """One folder per plan; the id short-code keeps same-titled plans apart."""
+    name = f'{export_util.safe(plan["titel"])}__{export_util.kuerzel(plan["id"])}'
+    return Path(out) / name
+
+
+# ---------------------------------------------------------------------------
+# Holen
+# ---------------------------------------------------------------------------
+def _alle(graph, url):
+    return list(graph.paged(url))
+
+
+def _namen(graph, db, ids):
+    """user id -> display name, cached in the plan's state.db forever –
+    names hardly change, and the cache spares one request per person."""
+    try:
+        cache = json.loads(db.kv_lesen("namen") or "{}")
+    except ValueError:
+        cache = {}
+    neu = False
+    for kennung in ids:
+        if not kennung or kennung in cache:
+            continue
+        try:
+            u = graph.get(f"{GRAPH}/users/{kennung}?$select=displayName")
+            cache[kennung] = str(u.get("displayName") or kennung)
+        except auth.TokenExpired:
+            raise
+        except Exception:
+            cache[kennung] = kennung
+        neu = True
+    if neu:
+        db.kv_schreiben("namen", json.dumps(cache, ensure_ascii=False))
+    return cache
+
+
+def _saeubere(html):
+    """Comment HTML straight from Exchange/Planner: keep the markup, drop
+    the executable parts – the file must open harmlessly offline."""
+    html = re.sub(r"<script\b[^>]*>.*?</script>", "", html or "",
+                  flags=re.I | re.S)
+    html = re.sub(r"<style\b[^>]*>.*?</style>", "", html, flags=re.I | re.S)
+    return re.sub(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*'|\S+)", "", html)
+
+
+def _legacy_posts(graph, gruppe, thread):
+    posts = _alle(graph, f"{GRAPH}/groups/{gruppe}/threads/{thread}/posts")
+    out = []
+    for p in posts:
+        wer = ((p.get("from") or {}).get("emailAddress") or {})
+        out.append({"art": "legacy", "wer": str(wer.get("name")
+                                                or wer.get("address") or "?"),
+                    "wann": p.get("receivedDateTime") or "",
+                    "html": _saeubere(((p.get("body") or {}).get("content"))
+                                      or "")})
+    return out
+
+
+def _neue_kommentare(graph, task_id):
+    """The chat-based comments; 404 with "no chat thread" simply means none.
+    Returns None when the endpoint refused for another reason."""
+    try:
+        d = graph.get(f"{BETA}/planner/tasks/{task_id}/messages")
+    except auth.TokenExpired:
+        raise
+    except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", 0)
+        if status == 404:
+            return []
+        return None
+    out = []
+    for m in d.get("value", []):
+        if m.get("deletedDateTime"):
+            continue
+        out.append({"art": "neu",
+                    "wer": ((m.get("createdBy") or {}).get("user")
+                            or {}).get("id") or "?",
+                    "wann": m.get("createdDateTime") or "",
+                    "html": _saeubere(m.get("content") or "")})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Rendern
+# ---------------------------------------------------------------------------
+_PRIO = {1: "urgent", 3: "important", 5: "medium", 9: "low"}
+
+_STIL = """
+body{font-family:-apple-system,'Segoe UI',sans-serif;margin:24px;color:#222;
+  background:#fafafa;max-width:1100px}
+h1{font-size:22px} h2{font-size:16px;margin:26px 0 10px;border-bottom:1px solid #ddd;
+  padding-bottom:4px}
+.karte{background:#fff;border:1px solid #e2e2e2;border-radius:10px;
+  padding:12px 14px;margin:10px 0;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.karte.weg{opacity:.55;background:#f2f2f2}
+.kopf{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.kopf b{font-size:14px}
+.label{font-size:11px;padding:1px 8px;border-radius:99px;color:#222}
+.meta{color:#777;font-size:12px;margin:4px 0}
+.beschreibung{font-size:13px;white-space:pre-wrap;margin:6px 0}
+ul.check{list-style:none;padding-left:2px;font-size:13px;margin:6px 0}
+ul.check .done{text-decoration:line-through;color:#888}
+.kommentare{border-top:1px dashed #ddd;margin-top:8px;padding-top:6px}
+.kommentar{font-size:13px;margin:6px 0}
+.kommentar .wer{font-weight:600}
+.kommentar .wann{color:#999;font-size:11px;margin-left:6px}
+.refs a{font-size:12px;margin-right:10px}
+"""
+
+
+def _task_html(eintrag, labels, namen, weg=False):
+    t, det = eintrag.get("task") or {}, eintrag.get("details") or {}
+    teile = ['<div class="karte%s">' % (" weg" if weg else "")]
+    kopf = [f"<b>{html_lib.escape(str(t.get('title') or '?'))}</b>"]
+    for cat in sorted(t.get("appliedCategories") or {}):
+        name = labels.get(cat) or cat
+        kopf.append(f'<span class="label" style="background:'
+                    f'{FARBEN.get(cat, "#ddd")}">{html_lib.escape(name)}</span>')
+    teile.append('<div class="kopf">' + " ".join(kopf) + "</div>")
+    meta = []
+    zu = [namen.get(k, k) for k in (t.get("assignments") or {})]
+    if zu:
+        meta.append(", ".join(html_lib.escape(n) for n in sorted(zu)))
+    p = t.get("percentComplete") or 0
+    meta.append({0: "offen", 50: "in Arbeit", 100: "erledigt"}.get(p, f"{p}%"))
+    if t.get("priority") in _PRIO:
+        meta.append(_PRIO[t["priority"]])
+    if t.get("dueDateTime"):
+        meta.append("fällig " + str(t["dueDateTime"])[:10])
+    if weg and eintrag.get("deleted"):
+        meta.append("nicht mehr im Board seit " + str(eintrag["deleted"])[:10])
+    teile.append('<div class="meta">' + " · ".join(meta) + "</div>")
+    if det.get("description"):
+        teile.append('<div class="beschreibung">'
+                     + html_lib.escape(str(det["description"])) + "</div>")
+    punkte = sorted((det.get("checklist") or {}).values(),
+                    key=lambda c: str(c.get("orderHint") or ""))
+    if punkte:
+        teile.append('<ul class="check">' + "".join(
+            f'<li class="{"done" if c.get("isChecked") else ""}">'
+            f'{"☑" if c.get("isChecked") else "☐"} '
+            f'{html_lib.escape(str(c.get("title") or ""))}</li>'
+            for c in punkte) + "</ul>")
+    refs = det.get("references") or {}
+    if refs:
+        teile.append('<div class="refs">' + " ".join(
+            f'<a href="{html_lib.escape(url_encoded)}">'
+            f'{html_lib.escape(str((r or {}).get("alias") or "Link"))}</a>'
+            for url_encoded, r in refs.items()) + "</div>")
+    kommentare = eintrag.get("kommentare") or []
+    if kommentare:
+        teile.append('<div class="kommentare">' + "".join(
+            '<div class="kommentar"><span class="wer">'
+            + html_lib.escape(namen.get(k["wer"], k["wer"])) + "</span>"
+            + f'<span class="wann">{html_lib.escape(str(k["wann"])[:16])}</span>'
+            + f'<div>{k["html"]}</div></div>'
+            for k in sorted(kommentare, key=lambda k: k["wann"])) + "</div>")
+    teile.append("</div>")
+    return "".join(teile)
+
+
+def render_board(plan, buckets, eintraege, labels, namen):
+    jetzt = datetime.now(UTC).isoformat(timespec="seconds")
+    teile = ["<!doctype html><html><head><meta charset=\"utf-8\">"
+             f"<title>{html_lib.escape(plan['titel'])}</title>"
+             f"<style>{_STIL}</style></head><body>"
+             f"<h1>{html_lib.escape(plan['titel'])}</h1>"
+             f'<p class="meta">Stand {jetzt}</p>']
+    lebend = [e for e in eintraege.values() if not e.get("deleted")]
+    reihen = sorted(buckets.values(), key=lambda b: str(b.get("orderHint") or ""))
+    for b in reihen:
+        im_bucket = sorted(
+            (e for e in lebend
+             if (e.get("task") or {}).get("bucketId") == b["id"]),
+            key=lambda e: str((e.get("task") or {}).get("orderHint") or ""))
+        if not im_bucket:
+            continue
+        teile.append(f"<h2>{html_lib.escape(str(b.get('name') or '?'))} "
+                     f"({len(im_bucket)})</h2>")
+        teile += [_task_html(e, labels, namen) for e in im_bucket]
+    ohne = [e for e in lebend
+            if (e.get("task") or {}).get("bucketId") not in
+            {b["id"] for b in reihen}]
+    if ohne:
+        teile.append("<h2>Ohne Bucket</h2>")
+        teile += [_task_html(e, labels, namen) for e in ohne]
+    weg = sorted((e for e in eintraege.values() if e.get("deleted")),
+                 key=lambda e: str(e.get("deleted")), reverse=True)
+    if weg:
+        teile.append("<h2>Nicht mehr im Board</h2>")
+        teile += [_task_html(e, labels, namen, weg=True) for e in weg]
+    teile.append("</body></html>")
+    return "".join(teile)
+
+
+# ---------------------------------------------------------------------------
+# Der Lauf
+# ---------------------------------------------------------------------------
+def plan_lauf(graph, out, plan, threads_cache):
+    """One plan: list, refresh what changed, mark what vanished, render."""
+    ziel = plan_ziel(out, plan)
+    db = state_db.StateDb(ziel)
+    try:
+        eintraege = json.loads(db.kv_lesen("tasks") or "{}")
+    except ValueError:
+        eintraege = {}
+
+    details = graph.get(f"{GRAPH}/planner/plans/{plan['id']}/details")
+    labels = {k: v for k, v in
+              (details.get("categoryDescriptions") or {}).items() if v}
+    buckets = {b["id"]: b for b in
+               _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/buckets")}
+    tasks = _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/tasks")
+
+    # Which legacy threads moved since last time – ONE listing per group.
+    gruppe = plan.get("gruppe")
+    if gruppe and gruppe not in threads_cache:
+        try:
+            threads_cache[gruppe] = {
+                th["id"]: th.get("lastDeliveredDateTime") or ""
+                for th in _alle(graph, f"{GRAPH}/groups/{gruppe}/threads")}
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            threads_cache[gruppe] = None
+            progress.event("run.planner.comments_failed", "warn",
+                           name=plan["titel"],
+                           error=f"{type(e).__name__}: {e}")
+    threads = threads_cache.get(gruppe)
+    try:
+        stand_threads = json.loads(db.kv_lesen("threads") or "{}")
+    except ValueError:
+        stand_threads = {}
+
+    sweep = export_util.sync_jetzt() or \
+        (time.time() - float(db.kv_lesen("sweep") or 0)) > SWEEP_S
+    neu = unveraendert = fehler = 0
+    gesehen = set()
+    for t in tasks:
+        tid = t.get("id")
+        if not tid:
+            continue
+        gesehen.add(tid)
+        alt = eintraege.get(tid) or {}
+        etag_neu = t.get("@odata.etag") or ""
+        geaendert = alt.get("etag") != etag_neu or alt.get("deleted")
+        thread = t.get("conversationThreadId")
+        legacy_neu = bool(thread and threads is not None and
+                          threads.get(thread, "") !=
+                          stand_threads.get(thread, ""))
+        if not (geaendert or legacy_neu or sweep):
+            unveraendert += 1
+            continue
+        eintrag = {"etag": etag_neu, "task": t, "deleted": None,
+                   "details": alt.get("details"),
+                   "kommentare": alt.get("kommentare") or []}
+        try:
+            if geaendert or not eintrag["details"]:
+                eintrag["details"] = graph.get(
+                    f"{GRAPH}/planner/tasks/{tid}/details")
+            kommentare = []
+            if thread and gruppe and threads is not None:
+                kommentare += _legacy_posts(graph, gruppe, thread)
+                stand_threads[thread] = threads.get(thread, "")
+            elif thread:
+                kommentare += [k for k in eintrag["kommentare"]
+                               if k["art"] == "legacy"]
+            neue = _neue_kommentare(graph, tid) if (geaendert or sweep) \
+                else None
+            kommentare += (neue if neue is not None else
+                           [k for k in eintrag["kommentare"]
+                            if k["art"] == "neu"])
+            eintrag["kommentare"] = kommentare
+            eintraege[tid] = eintrag
+            neu += 1
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            fehler += 1
+            progress.event("run.planner.task_failed", "err",
+                           name=str(t.get("title") or tid)[:60],
+                           error=f"{type(e).__name__}: {e}")
+    # Absence in a complete, error-free listing is the deletion signal –
+    # the record stays, the card moves to the greyed section.
+    if not fehler:
+        jetzt = datetime.now(UTC).isoformat(timespec="seconds")
+        for tid, e in eintraege.items():
+            if tid not in gesehen and not e.get("deleted"):
+                e["deleted"] = jetzt
+    if sweep and not fehler:
+        db.kv_schreiben("sweep", str(time.time()))
+
+    kennungen = set()
+    for e in eintraege.values():
+        kennungen |= set((e.get("task") or {}).get("assignments") or {})
+        kennungen |= {k["wer"] for k in e.get("kommentare") or []
+                      if k["art"] == "neu"}
+    namen = _namen(graph, db, kennungen)
+
+    db.kv_schreiben("plan", json.dumps(
+        {"id": plan["id"], "titel": plan["titel"], "labels": labels,
+         "buckets": {b["id"]: str(b.get("name") or "") for b in
+                     buckets.values()}}, ensure_ascii=False))
+    db.kv_schreiben("tasks", json.dumps(eintraege, ensure_ascii=False))
+    db.kv_schreiben("threads", json.dumps(stand_threads, ensure_ascii=False))
+    ziel.mkdir(parents=True, exist_ok=True)
+    export_util.schreibe_atomar(
+        ziel / "board.html",
+        render_board(plan, buckets, eintraege, labels, namen))
+    progress.event("run.planner.plan", name=plan["titel"], n=len(tasks))
+    return neu, unveraendert, fehler
+
+
+def lauf(graph, out, plaene, fehl=0):
+    out = Path(out)
+    neu = unveraendert = fehler = uebersprungen = 0
+    threads_cache = {}
+    for plan in plaene:
+        db = state_db.StateDb(plan_ziel(out, plan))
+        kadenz = plan.get("kadenz") or "always"
+        if not export_util.einheit_faellig(db, kadenz):
+            uebersprungen += 1
+            progress.event("run.cadence.skip", name=plan["titel"],
+                           cadence=progress.atom(f"cadence.{kadenz}"))
+            continue
+        try:
+            n, u, f = plan_lauf(graph, out, plan, threads_cache)
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.planner.plan_failed", "err",
+                           url=plan["titel"],
+                           error=f"{type(e).__name__}: {e}")
+            fehl += 1
+            continue
+        neu, unveraendert, fehler = neu + n, unveraendert + u, fehler + f
+        if not f:
+            db.kv_schreiben("last_sync",
+                            str(datetime.now(UTC).timestamp()))
+    progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
+                      extra={"plans": len(plaene),
+                             **({"skipped": uebersprungen}
+                                if uebersprungen else {})})
+
+
+def main():
+    argv = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if export_util.hilfe_gewuenscht(sys.argv[1:]):
+        print(__doc__)
+        return
+    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    urls = planner_urls()
+    if not urls:
+        progress.event("run.planner.none", "warn")
+        progress.ergebnis(0)
+        return
+    graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    try:
+        plaene, fehl = resolve_plans(graph, urls)
+        lauf(graph, out, plaene, fehl)
+    except auth.TokenExpired:
+        progress.fehler("token_expired")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
