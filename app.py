@@ -4900,7 +4900,10 @@ var ordnerJeQuelle = {}, typenJeQuelle = {}, ordnerStand = null;
 var ORDNER_ALLE = {
   kalender: 'search.folder.all.kalender',
   teams:    'search.folder.all.teams',
-  kontakte: 'search.folder.all.kontakte'
+  kontakte: 'search.folder.all.kontakte',
+  planner:  'search.folder.all.planner',
+  sharepoint: 'search.folder.all.sharepoint',
+  pages:    'search.folder.all.pages'
 };
 
 /* Die vier Teams-Arten heißen im Index nach ihrem Ablageordner. Das ist
