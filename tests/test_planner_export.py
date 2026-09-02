@@ -267,3 +267,49 @@ def test_board_ist_dreistufig_zugeklappt(tmp_path):
         "Kommentarzahl fehlt in der zugeklappten Zeile"
     assert "<details open" not in html and " open>" not in html, \
         "nichts darf aufgeklappt starten"
+
+
+def test_legacy_diff_erst_ab_dem_zweiten_lauf(tmp_path):
+    """Der Erstlauf holt alle Posts OHNE die Auflistung der kompletten
+    Gruppen-Konversation (bei großen Gruppen Minuten an Stille); ab dem
+    zweiten Lauf entscheidet die Auflistung, welcher Faden sich bewegt hat."""
+    def fake(posts, geliefert):
+        return _Graph({
+            "/planner/plans/p1/details": {"categoryDescriptions": {}},
+            "/planner/plans/p1/buckets": {"value": [
+                {"id": "b1", "name": "Offen", "orderHint": "a"}]},
+            "/planner/plans/p1/tasks": {"value": [
+                _task("t1", "Aufgabe A", thread="th1")]},
+            "/planner/tasks/t1/details": {"description": "", "checklist": {},
+                                          "references": {}},
+            "/groups/g1/threads/th1/posts": {"value": posts},
+            "/groups/g1/threads?$top=100": {"value": [
+                {"id": "th1", "lastDeliveredDateTime": geliefert}]},
+            "beta/planner/tasks/t1/messages": {"value": []},
+            "/users/": {"displayName": "Alice Beispiel"},
+        })
+
+    def post(wann):
+        return {"from": {"emailAddress": {"name": "Bob"}},
+                "receivedDateTime": wann, "body": {"content": "<div>x</div>"}}
+
+    g = fake([post("2026-07-01T10:00:00Z")], "2026-07-01T10:00:00Z")
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    assert not any("$top=100" in u for u in g.aufrufe), \
+        "Erstlauf listet die Gruppen-Konversation"
+
+    # Zweiter Lauf, Faden bewegt: Auflistung läuft, Posts kommen neu.
+    g2 = fake([post("2026-07-01T10:00:00Z"), post("2026-07-05T09:00:00Z")],
+              "2026-07-05T09:00:00Z")
+    pl.plan_lauf(g2, tmp_path, PLAN, {})
+    assert any("$top=100" in u for u in g2.aufrufe)
+    assert any("/th1/posts" in u for u in g2.aufrufe)
+    db = state_db.StateDb(pl.plan_ziel(tmp_path, PLAN))
+    eintraege = json.loads(db.kv_lesen("tasks"))
+    assert len(eintraege["t1"]["kommentare"]) == 2
+
+    # Dritter Lauf, nichts bewegt: keine Post-Abrufe mehr.
+    g3 = fake([], "2026-07-05T09:00:00Z")
+    pl.plan_lauf(g3, tmp_path, PLAN, {})
+    assert not any("/th1/posts" in u for u in g3.aufrufe), \
+        "unbewegter Faden wurde erneut geholt"

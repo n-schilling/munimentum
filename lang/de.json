@@ -786,5 +786,6 @@
   "run.planner.ref_failed": "Anhang von „{name}“ nicht geholt ({error}) – die Karte behält den Online-Link.",
   "run.planner.plan": "{name}: {n} Aufgaben.",
   "run.planner.start": "{name}: {n} Aufgaben, davon {m} aufzufrischen…",
+  "run.planner.threads": "{name}: Gruppen-Konversation wird auf Kommentar-Änderungen geprüft…",
   "run.planner.none": "Keine Board-URLs für den Planner-Export eingetragen – nichts zu tun."
 }

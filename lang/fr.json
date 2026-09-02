@@ -786,5 +786,6 @@
   "run.planner.ref_failed": "Pièce jointe de « {name} » non récupérée ({error}) – la carte garde le lien en ligne.",
   "run.planner.plan": "{name} : {n} tâches.",
   "run.planner.start": "{name} : {n} tâches, dont {m} à rafraîchir…",
+  "run.planner.threads": "{name} : vérification des changements de commentaires dans la conversation de groupe…",
   "run.planner.none": "Aucune URL de tableau pour l’export Planner – rien à faire."
 }

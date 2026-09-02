@@ -786,5 +786,6 @@
   "run.planner.ref_failed": "Attachment of “{name}” not fetched ({error}) – the card keeps the online link.",
   "run.planner.plan": "{name}: {n} tasks.",
   "run.planner.start": "{name}: {n} tasks, {m} to refresh…",
+  "run.planner.threads": "{name}: checking the group conversation for comment changes…",
   "run.planner.none": "No board URLs configured for the Planner export – nothing to do."
 }

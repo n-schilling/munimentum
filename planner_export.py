@@ -461,13 +461,24 @@ def plan_lauf(graph, out, plan, threads_cache):
                _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/buckets")}
     tasks = _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/tasks")
 
-    # Which legacy threads moved since last time – ONE listing per group.
     gruppe = plan.get("gruppe")
-    if gruppe and gruppe not in threads_cache:
+    try:
+        stand_threads = json.loads(db.kv_lesen("threads") or "{}")
+    except ValueError:
+        stand_threads = {}
+    # Which legacy threads moved since last time – ONE listing per group.
+    # NOT on the first comment sync: there every post is fetched anyway, and
+    # the listing walks the group's ENTIRE conversation store (Teams posts
+    # included) at Graph's tiny page size – on a big group that is minutes
+    # of silence for nothing.
+    erste = not stand_threads
+    if gruppe and not erste and gruppe not in threads_cache:
+        progress.event("run.planner.threads", name=plan["titel"])
         try:
             threads_cache[gruppe] = {
                 th["id"]: th.get("lastDeliveredDateTime") or ""
-                for th in _alle(graph, f"{GRAPH}/groups/{gruppe}/threads")}
+                for th in _alle(graph,
+                                f"{GRAPH}/groups/{gruppe}/threads?$top=100")}
         except auth.TokenExpired:
             raise
         except Exception as e:
@@ -476,10 +487,6 @@ def plan_lauf(graph, out, plan, threads_cache):
                            name=plan["titel"],
                            error=f"{type(e).__name__}: {e}")
     threads = threads_cache.get(gruppe)
-    try:
-        stand_threads = json.loads(db.kv_lesen("threads") or "{}")
-    except ValueError:
-        stand_threads = {}
 
     sweep = export_util.sync_jetzt() or \
         (time.time() - float(db.kv_lesen("sweep") or 0)) > SWEEP_S
@@ -498,9 +505,9 @@ def plan_lauf(graph, out, plan, threads_cache):
         etag_neu = t.get("@odata.etag") or ""
         geaendert = alt.get("etag") != etag_neu or alt.get("deleted")
         thread = t.get("conversationThreadId")
-        legacy_neu = bool(thread and threads is not None and
-                          threads.get(thread, "") !=
-                          stand_threads.get(thread, ""))
+        legacy_neu = bool(thread and (erste or (
+            threads is not None and threads.get(thread, "") !=
+            stand_threads.get(thread, ""))))
         if not (geaendert or legacy_neu or sweep):
             unveraendert += 1
             continue
@@ -525,9 +532,14 @@ def plan_lauf(graph, out, plan, threads_cache):
                 else:
                     eintrag["anhaenge"] = alt.get("anhaenge") or {}
             kommentare = []
-            if thread and gruppe and threads is not None:
+            if thread and gruppe and (erste or threads is not None):
                 kommentare += _legacy_posts(graph, gruppe, thread)
-                stand_threads[thread] = threads.get(thread, "")
+                # Ohne Auflistung (Erstlauf) datiert der letzte Post den
+                # Faden – lastDeliveredDateTime der Gruppe ist genau das.
+                stand_threads[thread] = (
+                    threads.get(thread, "") if threads is not None else
+                    max((k["wann"] for k in kommentare
+                         if k["art"] == "legacy"), default=""))
             elif thread:
                 kommentare += [k for k in eintrag["kommentare"]
                                if k["art"] == "legacy"]
