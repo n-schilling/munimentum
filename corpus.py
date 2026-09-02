@@ -827,6 +827,7 @@ def load_planner(root_dir):
         try:
             plan = json.loads(db.kv_lesen("plan") or "{}")
             eintraege = json.loads(db.kv_lesen("tasks") or "{}")
+            namen = json.loads(db.kv_lesen("namen") or "{}")
         except ValueError:
             continue
         if not eintraege:
@@ -843,7 +844,13 @@ def load_planner(root_dir):
             anhaenge = " ".join(
                 str((ref or {}).get("alias") or "").replace(" ", "_")
                 for ref in (det.get("references") or {}).values()).strip()
-            leute = sorted({k.get("wer") or "" for k in kommentare} - {""})
+            # Zuständige UND Kommentar-Autoren, GUIDs über den Namenscache
+            # des Exports aufgelöst – rohe IDs sagen in der Trefferliste
+            # niemandem etwas.
+            zustaendig = sorted(namen.get(k, k)
+                                for k in (task.get("assignments") or {}))
+            leute = sorted({namen.get(k.get("wer") or "", k.get("wer") or "")
+                            for k in kommentare} - {""})
             text = "\n".join(
                 [str(det.get("description") or "")]
                 + [str(c.get("title") or "") for c in
@@ -857,7 +864,8 @@ def load_planner(root_dir):
             satz = {
                 "uid": f"planner:{ordner.name}/{tid}:0", "src": "planner",
                 "root": "planner", "rel": rel,
-                "who": ", ".join(leute[:3]), "ppl": " ".join(leute).lower(),
+                "who": ", ".join((zustaendig or leute)[:3]),
+                "ppl": " ".join(zustaendig + leute).lower(),
                 "ts": ts.timestamp() if ts else None,
                 "date": ts.strftime("%Y-%m-%d %H:%M") if ts else "",
                 "title": str(task.get("title") or "(ohne Titel)"),

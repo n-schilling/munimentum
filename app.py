@@ -1707,6 +1707,7 @@ class SearchBridge:
                 onedrive_dir=str(BASE / ONEDRIVE_DIR),
                 sharepoint_dir=str(BASE / SHAREPOINT_DIR),
                 pages_dir=str(BASE / SHAREPOINT_PAGES_DIR),
+                planner_dir=str(BASE / PLANNER_DIR),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
