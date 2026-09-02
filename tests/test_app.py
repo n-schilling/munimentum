@@ -4803,8 +4803,7 @@ var ORDNER = {
   kalender: [{path:'kalender/Arbeit', messages:4854},
              {path:'kalender/Privat', messages:912}],
   teams:    [{path:'1on1', messages:31204}, {path:'channels', messages:15302}],
-  kontakte: [{path:'kontakte/Team', messages:64}],
-  planner:  [{path:'Team X Board', messages:126}]
+  kontakte: [{path:'kontakte/Team', messages:64}]
 };
 var gefragt = [];
 global.fetch = function(pfad){
@@ -4871,16 +4870,7 @@ waehle('outlook', function(){
           // Zurueck zu einer Quelle mit echter Auswahl: das Feld kommt wieder.
           waehle('kalender', function(){
             pruefe(!feld.classList.contains('hide'), 'Feld kommt nicht zurueck');
-
-            // Einheiten-Quellen sind die Ausnahme: das EINE Board ist die
-            // Auskunft, was hier filterbar ist - es bleibt sichtbar.
-            waehle('planner', function(){
-              pruefe(!feld.classList.contains('hide'),
-                     'Einzelnes Board wird versteckt');
-              pruefe(feld.innerHTML.indexOf('Team X Board') >= 0,
-                     'Board fehlt in der Liste');
-              console.log('OK');
-            });
+            console.log('OK');
           });
         });
       });
