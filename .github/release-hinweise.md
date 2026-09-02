@@ -1,16 +1,26 @@
-## New in 6.2.0
+## New in 6.3.0
 
-**One state.db per export folder.** Outlook, Teams and OneDrive now keep
-their bookkeeping the way the SharePoint exports always did: one SQLite
-file inside the output folder instead of loose TSV/JSON files. Inventory
-and resume data advance in transactions, and deleting an export folder
-still takes its state with it.
+**Planner boards are archived — comments included.** List board addresses in
+the settings, one per row with its own sync cadence, and every plan becomes
+a standalone `board.html`: swimlane chips up top, lanes that open into a
+compact task list, cards that unfold into description, checklist and — one
+more click — the comments, the legacy ones from the group conversation as
+well as the new chat-based ones. A task that leaves the board stays in the
+archive, greyed. Files a task references can be downloaded next to the
+board on request. Task texts, comments and attachment names are searchable
+under their own source, the boards appear in the file browser, and reading
+needs Tasks.Read plus Group.Read.All for the legacy comments.
 
-**The move is automatic.** On first start the app finds the old layout,
-says so in the log, and migrates everything by itself — resume data
-included, so a half-finished export continues exactly where it stopped.
-Until it is done, the whole interface waits (exports, search, everything);
-the old files remain next to the data as `.bak` copies.
+**The Analytics tab opens instantly.** Its numbers are computed once per
+index run and stored, instead of being recalculated on every visit — and
+communication and files are kept apart now: a mirrored PDF no longer fills
+a gap in the message timeline, and the mirrors get their own tiles and
+type ranking. Runs and completeness checks live together under Health.
+
+**Every run keeps its log.** The log lines of each run are stored in the
+run history and can be unfolded inline under Analytics → Health; how long
+they are kept is its own setting (14 days by default), separate from the
+run rows themselves.
 
 ## Which file?
 

@@ -118,9 +118,10 @@ chat-based ones. List the board addresses in the settings, one per row with
 its own sync cadence; a task that disappears from the board stays in the
 archive, greyed, in a section of its own. Files a task references can be
 downloaded next to the board on request — the cards then link the local
-copies — since the library behind a board is rarely mirrored on its own. Task texts and comments are
-full-text searchable under their own source. Reading needs Tasks.Read plus
-Group.Read.All for the legacy comments; the token wizard lists both.
+copies — since the library behind a board is rarely mirrored on its own.
+Task texts, comments and attachment names are full-text searchable under
+their own source. Reading needs Tasks.Read plus Group.Read.All for the
+legacy comments; the token wizard lists both.
 
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all
@@ -151,11 +152,11 @@ original file.
 
 Four views live here: results, calendar (including appointments recovered
 from invitation and cancellation mails), the address book, and a **file
-browser** that walks the mirrored drives — OneDrive and each SharePoint
-library — folder by folder, straight from the index: originals one click
-away, deleted files marked, and *Search here* turns the current folder into
-a search filter. In the filters, OneDrive, SharePoint files and SharePoint
-pages are each their own source.
+browser** that walks the mirrored drives — OneDrive, each SharePoint
+library and the Planner boards — folder by folder, straight from the index:
+originals one click away, deleted files marked, and *Search here* turns the
+current folder into a search filter. In the filters, OneDrive, SharePoint
+files, SharePoint pages and Planner are each their own source.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
