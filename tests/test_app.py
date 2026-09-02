@@ -532,6 +532,26 @@ def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
     assert steps[0]["corpus"] is True
 
 
+def test_planner_schritt_wird_gebaut(sandbox):
+    """Regression: das Teilprogramm stand nicht in RUNNABLE – der Klick auf
+    „Export starten" endete in einem leeren Alert statt in einem Lauf."""
+    cfg = app_mod.load_config()
+    url = "https://planner.cloud.microsoft/webui/v1/plan/abcdefID123/view"
+    cfg["planner_urls"] = url
+    cfg["planner_attachments"] = True
+    steps = app_mod.build_steps(cfg, planner=True)
+    assert [s["key"] for s in steps] == ["planner"]
+    assert steps[0]["env"]["PLANNER_URLS"] == url
+    assert steps[0]["env"]["PLANNER_ATTACHMENTS"] == "1"
+    assert steps[0]["corpus"] is True
+
+    nur = app_mod.build_steps(cfg, planner=True, nur_einheit=url)
+    assert nur[0]["env"]["SYNC_NOW"] == "1"
+
+    index = app_mod.build_steps(cfg, index=True)
+    assert "--planner" in index[0]["argv"]
+
+
 def test_index_schritt_kennt_den_sharepoint_ordner(sandbox):
     cfg = app_mod.load_config()
     steps = app_mod.build_steps(cfg, index=True)

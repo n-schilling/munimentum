@@ -89,7 +89,8 @@ RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             # Anmeldeweg gilt, liegt ein Schlüssel vor, gibt es einen Cache.
             # Im Bündel ist das der einzige Weg, das ohne Netz zu prüfen –
             # der Rauchtest tut genau das.
-            "auth", "onedrive_export", "sharepoint_export")
+            "auth", "onedrive_export", "sharepoint_export",
+            "planner_export")
 
 
 def resource_dir():
@@ -4605,7 +4606,9 @@ function run(what, label){
   what.label = label;
   merke('flow.run', label);
   post('/api/run', what).then(function(r){
-    if(!r.ok) alert(mtext(r.message));
+    // Auch ein 500 hat eine Aussage: lieber die rohe Fehlerzeile als ein
+    // leerer Alert, hinter dem niemand etwas suchen kann.
+    if(!r.ok) alert(mtext(r.message) || String(r.error || r.message || ''));
     refresh();
   });
 }
