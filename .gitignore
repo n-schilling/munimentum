@@ -37,3 +37,6 @@ sharepoint_pages/
 planner_export/
 rag_store/
 app.log
+# Der Daten-Split (6.4): Exporte wandern unter data/, der Rest bleibt.
+data/
+datenordner.txt

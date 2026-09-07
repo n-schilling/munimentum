@@ -132,50 +132,62 @@ def zeiger_datei():
     return standard_data_dir() / ZEIGER_DATEI
 
 
-def lies_zeiger():
-    try:
-        roh = zeiger_datei().read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    if not roh:
-        return None
-    ziel = Path(roh).expanduser()
-    # Ein Zeiger auf einen Ordner, den es nicht mehr gibt (externe Platte ab),
-    # darf die App nicht am Starten hindern – dann eben wieder der Standardort.
-    return ziel.resolve() if ziel.is_dir() else None
+
+
+DATEN_UNTERORDNER = "data"
 
 
 def data_dir():
-    """Verzeichnis für Exporte, Index, Konfiguration und Token.
+    """Der HEIMATORDNER der App: Konfiguration, Token, Laufhistorie.
 
-    Reihenfolge wie überall im Projekt: Umgebung schlägt Datei schlägt Vorgabe.
-    Mit MUNIMENTUM_DATA_DIR bzw. --data-dir für einen einzelnen Lauf, mit dem
-    Zeiger dauerhaft (z. B. eine externe Platte – ein Postfach kann
-    zweistellige Gigabyte haben).
+    Vier Ebenen, bewusst getrennt: (1) die Anwendung selbst liegt, wo das
+    Betriebssystem sie hinlegt; (2) dieser Heimatordner ist FEST – nur so
+    kann die Konfiguration hier liegen und selbst sagen, wo (3) der Index
+    (index_dir) und (4) die Exporte (data_dir) wohnen; beide sind per
+    Vorgabe Unterordner von hier. MUNIMENTUM_DATA_DIR bzw. --data-dir
+    bleiben der Alles-in-einem-Override für einzelne Läufe und Tests.
+
+    Munimentum verschiebt dabei NIE selbst Daten – wer Ordner umzieht, tut
+    das von Hand und stellt danach die Pfade um.
     """
     env = settings.data_dir_env()
     if env:
         return Path(env).expanduser().resolve()
-    return lies_zeiger() or standard_data_dir()
+    return standard_data_dir()
+
+
+def _split_pfade(heim):
+    """(Exportwurzel, Indexordner) – im Override-Modus flach wie früher."""
+    if settings.data_dir_env():
+        return heim, heim / STORE_DIR
+    cfg = settings.load()
+    daten = (Path(str(cfg.get("data_dir"))).expanduser().resolve()
+             if cfg.get("data_dir") else heim / DATEN_UNTERORDNER)
+    store = (Path(str(cfg.get("index_dir"))).expanduser().resolve()
+             if cfg.get("index_dir") else heim / STORE_DIR)
+    return daten, store
 
 
 RES = resource_dir()
-BASE = data_dir()
-CONFIG_FILE = BASE / settings.CONFIG_NAME   # dieselbe Datei, die die Einzelskripte lesen
-TOKEN_FILE = BASE / "gx_token.txt"
+HEIM = data_dir()
+CONFIG_FILE = HEIM / settings.CONFIG_NAME   # dieselbe Datei, die die Einzelskripte lesen
+TOKEN_FILE = HEIM / "gx_token.txt"
+BASE, STORE_PFAD = None, None                # unten gesetzt, nach STORE_DIR
 
 
 def set_data_dir(path):
-    """Datenverzeichnis umhängen (--data-dir). Liefert den neuen Pfad."""
-    global BASE, CONFIG_FILE, TOKEN_FILE
-    BASE = Path(path).expanduser().resolve()
-    CONFIG_FILE = BASE / settings.CONFIG_NAME
-    TOKEN_FILE = BASE / "gx_token.txt"
+    """Alles-in-einem-Override (--data-dir). Liefert den neuen Pfad."""
+    global HEIM, BASE, STORE_PFAD, CONFIG_FILE, TOKEN_FILE
+    HEIM = Path(path).expanduser().resolve()
+    BASE = HEIM
+    STORE_PFAD = HEIM / STORE_DIR
+    CONFIG_FILE = HEIM / settings.CONFIG_NAME
+    TOKEN_FILE = HEIM / "gx_token.txt"
     # Die Teilprogramme suchen ihre Vorgaben über dieselbe Variable – sonst läse
     # ein Unterprozess die Datei neben dem Skript statt die hier gewählte.
-    os.environ["MUNIMENTUM_DATA_DIR"] = str(BASE)
+    os.environ["MUNIMENTUM_DATA_DIR"] = str(HEIM)
     settings.reset()
-    return BASE
+    return HEIM
 
 def pruefe_datenordner(pfad):
     """Taugt der Ordner? Liefert (Pfad, Fehlerschlüssel).
@@ -198,18 +210,6 @@ def pruefe_datenordner(pfad):
     return ziel.resolve(), None
 
 
-def schreibe_zeiger(pfad):
-    """Den Zeiger setzen – oder löschen, wenn er auf den Standardort zeigt."""
-    datei = zeiger_datei()
-    try:
-        datei.parent.mkdir(parents=True, exist_ok=True)
-        if Path(pfad).resolve() == standard_data_dir().resolve():
-            datei.unlink(missing_ok=True)
-        else:
-            datei.write_text(str(pfad) + "\n", encoding="utf-8")
-        return True
-    except OSError:
-        return False
 
 
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
@@ -228,6 +228,7 @@ SHAREPOINT_PAGES_DIR = settings.SHAREPOINT_PAGES_DIR
 PLANNER_DIR = settings.PLANNER_DIR
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
+BASE, STORE_PFAD = _split_pfade(HEIM)
 
 # Kategorie -> Graph-Berechtigung. Der Assistent prüft damit, ob der eingefügte
 # Token für das reicht, was ausgewählt ist (scp-Claim im JWT).
@@ -693,7 +694,7 @@ def analytics_daten(cfg, neu=False):
     """The Analytics payload: the materialised block plus the completeness
     reports, with the person skip list applied at read time so a settings
     change acts immediately."""
-    store = BASE / STORE_DIR
+    store = STORE_PFAD
     daten = None if neu else analytics_db.lies(store)
     if daten is None:
         # Erster Aufruf nach einem Update (oder ausdrückliches Aktualisieren):
@@ -719,7 +720,7 @@ def analytics_daten(cfg, neu=False):
 
 def store_status(cfg):
     """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
-    store = BASE / STORE_DIR
+    store = STORE_PFAD
     db = store_layout.db_path(store)
     info = store_layout.info(store)
     out = {"dir": str(store), "exists": db.exists(), "chunks": 0, "messages": 0,
@@ -927,7 +928,7 @@ def _flag(value):
 
 
 def calendar_file(cfg):
-    return BASE / STORE_DIR / "calendar.json"
+    return STORE_PFAD / "calendar.json"
 
 
 def calendar_plan(cfg):
@@ -986,7 +987,10 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
     # weiß – etwa weil in diesem Lauf gar keine Mails geholt wurden.
     if reconstruct is None:
         reconstruct = bool(cfg.get("calendar_reconstruct", True))
-    base_env = {"PYTHONUNBUFFERED": "1", "EXPORT_WORKERS": str(cfg.get("workers", 4)),
+    # Unterprozesse (und auths MSAL-Cache) finden Konfiguration und Token
+    # über MUNIMENTUM_HOME im festen Heimatordner – unabhängig vom Datenordner.
+    base_env = {"PYTHONUNBUFFERED": "1", "MUNIMENTUM_HOME": str(HEIM),
+                "EXPORT_WORKERS": str(cfg.get("workers", 4)),
                 "MIRROR_WORKERS": str(cfg.get("mirror_workers") or 8),
                 **_auth_env(cfg)}
     if token:
@@ -1067,7 +1071,8 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                            ONEDRIVE_DIR, "--sharepoint", SHAREPOINT_DIR,
                            "--pages", SHAREPOINT_PAGES_DIR,
                            "--planner", PLANNER_DIR,
-                           "--store", STORE_DIR, "--model", cfg["embed_model"],
+                           "--store", str(STORE_PFAD),
+                           "--model", cfg["embed_model"],
                            "--ollama", cfg["ollama"],
                            "--batch", cfg.get("index_batch", 128))
         if not embeddings:
@@ -1079,7 +1084,7 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
             # Hat der Export nichts Neues gebracht, indiziert dieser Schritt
             # denselben Bestand ein zweites Mal. "ziel" ist die Bedingung, unter
             # der das Auslassen sicher ist: nur wenn es schon einen Index gibt.
-            "nur_bei_neuem": True, "ziel": store_layout.db_path(BASE / STORE_DIR),
+            "nur_bei_neuem": True, "ziel": store_layout.db_path(STORE_PFAD),
         })
     if calendar:
         # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
@@ -1556,14 +1561,17 @@ def mcp_client_config(cfg, port):
     unbekannten Arbeitsverzeichnis.
     """
     argv = script_argv("mcp_server", "--transport", "stdio",
-                       "--data-dir", str(BASE))
+                       "--data-dir", str(BASE), "--store", str(STORE_PFAD))
     if not cfg.get("ollama_enabled", True):
         argv.append("--no-ollama")
     return {
         "http": {"mcpServers": {"munimentum": {
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
         "stdio": {"mcpServers": {"munimentum": {
-            "command": argv[0], "args": argv[1:]}}},
+            "command": argv[0], "args": argv[1:],
+            # Konfiguration (mcp_enabled, Modelle) liegt im festen
+            # Heimatordner – Claude startet den Server irgendwo.
+            "env": {"MUNIMENTUM_HOME": str(HEIM)}}}},
     }
 
 
@@ -1592,18 +1600,21 @@ class McpProcess:
         if not cfg.get("mcp_enabled", True):
             self.error = {"k": "srv.mcp.disabled", "v": {}}
             return False, self.error
-        db = store_layout.db_path(BASE / STORE_DIR)
+        db = store_layout.db_path(STORE_PFAD)
         if not db.exists():
             self.error = {"k": "srv.mcp.noindex", "v": {}}
             return False, self.error
         argv = script_argv("mcp_server", "--data-dir", str(BASE),
+                           "--store", str(STORE_PFAD),
                            "--embed-model", cfg["embed_model"],
                            "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
         if not cfg.get("ollama_enabled", True):
             argv.append("--no-ollama")
         try:
             self.proc = subprocess.Popen(
-                argv, cwd=str(BASE), env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                argv, cwd=str(BASE),
+                env={**os.environ, "PYTHONUNBUFFERED": "1",
+                     "MUNIMENTUM_HOME": str(HEIM)},
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT, bufsize=0)
         except OSError as e:
@@ -1661,7 +1672,7 @@ class SearchBridge:
         abgebildete Datei stehen: gleiche Zeit, gleiche Größe, und die Suche in
         der App zeigte weiter den Stand von vorhin.
         """
-        store = BASE / STORE_DIR
+        store = STORE_PFAD
         out = []
         for p in (store_layout.db_path(store), store_layout.vectors_path(store)):
             if p is None:
@@ -1679,7 +1690,7 @@ class SearchBridge:
             stamp = self._store_stamp(cfg)
             if self.module is not None and stamp == self.stamp:
                 return self.module
-            db = store_layout.db_path(BASE / STORE_DIR)
+            db = store_layout.db_path(STORE_PFAD)
             if not db.exists():
                 self.error = {"k": "srv.noindex", "v": {}}
                 self.module = None
@@ -1694,7 +1705,7 @@ class SearchBridge:
                 con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
                 n = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
                 con.close()
-                np, V = mcp_server._open_vectors(str(BASE / STORE_DIR), n)
+                np, V = mcp_server._open_vectors(str(STORE_PFAD), n)
             except sqlite3.Error as e:
                 self.error = {"k": "srv.badindex", "v": {"error": str(e)}}
                 self.module = None
@@ -1720,7 +1731,7 @@ class App:
     def __init__(self, cfg=None):
         self.cfg = cfg or load_config()
         self.ui_lang = None      # language of the page served last
-        self.history = run_history.RunHistory(BASE / run_history.DB_NAME)
+        self.history = run_history.RunHistory(HEIM / run_history.DB_NAME)
         self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
         self.history.prune_log(int(self.cfg.get("log_retention_days") or 14))
         self.jobs = JobRunner(self.history)
@@ -1898,7 +1909,9 @@ class App:
             "schedule_enabled": bool(plan.get("enabled")),
             "wizard": wizard,
             "data_dir": str(BASE),
-            "data_dir_default": str(standard_data_dir()),
+            "data_dir_default": str(HEIM / DATEN_UNTERORDNER),
+            "index_dir": str(STORE_PFAD),
+            "index_dir_default": str(HEIM / STORE_DIR),
             "frozen": FROZEN,
             "update": dict(self._update, releases_url=version.RELEASES_URL),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
@@ -2326,19 +2339,38 @@ class Handler(BaseHTTPRequestHandler):
                 ok, daten = app.login_starten()
                 return self._json({"ok": ok, "device": daten}, 200 if ok else 500)
             if u.path == "/api/data-dir":
-                ziel, fehler = pruefe_datenordner(data.get("path"))
-                if fehler:
-                    return self._json({"ok": False, "message": fehler}, 400)
-                if not schreibe_zeiger(ziel):
-                    return self._json({"ok": False,
-                                       "message": {"k": "srv.datadir.unwritable",
-                                                   "v": {"detail": str(zeiger_datei())}}}, 500)
-                app.jobs.logk("srv.datadir.set", "warn", path=str(ziel))
+                # Beide Pfade sind Schlüssel in app_config.json – die liegt
+                # fest im Heimatordner, es gibt kein Henne-Ei mehr. Leer
+                # heißt Vorgabe (Unterordner des Heimatordners). Verschoben
+                # wird NICHTS: Ordner umziehen ist Sache des Nutzers.
+                felder = (("path", "data_dir", HEIM / DATEN_UNTERORDNER, BASE),
+                          ("index", "index_dir", HEIM / STORE_DIR, STORE_PFAD))
+                antwort, neustart = {}, False
+                for feld, key, vorgabe, aktuell in felder:
+                    if feld not in data:
+                        continue
+                    roh = str(data.get(feld) or "").strip()
+                    if roh:
+                        ziel, fehler = pruefe_datenordner(roh)
+                        if fehler:
+                            return self._json({"ok": False,
+                                               "message": fehler}, 400)
+                    else:
+                        ziel = vorgabe
+                    app.cfg[key] = "" if ziel == vorgabe else str(ziel)
+                    antwort[feld] = str(ziel)
+                    neustart = neustart or str(ziel) != str(aktuell)
+                save_config(app.cfg)
+                app.jobs.logk("srv.datadir.set", "warn",
+                              path=antwort.get("path", str(BASE)))
                 # BASE steht seit dem Start fest und geht als Arbeitsverzeichnis an
                 # jeden Unterprozess. Ihn mitten im Betrieb umzuhängen – womöglich
                 # während ein Export läuft – wäre grob fahrlässig.
-                return self._json({"ok": True, "path": str(ziel),
-                                   "restart": str(ziel) != str(BASE)})
+                return self._json({"ok": True,
+                                   "path": antwort.get("path", str(BASE)),
+                                   "index": antwort.get("index",
+                                                        str(STORE_PFAD)),
+                                   "restart": neustart})
             if u.path == "/api/folder-plan":
                 return self._json(self._ordnerplan(data))
             if u.path == "/api/logout":
@@ -2948,6 +2980,13 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
     app.log_token_state()
+    if zeiger_datei().exists() and not settings.data_dir_env():
+        # Der alte Datenordner-Zeiger wird seit dem Ablage-Split nicht mehr
+        # befolgt – und verschoben wird grundsätzlich nichts: sagen, was wo
+        # erwartet wird, den Rest macht der Mensch.
+        app.jobs.logk("srv.layout.pointer", "warn",
+                      pointer=str(zeiger_datei()), home=str(HEIM),
+                      data=str(BASE))
     app.starte_migration()
     app.check_updates()
     app.scheduler.start()
@@ -3031,6 +3070,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.data_dir:
         set_data_dir(a.data_dir)
+    HEIM.mkdir(parents=True, exist_ok=True)
     BASE.mkdir(parents=True, exist_ok=True)
     serve(App(), a.port, open_browser=not a.no_browser)
 
@@ -3990,6 +4030,15 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
           <span class="small" id="datadir-msg"></span>
         </div>
       </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.indexdir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.indexdir.i">i</span></span><span></span></div>
+      <div class="feldzeile breit">
+        <div class="row">
+          <input type="text" id="c-index-dir" style="flex:1;min-width:280px">
+          <button class="mini" onclick="setzeIndexordner()" data-i18n="settings.datadir.save">Übernehmen</button>
+          <button class="mini" onclick="indexordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
+          <span class="small" id="indexdir-msg"></span>
+        </div>
+      </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.analytics_skip"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.analytics_skip.i">i</span></span><span class="small muted"></span></div>
       <div class="feldzeile breit"><textarea id="c-analytics_skip" style="min-height:70px"></textarea></div>
@@ -4544,7 +4593,8 @@ function renderStatus(s){
   el('data-dir2').textContent = s.data_dir;
   // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
   // 2,5 Sekunden, was gerade getippt wird.
-  if(first) el('c-data-dir').value = s.data_dir;
+  if(first){ el('c-data-dir').value = s.data_dir;
+              el('c-index-dir').value = s.index_dir || ''; }
   zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
 
@@ -6529,19 +6579,25 @@ function gleicheOrdnerAb(quelle){
   });
 }
 
-function setzeDatenordner(pfad){
-  var ziel = pfad !== undefined ? pfad : el('c-data-dir').value.trim();
-  post('/api/data-dir', {path: ziel}).then(function(r){
-    var kasten = el('datadir-msg');
+function setzeAblage(koerper, feldId, msgId){
+  post('/api/data-dir', koerper).then(function(r){
+    var kasten = el(msgId);
     if(!r.ok){ kasten.className = 'small err'; kasten.textContent = mtext(r.message); return; }
-    el('c-data-dir').value = r.path;
+    el(feldId).value = koerper.path !== undefined ? r.path : r.index;
     kasten.className = 'small muted';
     kasten.textContent = t(r.restart ? 'settings.datadir.restart' : 'settings.datadir.same');
   });
 }
-function datenordnerZurueck(){
-  setzeDatenordner((S && S.data_dir_default) || '');
+function setzeDatenordner(pfad){
+  setzeAblage({path: pfad !== undefined ? pfad : el('c-data-dir').value.trim()},
+              'c-data-dir', 'datadir-msg');
 }
+function datenordnerZurueck(){ setzeDatenordner(''); }
+function setzeIndexordner(pfad){
+  setzeAblage({index: pfad !== undefined ? pfad : el('c-index-dir').value.trim()},
+              'c-index-dir', 'indexdir-msg');
+}
+function indexordnerZurueck(){ setzeIndexordner(''); }
 
 function ordnerZuruecksetzen(){
   el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');

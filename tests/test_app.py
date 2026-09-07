@@ -61,7 +61,9 @@ def make_jwt(exp=None, scp="Mail.Read User.Read", upn="a@example.com", name="A B
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     """app.py so umbiegen, dass alle Pfade in tmp_path liegen."""
+    monkeypatch.setattr(app_mod, "HEIM", tmp_path)
     monkeypatch.setattr(app_mod, "BASE", tmp_path)
+    monkeypatch.setattr(app_mod, "STORE_PFAD", tmp_path / app_mod.STORE_DIR)
     monkeypatch.setattr(app_mod, "CONFIG_FILE", tmp_path / "app_config.json")
     monkeypatch.setattr(app_mod, "TOKEN_FILE", tmp_path / "gx_token.txt")
     return tmp_path
@@ -550,6 +552,16 @@ def test_planner_schritt_wird_gebaut(sandbox):
 
     index = app_mod.build_steps(cfg, index=True)
     assert "--planner" in index[0]["argv"]
+
+
+def test_index_schritt_traegt_den_absoluten_store(sandbox):
+    """Der Index kann auf einer anderen Platte liegen (index_dir) – der
+    Schritt bekommt den aufgelösten Pfad, nicht den Ordnernamen; und jeder
+    Unterprozess findet die Konfiguration über den festen Heimatordner."""
+    steps = app_mod.build_steps(app_mod.load_config(), index=True)
+    argv = [str(a) for a in steps[0]["argv"]]
+    assert argv[argv.index("--store") + 1] == str(sandbox / app_mod.STORE_DIR)
+    assert steps[0]["env"]["MUNIMENTUM_HOME"] == str(sandbox)
 
 
 def test_index_schritt_kennt_den_sharepoint_ordner(sandbox):
@@ -2320,11 +2332,6 @@ def test_data_dir_je_betriebssystem(monkeypatch):
     monkeypatch.setattr(app_mod, "FROZEN", True)
     for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
         monkeypatch.delenv(_n, raising=False)
-    # Ohne diese Zeile läse der Test den ECHTEN Zeiger im Benutzerordner: auf
-    # einem Rechner, auf dem die App je einen Datenordner gesetzt hat, schlug er
-    # deshalb fehl – auf der CI nie. Geprüft wird hier die Vorgabe je System,
-    # nicht der Zeiger; der hat eigene Tests.
-    monkeypatch.setattr(app_mod, "lies_zeiger", lambda: None)
     monkeypatch.setattr(sys, "platform", "darwin")
     assert app_mod.data_dir().parts[-3:] == ("Library", "Application Support",
                                              app_mod.APP_DIRNAME)
@@ -3926,11 +3933,34 @@ def test_ohne_zeiger_gilt_der_standardort(standardort):
     assert app_mod.data_dir() == standardort
 
 
-def test_zeiger_biegt_den_ordner_um(standardort, tmp_path):
+def test_zeiger_wird_nicht_mehr_befolgt(standardort, tmp_path):
+    """Seit dem Ablage-Split sind data_dir/index_dir Konfiguration – der
+    alte Zeiger wird nur noch erkannt und gemeldet, nie befolgt."""
     woanders = tmp_path / "platte"
     woanders.mkdir()
-    app_mod.schreibe_zeiger(woanders)
-    assert app_mod.data_dir() == woanders.resolve()
+    (standardort / app_mod.ZEIGER_DATEI).write_text(str(woanders),
+                                                    encoding="utf-8")
+    assert app_mod.data_dir() == standardort
+
+
+def test_split_pfade_vorgaben_und_konfiguration(standardort, monkeypatch,
+                                                tmp_path):
+    """Ohne Override: data/ und rag_store/ unter dem Heimatordner, per
+    Konfiguration frei; mit Override (Tests, --data-dir): flach in einem."""
+    monkeypatch.setattr(app_mod.settings, "load", lambda path=None: {})
+    daten, store = app_mod._split_pfade(standardort)
+    assert daten == standardort / app_mod.DATEN_UNTERORDNER
+    assert store == standardort / app_mod.STORE_DIR
+
+    monkeypatch.setattr(app_mod.settings, "load", lambda path=None: {
+        "data_dir": str(tmp_path / "bulk"), "index_dir": str(tmp_path / "ix")})
+    daten, store = app_mod._split_pfade(standardort)
+    assert daten == (tmp_path / "bulk").resolve()
+    assert store == (tmp_path / "ix").resolve()
+
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
+    daten, store = app_mod._split_pfade(tmp_path)
+    assert daten == tmp_path and store == tmp_path / app_mod.STORE_DIR
 
 
 def test_zeiger_ins_leere_haelt_die_app_nicht_auf(standardort, tmp_path):
@@ -3941,20 +3971,11 @@ def test_zeiger_ins_leere_haelt_die_app_nicht_auf(standardort, tmp_path):
     assert app_mod.data_dir() == standardort
 
 
-def test_umgebung_schlaegt_den_zeiger(standardort, tmp_path, monkeypatch):
-    app_mod.schreibe_zeiger(tmp_path)
+def test_umgebung_schlaegt_den_standardort(standardort, tmp_path, monkeypatch):
     anders = tmp_path / "env"
     anders.mkdir()
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(anders))
     assert app_mod.data_dir() == anders.resolve()
-
-
-def test_zeiger_auf_den_standardort_wird_geloescht(standardort, tmp_path):
-    """Sonst bliebe eine Datei liegen, die nichts mehr aussagt."""
-    app_mod.schreibe_zeiger(tmp_path)
-    assert app_mod.zeiger_datei().exists()
-    app_mod.schreibe_zeiger(standardort)
-    assert not app_mod.zeiger_datei().exists()
 
 
 def test_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
@@ -3985,17 +4006,27 @@ def test_http_datenordner_setzen(server, standardort, tmp_path):
     ziel = tmp_path / "extern"
     code, r = call(port, "POST", "/api/data-dir", {"path": str(ziel)})
     assert code == 200 and r["ok"] and r["restart"] is True
-    assert app_mod.lies_zeiger() == ziel.resolve()
+    assert a.cfg["data_dir"] == str(ziel.resolve())
     # Die App hängt sich NICHT im Betrieb um – BASE geht als Arbeitsverzeichnis
     # an jeden Unterprozess, womöglich mitten in einem Export.
     assert call(port, "GET", "/api/status")[1]["data_dir"] != str(ziel)
 
+    # Der Index hat seinen eigenen Pfad; leer heißt zurück zur Vorgabe.
+    code, r = call(port, "POST", "/api/data-dir",
+                   {"index": str(tmp_path / "ix")})
+    assert code == 200 and r["ok"]
+    assert a.cfg["index_dir"] == str((tmp_path / "ix").resolve())
+    code, r = call(port, "POST", "/api/data-dir", {"index": ""})
+    assert code == 200 and a.cfg["index_dir"] == ""
 
-def test_http_datenordner_ablehnen(server, standardort):
-    _, port = server
-    code, r = call(port, "POST", "/api/data-dir", {"path": ""})
+
+def test_http_datenordner_ablehnen(server, standardort, tmp_path):
+    a, port = server
+    kaputt = tmp_path / "datei-statt-ordner"
+    kaputt.write_text("x", encoding="utf-8")
+    code, r = call(port, "POST", "/api/data-dir", {"path": str(kaputt)})
     assert code == 400 and not r["ok"]
-    assert app_mod.lies_zeiger() is None, "kaputter Wert wurde trotzdem gemerkt"
+    assert not a.cfg.get("data_dir"), "kaputter Wert wurde trotzdem gemerkt"
 
 
 def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
@@ -6708,7 +6739,8 @@ def test_jedes_feld_ist_auch_gelistet():
                  "analytics_skip",    # mehrzeiliger Text, eigene Behandlung
                  "language",          # eigenes Auswahlfeld, fuelleSprachen()
                  "notifications",     # eigenes Auswahlfeld, von Hand gespeichert
-                 "data-dir",          # kein Konfigurationswert, eigener Knopf
+                 "data-dir",          # eigener Knopf (setzeDatenordner)
+                 "index-dir",         # eigener Knopf (setzeIndexordner)
                  "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
                  "onedrive_enabled",  # steht im Reiter „Exportieren", saveCats()
                  "sharepoint_enabled",   # ebenso, saveCats()

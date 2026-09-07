@@ -155,6 +155,10 @@ VORGABEN = {
     "planner_urls": "",
     "planner_attachments": False,
     "runs_retention_months": 24,
+    # Ebenen 3 und 4 des Ablage-Modells: leer heißt Unterordner des festen
+    # Heimatordners ("rag_store" bzw. "data"). Aufgelöst in app.py.
+    "data_dir": "",
+    "index_dir": "",
     "log_retention_days": 14,
     "mcp_port": 8365,
     # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
@@ -213,9 +217,17 @@ def data_dir_env():
     return os.environ.get("MUNIMENTUM_DATA_DIR") or os.environ.get("OFFICE365_DATA_DIR")
 
 
+def home_env():
+    """Der Heimatordner der App (Konfiguration, Token, Historie), von app.py
+    an jeden Unterprozess gereicht – der Alles-in-einem-Override
+    (MUNIMENTUM_DATA_DIR) bleibt daneben gültig und gewinnt für Daten."""
+    return os.environ.get("MUNIMENTUM_HOME")
+
+
 def config_path():
-    """Wo die Konfiguration liegt: Datenordner der App, sonst neben dem Modul."""
-    env = data_dir_env()
+    """Wo die Konfiguration liegt: Heimatordner, Override, sonst neben dem
+    Modul (Quell-Lauf: das Projektverzeichnis)."""
+    env = home_env() or data_dir_env()
     base = Path(env).expanduser() if env else Path(__file__).resolve().parent
     return base / CONFIG_NAME
 

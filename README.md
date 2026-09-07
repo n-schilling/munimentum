@@ -53,15 +53,22 @@ for you.
 
 ## Where the data goes
 
-Not into the app, but into your user folder — so an update overwrites nothing:
+Four places, deliberately separate. The app itself lives where the operating
+system puts it. Its **app folder** is fixed and holds the small things —
+settings, access token, run history:
 
 * macOS: `~/Library/Application Support/Munimentum`
 * Windows: `%LOCALAPPDATA%\Munimentum`
 * Linux: `~/.local/share/Munimentum`
 
-The path is shown in *Settings*. A mailbox can take up tens of gigabytes; to put
-it on another disk, change it there (it takes effect after a restart and moves
-nothing). For a single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` work.
+The two heavy parts live below it by default and can each point elsewhere in
+*Settings*: the **data folder** (`data/`, all exports — a mailbox can take
+tens of gigabytes, a slow disk is fine) and the **index folder**
+(`rag_store/`, hot random-access reads — keep it on a fast disk). Changing a
+path moves nothing and takes effect after a restart: **Munimentum never
+moves your data** — copy or move the folders yourself, then set the paths.
+For a single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` put
+everything into one folder.
 
 ---
 

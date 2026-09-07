@@ -6,9 +6,6 @@ the code, not here.
 
 ## Smaller
 
-* **Split the data directory.** Bulk data and index have different needs —
-  the `.eml` files may live on a slow disk, the index must not. Separate
-  paths already work, but nothing explains them.
 * **A step registry.** Every export action is hand-threaded through four
   layers (API handler, launch, build_steps, run record); a declarative table
   keyed by step name would collapse them. Best done together with the app.py
