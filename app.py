@@ -1909,6 +1909,9 @@ class App:
             "schedule_enabled": bool(plan.get("enabled")),
             "wizard": wizard,
             "data_dir": str(BASE),
+            "home_dir": str(HEIM),
+            "app_location": (sys.executable if FROZEN
+                             else str(Path(__file__).resolve().parent)),
             "data_dir_default": str(HEIM / DATEN_UNTERORDNER),
             "index_dir": str(STORE_PFAD),
             "index_dir_default": str(HEIM / STORE_DIR),
@@ -4021,7 +4024,7 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
     <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
     <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><code id="data-dir2" class="small">…</code></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><span></span></div>
       <div class="feldzeile breit">
         <div class="row">
           <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
@@ -4039,6 +4042,8 @@ main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
           <span class="small" id="indexdir-msg"></span>
         </div>
       </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.homedir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.homedir.i">i</span></span><code id="home-dir" class="small">…</code></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.appdir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.appdir.i">i</span></span><code id="app-ort" class="small">…</code></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.analytics_skip"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.analytics_skip.i">i</span></span><span class="small muted"></span></div>
       <div class="feldzeile breit"><textarea id="c-analytics_skip" style="min-height:70px"></textarea></div>
@@ -4590,11 +4595,12 @@ function renderStatus(s){
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   zeigeKalenderstand(s.calendars || {});
-  el('data-dir2').textContent = s.data_dir;
   // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
   // 2,5 Sekunden, was gerade getippt wird.
   if(first){ el('c-data-dir').value = s.data_dir;
               el('c-index-dir').value = s.index_dir || ''; }
+  el('home-dir').textContent = s.home_dir || '';
+  el('app-ort').textContent = s.app_location || '';
   zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
 

@@ -5480,7 +5480,11 @@ def test_export_reiter_zeigt_weder_zeiten_noch_datenordner():
     assert 'id="export-state"' not in kopf, "Zeiten stehen noch im Export-Reiter"
     assert 'id="data-dir"' not in kopf
     assert 'id="export-state"' in app_mod.PAGE, "Zeiten sind ganz verschwunden"
-    assert 'id="data-dir2"' in app_mod.PAGE, "Datenordner fehlt in den Einstellungen"
+    # Der Wert steht im Eingabefeld selbst; die festen Ablagen (App-Ordner,
+    # Anwendung) stehen als eigene, unveraenderliche Zeilen darunter.
+    assert 'id="data-dir2"' not in app_mod.PAGE, "doppelte Pfadanzeige ist zurueck"
+    assert 'id="c-data-dir"' in app_mod.PAGE
+    assert 'id="home-dir"' in app_mod.PAGE and 'id="app-ort"' in app_mod.PAGE
 
 
 PRUEFUNG_SCHRITTNAME = GRUNDZUSTAND + """

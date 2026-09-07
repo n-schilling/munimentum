@@ -1,16 +1,30 @@
-## New in 6.3.1
+## New in 7.0.0
 
-**The first Planner comment sync no longer stalls.** It used to page through
-the owning group's ENTIRE conversation store before fetching a board — on
-big Teams-connected groups that was minutes of silence. The first sync now
-skips that listing entirely (every post is fetched anyway), and later runs
-page it in far bigger steps and say so in the log.
+**The storage layout is split — this release needs one manual step.** The
+app folder is now fixed and holds only the small things: settings, access
+token, run history. The two heavy parts live below it and can each point
+to another disk in *Settings*: the **data folder** (`data/`, all exports)
+and the **index folder** (`rag_store/` — hot reads, keep it fast).
+Munimentum never moves your data, so after updating do it yourself, once:
 
-**The folder filter thinks in units.** For Planner, SharePoint libraries
-and SharePoint pages, the folder dropdown lists whole boards, libraries
-("site/library") and sites instead of every sub-path — with labels to
-match: "All boards", "All libraries", "All sites". Picking one filters
-everything below it; OneDrive and the mailbox keep their full folder tree.
+1. Quit Munimentum.
+2. In the app folder (macOS `~/Library/Application Support/Munimentum`,
+   Windows `%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`)
+   create `data/` and move the export folders into it: `teams_export`,
+   `outlook_export`, `onedrive_export`, `sharepoint_export`,
+   `sharepoint_pages`, `planner_export`. `rag_store` and everything else
+   stay where they are.
+3. Only if you had redirected the data folder (the old pointer file): move
+   `app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` back
+   into the app folder, then set the data and index paths in *Settings* to
+   wherever your exports and index actually live. The pointer itself is no
+   longer honoured — the log says so until you delete the file.
+
+Alternatively, set the data folder in *Settings* to the folder your exports
+already live in — then nothing needs to move at all.
+
+**Claude Desktop users:** the stdio MCP snippet changed (it now names the
+app folder) — copy it again from *Settings*.
 
 ## Which file?
 
