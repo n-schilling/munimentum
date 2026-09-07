@@ -1,19 +1,19 @@
-# Zugangsdaten. gx_token.txt ist der eingefügte Schlüssel, msal_cache.bin der
-# Refresh-Token aus der Anmeldung – letzterer entsteht erst beim ersten
-# Anmelden und wäre sonst weder ignoriert noch bemerkt worden.
+# Credentials. gx_token.txt is the pasted access key, msal_cache.bin the
+# refresh token from signing in – the latter only appears after the first
+# sign-in and would otherwise be neither ignored nor noticed.
 gx_token.txt
 msal_cache.bin
 
-# Signierschlüssel für macOS (siehe packaging/signieren.md). Sie gehören in die
-# GitHub-Secrets, nie ins Repository – ein öffentlich gewordener privater
-# Schlüssel lässt sich nur durch Widerrufen des Zertifikats reparieren.
+# macOS signing keys (see packaging/signieren.md). They belong in the GitHub
+# secrets, never in the repository – a leaked private key can only be fixed
+# by revoking the certificate.
 *.p12
 *.p8
 *.mobileprovision
 
-# Laufzeitdaten eines Quell-Laufs – der Heimatordner ist dann das Projekt.
-# data/ hält seit dem Ablage-Split alle Exporte; die einzelnen Ordnernamen
-# bleiben als Netz für Arbeitsstände von davor.
+# Runtime data of a source run – the app's home folder is the project then.
+# data/ holds every export since the storage split; the individual folder
+# names remain as a net for working states from before.
 data/
 rag_store/
 teams_export/
@@ -27,7 +27,7 @@ runs.db
 app.log
 datenordner.txt
 
-# Werkzeug- und Systemreste
+# Tool and system residue
 __pycache__/
 .pytest_cache/
 .ruff_cache/
