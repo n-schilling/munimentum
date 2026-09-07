@@ -311,6 +311,7 @@
   "srv.logout": "Abgemeldet – die gespeicherte Erlaubnis wurde gelöscht.",
   "srv.datadir.set": "Datenordner ab dem nächsten Start: {path}",
   "srv.layout.pointer": "Der alte Datenordner-Zeiger ({pointer}) wird nicht mehr befolgt. Konfiguration, Token und Historie liegen in {home}; Exporte gehören unter {data}, der Index daneben — Ordner selbst umziehen, Pfade in den Einstellungen setzen, dann die Zeigerdatei löschen.",
+  "srv.layout.kept": "Bestehendes Archiv gefunden — der Datenordner zeigt weiter auf den App-Ordner ({data}), nichts wurde bewegt. Zum Auftrennen: App beenden, die Exportordner nach data/ (oder woandershin) verschieben, dann die Pfade in den Einstellungen setzen.",
   "srv.datadir.empty": "Kein Ordner angegeben.",
   "srv.datadir.unwritable": "In diesem Ordner lässt sich nicht schreiben: {detail}",
   "srv.mcp.started": "MCP-Server gestartet auf Port {port}.",

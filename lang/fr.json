@@ -311,6 +311,7 @@
   "srv.logout": "Déconnecté — l’autorisation enregistrée a été supprimée.",
   "srv.datadir.set": "Dossier de données à partir du prochain démarrage : {path}",
   "srv.layout.pointer": "L’ancien pointeur de dossier de données ({pointer}) n’est plus suivi. Configuration, jeton et historique vivent dans {home} ; les exports vont sous {data} et l’index à côté — déplacez les dossiers vous-même, réglez les chemins dans les réglages, puis supprimez le fichier pointeur.",
+  "srv.layout.kept": "Archive existante trouvée — le dossier de données continue de pointer sur le dossier de l’app ({data}), rien n’a bougé. Pour séparer : quittez l’app, déplacez les dossiers d’export dans data/ (ou ailleurs), puis réglez les chemins dans les réglages.",
   "srv.datadir.empty": "Aucun dossier indiqué.",
   "srv.datadir.unwritable": "Impossible d’écrire dans ce dossier : {detail}",
   "srv.mcp.started": "Serveur MCP démarré sur le port {port}.",

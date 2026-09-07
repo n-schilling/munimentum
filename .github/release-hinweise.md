@@ -1,27 +1,24 @@
 ## New in 7.0.0
 
-**The storage layout is split — this release needs one manual step.** The
-app folder is now fixed and holds only the small things: settings, access
-token, run history. The two heavy parts live below it and can each point
-to another disk in *Settings*: the **data folder** (`data/`, all exports)
-and the **index folder** (`rag_store/` — hot reads, keep it fast).
-Munimentum never moves your data, so after updating do it yourself, once:
+**The storage layout is split.** The app folder is now fixed and holds only
+the small things: settings, access token, run history. The two heavy parts
+can each point to another disk in *Settings*: the **data folder** (all
+exports) and the **index folder** (`rag_store/` — hot reads, keep it fast).
+On a fresh install they are separate folders (`data/` next to `rag_store/`).
 
-1. Quit Munimentum.
-2. In the app folder (macOS `~/Library/Application Support/Munimentum`,
-   Windows `%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`)
-   create `data/` and move the export folders into it: `teams_export`,
-   `outlook_export`, `onedrive_export`, `sharepoint_export`,
-   `sharepoint_pages`, `planner_export`. `rag_store` and everything else
-   stay where they are.
-3. Only if you had redirected the data folder (the old pointer file): move
-   `app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` back
-   into the app folder, then set the data and index paths in *Settings* to
-   wherever your exports and index actually live. The pointer itself is no
-   longer honoured — the log says so until you delete the file.
+**Upgrades just keep working.** When the app finds an existing archive laid
+out the old way, it points the data folder at the app folder and says so in
+the log — nothing is moved, everything is found where it always was.
+Munimentum never moves your data: to split storage, quit the app, move the
+export folders yourself (into `data/`, or onto another disk), then set the
+paths in *Settings*.
 
-Alternatively, set the data folder in *Settings* to the folder your exports
-already live in — then nothing needs to move at all.
+Only if you had redirected the data folder with the old pointer file: move
+`app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` into the
+app folder (macOS `~/Library/Application Support/Munimentum`, Windows
+`%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`), then set
+the data and index paths in *Settings* to where your archive lives. The
+pointer is no longer honoured — the log says so until you delete the file.
 
 **Claude Desktop users:** the stdio MCP snippet changed (it now names the
 app folder) — copy it again from *Settings*.

@@ -229,6 +229,35 @@ PLANNER_DIR = settings.PLANNER_DIR
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
 BASE, STORE_PFAD = _split_pfade(HEIM)
+ALT_ORDNER = (TEAMS_DIR, OUTLOOK_DIR, ONEDRIVE_DIR, SHAREPOINT_DIR,
+              SHAREPOINT_PAGES_DIR, PLANNER_DIR)
+_ALT_GEPINNT = False
+
+
+def altbestand_pinnen():
+    """Upgrades keep finding their data without a manual step.
+
+    When the home folder still holds the flat pre-7.0 export folders and no
+    data_dir was ever decided, the config pins the data folder to the home
+    folder – NOTHING moves, everything is found where it always was. Only
+    fresh installs get the split defaults (data/ next to rag_store/). The
+    caller logs a one-time hint that splitting is now possible – by moving
+    the folders yourself and changing the paths in the settings.
+
+    Deliberately keyed on the raw file: an explicit "Standard" reset in the
+    settings writes data_dir="" and must not be overridden here."""
+    global BASE, STORE_PFAD, _ALT_GEPINNT
+    if settings.data_dir_env() or "data_dir" in settings.load():
+        return False
+    if not any((HEIM / name).is_dir() for name in ALT_ORDNER):
+        return False
+    cfg = load_config()
+    cfg["data_dir"] = str(HEIM)
+    save_config(cfg)
+    settings.reset()
+    BASE, STORE_PFAD = _split_pfade(HEIM)
+    _ALT_GEPINNT = True
+    return True
 
 # Kategorie -> Graph-Berechtigung. Der Assistent prüft damit, ob der eingefügte
 # Token für das reicht, was ausgewählt ist (scp-Claim im JWT).
@@ -2983,6 +3012,10 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
     app.log_token_state()
+    if _ALT_GEPINNT:
+        # Erkannt, gesagt, nichts bewegt: die Trennung ist ab jetzt möglich,
+        # aber Umziehen bleibt Handarbeit des Nutzers.
+        app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
     if zeiger_datei().exists() and not settings.data_dir_env():
         # Der alte Datenordner-Zeiger wird seit dem Ablage-Split nicht mehr
         # befolgt – und verschoben wird grundsätzlich nichts: sagen, was wo
@@ -3073,6 +3106,8 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.data_dir:
         set_data_dir(a.data_dir)
+    else:
+        altbestand_pinnen()
     HEIM.mkdir(parents=True, exist_ok=True)
     BASE.mkdir(parents=True, exist_ok=True)
     serve(App(), a.port, open_browser=not a.no_browser)

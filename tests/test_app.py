@@ -3943,6 +3943,41 @@ def test_zeiger_wird_nicht_mehr_befolgt(standardort, tmp_path):
     assert app_mod.data_dir() == standardort
 
 
+def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
+    """Upgrade von 6.x: liegen die Exportordner noch flach im App-Ordner und
+    wurde nie ein data_dir entschieden, zeigt die Konfiguration künftig
+    dorthin – nichts wird bewegt. Neuinstallationen bekommen die Trennung."""
+    monkeypatch.setattr(app_mod, "HEIM", standardort)
+    monkeypatch.setattr(app_mod, "CONFIG_FILE",
+                        standardort / "app_config.json")
+    # Die Funktion setzt Modul-Globale neu – monkeypatch stellt sie zurück.
+    monkeypatch.setattr(app_mod, "BASE", app_mod.BASE)
+    monkeypatch.setattr(app_mod, "STORE_PFAD", app_mod.STORE_PFAD)
+    monkeypatch.setattr(app_mod, "_ALT_GEPINNT", False)
+    monkeypatch.setattr(app_mod.settings, "load",
+                        lambda path=None: json.loads(
+                            (standardort / "app_config.json").read_text(
+                                encoding="utf-8"))
+                        if (standardort / "app_config.json").exists() else {})
+
+    # Neuinstallation: keine alten Ordner, nichts wird gepinnt.
+    assert app_mod.altbestand_pinnen() is False
+
+    (standardort / app_mod.TEAMS_DIR).mkdir()
+    assert app_mod.altbestand_pinnen() is True
+    cfg = json.loads((standardort / "app_config.json").read_text(
+        encoding="utf-8"))
+    assert cfg["data_dir"] == str(standardort)
+    assert app_mod.BASE == standardort
+
+    # Idempotent – und ein ausdrückliches „Standard" (leerer Wert) gewinnt.
+    assert app_mod.altbestand_pinnen() is False
+    cfg["data_dir"] = ""
+    (standardort / "app_config.json").write_text(json.dumps(cfg),
+                                                 encoding="utf-8")
+    assert app_mod.altbestand_pinnen() is False,         "ausdrücklicher Standard wurde überstimmt"
+
+
 def test_split_pfade_vorgaben_und_konfiguration(standardort, monkeypatch,
                                                 tmp_path):
     """Ohne Override: data/ und rag_store/ unter dem Heimatordner, per

@@ -67,8 +67,10 @@ tens of gigabytes, a slow disk is fine) and the **index folder**
 (`rag_store/`, hot random-access reads — keep it on a fast disk). Changing a
 path moves nothing and takes effect after a restart: **Munimentum never
 moves your data** — copy or move the folders yourself, then set the paths.
-For a single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` put
-everything into one folder.
+An archive from before the split keeps working untouched: the app then
+points the data folder at the app folder and says so in the log. For a
+single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` put everything
+into one folder.
 
 ---
 
