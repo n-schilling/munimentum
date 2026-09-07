@@ -3,40 +3,36 @@
 # Anmelden und wäre sonst weder ignoriert noch bemerkt worden.
 gx_token.txt
 msal_cache.bin
+
 # Signierschlüssel für macOS (siehe packaging/signieren.md). Sie gehören in die
 # GitHub-Secrets, nie ins Repository – ein öffentlich gewordener privater
 # Schlüssel lässt sich nur durch Widerrufen des Zertifikats reparieren.
 *.p12
 *.p8
 *.mobileprovision
-outlook_export/*
-teams_export/*
-onedrive_export/*
-planner_export/*
-path/
-path/*
-.DS_Store
-combined_search.html
-__pycache__/
-__pycache__/*
-*_old
-*.zip
-rag_store
-rag_store/*
-.coverage
-app_config.json
-build/
-dist/
-*.spec.bak
-runs.db
+
+# Laufzeitdaten eines Quell-Laufs – der Heimatordner ist dann das Projekt.
+# data/ hält seit dem Ablage-Split alle Exporte; die einzelnen Ordnernamen
+# bleiben als Netz für Arbeitsstände von davor.
+data/
+rag_store/
 teams_export/
 outlook_export/
 onedrive_export/
 sharepoint_export/
 sharepoint_pages/
 planner_export/
-rag_store/
+app_config.json
+runs.db
 app.log
-# Der Daten-Split (6.4): Exporte wandern unter data/, der Rest bleibt.
-data/
 datenordner.txt
+
+# Werkzeug- und Systemreste
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.claude/
+.coverage
+.DS_Store
+build/
+dist/
