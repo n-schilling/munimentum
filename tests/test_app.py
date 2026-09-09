@@ -1536,6 +1536,40 @@ def test_alter_zeiger_sperrt_bis_die_pfade_stehen(standardort, tmp_path,
     assert app_mod.alter_zeiger() is None
 
 
+def test_konfiguration_aendert_sich_nur_durch_eine_tuer(sandbox, monkeypatch):
+    """Memory, file and settings.py's cache move together – and two changes
+    at once lose nothing. Before the door existed, one handler could
+    serialise the dict before the other's change and rename its file into
+    place after it; the setting then silently reverted on the next start."""
+    import json
+    import settings
+    import threading
+    # settings.py must read the same file the app writes – the sandbox only
+    # repoints app_mod.CONFIG_FILE, so steer settings' path the same way.
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(sandbox))
+    settings.reset()
+    a = app_mod.App(app_mod.load_config())
+    settings.load()                                  # warm the cache
+    fertig = threading.Barrier(2)
+
+    def dreher(key, n):
+        fertig.wait()
+        for i in range(n):
+            a.konfiguriere(lambda cfg, i=i: cfg.__setitem__(key, i))
+
+    t1 = threading.Thread(target=dreher, args=("workers", 200))
+    t2 = threading.Thread(target=dreher, args=("mcp_port", 200))
+    for th in (t1, t2):
+        th.start()
+    for th in (t1, t2):
+        th.join()
+    datei = json.loads(app_mod.CONFIG_FILE.read_text(encoding="utf-8"))
+    assert datei["workers"] == 199 and datei["mcp_port"] == 199
+    assert a.cfg["workers"] == 199 and a.cfg["mcp_port"] == 199
+    # the subprocess-side cache saw the change without a restart
+    assert settings.load()["workers"] == 199
+
+
 def test_lauf_sperren_kennt_jede_upgrade_lage(standardort, tmp_path,
                                               monkeypatch):
     """One answer to "may a run start here?" – every upgrade leftover the

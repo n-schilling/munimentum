@@ -326,10 +326,9 @@ def altbestand_pinnen():
         return False
     if not any((HEIM / name).is_dir() for name in ALT_ORDNER):
         return False
-    cfg = load_config()
-    cfg["data_dir"] = str(HEIM)
-    save_config(cfg)
-    settings.reset()
+    def pinnen(cfg):
+        cfg["data_dir"] = str(HEIM)
+    konfiguration_aendern(load_config(), pinnen)
     BASE, STORE_PFAD = _split_pfade(HEIM)
     _ALT_GEPINNT = True
     return True
@@ -469,15 +468,19 @@ def load_config(path=None):
     return _merge_defaults(DEFAULT_CONFIG, loaded)
 
 
-# /api/config, /api/schedule and /api/data-dir all read, change and write
-# the same dict, and the threading server may run them at once. The lock
-# spans serialising and renaming, so no snapshot overwrites a newer one; the
-# per-thread tmp name keeps two writers from sharing a half-written file.
-_CONFIG_LOCK = threading.Lock()
+# The configuration exists three times – the dict in memory, the file on
+# disk, settings.py's cache of that file for the subprocesses – and the
+# threading server may change it from two handlers at once. So there is ONE
+# way to change it: konfiguration_aendern() edits the dict, writes the file
+# and drops the cache under one lock. Nothing else writes the file at run
+# time; save_config() is the plumbing underneath it.
+_CONFIG_LOCK = threading.RLock()
 
 
 def save_config(cfg, path=None):
     path = Path(path or CONFIG_FILE)
+    # A tmp name of its own per write: two writers must never share a
+    # half-written file even if one of them bypasses the lock.
     tmp = path.with_suffix(f".json.{os.getpid()}-{threading.get_ident()}.tmp")
     with _CONFIG_LOCK:
         try:
@@ -486,6 +489,17 @@ def save_config(cfg, path=None):
             tmp.replace(path)
         finally:
             tmp.unlink(missing_ok=True)
+
+
+def konfiguration_aendern(cfg, aendern):
+    """The one way a setting changes: `aendern(cfg)` edits the live dict,
+    then the file is written and settings.py's cache dropped – all three
+    copies of the truth move together, and never half-way past another
+    handler's change."""
+    with _CONFIG_LOCK:
+        aendern(cfg)
+        save_config(cfg)
+        settings.reset()
 
 
 def _clean_categories(values, allowed):
@@ -1374,6 +1388,10 @@ class App:
                         "ahead": False, "error": None}
 
     # -- derived state ----------------------------------------------------
+    def konfiguriere(self, aendern):
+        """Change settings through the one door – see konfiguration_aendern."""
+        konfiguration_aendern(self.cfg, aendern)
+
     def selected_categories(self):
         kats = (_clean_categories(self.cfg["outlook_categories"],
                                   ["mail", "calendar", "contacts"])
@@ -1945,7 +1963,7 @@ class Handler(BaseHTTPRequestHandler):
                 # moved: relocating folders is the user's business.
                 felder = (("path", "data_dir", HEIM / DATEN_UNTERORDNER, BASE),
                           ("index", "index_dir", HEIM / STORE_DIR, STORE_PFAD))
-                antwort, neustart = {}, False
+                antwort, neustart, neu = {}, False, {}
                 for feld, key, vorgabe, aktuell in felder:
                     if feld not in data:
                         continue
@@ -1957,11 +1975,10 @@ class Handler(BaseHTTPRequestHandler):
                                                "message": fehler}, 400)
                     else:
                         ziel = vorgabe
-                    app.cfg[key] = "" if ziel == vorgabe else str(ziel)
+                    neu[key] = "" if ziel == vorgabe else str(ziel)
                     antwort[feld] = str(ziel)
                     neustart = neustart or str(ziel) != str(aktuell)
-                save_config(app.cfg)
-                settings.reset()      # the cache still held the old paths
+                app.konfiguriere(lambda cfg: cfg.update(neu))
                 app.jobs.logk("srv.datadir.set", "warn",
                               path=antwort.get("path", str(BASE)))
                 # BASE is fixed since startup and goes to every subprocess
@@ -2042,118 +2059,123 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": True, "message": msg, "token": st}
 
     def _save_config(self, data):
-        cfg = self.app.cfg
-        if "outlook_categories" in data:
-            cfg["outlook_categories"] = _clean_categories(
-                data["outlook_categories"], ["mail", "calendar", "contacts"])
-        if "teams_categories" in data:
-            cfg["teams_categories"] = _clean_categories(
-                data["teams_categories"], ["1on1", "group", "meeting", "channels"])
-        for key in ("embed_model",
-                    "chat_model", "ollama"):
-            if key in data and str(data[key]).strip():
-                cfg[key] = str(data[key]).strip()
-        # Bounds so a mistyped number cannot cripple the next run: Graph
-        # allows 4 concurrent requests per mailbox, anything above mostly
-        # produces throttling; ports beyond 65535 do not exist.
-        for key, low, high in (("workers", 1, 8), ("mirror_workers", 1, 16),
-                               ("mcp_port", 1024, 65535),
-                               ("index_batch", 1, 512), ("answer_sources", 1, 20),
-                               ("semantic_min", 0, 95),
-                               ("onedrive_max_mb", 0, 100000),
-                               ("sharepoint_max_mb", 0, 100000),
-                               ("sharepoint_pages_image_max_mb", 0, 100),
-                               ("search_results", 5, 100),
-                               # 0 means: userflow recording off.
-                               ("userflow_actions", 0, 50),
-                               ("runs_retention_months", 1, 120),
-                               ("log_retention_days", 1, 365)):
-            if key in data:
-                try:
-                    cfg[key] = max(low, min(high, int(data[key])))
-                except (TypeError, ValueError):
-                    pass
-        for key in ("mcp_enabled", "mcp_autostart", "update_check", "embed_images", "cache_images",
-                    "refresh_channels", "skip_empty_chats", "include_hidden",
-                    "calendar_reconstruct", "ollama_enabled", "index_semantic",
-                    # Missing since the checkbox exists: the state reached
-                    # the run but never survived a page rebuild.
-                    "onedrive_enabled", "sharepoint_enabled",
-                    "sharepoint_pages_enabled", "planner_enabled",
-                    "planner_attachments"):
-            if key in data:
-                cfg[key] = bool(data[key])
-        # Whoever switches Ollama off no longer means the check from just now.
-        if "ollama_enabled" in data:
-            self.app._ollama_cache = (0, None)
-        if "calendar_rules" in data:
-            cfg["calendar_rules"] = folders.schreibe_regeln(
-                folders.lies_regeln(str(data["calendar_rules"] or "")))
-        if "folder_rules" in data:
-            cfg["folder_rules"] = folders.schreibe_regeln(
-                folders.lies_regeln(str(data["folder_rules"] or "")))
-        for key in ("sharepoint_urls", "sharepoint_pages_urls",
-                    "planner_urls"):
-            if key in data:
-                cfg[key] = "\n".join(
-                    z.strip() for z in str(data[key] or "").splitlines()
-                    if z.strip())
-        for key in ("sharepoint_types_include", "sharepoint_types_exclude"):
-            if key in data:
-                cfg[key] = ", ".join(
-                    e for e in (s.strip().lstrip(".").lower()
-                                for s in str(data[key] or "").split(","))
-                    if e)
-        if "onedrive_rules" in data:
-            cfg["onedrive_rules"] = folders.schreibe_regeln(
-                folders.lies_regeln(str(data["onedrive_rules"] or "")))
-        if "analytics_skip" in data:
-            cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
-        if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
-            self.app.mcp.stop()
-        if "filetype_hidden" in data:
-            cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
-        if "skip_folders" in data:
-            cfg["skip_folders"] = _clean_folders(data["skip_folders"])
-        if "auth_mode" in data:
-            # Anything unknown becomes token mode – the path that works
-            # without asking IT.
-            cfg["auth_mode"] = ("login" if str(data["auth_mode"]).strip().lower()
-                                == "login" else "token")
-        for key in ("client_id", "tenant"):
-            if key in data:
-                cfg[key] = str(data[key] or "").strip()
-        if "sync_cadence" in data and isinstance(data["sync_cadence"], dict):
-            cfg["sync_cadence"] = {
-                str(k): v for k, v in data["sync_cadence"].items()
-                if v in ("always", "daily", "weekly", "monthly")}
-        if "notifications" in data:
-            wert = str(data["notifications"] or "").strip().lower()
-            if wert in ("off", "errors", "all"):
-                cfg["notifications"] = wert
-        if "language" in data:
-            # Only known codes – one typo otherwise and the interface would
-            # speak the fallback language forever.
-            gewuenscht = str(data["language"] or "auto").strip().lower()
-            erlaubt = {e["code"] for e in i18n.available(RES)} | {"auto"}
-            if gewuenscht in erlaubt:
-                cfg["language"] = gewuenscht
-        save_config(cfg)
-        return {"ok": True, "config": cfg}
+        def uebernehmen(cfg):
+            if "outlook_categories" in data:
+                cfg["outlook_categories"] = _clean_categories(
+                    data["outlook_categories"], ["mail", "calendar", "contacts"])
+            if "teams_categories" in data:
+                cfg["teams_categories"] = _clean_categories(
+                    data["teams_categories"], ["1on1", "group", "meeting", "channels"])
+            for key in ("embed_model",
+                        "chat_model", "ollama"):
+                if key in data and str(data[key]).strip():
+                    cfg[key] = str(data[key]).strip()
+            # Bounds so a mistyped number cannot cripple the next run: Graph
+            # allows 4 concurrent requests per mailbox, anything above mostly
+            # produces throttling; ports beyond 65535 do not exist.
+            for key, low, high in (("workers", 1, 8), ("mirror_workers", 1, 16),
+                                   ("mcp_port", 1024, 65535),
+                                   ("index_batch", 1, 512), ("answer_sources", 1, 20),
+                                   ("semantic_min", 0, 95),
+                                   ("onedrive_max_mb", 0, 100000),
+                                   ("sharepoint_max_mb", 0, 100000),
+                                   ("sharepoint_pages_image_max_mb", 0, 100),
+                                   ("search_results", 5, 100),
+                                   # 0 means: userflow recording off.
+                                   ("userflow_actions", 0, 50),
+                                   ("runs_retention_months", 1, 120),
+                                   ("log_retention_days", 1, 365)):
+                if key in data:
+                    try:
+                        cfg[key] = max(low, min(high, int(data[key])))
+                    except (TypeError, ValueError):
+                        pass
+            for key in ("mcp_enabled", "mcp_autostart", "update_check", "embed_images", "cache_images",
+                        "refresh_channels", "skip_empty_chats", "include_hidden",
+                        "calendar_reconstruct", "ollama_enabled", "index_semantic",
+                        # Missing since the checkbox exists: the state reached
+                        # the run but never survived a page rebuild.
+                        "onedrive_enabled", "sharepoint_enabled",
+                        "sharepoint_pages_enabled", "planner_enabled",
+                        "planner_attachments"):
+                if key in data:
+                    cfg[key] = bool(data[key])
+            # Whoever switches Ollama off no longer means the check from just now.
+            if "ollama_enabled" in data:
+                self.app._ollama_cache = (0, None)
+            if "calendar_rules" in data:
+                cfg["calendar_rules"] = folders.schreibe_regeln(
+                    folders.lies_regeln(str(data["calendar_rules"] or "")))
+            if "folder_rules" in data:
+                cfg["folder_rules"] = folders.schreibe_regeln(
+                    folders.lies_regeln(str(data["folder_rules"] or "")))
+            for key in ("sharepoint_urls", "sharepoint_pages_urls",
+                        "planner_urls"):
+                if key in data:
+                    cfg[key] = "\n".join(
+                        z.strip() for z in str(data[key] or "").splitlines()
+                        if z.strip())
+            for key in ("sharepoint_types_include", "sharepoint_types_exclude"):
+                if key in data:
+                    cfg[key] = ", ".join(
+                        e for e in (s.strip().lstrip(".").lower()
+                                    for s in str(data[key] or "").split(","))
+                        if e)
+            if "onedrive_rules" in data:
+                cfg["onedrive_rules"] = folders.schreibe_regeln(
+                    folders.lies_regeln(str(data["onedrive_rules"] or "")))
+            if "analytics_skip" in data:
+                cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
+            if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
+                self.app.mcp.stop()
+            if "filetype_hidden" in data:
+                cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
+            if "skip_folders" in data:
+                cfg["skip_folders"] = _clean_folders(data["skip_folders"])
+            if "auth_mode" in data:
+                # Anything unknown becomes token mode – the path that works
+                # without asking IT.
+                cfg["auth_mode"] = ("login" if str(data["auth_mode"]).strip().lower()
+                                    == "login" else "token")
+            for key in ("client_id", "tenant"):
+                if key in data:
+                    cfg[key] = str(data[key] or "").strip()
+            if "sync_cadence" in data and isinstance(data["sync_cadence"], dict):
+                cfg["sync_cadence"] = {
+                    str(k): v for k, v in data["sync_cadence"].items()
+                    if v in ("always", "daily", "weekly", "monthly")}
+            if "notifications" in data:
+                wert = str(data["notifications"] or "").strip().lower()
+                if wert in ("off", "errors", "all"):
+                    cfg["notifications"] = wert
+            if "language" in data:
+                # Only known codes – one typo otherwise and the interface would
+                # speak the fallback language forever.
+                gewuenscht = str(data["language"] or "auto").strip().lower()
+                erlaubt = {e["code"] for e in i18n.available(RES)} | {"auto"}
+                if gewuenscht in erlaubt:
+                    cfg["language"] = gewuenscht
+        self.app.konfiguriere(uebernehmen)
+        return {"ok": True, "config": self.app.cfg}
 
     def _save_schedule(self, data):
+        vorher = dict(self.app.cfg["schedule"])
+
+        def uebernehmen(cfg):
+            plan = cfg["schedule"]
+            for key in ("enabled", "outlook", "teams", "onedrive",
+                        "sharepoint", "sharepoint_pages", "planner", "index",
+                        "calendar"):
+                if key in data:
+                    plan[key] = bool(data[key])
+            if "interval_minutes" in data:
+                try:
+                    plan["interval_minutes"] = max(
+                        5, int(data["interval_minutes"]))
+                except (TypeError, ValueError):
+                    pass
+        self.app.konfiguriere(uebernehmen)
         plan = self.app.cfg["schedule"]
-        vorher = dict(plan)
-        for key in ("enabled", "outlook", "teams", "onedrive", "sharepoint",
-                    "sharepoint_pages", "planner", "index", "calendar"):
-            if key in data:
-                plan[key] = bool(data[key])
-        if "interval_minutes" in data:
-            try:
-                plan["interval_minutes"] = max(5, int(data["interval_minutes"]))
-            except (TypeError, ValueError):
-                pass
-        save_config(self.app.cfg)
         # Unchanged plan, unchanged clock. The page already asks before it
         # posts; this covers everyone else on the documented API, for whom
         # a no-op save would otherwise push a nearly due run back by a
