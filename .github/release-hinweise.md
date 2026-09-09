@@ -1,22 +1,29 @@
-## New in 7.0.1
+## New in 7.1.0
 
-**The folders you set are honoured after a restart.** The bundled app read
-its configuration from the wrong place and fell back to the default data and
-index folders on every start — a folder set in *Settings* looked saved and
-was ignored. Running from source was not affected.
+**Claude sees every source the same way.** The MCP server now covers the
+whole archive with one filter vocabulary — mail, Teams, calendar, contacts,
+OneDrive and SharePoint files, SharePoint pages, Planner boards — with the
+same filters the search tab offers: source (one or several), person, dates,
+folder (mailbox folder, calendar, chat kind, OneDrive folder, site/library,
+board, site) and file type. A `list_sources` tool says up front what each
+source holds and how the filters read there; files are searchable by name,
+path and type, never by content, and the tools say so wherever a file is
+touched.
 
-**Storage paths save with the settings.** The *Apply* buttons are gone:
-*Save settings* applies both folders, *Default* fills in the default path.
-The log names the folder that changed (an index change used to be announced
-as the data folder), says at startup which data and index folder are in use,
-and warns when the index folder holds no index.
+**Appointments and contacts, structured.** `list_events` returns
+appointments as the calendar view shows them — start, end, location,
+attendees, status, including the ones recovered from invitation and
+cancellation mails — and `lookup_contact` reads the address book: e-mail,
+phone, organisation. Planner attachments can be browsed with `list_files`;
+a binary file (PDF, Office, image) comes back as metadata instead of noise.
 
-**An existing archive stays where it is.** Found in the app folder, data and
-index keep living there — splitting storage is on offer, never demanded.
+**The archive about itself.** `corpus_stats` reports how far the archive
+reaches, which months are empty and when each source last synced;
+`archive_analytics` returns the figures of the Analytics tab — so an answer
+can say what the archive does not cover instead of guessing.
 
-What 7.0.0 brought — the split storage layout, expert mode with the OpenAPI
-description, faster index runs, the tidied settings — is in the notes of
-that release.
+What 7.0.1 fixed — folders honoured after a restart, storage paths saved
+with the settings — is in the notes of that release.
 
 ## Upgrading from 6.x
 

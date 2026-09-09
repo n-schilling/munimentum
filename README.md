@@ -91,7 +91,7 @@ and get a marker; that is the point of keeping one.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
 folder. Updating from 6.1 or older? Run the latest 6.x release once first —
-it moves the older loose bookkeeping files into this format; 7.0 no longer
+it moves the older loose bookkeeping files into this format; 7.x no longer
 carries that migration.
 
 Which folders come along is a list of ordered include/exclude rules, and *Show

@@ -33,6 +33,7 @@ full text is shown for you to edit, and you submit the form yourself.
 Folder names and subject lines are beyond what a pattern can catch, so read it
 before posting.
 
-**The MCP server** hands your archive to Claude on `127.0.0.1`. What Claude does
+**The MCP server** hands your archive — and what the app knows about it:
+coverage, run history, the analytics figures — to Claude on `127.0.0.1`. What Claude does
 with the passages it reads is governed by your agreement with Anthropic, not by
 this app.
