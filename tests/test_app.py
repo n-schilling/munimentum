@@ -443,7 +443,7 @@ def test_build_steps_laesst_die_wiederherstellung_weg(sandbox):
     """Without mail evaluation the expensive part is dropped – visible in the
     switch and in the step carrying a different name."""
     cfg = app_mod.load_config()
-    schritt = [s for s in app_mod.build_steps(cfg, calendar=True, reconstruct=False)
+    schritt = [s for s in app_mod.build_steps(cfg, {"calendar": True}, reconstruct=False)
                if s["key"] == "calendar"][0]
     assert "--no-reconstruct" in schritt["argv"]
     assert schritt["label"] == "job.step.calendar.plain"
@@ -452,11 +452,11 @@ def test_build_steps_laesst_die_wiederherstellung_weg(sandbox):
 def test_build_steps_folgt_der_einstellung(sandbox):
     """Without an explicit argument, app_config.json decides."""
     cfg = app_mod.load_config()
-    voll = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
+    voll = [s for s in app_mod.build_steps(cfg, {"calendar": True}) if s["key"] == "calendar"][0]
     assert "--no-reconstruct" not in voll["argv"]      # default: on
 
     cfg["calendar_reconstruct"] = False
-    aus = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
+    aus = [s for s in app_mod.build_steps(cfg, {"calendar": True}) if s["key"] == "calendar"][0]
     assert "--no-reconstruct" in aus["argv"]
 
 
@@ -472,8 +472,7 @@ def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollam
     monkeypatch.setattr(app.jobs, "start", merken)
     monkeypatch.setattr(app_mod, "read_token", lambda *a, **kw: "tok")
 
-    ok, _ = app.launch(outlook=True, index=True, calendar=True,
-                       reconstruct=False, label="job.export")
+    ok, _ = app.launch({"outlook": True, "index": True, "calendar": True}, reconstruct=False, label="job.export")
     assert ok
     kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
     assert kal and "--no-reconstruct" in kal[0]["argv"]
@@ -486,7 +485,7 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
     cfg = app_mod.load_config()
     cfg["outlook_categories"] = ["mail", "contacts"]
     cfg["teams_categories"] = ["1on1", "channels"]
-    steps = app_mod.build_steps(cfg, outlook=True, teams=True, index=True, token="tok")
+    steps = app_mod.build_steps(cfg, {"outlook": True, "teams": True, "index": True}, token="tok")
 
     assert [s["key"] for s in steps] == ["outlook", "teams", "index"]
     assert steps[0]["env"]["EXPORT_CATEGORIES"] == "mail,contacts"
@@ -517,19 +516,19 @@ def test_api_files_ohne_index_meldet_den_grund(sandbox, server):
 def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
     cfg = app_mod.load_config()
     cfg["sharepoint_pages_urls"] = "https://firma.sharepoint.com/sites/TeamX"
-    steps = app_mod.build_steps(cfg, sharepoint_pages=True)
+    steps = app_mod.build_steps(cfg, {"sharepoint_pages": True})
     assert [s["key"] for s in steps] == ["sharepoint_pages"]
     assert "--pages" in steps[0]["argv"]
     assert steps[0]["env"]["SHAREPOINT_PAGES_URLS"].startswith("https://")
     assert steps[0]["env"]["SHAREPOINT_PAGES_IMAGE_MAX_MB"] == "4"
 
-    check = app_mod.build_steps(cfg, check_pages=True)
+    check = app_mod.build_steps(cfg, {"check_pages": True})
     assert "--check-pages" in check[0]["argv"]
     assert check[0]["env"]["SHAREPOINT_PAGES_URLS"].startswith("https://")
 
     url = "https://firma.sharepoint.com/sites/TeamX"
     cfg["sync_cadence"] = {f"sharepoint-url:{url}": "weekly"}
-    nur = app_mod.build_steps(cfg, sharepoint=True, nur_einheit=url)
+    nur = app_mod.build_steps(cfg, {"sharepoint": True}, nur_einheit=url)
     assert nur[0]["env"]["SHAREPOINT_URLS"] == url
     assert nur[0]["env"]["SYNC_NOW"] == "1"
     assert '"weekly"' in nur[0]["env"]["SYNC_CADENCE"]
@@ -543,16 +542,16 @@ def test_planner_schritt_wird_gebaut(sandbox):
     url = "https://planner.cloud.microsoft/webui/v1/plan/abcdefID123/view"
     cfg["planner_urls"] = url
     cfg["planner_attachments"] = True
-    steps = app_mod.build_steps(cfg, planner=True)
+    steps = app_mod.build_steps(cfg, {"planner": True})
     assert [s["key"] for s in steps] == ["planner"]
     assert steps[0]["env"]["PLANNER_URLS"] == url
     assert steps[0]["env"]["PLANNER_ATTACHMENTS"] == "1"
     assert steps[0]["corpus"] is True
 
-    nur = app_mod.build_steps(cfg, planner=True, nur_einheit=url)
+    nur = app_mod.build_steps(cfg, {"planner": True}, nur_einheit=url)
     assert nur[0]["env"]["SYNC_NOW"] == "1"
 
-    index = app_mod.build_steps(cfg, index=True)
+    index = app_mod.build_steps(cfg, {"index": True})
     assert "--planner" in index[0]["argv"]
 
 
@@ -560,7 +559,7 @@ def test_index_schritt_traegt_den_absoluten_store(sandbox):
     """The index can live on another disk (index_dir) – the step receives the
     resolved path, not the folder name; and every subprocess finds the
     configuration via the fixed home folder."""
-    steps = app_mod.build_steps(app_mod.load_config(), index=True)
+    steps = app_mod.build_steps(app_mod.load_config(), {"index": True})
     argv = [str(a) for a in steps[0]["argv"]]
     assert argv[argv.index("--store") + 1] == str(sandbox / app_mod.STORE_DIR)
     assert steps[0]["env"]["MUNIMENTUM_HOME"] == str(sandbox)
@@ -568,7 +567,7 @@ def test_index_schritt_traegt_den_absoluten_store(sandbox):
 
 def test_index_schritt_kennt_den_sharepoint_ordner(sandbox):
     cfg = app_mod.load_config()
-    steps = app_mod.build_steps(cfg, index=True)
+    steps = app_mod.build_steps(cfg, {"index": True})
     argv = steps[0]["argv"]
     assert "--sharepoint" in argv
     assert argv[argv.index("--sharepoint") + 1] == app_mod.SHAREPOINT_DIR
@@ -580,7 +579,7 @@ def test_sharepoint_schritt_traegt_urls_und_filter(sandbox):
     cfg["sharepoint_types_include"] = "pdf, docx"
     cfg["sharepoint_types_exclude"] = "mp4"
     cfg["sharepoint_max_mb"] = 200
-    steps = app_mod.build_steps(cfg, sharepoint=True)
+    steps = app_mod.build_steps(cfg, {"sharepoint": True})
     assert [s["key"] for s in steps] == ["sharepoint"]
     env = steps[0]["env"]
     assert env["SHAREPOINT_URLS"].startswith("https://firma.sharepoint.com")
@@ -589,8 +588,8 @@ def test_sharepoint_schritt_traegt_urls_und_filter(sandbox):
     assert env["SHAREPOINT_MAX_MB"] == "200"
     assert steps[0]["corpus"] is True
 
-    sync = app_mod.build_steps(cfg, sync_sharepoint=True)
-    check = app_mod.build_steps(cfg, check_sharepoint=True)
+    sync = app_mod.build_steps(cfg, {"sync_sharepoint": True})
+    check = app_mod.build_steps(cfg, {"check_sharepoint": True})
     assert "--folders" in sync[0]["argv"] and "--check" in check[0]["argv"]
 
 
@@ -618,10 +617,10 @@ def test_ohne_kategorie_kein_schritt(sandbox):
     """The script reads an empty EXPORT_CATEGORIES as "not set" and then
     fetched everything. The schedule would thus bypass the selection."""
     cfg = app_mod.load_config()
-    assert app_mod.build_steps(cfg, outlook=True, teams=True) == []
+    assert app_mod.build_steps(cfg, {"outlook": True, "teams": True}) == []
 
     cfg["outlook_categories"] = ["contacts"]
-    steps = app_mod.build_steps(cfg, outlook=True, teams=True)
+    steps = app_mod.build_steps(cfg, {"outlook": True, "teams": True})
     assert [s["key"] for s in steps] == ["outlook"]
     assert steps[0]["env"]["EXPORT_CATEGORIES"] == "contacts"
 
@@ -633,25 +632,25 @@ def test_build_steps_setzt_die_kategorien_immer(sandbox):
     selection completely via EXPORT_CATEGORIES – otherwise a step silently
     exported the default instead of the setting.
     """
-    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True)
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), {"outlook": True, "teams": True})
     assert [s["key"] for s in steps] == ["outlook", "teams"]
     for s in steps:
         assert s["env"]["EXPORT_CATEGORIES"], s["key"]
 
 
 def test_build_steps_ohne_embeddings(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), index=True, embeddings=False)
+    steps = app_mod.build_steps(app_mod.load_config(), {"index": True}, embeddings=False)
     assert steps[0]["argv"][-1] == "--no-embeddings"
     assert steps[0]["label"] == "job.step.index.lexical"
 
 
 def test_build_steps_ohne_token_setzt_keine_variable(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), index=True)
+    steps = app_mod.build_steps(app_mod.load_config(), {"index": True})
     assert "GRAPH_TOKEN" not in steps[0]["env"]
 
 
 def test_build_steps_leere_auswahl(sandbox):
-    assert app_mod.build_steps(app_mod.load_config()) == []
+    assert app_mod.build_steps(app_mod.load_config(), {}) == []
 
 
 def test_build_steps_reicht_die_schalter_durch(sandbox):
@@ -661,8 +660,7 @@ def test_build_steps_reicht_die_schalter_durch(sandbox):
     cfg.update(embed_images=False, cache_images=False, refresh_channels=False,
                skip_empty_chats=False, include_hidden=True,
                skip_folders=["archiv", "drafts"], workers=2, index_batch=8)
-    steps = {s["key"]: s for s in app_mod.build_steps(
-        cfg, outlook=True, teams=True, index=True, token="t")}
+    steps = {s["key"]: s for s in app_mod.build_steps(cfg, {"outlook": True, "teams": True, "index": True}, token="t")}
 
     o = steps["outlook"]["env"]
     assert o["INCLUDE_HIDDEN"] == "1" and o["SKIP_FOLDERS"] == "archiv,drafts"
@@ -680,14 +678,13 @@ def test_build_steps_leere_ordnerliste_wird_gesetzt(sandbox):
     """Empty means "skip nothing". The variable must still be set – unset
     would mean "use your default" to outlook_export.py."""
     cfg = _cfg_mit_kategorien(skip_folders=[])
-    env = app_mod.build_steps(cfg, outlook=True, token="t")[0]["env"]
+    env = app_mod.build_steps(cfg, {"outlook": True}, token="t")[0]["env"]
     assert env["SKIP_FOLDERS"] == "" and "SKIP_FOLDERS" in env
 
 
 def test_build_steps_vorgaben_schalten_nichts_ab(sandbox):
     cfg = _cfg_mit_kategorien()
-    steps = {s["key"]: s for s in app_mod.build_steps(cfg, outlook=True, teams=True,
-                                                      token="t")}
+    steps = {s["key"]: s for s in app_mod.build_steps(cfg, {"outlook": True, "teams": True}, token="t")}
     assert steps["teams"]["env"]["EMBED_IMAGES"] == "1"
     assert steps["outlook"]["env"]["INCLUDE_HIDDEN"] == "0"
     assert steps["outlook"]["env"]["SKIP_FOLDERS"].split(",") \
@@ -712,13 +709,12 @@ def test_app_setzt_alles_was_die_skripte_sonst_aus_der_datei_laesen(sandbox, mod
     report "taken from app_config.json" in the middle of an app run."""
     noetig = _env_namen(modul)
     assert noetig, f"keine settings-Aufrufe in {modul}.py gefunden"
-    steps = {s["key"]: s for s in app_mod.build_steps(
-        _cfg_mit_kategorien(), outlook=True, teams=True, token="t")}
+    steps = {s["key"]: s for s in app_mod.build_steps(_cfg_mit_kategorien(), {"outlook": True, "teams": True}, token="t")}
     assert noetig <= set(steps[key]["env"])
 
 
 def test_build_steps_kalender(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), calendar=True)
+    steps = app_mod.build_steps(app_mod.load_config(), {"calendar": True})
     assert steps[0]["key"] == "calendar"
     assert steps[0]["argv"][1].endswith("combined_search.py")
     assert "--json" in steps[0]["argv"]
@@ -734,7 +730,7 @@ def test_kalender_wird_dorthin_geschrieben_wo_alle_ihn_lesen(sandbox,
     the calendar tab then stayed empty forever."""
     monkeypatch.setattr(app_mod, "BASE", sandbox / "data")
     monkeypatch.setattr(app_mod, "STORE_PFAD", sandbox / "woanders")
-    schritt = app_mod.build_steps(app_mod.load_config(), calendar=True)[0]
+    schritt = app_mod.build_steps(app_mod.load_config(), {"calendar": True})[0]
     geschrieben = schritt["argv"][schritt["argv"].index("--json") + 1]
     assert Path(geschrieben).is_absolute(), "relativ = relativ zum cwd des Laufs"
     gelesen = app_mod.calendar_file(app_mod.load_config())
@@ -742,8 +738,7 @@ def test_kalender_wird_dorthin_geschrieben_wo_alle_ihn_lesen(sandbox,
 
 
 def test_build_steps_reihenfolge_export_index_kalender(sandbox):
-    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True,
-                                index=True, calendar=True, token="t")
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), {"outlook": True, "teams": True, "index": True, "calendar": True}, token="t")
     assert [s["key"] for s in steps] == ["outlook", "teams", "index", "calendar"]
 
 
@@ -1076,7 +1071,7 @@ def test_build_steps_markiert_index_und_kalender(sandbox):
     the saving never kicks in."""
     cfg = _cfg_mit_kategorien()
     steps = {s["key"]: s for s in
-             app_mod.build_steps(cfg, outlook=True, index=True, calendar=True)}
+             app_mod.build_steps(cfg, {"outlook": True, "index": True, "calendar": True})}
     assert steps["index"]["nur_bei_neuem"] and steps["index"]["ziel"].name == "corpus.db"
     assert steps["calendar"]["nur_bei_neuem"]
     assert steps["calendar"]["ziel"].name == "calendar.json"
@@ -1107,13 +1102,13 @@ def test_jobrunner_ringpuffer_begrenzt(sandbox, monkeypatch):
 # --------------------------------------------------------------------------
 def test_launch_ohne_token_wird_abgelehnt(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
-    ok, why = a.launch(outlook=True)
+    ok, why = a.launch({"outlook": True})
     assert not ok and schluessel(why) == "srv.notoken"
 
 
 def test_launch_ohne_auswahl(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
-    ok, why = a.launch()
+    ok, why = a.launch({})
     assert not ok and schluessel(why) == "srv.nothing"
 
 
@@ -1124,7 +1119,7 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
     monkeypatch.setattr(app_mod.JobRunner, "start",
                         lambda self, steps, label, **kw: gesehen.update(steps=steps) or True)
     a = app_mod.App(app_mod.load_config())
-    ok, _ = a.launch(index=True, label="Index")
+    ok, _ = a.launch({"index": True}, label="Index")
     assert ok
     assert "--no-embeddings" in gesehen["steps"][0]["argv"]
     assert any(schluessel(ln["text"]) == "srv.lexical.noollama" for ln in a.jobs.lines)
@@ -1135,7 +1130,7 @@ def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
     """Ollama is running – the full-text index is then a decision, not a lack."""
     monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label, **kw: True)
     a = app_mod.App(app_mod.load_config())
-    assert a.launch(index=True, embeddings=False)[0]
+    assert a.launch({"index": True}, embeddings=False)[0]
     assert any(schluessel(ln["text"]) == "srv.lexical.choice" for ln in a.jobs.lines)
 
 
@@ -1144,14 +1139,14 @@ def test_launch_mit_ollama_baut_embeddings(sandbox, with_ollama, monkeypatch):
     monkeypatch.setattr(app_mod.JobRunner, "start",
                         lambda self, steps, label, **kw: gesehen.update(steps=steps) or True)
     a = app_mod.App(app_mod.load_config())
-    assert a.launch(index=True)[0]
+    assert a.launch({"index": True})[0]
     assert "--no-embeddings" not in gesehen["steps"][0]["argv"]
 
 
 def test_launch_lehnt_zweiten_lauf_ab(sandbox, with_ollama, monkeypatch):
     monkeypatch.setattr(app_mod.JobRunner, "busy", property(lambda self: True))
     a = app_mod.App(app_mod.load_config())
-    ok, why = a.launch(index=True)
+    ok, why = a.launch({"index": True})
     assert not ok and schluessel(why) == "srv.busy"
 
 
@@ -1371,7 +1366,8 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     a.cfg["schedule"].update(enabled=True, interval_minutes=5,
                              outlook=True, teams=False, index=True)
     gestartet = {}
-    a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
+    a.launch = (lambda anfrage, **kw:
+                gestartet.update(anfrage, **kw) or (True, "gestartet"))
     a.scheduler._tick()
     assert gestartet["outlook"] is True and gestartet["teams"] is False
     assert gestartet["index"] is True and gestartet["label"] == "job.scheduled"
@@ -1459,8 +1455,8 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
     a.history.last_step_ok = lambda key: time.time() - 3600   # an hour ago
     gebaut = {}
 
-    def fake_build(cfg, **kw):
-        gebaut.update(kw)
+    def fake_build(cfg, angefragt, **kw):
+        gebaut.update(angefragt)
         return [{"key": "outlook", "label": "job.step.outlook", "argv": [],
                  "env": {}}]
 
@@ -1470,7 +1466,7 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
     alt_build = app_mod.build_steps
     app_mod.build_steps = fake_build
     try:
-        a.launch(outlook=True, onedrive=True, label="job.export")
+        a.launch({"outlook": True, "onedrive": True}, label="job.export")
     finally:
         app_mod.build_steps = alt_build
     assert gebaut["onedrive"] is False and gebaut["outlook"] is True
@@ -1494,7 +1490,7 @@ def test_alter_state_sperrt_den_export(sandbox, with_ollama):
     (ordner / "exported.tsv").write_text("m1\ta.eml\n", encoding="utf-8")
     assert app_mod.altbestand_state() == ["outlook"]
     a = app_mod.App(app_mod.load_config())
-    ok, why = a.launch(outlook=True, label="job.export")
+    ok, why = a.launch({"outlook": True}, label="job.export")
     assert not ok and why["k"] == "srv.legacy.state"
     # A folder that already carries its state.db is done – the 6.x migration
     # leaves the originals as .bak, so an old name next to it means nothing.
@@ -1522,7 +1518,7 @@ def test_alter_zeiger_sperrt_bis_die_pfade_stehen(standardort, tmp_path,
     settings.reset()
     assert app_mod.alter_zeiger() == platte
     a = app_mod.App(app_mod.load_config())
-    ok, why = a.launch(index=True, label="job.index")
+    ok, why = a.launch({"index": True}, label="job.index")
     assert not ok and why["k"] == "srv.layout.pointer"
 
     # The trap: save_config writes the whole schema, so data_dir exists as
@@ -1591,9 +1587,9 @@ def test_nur_uebersprungene_exporte_lassen_den_index_aus(sandbox, with_ollama):
                                                else jetzt - 3600)
     gestartet = {}
     a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
-    a.launch(onedrive=True, index=True, label="job.export")
+    a.launch({"onedrive": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is True
-    a.launch(index=True, label="job.index")
+    a.launch({"index": True}, label="job.index")
     assert gestartet["context"]["nichts_neues"] is False
 
 
@@ -1615,13 +1611,13 @@ def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
                                                else jetzt - 3600)
     gestartet = {}
     a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
-    a.launch(onedrive=True, index=True, label="job.export")
+    a.launch({"onedrive": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
     # Never indexed at all: nothing to be current about.
     a.history.last_step_ok = lambda key: None if key == "index" else jetzt
     a.history.last_step_started = lambda key: None if key == "index" else jetzt
-    a.launch(onedrive=True, index=True, label="job.export")
+    a.launch({"onedrive": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
     # The one an "ok only" reading would miss: an export that DIED part-way
@@ -1630,7 +1626,7 @@ def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
     a.history.last_step_ok = lambda key: jetzt - 7200      # index, and the
     a.history.last_step_started = lambda key: (jetzt - 7200 if key == "index"
                                                else jetzt - 60)
-    a.launch(onedrive=True, index=True, label="job.export")
+    a.launch({"onedrive": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
 
@@ -1641,7 +1637,7 @@ def test_lauf_historie_kennt_jede_korpus_quelle(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     gestartet = {}
     a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
-    a.launch(planner=True, label="job.export")
+    a.launch({"planner": True}, label="job.export")
     elemente = gestartet["context"]["elements"]
     import steps as steps_mod
     for e in steps_mod.REGISTRY:
@@ -1675,7 +1671,8 @@ def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"].update(enabled=True, interval_minutes=5)
     gestartet = {}
-    a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
+    a.launch = (lambda anfrage, **kw:
+                gestartet.update(anfrage, **kw) or (True, "gestartet"))
     a.scheduler._tick()
     assert gestartet["onedrive"] is False and gestartet["sharepoint"] is False
 
@@ -1713,7 +1710,8 @@ def test_scheduler_stimmt_den_kalenderschritt_ab(sandbox, with_ollama, cats,
     a.cfg["schedule"].update(enabled=True, interval_minutes=5, outlook=True,
                              teams=False, index=True, calendar=True)
     gestartet = {}
-    a.launch = lambda **kw: gestartet.update(kw) or (True, "gestartet")
+    a.launch = (lambda anfrage, **kw:
+                gestartet.update(anfrage, **kw) or (True, "gestartet"))
     a.scheduler._tick()
     assert gestartet["calendar"] is kalender
     assert gestartet["reconstruct"] is rekonstruktion
@@ -1724,7 +1722,8 @@ def test_scheduler_wartet_bis_zum_intervall(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"].update(enabled=True, interval_minutes=60)
     laeufe = []
-    a.launch = lambda **kw: laeufe.append(kw) or (True, "gestartet")
+    a.launch = (lambda anfrage, **kw:
+                laeufe.append(dict(anfrage, **kw)) or (True, "gestartet"))
     a.scheduler._tick()
     a.scheduler._tick()                                   # right afterwards: not due
     assert len(laeufe) == 1
@@ -1734,7 +1733,7 @@ def test_scheduler_ueberspringt_ohne_gueltigen_token(sandbox, with_ollama):
     app_mod.write_token(make_jwt(exp=time.time() - 60))    # expired
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"]["enabled"] = True
-    a.launch = lambda **kw: pytest.fail("darf nicht starten")
+    a.launch = lambda anfrage, **kw: pytest.fail("darf nicht starten")
     a.scheduler._tick()
     assert a.jobs.token_expired is True
     assert any(schluessel(ln["text"]) == "srv.sched.notoken" for ln in a.jobs.lines)
@@ -1742,7 +1741,7 @@ def test_scheduler_ueberspringt_ohne_gueltigen_token(sandbox, with_ollama):
 
 def test_scheduler_tut_nichts_wenn_aus(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
-    a.launch = lambda **kw: pytest.fail("darf nicht starten")
+    a.launch = lambda anfrage, **kw: pytest.fail("darf nicht starten")
     a.scheduler._tick()
 
 
@@ -1750,7 +1749,7 @@ def test_scheduler_tut_nichts_waehrend_ein_lauf_laeuft(sandbox, with_ollama, mon
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"]["enabled"] = True
     monkeypatch.setattr(app_mod.JobRunner, "busy", property(lambda self: True))
-    a.launch = lambda **kw: pytest.fail("darf nicht starten")
+    a.launch = lambda anfrage, **kw: pytest.fail("darf nicht starten")
     a.scheduler._tick()
 
 
@@ -2442,8 +2441,7 @@ def test_script_argv_lehnt_unbekanntes_teilprogramm_ab(sandbox):
 
 
 def test_build_steps_gebuendelt(sandbox, frozen):
-    steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, index=True,
-                                token="tok")
+    steps = app_mod.build_steps(_cfg_mit_kategorien(), {"outlook": True, "index": True}, token="tok")
     assert steps[0]["argv"][:3] == [sys.executable, "--run", "outlook_export"]
     assert steps[1]["argv"][:3] == [sys.executable, "--run", "rag_index"]
 
@@ -3789,7 +3787,7 @@ def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
     """Otherwise the app would keep a setting the export knows nothing about."""
     cfg = _cfg_mit_kategorien(auth_mode="login", client_id="eigene-id",
                               tenant="contoso.example")
-    env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
+    env = app_mod.build_steps(cfg, {"outlook": True})[0]["env"]
     assert env["GRAPH_AUTH"] == "login"
     assert env["GRAPH_CLIENT_ID"] == "eigene-id"
     assert env["GRAPH_TENANT"] == "contoso.example"
@@ -3798,7 +3796,7 @@ def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
 def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
     """An empty field means "Microsoft's application", not "client id is ''"."""
     cfg = _cfg_mit_kategorien()
-    env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
+    env = app_mod.build_steps(cfg, {"outlook": True})[0]["env"]
     assert env["GRAPH_AUTH"] == "token"
     assert "GRAPH_CLIENT_ID" not in env and "GRAPH_TENANT" not in env
 
@@ -3810,11 +3808,11 @@ def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, mon
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
 
-    ok, why = a.launch(outlook=True, label="job.export")
+    ok, why = a.launch({"outlook": True}, label="job.export")
     assert not ok and schluessel(why) == "srv.notoken"
 
     a.cfg["auth_mode"] = "login"
-    ok, _ = a.launch(outlook=True, label="job.export")
+    ok, _ = a.launch({"outlook": True}, label="job.export")
     assert ok, "Login-Modus verlangt weiterhin einen Schlüssel"
 
 
@@ -4583,12 +4581,12 @@ def test_pruefschritt_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
     a = app_mod.App()
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
-    ok, why = a.launch(check=True, label="job.check")
+    ok, why = a.launch({"check": True}, label="job.check")
     assert not ok and schluessel(why) == "srv.notoken"
 
 
 def test_pruefschritt_ruft_outlook_mit_check(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), check=True)
+    steps = app_mod.build_steps(app_mod.load_config(), {"check": True})
     assert [s["key"] for s in steps] == ["check"]
     assert "--check" in steps[0]["argv"]
 
@@ -4802,12 +4800,12 @@ def test_kalenderregeln_werden_gespeichert_und_weitergereicht(server, sandbox):
     call(port, "POST", "/api/config", {"calendar_rules": "kalender/Privat"})
     # No sign means include – the spelled-out rule is what gets saved.
     assert a.cfg["calendar_rules"] == "+ kalender/Privat"
-    schritt = [s for s in app_mod.build_steps(a.cfg, outlook=True) if s["key"] == "outlook"][0]
+    schritt = [s for s in app_mod.build_steps(a.cfg, {"outlook": True}) if s["key"] == "outlook"][0]
     assert schritt["env"]["CALENDAR_RULES"] == "+ kalender/Privat"
 
 
 def test_build_steps_kalenderabgleich(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), sync_calendars=True)
+    steps = app_mod.build_steps(app_mod.load_config(), {"sync_calendars": True})
     assert [s["key"] for s in steps] == ["calendars"]
     assert "--calendars" in steps[0]["argv"]
 
@@ -5313,7 +5311,7 @@ def test_onedrive_schritt_bekommt_regeln_und_grenze(sandbox):
     cfg = app_mod.load_config()
     cfg["onedrive_rules"] = "- Dateien/Fotos/**"
     cfg["onedrive_max_mb"] = 50
-    schritt = next(s for s in app_mod.build_steps(cfg, onedrive=True)
+    schritt = next(s for s in app_mod.build_steps(cfg, {"onedrive": True})
                    if s["key"] == "onedrive")
     assert "onedrive_export" in " ".join(str(a) for a in schritt["argv"])
     assert schritt["env"]["ONEDRIVE_RULES"] == "- Dateien/Fotos/**"
@@ -5331,7 +5329,7 @@ def test_onedrive_leerer_schalter_setzt_die_variable_trotzdem(sandbox):
     """Empty means "take everything". Unset would mean "use what is in
     app_config.json" – and the script would run differently from what the
     app shows."""
-    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), onedrive=True)
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), {"onedrive": True})
                    if s["key"] == "onedrive")
     assert schritt["env"]["ONEDRIVE_RULES"] == ""
     assert schritt["env"]["ONEDRIVE_MAX_MB"] == "0"
@@ -5341,12 +5339,12 @@ def test_onedrive_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
     a = app_mod.App()
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
-    ok, why = a.launch(onedrive=True, label="job.export")
+    ok, why = a.launch({"onedrive": True}, label="job.export")
     assert not ok and schluessel(why) == "srv.notoken"
 
 
 def test_index_sieht_den_onedrive_ordner(sandbox):
-    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), index=True)
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), {"index": True})
                    if s["key"] == "index")
     argv = [str(x) for x in schritt["argv"]]
     assert "onedrive_export" in argv, "der Index findet die Dateien sonst nicht"
@@ -5411,7 +5409,7 @@ def test_onedrive_haekchen_startet_den_lauf():
 
 
 def test_onedrive_abgleich_ist_ein_eigener_schritt(sandbox):
-    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), sync_onedrive=True)
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), {"sync_onedrive": True})
                    if s["key"] == "onedrive_folders")
     argv = [str(x) for x in schritt["argv"]]
     assert "--folders" in argv and "onedrive_export" in " ".join(argv)
@@ -5423,7 +5421,7 @@ def test_onedrive_abgleich_braucht_einen_zugang(sandbox, no_ollama, monkeypatch)
     a = app_mod.App()
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
-    ok, why = a.launch(sync_onedrive=True, label="job.folders")
+    ok, why = a.launch({"sync_onedrive": True}, label="job.folders")
     assert not ok and schluessel(why) == "srv.notoken"
 
 
@@ -5547,7 +5545,7 @@ def test_vorabversion_wird_nicht_als_aktuell_ausgegeben():
 
 
 def test_onedrive_pruefschritt(sandbox):
-    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), check_onedrive=True)
+    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), {"check_onedrive": True})
                    if s["key"] == "check_onedrive")
     argv = [str(x) for x in schritt["argv"]]
     assert "--check" in argv and "onedrive_export" in " ".join(argv)
@@ -5556,8 +5554,7 @@ def test_onedrive_pruefschritt(sandbox):
 def test_ein_pruefknopf_prueft_beides_in_einem_lauf(sandbox):
     """The mailbox first: it is the main source and belongs at the top of
     the log."""
-    keys = [s["key"] for s in app_mod.build_steps(app_mod.load_config(),
-                                                  check=True, check_onedrive=True)]
+    keys = [s["key"] for s in app_mod.build_steps(app_mod.load_config(), {"check": True, "check_onedrive": True})]
     assert keys == ["check", "check_onedrive"]
 
 
@@ -6972,16 +6969,14 @@ def test_indexschritt_bekommt_ohne_ollama_den_volltextschalter(sandbox, with_oll
     monkeypatch.setattr(app_mod, "read_token", lambda: make_jwt(exp=time.time() + 3600, scp='Mail.Read User.Read'))
     a = app_mod.App(app_mod.load_config())
     a.cfg["ollama_enabled"] = False
-    schritte = app_mod.build_steps(a.cfg, index=True,
-                                   embeddings=a.semantisch_gewollt())
+    schritte = app_mod.build_steps(a.cfg, {"index": True}, embeddings=a.semantisch_gewollt())
     index = [s for s in schritte if s["key"] == "index"][0]
     assert "--no-embeddings" in index["argv"]
 
 
 def test_indexschritt_mit_ollama_bettet_ein(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
-    schritte = app_mod.build_steps(a.cfg, index=True,
-                                   embeddings=a.semantisch_gewollt())
+    schritte = app_mod.build_steps(a.cfg, {"index": True}, embeddings=a.semantisch_gewollt())
     index = [s for s in schritte if s["key"] == "index"][0]
     assert "--no-embeddings" not in index["argv"]
 

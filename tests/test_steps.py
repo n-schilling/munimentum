@@ -99,15 +99,19 @@ def test_braucht_zugang_nur_fuer_graph_schritte():
     assert steps.braucht_zugang({}) is False
 
 
-def test_launch_und_build_steps_kennen_jede_anfrage():
-    """anfrage_aus_request() hands every registry key to App.launch, which
-    unpacks them as keyword arguments – a new entry whose name no signature
-    knows would turn every POST /api/run into a 500."""
-    import inspect
-    for fn in (app_mod.App.launch, app_mod.build_steps):
-        bekannt = set(inspect.signature(fn).parameters)
-        fehlt = set(steps.ANFRAGEN) - bekannt
-        assert not fehlt, f"{fn.__qualname__} kennt nicht: {sorted(fehlt)}"
+def test_build_steps_nimmt_die_anfrage_als_dict():
+    """The request travels as one dict from the API body to the registry:
+    every key the registry knows is honoured, an unknown one is ignored –
+    so a new entry needs no new parameter anywhere in between."""
+    cfg = dict(settings.VORGABEN)
+    cfg["outlook_categories"] = ["mail"]
+    keys = [s["key"] for s in app_mod.build_steps(cfg, {"index": True,
+                                                        "unbekannt": True})]
+    assert keys == ["index"]
+    alle = {e["anfrage"]: True for e in steps.REGISTRY}
+    gebaut = {s["key"] for s in app_mod.build_steps(cfg, alle)}
+    assert gebaut >= {e["key"] for e in steps.REGISTRY
+                      if "aktiv" not in e or e["aktiv"](cfg, {"cats_outlook": ["mail"], "cats_teams": []})}
 
 
 def test_ui_metadaten_nennen_nur_quellen():

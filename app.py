@@ -1089,21 +1089,16 @@ def _auth_env(cfg):
     return env
 
 
-def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
-                embeddings=True, token="", reconstruct=None,
-                check=False, sync_folders=False, onedrive=False,
-                sync_onedrive=False, check_onedrive=False,
-                sync_calendars=False, sharepoint=False,
-                sync_sharepoint=False, check_sharepoint=False,
-                sharepoint_pages=False, check_pages=False, planner=False,
-                nur_einheit=None):
+def build_steps(cfg, angefragt, *, embeddings=True, token="",
+                reconstruct=None, nur_einheit=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
-    the app paths, the shared environment and the request flags. The
-    export scripts receive the selection via environment variables – so
-    they run without any prompt, with exactly what is ticked in the
-    interface.
+    the app paths, the shared environment and the request – one dict of
+    registry request keys to booleans, passed through untouched so a new
+    entry needs no new parameter anywhere. The export scripts receive the
+    selection via environment variables – so they run without any prompt,
+    with exactly what is ticked in the interface.
     """
     # None means "as configured". The caller only sets it when it knows
     # better – say because this run fetched no mail at all.
@@ -1137,17 +1132,6 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token
-    angefragt = {"outlook": outlook, "teams": teams, "index": index,
-                 "calendar": calendar, "onedrive": onedrive,
-                 "sharepoint": sharepoint, "planner": planner,
-                 "sharepoint_pages": sharepoint_pages,
-                 "sync_onedrive": sync_onedrive,
-                 "sync_sharepoint": sync_sharepoint,
-                 "sync_folders": sync_folders,
-                 "sync_calendars": sync_calendars,
-                 "check": check, "check_onedrive": check_onedrive,
-                 "check_sharepoint": check_sharepoint,
-                 "check_pages": check_pages}
     return steps_mod.baue(cfg, ctx, pfade, base_env, script_argv, angefragt)
 
 
@@ -1223,11 +1207,10 @@ class Scheduler(threading.Thread):
         noetig, mit_mails = calendar_plan(self.app.cfg)
         kalender = bool(plan.get("outlook", True) and plan.get("calendar", True) and noetig)
         cfg = self.app.cfg
-        ok, why = self.app.launch(origin="schedule",
-                                  calendar=kalender,
+        anfrage = dict(steps_mod.plan_anfrage(plan, cfg), calendar=kalender)
+        ok, why = self.app.launch(anfrage, origin="schedule",
                                   reconstruct=None if mit_mails else False,
-                                  label="job.scheduled",
-                                  **steps_mod.plan_anfrage(plan, cfg))
+                                  label="job.scheduled")
         if not ok:
             self.app.jobs.logk("srv.sched.skipped", "warn", why=why)
 
@@ -1607,13 +1590,11 @@ class App:
         self._calendar_cache = (stamp, roh, gzip.compress(roh, 6))
         return self._calendar_cache[1], self._calendar_cache[2]
 
-    def launch(self, outlook=False, teams=False, index=False, calendar=False,
-               embeddings=None, label="Lauf", reconstruct=None,
-               check=False, sync_folders=False, onedrive=False,
-               sync_onedrive=False, check_onedrive=False, sync_calendars=False,
-               sharepoint=False, sync_sharepoint=False, check_sharepoint=False,
-               sharepoint_pages=False, check_pages=False, planner=False,
-               nur_einheit=None, origin="manual"):
+    def launch(self, anfrage, *, embeddings=None, label="Lauf",
+               reconstruct=None, nur_einheit=None, origin="manual"):
+        """Start a run. `anfrage` maps registry request keys to booleans –
+        the API body, the schedule plan and the tests all speak this one
+        shape; unknown keys are ignored, missing ones are off."""
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
         # No run at all on an installation an upgrade left half-done – not
@@ -1629,20 +1610,12 @@ class App:
         # The cadence gate narrows EVERY run, scheduled and manual alike –
         # a source below its interval is skipped with a clear log line.
         kadenzen = self.cfg.get("sync_cadence") or {}
-        # One picture of what this run was asked for – the cadence gate
-        # narrows it, and the access question, the "nothing new" gate and
-        # the run record all read the same dict afterwards, so none of them
-        # can fall behind a new registry entry on its own.
-        angefragt = {"outlook": outlook, "teams": teams, "onedrive": onedrive,
-                     "sharepoint": sharepoint, "planner": planner,
-                     "sharepoint_pages": sharepoint_pages, "check": check,
-                     "sync_folders": sync_folders,
-                     "sync_onedrive": sync_onedrive,
-                     "check_onedrive": check_onedrive,
-                     "sync_sharepoint": sync_sharepoint,
-                     "check_sharepoint": check_sharepoint,
-                     "check_pages": check_pages, "index": index,
-                     "calendar": calendar, "sync_calendars": sync_calendars}
+        # One picture of what this run was asked for – normalised to the
+        # registry's keys (a private copy: the cadence gate narrows it), and
+        # read by the access question, the "nothing new" gate and the run
+        # record alike, so none of them can fall behind a new entry.
+        angefragt = {e["anfrage"]: bool(anfrage.get(e["anfrage"]))
+                     for e in steps_mod.REGISTRY}
         # Asked for BEFORE the gate: a source the cadence drops was still
         # wanted, and that is what makes "nothing new" true rather than
         # unknown further down.
@@ -1659,30 +1632,18 @@ class App:
             self.jobs.logk("srv.cadence.skip", "info",
                            step={"k": dienst_label, "v": {}},
                            cadence={"k": f"cadence.{kadenz}", "v": {}})
-        onedrive, teams = angefragt["onedrive"], angefragt["teams"]
         braucht_zugang = steps_mod.braucht_zugang(angefragt)
         token = read_token() if braucht_zugang else ""
         # In login mode the on-disk cache carries the run – a pasted key is
         # then unnecessary, and its absence must not prevent a run.
         if braucht_zugang and not token and self.auth_modus() != "login":
             return False, {"k": "srv.notoken", "v": {}}
-        if index and not embeddings:
+        if angefragt["index"] and not embeddings:
             self.jobs.logk("srv.lexical.choice" if gewaehlt
                            else "srv.lexical.noollama", "warn")
-        steps = build_steps(self.cfg, outlook=outlook, teams=teams, index=index,
-                            calendar=calendar, embeddings=embeddings,
-                            token=token,
-                            reconstruct=reconstruct, check=check,
-                            sync_folders=sync_folders, onedrive=onedrive,
-                            sync_onedrive=sync_onedrive,
-                            check_onedrive=check_onedrive,
-                            sharepoint=sharepoint,
-                            sync_sharepoint=sync_sharepoint,
-                            check_sharepoint=check_sharepoint,
-                            sharepoint_pages=sharepoint_pages,
-                            check_pages=check_pages, planner=planner,
-                            nur_einheit=nur_einheit,
-                            sync_calendars=sync_calendars)
+        steps = build_steps(self.cfg, angefragt, embeddings=embeddings,
+                            token=token, reconstruct=reconstruct,
+                            nur_einheit=nur_einheit)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         # Exports were asked for, but none survived its gate (cadence, empty
@@ -1702,15 +1663,16 @@ class App:
             "elements": {
                 "outlook": (_clean_categories(self.cfg["outlook_categories"],
                                               ["mail", "calendar", "contacts"])
-                            if outlook else []),
+                            if angefragt["outlook"] else []),
                 "teams": (_clean_categories(self.cfg["teams_categories"],
                                             ["1on1", "group", "meeting",
-                                             "channels"]) if teams else []),
+                                             "channels"])
+                          if angefragt["teams"] else []),
                 **{e["key"]: bool(angefragt.get(e["anfrage"]))
                    for e in steps_mod.REGISTRY
                    if e.get("corpus") and e["key"] not in ("outlook", "teams")},
             },
-            "semantic": bool(index and embeddings),
+            "semantic": bool(angefragt["index"] and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
             "retention_months": int(self.cfg.get("runs_retention_months") or 24),
             "log_retention_days": int(self.cfg.get("log_retention_days") or 14),
@@ -1952,7 +1914,7 @@ class Handler(BaseHTTPRequestHandler):
                 anfrage = steps_mod.anfrage_aus_request(data)
                 anfrage.update(outlook=mit_outlook, calendar=kalender)
                 ok, why = app.launch(
-                    **anfrage,
+                    anfrage,
                     nur_einheit=(str(data.get("nur_einheit") or "").strip()
                                  or None),
                     embeddings=data.get("embeddings"),
