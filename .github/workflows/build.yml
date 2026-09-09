@@ -1,14 +1,14 @@
 name: Build
 
-# Baut die fertige App für macOS, Windows und Linux.
+# Builds the finished app for macOS, Windows and Linux.
 #
-#   Push auf main / manuell  → Dateien hängen als Artifact am Lauf
-#   Tag "v*"                 → zusätzlich ein GitHub-Release mit denselben Dateien
+#   Push to main / manual    → files are attached to the run as an artifact
+#   Tag "v*"                 → additionally a GitHub release with the same files
 #
-# Jedes Bündel durchläuft vorher packaging/smoke_test.py: startet die App,
-# baut einen Index (die gebündelte Datei ruft sich dafür selbst auf), sucht
-# darin und startet den MCP-Server. Ein Bündel, in dem eine Abhängigkeit fehlt,
-# kommt damit gar nicht erst in ein Release.
+# Every bundle first goes through packaging/smoke_test.py: it starts the app,
+# builds an index (the bundled binary calls itself for that), searches it and
+# starts the MCP server. A bundle with a missing dependency never makes it
+# into a release this way.
 
 on:
   push:
@@ -33,7 +33,7 @@ jobs:
           - os: windows-latest
             ziel: windows-x64
             exe: dist/Munimentum/Munimentum.exe
-          - os: ubuntu-22.04      # ältere glibc = läuft auch auf neueren Systemen
+          - os: ubuntu-22.04      # older glibc = also runs on newer systems
             ziel: linux-x64
             exe: dist/Munimentum/Munimentum
 
@@ -44,10 +44,10 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Version prüfen
-        # Bei einem Tag muss version.py dieselbe Zahl tragen. Sonst meldete die
-        # App eine andere Version als der Download – und die eingebaute
-        # Aktualisierungsprüfung riete dauerhaft zum Update auf sich selbst.
+      - name: Check version
+        # On a tag, version.py must carry the same number. Otherwise the app
+        # would report a different version than the download – and the built-in
+        # update check would keep recommending an update to itself.
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
@@ -55,14 +55,14 @@ jobs:
           tag="${GITHUB_REF_NAME#v}"
           echo "version.py: $datei · Tag: $tag"
           test "$datei" = "$tag" || {
-            echo "::error::version.py sagt $datei, der Tag sagt $tag"; exit 1; }
+            echo "::error::version.py says $datei, the tag says $tag"; exit 1; }
 
-      - name: Abhängigkeiten installieren
+      - name: Install dependencies
         run: pip install -r requirements-build.txt
 
-      # Nur bei Tag-Läufen: dann kommt das Zertifikat auf den Runner, dann
-      # kostet die Beglaubigung Wartezeit. Pushes auf main bauen unsigniert.
-      - name: Zertifikat einspielen (macOS)
+      # Tag runs only: that is when the certificate goes onto the runner and
+      # when notarization costs waiting time. Pushes to main build unsigned.
+      - name: Import certificate (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -74,27 +74,27 @@ jobs:
           security unlock-keychain -p bauen build.keychain
           security import cert.p12 -k build.keychain -P "$MACOS_CERT_PASSWORD" \
             -T /usr/bin/codesign
-          # Ohne diese Zeile fragt codesign nach dem Schlüsselbund-Passwort und
-          # der Lauf hängt bis zum Zeitlimit.
+          # Without this line codesign prompts for the keychain password and
+          # the run hangs until the timeout.
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k bauen build.keychain
           rm cert.p12
           security find-identity -v -p codesigning
 
-      - name: Bündel bauen
-        # Die Spec signiert mit, sobald MACOS_SIGN_IDENTITY gesetzt ist – leer
-        # außerhalb von Tag-Läufen, dann baut sie unsigniert wie bisher.
+      - name: Build bundle
+        # The spec signs as soon as MACOS_SIGN_IDENTITY is set – empty outside
+        # tag runs, in which case it builds unsigned as before.
         env:
           MACOS_SIGN_IDENTITY: ${{ startsWith(github.ref, 'refs/tags/v') && secrets.MACOS_SIGN_IDENTITY || '' }}
         run: pyinstaller packaging/app.spec --noconfirm
 
-      - name: Rauchtest
+      - name: Smoke test
         run: python packaging/smoke_test.py "${{ matrix.exe }}"
 
-      # Reihenfolge: erst die App heften, dann daraus das DMG bauen. Wer das
-      # Ticket später anheftet, hat es nur am DMG – und wer die App herauszieht,
-      # bekommt ohne Netz wieder eine Warnung.
-      - name: App beglaubigen und heften (macOS)
+      # Order matters: staple the app first, then build the DMG from it. Staple
+      # the ticket later and it is only on the DMG – and whoever drags the app
+      # out gets the warning again when offline.
+      - name: Notarize and staple app (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
         env:
           AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
@@ -107,32 +107,32 @@ jobs:
             --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
           xcrun stapler staple "dist/Munimentum.app"
           rm pruefling.zip
-          # Lieber hier abbrechen als ein Bündel ausliefern, das beim Anwender
-          # trotzdem die Warnung zeigt.
+          # Better to fail here than to ship a bundle that still shows the
+          # warning on the user's machine.
           codesign --verify --strict --verbose=2 "dist/Munimentum.app"
           xcrun stapler validate "dist/Munimentum.app"
           spctl -a -t exec -vvv "dist/Munimentum.app"
 
-      - name: Packen (macOS)
+      - name: Package (macOS)
         if: startsWith(matrix.os, 'macos')
-        # DMG statt ZIP. Die .app enthält 36 Symlinks, die zwischen
-        # Contents/Resources und Contents/Frameworks in beide Richtungen zeigen
-        # – so baut PyInstaller ein macOS-Bündel. Ein ZIP kann das abbilden,
-        # aber jeder Entpacker muss es richtig machen, und das Archivierungs-
-        # programm von macOS tut es nicht zuverlässig: es brach mit „size of the
-        # extracted file does not match" ab und hinterließ eine App, der die
-        # Verweise fehlten. Beim DMG wird gar nicht entpackt – Doppelklick hängt
-        # es ein, der Finder kopiert, Symlinks bleiben.
+        # DMG instead of ZIP. The .app contains 36 symlinks pointing between
+        # Contents/Resources and Contents/Frameworks in both directions – that
+        # is how PyInstaller builds a macOS bundle. A ZIP can represent that,
+        # but every unarchiver has to get it right, and macOS Archive Utility
+        # does not do so reliably: it aborted with "size of the extracted file
+        # does not match" and left behind an app missing its links. A DMG is
+        # never unpacked at all – double-click mounts it, the Finder copies,
+        # symlinks survive.
         run: |
           mkdir -p dmg
           cp -R "dist/Munimentum.app" dmg/
           ln -s /Applications dmg/Applications
-          # Ohne -quiet: schlägt hdiutil fehl, steht der Grund im Protokoll.
-          # Mit dem Schalter kam beim Umbenennungs-Release nur "exit code 1".
+          # No -quiet: if hdiutil fails, the reason ends up in the log. With
+          # the flag, the rename release produced nothing but "exit code 1".
           hdiutil create -volname "Munimentum" -srcfolder dmg \
             -ov -format UDZO "Munimentum-${{ matrix.ziel }}.dmg"
 
-      - name: DMG signieren, beglaubigen und heften (macOS)
+      - name: Sign, notarize and staple DMG (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
@@ -145,16 +145,16 @@ jobs:
             --key key.p8 --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER_ID" --wait
           xcrun stapler staple "$dmg"
           rm key.p8
-          # Danach wird an der Datei nichts mehr angefasst – jede Änderung,
-          # auch Umpacken, macht die Signatur ungültig.
+          # Nothing touches the file after this – any change, repacking
+          # included, invalidates the signature.
           spctl -a -t open --context context:primary-signature -vv "$dmg"
 
-      - name: Rauchtest am fertigen DMG (macOS)
+      - name: Smoke test on the finished DMG (macOS)
         if: startsWith(matrix.os, 'macos')
-        # Der Rauchtest oben lief auf dem Baumverzeichnis. Dieser läuft auf dem,
-        # was der Nutzer wirklich bekommt: einhängen, herauskopieren wie ein
-        # Finder-Zug nach „Programme", dort starten. Genau der Schritt, an dem
-        # es mit dem ZIP scheiterte.
+        # The smoke test above ran on the build tree. This one runs on what the
+        # user actually gets: mount, copy out like a Finder drag to
+        # "Applications", launch from there. Exactly the step at which the ZIP
+        # failed.
         run: |
           hdiutil attach "Munimentum-${{ matrix.ziel }}.dmg" \
             -nobrowse -readonly -mountpoint /tmp/m365
@@ -162,30 +162,30 @@ jobs:
           cp -R "/tmp/m365/Munimentum.app" geprueft/
           hdiutil detach /tmp/m365 -quiet
           tot=$(find geprueft/Munimentum.app -type l ! -exec test -e {} \; -print | head -5)
-          test -z "$tot" || { echo "::error::Tote Symlinks nach dem Kopieren:"; echo "$tot"; exit 1; }
-          # --beglaubigt: hier ist das Ticket schon angeheftet, hier muss es
-          # halten. Bei unsignierten Läufen auf main greift der Schalter nicht.
+          test -z "$tot" || { echo "::error::Dead symlinks after copying:"; echo "$tot"; exit 1; }
+          # --beglaubigt: the ticket is already stapled here, so here it has to
+          # hold. On unsigned runs on main the flag does nothing.
           python packaging/smoke_test.py \
             "geprueft/Munimentum.app/Contents/MacOS/Munimentum" --beglaubigt
 
-      - name: Packen (Windows)
+      - name: Package (Windows)
         if: startsWith(matrix.os, 'windows')
         shell: pwsh
         run: Compress-Archive -Path "dist/Munimentum" -DestinationPath "Munimentum-${{ matrix.ziel }}.zip"
 
-      - name: Packen (Linux)
+      - name: Package (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: tar -czf "Munimentum-${{ matrix.ziel }}.tar.gz" -C dist "Munimentum"
 
       - uses: actions/upload-artifact@v7
         with:
-          # Bewusst NICHT wie die Datei darin benannt. GitHub packt jedes
-          # Artefakt noch einmal in ein ZIP; hießen beide gleich, wollte das
-          # Archivierungsprogramm beim Doppelklick eine Datei neben das Archiv
-          # legen, die genau so heißt wie das Archiv selbst. Heraus kommt dann
-          # "… 2.zip" statt der App – das sieht nach kaputtem Download aus.
-          # Die Namen der Release-Dateien ändert das nicht: die stammen aus den
-          # Dateien im Artefakt, nicht aus dessen Namen.
+          # Deliberately NOT named like the file inside. GitHub wraps every
+          # artifact in another ZIP; if both had the same name, Archive Utility
+          # would try on double-click to place a file next to the archive that
+          # is named exactly like the archive itself. The result is "… 2.zip"
+          # instead of the app – which looks like a broken download.
+          # This does not change the release file names: those come from the
+          # files inside the artifact, not from its name.
           name: bundle-${{ matrix.ziel }}
           path: |
             Munimentum-${{ matrix.ziel }}.dmg
@@ -200,7 +200,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
-      contents: write            # nötig, um das Release anzulegen
+      contents: write            # needed to create the release
     steps:
       - uses: actions/checkout@v7
 
@@ -209,13 +209,13 @@ jobs:
           path: pakete
           merge-multiple: true
 
-      - name: Prüfsummen
+      - name: Checksums
         run: |
           cd pakete
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
-      - name: Release anlegen
+      - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

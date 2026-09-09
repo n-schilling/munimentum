@@ -1,6 +1,6 @@
-# Freie Issues bleiben erlaubt: "Report a problem" in der App öffnet den
-# klassischen Editor mit vorbefülltem Bericht (?title=&body=), nicht ein
-# Formular. Ohne blank_issues_enabled landete dieser Weg im Auswahldialog.
+# Blank issues stay allowed: "Report a problem" in the app opens the classic
+# editor with a prefilled report (?title=&body=), not a form. Without
+# blank_issues_enabled that path would land in the template chooser.
 blank_issues_enabled: true
 contact_links:
   - name: Security issue

@@ -33,6 +33,10 @@ for scripts that talk to the backend directly.
 its last run; with nothing new, an archive of a few hundred thousand pieces
 is indexed in seconds instead of minutes.
 
+**The log reads like the run.** Heading, the selected sources, then every
+step under a heading of its own that says what starts — including the steps
+that do not run this time, with the reason right beneath.
+
 **Settings, tidied.** One shape for every card: switches for every on/off
 setting, the index kind as a plain choice, action buttons at the right —
 and a single *Save settings* button for the whole tab, the schedule included.

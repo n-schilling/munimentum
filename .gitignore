@@ -4,7 +4,7 @@
 gx_token.txt
 msal_cache.bin
 
-# macOS signing keys (see packaging/signieren.md). They belong in the GitHub
+# macOS signing keys (see packaging/signing.md). They belong in the GitHub
 # secrets, never in the repository – a leaked private key can only be fixed
 # by revoking the certificate.
 *.p12

@@ -11,11 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Beide Enden der zugesagten Spanne: 3.12 ist die im README genannte
-        # Untergrenze, 3.13 der aktuelle Stand. Die untere Zeile ist der Grund,
-        # warum die Zusage ehrlich bleibt: ohne sie hebt irgendwann eine
-        # Abhängigkeit die Grenze an, alles bleibt grün, und es fällt erst auf,
-        # wenn sich jemand meldet. Genau das war mit numpy 2.5 schon der Fall.
+        # Both ends of the promised range: 3.12 is the lower bound named in the
+        # README, 3.13 the current release. The lower line is what keeps that
+        # promise honest: without it, some dependency eventually raises the
+        # bar, everything stays green, and nobody notices until someone
+        # complains. That is exactly what already happened with numpy 2.5.
         python-version: ["3.12", "3.13"]
     name: checks (py${{ matrix.python-version }})
     steps:
@@ -26,8 +26,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
-        # Exakte Pins – siehe requirements.txt / requirements-dev.txt.
-        # Nichts hier direkt installieren: sonst laufen CI und lokal auseinander.
+        # Exact pins – see requirements.txt / requirements-dev.txt.
+        # Install nothing directly here: otherwise CI and local drift apart.
         run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
@@ -37,8 +37,8 @@ jobs:
         run: coverage run -m pytest -v
 
       - name: Coverage report
-        # Erst die Zusammenfassung schreiben, dann das Gate durchsetzen:
-        # fail_under steht in pyproject.toml ([tool.coverage.report])
+        # Write the summary first, then enforce the gate:
+        # fail_under lives in pyproject.toml ([tool.coverage.report])
         run: |
           echo "### Coverage (Python ${{ matrix.python-version }})" >> "$GITHUB_STEP_SUMMARY"
           coverage report --format=markdown --fail-under=0 >> "$GITHUB_STEP_SUMMARY"

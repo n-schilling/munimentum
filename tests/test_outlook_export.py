@@ -960,7 +960,7 @@ def test_bericht_landet_in_der_db(tmp_path):
 
 
 def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
-    """On the first real run the check reported 19,649 missing mails in the
+    """On the first real run the check reported nearly twenty thousand missing mails in the
     archive – a folder the default selection deliberately never exports.
     A report that shows nonsense the first time is never opened again.
     """

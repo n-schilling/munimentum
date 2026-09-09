@@ -320,7 +320,7 @@ def test_calendar_file_folgt_der_tzid(tmp_path):
 # Threads: which mails belong together
 #
 # Everything needed is in the .eml files – no re-export required. Measured
-# on the real corpus (sample of 400 out of 45,615): Thread-Index 89 %,
+# on the real corpus (sample of 400 out of about 45,000): Thread-Index 89 %,
 # References/In-Reply-To 58 %, Message-ID 100 %.
 # --------------------------------------------------------------------------
 def _msg(**kopf):

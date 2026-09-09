@@ -1,12 +1,12 @@
-# Dependabot – Aktualisierungen als Pull Request, nicht als Überraschung.
+# Dependabot – updates as pull requests, not as surprises.
 #
-# Zwei Ökosysteme sind hier im Spiel:
-#   pip             die drei requirements-Dateien (Laufzeit, Tests, Bündelbau)
-#   github-actions  die Actions in .github/workflows/
+# Two ecosystems are involved here:
+#   pip             the three requirements files (runtime, tests, bundle build)
+#   github-actions  the actions in .github/workflows/
 #
-# Warum gebündelt und nicht je Paket einzeln: jede Aktualisierung löst CI und
-# vier Bündelbauten aus. Ein Sammel-PR je Woche hält das im Rahmen und ist
-# leichter zu beurteilen als ein Dutzend Einzeländerungen.
+# Why grouped rather than one PR per package: every update triggers CI and
+# three bundle builds. One combined PR per week keeps that within bounds and is
+# easier to judge than a dozen individual changes.
 version: 2
 
 updates:
@@ -23,8 +23,8 @@ updates:
       include: scope
     labels: [dependencies]
     groups:
-      # Kleine Sprünge zusammen: die brechen selten etwas und einzeln zu
-      # prüfen lohnt nicht.
+      # Small bumps together: they rarely break anything and reviewing them
+      # one by one is not worth it.
       patch-und-minor:
         patterns: ["*"]
         update-types: [minor, patch]

@@ -3256,7 +3256,7 @@ def test_beenden_warnt_bei_laufendem_auftrag():
 
 
 # The four tiles used to stand for their building blocks: "Token", "Ollama",
-# "269,744 chunks", "MCP running". For someone who does not know the words,
+# "270,000 chunks", "MCP running". For someone who does not know the words,
 # that was four times no answer. The test pins down both halves of the fix –
 # everyday language on the tile, the technical term in the tooltip.
 PRUEFUNG_KACHELN = GRUNDZUSTAND + """

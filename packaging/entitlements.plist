@@ -2,19 +2,20 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Ausnahmen von der Hardened Runtime. Beglaubigt wird nur mit ihr, und sie
-  schaltet ab, was CPython braucht – ohne diese drei Zeilen startet die
-  signierte App nicht mehr (siehe packaging/signieren.md, Schritt 4).
+  Exceptions from the hardened runtime. Notarization only works with it, and
+  it switches off what CPython needs – without these three lines the signed
+  app no longer starts (see packaging/signing.md, step 4).
 
-  Bewusst so wenig wie möglich: wer eine Zeile entfernen kann, ohne dass die App
-  beim Start stirbt, soll es tun. Console.app nennt beim Fehlversuch den Grund.
+  Deliberately as little as possible: whoever can remove a line without the
+  app dying at launch should do so. Console.app names the reason on a failed
+  attempt.
 -->
 <plist version="1.0">
 <dict>
-  <!-- CPython erzeugt zur Laufzeit ausführbaren Speicher (ctypes, libffi). -->
+  <!-- CPython creates executable memory at runtime (ctypes, libffi). -->
   <key>com.apple.security.cs.allow-jit</key><true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
-  <!-- PyInstaller lädt über 200 .so/.dylib aus dem entpackten Bündel nach. -->
+  <!-- PyInstaller loads over 200 .so/.dylib from the unpacked bundle. -->
   <key>com.apple.security.cs.disable-library-validation</key><true/>
 </dict>
 </plist>

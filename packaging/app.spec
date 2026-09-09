@@ -29,15 +29,15 @@ ROOT = Path(SPECPATH).parent          # noqa: F821  (PyInstaller sets SPECPATH)
 # Windows reads the .ico from the EXE, macOS the .icns from the bundle.
 # Linux knows no icon in the binary – there it has no effect.
 # Exceptions from the hardened runtime. Without them the signed app does not
-# start (see packaging/signieren.md). Only needed when signing, but must be
+# start (see packaging/signing.md). Only needed when signing, but must be
 # there once that begins.
 ENTITLEMENTS = ROOT / "packaging" / "entitlements.plist"
-assert ENTITLEMENTS.exists(), "entitlements.plist fehlt – signierte Bündel starten damit nicht"
+assert ENTITLEMENTS.exists(), "entitlements.plist missing – signed bundles do not start without it"
 
 ICON_ICO = ROOT / "packaging" / "icon" / "icon.ico"
 ICON_ICNS = ROOT / "packaging" / "icon" / "icon.icns"
 for _p in (ICON_ICO, ICON_ICNS):
-    assert _p.exists(), f"{_p.name} fehlt – ohne es trüge die App PyInstallers Standardsymbol"
+    assert _p.exists(), f"{_p.name} missing – the app would carry PyInstaller's default icon"
 
 # Version number from version.py – do not maintain it here a second time.
 _v = {}
@@ -77,7 +77,7 @@ for paket in ("uvicorn", "mcp", "anyio", "sse_starlette"):
 # executable or in the unpacked bundle – without them the app would speak
 # only keys.
 datas = [(str(p), "lang") for p in sorted((ROOT / "lang").glob("*.json"))]
-assert datas, "lang/ ist leer – die Oberfläche hätte keine Texte"
+assert datas, "lang/ is empty – the interface would have no texts"
 # The interface itself and the API description that /api/openapi serves –
 # app.py reads both from RES; without them the app would start blank.
 datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "openapi.yaml"), ".")]
