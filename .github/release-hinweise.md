@@ -1,17 +1,28 @@
-## New in 7.0.0
+## New in 7.0.1
 
-**The storage layout is split.** The app folder is now fixed and holds only
-the small things: settings, access token, run history. The two heavy parts
-can each point to another disk in *Settings*: the **data folder** (all
-exports) and the **index folder** (`rag_store/` — hot reads, keep it fast).
-On a fresh install they are separate folders (`data/` next to `rag_store/`).
+**The folders you set are honoured after a restart.** The bundled app read
+its configuration from the wrong place and fell back to the default data and
+index folders on every start — a folder set in *Settings* looked saved and
+was ignored. Running from source was not affected.
 
-**Upgrades just keep working.** When the app finds an existing archive laid
-out the old way, it points the data folder at the app folder and says so in
-the log — nothing is moved, everything is found where it always was.
-Munimentum never moves your data: to split storage, quit the app, move the
-export folders yourself (into `data/`, or onto another disk), then set the
-paths in *Settings*.
+**Storage paths save with the settings.** The *Apply* buttons are gone:
+*Save settings* applies both folders, *Default* fills in the default path.
+The log names the folder that changed (an index change used to be announced
+as the data folder), says at startup which data and index folder are in use,
+and warns when the index folder holds no index.
+
+**An existing archive stays where it is.** Found in the app folder, data and
+index keep living there — splitting storage is on offer, never demanded.
+
+What 7.0.0 brought — the split storage layout, expert mode with the OpenAPI
+description, faster index runs, the tidied settings — is in the notes of
+that release.
+
+## Upgrading from 6.x
+
+**Coming from 6.1 or older?** Run the latest 6.x release once first — it
+moves the export bookkeeping into each folder's `state.db`; 7.x no longer
+carries that migration.
 
 Only if you had redirected the data folder with the old pointer file
 (`datenordner.txt`): it is no longer read. Move `app_config.json`,
@@ -20,28 +31,7 @@ Only if you had redirected the data folder with the old pointer file
 `%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`), then set
 the data and index paths in *Settings* to where your archive lives.
 
-**Coming from 6.1 or older?** Run the latest 6.x release once first — it
-moves the export bookkeeping into each folder's `state.db`. 7.0 no longer
-carries that migration and expects the new format.
-
-**Expert mode.** The individual steps (index only, calendar rebuild) moved
-from the *Export* tab into a box at the end of *Settings* — next to something
-new there: the complete HTTP API of the interface as an OpenAPI description,
-for scripts that talk to the backend directly.
-
-**Faster index runs.** The index reads only the files that changed since
-its last run; with nothing new, an archive of a few hundred thousand pieces
-is indexed in seconds instead of minutes.
-
-**The log reads like the run.** Heading, the selected sources, then every
-step under a heading of its own that says what starts — including the steps
-that do not run this time, with the reason right beneath.
-
-**Settings, tidied.** One shape for every card: switches for every on/off
-setting, the index kind as a plain choice, action buttons at the right —
-and a single *Save settings* button for the whole tab, the schedule included.
-
-**Claude Desktop users:** the stdio MCP snippet changed (it now names the
+**Claude Desktop users:** the stdio MCP snippet changed in 7.0 (it names the
 app folder) — copy it again from *Settings*.
 
 ## Which file?

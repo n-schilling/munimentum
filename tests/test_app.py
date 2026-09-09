@@ -4203,6 +4203,32 @@ def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
     assert app_mod.altbestand_pinnen() is False,         "ausdrücklicher Standard wurde überstimmt"
 
 
+def test_app_liest_seine_pfade_aus_dem_heimatordner(standardort, tmp_path,
+                                                    monkeypatch):
+    """The bundled app read its configuration from wherever the modules
+    sit – the unpacked archive – and never saw the data and index folders
+    the user had set: both fell back to the default on every restart. The
+    source checkout hid it, because there module folder and home folder are
+    the same. Every in-process read must name the home folder's file."""
+    import settings
+    for n in ("MUNIMENTUM_HOME", "MUNIMENTUM_DATA_DIR"):
+        monkeypatch.delenv(n, raising=False)
+    settings.reset()
+    monkeypatch.setattr(app_mod, "CONFIG_FILE", standardort / "app_config.json")
+    (standardort / "app_config.json").write_text(json.dumps(
+        {"data_dir": str(tmp_path / "bulk"), "index_dir": str(tmp_path / "ix")}),
+        encoding="utf-8")
+    # No stubbing of settings.load here on purpose – that is the point.
+    assert settings.config_path() != standardort / "app_config.json"
+    daten, store = app_mod._split_pfade(standardort)
+    assert daten == (tmp_path / "bulk").resolve()
+    assert store == (tmp_path / "ix").resolve()
+    assert app_mod.alter_zeiger() is None           # data_dir is set – no pointer talk
+    monkeypatch.setattr(app_mod, "HEIM", standardort)
+    (standardort / app_mod.TEAMS_DIR).mkdir()
+    assert app_mod.altbestand_pinnen() is False     # decided already – no pin
+
+
 def test_split_pfade_vorgaben_und_konfiguration(standardort, monkeypatch,
                                                 tmp_path):
     """Without override: data/ and rag_store/ under the home folder, freely

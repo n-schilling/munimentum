@@ -149,7 +149,10 @@ def _split_pfade(heim):
     """(export root, index folder) – the override mode keeps the flat layout."""
     if settings.data_dir_env():
         return heim, heim / STORE_DIR
-    cfg = settings.load()
+    # Our own file, by path: settings.load() without one looks next to the
+    # module, which in the bundle is the unpacked archive – so every path
+    # set in the settings fell back to the default on the next start.
+    cfg = settings.load(heim / settings.CONFIG_NAME)
     daten = (Path(str(cfg.get("data_dir"))).expanduser().resolve()
              if cfg.get("data_dir") else heim / DATEN_UNTERORDNER)
     store = (Path(str(cfg.get("index_dir"))).expanduser().resolve()
@@ -292,7 +295,7 @@ def alter_zeiger():
     # Truthiness, not membership: save_config writes the whole schema, so
     # the key exists (as "") after the first save – asking "is it present"
     # would disarm this guard the moment anyone touches the settings.
-    if settings.data_dir_env() or settings.load().get("data_dir"):
+    if settings.data_dir_env() or settings.load(CONFIG_FILE).get("data_dir"):
         return None
     try:
         roh = (standard_data_dir() / ZEIGER_DATEI).read_text(
@@ -322,7 +325,7 @@ def altbestand_pinnen():
     Deliberately keyed on the raw file: an explicit "Standard" reset in the
     settings writes data_dir="" and must not be overridden here."""
     global BASE, STORE_PFAD, _ALT_GEPINNT
-    if settings.data_dir_env() or "data_dir" in settings.load():
+    if settings.data_dir_env() or "data_dir" in settings.load(CONFIG_FILE):
         return False
     if not any((HEIM / name).is_dir() for name in ALT_ORDNER):
         return False
@@ -2632,9 +2635,15 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     url = f"http://{host}:{port}/"
     app.log_token_state()
     if _ALT_GEPINNT:
-        # Detected, said, nothing moved: the split is possible from now on,
-        # but relocating stays the user's manual work.
+        # Detected, said, nothing moved: data and index stay in the app
+        # folder; splitting is on offer, never demanded.
         app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
+    # Where this start reads and writes – the one line that answers "why
+    # does it not find my index" without a debugger.
+    app.jobs.logk("srv.layout.paths", "info", data=str(BASE),
+                  index=str(STORE_PFAD))
+    if app.cfg.get("index_dir") and not store_layout.db_path(STORE_PFAD).exists():
+        app.jobs.logk("srv.layout.noindex", "warn", index=str(STORE_PFAD))
     for sperre in lauf_sperren():
         app.jobs.log(sperre, "err")
     app.check_updates()
