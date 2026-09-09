@@ -13,12 +13,25 @@ Munimentum never moves your data: to split storage, quit the app, move the
 export folders yourself (into `data/`, or onto another disk), then set the
 paths in *Settings*.
 
-Only if you had redirected the data folder with the old pointer file: move
-`app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` into the
-app folder (macOS `~/Library/Application Support/Munimentum`, Windows
+Only if you had redirected the data folder with the old pointer file
+(`datenordner.txt`): it is no longer read. Move `app_config.json`,
+`gx_token.txt`, `msal_cache.bin` and `runs.db` into the app folder (macOS
+`~/Library/Application Support/Munimentum`, Windows
 `%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`), then set
-the data and index paths in *Settings* to where your archive lives. The
-pointer is no longer honoured — the log says so until you delete the file.
+the data and index paths in *Settings* to where your archive lives.
+
+**Coming from 6.1 or older?** Run the latest 6.x release once first — it
+moves the export bookkeeping into each folder's `state.db`. 7.0 no longer
+carries that migration and expects the new format.
+
+**Expert mode.** The individual steps (index only, calendar rebuild) moved
+from the *Export* tab into a box at the end of *Settings* — next to something
+new there: the complete HTTP API of the interface as an OpenAPI description,
+for scripts that talk to the backend directly.
+
+**Settings, tidied.** One shape for every card: switches for every on/off
+setting, the index kind as a plain choice, action buttons at the right —
+and a single *Save settings* button for the whole tab, the schedule included.
 
 **Claude Desktop users:** the stdio MCP snippet changed (it now names the
 app folder) — copy it again from *Settings*.

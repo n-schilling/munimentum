@@ -45,8 +45,9 @@ are deliberate.
   addresses and user names in paths; folder names and subject lines can remain.
   The whole text is shown for editing, and the app sends nothing by itself — you
   submit the form.
-- **The access token lives in your data folder** with restricted file
-  permissions. Anyone who can already read that folder has the archive anyway.
+- **The access token lives in the app folder** with restricted file
+  permissions. Anyone who can already read that folder and the data folder
+  has the archive anyway.
 
 ## What I would very much like to hear about
 

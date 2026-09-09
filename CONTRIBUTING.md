@@ -55,6 +55,5 @@ Both the tests and the lint have to pass before anything is released; CI runs
 them on Python 3.12 and 3.13, and every bundle goes through
 `packaging/smoke_test.py` before it becomes a download.
 
-One thing worth knowing up front: **older code comments are German; new code
-is written in English.** The interface, the README and the release notes are
-English, and the interface texts live in `lang/`.
+Code, comments and documentation are English throughout; the interface texts
+live in `lang/`, one JSON file per language.

@@ -89,9 +89,9 @@ takes minutes rather than hours. Deleted items **stay in the archive** and
 get a marker; that is the point of keeping one.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
-folder. The first start after updating moves the older loose state files in
-automatically — the app says so in the log and everything waits until it is
-done; the originals stay next to the data as `.bak` copies.
+folder. Updating from 6.1 or older? Run the latest 6.x release once first —
+it moves the older loose bookkeeping files into this format; 7.0 no longer
+carries that migration.
 
 Which folders come along is a list of ordered include/exclude rules, and *Show
 export list* spells out what they currently mean: what comes along, what is left
@@ -212,6 +212,11 @@ Windows, clicking one opens the interface; on Linux they go through
 `notify-send`, plain. By default only failures and an expired access key are
 reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
+
+An **Expert mode** box at the end collects what almost nobody needs day to
+day: running the index or the calendar rebuild as a single step, and the
+complete HTTP API of the interface as an OpenAPI description — for scripts
+that talk to the backend directly, on `127.0.0.1` only, like everything else.
 
 The log bar at the bottom is open from every tab, and it speaks the interface
 language: the exports report events, the app puts them into words. Drag its
