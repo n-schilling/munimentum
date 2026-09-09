@@ -8,3 +8,8 @@
 -r requirements.txt
 
 pyinstaller==6.22.2
+
+# Lays out the macOS disk image – window, background picture, icon
+# positions (packaging/dmg/layout.py). The extra draws the app icon onto
+# the volume icon. Only meaningful on macOS, hence the marker.
+dmgbuild[badge-icons]==1.6.7; sys_platform == "darwin"
