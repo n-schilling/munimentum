@@ -327,7 +327,6 @@
   "srv.datadir.set": "Datenordner ab dem nächsten Start: {path}",
   "srv.indexdir.set": "Index-Ordner ab dem nächsten Start: {path}",
   "srv.layout.kept": "Bestehendes Archiv im App-Ordner gefunden – Daten und Index bleiben dort ({data}), nichts wurde verschoben. Eine Aufteilung ist möglich, aber nicht nötig: App beenden, Ordner selbst umziehen, Pfade in den Einstellungen setzen.",
-  "srv.layout.paths": "Datenordner: {data} · Index-Ordner: {index}",
   "srv.layout.noindex": "Im eingestellten Index-Ordner liegt kein Index ({index}) – einen Indexlauf starten oder den Index-Ordner dorthin zeigen lassen, wo der Index liegt.",
   "srv.datadir.empty": "Kein Ordner angegeben.",
   "srv.datadir.unwritable": "In diesem Ordner lässt sich nicht schreiben: {detail}",

@@ -327,7 +327,6 @@
   "srv.datadir.set": "Dossier de données à partir du prochain démarrage : {path}",
   "srv.indexdir.set": "Dossier d’index à partir du prochain démarrage : {path}",
   "srv.layout.kept": "Archive existante trouvée dans le dossier de l’application – données et index y restent ({data}), rien n’a été déplacé. Séparer le stockage est possible, pas obligatoire : quittez l’application, déplacez les dossiers vous-même, indiquez les chemins dans les réglages.",
-  "srv.layout.paths": "Dossier de données : {data} · Dossier d’index : {index}",
   "srv.layout.noindex": "Le dossier d’index configuré ne contient aucun index ({index}) – lancez une indexation ou faites pointer le dossier d’index là où se trouve l’index.",
   "srv.datadir.empty": "Aucun dossier indiqué.",
   "srv.datadir.unwritable": "Impossible d’écrire dans ce dossier : {detail}",

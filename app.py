@@ -1364,6 +1364,7 @@ class SearchBridge:
                 sharepoint_dir=str(BASE / SHAREPOINT_DIR),
                 pages_dir=str(BASE / SHAREPOINT_PAGES_DIR),
                 planner_dir=str(BASE / PLANNER_DIR),
+                runs_db=str(HEIM / run_history.DB_NAME),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
@@ -2638,10 +2639,8 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
         # Detected, said, nothing moved: data and index stay in the app
         # folder; splitting is on offer, never demanded.
         app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
-    # Where this start reads and writes – the one line that answers "why
-    # does it not find my index" without a debugger.
-    app.jobs.logk("srv.layout.paths", "info", data=str(BASE),
-                  index=str(STORE_PFAD))
+    # The paths stand in the settings; the log only speaks up when the
+    # configured index folder holds no index.
     if app.cfg.get("index_dir") and not store_layout.db_path(STORE_PFAD).exists():
         app.jobs.logk("srv.layout.noindex", "warn", index=str(STORE_PFAD))
     for sperre in lauf_sperren():

@@ -75,8 +75,10 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
+import analytics_db
 import export_util
 import ollama_client
+import run_history
 import settings
 import store_layout
 import version
@@ -92,8 +94,12 @@ STATE = {}          # populated in main(): db path, V (mmap), np, dirs, flags
 # about choosing between the tools; details belong in the docstrings.
 _INSTRUCTIONS = """\
 Offline archive of the user's own Teams chats, Outlook mail, calendar and
-contacts. Everything is local and read-only; there is no live mailbox access,
-so anything not exported is simply absent.
+contacts, OneDrive and SharePoint files, SharePoint pages and Planner boards.
+Everything is local and read-only; there is no live mailbox access, so
+anything not exported is simply absent – and the archive has edges: it
+starts and ends somewhere, sources sync on their own cadence, and months can
+be empty. corpus_stats knows those edges; ask it before concluding that
+something does not exist.
 
 Which tool to use:
   • search_messages – the default entry point. Ranking depends on this archive:
@@ -112,7 +118,16 @@ Which tool to use:
     substring match over names and addresses.
   • list_folders / list_filetypes – what the folder and filetype filters can
     take, per source.
-  • corpus_stats    – what is indexed and which ranking backend is live.
+  • corpus_stats    – what is indexed, which ranking backend is live, and how
+    far the archive reaches: coverage (first and last message), gaps (months
+    without a single message) and when each source last exported
+    successfully. "No hits" in an archive that ends in May says nothing
+    about June.
+  • archive_analytics – the archive about itself: messages per source,
+    timeline and gaps, attachment and file types, the largest files, the
+    people the user exchanges the most with – the same block the app's
+    Analytics tab shows. For questions about the archive rather than its
+    contents.
   • read_source_file – last resort: the raw .eml/.html file. Teams
     conversations can exceed 100 MB and come back windowed, so prefer
     get_document with context for chat history.
@@ -1097,9 +1112,69 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
         con.close()
 
 
+def _archiv_stand():
+    """How far the archive reaches and how fresh it is.
+
+    Coverage and gaps come from the analytics block that every index run
+    materialises into corpus.db; the last successful run per source from
+    runs.db, opened read-only. Both are optional: an index from before the
+    block existed, or a server started without the app's home folder,
+    simply reports None and {} – never an error, this is context, not data.
+    """
+    block = analytics_db.lies(Path(STATE["db"]).parent) or {}
+    komm = block.get("komm") or {}
+
+    def tag(ts):
+        return date.fromtimestamp(ts).isoformat() if ts else None
+    laeufe = {}
+    pfad = STATE.get("runs_db")
+    if pfad and Path(pfad).exists():
+        try:
+            con = sqlite3.connect(f"file:{pfad}?mode=ro", uri=True)
+            try:
+                for key, ts in con.execute(
+                        "SELECT key, MAX(started_at) FROM steps "
+                        "WHERE ok = 1 GROUP BY key"):
+                    laeufe[key] = datetime.fromtimestamp(ts).isoformat(
+                        timespec="seconds")
+            finally:
+                con.close()
+        except sqlite3.Error:
+            pass
+    return {
+        "index_built_at": block.get("built_at"),
+        "coverage": {"from": tag(komm.get("von")), "to": tag(komm.get("bis"))},
+        "gaps": [{"from": g["von"], "to": g["bis"], "months": g["monate"]}
+                 for g in (block.get("luecken") or [])],
+        "last_successful_runs": laeufe,
+    }
+
+
+@mcp.tool(annotations=_READONLY)
+def archive_analytics() -> dict:
+    """The archive about itself, as the app's Analytics tab shows it.
+
+    The block every index run materialises: messages per source (quellen),
+    the communication summary (komm: messages, conversations, people, first
+    and last timestamp), the mirrored files (dateien), the Planner boards
+    (planner), the monthly timeline (verlauf) and its gaps (luecken),
+    attachment and file types (anhang_typen, datei_typen), the largest files
+    (grosse_dateien), disk usage per source (groesse) and the people the
+    user exchanges the most with (top_personen). Keys are the app's own
+    (German) names; timestamps are epoch seconds, months "YYYY-MM". Returns
+    {"error": …} when the index carries no block yet.
+    """
+    block = analytics_db.lies(Path(STATE["db"]).parent)
+    if not block:
+        return {"error": "No analytics block in this index yet – it is "
+                         "written at the end of an index run."}
+    return block
+
+
 @mcp.tool(annotations=_READONLY)
 def corpus_stats() -> dict:
-    """Report corpus size, per-source counts, and which ranking backend is active."""
+    """Corpus size, per-source counts, the active ranking backend – and the
+    archive's edges: coverage, gaps, last successful run per source."""
     con = _db()
     try:
         by_src = {r[0]: {"chunks": r[1], "messages": r[2]} for r in con.execute(
@@ -1123,6 +1198,7 @@ def corpus_stats() -> dict:
             "sharepoint_dir": STATE.get("sharepoint_dir"),
             "pages_dir": STATE.get("pages_dir"),
             "planner_dir": STATE.get("planner_dir"),
+            **_archiv_stand(),
         }
     finally:
         con.close()
@@ -1393,7 +1469,11 @@ def main():
                  teams_dir=a.teams, outlook_dir=a.outlook,
                  onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
                  pages_dir=a.pages, planner_dir=a.planner,
-                 embed_model=a.embed_model, ollama=a.ollama)
+                 embed_model=a.embed_model, ollama=a.ollama,
+                 # The run history lives in the app's home folder, which the
+                 # app hands to every subprocess; started by hand there is none.
+                 runs_db=(str(Path(settings.home_env()) / run_history.DB_NAME)
+                          if settings.home_env() else None))
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None
                else "lexical (FTS5/BM25) only")

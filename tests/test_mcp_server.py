@@ -274,6 +274,55 @@ def test_corpus_stats_counts_per_source(state):
     assert out["teams_dir"] == str(state["teams_dir"])
 
 
+def test_corpus_stats_kennt_die_raender_des_archivs(state):
+    """Claude used to answer over an archive whose reach it did not know.
+    Coverage and gaps come from the analytics block, the last successful
+    run per source from runs.db – both read-only, both optional."""
+    import time
+    from datetime import date
+    import analytics_db
+    import run_history
+    analytics_db.baue(state["store"], {"teams": state["teams_dir"],
+                                       "outlook": state["outlook_dir"]})
+    h = run_history.RunHistory(state["tmp"] / "runs.db")
+    rid = h.start_run("job.export", "manual")
+    h.record_step(rid, "outlook", "job.step.outlook", time.time() - 60,
+                  duration_s=1, ok=True)
+    h.record_step(rid, "index", "job.step.index", time.time() - 30,
+                  duration_s=1, ok=True)
+    h.record_step(rid, "teams", "job.step.teams", time.time() - 20,
+                  duration_s=1, ok=False)              # a failed one
+    h.finish_run(rid, "done")
+    mcp_server.STATE["runs_db"] = str(state["tmp"] / "runs.db")
+    out = mcp_server.corpus_stats()
+    block = analytics_db.lies(state["store"])
+    assert out["index_built_at"] == block["built_at"]
+    if block["komm"]["von"]:
+        assert out["coverage"]["from"] == date.fromtimestamp(
+            block["komm"]["von"]).isoformat()
+        assert out["coverage"]["to"] >= out["coverage"]["from"]
+    assert isinstance(out["gaps"], list)
+    assert set(out["last_successful_runs"]) == {"outlook", "index"}
+    assert "teams" not in out["last_successful_runs"], "failed run counted"
+
+
+def test_corpus_stats_ohne_block_und_historie_bleibt_ruhig(state):
+    mcp_server.STATE.pop("runs_db", None)
+    out = mcp_server.corpus_stats()
+    assert out["coverage"] == {"from": None, "to": None}
+    assert out["gaps"] == [] and out["last_successful_runs"] == {}
+    assert out["index_built_at"] is None
+
+
+def test_archive_analytics_liefert_den_block(state):
+    import analytics_db
+    assert "error" in mcp_server.archive_analytics()
+    analytics_db.baue(state["store"], {"teams": state["teams_dir"],
+                                       "outlook": state["outlook_dir"]})
+    block = mcp_server.archive_analytics()
+    assert block["quellen"] and "komm" in block and block["built_at"]
+
+
 def test_corpus_stats_lexical_when_semantic_off(state):
     mcp_server.STATE["semantic"] = False
     out = mcp_server.corpus_stats()
@@ -698,7 +747,8 @@ def test_with_port_verwechselt_ipv6_nicht_mit_port():
 # --------------------------------------------------------------------------
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "get_thread", "list_people", "list_folders", "list_filetypes",
-              "list_files", "read_source_file", "corpus_stats"}
+              "list_files", "read_source_file", "corpus_stats",
+              "archive_analytics"}
 
 
 def _via_client(fn):
