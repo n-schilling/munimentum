@@ -1,15 +1,15 @@
-"""Tests für onedrive_export.py – OneDrive als Spiegel.
+"""Tests for onedrive_export.py – OneDrive as a mirror.
 
-Drei Zusagen stehen hier im Mittelpunkt, und zwei davon sind an einem echten
-Laufwerk schon einmal gebrochen worden:
+Three promises take centre stage here, and two of them have already been
+broken once on a real drive:
 
-  * Ein abgeschnittener Dateiname darf nicht mit einem anderen kollidieren.
-    Zwei Dateien, deren Namen sich erst nach 120 Zeichen unterschieden, landeten
-    auf demselben Pfad – der zweite Download scheiterte an der Teildatei, die
-    der erste schon weggeräumt hatte.
-  * Ein abgebrochener Lauf darf den Delta-Zeiger nicht vorrücken, sonst
-    verschluckt der nächste Lauf alle Änderungen dazwischen.
-  * Gelöscht in OneDrive heißt vermerkt, nicht weggeworfen.
+  * A truncated file name must not collide with another. Two files whose
+    names only differed after 120 characters landed on the same path – the
+    second download then failed on the partial file the first one had
+    already cleaned up.
+  * An aborted run must not advance the delta pointer, otherwise the next
+    run swallows every change in between.
+  * Deleted in OneDrive means recorded, not thrown away.
 """
 
 import pytest
@@ -27,12 +27,12 @@ def _datei(kennung, name, pfad="/drive/root:/Ordner", groesse=10, ctag="c1", **e
 
 
 # --------------------------------------------------------------------------
-# Pfade
+# Paths
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("pfad,name,erwartet", [
     ("/drive/root:", "a.pdf", "Dateien/a.pdf"),
     ("/drive/root:/Kunden", "a.pdf", "Dateien/Kunden/a.pdf"),
-    ("/drive/root:/A%20B", "a.pdf", "Dateien/A B/a.pdf"),          # prozentkodiert
+    ("/drive/root:/A%20B", "a.pdf", "Dateien/A B/a.pdf"),          # percent-encoded
     ("/drive/root:/A/B/C", "a.pdf", "Dateien/A/B/C/a.pdf"),
 ])
 def test_rel_pfad(pfad, name, erwartet):
@@ -40,21 +40,21 @@ def test_rel_pfad(pfad, name, erwartet):
 
 
 def test_rel_pfad_bricht_nicht_aus_dem_ausgabeordner_aus():
-    """Ein Name aus der Cloud ist Fremdeingabe – er darf kein Verzeichnis
-    hochsteigen."""
+    """A name from the cloud is foreign input – it must not climb up a
+    directory."""
     rel = od.rel_pfad(_datei("1", "../../.ssh/id_rsa", "/drive/root:/a/../b"))
     assert ".." not in rel.split("/")
     assert rel.startswith("Dateien/")
 
 
 def test_lange_namen_kollidieren_nicht():
-    """Regression vom echten Laufwerk: zwei Dateien, deren Namen sich erst
-    NACH dem Schnitt unterscheiden, landeten auf demselben Pfad. Der zweite
-    Download scheiterte dann an der Teildatei, die der erste weggeräumt hatte.
+    """Regression from the real drive: two files whose names only differ
+    AFTER the cut landed on the same path. The second download then failed
+    on the partial file the first one had cleaned up.
 
-    Deshalb hier gleiche Endung und gleicher Anfang – der Unterschied liegt
-    jenseits der 120 Zeichen. Mit verschiedenen Endungen bestünde der Test
-    auch ohne Kürzel und prüfte nichts."""
+    Hence the same extension and the same start here – the difference lies
+    beyond the 120 characters. With different extensions the test would
+    pass even without the hash suffix and check nothing."""
     gleich = "A" * 130
     a = od.rel_pfad(_datei("id-A", gleich + "_variante_eins.pdf"))
     b = od.rel_pfad(_datei("id-B", gleich + "_variante_zwei.pdf"))
@@ -64,8 +64,8 @@ def test_lange_namen_kollidieren_nicht():
 
 
 def test_kuerzung_erhaelt_die_endung():
-    """Ohne die Endung wären "Bericht.pdf" und "Bericht.docx" nach dem Schnitt
-    dieselbe Datei – genau das ist am echten Laufwerk passiert."""
+    """Without the extension, "Bericht.pdf" and "Bericht.docx" would be the
+    same file after the cut – exactly what happened on the real drive."""
     lang = "B" * 200
     assert od.safe(lang + ".pdf", kennung="1").endswith(".pdf")
     assert od.safe(lang + ".docx", kennung="1").endswith(".docx")
@@ -73,12 +73,12 @@ def test_kuerzung_erhaelt_die_endung():
 
 
 def test_kurze_namen_bleiben_unangetastet():
-    """Das Kürzel darf nur auftauchen, wo wirklich gekürzt wird."""
+    """The hash suffix may only appear where something is actually cut."""
     assert od.safe("Angebot.pdf", kennung="id") == "Angebot.pdf"
 
 
 # --------------------------------------------------------------------------
-# Planung: was der Lauf täte, ohne Netz
+# Planning: what the run would do, without a network
 # --------------------------------------------------------------------------
 def test_plane_trennt_laden_auslassen_und_geloescht(tmp_path):
     bestand = od.Bestand()
@@ -106,16 +106,16 @@ def test_plane_ueberspringt_was_unveraendert_daliegt(tmp_path):
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
     assert plan["laden"] == []
-    # Anderer cTag = neuer Inhalt, also doch laden.
+    # Different cTag = new content, so download after all.
     plan = od.plane([_datei("1", "a.pdf", ctag="c2")], bestand, tmp_path, od.Selection())
     assert len(plan["laden"]) == 1
 
 
 def test_halbe_datei_gilt_nicht_als_fertig(tmp_path):
-    """Größe daneben: ein abgebrochener Download darf nicht durchgehen."""
+    """Wrong size: an aborted download must not pass as complete."""
     ziel = tmp_path / "Dateien/Ordner/a.pdf"
     ziel.parent.mkdir(parents=True)
-    ziel.write_bytes(b"x" * 3)                      # erwartet werden 10
+    ziel.write_bytes(b"x" * 3)                      # 10 are expected
     bestand = od.Bestand()
     bestand.merke("1", "Dateien/Ordner/a.pdf", "c1", 10)
     plan = od.plane([_datei("1", "a.pdf")], bestand, tmp_path, od.Selection())
@@ -137,8 +137,8 @@ def test_verschieben_statt_neu_laden(tmp_path):
 
 
 def test_umbenannt_und_geaendert_wird_verschoben_und_geladen(tmp_path):
-    """Beides zugleich: erst mitziehen, dann laden – sonst landete der neue
-    Inhalt neben einer verwaisten alten Datei."""
+    """Both at once: move along first, then download – otherwise the new
+    content would land next to an orphaned old file."""
     alt = tmp_path / "Dateien/Alt/a.pdf"
     alt.parent.mkdir(parents=True)
     alt.write_bytes(b"x" * 10)
@@ -158,8 +158,9 @@ def test_groessengrenze(tmp_path):
 
 
 def test_die_wurzel_steht_im_baum(tmp_path):
-    """Sonst gilt jede Datei direkt im Laufwerk als „nur noch lokal" – in der
-    Exportliste ein Fehlalarm, der genau einmal auftritt und dauerhaft irritiert."""
+    """Otherwise every file at the drive root counts as "local only" – a
+    false alarm in the export plan that occurs exactly once and confuses
+    permanently."""
     bestand = od.Bestand()
     wurzel = {"id": "root!", "name": "root", "root": {}, "folder": {"childCount": 4},
               "parentReference": {"driveId": "d"}}
@@ -169,7 +170,7 @@ def test_die_wurzel_steht_im_baum(tmp_path):
 
 
 def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
-    """Ein Notizbuch ist kein Inhalt; seine .one-Dateien kommen einzeln vor."""
+    """A notebook is not content; its .one files appear individually."""
     bestand = od.Bestand()
     paket = {"id": "p", "name": "Notizbuch", "package": {"type": "oneNote"},
              "folder": {"childCount": 3}, "parentReference": {"path": "/drive/root:"}}
@@ -178,7 +179,7 @@ def test_onenote_pakete_zaehlen_als_ordner(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Bestand und Grabsteine
+# Inventory and tombstones
 # --------------------------------------------------------------------------
 def test_bestand_ueberlebt_das_schreiben(tmp_path):
     db = state_db.StateDb(tmp_path)
@@ -191,7 +192,7 @@ def test_bestand_ueberlebt_das_schreiben(tmp_path):
 def test_grabstein_wird_gesetzt_und_die_datei_bleibt(tmp_path):
     db = state_db.StateDb(tmp_path)
     db.verschwunden_ergaenzen(["Dateien/a.pdf"], "2026-01-01")
-    # Ein zweiter Lauf überschreibt den Zeitpunkt nicht.
+    # A second run does not overwrite the timestamp.
     db.verschwunden_ergaenzen(["Dateien/a.pdf"], "2026-06-06")
     assert db.verschwunden_lesen() == {"Dateien/a.pdf": "2026-01-01"}
 
@@ -210,12 +211,12 @@ def test_delta_zeiger(tmp_path):
     assert z.delta_lesen() is None
     z.delta_schreiben("https://weiter")
     assert z.delta_lesen() == "https://weiter"
-    z.delta_schreiben(None)                           # nichts zu merken
+    z.delta_schreiben(None)                           # nothing to remember
     assert z.delta_lesen() == "https://weiter"
 
 
 # --------------------------------------------------------------------------
-# Der ganze Lauf, gegen ein nachgestelltes Graph
+# The whole run, against a mocked-up Graph
 # --------------------------------------------------------------------------
 class FakeGraph:
     def __init__(self, seiten, fehlerhaft=()):
@@ -247,16 +248,16 @@ def test_lauf_spiegelt_und_merkt_sich_den_zeiger(tmp_path):
 
 
 def test_abgebrochener_lauf_rueckt_den_zeiger_nicht_vor(tmp_path):
-    """Sonst gingen alle Änderungen zwischen diesem und dem nächsten Lauf
-    verloren – still, und erst Monate später bemerkbar."""
+    """Otherwise every change between this run and the next would be lost –
+    silently, and only noticeable months later."""
     g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")], fehlerhaft={"2"})
     od.lauf(g, tmp_path)
     assert state_db.DbZustand(tmp_path).delta_lesen() is None
 
 
 def test_lauf_schreibt_den_bestand_auch_ohne_download(tmp_path):
-    """Regression: eine Löschung ohne gleichzeitigen Download blieb ungemerkt –
-    beim nächsten Lauf stand die Datei noch im Bestand."""
+    """Regression: a deletion without a simultaneous download went
+    unrecorded – on the next run the file was still in the inventory."""
     db = state_db.StateDb(tmp_path)
     b = state_db.DbBestand(db)
     b.merke("weg", "Dateien/alt.pdf", "c1", 10)
@@ -267,9 +268,9 @@ def test_lauf_schreibt_den_bestand_auch_ohne_download(tmp_path):
 
 
 def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
-    """Regression: Graph liefert im Delta nur GEÄNDERTE Ordner. Wer den Baum
-    damit ersetzt, hat beim zweiten Lauf statt vierzig Ordnern noch einen –
-    und neununddreißig falsche Meldungen "nicht mehr vorhanden"."""
+    """Regression: Graph delivers only CHANGED folders in the delta.
+    Replacing the tree with that leaves one folder instead of forty on the
+    second run – and thirty-nine false "no longer present" reports."""
     def ordner(kennung, name):
         return {"id": kennung, "name": name, "folder": {"childCount": 1},
                 "parentReference": {"path": "/drive/root:"}}
@@ -277,7 +278,7 @@ def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
     od.lauf(FakeGraph([ordner("a", "A"), ordner("b", "B"), ordner("c", "C")]), tmp_path)
     assert len(folders.lade(tmp_path)["ordner"]) == 3
 
-    # Zweiter Lauf: nur B hat sich geändert, C ist gelöscht.
+    # Second run: only B has changed, C is deleted.
     od.lauf(FakeGraph([ordner("b", "B neu"),
                        {"id": "c", "deleted": {"state": "deleted"}}]), tmp_path)
     baum = {e["id"]: e["pfad"] for e in folders.lade(tmp_path)["ordner"]}
@@ -286,7 +287,7 @@ def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Vollständigkeit: was das Laufwerk hat gegen das, was hier liegt
+# Completeness: what the drive has against what lies here
 # --------------------------------------------------------------------------
 def test_check_findet_die_fehlende_datei(tmp_path):
     da = tmp_path / "Dateien/Ordner/da.pdf"
@@ -299,18 +300,18 @@ def test_check_findet_die_fehlende_datei(tmp_path):
 
 
 def test_check_erkennt_die_halb_uebertragene_datei(tmp_path):
-    """Vorhanden heißt gleich groß. Sonst zählte ein Abbruch als Erfolg."""
+    """Present means same size. Otherwise an abort would count as success."""
     halb = tmp_path / "Dateien/Ordner/a.pdf"
     halb.parent.mkdir(parents=True)
-    halb.write_bytes(b"x" * 3)                      # erwartet werden 10
+    halb.write_bytes(b"x" * 3)                      # 10 are expected
     b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf")], tmp_path, od.Selection())
     assert b["fehlt"] == 1
 
 
 def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
-    """Sonst meldete die erste Prüfung Hunderte Fehlalarme für Ordner, die man
-    selbst ausgeschlossen hat – ein Bericht, der beim ersten Mal Unsinn zeigt,
-    wird nie wieder aufgemacht."""
+    """Otherwise the first check would report hundreds of false alarms for
+    folders one excluded oneself – a report that shows nonsense the first
+    time is never opened again."""
     regeln = folders.lies_regeln("- Dateien/Fotos/**")
     b = od.pruefe_vollstaendigkeit(
         [_datei("1", "a.jpg", "/drive/root:/Fotos"),
@@ -334,11 +335,11 @@ def test_check_schreibt_den_bericht_in_die_db(tmp_path):
 
 
 def test_null_heisst_ohne_grenze(monkeypatch):
-    """Regression: settings.number zieht auf mindestens 1 hoch. Bei „Parallele
-    Downloads" richtig, hier falsch – aus der ausgeschalteten Grenze wurde eine
-    von einem Megabyte, und der Spiegel ließ still jede größere Datei liegen.
-    Aufgefallen ist es erst am Bericht: „208 nicht gezählt", ohne dass jemand
-    etwas ausgeschlossen hatte."""
+    """Regression: settings.number raises to at least 1. Right for
+    "parallel downloads", wrong here – the disabled limit turned into one
+    of a single megabyte, and the mirror silently left every larger file
+    behind. It only showed in the report: "208 not counted", although
+    nobody had excluded anything."""
     monkeypatch.setenv("ONEDRIVE_MAX_MB", "0")
     assert od.max_bytes() == 0
     wahl = od.Selection(max_bytes=od.max_bytes())

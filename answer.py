@@ -1,54 +1,54 @@
 #!/usr/bin/env python3
 """
-answer.py – aus gefundenen Stellen eine Antwort formulieren lassen (lokal).
+answer.py – have an answer written from the places already found (locally).
 
-Die Suche bleibt, wie sie ist: sie findet Nachrichten und zeigt sie. Dieses
-Modul setzt nur obendrauf – es schickt die *bereits gefundenen* Stellen an ein
-Sprachmodell in Ollama und lässt daraus einen Absatz mit Quellenangaben machen.
+Search stays as it is: it finds messages and shows them. This module only
+sits on top – it sends the *already found* passages to a language model in
+Ollama and has it produce a paragraph with source references.
 
-Bewusst ohne eigene Suche: gäbe es hier ein zweites Retrieval, könnte die
-Antwort Dinge zitieren, die in der Trefferliste gar nicht stehen – und niemand
-könnte nachvollziehen, woher sie kommen. Die Nummern in eckigen Klammern
-verweisen deshalb genau auf die Treffer, die daneben zu sehen sind.
+Deliberately without its own search: with a second retrieval here, the
+answer could cite things that are nowhere in the hit list – and nobody
+could trace where they came from. The numbers in square brackets therefore
+point exactly at the hits visible right next to the answer.
 
-Alles läuft lokal: nichts geht an einen Dienst außerhalb des Rechners.
+Everything runs locally: nothing leaves the machine for an outside service.
 """
 
 import ollama_client
 
-# Ollama liefert seine Antwort tokenweise. Bei einem 14B-Modell dauert ein
-# Absatz je nach Rechner 20 bis 60 Sekunden – ohne Streaming starrt man so
-# lange auf einen Wartehinweis, mit Streaming liest man einfach mit.
+# Ollama delivers its answer token by token. With a 14B model a paragraph
+# takes 20 to 60 seconds depending on the machine – without streaming you
+# stare at a spinner that long, with streaming you simply read along.
 STREAM_TIMEOUT = 600
 
-# Zeichen je Quelle im Kontext. Mehr Kontext heißt mehr Zeit und mehr Speicher,
-# und ab einer gewissen Länge verliert ein kleines Modell eher den Faden, als
-# dass es gewinnt.
+# Characters per source in the context. More context means more time and
+# more memory, and beyond a certain length a small model loses the thread
+# rather than gaining anything.
 CHARS_PER_SOURCE = 2000
 
-# Ollamas Vorgabe für num_ctx ist 2048 Token. Bei bis zu 20 Quellen à 2000
-# Zeichen sind das rund 40.000 Zeichen allein an Kontext – das Modell sähe
-# davon ein Zwanzigstel und antwortete auf Treffer, die es nie gelesen hat.
+# Ollama's default for num_ctx is 2048 tokens. With up to 20 sources of
+# 2000 characters each that is around 40,000 characters of context alone –
+# the model would see a twentieth of it and answer about hits it never read.
 #
-# Ein fest eingestelltes großes Fenster ist aber genauso falsch: Ollama legt
-# den Zwischenspeicher für die volle Länge an, ob sie gebraucht wird oder
-# nicht. Auf einem Rechner mit 24 GB und einem 17-GB-Modell drückt das ins
-# Auslagern, und die Antwort tröpfelt. Gemessen, mit acht Quellen:
+# A fixed large window is just as wrong though: Ollama allocates the cache
+# for the full length whether it is needed or not. On a machine with 24 GB
+# and a 17 GB model that pushes into swapping, and the answer trickles.
+# Measured, with eight sources:
 #
-#     32768 Token Fenster ->  2,4 Token/s   (Buchstabenkino)
-#      8192 Token Fenster ->  5,5 Token/s
+#     32768 token window ->  2.4 tokens/s   (watching letters crawl)
+#      8192 token window ->  5.5 tokens/s
 #
-# Deshalb wird das Fenster jetzt nach dem tatsächlichen Text bemessen.
+# So the window is sized to the actual text instead.
 NUM_CTX_MIN, NUM_CTX_MAX = 4096, 32768
-ANTWORT_RESERVE = 1024          # Token, die die Antwort selbst braucht
+ANTWORT_RESERVE = 1024          # tokens the answer itself needs
 
 
 def num_ctx(messages):
-    """Ein Fenster, das zum Text passt – auf die nächste Zweierpotenz gerundet.
+    """A window that fits the text – rounded up to the next power of two.
 
-    Vier Zeichen je Token ist grob, aber in der richtigen Richtung grob: die
-    Schätzung fällt eher zu groß aus, und zu groß heißt hier nur „etwas mehr
-    Reserve", während zu klein hieße, dass Quellen unter den Tisch fallen.
+    Four characters per token is rough, but rough in the right direction:
+    the estimate errs on the large side, and too large only means "a bit
+    more headroom", while too small would mean sources get dropped.
     """
     zeichen = sum(len(m.get("content") or "") for m in messages)
     gebraucht = zeichen // 4 + ANTWORT_RESERVE
@@ -57,9 +57,9 @@ def num_ctx(messages):
         fenster *= 2
     return min(fenster, NUM_CTX_MAX)
 
-# Qwen 3 denkt von Haus aus vor der Antwort. Für eine Zusammenfassung aus
-# bereits gefundenen Stellen kostet das nur Zeit – und der Gedankengang liefe
-# als Text mit in den Datenstrom, den die Oberfläche live anzeigt.
+# Qwen 3 thinks before answering by default. For a summary of already
+# found passages that only costs time – and the chain of thought would run
+# as text through the stream the UI displays live.
 THINK = False
 
 SPRACHNAME = {"de": "Deutsch", "en": "English", "fr": "français"}
@@ -84,21 +84,21 @@ _REGELN = {
 
 
 def system_prompt(lang="de"):
-    """Anweisung an das Modell – in der Sprache der Oberfläche.
+    """Instruction to the model – in the language of the UI.
 
-    Die Regel selbst steht in derselben Sprache wie die gewünschte Antwort:
-    ein kleines Modell folgt einer Anweisung deutlich zuverlässiger, wenn sie
-    nicht erst übersetzt werden muss.
+    The rule itself is written in the same language as the desired answer:
+    a small model follows an instruction far more reliably when it does not
+    have to translate it first.
     """
     code = lang if lang in _REGELN else "de"
     return _REGELN[code].format(sprache=SPRACHNAME.get(code, "Deutsch"))
 
 
 def build_context(quellen, chars=CHARS_PER_SOURCE):
-    """Die gefundenen Stellen als nummerierten Kontext.
+    """The found passages as numbered context.
 
-    Die Nummerierung ist die Zusage an den Leser: [1] ist der erste Treffer in
-    der Liste, [2] der zweite. Deshalb darf hier nichts umsortiert werden.
+    The numbering is the promise to the reader: [1] is the first hit in
+    the list, [2] the second. Which is why nothing may be reordered here.
     """
     teile = []
     for n, q in enumerate(quellen, 1):
@@ -122,11 +122,11 @@ def build_messages(query, quellen, lang="de", chars=CHARS_PER_SOURCE):
 
 def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
            timeout=STREAM_TIMEOUT):
-    """Antwort stückweise erzeugen. Liefert Textstücke, wirft nie.
+    """Produce the answer piece by piece. Yields text chunks, never raises.
 
-    Am Ende steht entweder nichts mehr (fertig) oder ein Fehlerstück – der
-    Aufrufer soll sich nicht mit Ausnahmen aus einem laufenden Datenstrom
-    herumschlagen müssen. Das HTTP dazu liegt in ollama_client.
+    At the end there is either nothing more (done) or an error chunk – the
+    caller should not have to wrestle with exceptions out of a running
+    stream. The HTTP part lives in ollama_client.
     """
     try:
         messages = build_messages(query, quellen, lang, chars)
@@ -141,5 +141,5 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
                 return
     except ollama_client.ModellFehlt:
         yield {"error": "model", "detail": model}
-    except Exception as e:                    # noqa: BLE001 – nie den Aufrufer treffen
+    except Exception as e:                    # noqa: BLE001 – never hit the caller
         yield {"error": "ollama", "detail": f"{type(e).__name__}: {e}"}

@@ -1,31 +1,30 @@
 #!/usr/bin/env python3
 """
-auth.py – die Anmeldung an Microsoft Graph, einmal für alle Skripte.
+auth.py – signing in to Microsoft Graph, once for all scripts.
 
-Es gibt zwei Wege, und sie unterscheiden sich in genau einer Eigenschaft, die
-für den Zeitplan alles bedeutet:
+There are two paths, and they differ in exactly one property that means
+everything for the schedule:
 
-  Zugangsschlüssel  Ein fertiger Access Token, von Hand aus dem Graph Explorer
-  (Vorgabe)         geholt. Braucht niemanden in der IT, gilt aber nur wenige
-                    Stunden und lässt sich nicht erneuern. Läuft er ab, steht
-                    jeder Lauf, bis jemand einen neuen einfügt.
+  Access key  A ready-made access token, fetched by hand from Graph Explorer.
+  (default)   Needs nobody from IT, but is valid for only a few hours and
+              cannot be renewed. Once it expires, every run stalls until
+              someone pastes a new one.
 
-  Anmelden          Richtige Anmeldung über MSAL. Der Cache auf der Platte hält
-                    ein Refresh Token, aus dem sich wochenlang neue Access
-                    Tokens ausstellen lassen – der Zeitplan überlebt damit auch
-                    einen Neustart. Voreingestellt ist Microsofts eigene
-                    öffentliche Anwendung „Graph Command Line Tools“, für die es
-                    keine Registrierung braucht; wer eine eigene App-Registrie-
-                    rung hat, trägt deren Client-ID und Tenant ein.
+  Sign-in     A real sign-in via MSAL. The on-disk cache holds a refresh
+              token from which fresh access tokens can be issued for weeks –
+              so the schedule survives even a reboot. The default is
+              Microsoft's own public application "Graph Command Line Tools",
+              which needs no registration; anyone with their own app
+              registration enters its client ID and tenant.
 
-Beides ist über settings.py konfigurierbar, gilt also gleichermaßen für die App
-und für einen Aufruf von Hand im Terminal. Dieses Modul kennt app.py nicht und
-darf es nie kennen – die Skripte müssen ohne die App laufen.
+Both are configurable via settings.py, so they apply equally to the app and
+to a manual call in the terminal. This module does not know app.py and must
+never know it – the scripts have to run without the app.
 
-Was hier NICHT liegt: die HTTP-Schicht. Die Skripte haben unterschiedliche
-Timeouts, Drosselungsregeln und Wiederholungszähler, und die zusammenzulegen
-hieße, echte Unterschiede zu verstecken. Geteilt wird, was wirklich dasselbe
-war: das Einlesen des Schlüssels und die Anmeldung.
+What does NOT live here: the HTTP layer. The scripts have different timeouts,
+throttling rules and retry counters, and merging those would mean hiding real
+differences. What is shared is what truly was the same: reading the key and
+signing in.
 """
 
 import os
@@ -35,10 +34,10 @@ from pathlib import Path
 import progress
 import settings
 
-# Microsofts eigene öffentliche Anwendung. Sie ist in praktisch jedem Tenant
-# vorab zugelassen – deshalb kommt der Login-Weg ohne eine einzige Rückfrage bei
-# der IT aus. Eine eigene Registrierung ist nur nötig, wenn der Tenant sie
-# ausdrücklich verlangt.
+# Microsoft's own public application. It is pre-approved in practically every
+# tenant – which is why the sign-in path works without a single question to
+# IT. A custom registration is only needed if the tenant explicitly demands
+# one.
 STANDARD_CLIENT_ID = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
 STANDARD_TENANT = "organizations"
 
@@ -49,17 +48,17 @@ RES = "https://graph.microsoft.com/"
 
 
 class TokenExpired(RuntimeError):
-    """Ein 401 im Schlüssel-Modus – dort ist keine Erneuerung möglich."""
+    """A 401 in key mode – no renewal is possible there."""
 
 
 # --------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # --------------------------------------------------------------------------
 def modus():
-    """„token“ (Vorgabe) oder „login“.
+    """"token" (default) or "login".
 
-    Unbekanntes ergibt „token“: der Weg, der immer funktioniert, ist auch der,
-    auf den ein Tippfehler zurückfallen soll.
+    Anything unknown yields "token": the path that always works is also the
+    one a typo should fall back to.
     """
     roh = (os.environ.get("GRAPH_AUTH")
            or settings.value("auth_mode") or "token")
@@ -82,33 +81,33 @@ def authority():
 
 
 def eigene_registrierung():
-    """Zeigt die Anmeldung auf eine eigene App-Registrierung?"""
+    """Does the sign-in point at a custom app registration?"""
     return (client_id(), tenant()) != (STANDARD_CLIENT_ID, STANDARD_TENANT)
 
 
 def device_code():
-    """Code-Login statt Browser – für Rechner ohne Anzeige."""
+    """Code login instead of a browser – for machines without a display."""
     return settings.flag("GRAPH_DEVICE_CODE", "device_code")
 
 
 # --------------------------------------------------------------------------
-# Schlüssel-Modus
+# Key mode
 # --------------------------------------------------------------------------
 def token_datei():
     return settings.config_path().parent / TOKEN_DATEI
 
 
 def load_pasted_token():
-    """Den eingefügten Zugangsschlüssel lesen – Umgebung schlägt Datei.
+    """Read the pasted access key – environment beats file.
 
-    Verträgt, was beim Kopieren aus dem Graph Explorer mitkommt: Anführungs-
-    zeichen, ein vorangestelltes „Bearer “, Zeilenumbrüche.
+    Tolerates whatever comes along when copying from Graph Explorer: quotes,
+    a leading "Bearer ", line breaks.
     """
     val = os.environ.get("GRAPH_TOKEN")
     if not val:
-        # Erst neben dem Aufruf, dann im Datenordner. Die Reihenfolge ist die
-        # dokumentierte: „gx_token.txt neben dieses Skript legen“ – wer das tut,
-        # soll damit auch gewinnen.
+        # First next to the call, then in the data directory. The order is
+        # the documented one: "put gx_token.txt next to this script" –
+        # whoever does that should win with it.
         for p in (Path(TOKEN_DATEI), token_datei()):
             try:
                 if p.exists():
@@ -125,18 +124,18 @@ def load_pasted_token():
 
 
 # --------------------------------------------------------------------------
-# Login-Modus
+# Login mode
 # --------------------------------------------------------------------------
 def cache_datei():
     return settings.config_path().parent / CACHE_DATEI
 
 
 class _Cache:
-    """MSAL-Cache auf der Platte – der Grund, warum der Zeitplan durchhält.
+    """MSAL cache on disk – the reason the schedule keeps going.
 
-    Ohne ihn lebt das Refresh Token nur im Arbeitsspeicher: ein Neustart der
-    App, und die nächste Anmeldung ist wieder von Hand. Die Datei enthält genau
-    dieses Refresh Token und wird deshalb nur für den Besitzer lesbar angelegt.
+    Without it the refresh token lives only in memory: one app restart, and
+    the next sign-in is manual again. The file contains exactly this refresh
+    token and is therefore created readable only by its owner.
     """
 
     def __init__(self, pfad):
@@ -147,7 +146,7 @@ class _Cache:
             if self.pfad.exists():
                 self.cache.deserialize(self.pfad.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            pass                      # kaputter Cache = einmal neu anmelden
+            pass                      # broken cache = sign in once more
 
     def sichern(self):
         if not self.cache.has_state_changed:
@@ -159,14 +158,14 @@ class _Cache:
             try:
                 os.chmod(tmp, 0o600)
             except OSError:
-                pass                  # Windows kennt den Modus nicht
+                pass                  # Windows does not know the mode
             tmp.replace(self.pfad)
         except OSError:
-            pass                      # kein Schreibrecht: dann eben je Lauf neu
+            pass                      # no write permission: fresh per run then
 
 
 def cache_leeren():
-    """Abmelden: das Refresh Token verwerfen."""
+    """Sign out: discard the refresh token."""
     try:
         cache_datei().unlink(missing_ok=True)
         return True
@@ -175,18 +174,18 @@ def cache_leeren():
 
 
 class Login:
-    """Anmeldung über MSAL, mit stiller Erneuerung.
+    """Sign-in via MSAL, with silent renewal.
 
-    `scopes` gibt das aufrufende Skript vor – Outlook braucht andere Rechte als
-    Teams, und mehr anzufordern als nötig wäre schlechter Stil gegenüber dem,
-    der zustimmen soll.
+    `scopes` comes from the calling script – Outlook needs different
+    permissions than Teams, and requesting more than necessary would be poor
+    style towards whoever has to consent.
     """
 
     def __init__(self, scopes, ausgabe=print, client=None, mandant=None):
-        # `client`/`mandant` reicht die App durch: sie führt ihre Konfiguration
-        # selbst und schreibt sie nicht erst in eine Datei, die settings.py
-        # danach wieder einliest. Ohne Angabe gilt, was konfiguriert ist – so
-        # bleibt der Aufruf von Hand im Terminal unverändert.
+        # `client`/`mandant` is passed through by the app: it manages its own
+        # configuration and does not first write it into a file that
+        # settings.py then reads back. Without them, whatever is configured
+        # applies – so a manual call in the terminal stays unchanged.
         import msal
         self.scopes = list(scopes)
         self.ausgabe = ausgabe
@@ -199,7 +198,7 @@ class Login:
         self.token = None
         self.fehler = ""
 
-    # -- innen ------------------------------------------------------------
+    # -- internal ---------------------------------------------------------
     def _fertig(self, res):
         if not res or "access_token" not in res:
             return False
@@ -210,7 +209,7 @@ class Login:
         return True
 
     def _still(self):
-        """Aus dem Cache erneuern, ohne den Anwender zu behelligen."""
+        """Renew from the cache without bothering the user."""
         for acc in ([self.account] if self.account else []) or self.app.get_accounts():
             if not acc:
                 continue
@@ -230,17 +229,17 @@ class Login:
         return self.app.acquire_token_interactive(scopes=self.scopes,
                                                   prompt="select_account")
 
-    # -- außen ------------------------------------------------------------
+    # -- external ---------------------------------------------------------
     def anmelden(self, nur_still=False, weich=False):
-        """Token besorgen.
+        """Obtain a token.
 
-        `nur_still` fragt den Anwender nicht – der Zeitplan setzt das: dort
-        sitzt niemand vor dem Bildschirm, und ein Anmeldefenster, das um drei
-        Uhr nachts aufgeht und bis zum Morgen wartet, hilft niemandem.
+        `nur_still` does not ask the user – the schedule sets this: nobody
+        is sitting at the screen there, and a sign-in window that opens at
+        three in the morning and waits until dawn helps no one.
 
-        `weich` liefert bei Misserfolg False statt abzubrechen. Der Teams-Export
-        braucht das: er fragt erst die Kanalrechte an und meldet sich, wenn die
-        niemand gewährt, mit reinem Chat-Zugriff erneut an.
+        `weich` returns False on failure instead of aborting. The Teams
+        export needs this: it first requests channel permissions and, if
+        nobody grants them, signs in again with chat-only access.
         """
         if self._still():
             return True
@@ -256,7 +255,7 @@ class Login:
                          + ((res or {}).get("error_description") or "unbekannt"))
 
     def erneuern(self):
-        """Nach einem 401: still erneuern, sonst neu anmelden."""
+        """After a 401: renew silently, otherwise sign in again."""
         if self._still():
             return
         if not self._fertig(self._interaktiv()):
@@ -267,16 +266,16 @@ class Login:
 
 
 class DeviceLogin:
-    """Anmeldung über Gerätecode, in zwei Schritten.
+    """Sign-in via device code, in two steps.
 
-    Für die Oberfläche im Browser der einzig sinnvolle Weg: ein natives
-    Anmeldefenster (acquire_token_interactive) gehört zu einer Anwendung mit
-    eigenem Fenster – diese hier hat keins. Stattdessen zeigt die Seite einen
-    Code, den man auf einer Microsoft-Seite eingibt, und wartet.
+    For the UI in the browser this is the only sensible path: a native
+    sign-in window (acquire_token_interactive) belongs to an application
+    with its own window – this one has none. Instead the page shows a code
+    to enter on a Microsoft page, and waits.
 
-    Getrennt in `start` und `warten`, weil `warten` blockiert, bis der Anwender
-    fertig ist: der Aufrufer legt es in einen eigenen Faden und kann derweil
-    den Code anzeigen.
+    Split into `start` and `warten` because `warten` blocks until the user
+    is done: the caller puts it into a thread of its own and can display
+    the code in the meantime.
     """
 
     def __init__(self, scopes, client=None, mandant=None):
@@ -295,10 +294,10 @@ class DeviceLogin:
                 "expires_in": int(self.flow.get("expires_in") or 900)}
 
     def warten(self):
-        """Blockiert bis zur Zustimmung. Liefert (ok, meldung)."""
+        """Blocks until consent. Returns (ok, message)."""
         try:
             res = self.login.app.acquire_token_by_device_flow(self.flow)
-        except Exception as e:                   # noqa: BLE001 – nie den Faden reißen
+        except Exception as e:                   # noqa: BLE001 – never kill the thread
             return False, f"{type(e).__name__}: {e}"
         if self.login._fertig(res):
             return True, ""
@@ -306,10 +305,10 @@ class DeviceLogin:
 
 
 def angemeldet(client=None, mandant=None):
-    """Liegt ein brauchbarer Cache vor? Ohne den Anwender zu fragen.
+    """Is a usable cache present? Without asking the user.
 
-    Für die Oberfläche: sie soll den Zustand anzeigen können, ohne dabei ein
-    Anmeldefenster aufzureißen.
+    For the UI: it should be able to show the state without ripping open a
+    sign-in window.
     """
     try:
         import msal                              # noqa: F401
@@ -322,13 +321,13 @@ def angemeldet(client=None, mandant=None):
                           client=client, mandant=mandant)
         for acc in anmeldung.app.get_accounts():
             return acc.get("username") or True
-    except Exception:                            # noqa: BLE001 – nur eine Anzeige
+    except Exception:                            # noqa: BLE001 – display only
         return None
     return None
 
 
 # --------------------------------------------------------------------------
-# Für die Skripte: einen Weg wählen und sagen, welcher es wurde
+# For the scripts: pick a path and say which one it was
 # --------------------------------------------------------------------------
 def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
     """Pick the configured access path – silently, or fail with a clear reason.
@@ -345,7 +344,7 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
     gewaehlt = modus()
     if gewaehlt == "login":
         try:
-            return mit_login(nur_still=True)        # ohne Rückfrage
+            return mit_login(nur_still=True)        # no prompting
         except SystemExit:
             pass
         schluessel = load_pasted_token()
@@ -366,7 +365,7 @@ def waehle_zugang(mit_schluessel, mit_login, ausgabe=print):
 
 
 def beschreibe(ausgabe=print):
-    """Eine Zeile darüber, wie dieser Lauf sich anmeldet."""
+    """One line about how this run signs in."""
     if modus() == "login":
         wo = ("eigene App-Registrierung" if eigene_registrierung()
               else "Microsofts öffentliche Anwendung")
@@ -376,11 +375,11 @@ def beschreibe(ausgabe=print):
 
 
 def main():
-    """Selbstauskunft: welcher Weg gilt, was liegt vor.
+    """Self-report: which path applies, what is present.
 
-    Auch das Gegenstück im Bündel (`--run auth`): dort ist es der einzige Weg,
-    ohne Netz zu prüfen, dass dieses Modul und msal wirklich mitgeliefert sind.
-    Ein Export würde es sonst erst beim Anwender merken.
+    Also the bundle counterpart (`--run auth`): there it is the only way to
+    verify, without network, that this module and msal really ship in the
+    bundle. An export would otherwise notice only at the user's end.
     """
     for _stream in (sys.stdout, sys.stderr):
         try:

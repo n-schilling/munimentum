@@ -8,10 +8,10 @@ import analytics_db
 
 
 def test_lies_ohne_index_und_ohne_block(tmp_path):
-    # Kein Index: nichts da, kein Krach.
+    # No index: nothing there, no noise.
     assert analytics_db.lies(tmp_path) is None
     assert analytics_db.baue(tmp_path, {}) is None
-    # Index einer älteren Fassung: corpus.db ohne analytics-Tabelle.
+    # Index from an older layout: corpus.db without an analytics table.
     con = sqlite3.connect(tmp_path / "corpus.db")
     con.execute("CREATE TABLE chunks(uid TEXT, seq INTEGER, src TEXT, ts REAL)")
     con.close()

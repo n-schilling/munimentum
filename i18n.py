@@ -1,31 +1,31 @@
 #!/usr/bin/env python3
 """
-i18n.py – Sprachdateien der Oberfläche laden und die passende auswählen.
+i18n.py – load the interface language files and pick the right one.
 
-Jede Sprache ist eine JSON-Datei in lang/ (de.json, en.json, fr.json). Eine
-weitere Sprache ergänzt man, indem man eine Datei dazulegt – Code und Anzeige-
-name stehen unter "_meta" darin, es ist nichts weiter zu registrieren.
+Every language is a JSON file in lang/ (de.json, en.json, fr.json). Another
+language is added by dropping in a file – code and display name live under
+"_meta" inside it, nothing else needs registering.
 
-Auswahl beim Seitenaufruf:
+Selection on page load:
 
-    Einstellung "language" in app_config.json, sonst der Accept-Language-Header
-    des Browsers, sonst Deutsch.
+    setting "language" in app_config.json, otherwise the browser's
+    Accept-Language header, otherwise German.
 
-Die Sprache wird serverseitig bestimmt und mit der Seite ausgeliefert – so
-erscheint nie kurz die falsche Sprache, und die Oberfläche braucht keinen
-zusätzlichen Abruf, bevor sie etwas anzeigen kann.
+The language is determined server-side and delivered with the page – so the
+wrong language never flashes up, and the interface needs no extra round trip
+before it can show anything.
 
-Übersetzt wird ausschließlich die Oberfläche der App samt ihrer eigenen
-Meldungen. Was die Export-Skripte auf ihre Konsole schreiben, geht unverändert
-ins Protokoll – es sind eigenständige Werkzeuge mit eigener Dokumentation.
-Exportierte Inhalte werden ohnehin nie angefasst.
+Only the app's interface and its own messages are translated. Whatever the
+export scripts write to their console goes into the log unchanged – they are
+standalone tools with their own documentation. Exported content is never
+touched anyway.
 """
 
 import json
 import re
 from pathlib import Path
 
-FALLBACK = "de"          # Quellsprache: hier ist garantiert jeder Schlüssel da
+FALLBACK = "de"          # source language: every key is guaranteed here
 LANG_DIRNAME = "lang"
 
 _cache = {}
@@ -36,7 +36,7 @@ def lang_dir(base=None):
 
 
 def available(base=None):
-    """[{"code": "de", "name": "Deutsch"}, …] – sortiert, Fallback zuerst."""
+    """[{"code": "de", "name": "Deutsch"}, …] – sorted, fallback first."""
     out = []
     for p in sorted(lang_dir(base).glob("*.json")):
         daten = _read(p)
@@ -62,15 +62,15 @@ def _read(path):
 
 
 def reset():
-    """Puffer leeren (Tests, geänderte Sprachdateien)."""
+    """Clear the cache (tests, changed language files)."""
     _cache.clear()
 
 
 def strings(code, base=None):
-    """Alle Texte einer Sprache, fehlende aus der Quellsprache ergänzt.
+    """All texts of a language, missing ones filled from the source language.
 
-    Ohne diese Ergänzung bliebe eine noch unvollständige Übersetzung an einzelnen
-    Stellen leer – lieber ein deutscher Satz als gar keiner.
+    Without this fill-in, a still incomplete translation would stay blank in
+    places – better a German sentence than none at all.
     """
     d = lang_dir(base)
     basis = dict(_read(d / f"{FALLBACK}.json"))
@@ -81,7 +81,7 @@ def strings(code, base=None):
 
 
 def parse_accept_language(header):
-    """Sprachcodes aus Accept-Language, nach Gewicht sortiert.
+    """Language codes from Accept-Language, sorted by weight.
 
     "de-DE,de;q=0.9,en;q=0.8" -> ["de-de", "de", "en"]
     """
@@ -98,8 +98,8 @@ def parse_accept_language(header):
         for teilstueck in stueck[1:]:
             m = re.match(r"\s*q\s*=\s*(\S+)", teilstueck, re.I)
             if m:
-                # Unlesbares q zählt als 0, nicht als 1: ein kaputter Wert soll
-                # eine Sprache nicht an die Spitze setzen.
+                # An unreadable q counts as 0, not 1: a broken value must
+                # not push a language to the top.
                 try:
                     q = float(m.group(1))
                 except ValueError:
@@ -109,11 +109,11 @@ def parse_accept_language(header):
 
 
 def negotiate(configured=None, accept_language=None, base=None):
-    """Welche Sprache gilt? Einstellung vor Browser vor Quellsprache.
+    """Which language applies? Setting before browser before source language.
 
-    "auto" (oder nichts) heißt: den Browser fragen. Ein Regionalcode wie de-CH
-    zählt für de – sonst fiele jemand mit Schweizer Einstellung auf Deutsch als
-    Notnagel statt als Treffer.
+    "auto" (or nothing) means: ask the browser. A regional code like de-CH
+    counts for de – otherwise someone with a Swiss setting would land on
+    German as a last resort instead of as a match.
     """
     codes = {e["code"] for e in available(base)}
     gewuenscht = (configured or "auto").strip().lower()

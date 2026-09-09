@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-corpus.py – gemeinsame Datengrundlage für die lokale RAG-Suche.
+corpus.py – shared data foundation for the local RAG search.
 
-Liest Teams-Export (HTML) und Outlook-Export (.eml) in einheitliche Datensätze
-und zerlegt lange Texte in überlappende Chunks. Wird von rag_index.py
-(Embeddings) genutzt. Nur Standardbibliothek.
+Reads the Teams export (HTML) and the Outlook export (.eml) into uniform
+records and splits long texts into overlapping chunks. Used by rag_index.py
+(embeddings). Standard library only.
 """
 
 import json
@@ -29,29 +29,30 @@ import export_util
 
 CATS = {"1on1", "group", "meeting", "channels"}
 _BLOCK = {"br", "p", "div", "li", "tr"}
-SAFETY_CAP = 500_000   # absurd lange Einzeltexte begrenzen (vor dem Chunking)
+SAFETY_CAP = 500_000   # cap absurdly long individual texts (before chunking)
 
-# Ab wie vielen Dateien sich der Prozess-Pool lohnt (Spawn-Overhead amortisiert).
+# From how many files onward the process pool pays off (amortizes the spawn
+# overhead).
 _PAR_THRESHOLD = 200
 
-# Warum der Pool nicht zustande kam – None, solange alles normal lief. Diese
-# Datei gibt selbst nichts aus (sie ist eine Bibliothek, siehe tests/
-# test_projekt.py); wer sie benutzt, liest die Notiz und meldet sie. rag_index
-# tut das nach dem Einlesen.
+# Why the pool did not come about – None as long as everything went normally.
+# This file prints nothing itself (it is a library, see tests/
+# test_projekt.py); whoever uses it reads the note and reports it. rag_index
+# does so after loading.
 POOL_FEHLER = None
 
 
 def _pmap(func, files, root_dir):
-    """func(p_str, root_str) über alle Dateien – parallel über alle CPU-Kerne.
+    """func(p_str, root_str) over all files – parallel across all CPU cores.
 
-    Das Parsen der Exporte ist reine CPU-Arbeit und war bisher single-threaded
-    der langsamste Teil vor dem (GPU-gebundenen) Einbetten. Bei vielen Dateien
-    auf alle Kerne verteilen; bei wenigen seriell (Spawn lohnt nicht).
+    Parsing the exports is pure CPU work and, single-threaded, the slowest
+    part before the (GPU-bound) embedding. With many files, spread it over
+    all cores; with few, run serially (spawning does not pay off).
 
-    Scheitert der Pool, wird seriell weitergemacht. Das dauert länger, aber es
-    ist immer noch die Aufgabe, die hier zu erledigen ist – ein Index, der gar
-    nicht erst gebaut wird, weil ein Arbeitsprozess nicht starten konnte, hilft
-    niemandem. Die Ursache steht danach in POOL_FEHLER.
+    If the pool fails, work continues serially. That takes longer, but it is
+    still the job to be done here – an index that never gets built because a
+    worker process could not start helps nobody. The cause is left in
+    POOL_FEHLER afterwards.
     """
     global POOL_FEHLER
     paths = [str(p) for p in files]
@@ -68,15 +69,15 @@ def _pmap(func, files, root_dir):
             return list(ex.map(partial(func, root_str=root_dir), paths,
                                chunksize=chunksize))
     except (BrokenExecutor, OSError) as e:
-        # BrokenExecutor: ein Arbeitsprozess ist gestorben, statt zu antworten.
-        # OSError: er ließ sich gar nicht erst starten (keine Handles mehr,
-        # gesperrt durch eine Sicherheitssoftware, kein /dev/shm im Container).
+        # BrokenExecutor: a worker process died instead of answering.
+        # OSError: it could not be started at all (out of handles, blocked
+        # by security software, no /dev/shm in the container).
         POOL_FEHLER = f"{type(e).__name__}: {e}"
         return seriell()
 
 
 # --------------------------------------------------------------------------
-# Teams: exportierte Konversations-HTML parsen
+# Teams: parse the exported conversation HTML
 # --------------------------------------------------------------------------
 class ConvParser(HTMLParser):
     def __init__(self):
@@ -174,10 +175,10 @@ def _teams_file(p_str, root_str):
     rel = p.relative_to(root).as_posix()
     top = rel.split("/")[0]
     cat = top if top in CATS else "other"
-    # Der Ablageordner, nicht ein Schmuckname: ctx ist die Spalte, über die in
-    # der Suche gefiltert wird, und ein Pfad meint dort immer auch alles
-    # darunter. "channels" trifft damit jeden Kanal, ohne dass die Auswahl je
-    # Kanal einen Eintrag braucht – und "1on1" genau die 1:1-Chats.
+    # The storage folder, not a display name: ctx is the column the search
+    # filters on, and a path there always means everything below it too.
+    # "channels" thus matches every channel without the picker needing one
+    # entry per channel – and "1on1" exactly the 1:1 chats.
     ctx = rel.rsplit("/", 1)[0] if "/" in rel else cat
     out = []
     for i, m in enumerate(msgs):
@@ -215,21 +216,21 @@ def collapse(s, cap=SAFETY_CAP):
     return " ".join((s or "").split())[:cap]
 
 
-# In Mail-Threads wird die komplette Historie in jeder Antwort erneut zitiert –
-# in diesem Korpus oft >80 % des Textvolumens. Das bläht den Index auf (langsames
-# Einbetten) und verschlechtert das Retrieval (Duplikat-Rauschen). Wir schneiden
-# vor dem Chunking an der ersten Zitat-Grenze ab und behalten nur die neue
-# Nachricht. Konservativ: nur bei eindeutigen Outlook-/Mail-Client-Markern.
+# In mail threads the complete history is quoted again in every reply – in
+# this corpus often >80 % of the text volume. That bloats the index (slow
+# embedding) and hurts retrieval (duplicate noise). We cut at the first quote
+# boundary before chunking and keep only the new message. Conservative: only
+# on unambiguous Outlook/mail-client markers.
 _QUOTE_CUTS = [
-    re.compile(r"_{25,}"),                                  # Outlook-Trennlinie
-    re.compile(r"(?m)^\s*_{10,}\s*$"),                      # Trennlinie auf eigener Zeile
+    re.compile(r"_{25,}"),                                  # Outlook divider
+    re.compile(r"(?m)^\s*_{10,}\s*$"),                      # divider on a line of its own
     re.compile(r"-{3,}\s*(Original Message|Ursprüngliche Nachricht)\s*-{3,}", re.I),
     re.compile(r"(?m)^\s*(From|Von):\s.*(?:\n.*){0,4}?^\s*(Sent|Gesendet|Date):\s", re.I),
     re.compile(r"(?im)^[ \t>]*On\b.{0,300}?\bwrote:\s*$", re.S),
     re.compile(r"(?im)^[ \t>]*Am\b.{0,300}?\bschrieb\b.{0,120}?:\s*$", re.S),
 ]
 _SIG_CUTS = [
-    re.compile(r"(?m)^-- ?$"),                              # RFC-3676-Signaturtrenner
+    re.compile(r"(?m)^-- ?$"),                              # RFC 3676 signature separator
     re.compile(r"(?im)^\s*Sent from (my |Outlook).*$"),
     re.compile(r"(?im)^\s*Von meinem (iPhone|iPad|Samsung|Android).*$"),
     re.compile(r"(?im)^\s*Get Outlook for (iOS|Android).*$"),
@@ -237,7 +238,7 @@ _SIG_CUTS = [
 
 
 def strip_quoted(text):
-    """Zitierte Thread-Historie und Signatur abschneiden, neue Nachricht behalten."""
+    """Cut off quoted thread history and signature, keep the new message."""
     if not text:
         return text
     t = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -251,25 +252,25 @@ def strip_quoted(text):
         m = rx.search(head)
         if m and m.start() > 0:
             head = head[:m.start()]
-    return re.sub(r"(?m)^[ \t]*>.*$", "", head)            # restliche Zitatzeilen
+    return re.sub(r"(?m)^[ \t]*>.*$", "", head)            # remaining quote lines
 
 
 # --------------------------------------------------------------------------
-# Verlauf: welche Mails zusammengehören
+# Threads: which mails belong together
 #
-# Alles dafür steht längst in den .eml-Dateien – ein Neu-Export ist nicht nötig.
-# An einem echten Bestand (Stichprobe 400 von rund 45.000) gemessen: Thread-Index 89 %,
-# References/In-Reply-To 58 %, Message-ID 100 %. Deshalb eine Kaskade, die mit
-# der genauesten Angabe beginnt und am Ende jede Mail wenigstens sich selbst
-# zuordnet – ein Verlauf aus einer Nachricht ist richtig, nur langweilig.
+# Everything for this is already in the .eml files – no re-export needed.
+# Measured on a real mailbox (sample of 400 out of about 45,000): Thread-Index 89 %,
+# References/In-Reply-To 58 %, Message-ID 100 %. Hence a cascade that starts
+# with the most precise field and in the end assigns every mail at least to
+# itself – a thread of one message is correct, just boring.
 # --------------------------------------------------------------------------
 def thread_key(msg):
-    """Stabile Kennung des Gesprächs, zu dem diese Mail gehört."""
+    """Stable id of the conversation this mail belongs to."""
     roh = hdr(msg, "thread-index")
     if roh:
         try:
-            # Exchange: die ersten 22 Byte sind die Kennung des Gesprächs,
-            # jede Antwort hängt weitere 5 Byte an. Nur der Kopf zählt.
+            # Exchange: the first 22 bytes are the conversation id; each
+            # reply appends another 5 bytes. Only the head counts.
             kopf = base64.b64decode(roh + "===", validate=False)[:22]
             if len(kopf) == 22:
                 return "tix:" + kopf.hex()
@@ -278,7 +279,7 @@ def thread_key(msg):
     for name in ("references", "in-reply-to"):
         wert = hdr(msg, name)
         if wert:
-            # Der erste Eintrag in References ist der Anfang des Gesprächs.
+            # The first entry in References is the start of the conversation.
             treffer = re.findall(r"<[^>]+>", wert)
             if treffer:
                 return "mid:" + treffer[0].strip("<>").lower()
@@ -326,30 +327,30 @@ def extract_body(msg):
     return collapse(text)
 
 
-# Zeichen, die in keinen Dateinamen gehören – und der Punkt am Anfang, damit
-# aus einem Anhang kein verstecktes „.profile“ wird.
+# Characters that belong in no filename – and the leading dot, so an
+# attachment cannot turn into a hidden ".profile".
 _UNGUT = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
 def sicherer_dateiname(name, ersatz="anhang"):
-    """Aus dem Namen im Anhang einen Dateinamen machen, dem man trauen kann."""
-    # Erst den Pfad abschneiden, dann die Zeichen ersetzen. Andersherum wird
-    # aus "../../.ssh/id_rsa" ein "_.._.ssh_id_rsa" – der Pfad ist dann zwar
-    # harmlos, steckt aber noch vollständig im Namen.
+    """Turn the name in the attachment into a filename that can be trusted."""
+    # Cut off the path first, then replace the characters. The other way
+    # around, "../../.ssh/id_rsa" becomes "_.._.ssh_id_rsa" – the path is
+    # harmless then, but still sits complete in the name.
     roh = (name or "").strip().replace("\\", "/").rsplit("/", 1)[-1]
     roh = _UNGUT.sub("_", roh).strip(". ")
     return roh[:150] or ersatz
 
 
 def anhaenge(msg):
-    """Namen der Anhänge einer Mail, in der Reihenfolge des Auftretens.
+    """Names of a mail's attachments, in order of appearance.
 
-    Der Index kannte bisher nur den Mailtext – der Vertrag im Anhang lag im
-    Archiv, war aber mit keinem Wort zu finden. Die Namen allein bringen schon
-    den größten Teil: „Vertrag_Musterkunde.pdf“ sucht man ohnehin so.
+    Without them, the contract in the attachment sits in the archive but
+    cannot be found by a single word. The names alone already carry most of
+    the value: "Vertrag_Musterkunde.pdf" is how one searches for it anyway.
 
-    Nur echte Anhänge: Inline-Bilder (Signaturlogos!) tragen Namen wie
-    image001.png und würden die Suche mit Rauschen fluten.
+    Real attachments only: inline images (signature logos!) carry names like
+    image001.png and would flood the search with noise.
     """
     namen = []
     try:
@@ -373,15 +374,15 @@ def anhaenge(msg):
 
 
 def endungen(att):
-    """Die Dateitypen hinter einer Anhangliste – entdoppelt, klein, sortiert.
+    """The file types behind an attachment list – deduped, lowercase, sorted.
 
-    Aus "Vertrag_Musterkunde.pdf Anlage.XLSX" wird "pdf xlsx". Gefiltert wird
-    danach in SQL und nicht über den Volltext: die Bedeutungssuche und die
-    KI-Antwort schränken dort ein, und ein Filter, der nur in der Textsuche
-    wirkt, wäre in zwei von drei Sucharten stillschweigend wirkungslos.
+    "Vertrag_Musterkunde.pdf Anlage.XLSX" becomes "pdf xlsx". Filtering on
+    it happens in SQL and not via the full text: semantic search and the AI
+    answer narrow down there, and a filter that only worked in the text
+    search would be silently ineffective in two of the three search kinds.
 
-    Nur was wie eine Endung aussieht: Buchstaben und Ziffern, höchstens acht
-    Zeichen. Ein Name wie "Bericht.2024-final" hat keine.
+    Only what looks like an extension: letters and digits, at most eight
+    characters. A name like "Bericht.2024-final" has none.
     """
     gefunden = set()
     for name in (att or "").split(" "):
@@ -438,11 +439,11 @@ def _outlook_file(p_str, root_str):
 
 
 def lies_verschwunden(root_dir):
-    """rel -> Zeitpunkt, seit dem die Mail nicht mehr im Postfach steht.
+    """rel -> time since which the mail is no longer in the mailbox.
 
-    Geschrieben von den Exporten in die state.db des Ordners. Die Datei
-    selbst bleibt liegen; hier wird nur vermerkt, dass sie an der Quelle
-    fehlt – das ist der Unterschied zwischen einer Kopie und einem Archiv.
+    Written by the exports into the folder's state.db. The file itself
+    stays put; this only records that it is missing at the source – that
+    is the difference between a copy and an archive.
     """
     import state_db
     return state_db.StateDb(root_dir).verschwunden_lesen()
@@ -462,7 +463,7 @@ def load_outlook(root_dir):
 
 
 # --------------------------------------------------------------------------
-# Kalender (.ics) und Kontakte (.vcf) – liegen im Outlook-Export
+# Calendar (.ics) and contacts (.vcf) – they live in the Outlook export
 # --------------------------------------------------------------------------
 def _unfold(text):
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -510,10 +511,10 @@ def _demail(v):
     return re.sub(r"(?i)^mailto:", "", (v or "").strip())
 
 
-# Exchange schreibt in Einladungsmails Windows-Zeitzonennamen statt IANA-Namen.
-# Ohne Zuordnung landen Termine aus anderen Zeitzonen um deren Differenz versetzt
-# im Kalender. Die häufigsten Namen genügen – alles andere fällt auf Lokalzeit
-# zurück (wie bisher).
+# Exchange writes Windows time zone names into invitation mails instead of
+# IANA names. Without a mapping, appointments from other time zones land in
+# the calendar shifted by that difference. The most common names suffice –
+# everything else falls back to local time.
 WIN_TZ = {
     "W. Europe Standard Time": "Europe/Berlin",
     "Central Europe Standard Time": "Europe/Budapest",
@@ -556,7 +557,7 @@ _ZONES = {}
 
 
 def _zone(tzid):
-    """TZID (Windows- oder IANA-Name) -> tzinfo, sonst None (= Lokalzeit)."""
+    """TZID (Windows or IANA name) -> tzinfo, else None (= local time)."""
     tzid = (tzid or "").strip().strip('"')
     if not tzid:
         return None
@@ -564,7 +565,7 @@ def _zone(tzid):
         try:
             _ZONES[tzid] = ZoneInfo(WIN_TZ.get(tzid, tzid))
         except Exception:
-            # unbekannter Name oder fehlende Zeitzonendaten (Windows ohne tzdata)
+            # unknown name or missing time zone data (Windows without tzdata)
             _ZONES[tzid] = None
     return _ZONES[tzid]
 
@@ -617,10 +618,10 @@ def _calendar_file(p_str, root_str):
     ts, disp = _ics_when(dtstart, dateonly, tzstart)
     rel = p.relative_to(root).as_posix()
     segs = rel.split("/")
-    # Der Ordnerpfad, nicht ein Schmuckname: ctx ist die Spalte, über die in
-    # der Suche nach Ordnern gefiltert wird. Als "kalender/Arbeit" steht der
-    # Kalender dort neben "E-Mail/Kunden" – dieselbe Auswahl wie im Export,
-    # mit demselben Pfad, unter dem er auch auf der Platte liegt.
+    # The folder path, not a display name: ctx is the column the folder
+    # search filters on. As "kalender/Arbeit" the calendar sits there next
+    # to "E-Mail/Kunden" – the same choice as in the export, with the same
+    # path it also occupies on disk.
     cal = "/".join(segs[:2]) if len(segs) >= 3 and segs[0] == "kalender" else "kalender"
     ppl = " ".join(x for x in ([org_cn, org_mail] + att_names + att_mails) if x).lower()
     text = ((f"Ort: {location}. " if location else "") + description).strip()
@@ -681,20 +682,20 @@ def load_contacts(root_dir):
 
 
 # --------------------------------------------------------------------------
-# Zusammenführen + Chunking
+# Merging + chunking
 # --------------------------------------------------------------------------
 # --------------------------------------------------------------------------
-# OneDrive: die gespiegelten Dateien
+# OneDrive: the mirrored files
 #
-# Stufe eins ist bewusst der NAME, nicht der Inhalt: er kostet nichts, ist
-# sofort da und beantwortet die häufigste Frage („wo lag noch mal das Angebot").
-# Ein PDF zu öffnen ist eine andere Größenordnung – an einem echten Bestand
-# gemessen rund eine Stunde für Extraktion und Einbetten (siehe ROADMAP.md).
+# Stage one is deliberately the NAME, not the content: it costs nothing, is
+# there at once and answers the most common question ("where was that offer
+# again"). Opening a PDF is a different order of magnitude – measured on a
+# real mirror, about an hour for extraction and embedding (see ROADMAP.md).
 #
-# Damit das nachrüstbar bleibt, ist `text` hier schon das INHALTSFELD und trägt
-# vorerst nur den Pfad. Wer später extrahiert, ersetzt genau diesen Wert; Aufbau,
-# Kennung und Suchfilter bleiben, wie sie sind, und ein alter Index wird nicht
-# ungültig, sondern nur ärmer.
+# To keep that retrofittable, `text` here is already the CONTENT FIELD and
+# carries only the path for now. Whoever extracts later replaces exactly this
+# value; layout, id and search filters stay as they are, and an old index
+# does not become invalid, only poorer.
 # --------------------------------------------------------------------------
 ONEDRIVE_DIR = "Dateien"
 
@@ -708,8 +709,8 @@ def _datei_satz(p_str, root_str):
     except OSError:
         ts, groesse = None, 0
     ordner = rel.rsplit("/", 1)[0] if "/" in rel else ONEDRIVE_DIR
-    # Der Pfad als Text: so findet die Volltextsuche auch über den Ordnernamen,
-    # nicht nur über den Dateinamen. Zwei Wörter, kein Rauschen.
+    # The path as text: that way the full-text search also matches on the
+    # folder name, not only the filename. Two words, no noise.
     return {
         "uid": f"datei:{rel}:0", "src": "datei", "root": "onedrive",
         "rel": rel,
@@ -718,14 +719,14 @@ def _datei_satz(p_str, root_str):
         "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else "",
         "title": p.name,
         "ctx": ordner,
-        "att": p.name,          # dieselbe Spalte wie Mailanhänge: att:pdf findet beides
+        "att": p.name,          # same column as mail attachments: att:pdf finds both
         "text": rel.replace("/", " / "),
         "groesse": groesse,
     }
 
 
 def load_onedrive(root_dir):
-    """Ein Satz je gespiegelter Datei – Name und Pfad, kein Inhalt."""
+    """One record per mirrored file – name and path, no content."""
     root = Path(root_dir)
     basis = root / ONEDRIVE_DIR
     if not basis.is_dir():
@@ -733,7 +734,7 @@ def load_onedrive(root_dir):
     dateien = [p for p in sorted(basis.rglob("*"))
                if p.is_file() and not p.name.endswith(".teil")]
     recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
-    weg = lies_verschwunden(root)          # derselbe Leser wie beim Postfach
+    weg = lies_verschwunden(root)          # the same reader as for the mailbox
     for r in recs:
         if r["rel"] in weg:
             r["gone"] = weg[r["rel"]]
@@ -839,14 +840,14 @@ def load_planner(root_dir):
             task = e.get("task") or {}
             det = e.get("details") or {}
             kommentare = e.get("kommentare") or []
-            # Referenz-Aliase wie Mail-Anhänge: Namen durchsuchbar, und der
-            # Dateityp-Filter (att:pdf) trifft auch Planner-Karten.
+            # Reference aliases like mail attachments: names searchable, and
+            # the file type filter (att:pdf) also hits Planner cards.
             anhaenge = " ".join(
                 str((ref or {}).get("alias") or "").replace(" ", "_")
                 for ref in (det.get("references") or {}).values()).strip()
-            # Zuständige UND Kommentar-Autoren, GUIDs über den Namenscache
-            # des Exports aufgelöst – rohe IDs sagen in der Trefferliste
-            # niemandem etwas.
+            # Assignees AND comment authors, GUIDs resolved via the export's
+            # name cache – raw ids in the result list mean nothing to
+            # anybody.
             zustaendig = sorted(namen.get(k, k)
                                 for k in (task.get("assignments") or {}))
             leute = sorted({namen.get(k.get("wer") or "", k.get("wer") or "")
@@ -890,13 +891,13 @@ def load_records(teams_dir, outlook_dir, onedrive_dir=None,
         recs += load_calendar(outlook_dir)    # .ics
         recs += load_contacts(outlook_dir)    # .vcf
     if onedrive_dir and Path(onedrive_dir).is_dir():
-        recs += load_onedrive(onedrive_dir)   # gespiegelte Dateien
+        recs += load_onedrive(onedrive_dir)   # mirrored files
     if sharepoint_dir and Path(sharepoint_dir).is_dir():
         recs += load_sharepoint(sharepoint_dir)
     if pages_dir and Path(pages_dir).is_dir():
-        recs += load_pages(pages_dir)              # gerenderte Site-Seiten
+        recs += load_pages(pages_dir)              # rendered site pages
     if planner_dir and Path(planner_dir).is_dir():
-        recs += load_planner(planner_dir)          # Boards samt Kommentaren
+        recs += load_planner(planner_dir)          # boards with their comments
     return recs
 
 
@@ -921,7 +922,7 @@ def _split(text, size, overlap):
 
 
 def chunk_records(records, size=1500, overlap=200):
-    """Eine Nachricht/Mail = Basis-Einheit; lange Texte in überlappende Stücke."""
+    """One message/mail = base unit; long texts into overlapping pieces."""
     chunks = []
     for r in records:
         parts = _split(r["text"], size, overlap)
@@ -930,10 +931,10 @@ def chunk_records(records, size=1500, overlap=200):
             c.pop("text", None)
             c["text"] = part
             c["cid"] = f'{r["uid"]}#{j}'
-            # Anhangnamen gehören der Nachricht, nicht jedem ihrer Stücke. Auf
-            # allen wiederholt zählte die Volltextsuche sie so oft, wie die
-            # Mail Stücke hat – eine lange Mail stünde allein deshalb weiter
-            # oben.
+            # Attachment names belong to the message, not to each of its
+            # pieces. Repeated on all of them, the full-text search would
+            # count them as often as the mail has pieces – a long mail would
+            # rank higher for that reason alone.
             if j > 0:
                 c.pop("att", None)
             chunks.append(c)
@@ -941,7 +942,7 @@ def chunk_records(records, size=1500, overlap=200):
 
 
 def embed_text(chunk):
-    """Was tatsächlich eingebettet wird: Titel als Kontext + Chunk-Text."""
+    """What actually gets embedded: title as context + chunk text."""
     return f'{chunk.get("title", "")}\n{chunk["text"]}'.strip()
 
 

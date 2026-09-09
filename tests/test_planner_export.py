@@ -29,7 +29,7 @@ def test_plan_id_aus_beiden_adressformen():
 
 
 class _Graph:
-    """URL -> Antwort; paged() liefert value-Listen, get() das Objekt."""
+    """URL -> response; paged() yields value lists, get() the object."""
 
     def __init__(self, antworten):
         self.antworten = antworten
@@ -205,9 +205,9 @@ def _graph_mit_referenz(tasks, ctag="c-1"):
 
 
 def test_referenzen_werden_optional_mitgeladen(tmp_path, monkeypatch):
-    """Die Board-Libraries werden nie eigenständig gespiegelt – eingeschaltet
-    holt der Export die referenzierten Dateien und verlinkt lokal; die
-    Graph-kodierten Referenz-Schlüssel werden dabei entschärft."""
+    """The board libraries are never mirrored on their own – when enabled
+    the export fetches the referenced files and links locally; the
+    Graph-encoded reference keys are defused along the way."""
     monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
     g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
     pl.plan_lauf(g, tmp_path, PLAN, {})
@@ -218,7 +218,7 @@ def test_referenzen_werden_optional_mitgeladen(tmp_path, monkeypatch):
     assert f'href="{pl.ANHANG_DIR}/' in html
     assert "firma.sharepoint.com" not in html.split("refs")[1].split("</div>")[0]
 
-    # Zweiter Lauf, Task geändert, Datei nicht: der cTag spart den Download.
+    # Second run, task changed, file not: the cTag saves the download.
     g2 = _graph_mit_referenz([_task("t1", "Aufgabe A", etag="e2")])
     pl.plan_lauf(g2, tmp_path, PLAN, {})
     assert g2.geladen == [], "unveränderte Referenz erneut geladen"
@@ -246,8 +246,8 @@ def test_corpus_traegt_referenznamen_als_anhang(tmp_path, monkeypatch):
 
 
 def test_board_ist_dreistufig_zugeklappt(tmp_path):
-    """Chips oben nennen die Swimlanes; Lane, Karte und Kommentare sind je
-    eine <details>-Stufe und starten alle zugeklappt."""
+    """Chips at the top name the swimlanes; lane, card and comments are one
+    <details> level each and all start collapsed."""
     g = _graph_fuer_plan(
         [_task("t1", "Aufgabe A", thread="th1")],
         posts=[{"from": {"emailAddress": {"name": "Bob"}},
@@ -270,9 +270,9 @@ def test_board_ist_dreistufig_zugeklappt(tmp_path):
 
 
 def test_legacy_diff_erst_ab_dem_zweiten_lauf(tmp_path):
-    """Der Erstlauf holt alle Posts OHNE die Auflistung der kompletten
-    Gruppen-Konversation (bei großen Gruppen Minuten an Stille); ab dem
-    zweiten Lauf entscheidet die Auflistung, welcher Faden sich bewegt hat."""
+    """The first run fetches all posts WITHOUT listing the complete group
+    conversation (minutes of silence for large groups); from the second
+    run on, the listing decides which thread has moved."""
     def fake(posts, geliefert):
         return _Graph({
             "/planner/plans/p1/details": {"categoryDescriptions": {}},
@@ -298,7 +298,7 @@ def test_legacy_diff_erst_ab_dem_zweiten_lauf(tmp_path):
     assert not any("$top=100" in u for u in g.aufrufe), \
         "Erstlauf listet die Gruppen-Konversation"
 
-    # Zweiter Lauf, Faden bewegt: Auflistung läuft, Posts kommen neu.
+    # Second run, thread moved: the listing runs, posts arrive fresh.
     g2 = fake([post("2026-07-01T10:00:00Z"), post("2026-07-05T09:00:00Z")],
               "2026-07-05T09:00:00Z")
     pl.plan_lauf(g2, tmp_path, PLAN, {})
@@ -308,7 +308,7 @@ def test_legacy_diff_erst_ab_dem_zweiten_lauf(tmp_path):
     eintraege = json.loads(db.kv_lesen("tasks"))
     assert len(eintraege["t1"]["kommentare"]) == 2
 
-    # Dritter Lauf, nichts bewegt: keine Post-Abrufe mehr.
+    # Third run, nothing moved: no more post fetches.
     g3 = fake([], "2026-07-05T09:00:00Z")
     pl.plan_lauf(g3, tmp_path, PLAN, {})
     assert not any("/th1/posts" in u for u in g3.aufrufe), \

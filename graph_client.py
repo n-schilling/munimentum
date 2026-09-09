@@ -1,30 +1,30 @@
 #!/usr/bin/env python3
 """
-graph_client.py – der eine HTTP-Client für Microsoft Graph.
+graph_client.py – the one HTTP client for Microsoft Graph.
 
-Bis 5.3 trug jedes Exportskript eine eigene Kopie dieser Schicht, und die
-Kopien wichen in Kleinigkeiten voneinander ab: Teams verrechnete Netz- und
-HTTP-Fehler in einem Zähler (ein ReadTimeout fraß dort einen 429-Versuch),
-OneDrive kannte weder Drossel noch TokenExpired. Hier steht sie einmal:
+Each export script used to carry its own copy of this layer, and the copies
+diverged in small ways: Teams counted network and HTTP errors in one counter
+(a ReadTimeout ate a 429 attempt there), OneDrive knew neither throttling
+nor TokenExpired. Here it lives once:
 
-    fetch()        ein GET; wiederholt NUR bei Netzwerkfehlern (Timeout,
-                   Verbindungsabbruch, TLS). Der HTTP-Status wird nicht
-                   bewertet – das ist Sache der Klassen darunter.
-    Basis          Wiederholung bei 429/5xx (Retry-After wird respektiert),
-                   401-Behandlung, Paging über @odata.nextLink, Byte- und
-                   Streaming-Downloads.
-    Graph          angemeldeter Zugriff über auth.Login; 401 erneuert den
-                   Token und versucht es erneut.
-    TokenClient    fertiger Bearer-Token (Graph Explorer); 401 heißt
-                   TokenExpired – erneuern kann ihn nur der Benutzer.
+    fetch()        one GET; retries ONLY on network errors (timeout,
+                   connection drop, TLS). The HTTP status is not judged –
+                   that is the business of the classes below.
+    Basis          retries on 429/5xx (Retry-After is respected), 401
+                   handling, paging via @odata.nextLink, byte and
+                   streaming downloads.
+    Graph          signed-in access via auth.Login; a 401 renews the
+                   token and tries again.
+    TokenClient    ready-made bearer token (Graph Explorer); 401 means
+                   TokenExpired – only the user can renew it.
 
-Die Drossel (GATE) hält gleichzeitige Graph-Aufrufe unter dem Limit des
-Postfachs; gewartet wird immer OHNE belegten Slot. konfiguriere() stellt sie
-und den Connection-Pool auf die Zahl der Arbeiter ein – einmal je main().
+The throttle (GATE) keeps concurrent Graph calls under the mailbox's limit;
+waiting always happens WITHOUT holding a slot. konfiguriere() sizes it and
+the connection pool to the number of workers – once per main().
 
-Was die Skripte eigen haben, bleibt bei ihnen: Teams behandelt Inline-Bilder
-bewusst nachsichtiger (Platzhalter statt Abbruch), OneDrive lädt Dateien
-stückweise und pagt über Delta-Links.
+What the scripts keep to themselves stays with them: Teams deliberately
+treats inline images more leniently (placeholder instead of abort), OneDrive
+downloads files in chunks and pages via delta links.
 """
 
 import threading
@@ -37,15 +37,15 @@ import progress
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 
-# Getrennte Timeouts für Verbindungsaufbau und Antwort. Graph liefert große
-# Seiten und Downloads teils sehr träge; ein zu knapper Read-Timeout bricht
-# sonst einen stundenlangen Export grundlos ab.
-TIMEOUT_JSON = (30, 120)     # (connect, read) für Listen-/Metadaten-Abfragen
-TIMEOUT_BYTES = (30, 300)    # (connect, read) für Downloads (.eml, Bilder)
-NET_RETRIES = 6              # Wiederholungen bei Timeout/Verbindungsabbruch/TLS
-HTTP_RETRIES = 6             # Wiederholungen bei 429/5xx bzw. nach Token-Erneuerung
+# Separate timeouts for connection setup and response. Graph serves large
+# pages and downloads rather sluggishly at times; a read timeout that is too
+# tight would otherwise abort an hours-long export for no reason.
+TIMEOUT_JSON = (30, 120)     # (connect, read) for list/metadata queries
+TIMEOUT_BYTES = (30, 300)    # (connect, read) for downloads (.eml, images)
+NET_RETRIES = 6              # retries on timeout/connection drop/TLS
+HTTP_RETRIES = 6             # retries on 429/5xx or after token renewal
 
-# Geteilte HTTP-Session (Keep-Alive/Connection-Pooling) und Drossel-Gate.
+# Shared HTTP session (keep-alive/connection pooling) and throttle gate.
 SESSION = requests.Session()
 GATE = threading.BoundedSemaphore(4)
 
@@ -53,11 +53,11 @@ TokenExpired = auth.TokenExpired
 
 
 def konfiguriere(workers):
-    """Drossel und Connection-Pool auf die Zahl der Arbeiter stellen.
+    """Size the throttle and connection pool to the number of workers.
 
-    Einmal je main(), BEVOR Threads laufen: ein BoundedSemaphore lässt sich
-    nicht nachträglich vergrößern, und der Standard-Pool von requests hielte
-    bei mehr Arbeitern nicht genug Verbindungen offen.
+    Once per main(), BEFORE threads run: a BoundedSemaphore cannot be
+    enlarged afterwards, and the default pool of requests would not keep
+    enough connections open with more workers.
     """
     global GATE
     GATE = threading.BoundedSemaphore(workers)
@@ -79,19 +79,19 @@ def _drossel_warten():
 
 
 def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label=""):
-    """Ein GET gegen Graph; wiederholt NUR bei Netzwerkfehlern.
+    """One GET against Graph; retries ONLY on network errors.
 
-    Eigener Zähler: ein Netzaussetzer soll die Versuche für 429/5xx nicht
-    aufbrauchen. Ohne dieses Retry beendet ein einzelner ReadTimeout nach
-    Stunden den kompletten Export.
+    Its own counter: a network hiccup must not use up the attempts for
+    429/5xx. Without this retry, a single ReadTimeout ends the whole export
+    after hours.
     """
-    # stream nur durchreichen, wenn gefordert – so bleiben schlanke
-    # Session-Fakes in Tests ohne stream-Parameter gültig.
+    # Pass stream through only when requested – this keeps lean session
+    # fakes in tests valid without a stream parameter.
     extra = {"stream": True} if stream else {}
     for net in range(NET_RETRIES):
         _drossel_warten()
         try:
-            with GATE:   # nur das eigentliche Request zählt gegen das Limit
+            with GATE:   # only the actual request counts against the limit
                 return SESSION.get(url, headers=headers, params=params,
                                    timeout=timeout, **extra)
         except requests.exceptions.RequestException as e:
@@ -101,8 +101,8 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
             progress.event("run.net_retry", "warn",
                            error=f"{type(e).__name__}{label}", s=w,
                            i=net + 2, n=NET_RETRIES)
-            time.sleep(w)   # Pause OHNE belegten Slot
-    raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")   # nicht erreichbar
+            time.sleep(w)   # pause WITHOUT holding a slot
+    raise RuntimeError(f"Zu viele Netzwerkfehler: {url}")   # unreachable
 
 
 def warte_auf(r, versuch, was=""):
@@ -124,13 +124,13 @@ def warte_auf(r, versuch, was=""):
 
 
 class Basis:
-    """Was beide Zugangsarten teilen: Wiederholung, Paging, Downloads."""
+    """What both access paths share: retries, paging, downloads."""
 
     def _headers(self):
         raise NotImplementedError
 
     def _erneuern(self):
-        """401: Token erneuern und noch einmal – oder TokenExpired."""
+        """401: renew the token and try once more – or TokenExpired."""
         raise TokenExpired()
 
     def get(self, url, params=None, extra_headers=None):
@@ -164,7 +164,7 @@ class Basis:
         raise RuntimeError(f"Zu viele Fehlversuche: {url}")
 
     def stream(self, url, timeout=TIMEOUT_BYTES, label=""):
-        """Eine Streaming-Antwort (Status schon geprüft) – für große Dateien."""
+        """A streaming response (status already checked) – for large files."""
         for versuch in range(HTTP_RETRIES):
             r = fetch(url, self._headers(), timeout=timeout, stream=True, label=label)
             if r.status_code == 401:
@@ -184,15 +184,15 @@ class Basis:
             nxt = data.get("@odata.nextLink")
             if not nxt:
                 break
-            data = self.get(nxt, extra_headers=extra_headers)   # Link ist absolut
+            data = self.get(nxt, extra_headers=extra_headers)   # link is absolute
 
 
 class Graph(Basis):
-    """Angemeldeter Zugriff. Die Anmeldung selbst steckt in auth.Login."""
+    """Signed-in access. The sign-in itself lives in auth.Login."""
 
     def __init__(self, scopes=None, nur_still=False, anmeldung=None):
         self._refresh_lock = threading.Lock()
-        if anmeldung is not None:      # Aufrufer hat schon angemeldet (Teams)
+        if anmeldung is not None:      # caller has already signed in (Teams)
             self.anmeldung = anmeldung
             return
         self.anmeldung = auth.Login(scopes)
@@ -212,7 +212,7 @@ class Graph(Basis):
         return self.anmeldung.scopes
 
     def _refresh(self):
-        with self._refresh_lock:   # nur ein Thread erneuert gleichzeitig
+        with self._refresh_lock:   # only one thread renews at a time
             self.anmeldung.erneuern()
 
     def _headers(self):
@@ -223,7 +223,7 @@ class Graph(Basis):
 
 
 class TokenClient(Basis):
-    """Nutzt einen fertigen Bearer-Token; keine Anmeldung, kein Refresh."""
+    """Uses a ready-made bearer token; no sign-in, no refresh."""
 
     def __init__(self, token):
         self.token = token

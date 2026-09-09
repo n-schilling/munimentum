@@ -1,10 +1,10 @@
-"""Tests für progress.py – Fortschritt maschinenlesbar melden.
+"""Tests for progress.py – reporting progress machine-readably.
 
-Der Kanal existiert, damit der Balken in der App nicht davon abhängt, wie ein
-Skript seine Fortschrittssätze formuliert. Die tragende Zusage: lies() erkennt
-gewöhnliche Ausgabe als solche – eine Skriptzeile, die zufällig nach
-Fortschritt aussieht, darf nicht als Zahl gedeutet werden. Gesendet wird
-immer; die App ist der einzige Aufrufer und filtert die Marker selbst.
+The channel exists so that the bar in the app does not depend on how a
+script phrases its progress sentences. The load-bearing promise: lies()
+recognises ordinary output as such – a script line that happens to look
+like progress must not be read as a number. Sending always happens; the
+app is the only caller and filters the markers itself.
 """
 
 import json
@@ -15,7 +15,7 @@ import progress
 
 
 # --------------------------------------------------------------------------
-# Melden
+# Reporting
 # --------------------------------------------------------------------------
 def test_melde_mit_gesamtzahl(capsys):
     progress.melde(37, 1200, "chats")
@@ -26,8 +26,8 @@ def test_melde_mit_gesamtzahl(capsys):
 
 
 def test_melde_ohne_gesamtzahl(capsys):
-    """Der Outlook-Export entdeckt seine Mails erst im Laufen – eine erfundene
-    Prozentzahl wäre schlechter als gar keine."""
+    """The Outlook export discovers its mails only while running – an
+    invented percentage would be worse than none."""
     progress.melde(1234, what="mails")
     daten = json.loads(capsys.readouterr().out.strip()[len(progress.MARKE):])
     assert daten == {"done": 1234, "what": "mails"}
@@ -35,16 +35,16 @@ def test_melde_ohne_gesamtzahl(capsys):
 
 
 def test_melde_haelt_keinen_lauf_auf(monkeypatch, capsys):
-    """Eine misslungene Meldung darf einen stundenlangen Export nicht beenden."""
+    """A failed report must not end an export that runs for hours."""
 
     def kaputt(*a, **kw):
         raise OSError("Rohr zu")
     monkeypatch.setattr("builtins.print", kaputt)
-    progress.melde(1, 2)                      # wirft nicht
+    progress.melde(1, 2)                      # does not raise
 
 
 # --------------------------------------------------------------------------
-# Lesen
+# Reading
 # --------------------------------------------------------------------------
 def test_lies_erkennt_die_eigene_zeile():
     assert progress.lies('@@PROGRESS@@ {"done": 5, "total": 9}') == {"done": 5, "total": 9}
@@ -52,7 +52,7 @@ def test_lies_erkennt_die_eigene_zeile():
 
 
 @pytest.mark.parametrize("zeile", [
-    "✓ [37/1200] neu · Chat: Alice",           # echte Ausgabe des Skripts
+    "✓ [37/1200] neu · Chat: Alice",           # real script output
     "  … 500/12000 eingebettet",
     "@@PROGRESS@@ kein json",
     '@@PROGRESS@@ {"ohne": "done"}',
@@ -60,7 +60,7 @@ def test_lies_erkennt_die_eigene_zeile():
     "", None,
 ])
 def test_lies_gibt_gewoehnliche_zeilen_zurueck(zeile):
-    """None heißt: ins Protokoll damit, nicht in den Balken."""
+    """None means: into the log with it, not into the bar."""
     assert progress.lies(zeile) is None
 
 
@@ -71,7 +71,7 @@ def test_melden_und_lesen_passen_zusammen(capsys):
 
 
 # --------------------------------------------------------------------------
-# Ergebnis: was der Schritt bewirkt hat
+# Result: what the step accomplished
 # --------------------------------------------------------------------------
 def test_ergebnis_melden_und_lesen(capsys):
     progress.ergebnis(0, unchanged=67, excluded=4, errors=1,
@@ -86,12 +86,12 @@ def test_ergebnis_haelt_keinen_lauf_auf(monkeypatch):
     def kaputt(*a, **kw):
         raise OSError("Rohr zu")
     monkeypatch.setattr("builtins.print", kaputt)
-    progress.ergebnis(3)                       # wirft nicht
+    progress.ergebnis(3)                       # does not raise
 
 
 @pytest.mark.parametrize("zeile", [
-    "Fertig. Neu exportiert: 0, übersprungen: 67.",   # echte Ausgabe des Skripts
-    '@@PROGRESS@@ {"done": 5}',                       # der andere Kanal
+    "Fertig. Neu exportiert: 0, übersprungen: 67.",   # real script output
+    '@@PROGRESS@@ {"done": 5}',                       # the other channel
     '@@RESULT@@ {"ohne": "neu"}',
     '@@RESULT@@ kein json',
     "", None,
@@ -101,7 +101,7 @@ def test_lies_ergebnis_gibt_gewoehnliche_zeilen_zurueck(zeile):
 
 
 def test_die_beiden_kanaele_verwechseln_sich_nicht(capsys):
-    """Beide laufen über dieselbe Leitung – jeder darf nur seine Zeile lesen."""
+    """Both run over the same pipe – each may only read its own line."""
     progress.melde(5, 10)
     progress.ergebnis(7)
     fortschritt, fazit = capsys.readouterr().out.strip().splitlines()
@@ -112,32 +112,32 @@ def test_die_beiden_kanaele_verwechseln_sich_nicht(capsys):
 
 
 # --------------------------------------------------------------------------
-# Die Skripte melden auch wirklich
+# The scripts really do report
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("modul", ["teams_export", "outlook_export",
                                    "onedrive_export", "sharepoint_export",
                                    "rag_index", "combined_search"])
 def test_export_meldet_sein_ergebnis(modul):
-    """Ohne diese Meldung indiziert die App nach jedem Lauf blind weiter –
-    und die Lauf-Historie bliebe für den Schritt leer."""
+    """Without this report the app would keep indexing blindly after every
+    run – and the run history would stay empty for the step."""
     from pathlib import Path
     wurzel = Path(__file__).resolve().parent.parent
     quelle = (wurzel / f"{modul}.py").read_text(encoding="utf-8")
     if "import drive_mirror" in quelle:
-        # Der Spiegel meldet über den gemeinsamen Kern – der Vertrag gilt dort.
+        # The mirror reports via the shared core – the contract holds there.
         quelle += (wurzel / "drive_mirror.py").read_text(encoding="utf-8")
     assert "progress.ergebnis(" in quelle, f"{modul} meldet sein Ergebnis nicht"
 
 
 
 @pytest.mark.parametrize("modul,stelle", [
-    ("teams_export", "chats"),          # kennt die Gesamtzahl
-    ("outlook_export", "mails"),        # kennt sie nicht
+    ("teams_export", "chats"),          # knows the total
+    ("outlook_export", "mails"),        # does not know it
     ("rag_index", "embeddings"),
     ("combined_search", "mails"),
 ])
 def test_skript_meldet_fortschritt(modul, stelle):
-    """Sonst bliebe der Balken bei einem Schritt stehen, ohne dass es auffällt."""
+    """Otherwise the bar would stall on a step without anyone noticing."""
     from pathlib import Path
     quelle = (Path(__file__).resolve().parent.parent / f"{modul}.py").read_text(
         encoding="utf-8")
@@ -147,7 +147,7 @@ def test_skript_meldet_fortschritt(modul, stelle):
 
 
 # --------------------------------------------------------------------------
-# Fehler-Ereignis: strukturiert statt Prosa-Muster
+# Error event: structured instead of prose patterns
 # --------------------------------------------------------------------------
 def test_fehler_melden_und_lesen(capsys):
     progress.fehler("token_expired")

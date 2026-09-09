@@ -85,7 +85,7 @@ def test_kaputte_datei_bricht_leser_kontrolliert(tmp_path):
     try:
         db.bestand_lesen()
     except sqlite3.DatabaseError:
-        pass                                   # klar gemeldet, kein Halbwissen
+        pass                                   # clearly reported, no half-truths
 
 
 def test_spiegel_lauf_hinterlaesst_genau_eine_zustandsdatei(tmp_path):

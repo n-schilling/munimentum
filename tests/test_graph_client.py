@@ -1,8 +1,7 @@
-"""Tests für graph_client.py – Retry, Drosselung, Paging, Token-Behandlung.
+"""Tests for graph_client.py – retry, throttling, paging, token handling.
 
-Bis 5.3 trug jedes Exportskript eine eigene Kopie dieser Schicht samt eigener
-Tests; hier steht beides einmal. Alles ohne Netzwerk: SESSION wird durch einen
-Fake ersetzt.
+The layer the export scripts share, tested once here instead of per copy.
+Everything without a network: SESSION is replaced by a fake.
 """
 
 import threading
@@ -14,7 +13,7 @@ import graph_client
 
 
 class FakeResponse:
-    """Nachgebaute requests-Response ohne Netzwerk."""
+    """Replica of a requests response without a network."""
 
     def __init__(self, status=200, payload=None, content=b"", headers=None):
         self.status_code = status
@@ -31,7 +30,7 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Liefert vorbereitete Antworten der Reihe nach und protokolliert Aufrufe."""
+    """Serves prepared responses in order and logs the calls."""
 
     def __init__(self, responses):
         self.responses = list(responses)
@@ -41,14 +40,14 @@ class FakeSession:
         self.calls.append({"url": url, "headers": dict(headers or {}),
                            "params": params, "timeout": timeout, "stream": stream})
         r = self.responses.pop(0)
-        if isinstance(r, Exception):   # Netzwerkfehler simulieren
+        if isinstance(r, Exception):   # simulate a network error
             raise r
         return r
 
 
 @pytest.fixture
 def session(monkeypatch):
-    """Fake-Session einhängen; Antworten setzt der Test über .responses."""
+    """Mount the fake session; the test sets responses via .responses."""
     fake = FakeSession([])
     monkeypatch.setattr(graph_client, "SESSION", fake)
     return fake
@@ -67,7 +66,7 @@ def sleeps(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# TokenClient: Retry, Drosselung, Paging, TokenExpired
+# TokenClient: retry, throttling, paging, TokenExpired
 # --------------------------------------------------------------------------
 def test_tokenclient_get_sendet_bearer_und_params(session):
     session.responses = [FakeResponse(payload={"value": [1]})]
@@ -134,13 +133,13 @@ def test_tokenclient_paged_folgt_nextlink(session):
     ]
     tc = graph_client.TokenClient("t")
     assert list(tc.paged("https://example.invalid/p1", {"$top": 2})) == [1, 2, 3]
-    # Folgeseite ohne die ursprünglichen Params (nextLink enthält sie bereits)
+    # Follow-up page without the original params (nextLink already carries them)
     assert session.calls[1]["url"] == "https://example.invalid/p2"
     assert session.calls[1]["params"] is None
 
 
 # --------------------------------------------------------------------------
-# Netzwerkfehler: Timeout/Verbindungsabbruch werden wiederholt statt zu beenden
+# Network errors: timeouts/dropped connections are retried, not fatal
 # --------------------------------------------------------------------------
 def _timeout():
     return requests.exceptions.ReadTimeout("read timed out")
@@ -161,7 +160,7 @@ def test_fetch_gibt_nach_allen_netzwerkversuchen_auf(session, sleeps):
 
 
 def test_netzwerkfehler_verbraucht_keinen_http_versuch(session, sleeps):
-    """Ein Aussetzer darf die Versuche für 429/5xx nicht aufbrauchen."""
+    """A hiccup must not use up the attempts reserved for 429/5xx."""
     session.responses = ([_timeout()]
                          + [FakeResponse(500) for _ in range(graph_client.HTTP_RETRIES - 1)]
                          + [FakeResponse(payload={"ok": 1})])
@@ -175,11 +174,11 @@ def test_get_bytes_wiederholt_nach_netzwerkfehler(session, sleeps):
 
 
 # --------------------------------------------------------------------------
-# Graph-Client: Token-Erneuerung bei 401 (ohne echte Anmeldung)
+# Graph client: token renewal on 401 (without a real sign-in)
 # --------------------------------------------------------------------------
 class _StubAnmeldung:
-    """Nur was die HTTP-Schicht von auth.Login braucht. Die Anmeldung selbst
-    hat eigene Tests (test_auth.py); hier geht es um Retry und Paging."""
+    """Only what the HTTP layer needs from auth.Login. Sign-in itself has
+    its own tests (test_auth.py); here it is about retry and paging."""
 
     def __init__(self, token="alt"):
         self.token = token
@@ -189,7 +188,7 @@ class _StubAnmeldung:
 
 
 def _bare_graph():
-    """Graph-Instanz ohne interaktiven Login."""
+    """Graph instance without an interactive login."""
     return graph_client.Graph(anmeldung=_StubAnmeldung())
 
 
@@ -228,7 +227,7 @@ def test_graph_paged_folgt_nextlink(session):
 
 
 def test_graph_refresh_ist_verriegelt():
-    """Nur ein Thread erneuert gleichzeitig – der Lock existiert und wird benutzt."""
+    """Only one thread renews at a time – the lock exists and is used."""
     g = _bare_graph()
     erneuert = []
 
@@ -243,7 +242,7 @@ def test_graph_refresh_ist_verriegelt():
 
 
 # --------------------------------------------------------------------------
-# stream() und konfiguriere()
+# stream() and konfiguriere()
 # --------------------------------------------------------------------------
 def test_stream_liefert_die_rohe_antwort(session, sleeps):
     antwort = FakeResponse(content=b"GROSS")
@@ -263,18 +262,18 @@ def test_konfiguriere_setzt_gate_und_pool(monkeypatch):
     alt = graph_client.GATE
     try:
         graph_client.konfiguriere(2)
-        # BoundedSemaphore(2): zweimal belegen geht, dreimal nicht
+        # BoundedSemaphore(2): acquiring twice works, three times does not
         assert graph_client.GATE.acquire(blocking=False)
         assert graph_client.GATE.acquire(blocking=False)
         assert not graph_client.GATE.acquire(blocking=False)
         assert gemountet["prefix"] == "https://"
-        assert gemountet["adapter"]._pool_maxsize == 4   # Untergrenze 4
+        assert gemountet["adapter"]._pool_maxsize == 4   # lower bound of 4
     finally:
         graph_client.GATE = alt
 
 
 def test_gate_wird_um_das_request_gehalten(session):
-    """Das Request läuft im GATE; gewartet wird ohne belegten Slot."""
+    """The request runs inside the GATE; waiting happens without a held slot."""
     session.responses = [FakeResponse(payload={"ok": 1})]
     belegt = []
     echt = graph_client.GATE
@@ -297,13 +296,13 @@ def test_gate_wird_um_das_request_gehalten(session):
 
 
 def test_threads_teilen_sich_das_gate(session):
-    """Mehr Threads als Slots: alle kommen durch, keiner verhungert."""
+    """More threads than slots: all get through, none starves."""
     session.responses = [FakeResponse(payload={"ok": 1})] * 8
     lock = threading.Lock()
     echt_get = session.get
 
     def sicher_get(*a, **kw):
-        with lock:                       # FakeSession.pop ist nicht threadsicher
+        with lock:                       # FakeSession.pop is not thread-safe
             return echt_get(*a, **kw)
 
     session.get = sicher_get
@@ -329,7 +328,7 @@ def test_drosselsperre_gilt_dem_ganzen_prozess(session, sleeps, capsys):
                          FakeResponse(payload={"ok": 2})]
     tc = graph_client.TokenClient("t")
     assert tc.get("https://example.invalid/a") == {"ok": 1}
-    assert tc.get("https://example.invalid/b") == {"ok": 2}   # zweiter Aufruf
+    assert tc.get("https://example.invalid/b") == {"ok": 2}   # second call
     events = [e for e in (progress.lies_event(z) for z in
                           capsys.readouterr().out.splitlines())
               if e and e["k"] == "run.throttled"]

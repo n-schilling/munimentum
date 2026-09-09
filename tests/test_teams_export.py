@@ -1,8 +1,8 @@
-"""Tests für teams_export.py – Graph-Client, Rendering, Fortschritt und Job-Aufbau.
+"""Tests for teams_export.py – Graph client, rendering, progress and job setup.
 
-Alle Netzwerkzugriffe sind durch Fakes ersetzt (SESSION bzw. Graph-Objekte);
-es wird nie wirklich das Netz berührt. Die reinen Helfer (safe, parse_ts, …)
-sind bereits in test_teams_export_helpers.py abgedeckt.
+All network access is replaced by fakes (SESSION or Graph objects); the
+network is never actually touched. The pure helpers (safe, parse_ts, …)
+are already covered in test_teams_export_helpers.py.
 """
 
 import json
@@ -15,14 +15,14 @@ import requests
 import teams_export as te
 
 GRAPH = te.GRAPH
-TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")   # lokale Zeit, ohne festen Wert
+TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")   # local time, no fixed value
 
 
 # --------------------------------------------------------------------------
-# Gemeinsame Fakes und Fixtures
+# Shared fakes and fixtures
 # --------------------------------------------------------------------------
 class FakeResponse:
-    """Minimaler Ersatz für requests.Response."""
+    """Minimal stand-in for requests.Response."""
 
     def __init__(self, status_code=200, payload=None, headers=None, content=b""):
         self.status_code = status_code
@@ -39,7 +39,7 @@ class FakeResponse:
 
 
 class FakeSession:
-    """Gibt vorbereitete Antworten der Reihe nach zurück und protokolliert Aufrufe."""
+    """Returns prepared responses in order and records the calls."""
 
     def __init__(self, responses):
         self.responses = list(responses)
@@ -48,13 +48,13 @@ class FakeSession:
     def get(self, url, headers=None, params=None, timeout=None):
         self.calls.append((url, params))
         r = self.responses.pop(0)
-        if isinstance(r, Exception):   # Netzwerkfehler simulieren
+        if isinstance(r, Exception):   # simulate a network error
             raise r
         return r
 
 
 class FakeGraph:
-    """Fake für Graph/TokenClient: paged/get aus vorbereiteten Daten je URL."""
+    """Fake for Graph/TokenClient: paged/get from prepared data per URL."""
 
     channels_enabled = True
 
@@ -76,7 +76,7 @@ class FakeGraph:
 
 @pytest.fixture(autouse=True)
 def _clear_stop():
-    """STOP ist ein modulweites Event – nach jedem Test zurücksetzen."""
+    """STOP is a module-wide event – reset it after every test."""
     yield
     te.STOP.clear()
 
@@ -102,23 +102,23 @@ def _msg(name, text, ts, ctype="text", **extra):
 
 
 # --------------------------------------------------------------------------
-# human_time (parse_ts & Co. sind schon in test_teams_export_helpers.py)
+# human_time (parse_ts & co. are already in test_teams_export_helpers.py)
 # --------------------------------------------------------------------------
 def test_human_time_formats_iso_locally():
     out = te.human_time("2025-06-01T09:30:00Z")
-    assert TIME_RE.fullmatch(out)   # exakte Uhrzeit ist zeitzonenabhängig
-    # 7-stellige Sekundenbruchteile (Graph) werden verkraftet
+    assert TIME_RE.fullmatch(out)   # the exact time depends on the timezone
+    # 7-digit fractional seconds (Graph) are tolerated
     assert TIME_RE.fullmatch(te.human_time("2025-06-01T09:30:00.1234567Z"))
 
 
 def test_human_time_passes_garbage_through():
     assert te.human_time("") == ""
     assert te.human_time(None) == ""
-    assert te.human_time("unsinn") == "unsinn"   # unparsebar -> unverändert zurück
+    assert te.human_time("unsinn") == "unsinn"   # unparsable -> returned unchanged
 
 
 # --------------------------------------------------------------------------
-# HOSTED_RE – Erkennung von hostedContents-URLs
+# HOSTED_RE – detection of hostedContents URLs
 # --------------------------------------------------------------------------
 def test_hosted_re_matches_v1_and_beta():
     u1 = "https://graph.microsoft.com/v1.0/chats/1/messages/2/hostedContents/abc/$value"
@@ -129,8 +129,8 @@ def test_hosted_re_matches_v1_and_beta():
 
 
 # --------------------------------------------------------------------------
-# get_bytes mit Bild-Semantik (_BildClient) – der generische Client samt
-# Retry/Backoff/Paging ist in test_graph_client.py abgedeckt
+# get_bytes with image semantics (_BildClient) – the generic client with
+# retry/backoff/paging is covered in test_graph_client.py
 # --------------------------------------------------------------------------
 def _session(monkeypatch, responses):
     import graph_client
@@ -149,7 +149,7 @@ def test_get_bytes_returns_content_and_type(monkeypatch):
 def test_get_bytes_5xx_is_image_unavailable(monkeypatch):
     _session(monkeypatch, [FakeResponse(502)])
     tc = te.TokenClient("tok", channels_enabled=False)
-    with pytest.raises(te.ImageUnavailable):   # kein Retry bei Serverfehler
+    with pytest.raises(te.ImageUnavailable):   # no retry on a server error
         tc.get_bytes("https://x/img")
 
 
@@ -158,12 +158,12 @@ def test_get_bytes_persistent_429_is_image_unavailable(monkeypatch, sleeps):
     tc = te.TokenClient("tok", channels_enabled=False)
     with pytest.raises(te.ImageUnavailable):
         tc.get_bytes("https://x/img")
-    # Gewartet wird vor dem Folge-Request; nach dem letzten Fehlversuch nicht.
+    # The wait happens before the follow-up request; not after the last try.
     assert len(sleeps) == 3
 
 
 def test_get_bytes_netzfehler_is_image_unavailable(monkeypatch, sleeps):
-    """Netz nach allen Wiederholungen weg -> Platzhalter, kein Abbruch."""
+    """Network still gone after all retries -> placeholder, no abort."""
     import graph_client
     fehler = [requests.exceptions.ReadTimeout("weg")] * graph_client.NET_RETRIES
     _session(monkeypatch, fehler)
@@ -180,7 +180,7 @@ def test_get_bytes_401_raises_tokenexpired(monkeypatch):
 
 
 class _StubAnmeldung:
-    """Nur was die HTTP-Schicht von auth.Login braucht."""
+    """Only what the HTTP layer needs from auth.Login."""
 
     def __init__(self, token="alt"):
         self.token = token
@@ -201,12 +201,12 @@ def test_get_bytes_401_refresh_then_ok(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Token-Modus: load_pasted_token
+# Token mode: load_pasted_token
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def _eigener_datenordner(tmp_path, monkeypatch):
-    """auth.load_pasted_token sucht auch im Datenordner – sonst fände es das
-    gx_token.txt des Repos, und die Tests hingen an der Laufreihenfolge."""
+    """auth.load_pasted_token also looks in the data directory – otherwise it
+    would find the repo's gx_token.txt and the tests would hang on run order."""
     monkeypatch.setenv("OFFICE365_DATA_DIR", str(tmp_path))
     import settings
     settings.reset()
@@ -215,9 +215,9 @@ def _eigener_datenordner(tmp_path, monkeypatch):
 
 
 def test_load_pasted_token_from_env(monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)   # kein gx_token.txt aus dem Repo einlesen
+    monkeypatch.chdir(tmp_path)   # don't read a gx_token.txt from the repo
     monkeypatch.setenv("GRAPH_TOKEN", '  "Bearer eyJ0abc"  ')
-    assert te.load_pasted_token() == "eyJ0abc"   # Anführungszeichen + Präfix entfernt
+    assert te.load_pasted_token() == "eyJ0abc"   # quotes + prefix removed
 
 
 def test_load_pasted_token_from_file(monkeypatch, tmp_path):
@@ -236,7 +236,7 @@ def test_load_pasted_token_missing_or_empty(monkeypatch, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Kategorien-Auswahl (ohne Rückfragen – die App ist der einzige Aufrufer)
+# Category selection (no prompts – the app is the only caller)
 # --------------------------------------------------------------------------
 _OPTIONS = [("1on1", "a"), ("group", "b"), ("meeting", "c"), ("channels", "d")]
 
@@ -257,11 +257,11 @@ def test_env_categories_ohne_variable_oder_ohne_treffer(monkeypatch):
     monkeypatch.setenv("EXPORT_CATEGORIES", "")
     assert te.env_categories(_OPTIONS) is None
     monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch,unsinn")
-    assert te.env_categories(_OPTIONS) is None          # nur Unbekanntes -> normale Abfrage
+    assert te.env_categories(_OPTIONS) is None          # only unknowns -> normal default
 
 
 def test_selected_categories_folgt_der_umgebung(monkeypatch):
-    """Die Variable kommt von app.py bzw. dem Zeitplan – eine bewusste Vorgabe."""
+    """The variable comes from app.py or the schedule – a deliberate choice."""
     monkeypatch.setenv("EXPORT_CATEGORIES", "channels")
     assert te.selected_categories(_OPTIONS) == {"channels"}
 
@@ -277,7 +277,7 @@ def test_select_teams_handles_errors():
     graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": RuntimeError("kaputt")})
     assert te.select_teams(graph) == []
     graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": te.TokenExpired()})
-    with pytest.raises(te.TokenExpired):   # Token-Ende wird durchgereicht
+    with pytest.raises(te.TokenExpired):   # token expiry is passed through
         te.select_teams(graph)
 
 
@@ -312,7 +312,7 @@ def test_chat_title_group_joins_members_and_truncates():
     members = [{"userId": f"u{i}", "displayName": f"P{i}"} for i in range(7)]
     chat = {"chatType": "group", "topic": None, "id": "c1", "members": members}
     title = te.chat_title(FakeGraph(), chat, "me")
-    assert title == "P0, P1, P2, P3, P4…"   # max. 5 Namen plus Ellipse
+    assert title == "P0, P1, P2, P3, P4…"   # at most 5 names plus ellipsis
 
 
 def test_chat_title_loads_members_when_missing():
@@ -331,7 +331,7 @@ def test_chat_title_member_load_failure_falls_back():
 
 
 # --------------------------------------------------------------------------
-# Rendering: Anhänge, Reaktionen, Nachrichten, Konversation
+# Rendering: attachments, reactions, messages, conversation
 # --------------------------------------------------------------------------
 def test_render_attachments_links_and_escapes():
     out = te.render_attachments([
@@ -340,7 +340,7 @@ def test_render_attachments_links_and_escapes():
     ])
     assert 'href="https://x/a?b=1&amp;c=2"' in out
     assert "Plan &lt;Q3&gt;.docx" in out
-    assert "reference" in out          # ohne URL nur der Name/Typ
+    assert "reference" in out          # without a URL just the name/type
     assert te.render_attachments([]) == ""
     assert te.render_attachments(None) == ""
 
@@ -356,10 +356,10 @@ def test_render_reactions_counts_types():
 def test_render_message_text_is_escaped():
     m = _msg("Alice <X>", "<b>kein html</b>", "2025-06-01T09:30:00Z")
     out = te.render_message(m)
-    assert 'class="msg text"' in out           # Textnachricht -> pre-wrap-Klasse
+    assert 'class="msg text"' in out           # text message -> pre-wrap class
     assert "Alice &lt;X&gt;" in out            # Name escaped
     assert "&lt;b&gt;kein html&lt;/b&gt;" in out
-    assert TIME_RE.search(out)                 # lokale Zeit gerendert
+    assert TIME_RE.search(out)                 # local time rendered
 
 
 def test_render_message_html_is_cleaned():
@@ -367,7 +367,7 @@ def test_render_message_html_is_cleaned():
              "2025-06-01T09:30:00Z", ctype="html")
     out = te.render_message(m)
     assert "onclick" not in out and "script" not in out
-    assert ">Hi</div>" in out                  # HTML bleibt ansonsten erhalten
+    assert ">Hi</div>" in out                  # HTML is otherwise preserved
 
 
 def test_render_message_deleted_and_subject_and_reply():
@@ -460,7 +460,7 @@ def test_embed_hosted_images_inlines_as_data_uri(monkeypatch):
                                  counter)
     assert "data:image/png;base64,QklMRA==" in out   # base64("BILD")
     assert "hostedContents" not in out
-    assert "https://example.com" in out              # fremde URLs bleiben stehen
+    assert "https://example.com" in out              # foreign URLs stay in place
     assert counter == [1] and client.calls == 1
 
 
@@ -470,7 +470,7 @@ def test_embed_hosted_images_failure_yields_placeholder(monkeypatch):
     counter = [0]
     out = te.embed_hosted_images(f'<img src="{HOSTED_URL}">', counter)
     assert te.IMG_PLACEHOLDER in out
-    assert counter == [0]   # fehlgeschlagene Bilder zählen nicht
+    assert counter == [0]   # failed images do not count
 
 
 def test_embed_hosted_images_token_expired_propagates(monkeypatch):
@@ -486,14 +486,14 @@ def test_embed_hosted_images_uses_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(te, "IMGCACHE_DIR", tmp_path)
     html = f'<img src="{HOSTED_URL}">'
     out1 = te.embed_hosted_images(html)
-    out2 = te.embed_hosted_images(html)   # zweiter Lauf: Cache-Treffer, kein Download
+    out2 = te.embed_hosted_images(html)   # second run: cache hit, no download
     assert out1 == out2
     assert client.calls == 1
     assert len(list(tmp_path.iterdir())) == 1
 
 
 # --------------------------------------------------------------------------
-# Fortschritt: load_state / save_state / already_done / get_record / cleanup_old
+# Progress: load_state / save_state / already_done / get_record / cleanup_old
 # --------------------------------------------------------------------------
 def test_load_state_defaults_and_roundtrip(tmp_path):
     state = te.load_state(tmp_path)
@@ -502,7 +502,7 @@ def test_load_state_defaults_and_roundtrip(tmp_path):
     te.save_state(tmp_path, state)
     assert te.load_state(tmp_path) == state
     import state_db
-    assert (tmp_path / state_db.DB_NAME).exists()   # wohnt in der state.db
+    assert (tmp_path / state_db.DB_NAME).exists()   # lives in state.db
 
 
 def test_load_state_ignores_corrupt_entry(tmp_path):
@@ -519,8 +519,8 @@ def test_already_done_requires_record_and_file(tmp_path):
         "b": {"done": False, "rel": "1on1/b.html"},
     }}
     assert not te.already_done(tmp_path, state, "fehlt")
-    assert not te.already_done(tmp_path, state, "b")       # nicht fertig
-    assert not te.already_done(tmp_path, state, "a")       # Datei fehlt noch
+    assert not te.already_done(tmp_path, state, "b")       # not finished
+    assert not te.already_done(tmp_path, state, "a")       # file still missing
     (tmp_path / "1on1").mkdir()
     (tmp_path / "1on1" / "a.html").write_text("x", encoding="utf-8")
     assert te.already_done(tmp_path, state, "a")
@@ -534,11 +534,11 @@ def test_get_record_variants(tmp_path):
     }}
     assert te.get_record(tmp_path, state, "fehlt") is None
     assert te.get_record(tmp_path, state, "open") is None
-    assert te.get_record(tmp_path, state, "done") is None    # Datei fehlt
+    assert te.get_record(tmp_path, state, "done") is None    # file missing
     (tmp_path / "1on1").mkdir()
     (tmp_path / "1on1" / "a.html").write_text("x", encoding="utf-8")
     assert te.get_record(tmp_path, state, "done")["last_activity"] == "2025-06-01T00:00:00Z"
-    # leere Chats gelten ohne Datei als gültiger Status
+    # empty chats count as a valid status without a file
     assert te.get_record(tmp_path, state, "empty")["empty"] is True
 
 
@@ -547,10 +547,10 @@ def test_cleanup_old_removes_renamed_file_only(tmp_path):
     old = tmp_path / "1on1" / "Unbekannt__1234.html"
     old.write_text("alt", encoding="utf-8")
     te.cleanup_old(tmp_path, {"rel": "1on1/Unbekannt__1234.html"}, "1on1/Unbekannt__1234.html")
-    assert old.exists()   # gleicher Name -> nichts löschen
+    assert old.exists()   # same name -> delete nothing
     te.cleanup_old(tmp_path, {"rel": "1on1/Unbekannt__1234.html"}, "1on1/Alice__1234.html")
     assert not old.exists()
-    te.cleanup_old(tmp_path, {"rel": "1on1/weg.html"}, "1on1/neu.html")   # fehlend -> kein Fehler
+    te.cleanup_old(tmp_path, {"rel": "1on1/weg.html"}, "1on1/neu.html")   # missing -> no error
     te.cleanup_old(tmp_path, None, "1on1/neu.html")
 
 
@@ -568,7 +568,7 @@ def test_record_done_persists_record(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Export einer Konversation (Chat und Kanal) mit gefaktem Graph
+# Exporting a conversation (chat and channel) with a faked Graph
 # --------------------------------------------------------------------------
 def _chat_fixture(chat_id="c1"):
     chat = {"id": chat_id, "chatType": "oneOnOne",
@@ -589,7 +589,7 @@ def test_export_one_chat_writes_html_and_state(tmp_path):
     fname = f"Alice Example__{te.short_id('c1')}.html"
     html = (tmp_path / "1on1" / fname).read_text(encoding="utf-8")
     idx_erste, idx_zweite = html.index("erste"), html.index("zweite")
-    assert idx_erste < idx_zweite            # chronologisch sortiert
+    assert idx_erste < idx_zweite            # sorted chronologically
     assert "Alice Example" in html and "Chat-ID c1" in html
 
     rec = state["conversations"]["c1"]
@@ -602,12 +602,12 @@ def test_export_one_chat_second_run_reports_updated_and_renames(tmp_path):
     chat, graph = _chat_fixture()
     state = te.load_state(tmp_path)
     te.export_one_chat(graph, tmp_path, state, "me", chat)
-    # Name ändert sich (z. B. 'Unbekannt' -> echter Name simuliert durch Member-Wechsel)
+    # Name changes (e.g. 'Unbekannt' -> real name, simulated by a member swap)
     old_rel = state["conversations"]["c1"]["rel"]
     chat["members"][1]["displayName"] = "Alice Umbenannt"
     status, _, title, _, _ = te.export_one_chat(graph, tmp_path, state, "me", chat)
     assert status == "updated" and title == "Alice Umbenannt"
-    assert not (tmp_path / old_rel).exists()   # Altdatei wurde aufgeräumt
+    assert not (tmp_path / old_rel).exists()   # old file was cleaned up
     assert (tmp_path / state["conversations"]["c1"]["rel"]).exists()
 
 
@@ -623,7 +623,7 @@ def test_export_one_chat_only_system_messages_is_empty(tmp_path):
     rec = state["conversations"]["c2"]
     assert rec["empty"] is True and rec["rel"] is None
     assert rec["last_activity"] == "2025-06-03T07:00:00Z"
-    assert not (tmp_path / "meeting").exists()   # keine Datei geschrieben
+    assert not (tmp_path / "meeting").exists()   # no file written
 
 
 def _channel_fixture(reply_ts="2025-06-05T10:00:00Z"):
@@ -644,7 +644,7 @@ def test_export_one_channel_writes_nested_replies(tmp_path):
     fname = f"Allgemein__{te.short_id('k1')}.html"
     html = (tmp_path / "channels" / "Team Rakete" / fname).read_text(encoding="utf-8")
     assert "Wurzelpost" in html and "Antwort" in html
-    assert 'class="msg reply' in html                    # Antwort eingerückt
+    assert 'class="msg reply' in html                    # reply indented
     assert "2 Nachrichten (inkl. Antworten)" in html
     assert state["conversations"]["ch:k1"]["last_activity"] == "2025-06-05T10:00:00Z"
 
@@ -661,14 +661,14 @@ def test_export_one_channel_updates_on_new_reply(tmp_path):
     team, ch, graph = _channel_fixture()
     state = te.load_state(tmp_path)
     te.export_one_channel(graph, tmp_path, state, team, ch)
-    team, ch, graph = _channel_fixture(reply_ts="2025-06-06T12:00:00Z")   # neuere Antwort
+    team, ch, graph = _channel_fixture(reply_ts="2025-06-06T12:00:00Z")   # newer reply
     status, _, _, _, _ = te.export_one_channel(graph, tmp_path, state, team, ch)
     assert status == "updated"
     assert state["conversations"]["ch:k1"]["last_activity"] == "2025-06-06T12:00:00Z"
 
 
 # --------------------------------------------------------------------------
-# Job-Aufbau: build_chat_jobs / build_channel_jobs
+# Job setup: build_chat_jobs / build_channel_jobs
 # --------------------------------------------------------------------------
 def test_build_chat_jobs_new_updated_and_skipped(tmp_path):
     chats = [
@@ -696,7 +696,7 @@ def test_build_chat_jobs_new_updated_and_skipped(tmp_path):
     jobs = te.build_chat_jobs(graph, tmp_path, state, stats, "me",
                               {"1on1", "group", "meeting"})
     assert [(k, c["id"]) for k, c, _ in jobs] == [("chat", "neu"), ("chat", "upd")]
-    assert stats["skipped"] == 1   # 'alt' unverändert; 'fremd' fällt aus den Kategorien
+    assert stats["skipped"] == 1   # 'alt' unchanged; 'fremd' drops out of the categories
 
 
 def test_build_channel_jobs_refresh_mode_and_error_team(monkeypatch, tmp_path):
@@ -710,7 +710,7 @@ def test_build_channel_jobs_refresh_mode_and_error_team(monkeypatch, tmp_path):
     jobs = te.build_channel_jobs(graph, tmp_path, {"version": 1, "conversations": {}}, stats,
                                  [{"id": "t1", "displayName": "T1"},
                                   {"id": "t2", "displayName": "T2"}])
-    # Fehler-Team wird übersprungen, Refresh-Modus prüft alle Kanäle erneut
+    # The failing team is skipped, refresh mode re-checks all channels
     assert [(k, ch["id"]) for k, _t, ch in jobs] == [("channel", "k1"), ("channel", "k2")]
 
 
@@ -763,7 +763,7 @@ def test_make_runner_token_expired_sets_stop(monkeypatch, tmp_path):
     run = te.make_runner("g", tmp_path, {}, "me", "chat", {"id": "c"}, None)
     assert run() == ("expired", None, None, 0, 0.0)
     assert te.STOP.is_set()
-    # nach gesetztem STOP starten weitere Runner gar nicht mehr
+    # once STOP is set, further runners no longer start at all
     run2 = te.make_runner("g", tmp_path, {}, "me", "chat", {"id": "c2"}, None)
     assert run2() == ("stopped", None, None, 0, 0.0)
 

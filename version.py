@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-version.py – die eine Stelle, an der die Versionsnummer steht.
+version.py – the one place where the version number lives.
 
-Beim Veröffentlichen: hier anheben, committen, dann den passenden Tag setzen
-(`git tag v4.0.0 && git push --tags`). Der Build-Workflow prüft, dass Tag und
-diese Zahl zusammenpassen – sonst meldete die App eine andere Version, als der
-Download trägt, und die Aktualisierungsprüfung riete dauerhaft zum Update.
+When releasing: bump here, commit, then set the matching tag
+(`git tag v4.0.0 && git push --tags`). The build workflow checks that the
+tag and this number match – otherwise the app would report a different
+version than the download carries, and the update check would forever
+recommend updating.
 
-Format: MAJOR.MINOR.PATCH, ohne führendes "v" (das trägt nur der Tag).
+Format: MAJOR.MINOR.PATCH, without a leading "v" (only the tag carries that).
 """
 
 VERSION = "7.0.0"
 
-# Für die Aktualisierungsprüfung: hier liegen die Releases.
+# For the update check: this is where the releases live.
 REPO = "n-schilling/munimentum"
 RELEASES_URL = f"https://github.com/{REPO}/releases"

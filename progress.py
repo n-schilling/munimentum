@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-progress.py – Fortschritt maschinenlesbar melden, für den Balken in der App.
+progress.py – report progress machine-readably, for the bar in the app.
 
-Die Skripte schreiben ihren Fortschritt für Menschen ("✓ [37/1200] neu · …").
-Daraus einen Balken zu bauen hieße, diese Sätze mit Mustern auszulesen – und
-jede Umformulierung bräche ihn. Stattdessen melden sie zusätzlich eine Zeile,
-die nur die Zahlen enthält:
+The scripts write their progress for humans ("✓ [37/1200] neu · …").
+Building a bar from that would mean reading these sentences with patterns –
+and every rewording would break it. Instead they additionally emit a line
+that contains only the numbers:
 
     @@PROGRESS@@ {"done": 37, "total": 1200, "what": "chats"}
 
-Die Marker werden immer gesendet – die App ist der einzige Aufrufer und
-filtert sie aus dem Protokoll heraus. Bis 5.4 hing das an EXPORT_PROGRESS,
-einer Weiche, die nur für Handaufrufe existierte.
+The markers are always sent – the app is the only caller and filters them
+out of the log.
 
-"total" darf fehlen. Der Outlook-Export entdeckt seine Mails erst beim Laufen –
-er kennt keine Gesamtzahl, und einen Prozentwert zu erfinden wäre schlechter
-als keiner. Die App zeigt dann die Zahl statt eines gefüllten Balkens.
+"total" may be missing. The Outlook export discovers its mails only while
+running – it knows no grand total, and inventing a percentage would be
+worse than none. The app then shows the number instead of a filled bar.
 """
 
 import json
@@ -27,7 +26,7 @@ MARKE_LOG = "@@LOG@@"
 
 
 def melde(done, total=None, what=None):
-    """Eine Fortschrittszeile ausgeben."""
+    """Emit one progress line."""
     daten = {"done": int(done)}
     if total is not None:
         daten["total"] = int(total)
@@ -36,7 +35,7 @@ def melde(done, total=None, what=None):
     try:
         print(f"{MARKE} {json.dumps(daten)}", flush=True)
     except (OSError, ValueError):
-        pass                       # eine Meldung darf nie einen Lauf aufhalten
+        pass                       # a report must never hold up a run
 
 
 def ergebnis(new, unchanged=None, excluded=None, errors=None, extra=None):
@@ -114,24 +113,24 @@ def _lies(zeile, marke, pflicht):
 
 
 def lies(zeile):
-    """Gegenstück für die App: Zahlen aus der Zeile, sonst None.
+    """Counterpart for the app: numbers from the line, otherwise None.
 
-    None heißt „das ist eine gewöhnliche Ausgabezeile“ – der Aufrufer schreibt
-    sie dann ins Protokoll, statt sie als Fortschritt zu deuten.
+    None means "this is an ordinary output line" – the caller then writes it
+    to the log instead of reading it as progress.
     """
     return _lies(zeile, MARKE, "done")
 
 
 def lies_ergebnis(zeile):
-    """Gegenstück zu ergebnis(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    """Counterpart to ergebnis(). Same promise: None means "ordinary line"."""
     return _lies(zeile, MARKE_ERGEBNIS, "new")
 
 
 def lies_fehler(zeile):
-    """Gegenstück zu fehler(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    """Counterpart to fehler(). Same promise: None means "ordinary line"."""
     return _lies(zeile, MARKE_FEHLER, "error")
 
 
 def lies_event(zeile):
-    """Gegenstück zu event(). Gleiche Zusage: None heißt „gewöhnliche Zeile“."""
+    """Counterpart to event(). Same promise: None means "ordinary line"."""
     return _lies(zeile, MARKE_LOG, "k")

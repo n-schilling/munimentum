@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-folders.py – der Ordnerbaum des Postfachs als eigenes Ding.
+folders.py – the mailbox folder tree as a thing of its own.
 
-Bis 2.x lief beides in einem: der Export las bei jedem Lauf die komplette
-Ordnerstruktur und entschied dabei, was er holt. Auf einem echten Postfach sind
-das **rund zwei Minuten für über 400 Ordner**, bevor eine einzige Mail geladen wird – und
-die Auswahl konnte damit fast nichts anfangen, weil sie nur auf oberster Ebene
-und nur über den Anzeigenamen griff. „Kunden“ mit fast 300 Unterordnern war eine
-Entscheidung: ganz oder gar nicht.
+Export and selection used to run as one: every run read the complete folder
+structure and decided along the way what to fetch. On a real mailbox that is
+**a couple of minutes for several hundred folders** before a single mail is
+loaded – and the selection could do almost nothing with it, because it only
+worked at the top level and only on display names. A branch with hundreds of
+subfolders was one decision: all or nothing.
 
-Hier liegt deshalb beides getrennt:
+So both live separately here:
 
-  Der Baum   wird auf Wunsch abgerufen und in der state.db abgelegt. Er ändert
-             sich selten; ein Export liest ihn von der Platte.
+  The tree   is fetched on demand and stored in the state.db. It changes
+             rarely; an export reads it from disk.
 
-  Die Regeln sind eine geordnete Liste aus Include und Exclude auf Pfaden mit
-             Platzhaltern. Die LETZTE zutreffende gewinnt – dasselbe Prinzip wie
-             in .gitignore. Damit ist sagbar, was vorher nicht ging:
+  The rules  are an ordered list of includes and excludes on paths with
+             wildcards. The LAST matching one wins – the same principle as
+             in .gitignore. This makes sayable what was not before:
 
                  - E-Mail/Archiv/**
                  + E-Mail/Archiv/Wichtig/**
 
-Warum je Ordner Pfad UND ID gespeichert werden: Ordner-IDs sind stabil,
-Anzeigenamen nicht. Wer in Outlook umbenennt, würde bei reiner Pfadhaltung den
-Ordner still aus dem Export verlieren – die ID erkennt ihn wieder.
+Why path AND ID are stored per folder: folder IDs are stable, display names
+are not. Renaming in Outlook would, with pure path bookkeeping, silently
+drop the folder from the export – the ID recognizes it again.
 """
 
 import json
@@ -33,13 +33,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 DATEI = "folders.json"
-# Die Kalender eines Postfachs sind dieselbe Art Liste: Einträge mit Pfad und
-# ID, über die geordnete Regeln entscheiden. Nur die Datei ist eine andere,
-# weil beide im selben Ausgabeordner liegen.
+# A mailbox's calendars are the same kind of list: entries with path and ID
+# that ordered rules decide about. Only the file differs, because both live
+# in the same output folder.
 KALENDER = "calendars.json"
 
-# Was frühere Fassungen als Namensliste hatten. Wird beim ersten Lauf in Regeln
-# übersetzt (siehe aus_namensliste) – niemand soll seine Auswahl neu eintippen.
+# What earlier versions had as a name list. Translated into rules on the
+# first run (see aus_namensliste) – nobody should retype their selection.
 BUILTIN_SKIP = [
     "archive", "archiv",
     "entwürfe", "drafts",
@@ -51,10 +51,10 @@ BUILTIN_SKIP = [
 
 
 # --------------------------------------------------------------------------
-# Regeln
+# Rules
 # --------------------------------------------------------------------------
 def _segment(stueck):
-    """Ein Pfadstück: * und ? bleiben innerhalb der Ebene, alles andere wörtlich."""
+    """One path segment: * and ? stay within the level, everything else literal."""
     out = []
     for ch in stueck:
         if ch == "*":
@@ -67,16 +67,16 @@ def _segment(stueck):
 
 
 def _als_regex(muster):
-    """Ein Pfadmuster als regulärer Ausdruck.
+    """A path pattern as a regular expression.
 
-    `*` bleibt innerhalb einer Ebene, `**` überspringt beliebig viele. Ein
-    Muster, das auf `/**` endet, meint den Ordner selbst *und* alles darunter –
-    „E-Mail/Archiv/**“ soll nicht ausgerechnet das Archiv selbst auslassen.
-    Deshalb zwei Varianten in einer Alternative.
+    `*` stays within one level, `**` skips any number of them. A pattern
+    ending in `/**` means the folder itself *and* everything below –
+    "E-Mail/Archiv/**" must not skip the archive itself of all things.
+    Hence two variants in one alternation.
     """
     muster = (muster or "").strip().strip("/")
     if not muster:
-        return re.compile(r"(?!)")            # trifft nie
+        return re.compile(r"(?!)")            # never matches
     varianten = [muster]
     if muster.endswith("/**"):
         varianten.append(muster[:-3])
@@ -88,12 +88,12 @@ def _als_regex(muster):
 
 
 def passt(pfad, muster):
-    """Trifft das Muster diesen Pfad?"""
+    """Does the pattern match this path?"""
     return bool(_als_regex(muster).match((pfad or "").strip("/")))
 
 
 def lies_regel(zeile):
-    """„- E-Mail/Archiv/**“ -> (False, "E-Mail/Archiv/**"). None bei Unfug."""
+    """"- E-Mail/Archiv/**" -> (False, "E-Mail/Archiv/**"). None for nonsense."""
     roh = (zeile or "").strip()
     if not roh or roh.startswith("#"):
         return None
@@ -102,13 +102,13 @@ def lies_regel(zeile):
         return (True, rest) if rest else None
     if zeichen == "-":
         return (False, rest) if rest else None
-    # Ohne Vorzeichen: einschließen. Wer eine Liste von Ordnern hinschreibt,
-    # meint fast immer „diese“ – nicht „diese nicht“.
+    # No sign: include. Whoever writes down a list of folders almost always
+    # means "these" – not "not these".
     return (True, roh)
 
 
 def lies_regeln(text):
-    """Mehrere Zeilen (oder eine Liste) in geordnete Regeln übersetzen."""
+    """Translate several lines (or a list) into ordered rules."""
     if isinstance(text, str):
         zeilen = text.splitlines()
     else:
@@ -121,10 +121,11 @@ def schreibe_regeln(regeln):
 
 
 def gilt(pfad, regeln, vorgabe=True):
-    """Wird dieser Ordner exportiert?
+    """Is this folder exported?
 
-    Die letzte zutreffende Regel gewinnt. Ohne Treffer gilt `vorgabe` – und die
-    ist „ja“: wer nichts einstellt, bekommt sein Postfach, nicht Leere.
+    The last matching rule wins. Without a match, `vorgabe` applies – and
+    that is "yes": whoever configures nothing gets their mailbox, not
+    emptiness.
     """
     ergebnis = vorgabe
     for ein, muster in regeln or ():
@@ -134,7 +135,7 @@ def gilt(pfad, regeln, vorgabe=True):
 
 
 def erklaere(pfad, regeln, vorgabe=True):
-    """(gilt, Regel die entschied) – für „warum ist der Ordner aus?“."""
+    """(applies, rule that decided) – for "why is this folder off?"."""
     treffer = None
     ergebnis = vorgabe
     for ein, muster in regeln or ():
@@ -144,18 +145,18 @@ def erklaere(pfad, regeln, vorgabe=True):
 
 
 def nur_standard(eintraege):
-    """Regeln, die genau die als Standard markierten Einträge auswählen.
+    """Rules that select exactly the entries marked as default.
 
-    Für Listen, deren sinnvolle Vorgabe nicht „alles“ ist: von den Kalendern
-    eines Postfachs will man zunächst den eigenen, nicht zusätzlich die
-    Geburtstage und jeden geteilten Kalender, den einem mal jemand freigegeben
-    hat. Als ausgeschriebene Regeln statt als Sonderfall im Code – so steht in
-    der Oberfläche dasselbe, was auch gilt, und wer es ändern will, sieht
-    woran.
+    For lists whose sensible default is not "everything": of a mailbox's
+    calendars one wants one's own first, not additionally the birthdays and
+    every shared calendar someone once granted access to. As written-out
+    rules instead of a special case in the code – this way the interface
+    shows the same thing that actually applies, and whoever wants to change
+    it sees what to change.
 
-    Ist nichts als Standard markiert, gilt der erste Eintrag. Sonst wäre die
-    Vorgabe „gar nichts“ – und ein Export, der schweigend nichts tut, ist die
-    schlechteste aller Antworten.
+    If nothing is marked as default, the first entry applies. Otherwise the
+    default would be "nothing at all" – and an export that silently does
+    nothing is the worst of all answers.
     """
     liste = list(eintraege or ())
     an = [e for e in liste if e.get("standard")] or liste[:1]
@@ -163,21 +164,21 @@ def nur_standard(eintraege):
 
 
 def aus_namensliste(namen):
-    """Alte SKIP_FOLDERS in Regeln übersetzen.
+    """Translate the old SKIP_FOLDERS into rules.
 
-    Die alte Liste verglich Anzeigenamen auf oberster Ebene. Als Regel ist das
-    „E-Mail/<Name>/**“ – ein Ausschluss des Ordners samt allem darunter.
+    The old list compared display names at the top level. As a rule that is
+    "E-Mail/<Name>/**" – an exclusion of the folder and everything below.
     """
     return [(False, f"E-Mail/{n}/**") for n in
             sorted({str(x).strip() for x in (namen or []) if str(x).strip()})]
 
 
 # --------------------------------------------------------------------------
-# Der Baum auf der Platte – seit 6.2 in der state.db des Exportordners
+# The tree on disk – in the export folder's state.db
 # --------------------------------------------------------------------------
-# Die alten Dateinamen bleiben die Adressen der Aufrufer; hier werden sie zu
-# kv-Schlüsseln. state_db wird spät importiert (es importiert selbst dieses
-# Modul für baum_diff).
+# The old file names remain the callers' addresses; here they become kv
+# keys. state_db is imported late (it itself imports this module for
+# baum_diff).
 SCHLUESSEL = {DATEI: "baum", KALENDER: "kalender"}
 
 
@@ -187,7 +188,7 @@ def _db(ordner):
 
 
 def lade(ordner, datei=DATEI):
-    """Den Baum lesen. Fehlt er oder ist er kaputt: None, kein Krach."""
+    """Read the tree. Missing or broken: None, no fuss."""
     try:
         daten = json.loads(_db(ordner).kv_lesen(SCHLUESSEL[datei]) or "")
     except (OSError, ValueError):
@@ -201,8 +202,8 @@ def baum_diff(eintraege, vorher=None):
     """The tree data plus what changed – pure, for every storage backend."""
     alt = {e["id"]: e for e in (vorher or {}).get("ordner", [])}
     jetzt = {e["id"]: e for e in eintraege}
-    # Beim allerersten Abgleich ist nichts „neu“ – es war ja vorher nichts da.
-    # „400 Ordner neu dazugekommen“ wäre formal wahr und trotzdem Unsinn.
+    # On the very first sync nothing is "new" – there was nothing before.
+    # "400 new folders added" would be formally true and still nonsense.
     erster = not alt
     return {
         "abgeglichen": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -217,11 +218,11 @@ def baum_diff(eintraege, vorher=None):
 
 
 def speichere(ordner, eintraege, vorher=None, datei=DATEI):
-    """Baum ablegen und melden, was sich geändert hat.
+    """Store the tree and report what changed.
 
-    Neue Ordner sind der Grund für die Rückgabe: nach einem Abgleich soll die
-    Oberfläche sagen können „4 neue Ordner“, statt dass sie unbemerkt
-    dazukommen und je nach Regel mitlaufen oder fehlen.
+    New folders are the reason for the return value: after a sync the
+    interface should be able to say "4 new folders", instead of them
+    arriving unnoticed and, depending on the rules, riding along or missing.
     """
     daten = baum_diff(eintraege, vorher)
     _db(ordner).kv_schreiben(SCHLUESSEL[datei],
@@ -230,12 +231,12 @@ def speichere(ordner, eintraege, vorher=None, datei=DATEI):
 
 
 def gewaehlt(daten, regeln):
-    """Die Einträge, die nach den Regeln exportiert werden."""
+    """The entries that get exported according to the rules."""
     return [e for e in (daten or {}).get("ordner", []) if gilt(e["pfad"], regeln)]
 
 
 def zusammenfassung(daten, regeln):
-    """Wie viele Ordner und Mails die Auswahl trifft – für die Oberfläche."""
+    """How many folders and mails the selection hits – for the interface."""
     alle = (daten or {}).get("ordner", [])
     an = gewaehlt(daten, regeln)
     return {
@@ -250,19 +251,19 @@ def zusammenfassung(daten, regeln):
 
 
 def auf_platte(ordner, wurzeln=(), endung=".eml"):
-    """Was im Archiv wirklich liegt: {Ordnerpfad: Zahl der .eml-Dateien}.
+    """What really lies in the archive: {folder path: number of .eml files}.
 
-    Nur unterhalb der genannten Wurzeln – sonst zählten `kalender/` und
-    `kontakte/` als Postfachordner, die sie nie waren. Die Wurzeln kommen aus
-    dem Baum selbst, damit hier kein Ordnername fest verdrahtet ist.
+    Only below the named roots – otherwise `kalender/` and `kontakte/`
+    would count as mailbox folders, which they never were. The roots come
+    from the tree itself, so no folder name is hard-wired here.
 
-    `endung` grenzt ein, was zählt: beim Postfach die `.eml`, beim
-    OneDrive-Spiegel alles außer halb übertragenen `.teil`-Dateien.
+    `endung` narrows what counts: for the mailbox the `.eml`, for the
+    OneDrive mirror everything except half-transferred `.teil` files.
 
-    Auf einem echten Archiv (rund 45.000 Mails, gut 400 Ordner) dauert das
-    0,06 s – billig
-    genug, um es bei jedem Öffnen der Liste frisch zu machen statt einen
-    Zwischenstand zu pflegen, der falsch sein kann.
+    On a real archive (around 45,000 mails, a good 400 folders) this takes
+    0.06 s – cheap
+    enough to redo it on every opening of the list instead of maintaining
+    an intermediate state that can be wrong.
     """
     gefunden = {}
     basis = Path(ordner)
@@ -277,20 +278,20 @@ def auf_platte(ordner, wurzeln=(), endung=".eml"):
 
 
 def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
-    """Was der nächste Export täte – Ordner für Ordner, ohne ihn zu starten.
+    """What the next export would do – folder by folder, without starting it.
 
-    Die Regeln sind mächtig genug, dass ihr Ergebnis nicht mehr im Kopf
-    entsteht: „- E-Mail/Archiv/**“ und zwei Zeilen später ein „+“ auf einen
-    Unterordner – wer das nachrechnen muss, rechnet irgendwann falsch. Deshalb
-    drei ausdrückliche Listen statt einer Zahl:
+    The rules are powerful enough that their outcome no longer forms in
+    one's head: "- E-Mail/Archiv/**" and two lines later a "+" on a
+    subfolder – whoever has to work that out will eventually get it wrong.
+    Hence three explicit lists instead of one number:
 
-      an   was mitkommt
-      aus  was ausgelassen wird, samt der Regel, die es entschied
-      weg  was nur noch im Archiv liegt und im Postfach nicht mehr auftaucht
+      an   what comes along
+      aus  what is left out, including the rule that decided it
+      weg  what only lies in the archive and no longer appears in the mailbox
 
-    Die dritte ist die, die man sonst nirgends sieht: ein in Outlook gelöschter
-    oder umbenannter Ordner verschwindet still aus dem Baum, seine Mails bleiben
-    aber – zu Recht – auf der Platte liegen.
+    The third is the one you see nowhere else: a folder deleted or renamed
+    in Outlook silently vanishes from the tree, but its mails remain –
+    rightly – on disk.
     """
     daten = lade(ordner, datei) if daten is None else daten
     eintraege = (daten or {}).get("ordner", [])
@@ -317,7 +318,7 @@ def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
 
 
 def main():
-    """Zeigt den gespeicherten Baum – und was die Regeln daraus machen."""
+    """Shows the stored tree – and what the rules make of it."""
     import sys
     for _stream in (sys.stdout, sys.stderr):
         try:

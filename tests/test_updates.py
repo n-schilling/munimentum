@@ -1,8 +1,8 @@
-"""Tests für updates.py – nachsehen, ob es ein neueres Release gibt.
+"""Tests for updates.py – checking whether a newer release exists.
 
-Kein Netz: requests.get wird immer ersetzt. Wichtigster Fall ist der, den es
-heute tatsächlich gibt – es wurde noch nichts veröffentlicht. GitHub antwortet
-dann mit 404, und das ist kein Fehler, sondern der Normalzustand.
+No network: requests.get is always replaced. The most important case is
+the one that actually exists today – nothing has been published yet.
+GitHub then answers with 404, and that is not an error but the normal state.
 """
 
 import pytest
@@ -25,7 +25,7 @@ class Antwort:
 
 @pytest.fixture
 def github(monkeypatch):
-    """requests.get durch eine feste Antwort ersetzen; liefert die Aufrufe."""
+    """Replace requests.get with a fixed response; returns the calls."""
     aufrufe = []
 
     def setze(antwort):
@@ -40,14 +40,14 @@ def github(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Versionen vergleichen
+# Comparing versions
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("text,erwartet", [
     ("1.2.3", (1, 2, 3)),
     ("v1.2.3", (1, 2, 3)),
     ("V1.2.3", (1, 2, 3)),
     ("1.2", (1, 2)),
-    ("1.2.0-beta.1", (1, 2, 0)),        # Vorabkennzeichen fällt weg
+    ("1.2.0-beta.1", (1, 2, 0)),        # pre-release marker is dropped
     ("1.2.0+build7", (1, 2, 0)),
     ("  v2.0.0  ", (2, 0, 0)),
     ("", ()),
@@ -64,11 +64,11 @@ def test_parse_version(text, erwartet):
     ("2.0.0", "1.9.9", True),
     ("v1.1.0", "1.0.0", True),
     ("1.0.0", "1.0.0", False),
-    ("1.0", "1.0.0", False),            # 1.0 und 1.0.0 sind dieselbe Version
+    ("1.0", "1.0.0", False),            # 1.0 and 1.0.0 are the same version
     ("1.0.0", "1.0", False),
-    ("1.0.0", "1.0.1", False),          # älter -> keine Meldung
+    ("1.0.0", "1.0.1", False),          # older -> no notice
     ("0.9.0", "1.0.0", False),
-    ("1.10.0", "1.9.0", True),          # nicht alphabetisch vergleichen
+    ("1.10.0", "1.9.0", True),          # do not compare alphabetically
 ])
 def test_is_newer(neu, alt, erwartet):
     assert updates.is_newer(neu, alt) is erwartet
@@ -77,19 +77,19 @@ def test_is_newer(neu, alt, erwartet):
 @pytest.mark.parametrize("neu,alt", [("unsinn", "1.0.0"), ("1.0.0", "unsinn"),
                                      ("", ""), (None, "1.0.0")])
 def test_is_newer_bei_unvergleichbarem(neu, alt):
-    """Lieber nichts melden als etwas Falsches behaupten."""
+    """Better to report nothing than to claim something wrong."""
     assert updates.is_newer(neu, alt) is False
 
 
 # --------------------------------------------------------------------------
-# Die vier Ausgänge
+# The four outcomes
 # --------------------------------------------------------------------------
 def test_check_findet_neueres_release(github):
     github(Antwort(200, {"tag_name": "v1.4.0",
                          "html_url": "https://github.com/x/y/releases/tag/v1.4.0"}))
     out = updates.check("1.2.0", "x/y")
     assert out["status"] == "ok" and out["newer"] is True
-    assert out["latest"] == "1.4.0"          # ohne führendes v
+    assert out["latest"] == "1.4.0"          # without the leading v
     assert out["url"].endswith("v1.4.0")
     assert out["current"] == "1.2.0"
 
@@ -101,9 +101,9 @@ def test_check_bei_aktueller_version(github):
 
 
 def test_check_ohne_release_ist_kein_fehler(github):
-    """Der Fall von heute: es wurde noch nichts veröffentlicht. GitHub antwortet
-    auf /releases/latest mit 404 – auch dann, wenn es nur Entwürfe oder
-    Vorabversionen gibt."""
+    """Today's case: nothing has been published yet. GitHub answers
+    /releases/latest with 404 – even when there are only drafts or
+    pre-releases."""
     github(Antwort(404, {"message": "Not Found"}))
     out = updates.check("1.0.0", "x/y")
     assert out["status"] == "none"
@@ -137,7 +137,7 @@ def test_check_abgeschaltet_fragt_gar_nicht(github):
     aufrufe = github(Antwort(200, {"tag_name": "v9.9.9", "html_url": "u"}))
     out = updates.check("1.0.0", "x/y", enabled=False)
     assert out["status"] == "off" and out["newer"] is False
-    assert aufrufe == []                     # keine Verbindung nach draußen
+    assert aufrufe == []                     # no connection to the outside
 
 
 def test_check_fragt_die_richtige_adresse(github):
@@ -145,11 +145,11 @@ def test_check_fragt_die_richtige_adresse(github):
     updates.check("1.0.0", "n-schilling/office_365_exporter")
     assert aufrufe[0]["url"] == \
         "https://api.github.com/repos/n-schilling/office_365_exporter/releases/latest"
-    assert aufrufe[0]["timeout"] == 4.0      # der Start darf nicht daran hängen
+    assert aufrufe[0]["timeout"] == 4.0      # startup must not hang on this
 
 
 def test_check_wirft_niemals(github):
-    """Ein Fehler in der Prüfung darf den Start nicht aufhalten."""
+    """An error in the check must not hold up startup."""
     class Boese:
         status_code = 200
 
@@ -157,16 +157,16 @@ def test_check_wirft_niemals(github):
             raise RuntimeError("kaputt")
     github(Boese())
     with pytest.raises(RuntimeError):
-        Boese().json()                       # der Fehler ist echt …
-    assert updates.check("1.0.0", "x/y")["status"] in ("error", "none")   # … wird aber gefangen
+        Boese().json()                       # the error is real …
+    assert updates.check("1.0.0", "x/y")["status"] in ("error", "none")   # … but is caught
 
 
 # --------------------------------------------------------------------------
-# Versionsnummer: eine Quelle
+# Version number: one source
 # --------------------------------------------------------------------------
 def test_version_hat_das_erwartete_format():
     assert updates.parse_version(version.VERSION), "VERSION ist nicht lesbar"
-    assert not version.VERSION.startswith("v")      # das "v" trägt nur der Tag
+    assert not version.VERSION.startswith("v")      # only the tag carries the "v"
 
 
 def test_mcp_server_meldet_dieselbe_version():
@@ -179,23 +179,23 @@ def test_spec_nimmt_die_version_aus_der_datei():
     spec = (Path(__file__).resolve().parent.parent / "packaging" / "app.spec")
     text = spec.read_text(encoding="utf-8")
     assert '"CFBundleShortVersionString": VERSION' in text
-    assert '"1.0.0"' not in text                    # nicht doppelt gepflegt
+    assert '"1.0.0"' not in text                    # not maintained twice
 
 
 # --------------------------------------------------------------------------
-# Voraus: die eigene Version ist höher als alles Veröffentlichte
+# Ahead: our own version is higher than anything published
 #
-# „Du bist auf dem neuesten Stand" wäre dort unwahr – und wer eine
-# unveröffentlichte Fassung benutzt, sollte das wissen.
+# "You are up to date" would be untrue there – and whoever uses an
+# unpublished build should know it.
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("eigene,neueste,newer,ahead", [
-    ("4.0.0", "v3.5.0", False, True),      # Vorabversion
-    ("3.5.0", "v4.0.0", True,  False),     # normales Update
-    ("3.5.0", "v3.5.0", False, False),     # gleich – keines von beidem
-    ("3.5.0", "v3.5",   False, False),     # 3.5 und 3.5.0 sind dieselbe
+    ("4.0.0", "v3.5.0", False, True),      # pre-release build
+    ("3.5.0", "v4.0.0", True,  False),     # normal update
+    ("3.5.0", "v3.5.0", False, False),     # equal – neither of the two
+    ("3.5.0", "v3.5",   False, False),     # 3.5 and 3.5.0 are the same
     ("4.0.0", "v4.0.1", True,  False),
     ("4.1.0", "v4.0.9", False, True),
-    ("wirr",  "v4.0.0", False, False),     # unvergleichbar: gar nichts behaupten
+    ("wirr",  "v4.0.0", False, False),     # incomparable: claim nothing at all
     ("4.0.0", "wirr",   False, False),
 ])
 def test_ahead_und_newer_schliessen_sich_aus(github, eigene, neueste, newer, ahead):
@@ -207,7 +207,7 @@ def test_ahead_und_newer_schliessen_sich_aus(github, eigene, neueste, newer, ahe
 
 
 def test_ahead_ist_bei_jedem_anderen_ausgang_falsch(github):
-    """Ohne brauchbare Antwort wird nichts behauptet – auch nicht das Gegenteil."""
+    """Without a usable response nothing is claimed – not the opposite either."""
     for code in (404, 500):
         github(Antwort(code, {}))
         assert updates.check("4.0.0", "n/x")["ahead"] is False
@@ -217,8 +217,8 @@ def test_ahead_ist_bei_jedem_anderen_ausgang_falsch(github):
 
 
 def test_fehlermeldung_steht_nur_im_protokoll():
-    """Sie gehört zum Protokoll, das von jedem Reiter aus offen ist – in der
-    Update-Zeile war sie ein zweites Mal dasselbe an einer fremden Stelle."""
+    """It belongs to the log, which is open from every tab – in the update
+    line it was the same thing a second time in a foreign place."""
     import app as app_mod
     assert app_mod.PAGE.count('data-i18n="report.button"') == 1
     kopf = app_mod.PAGE[app_mod.PAGE.index('id="protokoll"'):]
@@ -226,7 +226,7 @@ def test_fehlermeldung_steht_nur_im_protokoll():
 
 
 def test_zu_den_releases_sieht_aus_wie_ein_knopf():
-    """Ein Link mit derselben Aufgabe daneben soll auch gleich aussehen."""
+    """A link next to one with the same job should look the same too."""
     import app as app_mod
     i = app_mod.PAGE.index('id="update-link"')
     zeile = app_mod.PAGE[app_mod.PAGE.rindex("<", 0, i):app_mod.PAGE.index(">", i) + 1]

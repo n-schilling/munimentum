@@ -24,12 +24,11 @@ import ollama_client
 
 CONFIG_NAME = "app_config.json"
 
-# Die vier Unterordner im Datenordner. Früher waren sie einstellbar – ein Erbe
-# aus der Zeit, als das hier lose Skripte waren, die jemand von Hand in einem
-# beliebigen Verzeichnis aufrief. Die App ruft sie längst selbst auf, und drei
-# Textfelder in den Einstellungen, die niemand anfasst, sind keine Freiheit,
-# sondern Ballast. Die Schlüssel teams_dir/outlook_dir/… aus alten Dateien
-# werden weiter gelesen (value unten), nur angeboten werden sie nicht mehr.
+# The subfolders inside the data directory. They used to be configurable – a
+# legacy from when these were loose scripts someone called by hand in some
+# arbitrary directory. The app now hands every script its output directory
+# itself (export_util.ausgabeordner); the teams_dir/outlook_dir/… keys from
+# old config files are not read by anyone anymore.
 TEAMS_DIR = "teams_export"
 OUTLOOK_DIR = "outlook_export"
 ONEDRIVE_DIR = "onedrive_export"
@@ -38,7 +37,7 @@ SHAREPOINT_PAGES_DIR = "sharepoint_pages"
 PLANNER_DIR = "planner_export"
 STORE_DIR = "rag_store"
 
-# Postfach-Ordner, die die Standardauswahl von outlook_export.py auslässt.
+# Mailbox folders that the default selection of outlook_export.py skips.
 SKIP_FOLDERS_STANDARD = {
     "archive", "archiv",
     "entwürfe", "drafts",
@@ -48,30 +47,30 @@ SKIP_FOLDERS_STANDARD = {
     "postausgang", "outbox",
 }
 
-# Was eine Anhangliste aufbläht, ohne dass jemand danach sucht: die Signatur-
-# und Verschlüsselungsanhänge, die Mailprogramme selbst anhängen. Sie stehen als
-# Vorgabe im Feld und sind dort zu sehen und zu ändern – eine stille Regel im
-# Code wäre genau das, was man später nicht mehr findet.
+# What bloats an attachment list without anyone searching for it: the
+# signature and encryption attachments that mail programs attach themselves.
+# They sit in the field as a default, visible and changeable there – a silent
+# rule in the code would be exactly the thing nobody finds later.
 FILETYPE_HIDDEN_STANDARD = {"p7s", "p7m", "asc", "pgp", "sig"}
 
-# Der Bauplan von app_config.json: jeder Schlüssel einmal, mit seiner Vorgabe.
-# app.py zeigt genau diese Werte in den Einstellungen; die Einzelskripte holen
-# sie über flag()/number()/value() unten – bis 5.3 trug jede Aufrufstelle ihre
-# eigene Kopie der Vorgabe, und nichts hielt die Kopien zusammen.
+# The blueprint of app_config.json: every key once, with its default.
+# app.py shows exactly these values in the settings; the individual scripts
+# fetch them via flag()/number()/value() below – each call site used to carry
+# its own copy of the default, and nothing kept the copies in sync.
 VORGABEN = {
-    # Ollama ist optional. Aus heißt: es wird gar nicht mehr danach gesucht
-    # (bisher lief alle zehn Sekunden ein Verbindungsversuch ins Leere), die
-    # Bedeutungssuche und die KI-Zusammenfassung verschwinden, und der Index
-    # wird als reiner Volltextindex gebaut. Alles andere läuft unverändert.
+    # Ollama is optional. Off means: it is no longer even looked for (a
+    # connection attempt used to run into the void every ten seconds),
+    # semantic search and the AI summary disappear, and the index is built
+    # as a pure full-text index. Everything else runs unchanged.
     "ollama_enabled": True,
-    # Auch mit Ollama kann man den Volltextindex wollen: Einbetten kostet auf
-    # einem echten Bestand eine gute Stunde, und wer nur exakt sucht, zahlt sie
-    # umsonst.
+    # Even with Ollama one may want the full-text index: embedding costs a
+    # good hour on a real archive, and whoever only searches exactly pays it
+    # for nothing.
     "index_semantic": True,
-    # Aus, bis jemand es einschaltet: ein Laufwerk kann zweistellige
-    # Gigabyte haben, und niemand soll die beim ersten Klick ziehen.
+    # Off until someone turns it on: a drive can hold double-digit
+    # gigabytes, and nobody should pull those on the first click.
     "onedrive_enabled": False,
-    # Include/Exclude auf OneDrive-Pfaden, dieselbe Mechanik wie beim Postfach.
+    # Include/exclude on OneDrive paths, the same mechanics as the mailbox.
     "onedrive_rules": "",
     "onedrive_max_mb": 0,
     # Off until someone turns it on – the same caution as with the drive.
@@ -93,9 +92,9 @@ VORGABEN = {
     # monthly. Missing key means always; the toggle narrows every run,
     # scheduled and manual alike.
     "sync_cadence": {},
-    # Nichts vorausgewählt: jede dieser Kategorien kann zehntausende Elemente
-    # und viele Gigabyte bedeuten. Was geholt wird, soll eine Entscheidung
-    # sein und nicht das, was beim ersten Start zufällig angehakt war.
+    # Nothing preselected: each of these categories can mean tens of
+    # thousands of items and many gigabytes. What gets fetched should be a
+    # decision, not whatever happened to be ticked on first launch.
     "outlook_categories": [],
     "teams_categories": [],
     "workers": 4,
@@ -103,78 +102,78 @@ VORGABEN = {
     # documents no fixed limit for drives – throttling is budget-based and
     # answered with visible waits – so more than the mailbox's four is fine.
     "mirror_workers": 8,
-    # Schalter der Export-Skripte (dort per Umgebungsvariable, siehe env_flag)
+    # Switches of the export scripts (there via environment variable, see env_flag)
     "embed_images": True,
     "cache_images": True,
     "refresh_channels": True,
     "skip_empty_chats": True,
     "include_hidden": False,
-    # Holt gelöschte Termine aus Einladungs- und Absagemails zurück. Dafür wird
-    # jede .eml gelesen – der mit Abstand teuerste Schritt. Standardmäßig an,
-    # weil es Termine sichtbar macht, die es sonst nirgends mehr gibt.
+    # Recovers deleted appointments from invitation and cancellation mails.
+    # Every .eml is read for this – by far the most expensive step. On by
+    # default because it makes appointments visible that no longer exist
+    # anywhere else.
     "calendar_reconstruct": True,
     "skip_folders": sorted(SKIP_FOLDERS_STANDARD),
-    # Dateitypen, die im Suchfilter nicht angeboten werden. Rein kosmetisch:
-    # exportiert und durchsuchbar bleibt alles, es steht nur nicht in der
-    # Auswahlliste. Als sichtbare Vorgabe statt als Regel im Code.
+    # File types not offered in the search filter. Purely cosmetic:
+    # everything stays exported and searchable, it just does not appear in
+    # the selection list. A visible default instead of a rule in the code.
     "filetype_hidden": sorted(FILETYPE_HIDDEN_STANDARD),
-    # Personen, die in der Auswertung nicht gezählt werden – in aller Regel man
-    # selbst: die eigenen Nachrichten stehen sonst mit Abstand oben und sagen
-    # nichts über den Austausch mit anderen. Eine je Zeile, weil Namen Kommas
-    # enthalten („Schilling, Nico“).
+    # People not counted in the analytics – usually oneself: one's own
+    # messages otherwise top the list by a wide margin and say nothing about
+    # the exchange with others. One per line, because names contain commas
+    # ("Schilling, Nico").
     "analytics_skip": [],
-    # Ordnerauswahl als geordnete Regeln, letzte Übereinstimmung gewinnt.
-    # Leer heißt: die alte Namensliste oben gilt weiter (siehe folders.py).
+    # Folder selection as ordered rules, last match wins.
+    # Empty means: the old name list above still applies (see folders.py).
     "folder_rules": "",
-    # Kalenderauswahl, dieselbe Mechanik wie oben. Leer heißt: nur der
-    # Standardkalender (siehe folders.nur_standard).
+    # Calendar selection, the same mechanics as above. Empty means: only the
+    # default calendar (see folders.nur_standard).
     "calendar_rules": "",
-    # 128 an einem echten Archiv gemessen: rund ein Fuenftel schneller
-    # als 64, und auch die laengsten Chunks gehen noch durch. 256 lehnt
-    # Ollama ab.
+    # 128 measured on a real archive: roughly a fifth faster than 64, and
+    # even the longest chunks still get through. Ollama rejects 256.
     "index_batch": 128,
     "ollama": ollama_client.DEFAULT_URL,
     "embed_model": "bge-m3",
-    "chat_model": "qwen3.6:27b",            # formuliert die Antwort, lokal
-    "answer_sources": 8,                    # wie viele Treffer sie dafür liest
-    # Untergrenze der Bedeutungssuche; siehe mcp_server.SEM_MIN. Als Ganzzahl
-    # in Prozent, damit die Oberfläche ein normales Zahlenfeld benutzen kann
-    # und niemand über ein Komma stolpert.
+    "chat_model": "qwen3.6:27b",            # phrases the answer, locally
+    "answer_sources": 8,                    # how many hits it reads for that
+    # Lower bound of the semantic search; see mcp_server.SEM_MIN. As an
+    # integer in percent so the UI can use a plain number field and nobody
+    # trips over a decimal comma.
     "semantic_min": 45,
-    # Treffer je Seite in der Suche. Mehr heißt weniger Blättern, aber auch
-    # eine längere Liste, durch die man erst einmal hindurchsehen muss.
+    # Hits per page in the search. More means less paging, but also a longer
+    # list one has to look through first.
     "search_results": 20,
-    # UI-Userflow-Aufzeichnung: die letzten Bedienschritte für den Fehler-
-    # bericht – nur die Art (Reiter, Suche, Lauf), nie Inhalte, rein im
-    # Speicher der offenen Seite. 0 schaltet sie ab.
+    # UI userflow recording: the last interaction steps for the error
+    # report – only the kind (tab, search, run), never contents, purely in
+    # the memory of the open page. 0 turns it off.
     "notifications": "errors",  # system notifications: off | errors | all
     "userflow_actions": 20,
-    # Wie lange die Lauf-Historie (runs.db) zurückreicht. Aufgeräumt wird beim
-    # Start und nach jedem Lauf; die Datei bleibt im Kilobyte-Bereich.
+    # How far back the run history (runs.db) reaches. Cleaned up at startup
+    # and after every run; the file stays in the kilobyte range.
     "planner_enabled": False,
     "planner_urls": "",
     "planner_attachments": False,
     "runs_retention_months": 24,
-    # Ebenen 3 und 4 des Ablage-Modells: leer heißt Unterordner des festen
-    # Heimatordners ("rag_store" bzw. "data"). Aufgelöst in app.py.
+    # Levels 3 and 4 of the storage model: empty means subfolders of the
+    # fixed home directory ("rag_store" and "data"). Resolved in app.py.
     "data_dir": "",
     "index_dir": "",
     "log_retention_days": 14,
     "mcp_port": 8365,
-    # Der harte Schalter: aus heißt, dass mcp_server den Dienst verweigert –
-    # über HTTP wie über stdio. Start/Stop daneben betrifft nur den
-    # HTTP-Endpunkt, den diese App selbst betreibt.
+    # The hard switch: off means mcp_server refuses service – over HTTP as
+    # over stdio. Start/stop next to it only concerns the HTTP endpoint
+    # that this app runs itself.
     "mcp_enabled": True,
     "mcp_autostart": True,
-    "update_check": True,   # einmal beim Start bei GitHub nachsehen
-    # Wie sich die App anmeldet. "token" = eingefügter Zugangsschlüssel (keine
-    # Rückfrage bei der IT nötig, gilt aber nur Stunden); "login" = richtige
-    # Anmeldung mit Refresh Token, damit der Zeitplan unbeaufsichtigt läuft.
+    "update_check": True,   # check GitHub once at startup
+    # How the app signs in. "token" = pasted access key (no request to IT
+    # needed, but valid only for hours); "login" = real sign-in with a
+    # refresh token so the schedule runs unattended.
     "auth_mode": "token",
-    "client_id": "",        # leer = Microsofts öffentliche Anwendung
-    "tenant": "",           # leer = organizations
-    "device_code": False,   # Skripte im Terminal: Code statt Browserfenster
-    "language": "auto",   # "auto" = Browsersprache, sonst ein Code aus lang/
+    "client_id": "",        # empty = Microsoft's public application
+    "tenant": "",           # empty = organizations
+    "device_code": False,   # scripts in the terminal: code instead of browser window
+    "language": "auto",   # "auto" = browser language, otherwise a code from lang/
     "schedule": {
         "enabled": False,
         "interval_minutes": 60,
@@ -193,9 +192,9 @@ VORGABEN = {
 
 _FALSCH = ("0", "false", "no", "nein", "off", "")
 
-# Sentinel für „kein eigener Vorgabewert": dann gilt VORGABEN[key]. Ein
-# ausdrückliches default=None bleibt dagegen None – die Regel-Schlüssel
-# (folder_rules u. a.) unterscheiden „nicht gesetzt" von „leer".
+# Sentinel for "no default of its own": then VORGABEN[key] applies. An
+# explicit default=None stays None, however – the rule keys (folder_rules
+# and friends) distinguish "not set" from "empty".
 _AUS_SCHEMA = object()
 
 
@@ -207,36 +206,35 @@ _cache = {"pfad": None, "daten": None}
 
 
 def data_dir_env():
-    """Der per Umgebung gesetzte Datenordner – oder None.
+    """The data directory set via the environment – or None.
 
-    MUNIMENTUM_DATA_DIR ist der Name seit 5.0.0; OFFICE365_DATA_DIR gilt
-    weiter, damit vorhandene Skripte und Verknüpfungen nicht brechen. app.py
-    fragt für seinen Datenordner dieselbe Stelle – die beiden Namen stehen
-    nur hier.
+    MUNIMENTUM_DATA_DIR is the current name; OFFICE365_DATA_DIR remains
+    valid so existing scripts and shortcuts do not break. app.py asks the
+    same place for its data directory – the two names live only here.
     """
     return os.environ.get("MUNIMENTUM_DATA_DIR") or os.environ.get("OFFICE365_DATA_DIR")
 
 
 def home_env():
-    """Der Heimatordner der App (Konfiguration, Token, Historie), von app.py
-    an jeden Unterprozess gereicht – der Alles-in-einem-Override
-    (MUNIMENTUM_DATA_DIR) bleibt daneben gültig und gewinnt für Daten."""
+    """The app's home directory (configuration, token, history), handed by
+    app.py to every subprocess – the all-in-one override
+    (MUNIMENTUM_DATA_DIR) stays valid alongside and wins for data."""
     return os.environ.get("MUNIMENTUM_HOME")
 
 
 def config_path():
-    """Wo die Konfiguration liegt: Heimatordner, Override, sonst neben dem
-    Modul (Quell-Lauf: das Projektverzeichnis)."""
+    """Where the configuration lives: home directory, override, otherwise
+    next to the module (source run: the project directory)."""
     env = home_env() or data_dir_env()
     base = Path(env).expanduser() if env else Path(__file__).resolve().parent
     return base / CONFIG_NAME
 
 
 def load(path=None):
-    """Konfiguration lesen (einmal je Pfad gepuffert).
+    """Read the configuration (cached once per path).
 
-    Fehlende oder kaputte Datei ergibt {} – ein unlesbares app_config.json darf
-    einen Export niemals verhindern, es liefert ja nur Vorgaben.
+    A missing or broken file yields {} – an unreadable app_config.json must
+    never prevent an export, after all it only supplies defaults.
     """
     p = Path(path) if path is not None else config_path()
     if _cache["pfad"] == str(p) and _cache["daten"] is not None:
@@ -252,7 +250,7 @@ def load(path=None):
 
 
 def reset():
-    """Puffer leeren (Tests, erneutes Einlesen)."""
+    """Clear the cache (tests, re-reading)."""
     _cache.update(pfad=None, daten=None)
 
 
@@ -261,7 +259,7 @@ def _truthy(raw):
 
 
 def flag(env_name, key, default=_AUS_SCHEMA):
-    """Schalter: Umgebung, sonst Datei, sonst Vorgabe (aus VORGABEN)."""
+    """Switch: environment, else file, else default (from VORGABEN)."""
     default = _vorgabe(key, default)
     raw = os.environ.get(env_name)
     if raw is not None:
@@ -273,7 +271,7 @@ def flag(env_name, key, default=_AUS_SCHEMA):
 
 
 def number(env_name, key, default=_AUS_SCHEMA, low=1):
-    """Zahl: Umgebung, sonst Datei, sonst Vorgabe. Unbrauchbares wird ignoriert."""
+    """Number: environment, else file, else default. Unusable input is ignored."""
     default = _vorgabe(key, default)
     for roh in (os.environ.get(env_name), load().get(key)):
         if roh is None or isinstance(roh, bool):
@@ -286,12 +284,12 @@ def number(env_name, key, default=_AUS_SCHEMA, low=1):
 
 
 def value(key, default=_AUS_SCHEMA):
-    """Wert aus der Datei, sonst Vorgabe (ohne Umgebungsvariable).
+    """Value from the file, else default (no environment variable).
 
-    Absichtlich ohne Vermerk für report(): dieser Zweig liefert nur Vorgaben für
-    Argumente, die die Kommandozeile aussticht (Ausgabeordner, --store, --model).
-    Eine Meldung "aus app_config.json übernommen" wäre dort schlicht falsch,
-    sobald jemand das Argument mitgibt.
+    Deliberately without a note for report(): this branch only supplies
+    defaults for arguments that the command line trumps (output directory,
+    --store, --model). A message "taken from app_config.json" would simply
+    be wrong there as soon as someone passes the argument.
     """
     default = _vorgabe(key, default)
     val = load().get(key)
@@ -299,10 +297,10 @@ def value(key, default=_AUS_SCHEMA):
 
 
 def folders(env_name, key, default=_AUS_SCHEMA):
-    """Ordnerliste: Umgebung (kommagetrennt), sonst Datei (Liste), sonst Vorgabe.
+    """Folder list: environment (comma-separated), else file (list), else default.
 
-    Leer gesetzt heißt leere Liste, nicht "Vorgabe" – app.py braucht diesen
-    Unterschied, um "wirklich alle Ordner" ausdrücken zu können.
+    Set to empty means an empty list, not "default" – app.py needs this
+    distinction to be able to express "really all folders".
     """
     default = _vorgabe(key, default)
     raw = os.environ.get(env_name)

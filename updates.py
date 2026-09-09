@@ -1,30 +1,29 @@
 #!/usr/bin/env python3
 """
-updates.py – nachsehen, ob es ein neueres Release gibt.
+updates.py – check whether a newer release exists.
 
-Fragt beim Start einmal die GitHub-API und hinterlässt bei Bedarf eine Notiz.
-Mehr nicht: nichts wird heruntergeladen, nichts ersetzt. Wer aktualisieren
-will, holt sich die Datei selbst von der Releases-Seite – bei einer nicht
-signierten App ist ein stiller Selbstaustausch ohnehin nichts, was man wollen
-sollte.
+Asks the GitHub API once at startup and leaves a note if warranted. Nothing
+more: nothing is downloaded, nothing replaced. Whoever wants to update
+fetches the file themselves from the releases page – for an unsigned app, a
+silent self-replacement is nothing one should want anyway.
 
-Abschaltbar (Einstellung "update_check"). Das ist keine Förmlichkeit: die App
-spricht sonst mit nichts außer Microsoft Graph und dem lokalen Ollama, und
-diese eine Verbindung nach draußen soll niemand ungefragt bekommen.
+Can be turned off (setting "update_check"). That is no formality: the app
+otherwise talks to nothing but Microsoft Graph and the local Ollama, and
+nobody should get this one outward connection unasked.
 
-Vier Ausgänge, alle vier normal:
+Four outcomes, all four normal:
 
-    ok      Release gefunden. "newer" sagt, ob es neuer ist als die eigene;
-            "ahead" sagt das Gegenteil – die eigene ist HÖHER als alles
-            Veröffentlichte, man läuft also auf einem selbstgebauten Stand.
-    none    Es gibt noch gar kein Release (GitHub antwortet dann mit 404)
-    off     Prüfung ist abgeschaltet
-    error   Kein Netz, Sperre wegen zu vieler Anfragen, o. ä.
+    ok      Release found. "newer" says whether it is newer than one's own;
+            "ahead" says the opposite – one's own is HIGHER than anything
+            published, so this is a self-built version.
+    none    There is no release at all yet (GitHub then answers 404)
+    off     The check is turned off
+    error   No network, rate-limited, and the like
 
-Meldenswert sind zwei Fälle: newer=True („es gibt etwas Neueres") und
-ahead=True („du bist voraus"). Der zweite ist kein Fehler, aber „du bist auf
-dem neuesten Stand" wäre dort schlicht unwahr – und wer eine unveröffentlichte
-Fassung benutzt, sollte das wissen.
+Two cases are worth reporting: newer=True ("something newer exists") and
+ahead=True ("you are ahead"). The second is no error, but "you are up to
+date" would simply be untrue there – and whoever runs an unpublished
+version should know it.
 """
 
 import re
@@ -35,33 +34,33 @@ _TEIL = re.compile(r"\d+")
 
 
 def parse_version(text):
-    """"v1.12.0" -> (1, 12, 0). Unlesbares ergibt ein leeres Tupel.
+    """"v1.12.0" -> (1, 12, 0). Unreadable input yields an empty tuple.
 
-    Bewusst nachsichtig: Vorabversionen wie "1.2.0-beta.1" werden auf ihre
-    Zahlen reduziert. Ein Tag, aus dem sich gar keine Zahl lesen lässt, gilt
-    als unvergleichbar – dann wird lieber nichts gemeldet als etwas Falsches.
+    Deliberately lenient: pre-releases like "1.2.0-beta.1" are reduced to
+    their numbers. A tag from which no number can be read at all counts as
+    incomparable – then better to report nothing than something wrong.
     """
     kern = str(text or "").strip().lstrip("vV").split("+", 1)[0].split("-", 1)[0]
     return tuple(int(x) for x in _TEIL.findall(kern)[:4])
 
 
 def is_newer(latest, current):
-    """Ist `latest` eine höhere Version als `current`?"""
+    """Is `latest` a higher version than `current`?"""
     a, b = parse_version(latest), parse_version(current)
     if not a or not b:
-        return False                     # unvergleichbar -> nicht behaupten
+        return False                     # incomparable -> do not claim it
     laenge = max(len(a), len(b))
-    a += (0,) * (laenge - len(a))        # 1.2 und 1.2.0 sind dieselbe Version
+    a += (0,) * (laenge - len(a))        # 1.2 and 1.2.0 are the same version
     b += (0,) * (laenge - len(b))
     return a > b
 
 
 def check(current, repo, timeout=4.0, enabled=True):
-    """Einmal nachsehen. Wirft nie – ein Fehler hier darf nichts aufhalten.
+    """Look once. Never raises – a failure here must not hold anything up.
 
-    Deshalb ein einziger Fangzweig um alles: nicht nur um die Anfrage. Eine
-    unerwartet geformte Antwort ist genauso wenig ein Grund, den Start der App
-    scheitern zu lassen, wie ein fehlendes Netz.
+    Hence a single catch branch around everything: not just around the
+    request. An unexpectedly shaped answer is as little a reason to fail the
+    app's startup as a missing network.
     """
     out = {"status": "off", "current": current, "latest": None,
            "url": None, "newer": False, "ahead": False, "error": None}
@@ -72,8 +71,8 @@ def check(current, repo, timeout=4.0, enabled=True):
         r = requests.get(API.format(repo=repo), timeout=timeout,
                          headers={"Accept": "application/vnd.github+json"})
         if r.status_code == 404:
-            # Noch kein Release veröffentlicht – oder nur Entwürfe und Vorab-
-            # versionen, die dieser Endpunkt nicht mitzählt. Kein Fehlerfall.
+            # No release published yet – or only drafts and pre-releases,
+            # which this endpoint does not count. Not an error case.
             out["status"] = "none"
             return out
         if r.status_code != 200:
@@ -88,9 +87,9 @@ def check(current, repo, timeout=4.0, enabled=True):
         out["latest"] = tag.lstrip("vV")
         out["url"] = daten.get("html_url")
         out["newer"] = is_newer(tag, current)
-        # Umgekehrt gefragt – und bewusst nicht als "nicht newer" abgeleitet:
-        # bei gleicher Version und bei unvergleichbaren Nummern sind beide
-        # falsch, und das ist richtig so.
+        # Asked the other way round – and deliberately not derived as "not
+        # newer": with equal versions and with incomparable numbers both are
+        # False, and rightly so.
         out["ahead"] = is_newer(current, tag)
     except Exception as e:
         out.update(status="error", latest=None, url=None, newer=False,

@@ -1,36 +1,39 @@
 #!/usr/bin/env python3
 """
-smoke_test.py – prüft ein gebautes Bündel, bevor es jemand herunterlädt.
+smoke_test.py – checks a built bundle before anyone downloads it.
 
     python3 packaging/smoke_test.py dist/Munimentum/Munimentum
 
-Läuft in der CI nach jedem Build. Getestet wird genau das, was beim Bündeln
-schiefgehen kann und beim reinen "Datei existiert"-Test unbemerkt bliebe:
+Runs in CI after every build. Tested is exactly what can go wrong in
+bundling and would go unnoticed by a plain "file exists" test:
 
-  1. Der Selbstaufruf der Teilprogramme (--run …) findet die Module im Bündel.
-  2. Die App startet, bindet einen Port und liefert die Oberfläche aus.
-  3. Sie meldet sich als gebündelt und nutzt den übergebenen Datenordner.
-  4. Ein Volltextindex lässt sich bauen – das startet die gebündelte Datei als
-     eigenen Unterprozess, also die komplette Kette aus Punkt 1.
-  5. Die eingebettete Suche findet den indizierten Inhalt (SQLite/FTS5 an Bord).
-  6. Der MCP-Server startet (uvicorn/starlette/pydantic vollständig gebündelt).
-  7. Die Sprachdateien sind im Bündel und die Browsersprache greift (de/en/fr).
-  8. Kalender und Adressbuch entstehen – ein zweiter Selbstaufruf, diesmal von
-     combined_search, mit eigenen Parsern (E-Mail, iCalendar, vCard).
-  9. macOS: die Signatur hält, mit Zeitstempel und Hardened Runtime – und am
-     fertigen DMG zusätzlich das angeheftete Ticket (--beglaubigt). Unsignierte
-     Bündel überspringen den Schritt, damit Läufe auf `main` durchlaufen.
- 10. Windows: die EXE trägt unser Symbol – und nur unseres. Bis 1.1.0 zeigte
-     sie PyInstallers Python-Logo, und geprüft wurde das nie: die Tests sehen
-     die .ico im Repo und die Zeile in der Spec, nicht das Ergebnis.
- 11. Der Prozess-Pool beim Einlesen (corpus._pmap) kommt zustande. Gebündelt
-     startet ein Arbeitsprozess dieselbe ausführbare Datei noch einmal – das
-     geht nur mit multiprocessing.freeze_support() in app.py. Deshalb liegen
-     unten mehr Testdateien als die Schwelle, ab der der Pool aufgeht: mit den
-     drei Dateien von früher lief der Rauchtest immer seriell und hat den
-     Fehler nie gesehen.
+  1. The subprograms' self-invocation (--run …) finds the modules in the
+     bundle.
+  2. The app starts, binds a port and serves the interface.
+  3. It reports itself as bundled and uses the data directory it was given.
+  4. A full-text index can be built – this starts the bundled file as its
+     own subprocess, i.e. the complete chain from point 1.
+  5. The embedded search finds the indexed content (SQLite/FTS5 on board).
+  6. The MCP server starts (uvicorn/starlette/pydantic bundled completely).
+  7. The language files are in the bundle and the browser language takes
+     effect (de/en/fr).
+  8. Calendar and address book get built – a second self-invocation, this
+     time of combined_search, with its own parsers (e-mail, iCalendar,
+     vCard).
+  9. macOS: the signature holds, with timestamp and hardened runtime – and
+     on the finished DMG additionally the stapled ticket (--beglaubigt).
+     Unsigned bundles skip the step so runs on `main` pass.
+ 10. Windows: the EXE carries our icon – and only ours. It used to show
+     PyInstaller's Python logo, and nothing ever checked it: the tests see
+     the .ico in the repo and the line in the spec, not the result.
+ 11. The process pool for reading (corpus._pmap) comes together. Bundled,
+     a worker process starts the same executable again – that only works
+     with multiprocessing.freeze_support() in app.py. Hence more test
+     files below than the threshold at which the pool opens: with the
+     three files of before, the smoke test always ran serially and never
+     saw the bug.
 
-Ohne Netz, ohne Graph, ohne Ollama – nur das Bündel selbst.
+No network, no Graph, no Ollama – only the bundle itself.
 """
 
 import json
@@ -47,18 +50,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Windows-Konsolen nutzen eine Legacy-Codepage (cp1252); "→" in der Fortschritts-
-# ausgabe lässt print() dort sonst mit UnicodeEncodeError sterben – und zwar
-# bevor auch nur ein einziger Prüfschritt gelaufen ist. Dieselbe Umstellung wie
-# in allen anderen Skripten des Projekts (auf macOS/Linux ein No-op).
+# Windows consoles use a legacy codepage (cp1252); "→" in the progress
+# output otherwise makes print() die there with UnicodeEncodeError – before
+# even a single check step has run. The same switch as in every other script
+# of the project (a no-op on macOS/Linux).
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
     except (AttributeError, ValueError):
         pass
 
-# Ein Termin und ein Kontakt: daraus baut combined_search Kalender und
-# Adressbuch. Klein gehalten – geprüft wird das Bündeln, nicht das Auswerten.
+# One appointment and one contact: combined_search builds calendar and
+# address book from them. Kept small – bundling is tested, not parsing.
 ICS = """BEGIN:VCALENDAR
 VERSION:2.0
 BEGIN:VEVENT
@@ -86,11 +89,11 @@ TEAMS_HTML = """<html><body>
 
 
 def pool_schwelle():
-    """Ab wie vielen Dateien corpus._pmap den Prozess-Pool aufmacht.
+    """From how many files corpus._pmap opens the process pool.
 
-    Aus dem Modul gelesen statt hier abgeschrieben: wer die Schwelle anhebt,
-    soll nicht versehentlich den einzigen Test entschärfen, der den Pool im
-    Bündel überhaupt anfasst.
+    Read from the module instead of copied here: whoever raises the
+    threshold must not accidentally defuse the only test that touches the
+    pool in the bundle at all.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     try:
@@ -147,10 +150,10 @@ def protokoll(basis):
 
 
 def _pe_ressourcen(exe):
-    """RT_ICON- und RT_GROUP_ICON-Einträge einer Windows-EXE.
+    """RT_ICON and RT_GROUP_ICON entries of a Windows EXE.
 
-    Von Hand geparst statt mit einer Bibliothek: der Rauchtest soll außer dem
-    Bündel nichts brauchen. Geliefert wird {typ: {id: (offset, größe)}}.
+    Parsed by hand instead of with a library: the smoke test should need
+    nothing but the bundle. Returns {type: {id: (offset, size)}}.
     """
     roh = exe.read_bytes()
     pe = struct.unpack("<I", roh[0x3C:0x40])[0]
@@ -160,7 +163,7 @@ def _pe_ressourcen(exe):
     optsize, = struct.unpack("<H", roh[pe + 20:pe + 22])
     opt = pe + 24
     magic, = struct.unpack("<H", roh[opt:opt + 2])
-    dd = opt + (112 if magic == 0x20B else 96)        # PE32+ oder PE32
+    dd = opt + (112 if magic == 0x20B else 96)        # PE32+ or PE32
     res_rva, _ = struct.unpack("<II", roh[dd + 16:dd + 24])
 
     abschnitte = []
@@ -199,15 +202,14 @@ def _pe_ressourcen(exe):
 
 
 def symbol_ist_in_der_exe(exe):
-    """Trägt die gebaute EXE unser Symbol – und zwar nur unseres?
+    """Does the built EXE carry our icon – and only ours?
 
-    Bis 1.1.0 stand icon=None in der Spec und Windows zeigte PyInstallers
-    Standardsymbol (Python-Logo). Dass das nicht zurückkommt, hat bisher
-    niemand geprüft: die Tests sehen nur die .ico im Repo und die Zeile in der
-    Spec, nicht das Ergebnis. Genau dazwischen liegt der Fehler, den ein
-    Anwender meldet – und die Windows-Shell nimmt die Gruppe mit der
-    NIEDRIGSTEN Kennung, eine übrig gebliebene Gruppe des Bootloaders würde
-    unsere also verdecken.
+    icon=None used to sit in the spec and Windows showed PyInstaller's
+    default icon (Python logo). That it does not come back was never
+    checked: the tests only see the .ico in the repo and the line in the
+    spec, not the result. Exactly in between lies the bug a user reports –
+    and the Windows shell takes the group with the LOWEST id, so a leftover
+    group of the bootloader would hide ours.
     """
     schritt("Symbol steckt in der EXE (Windows-Ressourcen)")
     ico = Path(__file__).resolve().parent / "icon" / "icon.ico"
@@ -244,28 +246,29 @@ def _codesign(*args):
 
 
 def signatur_ist_in_ordnung(exe, beglaubigt=False):
-    """macOS: trägt das Bündel eine brauchbare Signatur – und ein Ticket?
+    """macOS: does the bundle carry a usable signature – and a ticket?
 
-    Unsignierte Bündel überspringen den Schritt: Läufe auf `main` bauen
-    absichtlich ohne Zertifikat, und der Rauchtest soll dort nicht scheitern.
-    Ist aber signiert, wird streng geprüft — eine halbe Signatur ist schlimmer
-    als keine, weil sie erst beim Anwender auffällt.
+    Unsigned bundles skip the step: runs on `main` deliberately build
+    without a certificate, and the smoke test must not fail there. But if
+    it is signed, the check is strict — half a signature is worse than
+    none, because it only shows up at the user's end.
 
-    `beglaubigt=True` verlangt zusätzlich das angeheftete Ticket. Das gibt es
-    erst nach der Beglaubigung, also nur beim zweiten Durchlauf am fertigen DMG.
+    `beglaubigt=True` additionally demands the stapled ticket. That only
+    exists after notarization, i.e. only on the second pass over the
+    finished DMG.
     """
     ziel = exe
-    for eltern in exe.parents:                 # im Bündel die .app selbst prüfen
+    for eltern in exe.parents:                 # in the bundle, check the .app itself
         if eltern.suffix == ".app":
             ziel = eltern
             break
 
     roh = _codesign("-dv", "--verbose=4", str(ziel))
     aus = roh.stdout + roh.stderr
-    # "adhoc" ist der Normalfall ohne Zertifikat: PyInstaller signiert auf macOS
-    # immer, auf Apple Silicon muss es das sogar. Eine Ad-hoc-Signatur trägt
-    # keine Identität und ist für Gatekeeper so gut wie keine – hier also
-    # dasselbe wie unsigniert.
+    # "adhoc" is the normal case without a certificate: PyInstaller always
+    # signs on macOS, on Apple Silicon it even must. An ad-hoc signature
+    # carries no identity and is as good as none to Gatekeeper – so here
+    # the same as unsigned.
     if roh.returncode != 0 or "not signed at all" in aus or "Signature=adhoc" in aus:
         schritt("Signatur: ohne Zertifikat gebaut – übersprungen")
         return
@@ -275,8 +278,9 @@ def signatur_ist_in_ordnung(exe, beglaubigt=False):
     if pruefung.returncode != 0:
         raise Fehler(f"Signatur hält nicht:\n{pruefung.stdout}{pruefung.stderr}")
 
-    # Ohne Developer ID nimmt Gatekeeper das Bündel gar nicht erst an, und ohne
-    # Hardened Runtime lehnt Apple die Beglaubigung ab.
+    # Without a Developer ID, Gatekeeper does not accept the bundle in the
+    # first place, and without the hardened runtime Apple refuses
+    # notarization.
     if "Authority=Developer ID Application" not in aus:
         raise Fehler(f"Kein Developer-ID-Zertifikat in der Kette:\n{aus}")
     for merkmal, warum in (("Timestamp=", "ohne Zeitstempel wird die Signatur "
@@ -311,12 +315,13 @@ def teilprogramm_aufrufbar(exe):
 
 
 def anmeldung_im_buendel(exe):
-    """Die Selbstauskunft von auth.py aufrufen.
+    """Invoke auth.py's self-report.
 
-    Sie importiert msal und liest die Konfiguration – im Bündel der einzige Weg,
-    den Anmeldeweg ohne Netz zu prüfen. Fehlte auth.py oder msal, liefe jeder
-    Export sofort in einen ModuleNotFoundError, und das fiele erst beim Anwender
-    auf: der Rauchtest startet selbst keinen Export (er hat keinen Token).
+    It imports msal and reads the configuration – in the bundle the only
+    way to check the sign-in path without network. Were auth.py or msal
+    missing, every export would immediately run into a ModuleNotFoundError,
+    and that would only show up at the user's end: the smoke test itself
+    starts no export (it has no token).
     """
     schritt("Anmeldung im Bündel (--run auth)")
     r = subprocess.run([str(exe), "--run", "auth"],
@@ -337,9 +342,9 @@ def testdaten(ordner):
     (outlook / "kontakte" / "Team").mkdir(parents=True)
     (outlook / "kontakte" / "Team" / "alice.vcf").write_text(VCF, encoding="utf-8")
 
-    # Über die Schwelle, damit der Index-Lauf den Prozess-Pool wirklich
-    # aufmacht (siehe pool_schwelle und Punkt 9 oben). OneDrive ist dafür der
-    # billigste Weg: corpus liest von diesen Dateien nur Name, Pfad und Größe.
+    # Above the threshold, so the index run really opens the process pool
+    # (see pool_schwelle and point 9 above). OneDrive is the cheapest way
+    # to get there: corpus reads only name, path and size from these files.
     dateien = Path(ordner) / "onedrive_export" / "Dateien" / "Projekte"
     dateien.mkdir(parents=True)
     for i in range(pool_schwelle() + 20):
@@ -439,12 +444,12 @@ def pruefe(exe, daten, port, proc):
     if not lebt:
         raise Fehler(f"MCP-Server läuft nicht:\n{protokoll(basis)}")
 
-    ausgabe = protokoll(basis)   # vor dem Beenden holen, danach hört niemand mehr zu
+    ausgabe = protokoll(basis)   # fetch before quitting, nobody listens afterwards
     schritt("Beenden")
     try:
         sende(f"{basis}/api/quit", {}, timeout=10)
     except (urllib.error.URLError, OSError):
-        pass                     # Server ist beim Antworten schon weg – in Ordnung
+        pass                     # server already gone while answering – fine
     return ausgabe
 
 
@@ -460,8 +465,8 @@ def main():
     teilprogramm_aufrufbar(exe)
     anmeldung_im_buendel(exe)
     if sys.platform == "win32":
-        # Nur dort steckt das Symbol IN der ausführbaren Datei; macOS liest
-        # das .icns aus dem Bündel, Linux kennt gar keines.
+        # Only there does the icon sit IN the executable; macOS reads the
+        # .icns from the bundle, Linux has none at all.
         symbol_ist_in_der_exe(exe)
     if sys.platform == "darwin":
         signatur_ist_in_ordnung(exe, beglaubigt="--beglaubigt" in sys.argv)

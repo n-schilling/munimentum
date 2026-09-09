@@ -31,11 +31,11 @@ TOP_PERSONEN = 40                      # stored; the app filters and cuts to 10
 
 
 # ---------------------------------------------------------------------------
-# Bausteine
+# Building blocks
 # ---------------------------------------------------------------------------
 def _monatsreihe(von, bis):
-    """Alle Monate von…bis, auch die leeren – sonst fiele eine Lücke nicht
-    auf, sie stünde einfach nicht da."""
+    """All months from…to, the empty ones included – otherwise a gap would
+    not stand out, it simply would not be there."""
     j, m = int(von[:4]), int(von[5:7])
     ende = (int(bis[:4]), int(bis[5:7]))
     out = []
@@ -46,9 +46,9 @@ def _monatsreihe(von, bis):
 
 
 def _luecken(monate, vorhanden):
-    """Zusammenhängende Monate ohne eine einzige Nachricht – nur INNERHALB
-    des Bestands: vor der ersten und nach der letzten ist nichts zu
-    vermissen."""
+    """Contiguous months without a single message – only WITHIN the
+    archive: before the first and after the last there is nothing to
+    miss."""
     out, lauf = [], []
     for m in monate:
         if vorhanden.get(m):
@@ -62,7 +62,7 @@ def _luecken(monate, vorhanden):
 
 
 def _groesse(pfad):
-    """(Bytes gesamt, größte Einzeldateien) – one walk, done here so the
+    """(total bytes, largest single files) – one walk, done here so the
     request thread never has to."""
     gesamt, groesste = 0, []
     try:
@@ -104,9 +104,9 @@ def _verlauf(con):
 
 
 def _anhang_typen(con):
-    """Anhangstypen der Kommunikation – die Spiegel haben ihre eigene Liste
-    (siehe _datei_typen), sonst bestünde diese hier zur Hälfte aus dem
-    Inhalt des Laufwerks."""
+    """Attachment types of the communication – the mirrors have their own
+    list (see _datei_typen), otherwise half of this one would consist of
+    the drive's contents."""
     typen = {}
     komm = ", ".join(f"'{s}'" for s in KOMM)
     for (att,) in con.execute(
@@ -133,7 +133,7 @@ def _datei_typen(con, spalten):
 
 
 # ---------------------------------------------------------------------------
-# Bauen und Lesen
+# Building and reading
 # ---------------------------------------------------------------------------
 def baue(store, ordner):
     """Aggregate the archive and store the result in corpus.db.
@@ -154,8 +154,8 @@ def baue(store, ordner):
             "ORDER BY 2 DESC")]
         je_quelle = {q["src"]: q["n"] for q in out["quellen"]}
 
-        # None heißt „weiß ich nicht", 0 hieße „keine": ein Index aus einer
-        # älteren Fassung kennt die Spalten nicht.
+        # None means "don't know", 0 would mean "none": an index from an
+        # older build does not know the columns.
         out["komm"] = {
             "nachrichten": sum(je_quelle.get(s, 0) for s in KOMM),
             "gespraeche": None, "mit_anhang": None, "verschwunden": None,

@@ -13,9 +13,7 @@ sharepoint_export.py) supply:
   * a Selection – path rules, size limit, extension include/exclude.
 
 The mirror promise is the same everywhere: the CURRENT version of every
-file is kept, deleted files stay here with a tombstone entry. The German
-docstrings on the moved functions are original OneDrive history – the
-reasoning applies to every drive.
+file is kept, deleted files stay here with a tombstone entry.
 """
 
 import os
@@ -36,10 +34,10 @@ import progress
 
 GRAPH = graph_client.GRAPH
 
-DATEI_DIR = "Dateien"           # Wurzel im Ausgabeordner; die Regeln greifen darauf
+DATEI_DIR = "Dateien"           # root in the output folder; the rules match on it
 
-# Netz, Drosselung, Retry und Paging liegen in graph_client.py; eigen bleibt
-# nur der Download-Timeout – eine große Datei braucht länger als eine Seite.
+# Network, throttling, retry and paging live in graph_client.py; all that
+# stays here is the download timeout – a big file takes longer than a page.
 TIMEOUT_BYTES = (30, 600)
 
 
@@ -50,7 +48,7 @@ def workers():
     limit; Graph documents no fixed concurrency, so the cap of 16 is our own
     restraint and 429 waits stay visible in the log."""
     return max(1, min(settings.number("MIRROR_WORKERS", "mirror_workers"), 16))
-SEITE = 999                     # $top: eine Seite statt vieler kleiner
+SEITE = 999                     # $top: one page instead of many small ones
 
 
 class Selection:
@@ -99,7 +97,7 @@ class Selection:
 
 
 # ---------------------------------------------------------------------------
-# HTTP – der Client kommt aus graph_client.py, eigen ist nur Drive-Spezifik
+# HTTP – the client comes from graph_client.py; only drive specifics live here
 # ---------------------------------------------------------------------------
 class DriveOps:
     """Drive specifics on top of the shared client: download and delta.
@@ -111,13 +109,13 @@ class DriveOps:
     drive_base = f"{GRAPH}/me/drive"
 
     def lade(self, item_id, ziel, geaendert=None):
-        """Inhalt einer Datei nach `ziel` schreiben – stückweise, nicht am Stück.
+        """Write a file's content to `ziel` – in chunks, not in one piece.
 
-        Eine große Datei komplett in den Speicher zu holen, nur um sie danach
-        auf die Platte zu schreiben, wäre auf einem kleinen Rechner der einzige
-        Grund, warum ein Lauf scheitert. Geschrieben wird daneben und erst zum
-        Schluss umbenannt: ein Abbruch hinterlässt dann keine halbe Datei, die
-        beim nächsten Lauf als fertig gälte.
+        Pulling a large file completely into memory just to write it to
+        disk afterwards would, on a small machine, be the one reason a run
+        fails. The bytes go to a sidecar file renamed only at the end: an
+        abort then leaves no half file that would count as complete on the
+        next run.
         """
         url = f"{self.drive_base}/items/{item_id}/content"
         r = self.stream(url, timeout=TIMEOUT_BYTES, label=" (Inhalt)")
@@ -130,10 +128,10 @@ class DriveOps:
                     f.write(stueck)
                     groesse += len(stueck)
         os.replace(tmp, ziel)
-        # Die Änderungszeit aus dem Laufwerk übernehmen. Ohne das trüge jede
-        # Datei den Zeitpunkt ihres Downloads, und im Index stünden hunderte
-        # Dateien mit demselben Datum – eine Sortierung nach Datum wäre
-        # wertlos, und ein Neuaufbau des Spiegels änderte sie erneut.
+        # Take the modification time from the drive. Without it every file
+        # would carry the moment of its download, and the index would hold
+        # hundreds of files with the same date – sorting by date would be
+        # worthless, and rebuilding the mirror would change them again.
         if geaendert:
             try:
                 os.utime(ziel, (geaendert, geaendert))
@@ -159,7 +157,7 @@ class DriveOps:
                 return
 
     def delta(self, weiter=None):
-        """Alle Delta-Einträge, Seite für Seite. Gibt am Ende den neuen Link."""
+        """All delta entries, page by page. Yields the new link at the end."""
         for eintraege, cursor, fertig in self.delta_seiten(weiter):
             for eintrag in eintraege:
                 yield eintrag, None
@@ -168,20 +166,19 @@ class DriveOps:
 
 
 # ---------------------------------------------------------------------------
-# Pfade
+# Paths
 # ---------------------------------------------------------------------------
 kuerzel = export_util.kuerzel
 
 
 def safe(name, maxlen=120, kennung=None):
-    """Ein Namensstück, dem das Dateisystem trauen kann.
+    """A name segment the file system can trust.
 
-    Das Abschneiden ist die heikle Stelle: es fraß am echten Laufwerk die
-    Endung zweier Dateien, deren Namen sich erst nach 120 Zeichen
-    unterschieden – beide landeten auf demselben Pfad, und der zweite
-    Download scheiterte an der Teildatei, die der erste schon weggeräumt
-    hatte. Deshalb bleibt die Endung erhalten und ein Kürzel aus der ID
-    macht den Namen wieder eindeutig.
+    Truncation is the delicate part: on a real drive it once ate the
+    extension of two files whose names only differed after 120 characters –
+    both landed on the same path, and the second download failed on the
+    partial file the first had already cleaned away. So the extension is
+    kept and a short tag from the ID makes the name unique again.
     """
     name = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", name or "").strip().strip(". ")
     name = re.sub(r"\s+", " ", name) or "unbenannt"
@@ -197,11 +194,11 @@ def safe(name, maxlen=120, kennung=None):
 
 
 def rel_pfad(eintrag):
-    """Der Pfad, unter dem ein Eintrag hier landet – "Dateien/Ordner/Datei.pdf".
+    """The path an entry lands under here – "Dateien/Ordner/Datei.pdf".
 
-    Graph liefert den Elternpfad als "/drive/root:/Ordner/Unter", prozentkodiert.
-    Jedes Stück wird einzeln entschärft: sonst könnte ein Name mit "/" oder ".."
-    darin aus dem Ausgabeordner herausführen.
+    Graph delivers the parent path as "/drive/root:/Ordner/Unter",
+    percent-encoded. Each segment is sanitised on its own: otherwise a name
+    containing "/" or ".." could lead out of the output folder.
     """
     roh = (eintrag.get("parentReference") or {}).get("path") or ""
     roh = unquote(roh)
@@ -212,11 +209,11 @@ def rel_pfad(eintrag):
 
 
 def geaendert_am(eintrag):
-    """Wann die Datei zuletzt geändert wurde – als Zeitstempel.
+    """When the file was last modified – as a timestamp.
 
-    fileSystemInfo trägt die Zeit des Clients, der sie hochgeladen hat, und ist
-    damit die ehrlichere Angabe; lastModifiedDateTime am Eintrag ist der
-    Rückfall.
+    fileSystemInfo carries the time of the client that uploaded it and is
+    therefore the more honest value; lastModifiedDateTime on the entry is
+    the fallback.
     """
     for roh in ((eintrag.get("fileSystemInfo") or {}).get("lastModifiedDateTime"),
                 eintrag.get("lastModifiedDateTime")):
@@ -231,26 +228,26 @@ def ist_ordner(eintrag):
 
 
 def ist_paket(eintrag):
-    """OneNote-Notizbücher meldet Graph als "package".
+    """Graph reports OneNote notebooks as "package".
 
-    Sie sind Ordner mit .one-Dateien darin; die einzelnen Dateien kommen im
-    Delta ohnehin vor und werden gesichert. Das Paket selbst ist kein Inhalt.
+    They are folders with .one files inside; the individual files appear in
+    the delta anyway and get backed up. The package itself is not content.
     """
     return "package" in eintrag
 
 
 # ---------------------------------------------------------------------------
-# Bestand: ID -> Pfad, Fassung, Größe
+# Inventory: ID -> path, version, size
 # ---------------------------------------------------------------------------
 class Bestand:
-    """Was hier liegt, je Graph-ID.
+    """What lies here, per Graph ID.
 
-    Der cTag ändert sich, wenn sich der INHALT ändert (der eTag auch bei reinen
-    Metadaten). Genau das ist die Frage vor jedem Download, also wird er
-    gespeichert. Die Größe steht daneben, damit eine abgebrochene Datei nicht
-    als vollständig durchgeht.
+    The cTag changes when the CONTENT changes (the eTag also on pure
+    metadata edits). That is exactly the question before every download, so
+    it is what gets stored. The size sits next to it so an aborted file
+    does not pass as complete.
 
-    In-Memory-Basis; die Persistenz liefert state_db.DbBestand.
+    In-memory base; persistence comes from state_db.DbBestand.
     """
 
     def __init__(self):
@@ -258,7 +255,7 @@ class Bestand:
         self._lock = threading.Lock()
 
     def aktuell(self, kennung, ctag, groesse, wurzel):
-        """Liegt genau diese Fassung schon hier?"""
+        """Is exactly this version already here?"""
         e = self.eintraege.get(kennung)
         if not e or e["ctag"] != ctag:
             return False
@@ -277,13 +274,13 @@ class Bestand:
             return self.eintraege.pop(kennung, None)
 
     def schreibe(self):
-        pass                   # das Backend persistiert (state_db.DbBestand)
+        pass                   # the backend persists (state_db.DbBestand)
 
 
 
 
 # ---------------------------------------------------------------------------
-# Der Lauf
+# The run
 # ---------------------------------------------------------------------------
 _EINTRAG_FELDER = ("id", "name", "size", "cTag", "lastModifiedDateTime")
 
@@ -323,9 +320,9 @@ def seiten(graph, weiter):
 
 
 def walk(graph, zustand, weiter):
-    """Den Delta-Feed seitenweise in die Ablage schreiben – je Seite mit dem
-    Wiederaufsetz-Link, damit ein abgebrochener Lauf fortsetzt statt neu zu
-    laufen. Liefert den neuen Delta-Link."""
+    """Write the delta feed page by page into the store – each page with
+    its resume link, so an aborted run continues instead of starting over.
+    Returns the new delta link."""
     gesamt = zustand.walk_status()["n"]
     fertig = None
     for eintraege, cursor, delta_link in seiten(graph, weiter):
@@ -341,10 +338,10 @@ def walk(graph, zustand, weiter):
 
 
 def sammle(graph, weiter):
-    """Delta einmal durchlaufen; liefert (Einträge, neuer Link).
+    """Run through the delta once; returns (entries, new link).
 
-    In-Memory-Variante für die reinen Prüfläufe – der Spiegel selbst läuft
-    über walk() und die Ablage im Zustands-Backend."""
+    In-memory variant for the pure check runs – the mirror itself goes
+    through walk() and the store in the state backend."""
     eintraege, link = [], None
     for eintrag, fertig in graph.delta(weiter):
         if eintrag is not None:
@@ -357,10 +354,10 @@ def sammle(graph, weiter):
 
 
 def plane(eintraege, bestand, wurzel, auswahl):
-    """Aus den Delta-Einträgen wird eine Aufgabenliste – ohne Netzzugriff.
+    """Turn the delta entries into a task list – with no network access.
 
-    Getrennt vom Herunterladen, damit die Entscheidung „was tun wir" ohne
-    Anmeldung geprüft werden kann.
+    Kept separate from downloading so the "what do we do" decision can be
+    tested without signing in.
     """
     laden, verschoben, geloescht, ausgelassen, baum = [], [], [], 0, []
     entfernt = set()
@@ -375,9 +372,10 @@ def plane(eintraege, bestand, wurzel, auswahl):
                 geloescht.append(alt["rel"])
             continue
         if "root" in e:
-            # Die Wurzel gehört in den Baum, obwohl Graph sie nicht als Ordner
-            # meldet. Fehlt sie, gilt jede Datei, die direkt im Laufwerk liegt,
-            # als „nur noch lokal vorhanden" – ein Fehlalarm in der Exportliste.
+            # The root belongs in the tree even though Graph does not report
+            # it as a folder. Without it, every file lying directly in the
+            # drive counts as "only present locally" – a false alarm in the
+            # export list.
             baum.append({"id": kennung, "pfad": DATEI_DIR, "name": DATEI_DIR,
                          "elemente": int((e.get("folder") or {}).get("childCount") or 0)})
             continue
@@ -396,12 +394,12 @@ def plane(eintraege, bestand, wurzel, auswahl):
             continue
         alt = bestand.eintraege.get(kennung)
         if alt and alt["rel"] != rel:
-            # Umbenennen und Verschieben behalten die ID; der cTag ändert sich
-            # nur beim INHALT. Deshalb reicht es, die Datei lokal mitzuziehen –
-            # sie noch einmal zu laden wäre bei einem umbenannten 300-MB-Video
-            # der teuerste denkbare Weg, nichts zu gewinnen. Hat sich der Inhalt
-            # zugleich geändert, steht sie unten trotzdem in `laden`, und der
-            # Download landet dann schon auf dem neuen Pfad.
+            # Renames and moves keep the ID; the cTag changes only with the
+            # CONTENT. So moving the file along locally is enough – loading
+            # it again would, for a renamed 300 MB video, be the most
+            # expensive conceivable way to gain nothing. If the content
+            # changed at the same time, it still ends up in `laden` below,
+            # and the download then lands on the new path already.
             verschoben.append((alt["rel"], rel))
         if bestand.aktuell(kennung, e.get("cTag") or "", groesse, wurzel):
             if alt and alt["rel"] != rel:
@@ -409,20 +407,20 @@ def plane(eintraege, bestand, wurzel, auswahl):
             continue
         laden.append({"id": kennung, "rel": rel, "ctag": e.get("cTag") or "",
                       "size": groesse, "mtime": geaendert_am(e)})
-    # Ein Delta darf denselben Eintrag mehrfach nennen (und ein wieder
-    # aufgesetzter Walk eine Seite doppelt): es zählt die letzte Fassung –
-    # sonst schrieben zwei Threads gleichzeitig an derselben Zieldatei.
+    # A delta may name the same entry several times (and a resumed walk may
+    # repeat a page): the last version counts – otherwise two threads would
+    # write to the same target file at the same time.
     laden = list({a["id"]: a for a in laden}.values())
     return {"laden": laden, "verschoben": verschoben, "geloescht": geloescht,
             "ausgelassen": ausgelassen, "baum": baum, "entfernt": entfernt}
 
 
 def baum_zusammenfuehren(alt, geaendert, entfernt):
-    """Den Ordnerbaum fortschreiben statt ersetzen.
+    """Carry the folder tree forward instead of replacing it.
 
-    Ein Delta-Lauf liefert nur die GEÄNDERTEN Ordner. Den Baum damit zu
-    überschreiben, hieße ihn beim zweiten Lauf auf eine Handvoll zu kürzen –
-    und alle übrigen Ordner als verschwunden zu melden.
+    A delta run delivers only the CHANGED folders. Overwriting the tree
+    with them would shrink it to a handful on the second run – and report
+    every other folder as gone.
     """
     nach_id = {e["id"]: e for e in (alt or {}).get("ordner", [])}
     for e in geaendert:
@@ -433,7 +431,7 @@ def baum_zusammenfuehren(alt, geaendert, entfernt):
 
 
 def verschiebe(wurzel, paare):
-    """Umbenannte oder verschobene Dateien mitziehen statt neu zu laden."""
+    """Move renamed or relocated files along instead of downloading again."""
     bewegt = 0
     for alt, neu in paare:
         a, n = wurzel / alt, wurzel / neu
@@ -448,7 +446,7 @@ def verschiebe(wurzel, paare):
 
 
 def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
-    """Die geplanten Downloads – parallel, mit Fortschritt."""
+    """The planned downloads – in parallel, with progress."""
     fertig = fehler = 0
     gesamt = len(aufgaben)
     if not gesamt:
@@ -491,8 +489,8 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     bestand = zustand.bestand()
     status = zustand.walk_status()
     if status["fertig"]:
-        # Der abgebrochene Lauf war mit der Aufzählung schon durch – nur die
-        # Arbeit danach fehlte. Nicht noch einmal fragen, nur nachholen.
+        # The aborted run had already finished enumerating – only the work
+        # after it was missing. Do not ask again, just catch up.
         progress.event("run.drive.replan", n=status["n"])
         neuer_link = status["fertig"]
     else:
@@ -518,9 +516,9 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
 
     bewegt = verschiebe(wurzel, plan["verschoben"])
     fertig, fehler = hole_alle(graph, wurzel, bestand, plan["laden"], arbeiter)
-    # Immer, nicht nur nach Downloads: auch eine Löschung oder eine Verschiebung
-    # ändert den Bestand. Ohne dieses Schreiben stünde eine gelöschte Datei beim
-    # nächsten Lauf noch drin und ihr Grabstein würde ein zweites Mal gesetzt.
+    # Always, not only after downloads: a deletion or a move changes the
+    # inventory too. Without this write a deleted file would still be listed
+    # on the next run and its tombstone would be set a second time.
     bestand.schreibe()
 
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
@@ -530,14 +528,14 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     if baum or alt_baum:
         zustand.baum_schreiben(baum, alt_baum)
     if not fehler:
-        # Erst jetzt: ein abgebrochener Lauf darf den Delta-Zeiger nicht
-        # vorrücken. Die Ablage hat ihren Dienst getan und geht mit.
+        # Only now: an aborted run must not advance the delta pointer. The
+        # walk store has done its duty and goes with it.
         if neuer_link:
             zustand.delta_schreiben(neuer_link, bestand=bestand)
         zustand.walk_leeren()
     else:
-        # Ablage und Fertig-Link bleiben liegen: der nächste Lauf plant
-        # daraus neu und holt nur nach, was fehlt.
+        # Walk store and finish link stay put: the next run replans from
+        # them and only fetches what is still missing.
         progress.event("run.drive.retry", "warn")
     zahlen = {"new": fertig, "excluded": plan["ausgelassen"], "errors": fehler,
               "moved": bewegt, "gone": len(plan["geloescht"])}
@@ -555,14 +553,14 @@ def _db_zustand(out):
 
 
 def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
-    """Was das Laufwerk hat gegen das, was hier liegt – je Ordner.
+    """What the drive holds against what lies here – per folder.
 
-    Dieselbe Form wie beim Postfach, damit die Oberfläche sie ohne eine zweite
-    Ansicht zeichnen kann. Der Unterschied steckt in der Frage: beim Postfach
-    zählt Graph die Elemente je Ordner, hier kennt das Delta jede einzelne
-    Datei – die Prüfung ist deshalb genauer und weiß auch, ob eine Datei nur
-    halb angekommen ist. Die Byte-Summen daneben machen sie zugleich zur
-    Größen-Vorschau: was würde ein Spiegel-Lauf holen, was ließe er aus.
+    The same shape as for the mailbox, so the UI can draw it without a
+    second view. The difference is in the question: for the mailbox Graph
+    counts items per folder, here the delta knows every single file – the
+    check is therefore more precise and also knows whether a file arrived
+    only half. The byte sums alongside make it double as the size preview:
+    what would a mirror run fetch, and what would it leave out.
     """
     if weg is None:
         weg = _db_zustand(out).verschwunden_lesen()
@@ -605,8 +603,8 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
             da = False
         if da:
             z["vorhanden"] += 1
-    # Grabsteine gehören zur Bilanz: sie erklären, warum hier mehr liegt als
-    # das Laufwerk noch kennt – eine Lücke sind sie nicht.
+    # Tombstones belong in the balance: they explain why more lies here
+    # than the drive still knows – they are not a gap.
     for rel in weg:
         ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
         z = je.setdefault(ordner, {"ordner": ordner, "erwartet": 0, "vorhanden": 0,
@@ -636,7 +634,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
 
 
 def nur_pruefen(graph, out, auswahl, still=False, zustand=None):
-    """--check: nur melden, was fehlt. Lädt nichts und rührt den Zeiger nicht an."""
+    """--check: only report what is missing. Loads nothing, leaves the pointer alone."""
     out = Path(out)
     zustand = zustand or _db_zustand(out)
     eintraege, _ = sammle(graph, None)
@@ -652,12 +650,12 @@ def nur_pruefen(graph, out, auswahl, still=False, zustand=None):
 
 
 def nur_ordner(graph, out, auswahl, still=False, zustand=None):
-    """--folders: nur die Struktur holen, nichts herunterladen.
+    """--folders: fetch only the structure, download nothing.
 
-    Zählt bewusst VOLLSTÄNDIG auf und ignoriert den gespeicherten Delta-Zeiger:
-    ein Abgleich soll den ganzen Baum zeigen, nicht die Handvoll Ordner, die
-    sich seit gestern geändert haben. Und er rückt den Zeiger nicht vor – sonst
-    hielte der nächste Export die noch nie geholten Dateien für erledigt.
+    Deliberately enumerates IN FULL and ignores the stored delta pointer: a
+    sync should show the whole tree, not the handful of folders that
+    changed since yesterday. And it does not advance the pointer – the next
+    export would otherwise consider the never-fetched files done.
     """
     out = Path(out)
     zustand = zustand or _db_zustand(out)

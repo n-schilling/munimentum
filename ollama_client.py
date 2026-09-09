@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
 """
-ollama_client.py – der eine Draht zum lokalen Modellserver.
+ollama_client.py – the one wire to the local model server.
 
-Bis 5.3 sprachen vier Stellen einzeln mit Ollama: das Einbetten beim
-Indexlauf (rag_index), das Einbetten der Suchanfrage (mcp_server), die
-formulierte Antwort (answer) und die Statusfrage der Oberfläche (app). Jede
-hatte ihre eigene URL-Vorgabe und ihr eigenes Fehlerbild. Hier liegt die
-API einmal – kommt ein zweiter Modellserver (openai-kompatibel), lernt
-genau dieses Modul seine Schnittstelle.
+Four places used to talk to Ollama individually: embedding during the index
+run (rag_index), embedding the search query (mcp_server), the phrased
+answer (answer) and the interface's status question (app). Each had its own
+URL default and its own error picture. Here the API lives once – if a
+second model server arrives (openai-compatible), exactly this module learns
+its interface.
 
-Die Fehlerpolitik bleibt bei den Aufrufern: ein Indexlauf will mit klarer
-Meldung enden, die Suche still auf Volltext zurückfallen, die Antwort nie
-eine Ausnahme in den Datenstrom werfen. Hier wird nur unterschieden, was
-die Aufrufer unterscheiden müssen: „Modell nicht geladen" (404) gegenüber
-allem anderen.
+The error policy stays with the callers: an index run wants to end with a
+clear message, the search to fall back silently to full text, the answer to
+never throw an exception into the data stream. Only what the callers must
+distinguish is distinguished here: "model not loaded" (404) versus
+everything else.
 
-requests wird erst im Aufruf importiert – die Aufrufer tun das heute genauso,
-damit der Import dieses Moduls nichts kostet.
+requests is imported only inside the calls – the callers do the same today,
+so importing this module costs nothing.
 """
 
 import json
@@ -25,7 +25,7 @@ DEFAULT_URL = "http://localhost:11434"
 
 
 class ModellFehlt(RuntimeError):
-    """Der Server läuft, aber das Modell ist nicht geladen (HTTP 404)."""
+    """The server is running, but the model is not loaded (HTTP 404)."""
 
     def __init__(self, model):
         super().__init__(f"Modell nicht geladen: {model}")
@@ -33,10 +33,11 @@ class ModellFehlt(RuntimeError):
 
 
 def embed(texts, model, url=DEFAULT_URL, timeout=600):
-    """POST /api/embed für einen Stapel Texte -> Liste von Vektoren.
+    """POST /api/embed for a batch of texts -> list of vectors.
 
-    Netz- und HTTP-Fehler kommen unverändert durch; nur der 404 wird als
-    ModellFehlt übersetzt, weil jeder Aufrufer ihn anders beantworten will.
+    Network and HTTP errors pass through unchanged; only the 404 is
+    translated into ModellFehlt, because every caller wants to answer it
+    differently.
     """
     import requests
     r = requests.post(f"{url.rstrip('/')}/api/embed",
@@ -46,7 +47,7 @@ def embed(texts, model, url=DEFAULT_URL, timeout=600):
     r.raise_for_status()
     data = r.json()
     embs = data.get("embeddings")
-    if embs is None and "embedding" in data:      # ältere Single-Form
+    if embs is None and "embedding" in data:      # older single form
         embs = [data["embedding"]]
     if not embs:
         raise RuntimeError(f"Unerwartete Embedding-Antwort: {str(data)[:200]}")
@@ -55,10 +56,10 @@ def embed(texts, model, url=DEFAULT_URL, timeout=600):
 
 def chat_stream(messages, model, url=DEFAULT_URL, options=None, think=False,
                 timeout=600):
-    """POST /api/chat mit stream=True -> die NDJSON-Zeilen als dicts.
+    """POST /api/chat with stream=True -> the NDJSON lines as dicts.
 
-    Liefert jede geparste Zeile, wie sie kommt – was davon Text ist und wann
-    Schluss ist ("done"), entscheidet der Aufrufer. 404 -> ModellFehlt.
+    Yields every parsed line as it comes – what of it is text and when it
+    ends ("done") is the caller's call. 404 -> ModellFehlt.
     """
     import requests
     r = requests.post(f"{url.rstrip('/')}/api/chat",
@@ -74,15 +75,15 @@ def chat_stream(messages, model, url=DEFAULT_URL, options=None, think=False,
         try:
             yield json.loads(zeile.decode("utf-8", "replace"))
         except ValueError:
-            continue                  # Ollama schickt gelegentlich Leerzeilen
+            continue                  # Ollama occasionally sends blank lines
 
 
 def tags(url=DEFAULT_URL, timeout=1.5):
-    """GET /api/tags -> die Namen der geladenen Modelle.
+    """GET /api/tags -> the names of the loaded models.
 
-    Der kurze Timeout ist Absicht: die Oberfläche fragt das im Statuspoll,
-    und ein nicht laufender Server soll die Antwort nicht sekundenlang
-    verzögern.
+    The short timeout is deliberate: the interface asks this in its status
+    poll, and a server that is not running must not delay the answer for
+    seconds.
     """
     import requests
     r = requests.get(f"{url.rstrip('/')}/api/tags", timeout=timeout)
@@ -91,7 +92,7 @@ def tags(url=DEFAULT_URL, timeout=1.5):
 
 
 def hat_modell(namen, gesucht):
-    """"bge-m3" in der Liste heißt "bge-m3:latest" – ohne Tag vergleichen."""
+    """"bge-m3" in the list means "bge-m3:latest" – compare without the tag."""
     if not gesucht:
         return False
     rumpf = gesucht.split(":", 1)[0]

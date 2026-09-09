@@ -1,13 +1,13 @@
-"""Tests für store_layout.py – welche Vektordatei gilt und wann sie weggeht.
+"""Tests for store_layout.py – which vector file is valid and when it goes.
 
-Hintergrund ist ein Fehler aus der Praxis: unter Windows ließ sich vectors.npy
-nicht ersetzen, solange irgendein Leser sie per mmap offen hielt – der
-MCP-Server, die Suche in der App, ein von Claude gestarteter Server. Der
-Indexlauf starb dort in der letzten Zeile, nachdem er alles eingebettet hatte.
+The background is a bug from the field: on Windows, vectors.npy could not
+be replaced while any reader held it open via mmap – the MCP server, the
+search in the app, a server started by Claude. The index run died there on
+its last line after embedding everything.
 
-Ersetzt wird deshalb nichts mehr: jeder Lauf schreibt eine neue Datei und
-info.json sagt, welche gilt. Hier steht, dass diese Zuordnung in allen drei
-Fällen stimmt – neuer Store, Lauf ohne Embeddings, Store von früher.
+So nothing is replaced any more: every run writes a new file and info.json
+says which one is valid. This file asserts that the mapping holds in all
+three cases – new store, run without embeddings, legacy store.
 """
 
 import json
@@ -28,7 +28,7 @@ def lege_an(ordner, *namen):
 
 
 # --------------------------------------------------------------------------
-# Welche Datei gilt
+# Which file is valid
 # --------------------------------------------------------------------------
 def test_info_bei_fehlender_datei(tmp_path):
     assert store_layout.info(tmp_path) == {}
@@ -46,20 +46,20 @@ def test_eintrag_bestimmt_die_datei(tmp_path):
 
 
 def test_leerer_eintrag_heisst_keine_vektoren(tmp_path):
-    """Ein Lauf ohne Embeddings zieht die Vektoren zurück. Läge die alte Datei
-    noch da, weil sie sich nicht löschen ließ, dürfte sie NICHT wieder gelten –
-    ihre Zeilen passen nicht mehr zur neu geschriebenen DB."""
+    """A run without embeddings retires the vectors. If the old file were
+    still there because it could not be deleted, it must NOT become valid
+    again – its rows no longer fit the freshly written DB."""
     lege_an(tmp_path, store_layout.LEGACY, "vectors-3.npy")
     schreibe_info(tmp_path, vectors=None)
     assert store_layout.vectors_path(tmp_path) is None
 
 
 def test_store_von_frueher_behaelt_seine_vektoren(tmp_path):
-    """Ein Index, der vor der Umstellung gebaut wurde, kennt den Eintrag nicht.
-    Ohne diesen Rückfall stünde er nach dem Update ohne Embeddings da und die
-    Suche fiele stillschweigend auf reines BM25 zurück."""
+    """An index built before the changeover does not know the entry.
+    Without this fallback it would stand there without embeddings after the
+    update, and search would silently fall back to plain BM25."""
     lege_an(tmp_path, store_layout.LEGACY)
-    schreibe_info(tmp_path, model="bge-m3")            # info.json ohne "vectors"
+    schreibe_info(tmp_path, model="bge-m3")            # info.json without "vectors"
     assert store_layout.vectors_path(tmp_path).name == store_layout.LEGACY
 
 
@@ -68,13 +68,13 @@ def test_ganz_ohne_info_und_ohne_datei(tmp_path):
 
 
 def test_eintrag_zeigt_ins_leere(tmp_path):
-    """Genannt, aber nicht da: kein Absturz, sondern kein Vektorteil."""
+    """Named but not there: no crash, just no vector part."""
     schreibe_info(tmp_path, vectors="vectors-9.npy")
     assert store_layout.vectors_path(tmp_path) is None
 
 
 # --------------------------------------------------------------------------
-# Der nächste Name
+# The next name
 # --------------------------------------------------------------------------
 def test_erster_name(tmp_path):
     assert store_layout.next_vectors_path(tmp_path).name == "vectors-1.npy"
@@ -86,10 +86,10 @@ def test_zaehlt_hoch(tmp_path):
 
 
 def test_zaehlt_nach_dem_ordner_nicht_nach_info(tmp_path):
-    """Eine Datei, die beim Aufräumen nicht wegging, hält noch ein Leser offen.
-    Sie zu überschreiben wäre genau der Fehler, um den es hier geht."""
+    """A file that did not go during clean-up is still held open by a
+    reader. Overwriting it would be exactly the bug this is all about."""
     lege_an(tmp_path, "vectors-4.npy", "vectors-5.npy")
-    schreibe_info(tmp_path, vectors="vectors-4.npy")   # 5 ist verwaist
+    schreibe_info(tmp_path, vectors="vectors-4.npy")   # 5 is orphaned
     assert store_layout.next_vectors_path(tmp_path).name == "vectors-6.npy"
 
 
@@ -99,7 +99,7 @@ def test_ignoriert_fremde_namen(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Aufräumen
+# Cleaning up
 # --------------------------------------------------------------------------
 def test_raeumt_die_vorigen_weg(tmp_path):
     lege_an(tmp_path, "vectors-1.npy", "vectors-2.npy", "vectors-3.npy")
@@ -108,8 +108,8 @@ def test_raeumt_die_vorigen_weg(tmp_path):
 
 
 def test_raeumt_auch_den_alten_festen_namen(tmp_path):
-    """Nach dem ersten Lauf auf einem Store von früher bleibt vectors.npy sonst
-    für immer liegen – bei einem echten Bestand einige hundert Megabyte."""
+    """After the first run on a legacy store, vectors.npy would otherwise
+    lie around forever – several hundred megabytes on a real corpus."""
     lege_an(tmp_path, store_layout.LEGACY, "vectors-1.npy")
     store_layout.prune_vectors(tmp_path, tmp_path / "vectors-1.npy")
     assert not (tmp_path / store_layout.LEGACY).exists()
@@ -121,9 +121,9 @@ def test_ohne_zu_behaltende_datei_geht_alles(tmp_path):
 
 
 def test_was_sich_nicht_loeschen_laesst_bleibt_liegen(tmp_path, monkeypatch):
-    """Der Normalfall unter Windows direkt nach einem Lauf: der noch laufende
-    MCP-Server hält die vorige Fassung. Das ist kein Fehler und darf den Lauf
-    nicht aufhalten – die Datei kostet Platz bis zum nächsten Mal."""
+    """The normal case on Windows right after a run: the still-running MCP
+    server holds the previous version. That is not an error and must not
+    hold up the run – the file costs space until next time."""
     lege_an(tmp_path, "vectors-1.npy", "vectors-2.npy")
     echt = type(tmp_path).unlink
 

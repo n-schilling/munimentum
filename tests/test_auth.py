@@ -1,15 +1,16 @@
-"""Tests für auth.py – die Anmeldung, die sich beide Export-Skripte teilen.
+"""Tests for auth.py – the sign-in that both export scripts share.
 
-Nie ins Netz und nie ein Anmeldefenster: msal wird durchweg ersetzt.
+Never touches the network and never opens a sign-in window: msal is
+replaced throughout.
 
-Zwei Zusagen stehen im Mittelpunkt, weil an ihnen Läufe hängen:
+Two promises take centre stage, because runs depend on them:
 
-  * Der Rückfall geht nur in eine Richtung. Ist „login“ eingestellt und kein
-    Cache da, darf ein hinterlegter Schlüssel einspringen. Umgekehrt nie – wer
-    den Schlüssel-Modus wählt, soll nicht überraschend ein Anmeldefenster sehen.
-  * Der Cache landet wirklich auf der Platte. Genau daran hängt, ob ein
-    Zeitplan einen Neustart überlebt; ohne ihn wäre der Login-Modus nur eine
-    umständlichere Variante des Schlüssels.
+  * The fallback goes in one direction only. With "login" configured and no
+    cache present, a stored key may step in. Never the other way round –
+    whoever picks key mode should not be surprised by a sign-in window.
+  * The cache really lands on disk. That is exactly what decides whether a
+    schedule survives a reboot; without it, login mode would just be a more
+    cumbersome variant of the key.
 """
 
 import json
@@ -24,7 +25,7 @@ import settings
 
 @pytest.fixture(autouse=True)
 def sauber(tmp_path, monkeypatch):
-    """Eigener Datenordner, leerer Puffer, keine geerbten Variablen."""
+    """Own data folder, empty cache, no inherited variables."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     for v in ("GRAPH_TOKEN", "GRAPH_AUTH", "GRAPH_CLIENT_ID", "GRAPH_TENANT",
@@ -42,10 +43,10 @@ def konfig(tmp_path, **werte):
 
 
 # --------------------------------------------------------------------------
-# Modus und Ziel
+# Mode and target
 # --------------------------------------------------------------------------
 def test_modus_ist_ohne_alles_der_schluessel(sauber):
-    """Der Weg, der ohne Rückfrage bei der IT funktioniert, bleibt die Vorgabe."""
+    """The path that works without asking IT for help remains the default."""
     assert auth.modus() == "token"
 
 
@@ -54,7 +55,7 @@ def test_modus_ist_ohne_alles_der_schluessel(sauber):
     ("token", "token"), ("quatsch", "token"), ("", "token"),
 ])
 def test_modus_aus_der_konfiguration(sauber, wert, erwartet):
-    """Ein Tippfehler fällt auf den Weg zurück, der immer geht."""
+    """A typo falls back to the path that always works."""
     konfig(sauber, auth_mode=wert)
     assert auth.modus() == erwartet
 
@@ -66,7 +67,7 @@ def test_modus_umgebung_schlaegt_datei(sauber, monkeypatch):
 
 
 def test_ohne_angabe_microsofts_oeffentliche_anwendung(sauber):
-    """Für die braucht es keine Registrierung – deshalb ist sie die Vorgabe."""
+    """It needs no app registration – which is why it is the default."""
     assert auth.client_id() == auth.STANDARD_CLIENT_ID
     assert auth.tenant() == auth.STANDARD_TENANT
     assert auth.eigene_registrierung() is False
@@ -80,15 +81,15 @@ def test_eigene_registrierung_wird_erkannt(sauber):
 
 
 def test_leere_angaben_zaehlen_als_keine(sauber):
-    """Ein geleertes Feld in der Oberfläche darf nicht in eine kaputte
-    Authority münden."""
+    """A field cleared in the UI must not end up in a broken
+    authority."""
     konfig(sauber, client_id="", tenant="")
     assert auth.client_id() == auth.STANDARD_CLIENT_ID
     assert auth.eigene_registrierung() is False
 
 
 # --------------------------------------------------------------------------
-# Schlüssel lesen
+# Reading the key
 # --------------------------------------------------------------------------
 def test_schluessel_aus_der_umgebung(sauber, monkeypatch):
     monkeypatch.setenv("GRAPH_TOKEN", '  "Bearer eyJ0abc"  ')
@@ -96,8 +97,8 @@ def test_schluessel_aus_der_umgebung(sauber, monkeypatch):
 
 
 def test_schluessel_neben_dem_aufruf_schlaegt_datenordner(sauber, tmp_path):
-    """„gx_token.txt neben dieses Skript legen“ ist die dokumentierte Regel –
-    wer das tut, soll damit auch gewinnen."""
+    """"Put gx_token.txt next to this script" is the documented rule –
+    whoever does that should win with it too."""
     unter = tmp_path / "woanders"
     unter.mkdir()
     (tmp_path / auth.TOKEN_DATEI).write_text("aus-dem-datenordner", encoding="utf-8")
@@ -125,7 +126,7 @@ def test_leere_datei_zaehlt_nicht(sauber, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# msal-Ersatz
+# msal stand-in
 # --------------------------------------------------------------------------
 class FakeCache:
     def __init__(self):
@@ -142,7 +143,7 @@ class FakeCache:
 
 
 class FakeApp:
-    """Verhält sich wie msal.PublicClientApplication, nur ohne Netz."""
+    """Behaves like msal.PublicClientApplication, just without the network."""
 
     letzte = None
 
@@ -151,8 +152,8 @@ class FakeApp:
         self.authority = authority
         self.cache = token_cache
         self.konten = []
-        self.still = None            # Antwort auf acquire_token_silent
-        self.interaktiv = None       # Antwort auf acquire_token_interactive
+        self.still = None            # response to acquire_token_silent
+        self.interaktiv = None       # response to acquire_token_interactive
         self.device = None
         self.gesehen = []
         FakeApp.letzte = self
@@ -188,7 +189,7 @@ def fake_msal(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Anmeldung
+# Signing in
 # --------------------------------------------------------------------------
 def test_stille_erneuerung_fragt_niemanden(sauber, fake_msal):
     anmeldung = auth.Login(["S"])
@@ -207,7 +208,7 @@ def test_ohne_cache_wird_gefragt(sauber, fake_msal):
 
 
 def test_nur_still_reisst_kein_fenster_auf(sauber, fake_msal):
-    """Der Zeitplan läuft nachts – ein Anmeldefenster wartete bis zum Morgen."""
+    """The schedule runs at night – a sign-in window would wait until morning."""
     anmeldung = auth.Login(["S"])
     anmeldung.app.interaktiv = {"access_token": "darf-nicht"}
     assert anmeldung.anmelden(nur_still=True) is False
@@ -215,8 +216,8 @@ def test_nur_still_reisst_kein_fenster_auf(sauber, fake_msal):
 
 
 def test_weich_meldet_misserfolg_statt_abzubrechen(sauber, fake_msal):
-    """Der Teams-Export braucht das: erst Kanalrechte fragen, bei Ablehnung
-    mit reinem Chat-Zugriff weiter."""
+    """The Teams export needs this: ask for channel rights first, and on
+    refusal carry on with chat-only access."""
     anmeldung = auth.Login(["Voll"])
     anmeldung.app.interaktiv = {"error_description": "Admin consent required\nZeile2"}
     assert anmeldung.anmelden(weich=True) is False
@@ -262,7 +263,7 @@ def test_eigene_registrierung_kommt_bei_msal_an(sauber, fake_msal):
 
 
 # --------------------------------------------------------------------------
-# Cache auf der Platte – daran hängt der unbeaufsichtigte Zeitplan
+# Cache on disk – the unattended schedule depends on it
 # --------------------------------------------------------------------------
 def test_cache_wird_geschrieben(sauber, fake_msal, tmp_path):
     anmeldung = auth.Login(["S"])
@@ -274,7 +275,7 @@ def test_cache_wird_geschrieben(sauber, fake_msal, tmp_path):
 
 
 def test_cache_gehoert_nur_dem_besitzer(sauber, fake_msal, tmp_path):
-    """Darin steht das Refresh Token – wochenlang gültig."""
+    """It holds the refresh token – valid for weeks."""
     if sys.platform.startswith("win"):
         pytest.skip("Windows kennt den Dateimodus nicht")
     anmeldung = auth.Login(["S"])
@@ -285,7 +286,7 @@ def test_cache_gehoert_nur_dem_besitzer(sauber, fake_msal, tmp_path):
 
 def test_kaputter_cache_haelt_nicht_auf(sauber, fake_msal, tmp_path):
     (tmp_path / auth.CACHE_DATEI).write_text("kaputt", encoding="utf-8")
-    anmeldung = auth.Login(["S"])          # wirft nicht
+    anmeldung = auth.Login(["S"])          # does not raise
     anmeldung.app.interaktiv = {"access_token": "tok"}
     assert anmeldung.anmelden() is True
 
@@ -294,7 +295,7 @@ def test_abmelden_verwirft_den_cache(sauber, fake_msal, tmp_path):
     (tmp_path / auth.CACHE_DATEI).write_text("{}", encoding="utf-8")
     assert auth.cache_leeren() is True
     assert not (tmp_path / auth.CACHE_DATEI).exists()
-    assert auth.cache_leeren() is True      # zweimal ist auch in Ordnung
+    assert auth.cache_leeren() is True      # twice is fine as well
 
 
 def test_angemeldet_ohne_cache(sauber, fake_msal):
@@ -316,7 +317,7 @@ def test_angemeldet_nennt_das_konto(sauber, fake_msal, tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Den Weg wählen – hier entscheidet sich, ob ein Lauf startet
+# Choosing the path – this is where a run starts or does not
 # --------------------------------------------------------------------------
 def wege():
     gesehen = []
@@ -332,8 +333,8 @@ def test_schluesselmodus_nimmt_den_schluessel(sauber, monkeypatch):
 
 
 def test_schluesselmodus_ohne_schluessel_bricht_ab(sauber, capsys):
-    """Kein Fenster aus einem Unterprozess: die App zeigt den Token-Assistenten,
-    sobald das strukturierte Ereignis kommt."""
+    """No window from a subprocess: the app shows the token assistant as
+    soon as the structured event arrives."""
     gesehen, k, ell = wege()
     with pytest.raises(SystemExit):
         auth.waehle_zugang(k, ell, ausgabe=lambda *_: None)
@@ -342,9 +343,9 @@ def test_schluesselmodus_ohne_schluessel_bricht_ab(sauber, capsys):
 
 
 def test_loginmodus_versucht_zuerst_still(sauber, monkeypatch):
-    """Aus der Praxis gemeldet: der Export riss sofort den Browser auf, obwohl
-    ein gültiger Schlüssel bereitlag. Der Rückfall hing an einem SystemExit –
-    und das kommt erst, nachdem das Fenster offen war. Also erst still fragen.
+    """Reported from the field: the export immediately tore open the browser
+    although a valid key was at hand. The fallback hung on a SystemExit –
+    which only comes after the window was already open. So ask silently first.
     """
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.setenv("GRAPH_TOKEN", "abc")
@@ -354,8 +355,8 @@ def test_loginmodus_versucht_zuerst_still(sauber, monkeypatch):
 
 
 def test_loginmodus_faellt_auf_den_schluessel_zurueck(sauber, monkeypatch):
-    """Cache weg, aber ein Schlüssel liegt bereit: dann läuft der Export – und
-    zwar ohne dass jemand ein Anmeldefenster wegklicken muss."""
+    """Cache gone, but a key is at hand: then the export runs – without
+    anyone having to click away a sign-in window."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.setenv("GRAPH_TOKEN", "abc")
     gesehen = []
@@ -375,8 +376,8 @@ def test_loginmodus_faellt_auf_den_schluessel_zurueck(sauber, monkeypatch):
 
 
 def test_loginmodus_ohne_ausweg_bricht_ab(sauber, monkeypatch, capsys):
-    """Kein Cache, kein Schlüssel – kein Fenster, sondern das Ereignis, auf das
-    die App mit ihrem Token-Assistenten reagiert."""
+    """No cache, no key – no window, but the event the app reacts to with
+    its token assistant."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     gesehen = []
 
@@ -409,11 +410,11 @@ def test_beschreibe_nennt_die_eigene_registrierung(sauber, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Die Skripte nutzen wirklich den gemeinsamen Weg
+# The scripts really use the shared path
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("modul", ["outlook_export", "teams_export"])
 def test_skript_nutzt_auth(modul):
-    """Sonst liefe die Anmeldung wieder auseinander – genau das war der Anlass."""
+    """Otherwise sign-in would drift apart again – exactly what prompted this."""
     from pathlib import Path
     quelle = (Path(__file__).resolve().parent.parent / f"{modul}.py").read_text(
         encoding="utf-8")
@@ -424,12 +425,12 @@ def test_skript_nutzt_auth(modul):
 
 
 # --------------------------------------------------------------------------
-# Login-Modus mit bereitliegendem Schlüssel
+# Login mode with a key at hand
 #
-# Aus der Praxis gemeldet: „python3 outlook_export.py -default“ riss sofort den
-# Browser auf, obwohl ein gültiger Schlüssel in gx_token.txt lag. Der Rückfall
-# gab es zwar, aber er hing an einem SystemExit – und das kommt erst, nachdem
-# das Anmeldefenster offen war und jemand es weggeklickt hat.
+# Reported from the field: "python3 outlook_export.py -default" immediately
+# tore open the browser although a valid key sat in gx_token.txt. The
+# fallback existed, but it hung on a SystemExit – which only comes after the
+# sign-in window was open and someone had clicked it away.
 # --------------------------------------------------------------------------
 class _Protokoll:
     def __init__(self):
@@ -443,7 +444,7 @@ class _Protokoll:
 
 
 def _wege(cache_taugt, interaktiv_erlaubt=True):
-    """(mit_schluessel, mit_login, gesehen) – mit_login merkt sich das Wie."""
+    """(mit_schluessel, mit_login, gesehen) – mit_login records the how."""
     gesehen = []
 
     def mit_login(nur_still=False):
@@ -458,8 +459,8 @@ def _wege(cache_taugt, interaktiv_erlaubt=True):
 
 
 def test_login_modus_nimmt_den_schluessel_ohne_fenster(monkeypatch, tmp_path):
-    """Der gemeldete Fall. Zuerst still versuchen; scheitert das und liegt ein
-    Schlüssel bereit, wird der genommen – ohne Browser."""
+    """The reported case. Try silently first; if that fails and a key is at
+    hand, it is taken – without a browser."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.setenv("GRAPH_TOKEN", "eyJ0gueltig")
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False,
@@ -481,7 +482,7 @@ def test_login_modus_nutzt_den_cache_wenn_er_traegt(monkeypatch):
 
 
 def test_ohne_cache_und_ohne_schluessel_bricht_ab(monkeypatch):
-    """Nie ein Fenster aus einem Unterprozess – die App übernimmt von hier."""
+    """Never a window from a subprocess – the app takes over from here."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False)
@@ -491,7 +492,7 @@ def test_ohne_cache_und_ohne_schluessel_bricht_ab(monkeypatch):
 
 
 def test_zeitplan_reisst_nie_ein_fenster_auf(monkeypatch):
-    """Auch der Zeitplan endet still mit dem Ereignis – niemand sitzt davor."""
+    """The schedule too ends quietly with the event – nobody is watching."""
     monkeypatch.setenv("GRAPH_AUTH", "login")
     monkeypatch.delenv("GRAPH_TOKEN", raising=False)
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=False,
@@ -502,8 +503,8 @@ def test_zeitplan_reisst_nie_ein_fenster_auf(monkeypatch):
 
 
 def test_schluesselmodus_oeffnet_nie_ungefragt_ein_fenster(monkeypatch):
-    """Die Gegenrichtung: wer den Schlüssel wählt, soll nicht überrascht
-    werden."""
+    """The opposite direction: whoever picks the key should not be
+    surprised."""
     monkeypatch.setenv("GRAPH_AUTH", "token")
     monkeypatch.setenv("GRAPH_TOKEN", "eyJ0gueltig")
     mit_schluessel, mit_login, gesehen = _wege(cache_taugt=True,

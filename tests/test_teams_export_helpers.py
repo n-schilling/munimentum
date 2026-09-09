@@ -1,4 +1,4 @@
-"""Tests für die reinen Helfer in teams_export.py (keine Graph-/Netzwerk-Aufrufe)."""
+"""Tests for the pure helpers in teams_export.py (no Graph/network calls)."""
 
 import teams_export as te
 
@@ -9,7 +9,7 @@ def test_safe_filenames():
     assert te.safe("x" * 200, maxlen=10) == "x" * 10
     assert te.safe("") == "unbenannt"
     assert te.safe(None) == "unbenannt"
-    assert te.safe("...") == "unbenannt"                # nur Punkte -> leer
+    assert te.safe("...") == "unbenannt"                # dots only -> empty
 
 
 def test_short_id_is_stable_hex():
@@ -22,7 +22,7 @@ def test_short_id_is_stable_hex():
 def test_parse_ts_handles_graph_timestamps():
     dt = te.parse_ts("2025-06-01T09:30:00Z")
     assert dt is not None and dt.tzinfo is not None
-    # Graph liefert teils 7-stellige Sekundenbruchteile
+    # Graph sometimes delivers 7-digit fractional seconds
     assert te.parse_ts("2025-06-01T09:30:00.1234567Z") is not None
     assert te.parse_ts("unsinn") is None
     assert te.parse_ts("") is None

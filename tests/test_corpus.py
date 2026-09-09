@@ -1,4 +1,4 @@
-"""Tests für corpus.py – Parsen der Exporte und Chunking (nur Standardbibliothek)."""
+"""Tests for corpus.py – parsing the exports and chunking (stdlib only)."""
 
 import textwrap
 
@@ -8,7 +8,7 @@ import corpus
 
 
 # --------------------------------------------------------------------------
-# HTML / Text-Aufbereitung
+# HTML / text clean-up
 # --------------------------------------------------------------------------
 def test_strip_html_removes_tags_scripts_and_entities():
     s = "<p>Hallo <b>Welt</b></p><script>alert(1)</script><style>p{}</style>&amp; mehr"
@@ -75,15 +75,15 @@ def test_split_long_text_overlaps_and_covers():
     words = " ".join(f"wort{i}" for i in range(200))
     chunks = corpus._split(words, size=120, overlap=30)
     assert len(chunks) > 1
-    # Jedes Stück ist Substring des Originals; Anfang und Ende sind abgedeckt
+    # Every chunk is a substring of the original; start and end are covered
     for c in chunks:
         assert c in words
     assert words.startswith(chunks[0])
     assert words.endswith(chunks[-1])
-    # Überlappung: der Anfang jedes Stücks liegt noch im Vorgänger
+    # Overlap: the start of each chunk still lies within its predecessor
     for a, b in zip(chunks, chunks[1:], strict=False):
         assert b[:15] in a
-    # Kein Stück (deutlich) über der Zielgröße
+    # No chunk (noticeably) above the target size
     assert all(len(c) <= 120 for c in chunks)
 
 
@@ -107,7 +107,7 @@ def test_embed_text_and_hash_are_deterministic():
 
 
 # --------------------------------------------------------------------------
-# Teams-HTML
+# Teams HTML
 # --------------------------------------------------------------------------
 TEAMS_HTML = """<html><body>
 <h1>Projekt Alpha</h1>
@@ -140,14 +140,14 @@ def test_load_teams_builds_records(tmp_path):
     d = tmp_path / "1on1"
     d.mkdir()
     (d / "alice__abc123.html").write_text(TEAMS_HTML, encoding="utf-8")
-    (tmp_path / "index.html").write_text("<html></html>", encoding="utf-8")  # wird ignoriert
+    (tmp_path / "index.html").write_text("<html></html>", encoding="utf-8")  # is ignored
 
     recs = corpus.load_teams(str(tmp_path))
     assert len(recs) == 2
     r = recs[0]
     assert r["uid"] == "teams:1on1/alice__abc123.html:0"
     assert r["src"] == "teams"
-    # Der Ablageordner: danach filtert die Suche, "channels" trifft alle Kanäle.
+    # The storage folder: search filters by it, "channels" matches all channels.
     assert r["ctx"] == "1on1"
     assert r["who"] == "Alice Example"
     assert "alice example" in r["ppl"]
@@ -194,7 +194,7 @@ def test_load_outlook_parses_eml(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Kalender (.ics) und Kontakte (.vcf)
+# Calendar (.ics) and contacts (.vcf)
 # --------------------------------------------------------------------------
 ICS = "\r\n".join([
     "BEGIN:VCALENDAR",
@@ -219,7 +219,7 @@ def test_load_calendar_parses_ics(tmp_path):
     assert len(recs) == 1
     r = recs[0]
     assert r["title"] == "Planung, Quartal"
-    # Der Ordnerpfad, damit die Suche danach filtern kann wie nach E-Mail/…
+    # The folder path, so search can filter by it just like by E-Mail/…
     assert r["ctx"] == "kalender/Arbeit"
     assert r["who"] == "Alice Example"
     assert "bob@example.com" in r["ppl"]
@@ -252,7 +252,7 @@ def test_load_contacts_parses_vcf(tmp_path):
     assert r["title"] == "Alice Example"
     assert r["ctx"] == "kontakte/Team"
     assert "Firma GmbH · Entwicklung" in r["text"]
-    assert "Erste Zeileweiter gefaltet" in r["text"]  # RFC-Zeilenfaltung aufgelöst
+    assert "Erste Zeileweiter gefaltet" in r["text"]  # RFC line folding resolved
     assert "alice@example.com" in r["ppl"]
 
 
@@ -270,12 +270,12 @@ def test_ics_when_variants():
 def test_ics_when_zeitzonen():
     from datetime import datetime
     utc = corpus.UTC
-    # Windows-Zeitzonenname aus Exchange-Einladungen: 15:00 London = 14:00 UTC
+    # Windows time zone name from Exchange invitations: 15:00 London = 14:00 UTC
     ts, _ = corpus._ics_when("20250610T150000", False, "GMT Standard Time")
     assert datetime.fromtimestamp(ts, utc).hour == 14
     ts, _ = corpus._ics_when("20250610T150000", False, "Pacific Standard Time")
     assert datetime.fromtimestamp(ts, utc).hour == 22
-    # IANA-Namen direkt, "Z" schlägt TZID, Unbekanntes bleibt Lokalzeit
+    # IANA names directly, "Z" beats TZID, unknown zones stay local time
     ts, _ = corpus._ics_when("20250610T150000", False, "America/New_York")
     assert datetime.fromtimestamp(ts, utc).hour == 19
     ts, _ = corpus._ics_when("20250610T150000Z", False, "Pacific Standard Time")
@@ -291,7 +291,7 @@ def test_unfold_unescape_prop_pval_demail():
     name, params, value = corpus._prop(
         'ORGANIZER;CN="Alice; Ex":mailto:alice@example.com')
     assert name == "ORGANIZER"
-    assert corpus._pval(params, "CN") == "Alice; Ex"  # Anführungszeichen schützen ;
+    assert corpus._pval(params, "CN") == "Alice; Ex"  # quotes protect the ;
     assert value == "mailto:alice@example.com"
     assert corpus._prop("zeile ohne doppelpunkt") == (None, None, None)
     assert corpus._pval(";CN=Bob", "CN") == "Bob"
@@ -301,8 +301,8 @@ def test_unfold_unescape_prop_pval_demail():
 
 
 def test_calendar_file_folgt_der_tzid(tmp_path):
-    """Ein Termin mit Windows-TZID muss im Index dieselbe Zeit tragen wie in
-    der Kalenderansicht – vorher las der Index ihn als Lokalzeit."""
+    """An event with a Windows TZID must carry the same time in the index as
+    in the calendar view – not be read as local time."""
     from datetime import datetime
     d = tmp_path / "kalender" / "Arbeit"
     d.mkdir(parents=True)
@@ -317,10 +317,10 @@ def test_calendar_file_folgt_der_tzid(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Verlauf: welche Mails zusammengehören
+# Threads: which mails belong together
 #
-# Alles dafür steht in den .eml-Dateien – ein Neu-Export ist nicht nötig. Am
-# echten Bestand gemessen (Stichprobe 400 von 45.615): Thread-Index 89 %,
+# Everything needed is in the .eml files – no re-export required. Measured
+# on the real corpus (sample of 400 out of 45,615): Thread-Index 89 %,
 # References/In-Reply-To 58 %, Message-ID 100 %.
 # --------------------------------------------------------------------------
 def _msg(**kopf):
@@ -340,7 +340,7 @@ def test_thread_index_gewinnt():
 
 
 def test_antwort_landet_im_selben_gespraech():
-    """Exchange hängt je Antwort 5 Byte an – nur die ersten 22 zählen."""
+    """Exchange appends 5 bytes per reply – only the first 22 count."""
     import base64
     kopf = bytes(range(22))
     erste = corpus.thread_key(_msg(Thread_Index=base64.b64encode(kopf).decode()))
@@ -350,8 +350,8 @@ def test_antwort_landet_im_selben_gespraech():
 
 
 def test_references_nimmt_den_anfang_des_gespraechs():
-    """Nicht die letzte Nachricht, sondern die erste – sonst zerfiele ein
-    Verlauf in so viele Gespräche, wie er Antworten hat."""
+    """Not the last message but the first – otherwise a thread would fall
+    apart into as many conversations as it has replies."""
     key = corpus.thread_key(_msg(References="<start@x> <mitte@x> <ende@x>"))
     assert key == "mid:start@x"
 
@@ -361,8 +361,8 @@ def test_in_reply_to_als_naechstes():
 
 
 def test_ohne_alles_ein_gespraech_fuer_sich():
-    """Ein Verlauf aus einer Nachricht ist richtig, nur langweilig – besser als
-    gar keine Zuordnung."""
+    """A thread of one message is correct, just boring – better than no
+    assignment at all."""
     assert corpus.thread_key(_msg(Message_ID="<allein@x>")) == "mid:allein@x"
 
 
@@ -390,7 +390,7 @@ def test_gross_und_kleinschreibung_egal():
 
 
 # --------------------------------------------------------------------------
-# Verschwundene Mails: die Datei bleibt, der Vermerk kommt dazu
+# Disappeared mails: the file stays, the marker is added
 # --------------------------------------------------------------------------
 def test_verschwundene_werden_markiert(tmp_path):
     post = tmp_path / "E-Mail" / "Posteingang"
@@ -405,8 +405,8 @@ def test_verschwundene_werden_markiert(tmp_path):
     recs = {r["rel"]: r for r in corpus.load_outlook(str(tmp_path))}
     assert recs["E-Mail/Posteingang/weg.eml"]["gone"] == "2026-03-12T09:00:00"
     assert "gone" not in recs["E-Mail/Posteingang/da.eml"]
-    # Die Datei liegt weiterhin da – das ist der Unterschied zwischen einer
-    # Kopie und einem Archiv.
+    # The file is still there – that is the difference between a copy
+    # and an archive.
     assert (post / "weg.eml").exists()
 
 
@@ -418,7 +418,7 @@ def test_ohne_verschwundene_datei_ist_nichts_markiert(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Anhänge: der Vertrag lag im Archiv, war aber mit keinem Wort zu finden
+# Attachments: the contract sat in the archive but no word of it was findable
 # --------------------------------------------------------------------------
 def _mit_anhang(*namen, inline=()):
     from email import policy
@@ -442,7 +442,7 @@ def test_anhaenge_werden_gefunden():
 
 
 def test_inline_bilder_zaehlen_nicht():
-    """Signaturlogos heißen image001.png und würden die Suche fluten."""
+    """Signature logos are named image001.png and would flood the search."""
     assert corpus.anhaenge(_mit_anhang("echt.pdf", inline=("image001.png",))) == ["echt.pdf"]
 
 
@@ -455,9 +455,9 @@ def test_doppelte_namen_nur_einmal():
 
 
 @pytest.mark.parametrize("roh,erwartet", [
-    ("../../.ssh/id_rsa", "id_rsa"),          # Pfad zuerst weg, dann die Zeichen
+    ("../../.ssh/id_rsa", "id_rsa"),          # path stripped first, then the chars
     ("C:\\Temp\\x.pdf", "x.pdf"),
-    (".profile", "profile"),                  # kein verstecktes Ergebnis
+    (".profile", "profile"),                  # no hidden result
     ("normal.pdf", "normal.pdf"),
     ("", "anhang"),
     ("a" * 300, "a" * 150),
@@ -467,8 +467,8 @@ def test_dateiname_wird_entschaerft(roh, erwartet):
 
 
 def test_anhangnamen_nur_am_ersten_stueck():
-    """Sonst zählte die Volltextsuche sie so oft, wie die Mail Stücke hat –
-    eine lange Mail stünde allein deshalb weiter oben."""
+    """Otherwise full-text search would count them once per chunk of the
+    mail – a long mail would rank higher for that reason alone."""
     lang = {"uid": "outlook:a.eml:0", "text": "wort " * 2000, "att": "Vertrag.pdf",
             "src": "outlook", "root": "outlook", "rel": "a.eml"}
     stuecke = corpus.chunk_records([lang], size=500, overlap=50)
@@ -478,7 +478,7 @@ def test_anhangnamen_nur_am_ersten_stueck():
 
 
 # --------------------------------------------------------------------------
-# OneDrive: ein Satz je gespiegelter Datei – Name und Pfad, kein Inhalt
+# OneDrive: one record per mirrored file – name and path, no content
 # --------------------------------------------------------------------------
 def _spiegel(tmp_path, *rel):
     for r in rel:
@@ -495,13 +495,13 @@ def test_load_onedrive_findet_jede_datei(tmp_path):
     e = r["Dateien/Kunden/Vertrag.docx"]
     assert e["src"] == "datei" and e["root"] == "onedrive"
     assert e["title"] == "Vertrag.docx"
-    assert e["ctx"] == "Dateien/Kunden"          # Ordner als Suchkriterium
-    assert e["att"] == "Vertrag.docx"            # dieselbe Spalte wie Mailanhänge
+    assert e["ctx"] == "Dateien/Kunden"          # folder as a search criterion
+    assert e["att"] == "Vertrag.docx"            # same column as mail attachments
 
 
 def test_load_onedrive_faellt_nicht_aus_dem_index(tmp_path):
-    """Der Satz muss Text tragen, sonst entsteht beim Chunking gar kein Eintrag
-    und die Datei wäre trotz Index unauffindbar."""
+    """The record must carry text, otherwise chunking produces no entry at
+    all and the file would be unfindable despite the index."""
     _spiegel(tmp_path, "Kunden/Vertrag.docx")
     recs = corpus.load_onedrive(tmp_path)
     chunks = corpus.chunk_records(recs)
@@ -520,7 +520,7 @@ def test_load_onedrive_uebernimmt_den_grabstein(tmp_path):
 
 
 def test_load_onedrive_ignoriert_teildateien(tmp_path):
-    """Eine abgebrochene Übertragung gehört nicht in den Index."""
+    """An aborted transfer does not belong in the index."""
     _spiegel(tmp_path, "fertig.pdf")
     (tmp_path / "Dateien" / "halb.pdf.teil").write_bytes(b"x")
     assert [x["title"] for x in corpus.load_onedrive(tmp_path)] == ["fertig.pdf"]
@@ -528,7 +528,7 @@ def test_load_onedrive_ignoriert_teildateien(tmp_path):
 
 def test_load_onedrive_ohne_ordner(tmp_path):
     assert corpus.load_onedrive(tmp_path / "gibtsnicht") == []
-    assert corpus.load_onedrive(tmp_path) == []       # da, aber ohne Dateien/
+    assert corpus.load_onedrive(tmp_path) == []       # exists, but no Dateien/
 
 
 def test_load_records_nimmt_onedrive_mit(tmp_path):
@@ -538,18 +538,18 @@ def test_load_records_nimmt_onedrive_mit(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Der Prozess-Pool beim Einlesen
+# The process pool during ingestion
 #
-# Aus der Praxis: gebündelt startete ein Arbeitsprozess die App-Datei erneut,
-# lief in deren Argumentparser und starb – der ganze Index-Lauf endete in
-# BrokenProcessPool, obwohl an den Dateien nichts falsch war. Behoben ist das
-# an der Wurzel (multiprocessing.freeze_support in app.py); hier steht das
-# Sicherheitsnetz: kommt der Pool nicht zustande, wird seriell weitergemacht
-# statt aufgegeben.
+# From the field: in the bundled app a worker process relaunched the app
+# binary, ran into its argument parser and died – the whole index run ended
+# in BrokenProcessPool although nothing was wrong with the files. The root
+# fix lives in app.py (multiprocessing.freeze_support); here is the safety
+# net: if the pool cannot be brought up, work continues serially instead
+# of giving up.
 # --------------------------------------------------------------------------
 @pytest.fixture(autouse=True)
 def pool_fehler_zuruecksetzen():
-    """POOL_FEHLER ist Modulzustand – sonst färbte ein Test auf den nächsten ab."""
+    """POOL_FEHLER is module state – without this one test would stain the next."""
     corpus.POOL_FEHLER = None
     yield
     corpus.POOL_FEHLER = None
@@ -561,7 +561,7 @@ def _viele(tmp_path, anzahl=None):
 
 
 def test_pmap_unter_der_schwelle_ohne_pool(tmp_path, monkeypatch):
-    """Bei wenigen Dateien lohnt das Starten von Prozessen nicht."""
+    """With only a few files, starting processes is not worth it."""
     def kein_pool(*a, **k):
         raise AssertionError("Pool trotz weniger Dateien geöffnet")
     monkeypatch.setattr(corpus, "ProcessPoolExecutor", kein_pool)
@@ -570,7 +570,7 @@ def test_pmap_unter_der_schwelle_ohne_pool(tmp_path, monkeypatch):
 
 
 def test_pmap_faellt_auf_seriell_zurueck(tmp_path, monkeypatch):
-    """Ein kaputter Pool darf keinen Index kosten – nur Geschwindigkeit."""
+    """A broken pool must not cost an index – only speed."""
     from concurrent.futures import BrokenExecutor
 
     def kaputt(*a, **k):
@@ -583,8 +583,8 @@ def test_pmap_faellt_auf_seriell_zurueck(tmp_path, monkeypatch):
 
 
 def test_pmap_faellt_auch_zurueck_wenn_kein_prozess_startet(tmp_path, monkeypatch):
-    """Keine Handles mehr, gesperrt durch eine Sicherheitssoftware, kein
-    /dev/shm – der Pool geht dann gar nicht erst auf."""
+    """Out of handles, blocked by security software, no /dev/shm – then
+    the pool does not even open."""
     def geht_nicht(*a, **k):
         raise OSError(24, "Too many open files")
     monkeypatch.setattr(corpus, "ProcessPoolExecutor", geht_nicht)
@@ -593,8 +593,8 @@ def test_pmap_faellt_auch_zurueck_wenn_kein_prozess_startet(tmp_path, monkeypatc
 
 
 def test_pmap_versucht_es_nach_einem_fehlschlag_nicht_wieder(tmp_path, monkeypatch):
-    """load_records ruft _pmap bis zu viermal. Ist der Pool einmal als kaputt
-    erkannt, wäre jeder weitere Versuch nur Wartezeit für dieselbe Antwort."""
+    """load_records calls _pmap up to four times. Once the pool is known to
+    be broken, every further attempt is just waiting for the same answer."""
     versuche = []
 
     def kaputt(*a, **k):
@@ -609,23 +609,23 @@ def test_pmap_versucht_es_nach_einem_fehlschlag_nicht_wieder(tmp_path, monkeypat
 
 
 def test_pmap_ohne_stoerung_liefert_dasselbe(tmp_path):
-    """Der Pfad mit Pool und der ohne müssen dasselbe ergeben – sonst hinge
-    der Inhalt des Index an der Zahl der Dateien."""
+    """The path with a pool and the one without must yield the same result –
+    otherwise the index content would depend on the number of files."""
     _viele(tmp_path)
     mit_pool = corpus.load_onedrive(tmp_path)
     assert corpus.POOL_FEHLER is None, "der normale Weg darf nicht zurückfallen"
-    corpus.POOL_FEHLER = "erzwungen"          # ab hier seriell
+    corpus.POOL_FEHLER = "erzwungen"          # serial from here on
     assert corpus.load_onedrive(tmp_path) == mit_pool
 
 
 def test_endungen_aus_anhangnamen():
-    """Die Spalte, nach der der Dateityp-Filter fragt: entdoppelt und klein."""
+    """The column the file-type filter asks for: deduplicated and lowercase."""
     assert corpus.endungen("Vertrag.pdf Anlage.XLSX Nachtrag.pdf") == "pdf xlsx"
     assert corpus.endungen("Bild.jpeg") == "jpeg"
     assert corpus.endungen("") == ""
     assert corpus.endungen(None) == ""
-    # Was keine Endung ist, wird auch keine: sonst stünde "2024-final" als
-    # Dateityp zur Wahl.
+    # What is not an extension does not become one: otherwise "2024-final"
+    # would be offered as a file type.
     assert corpus.endungen("Bericht.2024-final") == ""
     assert corpus.endungen("Archiv.ohneinehrsehrlangeendung") == ""
     assert corpus.endungen("ohnepunkt") == ""

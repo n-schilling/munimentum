@@ -93,7 +93,7 @@ def test_record_step_without_run_is_a_noop(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Das gespeicherte Protokoll je Lauf
+# The stored log per run
 # --------------------------------------------------------------------------
 def test_log_zeilen_roundtrip_je_lauf(tmp_path):
     h = _history(tmp_path)
@@ -109,12 +109,12 @@ def test_log_zeilen_roundtrip_je_lauf(tmp_path):
     assert zeilen[1]["text"] == "rohe Zeile"
     assert h.run_log(anderer) == [{"ts": 1002.0, "level": "info",
                                    "text": "fremd"}]
-    h.log_lines([])                                    # leer: kein Krach
+    h.log_lines([])                                    # empty: no fuss
 
 
 def test_log_aufbewahrung_ist_eigenstaendig(tmp_path):
-    """Die Zeilen sind der schwere Teil – sie haben ihr eigenes Fenster,
-    unabhängig von der Aufbewahrung der Läufe selbst."""
+    """The lines are the heavy part – they have their own window,
+    independent of the retention of the runs themselves."""
     h = _history(tmp_path)
     lauf = h.start_run("job.export", "manual")
     alt = time.time() - 10 * 86400
@@ -122,7 +122,7 @@ def test_log_aufbewahrung_ist_eigenstaendig(tmp_path):
                  (lauf, time.time(), "info", '"frisch"')])
     h.prune_log(7)
     assert [z["text"] for z in h.run_log(lauf)] == ["frisch"]
-    assert len(h.list_runs()) == 1                     # der Lauf bleibt
+    assert len(h.list_runs()) == 1                     # the run stays
 
 
 def test_kaputte_logzeile_bleibt_roh(tmp_path):
@@ -134,7 +134,7 @@ def test_kaputte_logzeile_bleibt_roh(tmp_path):
 
 
 def test_log_schreiben_wirft_nie(tmp_path):
-    kaputt = run_history.RunHistory(tmp_path)          # Pfad ist ein Ordner
+    kaputt = run_history.RunHistory(tmp_path)          # the path is a directory
     kaputt.log_lines([(1, 1.0, "info", '"x"')])
     kaputt.prune_log(7)
     assert kaputt.run_log(1) == []

@@ -1,29 +1,29 @@
 #!/usr/bin/env python3
 """
-store_layout.py – wo im Store welche Datei liegt.
+store_layout.py – which file lives where in the store.
 
-Ein Index besteht aus drei Teilen: corpus.db (Textstellen und Volltextindex),
-einer Vektordatei (Embeddings, Zeile i gehört zu chunks.id = i+1) und info.json
-(Modell, Format – und der NAME der Vektordatei).
+An index consists of three parts: corpus.db (text passages and full-text
+index), a vector file (embeddings, row i belongs to chunks.id = i+1) and
+info.json (model, format – and the NAME of the vector file).
 
-Warum der Name nicht mehr fest „vectors.npy" ist:
+Why the name is not a fixed "vectors.npy":
 
-    Jeder Leser öffnet die Vektordatei per mmap und hält sie offen, solange er
-    läuft – der MCP-Server, die Suche in der App selbst, ein von Claude Desktop
-    gestarteter Server. Unter Windows lässt sich eine so abgebildete Datei nicht
-    ersetzen: os.replace endet mit „Zugriff verweigert". Der Indexlauf starb
-    deshalb dort in der letzten Zeile, nachdem er alles eingebettet hatte, und
-    zwar zuverlässig, solange irgendwer den Index offen hatte. Unter macOS und
-    Linux fällt das nicht auf – dort überlebt die alte Datei das Umbenennen als
-    Inode, und der Leser liest sie ungestört zu Ende.
+    Every reader opens the vector file via mmap and keeps it open for as
+    long as it runs – the MCP server, the search in the app itself, a server
+    started by Claude Desktop. On Windows a file mapped like that cannot be
+    replaced: os.replace ends with "access denied". The index run therefore
+    died right there on its last line, after embedding everything – and
+    reliably so, as long as anyone had the index open. On macOS and Linux
+    this goes unnoticed – there the old file survives the rename as an
+    inode, and the reader finishes it undisturbed.
 
-    Ein Lauf schreibt darum eine NEUE Datei und trägt ihren Namen hier ein.
-    Ersetzt wird nichts mehr; wer noch die alte offen hat, behält sie gültig in
-    der Hand. Aufgeräumt wird, was niemand mehr braucht – und was sich nicht
-    löschen lässt, bleibt bis zum nächsten Lauf liegen.
+    So a run writes a NEW file and records its name here. Nothing gets
+    replaced any more; whoever still has the old one open keeps a valid
+    copy in hand. What nobody needs any more is swept up – and what refuses
+    to be deleted stays around until the next run.
 
-Nur Standardbibliothek: mcp_server.py bindet dieses Modul ein und kommt selbst
-bewusst ohne numpy aus.
+Standard library only: mcp_server.py pulls this module in and itself
+deliberately gets by without numpy.
 """
 
 import json
@@ -35,19 +35,19 @@ DB = "corpus.db"
 
 
 def db_path(store):
-    """Die Datenbank des Stores – ein Name, nicht neunmal dasselbe Literal."""
+    """The store's database – one name, not the same literal nine times."""
     return Path(store) / DB
 
-# Der feste Name bis einschließlich 4.1.0. Ein Store von damals trägt keinen
-# Eintrag in info.json – dort gilt weiter diese Datei, sonst stünde nach dem
-# Update ein vorhandener Index ohne seine Embeddings da.
+# The fixed name of stores up to 4.1.0. Such a store carries no entry in
+# info.json – there this file remains the valid one, otherwise an existing
+# index would sit without its embeddings after the update.
 LEGACY = "vectors.npy"
 
 _MUSTER = re.compile(r"^vectors-(\d+)\.npy$")
 
 
 def info(store):
-    """info.json als dict; fehlend oder unlesbar ergibt {}."""
+    """info.json as a dict; missing or unreadable yields {}."""
     try:
         daten = json.loads((Path(store) / INFO).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -56,17 +56,17 @@ def info(store):
 
 
 def vectors_path(store, daten=None):
-    """Die aktuelle Vektordatei – oder None, wenn dieser Index keine hat.
+    """The current vector file – or None when this index has none.
 
-    Drei Fälle, und der mittlere ist der Grund für die Unterscheidung:
+    Three cases, and the middle one is the reason for the distinction:
 
-        Eintrag da        -> genau diese Datei
-        Eintrag ausdrücklich leer -> KEINE Vektoren (ein Lauf ohne Embeddings
-                             hat sie zurückgezogen). Hier auf den alten Namen
-                             zurückzufallen wäre falsch: die Datei kann noch
-                             herumliegen, weil sie sich nicht löschen ließ, und
-                             ihre Zeilen passen dann nicht mehr zur DB.
-        kein Eintrag      -> Store von 4.1.0 oder älter, fester Name
+        entry present     -> exactly that file
+        entry explicitly empty -> NO vectors (a run without embeddings has
+                             retired them). Falling back to the old name
+                             here would be wrong: the file may still be
+                             lying around because it refused deletion, and
+                             its rows then no longer match the DB.
+        no entry          -> store from 4.1.0 or older, fixed name
     """
     sp = Path(store)
     daten = info(store) if daten is None else daten
@@ -81,12 +81,12 @@ def vectors_path(store, daten=None):
 
 
 def next_vectors_path(store):
-    """Ein Name, den es hier noch nicht gibt: vectors-1.npy, vectors-2.npy, …
+    """A name that does not exist here yet: vectors-1.npy, vectors-2.npy, …
 
-    Gezählt wird nach dem, was im Ordner liegt, nicht nach dem Eintrag in
-    info.json: eine Datei, die beim Aufräumen nicht wegging, darf ein späterer
-    Lauf nicht überschreiben – sonst wäre genau der Leser gestört, dessentwegen
-    sie liegen blieb.
+    Counting goes by what lies in the folder, not by the entry in
+    info.json: a file that did not go away during cleanup must not be
+    overwritten by a later run – that would disturb exactly the reader it
+    was left behind for.
     """
     sp = Path(store)
     hoechste = 0
@@ -98,14 +98,14 @@ def next_vectors_path(store):
 
 
 def prune_vectors(store, behalten=None):
-    """Vektordateien wegräumen, die niemand mehr braucht.
+    """Sweep up vector files nobody needs any more.
 
-    Was gerade abgebildet ist, lässt sich unter Windows nicht löschen. Das ist
-    kein Fehlerfall, sondern der Normalzustand direkt nach einem Lauf: der noch
-    laufende MCP-Server hält die vorige Fassung. Sie kostet Platz bis zum
-    nächsten Lauf, und der versucht es erneut.
+    Whatever is currently mapped cannot be deleted on Windows. That is not
+    an error case but the normal state right after a run: the still-running
+    MCP server holds the previous version. It costs space until the next
+    run, which simply tries again.
 
-    Liefert die Zahl der tatsächlich gelöschten Dateien.
+    Returns the number of files actually deleted.
     """
     sp = Path(store)
     behalten = Path(behalten).name if behalten else None
@@ -117,5 +117,5 @@ def prune_vectors(store, behalten=None):
             p.unlink()
             weg += 1
         except OSError:
-            pass                  # noch offen – beim nächsten Mal wieder
+            pass                  # still open – try again next time
     return weg

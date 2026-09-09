@@ -1,12 +1,12 @@
-"""Tests für answer.py – aus gefundenen Stellen eine Antwort formulieren lassen.
+"""Tests for answer.py – turning found passages into a formulated answer.
 
-Nie ins Netz: requests.post wird immer ersetzt. Zwei Zusagen stehen im
-Mittelpunkt, weil an ihnen die Nachvollziehbarkeit hängt:
+Never touches the network: requests.post is always replaced. Two promises
+take centre stage, because traceability depends on them:
 
-  * Die Nummerierung im Kontext ist die Reihenfolge der Treffer. [1] muss der
-    erste Treffer in der Liste sein, sonst zeigen die Fußnoten ins Leere.
-  * stream() wirft nie. Ein Fehler mitten im Datenstrom soll als Fehlerstück
-    ankommen, nicht als Ausnahme aus einem halb gelesenen Körper.
+  * The numbering in the context is the order of the hits. [1] must be the
+    first hit in the list, otherwise the footnotes point at nothing.
+  * stream() never raises. An error in the middle of the stream should
+    arrive as an error chunk, not as an exception from a half-read body.
 """
 
 import json
@@ -17,7 +17,7 @@ import answer
 
 
 class Strom:
-    """Ollamas Chat-Antwort: eine JSON-Zeile je Textstück."""
+    """Ollama's chat response: one JSON line per text chunk."""
 
     status_code = 200
 
@@ -46,7 +46,7 @@ QUELLEN = [
 
 @pytest.fixture
 def ollama(monkeypatch):
-    """requests.post ersetzen; liefert die gesehenen Aufrufe."""
+    """Replace requests.post; returns the calls it has seen."""
     gesehen = []
 
     def setze(antwort):
@@ -61,13 +61,13 @@ def ollama(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Anweisung an das Modell
+# Instructions to the model
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("lang,wort", [("de", "Quellennummern"), ("en", "source numbers"),
                                        ("fr", "numéros de source")])
 def test_system_prompt_in_der_sprache_der_oberflaeche(lang, wort):
-    """Die Regel steht in derselben Sprache wie die gewünschte Antwort – ein
-    kleines Modell folgt ihr dann zuverlässiger."""
+    """The rule is written in the same language as the desired answer – a
+    small model then follows it more reliably."""
     assert wort in answer.system_prompt(lang)
 
 
@@ -82,7 +82,7 @@ def test_system_prompt_bei_unbekannter_sprache():
 
 
 # --------------------------------------------------------------------------
-# Kontext: die Nummerierung ist die Zusage an den Leser
+# Context: the numbering is the promise to the reader
 # --------------------------------------------------------------------------
 def test_build_context_nummeriert_in_trefferreihenfolge():
     ctx = answer.build_context(QUELLEN)
@@ -146,8 +146,8 @@ def test_stream_meldet_netzfehler_statt_zu_werfen(ollama):
 
 
 def test_stream_bricht_mitten_im_strom_sauber_ab(ollama):
-    """Reißt die Verbindung nach dem zweiten Stück, sind die ersten beiden da
-    und danach ein Fehlerstück – keine Ausnahme beim Aufrufer."""
+    """If the connection drops after the second chunk, the first two arrive
+    followed by an error chunk – no exception at the caller."""
     ollama(Strom(["eins ", "zwei ", "drei"], abbruch=2))
     stuecke = list(answer.stream("F", QUELLEN, "m", "http://o.test"))
     assert [s.get("text") for s in stuecke[:2]] == ["eins ", "zwei "]
@@ -175,47 +175,47 @@ def test_stream_endet_bei_done(ollama):
 
 
 # --------------------------------------------------------------------------
-# Was im Chat-Request steht – zwei Werte, an denen die Antwort haengt
+# What goes into the chat request – two values the answer depends on
 # --------------------------------------------------------------------------
 def test_kontextfenster_wird_gesetzt(ollama):
-    """Ollamas Vorgabe ist 2048 Token. Bei bis zu 20 Quellen à 2000 Zeichen
-    saehe das Modell ein Zwanzigstel und antwortete auf Treffer, die es nie
-    gelesen hat."""
+    """Ollama's default is 2048 tokens. With up to 20 sources of 2000
+    characters each the model would see one twentieth and answer about hits
+    it never read."""
     gesehen = ollama(Strom(["ok"]))
     list(answer.stream("F", QUELLEN, "m", "http://o.test"))
     ktx = gesehen[0]["json"]["options"]["num_ctx"]
     zeichen = sum(len(m["content"]) for m in gesehen[0]["json"]["messages"])
     assert ktx >= zeichen / 4, "der Text passt nicht ins Fenster"
-    # … und ist nicht einfach immer das Maximum: genau daran hing die Langsamkeit.
+    # … and is not simply always the maximum: that is exactly what made it slow.
     assert ktx == answer.NUM_CTX_MIN < answer.NUM_CTX_MAX, (
         f"kurzer Text bekommt ein Fenster von {ktx}")
 
 
 def test_kontextfenster_waechst_mit_dem_text():
-    """Ein fest eingestelltes grosses Fenster ist genauso falsch wie ein zu
-    kleines: Ollama legt den Zwischenspeicher fuer die volle Laenge an, ob sie
-    gebraucht wird oder nicht. Auf einem Rechner mit 24 GB und einem 17-GB-
-    Modell drueckt das ins Auslagern - gemessen 2,4 statt 5,5 Token je Sekunde."""
+    """A fixed large window is just as wrong as one that is too small:
+    Ollama allocates the cache for the full length whether it is needed or
+    not. On a machine with 24 GB and a 17 GB model that pushes into
+    swapping - measured 2.4 instead of 5.5 tokens per second."""
     klein = answer.num_ctx([{"content": "x" * 400}])
     gross = answer.num_ctx([{"content": "x" * 40000}])
     assert klein == answer.NUM_CTX_MIN, "kurze Frage bekommt trotzdem ein grosses Fenster"
     assert gross > klein and gross <= answer.NUM_CTX_MAX
-    # Der groesste Fall passt noch hinein.
+    # The largest case still fits.
     assert answer.num_ctx([{"content": "x" * 20 * answer.CHARS_PER_SOURCE}]) \
         <= answer.NUM_CTX_MAX
 
 
 def test_denken_ist_abgeschaltet(ollama):
-    """Qwen 3 denkt sonst vor jeder Antwort – das kostet nur Zeit, und der
-    Gedankengang liefe als Text mit in den Datenstrom."""
+    """Qwen 3 otherwise thinks before every answer – that only costs time,
+    and the chain of thought would flow into the stream as text."""
     gesehen = ollama(Strom(["ok"]))
     list(answer.stream("F", QUELLEN, "m", "http://o.test"))
     assert gesehen[0]["json"]["think"] is False
 
 
 def test_der_kontext_passt_ins_fenster():
-    """Groesster Fall gegen das Fenster gerechnet: 20 Quellen, volle Laenge.
-    Grob vier Zeichen je Token – bleibt Luft, ist die Rechnung in Ordnung."""
+    """The largest case checked against the window: 20 sources, full length.
+    Roughly four characters per token – if there is headroom, the math holds."""
     quellen = [{"date": "2025-06-01 09:30", "who": "Wer", "source_label": "Mail",
                 "title": "Titel", "text": "x" * answer.CHARS_PER_SOURCE}
                for _ in range(20)]

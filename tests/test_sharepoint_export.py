@@ -134,7 +134,7 @@ def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
             "https://firma.sharepoint.com/sites/TeamX/Unterseite"]
     drives, fehl = sp.resolve_drives(g, urls)
     assert fehl == 0
-    assert [d["id"] for d in drives] == ["d1", "d2"]      # dedupliziert, ohne Papierkorb
+    assert [d["id"] for d in drives] == ["d1", "d2"]      # deduped, no recycle bin
     assert drives[0]["site"] == "Team X"
 
 
@@ -167,8 +167,8 @@ def test_drive_auswahl_nimmt_nur_den_teilbaum():
     assert wahl.takes("Dateien/N/Nordwind/tief/mehr.docx", 1)
     assert not wahl.takes("Dateien/N/Anderes/plan.pdf", 1)
     assert not wahl.takes("Dateien/oben.pdf", 1)
-    assert not wahl.takes("Dateien/N/Nordwind/film.mp4", 1)   # Filter gelten weiter
-    assert wahl.pfad_ok("Dateien/N/Nordwind/film.mp4")        # aber im Pfad-Scope
+    assert not wahl.takes("Dateien/N/Nordwind/film.mp4", 1)   # filters still apply
+    assert wahl.pfad_ok("Dateien/N/Nordwind/film.mp4")        # but in path scope
 
 
 def test_resolve_drives_403_wird_als_verweigert_gemeldet(capsys):
@@ -213,7 +213,7 @@ def test_lauf_summiert_ueber_bibliotheken(tmp_path, monkeypatch, capsys):
     e = progress.lies_ergebnis(letzte[0])
     assert e == {"new": 4, "excluded": 2, "errors": 1,
                  "extra": {"moved": 0, "gone": 2}}
-    assert G().__dict__ == {}                      # drive_base steht am Client
+    assert G().__dict__ == {}                      # drive_base sits on the client
 
 
 def test_je_drive_setzt_die_drive_basis(tmp_path):
@@ -433,7 +433,7 @@ def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
     here – same report shape as the mirror check."""
     g = _SeitenGraph()
     sites = [{"id": "s1", "pfad": ["Team X"], "host": "h"}]
-    sp.seiten_lauf(g, tmp_path, sites)          # eine Seite liegt jetzt hier
+    sp.seiten_lauf(g, tmp_path, sites)          # one page now lies here
     g.seiten.append({"id": "p2", "name": "Neu.aspx", "title": "Neu",
                      "eTag": "e2"})
     capsys.readouterr()
@@ -535,7 +535,7 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
         def delta(self, weiter=None):
             self.aufrufe.append(weiter)
             if weiter == "delta-1":
-                yield None, "delta-2"          # nichts geändert
+                yield None, "delta-2"          # nothing changed
                 return
             yield {"id": "in1", "name": "plan.pdf", "file": {}, "size": 1,
                    "cTag": "c1",
@@ -644,14 +644,14 @@ def test_download_fehler_fuehrt_zu_replan_ohne_neue_aufzaehlung(tmp_path,
                                zustand=zustand)
     assert zahlen["new"] == 1 and zahlen["errors"] == 1
     db = sp.state_db.StateDb(tmp_path)
-    assert db.delta_lesen() is None               # Zeiger rückt nicht vor
+    assert db.delta_lesen() is None               # pointer does not advance
     assert db.walk_status()["fertig"] == "delta-1"
 
     g.kaputt = False
     capsys.readouterr()
     zahlen = drive_mirror.lauf(g, tmp_path, Selection(), 1, still=True,
                                zustand=zustand)
-    assert g.walks == 1                           # keine zweite Aufzählung
+    assert g.walks == 1                           # no second enumeration
     assert zahlen["new"] == 1 and zahlen["errors"] == 0
     assert (tmp_path / "Dateien/b.pdf").is_file()
     assert db.delta_lesen() == "delta-1"
@@ -770,7 +770,7 @@ def test_lauf_ueberspringt_bibliothek_unter_ihrer_kadenz(tmp_path, monkeypatch,
         return {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
 
     monkeypatch.setattr(sp.drive_mirror, "lauf", fake_lauf)
-    # d1 lief gerade eben – unter der Wochen-Kadenz nicht fällig.
+    # d1 ran just now – not due under the weekly cadence.
     import time
     sp.state_db.StateDb(sp.drive_ziel(tmp_path, drives[0]))._kv_schreiben(
         "last_sync", str(time.time()))
@@ -824,4 +824,4 @@ def test_seiten_lauf_ueberspringt_site_unter_kadenz(tmp_path, capsys):
     events = _events(capsys)
     assert any(e["k"] == "run.cadence.skip" and e["v"]["name"] == "Team X"
                for e in events)
-    assert g.detailabrufe == 1                      # nichts erneut geholt
+    assert g.detailabrufe == 1                      # nothing fetched again
