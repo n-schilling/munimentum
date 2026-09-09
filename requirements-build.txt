@@ -1,10 +1,10 @@
-# Nur zum Bündeln der App (packaging/app.spec) – nicht zur Laufzeit nötig.
+# Only for bundling the app (packaging/app.spec) – not needed at runtime.
 #
-# Gepinnt aus demselben Grund wie requirements.txt: ein neuer PyInstaller-Major
-# ändert gern die Spec-API oder das Bootloader-Verhalten, und das fiele erst
-# beim Release auf. Beim Anheben: lokal bauen und packaging/smoke_test.py
-# laufen lassen, dann committen.
+# Pinned for the same reason as requirements.txt: a new PyInstaller major
+# likes to change the spec API or the bootloader behaviour, and that would
+# only show up at release time. When bumping: build locally and run
+# packaging/smoke_test.py, then commit.
 
 -r requirements.txt
 
-pyinstaller==6.21.0
+pyinstaller==6.22.2
