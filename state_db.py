@@ -4,8 +4,7 @@ state_db.py – one state.db per export folder.
 
 Every export keeps its state in ONE SQLite file inside its output folder:
 the library mirrors one per <site>/<library>, the pages export one at its
-root, and since 6.2 Outlook, Teams and OneDrive as well (migrate_state.py
-moves their historical loose files in once, at app start).
+root, Outlook, Teams and OneDrive one each.
 
 What the file holds, by export:
 
@@ -243,20 +242,6 @@ class StateDb:
     def bericht_schreiben(self, bericht):
         self._kv_schreiben("bericht", json.dumps(bericht, ensure_ascii=False))
 
-    # -- resume log (Outlook) ----------------------------------------------
-    def done_ersetzen(self, paare):
-        """Seed the resume log wholesale – the migration's path; a repeated
-        mail id keeps the last entry, like the appended TSV did."""
-        con = self._verbinden()
-        try:
-            with con:
-                con.execute("DELETE FROM done")
-                con.executemany(
-                    "INSERT OR REPLACE INTO done(mid, rel) VALUES(?, ?)",
-                    list(paare))
-        finally:
-            con.close()
-
     # -- walk staging (checkpointed enumeration) ---------------------------
     def walk_status(self):
         con = self._verbinden(lesend=True)
@@ -353,17 +338,6 @@ class DbDoneLog:
                     "ON CONFLICT(mid) DO UPDATE SET rel = excluded.rel",
                     (mid, rel))
 
-    def remap(self, fn):
-        """fn(rel)->rel over every entry, in one transaction – for one-off
-        path migrations (resume survives)."""
-        with self._lock:
-            self.done = {mid: fn(rel) for mid, rel in self.done.items()}
-            with self._con:
-                self._con.execute("DELETE FROM done")
-                self._con.executemany(
-                    "INSERT INTO done(mid, rel) VALUES(?, ?)",
-                    list(self.done.items()))
-
     def close(self):
         try:
             self._con.close()
@@ -401,7 +375,7 @@ class DbZustand:
 
     def delta_schreiben(self, link, bestand=None):
         if not link:
-            return             # nichts zu merken heißt: der alte Zeiger gilt
+            return             # nothing to note means: the old pointer stands
         if isinstance(bestand, DbBestand):
             # The transactional win over the loose files: inventory and
             # pointer can never disagree after a crash.

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-export_util.py – gemeinsame Helfer der Exportskripte.
+export_util.py – shared helpers of the export scripts.
 
-Bis 5.3 trug jedes Skript eigene Kopien: Dateinamen entschärfen, Graph-Zeiten
-parsen, Vermerke atomar schreiben, die Frage „sitzt hier jemand vor einem
-Terminal?". Die Kopien wichen in Kleinigkeiten voneinander ab, ohne dass eine
-Abweichung je gewollt war – hier steht jede Antwort einmal.
+Each script used to carry its own copies: defusing file names, parsing Graph
+timestamps, writing markers atomically, the question "is someone sitting at
+a terminal here?". The copies diverged in small ways without any divergence
+ever being intended – here every answer lives once.
 
-Nur Standardbibliothek.
+Standard library only.
 """
 
 import json
@@ -18,17 +18,17 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 
-# Dateinamen, die Outlook- und OneDrive-Export gleich benutzen: was aus der
-# Quelle verschwunden ist, und der Bericht der Vollständigkeitsprüfung.
+# File names that the Outlook and OneDrive exports use alike: what has
+# disappeared from the source, and the completeness check's report.
 
 
 def erzwinge_utf8():
-    """stdout/stderr auf UTF-8 stellen (auf macOS/Linux ein No-op).
+    """Set stdout/stderr to UTF-8 (a no-op on macOS/Linux).
 
-    Windows-Konsolen nutzen sonst eine Legacy-Codepage (z. B. cp1252), und bei
-    Umleitung in eine Datei die Locale-Kodierung. Beides lässt jede Ausgabe an
-    Zeichen wie →, ✓ oder Emoji mit UnicodeEncodeError scheitern und bricht
-    den Lauf ab.
+    Windows consoles otherwise use a legacy codepage (e.g. cp1252), and the
+    locale encoding when redirected to a file. Either makes any output of
+    characters like →, ✓ or emoji fail with UnicodeEncodeError and aborts
+    the run.
     """
     for strom in (sys.stdout, sys.stderr):
         try:
@@ -37,26 +37,39 @@ def erzwinge_utf8():
             pass
 
 
-def hilfe_gewuenscht(argv):
-    """-h/--help beantworten, statt einen Ordner dieses Namens anzulegen.
+def ausgabeordner(argv):
+    """The output directory, always the first positional argument.
 
-    Die Exportskripte deuten das erste freie Argument als Ausgabeordner. Ohne
-    diese Abfrage legte `python3 outlook_export.py --help` brav einen Ordner
-    namens „--help" an und begann zu exportieren – einmal passiert und dann
-    sogar eingecheckt.
+    7.0 removed the scripts' own defaults: the app is the only caller and
+    passes the directory explicitly, so a bare call must fail loudly instead
+    of quietly writing next to the current working directory.
+    """
+    if not argv:
+        raise SystemExit("output directory missing - "
+                         "the app passes it as the first argument")
+    return Path(argv[0])
+
+
+def hilfe_gewuenscht(argv):
+    """Answer -h/--help instead of creating a folder of that name.
+
+    The export scripts read the first free argument as the output
+    directory. Without this check, `python3 outlook_export.py --help`
+    dutifully created a folder named "--help" and started exporting – it
+    happened once, and even got checked in.
     """
     return any(a in ("-h", "--help", "-help", "help") for a in argv)
 
 
 # ---------------------------------------------------------------------------
-# Kategorien-Auswahl der App (die Skripte fragen nie zurück)
+# The app's category selection (the scripts never ask back)
 # ---------------------------------------------------------------------------
 def env_categories(options):
-    """Auswahl aus EXPORT_CATEGORIES, z. B. "mail,contacts" oder "1on1,group".
+    """Selection from EXPORT_CATEGORIES, e.g. "mail,contacts" or "1on1,group".
 
-    Für Aufrufer ohne Terminal (app.py, Scheduler, Cron). Unbekannte Namen
-    werden ignoriert; bleibt nichts übrig, zählt die Variable als nicht
-    gesetzt -> None (normale Abfrage bzw. Standardauswahl).
+    For callers without a terminal (app.py, scheduler, cron). Unknown names
+    are ignored; if nothing remains, the variable counts as not set -> None
+    (normal prompt or default selection).
     """
     raw = os.environ.get("EXPORT_CATEGORIES")
     if not raw:
@@ -67,18 +80,18 @@ def env_categories(options):
 
 
 # ---------------------------------------------------------------------------
-# Namen und Zeiten
+# Names and times
 # ---------------------------------------------------------------------------
 def kuerzel(s):
-    """Acht Hex-Zeichen aus dem Inhalt – macht gekürzte Namen wieder eindeutig."""
+    """Eight hex characters from the content – makes shortened names unique again."""
     return hashlib.sha1((s or "").encode("utf-8")).hexdigest()[:8]
 
 
 def safe(name, maxlen=80):
-    """Ein Namensstück, dem das Dateisystem trauen kann.
+    """A name fragment the file system can trust.
 
-    OneDrive hat eine eigene Fassung, die beim Kürzen die Endung erhält –
-    dort entscheidet sie über den Dateityp auf der Platte.
+    OneDrive has its own version that preserves the extension when
+    shortening – there it decides the file type on disk.
     """
     name = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", name or "").strip().strip(".")
     name = re.sub(r"\s+", " ", name)
@@ -86,11 +99,11 @@ def safe(name, maxlen=80):
 
 
 def graph_zeit(iso):
-    """ISO-8601 aus Graph -> datetime (UTC-bewusst) oder None.
+    """ISO 8601 from Graph -> datetime (UTC-aware) or None.
 
-    Graph liefert teils 7-stellige Sekundenbruchteile, die fromisoformat nicht
-    nimmt – sie werden auf 6 gekürzt. Unparsebares ergibt None, nie eine
-    Ausnahme: ein kaputter Zeitstempel darf keinen Export beenden.
+    Graph sometimes delivers 7-digit fractional seconds, which fromisoformat
+    rejects – they are trimmed to 6. Anything unparsable yields None, never
+    an exception: a broken timestamp must not end an export.
     """
     if not iso:
         return None
@@ -103,11 +116,11 @@ def graph_zeit(iso):
 
 
 # ---------------------------------------------------------------------------
-# Atomar schreiben und die geteilten Vermerk-Dateien
+# Atomic writes and the shared marker files
 # ---------------------------------------------------------------------------
 def schreibe_atomar(ziel, text):
-    """Erst .tmp, dann ersetzen – ein Abbruch hinterlässt nie eine halbe Datei,
-    die beim nächsten Lauf als fertig gälte."""
+    """First .tmp, then replace – an abort never leaves a half file that the
+    next run would take as finished."""
     ziel = Path(ziel)
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")
@@ -132,7 +145,7 @@ def cadence_faellig(cadence, letzter, jetzt=None):
 
 
 # ---------------------------------------------------------------------------
-# Sync-Kadenz je Quell-URL – geteilt von den SharePoint- und Planner-Exporten
+# Sync cadence per source URL – shared by the SharePoint and Planner exports
 # ---------------------------------------------------------------------------
 def kadenzen():
     """Cadence per source URL, e.g. "planner-url:<url>" – from the app via

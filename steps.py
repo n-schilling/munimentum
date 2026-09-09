@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+"""
+steps.py – the step registry: one entry per export action.
+
+Until 7.0 every step was hand-threaded through four layers of app.py (API
+handler, launch, build_steps, run record) plus side registers – the RUNNABLE
+whitelist, the bundle module list, the scheduler call, the runs table's
+naming in the page. Forgetting one of them was a recurring bug class: the
+Planner export shipped with an empty alert (missing RUNNABLE entry) and a
+nameless runs row (missing UI map), each found by a user.
+
+Here every step is ONE entry, and the layers iterate this table:
+
+    key       step name – runs.db, progress display, skip logic
+    anfrage   the request/launch flag that switches the step on
+    script    subprogram name; must be RUNNABLE and bundled (test_steps.py
+              cross-checks both, plus the language files)
+    label     i18n key of the step name, or callable(ctx) -> key
+    argv      callable(cfg, ctx, pfade) -> argv after the script name
+    env       callable(cfg, ctx) -> environment on top of the shared base
+    corpus    counts as archive content ("New" column, index skip logic)
+    zugang    needs a Graph token
+    schedule  key of its toggle in cfg["schedule"], or None
+    master    config switch that must be on for scheduled runs, or None
+    quelle    how the runs table names this source – an i18n key, a literal,
+              or None for derived steps (index, calendar, checks)
+    aktiv     callable(cfg, ctx) -> bool, extra gate (category lists)
+    ziel      callable(cfg, pfade) -> Path for "skip when nothing new", None
+              otherwise (implies nur_bei_neuem)
+
+The callables keep the table honest: they receive everything they need and
+touch no module state, so the registry can be read – and tested – as data.
+"""
+
+import json
+
+
+def _flag(wert):
+    return "1" if wert else "0"
+
+
+def _sharepoint_env(cfg, ctx):
+    # Always set, even empty: empty means "no filter", unset would mean
+    # "whatever app_config.json says" – the run must mirror the form.
+    return {"SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+            "SHAREPOINT_URLS": str(cfg.get("sharepoint_urls") or ""),
+            "SHAREPOINT_TYPES_INCLUDE": str(cfg.get("sharepoint_types_include") or ""),
+            "SHAREPOINT_TYPES_EXCLUDE": str(cfg.get("sharepoint_types_exclude") or ""),
+            "SHAREPOINT_MAX_MB": str(int(cfg.get("sharepoint_max_mb") or 0))}
+
+
+def _onedrive_env(cfg, ctx):
+    # Always set, even empty: empty means "take everything", unset would
+    # mean "whatever app_config.json says".
+    return {"ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
+            "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))}
+
+
+def _index_argv(cfg, ctx, pfade):
+    argv = [pfade["teams"], pfade["outlook"], pfade["onedrive"],
+            "--sharepoint", pfade["sharepoint"],
+            "--pages", pfade["sharepoint_pages"],
+            "--planner", pfade["planner"],
+            "--store", pfade["store"],
+            "--model", cfg["embed_model"], "--ollama", cfg["ollama"],
+            "--batch", cfg.get("index_batch", 128)]
+    if not ctx["embeddings"]:
+        argv.append("--no-embeddings")
+    return argv
+
+
+def _calendar_argv(cfg, ctx, pfade):
+    argv = [pfade["outlook"], "--json", pfade["calendar_json"]]
+    if not ctx["reconstruct"]:
+        argv.append("--no-reconstruct")
+    return argv
+
+
+REGISTRY = (
+    {"key": "outlook", "anfrage": "outlook", "script": "outlook_export",
+     "label": "job.step.outlook", "corpus": True, "zugang": True,
+     "schedule": "outlook", "master": None, "quelle": "Outlook",
+     "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
+     "argv": lambda cfg, ctx, pfade: [pfade["outlook"]],
+     "env": lambda cfg, ctx: {
+         "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
+         "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
+         # Always set, even empty: empty means "skip nothing", unset would
+         # mean "the script's default".
+         "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])}},
+
+    {"key": "onedrive", "anfrage": "onedrive", "script": "onedrive_export",
+     "label": "job.step.onedrive", "corpus": True, "zugang": True,
+     "schedule": "onedrive", "master": "onedrive_enabled",
+     "quelle": "OneDrive",
+     "argv": lambda cfg, ctx, pfade: [pfade["onedrive"]],
+     "env": _onedrive_env},
+
+    {"key": "sharepoint", "anfrage": "sharepoint",
+     "script": "sharepoint_export",
+     "label": "job.step.sharepoint", "corpus": True, "zugang": True,
+     "schedule": "sharepoint", "master": "sharepoint_enabled",
+     "quelle": "search.source.sharepoint",
+     "argv": lambda cfg, ctx, pfade: [pfade["sharepoint"]],
+     "env": lambda cfg, ctx: {
+         **_sharepoint_env(cfg, ctx),
+         **({"SHAREPOINT_URLS": ctx["nur_einheit"], "SYNC_NOW": "1"}
+            if ctx["nur_einheit"] else {})}},
+
+    {"key": "planner", "anfrage": "planner", "script": "planner_export",
+     "label": "job.step.planner", "corpus": True, "zugang": True,
+     "schedule": "planner", "master": "planner_enabled",
+     "quelle": "search.source.planner",
+     "argv": lambda cfg, ctx, pfade: [pfade["planner"]],
+     "env": lambda cfg, ctx: {
+         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+         "PLANNER_URLS": (ctx["nur_einheit"] or
+                          str(cfg.get("planner_urls") or "")),
+         "PLANNER_ATTACHMENTS": _flag(cfg.get("planner_attachments")),
+         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {})}},
+
+    {"key": "sharepoint_pages", "anfrage": "sharepoint_pages",
+     "script": "sharepoint_export",
+     "label": "job.step.pages", "corpus": True, "zugang": True,
+     "schedule": "sharepoint_pages", "master": "sharepoint_pages_enabled",
+     "quelle": "search.source.pages",
+     "argv": lambda cfg, ctx, pfade: ["--pages", pfade["sharepoint_pages"]],
+     "env": lambda cfg, ctx: {
+         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+         "SHAREPOINT_PAGES_URLS": (ctx["nur_einheit"] or
+                                   str(cfg.get("sharepoint_pages_urls") or "")),
+         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
+         "SHAREPOINT_PAGES_IMAGE_MAX_MB":
+             str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))}},
+
+    {"key": "teams", "anfrage": "teams", "script": "teams_export",
+     "label": "job.step.teams", "corpus": True, "zugang": True,
+     "schedule": "teams", "master": None, "quelle": "Teams",
+     "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
+     "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
+     "env": lambda cfg, ctx: {
+         "EXPORT_CATEGORIES": ",".join(ctx["cats_teams"]),
+         "EMBED_IMAGES": _flag(cfg.get("embed_images")),
+         "CACHE_IMAGES": _flag(cfg.get("cache_images")),
+         "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
+         "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))}},
+
+    {"key": "index", "anfrage": "index", "script": "rag_index",
+     "label": lambda ctx: ("job.step.index" if ctx["embeddings"]
+                           else "job.step.index.lexical"),
+     "corpus": False, "zugang": False,
+     "schedule": "index", "master": None, "quelle": None,
+     "argv": _index_argv, "env": lambda cfg, ctx: {},
+     # If the export brought nothing new, this step indexes the same
+     # corpus a second time. "ziel" is the condition under which skipping
+     # is safe: only when an index already exists.
+     "ziel": lambda cfg, pfade: pfade["store_db"]},
+
+    {"key": "calendar", "anfrage": "calendar", "script": "combined_search",
+     "label": lambda ctx: ("job.step.calendar" if ctx["reconstruct"]
+                           else "job.step.calendar.plain"),
+     "corpus": False, "zugang": False,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": _calendar_argv, "env": lambda cfg, ctx: {},
+     "ziel": lambda cfg, pfade: pfade["calendar_file"]},
+
+    {"key": "onedrive_folders", "anfrage": "sync_onedrive",
+     "script": "onedrive_export",
+     "label": "job.step.folders", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--folders", pfade["onedrive"]],
+     "env": lambda cfg, ctx: {
+         "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or "")}},
+
+    {"key": "sharepoint_folders", "anfrage": "sync_sharepoint",
+     "script": "sharepoint_export",
+     "label": "job.step.folders", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--folders", pfade["sharepoint"]],
+     "env": _sharepoint_env},
+
+    {"key": "folders", "anfrage": "sync_folders", "script": "outlook_export",
+     "label": "job.step.folders", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--folders", pfade["outlook"]],
+     "env": lambda cfg, ctx: {}},
+
+    {"key": "calendars", "anfrage": "sync_calendars",
+     "script": "outlook_export",
+     "label": "job.step.calendars", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--calendars", pfade["outlook"]],
+     "env": lambda cfg, ctx: {}},
+
+    {"key": "check", "anfrage": "check", "script": "outlook_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["outlook"]],
+     "env": lambda cfg, ctx: {}},
+
+    {"key": "check_onedrive", "anfrage": "check_onedrive",
+     "script": "onedrive_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["onedrive"]],
+     "env": _onedrive_env},
+
+    {"key": "check_sharepoint", "anfrage": "check_sharepoint",
+     "script": "sharepoint_export",
+     "label": "job.step.preview", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["sharepoint"]],
+     "env": _sharepoint_env},
+
+    {"key": "check_pages", "anfrage": "check_pages",
+     "script": "sharepoint_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--check-pages",
+                                      pfade["sharepoint_pages"]],
+     "env": lambda cfg, ctx: {
+         "SHAREPOINT_PAGES_URLS":
+             str(cfg.get("sharepoint_pages_urls") or "")}},
+)
+
+ANFRAGEN = tuple(e["anfrage"] for e in REGISTRY)
+
+
+def baue(cfg, ctx, pfade, base_env, script_argv, angefragt):
+    """The step list of one run – the registry, filtered and instantiated."""
+    schritte = []
+    for e in REGISTRY:
+        if not angefragt.get(e["anfrage"]):
+            continue
+        if "aktiv" in e and not e["aktiv"](cfg, ctx):
+            continue
+        label = e["label"](ctx) if callable(e["label"]) else e["label"]
+        schritt = {"key": e["key"], "label": label,
+                   "argv": script_argv(e["script"],
+                                       *e["argv"](cfg, ctx, pfade)),
+                   "env": {**base_env, **e["env"](cfg, ctx)}}
+        if e.get("corpus"):
+            schritt["corpus"] = True
+        if e.get("ziel"):
+            schritt["nur_bei_neuem"] = True
+            schritt["ziel"] = e["ziel"](cfg, pfade)
+        schritte.append(schritt)
+    return schritte
+
+
+def braucht_zugang(angefragt):
+    """Does any requested step talk to Graph?"""
+    return any(angefragt.get(e["anfrage"]) and e["zugang"] for e in REGISTRY)
+
+
+def anfrage_aus_request(data):
+    """The launch flags straight from an API request body."""
+    return {e["anfrage"]: bool(data.get(e["anfrage"])) for e in REGISTRY}
+
+
+def plan_anfrage(plan, cfg):
+    """The launch flags of a scheduled run: every step with a schedule
+    toggle, narrowed by its master switch – the schedule can only narrow,
+    never widen."""
+    anfrage = {}
+    for e in REGISTRY:
+        if not e["schedule"]:
+            continue
+        an = bool(plan.get(e["schedule"], True))
+        if e["master"]:
+            an = an and bool(cfg.get(e["master"]))
+        anfrage[e["anfrage"]] = an
+    return anfrage
+
+
+def ui_metadaten():
+    """What the page needs to name steps: per step the source label the
+    runs table shows (an i18n key when it contains a dot, otherwise a
+    literal) – injected into /*__STEPS__*/ at serve time."""
+    return {e["key"]: {"quelle": e["quelle"]}
+            for e in REGISTRY if e.get("quelle")}

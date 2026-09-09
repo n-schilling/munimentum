@@ -53,7 +53,6 @@ BETA = "https://graph.microsoft.com/beta"
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Tasks.Read", RES + "Group.Read.All", RES + "User.Read"]
 
-OUT_ROOT = settings.value("planner_dir", settings.PLANNER_DIR)
 SWEEP_S = 24 * 3600            # full new-comment sweep at most this often
 
 # Planner's fixed label palette – the plan's details name the categories,
@@ -104,7 +103,7 @@ class TokenClient(graph_client.TokenClient):
 
 
 # ---------------------------------------------------------------------------
-# Auflösen: URL -> Plan samt Kadenz
+# Resolving: URL -> plan with its cadence
 # ---------------------------------------------------------------------------
 def resolve_plans(graph, urls):
     """[(plan, kadenz)] for the configured URLs; broken URLs cost the others
@@ -149,7 +148,7 @@ def plan_ziel(out, plan):
 
 
 # ---------------------------------------------------------------------------
-# Holen
+# Fetching
 # ---------------------------------------------------------------------------
 def _alle(graph, url):
     return list(graph.paged(url))
@@ -202,13 +201,13 @@ def _referenzen_laden(graph, db, ziel, task, det):
             meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem"
                              "?$select=name,cTag")
             roh_name = export_util.safe(str(meta.get("name") or "datei"))
-            # Zusätzlich URL-tauglich: der Name steht im relativen Link des
-            # Boards und im path-Parameter der /source-Route.
+            # Additionally URL-safe: the name appears in the board's
+            # relative link and in the /source route's path parameter.
             roh_name = re.sub(r"[&#%?]", "_", roh_name)
             stamm, punkt, endung = roh_name.rpartition(".")
             kurz = export_util.kuerzel(url)
-            # Das URL-Kürzel im Namen: zwei gleichnamige Dateien aus zwei
-            # Referenzen dürfen sich nicht überschreiben.
+            # The URL tag in the name: two same-named files from two
+            # references must not overwrite each other.
             name = f"{stamm}__{kurz}.{endung}" if punkt else \
                 f"{roh_name}__{kurz}"
             rel = f"{ANHANG_DIR}/{name}"
@@ -279,7 +278,7 @@ def _neue_kommentare(graph, task_id):
 
 
 # ---------------------------------------------------------------------------
-# Rendern
+# Rendering
 # ---------------------------------------------------------------------------
 _PRIO = {1: "urgent", 3: "important", 5: "medium", 9: "low"}
 
@@ -318,7 +317,7 @@ details.kommentare>summary{cursor:pointer;font-size:12.5px;color:#555;
 .refs a{font-size:12px;margin-right:10px}
 """
 
-# Die Chips oben sollen die Lane nicht nur anspringen, sondern aufklappen.
+# The chips up top should not just jump to the lane but open it as well.
 _SKRIPT = """<script>
 document.querySelectorAll('.lanes a').forEach(function(chip){
   chip.addEventListener('click', function(){
@@ -374,7 +373,7 @@ def _task_html(eintrag, labels, namen, weg=False):
         lokal = eintrag.get("anhaenge") or {}
         glieder = []
         for roh, ref in refs.items():
-            url = unquote(roh)                  # Graph kodiert die Schlüssel
+            url = unquote(roh)                  # Graph encodes the keys
             ziel_url = lokal.get(url, url)
             glieder.append(
                 f'<a href="{html_lib.escape(ziel_url)}">'
@@ -443,7 +442,7 @@ def render_board(plan, buckets, eintraege, labels, namen):
 
 
 # ---------------------------------------------------------------------------
-# Der Lauf
+# The run
 # ---------------------------------------------------------------------------
 def plan_lauf(graph, out, plan, threads_cache):
     """One plan: list, refresh what changed, mark what vanished, render."""
@@ -492,9 +491,9 @@ def plan_lauf(graph, out, plan, threads_cache):
         (time.time() - float(db.kv_lesen("sweep") or 0)) > SWEEP_S
     neu = unveraendert = fehler = 0
     gesehen = set()
-    # Erst entscheiden, dann arbeiten: so kennt der Fortschrittsbalken sein
-    # Ziel, und die Startzeile sagt, wie viel dieser Lauf wirklich vorhat –
-    # beim Erstlauf sind das 2–3 Anfragen je Aufgabe, minutenlang.
+    # Decide first, then work: the progress bar then knows its target, and
+    # the start line says how much this run really intends – on a first run
+    # that is 2–3 requests per task, minutes' worth.
     faellig = []
     for t in tasks:
         tid = t.get("id")
@@ -534,8 +533,9 @@ def plan_lauf(graph, out, plan, threads_cache):
             kommentare = []
             if thread and gruppe and (erste or threads is not None):
                 kommentare += _legacy_posts(graph, gruppe, thread)
-                # Ohne Auflistung (Erstlauf) datiert der letzte Post den
-                # Faden – lastDeliveredDateTime der Gruppe ist genau das.
+                # Without a listing (first run) the latest post dates the
+                # thread – the group's lastDeliveredDateTime is exactly
+                # that.
                 stand_threads[thread] = (
                     threads.get(thread, "") if threads is not None else
                     max((k["wann"] for k in kommentare
@@ -627,7 +627,7 @@ def main():
     if export_util.hilfe_gewuenscht(sys.argv[1:]):
         print(__doc__)
         return
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    out = export_util.ausgabeordner(argv)
     urls = planner_urls()
     if not urls:
         progress.event("run.planner.none", "warn")

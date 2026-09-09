@@ -1,7 +1,7 @@
-"""Tests für export_util.py – die geteilten Helfer der Exportskripte.
+"""Tests for export_util.py – the helpers shared by the export scripts.
 
-Vieles läuft ohnehin über die Aliasse in den Export-Testdateien mit; hier
-stehen nur die Verträge, die kein Skript-Test von selbst abdeckt.
+Much of it is exercised anyway via the aliases in the export test files;
+only the contracts no script test covers on its own live here.
 """
 
 from datetime import UTC, datetime
@@ -33,18 +33,6 @@ def test_schreibe_atomar_legt_ordner_an_und_laesst_kein_tmp(tmp_path):
     export_util.schreibe_atomar(ziel, "inhalt")
     assert ziel.read_text(encoding="utf-8") == "inhalt"
     assert not ziel.with_name(ziel.name + ".tmp").exists()
-
-
-def test_alte_verschwunden_datei_wird_fuer_die_migration_gelesen(tmp_path):
-    """Der Legacy-Leser wohnt in migrate_state – der einzige Code, der die
-    Dateien von vor 6.2 noch anfasst."""
-    import migrate_state
-    pfad = tmp_path / "verschwunden.tsv"
-    pfad.write_text("a.eml\t2025-01-01\nb.eml\t2025-02-02\nkaputt\n",
-                    encoding="utf-8")
-    assert migrate_state._lies_verschwunden(pfad) == {
-        "a.eml": "2025-01-01", "b.eml": "2025-02-02"}
-    assert migrate_state._lies_verschwunden(tmp_path / "fehlt.tsv") == {}
 
 
 def test_safe_und_kuerzel():

@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 """
-rag_index.py – baut den Index für die lokale RAG-Suche und den MCP-Server.
+rag_index.py – builds the index for local RAG search and the MCP server.
 
-Liest beide Exporte (über corpus.py), bettet jeden Chunk per Ollama ein und legt
-alles in einem Store-Ordner ab:
+Reads both exports (via corpus.py), embeds every chunk through Ollama and puts
+everything into a store folder:
 
-    corpus.db     SQLite: Chunks + Metadaten, FTS5-Volltextindex (BM25),
-                  vorberechnete Personenliste. Wird von mcp_server.py
-                  abfragbar genutzt – kein Laden in den RAM nötig.
-    vectors-N.npy Embedding-Matrix, float16 (halber Platz, praktisch gleiche
-                  Kosinus-Rangfolge). Zeile i gehört zu chunks.id = i+1.
-                  Jeder Lauf schreibt eine NEUE Datei, statt die vorhandene
-                  zu ersetzen – sonst scheiterte er unter Windows, solange
-                  ein Leser sie abgebildet hält (siehe store_layout.py).
-    info.json     Modell/Dimension/Format – und welche Vektordatei gilt.
+    corpus.db     SQLite: chunks + metadata, FTS5 full-text index (BM25),
+                  precomputed people list. Queried directly by mcp_server.py
+                  – no need to load anything into RAM.
+    vectors-N.npy Embedding matrix, float16 (half the space, practically the
+                  same cosine ranking). Row i belongs to chunks.id = i+1.
+                  Every run writes a NEW file instead of replacing the
+                  existing one – otherwise it would fail on Windows while a
+                  reader keeps it mapped (see store_layout.py).
+    info.json     Model/dimension/format – and which vector file is current.
 
-Inkrementell: bei erneutem Lauf werden nur neue/geänderte Chunks neu berechnet
-(Abgleich über Inhalts-Hash), vorhandene Vektoren werden wiederverwendet.
+Incremental: a repeated run recomputes only new/changed chunks (matched via
+content hash); existing vectors are reused.
 
-Runs as a subprogram of app.py. Arguments: [teams] [outlook] [onedrive]
---store --model --ollama --batch; defaults come from the schema in
-settings.py. Embeddings need a running Ollama; --no-embeddings builds only
+Runs as a subprogram of app.py, which passes every folder explicitly:
+
+    teams outlook onedrive --sharepoint DIR --pages DIR --planner DIR
+    --store DIR [--model M] [--ollama URL] [--batch N] [--no-embeddings]
+
+Only model, ollama and batch still fall back to the schema in settings.py.
+Embeddings need a running Ollama; --no-embeddings builds only
 corpus.db with the FTS5 full-text index – search and the MCP server then
 work lexically (BM25), only the semantic half of hybrid ranking is missing.
 """
 
 import json
+import time
 import sqlite3
 import argparse
 from pathlib import Path
@@ -43,32 +48,32 @@ import store_layout
 
 export_util.erzwinge_utf8()
 
-# Aus dem Schema, nicht noch einmal hier: die Tests vergleichen dagegen.
+# From the schema, not repeated here: the tests compare against it.
 DEFAULT_MODEL = settings.VORGABEN["embed_model"]
 DEFAULT_OLLAMA = settings.VORGABEN["ollama"]
-FORMAT = 2                     # 2 = corpus.db + float16-Vektoren
-PPL_TOKEN_CAP = 60             # Personen-Tokens pro Person in der people-Tabelle
-STALE_VECTORS = "vectors_stale.npz"   # beiseitegelegte Embeddings, hash-indiziert
+FORMAT = 2                     # 2 = corpus.db + float16 vectors
+PPL_TOKEN_CAP = 60             # people tokens per person in the people table
+STALE_VECTORS = "vectors_stale.npz"   # set-aside embeddings, hash-indexed
 
-# Ab welcher Länge ein Chunk überhaupt eingebettet wird.
+# Minimum length before a chunk gets embedded at all.
 #
-# Gemessen an einem echten Archiv: 22 % aller Chunks sind kürzer als das —
-# „ok", „danke", „bis morgen" — und kosten zusammen eine Viertelstunde je Lauf.
-# Eine Bedeutung, nach der jemand sucht, tragen sie nicht: Was sie enthalten,
-# steht in fast jedem Chat hundertfach und beantwortet keine Frage.
+# Measured on a real archive: 22 % of all chunks are shorter than this —
+# "ok", "thanks", "see you tomorrow" — and together they cost a quarter of an
+# hour per run. They carry no meaning anyone would search for: what they
+# contain appears a hundred times in almost every chat and answers no question.
 #
-# Sie bleiben vollständig im Index und über die Textsuche auffindbar; nur ihr
-# Vektor bleibt null. Das ist kein Sonderfall im Suchcode: Kosinus 0 liegt
-# unter jeder sinnvollen Untergrenze (SEMANTIC_MIN, Vorgabe 0,45), solche
-# Zeilen können also gar nicht als Treffer erscheinen.
+# They stay fully in the index and findable via text search; only their
+# vector stays zero. That is no special case in the search code: cosine 0
+# lies below any sensible floor (SEMANTIC_MIN, default 0.45), so such rows
+# can never surface as hits.
 MIN_EMBED_ZEICHEN = 40
 
 
 def embed(texts, model, url, timeout=600):
-    """Ein Stapel Texte -> Vektoren; Fehler enden hier mit klarer Meldung.
+    """A batch of texts -> vectors; errors end here with a clear message.
 
-    Der HTTP-Teil liegt in ollama_client; dieses Skript übersetzt nur in
-    Abbrüche, denn mitten im Indexlauf ist niemand, der einen Traceback liest.
+    The HTTP part lives in ollama_client; this script only translates into
+    aborts, because nobody is around to read a traceback mid index run.
     """
     import requests
     try:
@@ -84,7 +89,7 @@ def embed(texts, model, url, timeout=600):
 
 
 # --------------------------------------------------------------------------
-# SQLite-Store schreiben
+# Writing the SQLite store
 # --------------------------------------------------------------------------
 def _chunk_row(i, c):
     seq = int(c["cid"].rsplit("#", 1)[1])
@@ -96,16 +101,16 @@ def _chunk_row(i, c):
             c.get("who"), c.get("ppl"), c.get("ts"), c.get("date"),
             c.get("title"), c.get("ctx"), c.get("text"), c.get("hash"),
             c.get("thread"), c.get("gone"), c.get("att"),
-            # Aus denselben Namen wie att, aber als eigene Spalte: danach wird
-            # in SQL gefiltert, und das muss in allen drei Sucharten wirken.
+            # From the same names as att, but as its own column: SQL filters
+            # on it, and that has to work in all three search modes.
             corpus.endungen(c.get("att")) or None)
 
 
 def _people_rows(chunks):
-    """(src, who) → Nachrichtenzahl + Personen-Token für die contains-Suche."""
+    """(src, who) → message count + people tokens for the contains search."""
     agg = {}
     for c in chunks:
-        if not c["cid"].endswith("#0"):           # eine Nachricht nur einmal zählen
+        if not c["cid"].endswith("#0"):           # count each message only once
             continue
         key = (c["src"], (c.get("who") or "").strip())
         cnt, toks = agg.setdefault(key, [0, set()])
@@ -117,7 +122,7 @@ def _people_rows(chunks):
 
 
 def write_db(store, chunks):
-    """corpus.db atomisch neu schreiben (erst .tmp, dann ersetzen)."""
+    """Rewrite corpus.db atomically (first .tmp, then replace)."""
     dbp = store_layout.db_path(store)
     tmp = dbp.with_name(dbp.name + ".tmp")
     tmp.unlink(missing_ok=True)
@@ -173,11 +178,11 @@ def write_db(store, chunks):
 
 
 def save_vectors(store, V):
-    """Normalisiert als float16 speichern (halber Platz, Rangfolge ~identisch).
+    """Store normalised as float16 (half the space, ranking ~identical).
 
-    Geschrieben wird unter einem NEUEN Namen, nie über die vorhandene Datei –
-    siehe store_layout. Liefert (Matrix, Pfad); der Name gehört anschließend in
-    info.json, sonst findet ihn niemand.
+    Written under a NEW name, never over the existing file – see store_layout.
+    Returns (matrix, path); the name must then go into info.json, or nobody
+    will find it.
     """
     V = V.astype("float32")
     norms = np.linalg.norm(V, axis=1, keepdims=True)
@@ -185,21 +190,21 @@ def save_vectors(store, V):
     V = (V / norms).astype("float16")
     ziel = store_layout.next_vectors_path(store)
     tmp = ziel.with_suffix(".npy.tmp")
-    with open(tmp, "wb") as f:                 # Dateiobjekt: np.save hängt kein .npy an
+    with open(tmp, "wb") as f:                 # file object: np.save appends no .npy
         np.save(f, V)
-    # Auch hier über eine Zwischendatei, obwohl das Ziel neu ist: ein Abbruch
-    # mitten im Schreiben hinterlässt so keine halbe Matrix unter einem Namen,
-    # den der nächste Lauf für gültig halten könnte.
+    # Via a temp file here too, even though the target is new: an abort in
+    # the middle of writing then leaves no half-written matrix under a name
+    # the next run might take for valid.
     tmp.replace(ziel)
     return V, ziel
 
 
 def write_info(store, model, dim, n, vectors=None):
-    """Der Schlusspunkt eines Laufs: erst hiermit gilt der neue Stand.
+    """The closing act of a run: only this makes the new state count.
 
-    `vectors` ist der Dateiname der Embeddings – None heißt ausdrücklich „dieser
-    Index hat keine". Der Eintrag steht immer da, auch leer; store_layout
-    unterscheidet daran einen Lauf ohne Embeddings von einem alten Store.
+    `vectors` is the filename of the embeddings – None explicitly means "this
+    index has none". The entry is always present, even when empty; store_layout
+    uses it to tell a run without embeddings from an old store.
     """
     (Path(store) / "info.json").write_text(json.dumps({
         "model": model, "dim": int(dim), "chunks": int(n),
@@ -209,15 +214,15 @@ def write_info(store, model, dim, n, vectors=None):
 
 
 # --------------------------------------------------------------------------
-# Alten Store lesen (für inkrementelle Läufe)
+# Reading the old store (for incremental runs)
 # --------------------------------------------------------------------------
 def _load_old_store(store):
-    """(hashes_in_order, V) des vorhandenen Stores."""
+    """(hashes_in_order, V) of the existing store."""
     sp = Path(store)
     vp = store_layout.vectors_path(sp)
-    # Ohne mmap: die Vektoren werden hier gleich vollständig gebraucht, und ein
-    # Lesehandle auf die alte Datei wäre genau das, was das Aufräumen am Ende
-    # des Laufs blockiert.
+    # No mmap: the vectors are needed in full right away, and a read handle
+    # on the old file would be exactly what blocks the cleanup at the end of
+    # the run.
     V = np.load(vp) if vp else None
     dbp = store_layout.db_path(sp)
     if dbp.exists():
@@ -229,7 +234,7 @@ def _load_old_store(store):
 
 
 def _load_stale(store):
-    """Beiseitegelegte Embeddings aus einem lexikalischen Lauf (hash -> Vektor)."""
+    """Set-aside embeddings from a lexical run (hash -> vector)."""
     p = Path(store) / STALE_VECTORS
     if not p.exists():
         return {}
@@ -243,7 +248,7 @@ def _load_stale(store):
 
 
 def load_old_vectors(store):
-    out = _load_stale(store)          # Fallback, von den Vektoren überstimmt
+    out = _load_stale(store)          # fallback, overruled by the vectors
     try:
         hashes, V = _load_old_store(store)
         if V is None or not hashes:
@@ -256,19 +261,19 @@ def load_old_vectors(store):
 
 
 def retire_vectors(store):
-    """Vor einem lexikalischen Rebuild: Embeddings hash-indiziert sichern und
-    die Vektordatei zurückziehen. Liefert die Zahl der geretteten Vektoren.
+    """Before a lexical rebuild: save embeddings hash-indexed and retire the
+    vector file. Returns the number of rescued vectors.
 
-    Nötig, weil die Vektoren zeilenweise an corpus.db hängen (Zeile i gehört zu
-    id i+1). Wird die DB ohne Embeddings neu geschrieben, stimmt diese Zuordnung
-    nicht mehr – die Datei einfach liegen zu lassen hieße, später falsche
-    Vektoren zu ranken. Über den Inhalts-Hash bleiben sie dagegen gültig, und
-    ein späterer Lauf mit Ollama muss nur wirklich Neues einbetten statt alles.
+    Needed because the vectors hang off corpus.db row by row (row i belongs
+    to id i+1). Once the DB is rewritten without embeddings, that mapping no
+    longer holds – simply leaving the file in place would mean ranking wrong
+    vectors later. Keyed by content hash they stay valid, and a later run
+    with Ollama only has to embed what is genuinely new instead of everything.
 
-    „Zurückziehen" heißt: der Eintrag in info.json fällt weg (das erledigt
-    write_info im Anschluss), und die Datei wird gelöscht, soweit sie sich
-    löschen lässt. Beides zusammen – gültig ist, was info.json nennt, nicht was
-    im Ordner liegt.
+    "Retire" means: the entry in info.json goes away (write_info does that
+    right after), and the file is deleted as far as it lets itself be
+    deleted. Both together – valid is what info.json names, not what happens
+    to sit in the folder.
     """
     sp = Path(store)
     if not store_layout.vectors_path(sp):
@@ -286,30 +291,36 @@ def retire_vectors(store):
 
 
 # --------------------------------------------------------------------------
-# Index bauen
+# Building the index
 # --------------------------------------------------------------------------
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None, sharepoint_dir=None,
                 pages_dir=None, planner_dir=None):
+    # Reading a large archive takes a minute or more and used to be silent –
+    # long enough for someone watching the log to suspect a hang.
+    progress.event("run.index.reading")
+    begonnen = time.time()
     recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir,
                                sharepoint_dir, pages_dir, planner_dir)
     if corpus.POOL_FEHLER:
-        # Nicht verschweigen: der Index stimmt, aber das Einlesen lief auf
-        # einem Kern statt auf allen, und bei großen Beständen merkt man das.
+        # Don't keep quiet about this: the index is correct, but reading ran
+        # on one core instead of all, and with large archives that shows.
         progress.event("run.index.no_pool", "warn",
                        error=str(corpus.POOL_FEHLER))
     chunks = corpus.chunk_records(recs)
     if not chunks:
-        raise SystemExit("Keine Inhalte gefunden – stimmen die Export-Ordner?")
+        raise SystemExit("No content found - are the export folders right?")
     for c in chunks:
         c["hash"] = corpus.chunk_hash(c)
+    progress.event("run.index.read", n=len(recs), chunks=len(chunks),
+                   s=int(time.time() - begonnen))
 
     Path(store).mkdir(parents=True, exist_ok=True)
     if not embeddings:
-        # Nur corpus.db + FTS5: Volltextsuche (BM25) läuft ohne Ollama, die
-        # semantische Hälfte der Hybrid-Suche fehlt. write_info trägt unten
-        # ausdrücklich keine Vektordatei ein; mcp_server.py und app.py ranken
-        # daraufhin rein lexikalisch.
+        # Only corpus.db + FTS5: full-text search (BM25) runs without Ollama,
+        # the semantic half of hybrid search is missing. write_info below
+        # explicitly records no vector file; mcp_server.py and app.py then
+        # rank purely lexically.
         saved = retire_vectors(store)
         if saved:
             progress.event("run.index.saved_stale", n=saved)
@@ -320,9 +331,9 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     old = load_old_vectors(store)
     vectors = [None] * len(chunks)
     dim = len(next(iter(old.values()))) if old else None
-    # Pro eindeutigem Inhalts-Hash nur EINMAL einbetten und das Ergebnis auf alle
-    # gleichen Chunks verteilen (identische Signaturen/Disclaimer kommen oft vor).
-    uniq = {}                       # hash -> Liste der Chunk-Indizes mit diesem Hash
+    # Embed each unique content hash only ONCE and spread the result over all
+    # equal chunks (identical signatures/disclaimers are common).
+    uniq = {}                       # hash -> list of chunk indices with this hash
     for i, c in enumerate(chunks):
         v = old.get(c["hash"])
         if v is not None:
@@ -330,15 +341,15 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
         else:
             uniq.setdefault(c["hash"], []).append(i)
 
-    todo_groups = list(uniq.values())          # je eindeutiger Text: alle Zielindizes
+    todo_groups = list(uniq.values())          # per unique text: all target indices
     new_total = sum(len(g) for g in todo_groups)
-    # Zu kurz für eine Bedeutung: Vektor bleibt null (siehe MIN_EMBED_ZEICHEN).
+    # Too short to carry meaning: vector stays zero (see MIN_EMBED_ZEICHEN).
     zu_kurz = sum(len(g) for g in todo_groups
                   if len(chunks[g[0]].get("text") or "") < MIN_EMBED_ZEICHEN)
     todo_groups = [g for g in todo_groups
                    if len(chunks[g[0]].get("text") or "") >= MIN_EMBED_ZEICHEN]
-    # Nach Länge sortiert: ein Stapel wird auf seine längste Sequenz aufgefüllt,
-    # und gemischte Längen zahlen diese Füllung bei jedem Stück mit.
+    # Sorted by length: a batch gets padded up to its longest sequence, and
+    # mixed lengths pay for that padding on every single item.
     todo_groups.sort(key=lambda g: len(chunks[g[0]].get("text") or ""))
     todo_texts = [corpus.embed_text(chunks[idxs[0]]) for idxs in todo_groups]
     progress.event("run.index.plan", chunks=len(chunks),
@@ -347,9 +358,9 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
 
     if todo_texts:
         done = 0
-        # Embedding ist GPU-gebunden und serialisiert auf einem Slot; mit zwei
-        # Requests „in flight“ liegt immer schon einer in der Server-Queue, sodass
-        # die GPU zwischen den Batches nicht leerläuft (kein Idle-Bubble).
+        # Embedding is GPU-bound and serialised on one slot; with two requests
+        # in flight one is always already waiting in the server queue, so the
+        # GPU never sits idle between batches (no idle bubble).
         def run(b):
             texts = todo_texts[b:b + batch]
             return b, embed(texts, model, url)
@@ -367,8 +378,8 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 progress.melde(done, len(todo_texts), "embeddings")
 
     if dim is None:
-        # Weder Altbestand noch etwas Neues: nur zu kurze Texte. Die Länge
-        # einmal erfragen, damit die Matrix trotzdem die richtige Form bekommt.
+        # Neither old stock nor anything new: only too-short texts. Ask for
+        # the dimension once so the matrix still gets the right shape.
         dim = len(embed([corpus.embed_text(chunks[0])], model, url)[0])
     leer = np.zeros(dim, dtype="float32")
     vectors = [leer if v is None else v for v in vectors]
@@ -376,40 +387,35 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     V, vp = save_vectors(store, np.vstack(vectors))
     write_db(store, chunks)
     write_info(store, model, V.shape[1], len(chunks), vp)
-    # Alles wieder in der Vektordatei – die Hash-Sicherung wird nicht mehr
-    # gebraucht.
+    # Everything is back in the vector file – the hash backup is no longer
+    # needed.
     (Path(store) / STALE_VECTORS).unlink(missing_ok=True)
-    # Erst jetzt, nachdem info.json auf die neue Datei zeigt: die vorige darf
-    # weg. Wer sie noch abgebildet hat, behält sie – dann bleibt sie liegen und
-    # der nächste Lauf räumt sie ab (siehe store_layout.prune_vectors).
+    # Only now, after info.json points to the new file, may the previous one
+    # go. Whoever still has it mapped keeps it – then it stays behind and the
+    # next run sweeps it up (see store_layout.prune_vectors).
     store_layout.prune_vectors(store, vp)
     return len(chunks), new_total, int(V.shape[1])
 
 
 def main():
     ap = argparse.ArgumentParser()
-    # Vorgaben aus app_config.json, sofern vorhanden – die Kommandozeile sticht
-    # sie aus (siehe settings.py).
-    ap.add_argument("teams", nargs="?", default=settings.value("teams_dir", settings.TEAMS_DIR))
-    ap.add_argument("outlook", nargs="?", default=settings.value("outlook_dir", settings.OUTLOOK_DIR))
-    ap.add_argument("onedrive", nargs="?",
-                    default=settings.value("onedrive_dir", settings.ONEDRIVE_DIR))
-    ap.add_argument("--sharepoint",
-                    default=settings.value("sharepoint_dir",
-                                           settings.SHAREPOINT_DIR))
-    ap.add_argument("--pages",
-                    default=settings.value("sharepoint_pages_dir",
-                                           settings.SHAREPOINT_PAGES_DIR))
-    ap.add_argument("--planner",
-                    default=settings.value("planner_dir",
-                                           settings.PLANNER_DIR))
-    ap.add_argument("--store", default=settings.value("store_dir", settings.STORE_DIR))
+    # No defaults of their own: the app passes every folder (steps.py), and a
+    # fallback would quietly index whatever sits next to the working
+    # directory – the same reason the export scripts lost theirs.
+    ap.add_argument("teams")
+    ap.add_argument("outlook")
+    ap.add_argument("onedrive")
+    ap.add_argument("--sharepoint", required=True)
+    ap.add_argument("--pages", required=True)
+    ap.add_argument("--planner", required=True)
+    ap.add_argument("--store", required=True)
     ap.add_argument("--model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
     ap.add_argument("--batch", type=int, default=settings.value("index_batch"))
     ap.add_argument("--no-embeddings", action="store_true",
-                    help="Nur den Volltextindex (FTS5/BM25) bauen, ohne Ollama. "
-                         "Suche und MCP laufen dann rein lexikalisch.")
+                    help="Build only the full-text index (FTS5/BM25), "
+                         "without Ollama. Search and MCP then run purely "
+                         "lexically.")
     a = ap.parse_args()
 
     n, new, dim = build_index(a.teams, a.outlook, a.store, a.model, a.ollama,

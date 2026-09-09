@@ -125,9 +125,9 @@ per message – page with offset rather than raising k; a hit's "uri" can be rea
 as an MCP resource.
 """
 
-# Was der Client zu sehen bekommt, wenn der Zugriff abgeschaltet ist. Bewusst
-# als Anweisung an das Modell formuliert: es soll den Satz weitergeben und nicht
-# anfangen, den Fehler zu umgehen.
+# What the client gets to see when access is switched off. Deliberately worded
+# as an instruction to the model: it should pass the sentence on rather than
+# start working around the error.
 AUS_TEXT = (
     "MCP access to the Munimentum archive is switched off, so nothing is "
     "served: no search, no documents, no statistics. This is a deliberate "
@@ -140,11 +140,11 @@ AUS_TEXT = (
 
 
 def _abgeschaltet_server():
-    """Ein Server, der genau eine Auskunft gibt: dass er abgeschaltet ist.
+    """A server that gives exactly one answer: that it is switched off.
 
-    Derselbe Name wie sonst – der Client hat ihn so eingetragen. Nur die
-    Werkzeugliste ist eine andere: eines statt neun, und dieses eine liest
-    nichts.
+    Same name as usual – the client has it registered that way. Only the
+    tool list is different: one tool instead of nine, and that one reads
+    nothing.
     """
     aus = MCPServer("munimentum", title="Munimentum", version=version.VERSION,
                     website_url="https://github.com/n-schilling/munimentum",
@@ -187,22 +187,22 @@ _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered ca
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
 
-# Untergrenze für die Bedeutungssuche (Kosinus, normalisierte Vektoren).
+# Lower bound for the semantic search (cosine, normalized vectors).
 #
-# Ohne sie liefert sie IMMER die besten k innerhalb des Filters – auch wenn
-# nichts passt. Wer einen Tag eingrenzt und nach einem Wort sucht, bekommt dann
-# alle Nachrichten dieses Tages, nach Ähnlichkeit sortiert. Genau so berichtet:
-# 18 Treffer, wovon 2 das Wort enthielten.
+# Without it, it ALWAYS returns the best k within the filter – even when
+# nothing matches. Narrow the search to one day and look for a word, and you
+# get every message of that day, sorted by similarity. Reported exactly like
+# that: 18 hits, 2 of which contained the word.
 #
-# An einem echten Index gemessen (bge-m3): eine Unsinnsanfrage kommt über 0,435
-# nicht hinaus, während echte Anfragen noch beim 40. Treffer bei 0,50–0,63
-# liegen. Dazwischen ist Platz. Wer ein anderes Modell benutzt, stellt es um.
+# Measured on a real index (bge-m3): a nonsense query never gets past 0.435,
+# while real queries still sit at 0.50–0.63 by the 40th hit. There is room in
+# between. Anyone using a different model adjusts it.
 def _sem_min():
-    """Als Prozentzahl eingestellt (0–95), hier als Kosinus gebraucht.
+    """Configured as a percentage (0–95), used here as a cosine value.
 
-    Prozent, weil die Oberfläche dann ein normales Zahlenfeld benutzen kann und
-    niemand über ein Komma stolpert. Eine Zahl über 1 wird deshalb als Prozent
-    gelesen – auch wenn jemand sie in der Datei von Hand einträgt.
+    Percent because the interface can then use a plain number field and
+    nobody trips over a decimal separator. A number above 1 is therefore read
+    as a percentage – even when someone puts it into the file by hand.
     """
     roh = os.environ.get("SEMANTIC_MIN")
     if roh is None:
@@ -230,15 +230,15 @@ def _db():
 # Filters (SQL WHERE fragments shared by all query tools)
 # --------------------------------------------------------------------------
 def _hat_spalte(con, name):
-    """Kennt der Index diese Spalte schon?
+    """Does the index know this column yet?
 
-    Ein Index aus einer älteren Fassung hat sie nicht. Ohne diese Frage endete
-    ein Klick auf „Nur Gelöschtes“ in einem SQL-Fehler statt in einem Hinweis.
+    An index from an older build does not have it. Without this check, a
+    click on "Deleted only" ended in a SQL error instead of a hint.
     """
     return any(r[1] == name for r in con.execute("PRAGMA table_info(chunks)"))
 
 
-# Welche Quellen eine Ordnerauswahl anbieten – alle, deren ctx ein Pfad ist.
+# Which sources offer a folder selection – all whose ctx is a path.
 _LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
             "kalender", "teams", "kontakte", "planner")
 
@@ -253,9 +253,10 @@ def _quelle_cond(quelle):
     if quelle in ("onedrive", "sharepoint"):
         return "(src = 'datei' AND root = ?)", [quelle]
     return "src = ?", [quelle]
-# Kanäle werden zu einem Eintrag zusammengefasst: ein Team hat schnell zwanzig,
-# und "welcher Kanal" ist selten die Frage – "Kanäle statt Chats" dagegen oft.
-# Der Filter kann das ohne Zutun, weil ein Pfad immer auch alles darunter meint.
+# Channels are folded into one entry: a team easily has twenty of them, and
+# "which channel" is rarely the question – "channels rather than chats" often
+# is. The filter handles that for free, since a path always means everything
+# below it too.
 # The folder DROPDOWN unit per source: chat kinds, Planner boards and pages
 # sites are the unit, not their sub-paths; a SharePoint library is
 # "site/library" (two segments). OneDrive and the mailbox keep their full
@@ -279,12 +280,13 @@ def _like_fest(text):
 
 
 def _wie(text):
-    """Ein Suchwort als LIKE-Muster: `*` ist der Platzhalter, sonst nichts.
+    """A search term as a LIKE pattern: `*` is the wildcard, nothing else.
 
-    Die Personensuche war immer schon eine Teilstringsuche – nur konnte niemand
-    sie steuern. Wer `*` tippte, suchte den Stern und fand nichts. Umgekehrt
-    wirkten `%` und `_` unbeabsichtigt als Platzhalter, weil sie das für SQL
-    nun einmal sind: "a_b" fand auch "axb". Beides ist hier geradegezogen.
+    The person search has always been a substring search – there was just no
+    way to steer it. Typing `*` searched for the literal star and found
+    nothing. Conversely, `%` and `_` acted as unintended wildcards, because
+    that is what they are to SQL: "a_b" also matched "axb". Both are
+    straightened out here.
     """
     roh = (text or "").strip().lower()
     return "%" + _like_fest(roh).replace("*", "%") + "%"
@@ -293,22 +295,23 @@ def _wie(text):
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
     conds, params = [], []
     if filetype:
-        # ext hält die Endungen einer Nachricht durch Leerzeichen getrennt
-        # ("pdf xlsx"). Mit Leerzeichen umschlossen trifft LIKE genau eine
-        # davon – "doc" fände sonst auch "docx". Zeilen ohne Anhang haben
-        # NULL und fallen damit von selbst heraus.
+        # ext holds a message's extensions separated by spaces ("pdf xlsx").
+        # Wrapped in spaces, LIKE matches exactly one of them – "doc" would
+        # otherwise also match "docx". Rows without an attachment have NULL
+        # and thus drop out on their own.
         conds.append("(' ' || ext || ' ') LIKE ?")
         params.append(f"% {str(filetype).strip().lower().lstrip('.')} %")
     if folder:
-        # Der Ordner steht seit jeher als ctx im Index – er war nur nie
-        # abfragbar. Ein Ordner meint immer auch seine Unterordner: wer
-        # "E-Mail/Kunden" wählt, will nicht 288 Häkchen setzen.
+        # The folder is stored in the index as ctx. A folder always means
+        # its subfolders too: whoever picks a branch does not want to tick
+        # hundreds of checkboxes.
         pfad = str(folder).strip().strip("/")
         conds.append("(ctx = ? OR ctx LIKE ?)")
         params.extend([pfad, pfad + "/%"])
     if only_gone:
-        # Nur was im Postfach nicht mehr steht. Das ist die Frage, für die man
-        # ein Archiv überhaupt hat – und sie ist sonst nicht zu beantworten.
+        # Only what is no longer in the mailbox. That is the question one
+        # keeps an archive for in the first place – and there is no other
+        # way to answer it.
         conds.append("gone IS NOT NULL")
     if src and src != "all":
         cond, werte = _quelle_cond(src)
@@ -327,12 +330,12 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
 
 
 def _to_ts(s, end):
-    """"YYYY-MM-DD" als Zeitstempel; None, wenn nichts angegeben wurde.
+    """"YYYY-MM-DD" as a timestamp; None when nothing was given.
 
-    Ein angegebenes, aber unlesbares Datum ("2021-06-31" – den gibt es nicht)
-    ist ein Fehler und keine fehlende Angabe. Es stillschweigend fallen zu
-    lassen hieße, ohne diese Grenze zu suchen und das Ergebnis als Antwort auf
-    die gestellte Frage auszugeben.
+    A date that was given but cannot be read ("2021-06-31" – it does not
+    exist) is an error, not a missing value. Dropping it silently would mean
+    searching without that bound and presenting the result as the answer to
+    the question that was asked.
     """
     s = (s or "").strip()
     if not s:
@@ -347,17 +350,17 @@ def _to_ts(s, end):
 
 
 def _seit_tagen(tage, heute=None):
-    """„Die letzten N Tage“ als Zeitstempel – N=7 heißt heute und die sechs
-    Tage davor, jeweils ab Mitternacht.
+    """"The last N days" as a timestamp – N=7 means today and the six days
+    before it, each starting at midnight.
 
-    Der Grund für den Parameter: „letzte 7 Tage“ ist die häufigste Frage ans
-    Archiv, und ein Datum dafür auszurechnen ist eine Gelegenheit, sich zu
-    vertun – vor allem am Monatsanfang.
+    The reason this parameter exists: "the last 7 days" is the most common
+    question put to the archive, and working out a date for it is a chance
+    to get it wrong – above all at the start of a month.
 
-    Kalendertage, nicht ein rollendes 7×24-Stunden-Fenster: sonst zeigte
-    dieselbe Frage eine Mail von vor sieben Tagen um 8 Uhr je nach Uhrzeit des
-    Fragens mal an und mal nicht. Über den Tag hinweg dieselbe Antwort ist
-    mehr wert als die Genauigkeit auf die Stunde.
+    Calendar days, not a rolling 7×24-hour window: otherwise the same
+    question would show a mail from 8 a.m. seven days ago or not, depending
+    on the time of day it was asked. The same answer throughout the day is
+    worth more than accuracy to the hour.
     """
     try:
         tage = int(tage)
@@ -370,19 +373,19 @@ def _seit_tagen(tage, heute=None):
 
 
 def _zeitraum(date_from, date_to, tage):
-    """(von, bis) aus genannten Daten und/oder der Abkürzung `days`.
+    """(from, to) from explicit dates and/or the `days` shorthand.
 
-    Zwei Entscheidungen stecken darin:
+    Two decisions are baked in here:
 
-    Ein genanntes date_from schlägt die Abkürzung – und schaltet sie ganz ab.
-    Wer ein Datum hinschreibt, hat sich etwas dabei gedacht; ein Fehler bei
-    beidem würde den Anrufer eine Runde kosten für etwas, das eindeutig zu
-    entscheiden ist.
+    An explicit date_from beats the shorthand – and switches it off entirely.
+    Whoever writes down a date meant something by it; erroring when both are
+    given would cost the caller a round trip over something that can be
+    decided unambiguously.
 
-    `days` setzt BEIDE Grenzen, nicht nur die untere. „Die letzten sieben
-    Tage“ ist ein Fenster, kein Anfang – und ohne obere Grenze holte die Frage
-    aus dem Kalender auch die Termine der nächsten Monate mit, denn die liegen
-    ebenfalls hinter dem Startdatum.
+    `days` sets BOTH bounds, not just the lower one. "The last seven days"
+    is a window, not a starting point – and without an upper bound the
+    question would also pull the coming months' appointments out of the
+    calendar, since those lie past the start date as well.
     """
     von, bis = _to_ts(date_from, False), _to_ts(date_to, True)
     if von is not None or not tage:
@@ -469,12 +472,12 @@ def _semantic_rank(con, query, where, params, limit):
 
 
 def _rank_wie(con, cid, where, params, limit):
-    """Ähnlichste Chunks zu einem, der schon im Index steht.
+    """The most similar chunks to one that is already in the index.
 
-    Der Unterschied zu _semantic_rank ist der Ausgangsvektor: der liegt hier
-    fertig in der Matrix. Es muss nichts eingebettet werden, also braucht das
-    kein Ollama – und funktioniert auch dann, wenn die Bedeutungssuche über das
-    Eingabefeld gerade nicht zur Verfügung steht.
+    The difference from _semantic_rank is the starting vector: here it
+    already sits finished in the matrix. Nothing needs embedding, so this
+    needs no Ollama – and it works even while semantic search through the
+    input field happens to be unavailable.
     """
     np, V = STATE["np"], STATE["V"]
     zeile = cid - 1
@@ -499,10 +502,10 @@ def _rank_wie(con, cid, where, params, limit):
         sims = np.empty(ids.size, dtype=np.float32)
         for s in range(0, ids.size, 32768):
             sims[s:s + 32768] = V[ids[s:s + 32768] - 1].astype(np.float32) @ qvec
-    take = min(limit + 1, ids.size)                  # +1: der Treffer selbst
+    take = min(limit + 1, ids.size)                  # +1: the hit itself
     order = np.argpartition(-sims, take - 1)[:take]
     order = order[np.argsort(-sims[order])]
-    # Sich selbst auszugeben wäre die trivialste und nutzloseste Antwort.
+    # Returning itself would be the most trivial and useless answer.
     return [(int(ids[o]), float(sims[o])) for o in order
             if int(ids[o]) != cid and sims[o] >= SEM_MIN][:limit]
 
@@ -572,8 +575,8 @@ def _source_uri(root, rel):
 def _hit(row, score, preview_chars, woerter=()):
     h = {
         "uid": row["uid"],
-        # Die Zeile im Index. Nur damit lässt sich später "Ähnliche zu diesem
-        # Treffer" fragen, ohne die Anfrage neu einzubetten.
+        # The row in the index. Only with it can "similar to this hit" be
+        # asked later without embedding the query again.
         "cid": row["id"] if "id" in row.keys() else None,
         "source": row["src"],
         # Files name their mirror: a hit from a SharePoint library should not
@@ -588,15 +591,15 @@ def _hit(row, score, preview_chars, woerter=()):
         "path": row["rel"],
         "uri": _source_uri(row["root"], row["rel"]),
         "score": round(score, 4) if score is not None else None,
-        # Kennung des Gesprächs, zu dem der Treffer gehört – damit lässt sich
-        # der ganze Verlauf holen, statt nur die eine Nachricht zu lesen.
+        # Id of the conversation the hit belongs to – with it the whole
+        # history can be fetched instead of reading just the one message.
         "thread": (row["thread"] if "thread" in row.keys() else None),
-        # Namen der Anhänge – der Grund, warum ein Vertrag im Archiv jetzt
-        # auffindbar ist und nicht nur daliegt.
+        # Names of the attachments – the reason a contract in the archive
+        # can now be found rather than just lying there.
         "attachments": [a for a in (row["att"] or "").split(" ")
                         if a] if "att" in row.keys() else [],
-        # Seit wann die Nachricht nicht mehr im Postfach steht. Leer heißt: sie
-        # ist noch da. Die Datei liegt in beiden Fällen im Archiv.
+        # Since when the message has been gone from the mailbox. Empty means:
+        # it is still there. The file sits in the archive either way.
         "gone": (row["gone"] if "gone" in row.keys() else None),
     }
     if preview_chars > 0:
@@ -605,15 +608,15 @@ def _hit(row, score, preview_chars, woerter=()):
 
 
 def _ausschnitt(text, woerter, laenge):
-    """Ein Stück Text um die erste Fundstelle – nicht stur der Anfang.
+    """A piece of text around the first match – not stubbornly the beginning.
 
-    Der Grund ist eine Rückmeldung aus dem Betrieb: eine Suche nach
-    „Betriebsrat" lieferte Mails, in denen das Wort erst nach 900 Zeichen
-    steht. Die Vorschau zeigte die ersten 200 und damit nichts davon, und der
-    Treffer sah aus wie ein Fehlgriff, obwohl er goldrichtig war.
+    The reason is feedback from real use: a search for "Betriebsrat"
+    returned mails in which the word first appears after 900 characters. The
+    preview showed the first 200 and therefore none of it, and the hit
+    looked like a miss although it was spot on.
 
-    Ohne Fundstelle – etwa beim Blättern ohne Suchbegriff – bleibt es der
-    Anfang; der ist dann die beste Auskunft, die es gibt.
+    Without a match position – e.g. when browsing with no query – it stays
+    the beginning; that is then the best information there is.
     """
     text = text or ""
     if not woerter or laenge <= 0:
@@ -622,12 +625,12 @@ def _ausschnitt(text, woerter, laenge):
     treffer = [i for i in (tief.find(w) for w in woerter) if i >= 0]
     if not treffer:
         return text[:laenge]
-    # Etwas Vorlauf, damit der Fund nicht am linken Rand klebt.
+    # Some lead-in so the match does not stick to the left edge.
     start = max(0, min(treffer) - laenge // 4)
     if not start:
         return text[:laenge]
-    # Das Auslassungszeichen zählt mit: preview_chars ist eine Zusage über die
-    # Länge, und ein Aufrufer, der mit 200 Zeichen rechnet, soll 200 bekommen.
+    # The ellipsis counts toward the total: preview_chars is a promise about
+    # the length, and a caller expecting 200 characters should get 200.
     return "…" + text[start:start + laenge - 1].lstrip()
 
 
@@ -767,13 +770,13 @@ def search_messages(query: str, person: str = "", date_from: str = "",
 
 
 def similar_messages(cid: int, k: int = 12, preview_chars: int = 200):
-    """Nachrichten, die dieser einen ähneln – ohne neue Anfrage.
+    """Messages that resemble this one – without a new query.
 
-    Bewusst kein MCP-Werkzeug, sondern nur für die Oberfläche: Claude formuliert
-    seine Anfragen selbst und braucht diesen Umweg nicht. Der Wert liegt beim
-    Menschen, der einen Treffer vor sich hat und „mehr davon“ will.
+    Deliberately not an MCP tool, only for the interface: Claude phrases its
+    own queries and does not need this detour. The value is for the person
+    who has a hit in front of them and wants "more like this".
 
-    Und es geht ohne Ollama: der Ausgangsvektor steht schon in der Matrix.
+    And it works without Ollama: the starting vector is already in the matrix.
     """
     if not STATE.get("semantic"):
         return {"error": "This index has no embeddings.", "count": 0, "results": []}
@@ -848,11 +851,11 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
 
 @mcp.tool(annotations=_READONLY)
 def get_thread(thread: str, limit: int = 50) -> dict:
-    """Alle Nachrichten eines Gesprächs, chronologisch.
+    """All messages of one conversation, in chronological order.
 
-    Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
-    Frage davor eine Aussage. `thread` steht an jedem Treffer aus
-    search_messages.
+    A single hit often says too little: "Yes, let's do it that way" only
+    becomes a statement together with the question before it. `thread` is
+    on every hit from search_messages.
     """
     if not thread:
         return {"thread": "", "count": 0, "messages": []}
@@ -968,9 +971,10 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
             f"SELECT who, SUM(messages) AS m FROM people WHERE {where} "
             f"GROUP BY who ORDER BY m DESC, who LIMIT ?",
             [*params, max(1, limit)]).fetchall()
-        # Auch die Summe: die Oberfläche bietet „alle mit diesem Namensteil“ als
-        # eigene Zeile an und muss dieselbe Größe nennen wie die Zeilen darüber
-        # – sonst stünden Nachrichten neben Personen in einer Liste.
+        # The sum as well: the interface offers "everyone with this name
+        # part" as a row of its own and must state the same quantity as the
+        # rows above it – otherwise messages would sit next to people in
+        # one list.
         total, nachrichten = con.execute(
             f"SELECT COUNT(DISTINCT who), COALESCE(SUM(messages), 0) "
             f"FROM people WHERE {where}", params).fetchone()
@@ -1075,9 +1079,9 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
             cond, werte = _quelle_cond(quelle)
             wo = f"AND {cond}"
             params.extend(werte)
-        # Eine Zeile trägt alle ihre Endungen ("pdf xlsx"); die Zahl je Typ
-        # entsteht daher hier und nicht in SQL. Verschiedene Kombinationen gibt
-        # es nur einige hundert, das ist billiger als es aussieht.
+        # A row carries all of its extensions ("pdf xlsx"); the count per
+        # type is therefore built here and not in SQL. There are only a few
+        # hundred distinct combinations, so this is cheaper than it looks.
         zahl = {}
         for ext, n in con.execute(
                 f"SELECT ext, COUNT(DISTINCT uid) FROM chunks "
@@ -1296,13 +1300,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     # Defaults come from app_config.json when it exists; flags win (settings.py).
-    # Ein Ordner statt drei. Die Unterordner heißen fest, wie überall im
-    # Projekt – Claude startet den Server in einem unbekannten Arbeits-
-    # verzeichnis, also muss dieser eine Pfad absolut mitkommen.
-    ap.add_argument("--data-dir", metavar="ORDNER",
-                    help="Datenordner mit rag_store/, teams_export/ und "
-                         "outlook_export/ darin. Ohne ihn gilt das aktuelle "
-                         "Verzeichnis.")
+    # One directory instead of three. The subdirectories have fixed names,
+    # as everywhere in the project – Claude starts the server in an unknown
+    # working directory, so this one path must come along absolute.
+    ap.add_argument("--data-dir", metavar="FOLDER",
+                    help="Data folder holding the export folders. The index "
+                         "has a path of its own (--store). Without it the "
+                         "current directory applies.")
     ap.add_argument("--store", help=argparse.SUPPRESS)
     ap.add_argument("--teams", help=argparse.SUPPRESS)
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
@@ -1312,11 +1316,11 @@ def main():
     ap.add_argument("--planner", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
-    # Abgeschaltet heißt: gar nicht erst versuchen. Ohne das entscheidet der
-    # Server pro Anfrage neu und läuft jedes Mal in denselben Fehler.
+    # Switched off means: do not even try. Without this, the server decides
+    # anew per request and runs into the same error every time.
     ap.add_argument("--no-ollama", action="store_true",
-                    help="Nicht einbetten, auch wenn Vektoren vorhanden sind. "
-                         "Rankt rein lexikalisch.")
+                    help="Do not embed, even when vectors exist. "
+                         "Ranks purely lexically.")
     ap.add_argument("--transport", choices=["http", "stdio"], default="http",
                     help="http: one shared server, register its URL in Claude "
                          "(default). stdio: launched per client via command.")
@@ -1324,8 +1328,9 @@ def main():
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
     ap.add_argument("--port", type=int, default=settings.value("mcp_port"))
-    # Für den Aufruf von Hand: wer das Programm selbst startet, hat den
-    # Schalter nicht vor sich und soll nicht rätseln müssen, warum nichts geht.
+    # For manual invocation: whoever starts the program themselves does not
+    # have the switch in front of them and should not have to puzzle out why
+    # nothing works.
     ap.add_argument("--force", action="store_true",
                     help="Serve even when MCP access is switched off in the app.")
     ap.add_argument("--allowed-host", action="append", default=[], metavar="HOST[:PORT]",
@@ -1333,8 +1338,8 @@ def main():
                          "Required when --host is not the loopback interface; "
                          "repeat for several. Port defaults to --port.")
     a = ap.parse_args()
-    # --store/--teams/--outlook gab es bis 5.0.0 einzeln; wer sie in einer alten
-    # Claude-Konfiguration stehen hat, soll nicht ins Leere laufen.
+    # --store/--teams/--outlook stay accepted as hidden flags: an old Claude
+    # configuration that still names them should not run into nothing.
     basis = Path(a.data_dir).expanduser() if a.data_dir else Path(".")
     a.store = a.store or str(basis / settings.STORE_DIR)
     a.teams = a.teams or str(basis / settings.TEAMS_DIR)
@@ -1344,19 +1349,19 @@ def main():
     a.pages = a.pages or str(basis / settings.SHAREPOINT_PAGES_DIR)
     a.planner = a.planner or str(basis / settings.PLANNER_DIR)
 
-    # Der harte Schalter. Er sitzt hier und nicht in den Werkzeugen, weil die
-    # App dieselben Funktionen für ihre eigene Suche im selben Prozess aufruft –
-    # abgeschaltet gehört der SERVER, nicht das Lesen des Index. Und er sitzt
-    # vor beiden Transporten: über stdio startet der Client dieses Programm
-    # selbst, ohne dass die App überhaupt läuft. Ein Schalter, der nur den
-    # HTTP-Endpunkt anhielte, wäre genau das Versprechen, das er nicht hält.
+    # The hard switch. It sits here and not in the tools because the app
+    # calls the same functions in-process for its own search – what is
+    # switched off is the SERVER, not reading the index. And it sits before
+    # both transports: over stdio the client launches this program itself,
+    # without the app running at all. A switch that only stopped the HTTP
+    # endpoint would be exactly the promise it does not keep.
     #
-    # Sich zu beenden wäre das Naheliegende und die schlechtere Antwort: der
-    # Client sähe nur einen Server, der nicht startet, und der Grund stünde in
-    # einer Logdatei. Stattdessen läuft ein Server, der genau eine Auskunft
-    # gibt – die liest das Sprachmodell und sagt sie dem Menschen im Klartext.
-    # Ausgeliefert wird dabei nichts: kein Werkzeug, das Daten liest, und der
-    # Index wird nicht einmal geöffnet.
+    # Exiting would be the obvious and the worse answer: the client would
+    # only see a server that fails to start, with the reason in a log file.
+    # Instead, a server runs that gives exactly one answer – the language
+    # model reads it and tells the human in plain words. Nothing is served
+    # in the process: no tool that reads data, and the index is not even
+    # opened.
     if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled"):
         print(AUS_TEXT, file=sys.stderr)
         server = _abgeschaltet_server()
@@ -1371,8 +1376,9 @@ def main():
 
     dbp = store_layout.db_path(a.store)
     if not dbp.exists():
-        raise SystemExit(f"No store at '{dbp}'. Build it first:\n"
-                         f"  python3 rag_index.py {a.teams} {a.outlook}")
+        raise SystemExit(f"No store at '{dbp}'. Build the index in "
+                         f"Munimentum first (Export tab, or Settings -> "
+                         f"expert mode -> index only).")
 
     con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
     n_chunks = con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]

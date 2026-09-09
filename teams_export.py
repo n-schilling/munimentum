@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Teams/Chat-Export über Microsoft Graph (delegiert, kein Admin nötig).
+Teams/chat export via Microsoft Graph (delegated, no admin needed).
 
-Exportiert eine HTML pro Chat bzw. pro Kanal, unterteilt in:
+Exports one HTML per chat or per channel, divided into:
     1on1/  group/  meeting/  channels/<Team>/
 
-PARALLEL: mehrere Chats/Kanäle gleichzeitig (Standard 4, per Env EXPORT_WORKERS).
-  Teams-Throttling: ~1 Anfrage/s je einzelnem Chat oder Kanal, 4/s je Team, und
-  Chats liegen im Postfach (4 gleichzeitige Anfragen). Deshalb wird ÜBER
-  Konversationen hinweg parallelisiert, nicht innerhalb einer. Kanäle holen ihre
-  Antworten via $expand=replies inline (bis 1000, dann replies@odata.nextLink),
-  das spart pro Kanal sehr viele Aufrufe. Drosselung (429) wird per Retry-After
-  abgefangen.
+PARALLEL: several chats/channels at once (default 4, via env EXPORT_WORKERS).
+  Teams throttling: ~1 request/s per individual chat or channel, 4/s per team,
+  and chats live in the mailbox (4 concurrent requests). That is why we
+  parallelize ACROSS conversations, not within one. Channels fetch their
+  replies inline via $expand=replies (up to 1000, then replies@odata.nextLink),
+  which saves a great many calls per channel. Throttling (429) is absorbed via
+  Retry-After.
 
 Runs as a subprogram of app.py: output folder as the only argument, every
 setting as an environment variable (EXPORT_CATEGORIES, EXPORT_WORKERS,
@@ -36,7 +36,6 @@ import hashlib
 import threading
 import html as html_lib
 from datetime import datetime
-from pathlib import Path
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -48,8 +47,8 @@ import settings
 import progress
 
 try:
-    # msal wird erst in auth.py gebraucht (und nur im Login-Modus) – hier nur
-    # geprüft, damit die Meldung über fehlende Pakete früh und gemeinsam kommt.
+    # msal is only needed in auth.py (and only in login mode) – checked here
+    # just so the missing-packages message arrives early and in one place.
     import msal  # noqa: F401
     import requests
 except ImportError:
@@ -59,7 +58,7 @@ except ImportError:
 export_util.erzwinge_utf8()
 
 # ---------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # ---------------------------------------------------------------------------
 GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
@@ -70,62 +69,62 @@ SCOPES_FULL = SCOPES_CHAT + [
     RES + "Channel.ReadBasic.All",
 ]
 
-# Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
+# Environment variable > app_config.json > default here (see settings.py)
 EMBED_IMAGES = settings.flag("EMBED_IMAGES", "embed_images")
-PAGE = 50                   # $top (Graph-Maximum für Nachrichten)
-OUT_ROOT = settings.value("teams_dir", settings.TEAMS_DIR)  # fest -> Resume über Läufe hinweg
+PAGE = 50                   # $top (Graph maximum for messages)
 
-# Inkrementelle Läufe (z. B. per Scheduler): Chats werden bei neuen Nachrichten
-# automatisch neu exportiert (günstig über lastMessagePreview erkannt). Kanäle
-# bieten keinen günstigen Änderungs-Indikator (neue Antworten in alten Threads),
-# daher werden gewählte Kanäle pro Lauf neu geholt und nur bei Änderung neu
-# geschrieben. Mit REFRESH_CHANNELS=0 abschaltbar (Kanäle dann nur einmalig).
+# Incremental runs (e.g. via scheduler): chats with new messages are
+# re-exported automatically (detected cheaply via lastMessagePreview).
+# Channels offer no cheap change indicator (new replies in old threads), so
+# selected channels are re-fetched each run and only rewritten on change.
+# REFRESH_CHANNELS=0 turns that off (channels then export only once).
 REFRESH_CHANNELS = settings.flag("REFRESH_CHANNELS", "refresh_channels")
 
-# Heruntergeladene Inline-Bilder zwischenspeichern (Ordner .imgcache). Bei erneutem
-# Export eines Chats werden so nur NEUE Bilder geladen statt aller. Kostet zusätzlichen
-# Plattenplatz (Bilder liegen dann doppelt: im Cache und eingebettet im HTML).
-# Mit CACHE_IMAGES=0 abschaltbar.
+# Cache downloaded inline images (folder .imgcache). When a chat is exported
+# again, only NEW images are downloaded instead of all of them. Costs extra
+# disk space (images then exist twice: in the cache and embedded in the HTML).
+# CACHE_IMAGES=0 turns it off.
 CACHE_IMAGES = settings.flag("CACHE_IMAGES", "cache_images")
 
-# Chats, die NUR System-/Event-Nachrichten enthalten (Beitritte, Anrufe, Mitglieder-
-# Änderungen, …) und keine echte Nachricht, werden standardmäßig NICHT exportiert
-# und nicht in den Index aufgenommen. Mit SKIP_EMPTY_CHATS=0 doch exportieren.
+# Chats containing ONLY system/event messages (joins, calls, membership
+# changes, …) and no real message are NOT exported by default and not added
+# to the index. SKIP_EMPTY_CHATS=0 exports them anyway.
 SKIP_EMPTY_CHATS = settings.flag("SKIP_EMPTY_CHATS", "skip_empty_chats")
 
 TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",
            "meeting": "Meeting-Chat", "other": "Chat"}
 
-# Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
-# diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
-STOP = threading.Event()                      # Signal: Token tot -> nichts Neues mehr starten
-STATE_LOCK = threading.Lock()                 # serialisiert Schreiben der Fortschrittsdatei
-PRINT_LOCK = threading.Lock()                 # saubere, nicht ineinander laufende Fortschrittszeilen
+# Network, throttling, retry and paging live in graph_client.py – one layer
+# shared by all the exports.
+STOP = threading.Event()                      # signal: token dead -> start nothing new
+STATE_LOCK = threading.Lock()                 # serializes writes to the progress state
+PRINT_LOCK = threading.Lock()                 # clean, non-interleaved progress lines
 
-_client = None       # wird in main() gesetzt (für die Bild-Einbettung)
-IMGCACHE_DIR = None  # wird in main() gesetzt, wenn CACHE_IMAGES aktiv
+_client = None       # set in main() (for image embedding)
+IMGCACHE_DIR = None  # set in main() when CACHE_IMAGES is active
 
 
-# Anmeldung und Schlüsselmodus liegen in auth.py – vorher stand das hier und in
-# outlook_export.py Zeile für Zeile doppelt.
+# Sign-in and token mode live in auth.py – shared with outlook_export.py
+# instead of being duplicated line for line.
 TokenExpired = auth.TokenExpired
 load_pasted_token = auth.load_pasted_token
 
 
 class ImageUnavailable(RuntimeError):
-    """Ein Inline-Bild (hostedContent) ist nicht herunterladbar (z. B. 502).
-    Wird NICHT erneut versucht – der Export läuft mit Platzhalter weiter."""
+    """An inline image (hostedContent) cannot be downloaded (e.g. 502).
+    NOT retried – the export continues with a placeholder."""
 
 
 # ---------------------------------------------------------------------------
-# Graph-Client: die Kanalfrage – der Rest steckt in graph_client.py
+# Graph client: the channel question – the rest lives in graph_client.py
 # ---------------------------------------------------------------------------
 class _BildClient:
-    """get_bytes mit Bild-Semantik – bewusst nachsichtiger als der gemeinsame
-    Client: Teams lädt Bytes nur für Inline-Bilder (hostedContents), und ein
-    Serverfehler oder hartnäckige Drosselung wirft dort ImageUnavailable, damit
-    der Export mit Platzhalter weiterläuft, statt an einem Bild zu scheitern."""
+    """get_bytes with image semantics – deliberately more forgiving than the
+    shared client: Teams downloads bytes only for inline images
+    (hostedContents), and a server error or persistent throttling raises
+    ImageUnavailable there, so the export continues with a placeholder
+    instead of failing over one image."""
 
     def get_bytes(self, url, timeout=graph_client.TIMEOUT_BYTES, label=" (Bild)"):
         for versuch in range(4):
@@ -136,10 +135,10 @@ class _BildClient:
             if r.status_code == 401:
                 self._erneuern()
                 continue
-            if r.status_code == 429:          # echte Drosselung -> abwarten
+            if r.status_code == 429:          # real throttling -> wait it out
                 graph_client.warte_auf(r, versuch, label)
                 continue
-            if 500 <= r.status_code < 600:    # Serverfehler -> Bild ist nicht ladbar
+            if 500 <= r.status_code < 600:    # server error -> image cannot be loaded
                 raise ImageUnavailable(r.status_code)
             r.raise_for_status()
             return r.content, r.headers.get("Content-Type", "")
@@ -147,11 +146,11 @@ class _BildClient:
 
 
 class Graph(_BildClient, graph_client.Graph):
-    """Angemeldeter Zugriff mit Kanalfrage.
+    """Signed-in access with the channel question.
 
-    Die Kanalrechte werden erst angefragt und bei Misserfolg fallen gelassen –
-    ChannelMessage.Read.All verlangt in vielen Tenants Admin-Zustimmung, und
-    daran soll ein Chat-Export nicht scheitern."""
+    Channel permissions are requested first and dropped on failure –
+    ChannelMessage.Read.All requires admin consent in many tenants, and a
+    chat export must not fail over that."""
 
     def __init__(self, want_channels, nur_still=False):
         self.want_channels = want_channels
@@ -170,7 +169,7 @@ class Graph(_BildClient, graph_client.Graph):
 
 
 class TokenClient(_BildClient, graph_client.TokenClient):
-    """Fertiger Bearer-Token; ob Kanäle gehen, weiß nur der Aufrufer."""
+    """Ready-made bearer token; only the caller knows whether channels work."""
 
     def __init__(self, token, channels_enabled):
         super().__init__(token)
@@ -178,11 +177,11 @@ class TokenClient(_BildClient, graph_client.TokenClient):
 
 
 # ---------------------------------------------------------------------------
-# Auswahl – ohne Rückfragen: die App ist der einzige Aufrufer, und niemand
-# sähe eine Frage, die ein Unterprozess stellt.
+# Selection – no prompts: the app is the only caller, and nobody would see
+# a question asked by a subprocess.
 # ---------------------------------------------------------------------------
 def default_categories(options):
-    """Standardauswahl: die ersten drei Kategorien (1:1-, Gruppen-, Meeting-Chats)."""
+    """Default selection: the first three categories (1:1, group, meeting chats)."""
     return {k for k, _ in options[:3]}
 
 
@@ -220,7 +219,7 @@ def select_teams(graph):
 
 
 # ---------------------------------------------------------------------------
-# Helfer (geteilt in export_util.py)
+# Helpers (shared in export_util.py)
 # ---------------------------------------------------------------------------
 safe = export_util.safe
 short_id = export_util.kuerzel
@@ -228,7 +227,7 @@ parse_ts = export_util.graph_zeit
 
 
 def human_time(iso):
-    """ISO-8601 (Graph, UTC) -> lokale Anzeige; Unparsebares unverändert zurück."""
+    """ISO-8601 (Graph, UTC) -> local display; unparseable input comes back as is."""
     dt = export_util.graph_zeit(iso)
     if dt is None:
         return iso or ""
@@ -236,7 +235,7 @@ def human_time(iso):
 
 
 def newest_iso(strings):
-    """Liefert den ISO-String mit dem spätesten Zeitpunkt (robust geparst)."""
+    """Returns the ISO string with the latest instant (robustly parsed)."""
     best_iso, best_dt = None, None
     for iso in strings:
         dt = parse_ts(iso)
@@ -285,7 +284,7 @@ def embed_hosted_images(html_content, counter=None):
             cf = IMGCACHE_DIR / hashlib.sha1(url.encode()).hexdigest()
             if cf.exists():
                 try:
-                    return cf.read_text(encoding="utf-8")   # Cache-Treffer: kein Download
+                    return cf.read_text(encoding="utf-8")   # cache hit: no download
                 except OSError:
                     pass
         try:
@@ -300,9 +299,9 @@ def embed_hosted_images(html_content, counter=None):
                     pass
             return data_uri
         except TokenExpired:
-            raise   # Token tot -> Konversation nicht halb schreiben
+            raise   # token dead -> don't half-write the conversation
         except Exception:
-            return IMG_PLACEHOLDER   # 502 o. Ä. -> sichtbarer Platzhalter, weitermachen
+            return IMG_PLACEHOLDER   # 502 or similar -> visible placeholder, carry on
 
     return HOSTED_RE.sub(repl, html_content)
 
@@ -329,7 +328,7 @@ def render_reactions(rs):
 
 def render_message(msg, is_reply=False, img_counter=None):
     when = human_time(msg.get("createdDateTime"))
-    if msg.get("messageType", "message") != "message":   # System-Event
+    if msg.get("messageType", "message") != "message":   # system event
         ed = msg.get("eventDetail") or {}
         label = strip_tags(html_lib.unescape((msg.get("body") or {}).get("content", ""))) \
             or ed.get("@odata.type", "").split(".")[-1] or "Systemnachricht"
@@ -372,9 +371,9 @@ def chat_title(graph, chat, my_id):
     topic = chat.get("topic")
     if ctype != "oneOnOne" and topic:
         return topic
-    members = chat.get("members")            # i. d. R. schon per $expand vorhanden
+    members = chat.get("members")            # usually already present via $expand
     if not members:
-        try:   # Fallback: Mitglieder einzeln laden
+        try:   # fallback: load members separately
             members = list(graph.paged(f"{GRAPH}/me/chats/{chat['id']}/members", {"$top": PAGE}))
         except TokenExpired:
             raise
@@ -431,7 +430,7 @@ def render_conversation(title, subtitle, meta, blocks):
 
 
 # ---------------------------------------------------------------------------
-# Fortschritt (thread-sicher)
+# Progress (thread-safe)
 # ---------------------------------------------------------------------------
 def load_state(out):
     roh = state_db.StateDb(out).kv_lesen("state")
@@ -454,26 +453,26 @@ def already_done(out, state, key):
     rec = state["conversations"].get(key)
     if not rec or not rec.get("done"):
         return False
-    return (out / rec["rel"]).exists()   # nur überspringen, wenn Datei noch da ist
+    return (out / rec["rel"]).exists()   # only skip while the file is still there
 
 
 def get_record(out, state, key):
-    """Vorhandenen, abgeschlossenen Datensatz lesen (samt last_activity) – oder None,
-    falls nicht exportiert oder die Datei fehlt. Thread-sicher."""
+    """Read an existing, completed record (including last_activity) – or None
+    if not exported or the file is missing. Thread-safe."""
     with STATE_LOCK:
         rec = state["conversations"].get(key)
     if not rec or not rec.get("done"):
         return None
     if rec.get("empty"):
-        return rec   # als leer markiert: keine Datei, aber gültiger Status (für inkrementelle Prüfung)
+        return rec   # marked empty: no file, but a valid status (for the incremental check)
     if not (out / rec["rel"]).exists():
         return None
     return rec
 
 
 def cleanup_old(out, prior, new_rel):
-    """Beim Umbenennen (z. B. 'Unbekannt' -> echter Name) die verwaiste Altdatei
-    entfernen, damit kein Duplikat zurückbleibt."""
+    """On a rename (e.g. 'Unbekannt' -> real name) remove the orphaned old
+    file so no duplicate is left behind."""
     if prior and prior.get("rel") and prior["rel"] != new_rel:
         try:
             (out / prior["rel"]).unlink()
@@ -482,18 +481,18 @@ def cleanup_old(out, prior, new_rel):
 
 
 def record_done(out, state, key, category, title, rel, count, last_activity=None, empty=False):
-    with STATE_LOCK:   # mehrere Worker schreiben -> serialisieren
+    with STATE_LOCK:   # several workers write -> serialize
         state["conversations"][key] = {
             "category": category, "title": title, "rel": rel,
             "count": count, "done": True, "empty": empty,
             "ts": datetime.now().isoformat(timespec="seconds"),
-            "last_activity": last_activity,   # neueste Nachricht -> Basis für inkrementelle Läufe
+            "last_activity": last_activity,   # newest message -> basis for incremental runs
         }
         save_state(out, state)
 
 
 # ---------------------------------------------------------------------------
-# Export EINER Konversation (läuft in einem Worker-Thread)
+# Export of ONE conversation (runs in a worker thread)
 # ---------------------------------------------------------------------------
 def render_blocks(msgs):
     """Render every message block; returns (blocks, embedded image count)."""
@@ -516,10 +515,10 @@ def export_one_chat(graph, out, state, my_id, chat):
             pass
     msgs.sort(key=lambda m: m.get("createdDateTime") or "")
 
-    # Nur System-/Event-Nachrichten und keine echte Nachricht? -> standardmäßig nicht exportieren
+    # Only system/event messages and no real message? -> not exported by default
     real = sum(1 for m in msgs if m.get("messageType", "message") == "message")
     if SKIP_EMPTY_CHATS and real == 0:
-        cleanup_old(out, prior, None)   # evtl. früher geschriebene Datei entfernen
+        cleanup_old(out, prior, None)   # remove a file possibly written earlier
         last_act = newest_iso(m.get("createdDateTime") for m in msgs)
         record_done(out, state, key, folder, title, None, len(msgs),
                     last_activity=last_act, empty=True)
@@ -533,7 +532,7 @@ def export_one_chat(graph, out, state, my_id, chat):
     (out / folder / fname).write_text(
         render_conversation(title, SUBNAME.get(folder, "Chat"), meta, blocks),
         encoding="utf-8")
-    cleanup_old(out, prior, new_rel)   # alte 'Unbekannt__…'-Datei entfernen, falls umbenannt
+    cleanup_old(out, prior, new_rel)   # remove old 'Unbekannt__…' file if renamed
     last_act = newest_iso(m.get("createdDateTime") for m in msgs)
     record_done(out, state, key, folder, title, new_rel, len(msgs),
                 last_activity=last_act)
@@ -547,7 +546,7 @@ def export_one_channel(graph, out, state, team, ch):
     key = f"ch:{ch['id']}"
     prior = get_record(out, state, key)
     base = f"{GRAPH}/teams/{team['id']}/channels/{ch['id']}/messages"
-    # Wurzel-Posts MIT eingebetteten Antworten (bis 1000 inline) holen
+    # Fetch root posts WITH embedded replies (up to 1000 inline)
     roots = list(graph.paged(base, {"$top": PAGE, "$expand": "replies"}))
     roots.sort(key=lambda m: m.get("createdDateTime") or "")
     img = [0]
@@ -558,7 +557,7 @@ def export_one_channel(graph, out, state, team, ch):
         times.append(root.get("createdDateTime"))
         times.append(root.get("lastModifiedDateTime"))
         replies = list(root.get("replies") or [])
-        nxt = root.get("replies@odata.nextLink")   # nur bei > 1000 Antworten
+        nxt = root.get("replies@odata.nextLink")   # only with > 1000 replies
         while nxt:
             data = graph.get(nxt)
             replies.extend(data.get("value", []))
@@ -569,9 +568,9 @@ def export_one_channel(graph, out, state, team, ch):
             count += 1
             times.append(rep.get("createdDateTime"))
             times.append(rep.get("lastModifiedDateTime"))
-    fp = newest_iso(times)   # neueste Aktivität (inkl. Antworten/Bearbeitungen)
+    fp = newest_iso(times)   # newest activity (incl. replies/edits)
 
-    # Unverändert seit letztem Lauf? -> nicht neu schreiben
+    # Unchanged since the last run? -> don't rewrite
     if prior:
         ps, cs = parse_ts(prior.get("last_activity")), parse_ts(fp)
         if cs is None or (ps is not None and cs <= ps):
@@ -607,13 +606,13 @@ def make_runner(graph, out, state, my_id, kind, a, b):
 
 
 # ---------------------------------------------------------------------------
-# Job-Aufbau (im Hauptthread) + paralleler Treiber
+# Job building (in the main thread) + parallel driver
 # ---------------------------------------------------------------------------
 def build_chat_jobs(graph, out, state, stats, my_id, chat_cats):
     progress.event("run.teams.chats_loading")
     chats = []
-    # members + lastMessagePreview inline -> richtige 1:1-Namen ohne Extra-Aufruf,
-    # und der Aktivitäts-Zeitstempel je Chat für inkrementelle Läufe
+    # members + lastMessagePreview inline -> correct 1:1 names without an extra
+    # call, and the per-chat activity timestamp for incremental runs
     for c in graph.paged(f"{GRAPH}/me/chats",
                          {"$top": PAGE, "$expand": "members,lastMessagePreview"}):
         chats.append(c)
@@ -624,16 +623,16 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats):
     for chat in wanted:
         cur = (chat.get("lastMessagePreview") or {}).get("createdDateTime")
         rec = get_record(out, state, chat["id"])
-        if rec is None:                       # noch nie exportiert (oder Datei fehlt)
+        if rec is None:                       # never exported (or the file is missing)
             jobs.append(("chat", chat, None))
             new += 1
             continue
         ps, cs = parse_ts(rec.get("last_activity")), parse_ts(cur)
         if cs is not None and (ps is None or cs > ps):
-            jobs.append(("chat", chat, None))   # neue Nachrichten -> erneut exportieren
+            jobs.append(("chat", chat, None))   # new messages -> export again
             upd += 1
         else:
-            stats["skipped"] += 1               # unverändert
+            stats["skipped"] += 1               # unchanged
     progress.event("run.teams.chats", n=len(wanted), new=new, updated=upd,
                    unchanged=len(wanted) - len(jobs))
     return jobs
@@ -653,8 +652,8 @@ def build_channel_jobs(graph, out, state, stats, selected_teams):
             continue
         for ch in channels:
             if REFRESH_CHANNELS:
-                # kein günstiger Indikator für neue Antworten -> erneut holen,
-                # der Worker schreibt nur bei tatsächlicher Änderung neu
+                # no cheap indicator for new replies -> fetch again; the
+                # worker only rewrites on an actual change
                 jobs.append(("channel", team, ch))
             elif already_done(out, state, f"ch:{ch['id']}"):
                 stats["skipped"] += 1
@@ -688,7 +687,7 @@ def run_parallel(runners, stats, workers):
             dur = f"{secs:.0f}s" if secs >= 1 else f"{secs * 1000:.0f}ms"
             kind = progress.atom("export.cat." + cat) if cat else ""
             with PRINT_LOCK:
-                # Threadsicher: eine ungebrochene Ereigniszeile je Konversation.
+                # Thread-safe: one unbroken event line per conversation.
                 if status in ("new", "ok"):
                     stats["new"] += 1
                     progress.event("run.conv.new", i=done_count, total=total,
@@ -698,7 +697,7 @@ def run_parallel(runners, stats, workers):
                     progress.event("run.conv.updated", i=done_count, total=total,
                                    kind=kind, name=label, n=count, dur=dur)
                 elif status == "unchanged":
-                    stats["skipped"] += 1   # geprüft, aber keine Änderung
+                    stats["skipped"] += 1   # checked, but no change
                     progress.event("run.conv.same", i=done_count, total=total,
                                    kind=kind, name=label)
                 elif status == "empty":
@@ -710,12 +709,12 @@ def run_parallel(runners, stats, workers):
                                    total=total, name=label)
             if status == "expired":
                 expired = True
-            # "stopped" -> ignorieren
+            # "stopped" -> ignore
     return "expired" if expired else "done"
 
 
 # ---------------------------------------------------------------------------
-# Hauptablauf
+# Main flow
 # ---------------------------------------------------------------------------
 _hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
@@ -725,22 +724,18 @@ def main():
         print(__doc__.strip())
         return
 
-    global _client, OUT_ROOT, IMGCACHE_DIR
-    argv = sys.argv[1:]
-    if argv:
-        OUT_ROOT = argv[0]
-
+    global _client, IMGCACHE_DIR
     workers = settings.number("EXPORT_WORKERS", "workers")
     graph_client.konfiguriere(workers)
 
-    # 1) Kategorien bestimmen (vor dem Login, damit der Kanal-Scope nur bei
-    #    Bedarf angefordert wird)
+    # 1) Determine categories (before the login, so the channel scope is
+    #    only requested when needed)
     cat_options = [("1on1", "1:1-Chats"), ("group", "Gruppenchats"),
                    ("meeting", "Meeting-Chats"), ("channels", "Team-Kanäle")]
     categories = selected_categories(cat_options)
     want_channels = "channels" in categories
 
-    # 2) Login bzw. Token-Modus
+    # 2) Login or token mode
     graph = auth.waehle_zugang(
         lambda tok: TokenClient(tok, channels_enabled=want_channels),
         lambda: Graph(want_channels=want_channels))
@@ -750,7 +745,7 @@ def main():
         categories.discard("channels")
         want_channels = False
 
-    out = Path(OUT_ROOT)
+    out = export_util.ausgabeordner(sys.argv[1:])
     out.mkdir(parents=True, exist_ok=True)
     if EMBED_IMAGES and CACHE_IMAGES:
         IMGCACHE_DIR = out / ".imgcache"
@@ -783,8 +778,8 @@ def main():
         progress.fehler("token_expired")
         sys.exit(1)
 
-    # Aktualisierte Konversationen zählen mit: ihre Dateien haben sich geändert,
-    # der Index kennt sie also in der alten Fassung.
+    # Updated conversations count as well: their files have changed, so the
+    # index knows them only in the old version.
     progress.ergebnis(stats["new"] + stats["updated"], unchanged=stats["skipped"],
                       extra={"updated": stats["updated"], "empty": stats["empty"]})
 

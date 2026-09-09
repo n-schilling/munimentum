@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Outlook/Exchange-Export als .eml über Microsoft Graph (delegiert, kein Admin nötig).
+Outlook/Exchange export as .eml via Microsoft Graph (delegated, no admin needed).
 
-- Jede Mail als .eml (volle MIME über /messages/{id}/$value, inkl. Anhänge und
-  Inline-Bildern). Direkt in jedem Mailprogramm importierbar.
-- Optional zusätzlich wählbar: Kalender als .ics (Termine, Zeiten in UTC) und
-  Kontakte als .vcf – in eigenen Unterordnern kalender/ und kontakte/.
-- Ordnerstruktur des Postfachs wird unter E-Mail/ als Verzeichnisbaum gespiegelt
-  (rekursiv) – parallel zu kalender/ und kontakte/.
-- PARALLEL: bis zu 4 Downloads gleichzeitig. Exchange Online erlaubt pro Postfach
-  nur 4 gleichzeitige Anfragen (MailboxConcurrency, festes Limit) – mehr erzeugt
-  nur 429er. Ein globaler Semaphor hält Listing + Downloads zusammen unter dieser
-  Grenze; bei 429 wird mit Retry-After zurückgenommen.
-- ROBUST: Netzwerkfehler (Timeout, Verbindungsabbruch, TLS) werden mit Backoff
-  wiederholt; ein Ordner, der sich nicht vollständig listen lässt, wird
-  übersprungen statt den Lauf abzubrechen (nächster Lauf holt ihn nach).
+- Every mail as .eml (full MIME via /messages/{id}/$value, incl. attachments
+  and inline images). Importable directly into any mail client.
+- Optionally selectable in addition: calendars as .ics (events, times in UTC)
+  and contacts as .vcf – in their own subfolders kalender/ and kontakte/.
+- The mailbox's folder structure is mirrored as a directory tree under E-Mail/
+  (recursively) – alongside kalender/ and kontakte/.
+- PARALLEL: up to 4 downloads at once. Exchange Online allows only 4 concurrent
+  requests per mailbox (MailboxConcurrency, a fixed limit) – more just produces
+  429s. A global semaphore keeps listing + downloads together under this
+  limit; on 429 we back off per Retry-After.
+- ROBUST: network errors (timeout, dropped connection, TLS) are retried with
+  backoff; a folder that cannot be listed completely is skipped instead of
+  aborting the run (the next run catches it up).
 
 Runs as a subprogram of app.py: the app passes the output folder as the only
 argument and every setting as an environment variable (EXPORT_CATEGORIES,
@@ -54,8 +54,8 @@ import settings
 import progress
 
 try:
-    # msal wird erst in auth.py gebraucht (und nur im Login-Modus) – hier nur
-    # geprüft, damit die Meldung über fehlende Pakete früh und gemeinsam kommt.
+    # msal is only needed in auth.py (and only in login mode) – checked here
+    # just so the missing-packages message arrives early and in one place.
     import msal  # noqa: F401
     import requests
 except ImportError:
@@ -65,20 +65,19 @@ except ImportError:
 export_util.erzwinge_utf8()
 
 # ---------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # ---------------------------------------------------------------------------
 GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES + "User.Read"]
-# Umgebungsvariable > app_config.json > Vorgabe hier (siehe settings.py)
+# Environment variable > app_config.json > default here (see settings.py)
 INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden")
-PAGE = 50                   # $top für Listenabfragen
-OUT_ROOT = settings.value("outlook_dir", settings.OUTLOOK_DIR)  # fest -> Resume über Läufe
-MAIL_DIR = "E-Mail"          # Postfach-Ordnerbaum liegt darunter (parallel zu kalender/kontakte)
-KALENDER_DIR = "kalender"    # ein Unterordner je Kalender, darin die .ics
+PAGE = 50                   # $top for list requests
+MAIL_DIR = "E-Mail"          # the mailbox folder tree lives below (next to kalender/kontakte)
+KALENDER_DIR = "kalender"    # one subfolder per calendar, the .ics inside
 
-# Diese Postfach-Ordner sind bei "alle" (Enter) standardmäßig NICHT dabei – nur per
-# expliziter Auswahl. Vergleich case-insensitive über den Anzeigenamen (DE + EN).
+# These mailbox folders are NOT included by default with "all" (Enter) – only
+# by explicit selection. Compared case-insensitively by display name (DE + EN).
 BUILTIN_SKIP_FOLDERS = {
     "archive", "archiv",
     "entwürfe", "drafts",
@@ -91,34 +90,34 @@ BUILTIN_SKIP_FOLDERS = {
 
 DEFAULT_SKIP_FOLDERS = settings.folders("SKIP_FOLDERS", "skip_folders")
 
-# Netz, Drosselung, Retry und Paging liegen in graph_client.py – bis 5.3 stand
-# diese Schicht hier (und in den anderen Exporten) als eigene Kopie.
-STOP = threading.Event()                     # Signal: Token tot -> nichts Neues mehr starten
+# Network, throttling, retry and paging live in graph_client.py – one layer
+# shared by all the exports.
+STOP = threading.Event()                     # signal: token dead -> start nothing new
 
-# Anmeldung, Schlüsselmodus und Konfiguration liegen in auth.py.
+# Sign-in, token mode and configuration live in auth.py.
 TokenExpired = auth.TokenExpired
 load_pasted_token = auth.load_pasted_token
 TokenClient = graph_client.TokenClient
 
 
 def graph_login(nur_still=False):
-    """Angemeldeter Zugriff mit den Mail-/Kalender-/Kontakte-Scopes."""
+    """Signed-in access with the mail/calendar/contacts scopes."""
     return graph_client.Graph(SCOPES, nur_still=nur_still)
 
 
 # ---------------------------------------------------------------------------
-# Fortschritt: append-only Log, thread-sicher (skaliert auf zehntausende Mails)
+# Progress: append-only log, thread-safe (scales to tens of thousands of mails)
 # ---------------------------------------------------------------------------
 DoneLog = state_db.DbDoneLog     # resume log, one row per mail in state.db
 
 
 # ---------------------------------------------------------------------------
-# Auswahl – ohne Rückfragen: die App ist der einzige Aufrufer, und niemand
-# sähe eine Frage, die ein Unterprozess stellt.
+# Selection – no prompts: the app is the only caller, and nobody would see
+# a question asked by a subprocess.
 # ---------------------------------------------------------------------------
 def list_calendars(graph):
-    """Liest die Kalenderliste für die gezielte Auswahl. Leere Liste bei fehlender
-    Berechtigung – dann erscheinen keine Kalender-Einträge im Menü."""
+    """Reads the calendar list for targeted selection. Empty list when the
+    permission is missing – no calendar entries appear in the menu then."""
     try:
         cals = list(graph.paged(f"{GRAPH}/me/calendars", {"$top": PAGE}))
     except TokenExpired:
@@ -149,29 +148,29 @@ def selected_categories():
 
 
 def kalender_eintraege(cals):
-    """Die Kalenderliste in der Form, in der folders.py mit ihr rechnet.
+    """The calendar list in the shape folders.py reckons with.
 
-    Der Pfad ist der, unter dem der Kalender auch auf der Platte landet
-    (kalender/<Name>). Damit greifen dieselben Regeln, dieselbe Vorschau und
-    dieselbe Zählung wie bei den Postfach-Ordnern – und ein umbenannter
-    Kalender fällt in der Vorschau als „nur noch im Archiv“ auf, statt still
-    doppelt zu liegen.
+    The path is the one under which the calendar lands on disk
+    (kalender/<name>). That way the same rules, the same preview and the
+    same counting apply as for mailbox folders – and a renamed calendar
+    stands out in the preview as "only in the archive now" instead of
+    silently lying around twice.
     """
     return [{
         "id": c.get("id") or f"{KALENDER_DIR}/{safe(c.get('name') or 'Kalender')}",
         "pfad": f"{KALENDER_DIR}/{safe(c.get('name') or 'Kalender')}",
         "name": c.get("name") or "Kalender",
         "standard": bool(c.get("isDefaultCalendar")),
-        "elemente": 0,      # Graph zählt Termine nicht mit; die Vorschau zählt
-    } for c in cals or ()]  # stattdessen, was schon im Archiv liegt
+        "elemente": 0,      # Graph doesn't count events; the preview counts
+    } for c in cals or ()]  # what already lies in the archive instead
 
 
 def kalender_regeln(daten=None):
-    """Welche Kalender exportiert werden – Umgebung schlägt Datei schlägt Vorgabe.
+    """Which calendars get exported – environment beats file beats default.
 
-    Ohne eigene Regeln bleibt es beim Standardkalender: ein Postfach hat neben
-    dem eigenen oft noch Geburtstage, Feiertage und fremde Freigaben, und die
-    hat niemand gemeint, der „Kalender“ ankreuzt.
+    Without rules of your own it stays the default calendar: besides its own,
+    a mailbox often carries birthdays, holidays and other people's shares,
+    and nobody who ticks "calendar" meant those.
     """
     roh = os.environ.get("CALENDAR_RULES")
     if roh is None:
@@ -182,15 +181,15 @@ def kalender_regeln(daten=None):
 
 
 def waehle_kalender(graph, out):
-    """Kalender aus der gespeicherten Liste wählen; einmalig holen, wenn sie fehlt."""
+    """Pick calendars from the stored list; fetch it once when it is missing."""
     daten = folders.lade(out, folders.KALENDER)
     if daten is None:
         progress.event("run.calendars.loading")
         eintraege = kalender_eintraege(list_calendars(graph))
         if not eintraege:
-            # Meist die fehlende Berechtigung Calendars.Read. Eine leere Liste
-            # abzulegen hieße, sie nie wieder zu holen – und der Export bliebe
-            # für immer still leer, ohne dass jemand den Grund sähe.
+            # Usually the missing Calendars.Read permission. Storing an empty
+            # list would mean never fetching it again – and the export would
+            # stay silently empty forever, with nobody seeing why.
             progress.event("run.calendars.none", "warn")
             return []
         daten = folders.speichere(out, eintraege, datei=folders.KALENDER)
@@ -205,8 +204,8 @@ def waehle_kalender(graph, out):
 
 
 def gleiche_kalender_ab(argv):
-    """--calendars: nur die Kalenderliste holen und ablegen, nichts exportieren."""
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    """--calendars: only fetch and store the calendar list, export nothing."""
+    out = export_util.ausgabeordner(argv)
     graph = auth.waehle_zugang(TokenClient, graph_login)
     vorher = folders.lade(out, folders.KALENDER)
     daten = folders.speichere(out, kalender_eintraege(list_calendars(graph)),
@@ -226,7 +225,7 @@ def gleiche_kalender_ab(argv):
 
 
 # ---------------------------------------------------------------------------
-# Helfer (geteilt in export_util.py)
+# Helpers (shared in export_util.py)
 # ---------------------------------------------------------------------------
 safe = export_util.safe
 short_id = export_util.kuerzel
@@ -249,7 +248,7 @@ def folder_params():
 
 
 def list_children(graph, folder):
-    """Listet die direkten Unterordner – unabhängig von childFolderCount."""
+    """Lists the direct subfolders – independent of childFolderCount."""
     try:
         return list(graph.paged(f"{GRAPH}/me/mailFolders/{folder['id']}/childFolders",
                                 folder_params()))
@@ -262,9 +261,9 @@ def list_children(graph, folder):
 
 
 def _subtree(graph, folder, rel_path, acc):
-    """Hängt (folder, rel_path) für den Ordner und ALLE Nachkommen an acc an.
-    Verlässt sich nicht auf childFolderCount, sondern listet immer die Kinder –
-    so werden auch tief verschachtelte Unterordner zuverlässig erfasst."""
+    """Appends (folder, rel_path) for the folder and ALL descendants to acc.
+    Does not rely on childFolderCount but always lists the children – so
+    even deeply nested subfolders are captured reliably."""
     acc.append((folder, rel_path))
     for child in list_children(graph, folder):
         cname = safe(child.get("displayName") or "Ordner")
@@ -272,9 +271,9 @@ def _subtree(graph, folder, rel_path, acc):
 
 
 def build_tree(graph):
-    """Liest die komplette Ordnerstruktur EINMAL und liefert pro oberstem Ordner
-    den Teilbaum samt rekursiver Elementzahl. Das Ergebnis wird für die Auswahl UND
-    den Export genutzt (kein erneutes Ordner-Listing im parallelen Download)."""
+    """Reads the complete folder structure ONCE and yields, per top-level
+    folder, the subtree with its recursive item count. The result is used for
+    the selection AND the export (no re-listing during the parallel download)."""
     tops = []
     roots = list(graph.paged(f"{GRAPH}/me/mailFolders", folder_params()))
     count = 0
@@ -291,27 +290,26 @@ def build_tree(graph):
 
 
 # ---------------------------------------------------------------------------
-# Verschwundene Mails erkennen
+# Detecting vanished mails
 #
-# Ein Archiv, das nur wächst, beantwortet die wichtigste Frage nicht: was war
-# hier einmal und ist jetzt weg? Die Datei bleibt selbstverständlich liegen –
-# vermerkt wird nur, dass sie im Postfach nicht mehr auftaucht.
+# An archive that only grows fails to answer the most important question:
+# what was here once and is now gone? The file stays put, of course – all
+# that gets recorded is that it no longer shows up in the mailbox.
 #
-# Die Falle dabei ist die Verwechslung von gelöscht und verschoben. Eine Mail,
-# die in einen Ordner wandert, den dieser Lauf nicht exportiert (Archiv steht
-# in der Standardauswahl nicht drin), sähe verschwunden aus. Deshalb wird jeder
-# Verdacht bei Graph nachgefragt: 404 heißt wirklich weg, alles andere heißt
-# verschoben.
+# The trap here is confusing deleted with moved. A mail that wanders into a
+# folder this run does not export (the archive isn't in the default
+# selection) would look vanished. That is why every suspicion is checked
+# with Graph: 404 means truly gone, everything else means moved.
 # ---------------------------------------------------------------------------
 
 
 class Bestand:
-    """Was in diesem Lauf wirklich im Postfach lag."""
+    """What really lay in the mailbox during this run."""
 
     def __init__(self):
-        self.gesehen = set()        # IDs aus vollständig gelisteten Ordnern
-        self.briefe = set()         # deren internetMessageId (überlebt ein Verschieben)
-        self.vollstaendig = []      # deren Pfade, mit Schrägstrich am Ende
+        self.gesehen = set()        # IDs from completely listed folders
+        self.briefe = set()         # their internetMessageId (survives a move)
+        self.vollstaendig = []      # their paths, with a trailing slash
 
     def ordner_fertig(self, rel_path):
         self.vollstaendig.append(rel_path.rstrip("/") + "/")
@@ -321,22 +319,22 @@ class Bestand:
 
 
 def brief_kennung(pfad):
-    """Die Message-ID aus dem Kopf einer abgelegten .eml.
+    """The Message-ID from the header of a stored .eml.
 
-    Nur der Kopf wird gelesen: eine .eml mit einem 40-MB-Anhang ganz zu laden,
-    um eine Zeile daraus zu holen, wäre bei hunderten Verdachtsfällen teuer.
-    Gefaltete Fortsetzungszeilen kommen bei dieser Kopfzeile praktisch nicht
-    vor, werden aber mitgenommen, damit ein Sonderfall keine falsche Antwort
-    erzeugt.
+    Only the header is read: loading a whole .eml with a 40 MB attachment
+    to pull one line out of it would be expensive across hundreds of
+    suspects. Folded continuation lines practically never occur for this
+    header line, but are taken along so an edge case cannot produce a wrong
+    answer.
     """
     try:
         with open(pfad, "rb") as f:
             wert = None
             for roh in f:
-                if roh in (b"\r\n", b"\n"):        # Ende des Kopfes
+                if roh in (b"\r\n", b"\n"):        # end of the header
                     break
                 if wert is not None:
-                    if roh[:1] in (b" ", b"\t"):     # Fortsetzung
+                    if roh[:1] in (b" ", b"\t"):     # continuation
                         wert += roh.strip()
                         continue
                     break
@@ -348,16 +346,16 @@ def brief_kennung(pfad):
 
 
 def verschoben_statt_weg(out, kandidaten, bestand):
-    """Verdachtsfälle aussortieren, deren Brief im Postfach wieder auftaucht.
+    """Weed out suspects whose letter shows up in the mailbox again.
 
-    Exchange vergibt beim Verschieben eine NEUE Nachrichten-ID. Die Rückfrage
-    nach der alten beantwortet Graph deshalb mit 404 – und eine nur in einen
-    anderen Ordner geschobene Mail galt als gelöscht. An einem echten Archiv
-    waren so 16 von 19 Vermerken falsch.
+    Exchange assigns a NEW message ID on a move. Asking Graph about the old
+    one therefore returns 404 – and a mail merely shoved into another folder
+    counted as deleted. On a real archive, 16 of 19 records were wrong that
+    way.
 
-    Die internetMessageId übersteht das Verschieben. Sie steht in jeder
-    abgelegten .eml und kommt beim Listen ohne Zusatzkosten mit, also lässt
-    sich der Fall hier ohne eine einzige weitere Anfrage entscheiden.
+    The internetMessageId survives the move. It sits in every stored .eml
+    and comes along with the listing at no extra cost, so the case can be
+    decided here without a single further request.
     """
     if not bestand.briefe:
         return kandidaten, 0
@@ -372,10 +370,10 @@ def verschoben_statt_weg(out, kandidaten, bestand):
 
 
 def zuruecknehmen(out, bekannt, bestand):
-    """Frühere Vermerke prüfen: Was wieder im Postfach liegt, war nie gelöscht.
+    """Check earlier records: what lies in the mailbox again was never deleted.
 
-    Ohne das bliebe der Fehler für immer stehen – die Vermerke von damals
-    entstanden unter der alten, falschen Annahme.
+    Without this the mistake would stand forever – those records were made
+    under the old, wrong assumption.
     """
     if not bestand.briefe:
         return bekannt, 0
@@ -389,20 +387,20 @@ def zuruecknehmen(out, bekannt, bestand):
 
 
 def verdaechtige(done, bestand):
-    """Früher exportiert, in diesem Lauf nicht mehr gesehen.
+    """Exported before, not seen in this run any more.
 
-    Nur aus Ordnern, die vollständig gelistet wurden – ein abgebrochenes
-    Listing darf nicht den halben Ordner für gelöscht erklären.
+    Only from folders that were listed completely – an aborted listing must
+    not declare half a folder deleted.
     """
     return sorted((mid, rel) for mid, rel in done.done.items()
                   if mid not in bestand.gesehen and bestand.aus_gelistetem_ordner(rel))
 
 
 def wirklich_weg(graph, kandidaten, grenze=2000):
-    """Jeden Verdacht bei Graph nachfragen. Liefert (weg, verschoben).
+    """Ask Graph about every suspicion. Returns (gone, moved).
 
-    Ein Fehler, der kein 404 ist (Drosselung, Netz), zählt als „nicht weg“:
-    lieber eine Löschung später melden als eine falsche jetzt.
+    An error that is not a 404 (throttling, network) counts as "not gone":
+    better to report a deletion later than a wrong one now.
     """
     weg, verschoben = [], 0
     for mid, rel in kandidaten[:grenze]:
@@ -414,7 +412,7 @@ def wirklich_weg(graph, kandidaten, grenze=2000):
         except Exception as e:
             if "404" in str(e) or getattr(e, "status", None) == 404:
                 weg.append(rel)
-            # sonst: unklar – nichts behaupten
+            # otherwise: unclear – claim nothing
     if len(kandidaten) > grenze:
         progress.event("run.gone.deferred", n=len(kandidaten) - grenze)
     return weg, verschoben
@@ -423,10 +421,10 @@ def wirklich_weg(graph, kandidaten, grenze=2000):
 
 
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
-    """Spiegelt die Ordner aufs Dateisystem und liefert (mid, rel) für jede
-    noch nicht exportierte Mail. Listing läuft im Hauptthread (lazy)."""
-    # internetMessageId kostet nichts extra und ist der einzige Schlüssel, der
-    # ein Verschieben übersteht – siehe brief_kennung und pruefe_verschwundene.
+    """Mirrors the folders onto the filesystem and yields (mid, rel) for
+    every mail not yet exported. Listing runs in the main thread (lazily)."""
+    # internetMessageId costs nothing extra and is the only key that survives
+    # a move – see brief_kennung and pruefe_verschwundene.
     select = ("id,internetMessageId,subject,receivedDateTime,sentDateTime,"
               "from,hasAttachments")
     for top in selected:
@@ -454,15 +452,15 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
             except TokenExpired:
                 raise
             except Exception as e:
-                # Ein dauerhaft hängender Ordner darf nicht den ganzen Lauf killen:
-                # Rest überspringen, weiter mit dem nächsten. Was schon exportiert
-                # ist, steht im Erledigt-Log – der nächste Lauf holt den Rest.
+                # A permanently stuck folder must not kill the whole run:
+                # skip the rest, on to the next one. What is already exported
+                # sits in the done log – the next run fetches the rest.
                 stats["folder_errors"] = stats.get("folder_errors", 0) + 1
                 progress.event("run.folder_incomplete", "err", name=rel_path,
                                error=f"{type(e).__name__}: {e}")
                 continue
-            # Nur ein vollständig durchlaufener Ordner taugt zum Vergleich –
-            # nach einem Abbruch oben sind wir hier gar nicht.
+            # Only a fully traversed folder is fit for comparison – after a
+            # break above we never get here at all.
             if bestand is not None:
                 bestand.ordner_fertig(rel_path)
             if seen:
@@ -471,7 +469,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
 
 
 # ---------------------------------------------------------------------------
-# Worker + paralleler Treiber
+# Worker + parallel driver
 # ---------------------------------------------------------------------------
 def download_one(graph, out, done, mid, rel):
     if STOP.is_set():
@@ -492,7 +490,7 @@ def download_one(graph, out, done, mid, rel):
 
 def run_export(graph, out, done, stats, selected, workers, bestand=None):
     gen = iter_messages_to_export(graph, out, done, stats, selected, bestand)
-    cap = max(workers * 8, workers)      # so viele Tasks gleichzeitig in der Pipeline
+    cap = max(workers * 8, workers)      # this many tasks in the pipeline at once
     pending = set()
     expired = False
 
@@ -504,7 +502,7 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     mid, rel = next(gen)
                 except StopIteration:
                     return
-                except TokenExpired:        # Token kann schon beim Listing sterben
+                except TokenExpired:        # the token can die during the listing already
                     expired = True
                     STOP.set()
                     return
@@ -521,15 +519,15 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     status, info = "error", str(e)
                 if status == "ok":
                     stats["new"] += 1
-                    # Ohne Gesamtzahl: der Generator entdeckt die Mails erst im
-                    # Laufen. Gemeldet wird deshalb nur der Stand.
+                    # No total: the generator only discovers the mails as it
+                    # goes. So only the running count is reported.
                     progress.melde(stats["new"], what="mails")
                 elif status == "expired":
                     expired = True
                     STOP.set()
                 elif status == "error":
                     progress.event("run.mail_skipped", "warn", detail=str(info))
-                # "stopped" -> ignorieren
+                # "stopped" -> ignore
             if not expired:
                 fill()
 
@@ -537,7 +535,7 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
 
 
 # ---------------------------------------------------------------------------
-# Kalender (.ics) und Kontakte (.vcf)
+# Calendars (.ics) and contacts (.vcf)
 # ---------------------------------------------------------------------------
 _WD = {"monday": "MO", "tuesday": "TU", "wednesday": "WE", "thursday": "TH",
        "friday": "FR", "saturday": "SA", "sunday": "SU"}
@@ -565,7 +563,7 @@ def _cn(name):
 
 
 def _fold(line):
-    """iCal/vCard-Zeilen auf <=75 Oktette falten (CRLF + Leerzeichen)."""
+    """Fold iCal/vCard lines to <=75 octets (CRLF + space)."""
     out, cur = "", 0
     for ch in line:
         w = len(ch.encode("utf-8"))
@@ -711,7 +709,7 @@ def export_calendar(graph, out, done, stats, cals):
     if not cals:
         return
     progress.event("run.section", name=progress.atom("export.cat.calendar"))
-    pref = {"Prefer": 'outlook.timezone="UTC"'}      # Zeiten in UTC -> korrekte .ics
+    pref = {"Prefer": 'outlook.timezone="UTC"'}      # times in UTC -> correct .ics
     select = ("id,iCalUId,subject,start,end,isAllDay,location,organizer,attendees,"
               "body,showAs,isCancelled,recurrence,seriesMasterId,type,"
               "createdDateTime,lastModifiedDateTime")
@@ -729,8 +727,9 @@ def export_calendar(graph, out, done, stats, cals):
                     # other line – the bar must show life.
                     progress.melde(seen, what="events")
                 rel = f"kalender/{cname}/{event_filename(ev)}"
-                # Termine ohne Graph-ID: Dateipfad als stabiler Ersatzschlüssel,
-                # sonst landet der Schlüssel None im Log und Resume greift nie.
+                # Events without a Graph ID: the file path as a stable
+                # fallback key, else None lands in the log and resume never
+                # kicks in.
                 key = ev.get("id") or ev.get("iCalUId") or rel
                 if done.is_done(out, key):
                     stats["skipped"] += 1
@@ -790,7 +789,7 @@ def build_vcf(c):
 
 def export_contacts(graph, out, done, stats):
     progress.event("run.section", name=progress.atom("export.cat.contacts"))
-    sources = [("", f"{GRAPH}/me/contacts")]          # Standardkontakte (kein Ordner)
+    sources = [("", f"{GRAPH}/me/contacts")]          # default contacts (no folder)
     try:
         folders = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
     except TokenExpired:
@@ -813,8 +812,9 @@ def export_contacts(graph, out, done, stats):
                     progress.melde(seen, what="contacts")
                 seen += 1
                 rel = f"{rel_dir}/{contact_filename(c)}"
-                # Kontakte ohne Graph-ID: Dateipfad als stabiler Ersatzschlüssel
-                # (sonst Schlüssel None im Log und Re-Export bei jedem Lauf).
+                # Contacts without a Graph ID: the file path as a stable
+                # fallback key (else key None in the log and a re-export on
+                # every run).
                 key = c.get("id") or rel
                 if done.is_done(out, key):
                     stats["skipped"] += 1
@@ -838,52 +838,18 @@ def export_contacts(graph, out, done, stats):
 
 
 # ---------------------------------------------------------------------------
-# Hauptablauf
+# Main flow
 # ---------------------------------------------------------------------------
-def migrate_to_email_subdir(out, done):
-    """Einmalige, idempotente Migration: bereits exportierte Mail-Ordner (oberste
-    Ebene) nach E-Mail/ verschieben und die Resume-Pfade entsprechend umschreiben,
-    damit nichts neu heruntergeladen wird. kalender/ und kontakte/ bleiben unberührt.
-    No-op bei neuer/leerer Struktur."""
-    reserved = {MAIL_DIR, "kalender", "kontakte"}
-    try:
-        children = [c for c in out.iterdir() if c.is_dir() and c.name not in reserved]
-    except FileNotFoundError:
-        return
-    if not children:
-        return
-    target = out / MAIL_DIR
-    target.mkdir(parents=True, exist_ok=True)
-    moved = 0
-    for d in children:
-        dest = target / d.name
-        if dest.exists():
-            continue   # Teilmigration/Namenskollision -> sicherheitshalber überspringen
-        try:
-            d.rename(dest)
-            moved += 1
-        except OSError as e:
-            progress.event("run.migrate.failed", "warn", name=d.name,
-                           error=str(e))
-    if not moved:
-        return
-
-    def fix(rel):
-        return rel if rel.split("/", 1)[0] in reserved else f"{MAIL_DIR}/{rel}"
-    done.remap(fix)
-    progress.event("run.migrate.done", n=moved, dir=MAIL_DIR)
-
-
 def pruefe_verschwundene(graph, out, done, bestand):
-    """Was seit dem letzten Lauf aus dem Postfach verschwunden ist.
+    """What has vanished from the mailbox since the last run.
 
-    Läuft nur nach einem sauberen Durchlauf: nach einem Abbruch oder einem
-    unvollständig gelisteten Ordner wüssten wir nicht, ob etwas fehlt oder ob
-    wir nur nicht hingesehen haben. Lieber gar keine Aussage als eine falsche.
+    Runs only after a clean pass: after an abort or an incompletely listed
+    folder we would not know whether something is missing or we just did not
+    look. Better no statement at all than a wrong one.
     """
     db = state_db.StateDb(out)
     bekannt = db.verschwunden_lesen()
-    # Erst aufräumen, was unter der alten Annahme falsch vermerkt wurde.
+    # First clean up what was recorded wrongly under the old assumption.
     bekannt, geheilt = zuruecknehmen(out, bekannt, bestand)
     if geheilt:
         db.verschwunden_ersetzen(bekannt)
@@ -893,8 +859,8 @@ def pruefe_verschwundene(graph, out, done, bestand):
     if not kandidaten:
         return {"gone_healed": geheilt} if geheilt else {}
     progress.event("run.gone.checking", n=len(kandidaten))
-    # Ohne eine einzige Anfrage: Wer unter derselben Message-ID anderswo im
-    # Postfach steht, ist verschoben und nicht gelöscht.
+    # Without a single request: whatever sits elsewhere in the mailbox under
+    # the same Message-ID was moved, not deleted.
     kandidaten, verschoben_lokal = verschoben_statt_weg(out, kandidaten, bestand)
     weg, verschoben = wirklich_weg(graph, kandidaten)
     verschoben += verschoben_lokal
@@ -912,15 +878,14 @@ _hilfe_gewuenscht = export_util.hilfe_gewuenscht
 
 
 # ---------------------------------------------------------------------------
-# Ordnerstruktur: eigener Schritt, eigenes Ergebnis
+# Folder structure: its own step, its own result
 #
-# Bis 2.x lief das bei jedem Export mit – zwei Minuten für über 400 Ordner,
-# bevor eine
-# einzige Mail geladen wurde. Der Baum ändert sich aber selten. Getrennt heißt:
-# einmal abgleichen, danach liest der Export ihn von der Platte.
+# Listing the tree takes two minutes for over 400 folders, and it rarely
+# changes. Separate means: sync once, after that the export reads it from
+# disk.
 # ---------------------------------------------------------------------------
 def baum_eintraege(graph):
-    """Den Baum als flache Liste: Pfad, ID, Name, Elementzahl."""
+    """The tree as a flat list: path, ID, name, item count."""
     eintraege = []
     for top in build_tree(graph):
         for folder, rel_path in top["subtree"]:
@@ -935,8 +900,8 @@ def baum_eintraege(graph):
 
 
 def gleiche_ordner_ab(argv):
-    """--folders: nur die Struktur holen und ablegen, nichts exportieren."""
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    """--folders: only fetch and store the structure, export nothing."""
+    out = export_util.ausgabeordner(argv)
     graph = auth.waehle_zugang(TokenClient, graph_login)
     vorher = folders.lade(out)
     daten = folders.speichere(out, baum_eintraege(graph), vorher)
@@ -956,11 +921,10 @@ def gleiche_ordner_ab(argv):
 
 
 def auswahl_aus_puffer(daten, regeln):
-    """Aus dem gespeicherten Baum die Auswahl bauen – wie der Export sie erwartet.
+    """Build the selection from the stored tree – as the export expects it.
 
-    Ein einziger Eintrag mit allen gewählten Ordnern: der Export braucht keine
-    Gruppierung nach oberster Ebene, die stammt noch aus der interaktiven
-    Abfrage.
+    A single entry with all chosen folders: the export needs no grouping by
+    top level.
     """
     gewaehlt = folders.gewaehlt(daten, regeln)
     if not gewaehlt:
@@ -970,12 +934,11 @@ def auswahl_aus_puffer(daten, regeln):
 
 
 def waehle_ordner(graph, out):
-    """Welche Ordner exportiert werden – aus dem Puffer, sonst frisch.
+    """Which folders get exported – from the cache, otherwise fresh.
 
-    Der Puffer ist der Normalfall: zwei Minuten für über 400 Ordner will
-    niemand bei jedem
-    Lauf zahlen. Fehlt er, wird er einmal angelegt; danach entscheidet
-    „Ordnerstruktur abgleichen“, wann er sich erneuert.
+    The cache is the normal case: nobody wants to pay two minutes for over
+    400 folders on every run. If it is missing it is created once; after
+    that "sync folder structure" decides when it renews.
     """
     regeln = aktuelle_regeln()
     daten = folders.lade(out)
@@ -997,10 +960,10 @@ def waehle_ordner(graph, out):
 
 
 def aktuelle_regeln():
-    """Die Auswahlregeln – Umgebung schlägt Datei schlägt alte Namensliste.
+    """The selection rules – environment beats file beats the old name list.
 
-    Wer aus einer früheren Fassung kommt, hat SKIP_FOLDERS gepflegt und soll
-    seine Auswahl nicht neu eintippen müssen.
+    Anyone with a maintained SKIP_FOLDERS should not have to retype their
+    selection.
     """
     roh = os.environ.get("FOLDER_RULES")
     if roh is None:
@@ -1011,8 +974,8 @@ def aktuelle_regeln():
 
 
 def nur_pruefen(argv):
-    """--check: nur die Vollständigkeit melden, nichts exportieren."""
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    """--check: only report completeness, export nothing."""
+    out = export_util.ausgabeordner(argv)
     graph = auth.waehle_zugang(TokenClient, graph_login)
     bericht = pruefe_vollstaendigkeit(
         graph, out, state_db.StateDb(out).verschwunden_lesen())
@@ -1026,12 +989,13 @@ def nur_pruefen(argv):
 
 
 # ---------------------------------------------------------------------------
-# Vollständigkeit: was Graph zählt gegen das, was auf der Platte liegt
+# Completeness: what Graph counts against what lies on disk
 #
-# Graph liefert totalItemCount ohnehin mit der Ordnerliste – der Abgleich
-# kostet also nichts extra. Allein wäre er nur ein Indikator: gelöschte Mails
-# erzeugen eine Differenz, die keine Lücke ist. Erst zusammen mit
-# den Grabsteinen wird daraus eine Bilanz, in der jede Zahl erklärt ist.
+# Graph delivers totalItemCount with the folder list anyway – so the
+# comparison costs nothing extra. Alone it would only be an indicator:
+# deleted mails create a difference that is no gap. Only together with the
+# tombstones does it become a balance sheet in which every number is
+# explained.
 # ---------------------------------------------------------------------------
 
 
@@ -1043,16 +1007,16 @@ def zaehle_dateien(ordner):
 
 
 def _is_default_skip(top):
-    """Ist der oberste Ordner einer der Standard-Ausschlüsse (Archiv, Junk …)?"""
+    """Is the top-level folder one of the default exclusions (archive, junk …)?"""
     name = (top["folder"].get("displayName") or "").strip().lower()
     return name in DEFAULT_SKIP_FOLDERS
 
 
 def pruefe_vollstaendigkeit(graph, out, weg=None):
-    """Je Postfachordner: erwartet, vorhanden, gelöscht, Differenz.
+    """Per mailbox folder: expected, present, deleted, difference.
 
-    `weg` sind die als verschwunden vermerkten Pfade – sie erklären, warum
-    weniger auf der Platte liegt, als Graph zählt.
+    `weg` holds the paths recorded as vanished – they explain why less lies
+    on disk than Graph counts.
     """
     weg = weg or {}
     weg_je_ordner = {}
@@ -1062,11 +1026,11 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
 
     zeilen = []
     for top in build_tree(graph):
-        # Ordner, welche die Auswahl auslässt (Archiv, Gelöschte Elemente,
-        # Junk …), sind nicht unvollständig – sie sind absichtlich leer. Sie
-        # als Lücke zu melden war beim ersten echten Lauf ein Fehlalarm über
-        # knapp 20.000 Mails, und ein Bericht, der beim ersten Mal Unsinn zeigt,
-        # wird nie wieder aufgemacht.
+        # Folders the selection leaves out (archive, deleted items, junk …)
+        # are not incomplete – they are intentionally empty. Reporting them
+        # as a gap was, on the first real run, a false alarm over almost
+        # 20,000 mails, and a report that shows nonsense the first time is
+        # never opened again.
         ausgelassen = _is_default_skip(top)
         for folder, rel_path in top["subtree"]:
             erwartet = folder.get("totalItemCount")
@@ -1080,8 +1044,9 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
                 "vorhanden": da,
                 "geloescht": geloescht,
                 "ausgelassen": ausgelassen,
-                # Positiv heißt: es fehlt etwas. Gelöschtes zählt nicht als
-                # Lücke – es liegt ja noch im Archiv, nur nicht mehr im Postfach.
+                # Positive means: something is missing. Deleted items do not
+                # count as a gap – they still lie in the archive, just no
+                # longer in the mailbox.
                 "fehlt": 0 if ausgelassen else max(0, int(erwartet) - (da - geloescht)),
             })
     zeilen.sort(key=lambda z: (-z["fehlt"], z["ordner"]))
@@ -1093,7 +1058,7 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
         "vorhanden": sum(z["vorhanden"] for z in gezaehlt),
         "geloescht": sum(z["geloescht"] for z in gezaehlt),
         "fehlt": sum(z["fehlt"] for z in gezaehlt),
-        # Was die Auswahl bewusst auslässt – als Zahl, nicht als Lücke.
+        # What the selection deliberately leaves out – as a number, not a gap.
         "ausgelassen": sum(z["erwartet"] for z in zeilen if z["ausgelassen"]),
         "ausgelassene_ordner": sorted({z["ordner"].split("/")[1]
                                        for z in zeilen if z["ausgelassen"]
@@ -1107,8 +1072,8 @@ def main():
     if _hilfe_gewuenscht(sys.argv[1:]):
         print(__doc__.strip())
         return
-    # Für die Sonderläufe zählt nur der Ausgabeordner; Schalter wie -default
-    # sind hier ohne Bedeutung und dürften keinesfalls als Ordner durchgehen.
+    # For the special runs only the output folder counts; switches like
+    # -default mean nothing here and must never pass as a folder.
     nur_ordner = [a for a in sys.argv[1:] if not a.startswith("-")]
     try:
         if "--check" in sys.argv[1:]:
@@ -1122,11 +1087,6 @@ def main():
         progress.fehler("token_expired")
         sys.exit(1)
 
-    global OUT_ROOT
-    argv = sys.argv[1:]
-    if argv:
-        OUT_ROOT = argv[0]
-
     workers = settings.number("EXPORT_WORKERS", "workers")
     if workers > 4:
         progress.event("run.workers_hint", "warn", n=workers)
@@ -1134,10 +1094,9 @@ def main():
 
     graph = auth.waehle_zugang(TokenClient, graph_login)
 
-    out = Path(OUT_ROOT)
+    out = export_util.ausgabeordner(sys.argv[1:])
     out.mkdir(parents=True, exist_ok=True)
     done = DoneLog(state_db.StateDb(out))
-    migrate_to_email_subdir(out, done)   # einmalig: Alt-Struktur -> E-Mail/
     stats = {"new": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
 
@@ -1169,8 +1128,8 @@ def main():
     except TokenExpired:
         result = "expired"
     except (requests.exceptions.RequestException, RuntimeError) as e:
-        # Netz endgültig weg (alle Wiederholungen aufgebraucht) – kein Traceback,
-        # der Fortschritt im Erledigt-Log bleibt erhalten.
+        # Network gone for good (all retries used up) – no traceback, the
+        # progress in the done log is preserved.
         result = "network"
         progress.event("run.network_gone", "err",
                        error=f"{type(e).__name__}: {e}")

@@ -1,32 +1,28 @@
 #!/usr/bin/env python3
 """
-Kalender- und Kontaktauswertung des Outlook-Exports als JSON.
+Calendar and contact evaluation of the Outlook export as JSON.
 
-Liest die .ics- und .vcf-Dateien des Exports und schreibt Termine, Kontakte und
-rekonstruierte Termine in eine JSON-Datei. app.py stellt daraus Kalender und
-Adressbuch dar – die Rekonstruktion gibt es damit einmal im Projekt und nicht
-zweimal leicht anders.
+Reads the export's .ics and .vcf files and writes appointments, contacts and
+reconstructed appointments into a JSON file. app.py renders the calendar and
+the address book from it – so the reconstruction exists once in the project
+rather than twice in slightly different flavours.
 
-Gelöschte Termine werden aus den Mails rekonstruiert: Einladungen, Antworten und
-Absagen tragen den kompletten Termin samt UID im text/calendar-Teil. Fehlt diese
-UID im Kalenderexport, taucht der Termin trotzdem im Kalender auf – als "gelöscht"
-(wenn eine Absage vorliegt) bzw. "nicht im Kalender" (nur eingeladen/zugesagt).
-Damit dabei keine Geisterkopien entstehen, werden in Exchange-IDs eingebettete
-Fremd-UIDs ausgepackt (siehe norm_uid) und Treffer verworfen, deren Titel und
-Startminute schon im Kalender stehen.
+Deleted appointments are reconstructed from the mails: invitations, replies
+and cancellations carry the complete appointment including its UID in the
+text/calendar part. If that UID is missing from the calendar export, the
+appointment still shows up in the calendar – as "deleted" (when a
+cancellation exists) or "not in the calendar" (merely invited/accepted). To
+keep this from creating ghost copies, foreign UIDs embedded in Exchange IDs
+are unwrapped (see norm_uid) and hits whose title and start minute already
+sit in the calendar are discarded.
 
 Runs as a subprogram of app.py; standard library only.
 
-    Arguments: [outlook-ordner] --json ziel.json [--no-reconstruct]
+    Arguments: outlook-folder --json target.json [--no-reconstruct]
 
---no-reconstruct lässt die Wiederherstellung gelöschter Termine aus Mails weg.
-Sie ist der mit Abstand teuerste Teil – jede .eml wird gelesen, bei einem
-großen Postfach Minuten – und für Termine und Kontakte allein nicht nötig.
-
-Bis 5.3 erzeugte dieses Skript zusätzlich eine eigenständige HTML-Suchseite
-über beide Exporte; die App bot sie seit 5.2 nicht mehr an, und auf einem
-gewachsenen Archiv wurde sie dreistellig viele Megabyte groß. Wer sie sucht,
-findet sie in der Git-Historie.
+--no-reconstruct skips restoring deleted appointments from mails. It is by
+far the most expensive part – every .eml gets read, minutes on a large
+mailbox – and is not needed for appointments and contacts alone.
 """
 
 import os
@@ -43,8 +39,8 @@ from urllib.parse import quote, unquote
 import export_util
 import progress
 import settings
-# Die Parser-Primitive für .eml, iCalendar und vCard leben in corpus.py –
-# hier werden sie nur wiederverwendet, nicht noch einmal gepflegt.
+# The parser primitives for .eml, iCalendar and vCard live in corpus.py –
+# they are only reused here, not maintained a second time.
 from corpus import addr_people, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
 
 export_util.erzwinge_utf8()
@@ -53,10 +49,10 @@ BODY_CAP = 4000
 
 
 # ===========================================================================
-# Outlook: Einladungs-/Absagemails (.eml mit text/calendar) einsammeln
+# Outlook: collecting invitation/cancellation mails (.eml with text/calendar)
 # ===========================================================================
 def mail_ical(msg):
-    """(METHOD, iCalendar-Text) aus dem text/calendar-Teil einer Mail."""
+    """(METHOD, iCalendar text) from a mail's text/calendar part."""
     for part in msg.walk():
         if part.get_content_type() != "text/calendar":
             continue
@@ -72,9 +68,10 @@ def mail_ical(msg):
 
 
 def read_outlook(root, out_dir, invites):
-    """Termin-Anhänge (text/calendar) aus allen .eml einsammeln.
+    """Collect appointment parts (text/calendar) from all .eml files.
 
-    Nur dafür werden die Mails hier gelesen – ihre Inhalte indexiert corpus.py.
+    That is the only reason mails are read here – their contents are
+    indexed by corpus.py.
     """
     dateien = sorted(root.rglob("*.eml"))
     progress.melde(0, len(dateien), "mails")
@@ -91,9 +88,9 @@ def read_outlook(root, out_dir, invites):
             continue
         m2, evs = parse_vevents(ical)
         meth = method or m2
-        # Antwortmails führen keinen ORGANIZER, nur den antwortenden
-        # ATTENDEE – der Organisator ist ihr Empfänger. Einladungen und
-        # Absagen kommen umgekehrt vom Organisator selbst.
+        # Reply mails carry no ORGANIZER, only the replying ATTENDEE –
+        # the organiser is their recipient. Invitations and cancellations
+        # come the other way round, from the organiser themselves.
         fn, fe = addr_people(msg, "from")
         hn, hm = addr_people(msg, "to") if meth in ("REPLY", "COUNTER") else (fn, fe)
         hint = (hn[0] if hn else "", hm[0] if hm else "")
@@ -113,14 +110,15 @@ def read_outlook(root, out_dir, invites):
 
 
 # ===========================================================================
-# Kalender (.ics) und Kontakte (.vcf) – liegen im Outlook-Export
+# Calendar (.ics) and contacts (.vcf) – part of the Outlook export
 # ===========================================================================
 def parse_vevents(text):
-    """iCalendar-Text -> (METHOD, [VEVENT-Felder, …]).
+    """iCalendar text -> (METHOD, [VEVENT fields, …]).
 
-    Blockweise, damit Eigenschaften aus VTIMEZONE/VALARM nicht im Termin landen:
-    Einladungsmails von Exchange enthalten ein VTIMEZONE mit eigenem DTSTART
-    (z. B. 16010101T030000), das ein flacher Parser als Termindatum lesen würde.
+    Block-aware, so properties from VTIMEZONE/VALARM don't land in the
+    appointment: Exchange invitation mails contain a VTIMEZONE with its own
+    DTSTART (e.g. 16010101T030000) that a flat parser would read as the
+    appointment date.
     """
     method, events, stack, ev = "", [], [], None
     for line in _unfold(text):
@@ -185,7 +183,7 @@ def parse_vevents(text):
 
 
 def event_rec(ev, *, ctx, href, status, cal):
-    """Gemeinsamer Datensatz für Kalender- und rekonstruierte Termine."""
+    """Shared record for calendar and reconstructed appointments."""
     ts, disp = _ics_when(ev["dtstart"], ev["dateonly"], ev.get("tzstart", ""))
     te, _ = _ics_when(ev["dtend"], ev["enddateonly"], ev.get("tzend", ""))
     names = [ev["org_cn"], ev["org_mail"]] + ev["att_names"] + ev["att_mails"]
@@ -199,7 +197,7 @@ def event_rec(ev, *, ctx, href, status, cal):
         "ctx": ctx,
         "x": text[:BODY_CAP],
         "p": href,
-        # zusätzlich für die Kalenderansicht
+        # extra fields for the calendar view
         "te": te,
         "ad": 1 if ev["dateonly"] else 0,
         "st": status,
@@ -216,7 +214,7 @@ def read_calendar(root, out_dir):
         _, events = parse_vevents(p.read_text(encoding="utf-8", errors="replace"))
         if not events:
             continue
-        ev = events[0]                       # der Export legt einen Termin je Datei ab
+        ev = events[0]                       # the export stores one event per file
         segs = p.relative_to(root).as_posix().split("/")
         cal = segs[1] if len(segs) >= 3 and segs[0] == "kalender" else "Kalender"
         recs.append(event_rec(ev, ctx=f"Kalender: {cal}", href=link(p, out_dir),
@@ -224,26 +222,27 @@ def read_calendar(root, out_dir):
     return recs
 
 
-# Outlook stellt Antwort-/Absagemails einen Status vor den Betreff – für den
-# rekonstruierten Termin ist das Rauschen, den Status zeigt die Ansicht selbst.
+# Outlook puts a status in front of the subject of reply/cancellation mails –
+# noise for the reconstructed appointment; the view shows the status itself.
 REPLY_PREFIX = re.compile(
     r"^(Abgesagt|Canceled|Cancelled|Angenommen|Accepted|Abgelehnt|Declined|"
     r"Mit Vorbehalt|Tentative|Vorläufig zugesagt|Aktualisiert|Updated|"
     r"Weitergeleitet|Forwarded|Zeitvorschlag|New Time Proposed)\s*:\s*", re.I)
 
-# Welche Mail beschreibt einen Termin am besten? Einladung vor Absage vor Antwort.
+# Which mail describes an event best? Invitation over cancellation over reply.
 METHOD_RANK = {"REQUEST": 4, "PUBLISH": 3, "CANCEL": 2, "COUNTER": 1, "REPLY": 0}
 
 _VCAL_UID = b"vCal-Uid\x01\x00\x00\x00"
 
 
 def norm_uid(uid):
-    """Termin-UID auf eine vergleichbare Form bringen.
+    """Bring an appointment UID into a comparable form.
 
-    Exchange verpackt fremde UIDs (Google, Zoom, …) in seine eigene Global Object
-    ID: ein Hex-Blob, der die ursprüngliche UID als ASCII hinter der Kennung
-    "vCal-Uid" enthält. Der Kalenderexport liefert diesen Blob, die Einladungsmail
-    dagegen die nackte UID – ohne Auspacken gälte derselbe Termin als gelöscht.
+    Exchange wraps foreign UIDs (Google, Zoom, …) in its own Global Object
+    ID: a hex blob containing the original UID as ASCII behind the marker
+    "vCal-Uid". The calendar export delivers this blob, the invitation mail
+    the bare UID – without unwrapping, the same appointment would count as
+    deleted.
     """
     u = (uid or "").strip()
     if len(u) < len(_VCAL_UID) * 2 or len(u) % 2:
@@ -260,15 +259,16 @@ def norm_uid(uid):
 
 
 def reconstruct_events(invites, cal_recs):
-    """Termine wiederherstellen, die nur noch in Mails existieren.
+    """Restore appointments that now exist only in mails.
 
-    Einladungs-, Antwort- und Absagemails tragen den kompletten VEVENT samt UID.
-    Fehlt diese UID im Kalenderexport, ist der Termin dort gelöscht – aus der Mail
-    lässt er sich rekonstruieren. Liegt eine Absage vor (METHOD:CANCEL), gilt er
-    als abgesagt/gelöscht, sonst nur als "nicht im Kalender" (z. B. nie zugesagt).
+    Invitation, reply and cancellation mails carry the complete VEVENT with
+    its UID. If that UID is missing from the calendar export, the event was
+    deleted there – the mail lets us reconstruct it. With a cancellation
+    present (METHOD:CANCEL) it counts as cancelled/deleted, otherwise merely
+    as "not in the calendar" (e.g. never accepted).
 
-    Rückgabe: (rekonstruierte Datensätze, Anzahl nachträglich als abgesagt
-    markierter Kalendertermine, Anzahl als Doppel verworfener Rekonstruktionen).
+    Returns: (reconstructed records, number of calendar events marked
+    cancelled after the fact, number of reconstructions discarded as dupes).
     """
     known, same = {}, set()
     for r in cal_recs:
@@ -294,18 +294,18 @@ def reconstruct_events(invites, cal_recs):
         cancel = g["cancel"]
         if uid in known:
             if not recid:
-                # Termin ist im Kalender – Absagemail heilt einen veralteten Status
+                # event is in the calendar – a cancellation mail heals a stale status
                 for r in (known[uid] if cancel else []):
                     if r["st"] != "cancelled":
                         r["st"] = "cancelled"
                         marked += 1
                 continue
             if not cancel:
-                continue      # Serieninstanz ohne Absage steckt bereits im Serientermin
+                continue      # instance without cancellation is already in the series event
         it = (cancel or g["best"])[1]
         ev = it["ev"]
         if not ev["dtstart"]:
-            continue          # ohne Startzeit im Kalender nicht platzierbar
+            continue          # without a start time it cannot be placed in the calendar
         ev = dict(ev, summary=REPLY_PREFIX.sub("", ev["summary"]).strip())
         if not (ev["org_cn"] or ev["org_mail"]):
             ev["org_cn"], ev["org_mail"] = it.get("org_hint") or ("", "")
@@ -313,8 +313,8 @@ def reconstruct_events(invites, cal_recs):
         note = "abgesagt" if cancel else "nicht im Kalender"
         rec = event_rec(ev, ctx=f"Kalender: {note} · rekonstruiert aus Mail vom {it['md']}",
                         href=it["href"], status=state, cal="(rekonstruiert)")
-        # Fängt UID-Formate ab, die hier noch nicht bekannt sind: steht derselbe
-        # Termin (Titel + Startminute) schon im Kalender, ist er nicht gelöscht.
+        # Catches UID formats not yet known here: if the same event (title +
+        # start minute) already sits in the calendar, it is not deleted.
         if rec["ts"] and (rec["title"].strip().lower(), int(rec["ts"] // 60)) in same:
             dupes += 1
             continue
@@ -362,7 +362,7 @@ def read_contacts(root, out_dir):
             "ctx": f"Kontakte: {folder}" if folder else "Kontakte",
             "x": text[:BODY_CAP],
             "p": link(p, out_dir),
-            # zusätzlich für das Adressbuch
+            # extra fields for the address book
             "em": emails[:10],
             "tel": tels[:10],
             "org": org,
@@ -372,7 +372,7 @@ def read_contacts(root, out_dir):
 
 
 # ===========================================================================
-# Gemeinsam
+# Shared
 # ===========================================================================
 def link(path, out_dir):
     try:
@@ -383,26 +383,26 @@ def link(path, out_dir):
 
 
 def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
-    """Kalender, Kontakte und rekonstruierte Termine als reine Daten liefern.
+    """Deliver calendar, contacts and reconstructed events as plain data.
 
-    Die Pfade kommen als `root` + `rel` (unkodiert) statt als fertiger Link:
-    die App liefert die Dateien über ihre eigene /source-Route aus.
-    Beschreibungstexte werden gekürzt (`text_cap`) – im Kalender stehen sie nur
-    im Tooltip und in der Suche über die rekonstruierten Termine, ungekürzt
-    blähen tausende Termine die Antwort auf.
+    Paths come as `root` + `rel` (unencoded) instead of a finished link:
+    the app serves the files through its own /source route. Description
+    texts are truncated (`text_cap`) – in the calendar they only appear in
+    the tooltip and in the search over reconstructed events; untruncated,
+    thousands of events bloat the response.
     """
     root = Path(outlook_dir).resolve()
     if not root.is_dir():
         raise SystemExit(f"Outlook-Export nicht gefunden: {outlook_dir}")
     invites = []
     ghosts, marked, dupes = [], 0, 0
-    # out_dir = root: link() liefert dann Pfade relativ zum Export-Stamm, genau
-    # das, was die /source-Route der App erwartet.
+    # out_dir = root: link() then yields paths relative to the export root,
+    # exactly what the app's /source route expects.
     #
-    # Das Lesen aller .eml ist der teure Teil – bei einem großen Postfach
-    # Minuten – und geschieht ausschließlich für die Einladungen. Wer den
-    # Kalender nur wegen der Termine oder der Kontakte aufbaut, zahlt das
-    # sonst mit, ohne etwas davon zu haben.
+    # Reading all .eml files is the expensive part – minutes on a large
+    # mailbox – and happens solely for the invitations. Whoever builds the
+    # calendar just for the events or the contacts would otherwise pay for
+    # it without getting anything in return.
     if reconstruct:
         read_outlook(root, root, invites)
     cal = read_calendar(root, root)
@@ -414,10 +414,10 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
     for r in recs:
         r["root"] = "outlook"
         r["rel"] = unquote(r.pop("p", ""))
-        r.pop("uid", None)          # nur fürs Zuordnen oben gebraucht, knapp 1 MB
-        # Personenliste und Beschreibung braucht nur die Suche über die
-        # rekonstruierten Termine. Über alle Termine hinweg sind das zwei
-        # Drittel der Antwort, ohne dass sie je jemand liest.
+        r.pop("uid", None)          # only needed for the matching above, ~1 MB
+        # Only the search over reconstructed events needs the people list
+        # and the description. Across all events they make up two thirds of
+        # the response without anyone ever reading them.
         if r.get("st") in ("deleted", "gone"):
             if text_cap is not None and r.get("x"):
                 r["x"] = r["x"][:text_cap]
@@ -428,9 +428,9 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
     return {
         "generated": datetime.now().isoformat(timespec="seconds"),
         "outlook_dir": str(root),
-        # Ob rekonstruiert wurde, muss mit: sonst könnte die Oberfläche eine
-        # leere Liste nur als „es gab nichts“ deuten und nicht als „danach
-        # wurde gar nicht gesucht“.
+        # Whether reconstruction ran has to travel along: otherwise the UI
+        # could only read an empty list as "there was nothing", not as
+        # "nobody looked in the first place".
         "reconstruct": bool(reconstruct),
         "counts": {"kalender": len(cal), "rekonstruiert": len(ghosts),
                    "kontakte": len(contacts), "abgesagt_markiert": marked,
@@ -440,7 +440,7 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
 
 
 def write_calendar_json(outlook_dir, ziel, reconstruct=True):
-    """Kalenderdaten nach `ziel` schreiben (atomar). Liefert die Zählungen."""
+    """Write the calendar data to `ziel` (atomically). Returns the counts."""
     daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct)
     ziel = Path(ziel)
     ziel.parent.mkdir(parents=True, exist_ok=True)
@@ -460,8 +460,8 @@ def main():
 
     args = sys.argv[1:]
     kalender_json = None
-    # Vorgabe aus app_config.json, damit der Einzelaufruf dieselbe Einstellung
-    # trägt wie die App. --no-reconstruct schlägt sie auf der Zeile.
+    # Default from app_config.json, so a standalone call carries the same
+    # setting as the app. --no-reconstruct beats it on the command line.
     reconstruct = settings.flag("CALENDAR_RECONSTRUCT", "calendar_reconstruct")
     pos = []
     i = 0
@@ -475,13 +475,11 @@ def main():
         else:
             pos.append(args[i])
             i += 1
-    # Das letzte freie Argument ist der Outlook-Export: bis 5.3 kam davor noch
-    # der Teams-Ordner (für die HTML-Seite) – alte Aufrufe laufen so weiter.
-    outlook_dir = pos[-1] if pos else settings.value("outlook_dir", settings.OUTLOOK_DIR)
-
     if not kalender_json:
-        raise SystemExit("Nutzung: python3 combined_search.py [outlook-ordner] "
-                         "--json ziel.json [--no-reconstruct]")
+        raise SystemExit("Usage: python3 combined_search.py outlook-folder "
+                         "--json target.json [--no-reconstruct]")
+    # The app passes exactly one positional: the Outlook export.
+    outlook_dir = export_util.ausgabeordner(pos)
 
     c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct)
     # Same result schema as every other subprogram; the file is rebuilt as a

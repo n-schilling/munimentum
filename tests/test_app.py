@@ -1,12 +1,12 @@
-"""Tests für app.py – Oberfläche, Assistenten, Läufe, Zeitplan, MCP, Suche.
+"""Tests for app.py – UI, wizards, runs, schedule, MCP, search.
 
-Es geht nie ins Netz: Graph wird gar nicht angesprochen (die App startet nur
-die Export-Skripte als Unterprozesse, hier durch kurze python -c-Aufrufe
-ersetzt), Ollama wird gemockt. Der Suchteil läuft gegen einen echten kleinen
-Store, den rag_index.py schreibt – damit stimmt das Schema garantiert.
+Nothing ever goes out to the network: Graph is not contacted at all (the app
+only starts the export scripts as subprocesses, replaced here by short
+python -c calls), Ollama is mocked. The search part runs against a real small
+store written by rag_index.py – so the schema is guaranteed to match.
 
-app.BASE, app.CONFIG_FILE und app.TOKEN_FILE zeigen in jedem Test auf tmp_path,
-damit nichts im Projektordner landet.
+app.BASE, app.CONFIG_FILE and app.TOKEN_FILE point at tmp_path in every test
+so nothing lands in the project folder.
 """
 
 import base64
@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 import app as app_mod
+import runner as runner_mod
 import i18n
 import corpus
 import folders as folders_mod
@@ -35,11 +36,11 @@ import rag_index
 
 
 # --------------------------------------------------------------------------
-# Hilfen
+# Helpers
 # --------------------------------------------------------------------------
 def schluessel(m):
-    """Textschlüssel einer Meldung. Serverseitige Meldungen sind {k, v} –
-    übersetzt wird erst in der Oberfläche."""
+    """Text key of a message. Server-side messages are {k, v} –
+    translation happens only in the UI."""
     return m.get("k") if isinstance(m, dict) else m
 
 
@@ -48,7 +49,7 @@ def werte(m):
 
 
 def make_jwt(exp=None, scp="Mail.Read User.Read", upn="a@example.com", name="A B"):
-    """JWT ohne gültige Signatur – app.decode_jwt prüft die auch nicht."""
+    """JWT without a valid signature – app.decode_jwt does not check it either."""
     claims = {"scp": scp, "upn": upn, "name": name}
     if exp is not None:
         claims["exp"] = exp
@@ -60,7 +61,7 @@ def make_jwt(exp=None, scp="Mail.Read User.Read", upn="a@example.com", name="A B
 
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
-    """app.py so umbiegen, dass alle Pfade in tmp_path liegen."""
+    """Bend app.py so that all paths live in tmp_path."""
     monkeypatch.setattr(app_mod, "HEIM", tmp_path)
     monkeypatch.setattr(app_mod, "BASE", tmp_path)
     monkeypatch.setattr(app_mod, "STORE_PFAD", tmp_path / app_mod.STORE_DIR)
@@ -70,11 +71,11 @@ def sandbox(tmp_path, monkeypatch):
 
 
 def _cfg_mit_kategorien(**extra):
-    """Konfiguration mit gewählten Kategorien.
+    """Configuration with categories selected.
 
-    Die Vorgabe wählt bewusst nichts: jede Kategorie kann zehntausende
-    Elemente bedeuten. Ein Test, der einen Exportschritt erwartet, muss also
-    sagen, was exportiert werden soll – so wie ein Anwender auch.
+    The default deliberately selects nothing: every category can mean tens of
+    thousands of items. A test that expects an export step must therefore say
+    what should be exported – just like a user would.
     """
     cfg = app_mod.load_config()
     cfg["outlook_categories"] = ["mail", "calendar", "contacts"]
@@ -102,7 +103,7 @@ def with_ollama(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # --------------------------------------------------------------------------
 def test_load_config_ergaenzt_fehlende_schluessel(sandbox):
     (sandbox / "app_config.json").write_text(
@@ -110,7 +111,7 @@ def test_load_config_ergaenzt_fehlende_schluessel(sandbox):
     cfg = app_mod.load_config()
     assert cfg["workers"] == 2
     assert cfg["schedule"]["enabled"] is True
-    assert cfg["schedule"]["interval_minutes"] == 60      # Vorgabe bleibt erhalten
+    assert cfg["schedule"]["interval_minutes"] == 60      # default is preserved
 
 
 def test_load_config_bei_kaputter_datei(sandbox):
@@ -129,13 +130,13 @@ def test_save_config_roundtrip(sandbox):
     cfg["mcp_port"] = 9999
     app_mod.save_config(cfg)
     assert app_mod.load_config()["mcp_port"] == 9999
-    assert not (sandbox / "app_config.json.tmp").exists()   # atomarer Tausch
+    assert not (sandbox / "app_config.json.tmp").exists()   # atomic swap
 
 
 def test_skip_folders_default_ist_mit_outlook_export_deckungsgleich():
-    """app.py spiegelt die Liste, statt outlook_export zu importieren (das Modul
-    bricht ohne msal/requests ab). Damit die Kopie nicht wegdriftet, hält dieser
-    Test beide zusammen."""
+    """app.py mirrors the list instead of importing outlook_export (the module
+    aborts without msal/requests). So the copy does not drift away, this test
+    keeps the two together."""
     import outlook_export
     assert app_mod.SKIP_FOLDERS_DEFAULT == outlook_export.BUILTIN_SKIP_FOLDERS
 
@@ -143,7 +144,7 @@ def test_skip_folders_default_ist_mit_outlook_export_deckungsgleich():
 @pytest.mark.parametrize("eingabe,erwartet", [
     (["Archiv", "archiv", " Drafts "], ["archiv", "drafts"]),
     ("Archiv, Drafts", ["archiv", "drafts"]),
-    ("Archiv\nDrafts\n\n", ["archiv", "drafts"]),      # Textfeld mit Zeilen
+    ("Archiv\nDrafts\n\n", ["archiv", "drafts"]),      # text field with lines
     ([], []),
     (None, []),
     ("  ,  ", []),
@@ -155,7 +156,7 @@ def test_clean_folders(eingabe, erwartet):
 def test_clean_categories_filtert_und_sortiert():
     erlaubt = ["mail", "calendar", "contacts"]
     assert app_mod._clean_categories(["CONTACTS", "mail", "quatsch"], erlaubt) \
-        == ["mail", "contacts"]                             # Reihenfolge von `erlaubt`
+        == ["mail", "contacts"]                             # order follows `erlaubt`
     assert app_mod._clean_categories(None, erlaubt) == []
 
 
@@ -167,7 +168,7 @@ def test_clean_categories_filtert_und_sortiert():
     ('"eyJabc"', "eyJabc"),
     ("Bearer eyJabc", "eyJabc"),
     ("bearer  eyJabc", "eyJabc"),
-    ("eyJ\nabc\n def", "eyJabcdef"),                        # Umbrüche beim Kopieren
+    ("eyJ\nabc\n def", "eyJabcdef"),                        # line breaks from copying
     ("", ""),
     (None, ""),
 ])
@@ -210,9 +211,9 @@ def test_token_status_meldet_fehlende_rechte():
 
 
 def test_token_status_akzeptiert_umfassendere_berechtigung():
-    """Der Graph Explorer vergibt oft gleich die Schreibvariante. Wer
-    Mail.ReadWrite hat, darf erst recht lesen – Mail.Read steht dann aber nie
-    im Token, und der Assistent meldete Rechte als fehlend, die da sind."""
+    """The Graph Explorer often grants the write variant right away. Whoever
+    has Mail.ReadWrite may certainly read – but Mail.Read then never appears
+    in the token, and the wizard reported rights as missing that are there."""
     now = 1_000_000
     tok = make_jwt(exp=now + 600,
                    scp="Mail.ReadWrite Contacts.ReadWrite Calendars.Read "
@@ -227,7 +228,7 @@ def test_token_status_akzeptiert_umfassendere_berechtigung():
     (["Mail.Read.Shared"], []),
     (["Mail.ReadWrite.Shared"], []),
     (["Mail.Read"], []),
-    # ReadBasic liefert keine Nachrichteninhalte – deckt den Export nicht ab
+    # ReadBasic returns no message bodies – does not cover the export
     (["Mail.ReadBasic"], ["Mail.Read"]),
     (["Calendars.Read"], ["Mail.Read"]),
     ([], ["Mail.Read"]),
@@ -243,13 +244,13 @@ def test_scope_missing_kanalnachrichten_ueber_gruppenrechte():
 
 
 def test_scope_missing_ohne_ersatz_bleibt_streng():
-    """Chat.ReadBasic liest keine Nachrichteninhalte – kein gültiger Ersatz."""
+    """Chat.ReadBasic reads no message bodies – not a valid substitute."""
     assert app_mod.scope_missing({"Chat.Read"}, ["Chat.ReadBasic"]) == ["Chat.Read"]
 
 
 def test_jede_noetige_berechtigung_hat_eine_beispielabfrage():
-    """Der Assistent nennt zu jedem Recht die Abfrage, die es im Graph Explorer
-    überhaupt erst sichtbar macht – sonst sucht man es dort vergeblich."""
+    """For every right the wizard names the query that makes it visible in the
+    Graph Explorer in the first place – otherwise you look for it in vain."""
     noetig = set(app_mod.SCOPE_FOR.values()) | {"User.Read"}
     assert noetig <= set(app_mod.SCOPE_QUERY)
 
@@ -266,11 +267,11 @@ def test_token_status_ohne_token():
 
 
 def test_token_status_unlesbar_gilt_als_vorhanden():
-    """Graph-Token sind offiziell undurchsichtig – ein nicht zerlegbarer Token
-    wird ausprobiert statt vorschnell als kaputt gemeldet."""
+    """Graph tokens are officially opaque – a token that cannot be decoded is
+    tried out instead of being prematurely reported as broken."""
     st = app_mod.token_status("undurchsichtig-aber-da", needed=["mail"])
     assert st["present"] and st["valid"] and not st["readable"]
-    assert st["missing"] == []                              # keine Falschmeldung
+    assert st["missing"] == []                              # no false alarm
 
 
 def test_write_und_read_token(sandbox):
@@ -300,7 +301,7 @@ def test_check_ollama_erkennt_modell_ohne_tag(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: R())
     out = app_mod.check_ollama("http://x", "bge-m3", "qwen:7b")
     assert out["running"] and out["has_model"]
-    assert out["has_chat_model"] is True            # auch ohne genaues Tag
+    assert out["has_chat_model"] is True            # even without the exact tag
     assert out["models"] == ["bge-m3:latest", "qwen:7b"]
 
 
@@ -311,7 +312,7 @@ def test_check_ollama_modell_fehlt(monkeypatch):
     monkeypatch.setattr("requests.get", lambda *a, **k: R())
     out = app_mod.check_ollama("http://x", "bge-m3")
     assert out["running"] and not out["has_model"]
-    assert out["has_chat_model"] is False           # ohne Namen kein Modell
+    assert out["has_chat_model"] is False           # no name, no model
 
 
 def test_check_ollama_nicht_erreichbar(monkeypatch):
@@ -331,7 +332,7 @@ def test_ollama_hint_je_betriebssystem(monkeypatch, system, erwartet):
 
 
 # --------------------------------------------------------------------------
-# Zustand von Exporten und Index
+# State of exports and index
 # --------------------------------------------------------------------------
 def test_export_status_ohne_ordner(sandbox):
     st = app_mod.export_status(app_mod.load_config())
@@ -342,7 +343,9 @@ def test_export_status_ohne_ordner(sandbox):
 def test_export_status_mit_fortschrittsdateien(sandbox):
     import state_db
     state_db.StateDb(sandbox / "teams_export").kv_schreiben("state", "{}")
-    state_db.StateDb(sandbox / "outlook_export").done_ersetzen([("m", "a.eml")])
+    log = state_db.DbDoneLog(state_db.StateDb(sandbox / "outlook_export"))
+    log.mark("m", "a.eml")
+    log.close()
     st = app_mod.export_status(app_mod.load_config())
     assert st["teams"]["exists"] and st["teams"]["last_run"]
     assert st["outlook"]["exists"] and st["outlook"]["last_run"]
@@ -355,7 +358,7 @@ def test_store_status_ohne_index(sandbox):
 
 
 def _index_bauen(sandbox, uids, chunks_je=3):
-    """Ein winziger Index: uids Nachrichten mit je chunks_je Textstellen."""
+    """A tiny index: uids messages with chunks_je chunks each."""
     store = sandbox / "rag_store"
     store.mkdir(exist_ok=True)
     app_mod._ZAEHLUNG.clear()
@@ -369,9 +372,9 @@ def _index_bauen(sandbox, uids, chunks_je=3):
 
 
 def test_store_status_zaehlt_nachrichten_nicht_nur_textstellen(sandbox):
-    """Die Kachel nennt Nachrichten – das ist die Einheit, in der jemand sein
-    Archiv denkt. Lange Mails stehen als mehrere Textstellen im Index; die
-    Zeilenzahl wäre also spürbar höher als das, was er wiederzufinden erwartet.
+    """The tile names messages – the unit in which someone thinks of their
+    archive. Long mails sit in the index as several chunks; the row count
+    would thus be noticeably higher than what they expect to find again.
     """
     _index_bauen(sandbox, uids=4, chunks_je=3)
     st = app_mod.store_status(app_mod.load_config())
@@ -379,8 +382,8 @@ def test_store_status_zaehlt_nachrichten_nicht_nur_textstellen(sandbox):
 
 
 def test_store_status_puffert_die_zaehlung(sandbox, monkeypatch):
-    """Die Oberfläche fragt alle paar Sekunden – über den ganzen Index zu
-    zählen darf nicht jedes Mal passieren."""
+    """The UI asks every few seconds – counting across the whole index must
+    not happen every time."""
     _index_bauen(sandbox, uids=2)
     cfg = app_mod.load_config()
 
@@ -395,14 +398,14 @@ def test_store_status_puffert_die_zaehlung(sandbox, monkeypatch):
 
     assert app_mod.store_status(cfg)["messages"] == 2
     erste = len(abfragen)
-    assert erste >= 2                       # Textstellen und Nachrichten
+    assert erste >= 2                       # chunks and messages
     for _ in range(5):
         assert app_mod.store_status(cfg)["messages"] == 2
     assert len(abfragen) == erste, "zählt trotz unveränderter Datei erneut"
 
 
 def test_store_status_zaehlt_nach_einer_aenderung_neu(sandbox):
-    """Der Puffer darf nicht dazu führen, dass ein frischer Index alt aussieht."""
+    """The cache must not make a fresh index look old."""
     _index_bauen(sandbox, uids=2)
     cfg = app_mod.load_config()
     assert app_mod.store_status(cfg)["messages"] == 2
@@ -416,18 +419,17 @@ def test_store_status_zaehlt_nach_einer_aenderung_neu(sandbox):
 
 
 # --------------------------------------------------------------------------
-# Kalenderschritt: wann überhaupt, und wann mit Mail-Auswertung
+# Calendar step: when it runs at all, and when with mail evaluation
 #
-# Gemeldet aus der Praxis: ein Lauf mit nur „Kontakte“ ließ trotzdem die
-# Wiederherstellung gelöschter Termine anlaufen – jede der 45.000 Mails wurde
-# gelesen, minutenlang, für ein Ergebnis, an dem sich nichts geändert haben
-# konnte.
+# Reported from the field: a run with only "Contacts" still kicked off the
+# reconstruction of deleted appointments – every one of the 45,000 mails was
+# read, for minutes, for a result that could not possibly have changed.
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("cats,noetig,mit_mails", [
     (["mail", "calendar", "contacts"], True, True),
-    (["calendar"], True, False),          # Termine ja, Mails wurden nicht geholt
-    (["contacts"], True, False),          # genau der gemeldete Fall
-    (["mail"], False, True),              # nichts aufzubauen: kein Kalender, keine Kontakte
+    (["calendar"], True, False),          # appointments yes, mails were not fetched
+    (["contacts"], True, False),          # exactly the reported case
+    (["mail"], False, True),              # nothing to build: no calendar, no contacts
     ([], False, False),
     (["mail", "contacts"], True, True),
 ])
@@ -438,8 +440,8 @@ def test_calendar_plan(sandbox, cats, noetig, mit_mails):
 
 
 def test_build_steps_laesst_die_wiederherstellung_weg(sandbox):
-    """Ohne Mail-Auswertung fällt der teure Teil weg – erkennbar am Schalter
-    und daran, dass der Schritt anders heißt."""
+    """Without mail evaluation the expensive part is dropped – visible in the
+    switch and in the step carrying a different name."""
     cfg = app_mod.load_config()
     schritt = [s for s in app_mod.build_steps(cfg, calendar=True, reconstruct=False)
                if s["key"] == "calendar"][0]
@@ -448,10 +450,10 @@ def test_build_steps_laesst_die_wiederherstellung_weg(sandbox):
 
 
 def test_build_steps_folgt_der_einstellung(sandbox):
-    """Ohne ausdrückliche Angabe entscheidet app_config.json."""
+    """Without an explicit argument, app_config.json decides."""
     cfg = app_mod.load_config()
     voll = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
-    assert "--no-reconstruct" not in voll["argv"]      # Vorgabe: an
+    assert "--no-reconstruct" not in voll["argv"]      # default: on
 
     cfg["calendar_reconstruct"] = False
     aus = [s for s in app_mod.build_steps(cfg, calendar=True) if s["key"] == "calendar"][0]
@@ -459,7 +461,7 @@ def test_build_steps_folgt_der_einstellung(sandbox):
 
 
 def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollama):
-    """Der gemeldete Fall, einmal durch den ganzen Weg: /api/run -> build_steps."""
+    """The reported case, once through the whole path: /api/run -> build_steps."""
     gesehen = {}
 
     def merken(steps, label, **kw):
@@ -478,7 +480,7 @@ def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollam
 
 
 # --------------------------------------------------------------------------
-# Schritte eines Laufs
+# Steps of a run
 # --------------------------------------------------------------------------
 def test_build_steps_setzt_kategorien_und_token(sandbox):
     cfg = app_mod.load_config()
@@ -492,13 +494,13 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
     assert all(s["env"]["GRAPH_TOKEN"] == "tok" for s in steps)
     assert all(s["env"]["PYTHONUNBUFFERED"] == "1" for s in steps)
     assert steps[0]["argv"][1].endswith("outlook_export.py")
-    assert "outlook_export" in steps[0]["argv"][2:]       # Ausgabeordner
+    assert "outlook_export" in steps[0]["argv"][2:]       # output folder
     assert "--no-embeddings" not in steps[2]["argv"]
 
 
 def test_vorgabe_waehlt_nichts_aus(sandbox):
-    """Jede Kategorie kann zehntausende Elemente bedeuten – was geholt wird,
-    soll eine Entscheidung sein und nicht das, was zufällig angehakt war."""
+    """Every category can mean tens of thousands of items – what gets fetched
+    should be a decision, not whatever happened to be checked."""
     cfg = app_mod.load_config()
     assert cfg["outlook_categories"] == [] and cfg["teams_categories"] == []
     assert cfg["onedrive_enabled"] is False
@@ -535,8 +537,8 @@ def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
 
 
 def test_planner_schritt_wird_gebaut(sandbox):
-    """Regression: das Teilprogramm stand nicht in RUNNABLE – der Klick auf
-    „Export starten" endete in einem leeren Alert statt in einem Lauf."""
+    """Regression: the subprogram was not in RUNNABLE – clicking "Start
+    export" ended in an empty alert instead of a run."""
     cfg = app_mod.load_config()
     url = "https://planner.cloud.microsoft/webui/v1/plan/abcdefID123/view"
     cfg["planner_urls"] = url
@@ -555,9 +557,9 @@ def test_planner_schritt_wird_gebaut(sandbox):
 
 
 def test_index_schritt_traegt_den_absoluten_store(sandbox):
-    """Der Index kann auf einer anderen Platte liegen (index_dir) – der
-    Schritt bekommt den aufgelösten Pfad, nicht den Ordnernamen; und jeder
-    Unterprozess findet die Konfiguration über den festen Heimatordner."""
+    """The index can live on another disk (index_dir) – the step receives the
+    resolved path, not the folder name; and every subprocess finds the
+    configuration via the fixed home folder."""
     steps = app_mod.build_steps(app_mod.load_config(), index=True)
     argv = [str(a) for a in steps[0]["argv"]]
     assert argv[argv.index("--store") + 1] == str(sandbox / app_mod.STORE_DIR)
@@ -613,8 +615,8 @@ def test_save_config_uebernimmt_spiegel_haken_und_sharepoint(sandbox, server):
 
 
 def test_ohne_kategorie_kein_schritt(sandbox):
-    """Eine leere EXPORT_CATEGORIES liest das Skript als „nicht gesetzt“ und
-    holte dann alles. Der Zeitplan käme so an der Auswahl vorbei."""
+    """The script reads an empty EXPORT_CATEGORIES as "not set" and then
+    fetched everything. The schedule would thus bypass the selection."""
     cfg = app_mod.load_config()
     assert app_mod.build_steps(cfg, outlook=True, teams=True) == []
 
@@ -625,11 +627,11 @@ def test_ohne_kategorie_kein_schritt(sandbox):
 
 
 def test_build_steps_setzt_die_kategorien_immer(sandbox):
-    """Kein Exportschritt darf aus der App heraus etwas fragen können.
+    """No export step may be able to ask questions when run from the app.
 
-    Rückfragen gibt es in den Skripten nicht mehr; die Zusage ist jetzt, dass
-    die App ihre Auswahl vollständig über EXPORT_CATEGORIES mitgibt – sonst
-    exportierte ein Schritt still die Vorgabe statt der Einstellung.
+    The scripts no longer prompt; the promise now is that the app passes its
+    selection completely via EXPORT_CATEGORIES – otherwise a step silently
+    exported the default instead of the setting.
     """
     steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True)
     assert [s["key"] for s in steps] == ["outlook", "teams"]
@@ -653,8 +655,8 @@ def test_build_steps_leere_auswahl(sandbox):
 
 
 def test_build_steps_reicht_die_schalter_durch(sandbox):
-    """Alles, was in der Oberfläche steht, muss auch beim Skript ankommen –
-    sonst ändert ein Klick nur die Datei und nicht den Lauf."""
+    """Everything shown in the UI must also arrive at the script – otherwise
+    a click changes only the file and not the run."""
     cfg = _cfg_mit_kategorien()
     cfg.update(embed_images=False, cache_images=False, refresh_channels=False,
                skip_empty_chats=False, include_hidden=True,
@@ -675,8 +677,8 @@ def test_build_steps_reicht_die_schalter_durch(sandbox):
 
 
 def test_build_steps_leere_ordnerliste_wird_gesetzt(sandbox):
-    """Leer heißt "nichts auslassen". Die Variable muss trotzdem gesetzt sein –
-    nicht gesetzt hieße für outlook_export.py "nimm deine Vorgabe"."""
+    """Empty means "skip nothing". The variable must still be set – unset
+    would mean "use your default" to outlook_export.py."""
     cfg = _cfg_mit_kategorien(skip_folders=[])
     env = app_mod.build_steps(cfg, outlook=True, token="t")[0]["env"]
     assert env["SKIP_FOLDERS"] == "" and "SKIP_FOLDERS" in env
@@ -693,10 +695,10 @@ def test_build_steps_vorgaben_schalten_nichts_ab(sandbox):
 
 
 def _env_namen(modul):
-    """Umgebungsvariablen, die ein Skript über settings liest – aus dem Quelltext.
+    """Environment variables a script reads via settings – from the source.
 
-    Selbsttragend: kommt im Skript eine neue Einstellung dazu, fällt der Test
-    unten auf, solange app.py sie nicht mitgibt.
+    Self-sustaining: when a script gains a new setting, the test below fails
+    as long as app.py does not pass it along.
     """
     quelle = (Path(app_mod.__file__).parent / f"{modul}.py").read_text(encoding="utf-8")
     return set(re.findall(r'settings\.(?:flag|folders|number)\(\s*"([A-Z_0-9]+)"', quelle))
@@ -705,9 +707,9 @@ def _env_namen(modul):
 @pytest.mark.parametrize("modul,key", [("teams_export", "teams"),
                                        ("outlook_export", "outlook")])
 def test_app_setzt_alles_was_die_skripte_sonst_aus_der_datei_laesen(sandbox, modul, key):
-    """Für einen Lauf aus der App muss die Umgebung vollständig sein – sonst
-    gälte teils die Oberfläche, teils app_config.json, und das Skript meldete
-    „aus app_config.json übernommen“ mitten in einem App-Lauf."""
+    """For a run from the app the environment must be complete – otherwise
+    partly the UI would apply, partly app_config.json, and the script would
+    report "taken from app_config.json" in the middle of an app run."""
     noetig = _env_namen(modul)
     assert noetig, f"keine settings-Aufrufe in {modul}.py gefunden"
     steps = {s["key"]: s for s in app_mod.build_steps(
@@ -724,6 +726,21 @@ def test_build_steps_kalender(sandbox):
     assert ziel.endswith("calendar.json") and "rag_store" in ziel
 
 
+def test_kalender_wird_dorthin_geschrieben_wo_alle_ihn_lesen(sandbox,
+                                                             monkeypatch):
+    """One file, one path. Spelled relative, the step wrote it under the
+    subprocess cwd (the data folder) while the skip target, the status and
+    /api/calendar looked in the index folder – with data and index apart
+    the calendar tab then stayed empty forever."""
+    monkeypatch.setattr(app_mod, "BASE", sandbox / "data")
+    monkeypatch.setattr(app_mod, "STORE_PFAD", sandbox / "woanders")
+    schritt = app_mod.build_steps(app_mod.load_config(), calendar=True)[0]
+    geschrieben = schritt["argv"][schritt["argv"].index("--json") + 1]
+    assert Path(geschrieben).is_absolute(), "relativ = relativ zum cwd des Laufs"
+    gelesen = app_mod.calendar_file(app_mod.load_config())
+    assert Path(geschrieben) == gelesen == schritt["ziel"]
+
+
 def test_build_steps_reihenfolge_export_index_kalender(sandbox):
     steps = app_mod.build_steps(_cfg_mit_kategorien(), outlook=True, teams=True,
                                 index=True, calendar=True, token="t")
@@ -731,7 +748,7 @@ def test_build_steps_reihenfolge_export_index_kalender(sandbox):
 
 
 @pytest.mark.parametrize("last,jetzt,faellig", [
-    (None, 1000, True),               # noch nie gelaufen
+    (None, 1000, True),               # never ran before
     (1000, 1000 + 59 * 60, False),
     (1000, 1000 + 60 * 60, True),
     (1000, 1000 + 61 * 60, True),
@@ -741,11 +758,11 @@ def test_due_now(last, jetzt, faellig):
 
 
 # --------------------------------------------------------------------------
-# Ausgabe der Unterprozesse
+# Output of the subprocesses
 # --------------------------------------------------------------------------
 def test_stream_lines_trennt_auch_an_wagenruecklauf():
-    """rag_index.py überschreibt seine Fortschrittszeile mit \\r statt \\n –
-    readline() würde bis zum Ende des Schritts blockieren."""
+    """rag_index.py overwrites its progress line with \\r instead of \\n –
+    readline() would block until the end of the step."""
     import io
     roh = b"start\n  1/9 fertig\r  2/9 fertig\rende\n"
     assert list(app_mod._stream_lines(io.BytesIO(roh))) == \
@@ -763,7 +780,7 @@ def test_stream_lines_ueberspringt_leerzeilen():
 
 
 # --------------------------------------------------------------------------
-# JobRunner – echte Unterprozesse, aber winzige
+# JobRunner – real subprocesses, but tiny ones
 # --------------------------------------------------------------------------
 def _py_step(code, label="Schritt"):
     return {"key": "t", "label": label, "argv": [sys.executable, "-c", code],
@@ -815,14 +832,14 @@ def test_jobrunner_bricht_bei_fehler_ab(sandbox):
     r.start([_py_step("raise SystemExit(3)", "Kaputt"), _py_step("print('nie')", "B")], "Lauf")
     _warte(r)
     text = "\n".join(str(ln["text"]) for ln in r.lines)
-    assert "nie" not in text                              # zweiter Schritt lief nicht
+    assert "nie" not in text                              # second step did not run
     assert not r.last["ok"]
     assert schluessel(r.last["detail"]) == "srv.job.exitcode"
     assert werte(r.last["detail"])["code"] == 3
 
 
 def test_jobrunner_erkennt_abgelaufenen_token(sandbox):
-    """Über das strukturierte Ereignis – nicht mehr über den Meldungstext."""
+    """Via the structured event – no longer via the message text."""
     wurzel = str(Path(app_mod.__file__).resolve().parent)
     r = app_mod.JobRunner()
     r.start([_py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
@@ -836,7 +853,7 @@ def test_jobrunner_erkennt_abgelaufenen_token(sandbox):
 
 
 def test_jobrunner_prosa_allein_setzt_kein_token_flag(sandbox):
-    """Ein Skript, das nur den Satz druckt, meldet nichts – die Regex ist weg."""
+    """A script that merely prints the sentence reports nothing – the regex is gone."""
     r = app_mod.JobRunner()
     r.start([_py_step("print('Abgebrochen: Token abgelaufen.'); raise SystemExit(1)")], "Lauf")
     _warte(r)
@@ -846,6 +863,13 @@ def test_jobrunner_prosa_allein_setzt_kein_token_flag(sandbox):
 def test_jobrunner_nimmt_nur_einen_lauf_gleichzeitig(sandbox):
     r = app_mod.JobRunner()
     assert r.start([_py_step("import time; time.sleep(2)")], "Erster")
+    # Wait for the run to be under way: under load the subprocess spawn can
+    # fail (EAGAIN), the thread ends at once, and the refusal below would
+    # then read as a broken lock instead of a machine out of processes.
+    ende = time.time() + 5
+    while not r.busy and time.time() < ende:
+        time.sleep(0.02)
+    assert r.busy, "der erste Lauf kam nicht in Gang"
     assert r.start([_py_step("print('x')")], "Zweiter") is False
     r.cancel()
     _warte(r)
@@ -873,9 +897,9 @@ def test_jobrunner_meldet_nicht_startbaren_befehl(sandbox):
 
 
 def test_jobrunner_nimmt_fortschritt_auf_und_haelt_ihn_aus_dem_protokoll(sandbox):
-    """Die Zahlen treiben den Balken; im Protokoll wären sie nur Rauschen."""
+    """The numbers drive the bar; in the log they would be mere noise."""
     r = app_mod.JobRunner()
-    # progress liegt im Projektordner, nicht im Sandkasten
+    # progress lives in the project folder, not in the sandbox
     wurzel = str(Path(app_mod.__file__).resolve().parent)
     skript = (f"import sys, time; sys.path.insert(0, {wurzel!r}); import progress; "
               "[(progress.melde(i, 3, 'chats'), time.sleep(0.05)) for i in range(4)]; "
@@ -895,7 +919,7 @@ def test_jobrunner_nimmt_fortschritt_auf_und_haelt_ihn_aus_dem_protokoll(sandbox
 
 
 def test_jobrunner_setzt_den_fortschritt_je_schritt_zurueck(sandbox):
-    """Sonst zeigte der zweite Schritt kurz den Stand des ersten."""
+    """Otherwise the second step briefly showed the first one's progress."""
     r = app_mod.JobRunner()
     staende = []
     echtes = app_mod.JobRunner._exec
@@ -915,22 +939,22 @@ def test_jobrunner_setzt_den_fortschritt_je_schritt_zurueck(sandbox):
 
 
 # --------------------------------------------------------------------------
-# Nichts Neues exportiert -> Index und Kalender entfallen
+# Nothing new exported -> index and calendar are skipped
 #
-# Gemeldet aus der Praxis: ein Lauf mit nur "Kontakte" meldete "Neu exportiert:
-# 0" und indizierte danach zwei Minuten lang denselben Bestand.
+# Reported from the field: a run with only "Contacts" reported "Newly
+# exported: 0" and then spent two minutes indexing the same unchanged corpus.
 # --------------------------------------------------------------------------
 def _melde_step(neu, label="job.step.outlook"):
     wurzel = str(Path(app_mod.__file__).resolve().parent)
     schritt = _py_step(f"import sys; sys.path.insert(0, {wurzel!r}); import progress; "
                        f"print('Fertig.'); progress.ergebnis({neu})", label)
-    # Wie in build_steps: nur Export-Schritte zählen für die Überspring-Logik.
+    # As in build_steps: only export steps count for the skip logic.
     schritt["corpus"] = True
     return schritt
 
 
 def _folge(sandbox, neu, ziel_da=True, steps_extra=None):
-    """Export-Schritt mit `neu` Stück, danach ein markierter Folgeschritt."""
+    """Export step with `neu` new items, then a marked follow-up step."""
     ziel = sandbox / "corpus.db"
     if ziel_da:
         ziel.write_text("x", encoding="utf-8")
@@ -946,10 +970,10 @@ def test_jobrunner_ueberspringt_index_wenn_nichts_neu_ist(sandbox):
     r, text = _folge(sandbox, neu=0)
     assert "INDIZIERT" not in text, "der Index lief trotz unverändertem Bestand"
     assert r.last["ok"]
-    assert "srv.job.skipped" in text          # und sagt auch, warum
-    assert "@@RESULT@@" not in text           # die Meldung selbst ist kein Protokoll
-    # Der Schrittname ist eine geschachtelte Meldung – nur so übersetzt die
-    # Oberfläche ihn; als nackte Zeichenkette stünde "job.step.index" im Log.
+    assert "srv.job.skipped" in text          # and says why, too
+    assert "@@RESULT@@" not in text           # the notice itself is not a log line
+    # The step name is a nested message – only then does the UI translate
+    # it; as a bare string, "job.step.index" would end up in the log.
     eintraege = [ln["text"] for ln in r.lines if isinstance(ln["text"], dict)]
     uebersprungen = [e for e in eintraege if e["k"] == "srv.job.skipped"][0]
     assert uebersprungen["v"]["step"] == {"k": "job.step.index", "v": {}}
@@ -958,27 +982,27 @@ def test_jobrunner_ueberspringt_index_wenn_nichts_neu_ist(sandbox):
 def test_jobrunner_indiziert_wenn_es_etwas_neues_gibt(sandbox):
     r, text = _folge(sandbox, neu=1)
     assert "INDIZIERT" in text
-    # Die Ergebniszeile kommt von der App, aus dem strukturierten Ereignis.
+    # The result line comes from the app, out of the structured event.
     eintraege = [ln["text"] for ln in r.lines if isinstance(ln["text"], dict)]
     ergebnis = [e for e in eintraege if e["k"] == "srv.job.result"]
     assert ergebnis and ergebnis[0]["v"]["ergebnis"]["new"] == 1
 
 
 def test_jobrunner_indiziert_ohne_vorhandenen_index(sandbox):
-    """Sonst gäbe es nach dem ersten Lauf mit unverändertem Bestand nie einen."""
+    """Otherwise a first run with an unchanged corpus would never get one."""
     _, text = _folge(sandbox, neu=0, ziel_da=False)
     assert "INDIZIERT" in text
 
 
 def test_jobrunner_zaehlt_ueber_alle_exportschritte(sandbox):
-    """Teams bringt etwas, Outlook nicht – dann muss indiziert werden."""
+    """Teams brings something, Outlook does not – then indexing must happen."""
     _, text = _folge(sandbox, neu=0,
                      steps_extra=[_melde_step(3, "job.step.teams")])
     assert "INDIZIERT" in text
 
 
 def test_jobrunner_indiziert_wenn_der_export_nichts_meldet(sandbox):
-    """Unwissen ist kein Grund zu sparen – etwa bei einem älteren Skript."""
+    """Not knowing is no reason to save – say, with an older script."""
     ziel = sandbox / "corpus.db"
     ziel.write_text("x", encoding="utf-8")
     folge = _py_step("print('INDIZIERT')", "job.step.index")
@@ -1028,7 +1052,7 @@ def test_jobrunner_historie_nennt_den_fehlschlag(sandbox, tmp_path):
 
 
 def test_jobrunner_ohne_historie_laeuft_wie_immer(sandbox):
-    """Tests und Sonderfälle: kein runs.db, kein Unterschied im Verhalten."""
+    """Tests and edge cases: no runs.db, no difference in behavior."""
     r = app_mod.JobRunner()
     r.start([_py_step("print('ok')")], "job.export")
     _warte(r)
@@ -1036,7 +1060,7 @@ def test_jobrunner_ohne_historie_laeuft_wie_immer(sandbox):
 
 
 def test_jobrunner_indiziert_wenn_gar_kein_export_lief(sandbox):
-    """Der Knopf „Nur indizieren“ muss immer indizieren."""
+    """The "Index only" button must always index."""
     ziel = sandbox / "corpus.db"
     ziel.write_text("x", encoding="utf-8")
     folge = _py_step("print('INDIZIERT')", "job.step.index")
@@ -1048,15 +1072,15 @@ def test_jobrunner_indiziert_wenn_gar_kein_export_lief(sandbox):
 
 
 def test_build_steps_markiert_index_und_kalender(sandbox):
-    """Die Marke samt Ergebnisdatei muss aus build_steps kommen – ohne sie
-    greift die Ersparnis nie."""
+    """The marker plus result file must come from build_steps – without it
+    the saving never kicks in."""
     cfg = _cfg_mit_kategorien()
     steps = {s["key"]: s for s in
              app_mod.build_steps(cfg, outlook=True, index=True, calendar=True)}
     assert steps["index"]["nur_bei_neuem"] and steps["index"]["ziel"].name == "corpus.db"
     assert steps["calendar"]["nur_bei_neuem"]
     assert steps["calendar"]["ziel"].name == "calendar.json"
-    # Die Export-Schritte selbst niemals.
+    # The export steps themselves never carry the marker.
     assert not steps["outlook"].get("nur_bei_neuem")
 
 
@@ -1075,11 +1099,11 @@ def test_jobrunner_ringpuffer_begrenzt(sandbox, monkeypatch):
     r = app_mod.JobRunner()
     for i in range(20):
         r.log(str(i))
-    assert len(r.lines) == 5 and r.seq == 20             # Nummern laufen weiter
+    assert len(r.lines) == 5 and r.seq == 20             # numbering keeps counting
 
 
 # --------------------------------------------------------------------------
-# App: Start eines Laufs
+# App: starting a run
 # --------------------------------------------------------------------------
 def test_launch_ohne_token_wird_abgelehnt(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
@@ -1094,8 +1118,8 @@ def test_launch_ohne_auswahl(sandbox, with_ollama):
 
 
 def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeypatch):
-    """Genau der Fall aus der Anforderung: kein Ollama -> es wird trotzdem
-    gearbeitet, nur eben ohne Embeddings, und der Grund steht im Protokoll."""
+    """Exactly the requested case: no Ollama -> work happens anyway, just
+    without embeddings, and the reason is in the log."""
     gesehen = {}
     monkeypatch.setattr(app_mod.JobRunner, "start",
                         lambda self, steps, label, **kw: gesehen.update(steps=steps) or True)
@@ -1108,7 +1132,7 @@ def test_launch_waehlt_ohne_ollama_den_volltextindex(sandbox, no_ollama, monkeyp
 
 def test_launch_ohne_embeddings_auf_wunsch_nennt_den_richtigen_grund(
         sandbox, with_ollama, monkeypatch):
-    """Ollama läuft – der Volltextindex ist dann eine Entscheidung, kein Mangel."""
+    """Ollama is running – the full-text index is then a decision, not a lack."""
     monkeypatch.setattr(app_mod.JobRunner, "start", lambda self, steps, label, **kw: True)
     a = app_mod.App(app_mod.load_config())
     assert a.launch(index=True, embeddings=False)[0]
@@ -1132,7 +1156,7 @@ def test_launch_lehnt_zweiten_lauf_ab(sandbox, with_ollama, monkeypatch):
 
 
 def test_ollama_ergebnis_wird_kurz_zwischengespeichert(sandbox, monkeypatch):
-    """Der Status wird im Sekundentakt abgefragt – ein Netzaufruf je Abruf wäre Unfug."""
+    """The status is polled every second – a network call per poll would be nonsense."""
     aufrufe = []
     monkeypatch.setattr(app_mod, "check_ollama", lambda url, model, timeout=1.5:
                         aufrufe.append(1) or {"running": True, "has_model": True,
@@ -1148,7 +1172,7 @@ def test_ollama_ergebnis_wird_kurz_zwischengespeichert(sandbox, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Aktualisierungsprüfung
+# Update check
 # --------------------------------------------------------------------------
 def test_update_check_meldet_nur_neuere_versionen(sandbox, with_ollama, monkeypatch):
     monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
@@ -1163,14 +1187,14 @@ def test_update_check_meldet_nur_neuere_versionen(sandbox, with_ollama, monkeypa
 
 
 @pytest.mark.parametrize("zustand", [
-    {"status": "none", "newer": False},           # noch kein Release
+    {"status": "none", "newer": False},           # no release yet
     {"status": "error", "newer": False, "error": "kein Netz"},
     {"status": "off", "newer": False},
     {"status": "ok", "newer": False, "latest": "1.0.0"},
 ])
 def test_update_check_schweigt_sonst(sandbox, with_ollama, monkeypatch, zustand):
-    """Kein Release, kein Netz oder schon aktuell sind normale Zustände – damit
-    behelligt man niemanden im Protokoll."""
+    """No release, no network, or already up to date are normal states – no
+    reason to bother anyone in the log."""
     voll = {"current": "1.0.0", "latest": None, "url": None, "error": None, **zustand}
     monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: voll)
     a = app_mod.App(app_mod.load_config())
@@ -1180,8 +1204,8 @@ def test_update_check_schweigt_sonst(sandbox, with_ollama, monkeypatch, zustand)
 
 
 def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeypatch):
-    """Abgeschaltet heißt abgeschaltet – updates.check darf gar nicht erst
-    hinausgehen, das prüft es selbst anhand dieses Schalters."""
+    """Off means off – updates.check must not even go out; it checks that
+    itself against this switch."""
     gesehen = {}
     monkeypatch.setattr(app_mod.updates, "check",
                         lambda current, repo, enabled=True: gesehen.update(
@@ -1197,7 +1221,7 @@ def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeyp
 
 
 def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
-    """Der erste Statusabruf kommt, bevor die Prüfung im Hintergrund fertig ist."""
+    """The first status poll arrives before the background check finishes."""
     s = app_mod.App(app_mod.load_config()).status()
     assert s["update"]["current"] == app_mod.version.VERSION
     assert s["update"]["newer"] is False
@@ -1205,7 +1229,7 @@ def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
 
 
 def test_update_check_laeuft_im_hintergrund(sandbox, with_ollama, monkeypatch):
-    """Der Start darf nicht auf eine Netzantwort warten."""
+    """Startup must not wait for a network response."""
     los = threading.Event()
     def langsam(*a, **k):
         los.wait(5)
@@ -1214,7 +1238,7 @@ def test_update_check_laeuft_im_hintergrund(sandbox, with_ollama, monkeypatch):
 
     monkeypatch.setattr(app_mod.updates, "check", langsam)
     a = app_mod.App(app_mod.load_config())
-    a.check_updates()                       # kehrt sofort zurück
+    a.check_updates()                       # returns immediately
     assert a.status()["update"]["status"] == "off"
     los.set()
 
@@ -1234,7 +1258,7 @@ def test_http_config_schaltet_die_pruefung_ab(server, sandbox):
 
 
 # --------------------------------------------------------------------------
-# Status und Assistenten-Steuerung
+# Status and wizard control
 # --------------------------------------------------------------------------
 def test_status_zeigt_token_assistenten_ohne_token(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
@@ -1245,8 +1269,8 @@ ALLE_RECHTE = "Mail.Read Calendars.Read Contacts.Read Chat.Read"
 
 
 def test_status_laesst_gueltigen_token_in_ruhe(sandbox, with_ollama):
-    """Ein noch gültiger Token darf beim Start nicht nach einem neuen fragen –
-    seine Laufzeit hängt am Tenant und reicht durchaus über einen Arbeitstag."""
+    """A still-valid token must not ask for a new one at startup – its
+    lifetime depends on the tenant and easily spans a working day."""
     app_mod.write_token(make_jwt(exp=time.time() + 12 * 3600, scp=ALLE_RECHTE))
     a = app_mod.App(app_mod.load_config())
     assert a.status()["wizard"] is None
@@ -1258,8 +1282,8 @@ def test_status_zeigt_assistenten_bei_abgelaufenem_token(sandbox, with_ollama):
 
 
 def test_status_fragt_bei_fehlenden_rechten_nicht_von_selbst(sandbox, with_ollama):
-    """Fehlende Rechte melden Kachel und Protokoll; ungefragt aufpoppen soll der
-    Assistent deswegen nicht – der Token selbst ist ja gültig."""
+    """Missing rights are reported by tile and log; the wizard should not pop
+    up unasked because of them – the token itself is valid, after all."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600, scp="Chat.Read"))
     a = app_mod.App(_cfg_mit_kategorien())
     s = a.status()
@@ -1274,8 +1298,8 @@ def test_status_zeigt_ollama_assistenten_wenn_token_passt(sandbox, no_ollama):
 
 
 def test_status_zeigt_token_assistenten_nach_abgelaufenem_lauf(sandbox, with_ollama):
-    """Ein Lauf, der am Token gescheitert ist, holt den Assistenten zurück –
-    auch wenn exp formal noch in der Zukunft liegt (zurückgezogener Token)."""
+    """A run that failed on the token brings the wizard back – even when exp
+    formally still lies in the future (a revoked token)."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600, scp=ALLE_RECHTE))
     a = app_mod.App(app_mod.load_config())
     assert a.status()["wizard"] is None
@@ -1284,7 +1308,7 @@ def test_status_zeigt_token_assistenten_nach_abgelaufenem_lauf(sandbox, with_oll
 
 
 # --------------------------------------------------------------------------
-# Rückmeldung beim Start (der Assistent schweigt jetzt im Normalfall)
+# Feedback at startup (the wizard now stays quiet in the normal case)
 # --------------------------------------------------------------------------
 def test_log_token_state_bei_gueltigem_token(sandbox, with_ollama):
     app_mod.write_token(make_jwt(exp=time.time() + 12 * 3600 + 60,
@@ -1295,7 +1319,7 @@ def test_log_token_state_bei_gueltigem_token(sandbox, with_ollama):
     assert zeile["level"] == "ok"
     assert schluessel(zeile["text"]) == "srv.token.found"
     assert werte(zeile["text"])["account"] == "chef@example.com"
-    assert werte(zeile["text"])["minutes"] == 12 * 60      # Formatierung macht die Oberfläche
+    assert werte(zeile["text"])["minutes"] == 12 * 60      # formatting is the UI's job
 
 
 def test_log_token_state_ohne_token(sandbox, with_ollama):
@@ -1323,7 +1347,7 @@ def test_log_token_state_nennt_fehlende_rechte(sandbox, with_ollama):
 
 
 def test_token_status_liefert_die_restminuten():
-    """Formatiert wird in der Oberfläche – nur dort ist die Sprache bekannt."""
+    """Formatting happens in the UI – only there the language is known."""
     now = 1_000_000
     st = app_mod.token_status(make_jwt(exp=now + 620 * 60), now=now)
     assert st["expires_in_minutes"] == 620
@@ -1339,7 +1363,7 @@ def test_status_nennt_die_noetigen_berechtigungen(sandbox, with_ollama):
 
 
 # --------------------------------------------------------------------------
-# Zeitplan
+# Schedule
 # --------------------------------------------------------------------------
 def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
@@ -1354,8 +1378,8 @@ def test_scheduler_startet_lauf_wenn_faellig(sandbox, with_ollama):
 
 
 def test_scope_pruefung_kennt_die_schreibvarianten_der_spiegel():
-    """Der gemeldete Fall: Läufe funktionierten, die Prüfung warnte trotzdem –
-    der Schlüssel trug die ReadWrite-Varianten, nicht die exakten Namen."""
+    """The reported case: runs worked, the check still warned – the key
+    carried the ReadWrite variants, not the exact names."""
     fehlt = app_mod.scope_missing(
         ["Files.Read.All", "Sites.Read.All"],
         ["Files.ReadWrite.All", "Sites.ReadWrite.All"])
@@ -1374,47 +1398,14 @@ def test_cadence_faellig_rechnet_mit_periode_und_slack():
     assert not app_mod.cadence_faellig("monthly", jetzt - 86400, jetzt)
 
 
-def test_migration_sperrt_exporte_und_meldet_sich(sandbox):
-    """Old state layout at startup: the migration runs by itself, says so in
-    the log, and NO export starts before it is done – manual or scheduled,
-    both go through launch()."""
-    ordner = sandbox / app_mod.OUTLOOK_DIR
-    ordner.mkdir(parents=True, exist_ok=True)
-    (ordner / "exported.tsv").write_text("m1\ta.eml\n", encoding="utf-8")
-    a = app_mod.App(app_mod.load_config())
-
-    a.migration = True                     # der Moment, bevor der Thread endet
-    ok, why = a.launch(outlook=True)
-    assert not ok and why["k"] == "srv.migrate.busy"
-
-    a.migration = False
-    a.starte_migration()
-    for _ in range(200):
-        if not a.migration:
-            break
-        time.sleep(0.05)
-    assert not a.migration, "Migration wurde nicht fertig"
-    schluessel = [z["text"]["k"] for z in a.jobs.lines
-                  if isinstance(z.get("text"), dict)]
-    assert "srv.migrate.start" in schluessel
-    assert "srv.migrate.store" in schluessel
-    assert "srv.migrate.done" in schluessel
-    assert not (ordner / "exported.tsv").exists()
-    assert (ordner / "exported.tsv.bak").exists()
-    import state_db
-    log = state_db.DbDoneLog(state_db.StateDb(ordner))
-    assert log.done == {"m1": "a.eml"}
-    log.close()
-
-
 def test_lauf_protokoll_landet_in_der_runs_db(sandbox):
-    """Jede Zeile eines Laufs steht mit dessen id in der log-Tabelle –
-    gebündelt geschrieben, der Rest am Laufende; App-Zeilen außerhalb eines
-    Laufs gehen sofort und ohne Lauf-id."""
+    """Every line of a run sits in the log table with the run's id – written
+    in batches, the rest at the end of the run; app lines outside a run go
+    immediately and without a run id."""
     import run_history as rh
     hist = rh.RunHistory(sandbox / "runs.db")
     jobs = app_mod.JobRunner(hist)
-    jobs.logk("srv.mcp.started", "ok", port=1)         # außerhalb eines Laufs
+    jobs.logk("srv.mcp.started", "ok", port=1)         # outside of a run
     jobs._run([], "job.export")
     runs = hist.list_runs()
     assert runs and runs[0]["result"] == "done"
@@ -1434,10 +1425,10 @@ def test_api_run_log_liefert_das_gespeicherte_protokoll(server):
 
 
 def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
-    """Regression: der relative Anhang-Link des Boards lief über /source
-    betrachtet gegen die App-Wurzel ("Unbekannter Pfad"). Beim Ausliefern
-    wird er auf die Route selbst umgeschrieben – die Datei auf der Platte
-    bleibt offline-tauglich relativ."""
+    """Regression: the board's relative attachment link, viewed via /source,
+    resolved against the app root ("Unknown path"). On serving, it is
+    rewritten onto the route itself – the file on disk stays
+    offline-friendly and relative."""
     a, port = server
     ordner = sandbox / app_mod.PLANNER_DIR / "Team_X__abc123"
     (ordner / "Anhaenge").mkdir(parents=True)
@@ -1457,22 +1448,6 @@ def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
     assert code == 200 and roh == b"PDF"
 
 
-def test_migration_sperrt_auch_die_api(server):
-    """While the migration runs, the WHOLE interface waits – search included.
-    Only the status (with the log) and quitting stay reachable."""
-    a, port = server
-    a.migration = True
-    try:
-        code, r = call(port, "GET", "/api/search?q=x")
-        assert r["error"]["k"] == "srv.migrate.busy"
-        code, r = call(port, "POST", "/api/run", {"outlook": True})
-        assert r["ok"] is False and r["message"]["k"] == "srv.migrate.busy"
-        code, r = call(port, "GET", "/api/status")
-        assert code == 200 and r["migration"] is True
-    finally:
-        a.migration = False
-
-
 def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
     """The cadence gate applies to EVERY run – a manual export click too –
     and says so in the log instead of silently dropping the source."""
@@ -1481,7 +1456,7 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
     a.cfg["outlook_categories"] = ["mail"]
     a.cfg["onedrive_enabled"] = True
     a.cfg["sync_cadence"] = {"onedrive": "weekly"}
-    a.history.last_step_ok = lambda key: time.time() - 3600   # vor einer Stunde
+    a.history.last_step_ok = lambda key: time.time() - 3600   # an hour ago
     gebaut = {}
 
     def fake_build(cfg, **kw):
@@ -1507,6 +1482,155 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
               and z["text"].get("k") == "srv.cadence.skip"]
     assert len(zeilen) == 1
     assert zeilen[0]["text"]["v"]["cadence"]["k"] == "cadence.weekly"
+
+
+def test_alter_state_sperrt_den_export(sandbox, with_ollama):
+    """7.0 no longer migrates the pre-6.2 state – so it must not export onto
+    it either: an empty state.db looks like a first run, which would fetch
+    the whole mailbox again and orphan the write-once tombstones."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    ordner = sandbox / app_mod.OUTLOOK_DIR
+    ordner.mkdir(parents=True, exist_ok=True)
+    (ordner / "exported.tsv").write_text("m1\ta.eml\n", encoding="utf-8")
+    assert app_mod.altbestand_state() == ["outlook"]
+    a = app_mod.App(app_mod.load_config())
+    ok, why = a.launch(outlook=True, label="job.export")
+    assert not ok and why["k"] == "srv.legacy.state"
+    # A folder that already carries its state.db is done – the 6.x migration
+    # leaves the originals as .bak, so an old name next to it means nothing.
+    import state_db
+    state_db.StateDb(ordner).kv_schreiben("x", "1")
+    assert app_mod.altbestand_state() == []
+
+
+def test_alter_zeiger_sperrt_bis_die_pfade_stehen(standardort, tmp_path,
+                                                  monkeypatch):
+    """Up to 6.3.1 a pointer file could send the whole archive elsewhere.
+    7.0 does not follow it – but running anyway would start a SECOND archive
+    beside the real one and fetch everything again, so it blocks and says
+    where the data is."""
+    platte = tmp_path / "platte"
+    (platte / app_mod.OUTLOOK_DIR).mkdir(parents=True)
+    (standardort / app_mod.ZEIGER_DATEI).write_text(str(platte),
+                                                    encoding="utf-8")
+    monkeypatch.setattr(app_mod, "CONFIG_FILE",
+                        standardort / "app_config.json")
+    # Read and write the same file: MUNIMENTUM_HOME steers settings without
+    # touching data_dir_env(), which the guard checks first.
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(standardort))
+    import settings
+    settings.reset()
+    assert app_mod.alter_zeiger() == platte
+    a = app_mod.App(app_mod.load_config())
+    ok, why = a.launch(index=True, label="job.index")
+    assert not ok and why["k"] == "srv.layout.pointer"
+
+    # The trap: save_config writes the whole schema, so data_dir exists as
+    # "" after any settings save. Asking whether the key is PRESENT would
+    # disarm the guard from then on.
+    app_mod.save_config(app_mod.load_config())
+    settings.reset()
+    assert app_mod.alter_zeiger() == platte, "Speichern hat die Sperre entschärft"
+
+    # A folder the user really chose wins – that is the way out.
+    cfg = app_mod.load_config()
+    cfg["data_dir"] = str(platte)
+    app_mod.save_config(cfg)
+    settings.reset()
+    assert app_mod.alter_zeiger() is None
+
+
+def test_nur_uebersprungene_exporte_lassen_den_index_aus(sandbox, with_ollama):
+    """Every requested export dropped by its cadence means nothing new by
+    definition – the run must not re-read the whole archive for the index.
+    An index-only run asked for no export and keeps running."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["onedrive_enabled"] = True
+    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
+    jetzt = time.time()
+    # Exported an hour ago, indexed afterwards: the index is current.
+    a.history.last_step_ok = lambda key: (jetzt - 60 if key == "index"
+                                          else jetzt - 3600)
+    a.history.last_step_started = lambda key: (jetzt - 60 if key == "index"
+                                               else jetzt - 3600)
+    gestartet = {}
+    a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
+    a.launch(onedrive=True, index=True, label="job.export")
+    assert gestartet["context"]["nichts_neues"] is True
+    a.launch(index=True, label="job.index")
+    assert gestartet["context"]["nichts_neues"] is False
+
+
+def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
+                                                                   with_ollama):
+    """"No export ran" only means "nothing to do" while the index is really
+    newer than the last export. After a failed or cancelled index step the
+    archive has moved on without it – then a run whose exports are all gated
+    must still catch up instead of skipping for good."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    a.cfg["onedrive_enabled"] = True
+    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
+    jetzt = time.time()
+    # Last successful index BEFORE the last export: stale.
+    a.history.last_step_ok = lambda key: (jetzt - 7200 if key == "index"
+                                          else jetzt - 3600)
+    a.history.last_step_started = lambda key: (jetzt - 7200 if key == "index"
+                                               else jetzt - 3600)
+    gestartet = {}
+    a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
+    a.launch(onedrive=True, index=True, label="job.export")
+    assert gestartet["context"]["nichts_neues"] is False
+
+    # Never indexed at all: nothing to be current about.
+    a.history.last_step_ok = lambda key: None if key == "index" else jetzt
+    a.history.last_step_started = lambda key: None if key == "index" else jetzt
+    a.launch(onedrive=True, index=True, label="job.export")
+    assert gestartet["context"]["nichts_neues"] is False
+
+    # The one an "ok only" reading would miss: an export that DIED part-way
+    # still wrote what it had fetched, so the older index is stale even
+    # though no successful export row is newer than it.
+    a.history.last_step_ok = lambda key: jetzt - 7200      # index, and the
+    a.history.last_step_started = lambda key: (jetzt - 7200 if key == "index"
+                                               else jetzt - 60)
+    a.launch(onedrive=True, index=True, label="job.export")
+    assert gestartet["context"]["nichts_neues"] is False
+
+
+def test_lauf_historie_kennt_jede_korpus_quelle(sandbox, with_ollama):
+    """The runs table names the sources of a run from `elements`; a corpus
+    step missing there is invisible in the history even though it ran."""
+    app_mod.write_token(make_jwt(exp=time.time() + 3600))
+    a = app_mod.App(app_mod.load_config())
+    gestartet = {}
+    a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
+    a.launch(planner=True, label="job.export")
+    elemente = gestartet["context"]["elements"]
+    import steps as steps_mod
+    for e in steps_mod.REGISTRY:
+        if e.get("corpus"):
+            assert e["key"] in elemente, f"{e['key']} fehlt in der Historie"
+    assert elemente["planner"] is True
+
+
+def test_jobrunner_ueberspringt_index_ohne_gelaufenen_export(sandbox):
+    """The runner side of it: told that nothing new can exist, it skips the
+    follow-up steps even though no export step reported anything."""
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('INDIZIERT')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner()
+    r.start([folge], "job.export", context={"nichts_neues": True})
+    _warte(r)
+    text = "\n".join(str(ln["text"]) for ln in r.lines)
+    assert "INDIZIERT" not in text and "srv.job.skipped" in text
+    r = app_mod.JobRunner()
+    r.start([folge], "job.index")             # nothing known: it runs
+    _warte(r)
+    assert "INDIZIERT" in "\n".join(str(ln["text"]) for ln in r.lines)
 
 
 def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
@@ -1541,13 +1665,13 @@ def test_scheduler_spiegelt_nur_mit_master_schalter(sandbox, with_ollama):
 
 
 @pytest.mark.parametrize("cats,kalender,rekonstruktion", [
-    (["mail", "calendar"], True, None),    # None = wie eingestellt
-    (["contacts"], True, False),           # aufbauen ja, Mails lesen nein
-    (["mail"], False, None),               # nichts aufzubauen – dann egal
+    (["mail", "calendar"], True, None),    # None = as configured
+    (["contacts"], True, False),           # build yes, read mails no
+    (["mail"], False, None),               # nothing to build – then it does not matter
 ])
 def test_scheduler_stimmt_den_kalenderschritt_ab(sandbox, with_ollama, cats,
                                                  kalender, rekonstruktion):
-    """Derselbe Fehler saß im Zeitplan – dort unbemerkt, weil er nachts läuft."""
+    """The same bug sat in the schedule – unnoticed there because it runs at night."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
     a = app_mod.App(app_mod.load_config())
     a.cfg["outlook_categories"] = cats
@@ -1567,12 +1691,12 @@ def test_scheduler_wartet_bis_zum_intervall(sandbox, with_ollama):
     laeufe = []
     a.launch = lambda **kw: laeufe.append(kw) or (True, "gestartet")
     a.scheduler._tick()
-    a.scheduler._tick()                                   # sofort danach: nicht fällig
+    a.scheduler._tick()                                   # right afterwards: not due
     assert len(laeufe) == 1
 
 
 def test_scheduler_ueberspringt_ohne_gueltigen_token(sandbox, with_ollama):
-    app_mod.write_token(make_jwt(exp=time.time() - 60))    # abgelaufen
+    app_mod.write_token(make_jwt(exp=time.time() - 60))    # expired
     a = app_mod.App(app_mod.load_config())
     a.cfg["schedule"]["enabled"] = True
     a.launch = lambda **kw: pytest.fail("darf nicht starten")
@@ -1597,15 +1721,15 @@ def test_scheduler_tut_nichts_waehrend_ein_lauf_laeuft(sandbox, with_ollama, mon
 
 def test_scheduler_next_due(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
-    assert a.scheduler.next_due() is None                  # aus
+    assert a.scheduler.next_due() is None                  # off
     a.cfg["schedule"].update(enabled=True, interval_minutes=30)
-    assert a.scheduler.next_due() <= time.time()           # noch nie gelaufen -> sofort
+    assert a.scheduler.next_due() <= time.time()           # never ran before -> right away
     a.scheduler.last_run = 1000
     assert a.scheduler.next_due() == 1000 + 1800
 
 
 # --------------------------------------------------------------------------
-# MCP-Prozess
+# MCP process
 # --------------------------------------------------------------------------
 def test_mcp_ohne_index_startet_nicht(sandbox):
     a = app_mod.App(app_mod.load_config())
@@ -1635,10 +1759,10 @@ def test_autostart_mcp_kann_abgeschaltet_werden(sandbox):
 
 
 class FakePopen:
-    """Ersatz für den mcp_server.py-Unterprozess – ohne echten Port.
+    """Stand-in for the mcp_server.py subprocess – without a real port.
 
-    Bleibt wie das Original laufen, bis terminate() kommt: sonst wäre der
-    Prozess schon beendet, sobald der Protokoll-Thread die Ausgabe gelesen hat.
+    Keeps running like the original until terminate() arrives: otherwise the
+    process would already be gone once the log thread has read the output.
     """
 
     def __init__(self, argv, **kw):
@@ -1668,7 +1792,7 @@ class FakePopen:
 @pytest.fixture
 def fake_popen(monkeypatch):
     gestartet = []
-    monkeypatch.setattr(app_mod.subprocess, "Popen",
+    monkeypatch.setattr(runner_mod.subprocess, "Popen",
                         lambda argv, **kw: gestartet.append(FakePopen(argv, **kw))
                         or gestartet[-1])
     return gestartet
@@ -1685,12 +1809,12 @@ def test_mcp_start_und_stop(sandbox, store, fake_popen):
     assert "--data-dir" in argv
     assert "--port" in argv
 
-    assert schluessel(a.mcp.start(a.cfg)[1]) == "srv.mcp.running"   # kein zweiter Prozess
+    assert schluessel(a.mcp.start(a.cfg)[1]) == "srv.mcp.running"   # no second process
     assert len(fake_popen) == 1
 
     assert a.mcp.stop() is True
     assert not a.mcp.running
-    assert a.mcp.stop() is False                            # schon gestoppt
+    assert a.mcp.stop() is False                            # already stopped
 
 
 def test_mcp_leitet_ausgabe_ins_protokoll(sandbox, store, fake_popen):
@@ -1706,7 +1830,7 @@ def test_mcp_leitet_ausgabe_ins_protokoll(sandbox, store, fake_popen):
 def test_mcp_start_scheitert_am_betriebssystem(sandbox, store, monkeypatch):
     def boom(*a, **k):
         raise OSError("kein Python")
-    monkeypatch.setattr(app_mod.subprocess, "Popen", boom)
+    monkeypatch.setattr(runner_mod.subprocess, "Popen", boom)
     a = app_mod.App(app_mod.load_config())
     ok, why = a.mcp.start(a.cfg)
     assert not ok and schluessel(why) == "srv.mcp.spawnfail"
@@ -1717,11 +1841,11 @@ def test_autostart_mcp_startet_bei_vorhandenem_index(sandbox, store, fake_popen)
     a.autostart_mcp()
     assert a.mcp.running
     a.shutdown()
-    assert not a.mcp.running                                # shutdown räumt auf
+    assert not a.mcp.running                                # shutdown cleans up
 
 
 # --------------------------------------------------------------------------
-# Suche über einen echten kleinen Store
+# Search over a real small store
 # --------------------------------------------------------------------------
 TEAMS_HTML = """<html><body>
 <h1>Projekt Alpha</h1>
@@ -1735,7 +1859,7 @@ TEAMS_HTML = """<html><body>
 
 @pytest.fixture
 def store(sandbox):
-    """Kleiner, echter Store – geschrieben mit den Helfern aus rag_index.py."""
+    """Small real store – written with the helpers from rag_index.py."""
     teams = sandbox / "teams_export" / "1on1"
     teams.mkdir(parents=True)
     (teams / "alice__abc.html").write_text(TEAMS_HTML, encoding="utf-8")
@@ -1776,14 +1900,14 @@ def test_searchbridge_laedt_nach_neuem_index_neu(sandbox, store):
     con.commit()
     con.close()
     b.ensure(cfg)
-    assert b.stamp != erster                              # neue Kennung -> neu geladen
+    assert b.stamp != erster                              # new stamp -> reloaded
 
 
 # --------------------------------------------------------------------------
-# Formulierte Antwort: nutzt die Treffer der Suche, sucht nicht selbst
+# Generated answer: uses the search hits, does not search on its own
 # --------------------------------------------------------------------------
 def _antwort(port, body, kopf=None):
-    """POST /api/answer und die NDJSON-Zeilen einsammeln."""
+    """POST /api/answer and collect the NDJSON lines."""
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
     con.request("POST", "/api/answer", json.dumps(body),
                 {"Content-Type": "application/json", **(kopf or {})})
@@ -1796,8 +1920,8 @@ def _antwort(port, body, kopf=None):
 
 
 def test_antwort_nutzt_die_treffer_der_suche(sandbox, with_ollama, store, monkeypatch):
-    """Kein zweites Retrieval: die Antwort sieht genau die Treffer, die auch in
-    der Liste stehen – sonst könnte sie Unauffindbares zitieren."""
+    """No second retrieval: the answer sees exactly the hits that are in the
+    list – otherwise it could cite the unfindable."""
     gesehen = {}
     monkeypatch.setattr(app_mod.answer, "stream",
                         lambda q, quellen, model, ollama, lang="de", **kw:
@@ -1809,11 +1933,11 @@ def test_antwort_nutzt_die_treffer_der_suche(sandbox, with_ollama, store, monkey
     try:
         code, zeilen = _antwort(httpd.server_address[1], {"q": "Rechnung"})
         assert code == 200
-        assert zeilen[0]["sources"][0]["n"] == 1          # Nummerierung ab 1
+        assert zeilen[0]["sources"][0]["n"] == 1          # numbering starts at 1
         assert zeilen[0]["model"] == a.cfg["chat_model"]
         assert {"text": "Antwort [1]."} in zeilen
         assert zeilen[-1] == {"done": True}
-        # Volltext statt Vorschau – aus 200 Zeichen lässt sich nichts beantworten
+        # Full text instead of preview – 200 characters cannot answer anything
         assert "4711" in gesehen["quellen"][0]["text"]
         assert gesehen["query"] == "Rechnung"
     finally:
@@ -1877,7 +2001,7 @@ def test_antwort_begrenzt_die_quellenzahl(sandbox, with_ollama, store, monkeypat
                         lambda q, quellen, *a, **kw:
                         gesehen.update(n=len(quellen)) or iter([]))
     cfg = app_mod.load_config()
-    cfg["answer_sources"] = 99                   # jenseits der Grenze
+    cfg["answer_sources"] = 99                   # beyond the limit
     a = app_mod.App(cfg)
     httpd = app_mod.make_server(a, 0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -1894,8 +2018,8 @@ def test_antwort_begrenzt_die_quellenzahl(sandbox, with_ollama, store, monkeypat
 # --------------------------------------------------------------------------
 @pytest.fixture
 def server(sandbox, with_ollama):
-    # Mit gewählten Kategorien: die Vorgabe wählt bewusst nichts, ein
-    # laufender Server gehört aber zu jemandem, der sich entschieden hat.
+    # With categories selected: the default deliberately selects nothing, but
+    # a running server belongs to someone who has made a choice.
     a = app_mod.App(_cfg_mit_kategorien())
     httpd = app_mod.make_server(a, 0)
     t = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -1948,8 +2072,8 @@ def test_http_status(server):
 
 
 def test_http_fremder_host_wird_abgewiesen(server):
-    """Schutz gegen DNS-Rebinding: ein Name, der auf 127.0.0.1 zeigt, reicht sonst,
-    damit eine beliebige Webseite den ganzen Mailbestand abfragen kann."""
+    """Guards against DNS rebinding: a name pointing at 127.0.0.1 would
+    otherwise suffice for any website to query the whole mail archive."""
     _, port = server
     code, _ = call(port, "GET", "/api/status", host="angreifer.example.com")
     assert code == 403
@@ -1970,7 +2094,7 @@ def test_http_token_speichern(server, sandbox):
     code, r = call(port, "POST", "/api/token", {"token": "Bearer " + tok})
     assert code == 200 and r["ok"]
     assert app_mod.read_token() == tok
-    assert a.status()["wizard"] is None            # gültig -> kein Assistent mehr
+    assert a.status()["wizard"] is None            # valid -> no wizard anymore
 
 
 def test_http_token_abgelaufen_wird_gemeldet(server):
@@ -1994,8 +2118,8 @@ def test_http_token_muell_wird_abgelehnt(server):
 
 
 def test_http_wizard_seen(server):
-    """„Später“ setzt die Merkung eines totgelaufenen Tokens zurück – sonst ginge
-    der Assistent beim nächsten Statusabruf sofort wieder auf."""
+    """The "Later" button resets the memory of a dead token – otherwise the
+    wizard would reopen immediately on the next status poll."""
     a, port = server
     a.jobs.token_expired = True
     call(port, "POST", "/api/wizard-seen")
@@ -2009,16 +2133,16 @@ def test_http_run_ohne_token(server):
 
 
 @pytest.mark.parametrize("cats,erwartet", [
-    # (gibt es den Kalenderschritt, liest er die Mails)
+    # (does the calendar step exist, does it read the mails)
     (["mail", "calendar"], (True, True)),
-    (["contacts"], (True, False)),        # der gemeldete Fall
+    (["contacts"], (True, False)),        # the reported case
     (["calendar"], (True, False)),
-    (["mail"], (False, False)),           # nichts aufzubauen
+    (["mail"], (False, False)),           # nothing to build
 ])
 def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwartet):
-    """Der Weg, den die Oberfläche wirklich geht. Sie schickt weiterhin
-    calendar=true zu jedem Outlook-Lauf; verfeinert wird serverseitig, damit
-    die Regel nur an einer Stelle steht."""
+    """The path the UI actually takes. It still sends calendar=true with
+    every Outlook run; refinement happens server-side so the rule lives in
+    one place only."""
     a, port = server
     a.cfg["outlook_categories"] = cats
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
@@ -2034,8 +2158,8 @@ def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwar
 
 
 def test_http_kalenderknopf_bleibt_vollstaendig(server, monkeypatch):
-    """„Kalender & Kontakte aufbauen“ kommt ohne outlook – wer ihn drückt, will
-    die Auswertung, unabhängig davon, was zuletzt exportiert wurde."""
+    """"Build calendar & contacts" comes without outlook – whoever presses it
+    wants the evaluation, regardless of what was last exported."""
     a, port = server
     a.cfg["outlook_categories"] = ["contacts"]
     gesehen = {}
@@ -2056,13 +2180,13 @@ def test_http_config_speichern(server, sandbox):
     assert code == 200
     assert r["config"]["outlook_categories"] == ["contacts"]
     assert r["config"]["workers"] == 2
-    assert r["config"]["mcp_port"] == app_mod.DEFAULT_CONFIG["mcp_port"]   # unverändert
+    assert r["config"]["mcp_port"] == app_mod.DEFAULT_CONFIG["mcp_port"]   # unchanged
     assert "unbekannt" not in r["config"]
-    assert app_mod.load_config()["workers"] == 2                          # persistiert
+    assert app_mod.load_config()["workers"] == 2                          # persisted
 
 
 def test_http_config_userflow_grenzen(server, sandbox):
-    """0 heißt aus und bleibt 0; nach oben ist bei 50 Schluss."""
+    """0 means off and stays 0; the ceiling is 50."""
     _, port = server
     code, r = call(port, "POST", "/api/config", {"userflow_actions": 99})
     assert code == 200 and r["config"]["userflow_actions"] == 50
@@ -2084,15 +2208,15 @@ def test_http_config_schalter_und_ordner(server, sandbox):
 
 
 @pytest.mark.parametrize("key,eingabe,erwartet", [
-    ("workers", 99, 8),          # Graph erlaubt 4 gleichzeitig, mehr ist Drosselung
+    ("workers", 99, 8),          # Graph allows 4 in parallel, more means throttling
     ("workers", 0, 1),
-    ("mcp_port", 80, 1024),      # privilegierte Ports gehören nicht dazu
+    ("mcp_port", 80, 1024),      # privileged ports are not among them
     ("mcp_port", 99999, 65535),
     ("index_batch", 9999, 512),
     ("index_batch", -3, 1),
 ])
 def test_http_config_begrenzt_zahlen(server, key, eingabe, erwartet):
-    """Eine vertippte Zahl darf den nächsten Lauf nicht lahmlegen."""
+    """A mistyped number must not cripple the next run."""
     code, r = call(server[1], "POST", "/api/config", {key: eingabe})
     assert r["config"][key] == erwartet
 
@@ -2104,7 +2228,7 @@ def test_http_config_ignoriert_unsinnige_zahlen(server):
 
 
 def test_status_nennt_die_ordner_vorgabe(server):
-    """Der Zurücksetzen-Knopf in der Oberfläche füllt sich daraus."""
+    """The reset button in the UI fills itself from this."""
     s = call(server[1], "GET", "/api/status")[1]
     assert s["skip_folders_default"] == sorted(app_mod.SKIP_FOLDERS_DEFAULT)
 
@@ -2115,10 +2239,10 @@ def test_http_zeitplan_speichern(server, sandbox):
                    {"enabled": True, "interval_minutes": 1, "teams": False})
     assert code == 200
     assert r["schedule"]["enabled"] is True
-    assert r["schedule"]["interval_minutes"] == 5          # Untergrenze greift
+    assert r["schedule"]["interval_minutes"] == 5          # lower bound kicks in
     assert r["schedule"]["teams"] is False
     assert app_mod.load_config()["schedule"]["enabled"] is True
-    assert a.scheduler.last_run is not None                # Abstand zählt ab jetzt
+    assert a.scheduler.last_run is not None                # interval counts from now
 
 
 def test_http_mcp_ohne_index(server):
@@ -2142,7 +2266,7 @@ def test_http_kalender_fehlt(server):
 
 
 def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
-    """Rund 5 MB JSON – ungepackt wäre das bei jedem Tab-Wechsel Verschwendung."""
+    """Around 5 MB of JSON – uncompressed, that would be waste on every tab switch."""
     a, port = server
     daten = {"generated": "2026-08-07T10:00:00", "counts": {"kalender": 1},
              "recs": [{"src": "kalender", "title": "Regelrunde", "ts": 1.0,
@@ -2159,7 +2283,7 @@ def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
     assert r.status == 200 and r.getheader("Content-Encoding") == "gzip"
     assert json.loads(gzip.decompress(roh))["recs"][0]["title"] == "Regelrunde"
 
-    # Ohne Accept-Encoding: unverändert durchreichen
+    # Without Accept-Encoding: pass through unchanged
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     con.request("GET", "/api/calendar", None, {"Accept-Encoding": "identity"})
     r2 = con.getresponse()
@@ -2175,11 +2299,11 @@ def test_kalender_puffer_erkennt_neue_daten(sandbox, with_ollama):
     ziel.parent.mkdir(parents=True, exist_ok=True)
     ziel.write_text('{"recs": [], "counts": {"kalender": 1}}', encoding="utf-8")
     erst, _ = a.calendar_payload()
-    assert a.calendar_payload()[0] is erst          # gepuffert, nicht neu gelesen
+    assert a.calendar_payload()[0] is erst          # cached, not re-read
     time.sleep(0.01)
     ziel.write_text('{"recs": [], "counts": {"kalender": 2}}', encoding="utf-8")
     zweit, _ = a.calendar_payload()
-    assert b'"kalender": 2' in zweit                # neu eingelesen
+    assert b'"kalender": 2' in zweit                # read in again
 
 
 def test_http_suche_ohne_index_meldet_das(server):
@@ -2202,11 +2326,11 @@ def test_http_kaputter_body_wird_toleriert(server):
     r = con.getresponse()
     r.read()
     con.close()
-    assert r.status == 200          # leerer Body -> nichts geändert, kein Absturz
+    assert r.status == 200          # empty body -> nothing changed, no crash
 
 
 def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
-    """Suche und Quelldatei-Auslieferung über den Server, gegen den echten Store."""
+    """Search and source-file delivery through the server, against the real store."""
     a = app_mod.App(app_mod.load_config())
     httpd = app_mod.make_server(a, 0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -2214,7 +2338,7 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
     try:
         code, r = call(port, "GET", "/api/search?q=Rechnung&k=5")
         assert code == 200 and r["count"] >= 1
-        assert r["semantic"] is False                      # ohne vectors.npy
+        assert r["semantic"] is False                      # without vectors.npy
         uri = r["results"][0]["uri"]
         assert uri.startswith("o365://teams/")
 
@@ -2231,12 +2355,12 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
         assert resp.status == 200
         assert resp.getheader("Content-Security-Policy") == "sandbox"
         assert "4711" in body
-        # Teams-Exporte sind zum Lesen gemacht und bleiben im Browser.
+        # Teams exports are made for reading and stay in the browser.
         assert resp.getheader("Content-Disposition") is None
         assert resp.getheader("Content-Type").startswith("text/html")
         con.close()
 
-        # Ausbruch aus dem Export-Ordner wird abgewiesen
+        # Breaking out of the export folder is rejected
         con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
         con.request("GET", "/source?root=teams&path=../../etc/passwd")
         resp = con.getresponse()
@@ -2249,11 +2373,11 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
 
 
 # --------------------------------------------------------------------------
-# Gebündelter Betrieb (PyInstaller): Selbstaufruf statt .py-Dateien
+# Bundled operation (PyInstaller): self-invocation instead of .py files
 # --------------------------------------------------------------------------
 @pytest.fixture
 def frozen(monkeypatch, tmp_path):
-    """Tut so, als liefe app.py als gebündelte Datei."""
+    """Pretends app.py runs as a bundled binary."""
     monkeypatch.setattr(app_mod, "FROZEN", True)
     monkeypatch.setattr(sys, "executable", str(tmp_path / "Munimentum"))
     return tmp_path
@@ -2267,8 +2391,8 @@ def test_script_argv_als_skript(sandbox):
 
 
 def test_script_argv_gebuendelt(sandbox, frozen):
-    """Im Bündel gibt es weder Interpreter noch .py-Dateien – die ausführbare
-    Datei ruft sich selbst mit --run auf."""
+    """In the bundle there is neither an interpreter nor .py files – the
+    executable calls itself with --run."""
     assert app_mod.script_argv("teams_export", "ordner") == \
         [sys.executable, "--run", "teams_export", "ordner"]
 
@@ -2325,7 +2449,7 @@ def test_main_data_dir_haengt_die_pfade_um(monkeypatch, tmp_path):
     app_mod.main(["--data-dir", str(ziel), "--no-browser"])
     assert app_mod.BASE == ziel.resolve()
     assert app_mod.TOKEN_FILE == ziel.resolve() / "gx_token.txt"
-    assert ziel.is_dir()                                    # wird angelegt
+    assert ziel.is_dir()                                    # gets created
 
 
 def test_data_dir_je_betriebssystem(monkeypatch):
@@ -2362,9 +2486,9 @@ def test_mcp_client_config_nennt_absolute_pfade(sandbox):
         == "http://127.0.0.1:8365/mcp"
     args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
     assert "--transport" in args and "stdio" in args
-    # Ein Ordner statt drei Pfaden: die Unterordner heißen fest.
+    # One folder instead of three paths: the subfolders have fixed names.
     assert "--data-dir" in args
-    # Claude startet den Befehl in einem unbekannten Arbeitsverzeichnis
+    # Claude starts the command in an unknown working directory
     ordner = args[args.index("--data-dir") + 1]
     assert Path(ordner).is_absolute() and ordner.startswith(str(sandbox))
 
@@ -2372,12 +2496,12 @@ def test_mcp_client_config_nennt_absolute_pfade(sandbox):
 def test_mcp_client_config_gebuendelt(sandbox, frozen):
     conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
     eintrag = conf["stdio"]["mcpServers"]["munimentum"]
-    assert eintrag["command"] == sys.executable          # die App selbst
+    assert eintrag["command"] == sys.executable          # the app itself
     assert eintrag["args"][:2] == ["--run", "mcp_server"]
 
 
 def test_ensure_streams_faengt_fehlende_konsole_ab(sandbox, monkeypatch):
-    """Windows-Bündel ohne Konsole: sys.stdout ist None, jedes print() flöge."""
+    """Windows bundle without a console: sys.stdout is None, every print() would throw."""
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
     f = app_mod.ensure_streams()
@@ -2396,8 +2520,8 @@ def test_ensure_streams_laesst_vorhandene_konsole_in_ruhe(sandbox):
 
 
 def test_server_schweigt_bei_verbindungsabbruch(capsys):
-    """Reloads und geschlossene Tabs resetten Sockets ständig – der volle
-    Traceback dafür begrub echte Fehler im Rauschen."""
+    """Reloads and closed tabs reset sockets all the time – the full
+    traceback for that buried real errors in the noise."""
     srv = app_mod.Server.__new__(app_mod.Server)
     try:
         raise ConnectionResetError(54, "Connection reset by peer")
@@ -2413,8 +2537,8 @@ def test_server_schweigt_bei_verbindungsabbruch(capsys):
 
 
 def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
-    """Zweiter Start bzw. belegter Port: ein Doppelklick soll nicht mit einem
-    Traceback enden, den in einer fensterlosen App niemand sieht."""
+    """Second start or occupied port: a double-click must not end in a
+    traceback that nobody sees in a windowless app."""
     a = app_mod.App(app_mod.load_config())
     erster = app_mod.make_server(a, 0)
     port = erster.server_address[1]
@@ -2431,7 +2555,7 @@ def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
 
 
 # --------------------------------------------------------------------------
-# Oberfläche: das eingebettete JavaScript in node ausführen
+# UI: run the embedded JavaScript in node
 # --------------------------------------------------------------------------
 DOM_STUMMEL = """
 process.on('unhandledRejection', function(){});
@@ -2537,6 +2661,7 @@ global.document = {
   getElementById: function(id){
     // Die Seite liest ihre Texte aus diesem eingebetteten JSON-Block.
     if(id === 'i18n') return {textContent: global.I18N_ROH};
+    if(id === 'schritte') return {textContent: global.SCHRITTE_ROH};
     // Kindknoten des Assistenten gibt es nur, solange sie in dessen HTML stehen.
     if(id === 'tok' && !knoten['tok']){
       if(modalRoh.innerHTML.indexOf('id="tok"') < 0) return null;
@@ -2592,7 +2717,7 @@ var modal = document.getElementById('modal');
 function pruefe(bedingung, text){ if(!bedingung) throw new Error(text); }
 """
 
-# Der Token-Assistent darf die halb fertige Eingabe nicht wegwerfen.
+# The token wizard must not throw away a half-finished input.
 PRUEFUNG_EINGABE = GRUNDZUSTAND + """
 openWizard('token');
 pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Assistent nicht gezeichnet');
@@ -2623,7 +2748,7 @@ pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Nach Schliessen nicht gezeichn
 console.log('OK');
 """
 
-# Der Ollama-Assistent muss merken, wenn nebenher "ollama pull" durchlief.
+# The Ollama wizard must notice when "ollama pull" ran on the side.
 PRUEFUNG_OLLAMA = GRUNDZUSTAND + """
 openWizard('ollama');
 pruefe(modal.innerHTML.indexOf('fehlt noch') >= 0, 'Fehlendes Modell nicht gemeldet');
@@ -2642,10 +2767,10 @@ pruefe(modal.innerHTML.indexOf('Ollama ist bereit') >= 0,
 console.log('OK');
 """
 
-# Kalenderdaten werden erst beim Oeffnen des Reiters geholt und nach einem
-# Neuaufbau verworfen. Der Stand kommt aus dem Status (Dateizeit) – wuerde
-# stattdessen das "generated" aus dem JSON gemerkt, waeren die beiden Werte nie
-# gleich und die Daten wuerden bei jedem Statusabruf neu geladen.
+# Calendar data is fetched only when the tab is opened, and discarded after
+# a rebuild. The state comes from the status (file mtime) – if the
+# "generated" from the JSON were remembered instead, the two values would
+# never be equal and the data would be reloaded on every status poll.
 PRUEFUNG_KALENDER = GRUNDZUSTAND + """
 var geholt = 0;
 global.fetch = function(pfad){
@@ -2692,10 +2817,10 @@ setTimeout(function(){
 }, 0);
 """
 
-# Adressbuch und die Liste der rekonstruierten Termine wirklich zeichnen –
-# beide filtern über Suchbegriffe UND übersetzen dabei. Genau dort verdeckte
-# einmal eine lokale Variable `t` die Übersetzungsfunktion t(), und die Ansicht
-# blieb stumm auf "Wird geladen…" stehen, weil das Promise den Fehler schluckte.
+# Actually draw the address book and the reconstructed-appointments list –
+# both filter by search terms AND translate while doing so. Right there a
+# local variable `t` once shadowed the translation function t(), and the view
+# silently stayed at "Loading…" because the promise swallowed the error.
 PRUEFUNG_ANSICHTEN = GRUNDZUSTAND + """
 global.fetch = function(pfad){
   if(String(pfad).indexOf('/api/calendar') >= 0){
@@ -2762,8 +2887,8 @@ setTimeout(function(){
 }, 0);
 """
 
-# Scheitert das Laden, muss das zu sehen sein. Ohne catch bleibt die Ansicht
-# stumm auf "Wird geladen…" stehen – und niemand weiß, warum.
+# If loading fails, that must be visible. Without a catch, the view silently
+# stays at "Loading…" – and nobody knows why.
 PRUEFUNG_LADEFEHLER = GRUNDZUSTAND + """
 global.fetch = function(pfad){
   if(String(pfad).indexOf('/api/calendar') >= 0)
@@ -2782,9 +2907,9 @@ setTimeout(function(){
 }, 0);
 """
 
-# Die Checkbox für die formulierte Antwort darf es nur geben, wenn auch ein
-# Modell sie erzeugen kann – sonst verspricht die Oberfläche etwas, das nicht
-# kommt. Und der Antwortkasten muss sich sichtbar von den Treffern abheben.
+# The checkbox for the generated answer may only exist when a model can
+# actually produce it – otherwise the UI promises something that never
+# arrives. And the answer box must stand out visibly from the hits.
 PRUEFUNG_KI = GRUNDZUSTAND + """
 function zustand(chat, index){
   var st = statusGeruest();
@@ -2827,9 +2952,9 @@ pruefe(zitierte('ohne').length === 0, 'Zitate erfunden');
 console.log('OK');
 """
 
-# Drei Reiter oben, drei Sichten darunter. Der Test schaltet durch und schaut,
-# was sichtbar ist – und ob die zuletzt gewählte Sicht einen Reiterwechsel
-# übersteht.
+# Three tabs on top, three views below. The test cycles through and checks
+# what is visible – and whether the last chosen view survives a tab
+# switch.
 PRUEFUNG_NAV = GRUNDZUSTAND + """
 var sichtbar = {};
 ['export','suche','einstellungen'].forEach(function(t){
@@ -2866,9 +2991,9 @@ pruefe(hat('einstellungen'), 'MCP-Kachel fuehrt nicht in die Einstellungen');
 console.log('OK');
 """
 
-# Der Balken hat zwei Ebenen: Schritt i von n, und darin so genau, wie das
-# Skript es weiss. Wo keine Gesamtzahl vorliegt (Outlook entdeckt seine Mails
-# erst im Laufen), darf keine Prozentzahl erfunden werden.
+# The bar has two levels: step i of n, and within that as precise as the
+# script knows. Where no total exists (Outlook discovers its mails only
+# while running), no percentage may be invented.
 PRUEFUNG_BALKEN = GRUNDZUSTAND + """
 var breite = null, unbekannt = null;
 document.getElementById('balken-fuell').style = {set width(v){ breite = v; }};
@@ -2913,8 +3038,8 @@ pruefe(document.getElementById('log-letzte').textContent.length > 3,
 console.log('OK');
 """
 
-# renderStatus liest viel mehr aus dem Status als die Assistenten – ein
-# vollstaendiges Geruest, damit der Aufruf oben durchlaeuft.
+# renderStatus reads far more from the status than the wizards do – a
+# complete scaffold so the call above goes through.
 STATUS_GERUEST = """
 function statusGeruest(){
   return {token: S.token, ollama: S.ollama, ollama_hint: S.ollama_hint,
@@ -2944,11 +3069,14 @@ function statusGeruest(){
 def _seiten_js():
     treffer = re.search(r"<script>(.*?)</script>", app_mod.PAGE, re.S)
     assert treffer, "Kein <script>-Block in der Seite"
-    return treffer.group(1)
+    # As when serving: insert the registry's step metadata.
+    import steps as steps_mod
+    return ("global.SCHRITTE_ROH = " + json.dumps(json.dumps(
+        steps_mod.ui_metadaten())) + ";\n" + treffer.group(1))
 
 
-# Schritt-Überschriften kommen als geschachtelte Meldung und werden im
-# Browser aufgelöst – vorher stand "job.step.outlook" wörtlich im Protokoll.
+# Step headings arrive as a nested message and are resolved in the browser
+# – otherwise "job.step.outlook" would appear verbatim in the log.
 PRUEFUNG_SCHRITTKOPF = GRUNDZUSTAND + """
 var zeile = mtext({k: 'srv.job.step', v: {step: {k: 'job.step.outlook', v: {}}}});
 pruefe(zeile.indexOf('Outlook') >= 0, 'Schritt nicht uebersetzt: ' + zeile);
@@ -2998,7 +3126,7 @@ console.log('OK');
 
 
 def test_beenden_fragt_zurueck_und_hoert_auf_zu_fragen():
-    """Ohne Knopf bliebe nur die Aktivitätsanzeige – die App hat kein Fenster."""
+    """Without the button only Activity Monitor would remain – the app has no window."""
     _in_node(PRUEFUNG_BEENDEN)
 
 
@@ -3020,10 +3148,10 @@ def test_beenden_warnt_bei_laufendem_auftrag():
     _in_node(PRUEFUNG_BEENDEN_LAUF)
 
 
-# Die vier Kacheln standen anfangs für ihre Bauteile: „Token“, „Ollama“,
-# „269.744 Chunks“, „MCP läuft“. Für jemanden, der die Wörter nicht kennt, war
-# das vier Mal keine Auskunft. Der Test hält beide Hälften der Lösung fest –
-# Alltagssprache auf der Kachel, Fachbegriff im Tooltip.
+# The four tiles used to stand for their building blocks: "Token", "Ollama",
+# "269,744 chunks", "MCP running". For someone who does not know the words,
+# that was four times no answer. The test pins down both halves of the fix –
+# everyday language on the tile, the technical term in the tooltip.
 PRUEFUNG_KACHELN = GRUNDZUSTAND + """
 function kachel(id){ return document.getElementById('p-' + id + '-t').textContent; }
 function hinweis(id){ return document.getElementById('pill-' + id).title || ''; }
@@ -3096,27 +3224,27 @@ def test_kacheln_sagen_die_bedeutung_und_nennen_den_begriff_im_tooltip():
 
 
 def test_navigation_drei_reiter_drei_sichten():
-    """Kalender und Adressbuch liegen unter der Suche, nicht daneben – und die
-    zuletzt gewählte Sicht übersteht einen Reiterwechsel."""
+    """Calendar and address book live under the search, not beside it – and
+    the last chosen view survives a tab switch."""
     _in_node(PRUEFUNG_NAV)
 
 
 def test_fortschrittsbalken_zwei_ebenen():
-    """Schritt i von n mal Fortschritt im Schritt – und ohne Gesamtzahl keine
-    erfundene Prozentangabe, sondern ein gestreifter Balken mit der Zahl."""
+    """Step i of n times progress within the step – and without a total no
+    invented percentage, but a striped bar with the number."""
     _in_node(PRUEFUNG_BALKEN)
 
 
 def test_ki_checkbox_und_fussnoten():
-    """Die Checkbox erscheint nur mit Modell UND Index; Fußnoten verweisen in
-    die Trefferliste, erfundene Nummern bleiben unverlinkter Text."""
+    """The checkbox appears only with model AND index; footnotes link into
+    the hit list, invented numbers stay unlinked text."""
     _in_node(PRUEFUNG_KI)
 
 
 def test_jeder_reiter_liegt_im_hauptbereich():
-    """Regression: der Einstellungen-Abschnitt stand hinter </main> und bekam
-    damit weder Innenabstand noch Maximalbreite – seine Karten klebten am
-    Fensterrand, anders als bei allen anderen Reitern."""
+    """Regression: the settings section sat behind </main> and thus got
+    neither padding nor max width – its cards stuck to the window edge,
+    unlike every other tab."""
     seite = app_mod.PAGE
     haupt = seite[seite.index("<main>"):seite.index("</main>")]
     for reiter in ("export", "suche", "analytics", "einstellungen"):
@@ -3124,16 +3252,16 @@ def test_jeder_reiter_liegt_im_hauptbereich():
 
 
 def test_die_reiterzeile_bleibt_kurz():
-    """Daten holen, Daten ansehen, Bestand beurteilen, einstellen. Mehr Ebenen
-    oben verwirren mehr, als sie ordnen.
+    """Fetch data, view data, judge the corpus, configure. More levels on top
+    confuse more than they order.
 
-    Analytics kam als vierter dazu, weil es eine eigene Frage beantwortet –
-    „was ist da und ist es vollständig?“ statt „wo steht dieses eine?“. Kalender
-    und Adressbuch dagegen sind Sichten auf denselben Bestand wie die Suche und
-    liegen darunter; Zeitplan und MCP sind Einstellungen.
+    Analytics joined as the fourth because it answers a question of its own –
+    "what is there and is it complete?" instead of "where is this one
+    thing?". Calendar and address book, by contrast, are views of the same
+    corpus as the search and live below it; schedule and MCP are settings.
 
-    Die Zahl steht hier als Bremse: wer einen fünften anlegt, soll sich diese
-    Begründung ansehen müssen."""
+    The number stands here as a brake: whoever adds a fifth should have to
+    read this rationale."""
     seite = app_mod.PAGE
     nav = seite[seite.index("<nav>"):seite.index("</nav>")]
     assert nav.count("data-tab=") == 4, "Die Reiterzeile ist wieder gewachsen"
@@ -3141,7 +3269,7 @@ def test_die_reiterzeile_bleibt_kurz():
         assert f'data-tab="{weg}"' not in nav, f"{weg} ist wieder ein eigener Reiter"
     for sicht in ("treffer", "kalender", "adressbuch"):
         assert f'id="sicht-{sicht}"' in seite, f"Sicht {sicht} fehlt unter der Suche"
-    # Zeitplan und MCP müssen in den Einstellungen gelandet sein, nicht verschwunden
+    # Schedule and MCP must have ended up in the settings, not vanished
     einst = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</main>")]
     assert 'data-i18n="sched.title"' in einst and 'data-i18n="mcp.title"' in einst
 
@@ -3162,10 +3290,10 @@ def test_seite_enthaelt_gueltiges_javascript():
 
 
 def _in_node(pruefung, sprache="de"):
-    """Das eingebettete JavaScript samt Prüfcode in node ausführen.
+    """Run the embedded JavaScript plus test code in node.
 
-    Mit den echten Sprachdaten: so prüfen die Tests denselben Weg, den der
-    Browser geht – Texte kommen aus lang/*.json, nicht aus dem Quelltext.
+    With the real language data: the tests thus check the same path the
+    browser takes – texts come from lang/*.json, not from the source.
     """
     node = shutil.which("node")
     if not node:
@@ -3186,22 +3314,22 @@ def _in_node(pruefung, sprache="de"):
 
 
 def test_assistent_ueberschreibt_die_eingabe_nicht():
-    """Regression: der Assistent wurde bei jedem Statusabruf neu gezeichnet und
-    löschte dabei den gerade eingefügten Token wieder aus dem Textfeld."""
+    """Regression: the wizard was redrawn on every status poll and thereby
+    wiped the just-pasted token from the text field again."""
     _in_node(PRUEFUNG_EINGABE)
 
 
 def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
-    """Regression: nach 'ollama pull' wurde die Ampel im Kopf grün, im offenen
-    Assistenten stand aber weiter 'Modell fehlt'. Sobald das Modell da ist,
-    verlangt der Server gar keinen Assistenten mehr – ein bereits offener muss
-    trotzdem aufgefrischt werden."""
+    """Regression: after 'ollama pull' the traffic light in the header turned
+    green, but the open wizard still said 'model missing'. Once the model is
+    there, the server no longer requests a wizard at all – an already open
+    one must be refreshed anyway."""
     _in_node(PRUEFUNG_OLLAMA)
 
 
-# Der Berechtigungsblock ist der technischste Teil des Dialogs – Namen wie
-# Contacts.Read samt Graph-Adressen. Meist ist er längst erledigt und stand
-# dann nur im Weg; fehlt aber wirklich eine Berechtigung, ist er das Thema.
+# The permissions block is the most technical part of the dialog – names
+# like Contacts.Read along with Graph URLs. Usually it is long done and was
+# only in the way; but when a permission really is missing, it is the topic.
 PRUEFUNG_RECHTE = GRUNDZUSTAND + """
 S.token.missing = [];
 openWizard('token');
@@ -3238,9 +3366,9 @@ def test_berechtigungen_sind_eingeklappt_solange_sie_nicht_fehlen():
     _in_node(PRUEFUNG_RECHTE)
 
 
-# Vorher hatte jeder Assistent eine andere Knopfzahl - zwei, drei -, und im
-# fertigen Ollama-Fenster war ausgerechnet "Schliessen" der primaere Knopf,
-# waehrend die eigentliche Handlung blass daneben stand.
+# Every wizard once had a different number of buttons - two, three - and in
+# the finished Ollama window, of all things "Close" was the primary button,
+# while the actual action stood pale beside it.
 PRUEFUNG_MODALE = GRUNDZUSTAND + """
 function zaehle(html, muster){ return html.split(muster).length - 1; }
 // Tut der Knopf mehr, als den Dialog zu schliessen?
@@ -3285,8 +3413,8 @@ def test_alle_assistenten_tragen_dieselben_knoepfe():
     _in_node(PRUEFUNG_MODALE)
 
 
-# Ein modales Fenster nimmt die Seite in Beschlag. Wer keine Maus benutzt, muss
-# trotzdem hinein, herum und wieder heraus.
+# A modal window takes over the page. Whoever uses no mouse must still get
+# in, around, and back out.
 PRUEFUNG_TASTATUR = GRUNDZUSTAND + """
 var ausloeser = {focus: function(){ document.activeElement = this; }, name: 'Kachel'};
 document.activeElement = ausloeser;
@@ -3335,8 +3463,8 @@ def test_assistent_ist_mit_der_tastatur_bedienbar():
     _in_node(PRUEFUNG_TASTATUR)
 
 
-# Der Assistent bietet beide Wege an – der Schlüssel bleibt vorausgewählt,
-# weil er ohne Rückfrage bei der IT funktioniert.
+# The wizard offers both paths – the key stays preselected because it
+# works without having to ask IT first.
 PRUEFUNG_ANMELDEWAHL = GRUNDZUSTAND + """
 S.auth = {mode: 'token', signed_in: false, account: null, own_registration: false,
           client_id: 'std', tenant: 'organizations', default_client_id: 'std',
@@ -3383,21 +3511,21 @@ def test_assistent_bietet_beide_anmeldewege():
 
 
 def test_adressbuch_und_rekonstruierte_termine_zeichnen():
-    """Regression: eine lokale Variable `t` verdeckte die Übersetzungsfunktion,
-    drawBook warf, und weil das Promise keinen catch hatte, blieb das Adressbuch
-    für immer bei „Wird geladen…“."""
+    """Regression: a local variable `t` shadowed the translation function,
+    drawBook threw, and because the promise had no catch, the address book
+    stayed at "Loading…" forever."""
     _in_node(PRUEFUNG_ANSICHTEN)
 
 
 def test_ladefehler_wird_angezeigt_statt_verschluckt():
-    """Regression: das Promise hatte kein catch – ein Fehler beim Laden ließ die
-    Ansicht für immer bei „Wird geladen…“ stehen, ohne jeden Hinweis."""
+    """Regression: the promise had no catch – an error during loading left
+    the view at "Loading…" forever, without any hint."""
     _in_node(PRUEFUNG_LADEFEHLER)
 
 
 def test_kalender_wird_erst_bei_bedarf_und_nach_neuaufbau_geholt():
-    """Die Kalenderdaten sind einige Megabyte: einmal holen, danach nur wieder,
-    wenn der Aufbau-Schritt sie tatsächlich neu geschrieben hat."""
+    """The calendar data is several megabytes: fetch once, then again only
+    when the build step has actually rewritten it."""
     _in_node(PRUEFUNG_KALENDER)
 
 
@@ -3405,8 +3533,8 @@ def test_kalender_wird_erst_bei_bedarf_und_nach_neuaufbau_geholt():
 # main()
 # --------------------------------------------------------------------------
 def test_serve_oeffnet_den_browser_und_raeumt_auf(sandbox, with_ollama, monkeypatch):
-    """serve() bindet, startet Zeitplan und MCP, öffnet den Browser und räumt
-    beim Beenden wieder auf."""
+    """serve() binds, starts schedule and MCP, opens the browser and cleans
+    up again on quitting."""
     geoeffnet = []
     monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: geoeffnet.append(url))
     a = app_mod.App(app_mod.load_config())
@@ -3426,12 +3554,12 @@ def test_serve_oeffnet_den_browser_und_raeumt_auf(sandbox, with_ollama, monkeypa
     app_mod.serve(a, 0, open_browser=True)
 
     assert geoeffnet and geoeffnet[0].startswith("http://127.0.0.1:")
-    assert a.scheduler.ident is not None                    # Zeitplan-Thread lief
-    assert a.scheduler.stop_event.is_set()                  # shutdown() hat aufgeräumt
+    assert a.scheduler.ident is not None                    # schedule thread ran
+    assert a.scheduler.stop_event.is_set()                  # shutdown() cleaned up
 
 
 # --------------------------------------------------------------------------
-# Nur eine Instanz – und ein Weg, sie zu beenden
+# Only one instance – and a way to quit it
 # --------------------------------------------------------------------------
 def test_laeuft_bereits_erkennt_die_eigene_instanz(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
@@ -3447,14 +3575,14 @@ def test_laeuft_bereits_erkennt_die_eigene_instanz(sandbox, with_ollama):
 
 def test_laeuft_bereits_bei_freiem_port(sandbox):
     import socket as _s
-    with _s.socket() as sock:            # Port ermitteln und sofort freigeben
+    with _s.socket() as sock:            # find a port and release it right away
         sock.bind(("127.0.0.1", 0))
         frei = sock.getsockname()[1]
     assert app_mod.laeuft_bereits(frei, timeout=0.5) is False
 
 
 def test_laeuft_bereits_bei_fremdem_dienst(sandbox):
-    """Auf dem Port kann etwas anderes horchen – das ist keine zweite Instanz."""
+    """Something else can be listening on the port – that is not a second instance."""
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class Fremd(BaseHTTPRequestHandler):
@@ -3477,8 +3605,8 @@ def test_laeuft_bereits_bei_fremdem_dienst(sandbox):
 
 
 def test_serve_startet_keine_zweite_instanz(sandbox, with_ollama, monkeypatch):
-    """Regression: jeder weitere Doppelklick legte eine zweite Instanz auf dem
-    nächsten Port an – unsichtbar, weil die App kein Fenster hat."""
+    """Regression: every further double-click spawned a second instance on
+    the next port – invisibly, because the app has no window."""
     a = app_mod.App(app_mod.load_config())
     erste = app_mod.make_server(a, 0)
     threading.Thread(target=erste.serve_forever, daemon=True).start()
@@ -3497,7 +3625,7 @@ def test_serve_startet_keine_zweite_instanz(sandbox, with_ollama, monkeypatch):
 
 
 def test_serve_mit_port_null_prueft_nicht(sandbox, with_ollama, monkeypatch):
-    """Port 0 heißt "irgendein freier" – da gibt es nichts zu erkennen."""
+    """Port 0 means "any free one" – there is nothing to detect there."""
     monkeypatch.setattr(app_mod, "laeuft_bereits",
                         lambda *a, **k: pytest.fail("darf nicht gefragt werden"))
     monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: None)
@@ -3523,14 +3651,14 @@ def test_main_reicht_argumente_an_serve_weiter(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Anmeldemodus über HTTP
+# Login mode over HTTP
 # --------------------------------------------------------------------------
 def test_http_status_nennt_den_anmeldemodus(server):
     _, port = server
     code, r = call(port, "GET", "/api/status")
     assert code == 200
     au = r["auth"]
-    assert au["mode"] == "token"                     # Vorgabe bleibt der Schlüssel
+    assert au["mode"] == "token"                     # the key remains the default
     assert au["own_registration"] is False
     assert au["client_id"] == app_mod.auth.STANDARD_CLIENT_ID
 
@@ -3541,7 +3669,7 @@ def test_http_modus_umschalten(server):
     assert code == 200 and r["config"]["auth_mode"] == "login"
     assert call(port, "GET", "/api/status")[1]["auth"]["mode"] == "login"
 
-    # Unbekanntes fällt auf den Weg zurück, der immer funktioniert.
+    # Unknown values fall back to the path that always works.
     call(port, "POST", "/api/config", {"auth_mode": "quatsch"})
     assert a.cfg["auth_mode"] == "token"
 
@@ -3569,8 +3697,8 @@ def test_http_abmelden_loescht_den_cache(server, sandbox, monkeypatch):
 
 
 def test_login_starten_meldet_code_und_wartet(sandbox, monkeypatch, no_ollama):
-    """Der Code muss sofort da sein – das Warten läuft daneben, sonst stünde
-    die Oberfläche still, bis jemand am Handy fertig ist."""
+    """The code must be there immediately – the waiting runs alongside,
+    otherwise the UI would stall until someone is done on their phone."""
     fertig = threading.Event()
 
     class FakeDevice:
@@ -3599,8 +3727,8 @@ def test_login_starten_meldet_code_und_wartet(sandbox, monkeypatch, no_ollama):
 
 
 def test_login_fordert_nur_noetige_rechte(sandbox, monkeypatch, no_ollama):
-    """Mehr zu verlangen, als der Export braucht, wäre schlechter Stil
-    gegenüber dem, der zustimmen soll."""
+    """Demanding more than the export needs would be bad style towards the
+    person who is supposed to consent."""
     gesehen = {}
 
     class FakeDevice:
@@ -3623,7 +3751,7 @@ def test_login_fordert_nur_noetige_rechte(sandbox, monkeypatch, no_ollama):
 
 
 def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
-    """Sonst führte die App eine Einstellung, von der der Export nichts weiß."""
+    """Otherwise the app would keep a setting the export knows nothing about."""
     cfg = _cfg_mit_kategorien(auth_mode="login", client_id="eigene-id",
                               tenant="contoso.example")
     env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
@@ -3633,7 +3761,7 @@ def test_anmeldemodus_geht_an_die_unterprozesse(sandbox):
 
 
 def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
-    """Ein leeres Feld heißt „Microsofts Anwendung“, nicht „Client-ID ist ''“."""
+    """An empty field means "Microsoft's application", not "client id is ''"."""
     cfg = _cfg_mit_kategorien()
     env = app_mod.build_steps(cfg, outlook=True)[0]["env"]
     assert env["GRAPH_AUTH"] == "token"
@@ -3641,8 +3769,8 @@ def test_leere_registrierung_wird_nicht_weitergereicht(sandbox):
 
 
 def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, monkeypatch):
-    """Im Login-Modus trägt der Cache – das Fehlen eines Schlüssels darf keinen
-    Lauf mehr verhindern."""
+    """In login mode the cache carries – a missing key must no longer
+    prevent a run."""
     a = app_mod.App(_cfg_mit_kategorien())
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
@@ -3656,7 +3784,7 @@ def test_login_modus_laeuft_ohne_eingefuegten_schluessel(sandbox, no_ollama, mon
 
 
 # --------------------------------------------------------------------------
-# Verlauf: ein Treffer allein sagt oft zu wenig
+# Conversation history: a single hit often says too little
 # --------------------------------------------------------------------------
 def test_http_thread_reicht_die_auswertung_durch(server, monkeypatch):
     a, port = server
@@ -3673,7 +3801,7 @@ def test_http_thread_reicht_die_auswertung_durch(server, monkeypatch):
     code, r = call(port, "GET", "/api/thread?key=tix:abc")
     assert code == 200 and r["count"] == 2 and r["thread"] == "tix:abc"
 
-    # Eine überzogene Grenze darf nicht die halbe Datenbank holen.
+    # An excessive limit must not fetch half the database.
     assert call(port, "GET", "/api/thread?key=x&limit=9999")[1]["limit"] == 200
 
 
@@ -3790,7 +3918,7 @@ def test_alter_index_bietet_die_neuen_filter_nicht_an():
 
 
 # --------------------------------------------------------------------------
-# Quelldateien: was in den Browser gehört und was ins Programm daneben
+# Source files: what belongs in the browser and what in the program next to it
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("name,inhalt,ctype", [
     ("mail.eml", b"From: a@b.c\nSubject: X\n\nText\n", "message/rfc822"),
@@ -3798,8 +3926,8 @@ def test_alter_index_bietet_die_neuen_filter_nicht_an():
     ("alice.vcf", b"BEGIN:VCARD\nEND:VCARD\n", "text/vcard; charset=utf-8"),
 ])
 def test_quelldatei_wird_heruntergeladen(sandbox, monkeypatch, name, inhalt, ctype):
-    """Eine .eml als roher Text im Browserfenster ist für niemanden zu
-    gebrauchen – im Mailprogramm dagegen eine Mail mit Anhängen."""
+    """An .eml as raw text in a browser window is of no use to anyone – in
+    the mail program, though, it is a mail with attachments."""
     ordner = sandbox / "outlook_export"
     ordner.mkdir()
     (ordner / name).write_bytes(inhalt)
@@ -3839,13 +3967,13 @@ def test_quelldatei_wird_heruntergeladen(sandbox, monkeypatch, name, inhalt, cty
     ("normal.eml", "normal.eml"),
 ])
 def test_dateiname_im_header_ist_unbedenklich(roh, erwartet):
-    """Der Name landet in einem Header – ein Anführungszeichen oder ein
-    Zeilenumbruch darin liesse ihn aufbrechen."""
+    """The name ends up in a header – a quotation mark or a line break in it
+    would let it break apart."""
     assert app_mod._sicherer_name(roh) == erwartet
 
 
 # --------------------------------------------------------------------------
-# Treffer je Seite
+# Hits per page
 # --------------------------------------------------------------------------
 def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
     a, port = server
@@ -3862,14 +3990,14 @@ def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
     call(port, "GET", "/api/search?k=50")
     assert gesehen["k"] == 50
-    call(port, "GET", "/api/search?k=99999")     # nicht die halbe Datenbank
+    call(port, "GET", "/api/search?k=99999")     # not half the database
     assert gesehen["k"] == 100
 
 
 @pytest.mark.parametrize("wert,erwartet", [
     (50, 50), (5, 5), (100, 100),
-    (1, 5), (500, 100),          # außerhalb: auf den Rand gezogen
-    ("quatsch", 20),             # unbrauchbar: Vorgabe bleibt
+    (1, 5), (500, 100),          # out of range: clamped to the edge
+    ("quatsch", 20),             # unusable: default stays
 ])
 def test_config_trefferzahl(server, wert, erwartet):
     a, port = server
@@ -3913,14 +4041,14 @@ def test_seitengroesse_wirkt_auf_suche_und_blaettern():
 
 
 # --------------------------------------------------------------------------
-# Datenordner umhängen
+# Moving the data folder
 #
-# Er lässt sich nicht in app_config.json einstellen – die Datei liegt selbst
-# darin. Deshalb ein Zeiger am Standardort.
+# It cannot be set in app_config.json – that file itself lives inside it.
+# Hence a pointer at the default location.
 # --------------------------------------------------------------------------
 @pytest.fixture
 def standardort(tmp_path, monkeypatch):
-    """standard_data_dir() in den Sandkasten biegen."""
+    """Bend standard_data_dir() into the sandbox."""
     ort = tmp_path / "standard"
     ort.mkdir()
     monkeypatch.setattr(app_mod, "standard_data_dir", lambda: ort)
@@ -3929,28 +4057,18 @@ def standardort(tmp_path, monkeypatch):
     return ort
 
 
-def test_ohne_zeiger_gilt_der_standardort(standardort):
-    assert app_mod.data_dir() == standardort
-
-
-def test_zeiger_wird_nicht_mehr_befolgt(standardort, tmp_path):
-    """Seit dem Ablage-Split sind data_dir/index_dir Konfiguration – der
-    alte Zeiger wird nur noch erkannt und gemeldet, nie befolgt."""
-    woanders = tmp_path / "platte"
-    woanders.mkdir()
-    (standardort / app_mod.ZEIGER_DATEI).write_text(str(woanders),
-                                                    encoding="utf-8")
+def test_standardort_ist_der_heimatordner(standardort):
     assert app_mod.data_dir() == standardort
 
 
 def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
-    """Upgrade von 6.x: liegen die Exportordner noch flach im App-Ordner und
-    wurde nie ein data_dir entschieden, zeigt die Konfiguration künftig
-    dorthin – nichts wird bewegt. Neuinstallationen bekommen die Trennung."""
+    """Upgrade from 6.x: if the export folders still sit flat in the app
+    folder and a data_dir was never decided, the configuration points there
+    from now on – nothing is moved. Fresh installs get the separation."""
     monkeypatch.setattr(app_mod, "HEIM", standardort)
     monkeypatch.setattr(app_mod, "CONFIG_FILE",
                         standardort / "app_config.json")
-    # Die Funktion setzt Modul-Globale neu – monkeypatch stellt sie zurück.
+    # The function reassigns module globals – monkeypatch restores them.
     monkeypatch.setattr(app_mod, "BASE", app_mod.BASE)
     monkeypatch.setattr(app_mod, "STORE_PFAD", app_mod.STORE_PFAD)
     monkeypatch.setattr(app_mod, "_ALT_GEPINNT", False)
@@ -3960,7 +4078,7 @@ def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
                                 encoding="utf-8"))
                         if (standardort / "app_config.json").exists() else {})
 
-    # Neuinstallation: keine alten Ordner, nichts wird gepinnt.
+    # Fresh install: no old folders, nothing gets pinned.
     assert app_mod.altbestand_pinnen() is False
 
     (standardort / app_mod.TEAMS_DIR).mkdir()
@@ -3970,7 +4088,7 @@ def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
     assert cfg["data_dir"] == str(standardort)
     assert app_mod.BASE == standardort
 
-    # Idempotent – und ein ausdrückliches „Standard" (leerer Wert) gewinnt.
+    # Idempotent – and an explicit "default" (empty value) wins.
     assert app_mod.altbestand_pinnen() is False
     cfg["data_dir"] = ""
     (standardort / "app_config.json").write_text(json.dumps(cfg),
@@ -3980,8 +4098,8 @@ def test_altbestand_pinnt_den_datenordner(standardort, monkeypatch):
 
 def test_split_pfade_vorgaben_und_konfiguration(standardort, monkeypatch,
                                                 tmp_path):
-    """Ohne Override: data/ und rag_store/ unter dem Heimatordner, per
-    Konfiguration frei; mit Override (Tests, --data-dir): flach in einem."""
+    """Without override: data/ and rag_store/ under the home folder, freely
+    configurable; with override (tests, --data-dir): flat in one place."""
     monkeypatch.setattr(app_mod.settings, "load", lambda path=None: {})
     daten, store = app_mod._split_pfade(standardort)
     assert daten == standardort / app_mod.DATEN_UNTERORDNER
@@ -3998,14 +4116,6 @@ def test_split_pfade_vorgaben_und_konfiguration(standardort, monkeypatch,
     assert daten == tmp_path and store == tmp_path / app_mod.STORE_DIR
 
 
-def test_zeiger_ins_leere_haelt_die_app_nicht_auf(standardort, tmp_path):
-    """Externe Platte ab: dann eben wieder der Standardort, statt gar nicht
-    zu starten."""
-    (standardort / app_mod.ZEIGER_DATEI).write_text(
-        str(tmp_path / "gibtsnicht"), encoding="utf-8")
-    assert app_mod.data_dir() == standardort
-
-
 def test_umgebung_schlaegt_den_standardort(standardort, tmp_path, monkeypatch):
     anders = tmp_path / "env"
     anders.mkdir()
@@ -4014,8 +4124,8 @@ def test_umgebung_schlaegt_den_standardort(standardort, tmp_path, monkeypatch):
 
 
 def test_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
-    """Lieber jetzt ablehnen als beim nächsten Start: die Einstellung, mit der
-    man es zurücknähme, läge genau dort."""
+    """Better to refuse now than at the next start: the setting one would
+    use to take it back would live exactly there."""
     gesperrt = tmp_path / "gesperrt"
     gesperrt.mkdir()
     gesperrt.chmod(0o500)
@@ -4042,11 +4152,11 @@ def test_http_datenordner_setzen(server, standardort, tmp_path):
     code, r = call(port, "POST", "/api/data-dir", {"path": str(ziel)})
     assert code == 200 and r["ok"] and r["restart"] is True
     assert a.cfg["data_dir"] == str(ziel.resolve())
-    # Die App hängt sich NICHT im Betrieb um – BASE geht als Arbeitsverzeichnis
-    # an jeden Unterprozess, womöglich mitten in einem Export.
+    # The app does NOT switch over while running – BASE goes to every
+    # subprocess as its working directory, possibly mid-export.
     assert call(port, "GET", "/api/status")[1]["data_dir"] != str(ziel)
 
-    # Der Index hat seinen eigenen Pfad; leer heißt zurück zur Vorgabe.
+    # The index has its own path; empty means back to the default.
     code, r = call(port, "POST", "/api/data-dir",
                    {"index": str(tmp_path / "ix")})
     assert code == 200 and r["ok"]
@@ -4065,10 +4175,10 @@ def test_http_datenordner_ablehnen(server, standardort, tmp_path):
 
 
 def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
-    """Den Fall deckt erst die Schreibprobe ab: mkdir(exist_ok=True) gelingt
-    bei einem vorhandenen Ordner auch dann, wenn niemand darin schreiben darf.
-    Ohne die Probe zeigte der Zeiger dorthin und die App könnte beim nächsten
-    Start nichts mehr speichern."""
+    """Only the write probe covers this case: mkdir(exist_ok=True) succeeds
+    on an existing folder even when nobody may write into it. Without the
+    probe the pointer would aim there and the app could no longer save
+    anything at the next start."""
     gesperrt = tmp_path / "nur_lesen"
     gesperrt.mkdir()
     gesperrt.chmod(0o500)
@@ -4080,11 +4190,11 @@ def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Die Antwort spricht die Sprache der Oberfläche
+# The answer speaks the language of the UI
 #
-# Sie wird genauso ausgehandelt wie die Seite selbst: Einstellung schlägt
-# Browsersprache. Ohne Test bräche das lautlos – die Antwort käme weiterhin,
-# nur eben auf Deutsch für jemanden, der Französisch liest.
+# It is negotiated exactly like the page itself: setting beats browser
+# language. Without a test this would break silently – the answer would
+# still arrive, just in German for someone who reads French.
 # --------------------------------------------------------------------------
 def _antwort_sprache(server, monkeypatch, accept=None, eingestellt="auto"):
     a, port = server
@@ -4126,22 +4236,22 @@ def _antwort_sprache(server, monkeypatch, accept=None, eingestellt="auto"):
     ("fr-CH,fr;q=0.9", "fr"),
     ("en-US,en;q=0.9", "en"),
     ("de-DE,de;q=0.9", "de"),
-    (None, "de"),                      # ohne Angabe die Vorgabe
-    ("kl-GL", "de"),                   # unbekannt: nicht raten
+    (None, "de"),                      # no header, the default
+    ("kl-GL", "de"),                   # unknown: do not guess
 ])
 def test_antwort_folgt_der_browsersprache(server, monkeypatch, accept, erwartet):
     assert _antwort_sprache(server, monkeypatch, accept) == erwartet
 
 
 def test_eingestellte_sprache_schlaegt_den_browser(server, monkeypatch):
-    """Wer die Oberfläche auf Französisch stellt, will die Antwort nicht auf
-    Englisch, nur weil der Browser das meldet."""
+    """Whoever sets the UI to French does not want the answer in English
+    just because the browser says so."""
     assert _antwort_sprache(server, monkeypatch, "en-US,en;q=0.9", "fr") == "fr"
 
 
 def test_prompt_verlangt_die_passende_sprache():
-    """Die Regel steht in derselben Sprache wie die gewünschte Antwort – ein
-    kleines Modell folgt ihr dann zuverlässiger."""
+    """The rule is written in the same language as the desired answer – a
+    small model then follows it more reliably."""
     import answer
     assert "Deutsch" in answer.system_prompt("de")
     assert "English" in answer.system_prompt("en")
@@ -4149,54 +4259,55 @@ def test_prompt_verlangt_die_passende_sprache():
 
 
 # --------------------------------------------------------------------------
-# Jeder ID-Selektor muss ein Element treffen
+# Every ID selector must hit an element
 #
-# Aus der Praxis gemeldet: „Monat“ und „Rekonstruiert“ im Kalender liessen sich
-# nicht mehr klicken. Ursache war der Reiter-Umbau – aus #tab-kalender wurde
-# #sicht-kalender, aber zwei querySelectorAll blieben auf dem alten Namen. Die
-# Auswahl traf nichts, es wurde nie ein Klick-Empfänger gesetzt, und „Woche“ sah
-# nur deshalb aktiv aus, weil die Klasse im Markup steht. Kein Fehler in der
-# Konsole, keine Meldung: der Knopf tat einfach nichts.
+# Reported from the field: "Month" and "Reconstructed" in the calendar could
+# no longer be clicked. The cause was the tab rework – #tab-kalender became
+# #sicht-kalender, but two querySelectorAll kept the old name. The selection
+# hit nothing, no click handler was ever attached, and "Week" only looked
+# active because the class sits in the markup. No error in the console, no
+# message: the button simply did nothing.
 # --------------------------------------------------------------------------
 def test_jeder_id_selektor_trifft_ein_element():
-    quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
-    # Alle im JavaScript benutzten '#id'-Selektoren. Nur die vollständig
-    # ausgeschriebenen: '#cat-' + name wird erst zur Laufzeit fertig, dazu
-    # liesse sich hier nichts sagen.
+    # The page lives in page.py – that is where the JS is.
+    quelle = app_mod.PAGE
+    # All '#id' selectors used in the JavaScript. Only the fully spelled-out
+    # ones: '#cat-' + name is only assembled at runtime, nothing could be
+    # said about it here.
     selektoren = set(re.findall(
         r"""querySelector(?:All)?\('#([\w-]+)[^']*'\s*\)""", quelle))
-    # el('x') ist der häufigere Zugriff und war bisher nicht geprüft. Genau
-    # dort ist es passiert: nach dem Umbau der Suchmaske zeigte el('search-sub')
-    # auf ein Element, das es nicht mehr gab. Im Browser wirft das, und
-    # renderStatus bricht mitten im Aufbau ab – die DOM-Attrappe der Tests legt
-    # dagegen jede ID auf Anfrage an und merkte nichts.
+    # el('x') is the more common access and went unchecked. That is exactly
+    # where it happened: after the search form rework, el('search-sub')
+    # pointed at an element that no longer existed. In the browser that
+    # throws, and renderStatus aborts mid-build – the tests' DOM stub, by
+    # contrast, creates every ID on demand and noticed nothing.
     selektoren |= set(re.findall(r"""\bel\('([\w-]+)'\)""", quelle))
     assert selektoren, "keine ID-Selektoren gefunden – Muster kaputt?"
-    # … gegen die IDs im Markup.
+    # … against the IDs in the markup.
     vorhanden = set(re.findall(r'id="([\w-]+)"', quelle))
     fehlt = sorted(selektoren - vorhanden)
-    # Statisch geprüft und nicht im DOM-Stummel nachgestellt: der müsste dafür
-    # echtes Markup parsen, und diese Prüfung deckt ohnehin jeden Selektor der
-    # Seite ab statt nur die drei Kalenderknöpfe.
+    # Checked statically rather than re-enacted in the DOM stub: that would
+    # have to parse real markup, and this check covers every selector on the
+    # page anyway instead of just the three calendar buttons.
     assert not fehlt, (
         f"Selektor trifft kein Element: {fehlt}. Der zugehörige Knopf tut dann "
         f"nichts, ohne dass irgendwo ein Fehler auftaucht.")
 
 
 def test_seite_bringt_ihr_eigenes_symbol_mit():
-    """Ohne das holt sich jeder Browser ein 404 auf /favicon.ico ab – und im
-    Bündel gäbe es keine Datei, die man stattdessen ausliefern könnte."""
+    """Without it every browser collects a 404 on /favicon.ico – and in the
+    bundle there would be no file to serve instead."""
     seite = app_mod.PAGE
     assert 'rel="icon"' in seite
     assert "data:image/svg+xml" in seite, "Symbol als Datei statt eingebettet"
 
 
 # --------------------------------------------------------------------------
-# MCP-Eintrag: kopieren, und die Pfade folgen dem Datenordner
+# MCP entry: copy it, and the paths follow the data folder
 # --------------------------------------------------------------------------
 def test_mcp_eintrag_folgt_dem_datenordner(sandbox, monkeypatch, tmp_path):
-    """Der Eintrag trägt absolute Pfade – Claude startet ihn in einem
-    unbekannten Arbeitsverzeichnis. Sie müssen also mitwandern."""
+    """The entry carries absolute paths – Claude starts it in an unknown
+    working directory. So they have to move along."""
     for ordner in (tmp_path / "platte-a", tmp_path / "platte-b"):
         app_mod.set_data_dir(ordner)
         conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
@@ -4207,7 +4318,7 @@ def test_mcp_eintrag_folgt_dem_datenordner(sandbox, monkeypatch, tmp_path):
 
 
 def test_mcp_programmpfad_folgt_dem_datenordner_nicht(sandbox, tmp_path):
-    """Das Programm liegt, wo es liegt – nur die Daten wandern."""
+    """The program stays where it is – only the data moves."""
     app_mod.set_data_dir(tmp_path / "woanders")
     conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
     eintrag = conf["stdio"]["mcpServers"]["munimentum"]
@@ -4254,7 +4365,7 @@ def test_mcp_eintrag_laesst_sich_kopieren():
 
 
 # --------------------------------------------------------------------------
-# Adressbuch: zwei Quellen für dieselbe Frage „wer ist das?“
+# Address book: two sources for the same question "who is this?"
 # --------------------------------------------------------------------------
 PRUEFUNG_ADRESSBUCH = GRUNDZUSTAND + """
 contacts = [
@@ -4305,7 +4416,7 @@ def test_adressbuch_trennt_die_beiden_quellen():
 
 
 # --------------------------------------------------------------------------
-# Analytics: was im Archiv steckt – und was fehlt
+# Analytics: what the archive holds – and what is missing
 # --------------------------------------------------------------------------
 def _analytics_db(sandbox, spalten_neu=True):
     store = sandbox / "rag_store"
@@ -4342,23 +4453,23 @@ def test_analytics_zaehlt_nachrichten_nicht_textstellen(sandbox):
     a = analytics_db.baue(store, {"onedrive": sandbox / "spiegel"})
     assert a["groesse"]["onedrive"] == 7 and "index" in a["groesse"]
     assert a["grosse_dateien"][0]["pfad"] == "a.bin"
-    assert a["komm"]["nachrichten"] == 3                # nicht 4 Textstellen
+    assert a["komm"]["nachrichten"] == 3                # not 4 chunks
     assert {q["src"]: q["n"] for q in a["quellen"]} == {"outlook": 2, "teams": 1}
     assert a["komm"]["personen"] == 2
     assert a["komm"]["gespraeche"] == 2
     assert a["komm"]["mit_anhang"] == 1
     assert a["komm"]["verschwunden"] == 1
     assert a["komm"]["von"] == 1_000_000 and a["komm"]["bis"] == 2_000_000
-    # Materialisiert: der nächste Aufruf liest nur noch.
+    # Materialized: the next call only reads.
     assert analytics_db.lies(store)["komm"]["nachrichten"] == 3
 
 
 def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
-    """Gemeldet: derselbe Name stand zweimal in der Liste.
+    """Reported: the same name appeared twice in the list.
 
-    Die people-Tabelle führt eine Zeile je (Quelle, Person). Wer in Teams UND
-    per Mail schreibt, stand deshalb doppelt da – mit geteilter Zahl, was
-    beides falsch aussah.
+    The people table keeps one row per (source, person). Whoever writes in
+    Teams AND by mail therefore appeared twice – with a split count, which
+    made both look wrong.
     """
     import analytics_db
     store = _analytics_db(sandbox)
@@ -4370,23 +4481,23 @@ def test_top_personen_zaehlen_ueber_die_quellen_hinweg(sandbox):
 
     k = app_mod.analytics_daten(app_mod.load_config())
     namen = [pe["who"] for pe in k["top_personen"]]
-    assert namen == ["Alice", "Bob"]                   # jede Person einmal
+    assert namen == ["Alice", "Bob"]                   # each person once
     assert namen.count("Alice") == 1
-    assert k["top_personen"][0]["n"] == 43             # 3 aus Mail + 40 aus Teams
+    assert k["top_personen"][0]["n"] == 43             # 3 from mail + 40 from Teams
 
 
 def test_ausgelassene_personen_fehlen_in_der_auswertung(sandbox):
-    """Man selbst steht sonst mit Abstand oben und sagt nichts über den
-    Austausch mit anderen."""
+    """Otherwise you yourself sit at the top by a wide margin and say
+    nothing about the exchange with others."""
     import analytics_db
     analytics_db.baue(_analytics_db(sandbox), {})
     cfg = app_mod.load_config()
     assert [pe["who"] for pe in
             app_mod.analytics_daten(cfg)["top_personen"]] == ["Alice", "Bob"]
 
-    # Klein geschrieben und mit Leerraum: verglichen wird ohne Rücksicht darauf.
-    # Gefiltert wird beim LESEN – eine Änderung der Einstellung darf nicht bis
-    # zum nächsten Indexlauf warten.
+    # Lowercase and padded with whitespace: the comparison ignores both.
+    # Filtering happens on READ – a changed setting must not have to wait
+    # for the next index run.
     cfg["analytics_skip"] = ["  alice "]
     assert [pe["who"] for pe in
             app_mod.analytics_daten(cfg)["top_personen"]] == ["Bob"]
@@ -4396,7 +4507,7 @@ def test_ausgelassene_personen_fehlen_in_der_auswertung(sandbox):
 
 
 def test_namensliste_je_zeile(sandbox):
-    """Kommagetrennt wäre falsch: „Schilling, Nico“ sind keine zwei Personen."""
+    """Comma-separated would be wrong: "Schilling, Nico" is not two people."""
     assert app_mod._clean_zeilen("Schilling, Nico\nBob\n\n  Bob  ") \
         == ["bob", "schilling, nico"]
     assert app_mod._clean_zeilen(["A", "a", ""]) == ["a"]
@@ -4404,11 +4515,11 @@ def test_namensliste_je_zeile(sandbox):
 
 
 def test_analytics_sagt_weiss_ich_nicht_statt_null(sandbox):
-    """Ein Index aus einer älteren Fassung kennt die Spalten nicht. „0 mit
-    Anhang“ wäre eine Behauptung, None ist eine Auskunft."""
+    """An index from an older version does not know the columns. "0 with
+    attachment" would be a claim, None is an answer."""
     import analytics_db
     a = analytics_db.baue(_analytics_db(sandbox, spalten_neu=False), {})
-    assert a["komm"]["nachrichten"] == 3                # das geht weiterhin
+    assert a["komm"]["nachrichten"] == 3                # this still works
     assert a["komm"]["gespraeche"] is None
     assert a["komm"]["mit_anhang"] is None
     assert a["komm"]["verschwunden"] is None
@@ -4433,7 +4544,7 @@ def test_groesse_zaehlt_und_findet_die_groessten(sandbox):
 
 
 def test_pruefschritt_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
-    """Die Prüfung fragt das Postfach ab – ohne Zugang darf sie nicht starten."""
+    """The check queries the mailbox – without access it must not start."""
     a = app_mod.App()
     monkeypatch.setattr(a.jobs, "start", lambda steps, label, **kw: True)
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "")
@@ -4489,8 +4600,8 @@ console.log('OK');
 
 
 def test_analytics_hat_einen_aktualisieren_knopf():
-    """ladeAnalytics(true) umgeht den Zwischenspeicher – genau das ruft der
-    Knopf; ohne ihn zeigte der Reiter bis zum Neuladen der Seite alte Zahlen."""
+    """ladeAnalytics(true) bypasses the cache – exactly what the button
+    calls; without it the tab showed stale numbers until a page reload."""
     assert 'onclick="ladeAnalytics(true)"' in app_mod.PAGE
     assert 'data-i18n="ana.reload"' in app_mod.PAGE
 
@@ -4499,9 +4610,9 @@ def test_analytics_zeigt_kennzahlen_und_trennt_ausgelassenes():
     _in_node(PRUEFUNG_ANALYTICS)
 
 
-# Gemeldet: die Balken begannen je Zeile an einer anderen Stelle, weil jede
-# Zeile ihr eigenes Raster war. Damit laesst sich nichts vergleichen - wozu
-# Balken da sind.
+# Reported: the bars started at a different position in every row because
+# each row was its own grid. Nothing can be compared that way - which is
+# what bars are for.
 PRUEFUNG_RANGLISTE = GRUNDZUSTAND + r"""
 var h = rangListe([{name: 'kurz', n: 100},
                    {name: 'ein deutlich laengerer Name als der davor', n: 50},
@@ -4532,16 +4643,16 @@ def test_rangliste_teilt_sich_ein_raster():
 
 
 def test_verschwundenes_ueber_die_zeit_ist_weg():
-    """Ein Balken bei einem einzigen Monat sagt nichts – die Kachel mit der
-    Gesamtzahl und die Sicht „Gelöschtes“ bleiben."""
+    """A bar for a single month says nothing – the tile with the total and
+    the "Deleted" view remain."""
     assert "ana.geloescht.sub" not in app_mod.PAGE
-    # Was bleibt: die Kachel mit der Gesamtzahl und die Sicht in der Suche.
+    # What remains: the tile with the total and the view in the search.
     assert "ana.gone" in app_mod.PAGE
     assert 'id="f-gone"' in app_mod.PAGE
 
 
 # --------------------------------------------------------------------------
-# Exportliste: was der nächste Lauf täte, ohne ihn zu starten
+# Export list: what the next run would do, without starting it
 # --------------------------------------------------------------------------
 def _baum(sandbox, cfg, eintraege, mails=()):
     ordner = sandbox / app_mod.OUTLOOK_DIR
@@ -4554,8 +4665,8 @@ def _baum(sandbox, cfg, eintraege, mails=()):
 
 
 def test_exportliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
-    """Wer eine Regel tippt, will sie prüfen, bevor er sie speichert – die
-    Vorschau darf nicht den zuletzt gespeicherten Stand zeigen."""
+    """Whoever types a rule wants to check it before saving – the preview
+    must not show the last saved state."""
     a, port = server
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "E-Mail/Posteingang", "name": "P", "elemente": 100},
@@ -4568,15 +4679,15 @@ def test_exportliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
     assert [z["pfad"] for z in r["an"]] == ["E-Mail/Posteingang"]
     assert [z["pfad"] for z in r["aus"]] == ["E-Mail/Archiv"]
     assert r["aus"][0]["regel"] == "- E-Mail/Archiv/**"
-    assert r["aus"][0]["archiv"] == 3            # ausgelassen heißt nicht leer
+    assert r["aus"][0]["archiv"] == 3            # skipped does not mean empty
     assert r["weg"] == [{"pfad": "E-Mail/Weg", "archiv": 4}]
-    # Gespeichert wurde nichts – die Vorschau ist eine Frage, keine Änderung.
+    # Nothing was saved – the preview is a question, not a change.
     assert not a.cfg["folder_rules"]
 
 
 def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
-    """Ohne Regeln gilt weiter, was in der Ordnerliste steht – genau wie im
-    Export (outlook_export.aktuelle_regeln)."""
+    """Without rules, whatever is in the folder list still applies – exactly
+    as in the export (outlook_export.aktuelle_regeln)."""
     a, port = server
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "E-Mail/Posteingang", "name": "P", "elemente": 1},
@@ -4584,8 +4695,8 @@ def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
     r = call(port, "POST", "/api/folder-plan",
              {"folder_rules": "", "skip_folders": "Archiv"})[1]
     assert [z["pfad"] for z in r["aus"]] == ["E-Mail/Archiv/Alt"]
-    # Kleingeschrieben, weil case-insensitive verglichen wird – die angezeigte
-    # Regel ist damit genau die, die auch entschieden hat.
+    # Lowercased because the comparison is case-insensitive – the rule shown
+    # is thus exactly the one that made the decision.
     assert r["aus"][0]["regel"] == "- E-Mail/archiv/**"
 
 
@@ -4596,7 +4707,7 @@ def test_exportliste_ohne_abgeglichenen_baum(server):
 
 
 # --------------------------------------------------------------------------
-# Kalender: dieselbe Mechanik wie die Postfach-Ordner
+# Calendars: the same mechanics as the mailbox folders
 # --------------------------------------------------------------------------
 def _kalenderliste(sandbox, eintraege, termine=()):
     ordner = sandbox / app_mod.OUTLOOK_DIR
@@ -4615,7 +4726,7 @@ KALENDER = [{"id": "a", "pfad": "kalender/Privat", "name": "Privat", "standard":
 
 
 def test_kalenderregeln_ohne_eintrag_nur_der_standard(sandbox):
-    """Ein Postfach hat oft Geburtstage und fremde Freigaben – die hat niemand gemeint."""
+    """A mailbox often has birthdays and foreign shares – nobody meant those."""
     daten = {"ordner": KALENDER}
     regeln = app_mod.kalenderregeln({"calendar_rules": ""}, daten)
     assert [e["name"] for e in folders_mod.gewaehlt(daten, regeln)] == ["Arbeit"]
@@ -4632,7 +4743,7 @@ def test_kalenderliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
     assert code == 200 and r["ok"]
     assert [z["pfad"] for z in r["an"]] == ["kalender/Privat"]
     assert [z["pfad"] for z in r["aus"]] == ["kalender/Arbeit"]
-    # Gezählt wird, was auf der Platte liegt: Termine zählt Graph beim Auflisten nicht.
+    # Counted is what sits on disk: Graph does not count events when listing.
     assert r["an"][0]["archiv"] == 3
     assert r["weg"] == [{"pfad": "kalender/Weg", "archiv": 2}]
     assert not a.cfg["calendar_rules"]
@@ -4654,7 +4765,7 @@ def test_kalenderstand_ohne_liste(server):
 def test_kalenderregeln_werden_gespeichert_und_weitergereicht(server, sandbox):
     a, port = server
     call(port, "POST", "/api/config", {"calendar_rules": "kalender/Privat"})
-    # Ohne Vorzeichen heißt einschließen – gespeichert wird die ausgeschriebene Regel.
+    # No sign means include – the spelled-out rule is what gets saved.
     assert a.cfg["calendar_rules"] == "+ kalender/Privat"
     schritt = [s for s in app_mod.build_steps(a.cfg, outlook=True) if s["key"] == "outlook"][0]
     assert schritt["env"]["CALENDAR_RULES"] == "+ kalender/Privat"
@@ -4667,10 +4778,10 @@ def test_build_steps_kalenderabgleich(sandbox):
 
 
 def test_ausgeblendete_dateitypen_nur_in_der_liste(server, sandbox, monkeypatch):
-    """Ausgeblendet heißt: nicht angeboten. Nicht: nicht da.
+    """Hidden means: not offered. Not: not there.
 
-    Das Werkzeug soll weiter sagen, was im Archiv liegt – auch Claude
-    gegenüber. Gekürzt wird nur die Liste, die die Oberfläche anbietet.
+    The tool should keep saying what the archive holds – to Claude too.
+    Only the list the UI offers gets trimmed.
     """
     a, port = server
     alle = {"count": 3, "total_distinct": 3, "filetypes": [
@@ -4680,19 +4791,19 @@ def test_ausgeblendete_dateitypen_nur_in_der_liste(server, sandbox, monkeypatch)
     monkeypatch.setattr(a.search, "ensure", lambda cfg: mod)
 
     call(port, "POST", "/api/config", {"filetype_hidden": ".P7S, xlsx ,, "})
-    assert a.cfg["filetype_hidden"] == ["p7s", "xlsx"]      # klein, ohne Punkt
+    assert a.cfg["filetype_hidden"] == ["p7s", "xlsx"]      # lowercase, no dot
 
     r = call(port, "GET", "/api/filetypes")[1]
     assert [e["type"] for e in r["filetypes"]] == ["pdf"]
     assert r["hidden"] == ["p7s", "xlsx"]
-    # Der Bestand wird nicht kleingeredet: es gibt weiterhin drei Typen.
+    # The corpus is not talked down: there are still three types.
     assert r["total_distinct"] == 3
-    # Und die Suche danach bleibt möglich – ausgeblendet ist nur das Angebot.
+    # And searching for them stays possible – only the offer is hidden.
     assert mod.list_filetypes()["filetypes"] == alle["filetypes"]
 
 
 def test_dateitypen_vorgabe_ist_sichtbar(server):
-    """Die Vorgabe steht im Feld, nicht als stille Regel im Code."""
+    """The default is visible in the field, not a silent rule in the code."""
     s = call(server[1], "GET", "/api/status")[1]
     assert s["filetype_hidden_default"] == sorted(app_mod.FILETYPE_HIDDEN_DEFAULT)
     assert s["config"]["filetype_hidden"] == s["filetype_hidden_default"]
@@ -4700,25 +4811,25 @@ def test_dateitypen_vorgabe_ist_sichtbar(server):
 
 
 def test_abgeschalteter_mcp_zugriff_startet_nichts(sandbox, monkeypatch):
-    """Der harte Schalter gilt auch für den HTTP-Endpunkt, den die App selbst
-    betreibt – und für den Autostart beim Programmstart."""
+    """The hard switch also applies to the HTTP endpoint the app itself
+    runs – and to the autostart at program start."""
     cfg = app_mod.load_config()
     cfg["mcp_enabled"] = False
     a = app_mod.App(cfg)
     gestartet = []
-    monkeypatch.setattr(app_mod.subprocess, "Popen",
+    monkeypatch.setattr(runner_mod.subprocess, "Popen",
                         lambda *x, **kw: gestartet.append(x) or (_ for _ in ()).throw(
                             AssertionError("Prozess trotzdem gestartet")))
 
     ok, why = a.mcp.start(cfg)
     assert not ok and schluessel(why) == "srv.mcp.disabled"
     cfg["mcp_autostart"] = True
-    a.autostart_mcp()                      # darf ebenfalls nichts starten
+    a.autostart_mcp()                      # must not start anything either
     assert not gestartet
 
 
 def test_abschalten_haelt_den_laufenden_endpunkt_an(server, monkeypatch):
-    """Wer den Zugriff abschaltet, meint auch den, der gerade läuft."""
+    """Whoever switches off access also means the one currently running."""
     a, port = server
     angehalten = []
     monkeypatch.setattr(a.mcp, "stop", lambda: angehalten.append(True))
@@ -4734,8 +4845,8 @@ def test_auswahlregeln_regeln_schlagen_die_namensliste():
         == [(False, "E-Mail/archiv/**")]
 
 
-# Die Exportliste im Browser: drei Gruppen, ein Filter – und ein Fenster, das
-# der Statusabruf alle 2,5 Sekunden NICHT wegwischen darf.
+# The export list in the browser: three groups, one filter – and a window
+# that the status poll every 2.5 seconds must NOT wipe away.
 PRUEFUNG_EXPORTLISTE = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
@@ -4807,8 +4918,8 @@ def test_exportliste_zeigt_drei_gruppen_und_ueberlebt_den_statusabruf():
     _in_node(PRUEFUNG_EXPORTLISTE)
 
 
-# Kalender sind dieselbe Liste mit derselben Vorschau - nur zaehlt hier, was
-# schon auf der Platte liegt, weil Graph beim Auflisten keine Termine zaehlt.
+# Calendars are the same list with the same preview - except here what
+# already sits on disk counts, because Graph counts no events when listing.
 PRUEFUNG_KALENDERLISTE = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
@@ -4859,8 +4970,8 @@ def test_kalenderliste_zeigt_bestand_statt_leerer_zahlen():
     _in_node(PRUEFUNG_KALENDERLISTE)
 
 
-# Die Quelle vorne bestimmt, was hinten zur Wahl steht. Eine Auswahl mit einem
-# einzigen Eintrag ist keine Auswahl - dann steht sie ausgegraut da.
+# The source up front decides what is on offer behind it. A select with a
+# single entry is no choice - then it sits there greyed out.
 PRUEFUNG_ORDNERAUSWAHL = GRUNDZUSTAND + r"""
 S.store = {exists: true, built_at: '2026-08-12T10:00:00+00:00'};
 var ORDNER = {
@@ -4950,8 +5061,8 @@ def test_ordnerauswahl_folgt_der_quelle():
     _in_node(PRUEFUNG_ORDNERAUSWAHL)
 
 
-# Das Personenfeld ist eine Freitexteingabe auf einen festen Bestand. Wer einen
-# Namen tippt, den es so nicht gibt, soll das vor der Suche erfahren.
+# The person field is free-text input against a fixed corpus. Whoever types
+# a name that does not exist should learn that before the search.
 PRUEFUNG_PERSONENVORSCHLAG = GRUNDZUSTAND + r"""
 var LEUTE = {
   bei: {people: [{name:'Alice Beispiel', messages:1240},
@@ -5035,8 +5146,8 @@ def test_personenfeld_schlaegt_vor_und_meldet_unbekannte():
     _in_node(PRUEFUNG_PERSONENVORSCHLAG)
 
 
-# Dateitypen gibt es nur, wo Anhaenge oder Dateien liegen - und nur, wenn der
-# Index die Spalte ueberhaupt kennt.
+# File types exist only where attachments or files live - and only when
+# the index knows the column at all.
 PRUEFUNG_DATEITYP = GRUNDZUSTAND + r"""
 S.store = {exists: true, built_at: '2026-08-12T10:00:00+00:00', features: ['ext']};
 KANN_TYP = true;
@@ -5109,9 +5220,9 @@ def test_dateitypfilter_folgt_quelle_und_index():
     _in_node(PRUEFUNG_DATEITYP)
 
 
-# Gemeldet: "von 01.01.2019 bis 31.06.2021" lieferte Treffer aus 2026. Den
-# 31. Juni gibt es nicht, das Feld liefert dann einen LEEREN Wert - und die
-# Suche lief ohne diese Grenze weiter, ohne es zu sagen.
+# Reported: "from 01.01.2019 to 31.06.2021" returned hits from 2026. June
+# 31st does not exist, the field then yields an EMPTY value - and the
+# search carried on without that bound, without saying so.
 PRUEFUNG_DATUMSPRUEFUNG = GRUNDZUSTAND + r"""
 var gesucht = [];
 global.fetch = function(pfad){
@@ -5155,11 +5266,11 @@ def test_unmoegliches_datum_sucht_nicht_stillschweigend_ohne():
 
 
 # --------------------------------------------------------------------------
-# OneDrive in der Oberfläche
+# OneDrive in the UI
 # --------------------------------------------------------------------------
 def test_onedrive_ist_aus_bis_jemand_es_einschaltet(sandbox):
-    """Ein Laufwerk kann zweistellige Gigabyte haben – das zieht niemand
-    versehentlich mit dem ersten Klick."""
+    """A drive can hold tens of gigabytes – nobody pulls that in by accident
+    with the first click."""
     assert app_mod.load_config()["onedrive_enabled"] is False
 
 
@@ -5182,8 +5293,9 @@ def test_onedrive_regeln_werden_beim_speichern_normalisiert(server):
 
 
 def test_onedrive_leerer_schalter_setzt_die_variable_trotzdem(sandbox):
-    """Leer heißt „alles mitnehmen". Nicht gesetzt hieße „nimm, was in
-    app_config.json steht" – und das Skript liefe anders als die App anzeigt."""
+    """Empty means "take everything". Unset would mean "use what is in
+    app_config.json" – and the script would run differently from what the
+    app shows."""
     schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), onedrive=True)
                    if s["key"] == "onedrive")
     assert schritt["env"]["ONEDRIVE_RULES"] == ""
@@ -5268,7 +5380,7 @@ def test_onedrive_abgleich_ist_ein_eigener_schritt(sandbox):
                    if s["key"] == "onedrive_folders")
     argv = [str(x) for x in schritt["argv"]]
     assert "--folders" in argv and "onedrive_export" in " ".join(argv)
-    # Ohne Zugang darf er nicht starten – er fragt das Laufwerk ab.
+    # Without access it must not start – it queries the drive.
     assert "ONEDRIVE_RULES" in schritt["env"]
 
 
@@ -5281,8 +5393,8 @@ def test_onedrive_abgleich_braucht_einen_zugang(sandbox, no_ollama, monkeypatch)
 
 
 def test_exportliste_kennt_beide_quellen(server, sandbox):
-    """Dieselbe Auswertung, zwei Ordner – beim Postfach zählen die .eml, beim
-    Spiegel alle Dateien."""
+    """The same evaluation, two folders – for the mailbox the .eml files
+    count, for the mirror all files."""
     a, port = server
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "Dateien/Kunden", "name": "Kunden", "elemente": 3}])
@@ -5407,20 +5519,19 @@ def test_onedrive_pruefschritt(sandbox):
 
 
 def test_ein_pruefknopf_prueft_beides_in_einem_lauf(sandbox):
-    """Das Postfach zuerst: es ist die Hauptquelle und gehört im Protokoll
-    nach oben."""
+    """The mailbox first: it is the main source and belongs at the top of
+    the log."""
     keys = [s["key"] for s in app_mod.build_steps(app_mod.load_config(),
                                                   check=True, check_onedrive=True)]
     assert keys == ["check", "check_onedrive"]
 
 
 def test_vollstaendigkeit_hat_genau_einen_knopf():
-    """Zwei Knöpfe zwangen den Nutzer erst zu einer Entscheidung darüber, was
-    er eigentlich wissen will – „prüfen" ist eine Frage an das Archiv, nicht
-    an eine Quelle."""
+    """Two buttons first forced the user to decide what they actually want
+    to know – "check" is a question to the archive, not to a source."""
     assert 'onclick="pruefeVollstaendigkeit()"' in app_mod.PAGE
     assert "pruefeVollstaendigkeit('onedrive')" not in app_mod.PAGE
-    assert app_mod.PAGE.count("pruefeVollstaendigkeit(") == 2   # Aufruf + Definition
+    assert app_mod.PAGE.count("pruefeVollstaendigkeit(") == 2   # call + definition
 
 
 def test_analytics_liefert_beide_berichte(server, sandbox):
@@ -5496,8 +5607,8 @@ def test_bericht_nennt_die_richtige_einheit():
 
 
 def test_export_status_kennt_onedrive(sandbox):
-    """Die state.db datiert den letzten Lauf – jeder Export schreibt sie am
-    Ende, auch wenn nichts Neues kam."""
+    """state.db dates the last run – every export writes it at the end,
+    even when nothing new arrived."""
     import state_db
     cfg = app_mod.load_config()
     od = sandbox / app_mod.ONEDRIVE_DIR
@@ -5509,14 +5620,14 @@ def test_export_status_kennt_onedrive(sandbox):
 
 
 def test_export_reiter_zeigt_weder_zeiten_noch_datenordner():
-    """Beides steht woanders: die Zeiten in Analytics, der Ordner in den
-    Einstellungen. Zweimal dasselbe an zwei Orten veraltet an einem."""
+    """Both live elsewhere: the times in Analytics, the folder in the
+    settings. The same thing in two places goes stale in one of them."""
     kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
     assert 'id="export-state"' not in kopf, "Zeiten stehen noch im Export-Reiter"
     assert 'id="data-dir"' not in kopf
     assert 'id="export-state"' in app_mod.PAGE, "Zeiten sind ganz verschwunden"
-    # Der Wert steht im Eingabefeld selbst; die festen Ablagen (App-Ordner,
-    # Anwendung) stehen als eigene, unveraenderliche Zeilen darunter.
+    # The value sits in the input field itself; the fixed locations (app
+    # folder, application) stand below as their own immutable rows.
     assert 'id="data-dir2"' not in app_mod.PAGE, "doppelte Pfadanzeige ist zurueck"
     assert 'id="c-data-dir"' in app_mod.PAGE
     assert 'id="home-dir"' in app_mod.PAGE and 'id="app-ort"' in app_mod.PAGE
@@ -5542,13 +5653,13 @@ def test_schrittname_wird_uebersetzt():
 
 
 def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
-    """Fließtext neben jedem Knopf macht die Oberfläche unruhig. Die Erklärung
-    steckt jetzt im title-Attribut eines (i) – sichtbar auf Abruf, vorlesbar,
-    und ohne eigenes Fenster, das aufgehen und wieder zugehen muss."""
+    """Prose next to every button makes the UI restless. The explanation now
+    sits in the title attribute of an (i) – visible on demand, readable by a
+    screen reader, and without its own window that has to open and close."""
     kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
     assert 'data-i18n="export.start.hint"' not in kopf, "steht wieder als Text da"
     assert 'data-i18n-title="export.start.hint"' in kopf
-    # Der Text selbst bleibt erhalten – nur seine Form ändert sich.
+    # The text itself is kept – only its form changes.
     assert i18n.strings("de")["export.start.hint"]
 
 
@@ -5559,16 +5670,16 @@ ERKLAERUNGEN_ALS_INFO = ["export.start.hint", "export.what.sub",
 
 @pytest.mark.parametrize("schluessel", ERKLAERUNGEN_ALS_INFO)
 def test_erklaerungen_im_exportreiter_stehen_am_infozeichen(schluessel):
-    """Absätze neben Knöpfen machen die Oberfläche unruhig; die Erklärung
-    gehört auf Abruf. Der Text selbst bleibt – nur seine Form ändert sich."""
+    """Paragraphs next to buttons make the UI restless; the explanation
+    belongs on demand. The text itself stays – only its form changes."""
     assert f'data-i18n="{schluessel}"' not in app_mod.PAGE, "steht wieder als Fließtext da"
     assert f'data-i18n-title="{schluessel}"' in app_mod.PAGE
     assert i18n.strings("de")[schluessel]
 
 
 def test_jedes_infozeichen_ist_erreichbar():
-    """Ein (i), das nur die Maus kennt, ist für die Tastatur ein Buchstabe
-    ohne Bedeutung."""
+    """An (i) that only the mouse knows is, for the keyboard, a letter
+    without meaning."""
     zeichen = app_mod.PAGE.count('class="info"')
     assert zeichen >= 5, f"nur {zeichen} (i) gefunden"
     for stueck in app_mod.PAGE.split('<span class="info"')[1:]:
@@ -5577,8 +5688,8 @@ def test_jedes_infozeichen_ist_erreichbar():
 
 
 def test_infozeichen_ist_erreichbar_und_erklaert_sich():
-    """Ein (i), das nur die Maus kennt, ist für die Tastatur ein Buchstabe
-    ohne Bedeutung."""
+    """An (i) that only the mouse knows is, for the keyboard, a letter
+    without meaning."""
     i = app_mod.PAGE.index('data-i18n-title="export.start.hint"')
     block = app_mod.PAGE[i - 200:i + 200]
     assert 'tabindex="0"' in block, "mit der Tastatur nicht erreichbar"
@@ -5637,15 +5748,15 @@ def test_analytics_kacheln_zeigen_zahlen_und_erklaeren_am_infozeichen():
 
 
 def test_kein_stylesheet_zieht_ein_infozeichen_auseinander():
-    """Regression: `.schritt span{flex:1;min-width:240px}` stammte vom
-    Erklärungstext, der dort einmal stand. Nach dem Umbau traf sie das (i) –
-    aus dem Kreis wurde eine 240 Pixel breite Ellipse quer durch die Zeile.
+    """Regression: `.schritt span{flex:1;min-width:240px}` came from the
+    explanation text that once sat there. After the rework it hit the (i) –
+    the circle became a 240-pixel-wide ellipse across the row.
 
-    Geprüft wird deshalb allgemein: keine Regel, die *jedes* span in einem
-    Behälter breitzieht, darf auf einen Behälter treffen, in dem ein (i) sitzt.
+    Hence the general check: no rule that stretches *every* span in a
+    container may match a container holding an (i).
     """
-    # Kommentare erst weg: dieser hier zitiert die alte Regel im Wortlaut, und
-    # der Test soll auf das Stylesheet schauen, nicht auf seine Begründung.
+    # Comments go first: this very one quotes the old rule verbatim, and the
+    # test should look at the stylesheet, not at its rationale.
     css = re.sub(r"/\*.*?\*/", "",
                  app_mod.PAGE.split("<style>")[1].split("</style>")[0], flags=re.S)
     markup = app_mod.PAGE.split("</style>")[1]
@@ -5668,15 +5779,15 @@ def test_infozeichen_behaelt_seine_groesse():
 
 
 def test_kopfleiste_zeigt_nur_was_eine_handlung_verlangt():
-    """Der Zustand des Index stand als Kachel im Kopf und steht jetzt in
-    Analytics. Zweimal dieselbe Zahl an zwei Orten hilft niemandem – sie
-    widersprechen sich irgendwann. Im Kopf bleibt, was etwas von einem will:
-    Zugang, KI-Suche, Claude."""
+    """The state of the index sat as a tile in the header and now lives in
+    Analytics. The same number in two places helps nobody – eventually they
+    contradict each other. The header keeps what demands something of you:
+    access, AI search, Claude."""
     kopf = app_mod.PAGE.split("<nav")[0]
     assert 'id="pill-index"' not in kopf
     for erwartet in ('id="pill-token"', 'id="pill-ollama"', 'id="pill-mcp"'):
         assert erwartet in kopf, f"{erwartet} ist mit verschwunden"
-    # Die Zahl steht weiterhin irgendwo – nur eben in den Kennzahlen.
+    # The number still appears somewhere – just in the key figures now.
     assert 'id="ana-kpi"' in app_mod.PAGE
 
 
@@ -5756,8 +5867,9 @@ def test_suchmaske_filter_und_geloeschtes_als_filter():
 
 
 def test_filter_beginnen_zugeklappt():
-    """Wer nichts filtert – der Normalfall – sieht ein Suchfeld und einen Knopf.
-    Im Markup geprüft: die DOM-Attrappe der JS-Tests liest keine class-Attribute."""
+    """Whoever filters nothing – the normal case – sees a search field and a
+    button. Checked in the markup: the JS tests' DOM stub reads no class
+    attributes."""
     i = app_mod.PAGE.index('id="filter"')
     assert 'class="row hide"' in app_mod.PAGE[i - 60:i], "Filter stehen offen da"
     j = app_mod.PAGE.index('id="filter-weg"')
@@ -5765,8 +5877,8 @@ def test_filter_beginnen_zugeklappt():
 
 
 def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
-    """Der Reiter sagt schon, wo man ist; der Zustand des Index steht in
-    Analytics. „BM25“ und „Embeddings“ gehören ohnehin nicht in die Maske."""
+    """The tab already says where you are; the state of the index lives in
+    Analytics. "BM25" and "embeddings" do not belong in the form anyway."""
     i = app_mod.PAGE.index('class="suchzeile"')
     karte = app_mod.PAGE[i - 300:i]
     assert 'data-i18n="nav.search"' not in karte, "Überschrift wiederholt den Reiter"
@@ -5774,22 +5886,22 @@ def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
 
 
 def test_kein_feld_sucht_von_selbst():
-    """Gesucht wird, wenn jemand danach fragt. Man soll in Ruhe Begriff,
-    Person, Zeitraum und Ordner eingeben können, ohne dass nach jeder Änderung
-    eine Suche losläuft – vorher taten das die Filter, und die Trefferliste
-    gehörte dann zu einem halb ausgefüllten Formular."""
+    """A search runs when someone asks for one. You should be able to enter
+    term, person, period and folder in peace without a search taking off
+    after every change – the filters used to do that, and the hit list then
+    belonged to a half-filled form."""
     i = app_mod.PAGE.index('id="filter"')
-    # Bis zum letzten Feld der Zeile, nicht auf eine Zeichenzahl geraten.
+    # Up to the last field of the row, not guessed as a character count.
     block = app_mod.PAGE[i:app_mod.PAGE.index('id="f-gone"', i) + 200]
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
                  'id="f-to"', 'id="f-folder"', 'id="f-typ"', 'id="f-gone"'):
         j = block.index(feld)
-        # Das ganze Element, vom Anfang des Tags bis zu seinem Ende: eine feste
-        # Zeichenzahl griff daneben, sobald ein Feld mehr Attribute bekam.
+        # The whole element, from the start of the tag to its end: a fixed
+        # character count missed as soon as a field gained more attributes.
         umfeld = block[block.rfind("<", 0, j):block.index(">", j) + 1]
         assert "doSearch" not in umfeld, f"{feld} sucht von selbst"
-        # Die Quelle lädt zusätzlich die Ordnerliste nach – gesucht wird auch
-        # dann nicht, gezählt aber schon.
+        # The source field additionally reloads the folder list – even then
+        # no search runs, but counting does happen.
         assert "zeigeFilterstand()" in umfeld, f"{feld} zählt nicht mit"
     q = app_mod.PAGE[app_mod.PAGE.index('id="q"'):][:260]
     assert "oninput" not in q, "das Suchfeld sucht beim Tippen"
@@ -5877,21 +5989,21 @@ def test_suchfeld_loest_aus_und_markiert():
 
 
 def test_suchfeld_und_markierung_sind_verdrahtet():
-    """Die Funktionen einzeln zu prüfen genügt nicht: die Gegenproben liefen
-    durch, weil der Test sie direkt aufrief statt über die Seite. Geprüft wird
-    deshalb die Verdrahtung selbst."""
+    """Checking the functions one by one is not enough: the counter-checks
+    passed because the test called them directly instead of via the page.
+    So the wiring itself is checked."""
     i = app_mod.PAGE.index('id="q"')
     feld = app_mod.PAGE[i:i + 260]
     assert "sofortSuchen()" in feld, "Enter sucht nicht"
     assert 'onclick="sofortSuchen()"' in app_mod.PAGE, "Der Knopf wartet auf die Verzögerung"
-    # Die Vorschau geht durch hervor(), nicht an ihm vorbei.
+    # The preview goes through hervor(), not around it.
     j = app_mod.PAGE.index('class="prev"')
     assert "hervor(h.preview" in app_mod.PAGE[j:j + 120], "Begriff wird nicht markiert"
 
 
 @pytest.mark.parametrize("wert,erwartet", [
     (60, 60), (0, 0), (95, 95),
-    (200, 95),      # über den Rand: auf den Rand gezogen
+    (200, 95),      # past the edge: clamped to the edge
     (-5, 0),
 ])
 def test_untergrenze_ist_einstellbar(server, wert, erwartet):
@@ -5901,8 +6013,8 @@ def test_untergrenze_ist_einstellbar(server, wert, erwartet):
 
 
 def test_unbrauchbare_untergrenze_laesst_den_wert_stehen(server):
-    """Nicht auf die Vorgabe zurückfallen: wer 60 eingestellt hat und sich
-    vertippt, soll nicht unbemerkt wieder bei 45 landen."""
+    """No falling back to the default: whoever set 60 and then mistypes
+    should not silently land at 45 again."""
     a, port = server
     call(port, "POST", "/api/config", {"semantic_min": 60})
     call(port, "POST", "/api/config", {"semantic_min": "unsinn"})
@@ -5910,11 +6022,11 @@ def test_unbrauchbare_untergrenze_laesst_den_wert_stehen(server):
 
 
 def test_untergrenze_wird_erklaert():
-    """Eine Zahl ohne Erklärung stellt niemand um – und wer sie doch umstellt,
-    soll wissen, was zu hoch und was zu niedrig ist."""
-    # Die Erklärung steht jetzt im (i) der Zeile statt als Fließtext darunter –
-    # ausführlich bleibt sie trotzdem: diese eine Zahl verändert, was die Suche
-    # überhaupt zeigt.
+    """A number without an explanation is one nobody changes – and whoever
+    does change it should know what is too high and what too low."""
+    # The explanation now sits in the row's (i) instead of prose below it –
+    # it stays thorough all the same: this one number changes what the
+    # search shows at all.
     text = i18n.strings("de")["settings.semantic_min.i"]
     assert len(text) > 400, "zu knapp für eine Einstellung, die die Suche verändert"
     for stichwort in ("45", "0", "Volltextsuche"):
@@ -5924,13 +6036,13 @@ def test_untergrenze_wird_erklaert():
 
 
 # --------------------------------------------------------------------------
-# Fehlerbericht
+# Error report
 #
-# Der Bestand dieser App ist Post und Chat. Ein Bericht, der auf einer
-# öffentlichen Seite landet, darf deshalb nicht mitnehmen, wer mit wem
-# schreibt und wie der Anwender heißt. Zwei Vorkehrungen, beide geprüft:
-# was maschinell erkennbar ist, wird ersetzt – und der Rest liegt vor dem
-# Absenden offen zum Ändern (siehe die JS-Prüfungen weiter unten).
+# This app's corpus is mail and chat. A report that ends up on a public
+# page must therefore not carry along who writes with whom and what the
+# user is called. Two safeguards, both tested: what is machine-detectable
+# gets replaced – and the rest lies open for editing before sending (see
+# the JS checks further down).
 # --------------------------------------------------------------------------
 def test_anonymisiere_nimmt_mailadressen_heraus():
     text = app_mod.anonymisiere(
@@ -5940,18 +6052,18 @@ def test_anonymisiere_nimmt_mailadressen_heraus():
 
 
 def test_anonymisiere_nimmt_die_domaene_mit():
-    """Nur den Teil vor dem @ zu ersetzen reichte nicht: die Domäne ist der
-    Arbeitgeber, und der ist mindestens so verräterisch wie der Name."""
+    """Replacing only the part before the @ was not enough: the domain is
+    the employer, and that is at least as telltale as the name."""
     assert "contoso" not in app_mod.anonymisiere("a@contoso.example").lower()
 
 
 def test_anonymisiere_nimmt_den_benutzernamen_aus_pfaden():
-    """Der Anmeldename steckt in fast jedem Pfad, den ein Protokoll nennt."""
+    """The login name sits in almost every path a log mentions."""
     aus = app_mod.anonymisiere(
         r"OneDrive-Spiegel: C:\Users\pmustermann\AppData\Local\Archiv\onedrive")
     assert "pmustermann" not in aus
-    # Was danach kommt, ist technisch und muss bleiben – sonst wäre der Pfad
-    # als Angabe wertlos.
+    # What follows is technical and must stay – otherwise the path would be
+    # worthless as information.
     assert r"AppData\Local\Archiv\onedrive" in aus
 
 
@@ -5969,7 +6081,7 @@ def test_anonymisiere_vertraegt_leeres():
 
 
 def test_gekuerzt_behaelt_das_ende():
-    """Vorne steht der Start der App, hinten der Absturz. Wer kürzt, kürzt vorne."""
+    """The app start is at the front, the crash at the back. Whoever trims, trims the front."""
     text = "\n".join(f"zeile {i}" for i in range(500))
     aus = app_mod.gekuerzt(text, zeilen=10, zeichen=10_000)
     assert "zeile 499" in aus and "zeile 490" in aus
@@ -5989,7 +6101,7 @@ def test_gekuerzt_haelt_die_zeichengrenze():
 def test_systemangaben_nennen_was_zur_einordnung_noetig_ist(sandbox, with_ollama):
     a = app_mod.App(app_mod.load_config())
     angaben = {z["k"]: z["v"] for z in app_mod.systemangaben(a.status(), "de")}
-    # Genau die Fragen, die man sonst per Rückfrage stellen müsste.
+    # Exactly the questions that would otherwise need a follow-up.
     assert {"version", "os", "python", "cores", "lang", "auth",
             "categories", "index", "model", "ollama"} <= set(angaben)
     assert app_mod.version.VERSION in angaben["version"]
@@ -5999,8 +6111,8 @@ def test_systemangaben_nennen_was_zur_einordnung_noetig_ist(sandbox, with_ollama
 
 
 def test_systemangaben_nennen_den_datenordner_nur_wenn_er_abweicht(sandbox, with_ollama):
-    """Der Standardordner steht ohnehin fest und trüge bloß einen Benutzernamen
-    mit sich – der abweichende dagegen erklärt eine ganze Klasse von Fehlern."""
+    """The default folder is fixed anyway and would only carry a username
+    along – the deviating one, though, explains a whole class of errors."""
     a = app_mod.App(app_mod.load_config())
     st = a.status()
     st["data_dir"] = st["data_dir_default"]
@@ -6013,7 +6125,7 @@ def test_systemangaben_nennen_den_datenordner_nur_wenn_er_abweicht(sandbox, with
 
 
 def test_systemangaben_sind_reine_schluesselruempfe(sandbox, with_ollama):
-    """Übersetzt wird in der Oberfläche – hier darf kein fertiger Satz stehen."""
+    """Translation happens in the UI – no finished sentence may stand here."""
     a = app_mod.App(app_mod.load_config())
     for z in app_mod.systemangaben(a.status()):
         assert "." not in z["k"] and z["k"].islower(), z
@@ -6026,8 +6138,8 @@ def test_einstellungs_abweichungen_bei_vorgabe_leer(sandbox):
 
 
 def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
-    """Verstellte Zahlen und Schalter stehen im Bericht; was jemanden benennt
-    (Ordnernamen, der eigene Name, der Tenant), schrumpft auf den Umfang."""
+    """Changed numbers and switches go into the report; whatever names
+    someone (folder names, one's own name, the tenant) shrinks to its size."""
     cfg = app_mod.load_config()
     cfg.update(workers=8, embed_images=False,
                folder_rules="+ E-Mail/Kunden/**\n- E-Mail/Privat/**",
@@ -6040,7 +6152,7 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
     assert "analytics_skip: 1 Eintrag" in aus
     assert "tenant: gesetzt" in aus
     assert "enabled=true" in aus and "interval_minutes=30" in aus
-    # die Inhalte selbst tauchen nirgends auf
+    # the contents themselves appear nowhere
     for privat in ("Kunden", "Privat", "schilling", "contoso"):
         assert privat not in aus
 
@@ -6075,7 +6187,7 @@ def test_fehlerbericht_kappt_einen_endlosen_betreff(sandbox, with_ollama):
 
 
 def test_http_runs(server):
-    """Die Lauf-Historie für die Analytics-Section, neueste zuerst."""
+    """The run history for the analytics section, newest first."""
     a, port = server
     run_id = a.history.start_run("job.export", "manual", workers=4)
     a.history.record_step(run_id, "outlook", "job.step.outlook", 0.0, 1.0,
@@ -6089,7 +6201,7 @@ def test_http_runs(server):
 
 
 def test_http_report(server):
-    """Der Weg, den die Oberfläche geht."""
+    """The path the UI takes."""
     a, port = server
     code, b = call(port, "POST", "/api/report",
                    {"log": "09:00:00  Hallo welt@example.com", "hint": "Absturz"})
@@ -6100,7 +6212,7 @@ def test_http_report(server):
 
 
 def test_http_report_ohne_angaben(server):
-    """Der Knopf in den Einstellungen wird auch bei leerem Protokoll gedrückt."""
+    """The button in the settings gets pressed even with an empty log."""
     _, port = server
     code, b = call(port, "POST", "/api/report", {})
     assert code == 200 and b["log"] == "" and b["title"] == ""
@@ -6108,8 +6220,8 @@ def test_http_report_ohne_angaben(server):
 
 
 def test_http_report_folgt_der_browsersprache(server):
-    """Die Sprache steht im Bericht, weil sie erklärt, welche Texte der Melder
-    gesehen hat."""
+    """The language is part of the report because it explains which texts
+    the reporter has seen."""
     _, port = server
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     con.request("POST", "/api/report", "{}",
@@ -6120,11 +6232,11 @@ def test_http_report_folgt_der_browsersprache(server):
 
 
 # --------------------------------------------------------------------------
-# Protokoll kopieren
+# Copying the log
 #
-# Der Kasten hat je Zeile ein eigenes Kind. textContent klebte sie ohne
-# Umbruch aneinander – ein Protokoll, das als eine einzige Zeile in der
-# Zwischenablage landet, ist als Fehlermeldung wertlos.
+# The box has one child per line. textContent glued them together without
+# a break – a log that lands in the clipboard as one single line is
+# worthless as an error report.
 # --------------------------------------------------------------------------
 PRUEFUNG_LOG_KOPIEREN = GRUNDZUSTAND + """
 var kopiert = [];
@@ -6147,9 +6259,9 @@ def test_protokoll_laesst_sich_zeilenweise_kopieren():
 
 
 def test_kopierknopf_klappt_das_protokoll_nicht_zu():
-    """Die Knöpfe liegen in der Kopfzeile, die selbst auf- und zuklappt. Ohne
-    stopPropagation klappte das Protokoll bei jedem Kopieren zu – man sähe das
-    Ergebnis genau in dem Moment nicht mehr, in dem man es braucht."""
+    """The buttons sit in the header row, which itself folds open and shut.
+    Without stopPropagation the log collapsed on every copy – you would lose
+    sight of the result at exactly the moment you need it."""
     seite = app_mod.PAGE
     kopf = seite.split('class="pkopf"')[1].split("</div>")[0]
     for knopf in ("kopiere('log', this)", "fehlerMelden()"):
@@ -6159,7 +6271,7 @@ def test_kopierknopf_klappt_das_protokoll_nicht_zu():
 
 
 # --------------------------------------------------------------------------
-# Fehler melden – die Seite dieses Vorgangs, die im Browser läuft
+# Reporting an error – the part of this flow that runs in the browser
 # --------------------------------------------------------------------------
 BERICHT_GERUEST = GRUNDZUSTAND + """
 global.geoeffnet = [];
@@ -6249,7 +6361,7 @@ def test_fehlerbericht_zeigt_alles_und_laesst_es_aendern():
     _in_node(PRUEFUNG_BERICHT)
 
 
-# Die Userflow-Aufzeichnung: nur die Art der Schritte, begrenzt, abschaltbar.
+# The userflow recording: only the kind of steps, bounded, can be turned off.
 PRUEFUNG_ABLAUF = GRUNDZUSTAND + """
 if(!S.config) S.config = {};
 S.config.userflow_actions = 3;
@@ -6275,7 +6387,7 @@ def test_userflow_aufzeichnung_begrenzt_und_abschaltbar():
     _in_node(PRUEFUNG_ABLAUF)
 
 
-# Die Lauf-Historie in der Analytics-Section: Zeile je Lauf, Details je Schritt.
+# The run history in the analytics section: a row per run, details per step.
 PRUEFUNG_LAEUFE = GRUNDZUSTAND + """
 renderRuns([]);
 pruefe(el('ana-runs').innerHTML.indexOf('Noch keine') >= 0,
@@ -6381,12 +6493,12 @@ def test_fehlerbericht_kuerzt_vorne_und_sagt_es():
 
 
 # --------------------------------------------------------------------------
-# Die drei Suchvarianten
+# The three search modes
 #
-# Bis 4.2.0 mischte jede Suche BM25 und Vektoren (hybrid) und die KI hing an
-# einer Checkbox, die bei JEDER Suche ein Modell anwarf. Beides ist ersetzt:
-# Textsuche ist die Vorgabe und rein lexikalisch, die anderen beiden sind eine
-# bewusste Abzweigung.
+# Text search is the default and purely lexical; the semantic and the AI
+# variant are a deliberate detour. No search mixes BM25 and vectors behind
+# the user's back any more, and none spins up a model unasked – the answer
+# is a choice, not a checkbox on every query.
 # --------------------------------------------------------------------------
 PRUEFUNG_MODI = GRUNDZUSTAND + """
 var gesucht = [], gefragt = 0;
@@ -6514,15 +6626,15 @@ def test_markiert_wird_nur_wo_woertlich_getroffen_wurde():
 
 
 # --------------------------------------------------------------------------
-# Ollama ist optional – im ganzen System
+# Ollama is optional – throughout the system
 #
-# Bis 5.0.0 war Ollama eine stille Voraussetzung: fehlte es, fragte die App
-# trotzdem alle zehn Sekunden nach, der Assistent drängte zur Installation, und
-# der Indexlauf entschied selbst. Jetzt ist es eine Entscheidung.
+# Ollama used to be a silent prerequisite: absent, the app still polled it
+# every ten seconds, the wizard pushed for the install, and the index run
+# decided on its own. Now it is a decision.
 # --------------------------------------------------------------------------
 def test_abgeschaltet_wird_gar_nicht_erst_gefragt(sandbox, monkeypatch):
-    """Der eigentliche Gewinn: ohne Ollama lief bisher dauerhaft alle zehn
-    Sekunden ein Verbindungsversuch ins Leere."""
+    """The actual win: without Ollama, a connection attempt into the void
+    used to run every ten seconds, permanently."""
     gefragt = []
     monkeypatch.setattr(app_mod, "check_ollama",
                         lambda *a, **k: gefragt.append(1) or {})
@@ -6536,23 +6648,23 @@ def test_abgeschaltet_wird_gar_nicht_erst_gefragt(sandbox, monkeypatch):
 
 
 def test_abgeschaltet_kein_assistent(sandbox, with_ollama):
-    """Wer Ollama abwählt, will nicht bei jedem Start gefragt werden, ob er es
-    nicht doch installieren möchte."""
+    """Whoever deselects Ollama does not want to be asked at every start
+    whether they would like to install it after all."""
     a = app_mod.App(app_mod.load_config())
     a.cfg["ollama_enabled"] = False
     assert a.status()["wizard"] != "ollama"
 
 
 def test_abgeschaltet_baut_den_volltextindex(sandbox, with_ollama, monkeypatch, no_ollama):
-    """Auch wenn Ollama liefe: abgewählt ist abgewählt."""
+    """Even if Ollama were running: deselected is deselected."""
     a = app_mod.App(app_mod.load_config())
     a.cfg["ollama_enabled"] = False
     assert a.semantisch_gewollt() is False
 
 
 def test_volltext_auch_mit_laufendem_ollama(sandbox, with_ollama):
-    """Einbetten kostet auf einem echten Bestand eine Stunde. Wer nur exakt
-    sucht, soll sie nicht zahlen müssen."""
+    """Embedding costs an hour on a real corpus. Whoever only searches
+    exactly should not have to pay it."""
     a = app_mod.App(app_mod.load_config())
     a.cfg["index_semantic"] = False
     assert a.semantisch_gewollt() is False
@@ -6561,8 +6673,8 @@ def test_volltext_auch_mit_laufendem_ollama(sandbox, with_ollama):
 
 
 def test_mcp_bekommt_den_verzicht_mitgeteilt(sandbox):
-    """Sonst versucht der Server es bei jeder Anfrage neu und läuft jedes Mal
-    in denselben Fehler."""
+    """Otherwise the server retries on every request and runs into the same
+    error every time."""
     cfg = app_mod.load_config()
     cfg["ollama_enabled"] = False
     args = app_mod.mcp_client_config(cfg, 8365)["stdio"]["mcpServers"]["munimentum"]["args"]
@@ -6632,12 +6744,12 @@ def test_einstellungen_ollama_schalter():
 
 
 def test_jede_einstellung_hat_eine_erklaerung():
-    """Die Seite lebt jetzt vom (i): eine Zeile ohne Erklärung ist eine Zahl,
-    die niemand anfasst – oder schlimmer, blind umstellt."""
+    """The page now lives off the (i): a row without an explanation is a
+    number nobody touches – or worse, changes blindly."""
     seite = app_mod.PAGE
     abschnitt = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</section>\n</main>")]
-    # „feldzeile breit" ist die Textarea unter ihrer Titelzeile – die Erklärung
-    # sitzt am Titel, nicht am Eingabefeld.
+    # "feldzeile breit" is the textarea below its title row – the explanation
+    # sits on the title, not on the input field.
     zeilen = abschnitt.count('class="feldzeile "')
     mit_info = abschnitt.count('class="info"')
     assert zeilen >= 25, f"nur {zeilen} Einstellungszeilen gefunden"
@@ -6645,10 +6757,10 @@ def test_jede_einstellung_hat_eine_erklaerung():
 
 
 # --------------------------------------------------------------------------
-# Auswertungen für die Analytics-Seite
+# Evaluations for the analytics page
 # --------------------------------------------------------------------------
 def _index_mit_zeitpunkten(sandbox, monate):
-    """Ein kleiner Store, dessen Nachrichten auf bestimmte Monate fallen."""
+    """A small store whose messages fall on specific months."""
     from datetime import UTC, datetime
 
     import corpus
@@ -6672,19 +6784,19 @@ def _analytics(sandbox):
 
 
 def test_verlauf_enthaelt_auch_die_leeren_monate(sandbox):
-    """Sonst fiele eine Lücke gar nicht auf – sie stünde einfach nicht da."""
+    """Otherwise a gap would not even show – it simply would not be there."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-04", "outlook")])
     k = _analytics(sandbox)
     monate = [r["m"] for r in k["verlauf"]]
     assert monate == ["2025-01", "2025-02", "2025-03", "2025-04"]
     assert k["verlauf"][1]["gesamt"] == 0
-    # Aufsummiert – das ist die Wachstumskurve.
+    # Summed up – that is the growth curve.
     assert [r["summe"] for r in k["verlauf"]] == [1, 1, 1, 2]
 
 
 def test_luecken_nur_innerhalb_des_bestands(sandbox):
-    """Vor der ersten und nach der letzten Nachricht ist nichts zu vermissen."""
+    """Before the first and after the last message there is nothing to miss."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-05", "teams")])
     k = _analytics(sandbox)
@@ -6692,7 +6804,7 @@ def test_luecken_nur_innerhalb_des_bestands(sandbox):
 
 
 def test_verlauf_zaehlt_nur_kommunikation(sandbox):
-    """Mail und Chat – Kalender zählt hier nicht mit."""
+    """Mail and chat – calendar does not count here."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-01", "outlook"),
                                      ("2025-01", "kalender")])
@@ -6702,9 +6814,9 @@ def test_verlauf_zaehlt_nur_kommunikation(sandbox):
 
 
 def test_dateien_verfaelschen_verlauf_und_luecken_nicht(sandbox):
-    """Der Kernfehler der alten Seite: eine gespiegelte Datei trägt ihr
-    Datei-Änderungsdatum als Zeitstempel und füllte damit Kommunikations-
-    Lücken – ein PDF von 2025-03 machte den mail-leeren März „voll“."""
+    """The core flaw of the old page: a mirrored file carries its file
+    modification date as timestamp and thus filled communication gaps – a
+    PDF from 2025-03 made the mail-empty March look "full"."""
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams"), ("2025-05", "teams"),
                                      ("2025-03", "datei")])
@@ -6723,9 +6835,9 @@ def test_anhangstypen_werden_gezaehlt(sandbox):
 
 
 def test_analytics_liest_nur_und_aktualisieren_baut_neu(sandbox, monkeypatch):
-    """Der Reiter darf keine Sekunden mehr kosten: /api/analytics liest den
-    materialisierten Block; nur „Aktualisieren“ (und der erste Aufruf nach
-    einem Update) rechnet."""
+    """The tab must not cost seconds any more: /api/analytics reads the
+    materialized block; only "Refresh" (and the first call after an update)
+    computes."""
     import analytics_db
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams")])
@@ -6734,24 +6846,23 @@ def test_analytics_liest_nur_und_aktualisieren_baut_neu(sandbox, monkeypatch):
     echt = analytics_db.baue
     monkeypatch.setattr(analytics_db, "baue",
                         lambda *a, **kw: laeufe.append(1) or echt(*a, **kw))
-    app_mod.analytics_daten(cfg)           # Block fehlt noch: einmal rechnen
-    app_mod.analytics_daten(cfg)           # jetzt nur noch lesen
+    app_mod.analytics_daten(cfg)           # block still missing: compute once
+    app_mod.analytics_daten(cfg)           # now it only reads
     assert len(laeufe) == 1
     app_mod.analytics_daten(cfg, neu=True)
     assert len(laeufe) == 2
 
 
 # --------------------------------------------------------------------------
-# Der Vertrag zwischen Oberfläche und Formularfeldern
+# The contract between UI and form fields
 #
-# Die Einstellungsseite wurde einmal komplett neu geschrieben. Genau dabei
-# passiert der Fehler, den kein anderer Test sieht: eine vertippte Kennung, und
-# eine Einstellung lässt sich still nicht mehr füllen oder speichern – bemerkt
-# wird es erst, wenn jemand sie umstellt und der Wert nach dem Neuladen wieder
-# dasteht wie vorher.
+# The settings page was once rewritten from scratch. That is exactly where
+# the error no other test sees happens: one mistyped id, and a setting can
+# silently no longer be filled or saved – noticed only when someone changes
+# it and after the reload the value sits there again as before.
 # --------------------------------------------------------------------------
 def _feldlisten():
-    """Die drei Listen, aus denen die Oberfläche Formularfelder liest."""
+    """The three lists from which the UI reads form fields."""
     quelle = app_mod.PAGE
     listen = {}
     for name in ("SCHALTER", "ZAHLEN", "TEXTE"):
@@ -6762,33 +6873,34 @@ def _feldlisten():
 
 
 def test_jedes_gelistete_feld_gibt_es_auch(sandbox):
-    """Jede Kennung in SCHALTER/ZAHLEN/TEXTE muss ein Element haben."""
+    """Every id in SCHALTER/ZAHLEN/TEXTE must have an element."""
     fehlt = [k for liste in _feldlisten().values() for k in liste
              if f'id="c-{k}"' not in app_mod.PAGE]
     assert not fehlt, f"kein Bedienelement für: {fehlt}"
 
 
 def test_jedes_feld_ist_auch_gelistet():
-    """Und umgekehrt: ein Element, das in keiner Liste steht, wird nie
-    gespeichert – es sieht bedienbar aus und ist es nicht."""
+    """And the other way round: an element that is in no list is never
+    saved – it looks operable and is not."""
     gelistet = {k for liste in _feldlisten().values() for k in liste}
-    # Von Hand behandelt, jeweils mit eigenem Grund.
-    ausnahmen = {"skip_folders",      # mehrzeiliger Text, eigene Behandlung
-                 "filetype_hidden",   # Liste aus einer Zeile, eigene Behandlung
-                 "analytics_skip",    # mehrzeiliger Text, eigene Behandlung
-                 "language",          # eigenes Auswahlfeld, fuelleSprachen()
-                 "notifications",     # eigenes Auswahlfeld, von Hand gespeichert
-                 "data-dir",          # eigener Knopf (setzeDatenordner)
-                 "index-dir",         # eigener Knopf (setzeIndexordner)
-                 "ollama_enabled",    # Kippschalter, siehe ollamaSchalter()
-                 "onedrive_enabled",  # steht im Reiter „Exportieren", saveCats()
-                 "sharepoint_enabled",   # ebenso, saveCats()
-                 "sharepoint_pages_enabled",  # ebenso, saveCats()
-                 "planner_enabled",   # ebenso, saveCats()
-                 "sharepoint_urls",      # mehrzeiliger Text, eigene Behandlung
-                 "planner_urls",         # URL-Tabelle, liesUrlTabelle()
-                 "sharepoint_pages_urls",     # ebenso
-                 "cadence-onedrive",     # Kadenz-Selects, leseKadenzen()
+    # Handled by hand, each for its own reason.
+    ausnahmen = {"skip_folders",      # multi-line text, handled separately
+                 "filetype_hidden",   # one-line list, handled separately
+                 "analytics_skip",    # multi-line text, handled separately
+                 "language",          # its own select, fuelleSprachen()
+                 "notifications",     # its own select, saved by hand
+                 "data-dir",          # its own button (setzeDatenordner)
+                 "index-dir",         # its own button (setzeIndexordner)
+                 "ollama_enabled",    # toggle, see ollamaSchalter()
+                 "index_kind",        # select, mirrors INDEX_SEMANTISCH via indexart()
+                 "onedrive_enabled",  # lives in the "Export" tab, saveCats()
+                 "sharepoint_enabled",   # likewise, saveCats()
+                 "sharepoint_pages_enabled",  # likewise, saveCats()
+                 "planner_enabled",   # likewise, saveCats()
+                 "sharepoint_urls",      # multi-line text, handled separately
+                 "planner_urls",         # URL table, liesUrlTabelle()
+                 "sharepoint_pages_urls",     # likewise
+                 "cadence-onedrive",     # cadence selects, leseKadenzen()
                  "cadence-teams"}
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
     verwaist = im_markup - gelistet - ausnahmen
@@ -6796,8 +6908,8 @@ def test_jedes_feld_ist_auch_gelistet():
 
 
 def test_jedes_gelistete_feld_wird_auch_serverseitig_angenommen(sandbox, server):
-    """Der Weg endet nicht im Browser: was die Oberfläche schickt, muss die
-    Konfiguration auch übernehmen."""
+    """The path does not end in the browser: what the UI sends, the
+    configuration must also accept."""
     _, port = server
     listen = _feldlisten()
     body = {}
@@ -6816,12 +6928,12 @@ def test_jedes_gelistete_feld_wird_auch_serverseitig_angenommen(sandbox, server)
 
 
 # --------------------------------------------------------------------------
-# Der Ollama-Schalter, den ganzen Weg entlang
+# The Ollama switch, all the way through
 # --------------------------------------------------------------------------
 def test_indexschritt_bekommt_ohne_ollama_den_volltextschalter(sandbox, with_ollama,
                                                                monkeypatch):
-    """Nicht nur die Absicht zählt – der Unterprozess muss den Schalter tragen.
-    Ollama LÄUFT in diesem Test; abgewählt ist abgewählt."""
+    """Intent alone does not count – the subprocess must carry the switch.
+    Ollama IS running in this test; deselected is deselected."""
     monkeypatch.setattr(app_mod, "read_token", lambda: make_jwt(exp=time.time() + 3600, scp='Mail.Read User.Read'))
     a = app_mod.App(app_mod.load_config())
     a.cfg["ollama_enabled"] = False
@@ -6840,7 +6952,7 @@ def test_indexschritt_mit_ollama_bettet_ein(sandbox, with_ollama):
 
 
 def test_zeitplan_laeuft_auch_ohne_ollama(sandbox, with_ollama, monkeypatch):
-    """Ein nächtlicher Lauf soll den Volltextindex bauen statt zu scheitern."""
+    """A nightly run should build the full-text index instead of failing."""
     monkeypatch.setattr(app_mod, "read_token", lambda: make_jwt(exp=time.time() + 3600, scp='Mail.Read User.Read'))
     gestartet = {}
     a = app_mod.App(app_mod.load_config())
@@ -6935,12 +7047,13 @@ def test_ollama_kachel_fuehrt_ans_richtige_ziel():
 
 
 def test_binden_loest_keine_namen_auf(sandbox, monkeypatch):
-    """Gemeldet: macOS fragte beim Start, ob die App im lokalen Netz suchen darf.
+    """Reported: macOS asked at startup whether the app may search the local
+    network.
 
-    http.server macht beim Binden einen Rückwärts-Lookup für die eigene
-    Adresse (`socket.getfqdn`); das Ergebnis landet in `server_name` und wird
-    nirgends gebraucht. Die App hört auf 127.0.0.1 – sie hat im Netz nichts zu
-    suchen und soll auch nicht danach fragen.
+    http.server does a reverse lookup for its own address when binding
+    (`socket.getfqdn`); the result lands in `server_name` and is needed
+    nowhere. The app listens on 127.0.0.1 – it has no business on the
+    network and should not ask about it either.
     """
     def verboten(*a, **kw):
         raise AssertionError("Namensauflösung beim Binden")
@@ -6950,14 +7063,14 @@ def test_binden_loest_keine_namen_auf(sandbox, monkeypatch):
     httpd = app_mod.make_server(app_mod.App(app_mod.load_config()), 0)
     try:
         assert httpd.server_address[0] == "127.0.0.1"
-        assert httpd.server_name == "127.0.0.1"      # statt eines aufgelösten Namens
+        assert httpd.server_name == "127.0.0.1"      # instead of a resolved name
     finally:
         httpd.server_close()
 
 
 def test_kacheln_springen_an_eine_stelle_die_es_gibt():
-    """Ohne Kennung im Markup findet zeigeEinstellung nichts und bleibt oben
-    in den Einstellungen stehen – gemeldet für die KI-Kachel."""
+    """Without the id in the markup zeigeEinstellung finds nothing and stays
+    at the top of the settings – reported for the AI tile."""
     for ziel in ("ki-karte", "mcp-karte"):
         assert f'id="{ziel}"' in app_mod.PAGE, f"Sprungziel {ziel} fehlt"
         assert f"zeigeEinstellung('{ziel}')" in app_mod.PAGE, f"{ziel} wird nicht angesprungen"
@@ -6979,8 +7092,8 @@ pruefe(String(document.getElementById('c-workers').value) === '6', 'Zahl nicht g
 pruefe(document.getElementById('c-embed_model').value === 'bge-m3', 'Text nicht gefuellt');
 pruefe(document.getElementById('c-ollama_enabled').checked === true, 'Schalter nicht gefuellt');
 pruefe(INDEX_SEMANTISCH === false, 'Indexart nicht uebernommen: ' + INDEX_SEMANTISCH);
-pruefe(document.getElementById('ix-text').classList.contains('on'),
-       'Umschalter zeigt die falsche Seite');
+pruefe(document.getElementById('c-index_kind').value === 'text',
+       'Auswahl zeigt die falsche Indexart');
 
 // Und zurueck: speichern muss jeden Wert mitschicken.
 var geschickt = null;
@@ -7028,6 +7141,6 @@ console.log('OK');
 
 
 def test_aehnliche_finden_haengt_an_den_vektoren():
-    """Nicht an Ollama: der Vektor der Textstelle liegt im Index. Ohne
-    Vektoren – ein reiner Volltextindex – liefe der Eintrag ins Leere."""
+    """Not on Ollama: the chunk's vector sits in the index. Without vectors
+    – a pure full-text index – the entry would lead nowhere."""
     _in_node(PRUEFUNG_AEHNLICHE_GESPERRT)

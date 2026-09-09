@@ -1,32 +1,38 @@
 #!/usr/bin/env python3
 """
-app.py – Bedienoberfläche für den Office-365-Export im Browser.
+app.py – browser-based front end for the Office 365 export.
 
-Ein Start, ein Fenster: das Skript startet einen kleinen HTTP-Server auf
-127.0.0.1 und öffnet die Oberfläche im Standardbrowser. Von dort aus laufen
-alle Teile des Projekts, ohne dass jemand ein Terminal braucht:
+One start, one window: the script starts a small HTTP server on 127.0.0.1
+and opens the interface in the default browser. From there every part of the
+project runs without anyone needing a terminal:
 
-    Token       Assistent: Access Token im Graph Explorer holen und einfügen.
-                Erscheint bei jedem Start und immer dann, wenn kein gültiger
-                Token da ist. Eine Anmeldung findet NICHT statt – der Token
-                wird ausschließlich manuell besorgt (gx_token.txt).
-    Export      Outlook und/oder Teams, Auswahl per Klick statt per Abfrage
-                (setzt EXPORT_CATEGORIES für die Export-Skripte).
-    Index       rag_index.py im Anschluss, für Suche und MCP.
-    Suche       eingebettet – dieselbe Rangfolge wie im MCP-Server
-                (BM25 + Embeddings, per RRF fusioniert).
-    Zeitplan    solange die App läuft: Export + Index in festem Abstand.
-    MCP         mcp_server.py starten/stoppen, Konfigschnipsel für Claude.
+    Access      Two ways, chosen in the wizard: paste an access token from
+                the Graph Explorer (gx_token.txt), or sign in once by device
+                code and let the refresh token carry unattended runs
+                (auth.py, auth_mode = "login"). The wizard opens when no
+                valid access is present.
+    Export      Outlook and/or Teams, chosen by click instead of prompt
+                (sets EXPORT_CATEGORIES for the export scripts).
+    Index       rag_index.py afterwards, for search and MCP.
+    Search      embedded – the same ranking as in the MCP server
+                (BM25 + embeddings, fused via RRF).
+    Schedule    while the app runs: export + index at a fixed interval.
+    MCP         start/stop mcp_server.py, config snippets for Claude.
 
-Ohne Ollama zeigt die App einen Assistenten zur Installation. Alternativ läuft
-alles weiter: der MCP-Server wird gestartet und die Indizierung ausgelassen
-(bzw. auf Wunsch als reiner Volltextindex gebaut, rag_index.py --no-embeddings).
+Without Ollama the app shows an installation wizard. Everything else keeps
+working: the MCP server is started and indexing is skipped (or, on request,
+built as a plain full-text index, rag_index.py --no-embeddings).
+
+Since 7.0 the file is split: page.py holds the interface (one page as a
+string), steps.py the step registry (one entry per export action), runner.py
+runs the steps as subprocesses. What stays here: configuration, paths,
+routes, and the wiring between them.
 
     python3 app.py [--port 8700] [--no-browser]
 
-Der Server bindet nur auf die Loopback-Adresse und prüft den Host-Header. Er
-hat keine Authentifizierung und liefert den gesamten Mail- und Chatbestand
-aus – er gehört nicht auf 0.0.0.0.
+The server binds only to the loopback address and checks the Host header.
+It has no authentication and serves the entire mail and chat archive – it
+does not belong on 0.0.0.0.
 """
 
 import os
@@ -42,11 +48,9 @@ import sqlite3
 import argparse
 import platform
 import importlib
-import subprocess
 import threading
 import webbrowser
 import multiprocessing.spawn
-from collections import deque
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, quote
@@ -60,18 +64,19 @@ import folders
 import i18n
 import notify
 import ollama_client
-import progress
 import analytics_db
-import migrate_state
 import run_history
+from runner import JobRunner, McpProcess, _stream_lines  # noqa: F401
+import steps as steps_mod
+from page import PAGE         # the interface, as a module of its own
 import settings
 import state_db
 import store_layout
 import updates
 import version
 
-# Auf Windows nutzt die Konsole standardmäßig eine Legacy-Codepage; UTF-8
-# erzwingen, damit print() an Unicode nicht scheitert (macOS/Linux: No-op).
+# On Windows the console defaults to a legacy codepage; force UTF-8 so
+# print() does not choke on Unicode (macOS/Linux: no-op).
 for _stream in (sys.stdout, sys.stderr):
     try:
         _stream.reconfigure(encoding="utf-8", errors="replace")
@@ -81,35 +86,32 @@ for _stream in (sys.stdout, sys.stderr):
 APP_DIRNAME = "Munimentum"
 FROZEN = bool(getattr(sys, "frozen", False))
 
-# Teilprogramme, die die gebündelte Datei über "--run <name>" selbst starten
-# kann. Als Skripte liegen sie nebeneinander, im Bündel als Module darin.
+# Subprograms the bundled file can start itself via "--run <name>". As
+# scripts they lie side by side, in the bundle as modules inside it.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             "mcp_server",
-            # auth ist kein Exportschritt, sondern eine Selbstauskunft: welcher
-            # Anmeldeweg gilt, liegt ein Schlüssel vor, gibt es einen Cache.
-            # Im Bündel ist das der einzige Weg, das ohne Netz zu prüfen –
-            # der Rauchtest tut genau das.
+            # auth is not an export step but a self-report: which sign-in
+            # path applies, is a key present, is there a cache. In the
+            # bundle this is the only way to check that without network –
+            # the smoke test does exactly that.
             "auth", "onedrive_export", "sharepoint_export",
             "planner_export")
 
 
 def resource_dir():
-    """Verzeichnis der mitgelieferten Skripte (im Bündel: das entpackte Archiv)."""
+    """Directory of the shipped scripts (in the bundle: the unpacked archive)."""
     if FROZEN:
         return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
     return Path(__file__).resolve().parent
 
 
-ZEIGER_DATEI = "datenordner.txt"
-
-
 def standard_data_dir():
-    """Wo die Daten liegen, wenn niemand etwas anderes sagt.
+    """Where the data lives when nobody says otherwise.
 
-    Als Skript: der Projektordner – dort liegen Exporte und rag_store schon.
-    Gebündelt: der Datenordner des Benutzers, denn das Bündel selbst entpackt
-    sich in ein Temp-Verzeichnis, das bei jedem Ende verschwindet, und in
-    /Applications bzw. C:\\Program Files darf eine App nicht schreiben.
+    As a script: the project folder – exports and rag_store already live
+    there. Bundled: the user's data folder, because the bundle itself
+    unpacks into a temp directory that vanishes on every exit, and an app
+    must not write into /Applications or C:\\Program Files.
     """
     if not FROZEN:
         return Path(__file__).resolve().parent
@@ -122,33 +124,21 @@ def standard_data_dir():
     return Path(root) / APP_DIRNAME
 
 
-def zeiger_datei():
-    """Die eine Datei, die am Standardort bleibt und woandershin zeigt.
-
-    Der Datenordner lässt sich nicht in app_config.json einstellen – die Datei
-    liegt ja selbst darin, man müsste sie lesen, um zu wissen, wo sie liegt.
-    Deshalb ein Zeiger am Standardort: eine Zeile, ein Pfad.
-    """
-    return standard_data_dir() / ZEIGER_DATEI
-
-
-
-
 DATEN_UNTERORDNER = "data"
 
 
 def data_dir():
-    """Der HEIMATORDNER der App: Konfiguration, Token, Laufhistorie.
+    """The app's HOME folder: configuration, token, run history.
 
-    Vier Ebenen, bewusst getrennt: (1) die Anwendung selbst liegt, wo das
-    Betriebssystem sie hinlegt; (2) dieser Heimatordner ist FEST – nur so
-    kann die Konfiguration hier liegen und selbst sagen, wo (3) der Index
-    (index_dir) und (4) die Exporte (data_dir) wohnen; beide sind per
-    Vorgabe Unterordner von hier. MUNIMENTUM_DATA_DIR bzw. --data-dir
-    bleiben der Alles-in-einem-Override für einzelne Läufe und Tests.
+    Four levels, deliberately separate: (1) the application itself lives
+    wherever the operating system puts it; (2) this home folder is FIXED –
+    only then can the configuration live here and itself say where (3) the
+    index (index_dir) and (4) the exports (data_dir) reside; both default
+    to subfolders of here. MUNIMENTUM_DATA_DIR and --data-dir remain the
+    all-in-one override for individual runs and tests.
 
-    Munimentum verschiebt dabei NIE selbst Daten – wer Ordner umzieht, tut
-    das von Hand und stellt danach die Pfade um.
+    Munimentum NEVER moves data itself – whoever relocates folders does so
+    by hand and adjusts the paths afterwards.
     """
     env = settings.data_dir_env()
     if env:
@@ -157,7 +147,7 @@ def data_dir():
 
 
 def _split_pfade(heim):
-    """(Exportwurzel, Indexordner) – im Override-Modus flach wie früher."""
+    """(export root, index folder) – the override mode keeps the flat layout."""
     if settings.data_dir_env():
         return heim, heim / STORE_DIR
     cfg = settings.load()
@@ -170,31 +160,32 @@ def _split_pfade(heim):
 
 RES = resource_dir()
 HEIM = data_dir()
-CONFIG_FILE = HEIM / settings.CONFIG_NAME   # dieselbe Datei, die die Einzelskripte lesen
+CONFIG_FILE = HEIM / settings.CONFIG_NAME   # the same file the scripts read
 TOKEN_FILE = HEIM / "gx_token.txt"
-BASE, STORE_PFAD = None, None                # unten gesetzt, nach STORE_DIR
+BASE, STORE_PFAD = None, None                # set below, after STORE_DIR
 
 
 def set_data_dir(path):
-    """Alles-in-einem-Override (--data-dir). Liefert den neuen Pfad."""
+    """All-in-one override (--data-dir). Returns the new path."""
     global HEIM, BASE, STORE_PFAD, CONFIG_FILE, TOKEN_FILE
     HEIM = Path(path).expanduser().resolve()
     BASE = HEIM
     STORE_PFAD = HEIM / STORE_DIR
     CONFIG_FILE = HEIM / settings.CONFIG_NAME
     TOKEN_FILE = HEIM / "gx_token.txt"
-    # Die Teilprogramme suchen ihre Vorgaben über dieselbe Variable – sonst läse
-    # ein Unterprozess die Datei neben dem Skript statt die hier gewählte.
+    # The subprograms look up their defaults via the same variable – otherwise
+    # a subprocess would read the file next to the script, not the one chosen
+    # here.
     os.environ["MUNIMENTUM_DATA_DIR"] = str(HEIM)
     settings.reset()
     return HEIM
 
 def pruefe_datenordner(pfad):
-    """Taugt der Ordner? Liefert (Pfad, Fehlerschlüssel).
+    """Is the folder usable? Returns (path, error key).
 
-    Lieber jetzt ablehnen als beim nächsten Start: ein Zeiger auf einen Ordner
-    ohne Schreibrecht führte in eine App, die nichts mehr speichern kann – und
-    die Einstellung, mit der man es zurücknähme, liegt genau dort.
+    Better to reject now than on the next start: a pointer to a folder
+    without write permission would leave an app that can no longer save
+    anything – and the setting to take it back lives exactly there.
     """
     roh = str(pfad or "").strip()
     if not roh:
@@ -215,9 +206,9 @@ def pruefe_datenordner(pfad):
 GRAPH_EXPLORER = "https://developer.microsoft.com/en-us/graph/graph-explorer"
 OLLAMA_SITE = "https://ollama.com/download"
 
-# Schema und Vorgaben von app_config.json liegen in settings.py – dieselbe
-# Quelle, aus der die Einzelskripte ihre Werte holen. Bis 5.3 stand hier eine
-# zweite Fassung, und nichts hielt die beiden zusammen.
+# Schema and defaults of app_config.json live in settings.py – the same
+# source the individual scripts take their values from; a second copy here
+# would have nothing keeping the two in sync.
 SKIP_FOLDERS_DEFAULT = settings.SKIP_FOLDERS_STANDARD
 FILETYPE_HIDDEN_DEFAULT = settings.FILETYPE_HIDDEN_STANDARD
 TEAMS_DIR = settings.TEAMS_DIR
@@ -232,6 +223,69 @@ BASE, STORE_PFAD = _split_pfade(HEIM)
 ALT_ORDNER = (TEAMS_DIR, OUTLOOK_DIR, ONEDRIVE_DIR, SHAREPOINT_DIR,
               SHAREPOINT_PAGES_DIR, PLANNER_DIR)
 _ALT_GEPINNT = False
+
+
+# The loose state files of 6.1 and older. 7.0 carries no migration any more
+# (the latest 6.x does it): what it can still do is RECOGNISE the old layout
+# instead of quietly starting over – an empty state.db would re-download the
+# whole mailbox and orphan the tombstones, which are write-once by design.
+ALT_STATE = {"outlook": ("exported.tsv", "verschwunden.tsv", folders.DATEI,
+                         folders.KALENDER, "vollstaendigkeit.json"),
+             "teams": ("export_state.json",),
+             "onedrive": ("dateien.tsv", "delta.txt", "verschwunden.tsv",
+                          folders.DATEI, "vollstaendigkeit.json",
+                          "walk.jsonl", "walk_cursor.txt", "walk_fertig.txt")}
+
+
+def altbestand_state():
+    """Export folders that still carry the pre-6.2 state files – [] when none.
+
+    A folder that already has its state.db is done: the 6.x migration leaves
+    the originals behind as .bak, so a stray old name there means nothing.
+    """
+    ordner = {"outlook": BASE / OUTLOOK_DIR, "teams": BASE / TEAMS_DIR,
+              "onedrive": BASE / ONEDRIVE_DIR}
+    gefunden = []
+    for name, dateien in ALT_STATE.items():
+        p = ordner[name]
+        if (p / state_db.DB_NAME).exists():
+            continue
+        if any((p / d).is_file() for d in dateien):
+            gefunden.append(name)
+    return gefunden
+
+
+ZEIGER_DATEI = "datenordner.txt"
+
+
+def alter_zeiger():
+    """The 6.x pointer file, when it still names a living archive.
+
+    Up to 6.3.1 a single line at the standard location could send the whole
+    archive elsewhere. 7.0 no longer follows it – the paths are settings
+    now. Following it silently would be wrong, but so is ignoring it: the
+    app would start a SECOND archive next to the real one and fetch
+    everything again. So it is read for one purpose only: to say where the
+    data is. Nothing is moved, and an explicitly chosen data_dir wins.
+    """
+    # Truthiness, not membership: save_config writes the whole schema, so
+    # the key exists (as "") after the first save – asking "is it present"
+    # would disarm this guard the moment anyone touches the settings.
+    if settings.data_dir_env() or settings.load().get("data_dir"):
+        return None
+    try:
+        roh = (standard_data_dir() / ZEIGER_DATEI).read_text(
+            encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not roh:
+        return None
+    ziel = Path(roh).expanduser()
+    # Only a target that really still holds an archive: a leftover file
+    # pointing into the void must not block anybody.
+    if any((ziel / name).is_dir() for name in ALT_ORDNER):
+        return ziel
+    return None
 
 
 def altbestand_pinnen():
@@ -259,8 +313,8 @@ def altbestand_pinnen():
     _ALT_GEPINNT = True
     return True
 
-# Kategorie -> Graph-Berechtigung. Der Assistent prüft damit, ob der eingefügte
-# Token für das reicht, was ausgewählt ist (scp-Claim im JWT).
+# Category -> Graph permission. The wizard uses this to check whether the
+# pasted token covers what is selected (scp claim in the JWT).
 SCOPE_FOR = {
     "mail": "Mail.Read",
     "calendar": "Calendars.Read",
@@ -272,7 +326,7 @@ SCOPE_FOR = {
     "files": "Files.Read.All",
     "sites": "Sites.Read.All",
     "tasks": "Tasks.Read",
-    "groups": "Group.Read.All",       # Planner: die Legacy-Kommentare
+    "groups": "Group.Read.All",       # Planner: the legacy comments
 }
 # One row per mirror-style source: config switch -> (scope category for the
 # token wizard, name in the system report). New sources register here.
@@ -288,16 +342,17 @@ LABEL_FOR = {
     "sites": "SharePoint", "tasks": "Planner", "groups": "Planner-Kommentare",
 }
 
-# Weitere Berechtigungen, die die jeweils nötige mit abdecken. Der Graph
-# Explorer vergibt oft gleich die Schreibvariante: wer Mail.ReadWrite hat, darf
-# erst recht lesen, im Token steht dann aber nie Mail.Read. Ohne diese Tabelle
-# meldete der Assistent fehlende Rechte, die in Wahrheit da sind.
+# Additional permissions that each cover the required one. The Graph
+# Explorer often grants the write variant right away: whoever has
+# Mail.ReadWrite may certainly read, but the token then never lists
+# Mail.Read. Without this table the wizard would report missing rights
+# that are in fact there.
 #
-# Bewusst großzügig: eine ausbleibende Warnung kostet höchstens einen 403 im
-# Lauf (so war es vor der Prüfung ohnehin), eine falsche Warnung schickt
-# dagegen jemanden los, im Graph Explorer etwas zu suchen, das er längst hat.
-# NICHT enthalten sind Varianten, die weniger können, als der Export braucht:
-# Chat.ReadBasic und Mail.ReadBasic liefern keine Nachrichteninhalte.
+# Deliberately generous: a missing warning costs at most a 403 during the
+# run (no worse than having no check at all), while a false warning sends
+# someone off to hunt in the Graph Explorer for something they already
+# have. NOT included are variants that can do less than the export needs:
+# Chat.ReadBasic and Mail.ReadBasic deliver no message bodies.
 SCOPE_COVERED_BY = {
     "Tasks.Read": ("Tasks.ReadWrite",),
     "Group.Read.All": ("Group.ReadWrite.All",),
@@ -313,15 +368,15 @@ SCOPE_COVERED_BY = {
                        "Sites.ReadWrite.All", "Sites.FullControl.All"),
     "Sites.Read.All": ("Sites.ReadWrite.All", "Sites.Manage.All",
                        "Sites.FullControl.All"),
-    # Graph erlaubt das Lesen von Kanalnachrichten auch mit den Gruppenrechten.
+    # Graph also allows reading channel messages with the group permissions.
     "ChannelMessage.Read.All": ("Group.Read.All", "Group.ReadWrite.All"),
 }
 
 
-# Der Reiter "Modify permissions" im Graph Explorer listet nur die Rechte zu der
-# Abfrage, die gerade in der Adresszeile steht. Wer dort nie eine Mail-Abfrage
-# ausgeführt hat, bekommt Mail.Read schlicht nie angeboten und sucht vergeblich.
-# Deshalb zu jedem Recht die Abfrage, die es sichtbar macht.
+# The "Modify permissions" tab in the Graph Explorer only lists the rights
+# for the query currently sitting in the address bar. Whoever never ran a
+# mail query there is simply never offered Mail.Read and searches in vain.
+# Hence, for every right, the query that makes it visible.
 SCOPE_QUERY = {
     "Mail.Read": "https://graph.microsoft.com/v1.0/me/messages?$top=1",
     "Calendars.Read": "https://graph.microsoft.com/v1.0/me/events?$top=1",
@@ -337,7 +392,7 @@ SCOPE_QUERY = {
 
 
 def scope_missing(needed_scopes, have):
-    """Welche der nötigen Berechtigungen deckt der Token nicht ab?"""
+    """Which of the required permissions does the token not cover?"""
     have = set(have)
     return sorted(s for s in needed_scopes
                   if s not in have
@@ -345,15 +400,15 @@ def scope_missing(needed_scopes, have):
 
 
 # --------------------------------------------------------------------------
-# Konfiguration
+# Configuration
 # --------------------------------------------------------------------------
 def _merge_defaults(base, loaded):
-    """Geladene Werte über die Vorgaben legen, eine Ebene tief rekursiv.
+    """Lay the loaded values over the defaults, recursing one level deep.
 
-    Damit fehlt nach einem Update nie ein Schlüssel, und eine von Hand
-    verkürzte app_config.json bleibt gültig. Tiefe Kopie, sonst würde ein
-    späteres cfg["schedule"]["enabled"] = True DEFAULT_CONFIG selbst verändern –
-    die Vorgaben wären dann für den Rest der Laufzeit verstellt.
+    This way no key is ever missing after an update, and a hand-trimmed
+    app_config.json stays valid. Deep copy, because a later
+    cfg["schedule"]["enabled"] = True would otherwise change DEFAULT_CONFIG
+    itself – the defaults would then be skewed for the rest of the runtime.
     """
     out = copy.deepcopy(base)
     for k, v in (loaded or {}).items():
@@ -373,21 +428,33 @@ def load_config(path=None):
     return _merge_defaults(DEFAULT_CONFIG, loaded)
 
 
+# /api/config, /api/schedule and /api/data-dir all read, change and write
+# the same dict, and the threading server may run them at once. The lock
+# spans serialising and renaming, so no snapshot overwrites a newer one; the
+# per-thread tmp name keeps two writers from sharing a half-written file.
+_CONFIG_LOCK = threading.Lock()
+
+
 def save_config(cfg, path=None):
     path = Path(path or CONFIG_FILE)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    tmp = path.with_suffix(f".json.{os.getpid()}-{threading.get_ident()}.tmp")
+    with _CONFIG_LOCK:
+        try:
+            tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2),
+                           encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _clean_categories(values, allowed):
-    """Nur bekannte Kategorien, in der Reihenfolge von `allowed`."""
+    """Only known categories, in the order of `allowed`."""
     picked = {str(v).strip().lower() for v in (values or [])}
     return [k for k in allowed if k in picked]
 
 
 def _clean_endungen(values):
-    """Dateiendungen aus Liste oder Text: klein, ohne Punkt, ohne Doppel."""
+    """File extensions from list or text: lowercase, no dot, no duplicates."""
     if isinstance(values, str):
         values = values.replace("\n", ",").split(",")
     return sorted({str(v).strip().lower().lstrip(".")
@@ -395,10 +462,11 @@ def _clean_endungen(values):
 
 
 def _clean_zeilen(values):
-    """Eine Angabe je Zeile: kleingeschrieben, ohne Doppel, ohne Leerzeilen.
+    """One entry per line: lowercased, no duplicates, no blank lines.
 
-    Nicht kommagetrennt wie die Ordnerliste – Namen enthalten Kommas, und
-    „Schilling, Nico“ wären sonst zwei Einträge, von denen keiner trifft.
+    Not comma-separated like the folder list – names contain commas, and
+    "Schilling, Nico" would otherwise be two entries, neither of which
+    matches.
     """
     if isinstance(values, str):
         values = values.splitlines()
@@ -406,11 +474,11 @@ def _clean_zeilen(values):
 
 
 def _clean_folders(values):
-    """Ordnernamen aus Liste oder Text (kommagetrennt): kleingeschrieben, ohne Doppel.
+    """Folder names from list or text (comma-separated): lowercased, no dupes.
 
-    outlook_export.py vergleicht Anzeigenamen case-insensitive, also wird hier
-    schon kleingeschrieben – sonst steht in der Oberfläche etwas anderes als
-    das, wonach am Ende verglichen wird.
+    outlook_export.py compares display names case-insensitively, so we
+    lowercase here already – otherwise the interface would show something
+    other than what is compared against in the end.
     """
     if isinstance(values, str):
         values = values.replace("\n", ",").split(",")
@@ -418,15 +486,15 @@ def _clean_folders(values):
 
 
 def auswahlregeln(cfg, roh=None, namen=None):
-    """Die Regeln, nach denen der Export Ordner auswählt.
+    """The rules by which the export picks folders.
 
-    Dieselbe Reihenfolge wie outlook_export.aktuelle_regeln – die Regeln
-    gelten, und nur solange keine da sind, wirkt die alte Namensliste weiter.
-    Beides ist hier an einer Stelle, damit die Vorschau nicht anders rechnet
-    als der Lauf, den sie vorhersagt.
+    Same order as outlook_export.aktuelle_regeln – the rules apply, and only
+    as long as none exist does the old name list still take effect. Both
+    live in one place here so the preview does not calculate differently
+    from the run it predicts.
 
-    `roh` und `namen` sind das, was gerade in den Feldern steht: wer eine Regel
-    tippt, will sie prüfen können, bevor er sie speichert.
+    `roh` and `namen` are whatever currently sits in the form fields:
+    whoever types a rule wants to check it before saving it.
     """
     regeln = folders.lies_regeln(
         (cfg.get("folder_rules") if roh is None else roh) or "")
@@ -437,10 +505,11 @@ def auswahlregeln(cfg, roh=None, namen=None):
 
 
 def kalenderregeln(cfg, daten=None, roh=None):
-    """Dasselbe für die Kalender – siehe outlook_export.kalender_regeln.
+    """The same for the calendars – see outlook_export.kalender_regeln.
 
-    Ohne eigene Regeln bleibt es beim Standardkalender. Das hängt an den Daten,
-    weil erst die Liste sagt, welcher das ist; deshalb kommt sie hier herein.
+    Without rules of its own it stays with the default calendar. That
+    depends on the data, because only the list says which one that is;
+    hence it is passed in here.
     """
     regeln = folders.lies_regeln(
         (cfg.get("calendar_rules") if roh is None else roh) or "")
@@ -450,14 +519,13 @@ def kalenderregeln(cfg, daten=None, roh=None):
 
 
 # --------------------------------------------------------------------------
-# Token: einfügen, prüfen, ablegen
+# Token: paste, check, store
 # --------------------------------------------------------------------------
 def normalize_token(raw):
-    """Eingefügten Token säubern: Anführungszeichen, "Bearer ", Zeilenumbrüche.
+    """Clean a pasted token: quotes, "Bearer ", line breaks.
 
-    Der Graph Explorer liefert den Token oft mit Zeilenumbrüchen aus dem
-    Kopier-Feld; ein JWT enthält selbst keinen Whitespace, also darf alles
-    davon weg.
+    The Graph Explorer often delivers the token with line breaks from the
+    copy field; a JWT itself contains no whitespace, so all of it may go.
     """
     if not raw:
         return ""
@@ -468,10 +536,10 @@ def normalize_token(raw):
 
 
 def decode_jwt(token):
-    """Nutzlast eines JWT ohne Signaturprüfung lesen. {} wenn das nichts ist.
+    """Read a JWT's payload without verifying the signature. {} if not one.
 
-    Nur zur Anzeige (Konto, Ablauf, Berechtigungen) – geprüft wird der Token
-    ohnehin von Graph beim ersten Aufruf.
+    Display only (account, expiry, permissions) – the token is validated
+    by Graph on the first call anyway.
     """
     parts = (token or "").split(".")
     if len(parts) < 2:
@@ -484,12 +552,12 @@ def decode_jwt(token):
 
 
 def token_status(token, now=None, needed=()):
-    """Zustand des Tokens für die Oberfläche.
+    """State of the token for the interface.
 
-    `needed` sind Kategorien (mail, 1on1, …); fehlende Berechtigungen dazu
-    werden benannt, damit der Assistent sagen kann, was im Graph Explorer noch
-    zuzustimmen ist. Lässt sich der Token nicht als JWT lesen, gilt er als
-    vorhanden mit unbekanntem Ablauf – er wird dann einfach ausprobiert.
+    `needed` are categories (mail, 1on1, …); missing permissions for them
+    are named so the wizard can say what still needs consenting to in the
+    Graph Explorer. If the token cannot be read as a JWT it counts as
+    present with unknown expiry – it is then simply tried.
     """
     now = now if now is not None else time.time()
     out = {"present": bool(token), "valid": False, "expired": False,
@@ -500,7 +568,7 @@ def token_status(token, now=None, needed=()):
         return out
     claims = decode_jwt(token)
     if not claims:
-        out["valid"] = True          # unlesbar, aber vorhanden -> ausprobieren
+        out["valid"] = True          # unreadable but present -> just try it
         return out
     out["readable"] = True
     out["account"] = (claims.get("upn") or claims.get("preferred_username")
@@ -513,8 +581,9 @@ def token_status(token, now=None, needed=()):
         out["expires_in_minutes"] = int((exp - now) // 60)
         out["expired"] = exp <= now
     out["valid"] = not out["expired"]
-    # Fehlende Rechte nur melden, wenn der scp-Claim wirklich gelesen wurde –
-    # sonst sähe ein Token ohne lesbare Claims so aus, als fehlte alles.
+    # Only report missing rights when the scp claim was actually read –
+    # otherwise a token without readable claims would look as if everything
+    # were missing.
     if out["scopes"]:
         want = {SCOPE_FOR[c] for c in needed if c in SCOPE_FOR}
         out["missing"] = scope_missing(want, out["scopes"])
@@ -529,14 +598,14 @@ def read_token(path=None):
 
 
 def write_token(token, path=None):
-    """Token ablegen – nur für den eigenen Benutzer lesbar."""
+    """Store the token – readable only by the owning user."""
     token = normalize_token(token)
     p = Path(path or TOKEN_FILE)
     p.write_text(token + "\n", encoding="utf-8")
     try:
         p.chmod(0o600)
     except OSError:
-        pass                          # z. B. Windows/FAT: Rechte nicht setzbar
+        pass                          # e.g. Windows/FAT: permissions not settable
     return token
 
 
@@ -547,12 +616,12 @@ _hat_modell = ollama_client.hat_modell
 
 
 def check_ollama(url, model, chat_model=None, timeout=1.5):
-    """Läuft Ollama – und welche der beiden Modelle liegen bereit?
+    """Is Ollama running – and which of the two models are available?
 
-    Das Embedding-Modell trägt die semantische Suche, das Chat-Modell die
-    formulierte Antwort. Beide getrennt gemeldet: wer nur das erste hat, soll
-    suchen können, ohne dass die Oberfläche eine Antwort verspricht, die kein
-    Modell erzeugen kann.
+    The embedding model carries the semantic search, the chat model the
+    worded answer. Reported separately: whoever has only the first should
+    be able to search without the interface promising an answer no model
+    can produce.
     """
     out = {"running": False, "models": [], "has_model": False,
            "has_chat_model": False, "error": None,
@@ -570,10 +639,10 @@ def check_ollama(url, model, chat_model=None, timeout=1.5):
 
 
 def ollama_hint():
-    """Installationshinweis passend zum Betriebssystem – als Textschlüssel.
+    """Installation hint matching the operating system – as text keys.
 
-    Die Sätze stehen in den Sprachdateien; hier wird nur entschieden, welche
-    Schritte gelten und mit welchen Werten sie zu füllen sind.
+    The sentences live in the language files; here we only decide which
+    steps apply and which values to fill them with.
     """
     sysname = platform.system()
     if sysname == "Darwin":
@@ -593,7 +662,7 @@ def ollama_hint():
 
 
 # --------------------------------------------------------------------------
-# Zustand von Exporten und Index
+# State of exports and index
 # --------------------------------------------------------------------------
 def _mtime_iso(p):
     try:
@@ -624,11 +693,11 @@ def _sharepoint_stand(wurzel):
 
 
 def export_status(cfg):
-    """Gibt es die Export-Ordner, und wann liefen sie zuletzt?
+    """Do the export folders exist, and when did they last run?
 
-    Als Zeitpunkt dient die Fortschrittsdatei des jeweiligen Exports – die
-    Ordnergröße bleibt bewusst außen vor: ein Postfach kann zweistellige
-    Gigabyte haben, das bei jedem Statusabruf durchzuzählen wäre teuer.
+    The timestamp comes from each export's progress file – folder size is
+    deliberately left out: a mailbox can hold tens of gigabytes, and
+    counting that on every status poll would be expensive.
     """
     teams = BASE / TEAMS_DIR
     outlook = BASE / OUTLOOK_DIR
@@ -637,8 +706,8 @@ def export_status(cfg):
     seiten = BASE / SHAREPOINT_PAGES_DIR
     planner = BASE / PLANNER_DIR
     return {
-        # Die state.db datiert den letzten Lauf: jeder Export schreibt sie
-        # am Ende, auch wenn nichts Neues kam.
+        # The state.db dates the last run: every export writes it at the
+        # end, even when nothing new arrived.
         "teams": {"dir": str(teams), "exists": teams.is_dir(),
                   "last_run": _mtime_iso(teams / state_db.DB_NAME)},
         "outlook": {"dir": str(outlook), "exists": outlook.is_dir(),
@@ -656,16 +725,16 @@ def export_status(cfg):
     }
 
 
-_ZAEHLUNG = {}          # db-Pfad -> (Kennung der Datei, Zahlen)
+_ZAEHLUNG = {}          # db path -> (file fingerprint, counts)
 
 
 def _zaehle(db):
-    """Textstellen und Nachrichten im Index – gepuffert.
+    """Chunks and messages in the index – cached.
 
-    Die Oberfläche fragt den Zustand alle paar Sekunden ab. COUNT(DISTINCT uid)
-    läuft über den ganzen Index (auf 270.000 Zeilen rund 30 ms); das jedes Mal
-    zu wiederholen wäre Verschwendung, denn die Zahlen ändern sich nur, wenn
-    die Datei sich ändert. Größe und Änderungszeit sind die Kennung dafür.
+    The interface polls the state every few seconds. COUNT(DISTINCT uid)
+    scans the whole index (about 30 ms on 270,000 rows); repeating that
+    every time would be waste, because the numbers only change when the
+    file does. Size and modification time are the fingerprint for that.
     """
     try:
         s = db.stat()
@@ -679,14 +748,14 @@ def _zaehle(db):
     try:
         zahlen = {
             "chunks": con.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
-            # Was der Anwender „Nachricht“ nennt: eine Mail, ein Chat, ein
-            # Termin. Lange Nachrichten stehen als mehrere Textstellen im
-            # Index – die Zahl der Zeilen wäre also deutlich höher als das,
-            # was jemand in seinem Archiv wiederzufinden erwartet.
+            # What the user calls a "message": a mail, a chat, an
+            # appointment. Long messages sit in the index as several
+            # chunks – the row count would thus be far higher than what
+            # someone expects to find again in their archive.
             "messages": con.execute("SELECT COUNT(DISTINCT uid) FROM chunks").fetchone()[0],
-            # Was dieser Index kann. Ein älterer kennt Verlauf und Löschungen
-            # nicht; die Oberfläche bietet sie dann gar nicht erst an, statt
-            # den Anwender in einen Fehler laufen zu lassen.
+            # What this index can do. An older one knows nothing of threads
+            # and deletions; the interface then simply does not offer them
+            # instead of letting the user run into an error.
             "features": sorted({r[1] for r in con.execute("PRAGMA table_info(chunks)")}
                                & {"thread", "gone", "ext"}),
         }
@@ -697,17 +766,18 @@ def _zaehle(db):
 
 
 def lies_bericht(ordner=OUTLOOK_DIR):
-    """Der letzte Vollständigkeitsbericht, falls es einen gibt.
+    """The last completeness report, if there is one.
 
-    Er entsteht nur auf Knopfdruck: die Prüfung fragt Microsoft, und das soll
-    niemand ungefragt tun, nur weil eine Ansicht aufgeht.
+    It is only created at the push of a button: the check queries
+    Microsoft, and nothing should do that unasked just because a view
+    opens.
     """
     return state_db.StateDb(BASE / ordner).bericht_lesen()
 
 
-# Die Analytics-Zahlen kommen materialisiert aus dem Index (analytics_db):
-# der Indexlauf schreibt sie, hier wird nur gelesen. "Aktualisieren" baut sie
-# auf Wunsch neu – der einzige Moment, in dem hier gerechnet wird.
+# The analytics numbers come materialised from the index (analytics_db):
+# the index run writes them, here we only read. "Refresh" rebuilds them on
+# request – the only moment any computing happens here.
 _ANALYTICS_LOCK = threading.Lock()
 
 
@@ -726,8 +796,8 @@ def analytics_daten(cfg, neu=False):
     store = STORE_PFAD
     daten = None if neu else analytics_db.lies(store)
     if daten is None:
-        # Erster Aufruf nach einem Update (oder ausdrückliches Aktualisieren):
-        # einmal rechnen, dann liegt der Block wieder im Index.
+        # First call after an update (or an explicit refresh): compute once,
+        # then the block sits in the index again.
         with _ANALYTICS_LOCK:
             daten = (None if neu else analytics_db.lies(store)) \
                 or analytics_db.baue(store, analytics_ordner())
@@ -748,7 +818,7 @@ def analytics_daten(cfg, neu=False):
 
 
 def store_status(cfg):
-    """Zustand des Index: wie viel steckt drin, mit oder ohne Embeddings."""
+    """State of the index: how much is in it, with or without embeddings."""
     store = STORE_PFAD
     db = store_layout.db_path(store)
     info = store_layout.info(store)
@@ -766,39 +836,40 @@ def store_status(cfg):
 
 
 # --------------------------------------------------------------------------
-# Fehlerbericht
+# Error report
 #
-# Ein Fehler wie „BrokenProcessPool" ist ohne Umgebung nicht zu beantworten:
-# Betriebssystem, gebündelt oder als Skript, wie viele Kerne, was der Index
-# gerade enthält. Diese Angaben von Hand zu erfragen kostet zwei Runden E-Mail;
-# hier stehen sie fertig da.
+# An error like "BrokenProcessPool" cannot be answered without the
+# environment: operating system, bundled or script, how many cores, what
+# the index currently holds. Asking for these details by hand costs two
+# rounds of e-mail; here they stand ready.
 #
-# Der Bestand dieser App ist Post und Chat – das Protokoll nennt zwangsläufig
-# Adressen und Pfade. Deshalb zwei Vorkehrungen, und beide sind ernst gemeint:
-# was offensichtlich persönlich ist, wird vorher ersetzt (unten), und was übrig
-# bleibt, bekommt der Mensch vor dem Absenden zu sehen und kann es ändern. Die
-# App schickt nichts selbst; sie füllt nur ein Formular auf GitHub aus.
+# This app's corpus is mail and chat – the log inevitably names addresses
+# and paths. Hence two precautions, and both are meant seriously: whatever
+# is obviously personal is replaced beforehand (below), and whatever
+# remains is shown to the human before sending, editable. The app sends
+# nothing itself; it merely fills in a form on GitHub.
 # --------------------------------------------------------------------------
-# Wie viel Protokoll in den Bericht kommt. Nach oben begrenzt, weil GitHub den
-# vorbelegten Text in der Adresse überträgt und lange Adressen abweist – und
-# weil die letzten Zeilen die interessanten sind.
+# How much log goes into the report. Capped because GitHub carries the
+# prefilled text in the URL and rejects long URLs – and because the last
+# lines are the interesting ones.
 BERICHT_ZEILEN = 80
 BERICHT_ZEICHEN = 3000
 
 _MAIL = re.compile(r"[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+")
-# C:\Users\name\… und /Users/name/…, /home/name/… – der Anmeldename steckt in
-# fast jedem Pfad, den ein Protokoll nennt.
+# C:\Users\name\… and /Users/name/…, /home/name/… – the login name sits in
+# almost every path a log mentions.
 _HOME_WIN = re.compile(r"([A-Za-z]:\\Users\\)[^\\/\r\n]+", re.I)
 _HOME_NIX = re.compile(r"(/(?:Users|home)/)[^/\s:\"']+")
 
 
 def anonymisiere(text):
-    """E-Mail-Adressen und Benutzernamen in Pfaden ersetzen.
+    """Replace e-mail addresses and user names in paths.
 
-    Bewusst grob und ohne Anspruch auf Vollständigkeit: Ordnernamen,
-    Betreffzeilen und Anzeigenamen kann kein Muster erkennen. Das ist kein
-    Versehen, sondern die Aufgabenteilung – die Maschine nimmt das Sichere weg,
-    den Rest liest der Mensch, dem der Text vor dem Absenden im Fenster steht.
+    Deliberately coarse and with no claim to completeness: no pattern can
+    recognise folder names, subject lines or display names. That is not an
+    oversight but the division of labour – the machine removes the certain
+    part, the rest is read by the human, who sees the text in the window
+    before sending.
     """
     text = _MAIL.sub("…@…", text or "")
     text = _HOME_WIN.sub(r"\1…", text)
@@ -806,7 +877,7 @@ def anonymisiere(text):
 
 
 def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
-    """Die letzten Zeilen – dort steht, was schiefging."""
+    """The last lines – that is where what went wrong is written."""
     alle = (text or "").splitlines()
     weg = max(0, len(alle) - zeilen)
     rest = "\n".join(alle[weg:])
@@ -816,23 +887,23 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
     return (f"[… {weg} ältere Zeilen ausgelassen …]\n" + rest) if weg else rest
 
 
-# Einstellungen, deren INHALT jemanden benennt – Ordnernamen, der eigene Name
-# in analytics_skip, der Arbeitgeber im Tenant. Im Bericht steht nur, DASS sie
-# verstellt sind und in welchem Umfang, nie der Wert selbst.
+# Settings whose CONTENT names someone – folder names, one's own name in
+# analytics_skip, the employer in the tenant. The report only says THAT
+# they deviate and to what extent, never the value itself.
 _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
                   "sharepoint_urls", "sharepoint_pages_urls", "planner_urls"}
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 _NUR_GESETZT = {"client_id", "tenant"}
-# Stehen schon als eigene Zeile im Bericht – nicht doppelt aufführen.
+# Already appear as their own line in the report – do not list twice.
 _SCHON_BERICHTET = {"outlook_categories", "teams_categories", "auth_mode"}
 
 
 def einstellungs_abweichungen(cfg):
-    """Was von der Vorgabe abweicht – kompakt und ohne benennende Inhalte.
+    """What deviates from the defaults – compact and without naming content.
 
-    Ein Fehler hängt oft an einer verstellten Einstellung, und von selbst nennt
-    sie niemand. Pfade stehen nicht im Schema und tauchen hier also gar nicht
-    erst auf; Regel- und Namenslisten schrumpfen auf ihren Umfang.
+    An error often hangs on a changed setting, and nobody mentions it
+    unprompted. Paths are not in the schema and thus never even appear
+    here; rule and name lists shrink to their extent.
     """
     aus = []
     for key, vorgabe in settings.VORGABEN.items():
@@ -859,11 +930,11 @@ def einstellungs_abweichungen(cfg):
 
 
 def systemangaben(status, lang=None):
-    """Die Fakten eines Berichts als [{"k": Textschlüssel, "v": Wert}, …].
+    """The facts of a report as [{"k": text key, "v": value}, …].
 
-    Übersetzt wird erst in der Oberfläche – wie bei den Protokollzeilen. So
-    liest der Melder den Bericht in seiner Sprache, statt in der eines
-    Servers, der keine hat.
+    Translation happens only in the interface – as with the log lines.
+    That way the reporter reads the report in their language rather than
+    in that of a server, which has none.
     """
     store = status.get("store") or {}
     oll = status.get("ollama") or {}
@@ -871,9 +942,9 @@ def systemangaben(status, lang=None):
     letzter = (status.get("jobs") or {}).get("last") or {}
 
     def zeile(k, v):
-        # Nur der Rumpf des Schlüssels; die Oberfläche setzt "report.sys." davor
-        # und übersetzt – wie bei den Protokollzeilen wird hier nichts benannt,
-        # was eine Sprache hat.
+        # Only the stem of the key; the interface prefixes "report.sys." and
+        # translates – as with the log lines, nothing that has a language is
+        # named here.
         return {"k": k, "v": str(v)}
 
     art = "Bündel" if status.get("frozen") else "Skript"
@@ -902,15 +973,15 @@ def systemangaben(status, lang=None):
     if letzter:
         angaben.append(zeile("lastjob", f'{letzter.get("label", "?")}: '
                                         f'{"ok" if letzter.get("ok") else "Fehler"}'))
-    # Der Datenordner nur, wenn er NICHT der Standard ist: sonst sagt er nichts,
-    # was oben nicht schon steht, und trägt bloß einen Benutzernamen mit sich.
+    # The data folder only when it is NOT the default: otherwise it says
+    # nothing the lines above do not, and merely carries a user name along.
     if status.get("data_dir") != status.get("data_dir_default"):
         angaben.append(zeile("datadir", anonymisiere(str(status.get("data_dir")))))
     return angaben
 
 
 def fehlerbericht(status, log_text="", hint="", lang=None):
-    """Alles, was die Oberfläche für das GitHub-Formular braucht."""
+    """Everything the interface needs for the GitHub form."""
     titel = anonymisiere(str(hint or "").strip()).strip()
     return {
         "system": systemangaben(status, lang),
@@ -921,15 +992,15 @@ def fehlerbericht(status, log_text="", hint="", lang=None):
 
 
 # --------------------------------------------------------------------------
-# Schritte eines Laufs (rein – ohne Seiteneffekte, daher gut testbar)
+# Steps of a run (pure – no side effects, hence easy to test)
 # --------------------------------------------------------------------------
 def script_argv(name, *args):
-    """Kommandozeile für eines der Teilprogramme.
+    """Command line for one of the subprograms.
 
-    Als Skript: python3 <name>.py …
-    Gebündelt: die eigene ausführbare Datei mit "--run <name>" – dort gibt es
-    keinen Python-Interpreter und keine .py-Dateien mehr, die Module stecken
-    im Bündel und werden von run_bundled() importiert.
+    As a script: python3 <name>.py …
+    Bundled: our own executable with "--run <name>" – there is no Python
+    interpreter and no .py files there any more, the modules sit in the
+    bundle and are imported by run_bundled().
     """
     if name not in RUNNABLE:
         raise ValueError(f"Unbekanntes Teilprogramm: {name}")
@@ -939,10 +1010,10 @@ def script_argv(name, *args):
 
 
 def run_bundled(name, argv):
-    """Ein Teilprogramm im Bündel starten (Gegenstück zu script_argv).
+    """Start a subprogram inside the bundle (counterpart to script_argv).
 
-    Die Teilprogramme lesen ihre Argumente selbst aus sys.argv, also wird die
-    Liste vorher so hergerichtet, wie sie beim direkten Aufruf aussähe.
+    The subprograms read their arguments from sys.argv themselves, so the
+    list is arranged beforehand to look as it would on a direct call.
     """
     if name not in RUNNABLE:
         raise SystemExit(f"Unbekanntes Teilprogramm: {name}. "
@@ -951,24 +1022,19 @@ def run_bundled(name, argv):
     importlib.import_module(name).main()
 
 
-def _flag(value):
-    """Schalter so schreiben, wie env_flag() in den Export-Skripten ihn liest."""
-    return "1" if value else "0"
-
-
 def calendar_file(cfg):
     return STORE_PFAD / "calendar.json"
 
 
 def calendar_plan(cfg):
-    """Was der Kalenderschritt in diesem Lauf zu tun hat.
+    """What the calendar step has to do in this run.
 
-    Liefert (noetig, mit_mails). Termine und Kontakte stammen ausschließlich
-    aus dem Outlook-Export – ist keine der beiden Kategorien gewählt, gäbe es
-    nichts aufzubauen. Die Wiederherstellung gelöschter Termine liest darüber
-    hinaus jede einzelne .eml; das lohnt nur, wenn in diesem Lauf auch Mails
-    geholt wurden. Wer nur Kontakte exportiert, wartete sonst minutenlang auf
-    eine Auswertung, an der sich nichts geändert haben kann.
+    Returns (noetig, mit_mails). Appointments and contacts come solely
+    from the Outlook export – if neither category is selected, there is
+    nothing to build. Reconstructing deleted appointments additionally
+    reads every single .eml; that only pays off when this run also fetched
+    mail. Someone exporting only contacts would otherwise wait minutes for
+    an evaluation nothing can have changed in.
     """
     cats = set(_clean_categories(cfg.get("outlook_categories"),
                                  ["mail", "calendar", "contacts"]))
@@ -976,11 +1042,11 @@ def calendar_plan(cfg):
 
 
 def _auth_env(cfg):
-    """Anmeldung an die Unterprozesse weiterreichen.
+    """Pass the sign-in on to the subprocesses.
 
-    Wie bei den Kategorien: die App führt ihre Konfiguration im Speicher und
-    gibt sie als Umgebungsvariable mit, statt sich darauf zu verlassen, dass
-    settings.py dieselbe Datei zur selben Zeit gleich liest.
+    As with the categories: the app keeps its configuration in memory and
+    hands it over as environment variables instead of relying on
+    settings.py reading the same file the same way at the same time.
     """
     env = {"GRAPH_AUTH": ("login" if str(cfg.get("auth_mode", "token")).lower()
                           == "login" else "token")}
@@ -1004,511 +1070,83 @@ def build_steps(cfg, outlook=False, teams=False, index=False, calendar=False,
                 sync_sharepoint=False, check_sharepoint=False,
                 sharepoint_pages=False, check_pages=False, planner=False,
                 nur_einheit=None):
-    """Kommandozeilen für einen Lauf zusammenstellen.
+    """Assemble the command lines for a run – from the registry.
 
-    Die Export-Skripte bekommen die Auswahl über EXPORT_CATEGORIES – so laufen
-    sie ohne jede Rückfrage, mit genau dem, was in der Oberfläche angehakt ist.
-    Der Token geht als GRAPH_TOKEN mit, damit der Lauf nicht davon abhängt, in
-    welchem Verzeichnis er gestartet wurde.
+    What a step is lives entirely in steps.REGISTRY; here we only hand in
+    the app paths, the shared environment and the request flags. The
+    export scripts receive the selection via environment variables – so
+    they run without any prompt, with exactly what is ticked in the
+    interface.
     """
-    steps = []
-    # None heißt „wie eingestellt“. Der Aufrufer setzt es nur, wenn er es besser
-    # weiß – etwa weil in diesem Lauf gar keine Mails geholt wurden.
+    # None means "as configured". The caller only sets it when it knows
+    # better – say because this run fetched no mail at all.
     if reconstruct is None:
         reconstruct = bool(cfg.get("calendar_reconstruct", True))
-    # Unterprozesse (und auths MSAL-Cache) finden Konfiguration und Token
-    # über MUNIMENTUM_HOME im festen Heimatordner – unabhängig vom Datenordner.
+    ctx = {
+        "embeddings": embeddings, "reconstruct": reconstruct,
+        "nur_einheit": nur_einheit,
+        "cats_outlook": _clean_categories(cfg["outlook_categories"],
+                                          ["mail", "calendar", "contacts"]),
+        "cats_teams": _clean_categories(cfg["teams_categories"],
+                                        ["1on1", "group", "meeting",
+                                         "channels"]),
+    }
+    pfade = {
+        "outlook": OUTLOOK_DIR, "teams": TEAMS_DIR, "onedrive": ONEDRIVE_DIR,
+        "sharepoint": SHAREPOINT_DIR, "sharepoint_pages": SHAREPOINT_PAGES_DIR,
+        "planner": PLANNER_DIR, "store": str(STORE_PFAD),
+        "store_db": store_layout.db_path(STORE_PFAD),
+        # ONE absolute path for both: the step writes it, the skip target,
+        # the status and /api/calendar read it. Spelled relative it landed
+        # under the subprocess cwd (BASE) instead of the index folder.
+        "calendar_json": str(calendar_file(cfg)),
+        "calendar_file": calendar_file(cfg),
+    }
+    # Subprocesses (and auth's MSAL cache) find configuration and token via
+    # MUNIMENTUM_HOME in the fixed home folder – independent of the data dir.
     base_env = {"PYTHONUNBUFFERED": "1", "MUNIMENTUM_HOME": str(HEIM),
                 "EXPORT_WORKERS": str(cfg.get("workers", 4)),
                 "MIRROR_WORKERS": str(cfg.get("mirror_workers") or 8),
                 **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token
-
-    # Ohne gewählte Kategorie kein Schritt: eine leere EXPORT_CATEGORIES liest
-    # das Skript als „nicht gesetzt“ und holte dann alles. Der Zeitplan und die
-    # Schnittstelle kämen sonst an der Auswahl vorbei.
-    cats = _clean_categories(cfg["outlook_categories"], ["mail", "calendar", "contacts"])
-    if outlook and cats:
-        steps.append({
-            "key": "outlook", "label": "job.step.outlook", "corpus": True,
-            "argv": script_argv("outlook_export", OUTLOOK_DIR),
-            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
-                    "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
-                    # Immer setzen, auch leer: leer heißt "nichts auslassen",
-                    # nicht gesetzt hieße "Vorgabe des Skripts".
-                    "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])},
-        })
-    if onedrive:
-        steps.append({
-            "key": "onedrive", "label": "job.step.onedrive", "corpus": True,
-            "argv": script_argv("onedrive_export", ONEDRIVE_DIR),
-            "env": {**base_env,
-                    # Immer setzen, auch leer: leer heißt "alles mitnehmen",
-                    # nicht gesetzt hieße "was in app_config.json steht".
-                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
-                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
-        })
-    if sharepoint:
-        steps.append({
-            "key": "sharepoint", "label": "job.step.sharepoint", "corpus": True,
-            "argv": script_argv("sharepoint_export", SHAREPOINT_DIR),
-            "env": {**base_env, **_sharepoint_env(cfg),
-                    **({"SHAREPOINT_URLS": nur_einheit, "SYNC_NOW": "1"}
-                       if nur_einheit else {})},
-        })
-    if planner:
-        steps.append({
-            "key": "planner", "label": "job.step.planner", "corpus": True,
-            "argv": script_argv("planner_export", PLANNER_DIR),
-            "env": {**base_env,
-                    "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
-                    "PLANNER_URLS": (nur_einheit if nur_einheit else
-                                     str(cfg.get("planner_urls") or "")),
-                    "PLANNER_ATTACHMENTS": _flag(
-                        cfg.get("planner_attachments")),
-                    **({"SYNC_NOW": "1"} if nur_einheit else {})},
-        })
-    if sharepoint_pages:
-        steps.append({
-            "key": "sharepoint_pages", "label": "job.step.pages", "corpus": True,
-            "argv": script_argv("sharepoint_export", "--pages",
-                                SHAREPOINT_PAGES_DIR),
-            "env": {**base_env,
-                    "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
-                    "SHAREPOINT_PAGES_URLS":
-                    (nur_einheit if nur_einheit
-                     else str(cfg.get("sharepoint_pages_urls") or "")),
-                    **({"SYNC_NOW": "1"} if nur_einheit else {}),
-                    "SHAREPOINT_PAGES_IMAGE_MAX_MB":
-                    str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))},
-        })
-    cats = _clean_categories(cfg["teams_categories"],
-                             ["1on1", "group", "meeting", "channels"])
-    if teams and cats:
-        steps.append({
-            "key": "teams", "label": "job.step.teams", "corpus": True,
-            "argv": script_argv("teams_export", TEAMS_DIR),
-            "env": {**base_env, "EXPORT_CATEGORIES": ",".join(cats),
-                    "EMBED_IMAGES": _flag(cfg.get("embed_images")),
-                    "CACHE_IMAGES": _flag(cfg.get("cache_images")),
-                    "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
-                    "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))},
-        })
-    if index:
-        argv = script_argv("rag_index", TEAMS_DIR, OUTLOOK_DIR,
-                           ONEDRIVE_DIR, "--sharepoint", SHAREPOINT_DIR,
-                           "--pages", SHAREPOINT_PAGES_DIR,
-                           "--planner", PLANNER_DIR,
-                           "--store", str(STORE_PFAD),
-                           "--model", cfg["embed_model"],
-                           "--ollama", cfg["ollama"],
-                           "--batch", cfg.get("index_batch", 128))
-        if not embeddings:
-            argv.append("--no-embeddings")
-        steps.append({
-            "key": "index",
-            "label": "job.step.index" if embeddings else "job.step.index.lexical",
-            "argv": argv, "env": dict(base_env),
-            # Hat der Export nichts Neues gebracht, indiziert dieser Schritt
-            # denselben Bestand ein zweites Mal. "ziel" ist die Bedingung, unter
-            # der das Auslassen sicher ist: nur wenn es schon einen Index gibt.
-            "nur_bei_neuem": True, "ziel": store_layout.db_path(STORE_PFAD),
-        })
-    if calendar:
-        # Termine und Kontakte aus dem Export zu lesen geht schnell. Teuer ist
-        # nur die Wiederherstellung gelöschter Termine: dafür wird jede .eml
-        # gelesen, bei einem großen Postfach ein paar Minuten. Deshalb ein
-        # eigener Schritt mit Ergebnisdatei – und abschaltbar.
-        argv = script_argv("combined_search", OUTLOOK_DIR,
-                           "--json", str(Path(STORE_DIR) / "calendar.json"))
-        if not reconstruct:
-            argv.append("--no-reconstruct")
-        steps.append({
-            "key": "calendar",
-            "label": "job.step.calendar" if reconstruct else "job.step.calendar.plain",
-            "argv": argv, "env": dict(base_env),
-            "nur_bei_neuem": True, "ziel": calendar_file(cfg),
-        })
-    if sync_onedrive:
-        steps.append({
-            "key": "onedrive_folders", "label": "job.step.folders",
-            "argv": script_argv("onedrive_export", "--folders", ONEDRIVE_DIR),
-            "env": {**base_env,
-                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or "")},
-        })
-    if sync_sharepoint:
-        steps.append({
-            "key": "sharepoint_folders", "label": "job.step.folders",
-            "argv": script_argv("sharepoint_export", "--folders", SHAREPOINT_DIR),
-            "env": {**base_env, **_sharepoint_env(cfg)},
-        })
-    if sync_folders:
-        steps.append({
-            "key": "folders", "label": "job.step.folders",
-            "argv": script_argv("outlook_export", "--folders", OUTLOOK_DIR),
-            "env": dict(base_env),
-        })
-    if sync_calendars:
-        steps.append({
-            "key": "calendars", "label": "job.step.calendars",
-            "argv": script_argv("outlook_export", "--calendars", OUTLOOK_DIR),
-            "env": dict(base_env),
-        })
-    if check:
-        steps.append({
-            "key": "check", "label": "job.step.check",
-            "argv": script_argv("outlook_export", "--check", OUTLOOK_DIR),
-            "env": dict(base_env),
-        })
-    if check_onedrive:
-        steps.append({
-            "key": "check_onedrive", "label": "job.step.check",
-            "argv": script_argv("onedrive_export", "--check", ONEDRIVE_DIR),
-            "env": {**base_env,
-                    "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
-                    "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))},
-        })
-    if check_sharepoint:
-        steps.append({
-            "key": "check_sharepoint", "label": "job.step.preview",
-            "argv": script_argv("sharepoint_export", "--check", SHAREPOINT_DIR),
-            "env": {**base_env, **_sharepoint_env(cfg)},
-        })
-    if check_pages:
-        steps.append({
-            "key": "check_pages", "label": "job.step.check",
-            "argv": script_argv("sharepoint_export", "--check-pages",
-                                SHAREPOINT_PAGES_DIR),
-            "env": {**base_env, "SHAREPOINT_PAGES_URLS":
-                    str(cfg.get("sharepoint_pages_urls") or "")},
-        })
-    return steps
-
-
-def _sharepoint_env(cfg):
-    # Always set, even empty: empty means "no filter", unset would mean
-    # "whatever app_config.json says" – the run must mirror the form.
-    return {"SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
-            "SHAREPOINT_URLS": str(cfg.get("sharepoint_urls") or ""),
-            "SHAREPOINT_TYPES_INCLUDE": str(cfg.get("sharepoint_types_include") or ""),
-            "SHAREPOINT_TYPES_EXCLUDE": str(cfg.get("sharepoint_types_exclude") or ""),
-            "SHAREPOINT_MAX_MB": str(int(cfg.get("sharepoint_max_mb") or 0))}
+    angefragt = {"outlook": outlook, "teams": teams, "index": index,
+                 "calendar": calendar, "onedrive": onedrive,
+                 "sharepoint": sharepoint, "planner": planner,
+                 "sharepoint_pages": sharepoint_pages,
+                 "sync_onedrive": sync_onedrive,
+                 "sync_sharepoint": sync_sharepoint,
+                 "sync_folders": sync_folders,
+                 "sync_calendars": sync_calendars,
+                 "check": check, "check_onedrive": check_onedrive,
+                 "check_sharepoint": check_sharepoint,
+                 "check_pages": check_pages}
+    return steps_mod.baue(cfg, ctx, pfade, base_env, script_argv, angefragt)
 
 
 cadence_faellig = export_util.cadence_faellig
 
 
 def due_now(last_run, interval_minutes, now):
-    """Ist der nächste geplante Lauf fällig? (last_run None = sofort)"""
+    """Is the next scheduled run due? (last_run None = immediately)"""
     if last_run is None:
         return True
     return now >= last_run + max(1, int(interval_minutes)) * 60
 
 
 # --------------------------------------------------------------------------
-# Läufe ausführen: ein Job nach dem anderen, Ausgabe live in den Puffer
-# --------------------------------------------------------------------------
-class JobRunner:
-    """Führt eine Folge von Schritten als Unterprozesse aus, einer zur Zeit.
-
-    Ein Job nach dem anderen ist Absicht und keine Einschränkung: Export und
-    Index schreiben in dieselben Ordner, und Graph drosselt ohnehin pro
-    Postfach. Die Ausgabe landet zeilenweise in einem Ringpuffer, den die
-    Oberfläche pollt.
-    """
-
-    MAX_LINES = 4000
-
-    def __init__(self, history=None):
-        self.lock = threading.Lock()
-        self.lines = deque(maxlen=self.MAX_LINES)
-        self.seq = 0
-        self.thread = None
-        self.proc = None
-        self.cancelled = False
-        self.job = None            # {"label", "steps", "step", "started"}
-        self.last = None           # {"label", "ok", "finished", "detail"}
-        self.token_expired = False
-        # Summe der neu geschriebenen Stücke über alle Export-Schritte dieses
-        # Laufs. None heißt „kein Export-Schritt hat sich geäußert“ – dann wird
-        # nichts übersprungen, denn Unwissen ist kein Grund.
-        self.neu = None
-        # Run history (run_history.RunHistory) – optional so tests can run
-        # without a database; every call is guarded on its side too.
-        self.history = history
-        self._origin = "manual"
-        self._context = {}
-        self._step_result = None   # last @@RESULT@@ dict of the current step
-        self._run_id = None        # tags log lines with the current run
-        self._log_puffer = []      # lines waiting for runs.db, see _log_flush
-
-    # -- Protokoll ---------------------------------------------------------
-    def log(self, text, level="info"):
-        """Rohe Protokollzeile – so, wie die Export-Skripte sie ausgeben.
-
-        Neben dem Ringpuffer für die Oberfläche wandert jede Zeile in die
-        log-Tabelle der runs.db – Zeilen eines Laufs tragen dessen id, die
-        Gesundheits-Sektion zeigt sie später je Lauf. Geschrieben wird
-        gebündelt; App-Zeilen außerhalb eines Laufs sind selten und gehen
-        sofort."""
-        with self.lock:
-            self.seq += 1
-            self.lines.append({"n": self.seq, "level": level,
-                               "t": datetime.now().strftime("%H:%M:%S"),
-                               "text": text})
-            self._log_puffer.append((self._run_id, time.time(), level,
-                                     json.dumps(text, ensure_ascii=False)))
-            voll = self._run_id is None or len(self._log_puffer) >= 50
-        if voll:
-            self._log_flush()
-
-    def _log_flush(self):
-        with self.lock:
-            puffer, self._log_puffer = self._log_puffer, []
-        if puffer and self.history:
-            self.history.log_lines(puffer)
-
-    def logk(self, key, level="info", **vars):
-        """Protokollzeile als Textschlüssel; übersetzt wird erst beim Anzeigen.
-
-        Getrennt von log(), damit nichts geraten werden muss: eine Skriptzeile
-        kann aussehen wie ein Schlüssel. Und erst beim Anzeigen zu übersetzen
-        heißt, dass ein Sprachwechsel auch das vorhandene Protokoll umstellt,
-        statt es in der Sprache von damals einzufrieren.
-        """
-        self.log({"k": key, "v": vars}, level)
-
-    def log_since(self, since):
-        with self.lock:
-            return [ln for ln in self.lines if ln["n"] > since], self.seq
-
-    # -- Zustand -----------------------------------------------------------
-    @property
-    def busy(self):
-        return self.thread is not None and self.thread.is_alive()
-
-    def snapshot(self):
-        job = dict(self.job) if self.job else None
-        return {"busy": self.busy, "job": job, "last": self.last,
-                "token_expired": self.token_expired, "seq": self.seq}
-
-    # -- Steuerung ---------------------------------------------------------
-    def start(self, steps, label, origin="manual", context=None):
-        if self.busy:
-            return False
-        if not steps:
-            return False
-        self.cancelled = False
-        self.token_expired = False
-        self.neu = None
-        self._origin = origin
-        self._context = context or {}
-        self.job = {"label": label, "steps": [s["label"] for s in steps],
-                    "step": steps[0]["label"], "index": 0, "progress": None,
-                    "started": datetime.now().isoformat(timespec="seconds")}
-        self.thread = threading.Thread(target=self._run, args=(steps, label), daemon=True)
-        self.thread.start()
-        return True
-
-    def cancel(self):
-        self.cancelled = True
-        proc = self.proc
-        if proc and proc.poll() is None:
-            proc.terminate()
-            self.logk("srv.job.cancel", "warn")
-            return True
-        return False
-
-    def _run(self, steps, label):
-        hist = self.history
-        run_id = hist.start_run(
-            label, self._origin,
-            elements=self._context.get("elements"),
-            semantic=self._context.get("semantic"),
-            workers=self._context.get("workers")) if hist else None
-        self._run_id = run_id
-        # Beschriftungen als geschachtelte Meldung ({"k": …}): mtext() im
-        # Browser übersetzt sie dann – als nackte Zeichenkette stünde der
-        # Schlüssel selbst im Protokoll ("job.step.outlook").
-        self.logk("srv.job.start", "head", label={"k": label, "v": {}})
-        ok = True
-        detail = ""
-        for i, step in enumerate(steps):
-            if self.cancelled:
-                ok, detail = False, {"k": "srv.job.cancelled", "v": {}}
-                break
-            self.job = {**self.job, "step": step["label"], "index": i,
-                        "progress": None}      # jeder Schritt zählt bei null an
-            if self._erspart(step):
-                self.logk("srv.job.skipped", "info",
-                          step={"k": step["label"], "v": {}})
-                if hist:
-                    hist.record_step(run_id, step["key"], step["label"],
-                                     time.time(), skipped=True)
-                continue
-            self.logk("srv.job.step", "head", step={"k": step["label"], "v": {}})
-            begonnen = time.time()
-            self._step_result = None
-            code = self._exec(step)
-            if hist:
-                hist.record_step(run_id, step["key"], step["label"], begonnen,
-                                 duration_s=time.time() - begonnen,
-                                 result=self._step_result, ok=(code == 0))
-            if self._step_result is not None:
-                # Die übersetzte Zusammenfassung baut die Oberfläche aus dem
-                # Ereignis – die Skripte drucken keine eigene Prosa mehr.
-                self.logk("srv.job.result", "info", ergebnis=self._step_result)
-            if code != 0:
-                ok = False
-                schritt = {"k": step["label"], "v": {}}
-                detail = ({"k": "srv.job.aborted", "v": {"step": schritt}}
-                          if self.cancelled else
-                          {"k": "srv.job.exitcode",
-                           "v": {"step": schritt, "code": code}})
-                self.logk("srv.job.stepfail", "err", detail=detail)
-                break
-            self.logk("srv.job.stepdone", "ok", step={"k": step["label"], "v": {}})
-        if ok:
-            self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
-        art = ("done" if ok else "aborted" if self.cancelled
-               else "token_expired" if self.token_expired else "error")
-        self._run_id = None
-        self._log_flush()          # der Rest des Laufs, bevor jemand liest
-        if hist:
-            hist.finish_run(run_id, art)
-            monate = self._context.get("retention_months")
-            if monate:
-                hist.prune(monate)
-            hist.prune_log(self._context.get("log_retention_days") or 14)
-        self._notify_user(art, label)
-        self.last = {"label": label, "ok": ok, "detail": detail,
-                     "finished": datetime.now().isoformat(timespec="seconds")}
-        self.job = None
-        self.proc = None
-
-    def _notify_user(self, art, label):
-        """One system notification per run – or none: the mode decides.
-
-        "errors" (the default) keeps quiet on success; "all" also reports
-        finished runs – the scheduler case, where no tab is open. A cancelled
-        run is never reported: the user did that themselves.
-        """
-        try:
-            mode = self._context.get("notify") or "errors"
-            if (mode == "off" or art == "aborted"
-                    or (art == "done" and mode != "all")):
-                return
-            key = {"done": "srv.notify.done",
-                   "token_expired": "srv.notify.token"}.get(art, "srv.notify.failed")
-            texte = i18n.strings(self._context.get("lang") or i18n.FALLBACK, RES)
-            text = (texte.get(key) or key).replace(
-                "{label}", texte.get(label) or str(label))
-            notify.send("Munimentum", text)
-        except Exception:
-            pass                # a missed notification must never break a run
-
-    def _erspart(self, step):
-        """Darf dieser Schritt entfallen, weil der Export nichts Neues brachte?
-
-        Aus der Praxis: ein Lauf mit nur „Kontakte“ meldete „Neu exportiert: 0“
-        und indizierte danach zwei Minuten lang denselben Bestand.
-
-        Drei Bedingungen, jede einzeln nötig:
-          * Der Schritt ist überhaupt dafür vorgesehen (Index, Kalender).
-          * Es lief ein Export-Schritt, der sich geäußert hat, und er brachte
-            nichts. Ohne Meldung wird gearbeitet – Unwissen ist kein Grund.
-          * Das Ergebnis existiert bereits. Sonst gäbe es nach dem ersten Lauf
-            mit unverändertem Bestand nie einen Index.
-        """
-        if not step.get("nur_bei_neuem") or self.neu is None or self.neu > 0:
-            return False
-        ziel = step.get("ziel")
-        return bool(ziel and Path(ziel).exists())
-
-    def _exec(self, step):
-        env = {**os.environ, **step.get("env", {})}
-        try:
-            self.proc = subprocess.Popen(
-                step["argv"], cwd=str(BASE), env=env, bufsize=0,
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT)
-        except OSError as e:
-            self.logk("srv.job.spawnfail", "err", error=str(e))
-            return -1
-        for line in _stream_lines(self.proc.stdout):
-            stand = progress.lies(line)
-            if stand is not None:
-                # Zahlen für den Balken – im Protokoll wären sie nur Rauschen.
-                if self.job:
-                    self.job = {**self.job, "progress": stand}
-                continue
-            fazit = progress.lies_ergebnis(line)
-            if fazit is not None:
-                self._step_result = fazit
-                # Nur Export-Schritte zählen für die Überspring-Logik: Index
-                # und Kalender melden zwar auch, ändern aber nicht den Bestand.
-                if step.get("corpus"):
-                    self.neu = (self.neu or 0) + fazit["new"]
-                continue
-            kaputt = progress.lies_fehler(line)
-            if kaputt is not None:
-                # Strukturiert statt Prosa-Muster: bis 5.4 stand hier eine
-                # Regex über den Meldungstext der Skripte.
-                if kaputt["error"] == "token_expired":
-                    self.token_expired = True
-                    self.logk("srv.job.token", "err")
-                continue
-            meldung = progress.lies_event(line)
-            if meldung is not None:
-                # Die Skripte erzählen in Textschlüsseln; übersetzt wird beim
-                # Anzeigen – wie bei den App-eigenen Zeilen.
-                self.log({"k": meldung["k"], "v": meldung.get("v", {})},
-                         meldung.get("level", "info"))
-                continue
-            self.log(line)
-        return self.proc.wait()
-
-
-def _stream_lines(stream):
-    """Zeilen aus einem Prozess-Stream, auch bei Fortschritt per \\r.
-
-    Die Skripte überschreiben Fortschrittszeilen mit "\\r" statt sie mit "\\n"
-    abzuschließen (rag_index.py: "… 500/12000 eingebettet"). readline() würde
-    darauf bis zum Ende des Schritts warten, deshalb wird roh gelesen und an
-    beiden Zeichen getrennt.
-    """
-    buf = ""
-    while True:
-        try:
-            chunk = stream.read(4096)
-        except (OSError, ValueError):
-            break
-        if not chunk:
-            break
-        buf += chunk.decode("utf-8", errors="replace")
-        parts = re.split(r"[\r\n]", buf)
-        buf = parts.pop()
-        for p in parts:
-            if p.strip():
-                yield p.rstrip()
-    if buf.strip():
-        yield buf.rstrip()
-
-
-# --------------------------------------------------------------------------
-# Zeitplan: läuft nur, solange die App offen ist
+# Schedule: runs only while the app is open
 # --------------------------------------------------------------------------
 class Scheduler(threading.Thread):
-    """Stößt in festem Abstand Export + Index an.
+    """Kicks off export + index at a fixed interval.
 
-    Bewusst an die Laufzeit der App gebunden (kein launchd/Task Scheduler): der
-    Token wird von Hand geholt und ist typischerweise etwa eine Stunde gültig –
-    ein Zeitplan, der im Hintergrund ohne offene Oberfläche weiterläuft, würde
-    vor allem abgelaufene Token produzieren, die niemand sieht.
+    Deliberately tied to the app's runtime (no launchd/Task Scheduler): the
+    token is fetched by hand and is typically valid for about an hour – a
+    schedule that keeps running in the background without an open interface
+    would mostly produce expired tokens nobody sees.
     """
 
-    TICK = 10                       # Sekunden zwischen zwei Fälligkeitsprüfungen
+    TICK = 10                       # seconds between two due-date checks
 
     def __init__(self, app):
         super().__init__(daemon=True)
@@ -1529,7 +1167,7 @@ class Scheduler(threading.Thread):
         return self.last_run + max(1, int(self.plan.get("interval_minutes", 60))) * 60
 
     def reset(self):
-        """Nach einer Änderung am Plan: Abstand ab jetzt neu zählen."""
+        """After a change to the plan: count the interval afresh from now."""
         self.last_run = time.time() if self.plan.get("enabled") else None
 
     def run(self):
@@ -1553,41 +1191,30 @@ class Scheduler(threading.Thread):
             self.app.jobs.logk("srv.sched.notoken", "warn")
             self.app.jobs.token_expired = True
             return
-        # Kalender nur, wenn Outlook mitläuft – die Daten dafür kommen
-        # ausschließlich von dort – und nur, wenn die Auswahl etwas hergibt.
+        # Calendar only when Outlook runs along – its data comes exclusively
+        # from there – and only when the selection yields anything.
         noetig, mit_mails = calendar_plan(self.app.cfg)
         kalender = bool(plan.get("outlook", True) and plan.get("calendar", True) and noetig)
         cfg = self.app.cfg
         ok, why = self.app.launch(origin="schedule",
-                                  outlook=plan.get("outlook", True),
-                                  teams=plan.get("teams", True),
-                                  onedrive=bool(plan.get("onedrive", True)
-                                                and cfg.get("onedrive_enabled")),
-                                  sharepoint=bool(plan.get("sharepoint", True)
-                                                  and cfg.get("sharepoint_enabled")),
-                                  sharepoint_pages=bool(
-                                      plan.get("sharepoint_pages", True)
-                                      and cfg.get("sharepoint_pages_enabled")),
-                                  planner=bool(plan.get("planner", True)
-                                               and cfg.get("planner_enabled")),
-                                  index=plan.get("index", True),
                                   calendar=kalender,
                                   reconstruct=None if mit_mails else False,
-                                  label="job.scheduled")
+                                  label="job.scheduled",
+                                  **steps_mod.plan_anfrage(plan, cfg))
         if not ok:
             self.app.jobs.logk("srv.sched.skipped", "warn", why=why)
 
 
 # --------------------------------------------------------------------------
-# MCP-Server als Unterprozess
+# MCP server as a subprocess
 # --------------------------------------------------------------------------
 def mcp_client_config(cfg, port):
-    """Fertige Einträge für Claude Code (HTTP) und Claude Desktop (stdio).
+    """Ready-made entries for Claude Code (HTTP) and Claude Desktop (stdio).
 
-    Serverseitig gebaut, weil nur hier bekannt ist, wie das Teilprogramm
-    aufzurufen ist (Skript oder gebündelte Datei) und wo die Daten liegen. Die
-    stdio-Variante bekommt absolute Pfade: Claude startet sie in einem
-    unbekannten Arbeitsverzeichnis.
+    Built server-side, because only here is it known how to invoke the
+    subprogram (script or bundled file) and where the data lives. The stdio
+    variant gets absolute paths: Claude starts it in an unknown working
+    directory.
     """
     argv = script_argv("mcp_server", "--transport", "stdio",
                        "--data-dir", str(BASE), "--store", str(STORE_PFAD))
@@ -1598,93 +1225,41 @@ def mcp_client_config(cfg, port):
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
         "stdio": {"mcpServers": {"munimentum": {
             "command": argv[0], "args": argv[1:],
-            # Konfiguration (mcp_enabled, Modelle) liegt im festen
-            # Heimatordner – Claude startet den Server irgendwo.
+            # Configuration (mcp_enabled, models) lives in the fixed
+            # home folder – Claude starts the server anywhere.
             "env": {"MUNIMENTUM_HOME": str(HEIM)}}}},
     }
 
 
-class McpProcess:
-    """Startet/stoppt mcp_server.py und sammelt dessen Ausgabe im Protokoll."""
+def _mcp_befehl(cfg):
+    """Launch plan for the MCP subprocess – paths resolved at call time.
 
-    def __init__(self, jobs):
-        self.jobs = jobs
-        self.proc = None
-        self.port = None
-        self.error = None
-
-    @property
-    def running(self):
-        return self.proc is not None and self.proc.poll() is None
-
-    def status(self, cfg):
-        return {"running": self.running, "port": self.port or cfg["mcp_port"],
-                "url": f"http://127.0.0.1:{self.port or cfg['mcp_port']}/mcp",
-                "error": self.error, "config": mcp_client_config(cfg,
-                                                                 self.port or cfg["mcp_port"])}
-
-    def start(self, cfg):
-        if self.running:
-            return True, {"k": "srv.mcp.running", "v": {}}
-        if not cfg.get("mcp_enabled", True):
-            self.error = {"k": "srv.mcp.disabled", "v": {}}
-            return False, self.error
-        db = store_layout.db_path(STORE_PFAD)
-        if not db.exists():
-            self.error = {"k": "srv.mcp.noindex", "v": {}}
-            return False, self.error
-        argv = script_argv("mcp_server", "--data-dir", str(BASE),
-                           "--store", str(STORE_PFAD),
-                           "--embed-model", cfg["embed_model"],
-                           "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
-        if not cfg.get("ollama_enabled", True):
-            argv.append("--no-ollama")
-        try:
-            self.proc = subprocess.Popen(
-                argv, cwd=str(BASE),
-                env={**os.environ, "PYTHONUNBUFFERED": "1",
-                     "MUNIMENTUM_HOME": str(HEIM)},
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT, bufsize=0)
-        except OSError as e:
-            self.error = {"k": "srv.mcp.spawnfail", "v": {"error": str(e)}}
-            return False, self.error
-        self.port = cfg["mcp_port"]
-        self.error = None
-        threading.Thread(target=self._pump, args=(self.proc,), daemon=True).start()
-        self.jobs.logk("srv.mcp.started", "ok", port=self.port)
-        return True, {"k": "srv.mcp.startok", "v": {}}
-
-    def _pump(self, proc):
-        for line in _stream_lines(proc.stdout):
-            self.jobs.log(f"[MCP] {line}")
-        code = proc.wait()
-        if proc is self.proc and code not in (0, -15):
-            self.error = {"k": "srv.mcp.exit", "v": {"code": code}}
-            self.jobs.logk("srv.mcp.exit", "err", code=code)
-
-    def stop(self):
-        if not self.running:
-            return False
-        self.proc.terminate()
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.proc.kill()
-        self.jobs.logk("srv.mcp.stopped", "warn")
-        return True
+    McpProcess (runner.py) knows nothing about the storage layout; this is
+    the one place that does. Resolving BASE/STORE_PFAD lazily keeps the
+    sandboxed tests honest, which repoint those globals per test.
+    """
+    argv = script_argv("mcp_server", "--data-dir", str(BASE),
+                       "--store", str(STORE_PFAD),
+                       "--embed-model", cfg["embed_model"],
+                       "--ollama", cfg["ollama"], "--port", str(cfg["mcp_port"]))
+    if not cfg.get("ollama_enabled", True):
+        argv.append("--no-ollama")
+    return {"argv": argv, "cwd": str(BASE),
+            "env": {"PYTHONUNBUFFERED": "1", "MUNIMENTUM_HOME": str(HEIM)},
+            "db": store_layout.db_path(STORE_PFAD)}
 
 
 # --------------------------------------------------------------------------
-# Eingebettete Suche – nutzt die Rangfolge des MCP-Servers
+# Embedded search – uses the MCP server's ranking
 # --------------------------------------------------------------------------
 class SearchBridge:
-    """Bindet mcp_server.py als Bibliothek ein statt die Suche nachzubauen.
+    """Pulls in mcp_server.py as a library instead of rebuilding the search.
 
-    Die Tool-Funktionen dort sind ganz normale Funktionen (der Dekorator meldet
-    sie nur zusätzlich am MCP-Server an) und arbeiten auf mcp_server.STATE. Wir
-    füllen STATE genauso wie dessen main() und rufen sie direkt auf – dieselbe
-    hybride Rangfolge, ohne einen zweiten Suchpfad zu pflegen.
+    The tool functions there are perfectly ordinary functions (the
+    decorator merely also registers them with the MCP server) and work on
+    mcp_server.STATE. We fill STATE just like its main() does and call them
+    directly – the same hybrid ranking without maintaining a second search
+    path.
     """
 
     def __init__(self):
@@ -1694,12 +1269,12 @@ class SearchBridge:
         self.lock = threading.Lock()
 
     def _store_stamp(self, cfg):
-        """Woran ein neuer Index zu erkennen ist.
+        """How a new index is recognised.
 
-        Die Vektordatei heißt nach jedem Lauf anders (store_layout) – der Name
-        gehört deshalb selbst in den Stempel. Ohne ihn bliebe die alte, noch
-        abgebildete Datei stehen: gleiche Zeit, gleiche Größe, und die Suche in
-        der App zeigte weiter den Stand von vorhin.
+        The vector file is named differently after every run (store_layout)
+        – so the name itself belongs in the stamp. Without it the old,
+        still-mapped file would remain: same time, same size, and the
+        in-app search would keep showing the previous state.
         """
         store = STORE_PFAD
         out = []
@@ -1714,7 +1289,7 @@ class SearchBridge:
         return tuple(out)
 
     def ensure(self, cfg):
-        """STATE (neu) aufsetzen, wenn der Index sich geändert hat."""
+        """Set up STATE (afresh) when the index has changed."""
         with self.lock:
             stamp = self._store_stamp(cfg)
             if self.module is not None and stamp == self.stamp:
@@ -1754,7 +1329,7 @@ class SearchBridge:
 
 
 # --------------------------------------------------------------------------
-# Anwendung: hält Konfiguration, Läufe, Zeitplan, MCP und Suche zusammen
+# Application: holds configuration, runs, schedule, MCP and search together
 # --------------------------------------------------------------------------
 class App:
     def __init__(self, cfg=None):
@@ -1763,51 +1338,18 @@ class App:
         self.history = run_history.RunHistory(HEIM / run_history.DB_NAME)
         self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
         self.history.prune_log(int(self.cfg.get("log_retention_days") or 14))
-        self.jobs = JobRunner(self.history)
-        self.mcp = McpProcess(self.jobs)
+        self.jobs = JobRunner(self.history, cwd=lambda: str(BASE), res=RES)
+        self.mcp = McpProcess(self.jobs, _mcp_befehl, mcp_client_config)
         self.search = SearchBridge()
         self.scheduler = Scheduler(self)
         self._ollama_cache = (0.0, None)
-        self._calendar_cache = None      # (Kennung, roh, gzip)
-        self.device_login = None         # laufende Gerätecode-Anmeldung
-        self.migration = False           # True, solange Alt-State einwandert
+        self._calendar_cache = None      # (fingerprint, raw, gzip)
+        self.device_login = None         # device-code sign-in in progress
         self._update = {"status": "off", "current": version.VERSION,
                         "latest": None, "url": None, "newer": False,
                         "ahead": False, "error": None}
 
-    def starte_migration(self):
-        """6.2: the historical loose state files move into state.db – found
-        at startup, run in the background, clearly logged, and no export
-        (manual or scheduled) starts before it is done: launch() checks the
-        flag."""
-        faellig = migrate_state.noetig(BASE / OUTLOOK_DIR, BASE / TEAMS_DIR,
-                                       BASE / ONEDRIVE_DIR)
-        if not faellig:
-            return
-        self.migration = True
-        self.jobs.logk("srv.migrate.start", "head",
-                       stores=", ".join(name for name, _ in faellig))
-
-        def _lauf():
-            try:
-                migrate_state.lauf(
-                    faellig,
-                    melde=lambda name, n: self.jobs.logk(
-                        "srv.migrate.store", "info", name=name, n=n))
-                self.jobs.logk("srv.migrate.done", "ok")
-                self.migration = False
-                # Deferred from serve(): the MCP server searches the archive
-                # and waits like everything else until the state is whole.
-                self.autostart_mcp()
-            except Exception as e:
-                # The flag deliberately stays set: exports keep waiting, the
-                # loose files are untouched, the next app start tries again.
-                self.jobs.logk("srv.migrate.failed", "err",
-                               error=f"{type(e).__name__}: {e}")
-
-        threading.Thread(target=_lauf, daemon=True).start()
-
-    # -- abgeleiteter Zustand ---------------------------------------------
+    # -- derived state ----------------------------------------------------
     def selected_categories(self):
         kats = (_clean_categories(self.cfg["outlook_categories"],
                                   ["mail", "calendar", "contacts"])
@@ -1820,8 +1362,8 @@ class App:
         for flag, kategorie, _name in SPIEGEL_QUELLEN:
             if self.cfg.get(flag) and kategorie not in kats:
                 kats.append(kategorie)
-        # Planner liest die Legacy-Kommentare aus den Gruppen-Konversationen –
-        # ein zweiter Scope am selben Schalter; das Anhang-Laden einen dritten.
+        # Planner reads the legacy comments from the group conversations –
+        # a second scope on the same switch; attachment loading a third.
         if self.cfg.get("planner_enabled") and "groups" not in kats:
             kats.append("groups")
         if self.cfg.get("planner_enabled") and \
@@ -1830,11 +1372,11 @@ class App:
         return kats
 
     def ollama(self, force=False):
-        """Ergebnis kurz zwischenspeichern – der Status wird im Sekundentakt abgefragt.
+        """Cache the result briefly – the status is polled every second.
 
-        Abgeschaltet wird gar nicht erst gefragt. Das ist der eigentliche Zweck
-        des Schalters: ohne ihn versucht die App alle zehn Sekunden eine
-        Verbindung, die es nicht gibt – dauerhaft, auf jedem Rechner ohne
+        When disabled we do not even ask. That is the real purpose of the
+        switch: without it the app attempts a connection that does not
+        exist every ten seconds – permanently, on every machine without
         Ollama.
         """
         if not self.cfg.get("ollama_enabled", True):
@@ -1853,15 +1395,15 @@ class App:
         return res
 
     def semantisch_gewollt(self):
-        """Soll der nächste Index Vektoren enthalten?"""
+        """Should the next index contain vectors?"""
         return bool(self.cfg.get("ollama_enabled", True)
                     and self.cfg.get("index_semantic", True))
 
     def check_updates(self, blockierend=False):
-        """Einmal nachsehen, ob es ein neueres Release gibt.
+        """Check once whether a newer release exists.
 
-        Im Hintergrund, weil der Start nicht auf eine Netzantwort warten soll –
-        wer offline ist, will die App trotzdem sofort sehen.
+        In the background, because startup must not wait for a network
+        reply – whoever is offline still wants to see the app immediately.
         """
         def lauf():
             self._update = updates.check(version.VERSION, version.REPO,
@@ -1870,8 +1412,8 @@ class App:
                 self.jobs.logk("srv.update.available", "info",
                                version=self._update["latest"],
                                url=self._update["url"] or version.RELEASES_URL)
-            # Alles andere bleibt still: kein Release, kein Netz oder abgeschaltet
-            # sind keine Ereignisse, mit denen man jemanden behelligt.
+            # Everything else stays quiet: no release, no network or
+            # switched off are not events to bother anyone with.
         if blockierend:
             lauf()
         else:
@@ -1879,20 +1421,20 @@ class App:
         return self._update
 
     def log_token_state(self):
-        """Beim Start einmal sagen, woran man ist.
+        """Say once at startup where things stand.
 
-        Der Assistent geht nur noch auf, wenn etwas fehlt – ohne diese Zeile
-        wäre der häufige Fall (Token liegt da und ist gültig) völlig stumm, und
-        niemand wüsste, wie lange er noch trägt.
+        The wizard only opens when something is missing – without this line
+        the common case (token present and valid) would be completely
+        silent, and nobody would know how long it still carries.
         """
         st = token_status(read_token(), needed=self.selected_categories())
         if not st["present"]:
             return self.jobs.logk("srv.token.none", "warn")
         if st["expired"]:
             return self.jobs.logk("srv.token.expired", "warn")
-        # Vier vollständige Sätze statt zusammengesetzter Bruchstücke: was in
-        # der einen Sprache aneinandergehängt funktioniert, ergibt in der
-        # nächsten keinen Satz mehr.
+        # Four complete sentences instead of assembled fragments: what works
+        # concatenated in one language no longer forms a sentence in the
+        # next.
         konto, minuten = st["account"], st["expires_in_minutes"]
         schluessel = ("srv.token.found" if konto and minuten is not None else
                       "srv.token.found.unknown" if konto else
@@ -1911,11 +1453,11 @@ class App:
         jobs = self.jobs.snapshot()
         plan = self.cfg["schedule"]
         nxt = self.scheduler.next_due()
-        # Der Assistent geht nur auf, wenn er gebraucht wird: kein Token, ein
-        # abgelaufener, oder einer, den ein Lauf gerade als tot erkannt hat.
-        # Ein noch gültiger Token wird nicht angetastet – seine Laufzeit hängt
-        # am Tenant und reicht durchaus über einen Arbeitstag. Wer ihn trotzdem
-        # ersetzen will, klickt oben auf die Token-Kachel.
+        # The wizard only opens when it is needed: no token, an expired one,
+        # or one a run has just found dead. A still-valid token is left
+        # alone – its lifetime depends on the tenant and can well outlast a
+        # working day. Whoever wants to replace it anyway clicks the token
+        # tile at the top.
         wizard = None
         if not tok["valid"] or jobs["token_expired"]:
             wizard = "token"
@@ -1923,7 +1465,6 @@ class App:
             wizard = "ollama"
         return {
             "token": tok,
-            "migration": self.migration,
             "ollama": oll,
             "ollama_hint": ollama_hint(),
             "store": store,
@@ -1963,12 +1504,12 @@ class App:
         }
 
     def _kalenderstand(self):
-        """Wie viele Kalender es gibt und wie viele davon mitkommen.
+        """How many calendars exist and how many of them come along.
 
-        Eigene Zahlen statt folders.zusammenfassung: dort zählen Elemente, und
-        wie viele Termine in einem Kalender liegen, sagt Graph beim Auflisten
-        nicht. Die Namen kommen mit, damit die Oberfläche die Auswahl nennen
-        kann statt nur zu zählen.
+        Own numbers instead of folders.zusammenfassung: that counts items,
+        and Graph does not say when listing how many appointments a
+        calendar holds. The names come along so the interface can name the
+        selection instead of merely counting.
         """
         daten = folders.lade(BASE / OUTLOOK_DIR, folders.KALENDER)
         alle = (daten or {}).get("ordner", [])
@@ -1982,26 +1523,27 @@ class App:
         }
 
     def auth_modus(self):
-        """Die App führt ihre Konfiguration selbst – nicht über settings.py.
+        """The app keeps its own configuration – not via settings.py.
 
-        settings.py liest app_config.json und ist die Quelle für die Skripte im
-        Terminal. Die App hat ihr cfg schon im Speicher; beides gleichzeitig zu
-        befragen hieße, zwei Wahrheiten für dieselbe Einstellung zu pflegen.
-        Weitergereicht wird sie an die Unterprozesse als Umgebungsvariable.
+        settings.py reads app_config.json and is the source for the scripts
+        in the terminal. The app already has its cfg in memory; consulting
+        both at once would mean maintaining two truths for the same
+        setting. It is passed on to the subprocesses as an environment
+        variable.
         """
         return "login" if str(self.cfg.get("auth_mode", "token")).lower() == "login" \
             else "token"
 
     def auth_ziel(self):
-        """(Client-ID, Tenant) – leer heißt Microsofts öffentliche Anwendung."""
+        """(client ID, tenant) – empty means Microsoft's public application."""
         return (str(self.cfg.get("client_id") or "").strip() or auth.STANDARD_CLIENT_ID,
                 str(self.cfg.get("tenant") or "").strip() or auth.STANDARD_TENANT)
 
     def auth_status(self):
-        """Wie sich die App anmeldet – und ob das gerade trägt.
+        """How the app signs in – and whether that currently holds.
 
-        `signed_in` fragt nur den Cache und öffnet dabei nichts: die Kachel soll
-        den Zustand anzeigen können, ohne ungefragt eine Anmeldung anzustoßen.
+        `signed_in` only asks the cache and opens nothing: the tile must be
+        able to show the state without kicking off a sign-in unasked.
         """
         klient, mandant = self.auth_ziel()
         konto = auth.angemeldet(client=klient, mandant=mandant)
@@ -2015,16 +1557,16 @@ class App:
             "client_id": klient,
             "tenant": mandant,
             "default_client_id": auth.STANDARD_CLIENT_ID,
-            # Läuft gerade eine Gerätecode-Anmeldung? Dann Code und Adresse.
+            # Is a device-code sign-in in progress? Then code and address.
             "device": dict(laeuft) if laeuft else None,
         }
 
-    # -- Aktionen ----------------------------------------------------------
+    # -- Actions -----------------------------------------------------------
     def calendar_payload(self):
-        """Kalenderdaten roh und gzip-gepackt, gepuffert bis die Datei sich ändert.
+        """Calendar data raw and gzipped, cached until the file changes.
 
-        Rund 5 MB JSON – neu einlesen und packen bei jedem Tab-Wechsel wäre
-        Verschwendung, gepackt gehen daraus 0,75 MB über die Leitung.
+        Around 5 MB of JSON – re-reading and compressing on every tab
+        switch would be waste; compressed, 0.75 MB go over the wire.
         """
         p = calendar_file(self.cfg)
         try:
@@ -2047,17 +1589,47 @@ class App:
                nur_einheit=None, origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
-        if self.migration:
-            return False, {"k": "srv.migrate.busy", "v": {}}
-        gewaehlt = embeddings is not None      # ausdrücklich gesetzt vs. selbst ermittelt
+        # No run at all against a 6.1 state. Not just exports: a folder
+        # sync writes the tree into a state.db, which would create the very
+        # file this guard looks for and quietly disarm it.
+        alt = altbestand_state()
+        if alt:
+            return False, {"k": "srv.legacy.state",
+                           "v": {"stores": ", ".join(alt)}}
+        # And never next to an archive the old pointer still names.
+        zeiger = alter_zeiger()
+        if zeiger:
+            return False, {"k": "srv.layout.pointer",
+                           "v": {"pointer": str(standard_data_dir()
+                                                / ZEIGER_DATEI),
+                                 "data": str(zeiger), "home": str(HEIM)}}
+        gewaehlt = embeddings is not None      # explicitly set vs. self-determined
         if embeddings is None:
             embeddings = (self.semantisch_gewollt()
                           and self.ollama()["running"] and self.ollama()["has_model"])
-        # Die Prüfung fragt das Postfach ab, braucht also denselben Zugang.
+        # The check queries the mailbox, so it needs the same access.
         # The cadence gate narrows EVERY run, scheduled and manual alike –
         # a source below its interval is skipped with a clear log line.
         kadenzen = self.cfg.get("sync_cadence") or {}
-        angefragt = {"onedrive": onedrive, "teams": teams}
+        # One picture of what this run was asked for – the cadence gate
+        # narrows it, and the access question, the "nothing new" gate and
+        # the run record all read the same dict afterwards, so none of them
+        # can fall behind a new registry entry on its own.
+        angefragt = {"outlook": outlook, "teams": teams, "onedrive": onedrive,
+                     "sharepoint": sharepoint, "planner": planner,
+                     "sharepoint_pages": sharepoint_pages, "check": check,
+                     "sync_folders": sync_folders,
+                     "sync_onedrive": sync_onedrive,
+                     "check_onedrive": check_onedrive,
+                     "sync_sharepoint": sync_sharepoint,
+                     "check_sharepoint": check_sharepoint,
+                     "check_pages": check_pages, "index": index,
+                     "calendar": calendar, "sync_calendars": sync_calendars}
+        # Asked for BEFORE the gate: a source the cadence drops was still
+        # wanted, and that is what makes "nothing new" true rather than
+        # unknown further down.
+        export_gewollt = any(angefragt.get(e["anfrage"])
+                             for e in steps_mod.REGISTRY if e.get("corpus"))
         for dienst, dienst_label in (("onedrive", "job.step.onedrive"),
                                      ("teams", "job.step.teams")):
             kadenz = kadenzen.get(dienst) or "always"
@@ -2070,15 +1642,10 @@ class App:
                            step={"k": dienst_label, "v": {}},
                            cadence={"k": f"cadence.{kadenz}", "v": {}})
         onedrive, teams = angefragt["onedrive"], angefragt["teams"]
-        braucht_zugang = (outlook or teams or onedrive or check or planner
-                          or sharepoint or sync_sharepoint or check_sharepoint
-                          or sharepoint_pages or check_pages
-                          or sync_folders or sync_onedrive or check_onedrive
-                          or sync_calendars)
+        braucht_zugang = steps_mod.braucht_zugang(angefragt)
         token = read_token() if braucht_zugang else ""
-        # Im Login-Modus trägt der Cache auf der Platte – dann ist ein
-        # eingefügter Schlüssel nicht nötig, und sein Fehlen darf keinen Lauf
-        # verhindern.
+        # In login mode the on-disk cache carries the run – a pasted key is
+        # then unnecessary, and its absence must not prevent a run.
         if braucht_zugang and not token and self.auth_modus() != "login":
             return False, {"k": "srv.notoken", "v": {}}
         if index and not embeddings:
@@ -2100,9 +1667,20 @@ class App:
                             sync_calendars=sync_calendars)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
+        # Exports were asked for, but none survived its gate (cadence, empty
+        # category list): by definition nothing new – the index and calendar
+        # steps must not rebuild the archive for that. An index-only run
+        # (expert mode) asked for no export and therefore still runs.
+        nichts_neues = (export_gewollt
+                        and not any(s.get("corpus") for s in steps)
+                        and self._folgeschritte_aktuell(steps))
         # What the run history records about this run – switches and counts
         # only, nothing personal.
         kontext = {
+            "nichts_neues": nichts_neues,
+            # Outlook and Teams record WHICH categories ran; every other
+            # source is a yes/no, taken straight from the registry so the
+            # runs table cannot miss a newly added one.
             "elements": {
                 "outlook": (_clean_categories(self.cfg["outlook_categories"],
                                               ["mail", "calendar", "contacts"])
@@ -2110,10 +1688,9 @@ class App:
                 "teams": (_clean_categories(self.cfg["teams_categories"],
                                             ["1on1", "group", "meeting",
                                              "channels"]) if teams else []),
-                "onedrive": bool(onedrive),
-                "sharepoint": bool(sharepoint),
-                "sharepoint_pages": bool(sharepoint_pages),
-                "planner": bool(planner),
+                **{e["key"]: bool(angefragt.get(e["anfrage"]))
+                   for e in steps_mod.REGISTRY
+                   if e.get("corpus") and e["key"] not in ("outlook", "teams")},
             },
             "semantic": bool(index and embeddings),
             "workers": int(self.cfg.get("workers") or 4),
@@ -2127,15 +1704,35 @@ class App:
             return False, {"k": "srv.nostart", "v": {}}
         return True, {"k": "srv.mcp.startok", "v": {}}
 
-    def login_starten(self):
-        """Gerätecode holen und im Hintergrund auf die Zustimmung warten.
+    def _folgeschritte_aktuell(self, steps):
+        """Is every follow-up step in this run newer than the last export?
 
-        Ein natives Anmeldefenster gibt es hier nicht – die App hat keins. Die
-        Seite zeigt stattdessen den Code; dieser Faden wartet, bis Microsoft
-        bestätigt, und legt das Ergebnis in den Cache auf der Platte.
+        Only then does "no export ran" really mean "nothing to do". If the
+        last index or calendar step failed or was cancelled, the archive
+        moved on without it, and a run whose exports are all gated must
+        still catch up instead of skipping forever. The export side counts
+        ATTEMPTS: one that died part-way still wrote what it had by then.
+        """
+        letzter_export = max(
+            (self.history.last_step_started(e["key"]) or 0
+             for e in steps_mod.REGISTRY if e.get("corpus")), default=0)
+        for s in steps:
+            if not s.get("nur_bei_neuem"):
+                continue
+            fertig = self.history.last_step_ok(s["key"])
+            if fertig is None or fertig < letzter_export:
+                return False
+        return True
+
+    def login_starten(self):
+        """Fetch a device code and wait for consent in the background.
+
+        There is no native sign-in window here – the app has none. The page
+        shows the code instead; this thread waits until Microsoft confirms
+        and puts the result into the on-disk cache.
         """
         if self.device_login and not self.device_login.get("done"):
-            return True, self.device_login          # schon einer offen
+            return True, self.device_login          # one already open
         scopes = sorted({auth.RES + s for s in
                          ({SCOPE_FOR[c] for c in self.selected_categories()
                            if c in SCOPE_FOR} | {"User.Read"})})
@@ -2161,17 +1758,17 @@ class App:
         return True, self.device_login
 
     def abmelden(self):
-        """Refresh Token verwerfen. Der Schlüssel bleibt, wo er ist."""
+        """Discard the refresh token. The pasted key stays where it is."""
         auth.cache_leeren()
         self.device_login = None
         self.jobs.logk("srv.logout")
         return True
 
     def autostart_mcp(self):
-        """Beim App-Start: MCP hochfahren, wenn ein Index da ist.
+        """On app start: bring up MCP when an index exists.
 
-        Genau der Fall aus der Anforderung „ohne Ollama läuft der MCP-Server
-        trotzdem“: der Server rankt dann rein lexikalisch weiter.
+        Exactly the case from the requirement "the MCP server runs even
+        without Ollama": the server then keeps ranking purely lexically.
         """
         if not self.cfg.get("mcp_autostart") or not self.cfg.get("mcp_enabled", True):
             return
@@ -2191,19 +1788,19 @@ class App:
 class Handler(BaseHTTPRequestHandler):
     server_version = "munimentum-app"
     protocol_version = "HTTP/1.1"
-    app = None                 # von serve() gesetzt
+    app = None                 # set by serve()
     allowed_hosts = ()
 
     def log_message(self, fmt, *args):
-        pass                    # kein Zugriffsprotokoll auf stdout
+        pass                    # no access log on stdout
 
-    # -- Hilfen ------------------------------------------------------------
+    # -- Helpers -----------------------------------------------------------
     def _host_ok(self):
-        """Nur die eigene Loopback-Adresse akzeptieren.
+        """Accept only our own loopback address.
 
-        Ohne diese Prüfung könnte eine beliebige Webseite über einen auf
-        127.0.0.1 zeigenden DNS-Namen (Rebinding) mit dem Server sprechen – und
-        der liefert den kompletten Mail- und Chatbestand aus.
+        Without this check any website could talk to the server via a DNS
+        name pointing at 127.0.0.1 (rebinding) – and the server hands out
+        the complete mail and chat archive.
         """
         host = (self.headers.get("Host") or "").lower()
         return host in self.allowed_hosts
@@ -2222,19 +1819,6 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _migration_sperrt(self, pfad):
-        """While the state migration runs, the WHOLE interface waits – only
-        the page itself, the status (it carries the log) and quitting work.
-        No domain code may see half-moved state."""
-        offen = ("/api/status", "/api/log", "/api/quit")
-        return (self.app.migration and pfad.startswith("/api/")
-                and pfad not in offen)
-
-    def _migration_antwort(self):
-        meldung = {"k": "srv.migrate.busy", "v": {}}
-        return self._json({"ok": False, "message": meldung, "error": meldung,
-                           "roots": [], "hits": []})
-
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str))
 
@@ -2250,7 +1834,7 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, UnicodeDecodeError):
             return {}
 
-    # -- Routen ------------------------------------------------------------
+    # -- Routes ------------------------------------------------------------
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
@@ -2259,8 +1843,6 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(u.query)
         one = {k: v[0] for k, v in q.items()}
         app = self.app
-        if self._migration_sperrt(u.path):
-            return self._migration_antwort()
         try:
             if u.path in ("/", "/index.html"):
                 return self._send(200, self._page(), "text/html; charset=utf-8")
@@ -2307,6 +1889,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"runs": app.history.list_runs(grenze)})
             if u.path == "/api/calendar":
                 return self._calendar()
+            if u.path == "/api/openapi":
+                # The expert-mode contract: the full HTTP API as OpenAPI 3.1,
+                # shipped as a file so spec and code are reviewed together.
+                text = (RES / "openapi.yaml").read_text(encoding="utf-8")
+                return self._send(200, text, "text/yaml; charset=utf-8")
             if u.path == "/source":
                 return self._source(one)
         except Exception as e:
@@ -2322,8 +1909,6 @@ class Handler(BaseHTTPRequestHandler):
                               "text/plain; charset=utf-8")
         u = urlsplit(self.path)
         app = self.app
-        if self._migration_sperrt(u.path):
-            return self._migration_antwort()
         data = self._body()
         try:
             if u.path == "/api/token":
@@ -2331,38 +1916,27 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/analytics-refresh":
                 return self._json(analytics_daten(app.cfg, neu=True))
             if u.path == "/api/wizard-seen":
-                # "Später": die Merkung eines totgelaufenen Tokens zurücksetzen,
-                # sonst ginge der Assistent bei jedem Statusabruf wieder auf.
+                # "Later": reset the note about a token that died mid-run,
+                # otherwise the wizard would reopen on every status poll.
                 app.jobs.token_expired = False
                 return self._json({"ok": True})
             if u.path == "/api/run":
                 mit_outlook = bool(data.get("outlook"))
                 kalender = bool(data.get("calendar"))
-                rekonstruktion = None            # None: wie eingestellt
+                rekonstruktion = None            # None: as configured
                 if kalender and mit_outlook:
-                    # Teil eines Exportlaufs: der Schritt richtet sich danach,
-                    # was überhaupt geholt wird. Der Knopf „Kalender & Kontakte
-                    # aufbauen“ kommt ohne outlook und bleibt unangetastet.
+                    # Part of an export run: the step follows what is
+                    # actually fetched. The "build calendar & contacts"
+                    # button comes without outlook and stays untouched.
                     kalender, mit_mails = calendar_plan(app.cfg)
                     if not mit_mails:
                         rekonstruktion = False
+                anfrage = steps_mod.anfrage_aus_request(data)
+                anfrage.update(outlook=mit_outlook, calendar=kalender)
                 ok, why = app.launch(
-                    outlook=mit_outlook, teams=bool(data.get("teams")),
-                    index=bool(data.get("index")), calendar=kalender,
-                    check=bool(data.get("check")),
-                    sync_folders=bool(data.get("sync_folders")),
-                    sync_calendars=bool(data.get("sync_calendars")),
-                    onedrive=bool(data.get("onedrive")),
-                    sync_onedrive=bool(data.get("sync_onedrive")),
-                    check_onedrive=bool(data.get("check_onedrive")),
-                    sharepoint=bool(data.get("sharepoint")),
-                    sharepoint_pages=bool(data.get("sharepoint_pages")),
-                    planner=bool(data.get("planner")),
-                    check_pages=bool(data.get("check_pages")),
+                    **anfrage,
                     nur_einheit=(str(data.get("nur_einheit") or "").strip()
                                  or None),
-                    sync_sharepoint=bool(data.get("sync_sharepoint")),
-                    check_sharepoint=bool(data.get("check_sharepoint")),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "job.export"),
                     reconstruct=rekonstruktion)
@@ -2371,10 +1945,10 @@ class Handler(BaseHTTPRequestHandler):
                 ok, daten = app.login_starten()
                 return self._json({"ok": ok, "device": daten}, 200 if ok else 500)
             if u.path == "/api/data-dir":
-                # Beide Pfade sind Schlüssel in app_config.json – die liegt
-                # fest im Heimatordner, es gibt kein Henne-Ei mehr. Leer
-                # heißt Vorgabe (Unterordner des Heimatordners). Verschoben
-                # wird NICHTS: Ordner umziehen ist Sache des Nutzers.
+                # Both paths are keys in app_config.json – which sits fixed
+                # in the home folder, so there is no chicken-and-egg. Empty
+                # means default (subfolder of the home folder). NOTHING is
+                # moved: relocating folders is the user's business.
                 felder = (("path", "data_dir", HEIM / DATEN_UNTERORDNER, BASE),
                           ("index", "index_dir", HEIM / STORE_DIR, STORE_PFAD))
                 antwort, neustart = {}, False
@@ -2393,11 +1967,12 @@ class Handler(BaseHTTPRequestHandler):
                     antwort[feld] = str(ziel)
                     neustart = neustart or str(ziel) != str(aktuell)
                 save_config(app.cfg)
+                settings.reset()      # the cache still held the old paths
                 app.jobs.logk("srv.datadir.set", "warn",
                               path=antwort.get("path", str(BASE)))
-                # BASE steht seit dem Start fest und geht als Arbeitsverzeichnis an
-                # jeden Unterprozess. Ihn mitten im Betrieb umzuhängen – womöglich
-                # während ein Export läuft – wäre grob fahrlässig.
+                # BASE is fixed since startup and goes to every subprocess
+                # as its working directory. Repointing it mid-operation –
+                # possibly while an export runs – would be grossly negligent.
                 return self._json({"ok": True,
                                    "path": antwort.get("path", str(BASE)),
                                    "index": antwort.get("index",
@@ -2416,9 +1991,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/mcp":
                 return self._json(self._mcp(data))
             if u.path == "/api/report":
-                # Das Protokoll kommt aus der Oberfläche, nicht aus dem Puffer
-                # hier: dort ist es bereits übersetzt (die Meldungen sind
-                # Textschlüssel, siehe Jobs.logk).
+                # The log comes from the interface, not from the buffer
+                # here: there it is already translated (the messages are
+                # text keys, see Jobs.logk).
                 return self._json(fehlerbericht(
                     app.status(), str(data.get("log") or ""),
                     str(data.get("hint") or ""),
@@ -2437,12 +2012,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
         self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
 
-    # -- Route-Implementierungen ------------------------------------------
+    # -- Route implementations --------------------------------------------
     def _page(self):
-        """Die Oberfläche mit ihren Texten ausliefern.
+        """Serve the interface together with its strings.
 
-        Die Sprache steht damit schon beim ersten Aufbau fest – nachzuladen
-        hieße, dass kurz die falsche Sprache zu sehen ist.
+        The language is thus settled at first render – loading it later
+        would mean briefly showing the wrong language.
         """
         code = i18n.negotiate(self.app.cfg.get("language"),
                               self.headers.get("Accept-Language"), RES)
@@ -2450,7 +2025,10 @@ class Handler(BaseHTTPRequestHandler):
         nutzlast = json.dumps({"lang": code, "strings": i18n.strings(code, RES),
                                "languages": i18n.available(RES)},
                               ensure_ascii=False).replace("<", "\\u003c")
-        return PAGE.replace("/*__I18N__*/", nutzlast)
+        schritte = json.dumps(steps_mod.ui_metadaten(),
+                              ensure_ascii=False).replace("<", "\\u003c")
+        return (PAGE.replace("/*__I18N__*/", nutzlast)
+                    .replace("/*__STEPS__*/", schritte))
 
     def _save_token(self, data):
         token = normalize_token(data.get("token"))
@@ -2481,21 +2059,18 @@ class Handler(BaseHTTPRequestHandler):
                     "chat_model", "ollama"):
             if key in data and str(data[key]).strip():
                 cfg[key] = str(data[key]).strip()
-        # Grenzen, damit eine vertippte Zahl den nächsten Lauf nicht lahmlegt:
-        # Graph erlaubt 4 gleichzeitige Anfragen pro Postfach, alles darüber
-        # erzeugt vor allem Drosselung; Ports jenseits von 65535 gibt es nicht.
+        # Bounds so a mistyped number cannot cripple the next run: Graph
+        # allows 4 concurrent requests per mailbox, anything above mostly
+        # produces throttling; ports beyond 65535 do not exist.
         for key, low, high in (("workers", 1, 8), ("mirror_workers", 1, 16),
                                ("mcp_port", 1024, 65535),
                                ("index_batch", 1, 512), ("answer_sources", 1, 20),
                                ("semantic_min", 0, 95),
-                               # Fehlte hier, seit es das Feld gibt: die Grenze
-                               # stand im Formular, ging an den Export, wurde
-                               # aber nie gespeichert.
                                ("onedrive_max_mb", 0, 100000),
                                ("sharepoint_max_mb", 0, 100000),
                                ("sharepoint_pages_image_max_mb", 0, 100),
                                ("search_results", 5, 100),
-                               # 0 heißt: Userflow-Aufzeichnung aus.
+                               # 0 means: userflow recording off.
                                ("userflow_actions", 0, 50),
                                ("runs_retention_months", 1, 120),
                                ("log_retention_days", 1, 365)):
@@ -2514,7 +2089,7 @@ class Handler(BaseHTTPRequestHandler):
                     "planner_attachments"):
             if key in data:
                 cfg[key] = bool(data[key])
-        # Wer Ollama abschaltet, hat die Prüfung von eben nicht mehr gemeint.
+        # Whoever switches Ollama off no longer means the check from just now.
         if "ollama_enabled" in data:
             self.app._ollama_cache = (0, None)
         if "calendar_rules" in data:
@@ -2547,8 +2122,8 @@ class Handler(BaseHTTPRequestHandler):
         if "skip_folders" in data:
             cfg["skip_folders"] = _clean_folders(data["skip_folders"])
         if "auth_mode" in data:
-            # Alles Unbekannte wird zum Schlüssel-Modus – dem Weg, der ohne
-            # Rückfrage bei der IT funktioniert.
+            # Anything unknown becomes token mode – the path that works
+            # without asking IT.
             cfg["auth_mode"] = ("login" if str(data["auth_mode"]).strip().lower()
                                 == "login" else "token")
         for key in ("client_id", "tenant"):
@@ -2563,8 +2138,8 @@ class Handler(BaseHTTPRequestHandler):
             if wert in ("off", "errors", "all"):
                 cfg["notifications"] = wert
         if "language" in data:
-            # Nur bekannte Codes – ein Tippfehler sonst und die Oberfläche
-            # spräche für immer die Notsprache.
+            # Only known codes – one typo otherwise and the interface would
+            # speak the fallback language forever.
             gewuenscht = str(data["language"] or "auto").strip().lower()
             erlaubt = {e["code"] for e in i18n.available(RES)} | {"auto"}
             if gewuenscht in erlaubt:
@@ -2574,6 +2149,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save_schedule(self, data):
         plan = self.app.cfg["schedule"]
+        vorher = dict(plan)
         for key in ("enabled", "outlook", "teams", "onedrive", "sharepoint",
                     "sharepoint_pages", "planner", "index", "calendar"):
             if key in data:
@@ -2584,10 +2160,16 @@ class Handler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 pass
         save_config(self.app.cfg)
-        self.app.scheduler.reset()
-        self.app.jobs.logk("srv.sched.state", "info", min=plan["interval_minutes"],
-                           state={"k": "srv.sched.on" if plan["enabled"]
-                                  else "srv.sched.off", "v": {}})
+        # Unchanged plan, unchanged clock. The page already asks before it
+        # posts; this covers everyone else on the documented API, for whom
+        # a no-op save would otherwise push a nearly due run back by a
+        # whole interval.
+        if plan != vorher:
+            self.app.scheduler.reset()
+            self.app.jobs.logk("srv.sched.state", "info",
+                               min=plan["interval_minutes"],
+                               state={"k": "srv.sched.on" if plan["enabled"]
+                                      else "srv.sched.off", "v": {}})
         return {"ok": True, "schedule": plan,
                 "next": self.app.scheduler.next_due()}
 
@@ -2602,16 +2184,15 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": False, "message": {"k": "srv.mcp.badaction", "v": {}}}
 
     def _answer(self, data):
-        """Aus den Treffern einer Suche eine Antwort formulieren lassen.
+        """Have an answer worded from the hits of a search.
 
-        Gesucht wird mit derselben Funktion wie im Reiter daneben – die Antwort
-        sieht also genau die Treffer, die auch in der Liste stehen. Ein zweites
-        Retrieval hier hieße, dass sie Dinge zitieren könnte, die niemand
-        nachschlagen kann.
+        The search uses the same function as the tab next door – the answer
+        thus sees exactly the hits that are in the list. A second retrieval
+        here would mean it could cite things nobody can look up.
 
-        Die Antwort läuft stückweise heraus (eine JSON-Zeile je Stück): ein
-        lokales Modell braucht für einen Absatz gut und gern eine Minute, und
-        so viel Wartezeit vor einem leeren Kasten hält niemand aus.
+        The answer streams out piecewise (one JSON line per piece): a local
+        model easily takes a minute for a paragraph, and nobody endures
+        that much waiting in front of an empty box.
         """
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
@@ -2633,8 +2214,8 @@ class Handler(BaseHTTPRequestHandler):
         if not treffer:
             return self._json({"error": {"k": "srv.answer.nohits", "v": {}}}, 200)
 
-        # Volltext je Treffer: die Vorschau in der Liste ist zu kurz, um daraus
-        # etwas zu beantworten.
+        # Full text per hit: the preview in the list is too short to answer
+        # anything from.
         quellen = []
         for h in treffer:
             doc = mod.get_document(uid=h["uid"])
@@ -2646,7 +2227,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Connection", "close")   # Ende des Stroms = Verbindungsende
+        self.send_header("Connection", "close")   # end of stream = end of connection
         self.end_headers()
         self.close_connection = True
 
@@ -2665,7 +2246,7 @@ class Handler(BaseHTTPRequestHandler):
                 schicke(stueck)
             schicke({"done": True})
         except (BrokenPipeError, ConnectionResetError):
-            pass          # Fenster zu oder abgebrochen – kein Grund für Lärm
+            pass          # window closed or aborted – no reason for noise
 
     def _search(self, q):
         mod = self.app.search.ensure(self.app.cfg)
@@ -2687,7 +2268,7 @@ class Handler(BaseHTTPRequestHandler):
         return res
 
     def _similar(self, q):
-        """Ähnliche zu einem Treffer – braucht kein Ollama (siehe mcp_server)."""
+        """Similar to one hit – needs no Ollama (see mcp_server)."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "results": [], "count": 0}
@@ -2700,7 +2281,7 @@ class Handler(BaseHTTPRequestHandler):
                                     k=min(int(q.get("k", 20) or 20), 100))
 
     def _thread(self, q):
-        """Alle Nachrichten eines Gesprächs – dieselbe Auswertung wie im MCP."""
+        """All messages of one conversation – the same evaluation as in MCP."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "messages": [], "count": 0}
@@ -2708,7 +2289,7 @@ class Handler(BaseHTTPRequestHandler):
                               limit=min(int(q.get("limit", 50) or 50), 200))
 
     def _folders(self, q):
-        """Welche Postfachordner im Archiv liegen – für den Filter."""
+        """Which mailbox folders are in the archive – for the filter."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "folders": []}
@@ -2717,15 +2298,15 @@ class Handler(BaseHTTPRequestHandler):
                                 source=q.get("source", ""))
 
     def _ordnerplan(self, data):
-        """Was der nächste Lauf täte – ohne ihn zu starten.
+        """What the next run would do – without starting it.
 
-        Nimmt die Regeln aus dem Formular, nicht die gespeicherten: sonst
-        zeigte die Vorschau den Stand von vorhin, während daneben schon die
-        neue Regel steht.
+        Takes the rules from the form, not the saved ones: otherwise the
+        preview would show the previous state while the new rule already
+        sits next to it.
 
-        Drei Quellen, eine Auswertung. Der Unterschied ist klein genug, dass
-        weitere Kopien sich nicht rechnen: beim Postfach zählen die `.eml`, bei
-        den Kalendern die `.ics`, beim Spiegel alle Dateien.
+        Three sources, one evaluation. The difference is small enough that
+        further copies do not pay: for the mailbox the `.eml` files count,
+        for the calendars the `.ics`, for the mirror all files.
         """
         cfg = self.app.cfg
         quelle = str(data.get("quelle") or "")
@@ -2773,7 +2354,7 @@ class Handler(BaseHTTPRequestHandler):
         daten = {"ordner": eintraege, "abgeglichen": stand}
         plan = folders.plan(wurzel, [], daten, None)
         # The walk under the site roots also sees each library's bookkeeping
-        # (state.db und Reste von vor 6.2) – real content lives below Dateien/.
+        # (state.db and other leftovers) – real content lives below Dateien/.
         plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
                        if "/Dateien/" in z["pfad"] + "/"]
         plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
@@ -2800,10 +2381,10 @@ class Handler(BaseHTTPRequestHandler):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "filetypes": []}
-        # Ausgeblendet wird hier und nicht im Werkzeug: list_filetypes soll
-        # sagen, was im Archiv liegt – auch Claude gegenüber. Die Kürzung ist
-        # eine Frage der Oberfläche, keine des Bestands. Deshalb erst alles
-        # holen, dann ausblenden, dann auf die gewünschte Zahl kürzen.
+        # Hiding happens here and not in the tool: list_filetypes is meant
+        # to say what is in the archive – to Claude as well. The trimming is
+        # a question of the interface, not of the corpus. Hence fetch
+        # everything first, then hide, then cut to the requested number.
         wieviele = min(int(q.get("limit", 40) or 40), 200)
         aus = set(self.app.cfg.get("filetype_hidden") or [])
         r = mod.list_filetypes(limit=200, source=q.get("source", ""))
@@ -2830,11 +2411,11 @@ class Handler(BaseHTTPRequestHandler):
                                 context_after=int(q.get("after", 0) or 0))
 
     def _calendar(self):
-        """Kalender, rekonstruierte Termine und Kontakte am Stück ausliefern.
+        """Serve calendars, reconstructed appointments and contacts in one go.
 
-        Gepackt, wenn der Browser es anbietet: ~5 MB JSON werden dabei zu
-        ~0,75 MB. Die Auswertung selbst läuft als eigener Schritt (sie liest
-        jede Mail), hier wird nur deren Ergebnisdatei durchgereicht.
+        Compressed when the browser offers it: ~5 MB of JSON become
+        ~0.75 MB. The evaluation itself runs as its own step (it reads
+        every mail); here only its result file is passed through.
         """
         roh, gz = self.app.calendar_payload()
         if roh is None:
@@ -2847,12 +2428,11 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, roh, "application/json; charset=utf-8")
 
     def _source(self, q):
-        """Exportierte Quelldatei ausliefern (für die Links in den Treffern).
+        """Serve an exported source file (for the links in the hits).
 
-        Content-Security-Policy: sandbox setzt die Seite in einen eigenen,
-        undurchsichtigen Ursprung. Ein exportiertes Teams-HTML kann damit kein
-        Skript gegen die API dieser App laufen lassen, zeigt aber weiterhin
-        seine eingebetteten Bilder.
+        Content-Security-Policy: sandbox puts the page into its own opaque
+        origin. An exported Teams HTML thus cannot run a script against
+        this app's API, but still shows its embedded images.
         """
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
@@ -2860,16 +2440,16 @@ class Handler(BaseHTTPRequestHandler):
         target, err = mod._resolve_source(q.get("root", ""), q.get("path", ""))
         if err:
             return self._send(404, err, "text/plain; charset=utf-8")
-        # Teams-Exporte sind zum Lesen gemacht und bleiben im Browser. Alles
-        # andere gehört in das Programm, das es kennt: eine .eml als roher Text
-        # im Browserfenster ist für niemanden zu gebrauchen, im Mailprogramm
-        # dagegen eine Mail mit Anhängen. Dasselbe gilt für .ics und .vcf.
+        # Teams exports are made for reading and stay in the browser. All
+        # the rest belongs to the program that knows it: an .eml as raw text
+        # in a browser window is of use to nobody, in the mail client it is
+        # a mail with attachments. The same goes for .ics and .vcf.
         endung = target.suffix.lower()
         ctype = _CONTENT_TYPE.get(endung, "application/octet-stream")
-        # Das Planner-Board verlinkt seine Anhänge relativ ("Anhaenge/…"),
-        # damit die Datei offline für sich steht. Durch diese Route betrachtet
-        # liefe das gegen die App-Wurzel ins Leere – beim Ausliefern werden
-        # die Links deshalb auf die Route selbst umgeschrieben.
+        # The Planner board links its attachments relatively ("Anhaenge/…")
+        # so the file stands on its own offline. Viewed through this route
+        # that would run into nothing at the app root – so on delivery the
+        # links are rewritten onto the route itself.
         wurzel, pfad = q.get("root", ""), q.get("path", "")
         if wurzel == "planner" and pfad.endswith("board.html"):
             basis = quote(pfad.rsplit("/", 1)[0], safe="")
@@ -2893,8 +2473,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy", "sandbox")
         self.send_header("X-Content-Type-Options", "nosniff")
         if endung not in (".html", ".htm"):
-            # Der Dateiname ohne Pfad, und nur mit unbedenklichen Zeichen: er
-            # landet in einem Header und im Downloadordner.
+            # The file name without path, and only with harmless characters:
+            # it ends up in a header and in the download folder.
             self.send_header("Content-Disposition",
                              f'attachment; filename="{_sicherer_name(target.name)}"')
         self.end_headers()
@@ -2904,8 +2484,8 @@ class Handler(BaseHTTPRequestHandler):
             shutil.copyfileobj(f, self.wfile, 64 * 1024)
 
 
-# Womit das Betriebssystem etwas anfangen kann. .eml öffnet das Mailprogramm,
-# .ics den Kalender, .vcf die Kontakte – vorausgesetzt, der Typ stimmt.
+# What the operating system can make sense of. .eml opens the mail client,
+# .ics the calendar, .vcf the contacts – provided the type is right.
 _CONTENT_TYPE = {
     ".html": "text/html; charset=utf-8",
     ".htm": "text/html; charset=utf-8",
@@ -2918,19 +2498,19 @@ _CONTENT_TYPE = {
 
 
 def _sicherer_name(name):
-    """Dateiname für Content-Disposition: keine Anführungszeichen, keine
-    Zeilenumbrüche, kein Pfad – sonst ließe sich der Header aufbrechen."""
+    """File name for Content-Disposition: no quotes, no line breaks, no
+    path – otherwise the header could be broken open."""
     sauber = re.sub(r'[\\"\r\n]', "_", Path(name).name).strip()
     return sauber or "datei"
 
 
 def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
-    """Antwortet auf dem Port schon eine Instanz dieser App?
+    """Is an instance of this app already answering on the port?
 
-    Ohne diese Prüfung startete jeder weitere Doppelklick eine zweite Instanz
-    auf dem nächsten freien Port. Die fällt niemandem auf – die App hat kein
-    Fenster und bleibt auch nicht im Dock stehen – und war nur über die
-    Aktivitätsanzeige wieder loszuwerden.
+    Without this check every further double-click would start a second
+    instance on the next free port. Nobody notices that one – the app has
+    no window and does not stay in the Dock either – and it could only be
+    got rid of via Activity Monitor.
     """
     import urllib.request
     try:
@@ -2939,22 +2519,23 @@ def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
             daten = json.loads(r.read().decode("utf-8"))
     except Exception:
         return False
-    # Auf dem Port könnte etwas völlig anderes horchen; nur unsere eigene
-    # Antwort zählt als "läuft schon".
+    # Something entirely different could be listening on the port; only
+    # our own answer counts as "already running".
     return isinstance(daten, dict) and "data_dir" in daten and "token" in daten
 
 
 class Server(ThreadingHTTPServer):
-    """Wie ThreadingHTTPServer, nur ohne Namensauflösung beim Binden.
+    """Like ThreadingHTTPServer, just without name resolution on bind.
 
-    http.server ruft dort `socket.getfqdn(host)` auf – einen Rückwärts-Lookup
-    für die eigene Adresse, dessen Ergebnis nur in `server_name` landet und
-    nirgends gebraucht wird. macOS 15 wertet das als Zugriff aufs lokale Netz
-    und fragt beim Start: „Darf Munimentum nach Geräten in lokalen Netzwerken
-    suchen?" – eine Frage, auf die diese App keinen Anspruch hat: Sie hört auf
-    127.0.0.1 und spricht sonst nur mit Microsoft Graph.
+    http.server calls `socket.getfqdn(host)` there – a reverse lookup for
+    our own address whose result only lands in `server_name` and is needed
+    nowhere. macOS 15 treats that as local-network access and asks on
+    startup: „Darf Munimentum nach Geräten in lokalen Netzwerken suchen?“
+    – a question this app has no claim to: it listens on 127.0.0.1 and
+    otherwise talks only to Microsoft Graph.
 
-    Nebenbei kostete der Lookup jedes Mal Zeit, bevor die Oberfläche kam.
+    On top of that, the lookup cost time on every start before the
+    interface appeared.
     """
 
     def server_bind(self):
@@ -2977,13 +2558,13 @@ class Server(ThreadingHTTPServer):
 
 
 def make_server(app, port, host="127.0.0.1", tries=12):
-    """Server binden und die erlaubten Host-Header festlegen.
+    """Bind the server and fix the allowed Host headers.
 
-    Erst binden, dann die Liste bauen: mit port=0 sucht das Betriebssystem
-    einen freien Port aus, und der muss in den erlaubten Headern stehen.
-    Ist der Wunschport belegt (zweiter Start, fremdes Programm), werden die
-    nächsten durchprobiert – ein Doppelklick soll nicht mit einem Traceback
-    enden, den niemand sieht.
+    Bind first, then build the list: with port=0 the operating system
+    picks a free port, and that one must appear in the allowed headers.
+    If the desired port is taken (second start, foreign program), the
+    next ones are tried – a double-click must not end in a traceback
+    nobody sees.
     """
     httpd = None
     for versuch in range(tries if port else 1):
@@ -3013,21 +2594,20 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     url = f"http://{host}:{port}/"
     app.log_token_state()
     if _ALT_GEPINNT:
-        # Erkannt, gesagt, nichts bewegt: die Trennung ist ab jetzt möglich,
-        # aber Umziehen bleibt Handarbeit des Nutzers.
+        # Detected, said, nothing moved: the split is possible from now on,
+        # but relocating stays the user's manual work.
         app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
-    if zeiger_datei().exists() and not settings.data_dir_env():
-        # Der alte Datenordner-Zeiger wird seit dem Ablage-Split nicht mehr
-        # befolgt – und verschoben wird grundsätzlich nichts: sagen, was wo
-        # erwartet wird, den Rest macht der Mensch.
-        app.jobs.logk("srv.layout.pointer", "warn",
-                      pointer=str(zeiger_datei()), home=str(HEIM),
-                      data=str(BASE))
-    app.starte_migration()
+    alt = altbestand_state()
+    if alt:
+        app.jobs.logk("srv.legacy.state", "err", stores=", ".join(alt))
+    zeiger = alter_zeiger()
+    if zeiger:
+        app.jobs.logk("srv.layout.pointer", "err",
+                      pointer=str(standard_data_dir() / ZEIGER_DATEI),
+                      data=str(zeiger), home=str(HEIM))
     app.check_updates()
     app.scheduler.start()
-    if not app.migration:
-        app.autostart_mcp()
+    app.autostart_mcp()
     print(f"Office-365-Export läuft: {url}")
     print("Beenden mit Strg+C (schließt auch den MCP-Server).")
     if open_browser:
@@ -3062,10 +2642,10 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
 
 
 def ensure_streams():
-    """Ohne Konsole (Windows-Bündel) ist sys.stdout None – jedes print() flöge.
+    """Without a console (Windows bundle) sys.stdout is None – print() dies.
 
-    Beides landet dann in app.log neben den Daten; sonst wäre ein Fehlstart
-    einer fensterlosen Anwendung vollkommen stumm.
+    Both then land in app.log next to the data; otherwise a failed start
+    of a windowless application would be completely mute.
     """
     if sys.stdout is not None and sys.stderr is not None:
         return None
@@ -3083,8 +2663,8 @@ def ensure_streams():
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    # Selbstaufruf als Teilprogramm (siehe script_argv) – vor dem Argument-
-    # Parser, denn die Teilprogramme haben ihre eigenen Optionen.
+    # Self-invocation as a subprogram (see script_argv) – before the
+    # argument parser, because the subprograms have their own options.
     if argv and argv[0] == "--run":
         if len(argv) < 2:
             raise SystemExit(f"--run braucht einen Namen: {', '.join(RUNNABLE)}")
@@ -3113,4013 +2693,33 @@ def main(argv=None):
     serve(App(), a.port, open_browser=not a.no_browser)
 
 
-PAGE = r"""<!doctype html>
-<html lang="de">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Munimentum</title>
-<!-- Der Archivkasten aus packaging/icon/icon.svg, klein nachgezeichnet. Als
-     Datenadresse, damit auch das Bündel ohne zusätzliche Datei auskommt –
-     sonst holt sich jeder Browser ein 404 auf /favicon.ico ab. -->
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Crect width='1024' height='1024' rx='229' fill='%232f6fed'/%3E%3Crect x='196' y='330' width='632' height='158' rx='34' fill='%23fff'/%3E%3Crect x='246' y='500' width='532' height='300' rx='34' fill='%23fff' opacity='.93'/%3E%3Crect x='430' y='596' width='164' height='44' rx='22' fill='%232f6fed'/%3E%3C/svg%3E">
-<style>
-:root{
-  --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6570; --line:#dfe3e8;
-  --accent:#2f6fed; --ok:#1a7f4b; --warn:#a2650a; --err:#b3261e; --code:#f1f3f6;
-}
-@media (prefers-color-scheme: dark){
-  :root{ --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa4ae; --line:#2c3238;
-         --accent:#7aa2ff; --ok:#4cc38a; --warn:#e0a33a; --err:#f2837c; --code:#22272c; }
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
-  padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
-h1{font-size:17px;margin:0;font-weight:650}
-header .marke{width:26px;height:26px;flex:0 0 auto;border-radius:6px;
-  margin-right:-6px}
-#migrationshinweis{padding:9px 20px;background:color-mix(in srgb, var(--accent) 12%, var(--card));
-  border-bottom:1px solid var(--line);font-size:13.5px}
-.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
-  border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
-.pill:hover{border-color:var(--muted)}
-/* „Beenden“ ist kein Zustand, sondern eine Handlung – die Lücke trennt es von
-   den vier Anzeigen, damit niemand es für eine weitere Meldung hält. */
-.pill-luecke{width:10px}
-/* Erklärung auf Abruf statt Fließtext neben jedem Knopf. Der Text steckt im
-   title-Attribut – das zeigt jeder Browser, liest jeder Screenreader vor, und
-   es braucht kein eigenes Fenster, das aufgehen und wieder zugehen muss. */
-h2.mit-info{display:flex;align-items:center;gap:8px}
-.info{display:inline-flex;align-items:center;justify-content:center;
-  width:17px;height:17px;border-radius:50%;border:1px solid var(--line);
-  color:var(--muted);font-size:11.5px;font-style:italic;font-weight:600;
-  cursor:help;user-select:none;flex:0 0 auto}
-.info:hover,.info:focus{color:var(--ink);border-color:var(--muted);outline:none}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.chk-sep{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)}
-.chk-note{margin:4px 0 0;max-width:240px;color:var(--warn)}
-.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
-nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
-nav button{border:0;background:transparent;color:var(--muted);padding:8px 14px;
-  border-radius:8px 8px 0 0;font:inherit;cursor:pointer}
-nav button.on{background:var(--bg);color:var(--ink);font-weight:600}
-main{padding:20px;max-width:1080px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:18px;margin-bottom:16px}
-.card h2{font-size:15px;margin:0 0 4px}
-.card p.sub{color:var(--muted);margin:0 0 14px;font-size:13px}
-label.chk{display:flex;gap:8px;align-items:center;padding:4px 0}
-.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px 20px}
-button.act{background:var(--accent);color:#fff;border:0;border-radius:8px;
-  padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
-button.act:disabled{opacity:.45;cursor:not-allowed}
-button.ghost{background:transparent;border:1px solid var(--line);color:inherit;
-  border-radius:8px;padding:9px 16px;font:inherit;cursor:pointer}
-input[type=text],input[type=number],input[type=date],select,textarea{
-  background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:8px;
-  padding:8px 10px;font:inherit}
-textarea{width:100%;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
-code,pre{background:var(--code);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
-code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
-.muted{color:var(--muted)} .small{font-size:13px}
-.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
-#log{background:#0d1013;color:#cbd3da;border-radius:10px;padding:12px;height:230px;
-  overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
-#log .l-head,.lauflog .l-head{color:#9ad0ff;font-weight:600}
-#log .l-ok,.lauflog .l-ok{color:#7fdca4}
-#log .l-warn,.lauflog .l-warn{color:#f0c674}
-#log .l-err,.lauflog .l-err{color:#ff9c94}
-/* Das gespeicherte Protokoll eines Laufs, inline in der Läufe-Tabelle –
-   dieselbe dunkle Konsole wie die Leiste unten. */
-.lauflog{background:#0d1013;color:#cbd3da;border-radius:10px;padding:10px 12px;
-  margin-top:8px;max-height:280px;overflow:auto;text-align:left;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
-  white-space:pre-wrap}
-/* Trefferzeile: zwei Zeilen statt vier. Titel links, Herkunft und Datum rechts
-   in eigenen Spalten – so stehen die Daten untereinander und man tastet die
-   Liste am Rand entlang ab, statt sie zu lesen. Die Aktionen liegen im Menü:
-   sie sind je Treffer verschieden und beherrschten sonst die Liste. */
-.hit{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;
-  column-gap:14px;row-gap:3px;align-items:baseline;padding:10px 0;
-  border-top:1px solid var(--line)}
-.hit:first-child{border-top:0}
-.dateizeile{display:flex;gap:10px;align-items:baseline;padding:8px 0;
-  border-top:1px solid var(--line);cursor:default}
-.dateizeile:first-child{border-top:0}
-.dateizeile .muted{margin-left:auto;white-space:nowrap}
-.urltab .zeile{display:flex;gap:8px;align-items:center;padding:5px 0;
-  border-top:1px solid var(--line)}
-.urltab .zeile:first-child{border-top:0}
-.urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
-.urltab input[type=text]{flex:1;min-width:0}
-.urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
-.hit h3{grid-column:1;margin:0;font-size:14px;font-weight:600;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hit .wer{grid-column:2;color:var(--muted);font-size:12.5px;white-space:nowrap}
-.hit .wann{grid-column:3;color:var(--muted);font-size:12.5px;white-space:nowrap;
-  font-variant-numeric:tabular-nums}
-.hit .menuzelle{grid-column:4;position:relative;align-self:center}
-.hit .prev{grid-column:1/-1;font-size:13.5px;color:var(--muted);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hit .verlauf{grid-column:1/-1}
-@media (max-width:720px){
-  .hit{grid-template-columns:minmax(0,1fr) auto}
-  .hit .wer{grid-column:1;grid-row:2} .hit .wann{grid-column:2;grid-row:2}
-  .hit .menuzelle{grid-column:2;grid-row:1} .hit .prev{grid-row:3}
-}
-.punkte-knopf{border:1px solid transparent;background:transparent;color:var(--muted);
-  border-radius:7px;padding:2px 8px;font-size:16px;line-height:1.2;cursor:pointer}
-.punkte-knopf:hover,.punkte-knopf[aria-expanded="true"]{border-color:var(--line);color:var(--ink)}
-.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:190px;
-  background:var(--card);border:1px solid var(--line);border-radius:10px;
-  box-shadow:0 6px 20px rgba(0,0,0,.14);padding:5px;display:flex;flex-direction:column}
-.menu button{border:0;background:transparent;color:inherit;font:inherit;font-size:13.5px;
-  text-align:left;padding:7px 10px;border-radius:7px;cursor:pointer}
-.menu button:hover:not(:disabled){background:var(--code)}
-.menu button:disabled{opacity:.4;cursor:not-allowed}
-.menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
-/* Vorschläge zum Personenfeld. Das Feld ist eine Freitexteingabe auf einen
-   festen Bestand: wer einen Namen tippt, den es im Archiv nicht gibt, bekommt
-   null Treffer und weiß nicht, ob die Person fehlt oder er sich vertippt hat.
-   Die Liste beantwortet das, bevor gesucht wird. */
-.vorschlagfeld{position:relative;display:inline-block}
-.vorschlagfeld #f-person{width:180px}
-#personliste{left:0;right:auto;min-width:100%;max-width:320px}
-#personliste button{display:flex;gap:10px;align-items:baseline;
-  justify-content:space-between;width:100%}
-#personliste button[aria-selected="true"]{background:var(--code)}
-#personliste .zahl{color:var(--muted);font-size:12.5px;
-  font-variant-numeric:tabular-nums;flex:0 0 auto}
-#personliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* Die Sternzeile ist ein Muster, kein Name – in der Schrift, in der man
-   Muster liest. */
-#personliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:12.5px}
-#personliste hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
-#personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
-/* Die Suchart: exklusive Wahl, beide Alternativen sichtbar. */
-.modi{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.modi button{border:0;background:transparent;color:var(--muted);font:inherit;
-  font-size:13.5px;padding:7px 16px;cursor:pointer}
-.modi button+button{border-left:1px solid var(--line)}
-.modi button.on{background:var(--accent);color:#fff;font-weight:600}
-.modi button:not(.on):not(:disabled):hover{color:var(--accent)}
-.modi button:disabled{opacity:.4;cursor:not-allowed}
-.modizeile{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
-/* Treffermarkierung: dezent. Die Vorschau ist gedämpft gesetzt, die Fundstelle
-   bekommt die volle Textfarbe und etwas Gewicht – das hebt sie heraus, ohne
-   dass eine lange Liste wie ein Textmarker-Unfall aussieht. */
-mark{background:var(--code);color:var(--ink);font-weight:600;
-  border-radius:3px;padding:0 3px}
-.tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 6px;
-  font-size:11.5px;color:var(--muted);margin-right:6px}
-#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
-  align-items:center;justify-content:center;padding:20px;z-index:20}
-#overlay.on{display:flex}
-.modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;
-  max-height:88vh;overflow:auto;padding:24px}
-.modal h2{margin:0 0 6px;font-size:18px}
-/* Alle Assistenten tragen denselben Rahmen: Titel mit Schließkreuz oben,
-   unten genau eine primäre und eine sekundäre Aktion. */
-.modal-kopf{display:flex;align-items:flex-start;gap:12px}
-.modal-kopf h2{flex:1}
-.modal-zu{flex:0 0 auto;border:0;background:transparent;color:var(--muted);
-  font-size:22px;line-height:1;padding:0 4px;cursor:pointer;border-radius:6px}
-.modal-zu:hover{color:var(--ink);background:var(--code)}
-.modal-fuss{margin-top:16px;align-items:center}
-/* Die Exportliste zeigt bis zu vierhundert Pfade – sie braucht mehr Breite als
-   ein Assistent mit drei Sätzen, und jede Gruppe scrollt für sich, damit die
-   dritte nicht unter der ersten begraben liegt. */
-.modal.breit{max-width:860px}
-.plangruppe{margin:10px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
-.plangruppe>summary{cursor:pointer;font-size:13.5px;font-weight:600}
-.plangruppe>summary .dot{display:inline-block;margin-right:7px;vertical-align:middle}
-.planliste{list-style:none;margin:8px 0 2px;padding:0;max-height:34vh;overflow:auto}
-.planliste li{display:flex;gap:10px;align-items:baseline;padding:3px 0;font-size:13px;
-  border-top:1px solid var(--line)}
-.planliste li:first-child{border-top:0}
-.planliste .pfad{flex:1;word-break:break-word}
-.planliste .zahl{flex:0 0 auto;min-width:5em;text-align:right;color:var(--muted);
-  font-variant-numeric:tabular-nums}
-.planliste .regel{flex:0 0 auto;color:var(--muted);font-size:11.5px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
-.banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
-  border:1px solid var(--line)}
-.banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
-/* Ein Feld, dessen Inhalt der Browser nicht lesen kann. Bei einem Datumsfeld
-   sieht man das sonst nicht: es zeigt weiter, was getippt wurde, liefert aber
-   einen leeren Wert – und die Suche lief stillschweigend ohne diese Grenze. */
-input.fehler{border-color:var(--err)}
-.hide{display:none!important}
-
-/* ---- Kalender und Adressbuch (übernommen aus combined_search.py, an die
-       Farbvariablen der App angepasst, damit sie auch dunkel funktionieren) ---- */
-:root{
-  --ev-ok:#2b6cb0; --ev-ok-bg:#eef4fb; --ev-warn:#c98a17; --ev-warn-bg:#fdf6e7;
-  --ev-bad:#c0392b; --ev-bad-bg:#fbeceb; --ev-gone:#b6bbc2; --ev-gone-bg:#f2f3f5;
-}
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --ev-ok:#7aa2ff; --ev-ok-bg:#1e2733; --ev-warn:#e0a33a; --ev-warn-bg:#2e2716;
-    --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
-  }
-}
-:root[data-theme="dark"]{
-  --ev-ok:#7aa2ff; --ev-ok-bg:#1e2733; --ev-warn:#e0a33a; --ev-warn-bg:#2e2716;
-  --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
-}
-.calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
-.chip{padding:6px 13px;border:1px solid var(--line);border-radius:8px;background:transparent;
-  color:var(--muted);font-size:13.5px;cursor:pointer}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
-#kalTitle{font-weight:650;margin-left:4px}
-.legend{display:flex;gap:12px;margin-left:auto;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
-.legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
-.grid{display:grid;gap:8px}
-/* minmax(0,…): sonst sprengen lange Termintitel die Spaltenbreite */
-.wk,.mo{grid-template-columns:repeat(7,minmax(0,1fr))}
-.mo{gap:6px}
-.dow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;padding:0 2px}
-.day{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px;min-height:110px;min-width:0}
-.day.today{border-color:var(--accent);box-shadow:0 0 0 2px rgba(122,162,255,.18)}
-.day.out{opacity:.5}
-.dnum{font-size:12px;color:var(--muted);margin-bottom:5px;display:flex;gap:5px;align-items:baseline}
-.dnum b{font-size:14px;color:var(--ink)}
-.dnum .wd{display:none}          /* Wochentag steht schon in der Spaltenüberschrift */
-.ev{display:block;font-size:12px;line-height:1.35;margin:3px 0;padding:4px 6px;border-radius:6px;
-  text-decoration:none;border-left:3px solid var(--ev-ok);background:var(--ev-ok-bg);color:var(--ink);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ev:hover{white-space:normal}
-.ev .evt{color:var(--muted);font-variant-numeric:tabular-nums}
-.ev.tentative{border-left-color:var(--ev-warn);background:var(--ev-warn-bg);border-left-style:dashed}
-.ev.cancelled{border-left-color:var(--ev-bad);background:var(--ev-bad-bg);text-decoration:line-through;opacity:.75}
-/* nur aus Mails rekonstruiert: gestrichelter Rahmen statt Balken */
-.ev.deleted{border:1px dashed var(--ev-bad);border-left-width:3px;background:var(--ev-bad-bg);text-decoration:line-through;opacity:.85}
-.ev.gone{border:1px dashed var(--ev-gone);border-left-width:3px;background:var(--ev-gone-bg);color:var(--muted)}
-.mo .day{min-height:96px}
-@media(max-width:820px){.wk,.mo{grid-template-columns:minmax(0,1fr)}.dowrow{display:none}
-  .day{min-height:0}.dnum .wd{display:inline}}
-.rbnote{color:var(--muted);font-size:12.5px;margin:0 0 10px}
-.rbcount{color:var(--muted);font-size:12px;margin-left:auto}
-.rbmonth{margin:16px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
-  border-bottom:1px solid var(--line);padding-bottom:3px}
-.rbrow{display:flex;gap:10px;align-items:baseline;background:var(--card);border:1px solid var(--line);
-  border-radius:9px;padding:8px 11px;margin:5px 0;text-decoration:none;color:var(--ink)}
-.rbrow:hover{border-color:var(--accent)}
-.rbrow.deleted{border-left:3px solid var(--ev-bad)}
-.rbrow.gone{border-left:3px solid var(--ev-gone)}
-.rbdate{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:158px}
-.rbstate{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;white-space:nowrap}
-.rbrow.deleted .rbstate{background:var(--ev-bad-bg);color:var(--ev-bad)}
-.rbrow.gone .rbstate{background:var(--ev-gone-bg);color:var(--muted)}
-.rbtitle{font-weight:600;overflow-wrap:anywhere;min-width:0;flex:1}
-.rbrow.deleted .rbtitle{text-decoration:line-through}
-.rbwho{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
-@media(max-width:820px){.rbrow{flex-wrap:wrap;gap:4px 9px}.rbwho{max-width:none}}
-.letter{margin:18px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
-  border-bottom:1px solid var(--line);padding-bottom:3px}
-.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-.card2{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
-.cname{font-weight:600;overflow-wrap:anywhere}
-.cname a{color:var(--ink);text-decoration:none}
-.cname a:hover{color:var(--accent);text-decoration:underline}
-.crole{font-size:12.5px;color:var(--muted);margin-bottom:5px;overflow-wrap:anywhere}
-.cline{font-size:13px;overflow-wrap:anywhere}
-.cline a{color:var(--accent);text-decoration:none}
-.cline span{color:var(--muted);margin-right:5px}
-.hint{color:var(--muted)}
-
-/* Fortschritt: Schritt für Schritt, und innerhalb eines Schritts so genau,
-   wie das Skript es weiß. Wo es keine Gesamtzahl gibt, läuft der Balken
-   gestreift weiter, statt eine Prozentzahl zu erfinden. */
-.fortschritt{margin-top:14px}
-.balken{height:8px;background:var(--code);border-radius:99px;overflow:hidden}
-.balken>div{height:100%;background:var(--accent);border-radius:99px;
-  transition:width .3s ease;width:0}
-.balken.unbekannt>div{width:35%;background:linear-gradient(90deg,
-  var(--code) 0%,var(--accent) 50%,var(--code) 100%);animation:wandern 1.6s linear infinite}
-@keyframes wandern{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
-
-/* Einzelschritte: eingeklappt, jeder Knopf mit dem Satz, wann man ihn braucht */
-#einzelschritte summary{cursor:pointer;font-weight:650;font-size:15px}
-.schritt{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:10px 0}
-.schritt button{flex:0 0 auto;min-width:230px}
-/* Die frühere Regel .schritt span{flex:1;min-width:240px} stammte vom
-   Erklärungstext, der hier stand. Sie traf danach das (i) und zog den Kreis
-   auf 240 Pixel Breite auseinander – als flache Ellipse quer durch die Zeile.
-   Was hier steht, ist ein Zeichen und keine Textspalte. */
-.schritt .info{flex:0 0 auto}
-
-/* Berechtigungen im Token-Assistenten: eine unauffällige Zeile, solange sie
-   nicht das Problem sind. */
-details.rechte{margin:12px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
-details.rechte summary{cursor:pointer;font-size:13px;color:var(--muted)}
-details.rechte[open] summary{margin-bottom:4px;color:var(--ink)}
-details.rechte p{margin:6px 0}
-
-/* Die Auswahl der beiden Anmeldewege: zwei gleichwertige Karten, damit keiner
-   wie eine Fußnote des anderen aussieht. */
-.wahlreihe{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-.wahl{flex:1 1 240px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;
-  border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.wahl.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.wahl input{margin-top:3px}
-.wahl span{display:flex;flex-direction:column;gap:2px}
-button.mini,a.mini{border:1px solid var(--line);background:transparent;color:inherit;
-  border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
-/* Ein Link mit derselben Aufgabe soll auch gleich aussehen – als reiner Text
-   in Linkfarbe stand er neben den Knöpfen wie ein Fremdkörper. */
-a.mini{display:inline-block;text-decoration:none;line-height:1.5}
-button.mini:hover,a.mini:hover{border-color:var(--accent);color:var(--accent)}
-/* Kopierknopf im Eck des Kastens – sichtbar, ohne den Inhalt zu verdecken. */
-.mitkopie{position:relative}
-.mitkopie pre{padding-right:96px}
-button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
-/* Verlauf unter einem Treffer: schmal und ruhig, damit er die Trefferliste
-   nicht erschlägt. */
-/* Gelöschtes ist die Ausnahme und darf auffallen – aber nur so weit, dass die
-   Trefferliste ruhig bleibt. */
-.tag.weg{border-color:var(--warn);color:var(--warn)}
-.tag.herkunft{margin-left:8px;font-weight:400}
-/* Analytics: Kennzahlen als ruhiges Raster, nicht als Armaturenbrett. */
-.kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
-/* Suchfeld und Knopf gehören zusammen und füllen die Zeile – das Bild, das
-   jeder aus anderen Programmen kennt. Alles Weitere liegt darunter. */
-.suchzeile{display:flex;gap:8px}
-.suchzeile input{flex:1;min-width:200px;font-size:15px;padding:9px 12px}
-.suchzeile button{flex:0 0 auto;padding:9px 20px}
-.feld{display:flex;align-items:center;gap:6px;color:var(--muted)}
-.kpi{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
-.kpi.klickbar{cursor:pointer}
-.kpi.klickbar:hover,.kpi.klickbar:focus{border-color:var(--accent);outline:none}
-.kpi-titel{display:flex;align-items:center;gap:6px}
-.kpi-wert{font-size:26px;font-weight:650;letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums}
-.kpi-titel{font-size:13.5px;margin-top:2px}
-.kpi-hint{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
-.kpi-fuss{grid-column:1/-1}
-.anatab{width:100%;border-collapse:collapse;margin-top:12px;font-size:13.5px}
-.anatab th{text-align:left;font-weight:600;border-bottom:1px solid var(--line);padding:6px 8px}
-.anatab td{padding:5px 8px;border-bottom:1px solid var(--line);
-  font-variant-numeric:tabular-nums}
-.anatab td:not(:first-child), .anatab th:not(:first-child){text-align:right}
-.anatab td.fehlt{color:var(--warn);font-weight:600}
-.warnzeile{color:var(--warn);font-weight:600;margin:0}
-.okzeile{color:var(--ok);font-weight:600;margin:0}
-.card2 button.mini{margin-top:8px}
-.verlauf{margin-top:8px}
-.verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
-.verlaufliste p{margin:0 0 6px}
-.vzeile{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;
-  font-size:13.5px;padding:3px 0}
-.vdatum{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.vwer{color:var(--muted);flex:0 0 auto;min-width:120px}
-.geraetecode{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;
-  text-align:center}
-.geraetecode p{margin:0 0 8px}
-.code-gross{display:inline-block;font-size:26px;letter-spacing:.14em;font-weight:700;
-  background:var(--code);border-radius:8px;padding:8px 16px}
-
-/* Einstellungen: eine Zeile je Einstellung, überall gleich gebaut –
-   Beschriftung links mit (i), Bedienelement rechts. Die Erklärungen stehen im
-   (i) statt als Fließtext darunter; das macht die Seite abtastbar statt
-   lesbar und hat sie von zwölf Karten auf sieben gebracht. */
-.feldzeile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;
-  align-items:center;padding:9px 0;border-top:1px solid var(--line)}
-.gruppe>.feldzeile:first-of-type{border-top:0}
-.feldzeile .bez{display:flex;align-items:center;gap:7px;font-size:14px}
-.feldzeile input[type=text],.feldzeile select{min-width:150px}
-.feldzeile input[type=number]{width:96px;text-align:right;font-variant-numeric:tabular-nums}
-.feldzeile.breit{grid-template-columns:1fr;gap:6px}
-.feldzeile.breit textarea{min-height:76px}
-.gruppe{margin-top:20px}
-.gruppe>h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;
-  color:var(--muted);margin:0 0 4px;display:flex;align-items:center;gap:7px}
-/* Was ohne den Schalter darüber keine Wirkung hätte, steht eingerückt
-   darunter – die Einrückung IST die Aussage. */
-.unter{margin-left:14px;padding-left:16px;border-left:2px solid var(--line)}
-.wahl2{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.wahl2 button{border:0;background:transparent;color:var(--muted);font:inherit;
-  font-size:13.5px;padding:6px 14px;cursor:pointer}
-.wahl2 button+button{border-left:1px solid var(--line)}
-.wahl2 button.on{background:var(--accent);color:#fff;font-weight:600}
-.wahl2 button:disabled{opacity:.4;cursor:not-allowed}
-.aus{opacity:.42;pointer-events:none}
-.kopfschalter{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.kipp{appearance:none;width:40px;height:23px;border-radius:12px;background:var(--line);
-  position:relative;cursor:pointer;transition:background .15s;flex:0 0 auto}
-.kipp:checked{background:var(--ok)}
-.kipp::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;
-  border-radius:50%;background:#fff;transition:transform .15s}
-.kipp:checked::after{transform:translateX(17px)}
-.kipp:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* „Gelöschtes“ steht als Schalter in der Filterzeile: es ist kein Wert, den man
-   aus einer Liste wählt, sondern ein Zustand – an oder aus. Alles auf einer
-   Höhe mit den Auswahlfeldern daneben, die Erklärung dahinter statt darunter. */
-.gonefeld{display:inline-flex;align-items:center;gap:8px;
-  border:1px solid var(--line);border-radius:8px;padding:5px 10px}
-.gonefeld label{color:var(--muted);cursor:pointer;white-space:nowrap}
-.gonefeld input:checked ~ label,.gonefeld:hover label{color:var(--ink)}
-/* Kleine Zustandsanzeige neben einem Feld: der Punkt trägt die Farbe, das
-   Wort daneben die Auskunft. Beides zusammen, weil Farbe allein niemandem
-   hilft, der sie nicht unterscheiden kann. */
-.feldmitstand{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
-.stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
-  color:var(--muted);white-space:nowrap}
-.stand .dot.ok{background:var(--ok)} .stand .dot.warn{background:var(--warn)}
-.stand .dot.err{background:var(--err)}
-.folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
-.speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
-  border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
-
-/* Diagramme. Zwei Reihen tragen Farbe – Teams und Mail –, alles andere ist
-   Menge und bekommt einen Ton. Die beiden Werte sind gegen die echten
-   Oberflächen der App geprüft (Kontrast, Farbfehlsichtigkeit); „andere" ist
-   bewusst keine dritte Farbe, sondern die Sammelspalte in Grau. */
-:root{ --serie-a:#2a78d6; --serie-b:#eb6834; --serie-c:#9aa4ae; }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){ --serie-a:#3987e5; --serie-b:#d95926; --serie-c:#5b6570; }
-}
-:root[data-theme="dark"]{ --serie-a:#3987e5; --serie-b:#d95926; --serie-c:#5b6570; }
-.dia{width:100%;height:auto;display:block;overflow:visible}
-.dia rect,.dia path{shape-rendering:crispEdges}
-.dia .achse{stroke:var(--line);stroke-width:1}
-.dia .tick{fill:var(--muted);font-size:10px}
-.dia .linie{fill:none;stroke:var(--serie-a);stroke-width:2;shape-rendering:geometricPrecision}
-.legende{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
-  margin:8px 0 2px}
-.legende span{display:inline-flex;align-items:center;gap:6px}
-.legende i{width:10px;height:10px;border-radius:2px;display:inline-block}
-/* Waagerechte Balken für Ranglisten: Beschriftung, Balken, Zahl – die Zahl
-   rechtsbündig mit Tabellenziffern, damit die Spalte steht.
-
-   EIN Raster für die ganze Liste, nicht eins je Zeile: sonst richtet sich jede
-   Zeile nach ihrer eigenen Beschriftung, die Balken beginnen an neun
-   verschiedenen Stellen und lassen sich nicht mehr vergleichen – wozu sie da
-   sind. Die Namensspalte ist so breit wie ihr längster Eintrag, aber
-   höchstens 420px: ein Dateipfad soll den Balken nicht verdrängen. */
-.rangliste{display:grid;grid-template-columns:minmax(90px,max-content) 1fr auto;
-  gap:8px 10px;align-items:center;font-size:13px;margin:2px 0}
-.rangliste .bal{background:var(--code);border-radius:4px;height:9px;position:relative}
-.rangliste .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);
-  border-radius:4px;display:block}
-.rangliste .zahl{color:var(--muted);font-variant-numeric:tabular-nums;
-  font-size:12.5px;text-align:right}
-.rangliste .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  max-width:420px}
-.dia-titel{font-size:13px;font-weight:600;margin:18px 0 2px}
-.dia-sub{font-size:12.5px;color:var(--muted);margin:0 0 8px}
-
-/* Protokollleiste unten */
-#protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
-  border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
-#protokoll .pkopf{display:flex;gap:10px;align-items:center;padding:8px 20px;
-  cursor:pointer;user-select:none}
-#protokoll .pkopf .pfeil{color:var(--muted);transition:transform .2s}
-#protokoll.zu .pkopf .pfeil{transform:rotate(180deg)}
-#protokoll .pkopf #log-letzte{overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;flex:1}
-/* Die Knöpfe rechts: klein und ruhig, damit die Zeile weiter wie eine
-   Beschriftung wirkt und nicht wie eine Werkzeugleiste. */
-#protokoll .pkopf button.mini{flex:0 0 auto;padding:3px 10px;font-size:12px}
-#protokoll.zu #log{display:none}
-#protokoll #log{margin:0 12px 12px;height:var(--loghoehe,220px)}
-/* Der Griff zum Ziehen: ein schmaler Streifen auf der Oberkante. */
-#protokoll .pgriff{position:absolute;left:0;right:0;top:-4px;height:9px;
-  cursor:ns-resize;touch-action:none}
-#protokoll.zu .pgriff,#protokoll.hide .pgriff{display:none}
-main{padding-bottom:60px}   /* bis das Skript die echte Protokollhöhe setzt */
-
-/* Antwortkasten. Bewusst anders als eine Trefferkarte: was hier steht, hat
-   kein Mensch geschrieben, sondern ein Modell aus den Treffern darunter
-   zusammengefasst. Farbiger Balken links, eigene Kopfzeile, Fußnoten. */
-.answer{background:var(--card);border:1px solid var(--line);
-  border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px}
-.answer .ahead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  font-size:12px;color:var(--muted);margin-bottom:8px}
-.answer .ahead .tag{background:var(--accent);color:#fff;border-radius:5px;
-  padding:1px 8px;font-weight:700;letter-spacing:.04em}
-.answer .atext{white-space:pre-wrap;overflow-wrap:anywhere}
-.answer .atext a{color:var(--accent);text-decoration:none;font-weight:600}
-.answer .afoot{font-size:12px;color:var(--muted);margin-top:10px;
-  border-top:1px solid var(--line);padding-top:8px}
-.answer.err{border-left-color:var(--err)}
-.blink::after{content:"▍";animation:blink 1s steps(2,start) infinite}
-@keyframes blink{to{visibility:hidden}}
-.hit.zitiert{background:var(--code);border-radius:8px;padding-left:10px;
-  margin-left:-10px;box-shadow:inset 3px 0 0 var(--accent)}
-.hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
-</style>
-</head>
-<body>
-<div id="migrationshinweis" class="hide" data-i18n="ui.migrate.wait"></div>
-<header>
-  <!-- The same small redraw of packaging/icon/icon.svg as the favicon –
-       inline, so the bundled app needs no asset route for it. -->
-  <svg class="marke" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="229" fill="#2f6fed"/><rect x="196" y="330" width="632" height="158" rx="34" fill="#fff"/><rect x="246" y="500" width="532" height="300" rx="34" fill="#fff" opacity=".93"/><rect x="430" y="596" width="164" height="44" rx="22" fill="#2f6fed"/></svg>
-  <h1 data-i18n="app.title">Munimentum</h1>
-  <!-- Die Kacheln sagen, was der Zustand für den Anwender bedeutet; der
-       Fachbegriff (Token, Ollama, Chunks, MCP) steht im Tooltip, damit ihn
-       findet, wer ihn braucht, ohne dass ihn lesen muss, wer ihn nicht kennt. -->
-  <div class="pills" id="pills">
-    <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
-    <button class="pill" id="pill-ollama" onclick="ollamaKachel()"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
-    <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
-    <span class="pill-luecke"></span>
-    <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
-            data-i18n-title="app.quit.tip"
-            style="border-color:var(--err);color:var(--err)">Beenden</button>
-  </div>
-</header>
-
-<nav>
-  <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Daten exportieren</button>
-  <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Daten durchsuchen</button>
-  <button data-tab="analytics" onclick="tab('analytics')" data-i18n="nav.analytics">Analytics</button>
-  <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
-</nav>
-
-<main>
-<section id="tab-export">
-  <div class="banner hide" id="update-banner" style="margin-bottom:16px"></div>
-  <div class="card">
-    <h2 class="mit-info" data-i18n="export.what">Was soll exportiert werden?
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.what.sub" role="img" aria-label="Info">i</span></h2>
-    <div class="row" style="gap:36px;align-items:flex-start">
-      <div>
-        <strong class="small" data-i18n="export.outlook">Outlook</strong>
-        <div id="cat-outlook"></div>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.teams">Teams</strong>
-        <div id="cat-teams"></div>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.onedrive">OneDrive</strong>
-        <label class="chk"><input type="checkbox" id="c-onedrive_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.files">OneDrive-Dateien</span></label>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.sharepoint">SharePoint</strong>
-        <label class="chk"><input type="checkbox" id="c-sharepoint_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.sharepoint">SharePoint-Bibliotheken</span></label>
-        <label class="chk"><input type="checkbox" id="c-sharepoint_pages_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.pages">Site-Seiten</span></label>
-        <p class="small muted" id="sp-export-note" style="max-width:240px;margin:4px 0 0"></p>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.planner">Planner</strong>
-        <label class="chk"><input type="checkbox" id="c-planner_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.planner">Boards</span></label>
-      </div>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
-      <button class="ghost hide" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.start.hint"
-            role="img" aria-label="Info">i</span>
-    </div>
-
-    <div class="fortschritt hide" id="fortschritt">
-      <div class="balken"><div id="balken-fuell"></div></div>
-      <p class="small muted" id="fortschritt-text"></p>
-    </div>
-
-  </div>
-
-  <details class="card" id="einzelschritte">
-    <summary data-i18n="export.steps.title">Expertenmodus</summary>
-    <p class="sub" style="margin-top:10px" data-i18n="export.steps.sub">Normalerweise nicht nötig – „Export starten“ erledigt das alles. Einzeln braucht man sie nur in den unten genannten Fällen.</p>
-
-    <div class="schritt">
-      <button class="ghost" onclick="run({index:true}, t('job.index'))" data-i18n="export.index.only">Nur indizieren</button>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.index.only.when" role="img" aria-label="Info">i</span>
-    </div>
-    <div class="schritt">
-      <button class="ghost" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="export.calendar.build">Kalender &amp; Kontakte aufbauen</button>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.calendar.build.when" role="img" aria-label="Info">i</span>
-    </div>
-  </details>
-</section>
-
-<section id="tab-suche" class="hide">
-  <div class="calbar" id="sichten" style="margin-bottom:14px">
-    <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
-    <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
-    <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
-    <span class="chip" data-sicht="dateien" onclick="sicht('dateien')" data-i18n="view.files">Dateien</span>
-  </div>
-
-  <div id="sicht-treffer">
-  <div class="card">
-    <div class="suchzeile">
-      <input type="search" id="q" data-i18n-ph="search.query.ph"
-             placeholder="Suchbegriff oder Frage"
-             onkeydown="if(event.key==='Enter'){sofortSuchen();}">
-      <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
-    </div>
-    <!-- Die Suchart steht direkt unter dem Feld, weil sie bestimmt, was man
-         dort sinnvoll eingibt – der Platzhalter wechselt mit ihr. Eine eigene
-         Erklärzeile gibt es nicht mehr; sie stand nur im Weg. -->
-    <div class="modizeile">
-      <div class="modi" role="group" aria-label="Suchart" data-i18n-title="search.mode">
-        <button id="m-text" class="on" onclick="suchmodus('text')"
-                data-i18n="search.mode.text">Textsuche</button>
-        <button id="m-aehnlich" onclick="suchmodus('aehnlich')"
-                data-i18n="search.mode.aehnlich">Ähnliche Suche</button>
-        <button id="m-ki" onclick="suchmodus('ki')"
-                data-i18n="search.mode.ki">KI-Zusammenfassung</button>
-      </div>
-      <span class="small muted hide" id="modus-fehlt"
-            data-i18n="search.mode.needs">Braucht Ollama.</span>
-    </div>
-    <div class="row" style="margin-top:10px;gap:10px">
-      <button class="mini" id="filter-auf" aria-expanded="false"
-              onclick="filterUmschalten()" data-i18n="search.filter">Filter</button>
-      <button class="mini hide" id="filter-weg" onclick="filterLeeren()"
-              data-i18n="search.filter.clear">Zurücksetzen</button>
-    </div>
-    <div class="row hide" id="filter" style="margin-top:10px">
-      <span class="vorschlagfeld">
-        <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
-               role="combobox" aria-expanded="false" aria-autocomplete="list"
-               aria-controls="personliste" autocomplete="off"
-               oninput="personVorschlagen()" onkeydown="personTaste(event)"
-               onchange="zeigeFilterstand()">
-        <div class="menu hide" id="personliste" role="listbox"></div>
-      </span>
-      <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
-        <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
-        <option value="outlook" data-i18n="search.source.outlook">Mail</option>
-        <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
-        <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
-        <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
-        <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
-        <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
-        <option value="planner" data-i18n="search.source.planner">Planner</option>
-      </select>
-      <label class="small feld"><span data-i18n="search.from">von</span>
-        <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
-      <label class="small feld"><span data-i18n="search.to">bis</span>
-        <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
-      <select id="f-typ" onchange="zeigeFilterstand()" style="max-width:170px">
-        <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
-      </select>
-      <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
-        <option value="" data-i18n="search.folder.all">Alle Ordner</option>
-      </select>
-      <span class="gonefeld" id="gone-feld">
-        <label class="feld small" for="f-gone" data-i18n="view.gone">Gelöschtes</label>
-        <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
-        <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.gone.note">i</span>
-      </span>
-    </div>
-  </div>
-  <div class="answer hide" id="ai-box"></div>
-  <div class="card">
-    <!-- In der KI-Variante steht die Antwort oben; die Treffer, auf die sie
-         sich stützt, sind einen Klick entfernt statt weg. -->
-    <div class="row hide" id="ki-klappe" style="margin-bottom:12px">
-      <button class="mini" id="ki-klappknopf" onclick="klappeTreffer()"></button>
-    </div>
-    <div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
-    <div class="row" id="pager" style="margin-top:12px"></div></div>
-  </div>
-
-  <div id="sicht-dateien" class="hide">
-    <div class="row" style="margin:10px 0 6px;align-items:center">
-      <p class="small muted" id="dateien-pfad" style="flex:1;margin:0"></p>
-      <button class="mini hide" id="dateien-suchen" onclick="dateienSuchen()"
-              data-i18n="files.search.here">Hier suchen</button>
-    </div>
-    <div id="dateien-liste"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-  </div>
-
-  <div id="sicht-kalender" class="hide">
-  <div class="card">
-    <div class="calbar">
-      <span class="chip on" data-mode="week" data-i18n="cal.week">Woche</span>
-      <span class="chip" data-mode="month" data-i18n="cal.month">Monat</span>
-      <span class="chip" data-mode="rebuilt" data-i18n="cal.rebuilt">Rekonstruiert</span>
-      <span id="kalNav">
-        <button class="ghost" id="kalPrev" style="padding:6px 12px">‹</button>
-        <button class="ghost" id="kalToday" style="padding:6px 12px" data-i18n="cal.today">Heute</button>
-        <button class="ghost" id="kalNext" style="padding:6px 12px">›</button>
-      </span>
-      <span id="kalTitle"></span>
-      <span class="legend" id="kalLegend">
-        <span><i style="background:var(--ev-ok)"></i><span data-i18n="cal.legend.confirmed">Bestätigt</span></span>
-        <span><i style="background:var(--ev-warn)"></i><span data-i18n="cal.legend.tentative">Vorläufig</span></span>
-        <span><i style="background:var(--ev-bad)"></i><span data-i18n="cal.legend.cancelled">Abgesagt</span></span>
-        <span><i style="background:var(--ev-gone)"></i><span data-i18n="cal.legend.rebuilt">Rekonstruiert</span></span>
-      </span>
-    </div>
-    <p class="small muted" id="kalStats"></p>
-    <div id="kalBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-  </div>
-  </div>
-
-  <div id="sicht-adressbuch" class="hide">
-  <div class="card">
-    <div class="calbar">
-      <span class="chip on" data-book="all" data-i18n="book.f.all">Alle</span>
-      <span class="chip" data-book="contacts" data-i18n="book.f.contacts">Aus Kontakten</span>
-      <span class="chip" data-book="comm" data-i18n="book.f.comm">Aus Kommunikation</span>
-      <input type="text" id="kbQ" data-i18n-ph="book.search.ph" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:220px">
-      <span class="small muted" id="kbStats"></span>
-    </div>
-    <p class="small muted" style="margin:8px 0 0" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
-  </div>
-  <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
-  </div>
-</section>
-
-
-
-
-<section id="tab-analytics" class="hide">
-  <div class="card">
-    <div class="row" style="justify-content:space-between">
-      <h2 data-i18n="ana.title" style="margin:0">Was im Archiv steckt</h2>
-      <span class="row" style="gap:10px"><span class="small muted" id="ana-stand"></span>
-      <button class="mini" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button></span>
-    </div>
-    <p class="sub" data-i18n="ana.sub">Beim Indexlauf gerechnet – ohne Microsoft zu fragen.</p>
-    <div class="dia-titel" data-i18n="ana.komm.title">Kommunikation</div>
-    <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-    <div class="dia-titel" data-i18n="ana.dateien.title">Dateien &amp; Platz</div>
-    <div id="ana-kpi-dateien" class="kpis"></div>
-    <p class="small muted" style="margin-top:10px" id="export-state"></p>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="ana.verlauf.titel">Verlauf</h2>
-    <div id="ana-dia"></div>
-  </div>
-
-  <div class="card">
-    <h2 data-i18n="ana.health.title">Gesundheit</h2>
-    <div class="dia-titel" data-i18n="ana.runs.title">Läufe</div>
-    <p class="dia-sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
-    <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-    <div class="dia-titel" data-i18n="ana.check.title">Vollständigkeit</div>
-    <p class="dia-sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
-    <div class="row">
-      <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
-      <span class="small muted" id="ana-check-state"></span>
-    </div>
-    <div id="ana-checks"></div>
-  </div>
-</section>
-
-<section id="tab-einstellungen" class="hide">
-  <div class="card">
-    <h2 class="mit-info"><span data-i18n="settings.export.title">Export</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.export.i">i</span></h2>
-
-    <div class="gruppe"><h3 data-i18n="settings.teams.title">Teams</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_images.i">i</span></span><input type="checkbox" id="c-embed_images"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-teams" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.outlook.title">Outlook</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.include_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.include_hidden.i">i</span></span><input type="checkbox" id="c-include_hidden"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_reconstruct"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_reconstruct.i">i</span></span><input type="checkbox" id="c-calendar_reconstruct"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="folders.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="folders.rules.i">i</span></span><span class="small muted" id="folders-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-folder_rules"
-          placeholder="- E-Mail/Archiv/**&#10;+ E-Mail/Archiv/Wichtig/**"></textarea>
-      </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_folders.sub"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_folders.i">i</span></span><span class="small muted"></span></div>
-      <div class="feldzeile breit"><textarea id="c-skip_folders"></textarea></div>
-      <div class="row" style="margin-top:8px">
-        <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
-        <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
-        <span class="small muted" id="folders-msg"></span>
-      </div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.calendars.title">Kalender</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendars.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendars.rules.i">i</span></span><span class="small muted" id="cal-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-calendar_rules"
-          placeholder="- kalender/**&#10;+ kalender/Privat"></textarea>
-      </div>
-      <div class="row" style="margin-top:8px">
-        <button class="mini" onclick="gleicheOrdnerAb('calendar')" data-i18n="settings.calendars.sync">Kalenderliste abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste('calendar')" data-i18n="plan.open">Exportliste anzeigen</button>
-        <span class="small muted" id="cal-msg"></span>
-      </div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.onedrive.title">OneDrive</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.rules.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.rules.i">i</span></span><span class="small muted" id="od-folders-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-onedrive_rules"
-          placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
-      </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive" style="min-width:160px"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
-      <div class="row" style="margin-top:8px">
-        <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
-        <span class="small muted" id="od-folders-msg"></span>
-      </div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.sharepoint.title">SharePoint</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('sp-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('sp-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="sp-urls" class="urltab" data-praefix="sharepoint-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" style="min-width:220px" placeholder="pdf, docx, xlsx"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" style="min-width:220px" placeholder="mp4, iso"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-      <div class="row" style="margin-top:8px">
-        <button class="mini" onclick="gleicheOrdnerAb('sharepoint')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="sharepointVorschau()" data-i18n="sharepoint.preview">Größen-Vorschau</button>
-        <button class="mini" onclick="zeigeExportliste('sharepoint')" data-i18n="plan.open">Exportliste anzeigen</button>
-        <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
-        <span class="small muted" id="sp-msg"></span>
-      </div>
-      <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('pg-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('pg-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="pg-urls" class="urltab" data-praefix="pages-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.planner.title">Planner</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 class="mit-info"><span data-i18n="sched.title">Zeitplan</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.i">i</span></h2>
-    <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.enabled.i">i</span></span><input type="checkbox" id="s-enabled"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.every"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.every.i">i</span></span><span><input type="number" id="s-interval" min="5" step="5" value="60"> <span class="muted small" data-i18n="sched.minutes">Minuten</span></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.outlook"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.outlook.i">i</span></span><input type="checkbox" id="s-outlook"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.teams"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.teams.i">i</span></span><input type="checkbox" id="s-teams"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.onedrive"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.onedrive.i">i</span></span><input type="checkbox" id="s-onedrive"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.sharepoint.i">i</span></span><input type="checkbox" id="s-sharepoint"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.pages"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.pages.i">i</span></span><input type="checkbox" id="s-sharepoint_pages"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.planner"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.planner.i">i</span></span><input type="checkbox" id="s-planner"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <button class="act" onclick="saveSchedule()" data-i18n="sched.save">Zeitplan speichern</button>
-      <span class="small muted" id="s-next"></span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 class="mit-info" id="ki-karte"><span data-i18n="settings.ollama.title">KI</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.i">i</span></h2>
-    <p class="sub" data-i18n="settings.ollama.sub">Alles darunter hängt daran.</p>
-    <div class="kopfschalter">
-      <input type="checkbox" class="kipp" id="c-ollama_enabled" onchange="ollamaSchalter()">
-      <label for="c-ollama_enabled" style="font-weight:600"
-             data-i18n="settings.ollama.use">Ollama verwenden</label>
-      <span class="small muted" id="ollama-stand"></span>
-    </div>
-    <p class="folgen" id="ollama-folgen"></p>
-
-    <div id="ollama-kinder">
-      <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.ollama.url"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.url.i">i</span></span><span class="feldmitstand"><input type="text" id="c-ollama" style="width:230px"><span class="stand hide" id="st-ollama"></span></span></div>
-      </div>
-
-      <div class="gruppe unter">
-        <h3><span data-i18n="settings.index.title">Index</span>
-          <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.i">i</span></h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.index.kind"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.index.kind.i">i</span></span><div class="wahl2" role="group"><button id="ix-text" onclick="indexart(false)" data-i18n="settings.index.text">Nur Volltext</button><button id="ix-beides" onclick="indexart(true)" data-i18n="settings.index.both">Volltext und Bedeutung</button></div></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_model.i">i</span></span><span class="feldmitstand"><input type="text" id="c-embed_model" style="width:160px"><span class="stand hide" id="st-embed_model"></span></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.batch"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.batch.i">i</span></span><input type="number" id="c-index_batch" min="1" max="512"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.semantic_min"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.semantic_min.i">i</span></span><span><input type="number" id="c-semantic_min" min="0" max="95" step="5"> <span class="muted small">%</span></span></div>
-        <p class="folgen" id="index-folgen"></p>
-      </div>
-
-      <div class="gruppe unter">
-        <h3><span data-i18n="settings.ki.title">KI-Zusammenfassung</span>
-          <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ki.i">i</span></h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.chat_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.chat_model.i">i</span></span><span class="feldmitstand"><input type="text" id="c-chat_model" style="width:210px"><span class="stand hide" id="st-chat_model"></span></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.answer_sources"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.answer_sources.i">i</span></span><input type="number" id="c-answer_sources" min="1" max="20"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2 class="mit-info" id="mcp-karte"><span data-i18n="mcp.title">Claude (MCP)</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.i">i</span></h2>
-    <div class="gruppe">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_enabled.i">i</span></span><input type="checkbox" class="kipp" id="c-mcp_enabled" onchange="speichereEinstellungen()"></div>
-    </div>
-    <div class="row" style="margin-top:8px">
-      <button class="act" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
-      <span class="small" id="mcp-state"></span>
-    </div>
-    <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_port"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_port.i">i</span></span><input type="number" id="c-mcp_port" min="1024" max="65535"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_autostart"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_autostart.i">i</span></span><input type="checkbox" id="c-mcp_autostart"></div>
-    </div>
-    <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
-    <div class="mitkopie"><pre id="mcp-json"></pre>
-      <button class="mini kopie" onclick="kopiere('mcp-json', this)" data-i18n="copy">Kopieren</button></div>
-    <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
-    <div class="mitkopie"><pre id="mcp-stdio"></pre>
-      <button class="mini kopie" onclick="kopiere('mcp-stdio', this)" data-i18n="copy">Kopieren</button></div>
-  </div>
-
-  <div class="card">
-    <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
-    <div class="gruppe" style="margin-top:8px">
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><span></span></div>
-      <div class="feldzeile breit">
-        <div class="row">
-          <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
-          <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
-          <button class="mini" onclick="datenordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
-          <span class="small" id="datadir-msg"></span>
-        </div>
-      </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.indexdir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.indexdir.i">i</span></span><span></span></div>
-      <div class="feldzeile breit">
-        <div class="row">
-          <input type="text" id="c-index-dir" style="flex:1;min-width:280px">
-          <button class="mini" onclick="setzeIndexordner()" data-i18n="settings.datadir.save">Übernehmen</button>
-          <button class="mini" onclick="indexordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
-          <span class="small" id="indexdir-msg"></span>
-        </div>
-      </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.homedir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.homedir.i">i</span></span><code id="home-dir" class="small">…</code></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.appdir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.appdir.i">i</span></span><code id="app-ort" class="small">…</code></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.analytics_skip"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.analytics_skip.i">i</span></span><span class="small muted"></span></div>
-      <div class="feldzeile breit"><textarea id="c-analytics_skip" style="min-height:70px"></textarea></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.filetype_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.filetype_hidden.i">i</span></span><span><input type="text" id="c-filetype_hidden" style="min-width:220px"> <button class="mini" onclick="typenZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.lang.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.lang.i">i</span></span><select id="c-language" style="min-width:200px"></select></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="update.enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="update.enabled.i">i</span></span><input type="checkbox" id="c-update_check"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.userflow_actions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.userflow_actions.i">i</span></span><input type="number" id="c-userflow_actions" min="0" max="50"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.runs_retention_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.runs_retention_months.i">i</span></span><input type="number" id="c-runs_retention_months" min="1" max="120"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.log_retention_days"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.log_retention_days.i">i</span></span><input type="number" id="c-log_retention_days" min="1" max="365"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications" style="min-width:200px"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <span class="small muted" id="update-current" style="flex:1"></span>
-      <span class="small muted" id="update-state"></span>
-      <button class="mini" onclick="pruefeUpdate()" data-i18n="update.check">Jetzt prüfen</button>
-      <a class="mini" id="update-link" target="_blank" rel="noopener"
-         data-i18n="update.download">Release herunterladen</a>
-    </div>
-  </div>
-
-  <div class="speichern">
-    <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
-    <span class="small" id="cfg-msg"></span>
-  </div>
-</section>
-</main>
-
-
-<!-- Das Protokoll gehört zur Anwendung, nicht zum Export-Reiter: darin stehen
-     auch Token-Zustand, MCP-Ausgabe und Meldungen des Zeitplans. Deshalb eine
-     Leiste am unteren Rand, von überall erreichbar und normalerweise zu. -->
-<div id="protokoll" class="zu">
-  <div class="pgriff" onpointerdown="protokollZiehen(event)"></div>
-  <!-- Die beiden Knöpfe liegen IN der Kopfzeile, die selbst das Auf- und
-       Zuklappen auslöst – deshalb hält jeder sein Klickereignis an. Sonst
-       klappte das Protokoll bei jedem Kopieren zu. -->
-  <div class="pkopf" onclick="protokollUmschalten()">
-    <span class="pfeil" id="p-pfeil">▴</span>
-    <strong data-i18n="log.title">Protokoll</strong>
-    <span class="small muted" id="log-letzte"></span>
-    <button class="mini" onclick="event.stopPropagation();kopiere('log', this)"
-            data-i18n="copy">Kopieren</button>
-    <button class="mini" onclick="event.stopPropagation();fehlerMelden()"
-            data-i18n="report.button">Fehler melden</button>
-  </div>
-  <div id="log"></div>
-</div>
-
-<div id="overlay"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
-
-<script type="application/json" id="i18n">/*__I18N__*/</script>
-<script>
-var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null, wizardStand = null;
-
-/* ---------- Sprache ----------
-   Die Texte kommen fertig mit der Seite (window.I18N) – kein zusätzlicher
-   Abruf, und damit auch kein kurzes Aufblitzen der falschen Sprache. */
-var I18N = JSON.parse(document.getElementById('i18n').textContent);
-var STR = I18N.strings || {};
-var LOC = I18N.lang || 'de';
-function t(key, vars){
-  var text = STR[key];
-  if(text == null) return key;          // fehlender Schlüssel: sichtbar statt leer
-  if(vars) Object.keys(vars).forEach(function(k){
-    text = text.split('{' + k + '}').join(vars[k]);
-  });
-  return text;
-}
-/* Meldungen vom Server sind entweder roher Text (Ausgabe der Export-Skripte)
-   oder {k: Schlüssel, v: Werte}. Ein Wert darf selbst wieder so eine Meldung
-   sein – so bleibt "Zeitplan aktiv (alle 60 Minuten)" ein Satz statt drei
-   Bruchstücken. Enthält v ein `minutes`, wird daraus zusätzlich `rest` als
-   lesbare Dauer gebildet: die Sprache kennt nur die Oberfläche. */
-function mtext(m){
-  if(m == null) return '';
-  if(typeof m === 'string') return m;
-  if(!m.k) return String(m);
-  var v = {};
-  Object.keys(m.v || {}).forEach(function(k){
-    // A step's structured result renders as one translated line.
-    v[k] = (k === 'ergebnis' && m.v[k] && typeof m.v[k] === 'object')
-      ? ergebnisText(m.v[k]) : mtext(m.v[k]);
-  });
-  if(m.v && m.v.minutes !== undefined) v.rest = restzeit(m.v.minutes);
-  return t(m.k, v);
-}
-
-/* The labels are the same atoms the run history table uses; extras keep
-   their technical names (moved, chunks, events …). */
-function ergebnisText(e){
-  var bits = [];
-  [['new', 'ana.runs.new'], ['unchanged', 'ana.runs.unchanged'],
-   ['excluded', 'ana.runs.excluded'], ['errors', 'ana.runs.errors']]
-    .forEach(function(p){
-      if(e[p[0]] !== undefined && e[p[0]] !== null)
-        bits.push(t(p[1]) + ' ' + zahl(e[p[0]]));
-    });
-  Object.keys(e.extra || {}).forEach(function(k){
-    bits.push(k + ' ' + zahl(e.extra[k]));
-  });
-  return bits.join(' · ') || '–';
-}
-function restzeit(min){
-  if(min === null || min === undefined) return t('unit.unknown');
-  if(min < 0) return t('unit.expired');
-  if(min < 60) return t('unit.min', {n: min});
-  var h = Math.floor(min / 60), m = min % 60;
-  if(h < 24) return m ? t('unit.hoursmin', {h: h, m: m}) : t('unit.hours', {h: h});
-  var d = Math.floor(h / 24); h = h % 24;
-  return h ? t('unit.dayshours', {d: d, h: h}) : t('unit.days', {d: d});
-}
-function fuelleSprachen(){
-  var sel = el('c-language');
-  sel.innerHTML = '<option value="auto">' + esc(t('settings.lang.auto')) + '</option>' +
-    (I18N.languages || []).map(function(l){
-      return '<option value="' + esc(l.code) + '">' + esc(l.name) + '</option>';
-    }).join('');
-  sel.value = (S && S.config && S.config.language) || 'auto';
-}
-function uebersetzeSeite(){
-  document.querySelectorAll('[data-i18n]').forEach(function(el){
-    el.textContent = t(el.dataset.i18n);
-  });
-  // Texte mit Auszeichnung (<code>, <strong>) – die Sprachdatei liefert HTML.
-  document.querySelectorAll('[data-i18n-html]').forEach(function(el){
-    el.innerHTML = t(el.dataset.i18nHtml);
-  });
-  document.querySelectorAll('[data-i18n-ph]').forEach(function(el){
-    el.placeholder = t(el.dataset.i18nPh);
-  });
-  document.querySelectorAll('[data-i18n-title]').forEach(function(el){
-    el.title = t(el.dataset.i18nTitle);
-    // Gruppen ohne sichtbare Beschriftung tragen denselben Text als aria-label:
-    // ein title allein wird von Screenreadern nicht zuverlässig vorgelesen.
-    if(el.hasAttribute('aria-label')) el.setAttribute('aria-label', t(el.dataset.i18nTitle));
-  });
-  document.title = t('app.title');
-  document.documentElement.lang = LOC;
-}
-uebersetzeSeite();
-
-function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
-
-/* Was in einem Kasten steht, so wie es jemand lesen würde. Im Protokoll ist
-   jede Zeile ein eigenes Kind, und textContent klebte sie ohne Umbruch
-   aneinander – ein Protokoll, das als eine einzige Zeile in der Zwischenablage
-   landet, hilft niemandem. Eingabefelder gehen nicht hier durch, sondern über
-   inZwischenablage(feld.value, …): sie tragen ihren Text woanders. */
-function kopiertext(id){
-  var e = el(id);
-  if(!e) return '';
-  if(e.children && e.children.length) return [].map.call(e.children,
-    function(k){ return k.textContent; }).join('\n');
-  return e.textContent || '';
-}
-function kopiere(id, knopf){
-  inZwischenablage(kopiertext(id), knopf);
-}
-/* In die Zwischenablage. Auf 127.0.0.1 gilt die Seite als vertrauenswürdig,
-   die Zwischenablage-Schnittstelle steht also zur Verfügung – aber nicht in
-   jedem Browser und nicht, wenn das Fenster gerade nicht im Vordergrund ist.
-   Deshalb der alte Weg als Rückfall, statt still nichts zu tun. */
-function inZwischenablage(text, knopf){
-  function fertig(ok){
-    var vorher = knopf.textContent;
-    knopf.textContent = t(ok ? 'copy.done' : 'copy.failed');
-    setTimeout(function(){ knopf.textContent = vorher; }, 1600);
-  }
-  if(navigator.clipboard && navigator.clipboard.writeText){
-    navigator.clipboard.writeText(text).then(function(){ fertig(true); },
-                                            function(){ altKopieren(text, fertig); });
-  } else {
-    altKopieren(text, fertig);
-  }
-}
-function altKopieren(text, fertig){
-  try {
-    var feld = document.createElement('textarea');
-    feld.value = text;
-    feld.style.position = 'fixed';
-    feld.style.opacity = '0';
-    document.body.appendChild(feld);
-    feld.select();
-    var ok = document.execCommand('copy');
-    document.body.removeChild(feld);
-    fertig(ok);
-  } catch(e){ fertig(false); }
-}
-function post(p, body){
-  return fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
-}
-function esc(s){ return String(s == null ? '' : s)
-  .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-function el(id){ return document.getElementById(id); }
-
-/* Drei Reiter, mehr braucht es nicht: Daten holen, Daten ansehen, einstellen.
-   Kalender und Adressbuch sind Sichten auf denselben Bestand wie die Suche und
-   liegen deshalb eine Ebene darunter; Zeitplan und MCP sind Einstellungen. */
-var KANN_VERLAUF = false;   // hängt am Index, siehe store.features
-var REITER = ['export', 'suche', 'analytics', 'einstellungen'];
-var SICHTEN = ['treffer', 'kalender', 'adressbuch', 'dateien'];
-var offeneSicht = 'treffer';
-
-/* ---------- UI-Userflow-Aufzeichnung ----------
-   Die letzten Bedienschritte – nur die ART (Reiter, Suche, Lauf), nie Inhalte
-   wie Suchtexte oder Namen. Rein im Speicher dieser Seite, beim Schließen weg;
-   sichtbar wird die Liste nur im Fehlerbericht, als eigenes editierbares Feld.
-   Anzahl in den Einstellungen (userflow_actions), 0 schaltet ab. */
-var ablauf = [];
-
-function ablaufGrenze(){
-  return (S && S.config && typeof S.config.userflow_actions === 'number')
-    ? S.config.userflow_actions : 20;
-}
-
-function merke(schluessel, detail){
-  var n = ablaufGrenze();
-  if(n <= 0){ ablauf.length = 0; return; }
-  var d = new Date();
-  function zwei(x){ return (x < 10 ? '0' : '') + x; }
-  ablauf.push({t: zwei(d.getHours()) + ':' + zwei(d.getMinutes()) + ':' +
-                  zwei(d.getSeconds()),
-               k: schluessel, d: detail || ''});
-  while(ablauf.length > n) ablauf.shift();
-}
-
-function ablaufText(){
-  if(ablaufGrenze() <= 0) return '';
-  return ablauf.map(function(e){
-    return e.t + '  ' + t(e.k) + (e.d ? ': ' + e.d : '');
-  }).join('\n');
-}
-
-function tab(name){
-  merke('flow.tab', name);
-  REITER.forEach(function(t){
-    el('tab-' + t).classList.toggle('hide', t !== name);
-    document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
-  });
-  if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); }
-  if(name === 'analytics') ladeAnalytics();
-}
-
-/* „Gelöschtes“ war ein Häkchen zwischen fünf Filtern und ist in Wahrheit eine
-   eigene Sicht auf denselben Bestand – wie Kalender und Adressbuch. Es teilt
-   sich deren Trefferliste, setzt aber den Filter. */
-function sicht(name){
-  if(name !== offeneSicht) merke('flow.view', name);   // tab() reicht die offene durch
-  offeneSicht = name;
-  SICHTEN.forEach(function(v){
-    el('sicht-' + v).classList.toggle('hide', v !== name);
-  });
-  document.querySelectorAll('#sichten .chip').forEach(function(c){
-    c.classList.toggle('on', c.dataset.sicht === name);
-  });
-  // Die Kalenderdaten sind ein paar Megabyte – erst holen, wenn jemand hinsieht.
-  if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
-  if(name === 'dateien') ladeDateien();
-}
-
-/* ---------- File browser: the mirrors as a tree, all from the index --- */
-var dateiSicht = {root: '', path: ''};
-var dateiDaten = null;
-
-function ladeDateien(root, path){
-  if(root !== undefined) dateiSicht = {root: root, path: path || ''};
-  api('/api/files?root=' + encodeURIComponent(dateiSicht.root) +
-      '&path=' + encodeURIComponent(dateiSicht.path))
-    .then(zeichneDateien).catch(function(){});
-}
-
-function dateiGehe(i){
-  var z = dateiDaten && (dateiDaten.roots ? dateiDaten.roots[i]
-                                          : dateiDaten.dirs[i]);
-  if(z) ladeDateien(z.root || dateiSicht.root, z.path);
-}
-
-function dateiHoch(n){
-  // n path segments survive; above the level root the crumb leads back to
-  // the sources screen, not to a half-empty listing.
-  if(n < 0 || n < (dateiSicht.base || 0)) return ladeDateien('', '');
-  var teile = dateiSicht.path.split('/').filter(Boolean).slice(0, n);
-  ladeDateien(dateiSicht.root, teile.join('/'));
-}
-
-function zeichneDateien(r){
-  dateiDaten = r;
-  var box = el('dateien-liste'), pfad = el('dateien-pfad');
-  el('dateien-suchen').classList.toggle('hide', !!r.roots);
-  if(r.error){ box.innerHTML = '<p class="hint">' + esc(mtext(r.error)) + '</p>'; return; }
-  if(r.roots){
-    pfad.textContent = t('files.roots');
-    box.innerHTML = r.roots.length ? r.roots.map(function(w, i){
-      return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
-        '<strong>' + esc(w.label) + '</strong>' +
-        '<span class="muted small">' + esc(zahl(w.files)) + ' ' +
-        esc(t('progress.unit.files')) + '</span></div>';
-    }).join('') : '<p class="hint">' + esc(t('files.none')) + '</p>';
-    return;
-  }
-  // Breadcrumbs: sources / root / folders… – depth and label come from
-  // the answer, the client holds no per-root layout knowledge.
-  var teile = (r.path || '').split('/').filter(Boolean);
-  var basis = r.base || 0;
-  dateiSicht.base = basis;
-  var krumen = ['<a href="javascript:void(0)" onclick="dateiHoch(-1)">' +
-                esc(t('files.roots')) + '</a>',
-                '<a href="javascript:void(0)" onclick="dateiHoch(' + basis + ')">' +
-                esc(r.label || dateiSicht.root) + '</a>'];
-  teile.slice(basis).forEach(function(s, i){
-    krumen.push('<a href="javascript:void(0)" onclick="dateiHoch(' + (basis + i + 1) + ')">' +
-                esc(s) + '</a>');
-  });
-  pfad.innerHTML = krumen.join(' / ');
-  var zeilen = (r.dirs || []).map(function(d, i){
-    return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
-      '<span>📁 <strong>' + esc(d.name) + '</strong></span>' +
-      '<span class="muted small">' + esc(zahl(d.files)) + ' ' +
-      esc(t('progress.unit.files')) + '</span></div>';
-  }).concat((r.files || []).map(function(f){
-    var link = '/source?root=' + encodeURIComponent(dateiSicht.root) +
-               '&path=' + encodeURIComponent(f.rel);
-    return '<div class="dateizeile"' +
-      (f.gone ? ' title="' + esc(t('search.gone.since', {when: fmt(f.gone)})) + '"' : '') + '>' +
-      '<a href="' + link + '" target="_blank"' +
-      (f.gone ? ' class="muted"' : '') + '>' + esc(f.name) + '</a>' +
-      (f.gone ? ' <span class="tag weg">' + esc(t('search.gone.tag')) + '</span>' : '') +
-      ' <span class="muted small">' + esc(f.date || '') +
-      (f.size != null ? ' · ' + esc(bytes(f.size)) : '') + '</span></div>';
-  }));
-  box.innerHTML = zeilen.length ? zeilen.join('')
-    : '<p class="hint">' + esc(t('files.empty')) + '</p>';
-}
-
-function dateienSuchen(){
-  // The browser's spot becomes the search's filter: source and folder.
-  el('f-source').value = dateiSicht.root || 'all';
-  var sel = el('f-folder'), pfad = dateiSicht.path || '';
-  if(pfad && !Array.prototype.some.call(sel.options,
-      function(o){ return o.value === pfad; })){
-    var o = document.createElement('option');
-    o.value = pfad; o.textContent = pfad; sel.appendChild(o);
-  }
-  sel.value = pfad;
-  el('filter').classList.remove('hide');
-  sicht('treffer'); zeigeFilterstand(); doSearch(0);
-}
-
-/* Wer nichts filtert – der Normalfall – soll ein Suchfeld und einen Knopf
-   sehen. Die Zahl am Schalter sagt, dass darunter etwas eingestellt ist;
-   ohne sie wäre ein zugeklappter Filter eine Falle. */
-function filterFelder(){
-  return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
-          el('f-from').value, el('f-to').value, el('f-folder').value,
-          el('f-typ').value, el('f-gone').checked ? 'gone' : ''].filter(Boolean);
-}
-function filterUmschalten(){
-  var zu = el('filter').classList.toggle('hide');      // true = jetzt versteckt
-  el('filter-auf').setAttribute('aria-expanded', zu ? 'false' : 'true');
-}
-function filterLeeren(){
-  el('f-person').value = ''; el('f-source').value = 'all';
-  el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
-  el('f-typ').value = ''; el('f-gone').checked = false;
-  zeigeFilterstand();
-}
-/* Ein unmögliches Datum („31.06.“) nimmt der Browser entgegen, gibt aber einen
-   leeren Wert heraus. Ohne diese Prüfung suchte die App dann ohne diese Grenze
-   weiter – das Feld sah gefüllt aus, die Treffer lagen außerhalb, und nichts
-   sagte warum. Ein vertauschter Zeitraum ist derselbe Fall: er liefert
-   zuverlässig null Treffer, die wie ein leeres Archiv aussehen. */
-function datumPruefen(){
-  var kaputt = false;
-  ['f-from', 'f-to'].forEach(function(id){
-    var e = el(id);
-    var schlecht = !!(e.validity && e.validity.badInput);
-    e.classList.toggle('fehler', schlecht);
-    if(schlecht) kaputt = true;
-  });
-  if(kaputt) return t('search.date.bad');
-  var von = el('f-from').value, bis = el('f-to').value;
-  if(von && bis && von > bis) return t('search.date.turned');
-  return '';
-}
-
-function zeigeFilterstand(){
-  datumPruefen();                      // die Markierung sofort, nicht erst beim Suchen
-  var n = filterFelder().length;
-  el('filter-auf').textContent = n ? t('search.filter.n', {n: n}) : t('search.filter');
-  el('filter-weg').classList.toggle('hide', !n);
-}
-
-/* Die Kachel führt immer dorthin, wo etwas zu ändern ist. Vorher öffnete sie
-   ein Fenster, das erklärte, was fehlt – aber ändern ließ sich dort nichts,
-   und die Hälfte der Angaben stand ohnehin nur in den Einstellungen. */
-function ollamaKachel(){
-  zeigeEinstellung('ki-karte');
-}
-
-/* Was hier steht, entscheidet dieselbe Prüfung, aus der die Kachel im Kopf
-   ihre Farbe bezieht – nur eben neben dem Feld, in dem man es richtet:
-   die Adresse, das Modell zum Einbetten, das Modell für die Antwort. */
-function zeigeOllamaStand(o, lage){
-  var teile = [
-    ['st-ollama', lage === 'aus' ? '' : o.running ? 'ok' : 'err',
-     o.running ? 'settings.stand.da' : 'settings.stand.weg'],
-    ['st-embed_model', lage === 'aus' || !o.running ? '' : o.has_model ? 'ok' : 'warn',
-     o.has_model ? 'settings.stand.geladen' : 'settings.stand.fehlt'],
-    ['st-chat_model', lage === 'aus' || !o.running ? '' : o.has_chat_model ? 'ok' : 'warn',
-     o.has_chat_model ? 'settings.stand.geladen' : 'settings.stand.fehlt']
-  ];
-  teile.forEach(function(z){
-    var kasten = el(z[0]);
-    if(!kasten) return;
-    // Ohne erreichbares Ollama ist „Modell fehlt“ keine Auskunft, sondern eine
-    // zweite Meldung über dieselbe Ursache.
-    kasten.className = 'stand ' + (z[1] || 'hide');
-    kasten.innerHTML = z[1]
-      ? '<span class="dot ' + z[1] + '"></span>' + esc(t(z[2])) : '';
-  });
-}
-
-/* Ollama abschalten heißt: die App sucht nicht mehr danach, die Bedeutungs-
-   suche und die Zusammenfassung fallen weg, und der Index wird als reiner
-   Volltextindex gebaut. Was ohne Ollama keine Wirkung hätte, graut hier ab –
-   sichtbar bleiben soll es trotzdem, sonst weiß niemand, was er sich abschaltet. */
-var INDEX_SEMANTISCH = true;
-
-function indexart(semantisch){
-  if(semantisch && !el('c-ollama_enabled').checked) return;
-  INDEX_SEMANTISCH = !!semantisch;
-  el('ix-text').classList.toggle('on', !INDEX_SEMANTISCH);
-  el('ix-beides').classList.toggle('on', INDEX_SEMANTISCH);
-  el('index-folgen').textContent = INDEX_SEMANTISCH ? '' : t('settings.index.parked');
-}
-
-function ollamaSchalter(){
-  var an = el('c-ollama_enabled').checked;
-  el('ollama-kinder').classList.toggle('aus', !an);
-  el('ix-beides').disabled = !an;
-  el('ollama-folgen').textContent = an ? '' : t('settings.ollama.folgen');
-  if(!an) indexart(false);
-}
-
-function zeigeEinstellung(anker){
-  // Die Kachel oben führt weiterhin direkt zu ihrem Thema – nur liegt das
-  // jetzt in den Einstellungen statt in einem eigenen Reiter.
-  tab('einstellungen');
-  var ziel = document.getElementById(anker);
-  if(ziel) ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
-}
-
-/* ---------- Status ----------
-   Beschriftung in Alltagssprache, Fachbegriff im Tooltip. Wer „Chunks“ oder
-   „MCP“ sucht, findet es beim Darüberfahren; wer die Wörter nicht kennt, muss
-   sie nicht lesen, um den Zustand zu verstehen. */
-function setPill(id, cls, text, tip){
-  el('p-' + id).className = 'dot ' + cls;
-  el('p-' + id + '-t').textContent = text;
-  var knopf = el('pill-' + id);
-  if(knopf) knopf.title = tip || '';
-}
-
-function renderStatus(s){
-  var first = S === null;
-  S = s;
-
-  var tok = s.token, tokTip = t('pill.token.tip');
-  if(tok.account) tokTip += '\n' + tok.account;
-  if(!tok.present) setPill('token','err', t('pill.token.missing'), tokTip);
-  else if(tok.expired) setPill('token','err', t('pill.token.expired'), tokTip);
-  else if(tok.missing && tok.missing.length) setPill('token','warn', t('pill.token.scopes'), tokTip);
-  else if(tok.expires_in_minutes != null) setPill('token','ok', t('pill.token.left', {rest: restzeit(tok.expires_in_minutes)}), tokTip);
-  else setPill('token','ok', t('pill.token.set'), tokTip);
-
-  var o = s.ollama;
-  // Abgeschaltet ist kein Fehler, sondern eine Entscheidung – deshalb grau
-  // statt rot, und kein Assistent, der zur Installation drängt.
-  // An oder aus – wie bei MCP. Warum es aus ist, steht im Mouseover, und was
-  // genau fehlt, in den Einstellungen neben dem Feld, in dem man es ändert.
-  // Drei Beschriftungen für drei Arten von „nicht verfügbar“ hießen: dieselbe
-  // Antwort in drei Wörtern, von denen keines sagt, was zu tun ist.
-  var oLage = o.disabled ? 'aus' : !o.running ? 'weg' : !o.has_model ? 'modell' : 'on';
-  setPill('ollama', {on: 'ok', modell: 'warn', weg: 'err', aus: ''}[oLage],
-    t(oLage === 'on' ? 'pill.ollama.on' : 'pill.ollama.off'),
-    t('pill.ollama.tip.' + oLage));
-  zeigeOllamaStand(o, oLage);
-
-  // Der Zustand des Index stand einmal als Kachel im Kopf. Er steht jetzt im
-  // Analytics-Reiter, wo auch alles andere über den Bestand steht – zweimal
-  // dieselbe Zahl an zwei Orten hilft niemandem, sie widersprechen sich nur
-  // irgendwann. Was der Kopf zeigt, sind Dinge, die eine Handlung verlangen.
-  var st = s.store;
-
-  // Drei Zustände, nicht zwei: der Endpunkt läuft, er läuft nicht, oder der
-  // Zugriff ist ganz abgeschaltet. „aus“ für alles hieße vorher, dass ein per
-  // stdio eingetragener Client keinen Zugriff hat – der hat ihn aber.
-  // Den Transport nur nennen, wenn auch nur der eine fehlt: läuft der
-  // Endpunkt, sind beide Wege offen und „MCP HTTP an“ läse sich, als wäre
-  // stdio ausgenommen.
-  var mcpAus = s.config && s.config.mcp_enabled === false;
-  var mcpLage = mcpAus ? 'aus' : s.mcp.running ? 'on' : 'off';
-  setPill('mcp', mcpLage === 'on' ? 'ok' : '',
-    t('pill.mcp.' + mcpLage), t('pill.mcp.tip.' + mcpLage));
-
-  /* Export-Tab */
-  if(first){
-    fill('cat-outlook', ['mail','calendar','contacts'], s.config.outlook_categories, 'o');
-    fill('cat-teams', ['1on1','group','meeting','channels'], s.config.teams_categories, 't');
-    el('c-onedrive_enabled').checked = !!s.config.onedrive_enabled;
-    el('c-sharepoint_enabled').checked = !!s.config.sharepoint_enabled;
-    el('c-sharepoint_pages_enabled').checked = !!s.config.sharepoint_pages_enabled;
-    el('c-planner_enabled').checked = !!s.config.planner_enabled;
-    fuelleSprachen();
-    el('s-enabled').checked = s.config.schedule.enabled;
-    el('s-interval').value = s.config.schedule.interval_minutes;
-    el('s-outlook').checked = s.config.schedule.outlook;
-    el('s-teams').checked = s.config.schedule.teams;
-    el('s-onedrive').checked = s.config.schedule.onedrive !== false;
-    el('s-sharepoint').checked = s.config.schedule.sharepoint !== false;
-    el('s-sharepoint_pages').checked = s.config.schedule.sharepoint_pages !== false;
-    el('s-planner').checked = s.config.schedule.planner !== false;
-    el('s-index').checked = s.config.schedule.index;
-    el('s-calendar').checked = s.config.schedule.calendar;
-  }
-  el('teams-note').textContent = checked('t').indexOf('channels') >= 0
-    ? t('export.channels.note') : '';
-  el('sp-export-note').textContent = el('c-sharepoint_enabled').checked
-    && !(s.config.sharepoint_urls || '').trim() ? t('export.sharepoint.nourls') : '';
-
-  var ex = s.exports, parts = [];
-  function wann(iso){ return iso ? t('export.state.last', {when: fmt(iso)}) : t('export.state.never'); }
-  parts.push(t('export.state.outlook', {when: wann(ex.outlook.last_run)}));
-  parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
-  parts.push(t('export.state.onedrive', {when: wann(ex.onedrive && ex.onedrive.last_run)}));
-  parts.push(t('export.state.sharepoint', {when: wann(ex.sharepoint && ex.sharepoint.last_run)}));
-  parts.push(t('export.state.pages', {when: wann(ex.pages && ex.pages.last_run)}));
-  parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
-  el('export-state').textContent = parts.join('  ·  ');
-  // Die Sicht „Gelöschtes“ und der Verlauf brauchen einen Index, der beides
-  // kennt. Ein alter kennt die Spalten nicht – dann gibt es den Chip nicht.
-  var kann = (st.features || []);
-  var kannGone = kann.indexOf('gone') >= 0;
-  el('gone-feld').classList.toggle('hide', !kannGone);
-  if(!kannGone) el('f-gone').checked = false;
-  KANN_VERLAUF = kann.indexOf('thread') >= 0;
-  KANN_TYP = kann.indexOf('ext') >= 0;
-  zeigeOrdnerstand(s.folders || {});
-  zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
-  zeigeKalenderstand(s.calendars || {});
-  // Nur beim ersten Zeichnen füllen – sonst überschriebe der Statusabruf alle
-  // 2,5 Sekunden, was gerade getippt wird.
-  if(first){ el('c-data-dir').value = s.data_dir;
-              el('c-index-dir').value = s.index_dir || ''; }
-  el('home-dir').textContent = s.home_dir || '';
-  el('app-ort').textContent = s.app_location || '';
-  zeigeUpdate(s.update || {});
-  fuelleEinstellungen(s.config);
-
-  el('migrationshinweis').classList.toggle('hide', !s.migration);
-  var busy = s.jobs.busy || s.migration;
-  el('btn-run').disabled = busy;
-  el('btn-cancel').classList.toggle('hide', !busy);
-  zeigeFortschritt(s.jobs);
-
-  /* Zeitplan / MCP */
-  el('s-next').textContent = s.schedule_enabled && s.schedule_next
-    ? t('sched.next', {when: fmt(s.schedule_next)}) : t('sched.none');
-  el('mcp-toggle').textContent = t(s.mcp.running ? 'mcp.stop' : 'mcp.start');
-  el('mcp-toggle').disabled = mcpAus;
-  el('mcp-state').textContent = mcpAus ? t('mcp.aus')
-    : s.mcp.running
-    ? t('mcp.running', {url: s.mcp.url, mode: t(st.semantic ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')})
-    : (mtext(s.mcp.error) || t('mcp.stopped'));
-  el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
-  el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
-  // Die Antwort gibt es nur, wenn auch ein Modell sie formulieren kann.
-  // Die beiden hinteren Varianten hängen an Ollama: „Ähnliche Suche“ muss die
-  // Anfrage einbetten, die Zusammenfassung braucht zusätzlich ein Sprachmodell.
-  modiPruefen(!!(o.running && o.has_chat_model && st.exists && st.semantic),
-              !!o.disabled);
-
-  // Nach einem Neuaufbau die Kalenderdaten verwerfen, sonst zeigten Kalender
-  // und Adressbuch weiter den Stand von vor dem Lauf.
-  if(kalGeladen && kalStand && s.calendar && s.calendar.built_at &&
-     s.calendar.built_at !== kalStand){
-    kalGeladen = false; kalStand = null;
-    var reiter = document.querySelector('nav [data-tab].on');
-    if(reiter && reiter.dataset.tab === 'suche' &&
-       (offeneSicht === 'kalender' || offeneSicht === 'adressbuch'))
-      ladeKalender(offeneSicht);
-  }
-
-  if(wizardOffen && !WIZARDS[wizardOffen]){ /* eigenes Fenster – nicht anfassen */ }
-  else if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);
-  else if(wizardOffen) openWizard(wizardOffen);   // offenen Assistenten aktuell halten
-  // Das zweite ist nicht optional: sobald das Modell geladen ist, verlangt der
-  // Server keinen Assistenten mehr (s.wizard === null). Ohne diesen Zweig
-  // stünde im offenen Fenster für immer „Modell fehlt“, während die Ampel im
-  // Kopf längst grün ist.
-}
-
-function fmt(iso){
-  if(!iso) return '–';
-  var d = new Date(iso);
-  return isNaN(d) ? iso : d.toLocaleString(LOC, {dateStyle:'short', timeStyle:'short'});
-}
-
-function fill(id, keys, active, pre){
-  el(id).innerHTML = keys.map(function(k){
-    var box = '<label class="chk"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
-      k + '"' + (active.indexOf(k) >= 0 ? ' checked' : '') +
-      ' onchange="saveCats()"> ' + esc(t('export.cat.' + k)) + '</label>';
-    // Channels stand apart: they pull whole teams and grow the archive fast,
-    // so ticking them reveals a warning right below the box.
-    return k === 'channels'
-      ? '<div class="chk-sep">' + box + '<p class="small chk-note" id="teams-note"></p></div>'
-      : box;
-  }).join('');
-}
-function checked(pre){
-  return Array.prototype.slice.call(document.querySelectorAll('#cat-' +
-    (pre === 'o' ? 'outlook' : 'teams') + ' input:checked')).map(function(i){ return i.value; });
-}
-function saveCats(){
-  merke('flow.save', 'export');
-  post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
-                       onedrive_enabled: el('c-onedrive_enabled').checked,
-                       sharepoint_enabled: el('c-sharepoint_enabled').checked,
-                       sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked,
-                       planner_enabled: el('c-planner_enabled').checked}).then(refresh);
-}
-
-/* ---------- Läufe ---------- */
-function run(what, label){
-  what.label = label;
-  merke('flow.run', label);
-  post('/api/run', what).then(function(r){
-    // Auch ein 500 hat eine Aussage: lieber die rohe Fehlerzeile als ein
-    // leerer Alert, hinter dem niemand etwas suchen kann.
-    if(!r.ok) alert(mtext(r.message) || String(r.error || r.message || ''));
-    refresh();
-  });
-}
-function runExport(){
-  var o = checked('o').length > 0, tm = checked('t').length > 0;
-  var od = el('c-onedrive_enabled').checked;
-  var sp = el('c-sharepoint_enabled').checked;
-  var sps = el('c-sharepoint_pages_enabled').checked;
-  var pl = el('c-planner_enabled').checked;
-  if(!o && !tm && !od && !sp && !sps && !pl){ alert(t('export.nothing')); return; }
-  // Kalender nur mit Outlook: Termine, Kontakte und die Rekonstruktion
-  // gelöschter Termine stammen ausschließlich aus dem Postfach.
-  run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
-       planner:pl, index:true, calendar:o}, t('job.export'));
-}
-
-/* ---------- Fortschritt ----------
-   Zwei Ebenen: der wievielte Schritt von wie vielen, und innerhalb des
-   Schrittes so genau, wie das Skript es weiß. Der Outlook-Export kennt seine
-   Gesamtzahl nicht – er entdeckt die Mails erst im Laufen. Dort läuft der
-   Balken gestreift weiter und die Zeile nennt die Zahl, statt eine Prozent-
-   angabe zu erfinden, die niemand halten kann. */
-function zeigeFortschritt(jobs){
-  var kasten = el('fortschritt'), balken = document.querySelector('.balken');
-  kasten.classList.toggle('hide', !jobs.busy);
-  if(!jobs.busy){
-    var L = jobs.last;
-    el('fortschritt-text').textContent = '';
-    if(L) el('log-letzte').textContent = L.ok
-      ? t('log.job.done', {label: mtext(L.label), when: fmt(L.finished)})
-      : t('log.job.failed', {label: mtext(L.label), when: fmt(L.finished),
-                             detail: mtext(L.detail)});
-    return;
-  }
-  var j = jobs.job || {}, n = (j.steps || []).length || 1, i = j.index || 0;
-  var p = j.progress, anteil = 0, kennt = false;
-  if(p && p.total){ anteil = Math.min(p.done / p.total, 1); kennt = true; }
-
-  balken.classList.toggle('unbekannt', !kennt);
-  if(kennt) el('balken-fuell').style.width = Math.round((i + anteil) / n * 100) + '%';
-
-  // Der Name des Schrittes kommt als Textschlüssel vom Server (job.step.…);
-  // das Etikett des Laufs hat der Browser schon übersetzt, bevor er ihn
-  // startete. mtext reicht Zeichenketten unverändert durch – für den Schritt
-  // stand deshalb der Schlüssel selbst in der Zeile.
-  var zeile = t('log.job.running', {label: mtext(j.label), step: t(j.step),
-                                    i: i + 1, n: n});
-  if(p) zeile += ' · ' + (p.total
-    ? t('progress.of', {done: p.done.toLocaleString(LOC),
-                        total: p.total.toLocaleString(LOC), what: einheit(p.what)})
-    : t('progress.count', {done: p.done.toLocaleString(LOC), what: einheit(p.what)}));
-  el('fortschritt-text').textContent = zeile;
-  el('log-letzte').textContent = zeile;
-}
-function einheit(was){
-  return was ? t('progress.unit.' + was) : '';
-}
-
-/* ---------- Protokoll ---------- */
-function protokollPlatz(){
-  // Der Kasten liegt fixiert über der Seite – der Inhalt bekommt genau so
-  // viel Fußraum, dass nichts hinter ihm verschwindet: das Protokoll ist
-  // aus Sicht der Seite ihr Ende.
-  var haupt = document.querySelector('main');
-  if(!haupt) return;
-  var p = el('protokoll');
-  haupt.style.paddingBottom = p.classList.contains('hide')
-    ? '20px' : (p.offsetHeight + 16) + 'px';
-}
-function protokollUmschalten(){
-  var p = el('protokoll');
-  p.classList.toggle('zu');
-  try { localStorage.setItem('protokoll', p.classList.contains('zu') ? 'zu' : 'auf'); } catch(e){}
-  if(!p.classList.contains('zu')){
-    var box = el('log'); box.scrollTop = box.scrollHeight;
-  }
-  protokollPlatz();
-}
-function protokollHoehe(h){
-  var grenze = Math.max(80, Math.min(Math.round(window.innerHeight * 0.7), h));
-  el('protokoll').style.setProperty('--loghoehe', grenze + 'px');
-  return grenze;
-}
-function protokollZiehen(ev){
-  ev.preventDefault();
-  var start = ev.clientY, hoehe = el('log').offsetHeight;
-  function bewegt(e){
-    protokollHoehe(hoehe + (start - e.clientY));
-    protokollPlatz();
-  }
-  function ende(e){
-    document.removeEventListener('pointermove', bewegt);
-    document.removeEventListener('pointerup', ende);
-    var h = protokollHoehe(hoehe + (start - e.clientY));
-    try { localStorage.setItem('protokoll_hoehe', String(h)); } catch(e2){}
-  }
-  document.addEventListener('pointermove', bewegt);
-  document.addEventListener('pointerup', ende);
-}
-function stelleProtokollHer(){
-  try {
-    if(localStorage.getItem('protokoll') === 'auf') el('protokoll').classList.remove('zu');
-    var h = parseInt(localStorage.getItem('protokoll_hoehe'), 10);
-    if(h) protokollHoehe(h);
-  } catch(e){}
-  protokollPlatz();
-}
-
-function pullLog(){
-  if(beendet) return;
-  api('/api/log?since=' + seen).then(function(r){
-    if(!r.lines || !r.lines.length){ seen = r.seq; return; }
-    var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-    r.lines.forEach(function(l){
-      var d = document.createElement('div');
-      d.className = 'l-' + l.level;
-      d.textContent = l.t + '  ' + mtext(l.text);
-      box.appendChild(d);
-    });
-    while(box.childElementCount > 1200) box.removeChild(box.firstChild);
-    if(!(S && S.jobs && S.jobs.busy)){
-      var letzte = r.lines[r.lines.length - 1];
-      el('log-letzte').textContent = mtext(letzte.text);
-    }
-    seen = r.seq;
-    if(atEnd) box.scrollTop = box.scrollHeight;
-  });
-}
-
-/* ---------- Fehler melden ----------
-   Die App verschickt nichts. Sie stellt einen Text zusammen, legt ihn offen
-   hin und öffnet damit das Formular auf GitHub – abgeschickt wird er vom
-   Menschen, im eigenen Browser, unter dessen eigenem Konto.
-
-   Deshalb steht der Bericht in einem Textfeld und nicht in einer hübschen
-   Vorschau: was man ändern können soll, muss auch aussehen wie etwas, das man
-   ändern kann. Was hier drin steht, ist Post und Chat – Ordnernamen und
-   Betreffzeilen erkennt kein Muster, das kann nur lesen, wer sie geschrieben
-   hat. Adressen und Benutzerpfade nimmt der Server vorher heraus
-   (app.anonymisiere). */
-var berichtDaten = null;
-
-function fehlerMelden(){
-  berichtDaten = null;
-  berichtFenster();                       // sofort etwas zeigen, dann füllen
-  api('/api/log?since=0').then(function(r){
-    var zeilen = r.lines || [];
-    var fehler = zeilen.filter(function(l){ return l.level === 'err'; });
-    return post('/api/report', {
-      log: zeilen.map(function(l){ return l.t + '  ' + mtext(l.text); }).join('\n'),
-      // Die letzte Fehlerzeile als Betreffvorschlag: „BrokenProcessPool …“
-      // sagt mehr als „Fehler in 4.0.0“, und geändert wird er ohnehin.
-      hint: fehler.length ? mtext(fehler[fehler.length - 1].text) : ''});
-  }).then(function(b){
-    berichtDaten = b;
-    if(wizardOffen === 'report') berichtFenster();
-  });
-}
-
-/* Die drei Felder hier sind dieselben wie im Bug-Formular auf GitHub
-   (.github/ISSUE_TEMPLATE/bug.yml): what, system, log. Die Adresse befüllt
-   sie über ihre Feld-IDs vor – was hier steht, steht drüben, Feld für Feld. */
-function berichtSystem(b){
-  return b.system.map(function(s){
-    return t('report.sys.' + s.k) + ': ' + s.v;
-  }).join('\n');
-}
-
-function berichtFenster(){
-  var b = berichtDaten;
-  if(!b){
-    oeffneEigenes('report', modalKopf(t('report.title'), 'report') +
-      '<p class="small muted">' + esc(t('report.loading')) + '</p>');
-    return;
-  }
-  var mono = 'width:100%;margin:2px 0 10px;font-family:ui-monospace,Menlo,' +
-    'Consolas,monospace;font-size:12.5px';
-  var koerper =
-    '<p class="small muted">' + esc(t('report.intro')) + '</p>' +
-    '<label class="small" for="rep-titel">' + esc(t('report.field.title')) + '</label>' +
-    '<input type="text" id="rep-titel" style="width:100%;margin:2px 0 12px" value="' +
-      esc(b.title) + '">' +
-    '<label class="small" for="rep-was">' + esc(t('report.body.what')) + '</label>' +
-    '<textarea id="rep-was" rows="3" style="' + mono + '" placeholder="' +
-      esc(t('report.body.hint')) + '"></textarea>' +
-    '<label class="small" for="rep-system">' + esc(t('report.body.system')) + '</label>' +
-    '<textarea id="rep-system" rows="6" spellcheck="false" style="' + mono + '">' +
-      esc(berichtSystem(b)) + '</textarea>' +
-    '<label class="small" for="rep-ablauf">' + esc(t('report.body.actions')) + '</label>' +
-    '<textarea id="rep-ablauf" rows="4" spellcheck="false" style="' + mono + '">' +
-      esc(ablaufText()) + '</textarea>' +
-    '<label class="small" for="rep-log">' + esc(t('report.body.log')) + '</label>' +
-    '<textarea id="rep-log" rows="8" spellcheck="false" style="' + mono + '">' +
-      esc(b.log) + '</textarea>' +
-    '<div class="banner warn" style="margin:0">' + esc(t('report.privacy')) + '</div>' +
-    '<p class="small muted" id="rep-hinweis" style="margin:8px 0 0"></p>';
-  oeffneEigenes('report', modalKopf(t('report.title'), 'report') + koerper +
-    modalFuss({text: t('report.open'), tun: 'berichtOeffnen()'},
-              {text: t('copy'),
-               tun: 'inZwischenablage(berichtGesamt(), this)'}));
-}
-
-/* Für die Zwischenablage: die Felder als ein lesbarer Text. */
-function berichtGesamt(){
-  return t('report.field.title') + ': ' + el('rep-titel').value + '\n\n' +
-    t('report.body.what') + ':\n' + el('rep-was').value + '\n\n' +
-    t('report.body.system') + ':\n' + el('rep-system').value + '\n\n' +
-    t('report.body.actions') + ':\n' + el('rep-ablauf').value + '\n\n' +
-    t('report.body.log') + ':\n' + el('rep-log').value + '\n';
-}
-
-/* GitHub bekommt die vorbelegten Felder in der Adresse. Zu lange Adressen
-   weist der Server ab – mit einer leeren Seite, nicht mit einer Erklärung.
-   Also vorher kürzen und es dazusagen, statt es darauf ankommen zu lassen. */
-var URL_GRENZE = 7000;
-
-function berichtAdresse(basis, titel, was, system, aktionen, log){
-  var gekuerzt = false;
-  // Der Vermerk über das Kürzen gehört mitgemessen. Ihn erst am Ende
-  // anzuhängen hieße, die Grenze genau um ihn zu überschreiten.
-  function adresse(){
-    return basis + '?template=bug.yml' +
-      '&title=' + encodeURIComponent(titel) +
-      '&what=' + encodeURIComponent(was) +
-      '&system=' + encodeURIComponent(system) +
-      '&actions=' + encodeURIComponent(aktionen) +
-      '&log=' + encodeURIComponent(gekuerzt ? t('report.cut') + '\n' + log : log);
-  }
-  var url = adresse();
-  // Von OBEN aus dem Protokoll nehmen: die letzten Zeilen sind die, um die es
-  // geht. Ein Bericht, dem der Absturz fehlt, wäre keiner.
-  while(url.length > URL_GRENZE){
-    var schnitt = log.indexOf('\n');
-    if(schnitt < 0) break;
-    log = log.slice(schnitt + 1);
-    gekuerzt = true;
-    url = adresse();
-  }
-  if(url.length > URL_GRENZE){          // Riesenzeilen oder riesige Felder
-    was = was.slice(0, 1000);
-    system = system.slice(0, 1500);
-    aktionen = aktionen.slice(-1000);
-    log = log.slice(-2000);
-    gekuerzt = true;
-    url = adresse();
-  }
-  return {url: url, gekuerzt: gekuerzt};
-}
-
-function berichtOeffnen(){
-  if(!berichtDaten) return;
-  var ziel = berichtAdresse(berichtDaten.url,
-                            el('rep-titel').value.trim() || t('report.title.fallback'),
-                            el('rep-was').value, el('rep-system').value,
-                            el('rep-ablauf').value, el('rep-log').value);
-  el('rep-hinweis').textContent = ziel.gekuerzt ? t('report.truncated') : '';
-  window.open(ziel.url, '_blank', 'noopener');
-}
-
-/* ---------- Suche ---------- */
-/* Die Ordnerliste einmal holen: sie ändert sich nur beim Indizieren, und ein
-   Auswahlfeld, das bei jedem Tastendruck nachlädt, wäre reine Last. */
-var ordnerJeQuelle = {}, typenJeQuelle = {}, ordnerStand = null;
-
-/* Womit die leere Wahl beschriftet ist. „Alle Ordner“ stimmt bei Kalendern
-   und Chatarten nicht – und eine Auswahl, die sich falsch nennt, liest sich
-   wie ein Fehler. */
-var ORDNER_ALLE = {
-  kalender: 'search.folder.all.kalender',
-  teams:    'search.folder.all.teams',
-  kontakte: 'search.folder.all.kontakte',
-  planner:  'search.folder.all.planner',
-  sharepoint: 'search.folder.all.sharepoint',
-  pages:    'search.folder.all.pages'
-};
-
-/* Die vier Teams-Arten heißen im Index nach ihrem Ablageordner. Das ist
-   richtig zum Filtern und unlesbar zum Anzeigen – hier stehen die Namen, die
-   ein Mensch dafür kennt, und zwar in seiner Sprache statt in der, die beim
-   Indizieren gerade eingestellt war. */
-function ordnerName(pfad){
-  var s = t('search.folder.teams.' + pfad);
-  return s === 'search.folder.teams.' + pfad ? pfad : s;
-}
-
-/* Eine Auswahl mit einem einzigen Eintrag ist keine Auswahl: sie filtert
-   nichts weg. Dann verschwindet das Feld – ausgegraut stehen zu bleiben sah
-   aus, als sei etwas kaputt, und der eine Ordner ist ohnehin schon durch die
-   Quelle gesagt (bei „Kontakte“ ist er es immer, denn Kontaktordner hat kaum
-   ein Postfach).
-
-   Ordner und Dateityp teilen sich das: beide hängen an der Quelle, beide
-   verschwinden, wenn nichts zu wählen ist, und beide dürfen keine Wahl
-   stehen lassen, die es in der neuen Quelle nicht gibt. */
-function fuelleAuswahl(id, liste, alle){
-  var sel = el(id), vorher = sel.value;
-  var wahl = liste.length > 1;
-  sel.classList.toggle('hide', !wahl);
-  sel.innerHTML = '<option value="">' + esc(alle) + '</option>' +
-    (wahl ? liste.map(function(e){
-      return '<option value="' + esc(e.wert) + '">' + esc(e.name) +
-             ' (' + e.zahl.toLocaleString(LOC) + ')</option>';
-    }).join('') : '');
-  sel.value = wahl && liste.some(function(e){ return e.wert === vorher; })
-    ? vorher : '';
-  // Der Zähler an „Filter“ muss die weggefallene Wahl mitbekommen – die Liste
-  // kommt erst nach dem Umschalten der Quelle an.
-  zeigeFilterstand();
-}
-
-function zeichneOrdner(liste){
-  fuelleAuswahl('f-folder', liste.map(function(f){
-    return {wert: f.path, name: ordnerName(f.path), zahl: f.messages};
-  }), t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all'));
-}
-
-/* Dateitypen gibt es nur, wo es Anhänge oder Dateien gibt – Chats, Termine und
-   Kontakte haben keine. Und nur, wenn der Index die Spalte kennt: ein älterer
-   tut es nicht, dann fehlt das Feld ganz statt ins Leere zu filtern. */
-var KANN_TYP = false;
-function typenMoeglich(quelle){
-  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' ||
-                      quelle === 'onedrive' || quelle === 'sharepoint');
-}
-function zeichneTypen(liste){
-  fuelleAuswahl('f-typ', liste.map(function(e){
-    return {wert: e.type, name: e.type.toUpperCase(), zahl: e.messages};
-  }), t('search.type.all'));
-}
-
-function ladeOrdner(){
-  var quelle = el('f-source').value || 'all';
-  // Nach einem Indexlauf sind die Listen andere: neue Ordner, neue Zahlen.
-  var stand = (S && S.store) ? S.store.built_at : null;
-  if(stand !== ordnerStand){ ordnerJeQuelle = {}; typenJeQuelle = {}; ordnerStand = stand; }
-  ladeTypen(quelle);
-  if(ordnerJeQuelle[quelle]){ zeichneOrdner(ordnerJeQuelle[quelle]); return; }
-  api('/api/folders?limit=300&source=' + encodeURIComponent(quelle))
-    .then(function(r){
-      ordnerJeQuelle[quelle] = r.folders || [];
-      if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
-    }).catch(function(){});
-}
-
-function ladeTypen(quelle){
-  if(!typenMoeglich(quelle)){ zeichneTypen([]); return; }
-  if(typenJeQuelle[quelle]){ zeichneTypen(typenJeQuelle[quelle]); return; }
-  api('/api/filetypes?limit=40&source=' + encodeURIComponent(quelle))
-    .then(function(r){
-      typenJeQuelle[quelle] = r.filetypes || [];
-      if((el('f-source').value || 'all') === quelle) zeichneTypen(typenJeQuelle[quelle]);
-    }).catch(function(){});
-}
-
-function trefferProSeite(){
-  var n = S && S.config ? parseInt(S.config.search_results, 10) : NaN;
-  return isNaN(n) ? 20 : Math.max(5, Math.min(n, 100));
-}
-/* Gesucht wird, wenn jemand danach fragt – mit dem Knopf oder mit Enter.
-   Nicht beim Tippen und nicht beim Setzen eines Filters: man soll in Ruhe
-   Begriff, Person, Zeitraum und Ordner eingeben können, ohne dass nach jeder
-   Änderung eine Suche losläuft. Die Filter melden nur ihren Stand an den
-   Schalter darüber. */
-/* Die Suchart. Textsuche ist die Vorgabe und bleibt es nach jedem Start:
-   Sie ist die einzige, die immer funktioniert, und die einzige, deren Ergebnis
-   sich vorhersagen lässt. Die anderen beiden sind eine bewusste Abzweigung.
-
-   Was die Oberfläche „Textsuche“ nennt, ist im Server mode=lexical; „Ähnliche
-   Suche“ ist semantic. Für die KI-Variante wird hybrid genommen: dort tippt man
-   eine Frage, und ganze Fragen findet BM25 allein schlecht. */
-var SUCHMODUS = 'text';
-var MODUS_ZU_SERVER = {text: 'lexical', aehnlich: 'semantic', ki: 'hybrid'};
-var TREFFER_OFFEN = true;
-
-function suchmodus(art){
-  SUCHMODUS = art;
-  ['text', 'aehnlich', 'ki'].forEach(function(a){
-    el('m-' + a).classList.toggle('on', a === art);
-  });
-  el('q').placeholder = t('search.ph.' + art);
-  TREFFER_OFFEN = art !== 'ki';
-  el('ki-klappe').classList.toggle('hide', art !== 'ki');
-  el('results').classList.toggle('hide', !TREFFER_OFFEN);
-  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
-  if(el('q').value.trim() || filterFelder().length) doSearch(0);
-  else abbrechenKI();
-}
-
-/* Ohne Ollama bleiben die beiden hinteren Varianten sichtbar, aber tot. Sie zu
-   verstecken hieße: wer sie nie sieht, erfährt auch nie, dass es sie gibt. */
-function modiPruefen(moeglich, abgeschaltet){
-  ['aehnlich', 'ki'].forEach(function(a){
-    var b = el('m-' + a);
-    b.disabled = !moeglich;
-    b.title = moeglich ? '' : t(abgeschaltet ? 'search.mode.off' : 'search.mode.needs');
-  });
-  el('modus-fehlt').textContent = t(abgeschaltet ? 'search.mode.off' : 'search.mode.needs');
-  el('modus-fehlt').classList.toggle('hide', moeglich);
-  if(!moeglich && SUCHMODUS !== 'text') suchmodus('text');
-}
-
-function klappeTreffer(){
-  TREFFER_OFFEN = !TREFFER_OFFEN;
-  el('results').classList.toggle('hide', !TREFFER_OFFEN);
-  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
-  zeigeKlappknopf();
-}
-function zeigeKlappknopf(n){
-  if(n === undefined) n = el('results').querySelectorAll('.hit').length;
-  el('ki-klappknopf').textContent = TREFFER_OFFEN
-    ? t('search.ki.hide') : t('search.ki.show', {n: n});
-}
-
-function sofortSuchen(){
-  doSearch(0);
-}
-
-function doSearch(off){
-  var fehler = datumPruefen();
-  if(fehler){
-    el('results').innerHTML = '<div class="banner err">' + esc(fehler) + '</div>';
-    el('pager').classList.add('hide');
-    return;
-  }
-  offset = off || 0;
-  // Nur die Art und die Zahl der Filter – nie der Suchtext oder ein Name.
-  var filter = ['f-person', 'f-source', 'f-from', 'f-to', 'f-folder', 'f-typ']
-    .filter(function(id){ return el(id).value; }).length +
-    (el('f-gone').checked ? 1 : 0);
-  merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
-  var proSeite = trefferProSeite();
-  var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
-    source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
-    gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
-    filetype: el('f-typ').value,
-    mode: MODUS_ZU_SERVER[SUCHMODUS], k: proSeite, offset: offset});
-  zeigeFilterstand();
-  el('results').textContent = t('search.running');
-  api('/api/search?' + p.toString()).then(function(r){
-    renderHits(r);
-    // Nur die KI-Variante fragt das Modell – und zwar erst, nachdem die Treffer
-    // stehen. Die Suche ist sofort da, das Modell braucht eine Minute; wer eine
-    // Rechnungsnummer sucht, hat mit Textsuche damit nie zu tun.
-    if(SUCHMODUS === 'ki' && (r.results || []).length) frageKI();
-    else abbrechenKI();
-  });
-}
-/* Warum ein Treffer einer ist, muss man sehen können. Die Vorschau zeigt seit
-   Kurzem den Ausschnitt um die Fundstelle; hier wird der Begriff darin noch
-   markiert. Erst getrennt maskiert, dann markiert – andersherum wäre die
-   Markierung selbst wieder maskiert und stünde als <mark> im Text. */
-function hervor(text){
-  var roh = el('q').value.trim();
-  var h = esc(text);
-  // Nur die Textsuche trifft wörtlich. Bei der Bedeutungssuche wäre eine
-  // Markierung eine Behauptung: dort passt der Sinn, nicht das Wort.
-  if(!roh || SUCHMODUS !== 'text') return h;
-  roh.split(/\s+/).filter(Boolean).forEach(function(w){
-    var muster = new RegExp('(' + esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
-    h = h.replace(muster, '<mark>$1</mark>');
-  });
-  return h;
-}
-
-/* Ein Menü je Treffer, aber immer nur eines offen. Klick daneben und ESC
-   schließen es – ohne das bliebe es beim Blättern stehen. */
-var offenesMenu = null;
-function menuZu(){
-  if(offenesMenu === null) return;
-  var m = el('menu-' + offenesMenu);
-  if(m){ m.classList.add('hide');
-         m.previousElementSibling.setAttribute('aria-expanded', 'false'); }
-  offenesMenu = null;
-}
-function menuAuf(ev, i){
-  ev.stopPropagation();
-  var war = offenesMenu;
-  menuZu();
-  if(war === i) return;                    // derselbe Knopf schließt wieder
-  el('menu-' + i).classList.remove('hide');
-  ev.currentTarget.setAttribute('aria-expanded', 'true');
-  offenesMenu = i;
-}
-document.addEventListener('click', menuZu);
-
-function filterPerson(wer){
-  menuZu();
-  el('f-person').value = wer;
-  el('filter').classList.remove('hide');
-  doSearch(0);
-}
-
-/* ---------- Vorschläge zum Personenfeld ----------
-   Ein Freitextfeld auf einen festen Bestand: wer „Meier“ tippt, wo „Meyer“
-   steht, bekommt null Treffer und weiß nicht, ob die Person fehlt oder er sich
-   vertippt hat. Die Liste beantwortet das vor der Suche – und nennt zu jedem
-   Namen die Zahl der Nachrichten, damit man den richtigen Vorschlag erkennt,
-   wenn es zwei ähnliche gibt. */
-var VORSCHLAG_MAX = 5;
-var personVorschlaege = [], personAktiv = -1, personTimer = null;
-
-function personVorschlagen(){
-  clearTimeout(personTimer);
-  var wort = el('f-person').value.trim();
-  if(wort.length < 2){ personZu(); return; }
-  // Nicht bei jedem Anschlag fragen: die Abfrage geht über alle Personen des
-  // Archivs, und wer einen Namen tippt, tut das in einem Zug.
-  personTimer = setTimeout(function(){
-    api('/api/people?limit=' + VORSCHLAG_MAX +
-        '&source=' + encodeURIComponent(el('f-source').value) +
-        '&contains=' + encodeURIComponent(wort)).then(function(r){
-      // Zwischenzeitlich weitergetippt: diese Antwort ist überholt.
-      if(el('f-person').value.trim() !== wort) return;
-      personZeichnen(r.people || [], r.total_distinct || 0, r.total_messages || 0);
-    }).catch(personZu);
-  }, 150);
-}
-
-/* Die Liste zwingt zu keiner Wahl: die Personensuche war immer schon eine
-   Teilstringsuche, man sah es ihr nur nicht an. Deshalb unter den Namen eine
-   Zeile, die das ausspricht – „schmi*“ statt eines bestimmten Schmidt. Sie
-   trägt dieselbe Größe wie die Zeilen darüber (Nachrichten, nicht Personen),
-   sonst stünden zwei Einheiten in einer Liste. */
-function personZeichnen(liste, gesamt, nachrichten){
-  var wort = el('f-person').value.trim();
-  var stern = wort.charAt(wort.length - 1) === '*' ? wort : wort + '*';
-  // Bei genau einem Treffer wäre „alle“ derselbe Treffer noch einmal.
-  var mitStern = gesamt > 1;
-  personVorschlaege = liste.map(function(p){
-    return {wert: p.name, name: p.name, zahl: p.messages};
-  });
-  if(mitStern) personVorschlaege.push({wert: stern, name: stern,
-                                       zahl: nachrichten, alle: true});
-  personAktiv = -1;
-  var kasten = el('personliste');
-  kasten.innerHTML = liste.length
-    ? personVorschlaege.map(function(p, i){
-        return (p.alle ? '<hr>' : '') +
-          '<button type="button" role="option" aria-selected="false" ' +
-          'id="personwahl-' + i + '" onclick="personWaehlen(' + i + ')">' +
-          '<span class="wer' + (p.alle ? ' alle' : '') + '">' + esc(p.name) +
-          '</span><span class="zahl">' + p.zahl.toLocaleString(LOC) +
-          '</span></button>';
-      }).join('') +
-      // Mehr Namen als Plätze: sagen statt still abschneiden – sonst hielte
-      // man die fünf für alle, die es gibt.
-      (gesamt > liste.length
-        ? '<div class="leer">' + esc(t('search.person.more',
-                                       {n: gesamt - liste.length})) + '</div>'
-        : '')
-    : '<div class="leer">' + esc(t('search.person.none')) + '</div>';
-  kasten.classList.remove('hide');
-  el('f-person').setAttribute('aria-expanded', 'true');
-}
-
-function personZu(){
-  clearTimeout(personTimer);
-  personVorschlaege = [];
-  personAktiv = -1;
-  el('personliste').classList.add('hide');
-  el('f-person').setAttribute('aria-expanded', 'false');
-}
-
-function personWaehlen(i){
-  var p = personVorschlaege[i];
-  if(!p) return;
-  el('f-person').value = p.wert;
-  personZu();
-  zeigeFilterstand();
-}
-
-function personHervor(i){
-  personAktiv = i;
-  personVorschlaege.forEach(function(_, j){
-    var b = el('personwahl-' + j);
-    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
-  });
-}
-
-/* Tastatur wie in jeder Vorschlagsliste: hoch, runter, Enter, Esc. Ohne das
-   müsste man zur Maus greifen, um einen Namen zu übernehmen. */
-function personTaste(ev){
-  var offen = !el('personliste').classList.contains('hide');
-  var n = personVorschlaege.length;
-  if(ev.key === 'Escape' && offen){ personZu(); ev.preventDefault(); return; }
-  if(!offen || !n) return;
-  if(ev.key === 'ArrowDown'){
-    personHervor((personAktiv + 1) % n); ev.preventDefault();
-  } else if(ev.key === 'ArrowUp'){
-    // Von „nichts gewählt“ (-1) aus gehört ↑ ans Ende der Liste. Gerechnet
-    // sprang es auf den vorletzten Eintrag.
-    personHervor(personAktiv <= 0 ? n - 1 : personAktiv - 1); ev.preventDefault();
-  } else if(ev.key === 'Enter' && personAktiv >= 0){
-    personWaehlen(personAktiv); ev.preventDefault();
-  }
-}
-
-document.addEventListener('click', function(ev){
-  var feld = el('f-person');
-  if(!ev.target || !feld) return personZu();
-  if(ev.target === feld) return;
-  var knoten = ev.target;
-  while(knoten){
-    if(knoten.id === 'personliste') return;   // im Kasten geklickt
-    knoten = knoten.parentElement;
-  }
-  personZu();
-});
-
-/* Ähnliche zu genau diesem Treffer. Anders als die Ähnliche Suche braucht das
-   kein Ollama: der Vektor dieser Textstelle liegt fertig im Index, es muss
-   nichts eingebettet werden. Deshalb steht der Eintrag auch dann bereit, wenn
-   die Variante oben ausgegraut ist. */
-function aehnlicheZu(cid){
-  menuZu();
-  el('q').value = '';
-  el('results').textContent = t('search.running');
-  api('/api/similar?cid=' + encodeURIComponent(cid) +
-      '&k=' + trefferProSeite()).then(function(r){
-    offset = 0;
-    renderHits(r);
-    abbrechenKI();
-  });
-}
-
-function renderHits(r){
-  if(r.error){ el('results').innerHTML = '<span class="err">' + esc(mtext(r.error)) + '</span>'; return; }
-  var hits = r.results || [];
-  if(!hits.length){ el('results').textContent = t('search.nohits');
-                    el('pager').innerHTML = ''; abbrechenKI(); return; }
-  // „Ähnliche finden" hängt an den VEKTOREN im Index, nicht an Ollama: der
-  // Vektor dieser Textstelle liegt fertig da, es wird nichts eingebettet.
-  // Ohne Vektoren – ein reiner Volltextindex – liefe der Eintrag ins Leere,
-  // also steht er ausgegraut da statt zu verschwinden.
-  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
-  // The tag speaks the interface language – the server label is only the
-  // fallback for sources this page does not know yet.
-  function quellTag(h){
-    var key = h.source === 'datei'
-      ? (h.root === 'sharepoint' ? 'search.source.sharepoint'
-                                 : 'search.source.onedrive')
-      : 'search.source.' + h.source;
-    var wert = t(key);
-    return wert === key ? (h.source_label || h.source || '') : wert;
-  }
-  el('results').innerHTML = hits.map(function(h, i){
-    var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
-    var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
-    var faden = h.thread && KANN_VERLAUF ? esc(h.thread).replace(/'/g, "\\'") : '';
-    return '<div class="hit" id="treffer-' + (i + 1) + '">' +
-      '<h3><span class="fussnote">[' + (i + 1) + ']</span>' +
-      (link ? '<a href="' + link + '" target="_blank">' : '') +
-      esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
-      '<div class="wer"><span class="tag">' + esc(quellTag(h)) + '</span>' +
-      (h.gone ? '<span class="tag weg" title="' +
-        esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
-        esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</div>' +
-      '<div class="wann">' + esc(h.date || '') + '</div>' +
-      '<div class="menuzelle">' +
-        '<button class="punkte-knopf" aria-haspopup="true" aria-expanded="false" ' +
-        'aria-label="' + esc(t('search.menu')) + '" onclick="menuAuf(event,' + i + ')">⋯</button>' +
-        '<div class="menu hide" id="menu-' + i + '">' +
-          (link ? '<a class="mini" href="' + link + '" target="_blank" ' +
-                  'style="text-decoration:none;border:0;padding:7px 10px">' +
-                  esc(t('search.menu.source')) + '</a>'
-                : '<button disabled>' + esc(t('search.menu.source')) + '</button>') +
-          '<button' + (faden ? ' onclick="zeigeVerlauf(' + (i + 1) + ',\'' + faden + '\')"'
-                             : ' disabled') + '>' +
-            esc(t('search.menu.thread')) + '</button>' +
-          '<button' + (h.cid && aehnlichMoeglich
-                       ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
-                       : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
-            '>' + esc(t('search.menu.similar')) + '</button>' +
-          (h.who ? '<hr><button onclick="filterPerson(\'' +
-                   esc(h.who).replace(/'/g, "\\'") + '\')">' +
-                   esc(t('search.menu.person')) + '</button>' : '') +
-        '</div>' +
-      '</div>' +
-      '<div class="prev">' + hervor(h.preview || '') + '…</div>' +
-      '<div class="verlauf" id="verlauf-' + (i + 1) + '"></div>' +
-      '</div>';
-  }).join('');
-  // Auch das Blättern richtet sich nach der Einstellung – sonst übersprünge
-  // „Weiter“ Treffer oder zeigte dieselben noch einmal.
-  var proSeite = trefferProSeite();
-  el('pager').innerHTML =
-    (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - proSeite) + ')">' + esc(t('search.back')) + '</button>' : '') +
-    (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '');
-  // Hier stand "Ranking: hybrid". Bei einer Suche ohne Begriff gibt es gar
-  // kein Ranking, also stand meistens ein Strich da; und "hybrid" ist ein
-  // Wort für Entwickler. Welche Suchart läuft, steht jetzt oben im Umschalter.
-  if(SUCHMODUS === 'ki') zeigeKlappknopf(hits.length);
-}
-
-/* Ein Treffer allein sagt oft zu wenig: „Ja, machen wir so“ ist erst mit der
-   Frage davor eine Aussage. Der Verlauf klappt deshalb unter dem Treffer auf,
-   statt in eine andere Ansicht zu springen. */
-function zeigeVerlauf(nr, schluessel){
-  var kasten = el('verlauf-' + nr);
-  if(!kasten) return;
-  kasten.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-  api('/api/thread?key=' + encodeURIComponent(schluessel)).then(function(r){
-    if(r.error || !(r.messages || []).length){
-      kasten.innerHTML = '<p class="hint">' + esc(t('search.thread.alone')) + '</p>';
-      return;
-    }
-    kasten.innerHTML = '<div class="verlaufliste"><p class="small muted">' +
-      esc(t('search.thread.count', {n: r.count})) + '</p>' +
-      r.messages.map(function(m){
-        var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
-        var link = g ? '/source?root=' + g[1] + '&path=' + g[2] : null;
-        return '<div class="vzeile"><span class="vdatum">' + esc(m.date || '') + '</span>' +
-          '<span class="vwer">' + esc(m.who || '') + '</span>' +
-          (link ? '<a href="' + link + '" target="_blank">' : '<span>') +
-          esc(m.title || t('search.nosubject')) + (link ? '</a>' : '</span>') +
-          '</div>';
-      }).join('') + '</div>';
-  }).catch(function(e){
-    kasten.innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
-  });
-}
-
-/* =======================================================================
-   Kalender und Adressbuch – Ansichten aus combined_search.py, hier gegen
-   /api/calendar statt gegen eingebettete Daten. Die Auswertung selbst
-   (inklusive der aus Mails rekonstruierten Termine) macht combined_search.py.
-   ======================================================================= */
-var KAL = null, kalGeladen = false, kTimer = null, kalStand = null;
-var DAYMS = 86400000;
-/* Wochentage und Monatsnamen liefert der Browser für die gewählte Sprache –
-   sie gehören nicht in die Sprachdateien. */
-var WD = wochentage(), MON = monatsnamen();
-var STATI = ['confirmed','tentative','cancelled','deleted','gone'];
-function wochentage(){
-  var f = new Intl.DateTimeFormat(LOC, {weekday: 'short'});
-  return [0,1,2,3,4,5,6].map(function(i){ return f.format(new Date(Date.UTC(2024, 0, 1 + i))); });
-}
-function monatsnamen(){
-  var f = new Intl.DateTimeFormat(LOC, {month: 'long'});
-  return [0,1,2,3,4,5,6,7,8,9,10,11].map(function(i){ return f.format(new Date(Date.UTC(2024, i, 15))); });
-}
-function stl(st){ return t('cal.st.' + (STATI.indexOf(st) >= 0 ? st : 'confirmed')); }
-var events = [], byDay = new Map(), REBUILT = [], contacts = [];
-var calMode = 'week', cursor = new Date(), rbSt = 'all';
-
-function toks(q){ return q.toLowerCase().split(/\s+/).filter(Boolean); }
-function allIn(hay, worte){ hay = (hay||'').toLowerCase();
-  return worte.every(function(x){ return hay.indexOf(x) >= 0; }); }
-function quelle(r){ return '/source?root=' + encodeURIComponent(r.root||'outlook') +
-                           '&path=' + encodeURIComponent(r.rel||''); }
-
-function ladeKalender(ziel){
-  if(kalGeladen) return zeichneKalenderTeil(ziel);
-  kalGeladen = true;
-  api('/api/calendar').then(function(d){
-    if(d.error){
-      var h = '<p class="hint">' + esc(mtext(d.error)) + '</p>' +
-        '<button class="act" onclick="run({calendar:true}, t(&quot;job.calendar&quot;))">' +
-        esc(t('cal.build.now')) + '</button>';
-      el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
-      kalGeladen = false;                     // nach dem Aufbau erneut versuchen
-      return;
-    }
-    KAL = d;
-    // Denselben Wert merken, den der Status liefert (Dateizeit) – d.generated
-    // steht im JSON und wäre nie gleich, der Vergleich schlüge immer an.
-    kalStand = (S && S.calendar) ? S.calendar.built_at : null;
-    var recs = d.recs || [];
-    events = recs.filter(function(r){ return r.src === 'kalender' && r.ts != null; });
-    ladePersonen();
-    contacts = recs.filter(function(r){ return r.src === 'kontakte'; })
-      .sort(function(a,b){ return (a.title||'').localeCompare(b.title||'',LOC,{sensitivity:'base'}); });
-    REBUILT = events.filter(function(r){ return r.st === 'deleted' || r.st === 'gone'; });
-    verteileAufTage();
-    setzeStartwoche();
-    var c = d.counts || {};
-    el('kalStats').textContent = t('cal.stats', {n: c.kalender, r: c.rekonstruiert,
-                                                 when: fmt(d.generated)});
-    zeichneKalenderTeil(ziel);
-  }).catch(function(e){
-    // Ohne diesen Zweig verschluckt das Promise jeden Fehler und die Ansicht
-    // bleibt für immer bei "Wird geladen…" – genau so ist es einmal passiert.
-    kalGeladen = false;
-    var h = '<p class="hint err">' + esc(String(e && e.message || e)) + '</p>';
-    el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
-  });
-}
-function zeichneKalenderTeil(ziel){
-  if(!KAL) return;
-  if(ziel === 'adressbuch') drawBook(); else drawCal();
-}
-
-// Termine auf Tage verteilen (mehrtägige erscheinen an jedem Tag)
-function verteileAufTage(){
-  byDay = new Map();
-  events.forEach(function(r){
-    var s = midnight(r.ts * 1000);
-    var endMs = (r.te != null ? r.te : r.ts) * 1000;
-    if(r.ad) endMs -= DAYMS;            // DTEND ist bei Ganztags-Terminen exklusiv
-    var e = midnight(Math.max(endMs, r.ts * 1000));
-    for(var d = new Date(s), n = 0; d <= e && n < 366; d = addDays(d,1), n++){
-      var k = dkey(d);
-      if(!byDay.has(k)) byDay.set(k, []);
-      byDay.get(k).push(r);
-    }
-  });
-  byDay.forEach(function(list){
-    list.sort(function(a,b){ return (a.ad?0:1) - (b.ad?0:1) || a.ts - b.ts; });
-  });
-}
-function setzeStartwoche(){
-  // Ein Archiv liegt meist in der Vergangenheit: auf den jüngsten Termin springen
-  if(!events.length) return;
-  var last = events.reduce(function(m,r){ return r.ts > m ? r.ts : m; }, -Infinity);
-  if(last * 1000 < midnight(Date.now()).getTime()) cursor = new Date(last * 1000);
-}
-
-function dkey(d){ return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') +
-                         '-' + String(d.getDate()).padStart(2,'0'); }
-function midnight(ms){ var d = new Date(ms); d.setHours(0,0,0,0); return d; }
-function addDays(d,n){ var x = new Date(d); x.setDate(x.getDate()+n); return x; }
-function startOfWeek(d){ return addDays(midnight(d.getTime()), -((d.getDay()+6)%7)); }
-function hhmm(d){ return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0'); }
-function isoWeek(d){
-  var tag = midnight(d.getTime()); tag.setDate(tag.getDate() + 3 - ((tag.getDay()+6)%7));
-  var w1 = new Date(tag.getFullYear(), 0, 4);
-  return 1 + Math.round(((tag - w1)/DAYMS - 3 + ((w1.getDay()+6)%7))/7);
-}
-function evTime(r){
-  if(r.ad) return t('cal.allday');
-  var s = hhmm(new Date(r.ts*1000));
-  if(r.te != null && r.te > r.ts) s += '–' + hhmm(new Date(r.te*1000));
-  return s;
-}
-function evHtml(r){
-  var st = STATI.indexOf(r.st) >= 0 ? r.st : 'confirmed';
-  var tip = [r.title, stl(st), r.d,
-             r.loc ? t('cal.tip.location', {v: r.loc}) : '',
-             r.who ? t('cal.tip.organizer', {v: r.who}) : '',
-             (r.att && r.att.length) ? t('cal.tip.attendees', {v: r.att.join(', ')}) : '',
-             r.ctx].filter(Boolean).join('\n');
-  return '<a class="ev ' + st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
-         esc(tip) + '"><span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
-}
-function dayCell(d, extraCls){
-  var k = dkey(d), list = byDay.get(k) || [];
-  var today = k === dkey(new Date()) ? ' today' : '';
-  return '<div class="day' + (extraCls||'') + today + '">' +
-         '<div class="dnum"><b>' + d.getDate() + '</b><span class="wd">' + WD[(d.getDay()+6)%7] + '</span></div>' +
-         (list.length ? list.map(evHtml).join('') : '') + '</div>';
-}
-
-/* Nur aus Mails rekonstruierte Termine – eigene Liste statt Kalenderraster */
-function rbRow(r){
-  var d = new Date(r.ts*1000);
-  return '<a class="rbrow ' + r.st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
-         esc(r.ctx) + '"><span class="rbdate">' + WD[(d.getDay()+6)%7] + ' ' + esc(r.d) + '</span>' +
-         '<span class="rbstate">' + esc(t(r.st === 'deleted' ? 'cal.rb.state.deleted' : 'cal.rb.state.gone')) + '</span>' +
-         '<span class="rbtitle">' + esc(r.title) + '</span>' +
-         '<span class="rbwho">' + esc(r.who) + '</span></a>';
-}
-function rbFrame(){
-  var nDel = REBUILT.filter(function(r){ return r.st === 'deleted'; }).length;
-  el('kalBox').innerHTML =
-      '<p class="rbnote">' + esc(t('cal.rb.note')) + '</p><div class="calbar">' +
-      '<span class="chip" data-rb="all">' + esc(t('cal.rb.all', {n: REBUILT.length})) + '</span>' +
-      '<span class="chip" data-rb="deleted">' + esc(t('cal.rb.deleted', {n: nDel})) + '</span>' +
-      '<span class="chip" data-rb="gone">' + esc(t('cal.rb.gone', {n: REBUILT.length - nDel})) + '</span>' +
-      '<input type="text" id="rbQ" placeholder="' + esc(t('cal.rb.search.ph')) + '" style="min-width:240px">' +
-      '<span class="rbcount"></span></div><div id="rblist"></div>';
-  el('rbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(rbList, 160); });
-  document.querySelectorAll('#kalBox [data-rb]').forEach(function(ch){
-    ch.addEventListener('click', function(){ rbSt = ch.dataset.rb; rbList(); });
-  });
-}
-function rbList(){
-  var worte = toks(el('rbQ').value.trim());
-  var hits = REBUILT.filter(function(r){
-    return (rbSt === 'all' || r.st === rbSt) &&
-           (!worte.length || allIn(r.title + ' ' + (r.ppl||'') + ' ' + (r.x||''), worte));
-  });
-  document.querySelectorAll('#kalBox [data-rb]').forEach(function(c){
-    c.classList.toggle('on', c.dataset.rb === rbSt);
-  });
-  document.querySelector('#kalBox .rbcount').textContent = t('cal.rb.hits', {n: hits.length});
-  var h = '', monat = null;
-  hits.forEach(function(r){
-    var d = new Date(r.ts*1000), m = MON[d.getMonth()] + ' ' + d.getFullYear();
-    if(m !== monat){ h += '<div class="rbmonth">' + m + '</div>'; monat = m; }
-    h += rbRow(r);
-  });
-  // Leer heißt nicht immer dasselbe: „nichts gefunden“ wäre gelogen, wenn gar
-  // nicht gesucht wurde, weil die Wiederherstellung ausgeschaltet ist.
-  var leer = (KAL && KAL.reconstruct === false) ? 'cal.rb.off' : 'cal.rb.empty';
-  el('rblist').innerHTML = h || '<p class="hint">' +
-    esc(t(REBUILT.length ? 'cal.rb.nohits' : leer)) + '</p>';
-}
-
-function drawCal(){
-  el('kalNav').classList.toggle('hide', calMode === 'rebuilt');
-  el('kalLegend').classList.toggle('hide', calMode === 'rebuilt');   // Zeilen sind beschriftet
-  if(calMode === 'rebuilt'){
-    el('kalTitle').textContent = '';
-    if(!document.querySelector('#kalBox [data-rb]')) rbFrame();
-    return rbList();
-  }
-  if(!events.length){
-    el('kalTitle').textContent = '';
-    el('kalBox').innerHTML = '<p class="hint">' + esc(t('cal.empty')) + '</p>';
-    return;
-  }
-  var head = '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + ' dowrow" style="margin-bottom:2px">' +
-             WD.map(function(w){ return '<div class="dow">' + w + '</div>'; }).join('') + '</div>';
-  var cells = '';
-  if(calMode === 'week'){
-    var mon = startOfWeek(cursor), sun = addDays(mon, 6);
-    for(var i = 0; i < 7; i++) cells += dayCell(addDays(mon, i));
-    el('kalTitle').textContent = t('cal.kw', {week: isoWeek(mon),
-      from: mon.getDate() + '. ' + MON[mon.getMonth()],
-      to: sun.getDate() + '. ' + MON[sun.getMonth()] + ' ' + sun.getFullYear()});
-  } else {
-    var first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
-    var start = startOfWeek(first);
-    var lastDay = new Date(cursor.getFullYear(), cursor.getMonth()+1, 0);
-    var weeks = Math.round((startOfWeek(lastDay) - start)/DAYMS/7) + 1;
-    for(var j = 0; j < weeks*7; j++){
-      var d = addDays(start, j);
-      cells += dayCell(d, d.getMonth() !== cursor.getMonth() ? ' out' : '');
-    }
-    el('kalTitle').textContent = MON[cursor.getMonth()] + ' ' + cursor.getFullYear();
-  }
-  el('kalBox').innerHTML = head + '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + '">' + cells + '</div>';
-}
-el('kalPrev').addEventListener('click', function(){
-  cursor = calMode === 'week' ? addDays(cursor, -7)
-                              : new Date(cursor.getFullYear(), cursor.getMonth()-1, 1);
-  drawCal();
-});
-el('kalNext').addEventListener('click', function(){
-  cursor = calMode === 'week' ? addDays(cursor, 7)
-                              : new Date(cursor.getFullYear(), cursor.getMonth()+1, 1);
-  drawCal();
-});
-el('kalToday').addEventListener('click', function(){ cursor = new Date(); drawCal(); });
-document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]').forEach(function(ch){
-  ch.addEventListener('click', function(){
-    document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]')
-      .forEach(function(x){ x.classList.remove('on'); });
-    ch.classList.add('on'); calMode = ch.dataset.mode;
-    if(calMode !== 'rebuilt') el('kalBox').innerHTML = '';   // Rahmen der Liste verwerfen
-    drawCal();
-  });
-});
-
-/* ---------- Analytics ----------
-   Zwei Karten mit zwei Herkünften: was oben steht, kommt aus dem Index und ist
-   sofort da. Was unten steht, fragt Microsoft – und passiert deshalb nur auf
-   Knopfdruck. */
-var anaGeladen = false;
-
-function ladeAnalytics(neu){
-  if(anaGeladen && !neu) return;
-  anaGeladen = true;
-  if(neu){
-    // Visible feedback for the refresh button: back to the loading hint
-    // until the fresh numbers arrive. Refresh recomputes on the server –
-    // the ONE way to invalidate everything at once.
-    el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-    el('ana-kpi-dateien').innerHTML = '';
-    el('ana-runs').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-  }
-  (neu ? post('/api/analytics-refresh', {}) : api('/api/analytics'))
-    .then(zeigeAnalytics).catch(function(e){
-    el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
-  });
-  api('/api/runs?limit=50').then(function(r){ renderRuns(r.runs || []); })
-    .catch(function(e){
-      el('ana-runs').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
-    });
-}
-
-/* ---------- Run history ----------
-   One row per app-driven run, expandable to the per-step details. The data
-   comes from runs.db (see run_history.py); counts and durations only. */
-function durationText(s){
-  if(s === null || s === undefined) return '–';
-  if(s < 60) return Math.round(s) + ' s';
-  return (s / 60).toFixed(s < 600 ? 1 : 0) + ' min';
-}
-
-function runElements(r){
-  var e = r.elements || {}, parts = [];
-  // Which categories, in brackets – "(all)" when every one was enabled.
-  function detail(cats, alle){
-    var namen = cats.length >= alle.length ? [t('ana.runs.all')]
-      : cats.map(function(c){ return t('export.cat.' + c); });
-    return ' (' + namen.join(', ') + ')';
-  }
-  if((e.outlook || []).length)
-    parts.push('Outlook' + detail(e.outlook, ['mail', 'calendar', 'contacts']));
-  if((e.teams || []).length)
-    parts.push('Teams' + detail(e.teams, ['1on1', 'group', 'meeting', 'channels']));
-  if(e.onedrive) parts.push('OneDrive (' + t('ana.runs.all') + ')');
-  if(e.sharepoint) parts.push(t('search.source.sharepoint') + ' (' + t('ana.runs.all') + ')');
-  if(e.sharepoint_pages) parts.push(t('search.source.pages'));
-  if(e.planner) parts.push(t('search.source.planner') + ' (' + t('ana.runs.all') + ')');
-  (r.steps || []).forEach(function(s){
-    if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
-  });
-  return parts.join(', ') || '–';
-}
-
-function runStepLine(s){
-  if(s.skipped) return t(s.label) + ': ' + t('ana.runs.skipped');
-  var bits = [];
-  if(s.duration_s !== null && s.duration_s !== undefined) bits.push(durationText(s.duration_s));
-  if(s.new !== null && s.new !== undefined) bits.push(t('ana.runs.new') + ' ' + zahl(s.new));
-  if(s.unchanged !== null && s.unchanged !== undefined)
-    bits.push(t('ana.runs.unchanged') + ' ' + zahl(s.unchanged));
-  if(s.excluded) bits.push(t('ana.runs.excluded') + ' ' + zahl(s.excluded));
-  if(s.errors) bits.push(t('ana.runs.errors') + ' ' + zahl(s.errors));
-  if(s.ok === 0) bits.push(t('ana.runs.failed'));
-  return t(s.label) + ': ' + (bits.join(' · ') || '–');
-}
-
-function renderRuns(runs){
-  var box = el('ana-runs');
-  if(!runs.length){
-    box.innerHTML = '<p class="hint">' + esc(t('ana.runs.empty')) + '</p>';
-    return;
-  }
-  var ok = runs.filter(function(r){ return r.result === 'done'; }).length;
-  var html = '<p class="small muted">' +
-    esc(t('ana.runs.count', {n: runs.length, ok: ok})) + '</p>' +
-    '<table class="anatab"><thead><tr>' +
-    ['time', 'origin', 'elements', 'duration', 'new', 'result']
-      .map(function(k){ return '<th>' + esc(t('ana.runs.col.' + k)) + '</th>'; })
-      .join('') + '</tr></thead><tbody>';
-  var QUELLE = {outlook: 'Outlook', teams: 'Teams', onedrive: 'OneDrive',
-                sharepoint: t('search.source.sharepoint'),
-                sharepoint_pages: t('search.source.pages'),
-                planner: t('search.source.planner')};
-  runs.forEach(function(r, i){
-    var dauer = (r.finished_at && r.started_at) ? r.finished_at - r.started_at : null;
-    // "New" counts the exports only – index and calendar report their own
-    // numbers, but those describe derived artefacts, not new archive items.
-    var neu = null, neuJe = [];
-    (r.steps || []).forEach(function(s){
-      if(QUELLE[s.key] && s.new !== null && s.new !== undefined){
-        neu = (neu || 0) + s.new;
-        neuJe.push(QUELLE[s.key] + ': ' + zahl(s.new));
-      }
-    });
-    html += '<tr class="lauf" style="cursor:pointer" onclick="toggleRun(' + i + ')">' +
-      '<td>' + esc(new Date(r.started_at * 1000).toLocaleString(LOC)) + '</td>' +
-      '<td>' + esc(t('ana.runs.origin.' +
-                     (r.origin === 'schedule' ? 'schedule' : 'manual'))) + '</td>' +
-      '<td>' + esc(runElements(r)) + '</td>' +
-      '<td>' + esc(durationText(dauer)) + '</td>' +
-      '<td' + (neuJe.length ? ' title="' + esc(neuJe.join('\n')) + '"' : '') +
-      '>' + esc(zahl(neu)) + '</td>' +
-      '<td>' + esc(t('ana.runs.result.' + (r.result || 'running'))) + '</td></tr>' +
-      '<tr class="hide" id="lauf-details-' + i + '"><td colspan="6" class="small muted">' +
-      (r.steps || []).map(runStepLine).map(esc).join('<br>') +
-      '<div class="row" style="margin-top:8px"><button class="mini" ' +
-      'onclick="event.stopPropagation();zeigeRunLog(' + r.id + ', ' + i + ')">' +
-      esc(t('ana.runs.log')) + '</button></div>' +
-      '<div id="lauf-log-' + i + '" class="lauflog hide"></div></td></tr>';
-  });
-  box.innerHTML = html + '</tbody></table>';
-}
-
-function toggleRun(i){
-  var d = el('lauf-details-' + i);
-  if(d) d.classList.toggle('hide');
-}
-
-function zeigeRunLog(id, i){
-  // The stored log of one run, inline below its steps. Second click folds
-  // it away again; the lines come from runs.db and translate on display,
-  // like the live log bar.
-  var box = el('lauf-log-' + i);
-  if(!box.classList.contains('hide')){ box.classList.add('hide'); return; }
-  box.classList.remove('hide');
-  box.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-  api('/api/run-log?id=' + id).then(function(r){
-    var zeilen = r.lines || [];
-    if(!zeilen.length){
-      box.innerHTML = '<p class="hint">' + esc(t('ana.runs.log.empty')) + '</p>';
-      return;
-    }
-    box.innerHTML = zeilen.map(function(l){
-      return '<div class="l-' + esc(l.level) + '">' +
-        esc(new Date(l.ts * 1000).toLocaleTimeString(LOC)) + '  ' +
-        esc(mtext(l.text)) + '</div>';
-    }).join('');
-  }).catch(function(e){
-    box.innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
-  });
-}
-
-function bytes(n){
-  if(!n) return '–';
-  var e = ['B','KB','MB','GB','TB'], i = 0;
-  while(n >= 1024 && i < e.length - 1){ n /= 1024; i++; }
-  return (i ? n.toFixed(1) : n) + ' ' + e[i];
-}
-function zahl(n){
-  // null heisst „weiss ich nicht“ – 0 hiesse „keine“.
-  return (n === null || n === undefined) ? '–' : Number(n).toLocaleString(LOC);
-}
-/* Zwei verschiedene Dinge standen bisher gleich aussehend unter jeder Kachel:
-   ZAHLEN (die Aufteilung nach Quellen, wie groß der Index ist) und
-   ERKLÄRUNGEN (was ein Gespräch ist, warum Gelöschtes noch da liegt). Nur die
-   Zahlen gehören dauerhaft hin; die Erklärung liest man einmal. Deshalb bleibt
-   `hinweis` sichtbar und `tip` wandert ans Infozeichen. */
-function kachelHtml(wert, titel, hinweis, tip, klick){
-  var info = tip ? ' <span class="info" tabindex="0" title="' + esc(tip) +
-                   '" role="img" aria-label="Info">i</span>' : '';
-  return '<div class="kpi' + (klick ? ' klickbar" role="button" tabindex="0"' +
-             ' onclick="' + klick + '" onkeydown="if(event.key===\'Enter\')' + klick + '"'
-           : '"') + '>' +
-    '<div class="kpi-wert">' + esc(wert) + '</div>' +
-    '<div class="kpi-titel">' + esc(titel) + info + '</div>' +
-    (hinweis ? '<div class="kpi-hint">' + esc(hinweis) + '</div>' : '') + '</div>';
-}
-
-
-/* ---------- Diagramme ----------
-   Von Hand gezeichnetes SVG statt einer Bibliothek: das Bündel soll nicht um
-   ein Diagrammpaket wachsen, und die drei Formen hier sind einfach. Bewusst
-   sparsam – dünne Marken, zurückhaltende Achsen, Zahlen nur dort, wo sie
-   gebraucht werden. Der Tooltip steckt in <title>: das zeigt jeder Browser und
-   liest jeder Screenreader vor, ohne eine eigene Ebene dafür. */
-
-/* Gestapelte Monatsbalken: Teams, Mail, alles Übrige. Eine Lücke ist eine
-   fehlende Säule – deshalb enthält die Reihe auch die leeren Monate. */
-function verlaufDia(reihe){
-  if(!reihe.length) return '';
-  var B = 720, H = 110, U = 16;
-  var hoch = Math.max.apply(null, reihe.map(function(r){ return r.gesamt; })) || 1;
-  var breite = B / reihe.length, lueck = reihe.length > 120 ? 0 : Math.min(2, breite * 0.25);
-  var teile = reihe.map(function(r, i){
-    var x = i * breite, y = H - U, s = '';
-    [['outlook', 'var(--serie-b)'], ['teams', 'var(--serie-a)']]
-      .forEach(function(paar){
-        var h = (r[paar[0]] / hoch) * (H - U);
-        if(h <= 0) return;
-        y -= h;
-        s += '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) + '" width="' +
-             Math.max(0.5, breite - lueck).toFixed(2) + '" height="' + h.toFixed(2) +
-             '" fill="' + paar[1] + '"/>';
-      });
-    return '<g><title>' + esc(r.m + ': ' + zahl(r.gesamt)) + '</title>' +
-      '<rect x="' + x.toFixed(2) + '" y="0" width="' + breite.toFixed(2) +
-      '" height="' + (H - U) + '" fill="transparent"/>' + s + '</g>';
-  }).join('');
-  // Jahreswechsel als Marke – Monatsbeschriftungen wären bei 90 Säulen Brei.
-  var marken = reihe.map(function(r, i){
-    return r.m.slice(5) !== '01' ? ''
-      : '<text class="tick" x="' + (i * breite + 2).toFixed(1) + '" y="' + (H - 4) + '">' +
-        r.m.slice(0, 4) + '</text>';
-  }).join('');
-  return '<svg class="dia" viewBox="0 0 ' + B + ' ' + H + '" role="img" aria-label="' +
-    esc(t('ana.verlauf')) + '">' + teile +
-    '<line class="achse" x1="0" y1="' + (H - U) + '" x2="' + B + '" y2="' + (H - U) + '"/>' +
-    marken + '</svg>';
-}
-
-/* Wachstum: dieselbe Zeitachse, aber ein eigenes Bild. Beide Größen in EINE
-   Zeichnung zu legen hieße zwei Maßstäbe nebeneinander – das führt zuverlässig
-   in die Irre. */
-function wachstumDia(reihe){
-  if(reihe.length < 2) return '';
-  var B = 720, H = 90, U = 16, hoch = reihe[reihe.length - 1].summe || 1;
-  var punkte = reihe.map(function(r, i){
-    return (i * (B / (reihe.length - 1))).toFixed(2) + ',' +
-           ((H - U) - (r.summe / hoch) * (H - U)).toFixed(2);
-  }).join(' ');
-  return '<svg class="dia" viewBox="0 0 ' + B + ' ' + H + '" role="img" aria-label="' +
-    esc(t('ana.wachstum')) + '">' +
-    '<polyline class="linie" points="' + punkte + '"/>' +
-    '<line class="achse" x1="0" y1="' + (H - U) + '" x2="' + B + '" y2="' + (H - U) + '"/>' +
-    '<text class="tick" x="0" y="' + (H - 4) + '">' + esc(reihe[0].m) + '</text>' +
-    '<text class="tick" x="' + B + '" y="' + (H - 4) + '" text-anchor="end">' +
-    esc(reihe[reihe.length - 1].m + ' · ' + zahl(hoch)) + '</text></svg>';
-}
-
-/* Rangliste als waagerechte Balken – für alles, was reine Menge ist. */
-function rangListe(eintraege, nenner){
-  if(!eintraege.length) return '';
-  var hoch = Math.max.apply(null, eintraege.map(function(e){ return e.n; })) || 1;
-  // Die Zeilen liegen als Spalten in EINEM Raster, nicht als eigene Raster
-  // nebeneinander – nur so beginnen alle Balken an derselben Stelle.
-  return '<div class="rangliste">' + eintraege.map(function(e){
-    return '<span class="name" title="' + esc(e.name) + '">' + esc(e.name) + '</span>' +
-      '<span class="bal"><i style="width:' + ((e.n / hoch) * 100).toFixed(1) + '%"></i></span>' +
-      '<span class="zahl">' + esc(nenner ? nenner(e.n) : zahl(e.n)) + '</span>';
-  }).join('') + '</div>';
-}
-
-function diaBlock(titel, sub, inhalt){
-  if(!inhalt) return '';
-  return '<div class="dia-titel">' + esc(titel) + '</div>' +
-    (sub ? '<p class="dia-sub">' + esc(sub) + '</p>' : '') + inhalt;
-}
-
-function zeigeVerlaeufe(a){
-  var v = a.verlauf || [];
-  var luecken = (a.luecken || []).map(function(l){
-    return l.monate === 1 ? l.von : l.von + '–' + l.bis;
-  });
-  var legende = '<div class="legende">' +
-    '<span><i style="background:var(--serie-a)"></i>' + esc(t('search.source.teams')) + '</span>' +
-    '<span><i style="background:var(--serie-b)"></i>' + esc(t('search.source.outlook')) + '</span></div>';
-  el('ana-dia').innerHTML =
-    diaBlock(t('ana.verlauf'), t('ana.verlauf.sub'), legende + verlaufDia(v)) +
-    (luecken.length
-      ? '<p class="dia-sub" style="margin-top:6px">' +
-        esc(t('ana.luecken', {n: luecken.length, liste: luecken.join(', ')})) + '</p>'
-      : (v.length ? '<p class="dia-sub" style="margin-top:6px">' +
-                    esc(t('ana.luecken.keine')) + '</p>' : '')) +
-    diaBlock(t('ana.wachstum'), t('ana.wachstum.sub'), wachstumDia(v)) +
-    diaBlock(t('ana.typen'), t('ana.typen.sub'),
-             rangListe((a.anhang_typen || []).map(function(x){
-               // Der Sammelposten braucht einen Namen: „…" sagt nichts, und er
-               // ist oft größer als die Einträge über ihm.
-               return {name: x.typ === '…' ? t('ana.typen.rest') : x.typ, n: x.n};
-             }))) +
-    diaBlock(t('ana.dateitypen'), t('ana.dateitypen.sub'),
-             rangListe((a.datei_typen || []).map(function(x){
-               return {name: x.typ, n: x.n}; }))) +
-    diaBlock(t('ana.dateien'), t('ana.dateien.sub'),
-             rangListe((a.grosse_dateien || []).map(function(d){
-               return {name: d.pfad, n: d.bytes}; }), bytes)) +
-    diaBlock(t('ana.people'), t('ana.personen.sub'),
-             rangListe((a.top_personen || []).map(function(pe){
-               return {name: pe.who, n: pe.n}; })));
-}
-
-function zeigeAnalytics(a){
-  el('ana-stand').textContent = a.built_at
-    ? t('ana.stand', {when: fmt(a.built_at)}) : '';
-  zeigeBerichte(a);
-  if(!a.exists){
-    el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('search.sub.none')) + '</p>';
-    el('ana-kpi-dateien').innerHTML = '';
-    el('ana-dia').innerHTML = '';
-    return;
-  }
-  var k = a.komm || {}, je = {};
-  (a.quellen || []).forEach(function(q){ je[q.src] = q.n; });
-  var zeitraum = (k.von && k.bis)
-    ? fmtTag(k.von) + ' – ' + fmtTag(k.bis) : '–';
-  // Anklickbar nur, wenn es auch etwas zu zeigen gibt – eine Kachel, die bei
-  // null Treffern in eine leere Suche führt, ist eine Sackgasse.
-  var klick = k.verschwunden ? 'zeigeVerschwundene()' : '';
-  el('ana-kpi').innerHTML =
-    kachelHtml(zahl(k.nachrichten), t('ana.messages'),
-               t('search.source.teams') + ' ' + zahl(je.teams || 0) + ' · ' +
-               t('search.source.outlook') + ' ' + zahl(je.outlook || 0)) +
-    kachelHtml(zahl(k.gespraeche), t('ana.threads'), '', t('ana.threads.hint')) +
-    kachelHtml(zahl(k.mit_anhang), t('ana.attachments'), '', t('ana.attachments.hint')) +
-    kachelHtml(zahl(k.personen), t('ana.people')) +
-    kachelHtml(zeitraum, t('ana.period')) +
-    kachelHtml(zahl(k.verschwunden), t('ana.gone'), '',
-               t(klick ? 'ana.gone.hint.klick' : 'ana.gone.hint'), klick);
-  var d = a.dateien || {}, g = a.groesse || {};
-  var teile = [];
-  if(d.onedrive) teile.push('OneDrive ' + zahl(d.onedrive));
-  if(d.sharepoint)
-    teile.push(t('search.source.sharepoint') + ' ' + zahl(d.sharepoint));
-  var pl = a.planner || {};
-  el('ana-kpi-dateien').innerHTML =
-    // Ohne Spiegel keine Datei-Kacheln – „0 Dateien" sagt niemandem etwas.
-    (d.n ? kachelHtml(zahl(d.n), t('ana.files'), teile.join(' · '),
-                      t('ana.files.hint')) : '') +
-    (d.pages ? kachelHtml(zahl(d.pages), t('ana.pages')) : '') +
-    (pl.n ? kachelHtml(zahl(pl.n), t('ana.planner'), '',
-                       t('ana.planner.hint')) : '') +
-    (d.n || d.pages || pl.n
-      ? kachelHtml(zahl((d.verschwunden || 0) + (pl.verschwunden || 0)),
-                   t('ana.gone.files'), '', t('ana.gone.files.hint')) : '') +
-    kachelHtml(bytes((g.teams || 0) + (g.outlook || 0) + (g.onedrive || 0) +
-                     (g.sharepoint || 0) + (g.pages || 0) + (g.planner || 0)),
-               t('ana.size'), t('ana.size.hint', {index: bytes(g.index)}));
-  zeigeVerlaeufe(a);
-}
-
-function zeigeBerichte(a){
-  // One block per report, straight from the registry – adding a checkable
-  // source is one line there, not a fourth hand-wired box.
-  el('ana-checks').innerHTML = Object.keys(BERICHTKAESTEN).map(function(feld){
-    return berichtHtml(a[feld], BERICHTKAESTEN[feld].titel,
-                       feld !== 'vollstaendigkeit');
-  }).join('');
-}
-
-function fmtTag(ts){
-  return new Date(ts * 1000).toLocaleDateString(LOC, {year: 'numeric', month: 'short'});
-}
-
-function zeigeVerschwundene(){
-  el('f-gone').checked = true;
-  el('q').value = ''; el('f-person').value = '';
-  el('filter').classList.remove('hide');   // sonst wirkt ein Filter, den man nicht sieht
-  tab('suche'); sicht('treffer'); zeigeFilterstand(); doSearch(0);
-}
-
-var BERICHTKAESTEN = {
-  vollstaendigkeit:            {titel: 'ana.check.title.mail'},
-  vollstaendigkeit_onedrive:   {titel: 'ana.check.title.onedrive'},
-  vollstaendigkeit_sharepoint: {titel: 'ana.check.title.sharepoint'},
-  vollstaendigkeit_pages:      {titel: 'ana.check.title.pages'}
-};
-
-function berichtHtml(b, titelKey, od){
-  // od: alle Spiegel-/Seitenberichte sprechen von Dateien statt Mails.
-  // Beim Postfach steht der Hinweis "noch nie geprüft"; beim Spiegel bliebe
-  // sonst dauerhaft ein Block stehen, obwohl die Quelle gar nicht genutzt wird.
-  if(!b){ return od ? '' :
-            '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; }
-  var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
-              esc(t(titelKey)) + '</h3>';
-  var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
-  var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
-    esc(t(b.fehlt ? (od ? 'ana.check.gaps.files' : 'ana.check.gaps')
-                  : 'ana.check.complete',
-          {n: zahl(b.fehlt), erwartet: zahl(b.erwartet), da: zahl(b.vorhanden),
-           weg: zahl(b.geloescht)})) + '</p>' +
-    '<p class="small muted">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</p>' +
-    // Ohne diese Zeile sähe es aus, als fehlten 20.000 Mails. Sie fehlen
-    // nicht – sie wurden nie geholt, weil die Auswahl sie auslässt.
-    (b.ausgelassen ? '<p class="small muted">' +
-      esc(t(od ? 'ana.check.skipped.files' : 'ana.check.skipped',
-            {n: zahl(b.ausgelassen),
-                                  ordner: (b.ausgelassene_ordner || []).join(', ')})) +
-      '</p>' : '');
-  if(!luecken.length){ return kopf; }
-  return kopf + '<table class="anatab"><thead><tr>' +
-    '<th>' + esc(t('ana.check.folder')) + '</th><th>' + esc(t('ana.check.expected')) +
-    '</th><th>' + esc(t('ana.check.present')) + '</th><th>' + esc(t('ana.check.missing')) +
-    '</th></tr></thead><tbody>' +
-    luecken.slice(0, 30).map(function(z){
-      return '<tr><td>' + esc(z.ordner) + '</td><td>' + zahl(z.erwartet) +
-        '</td><td>' + zahl(z.vorhanden) + '</td><td class="fehlt">' + zahl(z.fehlt) +
-        '</td></tr>';
-    }).join('') + '</tbody></table>';
-}
-
-/* Ein Knopf, nicht zwei. „Prüfen" ist eine Frage an das Archiv, keine an eine
-   Quelle – wer zwei Knöpfe sieht, muss erst entscheiden, was er eigentlich
-   wissen will. OneDrive kommt aber nur mit, wenn es benutzt wird: sonst wäre
-   es eine Netzanfrage für eine Antwort, die niemanden interessiert. */
-function nutztOneDrive(){
-  return !!((S.config && S.config.onedrive_enabled) ||
-            (S.folders_onedrive && S.folders_onedrive.abgeglichen));
-}
-function nutztSharePoint(){
-  return !!(S.config && S.config.sharepoint_enabled &&
-            (S.config.sharepoint_urls || '').trim());
-}
-function nutztPages(){
-  return !!(S.config && S.config.sharepoint_pages_enabled &&
-            (S.config.sharepoint_pages_urls || '').trim());
-}
-function pruefeVollstaendigkeit(){
-  el('ana-check-state').textContent = t('ana.check.running');
-  post('/api/run', {check: true, check_onedrive: nutztOneDrive(),
-                    check_sharepoint: nutztSharePoint(),
-                    check_pages: nutztPages(),
-                    label: 'job.check'}).then(function(r){
-    if(!r.ok){ el('ana-check-state').textContent = mtext(r.message); return; }
-    warteAufLauf();
-  });
-}
-function warteAufLauf(){
-  wennLaufFertig(function(){
-    el('ana-check-state').textContent = '';
-    ladeAnalytics(true);
-  });
-}
-
-/* ---------- Adressbuch ---------- */
-function telHref(t){ return 'tel:' + (t||'').replace(/[^\d+]/g, ''); }
-function cardHtml(e){
-  var r = e.c || {};
-  var sub = [r.role, r.org].filter(Boolean).join(' · ');
-  // Nur wer aus dem Adressbuch stammt, hat eine Quelldatei zum Verlinken.
-  var h = '<div class="card2"><div class="cname">' +
-    (e.c ? '<a href="' + quelle(r) + '" target="_blank" rel="noopener">' +
-           esc(e.name) + '</a>' : esc(e.name)) +
-    (e.quelle === 'comm' ? '<span class="tag herkunft">' + esc(t('book.tag.comm')) +
-                           '</span>' : '') + '</div>';
-  if(sub) h += '<div class="crole">' + esc(sub) + '</div>';
-  (r.em||[]).forEach(function(m){
-    h += '<div class="cline"><span>✉</span><a href="mailto:' + esc(m) + '">' + esc(m) + '</a></div>'; });
-  (r.tel||[]).forEach(function(x){
-    h += '<div class="cline"><span>☎</span><a href="' + esc(telHref(x)) + '">' + esc(x) + '</a></div>'; });
-  if(e.n) h += '<div class="cline muted small">' + esc(t('book.messages', {n: e.n.toLocaleString(LOC)})) + '</div>';
-  h += '<button class="mini" onclick="zeigeKommunikation(' +
-       JSON.stringify(e.name).replace(/"/g, '&quot;') + ')">' +
-       esc(t('book.show.comm')) + '</button>';
-  return h + '</div>';
-}
-/* Zwei Quellen für dieselbe Frage „wer ist das?“: das Outlook-Adressbuch
-   (.vcf, gepflegt, oft unvollständig) und die Kommunikation selbst (Absender
-   und Empfänger, vollständig, aber ohne Telefonnummer). Sie zu mischen, ohne
-   es zu sagen, wäre die schlechteste Lösung – deshalb ein Filter darüber. */
-var personen = [], personenGeladen = false, bookF = 'all';
-
-function ladePersonen(){
-  if(personenGeladen) return;
-  personenGeladen = true;
-  api('/api/people?limit=2000').then(function(r){
-    personen = r.people || [];
-    if(offeneSicht === 'adressbuch') drawBook();
-  }).catch(function(){ personen = []; });
-}
-
-function normName(n){ return (n || '').trim().toLowerCase(); }
-
-function buchEintraege(){
-  /* Kontakte gewinnen: sie tragen Firma, Rolle und Telefonnummer. Aus der
-     Kommunikation kommt die Zahl der Nachrichten dazu – auch für die, die im
-     Adressbuch stehen. */
-  var nachName = {};
-  contacts.forEach(function(c){
-    nachName[normName(c.title)] = {c: c, name: c.title, quelle: 'contacts', n: 0};
-  });
-  personen.forEach(function(p){
-    var k = normName(p.name);
-    if(!k) return;
-    if(nachName[k]){ nachName[k].n = p.messages; nachName[k].quelle = 'both'; }
-    else nachName[k] = {c: null, name: p.name, quelle: 'comm', n: p.messages};
-  });
-  return Object.keys(nachName).map(function(k){ return nachName[k]; });
-}
-
-function drawBook(){
-  var alle = buchEintraege();
-  if(!alle.length){
-    el('kbStats').textContent = '';
-    el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.empty')) + '</p>';
-    return;
-  }
-  var imFilter = alle.filter(function(e){
-    if(bookF === 'contacts') return e.quelle !== 'comm';
-    if(bookF === 'comm') return e.quelle !== 'contacts';
-    return true;
-  });
-  var worte = toks(el('kbQ').value.trim());
-  var hits = imFilter.filter(function(e){
-    var r = e.c || {};
-    return !worte.length || allIn([e.name, r.org, r.role, (r.em||[]).join(' '),
-                                   (r.tel||[]).join(' ')].join(' '), worte);
-  });
-  hits.sort(function(a, b){
-    return (a.name || '').localeCompare(b.name || '', LOC, {sensitivity: 'base'});
-  });
-  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
-    .forEach(function(c){ c.classList.toggle('on', c.dataset.book === bookF); });
-  el('kbStats').textContent = t('book.stats', {n: hits.length, total: alle.length});
-  if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.nohits')) + '</p>'; return; }
-  var h = '', letter = null;
-  hits.forEach(function(e){
-    var first = (e.name || '#').trim().charAt(0).toUpperCase();
-    var L = /[A-ZÄÖÜ]/.test(first) ? first : '#';
-    if(L !== letter){ h += (letter !== null ? '</div>' : '') + '<div class="letter">' + L +
-                           '</div><div class="cards">'; letter = L; }
-    h += cardHtml(e);
-  });
-  el('kbBox').innerHTML = h + '</div>';
-}
-el('kbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(drawBook, 120); });
-document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]').forEach(function(ch){
-  ch.addEventListener('click', function(){ bookF = ch.dataset.book; drawBook(); });
-});
-
-/* Von einer Person zu allem, was mit ihr gelaufen ist. Der Personenfilter der
-   Suche kann das längst – er war nur nie mit dem Adressbuch verbunden. */
-function zeigeKommunikation(name){
-  el('f-person').value = name;
-  el('q').value = '';
-  el('f-source').value = 'all';
-  el('f-gone').checked = false;
-  sicht('treffer');
-  doSearch(0);
-}
-
-/* ---------- Formulierte Antwort ----------
-   Ergänzt die Treffer, ersetzt sie nicht: die Liste darunter bleibt unberührt,
-   und jede Fußnote [1] springt genau dorthin. Was hier steht, hat ein lokales
-   Modell aus eben diesen Treffern geschrieben – das sagt der Kasten auch. */
-var kiLauf = null, kiQuellen = [];
-
-function abbrechenKI(){
-  if(kiLauf){ kiLauf.abort(); kiLauf = null; }
-  el('ai-box').classList.add('hide');
-  markiereZitate([]);
-}
-function kiKopf(modell, laufend){
-  // Der Kasten steht über den Treffern – die Kopfzeile muss deshalb in einem
-  // Satz sagen, dass hier eine KI schreibt, dass sie über Ollama auf diesem
-  // Rechner läuft und dass sie sich auf die Treffer darunter stützt.
-  return '<div class="ahead">' +
-    '<span class="tag">' + esc(t('search.ai.tag')) + '</span>' +
-    '<span>' + esc(t('search.ai.label')) + '</span>' +
-    (modell ? '<code class="small">' + esc(t('search.ai.model', {model: modell})) + '</code>' : '') +
-    (laufend ? '<button class="ghost" style="margin-left:auto;padding:3px 10px" ' +
-               'onclick="abbrechenKI()">' + esc(t('search.ai.stop')) + '</button>' : '') +
-    '</div>';
-}
-function kiFuss(){
-  return '<div class="afoot">' + esc(t('search.ai.note')) + '</div>';
-}
-
-function frageKI(){
-  abbrechenKI();
-  var box = el('ai-box');
-  box.classList.remove('hide', 'err');
-  box.innerHTML = kiKopf('', true) +
-    '<div class="atext blink" id="ai-text"></div>';
-
-  kiLauf = new AbortController();
-  var text = '', modell = '';
-  fetch('/api/answer', {
-    method: 'POST', signal: kiLauf.signal,
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({q: el('q').value, person: el('f-person').value,
-                          source: el('f-source').value,
-                          from: el('f-from').value, to: el('f-to').value})
-  }).then(function(r){
-    if(!r.ok || !r.body){
-      return r.json().then(function(d){ throw new Error(mtext(d.error)); });
-    }
-    var leser = r.body.getReader(), dekoder = new TextDecoder(), rest = '';
-    function weiter(){
-      return leser.read().then(function(st){
-        if(st.done) return fertig();
-        rest += dekoder.decode(st.value, {stream: true});
-        var zeilen = rest.split('\n');
-        rest = zeilen.pop();
-        zeilen.forEach(function(z){
-          if(!z.trim()) return;
-          var d;
-          try { d = JSON.parse(z); } catch(e){ return; }
-          if(d.sources){ kiQuellen = d.sources; modell = d.model;
-                         box.innerHTML = kiKopf(modell, true) +
-                           '<div class="atext blink" id="ai-text"></div>'; }
-          if(d.text){ text += d.text; el('ai-text').textContent = text; }
-          if(d.error){ throw new Error(t(d.error === 'model'
-                         ? 'search.ai.err.model' : 'search.ai.err.ollama',
-                         {detail: d.detail || ''})); }
-        });
-        return weiter();
-      });
-    }
-    function fertig(){
-      kiLauf = null;
-      box.innerHTML = kiKopf(modell, false) +
-        '<div class="atext">' + mitFussnoten(text) + '</div>' + kiFuss();
-      markiereZitate(zitierte(text));
-    }
-    return weiter();
-  }).catch(function(e){
-    kiLauf = null;
-    if(e && e.name === 'AbortError') return;      // vom Benutzer gestoppt
-    box.classList.add('err');
-    box.innerHTML = kiKopf(modell, false) +
-      '<div class="atext">' + esc(String(e && e.message || e)) + '</div>';
-  });
-}
-
-/* [1] wird zu einem Sprung in die Trefferliste – keine zweite Quellenliste,
-   die dieselben Einträge noch einmal zeigt. */
-function mitFussnoten(text){
-  return esc(text).replace(/\[(\d+)\]/g, function(m, n){
-    return kiQuellen[+n - 1]
-      ? '<a href="#treffer-' + n + '" onclick="zeigeTreffer(' + n + ');return false;">' + m + '</a>'
-      : m;
-  });
-}
-function zitierte(text){
-  var raus = [], m, re = /\[(\d+)\]/g;
-  while((m = re.exec(text))) if(raus.indexOf(+m[1]) < 0) raus.push(+m[1]);
-  return raus;
-}
-function markiereZitate(nummern){
-  document.querySelectorAll('#results .hit').forEach(function(el2, i){
-    el2.classList.toggle('zitiert', nummern.indexOf(i + 1) >= 0);
-  });
-}
-function zeigeTreffer(n){
-  var el2 = document.getElementById('treffer-' + n);
-  if(el2) el2.scrollIntoView({behavior: 'smooth', block: 'center'});
-}
-
-/* ---------- Zeitplan / MCP ---------- */
-function saveSchedule(){
-  merke('flow.save', 'schedule');
-  post('/api/schedule', {enabled: el('s-enabled').checked,
-    interval_minutes: parseInt(el('s-interval').value, 10) || 60,
-    outlook: el('s-outlook').checked, teams: el('s-teams').checked,
-    onedrive: el('s-onedrive').checked, sharepoint: el('s-sharepoint').checked,
-    sharepoint_pages: el('s-sharepoint_pages').checked,
-    planner: el('s-planner').checked,
-    index: el('s-index').checked, calendar: el('s-calendar').checked}).then(refresh);
-}
-function toggleMcp(){
-  merke('flow.mcp', S.mcp.running ? 'stop' : 'start');
-  post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
-    if(!r.ok && r.message) alert(mtext(r.message));
-    refresh();
-  });
-}
-
-/* ---------- Aktualisierungen ----------
-   Nur eine Notiz: nichts wird geladen, nichts ersetzt. Gemeldet wird allein
-   der Fall "es gibt etwas Neueres" – kein Release, kein Netz oder abgeschaltet
-   sind normale Zustände und stehen nur in den Einstellungen. */
-/* Drei Lagen, nicht zwei. „Du bist auf dem neuesten Stand" ist falsch, wenn
-   die eigene Version HÖHER ist als alles Veröffentlichte – dann läuft hier ein
-   selbstgebauter Stand, und das gehört gesagt, nicht verschwiegen. */
-function zeigeUpdate(u){
-  var banner = el('update-banner');
-  var vorab = u.status === 'ok' && u.ahead;
-  banner.classList.toggle('hide', !u.newer && !vorab);
-  banner.classList.toggle('warn', vorab);
-  if(u.newer){
-    banner.innerHTML = esc(t('update.banner', {v: u.latest, current: u.current})) +
-      ' <a href="' + esc(u.url || u.releases_url || '#') + '" target="_blank" rel="noopener">' +
-      esc(t('update.open')) + '</a>';
-  } else if(vorab){
-    banner.textContent = t('update.ahead.banner', {v: u.current, latest: u.latest});
-  }
-  el('update-current').textContent = t('update.current', {v: u.current || '?'});
-  el('update-state').textContent =
-      u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest})
-                         : u.ahead ? t('update.ahead', {v: u.latest})
-                                   : t('update.uptodate'))
-    : u.status === 'none' ? t('update.none')
-    : u.status === 'error' ? t('update.error', {error: u.error || ''})
-    : t('update.off');
-  el('update-link').href = u.url || u.releases_url || '#';
-}
-function pruefeUpdate(){
-  el('update-state').textContent = t('update.checking');
-  post('/api/update-check').then(function(u){ zeigeUpdate(u); refresh(); });
-}
-
-/* ---------- Einstellungen ---------- */
-var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
-                'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
-                'ollama_enabled','planner_attachments'];
-var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb','sharepoint_max_mb',
-                'sharepoint_pages_image_max_mb','semantic_min',
-                'userflow_actions','runs_retention_months','log_retention_days'];
-var TEXTE    = ['ollama','embed_model','chat_model',
-                'folder_rules','onedrive_rules','calendar_rules',
-                'sharepoint_types_include','sharepoint_types_exclude'];
-var cfgGefuellt = false;
-
-function fuelleEinstellungen(cfg){
-  // Nur einmal befüllen: der Status kommt alle 2,5 Sekunden, und ein Neusetzen
-  // würde eine gerade getippte Zahl oder Ordnerliste unter den Fingern ersetzen.
-  if(cfgGefuellt) return;
-  cfgGefuellt = true;
-  SCHALTER.forEach(function(k){ el('c-'+k).checked = !!cfg[k]; });
-  ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
-  TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
-  el('c-notifications').value = cfg.notifications || 'errors';
-  var kad = cfg.sync_cadence || {};
-  fuelleUrlTabelle('sp-urls', cfg.sharepoint_urls, kad, 'sharepoint-url');
-  fuelleUrlTabelle('pg-urls', cfg.sharepoint_pages_urls, kad, 'pages-url');
-  fuelleUrlTabelle('pl-urls', cfg.planner_urls, kad, 'planner-url');
-  el('c-cadence-onedrive').value = kad.onedrive || 'always';
-  el('c-cadence-teams').value = kad.teams || 'always';
-  el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
-  el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
-  el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
-  // Zwei Zustände, die keine Formularfelder sind: der Ollama-Schalter graut die
-  // halbe Karte ab, die Index-Wahl ist ein Umschalter statt einer Checkbox.
-  indexart(cfg.index_semantic !== false);
-  ollamaSchalter();
-  fuelleSprachen();
-}
-function leseKadenzen(){
-  // Rebuilt from scratch: URL keys always mirror the current tables, so a
-  // removed or edited row cannot leave a stale cadence behind.
-  return {onedrive: el('c-cadence-onedrive').value,
-          teams: el('c-cadence-teams').value};
-}
-
-function urlZeile(tabId, wert, kadenz){
-  // One row per source URL: the address, its sync cadence, and "sync now".
-  var tab = el(tabId);
-  var zeile = document.createElement('div');
-  zeile.className = 'zeile';
-  zeile.onclick = function(){
-    tab.querySelectorAll('.zeile').forEach(function(z){ z.classList.remove('an'); });
-    zeile.classList.add('an');
-  };
-  var optionen = ['always', 'daily', 'weekly', 'monthly'];
-  zeile.innerHTML =
-    '<input type="text" placeholder="https://firma.sharepoint.com/sites/TeamX">' +
-    '<select>' + optionen.map(function(o){
-      return '<option value="' + o + '"' + (o === (kadenz || 'always') ? ' selected' : '') +
-        '>' + esc(t('cadence.' + o)) + '</option>';
-    }).join('') + '</select>' +
-    '<button class="mini">' + esc(t('cadence.sync_now')) + '</button>';
-  zeile.querySelector('input').value = wert || '';
-  zeile.querySelector('select').onchange = speichereEinstellungen;
-  zeile.querySelector('input').onchange = speichereEinstellungen;
-  zeile.querySelector('button').onclick = function(ev){
-    ev.stopPropagation();
-    var url = zeile.querySelector('input').value.trim();
-    if(!url) return;
-    var lauf = tabId === 'sp-urls' ? {sharepoint: true}
-      : tabId === 'pl-urls' ? {planner: true} : {sharepoint_pages: true};
-    merke('flow.run', 'sync_now');
-    post('/api/run', Object.assign({nur_einheit: url, label: 'job.export'}, lauf))
-      .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
-  };
-  tab.appendChild(zeile);
-  return zeile;
-}
-
-function urlZeileWeg(tabId){
-  var an = el(tabId).querySelector('.zeile.an');
-  if(an){ an.remove(); speichereEinstellungen(); }
-}
-
-function fuelleUrlTabelle(tabId, text, kadenzen, praefix){
-  var tab = el(tabId);
-  tab.innerHTML = '';
-  tab.dataset.leer = t('cadence.units.none');
-  String(text || '').split('\n').map(function(z){ return z.trim(); })
-    .filter(Boolean).forEach(function(url){
-      urlZeile(tabId, url, kadenzen[praefix + ':' + url]);
-    });
-}
-
-function liesUrlTabelle(tabId, kadenzen, praefix){
-  var urls = [];
-  el(tabId).querySelectorAll('.zeile').forEach(function(z){
-    var url = z.querySelector('input').value.trim();
-    if(!url) return;
-    urls.push(url);
-    var wert = z.querySelector('select').value;
-    if(wert !== 'always') kadenzen[praefix + ':' + url] = wert;
-  });
-  return urls.join('\n');
-}
-
-function speichereEinstellungen(){
-  merke('flow.save', 'settings');
-  var body = {skip_folders: el('c-skip_folders').value,
-              filetype_hidden: el('c-filetype_hidden').value,
-              analytics_skip: el('c-analytics_skip').value,
-              language: el('c-language').value,
-              notifications: el('c-notifications').value,
-              sync_cadence: leseKadenzen()};
-  body.sharepoint_urls = liesUrlTabelle('sp-urls', body.sync_cadence,
-                                        'sharepoint-url');
-  body.sharepoint_pages_urls = liesUrlTabelle('pg-urls', body.sync_cadence,
-                                              'pages-url');
-  body.planner_urls = liesUrlTabelle('pl-urls', body.sync_cadence,
-                                     'planner-url');
-  var spracheVorher = (S.config && S.config.language) || 'auto';
-  SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
-  ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
-  TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
-  body.index_semantic = INDEX_SEMANTISCH;
-  post('/api/config', body).then(function(r){
-    // Die Sprache steckt in der ausgelieferten Seite – ein Wechsel braucht
-    // einen Neuaufbau, alles andere wirkt sofort.
-    if(r.config.language !== spracheVorher){ location.reload(); return; }
-    cfgGefuellt = false;                 // gespeicherte (und begrenzte) Werte zurückspielen
-    fuelleEinstellungen(r.config);
-    // Die ausgeblendeten Typen wirken auf die Auswahlliste – die liegt
-    // zwischengespeichert vor und wäre sonst bis zum nächsten Indexlauf alt.
-    typenJeQuelle = {};
-    ladeTypen(el('f-source').value || 'all');
-    var m = el('cfg-msg');
-    m.className = 'small ok';
-    m.textContent = t('settings.saved');
-    setTimeout(function(){ m.textContent = ''; }, 4000);
-    refresh();
-  });
-}
-/* Der Ordnerbaum ist seit 3.0 ein eigenes Ergebnis, kein Nebenprodukt jedes
-   Exports. Diese Zeile sagt, wie alt er ist und was die Regeln daraus machen. */
-function zeigeOrdnerstand(f, id){
-  var kasten = el(id || 'folders-state');
-  if(!kasten) return;
-  if(!f.abgeglichen){ kasten.textContent = t('folders.none'); return; }
-  var text = t(id ? 'folders.state.files' : 'folders.state',
-                              {an: (f.ordner_gewaehlt || 0).toLocaleString(LOC),
-                                 gesamt: (f.ordner_gesamt || 0).toLocaleString(LOC),
-                                 mails: (f.mails_gewaehlt || 0).toLocaleString(LOC),
-                                 when: fmt(f.abgeglichen)});
-  if((f.neu || []).length) text += ' ' + t('folders.new', {n: f.neu.length});
-  kasten.textContent = text;
-}
-
-/* Kalender zählen keine Termine: wie viele in einem liegen, sagt Graph beim
-   Auflisten nicht. Deshalb eine eigene Zeile statt zeigeOrdnerstand – sie nennt
-   dafür die gewählten Kalender beim Namen, was bei einer Handvoll mehr sagt
-   als jede Zahl. */
-function zeigeKalenderstand(c){
-  var kasten = el('cal-state');
-  if(!kasten) return;
-  if(!c || !c.abgeglichen){ kasten.textContent = t('settings.calendars.none'); return; }
-  var text = t('settings.calendars.state',
-               {an: (c.gewaehlt || 0).toLocaleString(LOC),
-                gesamt: (c.gesamt || 0).toLocaleString(LOC),
-                when: fmt(c.abgeglichen)});
-  if((c.namen || []).length) text += ' – ' + c.namen.join(', ');
-  if((c.neu || []).length) text += ' ' + t('folders.new', {n: c.neu.length});
-  kasten.textContent = text;
-}
-
-var ABGLEICH = {
-  onedrive: {msg: 'od-folders-msg', lauf: {sync_onedrive: true, label: 'job.folders'}},
-  sharepoint: {msg: 'sp-msg', lauf: {sync_sharepoint: true, label: 'job.folders'},
-               save: function(){ return speichereSharepointFelder(); }},
-  calendar: {msg: 'cal-msg', lauf: {sync_calendars: true, label: 'job.calendars'}},
-  outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}}
-};
-
-function speichereSharepointFelder(){
-  // The buttons must act on what the form shows, not on the last save –
-  // otherwise an edited URL list feels ignored until someone hits Save.
-  var kad = leseKadenzen();
-  return post('/api/config', {
-    sharepoint_urls: liesUrlTabelle('sp-urls', kad, 'sharepoint-url'),
-    sharepoint_pages_urls: liesUrlTabelle('pg-urls', kad, 'pages-url'),
-    sync_cadence: kad,
-    sharepoint_types_include: el('c-sharepoint_types_include').value,
-    sharepoint_types_exclude: el('c-sharepoint_types_exclude').value,
-    sharepoint_max_mb: parseInt(el('c-sharepoint_max_mb').value, 10) || 0});
-}
-function sharepointVorschau(){
-  // The check run enumerates without downloading; the merged report lands in
-  // Analytics, the one-line summary right here next to the button.
-  el('sp-msg').textContent = t('sharepoint.preview.running');
-  speichereSharepointFelder().then(function(){
-    return post('/api/run', {check_sharepoint: true, label: 'job.preview'});
-  }).then(function(r){
-    if(!r.ok){ el('sp-msg').textContent = mtext(r.message); return; }
-    var timer = setInterval(function(){
-      if(S && S.jobs && !S.jobs.busy){
-        clearInterval(timer);
-        api('/api/sharepoint-report').then(function(r){
-          var b = r.bericht;
-          el('sp-msg').textContent = b && (b.erwartet || b.ausgelassen)
-            ? t('sharepoint.preview.result',
-                {n: zahl(b.erwartet), mb: zahl(Math.round((b.bytes || 0) / 1048576)),
-                 skipped: zahl(b.ausgelassen || 0)})
-            : t('sharepoint.preview.empty');
-          malSharepointTypen(b);
-        });
-      }
-    }, 1500);
-  });
-}
-function zeigeSharepointTypen(){
-  api('/api/sharepoint-report').then(function(r){
-    malSharepointTypen(r.bericht);
-  }).catch(function(){});
-}
-function malSharepointTypen(b){
-  var kasten = el('sp-typen');
-  if(!b || !(b.typen || []).length){
-    kasten.textContent = t('sharepoint.types.none'); return;
-  }
-  kasten.innerHTML = (b.typen || []).slice(0, 30).map(function(z){
-    return '<span style="display:inline-block;margin:2px 10px 2px 0">' +
-      '<code>' + esc(z.ext || '·') + '</code> ' + esc(zahl(z.n)) + ' · ' +
-      esc(bytes(z.bytes)) + '</span>';
-  }).join('');
-}
-function gleicheOrdnerAb(quelle){
-  var wahl = ABGLEICH[quelle] || ABGLEICH.outlook;
-  var kasten = wahl.msg;
-  el(kasten).textContent = t('folders.syncing');
-  // Only SharePoint saves its form first – the other sources start
-  // synchronously, their rules travel inside the request itself.
-  var start = wahl.save
-    ? function(){ return wahl.save().then(function(){ return post('/api/run', wahl.lauf); }); }
-    : function(){ return post('/api/run', wahl.lauf); };
-  start().then(function(r){
-    if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
-    wennLaufFertig(function(){ el(kasten).textContent = ''; });
-  });
-}
-
-function setzeAblage(koerper, feldId, msgId){
-  post('/api/data-dir', koerper).then(function(r){
-    var kasten = el(msgId);
-    if(!r.ok){ kasten.className = 'small err'; kasten.textContent = mtext(r.message); return; }
-    el(feldId).value = koerper.path !== undefined ? r.path : r.index;
-    kasten.className = 'small muted';
-    kasten.textContent = t(r.restart ? 'settings.datadir.restart' : 'settings.datadir.same');
-  });
-}
-function setzeDatenordner(pfad){
-  setzeAblage({path: pfad !== undefined ? pfad : el('c-data-dir').value.trim()},
-              'c-data-dir', 'datadir-msg');
-}
-function datenordnerZurueck(){ setzeDatenordner(''); }
-function setzeIndexordner(pfad){
-  setzeAblage({index: pfad !== undefined ? pfad : el('c-index-dir').value.trim()},
-              'c-index-dir', 'indexdir-msg');
-}
-function indexordnerZurueck(){ setzeIndexordner(''); }
-
-function ordnerZuruecksetzen(){
-  el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');
-}
-function typenZuruecksetzen(){
-  el('c-filetype_hidden').value = (S.filetype_hidden_default || []).join(', ');
-  speichereEinstellungen();
-}
-
-/* ---------- Exportliste ----------
-   Die Regeln sind mächtig, ihr Ergebnis im Kopf auszurechnen ist es nicht:
-   „- E-Mail/Kunden/**“ und zwei Zeilen später ein „+“ auf einen Unterordner
-   entscheiden über vierhundert Ordner. Wer das nicht sehen kann, stellt blind
-   ein. Hier läuft deshalb dieselbe Auswertung wie im Export – nur als Liste
-   statt als Lauf, und mit dem, was gerade in den Feldern steht, nicht mit dem
-   zuletzt Gespeicherten. */
-var planDaten = null, planQuelle = 'outlook';
-
-function zeigeExportliste(quelle){
-  planDaten = null;
-  planQuelle = quelle || 'outlook';
-  planFenster();
-  post('/api/folder-plan', planQuelle === 'sharepoint'
-      ? {quelle: 'sharepoint'}
-      : planQuelle === 'onedrive'
-      ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
-      : planQuelle === 'calendar'
-      ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}
-      : {folder_rules: el('c-folder_rules').value,
-         skip_folders: el('c-skip_folders').value})
-    .then(function(p){
-      planDaten = p;
-      if(wizardOffen === 'plan') planFenster();
-    });
-}
-
-function planFenster(){
-  var p = planDaten, koerper;
-  if(!p){
-    koerper = '<p class="small muted">' + esc(t('plan.loading')) + '</p>';
-  } else if(!p.ok){
-    koerper = '<div class="banner warn">' + esc(t('folders.none')) + '</div>';
-  } else {
-    koerper = '<p class="small muted">' + esc(t('plan.stand', {when: fmt(p.abgeglichen)})) + '</p>' +
-      '<input type="text" id="plan-filter" oninput="planListen()" ' +
-        'placeholder="' + esc(t('plan.filter')) + '" style="width:100%;margin:12px 0 2px">' +
-      '<div id="plan-listen"></div>';
-  }
-  oeffneEigenes('plan', modalKopf(t('plan.title'), 'plan') + koerper +
-    modalFuss({text: t(planQuelle === 'calendar' ? 'settings.calendars.sync' : 'folders.sync'),
-               tun: 'planAbgleichen(&quot;' + planQuelle + '&quot;)'}));
-  if(p && p.ok) planListen();
-}
-
-/* Erst der Pfad, dann die Zahl, dann der Grund – in der Reihenfolge, in der
-   man fragt. Bei ausgelassenen Ordnern steht dazwischen, was trotzdem schon
-   im Archiv liegt: „ausgelassen“ heißt nicht „leer“, und wer das verwechselt,
-   sucht später Mails, die längst da sind. */
-function planZeile(e, zahl, mitArchiv){
-  return '<li><span class="pfad">' + esc(e.pfad) + '</span>' +
-    '<span class="zahl">' + (e[zahl] || 0).toLocaleString(LOC) + '</span>' +
-    (mitArchiv && e.archiv
-      ? '<span class="regel">' + esc(t(planQuelle === 'onedrive' ? 'plan.here' : 'plan.inarchive',
-                                       {n: e.archiv.toLocaleString(LOC)})) + '</span>'
-      : '') +
-    (e.regel ? '<span class="regel">' + esc(e.regel) + '</span>' : '') + '</li>';
-}
-
-function planListen(){
-  var p = planDaten;
-  if(!p || !p.ok || !document.getElementById('plan-listen')) return;
-  var f = (el('plan-filter').value || '').trim().toLowerCase();
-  function gruppe(schluessel, liste, zahl, mails, punkt, mitArchiv){
-    var zeilen = liste.filter(function(e){
-      return !f || e.pfad.toLowerCase().indexOf(f) >= 0; });
-    return '<details class="plangruppe" open><summary><span class="dot ' + punkt + '"></span>' +
-      esc(t(schluessel, {n: liste.length.toLocaleString(LOC),
-                         mails: mails.toLocaleString(LOC)})) +
-      (f ? ' <span class="small muted">' + esc(t('plan.shown', {n: zeilen.length})) + '</span>' : '') +
-      '</summary>' +
-      (zeilen.length
-        ? '<ul class="planliste">' + zeilen.map(function(e){
-            return planZeile(e, zahl, mitArchiv); }).join('') + '</ul>'
-        : '<p class="small muted">' + esc(t('plan.nothing')) + '</p>') + '</details>';
-  }
-  // Beim Spiegel sind es Dateien, nicht Mails – und was hier liegt, ist keine
-  // Archivierung, sondern der Rest eines gelöschten Ordners. Ausgeschrieben
-  // statt zusammengesetzt, damit der Abgleich mit den Sprachdateien die
-  // Schlüssel findet.
-  var dat = planQuelle === 'onedrive', kal = planQuelle === 'calendar';
-  // Bei Kalendern gibt es nichts zu vergleichen: wie viele Termine drin
-  // stehen, verrät Graph beim Auflisten nicht. Gezählt wird deshalb, was schon
-  // auf der Platte liegt – die einzige Zahl, die hier ehrlich zu haben ist.
-  function ablage(liste){
-    return liste.reduce(function(a, e){ return a + (e.archiv || 0); }, 0);
-  }
-  el('plan-listen').innerHTML = kal
-    ? gruppe('plan.an.cal',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
-      gruppe('plan.aus.cal', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
-      gruppe('plan.weg.cal', p.weg, 'archiv', p.mails_weg,   'err',  false)
-    : gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
-      gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
-      gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
-}
-
-function planAbgleichen(quelle){
-  closeWizard('plan');
-  gleicheOrdnerAb(quelle);
-}
-
-/* ---------- Assistenten ---------- */
-/* Kennung dessen, was der Assistent gerade anzeigt. Ändert sie sich nicht,
-   wird nicht neu gezeichnet – der Status kommt alle 2,5 Sekunden, und ein neu
-   gesetztes innerHTML wirft sonst die halb fertige Eingabe weg. Ändert sie
-   sich doch (Modell nachgeladen, Token gespeichert), muss neu gezeichnet
-   werden, sonst behauptet der Assistent Dinge, die längst erledigt sind.
-   Die Restlaufzeit des Tokens steht bewusst nicht drin: sie ändert sich jede
-   Minute, ohne dass am Text etwas Wesentliches anders wird. */
-function wizardKennung(kind){
-  if(kind === 'ollama'){
-    var o = S.ollama || {};
-    return ['ollama', o.running, o.has_model, o.model].join('|');
-  }
-  var tk = S.token || {}, au = S.auth || {}, dev = au.device || {};
-  return ['token', tk.present, tk.valid, tk.expired, tk.account,
-          (tk.missing || []).join(','), (S.scopes_needed || []).join(','),
-          au.mode, au.signed_in, au.account, au.own_registration,
-          dev.code, dev.done, dev.ok].join('|');
-}
-/* ---------- Tastatur im Assistenten ----------
-   Ein modales Fenster nimmt die Seite in Beschlag; wer keine Maus benutzt, muss
-   trotzdem hinein, herum und wieder heraus. ESC schließt, Tab bleibt innerhalb
-   (sonst wandert der Fokus unsichtbar hinter die Abdeckung), und beim Schließen
-   geht er dorthin zurück, wo er herkam. */
-var fokusVorher = null;
-
-function fokussierbare(){
-  return [].slice.call(el('modal').querySelectorAll(
-    'button, [href], textarea, input, select, summary, [tabindex]:not([tabindex="-1"])'));
-}
-function modalTaste(e){
-  if(!wizardOffen) return;
-  if(e.key === 'Escape'){ e.preventDefault(); closeWizard(wizardOffen); return; }
-  // Strg/Cmd+Enter im Textfeld: speichern, ohne zum Knopf tabben zu müssen.
-  if(e.key === 'Enter' && (e.metaKey || e.ctrlKey)){
-    var act = el('modal').querySelector('button.act');
-    if(act){ e.preventDefault(); act.click(); }
-    return;
-  }
-  if(e.key !== 'Tab') return;
-  var liste = fokussierbare();
-  if(!liste.length) return;
-  var erster = liste[0], letzter = liste[liste.length - 1];
-  if(e.shiftKey && document.activeElement === erster){ e.preventDefault(); letzter.focus(); }
-  else if(!e.shiftKey && document.activeElement === letzter){ e.preventDefault(); erster.focus(); }
-}
-document.addEventListener('keydown', modalTaste);
-
-/* Ein Fenster, das der Server nicht von sich aus aufzieht: es hat keine
-   Kennung, die der Status alle 2,5 Sekunden vergleichen könnte, und darf beim
-   Neuzeichnen des Assistenten nicht mit weggewischt werden (siehe refresh). */
-var WIZARDS = {token: 1, ollama: 1};
-
-function oeffneEigenes(kind, html){
-  var warOffen = !!wizardOffen;
-  if(!warOffen) fokusVorher = document.activeElement;
-  el('modal').className = 'modal breit';
-  el('modal').innerHTML = html;
-  el('overlay').classList.add('on');
-  wizardOffen = kind;
-  wizardStand = null;
-  if(!warOffen){
-    var ziel = el('modal').querySelector('input, button.act');
-    if(ziel && ziel.focus) ziel.focus();
-  }
-}
-
-function openWizard(kind, neuZeichnen){
-  if(!neuZeichnen) merke('flow.wizard', kind);
-  var kennung = wizardKennung(kind);
-  if(wizardOffen === kind && wizardStand === kennung && !neuZeichnen) return;
-  var feld = document.getElementById('tok');       // bereits Eingefügtes retten
-  var eingabe = feld ? feld.value : '';
-  var warOffen = !!wizardOffen;
-  if(!warOffen) fokusVorher = document.activeElement;
-  el('modal').className = 'modal';
-  el('modal').innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
-  var neu = document.getElementById('tok');
-  if(neu && eingabe) neu.value = eingabe;
-  el('overlay').classList.add('on');
-  wizardOffen = kind;
-  wizardStand = kennung;
-  // Beim Öffnen in den Dialog springen – aber nicht bei jedem Neuzeichnen,
-  // sonst risse es einem den Fokus mitten aus dem Textfeld.
-  if(!warOffen){
-    var ziel = document.getElementById('tok') || el('modal').querySelector('button.act');
-    if(ziel && ziel.focus) ziel.focus();
-  }
-}
-function closeWizard(kind){
-  dismissed[kind] = true;
-  el('overlay').classList.remove('on');
-  wizardOffen = null;
-  wizardStand = null;
-  if(fokusVorher && fokusVorher.focus) fokusVorher.focus();
-  fokusVorher = null;
-  // Nur Assistenten sind „gesehen“ zu melden – ein selbst geöffnetes Fenster
-  // hat der Server nie verlangt und darf ihm auch nichts zurücksetzen.
-  if(WIZARDS[kind]) post('/api/wizard-seen');
-}
-/* Rahmen für alle Assistenten. Vorher hatte jeder eine andere Knopfzahl – zwei,
-   drei, und im Ollama-Fenster war ausgerechnet „Schließen“ der primäre Knopf,
-   während die eigentliche Aktion daneben blass stand. Jetzt gilt überall:
-   Kreuz oben rechts zum Schließen, unten links die Aktion, daneben die
-   Ausweichmöglichkeit. */
-function modalKopf(titel, kind){
-  var zu = esc(t('wizard.close'));
-  return '<div class="modal-kopf"><h2>' + esc(titel) + '</h2>' +
-    '<button class="modal-zu" title="' + zu + '" aria-label="' + zu + '" ' +
-    'onclick="closeWizard(&quot;' + kind + '&quot;)">&times;</button></div>';
-}
-/* Der sekundäre Knopf darf fehlen. Ein „Später“, das nichts anderes tut als
-   das Kreuz darüber, ist keine zweite Möglichkeit – nur derselbe Ausgang
-   zweimal, und der Blick muss ihn zweimal prüfen. */
-function modalFuss(primaer, sekundaer, anhang){
-  return '<div class="row modal-fuss">' +
-    '<button class="act" onclick="' + primaer.tun + '">' + esc(primaer.text) + '</button>' +
-    (sekundaer ? '<button class="ghost" onclick="' + sekundaer.tun + '">' +
-                 esc(sekundaer.text) + '</button>' : '') +
-    (anhang || '') + '</div>';
-}
-
-function scopeListe(){
-  var q = S.scope_queries || {};
-  return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(x){
-    return '<li style="margin-bottom:3px"><code>' + esc(x) + '</code>' +
-      (q[x] ? '<br><span class="small muted">' + esc(t('wizard.token.scopes.query')) +
-              ' </span><code class="small">' + esc(q[x]) + '</code>' : '') + '</li>';
-  }).join('') + '</ul>';
-}
-
-/* Die Berechtigungen sind der technischste Teil des Dialogs – Namen wie
-   Contacts.Read und dazu Graph-Adressen. Meist sind sie längst erteilt und
-   stehen dann nur im Weg. Eingeklappt bleiben sie erreichbar; aufgeklappt
-   genau dann, wenn sie wirklich fehlen und damit das Thema sind. */
-function rechteBlock(offen){
-  return '<details class="rechte"' + (offen ? ' open' : '') + '>' +
-    '<summary>' + esc(t('wizard.token.scopes.title')) + '</summary>' +
-    '<p class="small muted">' + t('wizard.token.scopes.intro') + '</p>' +
-    scopeListe() +
-    '<p class="small muted">' + esc(t('wizard.token.scopes.note')) + '</p></details>';
-}
-
-function modusWahl(){
-  /* Zwei Wege, einer davon die Vorgabe. Der Unterschied, der zaehlt, steht
-     direkt daneben – nicht in einer Hilfe, die niemand oeffnet. */
-  var jetzt = (S.auth && S.auth.mode) || 'token';
-  function karte(wert, titel, hinweis){
-    return '<label class="wahl' + (jetzt === wert ? ' on' : '') + '">' +
-      '<input type="radio" name="authmode" value="' + wert + '"' +
-      (jetzt === wert ? ' checked' : '') + ' onchange="setzeModus(\'' + wert + '\')">' +
-      '<span><strong>' + esc(t(titel)) + '</strong>' +
-      '<span class="small muted">' + esc(t(hinweis)) + '</span></span></label>';
-  }
-  return '<div class="wahlreihe">' +
-    karte('token', 'wizard.auth.token', 'wizard.auth.token.hint') +
-    karte('login', 'wizard.auth.login', 'wizard.auth.login.hint') + '</div>';
-}
-
-function eigeneRegistrierung(){
-  var au = S.auth || {};
-  return '<details class="rechte"' + (au.own_registration ? ' open' : '') + '>' +
-    '<summary>' + esc(t('wizard.login.own.title')) + '</summary>' +
-    '<p class="small muted">' + t('wizard.login.own.intro') + '</p>' +
-    '<div class="row"><label class="small">' + esc(t('wizard.login.own.client')) +
-    ' <input type="text" id="au-client" style="width:320px" value="' +
-    esc(au.own_registration ? (au.client_id || '') : '') + '" placeholder="' +
-    esc(au.default_client_id || '') + '"></label>' +
-    '<label class="small">' + esc(t('wizard.login.own.tenant')) +
-    ' <input type="text" id="au-tenant" style="width:220px" value="' +
-    esc(au.own_registration ? (au.tenant || '') : '') + '" placeholder="organizations"></label>' +
-    '<button class="mini" onclick="speichereRegistrierung()">' +
-    esc(t('wizard.login.own.save')) + '</button></div></details>';
-}
-
-function loginTeil(){
-  var au = S.auth || {}, dev = au.device;
-  var kopf;
-  if(au.signed_in)
-    kopf = banner('', '<span class="ok">✓</span> ' +
-      t(au.account ? 'wizard.login.state.in' : 'wizard.login.state.in.plain',
-        {who: esc(au.account || '')}));
-  else
-    kopf = banner('warn', esc(t('wizard.login.state.out')));
-
-  var mitte = '';
-  if(dev && !dev.done){
-    // Der Code ist das Einzige, was jetzt zaehlt – gross und zum Kopieren.
-    mitte = '<div class="geraetecode">' +
-      '<p>' + t('wizard.login.code.intro', {url: esc(dev.url)}) + '</p>' +
-      '<code class="code-gross">' + esc(dev.code) + '</code>' +
-      '<p class="small muted">' + esc(t('wizard.login.waiting')) + '</p></div>';
-  } else if(dev && dev.done && !dev.ok){
-    mitte = banner('err', esc(t('wizard.login.failed', {detail: dev.error || ''})));
-  }
-
-  var primaer = au.signed_in
-    ? {text: t('wizard.login.again'), tun: 'starteLogin()'}
-    : {text: t('wizard.login.start'), tun: 'starteLogin()'};
-  var sekundaer = au.signed_in
-    ? {text: t('wizard.login.logout'), tun: 'abmelden()'} : null;
-
-  return '<p class="muted small">' + esc(t('wizard.login.intro')) + '</p>' +
-    kopf + mitte + eigeneRegistrierung() + modalFuss(primaer, sekundaer);
-}
-
-function schluesselTeil(){
-  var tk = S.token, head, fehlen = !!(tk.missing && tk.missing.length);
-  if(!tk.present) head = banner('err', t('wizard.token.none'));
-  else if(tk.expired) head = banner('err', t('wizard.token.expired'));
-  else if(fehlen)
-    head = banner('warn', t('wizard.token.missing', {list: esc(tk.missing.join(', '))}));
-  else {
-    // Vier ganze Sätze statt zusammengesetzter Bruchstücke – siehe Sprachdateien.
-    var hatWer = !!tk.account, hatZeit = tk.expires_in_minutes != null;
-    var k = hatWer && hatZeit ? 'wizard.token.ok'
-          : hatWer ? 'wizard.token.ok.unknown'
-          : hatZeit ? 'wizard.token.ok.nowho' : 'wizard.token.ok.plain';
-    head = banner('', '<span class="ok">✓</span> ' + t(k, {who: esc(tk.account || ''),
-                                                          rest: restzeit(tk.expires_in_minutes)}));
-  }
-  return '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
-    rechteBlock(fehlen) +
-    '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
-    '<li>' + t('wizard.token.step2') + '</li>' +
-    '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
-    '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
-    modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'}, null,
-              '<span class="small muted" id="tok-msg"></span>');
-}
-
-function tokenWizard(){
-  var login = (S.auth && S.auth.mode) === 'login';
-  return modalKopf(t('wizard.token.title'), 'token') +
-    modusWahl() +
-    (login ? loginTeil() : schluesselTeil()) +
-    '<p class="small muted" style="margin-top:14px">' +
-    t(login ? 'wizard.login.privacy' : 'wizard.token.privacy') + '</p>';
-}
-
-function setzeModus(wert){
-  post('/api/config', {auth_mode: wert}).then(function(){
-    refresh().then(function(){ openWizard('token', true); });
-  });
-}
-function starteLogin(){
-  post('/api/login').then(function(){
-    refresh().then(function(){ openWizard('token', true); });
-  });
-}
-function abmelden(){
-  post('/api/logout').then(function(){
-    refresh().then(function(){ openWizard('token', true); });
-  });
-}
-function speichereRegistrierung(){
-  post('/api/config', {client_id: el('au-client').value.trim(),
-                       tenant: el('au-tenant').value.trim()}).then(function(){
-    refresh().then(function(){ openWizard('token', true); });
-  });
-}
-
-function banner(art, html){
-  return '<div class="banner' + (art ? ' ' + art : '') + '">' + html + '</div>';
-}
-function saveToken(){
-  post('/api/token', {token: el('tok').value}).then(function(r){
-    el('tok-msg').textContent = mtext(r.message);
-    el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
-    if(r.ok){ dismissed = {};
-              setTimeout(function(){ el('overlay').classList.remove('on');
-                                     wizardOffen = null; wizardStand = null; }, 1200); }
-    refresh();
-  });
-}
-function ollamaWizard(){
-  var o = S.ollama, h = S.ollama_hint;
-
-  // Alles da – das kann passieren, während der Assistent offen steht und
-  // nebenher "ollama pull" durchläuft. Dann bestätigen statt weiter mahnen.
-  if(o.running && o.has_model){
-    // Das Neuindizieren ist hier die Handlung, für die das Fenster überhaupt
-    // aufgeht – es steht vorn, nicht mehr blass neben „Schließen“.
-    return modalKopf(t('wizard.ollama.ready.title'), 'ollama') +
-      banner('', '<span class="ok">✓</span> ' + t('wizard.ollama.ready', {model: esc(o.model)})) +
-      modalFuss({text: t('wizard.ollama.reindex'),
-                 tun: 'closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))'},
-                null);
-  }
-
-  var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc(o.model)})
-                                      : esc(t('wizard.ollama.off')));
-  var steps = o.running
-    ? [t('wizard.ollama.pull', {model: esc(o.model)}), esc(t('wizard.ollama.wait'))]
-    : (h.steps || []).map(function(k){ return t(k, {url: esc(h.url || '')}); });
-  return modalKopf(t('wizard.ollama.title'), 'ollama') +
-    '<p class="muted small">' + esc(t('wizard.ollama.intro')) + '</p>' + head +
-    '<ol>' + steps.map(function(x){ return '<li>' + x + '</li>'; }).join('') + '</ol>' +
-    (h.pkg && !o.running ? '<p class="small muted">' + esc(t('wizard.ollama.pkg')) +
-                           '</p><pre>' + esc(h.pkg) + '</pre>' : '') +
-    // „Später“ ist hier weggefallen: das Kreuz oben tut dasselbe, und der
-    // Ausweg ohne Ollama ist die Entscheidung, die wirklich ansteht.
-    modalFuss({text: t('wizard.ollama.recheck'), tun: 'recheckOllama()'},
-              {text: t('wizard.ollama.without'),
-               tun: 'closeWizard(&quot;ollama&quot;); run({index:true, embeddings:false}, ' +
-                    't(&quot;job.index.lexical&quot;))'}) +
-    '<p class="small muted" style="margin-top:14px">' + esc(t('wizard.ollama.without.note')) + '</p>';
-}
-function recheckOllama(){
-  post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
-}
-
-/* ---------- Beenden ----------
-   Die App hat kein Fenster und steht nicht im Dock – ohne diesen Knopf bliebe
-   nur die Aktivitätsanzeige. Der MCP-Server geht mit; ein laufender Auftrag
-   wird abgebrochen, bereits Exportiertes bleibt aber erhalten. */
-var beendet = false;
-function beenden(){
-  var laeuft = S && S.jobs && S.jobs.busy;
-  if(!confirm(t(laeuft ? 'quit.confirm.busy' : 'quit.confirm'))) return;
-  beendet = true;
-  post('/api/quit').catch(function(){});   // die Antwort kommt evtl. nicht mehr
-  document.querySelector('main').innerHTML =
-    '<div class="card"><p>' + esc(t('quit.done')) + '</p></div>';
-  document.querySelector('nav').classList.add('hide');
-  // Auch Pillen und Protokoll: sie zeigten sonst eingefrorene Zustände einer
-  // App, die nicht mehr läuft – und ihre Knöpfe riefen eine tote API.
-  el('pills').classList.add('hide');
-  el('protokoll').classList.add('hide');
-  protokollPlatz();
-}
-
-/* ---------- Schleife ---------- */
-function refresh(){
-  if(beendet) return Promise.resolve();
-  return api('/api/status').then(renderStatus);
-}
-stelleProtokollHer();
-refresh();
-setInterval(refresh, 2500);
-setInterval(pullLog, 1000);
-</script>
-</body>
-</html>
-"""
 
 if __name__ == "__main__":
-    # Muss die erste Anweisung bleiben.
+    # Must remain the first statement.
     #
-    # corpus._pmap verteilt das Parsen der Exporte auf einen Prozess-Pool.
-    # Außerhalb von Linux startet Python einen Arbeitsprozess nicht per fork,
-    # sondern indem es sich selbst noch einmal aufruft – gebündelt also diese
-    # ausführbare Datei, und zwar mit "--multiprocessing-fork pipe_handle=…"
-    # statt mit eigenen Argumenten. Ohne diese Zeile liefe das Kind in den
-    # Argumentparser in main(), stürbe dort an einer unbekannten Option, und
-    # der Pool meldete dem Aufrufer nur noch BrokenProcessPool – ohne jeden
-    # Hinweis darauf, dass gar keine Datei schuld war.
+    # corpus._pmap spreads parsing of the exports across a process pool.
+    # Outside Linux, Python does not start a worker process via fork but by
+    # invoking itself again – bundled, that means this executable, and with
+    # "--multiprocessing-fork pipe_handle=…" instead of its own arguments.
+    # Without this line the child would run into the argument parser in
+    # main(), die there on an unknown option, and the pool would report
+    # nothing but BrokenProcessPool to the caller – with no hint that no
+    # file was at fault at all.
     #
-    # Getroffen hat das jeden Bestand, bei dem eine Quelle die Schwelle in
-    # corpus überschritt – Postfach, Chats, Kalender oder Spiegel, je nachdem,
-    # welche sie zuerst erreichte.
+    # That hit every corpus in which one source crossed the threshold in
+    # corpus – mailbox, chats, calendar or mirror, whichever reached it
+    # first.
     #
-    # Bewusst spawn.freeze_support() und NICHT multiprocessing.freeze_support():
-    # letzteres prüft vor Python 3.14 zuerst sys.platform == "win32" und tut
-    # außerhalb von Windows gar nichts. PyInstaller ersetzt zwar beide Namen
-    # durch eine eigene, plattformunabhängige Fassung – dann hinge macOS und
-    # Linux aber daran, dass ein Werkzeug diesen Haken setzt und ihn behält.
-    # Der Weg über spawn trägt sich selbst, auf jeder Fassung und überall.
+    # Deliberately spawn.freeze_support() and NOT
+    # multiprocessing.freeze_support(): before Python 3.14 the latter first
+    # checks sys.platform == "win32" and does nothing at all outside
+    # Windows. PyInstaller does replace both names with its own
+    # platform-independent version – but then macOS and Linux would depend
+    # on a tool setting that hook and keeping it. The spawn route carries
+    # itself, on every version and everywhere.
     #
-    # freeze_support() erkennt diesen Aufruf, arbeitet als Kind und beendet
-    # sich danach. Als Skript gestartet tut die Zeile nichts – sie sieht nur
-    # nach, ob das erste Argument "--multiprocessing-fork" lautet.
+    # freeze_support() recognises this invocation, works as the child and
+    # exits afterwards. Started as a script the line does nothing – it only
+    # looks whether the first argument is "--multiprocessing-fork".
     multiprocessing.spawn.freeze_support()
     main()

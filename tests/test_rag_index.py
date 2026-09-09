@@ -1,7 +1,7 @@
-"""Tests für rag_index.py – Store-Dateien, Embedding-Aufrufe (gemockt) und inkrementeller Aufbau.
+"""Tests for rag_index.py – store files, embedding calls (mocked) and incremental builds.
 
-Es wird nie echtes Ollama angesprochen: requests.post bzw. rag_index.embed
-werden durch deterministische Fakes ersetzt.
+Real Ollama is never contacted: requests.post and rag_index.embed are
+replaced by deterministic fakes.
 """
 
 import sys
@@ -20,13 +20,13 @@ import store_layout
 
 
 # --------------------------------------------------------------------------
-# Hilfen: gefälschte Ollama-Antworten und deterministische Vektoren
+# Helpers: fake Ollama responses and deterministic vectors
 # --------------------------------------------------------------------------
 DIM = 8
 
 
 class FakeResp:
-    """Minimaler Ersatz für requests.Response."""
+    """Minimal stand-in for requests.Response."""
 
     def __init__(self, payload, status=200):
         self.status_code = status
@@ -41,13 +41,13 @@ class FakeResp:
 
 
 def det_vec(text):
-    """Deterministischer, textabhängiger Pseudo-Embedding-Vektor (nie Nullvektor)."""
+    """Deterministic, text-dependent pseudo embedding vector (never zero)."""
     digest = hashlib.sha1(text.encode("utf-8")).digest()
     return [b / 255.0 + 0.01 for b in digest[:DIM]]
 
 
 def fake_embed_factory(calls):
-    """Ersatz für rag_index.embed, der jeden Batch in `calls` mitschreibt."""
+    """Stand-in for rag_index.embed that records every batch in `calls`."""
     def fake_embed(texts, model, url, timeout=600):
         calls.append(list(texts))
         return [det_vec(t) for t in texts]
@@ -55,7 +55,7 @@ def fake_embed_factory(calls):
 
 
 def make_chunk(uid="outlook:inbox/mail.eml:0", seq=0, **kw):
-    """Chunk-Dict, wie es corpus.chunk_records + chunk_hash liefern würden."""
+    """Chunk dict as corpus.chunk_records + chunk_hash would deliver it."""
     c = {"uid": uid, "cid": f"{uid}#{seq}", "src": "outlook", "root": "outlook",
          "rel": "inbox/mail.eml", "who": "Alice Example", "ppl": "alice example",
          "ts": 1751875200.0, "date": "2025-07-07 10:00", "title": "Testmail",
@@ -72,10 +72,10 @@ def test_chunk_row_zerlegt_cid_und_uid():
     c = make_chunk(uid="teams:1on1/a.html:7", seq=2, src="teams", root="teams",
                    rel="1on1/a.html")
     row = rag_index._chunk_row(4, c)
-    assert row[0] == 5                                  # id = Index + 1
+    assert row[0] == 5                                  # id = index + 1
     assert row[1] == "teams:1on1/a.html:7"
-    assert row[2] == 2                                  # seq aus cid "...#2"
-    assert row[3] == 7                                  # msg_idx aus uid "...:7"
+    assert row[2] == 2                                  # seq from cid "...#2"
+    assert row[3] == 7                                  # msg_idx from uid "...:7"
     assert row[4:7] == ("teams", "teams", "1on1/a.html")
     assert row[14] == c["hash"]
 
@@ -94,9 +94,9 @@ def test_people_rows_zaehlt_jede_nachricht_nur_einmal():
     ]
     rows = {(src, who): (cnt, ppl)
             for src, who, cnt, ppl in rag_index._people_rows(chunks)}
-    assert rows[("teams", "Alice")][0] == 2             # Folge-Chunk #1 zählt nicht extra
+    assert rows[("teams", "Alice")][0] == 2             # follow-up chunk #1 not counted extra
     assert rows[("teams", "Alice")][1] == "alice alpha beta"
-    assert rows[("outlook", "Bob")] == (1, "bob")       # who wird getrimmt
+    assert rows[("outlook", "Bob")] == (1, "bob")       # who gets trimmed
 
 
 def test_people_rows_begrenzt_personen_tokens():
@@ -110,8 +110,8 @@ def test_people_rows_begrenzt_personen_tokens():
     _, _, cnt, ppl = rows[0]
     assert cnt == 2
     toks = ppl.split()
-    assert len(toks) == rag_index.PPL_TOKEN_CAP         # nur die ersten 60 Tokens
-    assert "zzz" not in toks                            # Kappe erreicht → nichts mehr dazu
+    assert len(toks) == rag_index.PPL_TOKEN_CAP         # only the first 60 tokens
+    assert "zzz" not in toks                            # cap reached → nothing more added
 
 
 def test_people_rows_ohne_who_und_ppl():
@@ -120,7 +120,7 @@ def test_people_rows_ohne_who_und_ppl():
 
 
 # --------------------------------------------------------------------------
-# Store schreiben: corpus.db, vectors.npy, info.json
+# Writing the store: corpus.db, vectors.npy, info.json
 # --------------------------------------------------------------------------
 def test_write_db_schreibt_schema_und_inhalte(tmp_path):
     chunks = [
@@ -134,21 +134,21 @@ def test_write_db_schreibt_schema_und_inhalte(tmp_path):
     ]
     rag_index.write_db(tmp_path, chunks)
     assert (tmp_path / "corpus.db").exists()
-    assert not (tmp_path / "corpus.db.tmp").exists()    # atomarer Tausch
+    assert not (tmp_path / "corpus.db.tmp").exists()    # atomic swap
 
     con = sqlite3.connect(tmp_path / "corpus.db")
     rows = list(con.execute(
         "SELECT id, uid, seq, msg_idx, src, text, hash FROM chunks ORDER BY id"))
     assert [r[0] for r in rows] == [1, 2, 3]
     assert rows[0][1:5] == ("teams:1on1/a.html:0", 0, 0, "teams")
-    assert rows[1][2] == 1                              # zweiter Chunk derselben Nachricht
+    assert rows[1][2] == 1                              # second chunk of the same message
     assert rows[2][5] == "hier die neue Nachricht."
-    assert all(r[6] for r in rows)                      # Hashes gespeichert
+    assert all(r[6] for r in rows)                      # hashes stored
 
     people = set(con.execute("SELECT src, who, messages FROM people"))
     assert people == {("teams", "Alice", 1), ("outlook", "Alice Example", 1)}
 
-    # FTS5-Volltext: Text und Titel sind durchsuchbar, rowid == chunks.id
+    # FTS5 full text: text and title are searchable, rowid == chunks.id
     hit = [r[0] for r in con.execute(
         "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'bericht'")]
     assert hit == [1]
@@ -168,10 +168,10 @@ def test_write_db_ersetzt_vorhandene_db(tmp_path):
 
 
 def _speichere(store, V, modell="test"):
-    """Vektoren schreiben UND in info.json eintragen – wie build_index.
+    """Write vectors AND record them in info.json – like build_index.
 
-    Ohne den Eintrag findet sie niemand: gültig ist, was info.json nennt,
-    nicht was im Ordner liegt (store_layout).
+    Without the entry nobody finds them: what info.json names is valid,
+    not what lies in the folder (store_layout).
     """
     V, pfad = rag_index.save_vectors(store, V)
     rag_index.write_info(store, modell, V.shape[1], len(V), pfad)
@@ -184,8 +184,8 @@ def test_save_vectors_normalisiert_und_speichert_float16(tmp_path):
     stored = np.load(pfad)
     assert stored.dtype == np.float16
     assert np.allclose(stored[0].astype("float32"), [0.6, 0.8], atol=1e-3)
-    assert np.all(stored[1] == 0)                       # Nullvektor: keine Division durch 0
-    assert np.array_equal(out, stored)                  # Rückgabe == gespeicherte Matrix
+    assert np.all(stored[1] == 0)                       # zero vector: no division by 0
+    assert np.array_equal(out, stored)                  # return value == stored matrix
     assert not list(tmp_path.glob("*.tmp"))
     assert pfad.name != store_layout.LEGACY, (
         "Der feste Name von früher ist genau der, über den nicht mehr geschrieben werden darf")
@@ -201,16 +201,16 @@ def test_write_info(tmp_path):
 
 
 def test_write_info_ohne_vektoren_sagt_es_ausdruecklich(tmp_path):
-    """Der Eintrag steht auch dann da, wenn es keine Vektoren gibt – daran
-    unterscheidet store_layout einen Lauf ohne Embeddings von einem Store, der
-    noch vor der Umstellung gebaut wurde."""
+    """The entry is present even when there are no vectors – this is how
+    store_layout tells a run without embeddings apart from a store built
+    before the changeover."""
     rag_index.write_info(tmp_path, None, 0, 7)
     info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))
     assert "vectors" in info and info["vectors"] is None
 
 
 # --------------------------------------------------------------------------
-# Alten Store lesen (inkrementelle Läufe)
+# Reading the old store (incremental runs)
 # --------------------------------------------------------------------------
 def test_load_old_store_und_vectors_roundtrip(tmp_path):
     chunks = [make_chunk(uid="u:0", text="eins"), make_chunk(uid="u:1", text="zwei")]
@@ -218,7 +218,7 @@ def test_load_old_store_und_vectors_roundtrip(tmp_path):
     _speichere(tmp_path, np.array([[1.0, 0.0], [0.0, 2.0]], dtype="float32"))
 
     hashes, V = rag_index._load_old_store(tmp_path)
-    assert hashes == [c["hash"] for c in chunks]        # in id-Reihenfolge
+    assert hashes == [c["hash"] for c in chunks]        # in id order
     assert V.shape == (2, 2)
 
     old = rag_index.load_old_vectors(tmp_path)
@@ -248,7 +248,7 @@ def test_load_old_vectors_unlesbarer_store(tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------
-# embed() – Ollama-Aufrufe (requests.post gemockt)
+# embed() – Ollama calls (requests.post mocked)
 # --------------------------------------------------------------------------
 def test_embed_sendet_batch_und_liefert_embeddings(monkeypatch):
     seen = {}
@@ -298,7 +298,7 @@ def test_embed_serverfehler_wird_durchgereicht(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# build_index – Ende-zu-Ende mit Mini-Export (embed gemockt)
+# build_index – end to end with a mini export (embed mocked)
 # --------------------------------------------------------------------------
 TEAMS_HTML = """<html><body>
 <h1>Projekt Alpha</h1>
@@ -347,18 +347,18 @@ def _build(tmp_path, monkeypatch, **kw):
 def test_build_index_erzeugt_kompletten_store(tmp_path, monkeypatch):
     _make_exports(tmp_path)
     (n, neu, dim), calls, store = _build(tmp_path, monkeypatch)
-    assert (n, neu, dim) == (3, 3, DIM)                 # 2 Teams-Nachrichten + 1 Mail
-    # Zwei statt drei: „Danke!" ist zu kurz für eine Bedeutung und bekommt
-    # einen Nullvektor, statt eine Anfrage zu kosten.
+    assert (n, neu, dim) == (3, 3, DIM)                 # 2 Teams messages + 1 mail
+    # Two instead of three: "Danke!" is too short to carry meaning and gets
+    # a zero vector instead of costing a request.
     assert sum(len(c) for c in calls) == 2
 
     V = np.load(store_layout.vectors_path(store))
     assert V.dtype == np.float16 and V.shape == (3, DIM)
     norms = np.linalg.norm(V.astype("float32"), axis=1)
-    # Normalisiert – außer den zu kurzen Chunks, die bewusst null bleiben.
+    # Normalised – except the too-short chunks, which stay zero on purpose.
     assert np.allclose(norms[norms > 0], 1.0, atol=1e-2)
 
-    # Zeile 0 gehört zum ersten Teams-Chunk (chunks.id = 1)
+    # Row 0 belongs to the first Teams chunk (chunks.id = 1)
     erwartet = np.asarray(det_vec("Projekt Alpha\nDer Bericht zum Quartal ist fertig und liegt im geteilten Ordner."), dtype="float32")
     erwartet /= np.linalg.norm(erwartet)
     assert np.allclose(V[0].astype("float32"), erwartet, atol=1e-2)
@@ -380,14 +380,14 @@ def test_build_index_inkrementell_und_nach_aenderung(tmp_path, monkeypatch):
     assert neu1 == 3
     V1 = np.load(store_layout.vectors_path(store)).astype("float32")
 
-    # Zweiter Lauf ohne Änderung: nichts wird neu eingebettet
+    # Second run without changes: nothing is re-embedded
     (_, neu2, _), calls2, _ = _build(tmp_path, monkeypatch)
     assert neu2 == 0
-    assert calls2 == []                                 # kein einziger embed-Aufruf
+    assert calls2 == []                                 # not a single embed call
     V2 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V1, V2, atol=1e-3)
 
-    # Eine Mail ändern: nur dieser eine Chunk wird neu eingebettet
+    # Change one mail: only this one chunk is re-embedded
     (tmp_path / "outlook_export" / "inbox" / "mail.eml").write_bytes(
         _eml(body="Ein komplett neuer Inhalt, lang genug zum Einbetten."))
     (_, neu3, _), calls3, _ = _build(tmp_path, monkeypatch)
@@ -395,7 +395,7 @@ def test_build_index_inkrementell_und_nach_aenderung(tmp_path, monkeypatch):
     assert sum(len(c) for c in calls3) == 1
     assert calls3[0] == ["Testmail\nEin komplett neuer Inhalt, lang genug zum Einbetten."]
     V3 = np.load(store_layout.vectors_path(store)).astype("float32")
-    assert np.allclose(V3[:2], V1[:2], atol=1e-3)       # Teams-Zeilen wiederverwendet
+    assert np.allclose(V3[:2], V1[:2], atol=1e-3)       # Teams rows reused
 
     con = sqlite3.connect(store / "corpus.db")
     rows = list(con.execute("SELECT text FROM chunks WHERE src = 'outlook'"))
@@ -407,12 +407,12 @@ def test_build_index_bettet_identische_texte_nur_einmal_ein(tmp_path, monkeypatc
     outlook = tmp_path / "outlook_export"
     (outlook / "inbox").mkdir(parents=True)
     (outlook / "inbox" / "a.eml").write_bytes(_eml())
-    (outlook / "inbox" / "b.eml").write_bytes(_eml())   # identischer Inhalt, andere Datei
+    (outlook / "inbox" / "b.eml").write_bytes(_eml())   # identical content, different file
     (n, neu, _), calls, store = _build(tmp_path, monkeypatch)
     assert (n, neu) == (2, 2)
-    assert sum(len(c) for c in calls) == 1              # nur ein eindeutiger Text
+    assert sum(len(c) for c in calls) == 1              # only one distinct text
     V = np.load(store_layout.vectors_path(store))
-    assert np.array_equal(V[0], V[1])                   # Vektor auf beide Chunks verteilt
+    assert np.array_equal(V[0], V[1])                   # vector shared across both chunks
 
 
 def test_build_index_batcht_embedding_aufrufe(tmp_path, monkeypatch):
@@ -424,21 +424,21 @@ def test_build_index_batcht_embedding_aufrufe(tmp_path, monkeypatch):
                  body=f"Inhalt {i} mit genug Text, um eingebettet zu werden."))
     (n, neu, _), calls, _ = _build(tmp_path, monkeypatch, batch=2)
     assert (n, neu) == (5, 5)
-    assert sorted(len(c) for c in calls) == [1, 2, 2]   # 5 Texte in Batches zu 2
+    assert sorted(len(c) for c in calls) == [1, 2, 2]   # 5 texts in batches of 2
 
 
 def test_zu_kurze_chunks_bekommen_keinen_vektor(tmp_path, monkeypatch):
-    """22 % eines echten Archivs sind „ok", „danke", „bis morgen".
+    """22 % of a real archive are "ok", "danke", "bis morgen".
 
-    Sie kosten zusammen eine Viertelstunde je Lauf und tragen keine Bedeutung,
-    nach der jemand sucht. Sie bleiben im Index und in der Textsuche; nur ihr
-    Vektor bleibt null – und Kosinus 0 liegt unter jeder Untergrenze, sie
-    können also gar nicht als Bedeutungstreffer erscheinen.
+    Together they cost a quarter of an hour per run and carry no meaning
+    anyone searches for. They stay in the index and in the text search;
+    only their vector stays zero – and cosine 0 lies below every threshold,
+    so they cannot appear as semantic hits at all.
     """
     _make_exports(tmp_path)
     (n, neu, dim), calls, store = _build(tmp_path, monkeypatch)
     assert (n, neu) == (3, 3)
-    assert sum(len(c) for c in calls) == 2          # „Danke!" war nicht dabei
+    assert sum(len(c) for c in calls) == 2          # "Danke!" was not among them
     assert all("Danke" not in t for c in calls for t in c)
 
     con = sqlite3.connect(store / "corpus.db")
@@ -446,23 +446,23 @@ def test_zu_kurze_chunks_bekommen_keinen_vektor(tmp_path, monkeypatch):
     con.close()
     V = np.load(store_layout.vectors_path(store))
     assert not V[zeile - 1].any(), "Der kurze Chunk hat doch einen Vektor"
-    assert V[zeile - 1].shape == V[0].shape        # Form bleibt, nur der Inhalt ist null
-    assert V.shape[0] == 3                         # und die Matrix passt weiter zum Index
+    assert V[zeile - 1].shape == V[0].shape        # shape stays, only the content is zero
+    assert V.shape[0] == 3                         # and the matrix still fits the index
 
 
 def test_lange_texte_werden_nach_laenge_gestapelt(tmp_path, monkeypatch):
-    """Ein Stapel wird auf seine längste Sequenz aufgefüllt – gemischte Längen
-    zahlen diese Füllung bei jedem Stück mit."""
+    """A batch is padded to its longest sequence – mixed lengths pay that
+    padding on every piece."""
     outlook = tmp_path / "outlook_export"
     (outlook / "inbox").mkdir(parents=True)
     for i, laenge in enumerate((900, 60, 600, 80)):
         (outlook / "inbox" / f"m{i}.eml").write_bytes(
             _eml(subject=f"Mail {i}", body="wort " * (laenge // 5)))
     _, calls, _ = _build(tmp_path, monkeypatch, batch=2)
-    # Nicht die Reihenfolge der Antworten prüfen – die ist bei zwei Arbeitern
-    # nicht die der Anfragen. Was die Sortierung bewirkt, steht INNERHALB eines
-    # Stapels: dort liegen die Längen dicht beieinander, statt dass ein kurzer
-    # Text die Füllung eines langen mitbezahlt.
+    # Do not check the order of the responses – with two workers it is not
+    # the order of the requests. What the sorting achieves shows WITHIN a
+    # batch: lengths lie close together there, instead of a short text
+    # paying for the padding of a long one.
     spannen = [max(map(len, c)) - min(map(len, c)) for c in calls if len(c) > 1]
     assert spannen, "keine Stapel mit mehr als einem Text"
     gesamt = max(len(t) for c in calls for t in c) - min(len(t) for c in calls for t in c)
@@ -471,13 +471,13 @@ def test_lange_texte_werden_nach_laenge_gestapelt(tmp_path, monkeypatch):
 
 
 def test_build_index_ohne_inhalte_bricht_ab(tmp_path):
-    with pytest.raises(SystemExit, match="Keine Inhalte"):
+    with pytest.raises(SystemExit, match="No content found"):
         rag_index.build_index(str(tmp_path / "fehlt"), str(tmp_path / "auch_fehlt"),
                               str(tmp_path / "store"), "m", "http://x")
 
 
 # --------------------------------------------------------------------------
-# main() – Argument-Verdrahtung
+# main() – argument wiring
 # --------------------------------------------------------------------------
 def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
     seen = {}
@@ -491,11 +491,13 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
 
     monkeypatch.setattr(rag_index, "build_index", fake_build)
     monkeypatch.setattr(sys, "argv",
-                        ["rag_index.py", "t_dir", "o_dir", "--store", "s", "--batch", "7"])
+                        ["rag_index.py", "t_dir", "o_dir", "od_dir",
+                         "--store", "s", "--batch", "7",
+                         "--sharepoint", "sp", "--pages", "pg", "--planner", "pl"])
     rag_index.main()
     assert seen["args"] == ("t_dir", "o_dir", "s", rag_index.DEFAULT_MODEL,
                             rag_index.DEFAULT_OLLAMA, 7, True)
-    # Statt Prosa nur das strukturierte Ergebnis – die App baut die Logzeile.
+    # Only the structured result instead of prose – the app builds the log line.
     fazit = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()]
     fazit = [f for f in fazit if f is not None]
     assert fazit == [{"new": 1, "unchanged": 2, "extra": {"chunks": 3}}]
@@ -511,17 +513,20 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
         return 3, 0, 0
 
     monkeypatch.setattr(rag_index, "build_index", fake_build)
-    monkeypatch.setattr(sys, "argv", ["rag_index.py", "--no-embeddings"])
+    monkeypatch.setattr(sys, "argv",
+                        ["rag_index.py", "t", "o", "od", "--no-embeddings",
+                         "--store", "s", "--sharepoint", "sp",
+                         "--pages", "pg", "--planner", "pl"])
     rag_index.main()
     assert seen["embeddings"] is False
-    # Den Modus kennt die App selbst; die Zahlen kommen als Ergebnis-Ereignis.
+    # The app knows the mode itself; the numbers arrive as a result event.
     out = capsys.readouterr().out
     assert progress.lies_ergebnis(out.splitlines()[-1]) == {
         "new": 0, "unchanged": 3, "extra": {"chunks": 3}}
 
 
 # --------------------------------------------------------------------------
-# Lexikalischer Index (--no-embeddings): ohne Ollama, ohne Vektoren
+# Lexical index (--no-embeddings): no Ollama, no vectors
 # --------------------------------------------------------------------------
 def test_build_index_ohne_embeddings_schreibt_nur_die_db(tmp_path, monkeypatch):
     _make_exports(tmp_path)
@@ -533,25 +538,25 @@ def test_build_index_ohne_embeddings_schreibt_nur_die_db(tmp_path, monkeypatch):
 
     assert (n, neu, dim) == (3, 0, 0)
     assert (store / "corpus.db").exists()
-    assert store_layout.vectors_path(store) is None         # nichts eingebettet
+    assert store_layout.vectors_path(store) is None         # nothing embedded
 
     con = sqlite3.connect(store / "corpus.db")
     treffer = list(con.execute(
         "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'Bericht'"))
     con.close()
-    assert treffer                                       # Volltextsuche funktioniert
+    assert treffer                                       # full-text search works
 
     info = json.loads((store / "info.json").read_text(encoding="utf-8"))
     assert info["chunks"] == 3 and info["dim"] == 0 and info["model"] is None
 
 
 def test_build_index_ohne_embeddings_rettet_vorhandene_vektoren(tmp_path, monkeypatch):
-    """Der lexikalische Lauf darf teuer berechnete Embeddings nicht wegwerfen.
+    """The lexical run must not throw away expensively computed embeddings.
 
-    vectors.npy hängt zeilenweise an corpus.db; wird die DB ohne Vektoren neu
-    geschrieben, passt die Zuordnung nicht mehr. Deshalb werden sie vorher
-    hash-indiziert gesichert – und ein späterer Lauf mit Ollama muss nichts
-    davon erneut einbetten.
+    vectors.npy is tied row by row to corpus.db; if the DB is rewritten
+    without vectors, the mapping no longer fits. So they are saved
+    hash-indexed beforehand – and a later run with Ollama has to re-embed
+    none of it.
     """
     _make_exports(tmp_path)
     (_, neu1, _), _, store = _build(tmp_path, monkeypatch)
@@ -564,10 +569,10 @@ def test_build_index_ohne_embeddings_rettet_vorhandene_vektoren(tmp_path, monkey
     assert store_layout.vectors_path(store) is None
     assert (store / rag_index.STALE_VECTORS).exists()
 
-    # Wieder mit Ollama: alles kommt aus der Sicherung, kein neuer Aufruf
+    # With Ollama again: everything comes from the backup, no new call
     (_, neu2, _), calls2, _ = _build(tmp_path, monkeypatch)
     assert neu2 == 0 and calls2 == []
-    assert not (store / rag_index.STALE_VECTORS).exists()   # wird nicht mehr gebraucht
+    assert not (store / rag_index.STALE_VECTORS).exists()   # no longer needed
     V2 = np.load(store_layout.vectors_path(store)).astype("float32")
     assert np.allclose(V1, V2, atol=1e-3)
 
@@ -585,28 +590,28 @@ def test_load_stale_ignoriert_kaputte_datei(tmp_path, capsys):
 
 
 # --------------------------------------------------------------------------
-# Indizieren, während jemand den Index offen hat
+# Indexing while someone has the index open
 #
-# Aus der Praxis (Windows): der MCP-Server hält die Vektordatei per mmap offen,
-# solange er läuft. os.replace auf eine abgebildete Datei endet dort mit
-# „Zugriff verweigert" – der Lauf starb in der letzten Zeile, nachdem er sieben
-# Minuten lang alles eingebettet hatte, und zwar zuverlässig bei jedem Versuch.
+# From the field (Windows): the MCP server holds the vector file open via
+# mmap for as long as it runs. os.replace on a mapped file ends there with
+# "access denied" – the run died on its last line after embedding
+# everything for seven minutes, reliably on every attempt.
 #
-# Nachstellen lässt sich diese Sperre auf macOS und Linux nicht: dort gelingt
-# das Umbenennen. Geprüft wird deshalb die Eigenschaft, die den Fehler
-# unmöglich macht, und die gilt überall: ein Lauf fasst die Datei, die ein
-# Leser geöffnet hat, überhaupt nicht mehr an.
+# This lock cannot be reproduced on macOS and Linux: renaming succeeds
+# there. So the test checks the property that makes the error impossible,
+# and that holds everywhere: a run no longer touches the file a reader
+# has open at all.
 # --------------------------------------------------------------------------
 def test_ein_lauf_ruehrt_die_offene_vektordatei_nicht_an(tmp_path, monkeypatch):
     _make_exports(tmp_path)
     (_, _, _), _, store = _build(tmp_path, monkeypatch)
 
-    # Ein Leser wie der MCP-Server: Datei auf, Abbildung offen, bleibt so.
+    # A reader like the MCP server: file open, mapping open, stays that way.
     offen = store_layout.vectors_path(store)
     leser = np.load(offen, mmap_mode="r")
     vorher = np.asarray(leser).copy()
 
-    # Neuer Inhalt, zweiter Lauf – der Schritt, der unter Windows starb.
+    # New content, second run – the step that died on Windows.
     (tmp_path / "teams_export" / "1on1" / "neu__x.html").write_text(
         TEAMS_HTML.replace("Rechnung 4711", "Rechnung 4712"), encoding="utf-8")
     _build(tmp_path, monkeypatch)
@@ -614,10 +619,10 @@ def test_ein_lauf_ruehrt_die_offene_vektordatei_nicht_an(tmp_path, monkeypatch):
     jetzt = store_layout.vectors_path(store)
     assert jetzt is not None and jetzt.name != offen.name, \
         "der Lauf hat wieder dieselbe Datei benutzt – unter Windows scheitert er hier"
-    # Der Leser merkt vom Lauf nichts: was er in der Hand hat, gilt unverändert
-    # weiter. (Sein Pfad ist auf macOS/Linux inzwischen gelöscht – die Abbildung
-    # hält das Inode am Leben. Unter Windows ginge das Löschen nicht, dann bleibt
-    # die Datei bis zum nächsten Lauf liegen. Beides ist in Ordnung.)
+    # The reader notices nothing of the run: what it holds stays valid
+    # unchanged. (Its path is by now deleted on macOS/Linux – the mapping
+    # keeps the inode alive. On Windows the delete would fail and the file
+    # stays until the next run. Both are fine.)
     assert np.array_equal(np.asarray(leser), vorher), \
         "der Lauf hat der offenen Abbildung den Boden unter den Füßen weggezogen"
     assert json.loads((store / "info.json").read_text(encoding="utf-8"))["vectors"] \
@@ -625,7 +630,7 @@ def test_ein_lauf_ruehrt_die_offene_vektordatei_nicht_an(tmp_path, monkeypatch):
 
 
 def test_die_vorige_datei_wird_weggeraeumt(tmp_path, monkeypatch):
-    """Sonst wüchse der Store mit jedem Lauf um eine volle Matrix."""
+    """Otherwise the store would grow by a full matrix with every run."""
     _make_exports(tmp_path)
     _build(tmp_path, monkeypatch)
     _build(tmp_path, monkeypatch)
@@ -635,14 +640,14 @@ def test_die_vorige_datei_wird_weggeraeumt(tmp_path, monkeypatch):
 
 
 def test_store_von_frueher_wird_uebernommen(tmp_path, monkeypatch):
-    """Ein Index aus 4.1.0 oder älter trägt seine Vektoren unter dem festen
-    Namen und kennt den Eintrag in info.json nicht. Der erste Lauf danach muss
-    sie wiederverwenden statt alles neu einzubetten – und den alten Namen
-    hinterher abräumen."""
+    """A legacy index carries its vectors under the fixed name and does not
+    know the entry in info.json. The first run after that must reuse them
+    instead of re-embedding everything – and clear away the old name
+    afterwards."""
     _make_exports(tmp_path)
     (_, _, _), _, store = _build(tmp_path, monkeypatch)
 
-    # Zurück auf den Stand von früher: fester Name, kein Eintrag.
+    # Back to the legacy state: fixed name, no entry.
     alt = store_layout.vectors_path(store)
     alt.replace(store / store_layout.LEGACY)
     info = json.loads((store / "info.json").read_text(encoding="utf-8"))

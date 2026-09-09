@@ -1,6 +1,6 @@
-"""Tests für outlook_export.py – Helfer, ICS/VCF-Erzeugung, DoneLog und
-Baum-Aufbau. Alles ohne Netzwerk: die Graph-Objekte werden durch Fakes ersetzt;
-die HTTP-Schicht selbst ist in test_graph_client.py abgedeckt."""
+"""Tests for outlook_export.py – helpers, ICS/VCF generation, DoneLog and
+tree building. All without network: the Graph objects are replaced by fakes;
+the HTTP layer itself is covered in test_graph_client.py."""
 
 import re
 from concurrent.futures import ThreadPoolExecutor
@@ -16,23 +16,23 @@ import progress
 
 
 def _unfold(text):
-    """RFC-Zeilenfaltung auflösen und in logische Zeilen zerlegen."""
+    """Undo RFC line folding and split into logical lines."""
     return text.replace("\r\n ", "").split("\r\n")
 
 
 @pytest.fixture(autouse=True)
 def _stop_zuruecksetzen():
-    """Globales STOP-Event nach jedem Test löschen (Modul-Zustand)."""
+    """Clear the global STOP event after every test (module state)."""
     yield
     outlook_export.STOP.clear()
 
 
 # --------------------------------------------------------------------------
-# Dateinamen- und Pfad-Helfer
+# Filename and path helpers
 # --------------------------------------------------------------------------
 def test_safe_ersetzt_verbotene_zeichen_und_kuerzt():
     assert outlook_export.safe('a\\b/c:d*e?f"g<h>i|j') == "a_b_c_d_e_f_g_h_i_j"
-    # Tab zählt zu den verbotenen Zeichen (-> "_"), Mehrfach-Leerzeichen kollabieren
+    # Tab counts as a forbidden character (-> "_"), multiple spaces collapse
     assert outlook_export.safe("  viel   Platz \t hier ") == "viel Platz _ hier"
     assert outlook_export.safe("  viel   Platz  hier ") == "viel Platz hier"
     assert outlook_export.safe("x" * 200) == "x" * 80
@@ -48,7 +48,7 @@ def test_short_id_ist_deterministisch_und_kurz():
     assert len(a) == 8
     assert re.fullmatch(r"[0-9a-f]{8}", a)
     assert a != outlook_export.short_id("abd")
-    # None wird wie leerer String behandelt
+    # None is treated like an empty string
     assert outlook_export.short_id(None) == outlook_export.short_id("")
 
 
@@ -56,7 +56,7 @@ def test_mail_filename_mit_datum_betreff_und_id():
     msg = {"id": "AAA", "subject": "Bericht: Q3/2025?",
            "receivedDateTime": "2025-07-07T10:00:00.0000000Z"}
     name = outlook_export.mail_filename(msg)
-    # Zeitstempel hängt von der lokalen Zeitzone ab -> nur das Format prüfen
+    # The timestamp depends on the local timezone -> check only the format
     assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{4}__", name)
     assert "Bericht_ Q3_2025_" in name
     assert name.endswith(f"__{outlook_export.short_id('AAA')}.eml")
@@ -68,11 +68,11 @@ def test_mail_filename_ohne_datum_und_ohne_betreff():
 
 
 def test_mail_filename_faellt_auf_sentdatetime_und_rohpraefix_zurueck():
-    # sentDateTime greift, wenn receivedDateTime fehlt
+    # sentDateTime kicks in when receivedDateTime is missing
     name = outlook_export.mail_filename({"id": "C", "subject": "x",
                                          "sentDateTime": "2025-01-02T03:04:05Z"})
     assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{4}__x__", name)
-    # Unparsebares Datum -> erste 10 Zeichen als Präfix
+    # Unparsable date -> first 10 characters as prefix
     name = outlook_export.mail_filename({"id": "D", "subject": "x",
                                          "receivedDateTime": "unfug-datum-99"})
     assert name.startswith("unfug-datu__x__")
@@ -85,7 +85,7 @@ def test_folder_params_beruecksichtigt_include_hidden(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Auswahl-Logik (Indizes, Standard-Ausschlüsse, Prompts)
+# Selection logic (indices, default exclusions, prompts)
 # --------------------------------------------------------------------------
 def test_is_default_skip_vergleicht_case_insensitive():
     assert outlook_export._is_default_skip({"folder": {"displayName": "Junk-E-Mail"}})
@@ -96,14 +96,14 @@ def test_is_default_skip_vergleicht_case_insensitive():
 
 
 def test_selected_categories_folgt_der_umgebung(monkeypatch):
-    """EXPORT_CATEGORIES bestimmt die Auswahl; ohne sie kommt alles.
+    """EXPORT_CATEGORIES determines the selection; without it, everything.
 
-    Rückfragen gibt es nicht mehr – die App ist der einzige Aufrufer, und
-    niemand sähe eine Frage, die ein Unterprozess stellt.
+    There are no interactive prompts – the app is the only caller, and
+    nobody would see a question asked by a subprocess.
     """
     monkeypatch.setenv("EXPORT_CATEGORIES", "mail;CONTACTS")
     assert outlook_export.selected_categories() == {"mail", "contacts"}
-    # Nur Unbekanntes zählt wie „nicht gesetzt" – dann greift die Vorgabe.
+    # Only unknown values count as "not set" – then the default applies.
     monkeypatch.setenv("EXPORT_CATEGORIES", "quatsch")
     assert outlook_export.selected_categories() == {"mail", "calendar", "contacts"}
     monkeypatch.delenv("EXPORT_CATEGORIES")
@@ -111,12 +111,12 @@ def test_selected_categories_folgt_der_umgebung(monkeypatch):
 
 
 def test_kalender_eintraege_tragen_den_ablagepfad():
-    """Der Pfad ist der, unter dem der Kalender auch auf der Platte landet."""
+    """The path is the one under which the calendar also lands on disk."""
     e = outlook_export.kalender_eintraege(
         [{"id": "a", "name": "Team/Projekt"}, {"id": "b", "name": "A", "isDefaultCalendar": True}])
     assert [x["pfad"] for x in e] == ["kalender/Team_Projekt", "kalender/A"]
     assert [x["standard"] for x in e] == [False, True]
-    assert e[0]["name"] == "Team/Projekt"     # der echte Name bleibt lesbar
+    assert e[0]["name"] == "Team/Projekt"     # the real name stays readable
 
 
 def test_kalender_ohne_regeln_nur_der_standard(monkeypatch):
@@ -133,7 +133,8 @@ def test_kalender_regeln_schlagen_die_vorgabe(monkeypatch):
     daten = {"ordner": outlook_export.kalender_eintraege(
         [{"id": "a", "name": "B"}, {"id": "b", "name": "A", "isDefaultCalendar": True}])}
     gewaehlt = folders.gewaehlt(daten, outlook_export.kalender_regeln(daten))
-    # Ohne Ausschluss gilt "alles" – die Regel nimmt nichts weg, sie bestätigt nur.
+    # Without an exclusion "everything" applies – the rule takes nothing
+    # away, it merely confirms.
     assert [e["name"] for e in gewaehlt] == ["B", "A"]
     monkeypatch.setenv("CALENDAR_RULES", "- kalender/**\n+ kalender/B")
     gewaehlt = folders.gewaehlt(daten, outlook_export.kalender_regeln(daten))
@@ -141,7 +142,7 @@ def test_kalender_regeln_schlagen_die_vorgabe(monkeypatch):
 
 
 def test_waehle_kalender_holt_die_liste_einmalig(tmp_path, monkeypatch):
-    """Fehlt calendars.json, wird sie einmal geholt – danach entscheidet die Datei."""
+    """If calendars.json is missing it is fetched once – then the file decides."""
     monkeypatch.delenv("CALENDAR_RULES", raising=False)
     monkeypatch.setattr(outlook_export.settings, "value", lambda *a, **kw: None)
     rufe = []
@@ -158,12 +159,12 @@ def test_waehle_kalender_holt_die_liste_einmalig(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Token aus Datei/Umgebung
+# Token from file/environment
 # --------------------------------------------------------------------------
 def test_load_pasted_token_aus_env_und_datei(tmp_path, monkeypatch):
-    # Beides umbiegen: seit auth.py sucht die Funktion neben dem Aufruf UND im
-    # Datenordner. Ohne die zweite Zeile fände sie das gx_token.txt des Repos –
-    # der Test hinge dann an der Reihenfolge der Testläufe.
+    # Redirect both: the function looks next to the call AND in the data
+    # directory. Without the second line it would find the repo's
+    # gx_token.txt – the test would then hang on the order of test runs.
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(tmp_path))
     import settings
@@ -182,7 +183,7 @@ def test_load_pasted_token_aus_env_und_datei(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Text-, Escaping- und Faltungs-Helfer (ICS/VCF)
+# Text, escaping and folding helpers (ICS/VCF)
 # --------------------------------------------------------------------------
 def test_plain_text_entfernt_html_und_kollabiert_whitespace():
     body = {"contentType": "html",
@@ -192,7 +193,7 @@ def test_plain_text_entfernt_html_und_kollabiert_whitespace():
     assert "alert" not in out and "p{}" not in out and "<" not in out
     assert "Hallo Welt" in out
     assert "& mehr Zeile" in out
-    # Text-Body bleibt bis auf Whitespace unangetastet
+    # A text body stays untouched apart from whitespace
     assert outlook_export._plain_text({"contentType": "text", "content": " a \n b "}) == "a b"
     assert outlook_export._plain_text(None) == ""
 
@@ -212,20 +213,20 @@ def test_fold_haelt_75_oktett_grenze_und_ist_umkehrbar():
     line = "DESCRIPTION:" + "ä" * 100 + "x" * 50
     folded = outlook_export._fold(line)
     assert "\r\n " in folded
-    # Jede physische Zeile bleibt unter der RFC-Grenze (75 Oktette ohne CRLF)
+    # Every physical line stays under the RFC limit (75 octets without CRLF)
     for part in folded.split("\r\n"):
         assert len(part.encode("utf-8")) <= 75
-    # Entfalten stellt das Original wieder her
+    # Unfolding restores the original
     assert folded.replace("\r\n ", "") == line
-    # Kurze Zeilen bleiben unverändert
+    # Short lines stay unchanged
     assert outlook_export._fold("SUMMARY:kurz") == "SUMMARY:kurz"
 
 
 def test_graph_dt_parst_graph_zeitstempel():
-    # 7 Nachkommastellen (Graph-Format) werden auf 6 gekürzt, "Z" entfernt
+    # 7 fractional digits (Graph format) are trimmed to 6, "Z" removed
     assert outlook_export._graph_dt("2025-06-01T12:00:00.0000000Z") == datetime(2025, 6, 1, 12)
     assert outlook_export._graph_dt("2025-06-01T12:30:45") == datetime(2025, 6, 1, 12, 30, 45)
-    # Fallback über strptime auf die ersten 19 Zeichen
+    # Fallback via strptime on the first 19 characters
     assert outlook_export._graph_dt("2025-06-01T12:00:00+9999") == datetime(2025, 6, 1, 12)
     assert outlook_export._graph_dt("") is None
     assert outlook_export._graph_dt(None) is None
@@ -244,7 +245,7 @@ def test_ics_dt_und_stamp_formate():
 
 
 # --------------------------------------------------------------------------
-# RRULE-Aufbau
+# RRULE construction
 # --------------------------------------------------------------------------
 def test_build_rrule_taeglich_mit_intervall_und_count():
     rec = {"pattern": {"type": "daily", "interval": 2},
@@ -280,7 +281,7 @@ def test_build_rrule_unbekannt_oder_leer():
 
 
 # --------------------------------------------------------------------------
-# ICS-Erzeugung (Termine)
+# ICS generation (events)
 # --------------------------------------------------------------------------
 EVENT = {
     "id": "ev1", "iCalUId": "uid-1", "subject": "Planung; Q3",
@@ -327,7 +328,7 @@ def test_build_ics_ganztaegig_abgesagt_und_frei():
     assert "STATUS:CANCELLED" in lines
     assert "TRANSP:TRANSPARENT" in lines
     assert "RRULE:FREQ=DAILY" in lines
-    # UID fällt auf die Ereignis-ID zurück
+    # UID falls back to the event id
     assert "UID:ev2" in lines
 
 
@@ -339,7 +340,7 @@ def test_build_ics_tentative_und_faltung():
     lines = _unfold(ics)
     assert "STATUS:TENTATIVE" in lines
     assert "DESCRIPTION:" + "Ä" * 200 in lines
-    # Alle physischen Zeilen unter der 75-Oktett-Grenze
+    # All physical lines under the 75-octet limit
     for part in ics.split("\r\n"):
         assert len(part.encode("utf-8")) <= 75
 
@@ -355,7 +356,7 @@ def test_event_filename():
 
 
 # --------------------------------------------------------------------------
-# VCF-Erzeugung (Kontakte)
+# VCF generation (contacts)
 # --------------------------------------------------------------------------
 CONTACT = {
     "id": "c1", "displayName": "Alice Example", "givenName": "Alice",
@@ -382,7 +383,7 @@ def test_build_vcf_vollstaendiger_kontakt():
     assert "TEL;TYPE=CELL,VOICE:+49 170 3" in lines
     assert "NOTE:Zeile1\\nZeile2" in lines
     assert "UID:c1" in lines
-    # Leere Telefonnummern und E-Mail-Einträge ohne Adresse werden übergangen
+    # Empty phone numbers and e-mail entries without an address are skipped
     assert sum(1 for x in lines if x.startswith("EMAIL")) == 1
     assert sum(1 for x in lines if x.startswith("TEL;TYPE=WORK")) == 1
 
@@ -402,7 +403,7 @@ def test_contact_filename_varianten():
 
 
 # --------------------------------------------------------------------------
-# DoneLog (Resume-Log in der state.db)
+# DoneLog (resume log in state.db)
 # --------------------------------------------------------------------------
 def _donelog(tmp_path):
     return outlook_export.DoneLog(state_db.StateDb(tmp_path))
@@ -420,19 +421,8 @@ def test_donelog_roundtrip_und_is_done(tmp_path):
     log2 = _donelog(tmp_path)
     assert log2.done == {"m1": "a/x.eml", "m2": "a/fehlt.eml"}
     assert log2.is_done(tmp_path, "m1")
-    assert not log2.is_done(tmp_path, "m2")   # Zieldatei existiert nicht
-    assert not log2.is_done(tmp_path, "m3")   # unbekannte ID
-    log2.close()
-
-
-def test_donelog_remap_schreibt_neu_und_bleibt_beschreibbar(tmp_path):
-    log = _donelog(tmp_path)
-    log.mark("m1", "Alt/x.eml")
-    log.remap(lambda rel: f"E-Mail/{rel}")
-    log.mark("m2", "E-Mail/y.eml")   # Anhängen nach remap funktioniert weiter
-    log.close()
-    log2 = _donelog(tmp_path)
-    assert log2.done == {"m1": "E-Mail/Alt/x.eml", "m2": "E-Mail/y.eml"}
+    assert not log2.is_done(tmp_path, "m2")   # target file does not exist
+    assert not log2.is_done(tmp_path, "m3")   # unknown id
     log2.close()
 
 
@@ -448,14 +438,14 @@ def test_donelog_paralleles_markieren(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Ordnerbaum und Mail-Iteration (mit Fake-Graph)
+# Folder tree and mail iteration (with fake Graph)
 # --------------------------------------------------------------------------
 class FakeTreeGraph:
-    """Stellt paged() für /me/mailFolders und childFolders aus Testdaten bereit."""
+    """Provides paged() for /me/mailFolders and childFolders from test data."""
 
     def __init__(self, roots, children):
         self.roots = roots
-        self.children = children   # dict: folder-id -> Kinderliste
+        self.children = children   # dict: folder id -> list of children
 
     def paged(self, url, params=None, extra_headers=None):
         if url.endswith("/me/mailFolders"):
@@ -475,9 +465,9 @@ def test_build_tree_erfasst_teilbaeume_und_zaehlt_elemente():
     t = tops[0]
     assert t["rel"] == "E-Mail/Posteingang"
     assert t["nfolders"] == 3
-    assert t["items"] == 8   # 5 + 2 + 1 rekursiv
+    assert t["items"] == 8   # 5 + 2 + 1 recursively
     rels = [rel for _, rel in t["subtree"]]
-    # Unsichere Zeichen im Ordnernamen werden ersetzt
+    # Unsafe characters in the folder name are replaced
     assert rels == ["E-Mail/Posteingang", "E-Mail/Posteingang/Sub_Ordner",
                     "E-Mail/Posteingang/Sub_Ordner/Tief"]
     assert tops[1]["nfolders"] == 1 and tops[1]["items"] == 1
@@ -499,7 +489,7 @@ def test_list_children_faengt_fehler_ab_und_reicht_tokenexpired_durch():
 
 
 class FakeMsgGraph:
-    """paged() liefert vorbereitete Nachrichtenlisten für Mail-Ordner."""
+    """paged() delivers prepared message lists for mail folders."""
 
     def __init__(self, msgs):
         self.msgs = msgs
@@ -531,7 +521,7 @@ def test_iter_messages_ueberspringt_erledigte_und_legt_ordner_an(tmp_path):
 
 
 def test_iter_messages_ueberspringt_ordner_mit_netzwerkfehler(tmp_path):
-    """Ein nicht listbarer Ordner beendet nicht den ganzen Lauf."""
+    """A folder that cannot be listed does not end the whole run."""
     kaputt = {"id": "f1", "displayName": "Ablage"}
     heil = {"id": "f2", "displayName": "Posteingang"}
     selected = [{"subtree": [(kaputt, "E-Mail/Ablage"), (heil, "E-Mail/Posteingang")]}]
@@ -548,7 +538,7 @@ def test_iter_messages_ueberspringt_ordner_mit_netzwerkfehler(tmp_path):
     got = list(outlook_export.iter_messages_to_export(
         HalbKaputt(), tmp_path, done, stats, selected))
     done.close()
-    assert [mid for mid, _ in got] == ["m1", "m2"]   # danach wird weitergemacht
+    assert [mid for mid, _ in got] == ["m1", "m2"]   # afterwards work continues
     assert stats["folder_errors"] == 1
 
 
@@ -559,7 +549,7 @@ def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
     class Abgelaufen:
         def paged(self, url, params=None, extra_headers=None):
             raise outlook_export.TokenExpired()
-            yield   # pragma: no cover – macht paged zum Generator
+            yield   # pragma: no cover – makes paged a generator
 
     done = _donelog(tmp_path)
     with pytest.raises(outlook_export.TokenExpired):
@@ -569,10 +559,10 @@ def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Download-Worker und paralleler Treiber
+# Download worker and parallel driver
 # --------------------------------------------------------------------------
 class FakeExportGraph:
-    """paged() liefert Mails, get_bytes() den MIME-Inhalt (oder TokenExpired)."""
+    """paged() delivers mails, get_bytes() the MIME content (or TokenExpired)."""
 
     def __init__(self, msgs, fail=False):
         self.msgs = msgs
@@ -600,16 +590,16 @@ def test_download_one_schreibt_datei_und_markiert(tmp_path):
 
 def test_download_one_meldet_expired_stopped_und_fehler(tmp_path):
     done = _donelog(tmp_path)
-    # Token abgelaufen
+    # Token expired
     status, info = outlook_export.download_one(
         FakeExportGraph([], fail=True), tmp_path, done, "m1", "E-Mail/a.eml")
     assert (status, info) == ("expired", "m1")
-    # Schreibfehler (Zielordner fehlt) -> "error", nichts markiert
+    # Write error (target folder missing) -> "error", nothing marked
     status, info = outlook_export.download_one(
         FakeExportGraph([]), tmp_path, done, "m2", "fehlt/tief/a.eml")
     assert status == "error"
     assert not done.is_done(tmp_path, "m2")
-    # STOP gesetzt -> gar nichts tun
+    # STOP set -> do nothing at all
     outlook_export.STOP.set()
     status, info = outlook_export.download_one(
         FakeExportGraph([]), tmp_path, done, "m3", "E-Mail/b.eml")
@@ -647,13 +637,13 @@ def test_run_export_meldet_expired_und_setzt_stop(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Kalender- und Kontakte-Export (kompletter Ablauf mit Fake-Graph)
+# Calendar and contacts export (complete flow with fake Graph)
 # --------------------------------------------------------------------------
 def test_export_calendar_schreibt_ics_und_markiert(tmp_path):
     class KalGraph:
         def paged(self, url, params=None, extra_headers=None):
             assert "/me/calendars/cal1/events" in url
-            # Zeiten müssen per Prefer-Header in UTC angefordert werden
+            # Times must be requested in UTC via the Prefer header
             assert extra_headers == {"Prefer": 'outlook.timezone="UTC"'}
             yield EVENT
 
@@ -666,7 +656,7 @@ def test_export_calendar_schreibt_ics_und_markiert(tmp_path):
     assert len(files) == 1
     assert "SUMMARY:Planung\\; Q3" in files[0].read_text(encoding="utf-8")
     assert done.is_done(tmp_path, "ev1")
-    # Zweiter Lauf überspringt den Termin
+    # A second run skips the event
     outlook_export.export_calendar(KalGraph(), tmp_path, done, stats,
                                    [{"id": "cal1", "name": "Arbeit"}])
     assert stats == {"new": 1, "skipped": 1}
@@ -711,45 +701,9 @@ def test_list_calendars_sortiert_default_zuerst_und_faengt_fehler():
     assert outlook_export.list_calendars(Kaputt()) == []
 
 
-# --------------------------------------------------------------------------
-# Migration der Alt-Struktur nach E-Mail/
-# --------------------------------------------------------------------------
-def test_migrate_verschiebt_ordner_und_remappt_pfade(tmp_path):
-    (tmp_path / "Posteingang").mkdir()
-    (tmp_path / "Posteingang" / "m.eml").write_bytes(b"x")
-    (tmp_path / "kalender").mkdir()
-    done = _donelog(tmp_path)
-    done.mark("m1", "Posteingang/m.eml")
-    done.mark("e1", "kalender/t.ics")
-
-    outlook_export.migrate_to_email_subdir(tmp_path, done)
-    assert (tmp_path / "E-Mail" / "Posteingang" / "m.eml").exists()
-    assert not (tmp_path / "Posteingang").exists()
-    assert done.done["m1"] == "E-Mail/Posteingang/m.eml"
-    assert done.done["e1"] == "kalender/t.ics"   # reservierte Pfade unangetastet
-    done.close()
-
-    # Persistiert: neue DoneLog-Instanz liest die remappten Pfade
-    log2 = _donelog(tmp_path)
-    assert log2.done["m1"] == "E-Mail/Posteingang/m.eml"
-    log2.close()
-
-
-def test_migrate_ist_noop_bei_neuer_struktur(tmp_path):
-    (tmp_path / "E-Mail").mkdir()
-    (tmp_path / "kontakte").mkdir()
-    done = _donelog(tmp_path)
-    done.mark("m1", "E-Mail/Inbox/a.eml")
-    outlook_export.migrate_to_email_subdir(tmp_path, done)
-    assert done.done["m1"] == "E-Mail/Inbox/a.eml"
-    # Auch ein nicht existierender Ausgabeordner ist kein Fehler
-    outlook_export.migrate_to_email_subdir(tmp_path / "gibtsnicht", done)
-    done.close()
-
-
 def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
-    """Termine/Kontakte ohne id dürfen nicht unter dem Schlüssel None landen
-    (sonst greift Resume nie und sie werden bei jedem Lauf neu exportiert)."""
+    """Events/contacts without an id must not land under the key None
+    (otherwise resume never kicks in and they are re-exported every run)."""
     ev = {k: v for k, v in EVENT.items() if k not in ("id", "iCalUId")}
 
     class KalGraph:
@@ -777,14 +731,14 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
     done.close()
     assert stats == {"new": 1, "skipped": 1}
     assert len(list((tmp_path / "kontakte").glob("*.vcf"))) == 1
-    # Der Schlüssel None darf nie im Log stehen
+    # The key None must never appear in the log
     log = _donelog(tmp_path)
     assert None not in log.done and "None" not in log.done
     log.close()
 
 
 def test_default_skip_folders_stammt_aus_der_eingebauten_liste(monkeypatch):
-    """Ohne SKIP_FOLDERS und ohne app_config.json gilt die Liste im Skript."""
+    """Without SKIP_FOLDERS and without app_config.json the script's list applies."""
     import settings
     monkeypatch.delenv("SKIP_FOLDERS", raising=False)
     monkeypatch.setattr(settings, "load", lambda path=None: {})
@@ -793,10 +747,10 @@ def test_default_skip_folders_stammt_aus_der_eingebauten_liste(monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Verschwundene Mails erkennen
+# Detecting disappeared mails
 #
-# Die gefährliche Stelle ist die Verwechslung von gelöscht und verschoben – und
-# ein abgebrochenes Listing, das den halben Ordner für gelöscht erklärt.
+# The dangerous spot is confusing deleted with moved – and an aborted
+# listing that declares half the folder deleted.
 # --------------------------------------------------------------------------
 class _Done:
     def __init__(self, eintraege):
@@ -818,7 +772,7 @@ def test_verdaechtig_ist_was_fehlt():
 
 
 def test_nicht_gelistete_ordner_bleiben_unangetastet():
-    """Wer nur Kontakte exportiert, hat keine Aussage über den Posteingang."""
+    """Whoever exports only contacts has no statement about the inbox."""
     done = _Done({"m1": "E-Mail/Archiv/alt.eml"})
     b = _bestand(set(), ["E-Mail/Posteingang"])
     assert outlook_export.verdaechtige(done, b) == []
@@ -831,7 +785,7 @@ def test_umzug_zwischen_gelisteten_ordnern_ist_keine_loeschung():
 
 
 class _FakeGraph:
-    """get() wirft für gelöschte IDs einen 404, liefert sonst etwas."""
+    """get() raises a 404 for deleted ids, otherwise returns something."""
 
     def __init__(self, weg=(), fehler=()):
         self.weg, self.fehler = set(weg), set(fehler)
@@ -855,8 +809,8 @@ def test_nur_ein_404_zaehlt_als_geloescht():
 
 
 def test_unklares_gilt_als_nicht_geloescht():
-    """Drosselung oder Netzfehler: lieber eine Löschung später melden als eine
-    falsche jetzt."""
+    """Throttling or network error: better to report a deletion later than
+    a wrong one now."""
     g = _FakeGraph(fehler={"m1"})
     weg, verschoben = outlook_export.wirklich_weg(g, [("m1", "a.eml")])
     assert weg == [] and verschoben == 0
@@ -872,8 +826,8 @@ def test_grenze_bremst_die_nachfragen(capsys):
 
 
 def test_verschwunden_behaelt_den_ersten_zeitpunkt(tmp_path):
-    """Sonst wanderte das Datum bei jedem Lauf nach vorn und die Angabe
-    „seit wann“ wäre wertlos."""
+    """Otherwise the date would move forward on every run and the "since
+    when" information would be worthless."""
     db = state_db.StateDb(tmp_path)
     db.verschwunden_ergaenzen(["a.eml"], "2026-01-01T10:00:00")
     db.verschwunden_ergaenzen(["a.eml", "b.eml"], "2026-06-01T10:00:00")
@@ -883,7 +837,7 @@ def test_verschwunden_behaelt_den_ersten_zeitpunkt(tmp_path):
 
 
 class _ListenGraph:
-    """paged() liefert Mails und bricht optional mittendrin ab."""
+    """paged() delivers mails and optionally aborts midway."""
 
     def __init__(self, mails, abbruch_nach=None):
         self.mails, self.abbruch_nach = mails, abbruch_nach
@@ -896,7 +850,7 @@ class _ListenGraph:
 
 
 def _lauf(graph, tmp_path):
-    """Einen Ordner listen lassen und den Bestand zurückgeben."""
+    """Have one folder listed and return the inventory."""
     bestand = outlook_export.Bestand()
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0, "folder_errors": 0}
@@ -907,15 +861,15 @@ def _lauf(graph, tmp_path):
 
 
 def test_abgebrochenes_listing_taugt_nicht_zum_vergleich(tmp_path):
-    """DER gefährliche Fall: ein Ordner, der nach der Hälfte hängen bleibt.
-    Würde er als vollständig gelten, erklärte der nächste Schritt die andere
-    Hälfte für gelöscht."""
+    """THE dangerous case: a folder that gets stuck halfway through.
+    If it counted as complete, the next step would declare the other
+    half deleted."""
     mails = [{"id": f"m{i}", "subject": "X", "receivedDateTime": "2025-06-01T10:00:00Z"}
              for i in range(4)]
     bestand, stats = _lauf(_ListenGraph(mails, abbruch_nach=2), tmp_path)
     assert stats["folder_errors"] == 1
     assert bestand.vollstaendig == [], "abgebrochener Ordner gilt als vollständig"
-    # Und damit ist auch nichts verdächtig, obwohl zwei IDs ungesehen blieben.
+    # And thus nothing is suspicious, although two ids went unseen.
     done = _Done({"m3": "E-Mail/Posteingang/x.eml"})
     assert outlook_export.verdaechtige(done, bestand) == []
 
@@ -930,10 +884,10 @@ def test_vollstaendiges_listing_taugt_zum_vergleich(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Vollständigkeit: Graph zählt, die Platte auch
+# Completeness: Graph counts, so does the disk
 # --------------------------------------------------------------------------
 class _BaumGraph:
-    """paged() liefert Ordner mit totalItemCount."""
+    """paged() delivers folders with totalItemCount."""
 
     def __init__(self, ordner):
         self.ordner = ordner
@@ -945,8 +899,9 @@ class _BaumGraph:
 
 
 def test_vollstaendigkeit_rechnet_geloeschtes_heraus(tmp_path, monkeypatch):
-    """Gelöschtes ist keine Lücke – es liegt ja noch im Archiv, nur nicht mehr
-    im Postfach. Ohne diese Verrechnung meldete jede Löschung Fehlalarm."""
+    """Deleted items are not a gap – they still sit in the archive, just no
+    longer in the mailbox. Without this offset every deletion would raise
+    a false alarm."""
     post = tmp_path / "E-Mail" / "Posteingang"
     post.mkdir(parents=True)
     for i in range(8):
@@ -961,7 +916,7 @@ def test_vollstaendigkeit_rechnet_geloeschtes_heraus(tmp_path, monkeypatch):
     zeile = b["ordner"][0]
     assert zeile["erwartet"] == 10 and zeile["vorhanden"] == 8
     assert zeile["geloescht"] == 3
-    # 8 auf der Platte, davon 3 geloescht -> 5 zaehlen gegen die 10 -> 5 fehlen
+    # 8 on disk, 3 of them deleted -> 5 count against the 10 -> 5 missing
     assert zeile["fehlt"] == 5
     assert b["fehlt"] == 5 and b["geloescht"] == 3
 
@@ -979,8 +934,8 @@ def test_vollstaendigkeit_ohne_luecke(tmp_path, monkeypatch):
 
 
 def test_mehr_da_als_erwartet_ist_keine_luecke(tmp_path, monkeypatch):
-    """Kommt vor: eine Mail wurde exportiert und danach im Postfach verschoben.
-    Eine negative Zahl wäre keine Auskunft."""
+    """Does happen: a mail was exported and then moved within the mailbox.
+    A negative number would be no information."""
     post = tmp_path / "E-Mail" / "Posteingang"
     post.mkdir(parents=True)
     for i in range(12):
@@ -992,7 +947,7 @@ def test_mehr_da_als_erwartet_ist_keine_luecke(tmp_path, monkeypatch):
 
 
 def test_ordner_ohne_zahl_wird_uebergangen(tmp_path, monkeypatch):
-    """Manche Ordner liefern kein totalItemCount – dazu lässt sich nichts sagen."""
+    """Some folders deliver no totalItemCount – nothing can be said there."""
     monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
         {"folder": {"displayName": "Ohne"},
          "subtree": [({}, "E-Mail/Ohne")]}])
@@ -1005,9 +960,9 @@ def test_bericht_landet_in_der_db(tmp_path):
 
 
 def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
-    """Beim ersten echten Lauf meldete die Prüfung 19.649 fehlende Mails im
-    Archiv – einem Ordner, den die Standardauswahl absichtlich nie exportiert.
-    Ein Bericht, der beim ersten Mal Unsinn zeigt, wird nie wieder aufgemacht.
+    """On the first real run the check reported 19,649 missing mails in the
+    archive – a folder the default selection deliberately never exports.
+    A report that shows nonsense the first time is never opened again.
     """
     monkeypatch.setattr(outlook_export, "DEFAULT_SKIP_FOLDERS", {"archiv"})
     monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
@@ -1026,13 +981,13 @@ def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
     assert b["erwartet"] == 10, "ausgelassener Ordner wurde mitgezählt"
     assert b["ausgelassen"] == 14000
     assert b["ausgelassene_ordner"] == ["Archiv"]
-    # Sichtbar bleibt er trotzdem – nur eben als Zeile ohne Lücke.
+    # It stays visible nonetheless – just as a row without a gap.
     archiv = [z for z in b["ordner"] if z["ordner"] == "E-Mail/Archiv"][0]
     assert archiv["ausgelassen"] is True and archiv["fehlt"] == 0
 
 
 # --------------------------------------------------------------------------
-# Ordnerbaum: einmal holen, danach von der Platte
+# Folder tree: fetch once, from disk afterwards
 # --------------------------------------------------------------------------
 def test_baum_eintraege_flach_mit_id_und_zahl(monkeypatch):
     monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
@@ -1046,8 +1001,7 @@ def test_baum_eintraege_flach_mit_id_und_zahl(monkeypatch):
 
 
 def test_export_nimmt_den_puffer_statt_graph(tmp_path, monkeypatch):
-    """Der Kern von 3.0: 110 s für 417 Ordner will niemand bei jedem Lauf
-    zahlen."""
+    """Nobody wants to pay minutes of folder enumeration on every run."""
     import folders
     folders.speichere(tmp_path, [
         {"id": "1", "pfad": "E-Mail/Posteingang", "name": "Posteingang", "elemente": 5},
@@ -1077,7 +1031,7 @@ def test_ohne_puffer_wird_er_einmal_angelegt(tmp_path, monkeypatch):
 
 
 def test_regeln_die_nichts_waehlen_exportieren_nichts(tmp_path, monkeypatch):
-    """Lieber gar nichts holen als überraschend alles."""
+    """Better to fetch nothing at all than surprisingly everything."""
     import folders
     folders.speichere(tmp_path, [
         {"id": "1", "pfad": "E-Mail/Posteingang", "name": "P", "elemente": 5}])
@@ -1087,7 +1041,7 @@ def test_regeln_die_nichts_waehlen_exportieren_nichts(tmp_path, monkeypatch):
 
 
 def test_alte_namensliste_gilt_ohne_regeln(monkeypatch):
-    """Wer aus einer früheren Fassung kommt, behält seine Auswahl."""
+    """Whoever comes from an earlier setup keeps their selection."""
     monkeypatch.delenv("FOLDER_RULES", raising=False)
     monkeypatch.setattr(outlook_export.settings, "value", lambda *a, **kw: None)
     monkeypatch.setattr(outlook_export, "DEFAULT_SKIP_FOLDERS", {"archiv"})
@@ -1101,7 +1055,7 @@ def test_umgebung_schlaegt_die_datei(monkeypatch):
 
 
 def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys):
-    """Ohne Calendars.Read kommt nichts zurück – dann darf nichts einrasten."""
+    """Without Calendars.Read nothing comes back – then nothing may latch in."""
     monkeypatch.setattr(outlook_export, "list_calendars", lambda graph: [])
     assert outlook_export.waehle_kalender(None, tmp_path) == []
     assert folders.lade(tmp_path, folders.KALENDER) is None
@@ -1110,19 +1064,18 @@ def test_waehle_kalender_legt_keine_leere_liste_ab(tmp_path, monkeypatch, capsys
 
 
 def test_nur_standard_faellt_auf_den_ersten_zurueck():
-    """Markiert Graph keinen Standard, ist der erste besser als gar keiner."""
+    """If Graph marks no default, the first one is better than none at all."""
     e = [{"pfad": "kalender/B"}, {"pfad": "kalender/A"}]
     assert folders.nur_standard(e) == [(False, "**"), (True, "kalender/B")]
     assert folders.nur_standard([]) == [(False, "**")]
 
 
 # --------------------------------------------------------------------------
-# Verschoben ist nicht gelöscht
+# Moved is not deleted
 #
-# Gemeldet und nachgemessen: In einem echten Archiv waren 16 von 19 Vermerken
-# falsch. Exchange vergibt beim Verschieben eine neue Nachrichten-ID; die
-# Rückfrage nach der alten beantwortet Graph mit 404, und der Export schloss
-# auf „gelöscht".
+# Reported and measured: in a real archive 16 of 19 entries were wrong.
+# Exchange assigns a new message id on moving; asking about the old one,
+# Graph answers with 404, and the export would conclude "deleted".
 # --------------------------------------------------------------------------
 def _eml_mit_kennung(pfad, kennung, faltung=False):
     pfad.parent.mkdir(parents=True, exist_ok=True)
@@ -1143,7 +1096,7 @@ def test_brief_kennung_liest_nur_den_kopf(tmp_path):
 
     ohne = tmp_path / "c.eml"
     ohne.write_bytes(b"From: a@example.com\n\nMessage-ID: <steht-im-text>\n")
-    assert outlook_export.brief_kennung(ohne) is None      # nur der Kopf zaehlt
+    assert outlook_export.brief_kennung(ohne) is None      # only the header counts
     assert outlook_export.brief_kennung(tmp_path / "gibtsnicht.eml") is None
 
 
@@ -1151,7 +1104,7 @@ def test_verschobene_mail_gilt_nicht_als_geloescht(tmp_path):
     _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<verschoben@example.com>")
     _eml_mit_kennung(tmp_path / "E-Mail/Archiv/b.eml", "<wirklich-weg@example.com>")
     bestand = outlook_export.Bestand()
-    bestand.briefe = {"<verschoben@example.com>"}          # taucht wieder auf
+    bestand.briefe = {"<verschoben@example.com>"}          # shows up again
 
     bleibt, verschoben = outlook_export.verschoben_statt_weg(
         tmp_path, [("alte-id-1", "E-Mail/Posteingang/a.eml"),
@@ -1161,7 +1114,7 @@ def test_verschobene_mail_gilt_nicht_als_geloescht(tmp_path):
 
 
 def test_ohne_kennungen_wird_nichts_entschieden(tmp_path):
-    """Ein Lauf ohne gelistete Briefe darf nicht alles fuer verschoben halten."""
+    """A run without listed message ids must not consider everything moved."""
     bestand = outlook_export.Bestand()
     kandidaten = [("id", "E-Mail/x.eml")]
     assert outlook_export.verschoben_statt_weg(tmp_path, kandidaten, bestand) \
@@ -1171,8 +1124,8 @@ def test_ohne_kennungen_wird_nichts_entschieden(tmp_path):
 
 
 def test_falsche_vermerke_werden_zurueckgenommen(tmp_path):
-    """Die Vermerke von damals entstanden unter der falschen Annahme – ohne
-    dieses Aufräumen bliebe der Fehler für immer stehen."""
+    """The old entries were made under the wrong assumption – without this
+    cleanup the mistake would stand forever."""
     _eml_mit_kennung(tmp_path / "E-Mail/Alt/a.eml", "<liegt-wieder-da@example.com>")
     _eml_mit_kennung(tmp_path / "E-Mail/Alt/b.eml", "<bleibt-weg@example.com>")
     bestand = outlook_export.Bestand()
@@ -1186,8 +1139,8 @@ def test_falsche_vermerke_werden_zurueckgenommen(tmp_path):
 
 
 def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
-    """Der gemeldete Fall am Stück: verschieben, löschen, und ein alter
-    Fehlvermerk, der sich von selbst auflöst."""
+    """The reported case in one piece: moving, deleting, and an old false
+    entry that resolves itself."""
     _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<verschoben@x>")
     _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/b.eml", "<geloescht@x>")
     _eml_mit_kennung(tmp_path / "E-Mail/Alt/c.eml", "<frueher-falsch@x>")
@@ -1200,21 +1153,21 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
 
     bestand = outlook_export.Bestand()
     bestand.ordner_fertig("E-Mail/Posteingang")
-    # Die verschobene Mail steht jetzt unter neuer ID in einem anderen Ordner,
-    # die geloeschte nirgends mehr. Der alte Fehlvermerk taucht wieder auf.
+    # The moved mail now sits under a new id in a different folder, the
+    # deleted one nowhere anymore. The old false entry shows up again.
     bestand.briefe = {"<verschoben@x>", "<frueher-falsch@x>"}
     bestand.gesehen = {"neu-1"}
 
     class FakeGraph:
         def get(self, *a, **kw):
-            raise RuntimeError("404 Not Found")       # alte ID ist tot
+            raise RuntimeError("404 Not Found")       # the old id is dead
 
     stats = outlook_export.pruefe_verschwundene(FakeGraph(), tmp_path, done, bestand)
     done.close()
 
-    assert stats["moved"] == 1                        # a.eml: verschoben
-    assert stats["gone_new"] == 1                     # b.eml: wirklich weg
-    assert stats["gone_healed"] == 1                  # c.eml: Vermerk zurueckgenommen
+    assert stats["moved"] == 1                        # a.eml: moved
+    assert stats["gone_new"] == 1                     # b.eml: really gone
+    assert stats["gone_healed"] == 1                  # c.eml: entry withdrawn
 
     vermerke = state_db.StateDb(tmp_path).verschwunden_lesen()
     assert sorted(vermerke) == ["E-Mail/Posteingang/b.eml"]

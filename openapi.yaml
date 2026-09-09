@@ -1,0 +1,987 @@
+openapi: 3.1.0
+info:
+  title: Munimentum HTTP API
+  version: 7.0.0
+  description: |
+    The API between the Munimentum page and its backend, served on
+    `127.0.0.1` only. There is **no authentication**: anything on this
+    machine that sends a correct `Host` header can read the whole archive.
+    The `Host` header must name the bound address (DNS-rebinding guard);
+    otherwise every request is answered with `403` and a plain-text body.
+
+    Conventions used throughout:
+    * Responses are JSON (`application/json; charset=utf-8`) unless a route
+      says otherwise; every response carries `Cache-Control: no-store` and
+      `X-Content-Type-Options: nosniff` (exceptions: `/api/answer`, `/source`).
+    * Many `message`/`error` values are i18n objects `{"k": key, "v": vars}`
+      that the page translates; some are plain strings — schemas use `oneOf`.
+    * Every POST route tolerates an absent or empty body and falls back to
+      its defaults; body fields act on **presence**, not truthiness.
+    * Unknown paths return `404` with `{"error": "Unbekannter Pfad"}`; an
+      uncaught error inside a route returns `500` with
+      `{"error": "<Type>: <message>"}`.
+    * `HEAD` is answered for every GET route (headers only).
+
+    This file is served by `GET /api/openapi` and lives in the repository as
+    `openapi.yaml`; it is updated in the same commit as any API change.
+servers:
+  - url: http://127.0.0.1:8700
+    description: Default port; the app tries the next twelve if it is taken.
+
+paths:
+  /:
+    get:
+      summary: The single-page interface
+      description: |
+        The whole UI as one HTML page, with the language strings and the
+        step metadata from the registry injected server-side. `/index.html`
+        is an alias. Language is negotiated from the configuration and the
+        request's `Accept-Language` header.
+      responses:
+        "200":
+          description: The page.
+          content:
+            text/html: {}
+
+  /api/status:
+    get:
+      summary: Complete application state
+      description: |
+        Polled by the page. Carries token state, Ollama state, index and
+        export inventories, the job runner snapshot (`jobs.seq` is the log
+        cursor), MCP state, the full configuration, storage paths, update
+        info, auth state and folder summaries.
+      responses:
+        "200":
+          description: The state object.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { $ref: "#/components/schemas/TokenStatus" }
+                  ollama: { $ref: "#/components/schemas/OllamaStatus" }
+                  ollama_hint: { type: object }
+                  store:
+                    type: object
+                    description: Index state (dir, exists, chunks, messages, features, semantic, built_at, model).
+                  calendar:
+                    type: object
+                    properties:
+                      exists: { type: boolean }
+                      built_at: { type: [string, "null"] }
+                  exports:
+                    type: object
+                    description: Per source (teams, outlook, onedrive, sharepoint, pages, planner) dir/exists/last_run.
+                  jobs: { $ref: "#/components/schemas/JobsState" }
+                  mcp: { $ref: "#/components/schemas/McpState" }
+                  config:
+                    type: object
+                    description: The complete app_config.json as held in memory.
+                  schedule_next: { type: [string, "null"] }
+                  schedule_enabled: { type: boolean }
+                  wizard:
+                    type: [string, "null"]
+                    enum: [token, ollama, null]
+                  data_dir: { type: string }
+                  data_dir_default: { type: string }
+                  index_dir: { type: string }
+                  index_dir_default: { type: string }
+                  home_dir: { type: string }
+                  app_location: { type: string }
+                  frozen: { type: boolean }
+                  update: { type: object }
+                  skip_folders_default: { type: array, items: { type: string } }
+                  filetype_hidden_default: { type: array, items: { type: string } }
+                  graph_explorer: { type: string }
+                  scopes_needed: { type: array, items: { type: string } }
+                  scope_queries: { type: object }
+                  auth:
+                    type: object
+                    description: mode (token|login), signed_in, account, own_registration, client_id, default_client_id, tenant, device.
+                  folders:
+                    type: object
+                    description: Mailbox folder summary (abgeglichen, ordner_gesamt, ordner_gewaehlt, mails_gesamt, mails_gewaehlt, neu, verschwunden).
+                  calendars: { type: object }
+                  folders_onedrive: { type: object }
+
+  /api/log:
+    get:
+      summary: Log lines after a cursor
+      description: |
+        The runner keeps a bounded ring buffer of log lines, each with a
+        strictly increasing `n`. Pass the `seq` of the previous response (or
+        of `/api/status` → `jobs.seq`) as `since`; `0` returns the whole
+        retained buffer. A client far behind loses old lines silently.
+      parameters:
+        - name: since
+          in: query
+          schema: { type: integer, default: 0 }
+          description: Last line number the client already has.
+      responses:
+        "200":
+          description: New lines and the current cursor.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/LogLine" }
+                  seq: { type: integer }
+
+  /api/search:
+    get:
+      summary: Search or browse the archive
+      description: |
+        With `q`: ranked search (mode auto/hybrid/semantic/lexical). Without
+        `q`: filter-only browsing, newest first. Errors (no index, stale
+        index) come back in-band with HTTP 200.
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: "Query text; empty switches to browse mode." }
+        - { name: person, in: query, schema: { type: string }, description: "Sender / author filter (substring)." }
+        - { name: from, in: query, schema: { type: string, format: date }, description: "Inclusive lower date bound." }
+        - { name: to, in: query, schema: { type: string, format: date }, description: "Inclusive upper date bound." }
+        - { name: source, in: query, schema: { type: string, default: all, enum: [all, teams, outlook, kalender, kontakte, onedrive, sharepoint, datei, pages, planner] } }
+        - { name: k, in: query, schema: { type: integer, default: 20, maximum: 100 }, description: "Page size." }
+        - { name: offset, in: query, schema: { type: integer, default: 0 }, description: "Results to skip." }
+        - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned messages." }
+        - { name: folder, in: query, schema: { type: string }, description: "Restrict to a folder and below." }
+        - { name: filetype, in: query, schema: { type: string }, description: "Attachment / file extension without dot." }
+        - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical] } }
+      responses:
+        "200":
+          description: Hits, or an in-band error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items: { $ref: "#/components/schemas/Hit" }
+                  count: { type: integer }
+                  offset: { type: integer }
+                  backend: { type: string }
+                  semantic: { type: boolean }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/similar:
+    get:
+      summary: Messages similar to one hit
+      description: Needs an index with embeddings; works without Ollama.
+      parameters:
+        - { name: cid, in: query, required: true, schema: { type: integer }, description: "Index row id from a hit's cid." }
+        - { name: k, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: Similar hits, or an in-band error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { $ref: "#/components/schemas/Hit" } }
+                  count: { type: integer }
+                  backend: { type: string }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/thread:
+    get:
+      summary: A whole conversation
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string }, description: "The thread id from a hit." }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: The messages of the conversation, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  thread: { type: string }
+                  count: { type: integer }
+                  messages: { type: array, items: { $ref: "#/components/schemas/Hit" } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/sharepoint-report:
+    get:
+      summary: Last SharePoint completeness report
+      description: The stored report blob of the mirror's check step; cheaper than /api/analytics.
+      responses:
+        "200":
+          description: The report, or null when the check never ran.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  bericht: { type: [object, "null"] }
+
+  /api/files:
+    get:
+      summary: Browse the mirrored drives
+      parameters:
+        - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint] }, description: "Empty lists the entry points." }
+        - { name: path, in: query, schema: { type: string }, description: "Folder inside the mirror, as returned here." }
+      responses:
+        "200":
+          description: Entry points, or one folder level (max 2000 files).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roots: { type: array, items: { type: object } }
+                  root: { type: string }
+                  path: { type: string }
+                  base: { type: integer, description: "Fixed prefix depth for breadcrumbs (2 for sharepoint)." }
+                  label: { type: string }
+                  dirs: { type: array, items: { type: object } }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        rel: { type: string }
+                        date: { type: string }
+                        gone: { type: [string, "null"] }
+                        size: { type: [integer, "null"] }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/filetypes:
+    get:
+      summary: File types in the archive
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 40, maximum: 200 } }
+        - { name: source, in: query, schema: { type: string }, description: "Empty = every source." }
+      responses:
+        "200":
+          description: Types after applying the configured hide list.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  total_distinct: { type: integer }
+                  hidden: { type: array, items: { type: string } }
+                  filetypes: { type: array, items: { type: object } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/folders:
+    get:
+      summary: Folder units for the filter dropdown
+      parameters:
+        - { name: contains, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 300, maximum: 1000 } }
+        - { name: source, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Folders (whole units per source), by message count.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  folders: { type: array, items: { type: object } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/people:
+    get:
+      summary: People occurring in the archive
+      parameters:
+        - { name: source, in: query, schema: { type: string, default: all } }
+        - { name: contains, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Names with message counts.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count: { type: integer }
+                  total_distinct: { type: integer }
+                  total_messages: { type: integer }
+                  people: { type: array, items: { type: object } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/document:
+    get:
+      summary: One message with its full text
+      parameters:
+        - { name: uid, in: query, required: true, schema: { type: string } }
+        - { name: before, in: query, schema: { type: integer, default: 0, maximum: 20 }, description: "Conversation context before." }
+        - { name: after, in: query, schema: { type: integer, default: 0, maximum: 20 } }
+      responses:
+        "200":
+          description: The document, or an in-band error.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uid: { type: string }
+                  source: { type: string }
+                  who: { type: string }
+                  date: { type: string }
+                  title: { type: string }
+                  path: { type: string }
+                  uri: { type: string }
+                  text: { type: string }
+                  context_before: { type: array, items: { type: object } }
+                  context_after: { type: array, items: { type: object } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/run-log:
+    get:
+      summary: The stored log of one run
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: integer }, description: "Run id from /api/runs." }
+      responses:
+        "200":
+          description: Lines, oldest first (max 4000).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lines:
+                    type: array
+                    items: { $ref: "#/components/schemas/StoredLogLine" }
+
+  /api/analytics:
+    get:
+      summary: What the archive holds
+      description: |
+        The block materialized at the end of each index run: sources,
+        communication vs. files, timeline with gaps, attachment and file
+        types, sizes, top people — plus the stored completeness reports.
+        If no block exists yet, one is computed inline (slow once).
+      responses:
+        "200":
+          description: The analytics block.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Analytics" }
+
+  /api/runs:
+    get:
+      summary: Run history
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Runs, newest first, each with its steps.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+
+  /api/calendar:
+    get:
+      summary: The combined calendar/contacts file
+      description: |
+        Raw bytes of calendar.json (can be several MB); gzip-encoded when
+        the request accepts it. 404 with an i18n error when the file has
+        not been built yet.
+      responses:
+        "200":
+          description: The file as built by the calendar step.
+          content:
+            application/json: {}
+        "404":
+          description: Not built yet.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { $ref: "#/components/schemas/I18nMessage" }
+                  recs: { type: array }
+
+  /api/openapi:
+    get:
+      summary: This document
+      responses:
+        "200":
+          description: The API description as YAML.
+          content:
+            text/yaml: {}
+
+  /source:
+    get:
+      summary: An original file from the archive
+      description: |
+        Serves a file out of an export folder. `path` is relative to the
+        root, exactly as hits and file listings return it; `..` escapes are
+        blocked. Non-HTML files come with `Content-Disposition: attachment`;
+        everything is sandboxed via `Content-Security-Policy: sandbox`.
+        A Planner `board.html` is rewritten in memory so its relative
+        attachment links route back through this endpoint.
+      parameters:
+        - { name: root, in: query, required: true, schema: { type: string, enum: [teams, outlook, onedrive, sharepoint, pages, planner] } }
+        - { name: path, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The file (content type by extension).
+        "404":
+          description: Unknown root, path outside the export, or missing file (plain text).
+        "503":
+          description: No index loaded (plain text).
+
+  /api/token:
+    post:
+      summary: Store a pasted Graph access token
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string, description: "Graph token; 'Bearer ' prefix and whitespace are stripped." }
+      responses:
+        "200":
+          description: Always 200; ok says whether the token was usable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  message: { $ref: "#/components/schemas/I18nMessage" }
+                  token: { $ref: "#/components/schemas/TokenStatus" }
+
+  /api/analytics-refresh:
+    post:
+      summary: Recompute the analytics block
+      responses:
+        "200":
+          description: The freshly computed block (same shape as GET /api/analytics).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Analytics" }
+
+  /api/wizard-seen:
+    post:
+      summary: Dismiss the token wizard
+      responses:
+        "200":
+          description: Acknowledged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /api/run:
+    post:
+      summary: Start an export/index run
+      description: |
+        Step flags are the registry's request keys; absent means off. A
+        cadence below its interval can silently drop onedrive/teams for
+        this run (the log says so). `nur_einheit` narrows a SharePoint,
+        pages or Planner run to one URL and forces its sync.
+
+        Note: the master switches from the settings (onedrive_enabled,
+        sharepoint_enabled, sharepoint_pages_enabled, planner_enabled)
+        gate the interface and the schedule, not this endpoint — asking
+        for a source here runs it even when its switch is off. That is
+        what the settings' per-URL "sync now" button relies on.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                outlook: { type: boolean, description: "Mailbox export (configured categories)." }
+                onedrive: { type: boolean }
+                sharepoint: { type: boolean }
+                planner: { type: boolean }
+                sharepoint_pages: { type: boolean }
+                teams: { type: boolean }
+                index: { type: boolean }
+                calendar: { type: boolean }
+                sync_onedrive: { type: boolean, description: "Folder tree only." }
+                sync_sharepoint: { type: boolean }
+                sync_folders: { type: boolean, description: "Outlook folder tree only." }
+                sync_calendars: { type: boolean }
+                check: { type: boolean, description: "Mailbox completeness check." }
+                check_onedrive: { type: boolean }
+                check_sharepoint: { type: boolean, description: "Mirror preview." }
+                check_pages: { type: boolean }
+                nur_einheit: { type: string, description: "Single site/library/plan URL." }
+                embeddings: { type: [boolean, "null"], description: "null = decide automatically." }
+                label: { type: string, default: job.export, description: "Run label (i18n key)." }
+      responses:
+        "200":
+          description: The run thread started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409":
+          description: Busy, no token, or nothing to do (message.k names it).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/login:
+    post:
+      summary: Start the device-code sign-in
+      responses:
+        "200":
+          description: The device code to show; a background thread waits for consent.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  device:
+                    type: object
+                    properties:
+                      code: { type: string }
+                      url: { type: string }
+                      expires_in: { type: integer }
+                      done: { type: boolean }
+                      ok: { type: boolean }
+                      error: { type: [string, "null"] }
+        "500":
+          description: The flow could not be started.
+
+  /api/data-dir:
+    post:
+      summary: Point the data and index folders elsewhere
+      description: |
+        Each field acts only when present; an empty string resets to the
+        default. Nothing is moved — moving folders is the user's job, and
+        the change takes effect after a restart.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                path: { type: string, description: "Data folder ('' = default)." }
+                index: { type: string, description: "Index folder ('' = default)." }
+      responses:
+        "200":
+          description: The effective paths and whether a restart is needed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  path: { type: string }
+                  index: { type: string }
+                  restart: { type: boolean }
+        "400":
+          description: Target not writable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/folder-plan:
+    post:
+      summary: What the current rules would export
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string, description: "onedrive | calendar | sharepoint | anything else = mailbox." }
+                onedrive_rules: { type: [string, "null"], description: "Rule text; null = stored config." }
+                calendar_rules: { type: [string, "null"] }
+                folder_rules: { type: [string, "null"] }
+                skip_folders: { description: "Legacy name list (array or comma/newline string)." }
+      responses:
+        "200":
+          description: Included/excluded/gone folders with counts, or leer=true when no tree is synced.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  leer: { type: boolean }
+                  regeln: { type: string }
+                  abgeglichen: { type: [string, "null"] }
+                  an: { type: array, items: { type: object } }
+                  aus: { type: array, items: { type: object } }
+                  weg: { type: array, items: { type: object } }
+                  mails_an: { type: integer }
+                  mails_aus: { type: integer }
+                  mails_weg: { type: integer }
+
+  /api/logout:
+    post:
+      summary: Sign out (clear the token cache)
+      responses:
+        "200":
+          description: Always ok; the pasted token file is untouched.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /api/cancel:
+    post:
+      summary: Cancel the running job
+      responses:
+        "200":
+          description: ok=true only when a subprocess was actually terminated.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /api/config:
+    post:
+      summary: Save settings
+      description: |
+        Every field is optional and keyed on presence. Numbers are clamped
+        to their documented ranges; invalid values are ignored rather than
+        rejected. Returns the complete normalized configuration.
+        Fields (see /api/status → config for the full shape):
+        outlook_categories, teams_categories, embed_model, chat_model,
+        ollama, workers, mirror_workers, mcp_port, index_batch,
+        answer_sources, semantic_min, onedrive_max_mb, sharepoint_max_mb,
+        sharepoint_pages_image_max_mb, search_results, userflow_actions,
+        runs_retention_months, log_retention_days, mcp_enabled,
+        mcp_autostart, update_check, embed_images, cache_images,
+        refresh_channels, skip_empty_chats, include_hidden,
+        calendar_reconstruct, ollama_enabled, index_semantic,
+        onedrive_enabled, sharepoint_enabled, sharepoint_pages_enabled,
+        planner_enabled, planner_attachments, calendar_rules, folder_rules,
+        onedrive_rules, sharepoint_urls, sharepoint_pages_urls,
+        planner_urls, sharepoint_types_include, sharepoint_types_exclude,
+        analytics_skip, filetype_hidden, skip_folders, auth_mode,
+        client_id, tenant, sync_cadence, notifications, language.
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        "200":
+          description: Saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  config: { type: object }
+
+  /api/schedule:
+    post:
+      summary: Save the schedule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+                outlook: { type: boolean }
+                teams: { type: boolean }
+                onedrive: { type: boolean }
+                sharepoint: { type: boolean }
+                sharepoint_pages: { type: boolean }
+                planner: { type: boolean }
+                index: { type: boolean }
+                calendar: { type: boolean }
+                interval_minutes: { type: integer, minimum: 5 }
+      responses:
+        "200":
+          description: The stored schedule and the next run time.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  schedule: { type: object }
+                  next: { type: [number, "null"], description: "Unix epoch seconds." }
+
+  /api/mcp:
+    post:
+      summary: Start or stop the MCP server
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: { type: string, enum: [start, stop] }
+      responses:
+        "200":
+          description: Result plus the MCP state (with ready-made client config).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  message: { $ref: "#/components/schemas/I18nMessage" }
+                  mcp: { $ref: "#/components/schemas/McpState" }
+
+  /api/report:
+    post:
+      summary: Prefill a bug report
+      description: |
+        Purely local: anonymizes and shortens the supplied log, collects
+        system details, and returns everything the page needs to open a
+        GitHub issue form. The app itself sends nothing.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                log: { type: string, description: "Log text as shown (already translated)." }
+                hint: { type: string, description: "One-line description." }
+      responses:
+        "200":
+          description: The prefilled report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  system: { type: array, items: { type: object } }
+                  log: { type: string }
+                  title: { type: string }
+                  url: { type: string }
+
+  /api/ollama-recheck:
+    post:
+      summary: Re-probe Ollama, bypassing the cache
+      responses:
+        "200":
+          description: The probe result.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OllamaStatus" }
+
+  /api/answer:
+    post:
+      summary: AI summary over the archive (streaming)
+      description: |
+        The only streaming route: NDJSON, one object per line — first the
+        sources, then text chunks, finally `{"done": true}` (or an error
+        chunk mid-stream). Needs a usable index and a running Ollama with
+        the chat model.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q: { type: string }
+                person: { type: string }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+                source: { type: string, default: all }
+      responses:
+        "200":
+          description: NDJSON stream, or a plain JSON error object when the search found nothing.
+          content:
+            application/x-ndjson: {}
+            application/json: {}
+        "400":
+          description: Empty question.
+        "503":
+          description: No usable index, or the chat model is not available.
+
+  /api/update-check:
+    post:
+      summary: Check GitHub for a newer release (blocking)
+      responses:
+        "200":
+          description: The check result.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: ["off", none, ok, error] }
+                  current: { type: string }
+                  latest: { type: [string, "null"] }
+                  url: { type: [string, "null"] }
+                  newer: { type: boolean }
+                  ahead: { type: boolean }
+                  error: { type: [string, "null"] }
+
+  /api/quit:
+    post:
+      summary: Shut the app down
+      responses:
+        "200":
+          description: Sent before the shutdown takes effect.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+components:
+  schemas:
+    I18nMessage:
+      type: object
+      description: A translatable message; the page renders lang[k] with v substituted.
+      properties:
+        k: { type: string }
+        v: { type: object }
+    MessageOrKey:
+      description: Either a plain sentence or an i18n message object.
+      oneOf:
+        - { type: string }
+        - { $ref: "#/components/schemas/I18nMessage" }
+    Ok:
+      type: object
+      properties:
+        ok: { type: boolean }
+    OkMessage:
+      type: object
+      properties:
+        ok: { type: boolean }
+        message: { $ref: "#/components/schemas/MessageOrKey" }
+    TokenStatus:
+      type: object
+      properties:
+        present: { type: boolean }
+        valid: { type: boolean }
+        expired: { type: boolean }
+        readable: { type: boolean }
+        account: { type: [string, "null"] }
+        name: { type: [string, "null"] }
+        expires_at: { type: [string, "null"] }
+        expires_in_minutes: { type: [integer, "null"] }
+        scopes: { type: array, items: { type: string } }
+        missing: { type: array, items: { type: string } }
+    OllamaStatus:
+      type: object
+      properties:
+        running: { type: boolean }
+        models: { type: array, items: { type: string } }
+        has_model: { type: boolean }
+        has_chat_model: { type: boolean }
+        error: { type: [string, "null"] }
+        model: { type: string }
+        chat_model: { type: string }
+        url: { type: string }
+        disabled: { type: boolean }
+    JobsState:
+      type: object
+      properties:
+        busy: { type: boolean }
+        job:
+          type: [object, "null"]
+          description: label, steps, step, index, progress, started.
+        last:
+          type: [object, "null"]
+          description: label, ok, detail, finished.
+        token_expired: { type: boolean }
+        seq: { type: integer, description: "Cursor for /api/log." }
+    McpState:
+      type: object
+      properties:
+        running: { type: boolean }
+        port: { type: integer }
+        url: { type: string }
+        error:
+          oneOf:
+            - { $ref: "#/components/schemas/I18nMessage" }
+            - { type: "null" }
+        config: { type: object, description: "Ready-made client snippets (http and stdio)." }
+    LogLine:
+      type: object
+      properties:
+        n: { type: integer }
+        level: { type: string, enum: [info, ok, warn, err, head] }
+        t: { type: string, description: "HH:MM:SS" }
+        text: { $ref: "#/components/schemas/MessageOrKey" }
+    StoredLogLine:
+      type: object
+      properties:
+        ts: { type: number, description: "Unix epoch seconds." }
+        level: { type: string }
+        text: { $ref: "#/components/schemas/MessageOrKey" }
+    Hit:
+      type: object
+      properties:
+        uid: { type: string }
+        cid: { type: integer, description: "Index row id; input for /api/similar." }
+        source: { type: string }
+        source_label: { type: string }
+        root: { type: string, description: "Input for /source." }
+        who: { type: string }
+        date: { type: string }
+        title: { type: string }
+        context: { type: string }
+        path: { type: string, description: "Relative path; input for /source." }
+        uri: { type: string }
+        score: { type: [number, "null"] }
+        thread: { type: [string, "null"], description: "Input for /api/thread." }
+        attachments: { type: array, items: { type: string } }
+        gone: { type: [string, "null"], description: "Tombstone date when the item vanished." }
+        preview: { type: string }
+    Run:
+      type: object
+      properties:
+        id: { type: integer }
+        started_at: { type: number }
+        finished_at: { type: [number, "null"] }
+        job_type: { type: string }
+        origin: { type: string }
+        result: { type: [string, "null"] }
+        elements: { type: [object, "null"] }
+        semantic: { type: [integer, "null"] }
+        workers: { type: [integer, "null"] }
+        app_version: { type: string }
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              label: { type: string }
+              started_at: { type: number }
+              duration_s: { type: [number, "null"] }
+              new: { type: [integer, "null"] }
+              unchanged: { type: [integer, "null"] }
+              excluded: { type: [integer, "null"] }
+              errors: { type: [integer, "null"] }
+              skipped: { type: integer }
+              ok: { type: [integer, "null"] }
+              extra: { type: [string, "null"] }
+    Analytics:
+      type: object
+      properties:
+        built_at: { type: [string, "null"] }
+        exists: { type: boolean }
+        quellen: { type: array, items: { type: object } }
+        komm:
+          type: object
+          description: nachrichten, gespraeche, mit_anhang, verschwunden, personen, von, bis (null = index too old to know).
+        dateien:
+          type: object
+          description: n, pages, onedrive, sharepoint, verschwunden.
+        planner: { type: object }
+        verlauf: { type: array, description: "Message counts over time (mail and chat only)." }
+        luecken: { type: array, description: "Months with no message at all." }
+        anhang_typen: { type: [array, "null"] }
+        datei_typen: { type: [array, "null"] }
+        top_personen: { type: array }
+        groesse: { type: object, description: "Bytes per source and for the index." }
+        grosse_dateien: { type: array }
+        vollstaendigkeit: { type: [object, "null"] }
+        vollstaendigkeit_onedrive: { type: [object, "null"] }
+        vollstaendigkeit_sharepoint: { type: [object, "null"] }
+        vollstaendigkeit_pages: { type: [object, "null"] }

@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-OneDrive-Export: das eigene Laufwerk als lokaler Spiegel.
+OneDrive export: the user's own drive as a local mirror.
 
-Was das heißt, sei hier festgehalten, weil man es beim Lesen des Codes sonst
-falsch erwartet:
+What that means is written down here, because reading the code alone sets
+the wrong expectation:
 
-  Gehalten wird die JEWEILS AKTUELLE Fassung jeder Datei. Ändert sie sich,
-  wird sie überschrieben – frühere Fassungen bewahrt dieser Spiegel nicht.
+  What is kept is the CURRENT version of each file. When it changes, it is
+  overwritten – this mirror does not preserve earlier versions.
 
-  Wird eine Datei in OneDrive gelöscht, BLEIBT sie hier liegen und bekommt
-  einen Grabstein-Vermerk in der state.db. Dieselbe Zusage wie beim Postfach: ein
-  Archiv, das nur wächst, beantwortet die wichtigste Frage nicht – was war
-  hier einmal und ist jetzt weg?
+  When a file is deleted in OneDrive, it STAYS here and gets a tombstone
+  entry in the state.db. The same promise as for the mailbox: an archive
+  that only grows fails to answer the most important question – what was
+  here once and is now gone?
 
-Warum Delta und nicht Auflisten: /me/drive/root/delta liefert Änderungen UND
-Löschungen mit einem Token, und beim nächsten Lauf nur noch das Neue.
+Why delta and not listing: /me/drive/root/delta delivers changes AND
+deletions with one token, and on the next run only what is new.
 
 The mirror machinery itself lives in drive_mirror.py – a SharePoint library
 is the same kind of drive, so both exports share one core. This module only
@@ -36,17 +36,16 @@ Resume: the output folder's state.db (inventory, delta pointer, walk
 
 import os
 import sys
-from pathlib import Path
 
 import auth
 import export_util
 import folders
-import progress  # noqa: F401 – Teil der gemeinsamen Skript-Schnittstelle
+import progress  # noqa: F401 – part of the shared script interface
 import settings
 
 try:
     import msal  # noqa: F401
-    import requests  # noqa: F401 – früh prüfen, gebraucht in graph_client
+    import requests  # noqa: F401 – check early, needed in graph_client
 except ImportError:
     print("Fehlende Pakete. Bitte installieren:  pip install msal requests")
     raise SystemExit(1) from None
@@ -64,29 +63,28 @@ GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Files.Read.All", RES + "User.Read"]
 
-OUT_ROOT = settings.value("onedrive_dir", settings.ONEDRIVE_DIR)
 
 
 workers = drive_mirror.workers
 
 
 def max_bytes():
-    """Obergrenze je Datei in Bytes; 0 heißt ohne Grenze.
+    """Per-file upper limit in bytes; 0 means no limit.
 
-    low=0 ist hier entscheidend: settings.number zieht sonst auf mindestens 1
-    hoch. Das ist bei „Parallele Downloads" richtig und hier falsch – aus der
-    ausgeschalteten Grenze wurde eine von einem Megabyte, und der Spiegel ließ
-    still jede größere Datei liegen.
+    low=0 is crucial here: settings.number otherwise raises the value to at
+    least 1. That is right for "parallel downloads" and wrong here – the
+    disabled limit turned into one of one megabyte, and the mirror silently
+    left every larger file behind.
     """
     return max(0, settings.number("ONEDRIVE_MAX_MB", "onedrive_max_mb",
                                   low=0)) * 1024 * 1024
 
 
 def aktuelle_regeln():
-    """Include/Exclude auf Pfaden – dieselbe Mechanik wie beim Postfach.
+    """Include/exclude on paths – the same mechanics as for the mailbox.
 
-    Ohne Regeln kommt alles mit: wer nichts einstellt, will sein Laufwerk, nicht
-    Leere.
+    Without rules everything comes along: whoever configures nothing wants
+    their drive, not emptiness.
     """
     roh = os.environ.get("ONEDRIVE_RULES")
     if roh is None:
@@ -101,14 +99,14 @@ def auswahl():
 
 
 class Graph(drive_mirror.DriveOps, graph_client.Graph):
-    """Angemeldeter Zugriff; die Anmeldung selbst steckt in auth.Login."""
+    """Signed-in access; the sign-in itself lives in auth.Login."""
 
     def __init__(self, nur_still=False):
         super().__init__(SCOPES, nur_still=nur_still)
 
 
 class TokenClient(drive_mirror.DriveOps, graph_client.TokenClient):
-    """Fertiger Bearer-Token aus dem Graph Explorer; 401 heißt TokenExpired."""
+    """Ready-made bearer token from the Graph Explorer; 401 means TokenExpired."""
 
 
 def lauf(graph, out):
@@ -134,7 +132,7 @@ def main():
     struktur = "--folders" in argv
     pruefen = "--check" in argv
     argv = [a for a in argv if not a.startswith("--")]
-    out = Path(argv[0]) if argv else Path(OUT_ROOT)
+    out = export_util.ausgabeordner(argv)
     graph_client.konfiguriere(workers())
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
     try:

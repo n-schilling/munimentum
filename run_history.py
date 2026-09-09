@@ -153,7 +153,7 @@ class RunHistory:
                     try:
                         text = json.loads(text)
                     except ValueError:
-                        pass               # eine rohe Zeile bleibt eine rohe
+                        pass               # a raw line stays a raw line
                     zeilen.append({"ts": ts, "level": level, "text": text})
                 return zeilen
             finally:
@@ -176,6 +176,27 @@ class RunHistory:
             return
         self._schreibe("UPDATE runs SET finished_at = ?, result = ? WHERE id = ?",
                        (time.time(), str(result), run_id))
+
+    def last_step_started(self, key):
+        """When the step last RAN, successful or not.
+
+        The archive's age asks this, not last_step_ok(): an export that died
+        part-way still wrote what it had fetched until then, so a follow-up
+        step from before it is stale even though the row says ok = 0.
+        """
+        try:
+            con = self._connect()
+            try:
+                row = con.execute(
+                    "SELECT MAX(started_at) FROM steps WHERE key = ?",
+                    (str(key),)).fetchone()
+                return row[0] if row and row[0] is not None else None
+            except sqlite3.Error:
+                return None
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            return None
 
     def last_step_ok(self, key):
         """When the step last finished successfully – the cadence gate's

@@ -73,8 +73,6 @@ GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 
-OUT_ROOT = settings.value("sharepoint_dir", settings.SHAREPOINT_DIR)
-OUT_PAGES = settings.value("sharepoint_pages_dir", settings.SHAREPOINT_PAGES_DIR)
 
 
 workers = drive_mirror.workers
@@ -110,7 +108,7 @@ def max_bytes():
                                   low=0)) * 1024 * 1024
 
 
-# Die Kadenz-Mechanik teilen sich die URL-basierten Exporte (export_util).
+# The cadence machinery is shared by the URL-based exports (export_util).
 kadenzen = export_util.kadenzen
 sync_jetzt = export_util.sync_jetzt
 _haeufigere = export_util.haeufigere
@@ -795,7 +793,7 @@ def main():
     seiten_pruefung = "--check-pages" in argv
     seiten = "--pages" in argv or seiten_pruefung
     argv = [a for a in argv if not a.startswith("--")]
-    out = Path(argv[0]) if argv else Path(OUT_PAGES if seiten else OUT_ROOT)
+    out = export_util.ausgabeordner(argv)
     urls = pages_urls() if seiten else configured_urls()
     if not urls:
         progress.event("run.pages.none" if seiten else "run.sharepoint.none",

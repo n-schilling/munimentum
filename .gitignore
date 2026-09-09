@@ -12,8 +12,10 @@ msal_cache.bin
 *.mobileprovision
 
 # Runtime data of a source run – the app's home folder is the project then.
-# data/ holds every export since the storage split; the individual folder
-# names remain as a net for working states from before.
+# data/ holds the exports of a fresh layout; the individual names stay
+# because an upgraded checkout keeps its flat folders and the app pins the
+# data folder to the home folder for it (altbestand_pinnen) – real mail
+# would otherwise sit unignored in the working copy.
 data/
 rag_store/
 teams_export/
@@ -25,7 +27,6 @@ planner_export/
 app_config.json
 runs.db
 app.log
-datenordner.txt
 
 # Tool and system residue
 __pycache__/

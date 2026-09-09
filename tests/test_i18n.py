@@ -1,10 +1,10 @@
-"""Tests für i18n.py und die Sprachdateien.
+"""Tests for i18n.py and the language files.
 
-Der wichtigste Test steht ganz unten: er liest jeden Textschlüssel aus app.py –
-aus dem Markup, aus dem JavaScript und aus den serverseitigen Meldungen – und
-prüft ihn gegen die Sprachdateien. Beide Richtungen: kein Schlüssel ohne Text,
-kein Text ohne Verwendung. Damit fällt auf, wenn jemand einen Text ergänzt und
-eine Sprache vergisst, und ebenso, wenn eine Zeile verwaist zurückbleibt.
+The most important test sits at the very bottom: it reads every text key
+out of app.py – from the markup, the JavaScript and the server-side
+messages – and checks it against the language files. Both directions: no
+key without a text, no text without a use. That way it shows when someone
+adds a text and forgets a language, and equally when a line is left orphaned.
 """
 
 import json
@@ -34,15 +34,15 @@ def roh(code):
 
 
 # --------------------------------------------------------------------------
-# Sprachdateien finden und lesen
+# Finding and reading the language files
 # --------------------------------------------------------------------------
 def test_available_listet_alle_sprachen():
     codes = [e["code"] for e in i18n.available()]
     assert set(codes) >= set(SPRACHEN)
-    assert codes[0] == i18n.FALLBACK          # Quellsprache zuerst
+    assert codes[0] == i18n.FALLBACK          # source language first
     namen = {e["code"]: e["name"] for e in i18n.available()}
-    # Jede Sprache nennt sich in ihrer eigenen Sprache – sonst müsste man die
-    # Auswahl erst übersetzen, um sie zu finden.
+    # Each language names itself in its own language – otherwise you would
+    # have to translate the choice first in order to find it.
     assert namen["de"] == "Deutsch" and namen["en"] == "English"
     assert namen["fr"] == "Français"
 
@@ -53,14 +53,14 @@ def test_available_bei_leerem_ordner(tmp_path):
 
 
 def test_strings_ergaenzt_fehlende_aus_der_quellsprache(tmp_path):
-    """Eine unvollständige Übersetzung darf keine leeren Stellen hinterlassen."""
+    """An incomplete translation must not leave blank spots behind."""
     d = tmp_path / "lang"
     d.mkdir()
     (d / "de.json").write_text(json.dumps({"a": "Ah", "b": "Beh"}), encoding="utf-8")
     (d / "xx.json").write_text(json.dumps({"_meta": {"code": "xx", "name": "X"},
                                            "a": "Ay", "b": ""}), encoding="utf-8")
     s = i18n.strings("xx", tmp_path)
-    assert s == {"a": "Ay", "b": "Beh"}       # leerer Text zählt als fehlend
+    assert s == {"a": "Ay", "b": "Beh"}       # empty text counts as missing
     assert "_meta" not in s
 
 
@@ -77,14 +77,14 @@ def test_kaputte_sprachdatei_wird_ignoriert(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Sprachwahl
+# Language selection
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("header,erwartet", [
     ("de-DE,de;q=0.9,en;q=0.8", "de"),
     ("en-US,en;q=0.9", "en"),
-    ("fr-CH,fr;q=0.9,de;q=0.8", "fr"),          # Regionalcode zählt für die Sprache
-    ("en;q=0.5,fr;q=0.9", "fr"),                # Gewichtung schlägt Reihenfolge
-    ("it-IT,it;q=0.9", "de"),                   # nichts passt -> Quellsprache
+    ("fr-CH,fr;q=0.9,de;q=0.8", "fr"),          # region code counts for the language
+    ("en;q=0.5,fr;q=0.9", "fr"),                # weighting beats order
+    ("it-IT,it;q=0.9", "de"),                   # nothing fits -> source language
     ("", "de"),
     (None, "de"),
     ("*", "de"),
@@ -103,8 +103,8 @@ def test_negotiate_auto_fragt_den_browser():
 
 
 def test_negotiate_unbekannte_einstellung_faellt_auf_den_browser_zurueck():
-    """Eine Sprache, die es nicht (mehr) gibt, darf die Oberfläche nicht
-    festfahren – dann zählt wieder der Browser."""
+    """A language that does not (or no longer) exist must not jam the UI –
+    then the browser counts again."""
     assert i18n.negotiate("kl", "fr-FR,fr;q=0.9") == "fr"
 
 
@@ -112,7 +112,7 @@ def test_negotiate_unbekannte_einstellung_faellt_auf_den_browser_zurueck():
     ("de-DE,de;q=0.9,en;q=0.8", ["de-de", "de", "en"]),
     ("en;q=0.5,fr", ["fr", "en"]),
     ("  de , en ", ["de", "en"]),
-    ("de;q=unsinn,en", ["en", "de"]),           # unlesbares q zählt als 0
+    ("de;q=unsinn,en", ["en", "de"]),           # unreadable q counts as 0
     ("", []),
 ])
 def test_parse_accept_language(header, erwartet):
@@ -120,7 +120,7 @@ def test_parse_accept_language(header, erwartet):
 
 
 # --------------------------------------------------------------------------
-# Vollständigkeit der Übersetzungen
+# Completeness of the translations
 # --------------------------------------------------------------------------
 def test_alle_sprachen_haben_dieselben_schluessel():
     basis = set(roh("de"))
@@ -137,8 +137,8 @@ def test_kein_text_ist_leer():
 
 
 def test_platzhalter_stimmen_ueberein():
-    """{name} muss in jeder Sprache dieselbe Menge sein – ein vergessener
-    Platzhalter zeigt sonst "{n}" statt einer Zahl."""
+    """{name} must be the same set in every language – a forgotten
+    placeholder otherwise shows "{n}" instead of a number."""
     basis = roh("de")
     for code in SPRACHEN[1:]:
         andere = roh(code)
@@ -149,7 +149,7 @@ def test_platzhalter_stimmen_ueberein():
 
 
 def test_uebersetzungen_sind_nicht_bloss_kopiert():
-    """Eine Handvoll auffälliger Schlüssel: hier muss wirklich übersetzt sein."""
+    """A handful of conspicuous keys: these must really be translated."""
     de, en, fr = (roh(c) for c in SPRACHEN)
     for k in ("nav.search", "export.start", "search.go", "wizard.token.title"):
         assert en[k] != de[k], f"{k} ist im Englischen unverändert"
@@ -157,23 +157,21 @@ def test_uebersetzungen_sind_nicht_bloss_kopiert():
 
 
 def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
-    """Der Kasten steht ÜBER den Treffern. Er muss deshalb in jeder Sprache
-    sagen, dass hier eine KI schreibt, dass sie in Ollama auf diesem Rechner
-    läuft und dass sie sich auf die Treffer darunter stützt – "lokal erzeugt"
-    allein sagt keines der drei."""
+    """The box sits ABOVE the hits. It must therefore say in every language
+    that an AI is writing here, that it runs in Ollama on this machine and
+    that it rests on the hits below – "generated locally" alone says none
+    of the three."""
     for code in SPRACHEN:
         d = roh(code)
-        # "search.ai" war das Etikett der alten Checkbox; die Kennzeichnung
-        # steht jetzt in der Kopfzeile des Kastens selbst.
-        # settings.chat_model.hint hieß die Erklärung, solange sie als Fließtext
-        # unter dem Feld stand; sie steckt jetzt im (i) der Karte.
+        # The labelling sits in the header line of the box itself; the
+        # explanation lives in the (i) of the settings card.
         for k in ("search.ai.label", "search.ai.note", "settings.ki.i"):
             assert "llama" in d[k], f"{code}.json[{k}] nennt Ollama nicht"
         kopf = d["search.ai.label"] + " " + d["search.ai.tag"]
         assert re.search(r"\bKI\b|\bAI\b|\bIA\b", kopf), \
             f"{code}.json: Kopfzeile kennzeichnet die KI nicht"
-        # Der Bezug auf die Treffer darunter – sonst wirkt die Zusammenfassung
-        # wie ein eigenständiges Ergebnis.
+        # The reference to the hits below – otherwise the summary looks
+        # like a standalone result.
         assert re.search(r"unten|below|ci-dessous", d["search.ai.label"]), \
             f"{code}.json: Kopfzeile nennt den Bezug zu den Treffern nicht"
         assert re.search(r"Claude", d["search.ai.note"]), \
@@ -181,40 +179,42 @@ def test_ki_zusammenfassung_ist_klar_gekennzeichnet():
 
 
 # --------------------------------------------------------------------------
-# Abgleich mit app.py – die eigentliche Klammer
+# Reconciliation with app.py – the actual clamp
 # --------------------------------------------------------------------------
-# Namensräume der Textschlüssel. Ein Literal in app.py, das so anfängt, ist ein
-# Schlüssel – damit werden auch die zusammengesetzten Fälle gefunden
-# (t(x ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')), an denen ein Muster um t(…)
-# herum vorbeiliefe.
+# Namespaces of the text keys. A literal in app.py that starts like this is
+# a key – that also catches the composed cases
+# (t(x ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')) which a pattern around
+# t(…) would miss.
 PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.",
            "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.")
 
-# Seit die Skripte über progress.event() in Textschlüsseln erzählen, liegen
-# Schlüssel auch außerhalb von app.py.
-SKRIPTE = ("outlook_export.py", "teams_export.py", "onedrive_export.py",
+# The scripts narrate via progress.event() in text keys, so keys also live
+# outside app.py.
+SKRIPTE = ("page.py", "steps.py", "runner.py",   # the app.py split
+           "outlook_export.py", "teams_export.py", "onedrive_export.py",
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py")
 
-# Schlüssel, die erst zur Laufzeit entstehen ('cal.st.' + status) und deshalb
-# nirgends vollständig im Quelltext stehen.
+# Keys that only come into being at runtime ('cal.st.' + status) and
+# therefore appear nowhere in full in the source.
 DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks")),
-    # Der Platzhalter im Suchfeld wechselt mit der Suchart.
+    # The placeholder in the search field changes with the search type.
     ("search.ph.", ("text", "aehnlich", "ki")),
-    # Die vier Teams-Arten heißen im Index nach ihrem Ablageordner; die
-    # Ordnerauswahl setzt den Namensraum davor und zeigt den lesbaren Namen.
+    # The four Teams kinds are named in the index after their storage
+    # folder; the folder picker prefixes the namespace and shows the
+    # readable name.
     ("search.folder.teams.", ("1on1", "group", "meeting", "channels")),
-    # Die Zeilen des Fehlerberichts: app.systemangaben liefert nur den Rumpf
-    # ("os", "cores", …), die Oberfläche setzt den Namensraum davor.
-    # Die Kachel im Kopf hat drei Lagen und setzt den Schlüssel daraus zusammen.
+    # The lines of the error report: app.systemangaben delivers only the
+    # stem ("os", "cores", …), the UI prefixes the namespace.
+    # The tile in the header has three layers and composes the key from them.
     ("pill.mcp.", ("on", "off", "aus")),
     ("pill.ollama.tip.", ("on", "aus", "weg", "modell")),
     ("pill.mcp.tip.", ("on", "off", "aus")),
@@ -230,24 +230,24 @@ DYNAMISCH = (
 
 
 def benutzte_schluessel():
-    """Alle Textschlüssel, die app.py verwendet – aus dem Quelltext gelesen.
+    """All text keys app.py uses – read from the source.
 
-    Markup (data-i18n…), JavaScript (t('…'), auch in Bedingungen) und die
-    serverseitigen Meldungen (logk("…"), {"k": "…"}, Schritt-Bezeichnungen).
-    Von Hand gepflegt liefe die Liste unweigerlich weg.
+    Markup (data-i18n…), JavaScript (t('…'), including in conditions) and
+    the server-side messages (logk("…"), {"k": "…"}, step labels).
+    Maintained by hand, the list would inevitably drift.
     """
     wurzel = Path(app_mod.__file__).resolve().parent
     quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
     for name in SKRIPTE:
         quelle += (wurzel / name).read_text(encoding="utf-8")
     keys = set(re.findall(r'data-i18n(?:-html|-ph|-title)?="([\w.]+)"', quelle))
-    # Literale in einfachen/doppelten Anführungszeichen und in HTML-Attributen
-    # (dort steht &quot; statt ").
+    # Literals in single/double quotes and in HTML attributes
+    # (there &quot; stands in for ").
     muster = r"""(?:['"]|&quot;)([\w][\w.]*\.[\w.]+)(?:['"]|&quot;)"""
     for treffer in re.findall(muster, quelle):
         if treffer.startswith(PREFIXE) and not treffer.endswith("."):
             keys.add(treffer)
-    keys.discard("app.log")          # Protokolldatei, kein Textschlüssel
+    keys.discard("app.log")          # log file, not a text key
     for rumpf, enden in DYNAMISCH:
         assert f"'{rumpf}'" in quelle, f"{rumpf} wird nicht mehr zusammengesetzt"
         keys |= {rumpf + e for e in enden}
@@ -261,17 +261,17 @@ def test_jeder_verwendete_schluessel_ist_uebersetzt():
 
 
 def test_keine_verwaisten_texte():
-    """Findet Zeilen, die nach einem Umbau niemand mehr anzeigt."""
+    """Finds lines that nobody displays any more after a rebuild."""
     verwaist = set(roh("de")) - benutzte_schluessel()
     assert not verwaist, f"in lang/, aber von app.py nicht verwendet: {sorted(verwaist)}"
 
 
 # --------------------------------------------------------------------------
-# Auslieferung der Seite
+# Serving the page
 # --------------------------------------------------------------------------
 def test_seite_traegt_keine_deutschen_reste_bei_fremder_sprache():
-    """Alles Sichtbare kommt aus der Sprachdatei – das Markup enthält deutschen
-    Text nur als Notnagel, falls JavaScript ausfällt."""
+    """Everything visible comes from the language file – the markup carries
+    German text only as a stopgap in case JavaScript fails."""
     en = i18n.strings("en")
     for k in ("nav.settings", "export.start", "sched.title", "mcp.title"):
         assert en[k] and not re.search(r"[äöüß]", en[k])
