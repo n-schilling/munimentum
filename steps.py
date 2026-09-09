@@ -78,6 +78,7 @@ def _calendar_argv(cfg, ctx, pfade):
 
 REGISTRY = (
     {"key": "outlook", "anfrage": "outlook", "script": "outlook_export",
+     "start": "job.start.outlook",
      "label": "job.step.outlook", "corpus": True, "zugang": True,
      "schedule": "outlook", "master": None, "quelle": "Outlook",
      "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
@@ -90,6 +91,7 @@ REGISTRY = (
          "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])}},
 
     {"key": "onedrive", "anfrage": "onedrive", "script": "onedrive_export",
+     "start": "job.start.onedrive",
      "label": "job.step.onedrive", "corpus": True, "zugang": True,
      "schedule": "onedrive", "master": "onedrive_enabled",
      "quelle": "OneDrive",
@@ -97,6 +99,7 @@ REGISTRY = (
      "env": _onedrive_env},
 
     {"key": "sharepoint", "anfrage": "sharepoint",
+     "start": "job.start.sharepoint",
      "script": "sharepoint_export",
      "label": "job.step.sharepoint", "corpus": True, "zugang": True,
      "schedule": "sharepoint", "master": "sharepoint_enabled",
@@ -108,6 +111,7 @@ REGISTRY = (
             if ctx["nur_einheit"] else {})}},
 
     {"key": "planner", "anfrage": "planner", "script": "planner_export",
+     "start": "job.start.planner",
      "label": "job.step.planner", "corpus": True, "zugang": True,
      "schedule": "planner", "master": "planner_enabled",
      "quelle": "search.source.planner",
@@ -120,6 +124,7 @@ REGISTRY = (
          **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {})}},
 
     {"key": "sharepoint_pages", "anfrage": "sharepoint_pages",
+     "start": "job.start.sharepoint_pages",
      "script": "sharepoint_export",
      "label": "job.step.pages", "corpus": True, "zugang": True,
      "schedule": "sharepoint_pages", "master": "sharepoint_pages_enabled",
@@ -134,6 +139,7 @@ REGISTRY = (
              str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))}},
 
     {"key": "teams", "anfrage": "teams", "script": "teams_export",
+     "start": "job.start.teams",
      "label": "job.step.teams", "corpus": True, "zugang": True,
      "schedule": "teams", "master": None, "quelle": "Teams",
      "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
@@ -146,6 +152,7 @@ REGISTRY = (
          "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))}},
 
     {"key": "index", "anfrage": "index", "script": "rag_index",
+     "start": "job.start.index",
      "label": lambda ctx: ("job.step.index" if ctx["embeddings"]
                            else "job.step.index.lexical"),
      "corpus": False, "zugang": False,
@@ -157,6 +164,7 @@ REGISTRY = (
      "ziel": lambda cfg, pfade: pfade["store_db"]},
 
     {"key": "calendar", "anfrage": "calendar", "script": "combined_search",
+     "start": "job.start.calendar",
      "label": lambda ctx: ("job.step.calendar" if ctx["reconstruct"]
                            else "job.step.calendar.plain"),
      "corpus": False, "zugang": False,
@@ -165,6 +173,7 @@ REGISTRY = (
      "ziel": lambda cfg, pfade: pfade["calendar_file"]},
 
     {"key": "onedrive_folders", "anfrage": "sync_onedrive",
+     "start": "job.start.onedrive_folders",
      "script": "onedrive_export",
      "label": "job.step.folders", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -173,6 +182,7 @@ REGISTRY = (
          "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or "")}},
 
     {"key": "sharepoint_folders", "anfrage": "sync_sharepoint",
+     "start": "job.start.sharepoint_folders",
      "script": "sharepoint_export",
      "label": "job.step.folders", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -180,12 +190,14 @@ REGISTRY = (
      "env": _sharepoint_env},
 
     {"key": "folders", "anfrage": "sync_folders", "script": "outlook_export",
+     "start": "job.start.folders",
      "label": "job.step.folders", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
      "argv": lambda cfg, ctx, pfade: ["--folders", pfade["outlook"]],
      "env": lambda cfg, ctx: {}},
 
     {"key": "calendars", "anfrage": "sync_calendars",
+     "start": "job.start.calendars",
      "script": "outlook_export",
      "label": "job.step.calendars", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -193,12 +205,14 @@ REGISTRY = (
      "env": lambda cfg, ctx: {}},
 
     {"key": "check", "anfrage": "check", "script": "outlook_export",
+     "start": "job.start.check",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["outlook"]],
      "env": lambda cfg, ctx: {}},
 
     {"key": "check_onedrive", "anfrage": "check_onedrive",
+     "start": "job.start.check_onedrive",
      "script": "onedrive_export",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -206,6 +220,7 @@ REGISTRY = (
      "env": _onedrive_env},
 
     {"key": "check_sharepoint", "anfrage": "check_sharepoint",
+     "start": "job.start.check_sharepoint",
      "script": "sharepoint_export",
      "label": "job.step.preview", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -213,6 +228,7 @@ REGISTRY = (
      "env": _sharepoint_env},
 
     {"key": "check_pages", "anfrage": "check_pages",
+     "start": "job.start.check_pages",
      "script": "sharepoint_export",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
@@ -235,7 +251,7 @@ def baue(cfg, ctx, pfade, base_env, script_argv, angefragt):
         if "aktiv" in e and not e["aktiv"](cfg, ctx):
             continue
         label = e["label"](ctx) if callable(e["label"]) else e["label"]
-        schritt = {"key": e["key"], "label": label,
+        schritt = {"key": e["key"], "label": label, "start": e["start"],
                    "argv": script_argv(e["script"],
                                        *e["argv"](cfg, ctx, pfade)),
                    "env": {**base_env, **e["env"](cfg, ctx)}}

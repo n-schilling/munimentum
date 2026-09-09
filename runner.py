@@ -169,8 +169,11 @@ class JobRunner:
             self.job = {**self.job, "step": step["label"], "index": i,
                         "progress": None}      # every step counts up from zero
             # The heading comes first in every case – a skipped step is
-            # still a step of this run, and its reason belongs under it.
-            self.logk("srv.job.step", "head", step={"k": step["label"], "v": {}})
+            # still a step of this run, and its reason belongs under it. It
+            # says what STARTS ("Microsoft Planner export starts"); the short
+            # label serves the result, finish and skip lines and the table.
+            self.logk("srv.job.step", "head",
+                      step={"k": step.get("start") or step["label"], "v": {}})
             grund = step.get("auslassen")
             if grund is None and self._erspart(step):
                 grund = {"k": "srv.job.skipped",

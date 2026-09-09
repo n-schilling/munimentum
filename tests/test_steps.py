@@ -67,6 +67,8 @@ def test_jede_beschriftung_ist_uebersetzt():
                        for an in (True, False)])
         for k in kandidaten:
             assert k in de, f"{e['key']}: {k}"
+        # The heading of the step in the log ("… export starts").
+        assert e["start"] in de, f"{e['key']}: {e['start']}"
 
 
 def test_jede_quelle_ist_uebersetzt_oder_klarname():
