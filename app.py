@@ -225,10 +225,17 @@ ALT_ORDNER = (TEAMS_DIR, OUTLOOK_DIR, ONEDRIVE_DIR, SHAREPOINT_DIR,
 _ALT_GEPINNT = False
 
 
-# The loose state files of 6.1 and older. 7.0 carries no migration any more
-# (the latest 6.x does it): what it can still do is RECOGNISE the old layout
-# instead of quietly starting over – an empty state.db would re-download the
-# whole mailbox and orphan the tombstones, which are write-once by design.
+# --------------------------------------------------------------------------
+# Upgrade leftovers: recognise, pin what is safe, block the rest – never move
+#
+# Three situations an older installation can leave behind, one rule for all
+# of them: the app moves no data. The flat pre-7.0 layout is PINNED (the
+# config points at it, altbestand_pinnen); the pre-6.2 state files and the
+# 6.x pointer file cannot be handled safely and BLOCK every run instead
+# (lauf_sperren) – going ahead would mean a full re-download beside the real
+# archive and orphaned, write-once tombstones. Startup says it, every run
+# checks it again, so the block lifts as soon as the user has sorted it out.
+# --------------------------------------------------------------------------
 ALT_STATE = {"outlook": ("exported.tsv", "verschwunden.tsv", folders.DATEI,
                          folders.KALENDER, "vollstaendigkeit.json"),
              "teams": ("export_state.json",),
@@ -312,6 +319,26 @@ def altbestand_pinnen():
     BASE, STORE_PFAD = _split_pfade(HEIM)
     _ALT_GEPINNT = True
     return True
+
+
+def lauf_sperren():
+    """Every reason why no run may start on this installation – [] when none.
+
+    The one answer both the startup log and the run gate read, so they
+    cannot disagree; checked per run, not once, because the user fixes
+    these things while the app is open.
+    """
+    sperren = []
+    alt = altbestand_state()
+    if alt:
+        sperren.append({"k": "srv.legacy.state",
+                        "v": {"stores": ", ".join(alt)}})
+    zeiger = alter_zeiger()
+    if zeiger:
+        sperren.append({"k": "srv.layout.pointer",
+                        "v": {"pointer": str(standard_data_dir() / ZEIGER_DATEI),
+                              "data": str(zeiger), "home": str(HEIM)}})
+    return sperren
 
 # Category -> Graph permission. The wizard uses this to check whether the
 # pasted token covers what is selected (scp claim in the JWT).
@@ -1589,20 +1616,11 @@ class App:
                nur_einheit=None, origin="manual"):
         if self.jobs.busy:
             return False, {"k": "srv.busy", "v": {}}
-        # No run at all against a 6.1 state. Not just exports: a folder
-        # sync writes the tree into a state.db, which would create the very
-        # file this guard looks for and quietly disarm it.
-        alt = altbestand_state()
-        if alt:
-            return False, {"k": "srv.legacy.state",
-                           "v": {"stores": ", ".join(alt)}}
-        # And never next to an archive the old pointer still names.
-        zeiger = alter_zeiger()
-        if zeiger:
-            return False, {"k": "srv.layout.pointer",
-                           "v": {"pointer": str(standard_data_dir()
-                                                / ZEIGER_DATEI),
-                                 "data": str(zeiger), "home": str(HEIM)}}
+        # No run at all on an installation an upgrade left half-done – not
+        # just exports: a folder sync writes a state.db, which would create
+        # the very file the legacy check looks for and quietly disarm it.
+        for sperre in lauf_sperren():
+            return False, sperre
         gewaehlt = embeddings is not None      # explicitly set vs. self-determined
         if embeddings is None:
             embeddings = (self.semantisch_gewollt()
@@ -2597,14 +2615,8 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
         # Detected, said, nothing moved: the split is possible from now on,
         # but relocating stays the user's manual work.
         app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
-    alt = altbestand_state()
-    if alt:
-        app.jobs.logk("srv.legacy.state", "err", stores=", ".join(alt))
-    zeiger = alter_zeiger()
-    if zeiger:
-        app.jobs.logk("srv.layout.pointer", "err",
-                      pointer=str(standard_data_dir() / ZEIGER_DATEI),
-                      data=str(zeiger), home=str(HEIM))
+    for sperre in lauf_sperren():
+        app.jobs.log(sperre, "err")
     app.check_updates()
     app.scheduler.start()
     app.autostart_mcp()

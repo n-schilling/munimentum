@@ -1540,6 +1540,41 @@ def test_alter_zeiger_sperrt_bis_die_pfade_stehen(standardort, tmp_path,
     assert app_mod.alter_zeiger() is None
 
 
+def test_lauf_sperren_kennt_jede_upgrade_lage(standardort, tmp_path,
+                                              monkeypatch):
+    """One answer to "may a run start here?" – every upgrade leftover the
+    app recognises lands in this list, so the startup log and the run gate
+    cannot disagree, and the block lifts as the user sorts things out."""
+    import settings
+    import state_db
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(standardort))
+    monkeypatch.setattr(app_mod, "CONFIG_FILE",
+                        standardort / "app_config.json")
+    monkeypatch.setattr(app_mod, "BASE", standardort / "data")
+    settings.reset()
+    assert app_mod.lauf_sperren() == []                # fresh install
+
+    ordner = standardort / "data" / app_mod.OUTLOOK_DIR   # 6.1 state files
+    ordner.mkdir(parents=True)
+    (ordner / "exported.tsv").write_text("m\ta.eml\n", encoding="utf-8")
+    assert [s["k"] for s in app_mod.lauf_sperren()] == ["srv.legacy.state"]
+
+    platte = tmp_path / "platte"                      # plus a 6.x pointer
+    (platte / app_mod.OUTLOOK_DIR).mkdir(parents=True)
+    (standardort / app_mod.ZEIGER_DATEI).write_text(str(platte),
+                                                    encoding="utf-8")
+    assert [s["k"] for s in app_mod.lauf_sperren()] == [
+        "srv.legacy.state", "srv.layout.pointer"]
+
+    # The user runs 6.x once (state.db appears) and chooses the folder.
+    state_db.StateDb(ordner).kv_schreiben("x", "1")
+    cfg = app_mod.load_config()
+    cfg["data_dir"] = str(platte)
+    app_mod.save_config(cfg)
+    settings.reset()
+    assert app_mod.lauf_sperren() == []
+
+
 def test_nur_uebersprungene_exporte_lassen_den_index_aus(sandbox, with_ollama):
     """Every requested export dropped by its cadence means nothing new by
     definition – the run must not re-read the whole archive for the index.
