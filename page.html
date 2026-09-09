@@ -919,7 +919,6 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <div class="feldzeile breit">
         <div class="row">
           <input type="text" id="c-data-dir" style="flex:1;min-width:280px">
-          <button class="mini" onclick="setzeDatenordner()" data-i18n="settings.datadir.save">Übernehmen</button>
           <button class="mini" onclick="datenordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
           <span class="small" id="datadir-msg"></span>
         </div>
@@ -928,7 +927,6 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <div class="feldzeile breit">
         <div class="row">
           <input type="text" id="c-index-dir" style="flex:1;min-width:280px">
-          <button class="mini" onclick="setzeIndexordner()" data-i18n="settings.datadir.save">Übernehmen</button>
           <button class="mini" onclick="indexordnerZurueck()" data-i18n="settings.datadir.reset">Standard</button>
           <span class="small" id="indexdir-msg"></span>
         </div>
@@ -3373,6 +3371,7 @@ function speichereEinstellungen(){
   // when it changed: /api/schedule restarts the interval, and a settings
   // save must not keep postponing a run that is nearly due.
   if(planGeaendert()) saveSchedule();
+  speichereAblage();
   var body = {skip_folders: el('c-skip_folders').value,
               filetype_hidden: el('c-filetype_hidden').value,
               analytics_skip: el('c-analytics_skip').value,
@@ -3514,25 +3513,26 @@ function gleicheOrdnerAb(quelle){
   });
 }
 
-function setzeAblage(koerper, feldId, msgId){
-  post('/api/data-dir', koerper).then(function(r){
-    var kasten = el(msgId);
-    if(!r.ok){ kasten.className = 'small err'; kasten.textContent = mtext(r.message); return; }
-    el(feldId).value = koerper.path !== undefined ? r.path : r.index;
-    kasten.className = 'small muted';
-    kasten.textContent = t(r.restart ? 'settings.datadir.restart' : 'settings.datadir.same');
+/* The two storage paths travel with the settings save – one button for
+   the whole tab. A folder the app cannot write to is refused by the
+   server, shown next to the fields and written to the log. */
+function speichereAblage(){
+  var koerper = {path: el('c-data-dir').value.trim(),
+                 index: el('c-index-dir').value.trim()};
+  return post('/api/data-dir', koerper).then(function(r){
+    var text = r.ok ? t(r.restart ? 'settings.datadir.restart'
+                                  : 'settings.datadir.same') : mtext(r.message);
+    ['datadir-msg', 'indexdir-msg'].forEach(function(id){
+      var kasten = el(id);
+      kasten.className = 'small ' + (r.ok ? 'muted' : 'err');
+      kasten.textContent = text;
+    });
+    if(r.ok){ el('c-data-dir').value = r.path; el('c-index-dir').value = r.index; }
   });
 }
-function setzeDatenordner(pfad){
-  setzeAblage({path: pfad !== undefined ? pfad : el('c-data-dir').value.trim()},
-              'c-data-dir', 'datadir-msg');
-}
-function datenordnerZurueck(){ setzeDatenordner(''); }
-function setzeIndexordner(pfad){
-  setzeAblage({index: pfad !== undefined ? pfad : el('c-index-dir').value.trim()},
-              'c-index-dir', 'indexdir-msg');
-}
-function indexordnerZurueck(){ setzeIndexordner(''); }
+// "Default" only fills the field – saving is what applies it.
+function datenordnerZurueck(){ el('c-data-dir').value = S.data_dir_default || ''; }
+function indexordnerZurueck(){ el('c-index-dir').value = S.index_dir_default || ''; }
 
 function ordnerZuruecksetzen(){
   el('c-skip_folders').value = (S.skip_folders_default || []).join('\n');

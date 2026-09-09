@@ -1982,6 +1982,10 @@ class Handler(BaseHTTPRequestHandler):
                     if roh:
                         ziel, fehler = pruefe_datenordner(roh)
                         if fehler:
+                            # Into the log as well: the settings save posts
+                            # this along with everything else, and a
+                            # refusal must not hide in one small field.
+                            app.jobs.log(fehler, "err")
                             return self._json({"ok": False,
                                                "message": fehler}, 400)
                     else:
@@ -1989,9 +1993,16 @@ class Handler(BaseHTTPRequestHandler):
                     neu[key] = "" if ziel == vorgabe else str(ziel)
                     antwort[feld] = str(ziel)
                     neustart = neustart or str(ziel) != str(aktuell)
+                vorher = {key: app.cfg.get(key) or "" for key in neu}
                 app.konfiguriere(lambda cfg: cfg.update(neu))
-                app.jobs.logk("srv.datadir.set", "warn",
-                              path=antwort.get("path", str(BASE)))
+                # One line per path that really changed, each naming its
+                # own folder – an index change used to be logged as the
+                # data folder, which read as if the wrong one had been saved.
+                for feld, key, _vorgabe, _aktuell in felder:
+                    if key in neu and neu[key] != vorher[key]:
+                        app.jobs.logk("srv.datadir.set" if key == "data_dir"
+                                      else "srv.indexdir.set", "warn",
+                                      path=antwort[feld])
                 # BASE is fixed since startup and goes to every subprocess
                 # as its working directory. Repointing it mid-operation –
                 # possibly while an export runs – would be grossly negligent.

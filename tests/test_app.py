@@ -4268,8 +4268,18 @@ def test_http_datenordner_setzen(server, standardort, tmp_path):
                    {"index": str(tmp_path / "ix")})
     assert code == 200 and r["ok"]
     assert a.cfg["index_dir"] == str((tmp_path / "ix").resolve())
+    # The log names the folder that changed – an index change was logged
+    # as the data folder, which read as if the wrong one had been saved.
+    zeilen = [z["text"] for z in a.jobs.lines if isinstance(z["text"], dict)]
+    assert zeilen[-1]["k"] == "srv.indexdir.set"
+    assert zeilen[-1]["v"]["path"] == str((tmp_path / "ix").resolve())
     code, r = call(port, "POST", "/api/data-dir", {"index": ""})
     assert code == 200 and a.cfg["index_dir"] == ""
+    # Saving the same values again says nothing – the settings save posts
+    # both paths on every click.
+    n = len(a.jobs.lines)
+    call(port, "POST", "/api/data-dir", {"path": str(ziel), "index": ""})
+    assert len(a.jobs.lines) == n
 
 
 def test_http_datenordner_ablehnen(server, standardort, tmp_path):
@@ -4279,6 +4289,9 @@ def test_http_datenordner_ablehnen(server, standardort, tmp_path):
     code, r = call(port, "POST", "/api/data-dir", {"path": str(kaputt)})
     assert code == 400 and not r["ok"]
     assert not a.cfg.get("data_dir"), "kaputter Wert wurde trotzdem gemerkt"
+    # The refusal reaches the log too, not only the small field.
+    letzte = [z for z in a.jobs.lines if isinstance(z["text"], dict)][-1]
+    assert letzte["level"] == "err" and letzte["text"]["k"] == r["message"]["k"]
 
 
 def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
@@ -7007,8 +7020,8 @@ def test_jedes_feld_ist_auch_gelistet():
                  "analytics_skip",    # multi-line text, handled separately
                  "language",          # its own select, fuelleSprachen()
                  "notifications",     # its own select, saved by hand
-                 "data-dir",          # its own button (setzeDatenordner)
-                 "index-dir",         # its own button (setzeIndexordner)
+                 "data-dir",          # posted to /api/data-dir by the save
+                 "index-dir",         # likewise
                  "ollama_enabled",    # toggle, see ollamaSchalter()
                  "index_kind",        # select, mirrors INDEX_SEMANTISCH via indexart()
                  "onedrive_enabled",  # lives in the "Export" tab, saveCats()
