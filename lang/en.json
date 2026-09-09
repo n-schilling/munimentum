@@ -476,7 +476,7 @@
   "run.drive.replan": "Enumeration already stored from the interrupted run – continuing straight with the downloads.",
   "run.file_failed": "{name}: {error}",
   "run.index.reading": "Index: reading the exports …",
-  "run.index.read": "{n} items read into {chunks} chunks ({s} s).",
+  "run.index.read": "{reused} files unchanged and re-used, {read} read – {chunks} chunks ({s} s).",
   "run.index.plan": "{chunks} chunks: {reused} reused, {new} new ({short} too short to carry meaning).",
   "run.index.saved_stale": "{n} existing embeddings saved – a later run with Ollama reuses them.",
   "run.index.rebuild": "Old index unreadable – rebuilding from scratch.",

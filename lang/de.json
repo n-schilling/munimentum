@@ -476,7 +476,7 @@
   "run.drive.replan": "Die Aufzählung liegt aus dem unterbrochenen Lauf schon vor – es geht direkt mit den Downloads weiter.",
   "run.file_failed": "{name}: {error}",
   "run.index.reading": "Index: Exporte werden eingelesen …",
-  "run.index.read": "{n} Einträge in {chunks} Chunks eingelesen ({s} s).",
+  "run.index.read": "{reused} Dateien unverändert übernommen, {read} gelesen – {chunks} Chunks ({s} s).",
   "run.index.plan": "{chunks} Chunks: {reused} wiederverwendet, {new} neu ({short} zu kurz für Bedeutung).",
   "run.index.saved_stale": "{n} vorhandene Embeddings gesichert – ein späterer Lauf mit Ollama nutzt sie wieder.",
   "run.index.rebuild": "Alter Index unlesbar – baue komplett neu.",

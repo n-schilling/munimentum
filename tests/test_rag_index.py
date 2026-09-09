@@ -659,3 +659,98 @@ def test_store_von_frueher_wird_uebernommen(tmp_path, monkeypatch):
     assert neu == 0 and calls == [], "die vorhandenen Embeddings wurden verworfen"
     assert not (store / store_layout.LEGACY).exists(), "der alte Name blieb liegen"
     assert store_layout.vectors_path(store).name.startswith("vectors-")
+
+
+# --------------------------------------------------------------------------
+# Reading only what changed – the store is still rebuilt in full
+# --------------------------------------------------------------------------
+def _zaehle_parser(monkeypatch):
+    """Count how many files the per-file parsers actually open."""
+    zaehler = {"n": 0}
+    for name in ("_outlook_file", "_teams_file"):
+        echt = getattr(corpus, name)
+
+        def zaehlend(p_str, root_str, _echt=echt):
+            zaehler["n"] += 1
+            return _echt(p_str, root_str)
+        monkeypatch.setattr(corpus, name, zaehlend)
+    return zaehler
+
+
+def _nachrichten(store):
+    con = sqlite3.connect(store_layout.db_path(store))
+    try:
+        return {r[0]: {"title": r[1], "gone": r[2]} for r in con.execute(
+            "SELECT uid, title, gone FROM chunks WHERE seq = 0")}
+    finally:
+        con.close()
+
+
+def test_zweiter_lauf_liest_unveraenderte_dateien_nicht(tmp_path, monkeypatch):
+    """The minute of silence at the start of every index run was the whole
+    archive being read and hashed again, only to learn that nothing had
+    changed. A file whose mtime and size still match the previous manifest
+    keeps its chunks from the previous index instead."""
+    _make_exports(tmp_path)
+    zaehler = _zaehle_parser(monkeypatch)
+    (n1, _, _), _, store = _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 2                          # one .html, one .eml
+    zaehler["n"] = 0
+    (n2, neu, _), _, _ = _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 0, "unveränderte Dateien wurden erneut gelesen"
+    assert n2 == n1 and neu == 0
+    con = sqlite3.connect(store_layout.db_path(store))
+    assert con.execute("SELECT COUNT(*) FROM dateien").fetchone()[0] == 2
+    con.close()
+
+
+def test_geaenderte_datei_wird_neu_gelesen(tmp_path, monkeypatch):
+    _make_exports(tmp_path)
+    _build(tmp_path, monkeypatch)
+    zaehler = _zaehle_parser(monkeypatch)
+    (tmp_path / "outlook_export" / "inbox" / "mail.eml").write_bytes(
+        _eml(subject="Ganz neu und deutlich laenger"))
+    _, _, store = _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 1                          # only the changed file
+    titel = {c["title"] for c in _nachrichten(store).values()}
+    assert "Ganz neu und deutlich laenger" in titel and "Testmail" not in titel
+
+
+def test_verschwundene_datei_faellt_aus_dem_index(tmp_path, monkeypatch):
+    _make_exports(tmp_path)
+    (n1, _, _), _, _ = _build(tmp_path, monkeypatch)
+    (tmp_path / "outlook_export" / "inbox" / "mail.eml").unlink()
+    (n2, _, _), _, store = _build(tmp_path, monkeypatch)
+    assert n2 == n1 - 1
+    assert not any(uid.startswith("outlook:") for uid in _nachrichten(store))
+
+
+def test_grabstein_erreicht_wiederverwendete_chunks(tmp_path, monkeypatch):
+    """A tombstone appears while the file stays byte-identical – the reused
+    chunk must carry today's answer, not last run's."""
+    import state_db
+    _make_exports(tmp_path)
+    _build(tmp_path, monkeypatch)
+    state_db.StateDb(tmp_path / "outlook_export").verschwunden_ergaenzen(
+        ["inbox/mail.eml"], "2025-05-05")
+    zaehler = _zaehle_parser(monkeypatch)
+    _, _, store = _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 0
+    assert _nachrichten(store)["outlook:inbox/mail.eml:0"]["gone"] == "2025-05-05"
+
+
+def test_alter_store_ohne_manifest_wird_voll_gelesen(tmp_path, monkeypatch):
+    """A store from before the manifest existed: read everything once, write
+    the manifest, and be incremental from the run after."""
+    _make_exports(tmp_path)
+    _, _, store = _build(tmp_path, monkeypatch)
+    con = sqlite3.connect(store_layout.db_path(store))
+    con.execute("DROP TABLE dateien")
+    con.commit()
+    con.close()
+    zaehler = _zaehle_parser(monkeypatch)
+    _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 2
+    zaehler["n"] = 0
+    _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 0

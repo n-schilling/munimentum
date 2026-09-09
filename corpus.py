@@ -192,10 +192,9 @@ def _teams_file(p_str, root_str):
     return out
 
 
-def load_teams(root_dir):
+def load_teams(root_dir, nur=None):
     root = Path(root_dir)
-    files = [p for p in sorted(root.rglob("*.html"))
-             if p.name not in ("index.html", "search.html")]
+    files = _nur(_dateien_teams(root), root, nur)
     recs = []
     for out in _pmap(_teams_file, files, root_dir):
         recs.extend(out)
@@ -449,11 +448,11 @@ def lies_verschwunden(root_dir):
     return state_db.StateDb(root_dir).verschwunden_lesen()
 
 
-def load_outlook(root_dir):
+def load_outlook(root_dir, nur=None):
     root = Path(root_dir)
-    files = sorted(root.rglob("*.eml"))
+    files = _nur(_dateien_outlook(root), root, nur)
     recs = [r for r in _pmap(_outlook_file, files, root_dir) if r is not None]
-    weg = lies_verschwunden(root_dir)
+    weg = grabsteine("outlook", root_dir)
     if weg:
         for r in recs:
             wann = weg.get(r["rel"])
@@ -725,23 +724,19 @@ def _datei_satz(p_str, root_str):
     }
 
 
-def load_onedrive(root_dir):
+def load_onedrive(root_dir, nur=None):
     """One record per mirrored file – name and path, no content."""
     root = Path(root_dir)
-    basis = root / ONEDRIVE_DIR
-    if not basis.is_dir():
-        return []
-    dateien = [p for p in sorted(basis.rglob("*"))
-               if p.is_file() and not p.name.endswith(".teil")]
+    dateien = _nur(_dateien_onedrive(root), root, nur)
     recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
-    weg = lies_verschwunden(root)          # the same reader as for the mailbox
+    weg = grabsteine("onedrive", root)     # the same reader as for the mailbox
     for r in recs:
         if r["rel"] in weg:
             r["gone"] = weg[r["rel"]]
     return recs
 
 
-def load_sharepoint(root_dir):
+def load_sharepoint(root_dir, nur=None):
     """One record per mirrored SharePoint file – name and path, no content.
 
     The mirror keeps one folder per library (<site>/<library>/Dateien/…),
@@ -752,15 +747,8 @@ def load_sharepoint(root_dir):
     root = Path(root_dir)
     if not root.is_dir():
         return []
-    import state_db
-    dateien, weg = [], {}
-    for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
-        dateien += [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
-                    if p.is_file() and not p.name.endswith(".teil")]
-        praefix = lib.relative_to(root).as_posix()
-        weg.update({f"{praefix}/{rel}": ts
-                    for rel, ts in
-                    state_db.StateDb(lib).verschwunden_lesen().items()})
+    dateien = _nur(_dateien_sharepoint(root), root, nur)
+    weg = grabsteine("sharepoint", root)
     recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
     for r in recs:
         r["root"] = "sharepoint"
@@ -793,7 +781,7 @@ def _seiten_satz(p_str, root_str):
     }
 
 
-def load_pages(root_dir):
+def load_pages(root_dir, nur=None):
     """One record per rendered site page – full text, straight from the HTML.
 
     Unlike the file mirrors, the content is right there: the pages export
@@ -801,12 +789,11 @@ def load_pages(root_dir):
     index and the full-text search reads SharePoint pages like mail. The
     parse fans out like every sibling loader.
     """
-    import state_db
     root = Path(root_dir)
     if not root.is_dir():
         return []
-    weg = state_db.StateDb(root).verschwunden_lesen()
-    dateien = sorted(root.rglob("*.html"))
+    weg = grabsteine("pages", root)
+    dateien = _nur(_dateien_pages(root), root, nur)
     recs = [r for r in _pmap(_seiten_satz, dateien, str(root)) if r]
     for satz in recs:
         if satz["rel"] in weg:
@@ -879,6 +866,93 @@ def load_planner(root_dir):
                 satz["gone"] = e["deleted"]
             recs.append(satz)
     return recs
+
+
+# --------------------------------------------------------------------------
+# What the index reads, file by file – shared by the loaders and by the
+# incremental read in rag_index: ONE enumeration per source, so a file the
+# manifest lists is exactly a file the loader would parse.
+# --------------------------------------------------------------------------
+def _dateien_teams(root):
+    return [p for p in sorted(root.rglob("*.html"))
+            if p.name not in ("index.html", "search.html")]
+
+
+def _dateien_outlook(root):
+    return sorted(root.rglob("*.eml"))
+
+
+def _dateien_onedrive(root):
+    basis = root / ONEDRIVE_DIR
+    if not basis.is_dir():
+        return []
+    return [p for p in sorted(basis.rglob("*"))
+            if p.is_file() and not p.name.endswith(".teil")]
+
+
+def _dateien_sharepoint(root):
+    dateien = []
+    for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
+        dateien += [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
+                    if p.is_file() and not p.name.endswith(".teil")]
+    return dateien
+
+
+def _dateien_pages(root):
+    return sorted(root.rglob("*.html"))
+
+
+DATEIEN = {"teams": _dateien_teams, "outlook": _dateien_outlook,
+           "onedrive": _dateien_onedrive, "sharepoint": _dateien_sharepoint,
+           "pages": _dateien_pages}
+
+
+def _nur(files, root, nur):
+    """Only the files whose rel path is wanted – None means all of them."""
+    if nur is None:
+        return files
+    return [p for p in files if p.relative_to(root).as_posix() in nur]
+
+
+def grabsteine(art, root_dir):
+    """rel -> since when the item is gone at the source, for one export root.
+
+    Kept apart from the parsing on purpose: a tombstone can appear while the
+    file stays byte-identical, so an unchanged file re-used from the last
+    index still has to pick up today's answer.
+    """
+    root = Path(root_dir)
+    if art in ("outlook", "onedrive"):
+        return lies_verschwunden(root)
+    if art == "pages":
+        import state_db
+        return state_db.StateDb(root).verschwunden_lesen()
+    if art == "sharepoint":
+        import state_db
+        weg = {}
+        for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
+            praefix = lib.relative_to(root).as_posix()
+            weg.update({f"{praefix}/{rel}": ts for rel, ts in
+                        state_db.StateDb(lib).verschwunden_lesen().items()})
+        return weg
+    return {}
+
+
+def manifest(art, root_dir):
+    """rel -> (mtime_ns, size) of every file the loader for `art` would
+    read. Cheap – one stat per file, no parsing – and the whole reason the
+    index can skip what did not change."""
+    root = Path(root_dir)
+    if not root.is_dir():
+        return {}
+    out = {}
+    for p in DATEIEN[art](root):
+        try:
+            st = p.stat()
+        except OSError:
+            continue
+        out[p.relative_to(root).as_posix()] = (st.st_mtime_ns, st.st_size)
+    return out
 
 
 def load_records(teams_dir, outlook_dir, onedrive_dir=None,

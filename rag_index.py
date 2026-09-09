@@ -121,8 +121,11 @@ def _people_rows(chunks):
             for (src, who), (cnt, toks) in agg.items()]
 
 
-def write_db(store, chunks):
-    """Rewrite corpus.db atomically (first .tmp, then replace)."""
+def write_db(store, chunks, manifest=None):
+    """Rewrite corpus.db atomically (first .tmp, then replace).
+
+    `manifest` – (root, rel) -> (mtime_ns, size) of every file read – goes
+    in as its own table, so the next run can tell which files to skip."""
     dbp = store_layout.db_path(store)
     tmp = dbp.with_name(dbp.name + ".tmp")
     tmp.unlink(missing_ok=True)
@@ -167,9 +170,18 @@ def write_db(store, chunks):
         -- stünden sie in jeder Vorschau und im Kontext der KI-Antwort.
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
             title, text, att, content='chunks', content_rowid='id');
+        -- The files this index was read from, with what identifies their
+        -- state cheaply: the next run re-uses the chunks of every file
+        -- whose entry still matches (see lese_bestand).
+        CREATE TABLE dateien(root TEXT NOT NULL, rel TEXT NOT NULL,
+                             mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
+                             PRIMARY KEY (root, rel));
     """)
     con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
+    con.executemany("INSERT INTO dateien VALUES (?,?,?,?)",
+                    ((root, rel, mtime, size) for (root, rel), (mtime, size)
+                     in (manifest or {}).items()))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
     con.commit()
@@ -293,6 +305,98 @@ def retire_vectors(store):
 # --------------------------------------------------------------------------
 # Building the index
 # --------------------------------------------------------------------------
+def _alter_bestand(store):
+    """What the previous index read: its file manifest and its chunks, both
+    keyed by (root, rel). (None, None) when there is no previous index or
+    one from before the manifest existed – then everything is read."""
+    dbp = store_layout.db_path(Path(store))
+    if not dbp.exists():
+        return None, None
+    con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
+    try:
+        tabellen = {r[0] for r in con.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'")}
+        if "dateien" not in tabellen:
+            return None, None
+        manifest = {(root, rel): (mtime, size) for root, rel, mtime, size in
+                    con.execute("SELECT root, rel, mtime_ns, size FROM dateien")}
+        spalten = ("uid", "seq", "src", "root", "rel", "who", "ppl", "ts",
+                   "date", "title", "ctx", "text", "hash", "thread", "gone",
+                   "att")
+        chunks = {}
+        for row in con.execute(f"SELECT {', '.join(spalten)} FROM chunks "
+                               "ORDER BY id"):
+            c = dict(zip(spalten, row, strict=True))
+            c["cid"] = f'{c["uid"]}#{c.pop("seq")}'
+            chunks.setdefault((c["root"], c["rel"]), []).append(c)
+        return manifest, chunks
+    except sqlite3.Error:
+        return None, None
+    finally:
+        con.close()
+
+
+# The sources the index can read file by file – (registry art, chunk root).
+# Calendars, contacts and Planner boards are few files and always parsed.
+_QUELLEN = (("teams", corpus.load_teams), ("outlook", corpus.load_outlook),
+            ("onedrive", corpus.load_onedrive),
+            ("sharepoint", corpus.load_sharepoint),
+            ("pages", corpus.load_pages))
+
+
+def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
+                 pages_dir, planner_dir, store):
+    """Every chunk of the archive – re-used from the previous index where the
+    file did not change, parsed where it did.
+
+    Reading and parsing is the expensive part of an index run (minutes on a
+    large mailbox, for nothing when nothing changed). A file whose mtime
+    and size still match the previous manifest keeps its chunks, only
+    today's tombstone state is applied afresh; changed and new files are
+    parsed, vanished ones simply drop out. The result is still the COMPLETE
+    chunk list, so the store is rebuilt as before – a wrong reuse could
+    only ever make the index stale, never inconsistent.
+
+    Returns (chunks, manifest, files reused, files read).
+    """
+    alt_manifest, alt_chunks = _alter_bestand(store)
+    ordner = {"teams": teams_dir, "outlook": outlook_dir,
+              "onedrive": onedrive_dir, "sharepoint": sharepoint_dir,
+              "pages": pages_dir}
+    chunks, manifest, wieder, gelesen = [], {}, 0, 0
+    for art, laden in _QUELLEN:
+        wurzel = ordner[art]
+        if not wurzel or not Path(wurzel).is_dir():
+            continue
+        jetzt = corpus.manifest(art, wurzel)
+        weg = corpus.grabsteine(art, wurzel) if alt_chunks else {}
+        neu = set()
+        for rel, signatur in jetzt.items():
+            manifest[(art, rel)] = signatur
+            alte = (alt_chunks.get((art, rel))
+                    if alt_chunks and alt_manifest.get((art, rel)) == signatur
+                    else None)
+            if alte is None:
+                neu.add(rel)
+                continue
+            for c in alte:
+                c["gone"] = weg.get(rel)     # today's answer, not last run's
+                chunks.append(c)
+            wieder += 1
+        if alt_chunks is None:
+            chunks += corpus.chunk_records(laden(wurzel))
+            gelesen += len(jetzt)
+        elif neu:
+            chunks += corpus.chunk_records(laden(wurzel, nur=neu))
+            gelesen += len(neu)
+        if art == "outlook":
+            chunks += corpus.chunk_records(corpus.load_calendar(wurzel)
+                                           + corpus.load_contacts(wurzel))
+    if planner_dir and Path(planner_dir).is_dir():
+        chunks += corpus.chunk_records(corpus.load_planner(planner_dir))
+    return chunks, manifest, wieder, gelesen
+
+
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None, sharepoint_dir=None,
                 pages_dir=None, planner_dir=None):
@@ -300,20 +404,21 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     # long enough for someone watching the log to suspect a hang.
     progress.event("run.index.reading")
     begonnen = time.time()
-    recs = corpus.load_records(teams_dir, outlook_dir, onedrive_dir,
-                               sharepoint_dir, pages_dir, planner_dir)
+    chunks, manifest, wieder, gelesen = lese_bestand(
+        teams_dir, outlook_dir, onedrive_dir, sharepoint_dir, pages_dir,
+        planner_dir, store)
     if corpus.POOL_FEHLER:
         # Don't keep quiet about this: the index is correct, but reading ran
         # on one core instead of all, and with large archives that shows.
         progress.event("run.index.no_pool", "warn",
                        error=str(corpus.POOL_FEHLER))
-    chunks = corpus.chunk_records(recs)
     if not chunks:
         raise SystemExit("No content found - are the export folders right?")
     for c in chunks:
-        c["hash"] = corpus.chunk_hash(c)
-    progress.event("run.index.read", n=len(recs), chunks=len(chunks),
-                   s=int(time.time() - begonnen))
+        if not c.get("hash"):
+            c["hash"] = corpus.chunk_hash(c)
+    progress.event("run.index.read", reused=wieder, read=gelesen,
+                   chunks=len(chunks), s=int(time.time() - begonnen))
 
     Path(store).mkdir(parents=True, exist_ok=True)
     if not embeddings:
@@ -324,7 +429,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
         saved = retire_vectors(store)
         if saved:
             progress.event("run.index.saved_stale", n=saved)
-        write_db(store, chunks)
+        write_db(store, chunks, manifest)
         write_info(store, None, 0, len(chunks))
         return len(chunks), 0, 0
 
@@ -385,7 +490,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     vectors = [leer if v is None else v for v in vectors]
 
     V, vp = save_vectors(store, np.vstack(vectors))
-    write_db(store, chunks)
+    write_db(store, chunks, manifest)
     write_info(store, model, V.shape[1], len(chunks), vp)
     # Everything is back in the vector file – the hash backup is no longer
     # needed.

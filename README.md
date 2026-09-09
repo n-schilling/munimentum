@@ -85,8 +85,9 @@ channel chats; OneDrive files; SharePoint libraries and pages; Planner
 boards —
 and start. Nothing is preselected: any one of these can mean tens of
 thousands of items. Every run fetches only what is new, so the second one
-takes minutes rather than hours. Deleted items **stay in the archive** and
-get a marker; that is the point of keeping one.
+takes minutes rather than hours — and the index that follows reads only the
+files that changed since its last run. Deleted items **stay in the archive**
+and get a marker; that is the point of keeping one.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
 folder. Updating from 6.1 or older? Run the latest 6.x release once first —

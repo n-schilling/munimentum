@@ -29,6 +29,10 @@ from the *Export* tab into a box at the end of *Settings* — next to something
 new there: the complete HTTP API of the interface as an OpenAPI description,
 for scripts that talk to the backend directly.
 
+**Faster index runs.** The index reads only the files that changed since
+its last run; with nothing new, an archive of a few hundred thousand pieces
+is indexed in seconds instead of minutes.
+
 **Settings, tidied.** One shape for every card: switches for every on/off
 setting, the index kind as a plain choice, action buttons at the right —
 and a single *Save settings* button for the whole tab, the schedule included.

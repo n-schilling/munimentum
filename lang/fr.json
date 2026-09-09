@@ -476,7 +476,7 @@
   "run.drive.replan": "L’énumération du lancement interrompu est déjà là – on continue directement avec les téléchargements.",
   "run.file_failed": "{name} : {error}",
   "run.index.reading": "Index : lecture des exports…",
-  "run.index.read": "{n} éléments lus en {chunks} segments ({s} s).",
+  "run.index.read": "{reused} fichiers inchangés réutilisés, {read} lus — {chunks} segments ({s} s).",
   "run.index.plan": "{chunks} fragments : {reused} réutilisés, {new} nouveaux ({short} trop courts pour porter du sens).",
   "run.index.saved_stale": "{n} embeddings existants sauvegardés – une exécution ultérieure avec Ollama les réutilisera.",
   "run.index.rebuild": "Ancien index illisible – reconstruction complète.",
