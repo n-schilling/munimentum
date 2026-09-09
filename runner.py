@@ -155,6 +155,11 @@ class JobRunner:
         # then translates them – as a bare string the key itself would end
         # up in the log ("job.step.outlook").
         self.logk("srv.job.start", "head", label={"k": label, "v": {}})
+        # What was selected, right under the heading – the same wording the
+        # run history uses, rendered by the page from the structured value.
+        elemente = self._context.get("elements") or {}
+        if any(elemente.values()):
+            self.logk("srv.job.elements", "info", elements=elemente)
         ok = True
         detail = ""
         for i, step in enumerate(steps):
@@ -163,14 +168,19 @@ class JobRunner:
                 break
             self.job = {**self.job, "step": step["label"], "index": i,
                         "progress": None}      # every step counts up from zero
-            if self._erspart(step):
-                self.logk("srv.job.skipped", "info",
-                          step={"k": step["label"], "v": {}})
+            # The heading comes first in every case – a skipped step is
+            # still a step of this run, and its reason belongs under it.
+            self.logk("srv.job.step", "head", step={"k": step["label"], "v": {}})
+            grund = step.get("auslassen")
+            if grund is None and self._erspart(step):
+                grund = {"k": "srv.job.skipped",
+                         "v": {"step": {"k": step["label"], "v": {}}}}
+            if grund is not None:
+                self.log(grund, "info")
                 if hist:
                     hist.record_step(run_id, step["key"], step["label"],
                                      time.time(), skipped=True)
                 continue
-            self.logk("srv.job.step", "head", step={"k": step["label"], "v": {}})
             begonnen = time.time()
             self._step_result = None
             code = self._exec(step)

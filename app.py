@@ -1653,6 +1653,11 @@ class App:
         # unknown further down.
         export_gewollt = any(angefragt.get(e["anfrage"])
                              for e in steps_mod.REGISTRY if e.get("corpus"))
+        # The gate does not drop a source – it stays a step of the run and
+        # is skipped IN the run, under its own heading and with the reason.
+        # The log then reads like the run happened, not like the code
+        # decided: selected sources first, then every step in turn.
+        ausgelassen = {}                 # step key -> why it will not run
         for dienst, dienst_label in (("onedrive", "job.step.onedrive"),
                                      ("teams", "job.step.teams")):
             kadenz = kadenzen.get(dienst) or "always"
@@ -1660,11 +1665,13 @@ class App:
                 continue
             if cadence_faellig(kadenz, self.history.last_step_ok(dienst)):
                 continue
-            angefragt[dienst] = False
-            self.jobs.logk("srv.cadence.skip", "info",
-                           step={"k": dienst_label, "v": {}},
-                           cadence={"k": f"cadence.{kadenz}", "v": {}})
-        braucht_zugang = steps_mod.braucht_zugang(angefragt)
+            ausgelassen[dienst] = {
+                "k": "srv.cadence.skip",
+                "v": {"step": {"k": dienst_label, "v": {}},
+                      "cadence": {"k": f"cadence.{kadenz}", "v": {}}}}
+        # Access is needed only for what will really talk to Graph.
+        braucht_zugang = steps_mod.braucht_zugang(
+            {k: v and k not in ausgelassen for k, v in angefragt.items()})
         token = read_token() if braucht_zugang else ""
         # In login mode the on-disk cache carries the run – a pasted key is
         # then unnecessary, and its absence must not prevent a run.
@@ -1678,12 +1685,16 @@ class App:
                             nur_einheit=nur_einheit)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
+        for s in steps:
+            if s["key"] in ausgelassen:
+                s["auslassen"] = ausgelassen[s["key"]]
         # Exports were asked for, but none survived its gate (cadence, empty
         # category list): by definition nothing new – the index and calendar
         # steps must not rebuild the archive for that. An index-only run
         # (expert mode) asked for no export and therefore still runs.
         nichts_neues = (export_gewollt
-                        and not any(s.get("corpus") for s in steps)
+                        and not any(s.get("corpus") and not s.get("auslassen")
+                                    for s in steps)
                         and self._folgeschritte_aktuell(steps))
         # What the run history records about this run – switches and counts
         # only, nothing personal.

@@ -282,6 +282,7 @@
   "job.step.calendar": "Kalender & Kontakte",
   "job.step.calendar.plain": "Kalender & Kontakte (ohne Wiederherstellung)",
   "srv.job.start": "▶ {label}",
+  "srv.job.elements": "Ausgewählt: {elements}",
   "srv.job.step": "— {step} —",
   "srv.job.stepdone": "✓ {step} fertig",
   "srv.job.result": "Ergebnis: {ergebnis}",

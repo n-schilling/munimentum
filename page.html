@@ -1025,9 +1025,12 @@ function mtext(m){
   if(!m.k) return String(m);
   var v = {};
   Object.keys(m.v || {}).forEach(function(k){
-    // A step's structured result renders as one translated line.
+    // A step's structured result renders as one translated line; the
+    // selected sources of a run use the runs table's wording.
     v[k] = (k === 'ergebnis' && m.v[k] && typeof m.v[k] === 'object')
-      ? ergebnisText(m.v[k]) : mtext(m.v[k]);
+      ? ergebnisText(m.v[k])
+      : (k === 'elements' && m.v[k] && typeof m.v[k] === 'object')
+      ? runElements({elements: m.v[k]}) : mtext(m.v[k]);
   });
   if(m.v && m.v.minutes !== undefined) v.rest = restzeit(m.v.minutes);
   return t(m.k, v);

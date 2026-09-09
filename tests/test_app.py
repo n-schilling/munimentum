@@ -1457,27 +1457,61 @@ def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
 
     def fake_build(cfg, angefragt, **kw):
         gebaut.update(angefragt)
-        return [{"key": "outlook", "label": "job.step.outlook", "argv": [],
-                 "env": {}}]
+        return [{"key": k, "label": f"job.step.{k}", "argv": [], "env": {},
+                 "corpus": True} for k in ("outlook", "onedrive")
+                if angefragt.get(k)]
 
     gestartet = {}
     a.jobs.start = (lambda steps, label, **kw:
-                    gestartet.update(label=label) or True)
+                    gestartet.update(label=label, steps=steps) or True)
     alt_build = app_mod.build_steps
     app_mod.build_steps = fake_build
     try:
         a.launch({"outlook": True, "onedrive": True}, label="job.export")
     finally:
         app_mod.build_steps = alt_build
-    assert gebaut["onedrive"] is False and gebaut["outlook"] is True
+    # The source stays selected and stays a step – it is skipped IN the run,
+    # under its own heading, so the log reads like the run happened.
+    assert gebaut["onedrive"] is True and gebaut["outlook"] is True
+    schritte = {s["key"]: s for s in gestartet["steps"]}
+    assert "auslassen" not in schritte["outlook"]
+    grund = schritte["onedrive"]["auslassen"]
+    assert grund["k"] == "srv.cadence.skip"
+    assert grund["v"]["cadence"]["k"] == "cadence.weekly"
     # The gate's loop variable must not shadow the run label – every run
     # was suddenly called "Teams export".
     assert gestartet["label"] == "job.export"
-    zeilen = [z for z in a.jobs.lines
-              if isinstance(z.get("text"), dict)
-              and z["text"].get("k") == "srv.cadence.skip"]
-    assert len(zeilen) == 1
-    assert zeilen[0]["text"]["v"]["cadence"]["k"] == "cadence.weekly"
+    # Nothing is said before the run: the reason is logged by the runner.
+    assert not [z for z in a.jobs.lines if isinstance(z.get("text"), dict)
+                and z["text"].get("k") == "srv.cadence.skip"]
+
+
+def test_jobrunner_protokoll_liest_sich_wie_der_lauf(sandbox):
+    """Heading, selection, then every step under its own heading – also the
+    ones that do not run. Reported from the field: the cadence line stood
+    BEFORE the run heading, and the skipped index had no heading at all."""
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    gated = _py_step("print('DARF NICHT LAUFEN')", "job.step.onedrive")
+    gated.update(corpus=True, auslassen={
+        "k": "srv.cadence.skip",
+        "v": {"step": {"k": "job.step.onedrive", "v": {}},
+              "cadence": {"k": "cadence.daily", "v": {}}}})
+    index = _py_step("print('INDIZIERT')", "job.step.index")
+    index.update(nur_bei_neuem=True, ziel=ziel)
+    r = app_mod.JobRunner()
+    r.start([gated, index], "job.export",
+            context={"nichts_neues": True,
+                     "elements": {"outlook": [], "teams": [],
+                                  "onedrive": True}})
+    _warte(r)
+    folge = [z["text"]["k"] for z in r.lines if isinstance(z["text"], dict)]
+    assert folge == ["srv.job.start", "srv.job.elements",
+                     "srv.job.step", "srv.cadence.skip",
+                     "srv.job.step", "srv.job.skipped",
+                     "srv.job.done"], folge
+    text = "\n".join(str(z["text"]) for z in r.lines)
+    assert "DARF NICHT LAUFEN" not in text and "INDIZIERT" not in text
 
 
 def test_alter_state_sperrt_den_export(sandbox, with_ollama):
@@ -3157,6 +3191,12 @@ pruefe(erg.indexOf('neu: 0') >= 0, 'neu fehlt: ' + erg);
 pruefe(erg.indexOf('unver') >= 0 && erg.indexOf('67') >= 0,
        'unveraendert fehlt: ' + erg);
 pruefe(erg.indexOf('moved 2') >= 0, 'Extra fehlt: ' + erg);
+
+// Die Auswahlzeile unter der Ueberschrift nutzt die Worte der Lauf-Historie.
+var wahl = mtext({k: 'srv.job.elements',
+                  v: {elements: {outlook: ['mail'], teams: [], onedrive: true}}});
+pruefe(wahl.indexOf('OneDrive (alle)') >= 0 && wahl.indexOf('Outlook') >= 0,
+       'Auswahl nicht wie in der Historie: ' + wahl);
 console.log('OK');
 """
 
