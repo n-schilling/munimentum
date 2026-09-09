@@ -254,11 +254,17 @@ pre-approved in almost every tenant.
 A built-in MCP server hands the archive to Claude Code or Claude Desktop — or
 any other MCP client: it searches, browses the mirrored drives, reads the
 sources and answers with citations
-— over your own mail and chats, not over the open web. It can also ask the
-archive about itself — how far it reaches, which months are empty, when each
-source last synced, and the same figures the Analytics tab shows — so an
-answer can say what the archive does not cover instead of guessing.
-*Settings* prints the exact snippet to paste into your client.
+— over your own mail and chats, not over the open web. Every source is
+reachable the same way — mail, Teams, calendar, contacts, OneDrive and
+SharePoint files, SharePoint pages, Planner boards — with the same filters
+the search tab offers, and the server says up front what each source holds:
+files by name, path and type only, since their contents are not indexed.
+Appointments come structured, including the ones recovered from mails; the
+address book can be looked up; Planner attachments can be browsed. It can
+also ask the archive about itself — how far it reaches, which months are
+empty, when each source last synced, and the same figures the Analytics tab
+shows — so an answer can say what the archive does not cover instead of
+guessing. *Settings* prints the exact snippet to paste into your client.
 
 There are two routes, and the app controls them differently. It runs the **HTTP
 endpoint** itself; *Start* / *Stop* and the autostart apply to that one. A client

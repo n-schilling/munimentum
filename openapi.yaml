@@ -143,7 +143,7 @@ paths:
         - { name: person, in: query, schema: { type: string }, description: "Sender / author filter (substring)." }
         - { name: from, in: query, schema: { type: string, format: date }, description: "Inclusive lower date bound." }
         - { name: to, in: query, schema: { type: string, format: date }, description: "Inclusive upper date bound." }
-        - { name: source, in: query, schema: { type: string, default: all, enum: [all, teams, outlook, kalender, kontakte, onedrive, sharepoint, datei, pages, planner] } }
+        - { name: source, in: query, schema: { type: string, default: all }, description: "One key or several comma-separated (\"onedrive,sharepoint\"): teams, outlook, kalender, kontakte, onedrive, sharepoint, pages, planner; datei = both file mirrors, all = everything." }
         - { name: k, in: query, schema: { type: integer, default: 20, maximum: 100 }, description: "Page size." }
         - { name: offset, in: query, schema: { type: integer, default: 0 }, description: "Results to skip." }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned messages." }
@@ -224,7 +224,7 @@ paths:
     get:
       summary: Browse the mirrored drives
       parameters:
-        - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint] }, description: "Empty lists the entry points." }
+        - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint, planner] }, description: "Empty lists the entry points; planner browses a board's downloaded attachments." }
         - { name: path, in: query, schema: { type: string }, description: "Folder inside the mirror, as returned here." }
       responses:
         "200":
@@ -257,7 +257,7 @@ paths:
       summary: File types in the archive
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 40, maximum: 200 } }
-        - { name: source, in: query, schema: { type: string }, description: "Empty = every source." }
+        - { name: source, in: query, schema: { type: string }, description: "Empty = every source; one key or several comma-separated." }
       responses:
         "200":
           description: Types after applying the configured hide list.
@@ -278,7 +278,7 @@ paths:
       parameters:
         - { name: contains, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 300, maximum: 1000 } }
-        - { name: source, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { type: string }, description: "One key or several comma-separated." }
       responses:
         "200":
           description: Folders (whole units per source), by message count.
@@ -295,7 +295,7 @@ paths:
     get:
       summary: People occurring in the archive
       parameters:
-        - { name: source, in: query, schema: { type: string, default: all } }
+        - { name: source, in: query, schema: { type: string, default: all }, description: "One key or several comma-separated; files and pages record no person." }
         - { name: contains, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
       responses:
@@ -335,6 +335,9 @@ paths:
                   path: { type: string }
                   uri: { type: string }
                   text: { type: string }
+                  file:
+                    type: object
+                    description: Only for mirrored files – name, path, size_bytes, modified, gone, binary, content_indexed (always false).
                   context_before: { type: array, items: { type: object } }
                   context_after: { type: array, items: { type: object } }
                   error: { $ref: "#/components/schemas/MessageOrKey" }

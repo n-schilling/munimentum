@@ -104,6 +104,86 @@ def _sample_records():
     ]
 
 
+UID_F1 = "datei:Dateien/Projekte/Angebot.pdf:0"
+UID_F2 = "datei:TeamX/Dokumente/Dateien/Plan.xlsx:0"
+UID_PG = "pages:TeamX/SitePages/Start.html:0"
+UID_PL = "planner:Board A/task1:0"
+
+
+def _extra_records():
+    """Files, a page and a Planner task – the sources the base sample lacks."""
+    f1 = _rec(UID_F1, "datei", "onedrive", "Dateien/Projekte/Angebot.pdf", "",
+              "", _ts("2025-06-20 10:00"), "2025-06-20 10:00", "Angebot.pdf",
+              "Dateien/Projekte", "Angebot.pdf Dateien/Projekte")
+    f1["att"] = "Angebot.pdf"
+    f2 = _rec(UID_F2, "datei", "sharepoint", "TeamX/Dokumente/Dateien/Plan.xlsx",
+              "", "", _ts("2025-06-21 10:00"), "2025-06-21 10:00", "Plan.xlsx",
+              "TeamX/Dokumente/Dateien", "Plan.xlsx TeamX/Dokumente/Dateien")
+    f2["att"] = "Plan.xlsx"
+    pg = _rec(UID_PG, "pages", "pages", "TeamX/SitePages/Start.html", "", "",
+              _ts("2025-06-22 10:00"), "2025-06-22 10:00", "Startseite",
+              "TeamX", "Willkommen im Portal von Team X.")
+    pl = _rec(UID_PL, "planner", "planner", "Board A/board.html",
+              "Alice Beispiel", "alice beispiel", _ts("2025-06-23 10:00"),
+              "2025-06-23 10:00", "Angebot prüfen", "Board A/Zu tun",
+              "Angebot prüfen. Kommentar: bitte bis Freitag.")
+    pl["att"] = "Angebot.pdf"
+    return [f1, f2, pg, pl]
+
+
+@pytest.fixture
+def state_alle(tmp_path, monkeypatch):
+    """Every source in one index, the files on disk, STATE pointing at all
+    of it – for the tools that must treat the sources alike."""
+    store = tmp_path / "rag_store"
+    store.mkdir()
+    ordner = {}
+    for name in ("teams", "outlook", "onedrive", "sharepoint", "pages",
+                 "planner"):
+        ordner[name] = tmp_path / f"{name}_export"
+    (ordner["onedrive"] / "Dateien" / "Projekte").mkdir(parents=True)
+    (ordner["onedrive"] / "Dateien" / "Projekte" / "Angebot.pdf").write_bytes(
+        b"%PDF-1.4 \x00\x01binary")
+    (ordner["sharepoint"] / "TeamX" / "Dokumente" / "Dateien").mkdir(parents=True)
+    (ordner["sharepoint"] / "TeamX" / "Dokumente" / "Dateien" / "Plan.xlsx"
+     ).write_bytes(b"PK\x03\x04xlsx")
+    (ordner["pages"] / "TeamX" / "SitePages").mkdir(parents=True)
+    (ordner["pages"] / "TeamX" / "SitePages" / "Start.html").write_text(
+        "<html><body>Willkommen im Portal von Team X.</body></html>",
+        encoding="utf-8")
+    board = ordner["planner"] / "Board A"
+    (board / "Anhaenge").mkdir(parents=True)
+    (board / "board.html").write_text("<html>Board A</html>", encoding="utf-8")
+    (board / "Anhaenge" / "Angebot.pdf").write_bytes(b"%PDF-1.4 binary")
+    (board / "Anhaenge" / "notizen.txt").write_text("Notizen zum Angebot",
+                                                    encoding="utf-8")
+    ordner["teams"].mkdir()
+    ordner["outlook"].mkdir()
+    chunks = corpus.chunk_records(_sample_records() + _extra_records())
+    for c in chunks:
+        c["hash"] = corpus.chunk_hash(c)
+    dim = 32
+    assert len(chunks) <= dim
+    V = np.zeros((len(chunks), dim), dtype="float32")
+    for i in range(len(chunks)):
+        V[i, i] = 1.0
+    rag_index.write_db(store, chunks)
+    _, vp = rag_index.save_vectors(store, V)
+    rag_index.write_info(store, "test-embed", dim, len(chunks), vp)
+    old = dict(mcp_server.STATE)
+    mcp_server.STATE.clear()
+    mcp_server.STATE.update(
+        db=str(store / "corpus.db"), V=np.load(vp, mmap_mode="r"), np=np,
+        semantic=False, vector_dtype="float16", embed_model="test-embed",
+        ollama="http://127.0.0.1:1",
+        **{f"{name}_dir": str(pfad) for name, pfad in ordner.items()})
+    monkeypatch.setattr(mcp_server, "_embed_query",
+                        lambda text: (_ for _ in ()).throw(RuntimeError("kein Netz")))
+    yield {"store": store, "chunks": chunks, "tmp": tmp_path, "ordner": ordner}
+    mcp_server.STATE.clear()
+    mcp_server.STATE.update(old)
+
+
 # Newest first; contact (ts = NULL) at the end – expected browse order
 BROWSE_ORDER = [UID_M2, UID_CAL, UID_M1, UID_TX, UID_T2, UID_T1, UID_T0,
                 UID_M3, UID_CON]
@@ -748,7 +828,8 @@ def test_with_port_verwechselt_ipv6_nicht_mit_port():
 TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "get_thread", "list_people", "list_folders", "list_filetypes",
               "list_files", "read_source_file", "corpus_stats",
-              "archive_analytics"}
+              "archive_analytics", "list_sources", "list_events",
+              "lookup_contact"}
 
 
 def _via_client(fn):
@@ -1537,3 +1618,150 @@ def test_list_folders_einheiten_je_spiegelquelle(state):
     assert pfade(source="pages") == {"Team X"}
     # OneDrive keeps the full folder tree.
     assert "Dateien/Kunden" not in pfade(source="sharepoint")
+
+
+
+# --------------------------------------------------------------------------
+# Every source alike: one filter vocabulary, honest descriptions, no gaps
+# --------------------------------------------------------------------------
+def test_quellenfilter_nimmt_mehrere_quellen(state_alle):
+    """"onedrive,sharepoint" is one filter for both mirrors; a single key
+    keeps the old SQL shape so nothing else moves."""
+    treffer = mcp_server.search_messages("Angebot", source="onedrive,sharepoint",
+                                         mode="lexical")
+    assert {h["uid"] for h in treffer["results"]} == {UID_F1}
+    alle = mcp_server.search_messages("Angebot", mode="lexical")
+    assert {h["uid"] for h in alle["results"]} >= {UID_F1, UID_PL}
+    nur_planner = mcp_server.browse_messages(source="planner")
+    assert [h["uid"] for h in nur_planner["results"]] == [UID_PL]
+    ordner = {f["path"] for f in
+              mcp_server.list_folders(source="onedrive,planner")["folders"]}
+    assert ordner == {"Dateien/Projekte", "Board A"}
+    assert mcp_server.list_folders(source="unbekannt")["folders"] == []
+    assert mcp_server._quelle_cond("outlook") == ("src = ?", ["outlook"])
+    assert mcp_server._quelle_cond("outlook, teams")[0] == \
+        "(src = ? OR src = ?)"
+
+
+def test_list_sources_beschreibt_jede_quelle(state_alle):
+    """The entry point: every source present, what is indexed there, what
+    the filters mean – and which sources were never exported."""
+    aus = mcp_server.list_sources()
+    keys = {q["key"] for q in aus["sources"]}
+    assert keys == {"outlook", "teams", "kalender", "kontakte", "onedrive",
+                    "sharepoint", "pages", "planner"}
+    assert aus["not_in_archive"] == []
+    je = {q["key"]: q for q in aus["sources"]}
+    assert je["onedrive"]["items"] == 1 and je["outlook"]["items"] == 3
+    assert "not indexed" in je["onedrive"]["indexed"]
+    assert je["onedrive"]["person_filter"].startswith("not applicable")
+    assert je["planner"]["person_filter"] == "the assignees"
+    assert "board" in je["planner"]["folder_filter"]
+    assert "comma" in aus["source_filter"]
+
+
+def test_list_sources_nennt_was_nie_exportiert_wurde(state):
+    aus = mcp_server.list_sources()
+    assert set(aus["not_in_archive"]) == {"onedrive", "sharepoint", "pages",
+                                          "planner"}
+
+
+def test_get_document_datei_liefert_metadaten(state_alle):
+    doc = mcp_server.get_document(UID_F1)
+    assert doc["file"]["name"] == "Angebot.pdf"
+    assert doc["file"]["binary"] is True and doc["file"]["size_bytes"] > 0
+    assert doc["file"]["content_indexed"] is False
+    assert "file" not in mcp_server.get_document(UID_M1)
+
+
+def test_read_source_file_binaer_liefert_nur_metadaten(state_alle):
+    """A PDF read as UTF-8 is a window of replacement characters – worse
+    than nothing, because it looks like an answer."""
+    pdf = mcp_server.read_source_file("onedrive", "Dateien/Projekte/Angebot.pdf")
+    assert pdf["binary"] is True and pdf["content"] == ""
+    assert pdf["total_bytes"] > 0 and "not indexed" in pdf["note"]
+    txt = mcp_server.read_source_file("planner", "Board A/Anhaenge/notizen.txt")
+    assert txt["content"] == "Notizen zum Angebot"
+    seite = mcp_server.read_source_file("pages", "TeamX/SitePages/Start.html")
+    assert "Willkommen" in seite["content"]
+
+
+def test_list_files_kennt_planner_anhaenge(state_alle):
+    wurzeln = mcp_server.list_files()["roots"]
+    planner = [w for w in wurzeln if w["root"] == "planner"]
+    assert planner == [{"root": "planner", "path": "Board A",
+                        "label": "Planner: Board A", "files": 2}]
+    assert [w["root"] for w in wurzeln][:2] == ["onedrive", "sharepoint"]
+    ebene = mcp_server.list_files("planner", "Board A")
+    assert [f["name"] for f in ebene["files"]] == ["Angebot.pdf", "notizen.txt"]
+    rel = ebene["files"][1]["rel"]
+    assert mcp_server.read_source_file("planner", rel)["content"].startswith("Notizen")
+    assert mcp_server.list_files("planner", "gibt es nicht")["files"] == []
+
+
+def _kalender_json(store, recs, reconstruct=True):
+    (store / "calendar.json").write_text(json.dumps(
+        {"generated": "2025-06-30T12:00:00", "reconstruct": reconstruct,
+         "counts": {}, "recs": recs}), encoding="utf-8")
+
+
+def _termin(title, start, ende, st="confirmed", cal="Arbeit", **extra):
+    return {"src": "kalender", "who": "Alice Beispiel", "title": title,
+            "ts": _ts(start), "te": _ts(ende), "d": start, "ad": 0, "st": st,
+            "cal": cal, "loc": extra.get("loc", "Raum 42"),
+            "att": ["Bob Baumeister"], "uid": f"uid-{title}",
+            "p": "kalender/Arbeit/termin.ics", "ctx": "kalender/Arbeit",
+            "x": extra.get("x", "")}
+
+
+def test_list_events_strukturiert_und_mit_rekonstruierten(state_alle):
+    """The search knows appointments as text; this returns them structured
+    – including the ones recovered from mails, which no .ics carries."""
+    assert "error" in mcp_server.list_events()
+    _kalender_json(state_alle["store"], [
+        _termin("Quartalsplanung", "2025-06-15 14:00", "2025-06-15 15:00"),
+        _termin("Abgesagtes Meeting", "2025-06-16 09:00", "2025-06-16 10:00",
+                st="deleted", cal="(rekonstruiert)"),
+        _termin("Privat", "2025-06-17 18:00", "2025-06-17 19:00", cal="Privat"),
+        _termin("Zukunft", "2099-01-05 10:00", "2099-01-05 11:00"),
+        {"src": "kontakte", "title": "kein Termin", "ts": None},
+    ])
+    juni = mcp_server.list_events(date_from="2025-06-01", date_to="2025-06-30")
+    assert [e["title"] for e in juni["events"]] == [
+        "Quartalsplanung", "Abgesagtes Meeting", "Privat"]
+    e = juni["events"][0]
+    assert e["start"] == "2025-06-15T14:00" and e["end"] == "2025-06-15T15:00"
+    assert e["location"] == "Raum 42" and e["attendees"] == ["Bob Baumeister"]
+    assert e["recovered"] is False and juni["events"][1]["recovered"] is True
+    ohne = mcp_server.list_events(date_from="2025-06-01", date_to="2025-06-30",
+                                  include_recovered=False)
+    assert [e["title"] for e in ohne["events"]] == ["Quartalsplanung", "Privat"]
+    nur = mcp_server.list_events(date_from="2025-06-01", date_to="2025-06-30",
+                                 calendar="priv")
+    assert [e["title"] for e in nur["events"]] == ["Privat"]
+    # Upcoming appointments are reachable – days= would not get there.
+    zukunft = mcp_server.list_events(date_from="2099-01-01")
+    assert [e["title"] for e in zukunft["events"]] == ["Zukunft"]
+    assert juni["reconstruction_ran"] is True
+
+
+def test_lookup_contact_liefert_das_adressbuch(state_alle):
+    aus = mcp_server.lookup_contact("alice")
+    assert aus["count"] == 1
+    k = aus["contacts"][0]
+    assert k["name"] == "Alice Beispiel" and k["emails"] == ["alice@example.com"]
+    assert k["folder"] == "kontakte/Team" and k["uid"] == UID_CON
+    assert mcp_server.lookup_contact("niemand")["count"] == 0
+    # By address as well – that is how one usually has the person.
+    assert mcp_server.lookup_contact("alice@example.com")["count"] == 1
+
+
+def test_beschreibungen_nennen_die_dateiinhalte_ehrlich():
+    """Claude follows the descriptions: every place that touches files has
+    to say that their contents are not indexed."""
+    for fn in (mcp_server.search_messages, mcp_server.browse_messages,
+               mcp_server.list_files, mcp_server.read_source_file,
+               mcp_server.get_document):
+        assert "not indexed" in fn.__doc__, fn.__name__
+    assert "list_sources" in mcp_server._INSTRUCTIONS
+    assert "NAME, PATH and TYPE" in mcp_server._INSTRUCTIONS

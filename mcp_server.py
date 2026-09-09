@@ -65,6 +65,7 @@ reading the index. --force serves anyway.
 import os
 import re
 import sys
+import json
 import sqlite3
 import argparse
 from pathlib import Path
@@ -102,7 +103,12 @@ be empty. corpus_stats knows those edges; ask it before concluding that
 something does not exist.
 
 Which tool to use:
-  • search_messages – the default entry point. Ranking depends on this archive:
+  • list_sources    – START HERE once per session: which sources this archive
+    holds, what is indexed in each (mail, Teams, pages and Planner tasks by
+    full text; calendar and contacts by their text; OneDrive and SharePoint
+    files by NAME, PATH and TYPE only – contents are not indexed), what
+    `folder` and `person` mean per source, and what was never exported.
+  • search_messages – the default entry point for content. Ranking depends on this archive:
     with embeddings it fuses BM25 and semantic scoring, so exact tokens and
     paraphrases both work; without them it is BM25 only, and a paraphrase will
     miss. Every result says which was used in its "backend" field ("hybrid",
@@ -115,9 +121,19 @@ Which tool to use:
     result. For chats, context_before/context_after return the neighbouring
     messages of the conversation.
   • list_people     – resolve a name before filtering; the person filter is a
-    substring match over names and addresses.
+    substring match over names and addresses. Files and pages carry none.
   • list_folders / list_filetypes – what the folder and filetype filters can
-    take, per source.
+    take, per source: mailbox folders, calendars, Teams conversation kinds,
+    OneDrive folders, SharePoint site/library, Planner boards, pages sites.
+  • list_events     – appointments structured (start, end, location,
+    attendees), including those recovered from invitation and cancellation
+    mails; the search knows them only as text. Upcoming ones need
+    date_from/date_to.
+  • lookup_contact  – the address book, structured: e-mail, phone,
+    organisation.
+  • list_files      – browse OneDrive, the SharePoint libraries and the
+    Planner attachments folder by folder; the files' contents are not
+    indexed, only their names.
   • corpus_stats    – what is indexed, which ranking backend is live, and how
     far the archive reaches: coverage (first and last message), gaps (months
     without a single message) and when each source last exported
@@ -128,16 +144,19 @@ Which tool to use:
     people the user exchanges the most with – the same block the app's
     Analytics tab shows. For questions about the archive rather than its
     contents.
-  • read_source_file – last resort: the raw .eml/.html file. Teams
-    conversations can exceed 100 MB and come back windowed, so prefer
-    get_document with context for chat history.
+  • read_source_file – last resort: the raw .eml/.html/.ics/.vcf file, a
+    rendered page or a board. Binary files (PDF, Office, images) come back
+    as metadata only. Teams conversations can exceed 100 MB and come back
+    windowed, so prefer get_document with context for chat history.
 
-Notes: dates are "YYYY-MM-DD", and days=N is a shorthand for the last N days
-(no need to work out the date); folder restricts to one folder and everything
-below it – "E-Mail/Kunden", "kalender/Privat", "channels" for every Teams
-channel – and list_folders shows what exists, per source; results are one hit
-per message – page with offset rather than raising k; a hit's "uri" can be read
-as an MCP resource.
+Notes: `source` takes one key or several comma-separated ("onedrive,sharepoint");
+dates are "YYYY-MM-DD", and days=N is a shorthand for the last N days (no need
+to work out the date); folder restricts to one unit and everything below it –
+"E-Mail/Kunden", "kalender/Privat", "channels" for every Teams channel,
+"Dateien/Projekte" in OneDrive, "TeamX/Dokumente" for a library, a board name
+for Planner – and list_folders shows what exists, per source; results are one
+hit per item – page with offset rather than raising k; a hit's "uri" can be
+read as an MCP resource.
 """
 
 # What the client gets to see when access is switched off. Deliberately worded
@@ -199,6 +218,10 @@ _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "File",
                  "pages": "SharePoint page", "kalender": "Calendar",
                  "kontakte": "Contacts", "planner": "Planner task"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
+# What read_source_file hands over as text; everything else is binary and
+# comes back as metadata only.
+_TEXTFORMATE = {".eml", ".html", ".htm", ".ics", ".vcf", ".txt", ".md",
+                ".json", ".csv", ".xml", ".log"}
 _RRF_K = 60                     # standard reciprocal-rank-fusion constant
 _POOL_MIN, _POOL_MAX = 100, 1000  # candidate pool per backend before merging
 
@@ -258,16 +281,84 @@ _LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
             "kalender", "teams", "kontakte", "planner")
 
 
+def _quellen(text):
+    """The source filter as a list: "onedrive,sharepoint" names two sources.
+    "all", empty and whitespace are dropped; an empty list means no filter."""
+    return [q for q in (s.strip().lower() for s in str(text or "").split(","))
+            if q and q != "all"]
+
+
 def _quelle_cond(quelle):
-    """One source value as SQL condition – the mirrors are told apart.
+    """One or more sources as SQL condition – the mirrors are told apart.
 
     "onedrive" and "sharepoint" are both src='datei' rows; the stored root
-    column separates them. "datei" stays as the umbrella for both, so old
-    clients and saved queries keep working.
+    column separates them. "datei" stays as the umbrella for both. Several
+    sources ("onedrive,sharepoint") become an OR; no source means no filter.
     """
-    if quelle in ("onedrive", "sharepoint"):
-        return "(src = 'datei' AND root = ?)", [quelle]
-    return "src = ?", [quelle]
+    teile, werte = [], []
+    for q in _quellen(quelle):
+        if q in ("onedrive", "sharepoint"):
+            teile.append("(src = 'datei' AND root = ?)")
+        else:
+            teile.append("src = ?")
+        werte.append(q)
+    if not teile:
+        return "1=1", []
+    if len(teile) == 1:
+        return teile[0], werte
+    return "(" + " OR ".join(teile) + ")", werte
+
+
+# What each source holds and how the filters read there – the same words the
+# tool descriptions use, handed to the client by list_sources so it never has
+# to guess whether a person filter or a folder means anything for a source.
+_QUELLEN_INFO = {
+    "outlook": {"label": "Mail",
+                "indexed": "full text of every mail, plus attachment names "
+                           "and types (attachment contents are not indexed)",
+                "folder": "mailbox folder path, e.g. E-Mail/Kunden – the "
+                          "folder and everything below it",
+                "person": "sender and recipients", "step": "outlook"},
+    "teams": {"label": "Teams",
+              "indexed": "full text of chats and channel messages",
+              "folder": "the kind of conversation: 1on1, group, meeting, "
+                        "channels",
+              "person": "the author", "step": "teams"},
+    "kalender": {"label": "Calendar",
+                 "indexed": "appointments of the exported calendars – title, "
+                            "description, location; list_events returns them "
+                            "structured and adds the appointments recovered "
+                            "from invitation and cancellation mails",
+                 "folder": "the calendar, e.g. kalender/Arbeit",
+                 "person": "organizer and attendees", "step": "outlook"},
+    "kontakte": {"label": "Contacts",
+                 "indexed": "the address book – name, organisation, e-mail, "
+                            "phone; lookup_contact returns it structured",
+                 "folder": "the contact folder, e.g. kontakte/Team",
+                 "person": "the contact's name and addresses",
+                 "step": "outlook"},
+    "onedrive": {"label": "OneDrive files",
+                 "indexed": "NAME, PATH and TYPE only – file contents are "
+                            "not indexed and cannot be searched",
+                 "folder": "folder path in the mirror, e.g. Dateien/Projekte",
+                 "person": None, "step": "onedrive"},
+    "sharepoint": {"label": "SharePoint files",
+                   "indexed": "NAME, PATH and TYPE only – file contents are "
+                              "not indexed and cannot be searched",
+                   "folder": "site/library, optionally deeper: "
+                             "TeamX/Dokumente/Projekte",
+                   "person": None, "step": "sharepoint"},
+    "pages": {"label": "SharePoint pages",
+              "indexed": "full text of the rendered site pages",
+              "folder": "the site", "person": None,
+              "step": "sharepoint_pages"},
+    "planner": {"label": "Planner tasks",
+                "indexed": "task title, description, checklist, comments and "
+                           "attachment NAMES; the attachments themselves via "
+                           "list_files and read_source_file",
+                "folder": "the board", "person": "the assignees",
+                "step": "planner"},
+}
 # Channels are folded into one entry: a team easily has twenty of them, and
 # "which channel" is rarely the question – "channels rather than chats" often
 # is. The filter handles that for free, since a path always means everything
@@ -727,38 +818,51 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     k: int = 12, offset: int = 0, mode: str = "auto",
                     preview_chars: int = 200, only_gone: bool = False,
                     folder: str = "", filetype: str = "") -> dict:
-    """Search the exported Teams messages and Outlook mail/calendar/contacts.
+    """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
+    SharePoint files, SharePoint pages, Planner tasks – or any subset of it.
 
-    Hybrid ranking (BM25 + semantic embeddings, fused) when available. Results
-    are deduped to one hit per message; use get_document(uid) for the full text
-    and pass offset to page through more results.
+    Hybrid ranking (BM25 + semantic embeddings, fused) when available. One
+    hit per message/file/task/page; get_document(uid) returns the full
+    text, offset pages through more results. What is searchable differs by
+    source – list_sources says it per source; in short: mail, Teams, pages
+    and Planner tasks by their full text; calendar and contacts by their
+    text; OneDrive and SharePoint files by NAME, PATH and TYPE only – file
+    contents are not indexed, so a query about what a document says will
+    not find it, a query for its name or a `filetype` will.
 
     Args:
         query: Natural-language query or keywords (German or English).
-        person: Optional. Filter to messages involving this name or email.
+        person: Optional. Only items involving this name or e-mail –
+            sender/recipients (mail), author (Teams), organizer/attendees
+            (calendar), assignees (Planner). Files and pages carry no person;
+            the filter finds nothing there.
         date_from: Optional. Inclusive lower bound, "YYYY-MM-DD". A date that
             does not exist is an error, not an omission.
         date_to: Optional. Inclusive upper bound, "YYYY-MM-DD".
         days: Shorthand for a date range: only the last N days, counting
-            today (7 = today and the six days before). No need to work out the
-            date yourself. Bounds the range at both ends, so upcoming calendar
-            entries stay out. Ignored when date_from is given.
-        source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors),
-            or "pages" (SharePoint site pages, full text).
+            today (7 = today and the six days before). Bounds the range at
+            both ends, so upcoming calendar entries stay out – use date_from/
+            date_to for those. Ignored when date_from is given.
+        source: One key or several comma-separated: "outlook", "teams",
+            "kalender", "kontakte", "onedrive", "sharepoint", "pages",
+            "planner" – "datei" means both file mirrors, "all" or empty
+            means everything. Example: "onedrive,sharepoint" for files only.
         k: Number of results per page (default 12).
         offset: Results to skip, for pagination (default 0).
         mode: "auto" (hybrid if embeddings available, else lexical),
               "hybrid", "semantic", or "lexical".
         preview_chars: Preview length per hit (default 200; 0 disables previews).
-        only_gone: Only messages that are no longer in the mailbox (deleted from
-            it after they were archived). Everything stays on disk either way.
-        folder: Restrict to one folder and everything below it, e.g.
-            "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
-            channel. Use list_folders to see what exists.
-        filetype: Restrict to messages carrying an attachment of this type, or
-            to mirrored files of it — "pdf", "xlsx". One type; use
+        only_gone: Only items no longer at Microsoft – mails deleted from the
+            mailbox, files removed from the drive, tasks removed from the
+            board. Everything stays on disk either way.
+        folder: Restrict to one unit and everything below it. The unit
+            depends on the source – mailbox folder ("E-Mail/Kunden"),
+            calendar ("kalender/Privat"), Teams conversation kind ("channels"),
+            OneDrive folder ("Dateien/Projekte"), SharePoint site/library
+            ("TeamX/Dokumente"), Planner board, pages site. list_folders
+            lists what exists, per source.
+        filetype: Restrict to messages carrying an attachment of this type,
+            or to mirrored files of it – "pdf", "xlsx". One type; use
             list_filetypes to see what exists.
     """
     con = _db()
@@ -812,34 +916,35 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     offset: int = 0, preview_chars: int = 200,
                     only_gone: bool = False, folder: str = "",
                     filetype: str = "") -> dict:
-    """List messages by filter, newest first, without a search query.
+    """List items by filter, newest first, without a search query.
 
-    Useful for "everything from <person> in <month>", "the last week in
-    <folder>", or scanning a source. Pass offset to page through more results.
+    For "everything from <person> in <month>", "the last week in <folder>",
+    "the newest files in <library>" or scanning a source. Same sources and
+    filters as search_messages – files by name, path and type only, their
+    contents are not indexed. Pass offset to page through more results.
 
     Args:
-        person: Optional name or email to filter by.
+        person: Optional name or e-mail – see search_messages for what it
+            means per source (nothing for files and pages).
         date_from: Optional inclusive "YYYY-MM-DD" lower bound.
         date_to: Optional inclusive "YYYY-MM-DD" upper bound.
         days: Shorthand for a date range: only the last N days, counting
-            today (7 = today and the six days before). No need to work out the
-            date yourself. Bounds the range at both ends, so upcoming calendar
-            entries stay out. Ignored when date_from is given.
-        source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors),
-            or "pages" (SharePoint site pages, full text).
+            today. Bounds the range at both ends; ignored when date_from is
+            given.
+        source: One key or several comma-separated – "outlook", "teams",
+            "kalender", "kontakte", "onedrive", "sharepoint", "pages",
+            "planner"; "datei" both mirrors, "all" or empty everything.
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
-        only_gone: Only messages that are no longer in the mailbox (deleted from
-            it after they were archived). Everything stays on disk either way.
-        folder: Restrict to one folder and everything below it, e.g.
-            "E-Mail/Kunden", "kalender/Privat" or "channels" for every Teams
-            channel. Use list_folders to see what exists.
-        filetype: Restrict to messages carrying an attachment of this type, or
-            to mirrored files of it — "pdf", "xlsx". One type; use
-            list_filetypes to see what exists.
+        only_gone: Only items no longer at Microsoft (deleted after they were
+            archived). Everything stays on disk either way.
+        folder: Restrict to one unit and everything below it – mailbox
+            folder, calendar, Teams conversation kind, OneDrive folder,
+            SharePoint site/library, Planner board, pages site. Use
+            list_folders to see what exists.
+        filetype: Restrict to messages carrying an attachment of this type,
+            or to mirrored files of it – "pdf", "xlsx".
     """
     con = _db()
     try:
@@ -866,11 +971,19 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
 
 @mcp.tool(annotations=_READONLY)
 def get_thread(thread: str, limit: int = 50) -> dict:
-    """All messages of one conversation, in chronological order.
+    """All messages of one conversation, in chronological order – mail and
+    Teams only.
 
     A single hit often says too little: "Yes, let's do it that way" only
     becomes a statement together with the question before it. `thread` is
-    on every hit from search_messages.
+    the value a hit carries in its "thread" field: for mail the
+    conversation (replies and forwards), for Teams the chat or channel. Other
+    sources have no threads – a Planner task already carries its comments in
+    its own text, a page or file stands alone.
+
+    Args:
+        thread: The conversation key from a search or browse hit.
+        limit: Max number of messages (default 50, cap 500).
     """
     if not thread:
         return {"thread": "", "count": 0, "messages": []}
@@ -892,17 +1005,20 @@ def get_thread(thread: str, limit: int = 50) -> dict:
 
 @mcp.tool(annotations=_READONLY)
 def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> dict:
-    """Return the full text and metadata of a single message/mail by its uid.
+    """Full text and metadata of one item by its uid – mail, chat message,
+    appointment, contact, Planner task, SharePoint page, or a mirrored file.
 
-    The uid comes from a search_messages / browse_messages result. For chat
-    messages, context_before/context_after also return the neighboring messages
-    of the same conversation – usually much cheaper than reading the whole
-    conversation file.
+    The uid comes from a search/browse hit. For chat messages,
+    context_before/context_after also return the neighbouring messages of
+    the conversation. For OneDrive and SharePoint files the text is only
+    name and path – contents are not indexed – and a `file` block adds
+    size, modification date, whether it is gone at the source, and the path
+    read_source_file would take.
 
     Args:
-        uid: Message id from a search/browse hit.
-        context_before: Neighboring messages before this one (default 0, max 20).
-        context_after: Neighboring messages after this one (default 0, max 20).
+        uid: The item's uid from a search or browse hit.
+        context_before: Chat messages before this one (0–20).
+        context_after: Chat messages after this one (0–20).
     """
     con = _db()
     try:
@@ -921,6 +1037,19 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
             "uri": _source_uri(row["root"], row["rel"]),
             "text": text,
         }
+        if row["src"] == "datei":
+            # The text is name and path; what else is known about a file
+            # sits on disk, and the size says whether reading it is worth it.
+            ziel, fehler = _resolve_source(row["root"], row["rel"])
+            datei = {"name": Path(row["rel"]).name, "gone": row["gone"],
+                     "content_indexed": False, "path": row["rel"]}
+            if not fehler and ziel.exists():
+                st = ziel.stat()
+                datei.update(size_bytes=st.st_size,
+                             modified=datetime.fromtimestamp(
+                                 st.st_mtime).isoformat(timespec="seconds"),
+                             binary=ziel.suffix.lower() not in _TEXTFORMATE)
+            out["file"] = datei
         before = max(0, min(context_before, 20))
         after = max(0, min(context_after, 20))
         if before or after:
@@ -946,30 +1075,35 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
 
 @mcp.tool(annotations=_READONLY)
 def list_people(source: str = "all", contains: str = "", limit: int = 100) -> dict:
-    """List the people in the corpus (senders / chat authors) with message counts.
+    """List the people in the archive (senders, chat authors, organizers,
+    assignees) with item counts – resolve a name before filtering by it.
 
-    Use this to discover valid values for the `person` filter of search_messages
-    and browse_messages.
+    The `person` filter is a substring match over names and addresses;
+    this tells you the spelling the archive uses. Mirrored files and
+    SharePoint pages record no person, so those sources return nothing here
+    and the person filter finds nothing there. For the address book itself
+    use lookup_contact.
 
     Args:
-        source: One of "all", "teams", "outlook", "kalender", "kontakte",
-            "onedrive" or "sharepoint" (mirrored files — name and path only,
-            their contents are not indexed; "datei" still means both mirrors),
-            or "pages" (SharePoint site pages, full text).
-        contains: Optional. Only people whose name or email contains this text;
-            `*` stands for any run of characters.
-        limit: Max number of people to return, most frequent first (default 100).
+        source: One key or several comma-separated – "outlook", "teams",
+            "kalender", "kontakte", "planner"; "all" or empty for every
+            source.
+        contains: Optional. Only people whose name or e-mail contains this
+            text; use it to resolve a first name to the full entry.
+        limit: Max number of people (default 100, most frequent first).
     """
     con = _db()
     try:
         conds = ["who != '' AND who != '(unbekannt)'"]
         params = []
-        if source != "all":
+        quellen = _quellen(source)
+        if quellen:
             # The people table has no root column – and mirrored files carry
             # no people anyway, so both mirrors fold into their src here.
-            quelle = "datei" if source in ("onedrive", "sharepoint") else source
-            conds.append("src = ?")
-            params.append(quelle)
+            srcs = sorted({"datei" if q in ("onedrive", "sharepoint") else q
+                           for q in quellen})
+            conds.append(f"src IN ({','.join('?' * len(srcs))})")
+            params.extend(srcs)
         if contains.strip():
             # SQLite's LIKE/lower() are ASCII-only; register Python lower() so
             # umlaut-cased input ("MÜLLER") still matches. ppl is stored
@@ -1003,23 +1137,36 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
 @mcp.tool(annotations=_READONLY)
 def read_source_file(source_root: str, path: str, max_chars: int = 100000,
                      offset: int = 0) -> dict:
-    """Read a raw exported source file (e.g. a whole .eml or Teams conversation).
+    """Read a raw exported source file in windows – the .eml, the Teams
+    conversation, an .ics or .vcf, a rendered SharePoint page, a Planner
+    board.html, a Planner attachment or a mirrored file.
 
-    Large files (some Teams conversations exceed 100 MB) are returned in
-    windows: the reply contains total_chars and truncated – pass offset to read
-    the next window. Prefer get_document with context_before/context_after for
-    chat conversations; it is far cheaper.
+    Text formats come back as text; binary files (PDF, Office documents,
+    images – anything not a text format) come back as metadata with
+    binary=true and no content: their contents are not indexed, and there
+    is nothing readable to hand over. Large files are windowed: the reply
+    carries total_bytes and truncated – pass offset for the next window.
+    Prefer get_document with context for chat history; it is far cheaper.
 
     Args:
-        source_root: "teams", "outlook", "onedrive" or "sharepoint"
-            (the export the file belongs to).
-        path: Relative path within that export, as returned in a hit's "path".
+        source_root: "teams", "outlook", "onedrive", "sharepoint", "pages" or
+            "planner" (the export the file belongs to).
+        path: Relative path within that export, as returned in a hit's "path"
+            or a list_files entry's "rel".
         max_chars: Max bytes to return (default 100000, cap 500000).
         offset: Byte position to start reading from (default 0).
     """
     target, err = _resolve_source(source_root, path)
     if err:
         return {"error": err}
+    if target.suffix.lower() not in _TEXTFORMATE:
+        # A PDF read as UTF-8 is a window of replacement characters – worse
+        # than nothing, because it looks like an answer.
+        return {"source_root": source_root, "path": path,
+                "suffix": target.suffix, "binary": True,
+                "total_bytes": target.stat().st_size, "content": "",
+                "note": "Binary file: its contents are not indexed and not "
+                        "returned. The archive holds name, path and type."}
     content, total, start, truncated = _read_window(target, offset, max_chars)
     return {"source_root": source_root, "path": path, "suffix": target.suffix,
             "total_bytes": total, "offset": start, "truncated": truncated,
@@ -1028,21 +1175,22 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
 
 @mcp.tool(annotations=_READONLY)
 def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict:
-    """List the folders present in the archive, with item counts.
+    """List the units the `folder` filter can take, with item counts.
 
-    The counterpart to the `folder` filter on search_messages: it tells you
-    what can be filtered on. The unit depends on the source: mailbox folders
-    below "E-Mail/", mirrored OneDrive folders below "Dateien/", ONE entry
-    per SharePoint library ("<site>/<library>"), per pages site, per Planner
-    board, calendars below "kalender/", contact folders below "kontakte/"
-    and the four kinds of Teams conversation.
+    The unit depends on the source, and it is the same the app's search
+    offers: mailbox folders and calendars (full path, e.g. E-Mail/Kunden,
+    kalender/Privat), the kind of Teams conversation (1on1, group, meeting,
+    channels), OneDrive folders (Dateien/…), SharePoint site/library,
+    Planner boards, and SharePoint pages sites. A folder always means
+    everything below it as well.
 
     Args:
         contains: Only folders whose path contains this text.
-        limit: How many folders to return, largest first.
-        source: Restrict to one source — "teams", "outlook", "kalender",
-            "kontakte", "onedrive" or "sharepoint" ("datei" = both mirrors).
-            Empty (or "all") lists every source.
+        limit: Max number of folders (default 200, most items first).
+        source: One key or several comma-separated – "outlook", "teams",
+            "kalender", "kontakte", "onedrive", "sharepoint", "pages",
+            "planner"; "datei" both mirrors. Empty or "all" lists every
+            source.
     """
     con = _db()
     try:
@@ -1050,11 +1198,11 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
         if contains.strip():
             wo = "AND ordner LIKE ?"
             params.append(f"%{contains.strip()}%")
-        quelle = (source or "").strip().lower()
-        if quelle and quelle != "all":
-            if quelle not in _LISTBAR:
+        quellen = _quellen(source)
+        if quellen:
+            if any(q not in _LISTBAR for q in quellen):
                 return {"count": 0, "folders": []}
-            cond, werte = _quelle_cond(quelle)
+            cond, werte = _quelle_cond(source)
             wo += f" AND {cond}"
             params.extend(werte)
         rows = con.execute(
@@ -1074,17 +1222,18 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
 
 @mcp.tool(annotations=_READONLY)
 def list_filetypes(limit: int = 40, source: str = "") -> dict:
-    """List the attachment and file types present in the archive, with counts.
+    """List the attachment and file types present, with counts.
 
-    The counterpart to the `filetype` filter. A count is the number of messages
-    carrying at least one attachment of that type — plus, under source
-    "datei", the mirrored OneDrive files themselves.
+    The counterpart to the `filetype` filter. A count is the number of mails
+    carrying at least one attachment of that type, of Planner tasks with such
+    an attachment, or of mirrored OneDrive/SharePoint files of that type.
+    Types are extensions without the dot ("pdf", "xlsx").
 
     Args:
-        limit: How many types to return, most frequent first.
-        source: Restrict to one source — mainly "outlook" (mail
-            attachments), "onedrive" or "sharepoint" (mirrored files;
-            "datei" = both mirrors). Empty lists every source.
+        limit: Max number of types (default 40, most frequent first).
+        source: One key or several comma-separated – "outlook", "planner",
+            "onedrive", "sharepoint" ("datei" = both mirrors). Empty lists
+            every source.
     """
     con = _db()
     try:
@@ -1151,6 +1300,154 @@ def _archiv_stand():
 
 
 @mcp.tool(annotations=_READONLY)
+def list_events(date_from: str = "", date_to: str = "", days: int = 0,
+                calendar: str = "", include_recovered: bool = True,
+                k: int = 100, offset: int = 0) -> dict:
+    """Appointments as the app's calendar view shows them – structured, and
+    including the ones recovered from invitation and cancellation mails.
+
+    The search tools know appointments only as text; this returns start,
+    end, all-day flag, status, calendar, location, organizer and attendees.
+    Recovered appointments are those no longer in any exported calendar:
+    status "deleted" (a cancellation was found) or "gone" (merely invited or
+    accepted). Upcoming appointments need date_from/date_to – `days` looks
+    back, not ahead.
+
+    Args:
+        date_from: Inclusive "YYYY-MM-DD" lower bound (an appointment counts
+            when any part of it lies in the window).
+        date_to: Inclusive "YYYY-MM-DD" upper bound.
+        days: The last N days, counting today. Ignored when date_from is given.
+        calendar: Only calendars whose name contains this text.
+        include_recovered: Also the appointments recovered from mails
+            (default true).
+        k: Max appointments (default 100).
+        offset: Appointments to skip, for pagination.
+    """
+    datei = Path(STATE["db"]).parent / "calendar.json"
+    if not datei.exists():
+        return {"error": "No calendar data yet – it is built by the calendar "
+                         "step of an export run.", "events": [], "count": 0}
+    try:
+        daten = json.loads(datei.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"error": f"Calendar data unreadable: {e}", "events": [],
+                "count": 0}
+    von, bis = _zeitraum(date_from, date_to, days)
+    aus = []
+    for r in daten.get("recs") or []:
+        if r.get("src") != "kalender":
+            continue
+        st = r.get("st") or ""
+        if st in ("deleted", "gone") and not include_recovered:
+            continue
+        if calendar and calendar.lower() not in str(r.get("cal") or "").lower():
+            continue
+        ts, te = r.get("ts"), r.get("te") or r.get("ts")
+        if ts is None:
+            continue
+        if von is not None and te < von:
+            continue
+        if bis is not None and ts > bis:
+            continue
+
+        def zeit(x):
+            return datetime.fromtimestamp(x).isoformat(timespec="minutes") if x else None
+        aus.append({"title": r.get("title"), "start": zeit(ts),
+                    "end": zeit(r.get("te")), "all_day": bool(r.get("ad")),
+                    "status": st, "recovered": st in ("deleted", "gone"),
+                    "calendar": r.get("cal"), "location": r.get("loc") or "",
+                    "organizer": r.get("who"), "attendees": r.get("att") or [],
+                    "description": r.get("x") or "", "uid": r.get("uid"),
+                    "path": r.get("p")})
+    aus.sort(key=lambda e: e["start"] or "")
+    k = max(1, min(int(k), 500))
+    offset = max(0, int(offset))
+    return {"count": len(aus), "offset": offset,
+            "reconstruction_ran": bool(daten.get("reconstruct")),
+            "events": aus[offset:offset + k]}
+
+
+@mcp.tool(annotations=_READONLY)
+def lookup_contact(query: str, limit: int = 20) -> dict:
+    """Look a person up in the exported address book – structured: name,
+    organisation, e-mail addresses, phone numbers, contact folder.
+
+    list_people knows who wrote messages; this knows the contact cards.
+    The query is a substring match over name, organisation and addresses.
+
+    Args:
+        query: Part of a name, organisation or e-mail address.
+        limit: Max contacts (default 20).
+    """
+    con = _db()
+    try:
+        con.create_function("py_lower", 1,
+                            lambda s: s.lower() if isinstance(s, str) else s,
+                            deterministic=True)
+        pat = _wie(query)
+        rows = con.execute(
+            "SELECT uid, title, who, ctx, rel, text, ppl FROM chunks "
+            "WHERE src = 'kontakte' AND seq = 0 AND (py_lower(title) LIKE ? "
+            "ESCAPE '\\' OR ppl LIKE ? ESCAPE '\\' OR py_lower(text) LIKE ? "
+            "ESCAPE '\\') ORDER BY title LIMIT ?",
+            (pat, pat, pat, max(1, min(int(limit), 200)))).fetchall()
+    finally:
+        con.close()
+    kontakte = []
+    for uid, name, org, ctx, rel, text, _ppl in rows:
+        text = text or ""
+        mails = sorted(set(re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", text)))
+        telefone = [m.strip() for m in re.findall(
+            r"(?<![\w@.])\+?\d[\d /().-]{5,}\d", text)]
+        kontakte.append({"uid": uid, "name": name, "organisation": org or "",
+                         "emails": mails, "phones": telefone,
+                         "folder": ctx, "path": rel, "text": text})
+    return {"count": len(kontakte), "contacts": kontakte}
+
+
+@mcp.tool(annotations=_READONLY)
+def list_sources() -> dict:
+    """Which sources this archive holds, and how to search each – start here.
+
+    One entry per source present in the index: its key (the value for every
+    `source` filter), what is indexed there (full text, or for OneDrive and
+    SharePoint files NAME, PATH and TYPE only), what `folder` means for it,
+    whether `person` applies, how many items it holds and when it last
+    exported successfully. `not_in_archive` lists the sources that were never
+    exported – asking about them is pointless, and worth telling the user.
+    """
+    con = _db()
+    try:
+        zaehler = {}
+        for src, root, n in con.execute(
+                "SELECT src, root, COUNT(DISTINCT uid) FROM chunks "
+                "GROUP BY src, root"):
+            key = root if src == "datei" else src
+            zaehler[key] = zaehler.get(key, 0) + n
+    finally:
+        con.close()
+    laeufe = _archiv_stand()["last_successful_runs"]
+    quellen, fehlt = [], []
+    for key, info in _QUELLEN_INFO.items():
+        if not zaehler.get(key):
+            fehlt.append(key)
+            continue
+        quellen.append({
+            "key": key, "label": info["label"], "items": zaehler[key],
+            "indexed": info["indexed"],
+            "folder_filter": info["folder"],
+            "person_filter": info["person"] or "not applicable – no person "
+                                               "is recorded for this source",
+            "last_successful_run": laeufe.get(info["step"]),
+        })
+    return {"sources": quellen, "not_in_archive": fehlt,
+            "source_filter": "one key, or several comma-separated: "
+                             "\"onedrive,sharepoint\"; \"datei\" means both "
+                             "file mirrors, \"all\" or empty means every source"}
+
+
+@mcp.tool(annotations=_READONLY)
 def archive_analytics() -> dict:
     """The archive about itself, as the app's Analytics tab shows it.
 
@@ -1206,18 +1503,22 @@ def corpus_stats() -> dict:
 
 @mcp.tool(annotations=_READONLY)
 def list_files(root: str = "", path: str = "") -> dict:
-    """Browse the mirrored drives one folder level at a time.
+    """Browse the mirrored drives and the Planner attachments one folder level
+    at a time.
 
-    Without arguments: the entry points — "onedrive" plus one per mirrored
-    SharePoint site/library. With root ("onedrive" or "sharepoint") and a
-    folder path: the immediate subfolders with their file counts, and the
-    files sitting right there — name, date, tombstone (gone = no longer at
-    Microsoft). File contents are not indexed; fetch a file itself via
-    read_source_file with the matching source_root.
+    Without arguments: the entry points – "onedrive", one per mirrored
+    SharePoint site/library, and "planner" once per board that carries
+    attachments. With root and a folder path: the immediate subfolders with
+    their file counts, and the files sitting right there – name, date,
+    tombstone (gone = no longer at Microsoft). File contents are not indexed;
+    a text file can be read via read_source_file with the matching root,
+    a binary one only named.
 
     Args:
-        root: "" for the entry points, else "onedrive" or "sharepoint".
-        path: Folder path inside that mirror, as returned by this tool.
+        root: "" for the entry points, else "onedrive", "sharepoint" or
+            "planner".
+        path: Folder inside that root, as returned by this tool ("" for the
+            top level; for planner the board name).
     """
     con = _db()
     try:
@@ -1239,7 +1540,22 @@ def list_files(root: str = "", path: str = "") -> dict:
             for k in sorted(bibliotheken):
                 wurzeln.append({"root": "sharepoint", "path": k,
                                 "label": k, "files": bibliotheken[k]})
+            for board, dateien in _planner_anhaenge().items():
+                wurzeln.append({"root": "planner", "path": board,
+                                "label": f"Planner: {board}",
+                                "files": len(dateien)})
             return {"roots": wurzeln}
+        if root == "planner":
+            # Attachments are downloaded next to the board, not indexed as
+            # chunks – the listing comes from disk, one flat folder per board.
+            board = (path or "").strip("/")
+            alle = _planner_anhaenge()
+            if board not in alle:
+                return {"root": root, "path": board, "base": 1, "label": board,
+                        "dirs": [], "files": []}
+            return {"root": root, "path": board, "base": 1,
+                    "label": f"Planner: {board}", "dirs": [],
+                    "files": alle[board][:2000]}
         praefix = (path or "").strip("/")
         # The fixed prefix depth and the level label travel with the answer:
         # the client renders breadcrumbs generically instead of knowing that
@@ -1273,6 +1589,32 @@ def list_files(root: str = "", path: str = "") -> dict:
                 "files": dateien[:2000]}
     finally:
         con.close()
+
+
+def _planner_anhaenge():
+    """board -> its downloaded attachments, straight from the export folder."""
+    wurzel = STATE.get("planner_dir")
+    if not wurzel or not Path(wurzel).is_dir():
+        return {}
+    import planner_export
+    out = {}
+    for board in sorted(p for p in Path(wurzel).iterdir() if p.is_dir()):
+        ordner = board / planner_export.ANHANG_DIR
+        if not ordner.is_dir():
+            continue
+        dateien = []
+        for p in sorted(ordner.iterdir(), key=lambda p: p.name.lower()):
+            if not p.is_file():
+                continue
+            st = p.stat()
+            dateien.append({"name": p.name,
+                            "rel": f"{board.name}/{planner_export.ANHANG_DIR}/{p.name}",
+                            "date": datetime.fromtimestamp(st.st_mtime)
+                            .strftime("%Y-%m-%d %H:%M"),
+                            "gone": None, "size": st.st_size})
+        if dateien:
+            out[board.name] = dateien
+    return out
 
 
 # --------------------------------------------------------------------------
