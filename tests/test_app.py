@@ -3100,7 +3100,7 @@ function statusGeruest(){
 
 
 def _seiten_js():
-    treffer = re.search(r"<script>(.*?)</script>", app_mod.PAGE, re.S)
+    treffer = re.search(r"<script>(.*?)</script>", app_mod.seite(), re.S)
     assert treffer, "Kein <script>-Block in der Seite"
     # As when serving: insert the registry's step metadata.
     import steps as steps_mod
@@ -3278,7 +3278,7 @@ def test_jeder_reiter_liegt_im_hauptbereich():
     """Regression: the settings section sat behind </main> and thus got
     neither padding nor max width – its cards stuck to the window edge,
     unlike every other tab."""
-    seite = app_mod.PAGE
+    seite = app_mod.seite()
     haupt = seite[seite.index("<main>"):seite.index("</main>")]
     for reiter in ("export", "suche", "analytics", "einstellungen"):
         assert f'<section id="tab-{reiter}"' in haupt, f"{reiter} liegt außerhalb <main>"
@@ -3295,7 +3295,7 @@ def test_die_reiterzeile_bleibt_kurz():
 
     The number stands here as a brake: whoever adds a fifth should have to
     read this rationale."""
-    seite = app_mod.PAGE
+    seite = app_mod.seite()
     nav = seite[seite.index("<nav>"):seite.index("</nav>")]
     assert nav.count("data-tab=") == 4, "Die Reiterzeile ist wieder gewachsen"
     for weg in ("kalender", "adressbuch", "zeitplan", "mcp"):
@@ -4301,9 +4301,21 @@ def test_prompt_verlangt_die_passende_sprache():
 # active because the class sits in the markup. No error in the console, no
 # message: the button simply did nothing.
 # --------------------------------------------------------------------------
+def test_seite_liegt_als_datei_neben_dem_code():
+    """The interface is a data file read from RES – the same place the
+    bundle unpacks lang/ and openapi.yaml to. A wrong path here means the
+    app starts blank, so the test reads it the way app.py does."""
+    datei = Path(app_mod.RES) / "page.html"
+    assert datei.exists()
+    assert app_mod.seite() == datei.read_text(encoding="utf-8")
+    assert app_mod.seite() is app_mod.seite()          # read once
+    assert app_mod.seite().lstrip().lower().startswith("<!doctype html>")
+    assert "/*__I18N__*/" in app_mod.seite() and "/*__STEPS__*/" in app_mod.seite()
+
+
 def test_jeder_id_selektor_trifft_ein_element():
-    # The page lives in page.py – that is where the JS is.
-    quelle = app_mod.PAGE
+    # The page lives in page.html – that is where the JS is.
+    quelle = app_mod.seite()
     # All '#id' selectors used in the JavaScript. Only the fully spelled-out
     # ones: '#cat-' + name is only assembled at runtime, nothing could be
     # said about it here.
@@ -4330,7 +4342,7 @@ def test_jeder_id_selektor_trifft_ein_element():
 def test_seite_bringt_ihr_eigenes_symbol_mit():
     """Without it every browser collects a 404 on /favicon.ico – and in the
     bundle there would be no file to serve instead."""
-    seite = app_mod.PAGE
+    seite = app_mod.seite()
     assert 'rel="icon"' in seite
     assert "data:image/svg+xml" in seite, "Symbol als Datei statt eingebettet"
 
@@ -4635,8 +4647,8 @@ console.log('OK');
 def test_analytics_hat_einen_aktualisieren_knopf():
     """ladeAnalytics(true) bypasses the cache – exactly what the button
     calls; without it the tab showed stale numbers until a page reload."""
-    assert 'onclick="ladeAnalytics(true)"' in app_mod.PAGE
-    assert 'data-i18n="ana.reload"' in app_mod.PAGE
+    assert 'onclick="ladeAnalytics(true)"' in app_mod.seite()
+    assert 'data-i18n="ana.reload"' in app_mod.seite()
 
 
 def test_analytics_zeigt_kennzahlen_und_trennt_ausgelassenes():
@@ -4678,10 +4690,10 @@ def test_rangliste_teilt_sich_ein_raster():
 def test_verschwundenes_ueber_die_zeit_ist_weg():
     """A bar for a single month says nothing – the tile with the total and
     the "Deleted" view remain."""
-    assert "ana.geloescht.sub" not in app_mod.PAGE
+    assert "ana.geloescht.sub" not in app_mod.seite()
     # What remains: the tile with the total and the view in the search.
-    assert "ana.gone" in app_mod.PAGE
-    assert 'id="f-gone"' in app_mod.PAGE
+    assert "ana.gone" in app_mod.seite()
+    assert 'id="f-gone"' in app_mod.seite()
 
 
 # --------------------------------------------------------------------------
@@ -4840,7 +4852,7 @@ def test_dateitypen_vorgabe_ist_sichtbar(server):
     s = call(server[1], "GET", "/api/status")[1]
     assert s["filetype_hidden_default"] == sorted(app_mod.FILETYPE_HIDDEN_DEFAULT)
     assert s["config"]["filetype_hidden"] == s["filetype_hidden_default"]
-    assert 'id="c-filetype_hidden"' in app_mod.PAGE
+    assert 'id="c-filetype_hidden"' in app_mod.seite()
 
 
 def test_abgeschalteter_mcp_zugriff_startet_nichts(sandbox, monkeypatch):
@@ -5561,9 +5573,9 @@ def test_ein_pruefknopf_prueft_beides_in_einem_lauf(sandbox):
 def test_vollstaendigkeit_hat_genau_einen_knopf():
     """Two buttons first forced the user to decide what they actually want
     to know – "check" is a question to the archive, not to a source."""
-    assert 'onclick="pruefeVollstaendigkeit()"' in app_mod.PAGE
-    assert "pruefeVollstaendigkeit('onedrive')" not in app_mod.PAGE
-    assert app_mod.PAGE.count("pruefeVollstaendigkeit(") == 2   # call + definition
+    assert 'onclick="pruefeVollstaendigkeit()"' in app_mod.seite()
+    assert "pruefeVollstaendigkeit('onedrive')" not in app_mod.seite()
+    assert app_mod.seite().count("pruefeVollstaendigkeit(") == 2   # call + definition
 
 
 def test_analytics_liefert_beide_berichte(server, sandbox):
@@ -5654,15 +5666,15 @@ def test_export_status_kennt_onedrive(sandbox):
 def test_export_reiter_zeigt_weder_zeiten_noch_datenordner():
     """Both live elsewhere: the times in Analytics, the folder in the
     settings. The same thing in two places goes stale in one of them."""
-    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
+    kopf = app_mod.seite().split('<section id="tab-suche"')[0]
     assert 'id="export-state"' not in kopf, "Zeiten stehen noch im Export-Reiter"
     assert 'id="data-dir"' not in kopf
-    assert 'id="export-state"' in app_mod.PAGE, "Zeiten sind ganz verschwunden"
+    assert 'id="export-state"' in app_mod.seite(), "Zeiten sind ganz verschwunden"
     # The value sits in the input field itself; the fixed locations (app
     # folder, application) stand below as their own immutable rows.
-    assert 'id="data-dir2"' not in app_mod.PAGE, "doppelte Pfadanzeige ist zurueck"
-    assert 'id="c-data-dir"' in app_mod.PAGE
-    assert 'id="home-dir"' in app_mod.PAGE and 'id="app-ort"' in app_mod.PAGE
+    assert 'id="data-dir2"' not in app_mod.seite(), "doppelte Pfadanzeige ist zurueck"
+    assert 'id="c-data-dir"' in app_mod.seite()
+    assert 'id="home-dir"' in app_mod.seite() and 'id="app-ort"' in app_mod.seite()
 
 
 PRUEFUNG_SCHRITTNAME = GRUNDZUSTAND + """
@@ -5688,7 +5700,7 @@ def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
     """Prose next to every button makes the UI restless. The explanation now
     sits in the title attribute of an (i) – visible on demand, readable by a
     screen reader, and without its own window that has to open and close."""
-    kopf = app_mod.PAGE.split('<section id="tab-suche"')[0]
+    kopf = app_mod.seite().split('<section id="tab-suche"')[0]
     assert 'data-i18n="export.start.hint"' not in kopf, "steht wieder als Text da"
     assert 'data-i18n-title="export.start.hint"' in kopf
     # The text itself is kept – only its form changes.
@@ -5704,17 +5716,17 @@ ERKLAERUNGEN_ALS_INFO = ["export.start.hint", "export.what.sub",
 def test_erklaerungen_im_exportreiter_stehen_am_infozeichen(schluessel):
     """Paragraphs next to buttons make the UI restless; the explanation
     belongs on demand. The text itself stays – only its form changes."""
-    assert f'data-i18n="{schluessel}"' not in app_mod.PAGE, "steht wieder als Fließtext da"
-    assert f'data-i18n-title="{schluessel}"' in app_mod.PAGE
+    assert f'data-i18n="{schluessel}"' not in app_mod.seite(), "steht wieder als Fließtext da"
+    assert f'data-i18n-title="{schluessel}"' in app_mod.seite()
     assert i18n.strings("de")[schluessel]
 
 
 def test_jedes_infozeichen_ist_erreichbar():
     """An (i) that only the mouse knows is, for the keyboard, a letter
     without meaning."""
-    zeichen = app_mod.PAGE.count('class="info"')
+    zeichen = app_mod.seite().count('class="info"')
     assert zeichen >= 5, f"nur {zeichen} (i) gefunden"
-    for stueck in app_mod.PAGE.split('<span class="info"')[1:]:
+    for stueck in app_mod.seite().split('<span class="info"')[1:]:
         block = stueck[:220]
         assert 'tabindex="0"' in block and "aria-label=" in block
 
@@ -5722,11 +5734,11 @@ def test_jedes_infozeichen_ist_erreichbar():
 def test_infozeichen_ist_erreichbar_und_erklaert_sich():
     """An (i) that only the mouse knows is, for the keyboard, a letter
     without meaning."""
-    i = app_mod.PAGE.index('data-i18n-title="export.start.hint"')
-    block = app_mod.PAGE[i - 200:i + 200]
+    i = app_mod.seite().index('data-i18n-title="export.start.hint"')
+    block = app_mod.seite()[i - 200:i + 200]
     assert 'tabindex="0"' in block, "mit der Tastatur nicht erreichbar"
     assert 'aria-label=' in block, "ohne Namen für den Screenreader"
-    assert ".info{" in app_mod.PAGE and "cursor:help" in app_mod.PAGE
+    assert ".info{" in app_mod.seite() and "cursor:help" in app_mod.seite()
 
 
 PRUEFUNG_ANALYTICS_KACHELN = GRUNDZUSTAND + """
@@ -5790,8 +5802,8 @@ def test_kein_stylesheet_zieht_ein_infozeichen_auseinander():
     # Comments go first: this very one quotes the old rule verbatim, and the
     # test should look at the stylesheet, not at its rationale.
     css = re.sub(r"/\*.*?\*/", "",
-                 app_mod.PAGE.split("<style>")[1].split("</style>")[0], flags=re.S)
-    markup = app_mod.PAGE.split("</style>")[1]
+                 app_mod.seite().split("<style>")[1].split("</style>")[0], flags=re.S)
+    markup = app_mod.seite().split("</style>")[1]
     gefaehrlich = re.findall(r"\.([\w-]+) span\{([^}]*)\}", css)
     for klasse, regel in gefaehrlich:
         if not re.search(r"flex:\s*1|min-width|width:", regel):
@@ -5804,7 +5816,7 @@ def test_kein_stylesheet_zieht_ein_infozeichen_auseinander():
 
 def test_infozeichen_behaelt_seine_groesse():
     css = re.sub(r"/\*.*?\*/", "",
-                 app_mod.PAGE.split("<style>")[1].split("</style>")[0], flags=re.S)
+                 app_mod.seite().split("<style>")[1].split("</style>")[0], flags=re.S)
     regel = re.search(r"\.info\{([^}]*)\}", css).group(1)
     assert "width:17px" in regel and "height:17px" in regel
     assert "flex:0 0 auto" in regel, "sonst zieht der nächste Flex-Behälter daran"
@@ -5815,12 +5827,12 @@ def test_kopfleiste_zeigt_nur_was_eine_handlung_verlangt():
     Analytics. The same number in two places helps nobody – eventually they
     contradict each other. The header keeps what demands something of you:
     access, AI search, Claude."""
-    kopf = app_mod.PAGE.split("<nav")[0]
+    kopf = app_mod.seite().split("<nav")[0]
     assert 'id="pill-index"' not in kopf
     for erwartet in ('id="pill-token"', 'id="pill-ollama"', 'id="pill-mcp"'):
         assert erwartet in kopf, f"{erwartet} ist mit verschwunden"
     # The number still appears somewhere – just in the key figures now.
-    assert 'id="ana-kpi"' in app_mod.PAGE
+    assert 'id="ana-kpi"' in app_mod.seite()
 
 
 PRUEFUNG_SUCHMASKE = GRUNDZUSTAND + """
@@ -5902,19 +5914,19 @@ def test_filter_beginnen_zugeklappt():
     """Whoever filters nothing – the normal case – sees a search field and a
     button. Checked in the markup: the JS tests' DOM stub reads no class
     attributes."""
-    i = app_mod.PAGE.index('id="filter"')
-    assert 'class="row hide"' in app_mod.PAGE[i - 60:i], "Filter stehen offen da"
-    j = app_mod.PAGE.index('id="filter-weg"')
-    assert 'class="mini hide"' in app_mod.PAGE[j - 60:j], "„Zurücksetzen“ ohne Filter sichtbar"
+    i = app_mod.seite().index('id="filter"')
+    assert 'class="row hide"' in app_mod.seite()[i - 60:i], "Filter stehen offen da"
+    j = app_mod.seite().index('id="filter-weg"')
+    assert 'class="mini hide"' in app_mod.seite()[j - 60:j], "„Zurücksetzen“ ohne Filter sichtbar"
 
 
 def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
     """The tab already says where you are; the state of the index lives in
     Analytics. "BM25" and "embeddings" do not belong in the form anyway."""
-    i = app_mod.PAGE.index('class="suchzeile"')
-    karte = app_mod.PAGE[i - 300:i]
+    i = app_mod.seite().index('class="suchzeile"')
+    karte = app_mod.seite()[i - 300:i]
     assert 'data-i18n="nav.search"' not in karte, "Überschrift wiederholt den Reiter"
-    assert 'id="search-sub"' not in app_mod.PAGE, "Statuszeile in der Maske"
+    assert 'id="search-sub"' not in app_mod.seite(), "Statuszeile in der Maske"
 
 
 def test_kein_feld_sucht_von_selbst():
@@ -5922,9 +5934,9 @@ def test_kein_feld_sucht_von_selbst():
     term, person, period and folder in peace without a search taking off
     after every change – the filters used to do that, and the hit list then
     belonged to a half-filled form."""
-    i = app_mod.PAGE.index('id="filter"')
+    i = app_mod.seite().index('id="filter"')
     # Up to the last field of the row, not guessed as a character count.
-    block = app_mod.PAGE[i:app_mod.PAGE.index('id="f-gone"', i) + 200]
+    block = app_mod.seite()[i:app_mod.seite().index('id="f-gone"', i) + 200]
     for feld in ('id="f-person"', 'id="f-source"', 'id="f-from"',
                  'id="f-to"', 'id="f-folder"', 'id="f-typ"', 'id="f-gone"'):
         j = block.index(feld)
@@ -5935,7 +5947,7 @@ def test_kein_feld_sucht_von_selbst():
         # The source field additionally reloads the folder list – even then
         # no search runs, but counting does happen.
         assert "zeigeFilterstand()" in umfeld, f"{feld} zählt nicht mit"
-    q = app_mod.PAGE[app_mod.PAGE.index('id="q"'):][:260]
+    q = app_mod.seite()[app_mod.seite().index('id="q"'):][:260]
     assert "oninput" not in q, "das Suchfeld sucht beim Tippen"
 
 
@@ -6024,13 +6036,13 @@ def test_suchfeld_und_markierung_sind_verdrahtet():
     """Checking the functions one by one is not enough: the counter-checks
     passed because the test called them directly instead of via the page.
     So the wiring itself is checked."""
-    i = app_mod.PAGE.index('id="q"')
-    feld = app_mod.PAGE[i:i + 260]
+    i = app_mod.seite().index('id="q"')
+    feld = app_mod.seite()[i:i + 260]
     assert "sofortSuchen()" in feld, "Enter sucht nicht"
-    assert 'onclick="sofortSuchen()"' in app_mod.PAGE, "Der Knopf wartet auf die Verzögerung"
+    assert 'onclick="sofortSuchen()"' in app_mod.seite(), "Der Knopf wartet auf die Verzögerung"
     # The preview goes through hervor(), not around it.
-    j = app_mod.PAGE.index('class="prev"')
-    assert "hervor(h.preview" in app_mod.PAGE[j:j + 120], "Begriff wird nicht markiert"
+    j = app_mod.seite().index('class="prev"')
+    assert "hervor(h.preview" in app_mod.seite()[j:j + 120], "Begriff wird nicht markiert"
 
 
 @pytest.mark.parametrize("wert,erwartet", [
@@ -6294,7 +6306,7 @@ def test_kopierknopf_klappt_das_protokoll_nicht_zu():
     """The buttons sit in the header row, which itself folds open and shut.
     Without stopPropagation the log collapsed on every copy – you would lose
     sight of the result at exactly the moment you need it."""
-    seite = app_mod.PAGE
+    seite = app_mod.seite()
     kopf = seite.split('class="pkopf"')[1].split("</div>")[0]
     for knopf in ("kopiere('log', this)", "fehlerMelden()"):
         assert knopf in kopf, f"{knopf} steht nicht in der Protokollkopfzeile"
@@ -6778,7 +6790,7 @@ def test_einstellungen_ollama_schalter():
 def test_jede_einstellung_hat_eine_erklaerung():
     """The page now lives off the (i): a row without an explanation is a
     number nobody touches – or worse, changes blindly."""
-    seite = app_mod.PAGE
+    seite = app_mod.seite()
     abschnitt = seite[seite.index('<section id="tab-einstellungen"'):seite.index("</section>\n</main>")]
     # "feldzeile breit" is the textarea below its title row – the explanation
     # sits on the title, not on the input field.
@@ -6895,7 +6907,7 @@ def test_analytics_liest_nur_und_aktualisieren_baut_neu(sandbox, monkeypatch):
 # --------------------------------------------------------------------------
 def _feldlisten():
     """The three lists from which the UI reads form fields."""
-    quelle = app_mod.PAGE
+    quelle = app_mod.seite()
     listen = {}
     for name in ("SCHALTER", "ZAHLEN", "TEXTE"):
         m = re.search(rf"var {name}\s*=\s*\[(.*?)\];", quelle, re.S)
@@ -6907,7 +6919,7 @@ def _feldlisten():
 def test_jedes_gelistete_feld_gibt_es_auch(sandbox):
     """Every id in SCHALTER/ZAHLEN/TEXTE must have an element."""
     fehlt = [k for liste in _feldlisten().values() for k in liste
-             if f'id="c-{k}"' not in app_mod.PAGE]
+             if f'id="c-{k}"' not in app_mod.seite()]
     assert not fehlt, f"kein Bedienelement für: {fehlt}"
 
 
@@ -6934,7 +6946,7 @@ def test_jedes_feld_ist_auch_gelistet():
                  "sharepoint_pages_urls",     # likewise
                  "cadence-onedrive",     # cadence selects, leseKadenzen()
                  "cadence-teams"}
-    im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.PAGE))
+    im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.seite()))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"
 
@@ -7102,8 +7114,8 @@ def test_kacheln_springen_an_eine_stelle_die_es_gibt():
     """Without the id in the markup zeigeEinstellung finds nothing and stays
     at the top of the settings – reported for the AI tile."""
     for ziel in ("ki-karte", "mcp-karte"):
-        assert f'id="{ziel}"' in app_mod.PAGE, f"Sprungziel {ziel} fehlt"
-        assert f"zeigeEinstellung('{ziel}')" in app_mod.PAGE, f"{ziel} wird nicht angesprungen"
+        assert f'id="{ziel}"' in app_mod.seite(), f"Sprungziel {ziel} fehlt"
+        assert f"zeigeEinstellung('{ziel}')" in app_mod.seite(), f"{ziel} wird nicht angesprungen"
 
 
 PRUEFUNG_RUNDREISE = GRUNDZUSTAND + """

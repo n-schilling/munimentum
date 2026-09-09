@@ -220,16 +220,16 @@ def test_fehlermeldung_steht_nur_im_protokoll():
     """It belongs to the log, which is open from every tab – in the update
     line it was the same thing a second time in a foreign place."""
     import app as app_mod
-    assert app_mod.PAGE.count('data-i18n="report.button"') == 1
-    kopf = app_mod.PAGE[app_mod.PAGE.index('id="protokoll"'):]
+    assert app_mod.seite().count('data-i18n="report.button"') == 1
+    kopf = app_mod.seite()[app_mod.seite().index('id="protokoll"'):]
     assert 'data-i18n="report.button"' in kopf[:1200]
 
 
 def test_zu_den_releases_sieht_aus_wie_ein_knopf():
     """A link next to one with the same job should look the same too."""
     import app as app_mod
-    i = app_mod.PAGE.index('id="update-link"')
-    zeile = app_mod.PAGE[app_mod.PAGE.rindex("<", 0, i):app_mod.PAGE.index(">", i) + 1]
+    i = app_mod.seite().index('id="update-link"')
+    zeile = app_mod.seite()[app_mod.seite().rindex("<", 0, i):app_mod.seite().index(">", i) + 1]
     assert 'class="mini"' in zeile
     assert 'data-i18n="update.download"' in zeile
-    assert "button.mini,a.mini{" in app_mod.PAGE
+    assert "button.mini,a.mini{" in app_mod.seite()

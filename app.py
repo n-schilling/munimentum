@@ -23,8 +23,8 @@ Without Ollama the app shows an installation wizard. Everything else keeps
 working: the MCP server is started and indexing is skipped (or, on request,
 built as a plain full-text index, rag_index.py --no-embeddings).
 
-Since 7.0 the file is split: page.py holds the interface (one page as a
-string), steps.py the step registry (one entry per export action), runner.py
+Since 7.0 the file is split: page.html is the interface (one page, a data
+file), steps.py the step registry (one entry per export action), runner.py
 runs the steps as subprocesses. What stays here: configuration, paths,
 routes, and the wiring between them.
 
@@ -68,7 +68,6 @@ import analytics_db
 import run_history
 from runner import JobRunner, McpProcess, _stream_lines  # noqa: F401
 import steps as steps_mod
-from page import PAGE         # the interface, as a module of its own
 import settings
 import state_db
 import store_layout
@@ -159,6 +158,21 @@ def _split_pfade(heim):
 
 
 RES = resource_dir()
+
+_SEITE = None
+
+
+def seite():
+    """The interface: one HTML file next to the code, shipped as a data file
+    like lang/ and openapi.yaml. Read on first use, not at import – the
+    bundle's multiprocessing workers import this module too and have no
+    business loading 200 KB of markup. The /-route fills its two
+    placeholders, /*__I18N__*/ (language strings) and /*__STEPS__*/ (the
+    step metadata of the registry), on every request."""
+    global _SEITE
+    if _SEITE is None:
+        _SEITE = (RES / "page.html").read_text(encoding="utf-8")
+    return _SEITE
 HEIM = data_dir()
 CONFIG_FILE = HEIM / settings.CONFIG_NAME   # the same file the scripts read
 TOKEN_FILE = HEIM / "gx_token.txt"
@@ -2007,7 +2021,7 @@ class Handler(BaseHTTPRequestHandler):
                               ensure_ascii=False).replace("<", "\\u003c")
         schritte = json.dumps(steps_mod.ui_metadaten(),
                               ensure_ascii=False).replace("<", "\\u003c")
-        return (PAGE.replace("/*__I18N__*/", nutzlast)
+        return (seite().replace("/*__I18N__*/", nutzlast)
                     .replace("/*__STEPS__*/", schritte))
 
     def _save_token(self, data):

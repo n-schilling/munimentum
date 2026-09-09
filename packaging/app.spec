@@ -52,7 +52,7 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "progress", "answer", "notify",
                  "drive_mirror", "sharepoint_export", "state_db",
                  "planner_export", "analytics_db",
-                 "page", "steps", "runner"]
+                 "steps", "runner"]
 
 def ohne_cli(name):
     """mcp.cli needs typer – an optional extra we do not ship.
@@ -78,8 +78,9 @@ for paket in ("uvicorn", "mcp", "anyio", "sse_starlette"):
 # only keys.
 datas = [(str(p), "lang") for p in sorted((ROOT / "lang").glob("*.json"))]
 assert datas, "lang/ ist leer – die Oberfläche hätte keine Texte"
-# The API description that /api/openapi serves (expert mode).
-datas += [(str(ROOT / "openapi.yaml"), ".")]
+# The interface itself and the API description that /api/openapi serves –
+# app.py reads both from RES; without them the app would start blank.
+datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "openapi.yaml"), ".")]
 
 for paket in ("mcp", "uvicorn", "starlette", "pydantic", "msal", "requests"):
     try:

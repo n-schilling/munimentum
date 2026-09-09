@@ -50,9 +50,11 @@ def test_jedes_skript_ist_im_buendel():
     gebuendelt = set(re.findall(r'"([^"]+)"', treffer.group(1)))
     for e in steps.REGISTRY:
         assert e["script"] in gebuendelt, e["key"]
-    # The new modules of the split itself must come along as well.
-    for modul in ("page", "steps", "runner"):
+    # The new modules of the split itself must come along as well – and the
+    # page, which is a data file now, not a module.
+    for modul in ("steps", "runner"):
         assert modul in gebuendelt, modul
+    assert "page.html" in spec, "the bundle would start blank"
 
 
 def test_jede_beschriftung_ist_uebersetzt():

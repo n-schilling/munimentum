@@ -1,16 +1,4 @@
-#!/usr/bin/env python3
-"""
-page.py – the interface, one embedded string.
-
-Everything the browser gets is this single page: markup, styles and the
-script, delivered by app.py's /-route with the language strings injected
-(the /*__I18N__*/ placeholder) and the step metadata from the registry
-(/*__STEPS__*/, a JSON block read the same way as the language strings).
-One string on purpose: the bundle ships no template folder, and the page
-tests read it as a string.
-"""
-
-PAGE = r"""<!doctype html>
+<!doctype html>
 <html lang="de">
 <head>
 <meta charset="utf-8">
@@ -3996,4 +3984,3 @@ setInterval(pullLog, 1000);
 </script>
 </body>
 </html>
-"""
