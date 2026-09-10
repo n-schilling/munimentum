@@ -37,6 +37,9 @@ DATEI = "folders.json"
 # that ordered rules decide about. Only the file differs, because both live
 # in the same output folder.
 KALENDER = "calendars.json"
+# OneNote notebooks are the same kind of list once more – one entry per
+# notebook, the folder it lands in as the path, ordered rules over it.
+NOTIZBUECHER = "notebooks.json"
 
 # What earlier versions had as a name list. Translated into rules on the
 # first run (see aus_namensliste) – nobody should retype their selection.
@@ -179,7 +182,7 @@ def aus_namensliste(namen):
 # The old file names remain the callers' addresses; here they become kv
 # keys. state_db is imported late (it itself imports this module for
 # baum_diff).
-SCHLUESSEL = {DATEI: "baum", KALENDER: "kalender"}
+SCHLUESSEL = {DATEI: "baum", KALENDER: "kalender", NOTIZBUECHER: "notizbuecher"}
 
 
 def _db(ordner):
@@ -277,7 +280,7 @@ def auf_platte(ordner, wurzeln=(), endung=".eml"):
     return gefunden
 
 
-def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
+def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI, archiv=None):
     """What the next export would do – folder by folder, without starting it.
 
     The rules are powerful enough that their outcome no longer forms in
@@ -295,7 +298,11 @@ def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI):
     """
     daten = lade(ordner, datei) if daten is None else daten
     eintraege = (daten or {}).get("ordner", [])
-    archiv = auf_platte(ordner, [e["pfad"].split("/")[0] for e in eintraege], endung)
+    # `archiv` may arrive ready-made: a caller whose units hold their files
+    # in subfolders (a notebook keeps its pages in section folders) counts
+    # per unit itself instead of per directory.
+    if archiv is None:
+        archiv = auf_platte(ordner, [e["pfad"].split("/")[0] for e in eintraege], endung)
     an, aus = [], []
     for e in eintraege:
         ja, regel = erklaere(e["pfad"], regeln)

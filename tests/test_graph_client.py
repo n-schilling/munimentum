@@ -335,3 +335,84 @@ def test_drosselsperre_gilt_dem_ganzen_prozess(session, sleeps, capsys):
     assert len(events) == 1 and events[0]["v"]["s"] == 7
     # Both follow-up requests waited out the gate (~7 s remainder each).
     assert [round(s) for s in sleeps] == [7, 7]
+
+
+# --------------------------------------------------------------------------
+# The pacer: requests spaced out below a per-count limit
+# --------------------------------------------------------------------------
+def test_takt_rechnet_die_wartezeit_aus_beiden_fenstern():
+    t = graph_client.Takt(pro_minute=2, pro_stunde=3, zeiten=[1000.0, 1010.0])
+    assert t.wartezeit(jetzt=1011.0) == 49.0          # minute window: 2 of 2 used
+    assert t.wartezeit(jetzt=1061.0) == 0.0           # the first one dropped out
+    t.zeiten.append(1061.0)
+    assert t.wartezeit(jetzt=1062.0) == pytest.approx(1000.0 + 3600.0 - 1062.0)   # hour: 3 of 3
+    assert t.verbraucht(3600.0, jetzt=1062.0) == 3
+    assert t.verbraucht(60.0, jetzt=1062.0) == 2
+
+
+def test_takt_wartet_vor_der_anfrage_und_merkt_sie_sich(session, sleeps, monkeypatch):
+    zeit = [1000.0]
+    monkeypatch.setattr(graph_client.time, "time", lambda: zeit[0])
+    takt = graph_client.takt(pro_minute=1)
+    session.responses = [FakeResponse(payload={"a": 1}), FakeResponse(payload={"a": 2})]
+    tc = graph_client.TokenClient("tok")
+    assert tc.get("https://example.invalid/1") == {"a": 1}
+    assert sleeps == [] and takt.zeiten == [1000.0]
+    # The second request within the minute has to wait for the window –
+    # the fake sleep records it and the clock moves on.
+    def schlafen(s):
+        sleeps.append(s)
+        zeit[0] += s
+    monkeypatch.setattr(graph_client.time, "sleep", schlafen)
+    zeit[0] = 1010.0
+    assert tc.get("https://example.invalid/2") == {"a": 2}
+    # The first moment has left the minute window by then.
+    assert sleeps == [50.0] and takt.zeiten == [1060.0]
+    assert graph_client.takt() is None, "no limits means no pacer"
+
+
+def test_erschoepfte_429_leiter_ist_ueberlastet(session, sleeps):
+    session.responses = [FakeResponse(status=429)] * graph_client.HTTP_RETRIES
+    with pytest.raises(graph_client.Ueberlastet):
+        graph_client.TokenClient("tok").get("https://example.invalid/x")
+    session.responses = [FakeResponse(status=503)] * graph_client.HTTP_RETRIES
+    with pytest.raises(RuntimeError) as e:
+        graph_client.TokenClient("tok").get_bytes("https://example.invalid/y")
+    assert not isinstance(e.value, graph_client.Ueberlastet), "a 503 is not a spent budget"
+
+
+def test_getaktete_429_wartet_die_minute_und_gibt_dann_auf(session, sleeps):
+    """Under pacing a 429 without Retry-After means the minute window (or
+    the hour) is full: wait the minute once, and a second refusal ends the
+    run as a spent budget – not four more refused requests."""
+    graph_client.takt(100, 380, [])
+    session.responses = [FakeResponse(status=429), FakeResponse(status=429),
+                         FakeResponse(200, {"ok": 1})]
+    with pytest.raises(graph_client.Ueberlastet):
+        graph_client.TokenClient("tok").get("https://example.invalid/x")
+    assert len(session.calls) == 2, "the second 429 is the answer"
+    assert any(round(s) == 60 for s in sleeps), "the minute window, not a guess"
+    # Without pacing the ladder runs as before.
+    graph_client.TAKT = None
+    session.responses = [FakeResponse(status=429)] * 3 + [FakeResponse(200, {"ok": 1})]
+    assert graph_client.TokenClient("tok").get("https://example.invalid/x") == {"ok": 1}
+
+
+def test_takt_sagt_die_pause_und_haelt_kein_volles_fenster_aus(monkeypatch, capsys):
+    """A run that stands still without a word looks hung: a noticeable pause
+    is said once. And a wait for the hour window is no pause at all – the
+    caller must end cleanly instead of sleeping for the rest of the hour."""
+    import progress
+    clock = [1000.0]
+    monkeypatch.setattr(graph_client.time, "time", lambda: clock[0])
+    monkeypatch.setattr(graph_client.time, "sleep",
+                        lambda s: clock.__setitem__(0, clock[0] + s))
+    t = graph_client.Takt(pro_minute=2, pro_stunde=100, zeiten=[990.0, 995.0])
+    t.warten()                       # the minute holds two: wait until 1050
+    assert clock[0] >= 1050.0 and len(t.zeiten) == 3
+    ereignisse = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert sum(1 for e in ereignisse if e and e["k"] == "run.paced_wait") == 1
+    voll = graph_client.Takt(pro_minute=100, pro_stunde=3, zeiten=[clock[0] - 10.0] * 3)
+    with pytest.raises(graph_client.Ueberlastet):
+        voll.warten()
+    assert len(voll.zeiten) == 3, "nothing registered for a refused request"

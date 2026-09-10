@@ -61,6 +61,7 @@ def _index_argv(cfg, ctx, pfade):
             "--sharepoint", pfade["sharepoint"],
             "--pages", pfade["sharepoint_pages"],
             "--planner", pfade["planner"],
+            "--todo", pfade["todo"], "--onenote", pfade["onenote"],
             "--store", pfade["store"],
             "--model", cfg["embed_model"], "--ollama", cfg["ollama"],
             "--batch", cfg.get("index_batch", 128)]
@@ -123,6 +124,29 @@ REGISTRY = (
          "PLANNER_ATTACHMENTS": _flag(cfg.get("planner_attachments")),
          **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {})}},
 
+    {"key": "todo", "anfrage": "todo", "script": "todo_export",
+     "start": "job.start.todo",
+     "label": "job.step.todo", "corpus": True, "zugang": True,
+     "schedule": "todo", "master": "todo_enabled",
+     "quelle": "search.source.todo",
+     "argv": lambda cfg, ctx, pfade: [pfade["todo"]],
+     "env": lambda cfg, ctx: {}},
+
+    {"key": "onenote", "anfrage": "onenote", "script": "onenote_export",
+     "start": "job.start.onenote",
+     "label": "job.step.onenote", "corpus": True, "zugang": True,
+     "schedule": "onenote", "master": "onenote_enabled",
+     "quelle": "search.source.onenote",
+     "argv": lambda cfg, ctx, pfade: [pfade["onenote"]],
+     "env": lambda cfg, ctx: {
+         "ONENOTE_IMAGE_MAX_MB":
+             str(int(cfg.get("onenote_image_max_mb") or 0)),
+         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+         # Always set, even empty: empty means "every notebook".
+         "ONENOTE_RULES": str(cfg.get("onenote_rules") or ""),
+         **({"ONENOTE_ONLY": ctx["nur_einheit"], "SYNC_NOW": "1"}
+            if ctx["nur_einheit"] else {})}},
+
     {"key": "sharepoint_pages", "anfrage": "sharepoint_pages",
      "start": "job.start.sharepoint_pages",
      "script": "sharepoint_export",
@@ -149,7 +173,10 @@ REGISTRY = (
          "EMBED_IMAGES": _flag(cfg.get("embed_images")),
          "CACHE_IMAGES": _flag(cfg.get("cache_images")),
          "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
-         "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats"))}},
+         "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats")),
+         "TEAMS_ATTACHMENTS": _flag(cfg.get("teams_attachments")),
+         "TEAMS_CHANNEL_FILES": _flag(cfg.get("teams_channel_files")),
+         "TEAMS_FILES_MAX_MB": str(int(cfg.get("teams_files_max_mb") or 0))}},
 
     {"key": "index", "anfrage": "index", "script": "rag_index",
      "start": "job.start.index",
@@ -195,6 +222,15 @@ REGISTRY = (
      "schedule": None, "master": None, "quelle": None,
      "argv": lambda cfg, ctx, pfade: ["--folders", pfade["outlook"]],
      "env": lambda cfg, ctx: {}},
+
+    {"key": "notebooks", "anfrage": "sync_notebooks",
+     "start": "job.start.notebooks",
+     "script": "onenote_export",
+     "label": "job.step.notebooks", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--notebooks", pfade["onenote"]],
+     "env": lambda cfg, ctx: {
+         "ONENOTE_RULES": str(cfg.get("onenote_rules") or "")}},
 
     {"key": "calendars", "anfrage": "sync_calendars",
      "start": "job.start.calendars",

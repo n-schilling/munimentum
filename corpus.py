@@ -868,14 +868,157 @@ def load_planner(root_dir):
     return recs
 
 
+def load_todo(root_dir):
+    """One record per To Do task, straight from the per-list state.db –
+    title, notes, steps and linked resources are the searchable text; the
+    source file is the list's list.html."""
+    import state_db
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    recs = []
+    for ordner in sorted(pf for pf in root.iterdir() if pf.is_dir()):
+        db = state_db.StateDb(ordner)
+        try:
+            liste = json.loads(db.kv_lesen("list") or "{}")
+            eintraege = json.loads(db.kv_lesen("tasks") or "{}")
+        except ValueError:
+            continue
+        if not eintraege:
+            continue
+        rel = f"{ordner.name}/list.html"
+        titel_liste = str(liste.get("titel") or ordner.name)
+        for tid, e in eintraege.items():
+            task = e.get("task") or {}
+            body = task.get("body") or {}
+            inhalt = str(body.get("content") or "")
+            if (body.get("contentType") or "text") == "html":
+                inhalt = collapse(strip_html(inhalt))
+            text = "\n".join(
+                [inhalt]
+                + [str(s.get("displayName") or "") for s in
+                   (task.get("checklistItems") or [])]
+                + [str(r.get("displayName") or r.get("applicationName") or "")
+                   for r in (task.get("linkedResources") or [])])
+            anhaenge = " ".join(
+                str(a.get("name") or "").replace(" ", "_")
+                for a in (e.get("anhaenge") or [])).strip()
+            ts = (export_util.graph_zeit(task.get("lastModifiedDateTime"))
+                  or export_util.graph_zeit(task.get("createdDateTime")))
+            satz = {
+                "uid": f"todo:{ordner.name}/{tid}:0", "src": "todo",
+                "root": "todo", "rel": rel,
+                "who": "", "ppl": "",
+                "ts": ts.timestamp() if ts else None,
+                "date": ts.strftime("%Y-%m-%d %H:%M") if ts else "",
+                "title": str(task.get("title") or "(ohne Titel)"),
+                "ctx": titel_liste,
+                "text": text.strip(),
+                "att": anhaenge or None,
+            }
+            if e.get("deleted"):
+                satz["gone"] = e["deleted"]
+            recs.append(satz)
+    return recs
+
+
+ONENOTE_SUFFIX = ".files"       # per page: the folder for large images and attachments
+_ONENOTE_KOPF_RE = re.compile(r'<div class="mn-(?:kopf|weg)">.*?</div>', re.S)
+
+
+def _onenote_satz(p_str, root_str):
+    p, root = Path(p_str), Path(root_str)
+    rel = p.relative_to(root).as_posix()
+    try:
+        roh = p.read_text(encoding="utf-8", errors="replace")
+        ts = p.stat().st_mtime
+    except OSError:
+        return None
+    roh = re.sub(r'"data:[^"]*"', '""', roh)
+    m = re.search(r"<title>(.*?)</title>", roh, re.S | re.I)
+    titel = collapse(html_lib.unescape(m.group(1))) if m else p.stem
+    # The header the export adds – notebook path and dates – is navigation,
+    # not the note; the folder path carries it for the filters anyway.
+    roh = _ONENOTE_KOPF_RE.sub("", roh)
+    return {
+        "uid": f"onenote:{rel}:0", "src": "onenote", "root": "onenote",
+        "rel": rel, "who": "", "ppl": "", "ts": ts,
+        "date": datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"),
+        "title": titel,
+        "ctx": rel.rsplit("/", 1)[0] if "/" in rel else "",
+        "text": collapse(strip_html(roh)),
+    }
+
+
+def load_onenote(root_dir, nur=None):
+    """One record per OneNote page – full text, straight from the HTML the
+    export wrote; the folder path (notebook/group/section) is the context
+    the folder filter offers. Pages that left the notebook carry their
+    marker from the notebook's state.db."""
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    weg = grabsteine("onenote", root)
+    dateien = _nur(_dateien_onenote(root), root, nur)
+    recs = [r for r in _pmap(_onenote_satz, dateien, str(root)) if r]
+    for satz in recs:
+        if satz["rel"] in weg:
+            satz["gone"] = weg[satz["rel"]]
+    return recs
+
+
+TEAMS_ANHANG_DIR = "Anhaenge"   # files a Teams message referenced, per conversation
+
+
+def load_teams_files(root_dir, nur=None):
+    """One record per file next to a Teams conversation – the referenced
+    attachments and the mirrored channel folders – name and path, no
+    content, like every mirror. The kind folder up front (1on1, channels/…)
+    is the context, so the Teams folder filter finds files and messages
+    alike; tombstones come from the channel mirrors' state.db."""
+    root = Path(root_dir)
+    if not root.is_dir():
+        return []
+    dateien = _nur(_dateien_teams_files(root), root, nur)
+    weg = grabsteine("teams_files", root)
+    recs = [r for r in _pmap(_datei_satz, dateien, str(root)) if r]
+    for r in recs:
+        r["root"] = "teams"
+        r["uid"] = "teamsdatei:" + r["uid"].split(":", 1)[1]
+        if r["rel"] in weg:
+            r["gone"] = weg[r["rel"]]
+    return recs
+
+
 # --------------------------------------------------------------------------
 # What the index reads, file by file – shared by the loaders and by the
 # incremental read in rag_index: ONE enumeration per source, so a file the
 # manifest lists is exactly a file the loader would parse.
 # --------------------------------------------------------------------------
+def _teams_datei_ordner(teile):
+    """Below an attachment or mirror folder? Those hold files, not
+    conversations – and an attached .html must not read as a chat."""
+    return TEAMS_ANHANG_DIR in teile[:-1] or ONEDRIVE_DIR in teile[:-1]
+
+
 def _dateien_teams(root):
     return [p for p in sorted(root.rglob("*.html"))
-            if p.name not in ("index.html", "search.html")]
+            if p.name not in ("index.html", "search.html")
+            and not _teams_datei_ordner(p.relative_to(root).parts)]
+
+
+def _dateien_teams_files(root):
+    return [p for p in sorted(root.rglob("*"))
+            if p.is_file() and not p.name.endswith(".teil")
+            and _teams_datei_ordner(p.relative_to(root).parts)]
+
+
+def _dateien_onenote(root):
+    # A page's .files folder may hold an attached .html – that is a file,
+    # not a page.
+    return [p for p in sorted(root.rglob("*.html"))
+            if not any(t.endswith(ONENOTE_SUFFIX)
+                       for t in p.relative_to(root).parts[:-1])]
 
 
 def _dateien_outlook(root):
@@ -904,7 +1047,8 @@ def _dateien_pages(root):
 
 DATEIEN = {"teams": _dateien_teams, "outlook": _dateien_outlook,
            "onedrive": _dateien_onedrive, "sharepoint": _dateien_sharepoint,
-           "pages": _dateien_pages}
+           "pages": _dateien_pages, "onenote": _dateien_onenote,
+           "teams_files": _dateien_teams_files}
 
 
 def _nur(files, root, nur):
@@ -935,6 +1079,30 @@ def grabsteine(art, root_dir):
             weg.update({f"{praefix}/{rel}": ts for rel, ts in
                         state_db.StateDb(lib).verschwunden_lesen().items()})
         return weg
+    if art == "teams_files":
+        # The channel mirrors: one state.db per team library below
+        # channels/, each with the tombstones of its own subtree.
+        import state_db
+        weg = {}
+        for db in sorted((root / "channels").rglob(state_db.DB_NAME)):
+            praefix = db.parent.relative_to(root).as_posix()
+            weg.update({f"{praefix}/{rel}": ts for rel, ts in
+                        state_db.StateDb(db.parent).verschwunden_lesen().items()})
+        return weg
+    if art == "onenote":
+        # The export keeps a page's marker in the notebook's state.db – the
+        # file stays, so the record knows since when it is gone.
+        import state_db
+        weg = {}
+        for nb in sorted(p for p in root.iterdir() if p.is_dir()):
+            try:
+                seiten = json.loads(state_db.StateDb(nb).kv_lesen("pages") or "{}")
+            except ValueError:
+                continue
+            for e in seiten.values():
+                if e.get("deleted") and e.get("rel"):
+                    weg[f'{nb.name}/{e["rel"]}'] = e["deleted"]
+        return weg
     return {}
 
 
@@ -956,10 +1124,12 @@ def manifest(art, root_dir):
 
 
 def load_records(teams_dir, outlook_dir, onedrive_dir=None,
-                 sharepoint_dir=None, pages_dir=None, planner_dir=None):
+                 sharepoint_dir=None, pages_dir=None, planner_dir=None,
+                 todo_dir=None, onenote_dir=None):
     recs = []
     if teams_dir and Path(teams_dir).is_dir():
         recs += load_teams(teams_dir)
+        recs += load_teams_files(teams_dir)   # referenced files, channel folders
     if outlook_dir and Path(outlook_dir).is_dir():
         recs += load_outlook(outlook_dir)     # .eml
         recs += load_calendar(outlook_dir)    # .ics
@@ -972,6 +1142,10 @@ def load_records(teams_dir, outlook_dir, onedrive_dir=None,
         recs += load_pages(pages_dir)              # rendered site pages
     if planner_dir and Path(planner_dir).is_dir():
         recs += load_planner(planner_dir)          # boards with their comments
+    if todo_dir and Path(todo_dir).is_dir():
+        recs += load_todo(todo_dir)                # lists with their tasks
+    if onenote_dir and Path(onenote_dir).is_dir():
+        recs += load_onenote(onenote_dir)          # pages, full text
     return recs
 
 

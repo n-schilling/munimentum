@@ -1,9 +1,10 @@
 # Munimentum
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
-channels, Outlook mail, calendar, contacts, OneDrive files, SharePoint
-libraries and pages, and Planner boards — exported through Microsoft Graph
-and searchable offline, in the app or through Claude via MCP.
+channels with the files they share, Outlook mail, calendar, contacts,
+OneDrive files, SharePoint libraries and pages, Planner boards, To Do lists
+and OneNote notebooks — exported through Microsoft Graph and searchable
+offline, in the app or through Claude via MCP.
 
 **The magic:** All via delegated access, no admin consent required.
 
@@ -36,7 +37,7 @@ On Windows, SmartScreen asks once on first launch, because the build carries no
 code-signing certificate: *More info* → *Run anyway*.
 
 The app has no window of its own: it serves a page and lives in your browser.
-Quit it with **Quit** at the top right. Starting it a second time does not
+Quit it with the power button at the top right. Starting it a second time does not
 create a second copy — it opens the page of the one already running, which is
 also the way back if you closed the tab.
 
@@ -76,23 +77,36 @@ into one folder.
 
 ## What it does
 
-One browser page with four tabs.
+One browser page with two doors — **Build archive** and **Search archive**
+— and two side rooms, *Overview* and *Settings*. The header carries nothing
+else but one frame with the states — your access, and a run while it is
+minimised — and the power button to quit.
 
-### Export data
+### Build archive
 
-Pick what to fetch — mail, calendar, contacts; 1:1, group, meeting and
-channel chats; OneDrive files; SharePoint libraries and pages; Planner
-boards —
-and start. Nothing is preselected: any one of these can mean tens of
-thousands of items. Every run fetches only what is new, so the second one
-takes minutes rather than hours — and the index that follows reads only the
-files that changed since its last run. Deleted items **stay in the archive**
-and get a marker; that is the point of keeping one.
+The page opens with one line — how current the archive is — and one
+button, *Update archive now*. An empty archive shows three steps instead:
+set up access, choose sources, build. Below sit the sources as cards —
+mail, calendar, contacts; 1:1, group, meeting and channel chats; OneDrive
+files; SharePoint libraries and pages; Planner boards; To Do lists; OneNote
+notebooks — each with its categories as chips to tick, an **(i)** that says
+what is chosen and when it last ran, and a gear leading straight to its
+settings. Nothing is preselected:
+any one of these can mean tens of thousands of items. Every run fetches only
+what is new, so the second one takes minutes rather than hours — and the
+index that follows reads only the files that changed since its last run.
+Deleted items **stay in the archive** and get a marker; that is the point of
+keeping one. A running job opens its own window over the page: progress,
+the steps, the log, *Cancel*. It stays until the run is done and shows the
+result until you close it; *Minimise* turns it into a pill in the header,
+so you can search meanwhile, and a click on the pill brings it back. Open
+the page while a run is on — started by hand or by the schedule — and you
+land in that window. Every run with its log is in the overview afterwards.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
 folder. Updating from 6.1 or older? Run the latest 6.x release once first —
-it moves the older loose bookkeeping files into this format; 7.x no longer
-carries that migration.
+it moves the older loose bookkeeping files into this format; 7.x and 8.x no
+longer carry that migration.
 
 Which folders come along is a list of ordered include/exclude rules, and *Show
 export list* spells out what they currently mean: what comes along, what is left
@@ -133,6 +147,52 @@ Task texts, comments and attachment names are full-text searchable under
 their own source. Reading needs Tasks.Read plus Group.Read.All for the
 legacy comments; the token wizard lists both.
 
+**Files shared in Teams** are, by default, links — into the sender's
+OneDrive or the team's library, both gone with the access. Two switches in
+the Teams settings, off until you turn them on, change that. *Download
+shared files* fetches every file a chat or channel post references next to
+its conversation and the HTML links the local copy, kept current by change
+tag. *Mirror the channel folders* takes the Files tab of every exported
+channel the way a SharePoint library is mirrored — one walk per team
+library, current version of every file, deletions with a tombstone — and
+channel posts then link into that mirror instead of fetching twice. A size
+cap applies to both. The files land in the index by name, path and type
+under the Teams source, and the file browser lists them per chat kind and
+per team. Both need Files.Read.All; the token wizard lists it.
+
+**To Do lists** come whole — every list the account sees, own, shared and
+the built-in ones — one folder per list with a standalone `list.html`:
+open and completed tasks with their steps, due dates, reminders,
+recurrence, notes, linked resources and attachments, downloaded next to
+the list. A task that leaves a list stays, greyed. Lists are small, so
+every run lists them and refreshes only the tasks whose change tag moved.
+Title, notes, steps and linked resources are full-text searchable under
+their own source, the list being the folder. Needs Tasks.Read.
+
+**OneNote notebooks** are exported page by page: one folder per notebook,
+the section groups and sections below it, one standalone HTML per page as
+Graph renders it — images embedded up to a configurable size, larger ones
+and every attachment in a folder next to the page — so each page opens
+offline. Only pages that changed are fetched again, and a page that leaves
+its section keeps its file with a marker at the top. Which notebooks come
+along works like the mailbox folders: *Sync notebook list* fetches the
+list, ordered include/exclude rules decide over it (empty means every
+notebook), and *Show export list* spells out what comes along, what is
+left out and why, and what is only in the archive because it is gone. Each
+notebook has its own sync cadence and a *Sync now* button in the settings.
+The notebook, section group and section are the folder filter; the page
+text is full-text searchable. One thing to know: OneNote allows 400
+requests an hour per user, and a page costs one plus its images — so the
+export paces itself below that limit, stops a run cleanly when the hour is
+spent and continues with the next run, which fetches only what never
+arrived. The bookkeeping is written page by page, so a cancelled run keeps
+every page that arrived too, and a run that would start into a spent hour
+says so and waits instead of collecting refusals. A first export of a large
+notebook therefore takes several runs; that is the API's limit, not a
+fault. The OneDrive mirror backs up the raw
+`.one` files as well — this export is what makes them readable. Needs
+Notes.Read.
+
 **SharePoint pages** are a separate export with their own settings section
 and URL list: the modern pages (news included) of the listed sites and all
 their subsites, rendered to standalone HTML — text kept, images embedded up
@@ -141,43 +201,47 @@ mirrored files, the page text itself lands in the index and is full-text
 searchable. Both SharePoint exports need the Sites.Read.All permission; the
 token wizard lists it.
 
-### Search data
+### Search archive
 
-Three kinds of search, chosen above the results. **Text search** is the default
+Three kinds of search, chosen in the search field. **Text search** is the default
 and always available: it finds the words that actually occur, ranked by
 relevance. **Similar search** finds related wording even when your words do not
-appear. **AI summary** answers a question in a paragraph with source numbers and
+appear. **AI answer** answers a question in a paragraph with source numbers and
 keeps the underlying hits one click away.
 
 Filters — person, source, date range, folder, file type, and messages no longer
-in the mailbox — sit behind a toggle that shows how many are set, and nothing
-searches until you ask for it. The
+in the mailbox — sit in a row below the field, a set one highlighted where it
+stands, and nothing searches until you ask for it. The
 person field suggests names that actually occur, so a typo is not mistaken for
 an absence, and `*` stands for any run of characters when one name is too
 narrow. Picking a source narrows what the other two offer: calendars for
 the calendar, the four kinds of Teams conversation for Teams, attachment types
-for mail, and nothing at all where there is only one thing to choose from. Every
-hit offers *Find similar*, the whole conversation it belongs to, and the
-original file.
+for mail, and nothing at all where there is only one thing to choose from. The
+hits stand on the left; a chosen one opens on the right with its origin, the
+original file, the whole conversation it belongs to, *Find similar*, and a
+link to everything with that person — the archive's own HTML shown in place,
+for everything else the excerpt the index holds.
 
 Four views live here: results, calendar (including appointments recovered
 from invitation and cancellation mails), the address book, and a **file
 browser** that walks the mirrored drives — OneDrive, each SharePoint
-library and the Planner boards — folder by folder, straight from the index:
-originals one click away, deleted files marked, and *Search here* turns the
-current folder into a search filter. In the filters, OneDrive, SharePoint
-files, SharePoint pages and Planner are each their own source, and their
-folder filter lists whole units — a board, a library, a site — rather than
-every sub-path.
+library, the files next to Teams conversations and the Planner boards —
+folder by folder, straight from the index: originals one click away,
+deleted files marked, and *Search here* turns the current folder into a
+search filter. In the filters, OneDrive, SharePoint files, SharePoint
+pages, Planner, To Do and OneNote are each their own source, and their
+folder filter lists whole units — a board, a list, a notebook, a library,
+a site — rather than every sub-path; the Teams source covers the
+conversations and the files shared in them alike.
 
 The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
 unchanged.
 
-### Analytics
+### Overview
 
 What the archive holds, computed once per index run without asking
-Microsoft, so the tab opens instantly. Communication and files are kept
+Microsoft, so the page opens instantly. Communication and files are kept
 apart: messages, conversations, people and period on one row; the mirrored
 files, pages and disk usage on their own. The timeline covers mail and chat
 only — a mirrored PDF must not fill a communication gap — and **gaps**,
@@ -199,13 +263,17 @@ kept are two separate settings (24 months and 14 days by default).
 
 ### Settings
 
-Export options per source, the schedule, AI, the MCP server and the app itself. Each
-setting is one line with an **(i)** that explains what it does and what happens
-if you change it. The **AI** section holds everything that needs a local model
-server — currently Ollama — and it has a switch of its own: turned off, the app
-stops looking, the index is built as full text only, and the header says so.
-Next to the address and the two model names, a small indicator says whether each
-is actually there.
+A navigation on the left — Sources, Schedule, AI (Ollama), Claude (MCP),
+Storage, App, Expert mode — and one card per topic on the right. Each source
+is a block with its essentials open and everything else under *Advanced*;
+the gear on the archive page leads straight to it. Each setting is one line
+with an **(i)** that explains what it does and what happens if you change
+it, and the save bar appears only once something is unsaved. The **AI**
+card holds everything that needs a local model server — currently Ollama —
+and it has a switch of its own: turned off, the app stops looking, the index
+is built as full text only, and the dot next to *AI (Ollama)* in the
+navigation says so. Next to the address and the two model names, a small
+indicator says whether each is actually there.
 
 **System notifications** can report the end of a run through the operating
 system — useful when the schedule exports with no tab open. On macOS and
@@ -214,15 +282,16 @@ Windows, clicking one opens the interface; on Linux they go through
 reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
 
-An **Expert mode** box at the end collects what almost nobody needs day to
-day: running the index or the calendar rebuild as a single step, and the
-complete HTTP API of the interface as an OpenAPI description — for scripts
+An **Expert mode** card at the end collects what almost nobody needs day to
+day: how many requests run in parallel, running the index or the calendar
+rebuild as a single step, and the complete HTTP API of the interface as an OpenAPI description — for scripts
 that talk to the backend directly, on `127.0.0.1` only, like everything else.
 
-The log bar at the bottom is open from every tab, and it speaks the interface
-language: the exports report events, the app puts them into words. Drag its
-top edge to resize it; the size sticks. *Copy* puts
-the log on the clipboard; *Report a problem* opens the matching GitHub issue
+The log sits in the run window, and it speaks the interface language: the
+exports report events, the app puts them into words; afterwards every
+run's log is in the overview. *Copy* puts the log on the clipboard;
+*Report a problem* — there and under *Settings → App* — opens the
+matching GitHub issue
 form with description, system details and log filled in — including which
 settings differ from their defaults (rules and name lists only as their size,
 paths not at all) and, if enabled, the kind of your last steps in the
@@ -255,14 +324,16 @@ A built-in MCP server hands the archive to Claude Code or Claude Desktop — or
 any other MCP client: it searches, browses the mirrored drives, reads the
 sources and answers with citations
 — over your own mail and chats, not over the open web. Every source is
-reachable the same way — mail, Teams, calendar, contacts, OneDrive and
-SharePoint files, SharePoint pages, Planner boards — with the same filters
-the search tab offers, and the server says up front what each source holds:
-files by name, path and type only, since their contents are not indexed.
-Appointments come structured, including the ones recovered from mails; the
-address book can be looked up; Planner attachments can be browsed. It can
+reachable the same way — mail, Teams and the files shared there, calendar,
+contacts, OneDrive and SharePoint files, SharePoint pages, Planner boards,
+To Do lists, OneNote notebooks — with the same filters the search page
+offers, and the server says up front what each source holds: files by name,
+path and type only, since their contents are not indexed. Appointments come
+structured, including the ones recovered from mails; the address book can
+be looked up; the files next to Teams conversations and the Planner
+attachments can be browsed. It can
 also ask the archive about itself — how far it reaches, which months are
-empty, when each source last synced, and the same figures the Analytics tab
+empty, when each source last synced, and the same figures the overview
 shows — so an answer can say what the archive does not cover instead of
 guessing. *Settings* prints the exact snippet to paste into your client.
 
@@ -284,7 +355,7 @@ way.
 
 Without [Ollama](https://ollama.com), Munimentum exports, indexes and searches
 by text — that is the whole app minus two features. With it, similar search and
-the AI summary become available, both running on your machine; nothing is sent
+the AI answer become available, both running on your machine; nothing is sent
 anywhere. The app offers to help you install it, and you can switch it off for
 good in *Settings* if you would rather not.
 

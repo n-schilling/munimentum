@@ -9,7 +9,7 @@ analytics, and nothing you export ever reaches the author of this software.
 |---|---|---|
 | Microsoft Graph | fetching your own data — this *is* the export | no |
 | `api.github.com` | one check at startup for a newer release | yes, *Settings* |
-| your local Ollama | semantic search and the AI summary | it never leaves the machine |
+| your local Ollama | similar search and the AI answer | it never leaves the machine |
 
 That is the complete list. No crash reports, no usage statistics, no error
 tracking, no fonts or scripts loaded from a CDN.

@@ -12,6 +12,7 @@ import threading
 import pytest
 import requests
 
+import progress
 import teams_export as te
 
 GRAPH = te.GRAPH
@@ -583,7 +584,7 @@ def _chat_fixture(chat_id="c1"):
 def test_export_one_chat_writes_html_and_state(tmp_path):
     chat, graph = _chat_fixture()
     state = te.load_state(tmp_path)
-    status, folder, title, count, secs = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    status, folder, title, count, secs, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
     assert (status, folder, title, count) == ("new", "1on1", "Alice Example", 2)
 
     fname = f"Alice Example__{te.short_id('c1')}.html"
@@ -605,7 +606,7 @@ def test_export_one_chat_second_run_reports_updated_and_renames(tmp_path):
     # Name changes (e.g. 'Unbekannt' -> real name, simulated by a member swap)
     old_rel = state["conversations"]["c1"]["rel"]
     chat["members"][1]["displayName"] = "Alice Umbenannt"
-    status, _, title, _, _ = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    status, _, title, _, _, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
     assert status == "updated" and title == "Alice Umbenannt"
     assert not (tmp_path / old_rel).exists()   # old file was cleaned up
     assert (tmp_path / state["conversations"]["c1"]["rel"]).exists()
@@ -618,7 +619,7 @@ def test_export_one_chat_only_system_messages_is_empty(tmp_path):
               "body": {"content": "Anruf beendet"}}
     graph = FakeGraph(pages={f"{GRAPH}/me/chats/c2/messages": [sysmsg]})
     state = te.load_state(tmp_path)
-    status, folder, title, count, _ = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    status, folder, title, count, _, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
     assert (status, folder, title, count) == ("empty", "meeting", "Standup", 1)
     rec = state["conversations"]["c2"]
     assert rec["empty"] is True and rec["rel"] is None
@@ -638,7 +639,7 @@ def _channel_fixture(reply_ts="2025-06-05T10:00:00Z"):
 def test_export_one_channel_writes_nested_replies(tmp_path):
     team, ch, graph = _channel_fixture()
     state = te.load_state(tmp_path)
-    status, cat, title, count, _ = te.export_one_channel(graph, tmp_path, state, team, ch)
+    status, cat, title, count, _, _z = te.export_one_channel(graph, tmp_path, state, team, ch)
     assert (status, cat, title, count) == ("new", "channels", "Team Rakete / Allgemein", 2)
 
     fname = f"Allgemein__{te.short_id('k1')}.html"
@@ -653,7 +654,7 @@ def test_export_one_channel_unchanged_on_second_run(tmp_path):
     team, ch, graph = _channel_fixture()
     state = te.load_state(tmp_path)
     te.export_one_channel(graph, tmp_path, state, team, ch)
-    status, _, _, count, _ = te.export_one_channel(graph, tmp_path, state, team, ch)
+    status, _, _, count, _, _z = te.export_one_channel(graph, tmp_path, state, team, ch)
     assert status == "unchanged" and count == 2
 
 
@@ -662,7 +663,7 @@ def test_export_one_channel_updates_on_new_reply(tmp_path):
     state = te.load_state(tmp_path)
     te.export_one_channel(graph, tmp_path, state, team, ch)
     team, ch, graph = _channel_fixture(reply_ts="2025-06-06T12:00:00Z")   # newer reply
-    status, _, _, _, _ = te.export_one_channel(graph, tmp_path, state, team, ch)
+    status, _, _, _, _, _z = te.export_one_channel(graph, tmp_path, state, team, ch)
     assert status == "updated"
     assert state["conversations"]["ch:k1"]["last_activity"] == "2025-06-06T12:00:00Z"
 
@@ -800,3 +801,243 @@ def test_run_parallel_catches_raising_runner():
 
 def test_run_parallel_empty_list_is_done():
     assert te.run_parallel([], {}, workers=4) == "done"
+
+
+# --------------------------------------------------------------------------
+# Files: referenced attachments next to the conversation, channel folders
+# --------------------------------------------------------------------------
+class _StreamAntwort:
+    def __init__(self, daten):
+        self.daten = daten
+
+    def iter_content(self, chunk_size=0):
+        yield self.daten
+
+
+class _DateiGraph(FakeGraph):
+    """FakeGraph plus the two calls the file download makes: the sharing
+    lookup (get) and the content stream."""
+
+    def __init__(self, pages=None, gets=None, ctag="c-1", size=3, kaputt=False):
+        super().__init__(pages, gets)
+        self.ctag, self.size, self.kaputt = ctag, size, kaputt
+        self.geladen = []
+        self.gefragt = []
+
+    def get(self, url, params=None):
+        if "/shares/u!" in url:
+            self.gefragt.append(url)
+            if self.kaputt:
+                raise RuntimeError("403")
+            return {"name": "Angebot.pdf", "cTag": self.ctag, "size": self.size}
+        return super().get(url, params)
+
+    def stream(self, url, timeout=None, label=""):
+        self.geladen.append(url)
+        return _StreamAntwort(b"PDF")
+
+
+DATEI_URL = "https://firma.sharepoint.com/sites/x/Freigegebene%20Dokumente/Angebot.pdf"
+
+
+def _chat_mit_datei(chat_id="c1", **graph_kw):
+    chat = {"id": chat_id, "chatType": "oneOnOne",
+            "members": [{"userId": "me", "displayName": "Ich"},
+                        {"userId": "u2", "displayName": "Alice Example"}]}
+    msgs = [_msg("Alice Example", "hier die Datei", "2025-06-02T08:00:00Z",
+                 attachments=[{"id": "a1", "contentType": "reference",
+                               "contentUrl": DATEI_URL, "name": "Angebot.pdf"},
+                              {"id": "a2", "contentType": "application/vnd.microsoft.card.adaptive",
+                               "content": "{}"}])]
+    graph = _DateiGraph(pages={f"{GRAPH}/me/chats/{chat_id}/messages": msgs}, **graph_kw)
+    return chat, graph
+
+
+def test_anhaenge_bleiben_ohne_schalter_online_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(te, "ATTACHMENTS", False)
+    chat, graph = _chat_mit_datei()
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
+    assert f'href="{DATEI_URL}"' in html and graph.geladen == []
+    assert not (tmp_path / "1on1" / te.ANHANG_DIR).exists()
+
+
+def test_anhaenge_landen_neben_dem_chat(tmp_path, monkeypatch):
+    monkeypatch.setattr(te, "ATTACHMENTS", True)
+    chat, graph = _chat_mit_datei()
+    state = te.load_state(tmp_path)
+    status, _f, _t, _n, _s, zahlen = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert zahlen["files"] == 1 and zahlen["excluded"] == 0
+    rel = state["conversations"]["c1"]["rel"]
+    html = (tmp_path / rel).read_text(encoding="utf-8")
+    ordner = tmp_path / te.anhang_ordner(rel)
+    dateien = list(ordner.iterdir())
+    assert len(dateien) == 1 and dateien[0].read_bytes() == b"PDF"
+    assert dateien[0].name.startswith("Angebot__") and dateien[0].name.endswith(".pdf")
+    assert f'href="{te.ANHANG_DIR}/{ordner.name}/{dateien[0].name}"' in html
+    assert DATEI_URL not in html
+    assert "Angebot.pdf" in html
+
+    # Second run, same cTag: the file is not fetched again.
+    chat2, graph2 = _chat_mit_datei()
+    te.export_one_chat(graph2, tmp_path, state, "me", chat2)
+    assert graph2.gefragt and graph2.geladen == []
+
+
+def test_anhaenge_ueber_der_grenze_bleiben_links(tmp_path, monkeypatch):
+    monkeypatch.setattr(te, "ATTACHMENTS", True)
+    monkeypatch.setenv("TEAMS_FILES_MAX_MB", "1")
+    chat, graph = _chat_mit_datei(size=5 * 1024 * 1024)
+    state = te.load_state(tmp_path)
+    _s, _f, _t, _n, _d, zahlen = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert zahlen == {"files": 0, "excluded": 1, "file_errors": 0}
+    html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
+    assert f'href="{DATEI_URL}"' in html and graph.geladen == []
+
+
+def test_anhang_der_nicht_kommt_meldet_sich_einmal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(te, "ATTACHMENTS", True)
+    chat, graph = _chat_mit_datei(kaputt=True)
+    state = te.load_state(tmp_path)
+    _s, _f, _t, _n, _d, zahlen = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert zahlen["file_errors"] == 1
+    html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
+    assert f'href="{DATEI_URL}"' in html
+    ereignisse = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert any(e and e["k"] == "run.teams.file_failed" for e in ereignisse)
+
+
+def test_umbenannter_chat_nimmt_seine_dateien_mit(tmp_path, monkeypatch):
+    monkeypatch.setattr(te, "ATTACHMENTS", True)
+    chat, graph = _chat_mit_datei()
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    alt = state["conversations"]["c1"]["rel"]
+    chat["members"][1]["displayName"] = "Alice Umbenannt"
+    chat2, graph2 = _chat_mit_datei()
+    chat2["members"][1]["displayName"] = "Alice Umbenannt"
+    te.export_one_chat(graph2, tmp_path, state, "me", chat2)
+    neu = state["conversations"]["c1"]["rel"]
+    assert neu != alt
+    assert not (tmp_path / te.anhang_ordner(alt)).exists()
+    assert list((tmp_path / te.anhang_ordner(neu)).iterdir())
+    assert graph2.geladen == [], "nach dem Umzug erneut geladen"
+
+
+def test_kanalpost_verlinkt_in_den_spiegel(tmp_path, monkeypatch):
+    """A channel post pointing into the mirrored channel folder links the
+    mirror copy – and is not fetched a second time even with the
+    attachment switch on."""
+    monkeypatch.setattr(te, "ATTACHMENTS", True)
+    team = {"id": "t1", "displayName": "Team Rakete"}
+    ch = {"id": "k1", "displayName": "Allgemein", "membershipType": "standard"}
+    url = "https://firma.sharepoint.com/sites/rakete/Freigegebene%20Dokumente/Allgemein/Plan%202026.xlsx"
+    root = _msg("Alice", "Plan anbei", "2025-06-04T09:00:00Z",
+                attachments=[{"id": "a1", "contentType": "reference",
+                              "contentUrl": url, "name": "Plan 2026.xlsx"}])
+    graph = _DateiGraph(pages={f"{GRAPH}/teams/t1/channels/k1/messages": [root]})
+    spiegel = {"wurzel": "channels/Team Rakete", "praefix": "",
+               "rel": "Dateien/Allgemein",
+               "weburl": "https://firma.sharepoint.com/sites/rakete/Freigegebene Dokumente/Allgemein",
+               "neu": 1}
+    kopie = tmp_path / "channels" / "Team Rakete" / "Dateien" / "Allgemein" / "Plan 2026.xlsx"
+    kopie.parent.mkdir(parents=True)
+    kopie.write_bytes(b"XLSX")
+    state = te.load_state(tmp_path)
+    te.export_one_channel(graph, tmp_path, state, team, ch, spiegel=spiegel)
+    html = (tmp_path / state["conversations"]["ch:k1"]["rel"]).read_text(encoding="utf-8")
+    assert 'href="Dateien/Allgemein/Plan 2026.xlsx"' in html
+    assert graph.geladen == [] and graph.gefragt == []
+
+
+def test_spiegel_links_kennt_nur_vorhandene_dateien(tmp_path):
+    info = {"wurzel": "channels/T/Privat__abc", "praefix": "Privat__abc", "rel": "Dateien",
+            "weburl": "https://firma.sharepoint.com/sites/privat/Dokumente"}
+    msgs = [_msg("A", "x", "2025-06-04T09:00:00Z", attachments=[
+        {"contentType": "reference", "contentUrl":
+         "https://firma.sharepoint.com/sites/privat/Dokumente/Ordner/a.pdf"},
+        {"contentType": "reference", "contentUrl":
+         "https://firma.sharepoint.com/sites/anders/Dokumente/b.pdf"}])]
+    (tmp_path / "channels/T/Privat__abc/Dateien/Ordner").mkdir(parents=True)
+    (tmp_path / "channels/T/Privat__abc/Dateien/Ordner/a.pdf").write_bytes(b"x")
+    lokal = te.spiegel_links(tmp_path, info, msgs)
+    assert lokal == {"https://firma.sharepoint.com/sites/privat/Dokumente/Ordner/a.pdf":
+                     "Privat__abc/Dateien/Ordner/a.pdf"}
+
+
+def test_kanal_dateien_spiegeln_gruppiert_nach_bibliothek(tmp_path, monkeypatch):
+    """Standard channels share the team library: one walk, scoped to their
+    folders; a private channel gets its own folder and the whole drive."""
+    import drive_mirror
+    team = {"id": "t1", "displayName": "Team Rakete"}
+    allgemein = {"id": "k1", "displayName": "Allgemein", "membershipType": "standard"}
+    projekt = {"id": "k2", "displayName": "Projekt X", "membershipType": "standard"}
+    privat = {"id": "k3", "displayName": "Geheim", "membershipType": "private"}
+    gets = {
+        f"{GRAPH}/teams/t1/channels/k1/filesFolder": {"id": "f1", "parentReference": {"driveId": "d1"}},
+        f"{GRAPH}/teams/t1/channels/k2/filesFolder": {"id": "f2", "parentReference": {"driveId": "d1"}},
+        f"{GRAPH}/teams/t1/channels/k3/filesFolder": {"id": "f3", "parentReference": {"driveId": "d2"}},
+        f"{GRAPH}/drives/d1/items/f1?$select=id,name,parentReference,root,webUrl": {
+            "id": "f1", "name": "Allgemein", "webUrl": "https://x/sites/r/Shared%20Documents/Allgemein",
+            "parentReference": {"driveId": "d1", "path": "/drives/d1/root:"}},
+        f"{GRAPH}/drives/d1/items/f2?$select=id,name,parentReference,root,webUrl": {
+            "id": "f2", "name": "Projekt X", "webUrl": "https://x/sites/r/Shared%20Documents/Projekt%20X",
+            "parentReference": {"driveId": "d1", "path": "/drives/d1/root:"}},
+        f"{GRAPH}/drives/d2/items/f3?$select=id,name,parentReference,root,webUrl": {
+            "id": "f3", "name": "root", "root": {}, "webUrl": "https://x/sites/r-geheim/Shared%20Documents",
+            "parentReference": {"driveId": "d2"}},
+    }
+    graph = FakeGraph(gets=gets)
+    laeufe = []
+
+    def fake_lauf(g, ziel, auswahl, arbeiter, still=False, zustand=None):
+        laeufe.append((g.drive_base, ziel, auswahl))
+        return {"new": 2, "excluded": 1, "errors": 0, "moved": 0, "gone": 0}
+
+    monkeypatch.setattr(drive_mirror, "lauf", fake_lauf)
+    jobs = [("channel", team, allgemein), ("channel", team, projekt), ("channel", team, privat)]
+    spiegel, summe = te.kanal_dateien_spiegeln(graph, tmp_path, jobs)
+    assert summe == {"new": 4, "excluded": 2, "errors": 0, "moved": 0, "gone": 0}
+    assert len(laeufe) == 2
+    basis1, ziel1, wahl1 = laeufe[0]
+    assert basis1.endswith("/drives/d1") and ziel1 == tmp_path / "channels" / "Team Rakete"
+    assert wahl1.im_scope("Dateien/Allgemein/a.pdf") and wahl1.im_scope("Dateien/Projekt X/b.pdf")
+    assert not wahl1.im_scope("Dateien/Forms/c.pdf")
+    basis2, ziel2, wahl2 = laeufe[1]
+    assert basis2.endswith("/drives/d2")
+    assert ziel2 == tmp_path / "channels" / "Team Rakete" / f"Geheim__{te.short_id('k3')}"
+    assert wahl2.im_scope("Dateien/irgendwas/x.pdf")
+    assert spiegel["k1"] == {"wurzel": "channels/Team Rakete", "praefix": "", "rel": "Dateien/Allgemein",
+                             "weburl": "https://x/sites/r/Shared Documents/Allgemein"}
+    assert spiegel["k3"]["praefix"] == f"Geheim__{te.short_id('k3')}" and spiegel["k3"]["rel"] == "Dateien"
+
+
+def test_kanal_ohne_dateiordner_kostet_die_anderen_nichts(tmp_path, monkeypatch, capsys):
+    import drive_mirror
+    team = {"id": "t1", "displayName": "Team Rakete"}
+    ok = {"id": "k1", "displayName": "Allgemein", "membershipType": "standard"}
+    kaputt = {"id": "k9", "displayName": "Kaputt", "membershipType": "standard"}
+    gets = {
+        f"{GRAPH}/teams/t1/channels/k1/filesFolder": {"id": "f1", "parentReference": {"driveId": "d1"}},
+        f"{GRAPH}/drives/d1/items/f1?$select=id,name,parentReference,root,webUrl": {
+            "id": "f1", "name": "Allgemein", "webUrl": "https://x/s/Shared%20Documents/Allgemein",
+            "parentReference": {"driveId": "d1", "path": "/drives/d1/root:"}},
+    }
+    graph = FakeGraph(gets=gets)
+    monkeypatch.setattr(drive_mirror, "lauf", lambda *a, **k: {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0})
+    spiegel, summe = te.kanal_dateien_spiegeln(
+        graph, tmp_path, [("channel", team, kaputt), ("channel", team, ok)])
+    assert set(spiegel) == {"k1"} and summe["new"] == 1
+    ereignisse = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    assert any(e and e["k"] == "run.teams.files_failed" and "Kaputt" in e["v"]["name"]
+               for e in ereignisse)
+
+
+def test_run_parallel_summiert_dateizahlen():
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0,
+             "files": 0, "excluded": 0, "file_errors": 0, "gone": 0}
+    runners = [lambda: ("new", "1on1", "A", 1, 0.1, {"files": 2, "excluded": 1, "file_errors": 0}),
+               lambda: ("updated", "channels", "B", 1, 0.1, {"files": 1, "excluded": 0, "file_errors": 1})]
+    assert te.run_parallel(runners, stats, workers=2) == "done"
+    assert (stats["files"], stats["excluded"], stats["file_errors"]) == (3, 1, 1)

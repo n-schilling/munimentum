@@ -189,7 +189,8 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "book.", "sched.", "mcp.",
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
-           "run.", "sharepoint.", "files.", "view.", "cadence.")
+           "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
+           "lauf.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -197,7 +198,8 @@ SKRIPTE = ("page.html", "steps.py", "runner.py", # the app.py split
            "outlook_export.py", "teams_export.py", "onedrive_export.py",
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",
-           "sharepoint_export.py", "planner_export.py")
+           "sharepoint_export.py", "planner_export.py",
+           "todo_export.py", "onenote_export.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
@@ -205,7 +207,8 @@ DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
-    ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks")),
+    ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks",
+                        "pages", "notebooks")),
     # The placeholder in the search field changes with the search type.
     ("search.ph.", ("text", "aehnlich", "ki")),
     # The four Teams kinds are named in the index after their storage

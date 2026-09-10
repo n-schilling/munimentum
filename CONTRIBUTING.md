@@ -7,8 +7,8 @@ time.
 
 The most useful thing you can send me is a bug report.
 
-Use **Report a problem** in the app — in the log bar at the bottom, and again in
-*Settings*. It fills in a GitHub issue with the log and the details I would
+Use **Report a problem** in the app — under *Settings → App*, and in the run
+window while a run is on. It fills in a GitHub issue with the log and the details I would
 otherwise have to ask for (version, operating system, cores, what the index
 holds), replaces e-mail addresses and user names in paths, and shows you the
 whole text to edit before anything happens. You submit it yourself; the app

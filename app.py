@@ -43,6 +43,8 @@ import json
 import time
 import gzip
 import base64
+import html
+import posixpath
 import shutil
 import sqlite3
 import argparse
@@ -53,7 +55,7 @@ import webbrowser
 import multiprocessing.spawn
 from datetime import UTC, datetime
 from pathlib import Path
-from urllib.parse import urlsplit, parse_qs, quote
+from urllib.parse import urlsplit, parse_qs, quote, unquote
 import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -94,7 +96,7 @@ RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             # bundle this is the only way to check that without network –
             # the smoke test does exactly that.
             "auth", "onedrive_export", "sharepoint_export",
-            "planner_export")
+            "planner_export", "todo_export", "onenote_export")
 
 
 def resource_dir():
@@ -234,11 +236,13 @@ ONEDRIVE_DIR = settings.ONEDRIVE_DIR
 SHAREPOINT_DIR = settings.SHAREPOINT_DIR
 SHAREPOINT_PAGES_DIR = settings.SHAREPOINT_PAGES_DIR
 PLANNER_DIR = settings.PLANNER_DIR
+TODO_DIR = settings.TODO_DIR
+ONENOTE_DIR = settings.ONENOTE_DIR
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
 BASE, STORE_PFAD = _split_pfade(HEIM)
 ALT_ORDNER = (TEAMS_DIR, OUTLOOK_DIR, ONEDRIVE_DIR, SHAREPOINT_DIR,
-              SHAREPOINT_PAGES_DIR, PLANNER_DIR)
+              SHAREPOINT_PAGES_DIR, PLANNER_DIR, TODO_DIR, ONENOTE_DIR)
 _ALT_GEPINNT = False
 
 
@@ -368,21 +372,25 @@ SCOPE_FOR = {
     "channels": "ChannelMessage.Read.All",
     "files": "Files.Read.All",
     "sites": "Sites.Read.All",
-    "tasks": "Tasks.Read",
+    "tasks": "Tasks.Read",            # Planner and To Do alike
     "groups": "Group.Read.All",       # Planner: the legacy comments
+    "notes": "Notes.Read",            # OneNote
 }
 # One row per mirror-style source: config switch -> (scope category for the
 # token wizard, name in the system report). New sources register here.
 SPIEGEL_QUELLEN = (("onedrive_enabled", "files", "onedrive"),
                    ("sharepoint_enabled", "sites", "sharepoint"),
                    ("sharepoint_pages_enabled", "sites", "pages"),
-                   ("planner_enabled", "tasks", "planner"))
+                   ("planner_enabled", "tasks", "planner"),
+                   ("todo_enabled", "tasks", "todo"),
+                   ("onenote_enabled", "notes", "onenote"))
 
 LABEL_FOR = {
     "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
     "1on1": "1:1-Chats", "group": "Gruppenchats",
     "meeting": "Meeting-Chats", "channels": "Team-Kanäle", "files": "OneDrive",
-    "sites": "SharePoint", "tasks": "Planner", "groups": "Planner-Kommentare",
+    "sites": "SharePoint", "tasks": "Planner / To Do",
+    "groups": "Planner-Kommentare", "notes": "OneNote",
 }
 
 # Additional permissions that each cover the required one. The Graph
@@ -398,6 +406,7 @@ LABEL_FOR = {
 # Chat.ReadBasic and Mail.ReadBasic deliver no message bodies.
 SCOPE_COVERED_BY = {
     "Tasks.Read": ("Tasks.ReadWrite",),
+    "Notes.Read": ("Notes.ReadWrite", "Notes.Read.All", "Notes.ReadWrite.All"),
     "Group.Read.All": ("Group.ReadWrite.All",),
     "Mail.Read": ("Mail.ReadWrite", "Mail.Read.Shared", "Mail.ReadWrite.Shared"),
     "Calendars.Read": ("Calendars.ReadWrite", "Calendars.Read.Shared",
@@ -429,6 +438,7 @@ SCOPE_QUERY = {
     "Files.Read.All": "https://graph.microsoft.com/v1.0/me/drive/root/children?$top=1",
     "Sites.Read.All": "https://graph.microsoft.com/v1.0/sites?search=*",
     "Tasks.Read": "https://graph.microsoft.com/v1.0/me/planner/plans?$top=1",
+    "Notes.Read": "https://graph.microsoft.com/v1.0/me/onenote/notebooks?$top=1",
     "Group.Read.All": "https://graph.microsoft.com/v1.0/groups?$top=1",
     "User.Read": "https://graph.microsoft.com/v1.0/me",
 }
@@ -574,6 +584,13 @@ def kalenderregeln(cfg, daten=None, roh=None):
     if regeln:
         return regeln
     return folders.nur_standard((daten or {}).get("ordner", []))
+
+
+def notizbuchregeln(cfg, roh=None):
+    """The same for the OneNote notebooks – see onenote_export.
+    notizbuch_regeln. Empty means every notebook."""
+    return folders.lies_regeln(
+        (cfg.get("onenote_rules") if roh is None else roh) or "")
 
 
 # --------------------------------------------------------------------------
@@ -729,8 +746,9 @@ def _mtime_iso(p):
         return None
 
 
-def _planner_stand(wurzel):
-    """The newest per-plan state.db dates the last board run."""
+def _einheiten_stand(wurzel):
+    """The newest per-unit state.db – plan, list, notebook – dates the
+    last run of an export that keeps one folder per unit."""
     try:
         pfade = list(wurzel.glob(f"*/{state_db.DB_NAME}"))
     except OSError:
@@ -763,6 +781,8 @@ def export_status(cfg):
     sharepoint = BASE / SHAREPOINT_DIR
     seiten = BASE / SHAREPOINT_PAGES_DIR
     planner = BASE / PLANNER_DIR
+    todo = BASE / TODO_DIR
+    onenote = BASE / ONENOTE_DIR
     return {
         # The state.db dates the last run: every export writes it at the
         # end, even when nothing new arrived.
@@ -777,9 +797,13 @@ def export_status(cfg):
                        "last_run": _sharepoint_stand(sharepoint)},
         "pages": {"dir": str(seiten), "exists": seiten.is_dir(),
                   "last_run": _mtime_iso(seiten / state_db.DB_NAME)},
-        # One state.db per plan – the newest one dates the run.
+        # One state.db per plan, list or notebook – the newest dates the run.
         "planner": {"dir": str(planner), "exists": planner.is_dir(),
-                    "last_run": _planner_stand(planner)},
+                    "last_run": _einheiten_stand(planner)},
+        "todo": {"dir": str(todo), "exists": todo.is_dir(),
+                 "last_run": _einheiten_stand(todo)},
+        "onenote": {"dir": str(onenote), "exists": onenote.is_dir(),
+                    "last_run": _einheiten_stand(onenote)},
     }
 
 
@@ -844,7 +868,8 @@ def analytics_ordner():
             "onedrive": BASE / ONEDRIVE_DIR,
             "sharepoint": BASE / SHAREPOINT_DIR,
             "pages": BASE / SHAREPOINT_PAGES_DIR,
-            "planner": BASE / PLANNER_DIR}
+            "planner": BASE / PLANNER_DIR, "todo": BASE / TODO_DIR,
+            "onenote": BASE / ONENOTE_DIR}
 
 
 def analytics_daten(cfg, neu=False):
@@ -949,6 +974,7 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
 # analytics_skip, the employer in the tenant. The report only says THAT
 # they deviate and to what extent, never the value itself.
 _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
+                  "onenote_rules",
                   "sharepoint_urls", "sharepoint_pages_urls", "planner_urls"}
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 _NUR_GESETZT = {"client_id", "tenant"}
@@ -1147,7 +1173,8 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
     pfade = {
         "outlook": OUTLOOK_DIR, "teams": TEAMS_DIR, "onedrive": ONEDRIVE_DIR,
         "sharepoint": SHAREPOINT_DIR, "sharepoint_pages": SHAREPOINT_PAGES_DIR,
-        "planner": PLANNER_DIR, "store": str(STORE_PFAD),
+        "planner": PLANNER_DIR, "todo": TODO_DIR, "onenote": ONENOTE_DIR,
+        "store": str(STORE_PFAD),
         "store_db": store_layout.db_path(STORE_PFAD),
         # ONE absolute path for both: the step writes it, the skip target,
         # the status and /api/calendar read it. Spelled relative it landed
@@ -1364,6 +1391,8 @@ class SearchBridge:
                 sharepoint_dir=str(BASE / SHAREPOINT_DIR),
                 pages_dir=str(BASE / SHAREPOINT_PAGES_DIR),
                 planner_dir=str(BASE / PLANNER_DIR),
+                todo_dir=str(BASE / TODO_DIR),
+                onenote_dir=str(BASE / ONENOTE_DIR),
                 runs_db=str(HEIM / run_history.DB_NAME),
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
@@ -1414,6 +1443,12 @@ class App:
             kats.append("groups")
         if self.cfg.get("planner_enabled") and \
                 self.cfg.get("planner_attachments") and "files" not in kats:
+            kats.append("files")
+        # Teams reads the files its messages point at and the channel
+        # folders through the drive API – the same scope as OneDrive.
+        if self.cfg.get("teams_categories") and "files" not in kats and (
+                self.cfg.get("teams_attachments")
+                or self.cfg.get("teams_channel_files")):
             kats.append("files")
         return kats
 
@@ -1544,6 +1579,7 @@ class App:
                 folders.lade(BASE / OUTLOOK_DIR),
                 auswahlregeln(self.cfg)),
             "calendars": self._kalenderstand(),
+            "notebooks": self._notizbuchstand(),
             "folders_onedrive": folders.zusammenfassung(
                 folders.lade(BASE / ONEDRIVE_DIR),
                 folders.lies_regeln(self.cfg.get("onedrive_rules") or "")),
@@ -1566,6 +1602,24 @@ class App:
             "gewaehlt": len(an),
             "namen": [e.get("name") or e["pfad"] for e in an],
             "neu": (daten or {}).get("neu", []),
+        }
+
+    def _notizbuchstand(self):
+        """How many notebooks exist, how many come along – and the list
+        itself: the settings show one row per notebook with its own cadence,
+        so the page needs the entries, not only the count."""
+        daten = folders.lade(BASE / ONENOTE_DIR, folders.NOTIZBUECHER)
+        alle = (daten or {}).get("ordner", [])
+        an = {e["id"] for e in folders.gewaehlt(daten, notizbuchregeln(self.cfg))}
+        return {
+            "abgeglichen": (daten or {}).get("abgeglichen"),
+            "gesamt": len(alle),
+            "gewaehlt": len(an),
+            "namen": [e.get("name") or e["pfad"] for e in alle if e["id"] in an],
+            "neu": (daten or {}).get("neu", []),
+            "eintraege": [{"id": e["id"], "name": e.get("name") or e["pfad"],
+                           "pfad": e["pfad"], "an": e["id"] in an}
+                          for e in alle],
         }
 
     def auth_modus(self):
@@ -1662,8 +1716,11 @@ class App:
         # The log then reads like the run happened, not like the code
         # decided: selected sources first, then every step in turn.
         ausgelassen = {}                 # step key -> why it will not run
+        # OneNote is missing on purpose: its cadence lives per notebook,
+        # inside the export, like the SharePoint libraries.
         for dienst, dienst_label in (("onedrive", "job.step.onedrive"),
-                                     ("teams", "job.step.teams")):
+                                     ("teams", "job.step.teams"),
+                                     ("todo", "job.step.todo")):
             kadenz = kadenzen.get(dienst) or "always"
             if kadenz == "always" or not angefragt[dienst]:
                 continue
@@ -2106,6 +2163,8 @@ class Handler(BaseHTTPRequestHandler):
                                    ("onedrive_max_mb", 0, 100000),
                                    ("sharepoint_max_mb", 0, 100000),
                                    ("sharepoint_pages_image_max_mb", 0, 100),
+                                   ("onenote_image_max_mb", 0, 100),
+                                   ("teams_files_max_mb", 0, 100000),
                                    ("search_results", 5, 100),
                                    # 0 means: userflow recording off.
                                    ("userflow_actions", 0, 50),
@@ -2123,7 +2182,9 @@ class Handler(BaseHTTPRequestHandler):
                         # the run but never survived a page rebuild.
                         "onedrive_enabled", "sharepoint_enabled",
                         "sharepoint_pages_enabled", "planner_enabled",
-                        "planner_attachments"):
+                        "planner_attachments", "todo_enabled",
+                        "onenote_enabled", "teams_attachments",
+                        "teams_channel_files"):
                 if key in data:
                     cfg[key] = bool(data[key])
             # Whoever switches Ollama off no longer means the check from just now.
@@ -2150,6 +2211,9 @@ class Handler(BaseHTTPRequestHandler):
             if "onedrive_rules" in data:
                 cfg["onedrive_rules"] = folders.schreibe_regeln(
                     folders.lies_regeln(str(data["onedrive_rules"] or "")))
+            if "onenote_rules" in data:
+                cfg["onenote_rules"] = folders.schreibe_regeln(
+                    folders.lies_regeln(str(data["onenote_rules"] or "")))
             if "analytics_skip" in data:
                 cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
             if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
@@ -2190,8 +2254,8 @@ class Handler(BaseHTTPRequestHandler):
         def uebernehmen(cfg):
             plan = cfg["schedule"]
             for key in ("enabled", "outlook", "teams", "onedrive",
-                        "sharepoint", "sharepoint_pages", "planner", "index",
-                        "calendar"):
+                        "sharepoint", "sharepoint_pages", "planner", "todo",
+                        "onenote", "index", "calendar"):
                 if key in data:
                     plan[key] = bool(data[key])
             if "interval_minutes" in data:
@@ -2354,6 +2418,8 @@ class Handler(BaseHTTPRequestHandler):
         quelle = str(data.get("quelle") or "")
         if quelle == "sharepoint":
             return self._sharepoint_plan()
+        if quelle == "onenote":
+            return self._notizbuch_plan(data.get("onenote_rules"))
         datei = folders.KALENDER if quelle == "calendar" else folders.DATEI
         if quelle == "onedrive":
             ordner, endung = BASE / ONEDRIVE_DIR, None
@@ -2375,6 +2441,28 @@ class Handler(BaseHTTPRequestHandler):
                                    data.get("skip_folders"))
         return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
                 **folders.plan(ordner, regeln, daten, endung, datei)}
+
+    def _notizbuch_plan(self, roh):
+        """The export list for the notebooks: the stored list against the
+        rules from the form, pages counted per notebook. A notebook keeps
+        its pages in section folders, so the count on disk is summed up
+        to the notebook – and every folder in the export root is walked,
+        so a notebook that left the list still shows as "only here"."""
+        wurzel = BASE / ONENOTE_DIR
+        daten = folders.lade(wurzel, folders.NOTIZBUECHER)
+        if not daten:
+            return {"ok": False, "leer": True}
+        regeln = notizbuchregeln(self.app.cfg, roh)
+        wurzeln = {e["pfad"].split("/")[0] for e in daten.get("ordner", [])}
+        if wurzel.is_dir():
+            wurzeln |= {p.name for p in wurzel.iterdir() if p.is_dir()}
+        je_buch = {}
+        for pfad, n in folders.auf_platte(wurzel, sorted(wurzeln), ".html").items():
+            buch = pfad.split("/")[0]
+            je_buch[buch] = je_buch.get(buch, 0) + n
+        return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
+                **folders.plan(wurzel, regeln, daten, ".html",
+                               folders.NOTIZBUECHER, archiv=je_buch)}
 
     def _sharepoint_plan(self):
         """The export list for the SharePoint mirror: every library's tree,
@@ -2488,17 +2576,14 @@ class Handler(BaseHTTPRequestHandler):
         # a mail with attachments. The same goes for .ics and .vcf.
         endung = target.suffix.lower()
         ctype = _CONTENT_TYPE.get(endung, "application/octet-stream")
-        # The Planner board links its attachments relatively ("Anhaenge/…")
-        # so the file stands on its own offline. Viewed through this route
-        # that would run into nothing at the app root – so on delivery the
-        # links are rewritten onto the route itself.
+        # The archive's own HTML – boards, lists, pages, conversations –
+        # links its files relatively ("Anhaenge/…", "Dateien/…", the page's
+        # .files folder) so every file stands on its own offline. Viewed
+        # through this route that would run into nothing at the app root –
+        # so on delivery the relative links are rewritten onto the route.
         wurzel, pfad = q.get("root", ""), q.get("path", "")
-        if wurzel == "planner" and pfad.endswith("board.html"):
-            basis = quote(pfad.rsplit("/", 1)[0], safe="")
-            inhalt = target.read_bytes().replace(
-                b'href="Anhaenge/',
-                b'href="/source?root=planner&path=' + basis.encode()
-                + b'%2FAnhaenge%2F')
+        if endung in (".html", ".htm"):
+            inhalt = _links_umleiten(target.read_bytes(), wurzel, pfad)
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(inhalt)))
@@ -2524,6 +2609,35 @@ class Handler(BaseHTTPRequestHandler):
             return
         with open(target, "rb") as f:
             shutil.copyfileobj(f, self.wfile, 64 * 1024)
+
+
+_LINK_RE = re.compile(rb'(\b(?:href|src)=")([^"]+)(")')
+_ABSOLUT_RE = re.compile(rb"^(?:[a-zA-Z][a-zA-Z0-9+.\-]*:|/|#|\?)")
+
+
+def _links_umleiten(inhalt, wurzel, pfad):
+    """Relative href/src values of an archive HTML onto the /source route.
+
+    Absolute links, anchors, data URIs and the embedded images stay as they
+    are; a relative path is resolved against the file's own folder and
+    handed back through this route with the same root, so the sandboxed
+    page reaches its attachments the way it does on disk."""
+    ordner = pfad.rsplit("/", 1)[0] if "/" in pfad else ""
+
+    def ersetze(m):
+        wert = m.group(2)
+        if _ABSOLUT_RE.match(wert):
+            return m.group(0)
+        ziel, _, anker = wert.partition(b"#")
+        rel = unquote(html.unescape(ziel.decode("utf-8", "replace")))
+        rel = posixpath.normpath(f"{ordner}/{rel}" if ordner else rel)
+        neu = (f"/source?root={quote(wurzel, safe='')}"
+               f"&path={quote(rel, safe='')}").encode()
+        if anker:
+            neu += b"#" + anker
+        return m.group(1) + neu + m.group(3)
+
+    return _LINK_RE.sub(ersetze, inhalt)
 
 
 # What the operating system can make sense of. .eml opens the mail client,

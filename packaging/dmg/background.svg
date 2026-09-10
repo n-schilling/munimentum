@@ -29,7 +29,7 @@
   <!-- what you are installing -->
   <g font-size="13" fill="#1b1f24">
     <circle cx="52" cy="367" r="4" fill="#2f6fed"/>
-    <text x="66" y="371">Teams, mail, calendar, contacts, OneDrive, SharePoint and Planner – exported and searchable offline.</text>
+    <text x="66" y="371">Teams, mail, calendar, contacts, OneDrive, SharePoint, Planner, To Do, OneNote – searchable offline.</text>
     <circle cx="52" cy="393" r="4" fill="#2f6fed"/>
     <text x="66" y="397">Everything stays on this Mac: no account, no cloud service, no telemetry.</text>
     <circle cx="52" cy="419" r="4" fill="#2f6fed"/>

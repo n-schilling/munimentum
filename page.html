@@ -9,199 +9,327 @@
      a 404 on /favicon.ico. -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1024 1024'%3E%3Crect width='1024' height='1024' rx='229' fill='%232f6fed'/%3E%3Crect x='196' y='330' width='632' height='158' rx='34' fill='%23fff'/%3E%3Crect x='246' y='500' width='532' height='300' rx='34' fill='%23fff' opacity='.93'/%3E%3Crect x='430' y='596' width='164' height='44' rx='22' fill='%232f6fed'/%3E%3C/svg%3E">
 <style>
+/* Tokens. Every colour on the page is one of these – see DESIGN.md §3. */
 :root{
   --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6570; --line:#dfe3e8;
-  --accent:#2f6fed; --ok:#1a7f4b; --warn:#a2650a; --err:#b3261e; --code:#f1f3f6;
+  --accent:#2f6fed; --accent-weich:#eaf0fe; --ok:#1a7f4b; --warn:#a2650a; --err:#b3261e;
+  --code:#f1f3f6; --konsole:#0d1013;
 }
 @media (prefers-color-scheme: dark){
   :root{ --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa4ae; --line:#2c3238;
-         --accent:#7aa2ff; --ok:#4cc38a; --warn:#e0a33a; --err:#f2837c; --code:#22272c; }
+         --accent:#7aa2ff; --accent-weich:#22304a; --ok:#4cc38a; --warn:#e0a33a; --err:#f2837c;
+         --code:#22272c; --konsole:#0b0e11; }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
   font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
-  padding:14px 20px;background:var(--card);border-bottom:1px solid var(--line)}
+a{color:var(--accent);text-decoration:none} a:hover{text-decoration:underline}
 h1{font-size:17px;margin:0;font-weight:650}
-header .marke{width:26px;height:26px;flex:0 0 auto;border-radius:6px;
-  margin-right:-6px}
-.pills{display:flex;gap:8px;flex-wrap:wrap;margin-left:auto;align-items:center}
-.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
-  border:1px solid var(--line);font-size:13px;cursor:pointer;background:transparent;color:inherit}
-.pill:hover{border-color:var(--muted)}
-/* "Quit" is not a state but an action – the gap separates it from the four
-   indicators so nobody takes it for yet another status message. */
-.pill-luecke{width:10px}
-/* Explanation on demand instead of prose next to every button. The text lives
-   in the title attribute – every browser shows it, every screen reader speaks
-   it, and it needs no extra window that has to open and close again. */
+h2{font-size:15px;font-weight:650;margin:0}
+h3{font-size:14px;font-weight:650;margin:0}
+.muted{color:var(--muted)} .small{font-size:13px}
+.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
+.num{font-variant-numeric:tabular-nums}
+.hide{display:none!important}
+.hint{color:var(--muted)}
+/* Icons: inline SVG from the IKON set in the script, never emoji. */
+svg.ik{width:16px;height:16px;flex:0 0 auto;vertical-align:-3px}
+svg.ik.klein{width:12px;height:12px;vertical-align:-1px}
+svg.ik.akzent{color:var(--accent)} svg.ik.ok{color:var(--ok)} svg.ik.blass{color:var(--line)}
+[data-ikon]{display:inline-flex;align-items:center}
+
+/* ---- Header: brand, the two doors, the two side rooms, account, quit ---- */
+header{display:flex;align-items:center;gap:12px;padding:0 24px;min-height:56px;
+  background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.marke-zeile{display:flex;align-items:center;gap:10px;margin-right:12px}
+header .marke{width:24px;height:24px;flex:0 0 auto}
+nav{display:flex;align-items:stretch;flex:1 1 320px;gap:4px;align-self:stretch;min-height:56px}
+.nav-haupt{display:flex;align-items:stretch;gap:4px}
+.nav-neben{display:flex;align-items:center;gap:4px;margin-left:auto}
+nav button{border:0;background:transparent;color:var(--muted);font:inherit;cursor:pointer;border-radius:8px;white-space:nowrap}
+nav button:hover{color:var(--ink)}
+.nav-haupt button{padding:0 14px;font-weight:600;border-radius:0;border-bottom:2px solid transparent}
+.nav-haupt button.on{color:var(--ink);border-bottom-color:var(--accent)}
+.nav-neben button{padding:6px 10px;font-size:13.5px}
+.nav-neben button.on{background:var(--code);color:var(--ink);font-weight:600}
+.pills{display:flex;gap:8px;align-items:center}
+/* The states share one frame, 8 px like every button; each state is a dot
+   or an icon plus a word and leads to where it is fixed. */
+.zustaende{display:inline-flex;align-items:center;height:32px;border:1px solid var(--line);
+  border-radius:8px;overflow:hidden;background:var(--card)}
+.zustand{display:inline-flex;align-items:center;gap:7px;height:100%;padding:0 11px;border:0;
+  background:transparent;color:inherit;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+.zustand:not(.hide)+.zustand{border-left:1px solid var(--line)}
+.zustand:hover{background:var(--code)}
+/* The minimised run: soft accent, a word, a tiny bar. */
+.zustand.lauf-pille{background:var(--accent-weich);font-weight:600}
+.zustand.lauf-pille:hover{background:var(--accent-weich)}
+/* The one action up here: an icon in the same frame as every button. */
+.ikonknopf{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
+  border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--muted);cursor:pointer;flex:0 0 auto}
+.ikonknopf:hover{background:var(--code)}
+.ikonknopf.quit{color:var(--err)}
+.mini-balken{width:48px;height:5px;border-radius:999px;background:var(--card);border:1px solid var(--line);overflow:hidden;display:inline-block}
+.mini-balken>span{display:block;height:100%;background:var(--accent);width:0;transition:width .3s ease}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;flex:0 0 auto}
+.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+
+/* ---- Page frame ---- */
+main{padding:22px 24px 40px;max-width:1280px}
+#tab-export,#tab-analytics{max-width:1080px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:18px;margin-bottom:16px}
+.card p.sub{color:var(--muted);margin:2px 0 14px;font-size:13px}
+.abschnitt-kopf{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin:6px 0 12px}
+.abschnitt-kopf .rechts{margin-left:auto}
 h2.mit-info{display:flex;align-items:center;gap:8px}
+/* Explanation on demand instead of prose next to every control: the text
+   lives in the title attribute, readable by hover, keyboard and screen reader. */
 .info{display:inline-flex;align-items:center;justify-content:center;
   width:17px;height:17px;border-radius:50%;border:1px solid var(--line);
   color:var(--muted);font-size:11.5px;font-style:italic;font-weight:600;
   cursor:help;user-select:none;flex:0 0 auto}
 .info:hover,.info:focus{color:var(--ink);border-color:var(--muted);outline:none}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--muted)}
-.chk-sep{margin-top:10px;padding-top:8px;border-top:1px dashed var(--line)}
-.chk-note{margin:4px 0 0;max-width:240px;color:var(--warn)}
-.dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
-nav{display:flex;gap:4px;padding:10px 20px 0;background:var(--card)}
-nav button{border:0;background:transparent;color:var(--muted);padding:8px 14px;
-  border-radius:8px 8px 0 0;font:inherit;cursor:pointer}
-nav button.on{background:var(--bg);color:var(--ink);font-weight:600}
-main{padding:20px;max-width:1080px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:18px;margin-bottom:16px}
-.card h2{font-size:15px;margin:0 0 4px}
-.card p.sub{color:var(--muted);margin:0 0 14px;font-size:13px}
-label.chk{display:flex;gap:8px;align-items:center;padding:4px 0}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:6px 20px}
-button.act{background:var(--accent);color:#fff;border:0;border-radius:8px;
-  padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
+button.act,a.act{display:inline-flex;align-items:center;gap:8px;background:var(--accent);color:#fff;
+  border:0;border-radius:8px;padding:9px 16px;font:inherit;font-weight:600;cursor:pointer}
 button.act:disabled{opacity:.45;cursor:not-allowed}
-button.ghost{background:transparent;border:1px solid var(--line);color:inherit;
-  border-radius:8px;padding:9px 16px;font:inherit;cursor:pointer}
-input[type=text],input[type=number],input[type=date],select,textarea{
+button.act.gross{padding:12px 22px;font-size:15px}
+button.ghost,a.ghost{display:inline-flex;align-items:center;gap:6px;background:transparent;
+  border:1px solid var(--line);color:inherit;border-radius:8px;padding:7px 12px;
+  font:inherit;font-size:13.5px;cursor:pointer}
+button.ghost:hover,a.ghost:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+button.ghost:disabled{opacity:.4;cursor:not-allowed}
+button.mini,a.mini{border:1px solid var(--line);background:transparent;color:inherit;
+  border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
+a.mini{display:inline-block;line-height:1.5}
+button.mini:hover,a.mini:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+input[type=text],input[type=number],input[type=date],input[type=search],select,textarea{
   background:var(--bg);color:inherit;border:1px solid var(--line);border-radius:8px;
   padding:8px 10px;font:inherit}
 textarea{width:100%;min-height:120px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 code,pre{background:var(--code);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
 code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
-.muted{color:var(--muted)} .small{font-size:13px}
-.ok{color:var(--ok)} .warn{color:var(--warn)} .err{color:var(--err)}
-#log{background:#0d1013;color:#cbd3da;border-radius:10px;padding:12px;height:230px;
-  overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
+.banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
+  border:1px solid var(--line)}
+.banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
+.tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 7px;
+  font-size:11.5px;color:var(--muted);margin-right:6px}
+.tag.weg{border:1px solid var(--warn);color:var(--warn);background:transparent}
+.tag.herkunft{margin-left:8px;font-weight:400}
+mark{background:var(--code);color:var(--ink);font-weight:600;border-radius:3px;padding:0 3px}
+/* Small status next to a field: the dot carries the colour, the word the fact. */
+.stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
+  color:var(--muted);white-space:nowrap}
+.feldmitstand{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* ---- Build archive: the status card ---- */
+.stand-kopf{display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.stand-titel{flex:1;min-width:260px;font-size:15px;font-weight:650}
+.stand-knoepfe{display:flex;align-items:center;gap:10px}
+.erststart{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-top:18px}
+.schrittkarte{display:flex;gap:12px;align-items:flex-start}
+.schrittkarte>div{display:flex;flex-direction:column;gap:6px}
+.schrittkarte button.act{align-self:flex-start;margin-top:4px}
+.nr{width:28px;height:28px;border-radius:50%;background:var(--accent-weich);color:var(--accent);
+  font-weight:700;display:inline-flex;align-items:center;justify-content:center;font-size:14px;flex:0 0 auto}
+.nr.fertig{background:var(--ok);color:#fff}
+@media(max-width:820px){.erststart{grid-template-columns:1fr}}
+
+/* Progress: step by step, and within one step as precise as the script
+   knows. Where there is no total, the bar keeps moving striped instead of
+   inventing a percentage. */
+.fortschritt{margin-top:4px}
+/* The run window: the wizards' frame, wider, with the log inside. */
+#lauf-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-start;
+  justify-content:center;padding:40px 20px;z-index:18;overflow:auto}
+.lauf-fenster{max-width:860px;width:100%;max-height:none}
+.lauf-fenster .modal-kopf{align-items:flex-start}
+.lauf-fenster .modal-kopf h2{margin:0}
+.lauf-fenster .modal-fuss .rechts{margin-left:auto}
+button.ghost.klein{padding:4px 10px;font-size:13px;flex:0 0 auto}
+button.ghost.rot{color:var(--err)}
+#lauf-ergebnis .schritt{grid-template-columns:22px minmax(140px,220px) minmax(0,1fr) 90px}
+.lauf-titel-ok{display:inline-flex;align-items:center;gap:8px}
+.balken{height:6px;background:var(--code);border-radius:99px;overflow:hidden}
+.balken>div{height:100%;background:var(--accent);border-radius:99px;
+  transition:width .3s ease;width:0}
+.balken.unbekannt>div{width:35%;background:linear-gradient(90deg,
+  var(--code) 0%,var(--accent) 50%,var(--code) 100%);animation:wandern 1.6s linear infinite}
+@keyframes wandern{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
+#fortschritt-text{margin:8px 0 4px}
+.schritte{display:flex;flex-direction:column}
+.schritt{display:grid;grid-template-columns:22px minmax(140px,220px) minmax(0,1fr);gap:12px;
+  align-items:center;padding:8px 0;border-top:1px solid var(--line);font-size:13.5px}
+.schritt:first-child{border-top:0}
+.schritt .name{font-weight:600}
+.schritt.offen .name{color:var(--muted);font-weight:400}
+
+/* The log: the app's, not the run's – a strip at the foot of the status
+   card, folded by default, reachable whenever the archive page is open. */
+#protokoll{margin-top:14px;border-top:1px solid var(--line);padding-top:8px}
+#protokoll.hide{display:none!important}
+#protokoll .pkopf{display:flex;gap:10px;align-items:center;cursor:pointer;user-select:none;flex-wrap:wrap}
+#protokoll .pkopf .pfeil{color:var(--muted);display:inline-flex;transition:transform .2s}
+#protokoll.zu .pkopf .pfeil{transform:rotate(-90deg)}
+#protokoll .pkopf #log-letzte{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:120px}
+#protokoll .pkopf button.mini{flex:0 0 auto;padding:3px 10px;font-size:12px}
+#protokoll.zu #log{display:none}
+#protokoll:not(.zu) #log-letzte{visibility:hidden}
+#log{background:var(--konsole);color:#cbd3da;border-radius:10px;padding:12px 14px;height:220px;
+  min-height:80px;max-height:70vh;overflow:auto;resize:vertical;margin-top:10px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;white-space:pre-wrap}
 #log .l-head,.lauflog .l-head{color:#9ad0ff;font-weight:600}
 #log .l-ok,.lauflog .l-ok{color:#7fdca4}
 #log .l-warn,.lauflog .l-warn{color:#f0c674}
 #log .l-err,.lauflog .l-err{color:#ff9c94}
-/* The stored log of one run, inline in the runs table – the same dark
-   console as the bar at the bottom. */
-.lauflog{background:#0d1013;color:#cbd3da;border-radius:10px;padding:10px 12px;
+.lauflog{background:var(--konsole);color:#cbd3da;border-radius:10px;padding:10px 12px;
   margin-top:8px;max-height:280px;overflow:auto;text-align:left;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
-  white-space:pre-wrap}
-/* Hit row: two lines instead of four. Title on the left, origin and date on
-   the right in their own columns – the dates stack up and you scan the list
-   along its edge instead of reading it. The actions live in the menu: they
-   differ per hit and would otherwise dominate the list. */
-.hit{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;
-  column-gap:14px;row-gap:3px;align-items:baseline;padding:10px 0;
-  border-top:1px solid var(--line)}
-.hit:first-child{border-top:0}
-.dateizeile{display:flex;gap:10px;align-items:baseline;padding:8px 0;
-  border-top:1px solid var(--line);cursor:default}
-.dateizeile:first-child{border-top:0}
-.dateizeile .muted{margin-left:auto;white-space:nowrap}
-.urltab .zeile{display:flex;gap:8px;align-items:center;padding:5px 0;
-  border-top:1px solid var(--line)}
-.urltab .zeile:first-child{border-top:0}
-.urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
-.urltab input[type=text]{flex:1;min-width:0}
-.urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
-.hit h3{grid-column:1;margin:0;font-size:14px;font-weight:600;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hit .wer{grid-column:2;color:var(--muted);font-size:12.5px;white-space:nowrap}
-.hit .wann{grid-column:3;color:var(--muted);font-size:12.5px;white-space:nowrap;
-  font-variant-numeric:tabular-nums}
-.hit .menuzelle{grid-column:4;position:relative;align-self:center}
-.hit .prev{grid-column:1/-1;font-size:13.5px;color:var(--muted);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.hit .verlauf{grid-column:1/-1}
-@media (max-width:720px){
-  .hit{grid-template-columns:minmax(0,1fr) auto}
-  .hit .wer{grid-column:1;grid-row:2} .hit .wann{grid-column:2;grid-row:2}
-  .hit .menuzelle{grid-column:2;grid-row:1} .hit .prev{grid-row:3}
-}
-.punkte-knopf{border:1px solid transparent;background:transparent;color:var(--muted);
-  border-radius:7px;padding:2px 8px;font-size:16px;line-height:1.2;cursor:pointer}
-.punkte-knopf:hover,.punkte-knopf[aria-expanded="true"]{border-color:var(--line);color:var(--ink)}
-.menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;min-width:190px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;white-space:pre-wrap}
+
+/* ---- Build archive: the source cards ---- */
+.quellen{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+@media(max-width:900px){.quellen{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.quellen{grid-template-columns:1fr}}
+.quelle{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;
+  display:flex;flex-direction:column;gap:10px}
+.quelle h3{display:flex;align-items:center;gap:8px}
+.quelle h3 svg{color:var(--accent)}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+  border:1px solid var(--line);font-size:13px;color:var(--muted);background:var(--card);
+  cursor:pointer;position:relative;user-select:none}
+.chip input{position:absolute;opacity:0;width:0;height:0;margin:0}
+.chip .haken,.chip [data-ikon="haken"]{display:none;color:var(--accent)}
+.chip.on,.chip:has(input:checked){background:var(--accent-weich);border-color:var(--accent);color:var(--ink)}
+.chip:has(input:checked) .haken,.chip:has(input:checked) [data-ikon="haken"]{display:inline-flex}
+.chip [data-ikon="haken"] .haken{display:inline}
+.chip:hover{border-color:var(--muted)}
+.chip:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.qkopf{display:flex;align-items:center;gap:8px}
+.qkopf h3{flex:1;min-width:0}
+/* The gear leads to the source's block in the settings – an icon, because
+   the card is meant to stay as bare as its chips. */
+.zahnrad{border:0;background:transparent;color:var(--muted);padding:4px;border-radius:6px;
+  cursor:pointer;display:inline-flex;flex:0 0 auto}
+.zahnrad:hover,.zahnrad:focus-visible{color:var(--accent);background:var(--code);outline:none}
+.chk-note{margin:0;color:var(--warn);font-size:13px}
+.chk-note:empty{display:none}
+
+/* ---- Search archive ---- */
+.suchzeile{display:flex;gap:10px;align-items:stretch}
+.suchfeld{flex:1;display:flex;align-items:center;gap:12px;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;padding:0 6px 0 14px;min-height:48px}
+.suchfeld:focus-within{border-color:var(--accent)}
+.suchfeld>svg{color:var(--muted)}
+.suchfeld input{flex:1;min-width:120px;border:0;background:transparent;padding:8px 0;font-size:15px;outline:none}
+.suchzeile button.act{padding:0 20px}
+/* The search mode: an exclusive choice, the alternatives visible. */
+.modi{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;flex:0 0 auto}
+.modi button{border:0;background:transparent;color:var(--muted);font:inherit;
+  font-size:13px;padding:6px 12px;cursor:pointer}
+.modi button+button{border-left:1px solid var(--line)}
+.modi button.on{background:var(--accent);color:#fff;font-weight:600}
+.modi button:not(.on):not(:disabled):hover{color:var(--accent)}
+.modi button:disabled{opacity:.4;cursor:not-allowed}
+#modus-fehlt{margin:6px 0 0}
+@media(max-width:720px){.suchfeld{flex-wrap:wrap;padding:6px 14px}.modi{width:100%}.modi button{flex:1}}
+/* Filters: always open, every filter a pill, a set one highlighted in place. */
+.filterzeile{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
+.filterzeile select,.filterzeile input[type=text],.filter{border-radius:999px;padding:5px 11px;
+  font-size:13px;background:var(--card);border:1px solid var(--line);color:var(--ink);height:31px}
+.filterzeile .on{background:var(--accent-weich);border-color:var(--accent)}
+.filter{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.filter .bez{color:var(--muted);white-space:nowrap}
+.filter input[type=date]{border:0;background:transparent;padding:0;height:auto;font-size:13px;color:inherit}
+#gone-feld{height:auto;padding:3px 10px 3px 4px}
+.vorschlagfeld{position:relative;display:inline-block}
+.vorschlagfeld #f-person{width:180px}
+#filter-weg{border:0;background:transparent;color:var(--accent);font:inherit;font-size:13px;padding:0 4px;cursor:pointer}
+#filter-weg:hover{text-decoration:underline}
+/* A field whose content the browser cannot read – a date that does not exist. */
+input.fehler{border-color:var(--err)!important}
+/* Suggestions for the person field. */
+.menu{position:absolute;left:0;top:calc(100% + 4px);z-index:5;min-width:100%;max-width:320px;
   background:var(--card);border:1px solid var(--line);border-radius:10px;
   box-shadow:0 6px 20px rgba(0,0,0,.14);padding:5px;display:flex;flex-direction:column}
 .menu button{border:0;background:transparent;color:inherit;font:inherit;font-size:13.5px;
   text-align:left;padding:7px 10px;border-radius:7px;cursor:pointer}
 .menu button:hover:not(:disabled){background:var(--code)}
-.menu button:disabled{opacity:.4;cursor:not-allowed}
 .menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
-/* Suggestions for the person field. The field is free-text input against a
-   fixed inventory: whoever types a name the archive does not contain gets
-   zero hits and cannot tell whether the person is missing or the name is
-   misspelled. The list answers that before the search runs. */
-.vorschlagfeld{position:relative;display:inline-block}
-.vorschlagfeld #f-person{width:180px}
-#personliste{left:0;right:auto;min-width:100%;max-width:320px}
-#personliste button{display:flex;gap:10px;align-items:baseline;
-  justify-content:space-between;width:100%}
+#personliste button{display:flex;gap:10px;align-items:baseline;justify-content:space-between;width:100%}
 #personliste button[aria-selected="true"]{background:var(--code)}
-#personliste .zahl{color:var(--muted);font-size:12.5px;
-  font-variant-numeric:tabular-nums;flex:0 0 auto}
+#personliste .zahl{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
 #personliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* The asterisk row is a pattern, not a name – set in the typeface patterns
-   are read in. */
-#personliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  font-size:12.5px}
-#personliste hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
+#personliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
 #personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
-/* The search mode: an exclusive choice, the alternatives visible. */
-.modi{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
-.modi button{border:0;background:transparent;color:var(--muted);font:inherit;
-  font-size:13.5px;padding:7px 16px;cursor:pointer}
-.modi button+button{border-left:1px solid var(--line)}
-.modi button.on{background:var(--accent);color:#fff;font-weight:600}
-.modi button:not(.on):not(:disabled):hover{color:var(--accent)}
-.modi button:disabled{opacity:.4;cursor:not-allowed}
-.modizeile{display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap}
-/* Match highlighting: subtle. The preview is set muted, the match gets the
-   full text color and some weight – that lifts it out without making a long
-   list look like a highlighter accident. */
-mark{background:var(--code);color:var(--ink);font-weight:600;
-  border-radius:3px;padding:0 3px}
-.tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 6px;
-  font-size:11.5px;color:var(--muted);margin-right:6px}
-#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;
-  align-items:center;justify-content:center;padding:20px;z-index:20}
-#overlay.on{display:flex}
-.modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;
-  max-height:88vh;overflow:auto;padding:24px}
-.modal h2{margin:0 0 6px;font-size:18px}
-/* All wizards share the same frame: title with a close cross at the top,
-   exactly one primary and one secondary action at the bottom. */
-.modal-kopf{display:flex;align-items:flex-start;gap:12px}
-.modal-kopf h2{flex:1}
-.modal-zu{flex:0 0 auto;border:0;background:transparent;color:var(--muted);
-  font-size:22px;line-height:1;padding:0 4px;cursor:pointer;border-radius:6px}
-.modal-zu:hover{color:var(--ink);background:var(--code)}
-.modal-fuss{margin-top:16px;align-items:center}
-/* The export list shows up to four hundred paths – it needs more width than
-   a three-sentence wizard, and each group scrolls on its own so the third
-   is not buried under the first. */
-.modal.breit{max-width:860px}
-.plangruppe{margin:10px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
-.plangruppe>summary{cursor:pointer;font-size:13.5px;font-weight:600}
-.plangruppe>summary .dot{display:inline-block;margin-right:7px;vertical-align:middle}
-.planliste{list-style:none;margin:8px 0 2px;padding:0;max-height:34vh;overflow:auto}
-.planliste li{display:flex;gap:10px;align-items:baseline;padding:3px 0;font-size:13px;
-  border-top:1px solid var(--line)}
-.planliste li:first-child{border-top:0}
-.planliste .pfad{flex:1;word-break:break-word}
-.planliste .zahl{flex:0 0 auto;min-width:5em;text-align:right;color:var(--muted);
-  font-variant-numeric:tabular-nums}
-.planliste .regel{flex:0 0 auto;color:var(--muted);font-size:11.5px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
-ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
-.banner{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13.5px;
-  border:1px solid var(--line)}
-.banner.warn{border-color:var(--warn)} .banner.err{border-color:var(--err)}
-/* A field whose content the browser cannot read. On a date field that is
-   otherwise invisible: it keeps showing what was typed but yields an empty
-   value – and the search would silently run without that bound. */
-input.fehler{border-color:var(--err)}
-.hide{display:none!important}
+/* The four views onto the same inventory. */
+.sichten{display:flex;align-items:center;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.sicht{border:0;background:transparent;font:inherit;padding:8px 14px;font-size:13.5px;color:var(--muted);
+  border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.sicht.on{color:var(--ink);font-weight:600;border-bottom-color:var(--accent)}
+.sicht .zahl{font-weight:400;color:var(--muted)}
+.sicht .zahl:empty{display:none}
+/* Hits on the left, the chosen hit on the right. */
+.treffer-split{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
+.treffer-split:has(#detail.hide){grid-template-columns:1fr}
+.treffer-split .liste{padding:0}
+#results>.hint,#results>.banner{margin:14px}
+.hit{display:grid;grid-template-columns:22px minmax(0,1fr) auto;column-gap:12px;row-gap:3px;
+  padding:11px 14px;border-top:1px solid var(--line);align-items:baseline;cursor:pointer}
+.hit:first-child{border-top:0}
+.hit:hover{background:var(--code)}
+.hit.on{background:var(--accent-weich)}
+.hit .ikon{grid-row:1;align-self:center;color:var(--muted);display:inline-flex}
+.hit h3{grid-column:2;margin:0;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hit .wann{grid-column:3;color:var(--muted);font-size:12.5px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.hit .wer{grid-column:2/4;color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hit .prev{grid-column:2/4;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hit.zitiert{box-shadow:inset 3px 0 0 var(--accent)}
+.hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
+#pager{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
+#pager:empty{display:none}
+#detail{position:sticky;top:16px;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
+#detail-inhalt{display:flex;flex-direction:column;gap:14px}
+#detail-verlauf:empty{display:none}
+.dkopf{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dtitel{font-size:16px;font-weight:650;overflow-wrap:anywhere}
+.daktionen{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.daktionen .rechts{margin-left:auto}
+.dinhalt{border-top:1px solid var(--line);padding-top:14px;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.dframe{width:100%;height:60vh;border:0;border-radius:8px;background:#fff}
+.dfuss{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);padding-top:12px;
+  color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+@media(max-width:900px){.treffer-split{grid-template-columns:1fr}#detail{position:static}}
+/* Thread below the chosen hit: narrow and quiet. */
+.verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
+.verlaufliste p{margin:0 0 6px}
+.vzeile{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:13.5px;padding:3px 0}
+.vdatum{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.vwer{color:var(--muted);flex:0 0 auto;min-width:120px}
+/* Answer box. Deliberately unlike a hit card: what stands here was written
+   by no human but summarized by a model from the hits below. */
+.answer{background:var(--card);border:1px solid var(--line);
+  border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px}
+.answer .ahead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-bottom:8px}
+.answer .ahead .tag{background:var(--accent);color:#fff;border-radius:5px;padding:1px 8px;font-weight:700;letter-spacing:.04em}
+.answer .atext{white-space:pre-wrap;overflow-wrap:anywhere}
+.answer .atext a{color:var(--accent);text-decoration:none;font-weight:600}
+.answer .afoot{font-size:12px;color:var(--muted);margin-top:10px;border-top:1px solid var(--line);padding-top:8px}
+.answer.err{border-left-color:var(--err)}
+.blink::after{content:"▍";animation:blink 1s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
+/* File browser */
+.dateien-kopf{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.dateien-kopf p{flex:1;margin:0;min-width:0;overflow-wrap:anywhere}
+.dateizeile{display:flex;gap:10px;align-items:center;padding:8px 14px;border-top:1px solid var(--line)}
+.dateizeile:first-child{border-top:0}
+.dateizeile .muted{margin-left:auto;white-space:nowrap}
+.dateizeile>svg{color:var(--muted)} .dateizeile.ordner>svg{color:var(--accent)}
+.dateizeile.ordner{cursor:pointer} .dateizeile.ordner:hover{background:var(--code)}
+#dateien-liste>.hint{margin:14px}
 
-/* ---- Calendar and address book (taken over from combined_search.py,
-       adapted to the app's color variables so they work in dark mode too) ---- */
+/* ---- Calendar and address book ---- */
 :root{
   --ev-ok:#2b6cb0; --ev-ok-bg:#eef4fb; --ev-warn:#c98a17; --ev-warn-bg:#fdf6e7;
   --ev-bad:#c0392b; --ev-bad-bg:#fbeceb; --ev-gone:#b6bbc2; --ev-gone-bg:#f2f3f5;
@@ -217,14 +345,12 @@ input.fehler{border-color:var(--err)}
   --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
 }
 .calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
-.chip{padding:6px 13px;border:1px solid var(--line);border-radius:8px;background:transparent;
-  color:var(--muted);font-size:13.5px;cursor:pointer}
-.chip.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.calbar .chip{padding:5px 12px}
+.calbar .ghost{padding:5px 10px}
 #kalTitle{font-weight:650;margin-left:4px}
 .legend{display:flex;gap:12px;margin-left:auto;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
 .grid{display:grid;gap:8px}
-/* minmax(0,…): otherwise long event titles blow up the column width */
 .wk,.mo{grid-template-columns:repeat(7,minmax(0,1fr))}
 .mo{gap:6px}
 .dow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;padding:0 2px}
@@ -233,15 +359,14 @@ input.fehler{border-color:var(--err)}
 .day.out{opacity:.5}
 .dnum{font-size:12px;color:var(--muted);margin-bottom:5px;display:flex;gap:5px;align-items:baseline}
 .dnum b{font-size:14px;color:var(--ink)}
-.dnum .wd{display:none}          /* the weekday is already in the column header */
+.dnum .wd{display:none}
 .ev{display:block;font-size:12px;line-height:1.35;margin:3px 0;padding:4px 6px;border-radius:6px;
   text-decoration:none;border-left:3px solid var(--ev-ok);background:var(--ev-ok-bg);color:var(--ink);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ev:hover{white-space:normal}
+.ev:hover{white-space:normal;text-decoration:none}
 .ev .evt{color:var(--muted);font-variant-numeric:tabular-nums}
 .ev.tentative{border-left-color:var(--ev-warn);background:var(--ev-warn-bg);border-left-style:dashed}
 .ev.cancelled{border-left-color:var(--ev-bad);background:var(--ev-bad-bg);text-decoration:line-through;opacity:.75}
-/* reconstructed from mails only: dashed border instead of a bar */
 .ev.deleted{border:1px dashed var(--ev-bad);border-left-width:3px;background:var(--ev-bad-bg);text-decoration:line-through;opacity:.85}
 .ev.gone{border:1px dashed var(--ev-gone);border-left-width:3px;background:var(--ev-gone-bg);color:var(--muted)}
 .mo .day{min-height:96px}
@@ -249,11 +374,10 @@ input.fehler{border-color:var(--err)}
   .day{min-height:0}.dnum .wd{display:inline}}
 .rbnote{color:var(--muted);font-size:12.5px;margin:0 0 10px}
 .rbcount{color:var(--muted);font-size:12px;margin-left:auto}
-.rbmonth{margin:16px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
-  border-bottom:1px solid var(--line);padding-bottom:3px}
+.rbmonth{margin:16px 0 6px;font-size:13px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:3px}
 .rbrow{display:flex;gap:10px;align-items:baseline;background:var(--card);border:1px solid var(--line);
   border-radius:9px;padding:8px 11px;margin:5px 0;text-decoration:none;color:var(--ink)}
-.rbrow:hover{border-color:var(--accent)}
+.rbrow:hover{border-color:var(--accent);text-decoration:none}
 .rbrow.deleted{border-left:3px solid var(--ev-bad)}
 .rbrow.gone{border-left:3px solid var(--ev-gone)}
 .rbdate{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:158px}
@@ -264,160 +388,35 @@ input.fehler{border-color:var(--err)}
 .rbrow.deleted .rbtitle{text-decoration:line-through}
 .rbwho{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 @media(max-width:820px){.rbrow{flex-wrap:wrap;gap:4px 9px}.rbwho{max-width:none}}
-.letter{margin:18px 0 6px;font-size:13px;font-weight:700;color:var(--muted);
-  border-bottom:1px solid var(--line);padding-bottom:3px}
+.letter{margin:18px 0 6px;font-size:13px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:3px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
 .card2{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+.card2 button.mini{margin-top:8px}
 .cname{font-weight:600;overflow-wrap:anywhere}
 .cname a{color:var(--ink);text-decoration:none}
 .cname a:hover{color:var(--accent);text-decoration:underline}
 .crole{font-size:12.5px;color:var(--muted);margin-bottom:5px;overflow-wrap:anywhere}
-.cline{font-size:13px;overflow-wrap:anywhere}
+.cline{font-size:13px;overflow-wrap:anywhere;display:flex;gap:6px;align-items:center}
+.cline svg{color:var(--muted)}
 .cline a{color:var(--accent);text-decoration:none}
-.cline span{color:var(--muted);margin-right:5px}
-.hint{color:var(--muted)}
 
-/* Progress: step by step, and within one step as precise as the script
-   knows. Where there is no total, the bar keeps moving striped instead of
-   inventing a percentage. */
-.fortschritt{margin-top:14px}
-.balken{height:8px;background:var(--code);border-radius:99px;overflow:hidden}
-.balken>div{height:100%;background:var(--accent);border-radius:99px;
-  transition:width .3s ease;width:0}
-.balken.unbekannt>div{width:35%;background:linear-gradient(90deg,
-  var(--code) 0%,var(--accent) 50%,var(--code) 100%);animation:wandern 1.6s linear infinite}
-@keyframes wandern{from{transform:translateX(-100%)}to{transform:translateX(340%)}}
-
-/* Permissions in the token wizard: an unobtrusive line as long as they are
-   not the problem. */
-details.rechte{margin:12px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
-details.rechte summary{cursor:pointer;font-size:13px;color:var(--muted)}
-details.rechte[open] summary{margin-bottom:4px;color:var(--ink)}
-details.rechte p{margin:6px 0}
-
-/* The choice between the two sign-in paths: two equal cards, so neither
-   looks like a footnote of the other. */
-.wahlreihe{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
-.wahl{flex:1 1 240px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;
-  border:1px solid var(--line);border-radius:10px;padding:10px 12px}
-.wahl.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
-.wahl input{margin-top:3px}
-.wahl span{display:flex;flex-direction:column;gap:2px}
-button.mini,a.mini{border:1px solid var(--line);background:transparent;color:inherit;
-  border-radius:8px;padding:5px 12px;font:inherit;font-size:13px;cursor:pointer}
-/* A link with the same job should look the same – as plain link-colored text
-   it would sit next to the buttons like a foreign object. */
-a.mini{display:inline-block;text-decoration:none;line-height:1.5}
-button.mini:hover,a.mini:hover{border-color:var(--accent);color:var(--accent)}
-/* Copy button in the corner of the box – visible without covering the content. */
-.mitkopie{position:relative}
-.mitkopie pre{padding-right:96px}
-button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
-/* Thread history below a hit: narrow and quiet so it does not overwhelm
-   the hit list. */
-/* Deleted items are the exception and may stand out – but only as far as
-   keeps the hit list calm. */
-.tag.weg{border-color:var(--warn);color:var(--warn)}
-.tag.herkunft{margin-left:8px;font-weight:400}
-/* Analytics: key figures as a calm grid, not as a dashboard cockpit. */
+/* ---- Overview ---- */
 .kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
-/* Search field and button belong together and fill the row – the picture
-   everyone knows from other programs. Everything else sits below. */
-.suchzeile{display:flex;gap:8px}
-.suchzeile input{flex:1;min-width:200px;font-size:15px;padding:9px 12px}
-.suchzeile button{flex:0 0 auto;padding:9px 20px}
-.feld{display:flex;align-items:center;gap:6px;color:var(--muted)}
 .kpi{border:1px solid var(--line);border-radius:12px;padding:14px 16px}
 .kpi.klickbar{cursor:pointer}
 .kpi.klickbar:hover,.kpi.klickbar:focus{border-color:var(--accent);outline:none}
-.kpi-titel{display:flex;align-items:center;gap:6px}
-.kpi-wert{font-size:26px;font-weight:650;letter-spacing:-.02em;
-  font-variant-numeric:tabular-nums}
-.kpi-titel{font-size:13.5px;margin-top:2px}
+.kpi-wert{font-size:26px;font-weight:650;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.kpi-titel{display:flex;align-items:center;gap:6px;font-size:13.5px;margin-top:2px}
 .kpi-hint{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.4}
-.kpi-fuss{grid-column:1/-1}
 .anatab{width:100%;border-collapse:collapse;margin-top:12px;font-size:13.5px}
 .anatab th{text-align:left;font-weight:600;border-bottom:1px solid var(--line);padding:6px 8px}
-.anatab td{padding:5px 8px;border-bottom:1px solid var(--line);
-  font-variant-numeric:tabular-nums}
+.anatab td{padding:5px 8px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
 .anatab td:not(:first-child), .anatab th:not(:first-child){text-align:right}
 .anatab td.fehlt{color:var(--warn);font-weight:600}
 .warnzeile{color:var(--warn);font-weight:600;margin:0}
 .okzeile{color:var(--ok);font-weight:600;margin:0}
-.card2 button.mini{margin-top:8px}
-.verlauf{margin-top:8px}
-.verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
-.verlaufliste p{margin:0 0 6px}
-.vzeile{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;
-  font-size:13.5px;padding:3px 0}
-.vdatum{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.vwer{color:var(--muted);flex:0 0 auto;min-width:120px}
-.geraetecode{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;
-  text-align:center}
-.geraetecode p{margin:0 0 8px}
-.code-gross{display:inline-block;font-size:26px;letter-spacing:.14em;font-weight:700;
-  background:var(--code);border-radius:8px;padding:8px 16px}
-
-/* Settings: one row per setting, built the same everywhere – label on the
-   left with an (i), control on the right. The explanations live in the (i)
-   instead of prose below; that makes the page scannable rather than
-   something to read. */
-.feldzeile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;
-  align-items:center;padding:9px 0;border-top:1px solid var(--line)}
-.gruppe>.feldzeile:first-of-type{border-top:0}
-.feldzeile .bez{display:flex;align-items:center;gap:7px;font-size:14px}
-.feldzeile input[type=text]{width:240px}
-.feldzeile select{min-width:200px}
-.feldzeile input[type=number]{width:96px;text-align:right;font-variant-numeric:tabular-nums}
-.feldzeile.breit{grid-template-columns:1fr;gap:6px}
-.feldzeile.breit textarea{min-height:76px}
-.gruppe{margin-top:20px}
-.card>h2+.gruppe{margin-top:10px}
-/* Action rows: the status text at the left, the buttons at the right –
-   the same shape under every group, no matter which card. */
-.aktionen{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
-.aktionen>.small:first-child{margin-right:auto}
-.aktionen:has(>:only-child:empty){display:none}
-.gruppe>h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;
-  color:var(--muted);margin:0 0 4px;display:flex;align-items:center;gap:7px}
-.aus{opacity:.42;pointer-events:none}
-/* Every boolean in the settings is this switch – the class is for the
-   one outside a settings row (the search filter). */
-.kipp,.feldzeile input[type=checkbox]{appearance:none;width:40px;height:23px;border-radius:12px;background:var(--line);
-  position:relative;cursor:pointer;transition:background .15s;flex:0 0 auto}
-.kipp:checked,.feldzeile input[type=checkbox]:checked{background:var(--accent)}
-.kipp::after,.feldzeile input[type=checkbox]::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;
-  border-radius:50%;background:#fff;transition:transform .15s}
-.kipp:checked::after,.feldzeile input[type=checkbox]:checked::after{transform:translateX(17px)}
-.kipp:focus-visible,.feldzeile input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-/* "Deleted" sits as a toggle in the filter row: it is not a value picked
-   from a list but a state – on or off. Everything level with the selects
-   next to it, the explanation behind it instead of below. */
-.gonefeld{display:inline-flex;align-items:center;gap:8px;
-  border:1px solid var(--line);border-radius:8px;padding:5px 10px}
-.gonefeld label{color:var(--muted);cursor:pointer;white-space:nowrap}
-.gonefeld input:checked ~ label,.gonefeld:hover label{color:var(--ink)}
-/* Small status indicator next to a field: the dot carries the color, the
-   word next to it the information. Both together, because color alone helps
-   nobody who cannot tell the colors apart. */
-.feldmitstand{display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap}
-.stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
-  color:var(--muted);white-space:nowrap}
-.stand .dot.ok{background:var(--ok)} .stand .dot.warn{background:var(--warn)}
-.stand .dot.err{background:var(--err)}
-.folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
-.folgen:empty{display:none}
-/* The grayed-out part continues the list below the switch – no group gap,
-   the divider stays. */
-#ollama-kinder>.gruppe:first-child{margin-top:0}
-#ollama-kinder>.gruppe:first-child>.feldzeile:first-of-type{border-top:1px solid var(--line)}
-.speichern{position:sticky;bottom:0;background:var(--bg);padding:14px 0;
-  border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;z-index:5}
-
-/* Charts. Two series carry color – Teams and mail –, everything else is
-   plain quantity and gets one tone. The two values are checked against the
-   app's real surfaces (contrast, color blindness); "other" is deliberately
-   not a third color but the catch-all column in gray. */
+/* Charts. Two series carry colour – Teams and mail –, everything else is
+   plain quantity and gets one tone. */
 :root{ --serie-a:#2a78d6; --serie-b:#eb6834; --serie-c:#9aa4ae; }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){ --serie-a:#3987e5; --serie-b:#d95926; --serie-c:#5b6570; }
@@ -428,239 +427,353 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .dia .achse{stroke:var(--line);stroke-width:1}
 .dia .tick{fill:var(--muted);font-size:10px}
 .dia .linie{fill:none;stroke:var(--serie-a);stroke-width:2;shape-rendering:geometricPrecision}
-.legende{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);
-  margin:8px 0 2px}
+.legende{display:flex;gap:16px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin:8px 0 2px}
 .legende span{display:inline-flex;align-items:center;gap:6px}
 .legende i{width:10px;height:10px;border-radius:2px;display:inline-block}
-/* Horizontal bars for rankings: label, bar, number – the number
-   right-aligned with tabular figures so the column holds still.
-
-   ONE grid for the whole list, not one per row: otherwise each row follows
-   its own label, the bars start at nine different places and can no longer
-   be compared – which is what they are for. The name column is as wide as
-   its longest entry, but at most 420px: a file path must not crowd out the
-   bar. */
+/* ONE grid for the whole ranking, not one per row – only so do all bars
+   start at the same place. */
 .rangliste{display:grid;grid-template-columns:minmax(90px,max-content) 1fr auto;
   gap:8px 10px;align-items:center;font-size:13px;margin:2px 0}
 .rangliste .bal{background:var(--code);border-radius:4px;height:9px;position:relative}
-.rangliste .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);
-  border-radius:4px;display:block}
-.rangliste .zahl{color:var(--muted);font-variant-numeric:tabular-nums;
-  font-size:12.5px;text-align:right}
-.rangliste .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  max-width:420px}
+.rangliste .bal i{position:absolute;inset:0 auto 0 0;background:var(--serie-a);border-radius:4px;display:block}
+.rangliste .zahl{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px;text-align:right}
+.rangliste .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:420px}
 .dia-titel{font-size:13px;font-weight:600;margin:18px 0 2px}
+.card>.dia-titel:first-child,.card>h2+.dia-titel{margin-top:4px}
 .dia-sub{font-size:12.5px;color:var(--muted);margin:0 0 8px}
 
-/* Log bar at the bottom */
-#protokoll{position:fixed;left:0;right:0;bottom:0;background:var(--card);
-  border-top:1px solid var(--line);z-index:15;box-shadow:0 -2px 12px rgba(0,0,0,.10)}
-#protokoll .pkopf{display:flex;gap:10px;align-items:center;padding:8px 20px;
-  cursor:pointer;user-select:none}
-#protokoll .pkopf .pfeil{color:var(--muted);transition:transform .2s}
-#protokoll.zu .pkopf .pfeil{transform:rotate(180deg)}
-#protokoll .pkopf #log-letzte{overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;flex:1}
-/* The buttons on the right: small and quiet, so the row still reads as a
-   caption and not as a toolbar. */
-#protokoll .pkopf button.mini{flex:0 0 auto;padding:3px 10px;font-size:12px}
-#protokoll.zu #log{display:none}
-#protokoll #log{margin:0 12px 12px;height:var(--loghoehe,220px)}
-/* The drag handle: a narrow strip along the top edge. */
-#protokoll .pgriff{position:absolute;left:0;right:0;top:-4px;height:9px;
-  cursor:ns-resize;touch-action:none}
-#protokoll.zu .pgriff,#protokoll.hide .pgriff{display:none}
-main{padding-bottom:60px}   /* until the script sets the real log height */
+/* ---- Settings: sub-navigation left, one card per topic right ---- */
+.einst{display:grid;grid-template-columns:220px minmax(0,1fr);gap:20px;align-items:start}
+.snav{display:flex;flex-direction:column;gap:2px;position:sticky;top:16px}
+.snav-punkt{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font:inherit;
+  font-size:14px;color:var(--ink);background:transparent;border:0;cursor:pointer;text-align:left;width:100%}
+.snav-punkt:hover{background:var(--code)}
+.snav-punkt.on{background:var(--accent-weich);font-weight:600}
+.snav-punkt .stand,.snav-punkt .nebenwert{margin-left:auto;font-weight:400}
+.snav-punkt>.dot{margin-left:auto}
+@media(max-width:820px){.einst{grid-template-columns:1fr}.snav{position:static;flex-direction:row;flex-wrap:wrap}
+  .snav-punkt{width:auto}}
+.einst-inhalt{min-width:0}
+/* One block per source: essentials open, the rest under "Advanced". */
+details.quelle-einst{border:1px solid var(--line);border-radius:10px;margin-top:10px}
+details.quelle-einst>summary{display:flex;align-items:center;gap:12px;padding:12px 16px;cursor:pointer;list-style:none;flex-wrap:wrap}
+details.quelle-einst>summary::-webkit-details-marker{display:none}
+details.quelle-einst>summary .pfeil{color:var(--muted);display:inline-flex;transition:transform .2s}
+details.quelle-einst[open]>summary .pfeil{transform:rotate(90deg)}
+details.quelle-einst>summary b{font-size:14px}
+details.quelle-einst>summary .zf{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qinhalt{padding:0 16px 14px}
+.qinhalt>.gruppe:first-child{margin-top:0}
+.qinhalt>p.sub{margin-top:0}
+details.erweitert{border-top:1px solid var(--line);margin-top:14px;padding-top:8px}
+details.erweitert>summary{cursor:pointer;font-size:13px;color:var(--muted);font-weight:600;list-style:none;
+  display:flex;align-items:center;gap:6px}
+details.erweitert>summary::-webkit-details-marker{display:none}
+details.erweitert>summary .pfeil{display:inline-flex;transition:transform .2s}
+details.erweitert[open]>summary .pfeil{transform:rotate(90deg)}
+details.erweitert>.gruppe{margin-top:4px}
+/* One row per setting, built the same everywhere – label with an (i) on the
+   left, control on the right. */
+.feldzeile{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;
+  align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+.gruppe>.feldzeile:first-of-type{border-top:0}
+.feldzeile .bez{display:flex;align-items:center;gap:7px;font-size:14px}
+.feldzeile input[type=text]{width:240px}
+.feldzeile select{min-width:200px}
+.feldzeile input[type=number]{width:96px;text-align:right;font-variant-numeric:tabular-nums}
+.feldzeile.breit{grid-template-columns:1fr;gap:6px}
+.feldzeile.breit textarea{min-height:76px}
+.gruppe{margin-top:20px}
+.card>h2+.gruppe,.card>p.sub+.gruppe{margin-top:10px}
+.aktionen{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
+.aktionen>.small:first-child{margin-right:auto}
+.aktionen:has(>:only-child:empty){display:none}
+.gruppe>h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+  margin:0 0 4px;display:flex;align-items:center;gap:7px;font-weight:600}
+.aus{opacity:.42;pointer-events:none}
+/* Every boolean is this switch. */
+.kipp,.feldzeile input[type=checkbox]{appearance:none;width:40px;height:23px;border-radius:12px;background:var(--line);
+  position:relative;cursor:pointer;transition:background .15s;flex:0 0 auto;margin:0}
+.kipp:checked,.feldzeile input[type=checkbox]:checked{background:var(--accent)}
+.kipp::after,.feldzeile input[type=checkbox]::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;
+  border-radius:50%;background:#fff;transition:transform .15s}
+.kipp:checked::after,.feldzeile input[type=checkbox]:checked::after{transform:translateX(17px)}
+.kipp:focus-visible,.feldzeile input[type=checkbox]:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.urltab .zeile{display:flex;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--line)}
+.urltab .zeile:first-child{border-top:0}
+.urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.urltab input[type=text]{flex:1;min-width:0}
+.urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
+.folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
+.folgen:empty{display:none}
+#ollama-kinder>.gruppe:first-child{margin-top:0}
+#ollama-kinder>.gruppe:first-child>.feldzeile:first-of-type{border-top:1px solid var(--line)}
+.mitkopie{position:relative}
+.mitkopie pre{padding-right:96px}
+button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
+/* The save bar: sticky at the foot, shown only while something is unsaved. */
+.speichern{position:sticky;bottom:0;background:var(--card);margin:16px -24px -40px;padding:12px 24px;
+  border-top:1px solid var(--line);display:flex;gap:14px;align-items:center;z-index:5;flex-wrap:wrap}
+.speichern .rechts{margin-left:auto}
 
-/* Answer box. Deliberately unlike a hit card: what stands here was written
-   by no human but summarized by a model from the hits below. Colored bar on
-   the left, its own header, footnotes. */
-.answer{background:var(--card);border:1px solid var(--line);
-  border-left:4px solid var(--accent);border-radius:12px;padding:14px 18px;margin-bottom:16px}
-.answer .ahead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
-  font-size:12px;color:var(--muted);margin-bottom:8px}
-.answer .ahead .tag{background:var(--accent);color:#fff;border-radius:5px;
-  padding:1px 8px;font-weight:700;letter-spacing:.04em}
-.answer .atext{white-space:pre-wrap;overflow-wrap:anywhere}
-.answer .atext a{color:var(--accent);text-decoration:none;font-weight:600}
-.answer .afoot{font-size:12px;color:var(--muted);margin-top:10px;
-  border-top:1px solid var(--line);padding-top:8px}
-.answer.err{border-left-color:var(--err)}
-.blink::after{content:"▍";animation:blink 1s steps(2,start) infinite}
-@keyframes blink{to{visibility:hidden}}
-.hit.zitiert{background:var(--code);border-radius:8px;padding-left:10px;
-  margin-left:-10px;box-shadow:inset 3px 0 0 var(--accent)}
-.hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
+/* ---- Wizards and windows ---- */
+#overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
+#overlay.on{display:flex}
+.modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;max-height:88vh;overflow:auto;padding:24px}
+.modal h2{margin:0 0 6px;font-size:18px}
+.modal-kopf{display:flex;align-items:flex-start;gap:12px}
+.modal-kopf h2{flex:1;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.banner .dot{margin-right:7px;vertical-align:1px}
+.modal-zu{flex:0 0 auto;border:0;background:transparent;color:var(--muted);font-size:22px;line-height:1;padding:0 4px;cursor:pointer;border-radius:6px}
+.modal-zu:hover{color:var(--ink);background:var(--code)}
+.modal-fuss{margin-top:16px;align-items:center}
+.modal.breit{max-width:860px}
+.plangruppe{margin:10px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.plangruppe>summary{cursor:pointer;font-size:13.5px;font-weight:600}
+.plangruppe>summary .dot{display:inline-block;margin-right:7px;vertical-align:middle}
+.planliste{list-style:none;margin:8px 0 2px;padding:0;max-height:34vh;overflow:auto}
+.planliste li{display:flex;gap:10px;align-items:baseline;padding:3px 0;font-size:13px;border-top:1px solid var(--line)}
+.planliste li:first-child{border-top:0}
+.planliste .pfad{flex:1;word-break:break-word}
+.planliste .zahl{flex:0 0 auto;min-width:5em;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.planliste .regel{flex:0 0 auto;color:var(--muted);font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
+details.rechte{margin:12px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+details.rechte summary{cursor:pointer;font-size:13px;color:var(--muted)}
+details.rechte[open] summary{margin-bottom:4px;color:var(--ink)}
+details.rechte p{margin:6px 0}
+.wahlreihe{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.wahl{flex:1 1 240px;display:flex;gap:9px;align-items:flex-start;cursor:pointer;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.wahl.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.wahl input{margin-top:3px}
+.wahl span{display:flex;flex-direction:column;gap:2px}
+.geraetecode{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;text-align:center}
+.geraetecode p{margin:0 0 8px}
+.code-gross{display:inline-block;font-size:26px;letter-spacing:.14em;font-weight:700;background:var(--code);border-radius:8px;padding:8px 16px}
 </style>
 </head>
 <body>
 <header>
-  <!-- The same small redraw of packaging/icon/icon.svg as the favicon –
-       inline, so the bundled app needs no asset route for it. -->
-  <svg class="marke" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="229" fill="#2f6fed"/><rect x="196" y="330" width="632" height="158" rx="34" fill="#fff"/><rect x="246" y="500" width="532" height="300" rx="34" fill="#fff" opacity=".93"/><rect x="430" y="596" width="164" height="44" rx="22" fill="#2f6fed"/></svg>
-  <h1 data-i18n="app.title">Munimentum</h1>
-  <!-- The pills say what the state means for the user; the technical term
-       (token, Ollama, chunks, MCP) sits in the tooltip, so whoever needs it
-       can find it without making everyone who doesn't know it read it. -->
+  <div class="marke-zeile">
+    <!-- The same small redraw of packaging/icon/icon.svg as the favicon –
+         inline, so the bundled app needs no asset route for it. -->
+    <svg class="marke" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="229" fill="#2f6fed"/><rect x="196" y="330" width="632" height="158" rx="34" fill="#fff"/><rect x="246" y="500" width="532" height="300" rx="34" fill="#fff" opacity=".93"/><rect x="430" y="596" width="164" height="44" rx="22" fill="#2f6fed"/></svg>
+    <h1 data-i18n="app.title">Munimentum</h1>
+  </div>
+  <!-- Two doors – build the archive, search it – and two side rooms. -->
+  <nav>
+    <div class="nav-haupt">
+      <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Archiv aufbauen</button>
+      <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Archiv durchsuchen</button>
+    </div>
+    <div class="nav-neben">
+      <button data-tab="analytics" onclick="tab('analytics')" data-i18n="nav.analytics">Übersicht</button>
+      <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
+    </div>
+  </nav>
+  <!-- The account chip says what the access means for the user; the
+       technical term (token) sits in the tooltip. AI and MCP show their
+       state next to their settings, not here. -->
   <div class="pills" id="pills">
-    <button class="pill" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
-    <button class="pill" id="pill-ollama" onclick="ollamaKachel()"><span class="dot" id="p-ollama"></span><span id="p-ollama-t">KI-Suche</span></button>
-    <button class="pill" id="pill-mcp" onclick="zeigeEinstellung('mcp-karte')"><span class="dot" id="p-mcp"></span><span id="p-mcp-t">Claude</span></button>
-    <span class="pill-luecke"></span>
-    <button class="pill" onclick="beenden()" id="btn-quit" data-i18n="app.quit"
-            data-i18n-title="app.quit.tip"
-            style="border-color:var(--err);color:var(--err)">Beenden</button>
+    <!-- One frame for the states – a minimised run while there is one, the
+         access always – and one icon button for the one action. -->
+    <div class="zustaende" id="zustaende">
+      <button class="zustand lauf-pille hide" id="lauf-pille" onclick="laufOeffnen()"><span data-ikon="uhr" data-ikon-klasse="klein akzent"></span><span id="lauf-pille-t"></span><span class="mini-balken"><span id="lauf-pille-balken"></span></span></button>
+      <button class="zustand" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
+    </div>
+    <button class="ikonknopf quit" onclick="beenden()" id="btn-quit" data-i18n-title="app.quit.tip" data-ikon="aus"></button>
   </div>
 </header>
 
-<nav>
-  <button data-tab="export" class="on" onclick="tab('export')" data-i18n="nav.export">Daten exportieren</button>
-  <button data-tab="suche" onclick="tab('suche')" data-i18n="nav.search">Daten durchsuchen</button>
-  <button data-tab="analytics" onclick="tab('analytics')" data-i18n="nav.analytics">Analytics</button>
-  <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
-</nav>
-
 <main>
 <section id="tab-export">
-  <div class="banner hide" id="update-banner" style="margin-bottom:16px"></div>
-  <div class="card">
-    <h2 class="mit-info" data-i18n="export.what">Was soll exportiert werden?
+  <!-- The state of the archive in one line and the one button. Nothing
+       else: a running job lives in its own window (#lauf-overlay), counts
+       in the overview, the schedule in the settings. -->
+  <div class="card" id="stand-karte">
+    <div class="stand-kopf">
+      <div class="stand-titel" id="stand-titel"></div>
+      <div class="stand-knoepfe" id="stand-knoepfe">
+        <button class="act gross" id="btn-run" onclick="runExport()"><span data-ikon="aktualisieren"></span><span data-i18n="export.start">Archiv jetzt aktualisieren</span></button>
+      </div>
+    </div>
+
+    <!-- An empty archive: three steps instead of a button nobody dares to press. -->
+    <div class="erststart hide" id="erststart">
+      <div class="schrittkarte"><span class="nr" id="nr-zugang">1</span>
+        <div><b data-i18n="stand.step1">Zugang einrichten</b>
+          <span class="muted small" data-i18n="stand.step1.sub"></span>
+          <button class="act" id="btn-zugang" onclick="openWizard('token')" data-i18n="stand.step1">Zugang einrichten</button></div></div>
+      <div class="schrittkarte"><span class="nr">2</span>
+        <div><b data-i18n="stand.step2">Quellen wählen</b>
+          <span class="muted small" data-i18n="stand.step2.sub"></span></div></div>
+      <div class="schrittkarte"><span class="nr">3</span>
+        <div><b data-i18n="stand.step3">Archiv aufbauen</b>
+          <span class="muted small" data-i18n="stand.step3.sub"></span>
+          <button class="act" id="btn-run-erst" onclick="runExport()" data-i18n="stand.step3">Archiv aufbauen</button></div></div>
+    </div>
+
+  </div>
+
+  <div class="abschnitt-kopf">
+    <h2 class="mit-info"><span data-i18n="export.what">Was ins Archiv kommt</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.what.sub" role="img" aria-label="Info">i</span></h2>
-    <div class="row" style="gap:36px;align-items:flex-start">
-      <div>
-        <strong class="small" data-i18n="export.outlook">Outlook</strong>
-        <div id="cat-outlook"></div>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.teams">Teams</strong>
-        <div id="cat-teams"></div>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.onedrive">OneDrive</strong>
-        <label class="chk"><input type="checkbox" id="c-onedrive_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.files">OneDrive-Dateien</span></label>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.sharepoint">SharePoint</strong>
-        <label class="chk"><input type="checkbox" id="c-sharepoint_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.sharepoint">SharePoint-Bibliotheken</span></label>
-        <label class="chk"><input type="checkbox" id="c-sharepoint_pages_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.pages">Site-Seiten</span></label>
-        <p class="small muted" id="sp-export-note" style="max-width:240px;margin:4px 0 0"></p>
-      </div>
-      <div>
-        <strong class="small" data-i18n="export.planner">Planner</strong>
-        <label class="chk"><input type="checkbox" id="c-planner_enabled" onchange="saveCats()">
-          <span data-i18n="export.cat.planner">Boards</span></label>
-      </div>
-    </div>
-    <div class="row" style="margin-top:14px">
-      <button class="act" id="btn-run" onclick="runExport()" data-i18n="export.start">Export starten</button>
-      <button class="ghost hide" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Abbrechen</button>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="export.start.hint"
-            role="img" aria-label="Info">i</span>
-    </div>
+  </div>
 
-    <div class="fortschritt hide" id="fortschritt">
-      <div class="balken"><div id="balken-fuell"></div></div>
-      <p class="small muted" id="fortschritt-text"></p>
+  <!-- One card per source: name, an (i) with its state, the gear into its
+       settings block, and its categories as chips. Nothing else. -->
+  <div class="quellen" id="quellen">
+    <div class="quelle" id="qk-outlook">
+      <div class="qkopf"><h3><span data-ikon="mail"></span><span data-i18n="export.outlook">Outlook</span><span class="info" id="q-outlook-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-outlook')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips" id="cat-outlook"></div>
     </div>
-
+    <div class="quelle" id="qk-teams">
+      <div class="qkopf"><h3><span data-ikon="teams"></span><span data-i18n="export.teams">Teams</span><span class="info" id="q-teams-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-teams')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips" id="cat-teams"></div>
+      <p class="chk-note" id="teams-note"></p>
+    </div>
+    <div class="quelle" id="qk-onedrive">
+      <div class="qkopf"><h3><span data-ikon="onedrive"></span><span data-i18n="export.onedrive">OneDrive</span><span class="info" id="q-onedrive-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-onedrive')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-onedrive_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.files">Dateien</span></label>
+      </div>
+    </div>
+    <div class="quelle" id="qk-sharepoint">
+      <div class="qkopf"><h3><span data-ikon="sharepoint"></span><span data-i18n="export.sharepoint">SharePoint</span><span class="info" id="q-sharepoint-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-sharepoint')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-sharepoint_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.sharepoint">Bibliotheken</span></label>
+        <label class="chip"><input type="checkbox" id="c-sharepoint_pages_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.pages">Site-Seiten</span></label>
+      </div>
+      <p class="chk-note" id="sp-export-note"></p>
+    </div>
+    <div class="quelle" id="qk-planner">
+      <div class="qkopf"><h3><span data-ikon="planner"></span><span data-i18n="export.planner">Planner</span><span class="info" id="q-planner-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-planner')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-planner_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.planner">Boards</span></label>
+      </div>
+    </div>
+    <div class="quelle" id="qk-todo">
+      <div class="qkopf"><h3><span data-ikon="todo"></span><span data-i18n="export.todo">To Do</span><span class="info" id="q-todo-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-todo')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-todo_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.todo">Listen</span></label>
+      </div>
+    </div>
+    <div class="quelle" id="qk-onenote">
+      <div class="qkopf"><h3><span data-ikon="onenote"></span><span data-i18n="export.onenote">OneNote</span><span class="info" id="q-onenote-info" tabindex="0" aria-label="i" role="img">i</span></h3>
+        <button class="zahnrad" onclick="zeigeEinstellung('q-onenote')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-onenote_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.onenote">Notizbücher</span></label>
+      </div>
+    </div>
   </div>
 
 </section>
 
 <section id="tab-suche" class="hide">
-  <div class="calbar" id="sichten" style="margin-bottom:14px">
-    <span class="chip on" data-sicht="treffer" onclick="sicht('treffer')" data-i18n="view.hits">Treffer</span>
-    <span class="chip" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</span>
-    <span class="chip" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</span>
-    <span class="chip" data-sicht="dateien" onclick="sicht('dateien')" data-i18n="view.files">Dateien</span>
-  </div>
-
-  <div id="sicht-treffer">
-  <div class="card">
-    <div class="suchzeile">
+  <div class="suchzeile">
+    <div class="suchfeld">
+      <span data-ikon="lupe"></span>
       <input type="search" id="q" data-i18n-ph="search.query.ph"
              placeholder="Suchbegriff oder Frage"
              onkeydown="if(event.key==='Enter'){sofortSuchen();}">
-      <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
-    </div>
-    <!-- The search mode sits right below the field because it determines
-         what makes sense to type there – the placeholder changes with it.
-         No separate explanation line; it would only be in the way. -->
-    <div class="modizeile">
+      <!-- The search mode sits inside the field because it determines what
+           makes sense to type there – the placeholder changes with it. -->
       <div class="modi" role="group" aria-label="Suchart" data-i18n-title="search.mode">
         <button id="m-text" class="on" onclick="suchmodus('text')"
                 data-i18n="search.mode.text">Textsuche</button>
         <button id="m-aehnlich" onclick="suchmodus('aehnlich')"
                 data-i18n="search.mode.aehnlich">Ähnliche Suche</button>
         <button id="m-ki" onclick="suchmodus('ki')"
-                data-i18n="search.mode.ki">KI-Zusammenfassung</button>
+                data-i18n="search.mode.ki">KI-Antwort</button>
       </div>
-      <span class="small muted hide" id="modus-fehlt"
-            data-i18n="search.mode.needs">Braucht Ollama.</span>
     </div>
-    <div class="row" style="margin-top:10px;gap:10px">
-      <button class="mini" id="filter-auf" aria-expanded="false"
-              onclick="filterUmschalten()" data-i18n="search.filter">Filter</button>
-      <button class="mini hide" id="filter-weg" onclick="filterLeeren()"
-              data-i18n="search.filter.clear">Zurücksetzen</button>
-    </div>
-    <div class="row hide" id="filter" style="margin-top:10px">
-      <span class="vorschlagfeld">
-        <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
-               role="combobox" aria-expanded="false" aria-autocomplete="list"
-               aria-controls="personliste" autocomplete="off"
-               oninput="personVorschlagen()" onkeydown="personTaste(event)"
-               onchange="zeigeFilterstand()">
-        <div class="menu hide" id="personliste" role="listbox"></div>
-      </span>
-      <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
-        <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
-        <option value="outlook" data-i18n="search.source.outlook">Mail</option>
-        <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
-        <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
-        <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
-        <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
-        <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
-        <option value="planner" data-i18n="search.source.planner">Planner</option>
-      </select>
-      <label class="small feld"><span data-i18n="search.from">von</span>
-        <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
-      <label class="small feld"><span data-i18n="search.to">bis</span>
-        <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
-      <select id="f-typ" onchange="zeigeFilterstand()" style="max-width:170px">
-        <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
-      </select>
-      <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
-        <option value="" data-i18n="search.folder.all">Alle Ordner</option>
-      </select>
-      <span class="gonefeld" id="gone-feld">
-        <label class="feld small" for="f-gone" data-i18n="view.gone">Gelöschtes</label>
-        <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
-        <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.gone.note">i</span>
-      </span>
-    </div>
+    <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
   </div>
-  <div class="answer hide" id="ai-box"></div>
-  <div class="card">
+  <p class="small muted hide" id="modus-fehlt" data-i18n="search.mode.needs">Braucht Ollama.</p>
+
+  <!-- Filters count, they do not search: one enters term, person, period
+       and folder in peace, then presses the button. -->
+  <div class="filterzeile" id="filter">
+    <span class="vorschlagfeld">
+      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
+             role="combobox" aria-expanded="false" aria-autocomplete="list"
+             aria-controls="personliste" autocomplete="off"
+             oninput="personVorschlagen()" onkeydown="personTaste(event)"
+             onchange="zeigeFilterstand()">
+      <div class="menu hide" id="personliste" role="listbox"></div>
+    </span>
+    <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
+      <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
+      <option value="outlook" data-i18n="search.source.outlook">Mail</option>
+      <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
+      <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
+      <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
+      <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
+      <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
+      <option value="planner" data-i18n="search.source.planner">Planner</option>
+      <option value="todo" data-i18n="search.source.todo">To Do</option>
+      <option value="onenote" data-i18n="search.source.onenote">OneNote</option>
+    </select>
+    <label class="filter" id="fi-from"><span class="bez" data-i18n="search.from">von</span>
+      <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
+    <label class="filter" id="fi-to"><span class="bez" data-i18n="search.to">bis</span>
+      <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
+    <select id="f-typ" onchange="zeigeFilterstand()" style="max-width:170px">
+      <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
+    </select>
+    <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
+      <option value="" data-i18n="search.folder.all">Alle Ordner</option>
+    </select>
+    <label class="filter" id="gone-feld" for="f-gone">
+      <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
+      <span class="bez" data-i18n="view.gone">Nur nicht mehr bei Microsoft</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.gone.note">i</span>
+    </label>
+    <button class="hide" id="filter-weg" onclick="filterLeeren()"
+            data-i18n="search.filter.clear">Filter zurücksetzen</button>
+  </div>
+
+  <div class="sichten" id="sichten">
+    <button class="sicht on" data-sicht="treffer" onclick="sicht('treffer')"><span data-i18n="view.hits">Treffer</span><span class="zahl num" id="treffer-zahl"></span></button>
+    <button class="sicht" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</button>
+    <button class="sicht" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</button>
+    <button class="sicht" data-sicht="dateien" onclick="sicht('dateien')" data-i18n="view.files">Dateien</button>
+  </div>
+
+  <div id="sicht-treffer">
+    <div class="answer hide" id="ai-box"></div>
     <!-- In the AI variant the answer sits on top; the hits it rests on are
          one click away instead of gone. -->
     <div class="row hide" id="ki-klappe" style="margin-bottom:12px">
       <button class="mini" id="ki-klappknopf" onclick="klappeTreffer()"></button>
     </div>
-    <div id="results" class="muted small" data-i18n="search.none.yet">Noch keine Suche.</div>
-    <div class="row" id="pager" style="margin-top:12px"></div></div>
+    <div class="treffer-split" id="treffer-split">
+      <div class="card liste">
+        <div id="results"><p class="hint" data-i18n="search.none.yet">Noch keine Suche.</p></div>
+        <div id="pager"></div>
+      </div>
+      <div class="card hide" id="detail">
+        <div id="detail-inhalt"></div>
+        <div class="dverlauf" id="detail-verlauf"></div>
+      </div>
+    </div>
   </div>
 
   <div id="sicht-dateien" class="hide">
-    <div class="row" style="margin:10px 0 6px;align-items:center">
-      <p class="small muted" id="dateien-pfad" style="flex:1;margin:0"></p>
-      <button class="mini hide" id="dateien-suchen" onclick="dateienSuchen()"
-              data-i18n="files.search.here">Hier suchen</button>
+    <div class="card" style="padding:0">
+      <div class="dateien-kopf">
+        <p class="small muted" id="dateien-pfad"></p>
+        <button class="mini hide" id="dateien-suchen" onclick="dateienSuchen()"
+                data-i18n="files.search.here">Hier suchen</button>
+      </div>
+      <div id="dateien-liste"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     </div>
-    <div id="dateien-liste"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
   </div>
 
   <div id="sicht-kalender" class="hide">
@@ -670,9 +783,9 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <span class="chip" data-mode="month" data-i18n="cal.month">Monat</span>
       <span class="chip" data-mode="rebuilt" data-i18n="cal.rebuilt">Rekonstruiert</span>
       <span id="kalNav">
-        <button class="ghost" id="kalPrev" style="padding:6px 12px">‹</button>
-        <button class="ghost" id="kalToday" style="padding:6px 12px" data-i18n="cal.today">Heute</button>
-        <button class="ghost" id="kalNext" style="padding:6px 12px">›</button>
+        <button class="ghost" id="kalPrev" data-ikon="links"></button>
+        <button class="ghost" id="kalToday" data-i18n="cal.today">Heute</button>
+        <button class="ghost" id="kalNext" data-ikon="rechts"></button>
       </span>
       <span id="kalTitle"></span>
       <span class="legend" id="kalLegend">
@@ -702,22 +815,18 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
   </div>
 </section>
 
-
-
-
 <section id="tab-analytics" class="hide">
+  <div class="abschnitt-kopf" style="margin-top:0">
+    <h2 data-i18n="ana.title">Was im Archiv steckt</h2>
+    <span class="muted small" id="ana-stand"></span>
+    <span class="muted small" data-i18n="ana.sub">Einmal je Indexlauf gerechnet – Microsoft wird dafür nicht gefragt.</span>
+    <button class="ghost rechts" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button>
+  </div>
   <div class="card">
-    <div class="row" style="justify-content:space-between">
-      <h2 data-i18n="ana.title" style="margin:0">Was im Archiv steckt</h2>
-      <span class="row" style="gap:10px"><span class="small muted" id="ana-stand"></span>
-      <button class="mini" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button></span>
-    </div>
-    <p class="sub" data-i18n="ana.sub">Beim Indexlauf gerechnet – ohne Microsoft zu fragen.</p>
     <div class="dia-titel" data-i18n="ana.komm.title">Kommunikation</div>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     <div class="dia-titel" data-i18n="ana.dateien.title">Dateien &amp; Platz</div>
     <div id="ana-kpi-dateien" class="kpis"></div>
-    <p class="small muted" style="margin-top:10px" id="export-state"></p>
   </div>
 
   <div class="card">
@@ -726,120 +835,220 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
   </div>
 
   <div class="card">
-    <h2 data-i18n="ana.health.title">Gesundheit</h2>
-    <div class="dia-titel" data-i18n="ana.runs.title">Läufe</div>
-    <p class="dia-sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
-    <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
-    <div class="dia-titel" data-i18n="ana.check.title">Vollständigkeit</div>
-    <p class="dia-sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
+    <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
+    <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
     <div class="row">
       <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
       <span class="small muted" id="ana-check-state"></span>
     </div>
     <div id="ana-checks"></div>
   </div>
+
+  <div class="card">
+    <h2 data-i18n="ana.runs.title">Läufe</h2>
+    <p class="sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
+    <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
+  </div>
 </section>
 
 <section id="tab-einstellungen" class="hide">
-  <div class="card">
-    <h2 class="mit-info"><span data-i18n="settings.export.title">Export</span>
+  <div class="einst">
+    <!-- The sub-navigation carries the states the header used to: access,
+         AI, MCP – each as a dot next to the place where it is fixed. -->
+    <div class="snav" id="einst-nav">
+      <button class="snav-punkt" onclick="openWizard('token')"><span data-i18n="settings.nav.account">Zugang &amp; Konto</span><span class="dot" id="p-konto"></span></button>
+      <button class="snav-punkt on" data-ziel="quellen-karte" onclick="zeigeEinstellung('quellen-karte')" data-i18n="settings.nav.sources">Quellen</button>
+      <button class="snav-punkt" data-ziel="sched-karte" onclick="zeigeEinstellung('sched-karte')"><span data-i18n="sched.nav">Zeitplan</span><span class="nebenwert muted small" id="snav-plan"></span></button>
+      <button class="snav-punkt" id="pill-ollama" data-ziel="ki-karte" onclick="ollamaKachel()"><span data-i18n="settings.nav.ki">KI (Ollama)</span><span class="stand"><span class="dot" id="p-ollama"></span><span id="p-ollama-t"></span></span></button>
+      <button class="snav-punkt" id="pill-mcp" data-ziel="mcp-karte" onclick="zeigeEinstellung('mcp-karte')"><span data-i18n="settings.nav.mcp">Claude (MCP)</span><span class="stand"><span class="dot" id="p-mcp"></span><span id="p-mcp-t"></span></span></button>
+      <button class="snav-punkt" data-ziel="ablage-karte" onclick="zeigeEinstellung('ablage-karte')" data-i18n="settings.storage.title">Speicherorte</button>
+      <button class="snav-punkt" data-ziel="app-karte" onclick="zeigeEinstellung('app-karte')"><span data-i18n="settings.app.title">App</span><span class="dot warn hide" id="p-app"></span></button>
+      <button class="snav-punkt" data-ziel="expert-karte" onclick="zeigeEinstellung('expert-karte')" data-i18n="expert.title">Expertenmodus</button>
+    </div>
+
+    <div class="einst-inhalt">
+  <div class="card" id="quellen-karte">
+    <h2 class="mit-info"><span data-i18n="settings.export.title">Quellen</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.export.i">i</span></h2>
+    <p class="sub" data-i18n="settings.sources.sub"></p>
 
-    <div class="gruppe"><h3 data-i18n="settings.teams.title">Teams</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_images.i">i</span></span><input type="checkbox" id="c-embed_images"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-teams"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.outlook.title">Outlook</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.include_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.include_hidden.i">i</span></span><input type="checkbox" id="c-include_hidden"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_reconstruct"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_reconstruct.i">i</span></span><input type="checkbox" id="c-calendar_reconstruct"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="folders.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="folders.rules.i">i</span></span><span class="small muted" id="folders-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-folder_rules"
-          placeholder="- E-Mail/Archiv/**&#10;+ E-Mail/Archiv/Wichtig/**"></textarea>
+    <details class="quelle-einst" id="q-outlook">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.outlook.title">Outlook</b><span class="muted small zf" id="q-outlook-zf"></span></summary>
+      <div class="qinhalt">
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="folders.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="folders.rules.i">i</span></span><span class="small muted" id="folders-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-folder_rules"
+              placeholder="- E-Mail/Archiv/**&#10;+ E-Mail/Archiv/Wichtig/**"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="folders-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
+        </div>
+        <div class="gruppe"><h3 data-i18n="settings.calendars.title">Kalender</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendars.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendars.rules.i">i</span></span><span class="small muted" id="cal-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-calendar_rules"
+              placeholder="- kalender/**&#10;+ kalender/Privat"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="cal-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('calendar')" data-i18n="settings.calendars.sync">Kalenderliste abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste('calendar')" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.include_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.include_hidden.i">i</span></span><input type="checkbox" id="c-include_hidden"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_reconstruct"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_reconstruct.i">i</span></span><input type="checkbox" id="c-calendar_reconstruct"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_folders.sub"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_folders.i">i</span></span><span class="small muted"></span></div>
+            <div class="feldzeile breit"><textarea id="c-skip_folders"></textarea></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
+            </div>
+          </div>
+        </details>
       </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_folders.sub"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_folders.i">i</span></span><span class="small muted"></span></div>
-      <div class="feldzeile breit"><textarea id="c-skip_folders"></textarea></div>
-      <div class="aktionen">
-        <span class="small muted" id="folders-msg"></span>
-        <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
-        <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
-      </div>
-    </div>
+    </details>
 
-    <div class="gruppe"><h3 data-i18n="settings.calendars.title">Kalender</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendars.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendars.rules.i">i</span></span><span class="small muted" id="cal-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-calendar_rules"
-          placeholder="- kalender/**&#10;+ kalender/Privat"></textarea>
+    <details class="quelle-einst" id="q-teams">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.teams.title">Teams</b><span class="muted small zf" id="q-teams-zf"></span></summary>
+      <div class="qinhalt">
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.attachments.i">i</span></span><input type="checkbox" id="c-teams_attachments"></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.channel_files"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.channel_files.i">i</span></span><input type="checkbox" id="c-teams_channel_files"></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_max.i">i</span></span><span><input type="number" id="c-teams_files_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-teams"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_images.i">i</span></span><input type="checkbox" id="c-embed_images"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
+          </div>
+        </details>
       </div>
-      <div class="aktionen">
-        <span class="small muted" id="cal-msg"></span>
-        <button class="mini" onclick="gleicheOrdnerAb('calendar')" data-i18n="settings.calendars.sync">Kalenderliste abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste('calendar')" data-i18n="plan.open">Exportliste anzeigen</button>
+    </details>
+
+    <details class="quelle-einst" id="q-onedrive">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.onedrive.title">OneDrive</b><span class="muted small zf" id="q-onedrive-zf"></span></summary>
+      <div class="qinhalt">
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.rules.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.rules.i">i</span></span><span class="small muted" id="od-folders-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-onedrive_rules"
+              placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="od-folders-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          </div>
+        </details>
       </div>
-    </div>
+    </details>
 
-    <div class="gruppe"><h3 data-i18n="settings.onedrive.title">OneDrive</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.rules.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.rules.i">i</span></span><span class="small muted" id="od-folders-state"></span></div>
-      <div class="feldzeile breit">
-        <textarea id="c-onedrive_rules"
-          placeholder="- Dateien/Fotos/**&#10;+ Dateien/Fotos/Wichtig/**"></textarea>
+    <details class="quelle-einst" id="q-sharepoint">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.sharepoint.title">SharePoint</b><span class="muted small zf" id="q-sharepoint-zf"></span></summary>
+      <div class="qinhalt">
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span>
+            <button class="mini" onclick="urlZeile('sp-urls', '')" title="+">+</button>
+            <button class="mini" onclick="urlZeileWeg('sp-urls')" title="&minus;">&minus;</button></span></div>
+          <div id="sp-urls" class="urltab" data-praefix="sharepoint-url"></div>
+          <div class="aktionen">
+            <span class="small muted" id="sp-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('sharepoint')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
+            <button class="mini" onclick="sharepointVorschau()" data-i18n="sharepoint.preview">Größen-Vorschau</button>
+            <button class="mini" onclick="zeigeExportliste('sharepoint')" data-i18n="plan.open">Exportliste anzeigen</button>
+            <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
+          </div>
+          <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
+        </div>
+        <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
+            <button class="mini" onclick="urlZeile('pg-urls', '')" title="+">+</button>
+            <button class="mini" onclick="urlZeileWeg('pg-urls')" title="&minus;">&minus;</button></span></div>
+          <div id="pg-urls" class="urltab" data-praefix="pages-url"></div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" placeholder="pdf, docx, xlsx"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" placeholder="mp4, iso"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
+          </div>
+        </details>
       </div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
-      <div class="aktionen">
-        <span class="small muted" id="od-folders-msg"></span>
-        <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
+    </details>
+
+    <details class="quelle-einst" id="q-planner">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.planner.title">Planner</b><span class="muted small zf" id="q-planner-zf"></span></summary>
+      <div class="qinhalt">
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span>
+            <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
+            <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
+          <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
+          </div>
+        </details>
       </div>
-    </div>
+    </details>
 
-    <div class="gruppe"><h3 data-i18n="settings.sharepoint.title">SharePoint</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('sp-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('sp-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="sp-urls" class="urltab" data-praefix="sharepoint-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" placeholder="pdf, docx, xlsx"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" placeholder="mp4, iso"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-      <div class="aktionen">
-        <span class="small muted" id="sp-msg"></span>
-        <button class="mini" onclick="gleicheOrdnerAb('sharepoint')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
-        <button class="mini" onclick="sharepointVorschau()" data-i18n="sharepoint.preview">Größen-Vorschau</button>
-        <button class="mini" onclick="zeigeExportliste('sharepoint')" data-i18n="plan.open">Exportliste anzeigen</button>
-        <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
+    <details class="quelle-einst" id="q-todo">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.todo.title">To Do</b><span class="muted small zf" id="q-todo-zf"></span></summary>
+      <div class="qinhalt">
+        <p class="sub" data-i18n="settings.todo.note"></p>
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-todo"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+        </div>
       </div>
-      <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
-    </div>
+    </details>
 
-    <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('pg-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('pg-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="pg-urls" class="urltab" data-praefix="pages-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.planner.title">Planner</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span>
-        <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
-        <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
-      <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
-    </div>
-
-    <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
-    </div>
+    <details class="quelle-einst" id="q-onenote">
+      <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.onenote.title">OneNote</b><span class="muted small zf" id="q-onenote-zf"></span></summary>
+      <div class="qinhalt">
+        <p class="sub" data-i18n="settings.onenote.note"></p>
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.onenote.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onenote.rules.i">i</span></span><span class="small muted" id="on-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-onenote_rules"
+              placeholder="- **&#10;+ Projekte"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="on-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('onenote')" data-i18n="settings.onenote.sync">Notizbuchliste abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste('onenote')" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
+        </div>
+        <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.onenote.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onenote.cadence.i">i</span></span></div>
+          <div id="on-notebooks" class="urltab"></div>
+        </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.onenote.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onenote.image_max.i">i</span></span><span><input type="number" id="c-onenote_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
+          </div>
+        </details>
+      </div>
+    </details>
   </div>
 
-  <div class="card">
+  <div class="card" id="sched-karte">
     <h2 class="mit-info"><span data-i18n="sched.title">Zeitplan</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.i">i</span></h2>
     <div class="gruppe">
@@ -851,6 +1060,8 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.sharepoint.i">i</span></span><input type="checkbox" id="s-sharepoint"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.pages"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.pages.i">i</span></span><input type="checkbox" id="s-sharepoint_pages"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.planner"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.planner.i">i</span></span><input type="checkbox" id="s-planner"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.todo"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.todo.i">i</span></span><input type="checkbox" id="s-todo"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.onenote"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.onenote.i">i</span></span><input type="checkbox" id="s-onenote"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
     </div>
@@ -859,8 +1070,8 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
     </div>
   </div>
 
-  <div class="card">
-    <h2 class="mit-info" id="ki-karte"><span data-i18n="settings.ollama.title">KI</span>
+  <div class="card" id="ki-karte">
+    <h2 class="mit-info"><span data-i18n="settings.ollama.title">KI</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.i">i</span></h2>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.ollama.use"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ollama.i">i</span></span><input type="checkbox" id="c-ollama_enabled" onchange="ollamaSchalter()"></div>
@@ -883,7 +1094,7 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       </div>
 
       <div class="gruppe">
-        <h3><span data-i18n="settings.ki.title">KI-Zusammenfassung</span>
+        <h3><span data-i18n="settings.ki.title">KI-Antwort</span>
           <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.ki.i">i</span></h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.chat_model"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.chat_model.i">i</span></span><span class="feldmitstand"><input type="text" id="c-chat_model"><span class="stand hide" id="st-chat_model"></span></span></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.answer_sources"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.answer_sources.i">i</span></span><input type="number" id="c-answer_sources" min="1" max="20"></div>
@@ -891,8 +1102,8 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
     </div>
   </div>
 
-  <div class="card">
-    <h2 class="mit-info" id="mcp-karte"><span data-i18n="mcp.title">Claude (MCP)</span>
+  <div class="card" id="mcp-karte">
+    <h2 class="mit-info"><span data-i18n="mcp.title">Claude (MCP)</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.i">i</span></h2>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_enabled.i">i</span></span><input type="checkbox" id="c-mcp_enabled" onchange="speichereEinstellungen()"></div>
@@ -911,9 +1122,9 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <button class="mini kopie" onclick="kopiere('mcp-stdio', this)" data-i18n="copy">Kopieren</button></div>
   </div>
 
-  <div class="card">
-    <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
+  <div class="card" id="ablage-karte">
+    <h2 class="mit-info"><span data-i18n="settings.storage.title">Speicherorte</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.storage.i">i</span></h2>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><span></span></div>
       <div class="feldzeile breit">
@@ -933,6 +1144,13 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       </div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.homedir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.homedir.i">i</span></span><code id="home-dir" class="small">…</code></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.appdir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.appdir.i">i</span></span><code id="app-ort" class="small">…</code></div>
+    </div>
+  </div>
+
+  <div class="card" id="app-karte">
+    <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
+    <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.search_results"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.search_results.i">i</span></span><input type="number" id="c-search_results" min="5" max="100" step="5"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.analytics_skip"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.analytics_skip.i">i</span></span><span class="small muted"></span></div>
       <div class="feldzeile breit"><textarea id="c-analytics_skip" style="min-height:70px"></textarea></div>
@@ -944,6 +1162,7 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.log_retention_days"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.log_retention_days.i">i</span></span><input type="number" id="c-log_retention_days" min="1" max="365"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
     </div>
+    <div class="banner hide" id="update-banner" style="margin-top:14px"></div>
     <div class="aktionen">
       <span class="small muted" id="update-current"></span>
       <span class="small muted" id="update-state"></span>
@@ -951,47 +1170,83 @@ main{padding-bottom:60px}   /* until the script sets the real log height */
       <a class="mini" id="update-link" target="_blank" rel="noopener"
          data-i18n="update.download">Release herunterladen</a>
     </div>
+    <div class="aktionen">
+      <span class="small muted"></span>
+      <button class="mini" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
+    </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="expert-karte">
     <h2 class="mit-info"><span data-i18n="expert.title">Expertenmodus</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="expert.i">i</span></h2>
+    <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
+    </div>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="export.index.only"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="export.index.only.when">i</span></span><button class="mini" onclick="run({index:true}, t('job.index'))" data-i18n="expert.run">Ausführen</button></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="export.calendar.build"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="export.calendar.build.when">i</span></span><button class="mini" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="expert.run">Ausführen</button></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="expert.openapi"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="expert.openapi.i">i</span></span><a class="mini" href="/api/openapi" target="_blank" rel="noopener" data-i18n="expert.open">Öffnen</a></div>
     </div>
   </div>
+    </div>
+  </div>
 
-  <div class="speichern">
-    <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
+  <!-- Sticky save bar: appears with the first unsaved change, one primary
+       action, "Discard" beside it. -->
+  <div class="speichern hide" id="speichern">
+    <span class="small warn" data-i18n="settings.dirty">Ungespeicherte Änderungen</span>
+    <span class="small muted" data-i18n="settings.dirty.note">Gilt ab dem nächsten Lauf.</span>
     <span class="small" id="cfg-msg"></span>
+    <button class="ghost rechts" onclick="einstellungenVerwerfen()" data-i18n="settings.discard">Verwerfen</button>
+    <button class="act" onclick="speichereEinstellungen()" data-i18n="settings.save">Einstellungen speichern</button>
   </div>
 </section>
 </main>
 
-
-<!-- The log belongs to the application, not to the export tab: it also holds
-     token state, MCP output and scheduler messages. Hence a bar along the
-     bottom edge, reachable from everywhere and normally closed. -->
-<div id="protokoll" class="zu">
-  <div class="pgriff" onpointerdown="protokollZiehen(event)"></div>
-  <!-- The two buttons sit INSIDE the header row, which itself toggles the
-       fold – so each one stops its click event. Otherwise the log would
-       fold shut on every copy. -->
-  <div class="pkopf" onclick="protokollUmschalten()">
-    <span class="pfeil" id="p-pfeil">▴</span>
-    <strong data-i18n="log.title">Protokoll</strong>
-    <span class="small muted" id="log-letzte"></span>
-    <button class="mini" onclick="event.stopPropagation();kopiere('log', this)"
-            data-i18n="copy">Kopieren</button>
-    <button class="mini" onclick="event.stopPropagation();fehlerMelden()"
-            data-i18n="report.button">Fehler melden</button>
-  </div>
-  <div id="log"></div>
-</div>
-
 <div id="overlay"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+
+<!-- The run window: everything about a running export happens here –
+     progress, the steps, the log, cancelling. It opens with the run, stays
+     until the run is done and is closed by hand; "Minimise" puts it into
+     the header as a pill. Below the wizards' overlay, so an expired token
+     can still ask for a new one on top. -->
+<div id="lauf-overlay" class="hide">
+  <div class="modal breit lauf-fenster" id="lauf-fenster" role="dialog" aria-modal="true" aria-labelledby="lauf-titel">
+    <div class="modal-kopf">
+      <div style="flex:1;min-width:0"><h2 id="lauf-titel"></h2><p class="small muted" id="lauf-sub" style="margin:2px 0 0"></p></div>
+      <button class="ghost klein" id="lauf-minimieren" onclick="laufMinimieren()"><span data-ikon="minus" data-ikon-klasse="klein"></span><span data-i18n="lauf.minimize">Minimieren</span></button>
+      <button class="modal-zu hide" id="lauf-zu" onclick="laufSchliessen()" data-i18n-title="wizard.close" aria-label="">&times;</button>
+    </div>
+    <div class="fortschritt hide" id="fortschritt">
+      <div class="balken"><div id="balken-fuell"></div></div>
+      <p class="small muted" id="fortschritt-text"></p>
+      <div class="schritte" id="lauf-schritte"></div>
+    </div>
+    <div class="schritte hide" id="lauf-ergebnis"></div>
+    <!-- The log speaks the interface language: the exports report events,
+         the app puts them into words. The two buttons sit INSIDE the header
+         row, which itself toggles the fold – so each one stops its click
+         event. -->
+    <div id="protokoll">
+      <div class="pkopf" onclick="protokollUmschalten()">
+        <span class="pfeil" id="p-pfeil" data-ikon="runter"></span>
+        <strong data-i18n="log.title">Protokoll</strong>
+        <span class="small muted" id="log-letzte"></span>
+        <button class="mini" onclick="event.stopPropagation();kopiere('log', this)"
+                data-i18n="copy">Kopieren</button>
+        <button class="mini" onclick="event.stopPropagation();fehlerMelden()"
+                data-i18n="report.button">Fehler melden</button>
+      </div>
+      <div id="log"></div>
+    </div>
+    <div class="row modal-fuss">
+      <button class="act hide" id="lauf-fertig" onclick="laufSchliessen()" data-i18n="lauf.close">Schließen</button>
+      <button class="ghost rot" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Lauf abbrechen</button>
+      <span class="small muted rechts" id="lauf-hinweis" data-i18n="lauf.minimize.note">Minimiert wandert der Lauf in die Kopfzeile – suchen geht dann weiter.</span>
+    </div>
+  </div>
+</div>
 
 <script type="application/json" id="i18n">/*__I18N__*/</script>
 <script type="application/json" id="schritte">/*__STEPS__*/</script>
@@ -1087,6 +1342,60 @@ function uebersetzeSeite(){
   document.documentElement.lang = LOC;
 }
 uebersetzeSeite();
+
+/* ---------- Icons ----------
+   One set of inline SVG paths for the whole page – headings, chips, rows,
+   the step list. No emoji, no icon font: the same stroke everywhere. */
+var IKON = {
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  teams: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-4.5A8 8 0 1 1 21 12z"/>',
+  onedrive: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-9 7 7 0 0 0-13.4 1.5A4 4 0 0 0 6 19h11.5z"/>',
+  sharepoint: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>',
+  planner: '<rect x="3" y="4" width="5" height="16" rx="1"/><rect x="10" y="4" width="5" height="10" rx="1"/>' +
+           '<rect x="17" y="4" width="4" height="13" rx="1"/>',
+  todo: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  onenote: '<path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"/><path d="M18 8h2v10a2 2 0 0 1-2 2"/>' +
+           '<path d="M8 8h6"/><path d="M8 12h6"/>',
+  datei: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  kalender: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="M8 2v4M16 2v4"/>',
+  kontakt: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  ordner: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  telefon: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
+  lupe: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+  aktualisieren: '<path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/>',
+  haken: '<path d="M5 13l4 4L19 7"/>',
+  rechts: '<path d="M9 6l6 6-6 6"/>',
+  links: '<path d="M15 6l-6 6 6 6"/>',
+  runter: '<path d="M6 9l6 6 6-6"/>',
+  fertig: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
+  uhr: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  kreis: '<circle cx="12" cy="12" r="9"/>',
+  minus: '<path d="M5 12h14"/>',
+  aus: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
+  zahnrad: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8' +
+           'l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5' +
+           ' 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3' +
+           'a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1' +
+           'a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3' +
+           'l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1' +
+           'a1.7 1.7 0 0 0-1.5 1z"/>'
+};
+function ikon(name, klasse){
+  var dick = name === 'haken' ? 3
+           : (name === 'rechts' || name === 'links' || name === 'runter') ? 2.5 : 2;
+  return '<svg class="ik' + (klasse ? ' ' + klasse : '') + '" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="' + dick + '" stroke-linecap="round" ' +
+    'stroke-linejoin="round" aria-hidden="true">' + (IKON[name] || IKON.kreis) + '</svg>';
+}
+/* Static markup names its icon in data-ikon; the SVG is put in once here,
+   so the markup stays readable and every icon comes from the one set. */
+function setzeIkons(){
+  document.querySelectorAll('[data-ikon]').forEach(function(e){
+    e.innerHTML = ikon(e.dataset.ikon, e.dataset.ikonKlasse);
+  });
+}
+setzeIkons();
+el('btn-quit').setAttribute('aria-label', t('app.quit'));
 
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 
@@ -1200,7 +1509,7 @@ function sicht(name){
   SICHTEN.forEach(function(v){
     el('sicht-' + v).classList.toggle('hide', v !== name);
   });
-  document.querySelectorAll('#sichten .chip').forEach(function(c){
+  document.querySelectorAll('#sichten [data-sicht]').forEach(function(c){
     c.classList.toggle('on', c.dataset.sicht === name);
   });
   // The calendar data is a few megabytes – fetch it only when someone looks.
@@ -1241,8 +1550,8 @@ function zeichneDateien(r){
   if(r.roots){
     pfad.textContent = t('files.roots');
     box.innerHTML = r.roots.length ? r.roots.map(function(w, i){
-      return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
-        '<strong>' + esc(w.label) + '</strong>' +
+      return '<div class="dateizeile ordner" onclick="dateiGehe(' + i + ')">' +
+        ikon('ordner') + '<strong>' + esc(w.label) + '</strong>' +
         '<span class="muted small">' + esc(zahl(w.files)) + ' ' +
         esc(t('progress.unit.files')) + '</span></div>';
     }).join('') : '<p class="hint">' + esc(t('files.none')) + '</p>';
@@ -1263,8 +1572,8 @@ function zeichneDateien(r){
   });
   pfad.innerHTML = krumen.join(' / ');
   var zeilen = (r.dirs || []).map(function(d, i){
-    return '<div class="dateizeile" style="cursor:pointer" onclick="dateiGehe(' + i + ')">' +
-      '<span>📁 <strong>' + esc(d.name) + '</strong></span>' +
+    return '<div class="dateizeile ordner" onclick="dateiGehe(' + i + ')">' +
+      ikon('ordner') + '<strong>' + esc(d.name) + '</strong>' +
       '<span class="muted small">' + esc(zahl(d.files)) + ' ' +
       esc(t('progress.unit.files')) + '</span></div>';
   }).concat((r.files || []).map(function(f){
@@ -1272,7 +1581,7 @@ function zeichneDateien(r){
                '&path=' + encodeURIComponent(f.rel);
     return '<div class="dateizeile"' +
       (f.gone ? ' title="' + esc(t('search.gone.since', {when: fmt(f.gone)})) + '"' : '') + '>' +
-      '<a href="' + link + '" target="_blank"' +
+      ikon('datei') + '<a href="' + link + '" target="_blank"' +
       (f.gone ? ' class="muted"' : '') + '>' + esc(f.name) + '</a>' +
       (f.gone ? ' <span class="tag weg">' + esc(t('search.gone.tag')) + '</span>' : '') +
       ' <span class="muted small">' + esc(f.date || '') +
@@ -1292,21 +1601,15 @@ function dateienSuchen(){
     o.value = pfad; o.textContent = pfad; sel.appendChild(o);
   }
   sel.value = pfad;
-  el('filter').classList.remove('hide');
   sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
-/* Whoever filters nothing – the normal case – should see a search field and
-   a button. The number on the toggle says something is set below it;
-   without it a folded-away filter would be a trap. */
+/* The filters are always in view, each a pill; a set one is highlighted in
+   place, so nothing acts on the search unseen. */
 function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
           el('f-from').value, el('f-to').value, el('f-folder').value,
           el('f-typ').value, el('f-gone').checked ? 'gone' : ''].filter(Boolean);
-}
-function filterUmschalten(){
-  var zu = el('filter').classList.toggle('hide');      // true = now hidden
-  el('filter-auf').setAttribute('aria-expanded', zu ? 'false' : 'true');
 }
 function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
@@ -1335,9 +1638,16 @@ function datumPruefen(){
 
 function zeigeFilterstand(){
   datumPruefen();                      // mark it immediately, not only on search
-  var n = filterFelder().length;
-  el('filter-auf').textContent = n ? t('search.filter.n', {n: n}) : t('search.filter');
-  el('filter-weg').classList.toggle('hide', !n);
+  // The reset link appears only when there is something to reset; every set
+  // filter lights up where it stands.
+  el('filter-weg').classList.toggle('hide', !filterFelder().length);
+  el('f-person').classList.toggle('on', !!el('f-person').value.trim());
+  el('f-source').classList.toggle('on', !!el('f-source').value && el('f-source').value !== 'all');
+  el('fi-from').classList.toggle('on', !!el('f-from').value);
+  el('fi-to').classList.toggle('on', !!el('f-to').value);
+  el('f-folder').classList.toggle('on', !!el('f-folder').value);
+  el('f-typ').classList.toggle('on', !!el('f-typ').value);
+  el('gone-feld').classList.toggle('on', !!el('f-gone').checked);
 }
 
 /* The pill always leads to where something can be changed. A window that
@@ -1392,11 +1702,21 @@ function ollamaSchalter(){
 }
 
 function zeigeEinstellung(anker){
-  // The pill at the top still leads straight to its topic – which lives in
-  // the settings rather than in a tab of its own.
+  // Every "set up" link and every dot leads straight to its topic – a card
+  // in the settings, or a source block inside the sources card, which then
+  // opens so the fields are in view.
   tab('einstellungen');
   var ziel = document.getElementById(anker);
-  if(ziel) ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
+  if(!ziel) return;
+  if(ziel.tagName === 'DETAILS') ziel.open = true;
+  var karte = ziel.closest ? (ziel.closest('.card') || ziel) : ziel;
+  markiereEinstellungsnav(karte.id || anker);
+  ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function markiereEinstellungsnav(id){
+  document.querySelectorAll('#einst-nav [data-ziel]').forEach(function(k){
+    k.classList.toggle('on', k.dataset.ziel === id);
+  });
 }
 
 /* ---------- Status ----------
@@ -1408,6 +1728,9 @@ function setPill(id, cls, text, tip){
   el('p-' + id + '-t').textContent = text;
   var knopf = el('pill-' + id);
   if(knopf) knopf.title = tip || '';
+  // The account chip and the "Access & account" entry in the settings show
+  // the same dot – one state, two places where it is looked for.
+  if(id === 'token') el('p-konto').className = 'dot ' + cls;
 }
 
 function renderStatus(s){
@@ -1460,32 +1783,18 @@ function renderStatus(s){
     el('c-sharepoint_enabled').checked = !!s.config.sharepoint_enabled;
     el('c-sharepoint_pages_enabled').checked = !!s.config.sharepoint_pages_enabled;
     el('c-planner_enabled').checked = !!s.config.planner_enabled;
+    el('c-todo_enabled').checked = !!s.config.todo_enabled;
+    el('c-onenote_enabled').checked = !!s.config.onenote_enabled;
     fuelleSprachen();
-    el('s-enabled').checked = s.config.schedule.enabled;
-    el('s-interval').value = s.config.schedule.interval_minutes;
-    el('s-outlook').checked = s.config.schedule.outlook;
-    el('s-teams').checked = s.config.schedule.teams;
-    el('s-onedrive').checked = s.config.schedule.onedrive !== false;
-    el('s-sharepoint').checked = s.config.schedule.sharepoint !== false;
-    el('s-sharepoint_pages').checked = s.config.schedule.sharepoint_pages !== false;
-    el('s-planner').checked = s.config.schedule.planner !== false;
-    el('s-index').checked = s.config.schedule.index;
-    el('s-calendar').checked = s.config.schedule.calendar;
+    fuelleZeitplan(s.config);
   }
   el('teams-note').textContent = checked('t').indexOf('channels') >= 0
     ? t('export.channels.note') : '';
   el('sp-export-note').textContent = el('c-sharepoint_enabled').checked
     && !(s.config.sharepoint_urls || '').trim() ? t('export.sharepoint.nourls') : '';
 
-  var ex = s.exports, parts = [];
-  function wann(iso){ return iso ? t('export.state.last', {when: fmt(iso)}) : t('export.state.never'); }
-  parts.push(t('export.state.outlook', {when: wann(ex.outlook.last_run)}));
-  parts.push(t('export.state.teams', {when: wann(ex.teams.last_run)}));
-  parts.push(t('export.state.onedrive', {when: wann(ex.onedrive && ex.onedrive.last_run)}));
-  parts.push(t('export.state.sharepoint', {when: wann(ex.sharepoint && ex.sharepoint.last_run)}));
-  parts.push(t('export.state.pages', {when: wann(ex.pages && ex.pages.last_run)}));
-  parts.push(t('export.state.index', {when: st.exists ? fmt(st.built_at) : t('export.state.never')}));
-  el('export-state').textContent = parts.join('  ·  ');
+  zeigeArchivstand(s);
+  zeigeQuellenstand(s);
   // The "deleted" view and the thread history need an index that knows
   // both. An old one lacks the columns – then the chip does not exist.
   var kann = (st.features || []);
@@ -1497,6 +1806,8 @@ function renderStatus(s){
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   zeigeKalenderstand(s.calendars || {});
+  zeigeNotizbuchstand(s.notebooks || {});
+  fuelleNotizbuchTabelle(s.notebooks || {}, (s.config && s.config.sync_cadence) || {});
   // Fill only on the first render – otherwise the status poll would
   // overwrite every 2.5 seconds what is being typed right now.
   if(first){ el('c-data-dir').value = s.data_dir;
@@ -1508,12 +1819,17 @@ function renderStatus(s){
 
   var busy = s.jobs.busy;
   el('btn-run').disabled = busy;
+  el('btn-run-erst').disabled = busy;
   el('btn-cancel').classList.toggle('hide', !busy);
   zeigeFortschritt(s.jobs);
+  laufVerfolgen(s.jobs, first);
 
   /* Schedule / MCP */
+  var takt = (s.config.schedule || {}).interval_minutes || 60;
   el('s-next').textContent = s.schedule_enabled && s.schedule_next
     ? t('sched.next', {when: fmt(s.schedule_next)}) : t('sched.none');
+  el('snav-plan').textContent = s.schedule_enabled
+    ? t('stand.plan.kurz', {n: takt}) : t('stand.plan.aus.kurz');
   el('mcp-toggle').textContent = t(s.mcp.running ? 'mcp.stop' : 'mcp.start');
   el('mcp-toggle').disabled = mcpAus;
   el('mcp-state').textContent = mcpAus ? t('mcp.aus')
@@ -1554,16 +1870,100 @@ function fmt(iso){
   return isNaN(d) ? iso : d.toLocaleString(LOC, {dateStyle:'short', timeStyle:'short'});
 }
 
+/* ---------- The state of the archive ----------
+   One headline with the archive's date and – while nothing has ever been
+   exported – the three steps of a first start instead of a button nobody
+   dares to press. Counts live in the overview, the schedule in the
+   settings: this card is meant to stay bare. */
+function neuesteZeit(s){
+  var zeiten = [];
+  Object.keys(s.exports || {}).forEach(function(k){
+    var z = s.exports[k] && s.exports[k].last_run;
+    if(z) zeiten.push(z);
+  });
+  var st = s.store || {};
+  if(st.exists && st.built_at) zeiten.push(st.built_at);
+  zeiten.sort();
+  return zeiten.length ? zeiten[zeiten.length - 1] : null;
+}
+function zeigeArchivstand(s){
+  var stand = neuesteZeit(s), leer = !stand;
+  el('erststart').classList.toggle('hide', !leer);
+  el('stand-knoepfe').classList.toggle('hide', leer);
+  el('stand-titel').textContent = leer ? t('stand.title.empty')
+                                       : t('stand.title', {when: fmt(stand)});
+  // Step one of the first start is done once the access is valid.
+  var tok = s.token || {};
+  var ok = !!(tok.present && tok.valid && !tok.expired);
+  el('nr-zugang').classList.toggle('fertig', ok);
+  el('btn-zugang').classList.toggle('hide', ok);
+}
+/* Each source's state – what is chosen and when it last ran – sits in the
+   (i) on its card and heads its block in the settings. Not on the card
+   itself: the card shows what comes along, nothing more. */
+function zeigeQuellenstand(s){
+  var ex = s.exports || {}, cfg = s.config || {}, kad = cfg.sync_cadence || {};
+  function wann(k){
+    var z = ex[k] && ex[k].last_run;
+    return z ? t('export.state.last', {when: fmt(z)}) : t('export.state.never');
+  }
+  function anzahl(text){
+    return String(text || '').split('\n').filter(function(z){ return z.trim(); }).length;
+  }
+  function ordner(f){
+    return f.abgeglichen ? t('export.foot.folders', {an: zahl(f.ordner_gewaehlt || 0),
+                                                     gesamt: zahl(f.ordner_gesamt || 0)}) : '';
+  }
+  var nb = s.notebooks || {};
+  var zeilen = {
+    outlook: [ordner(s.folders || {}), wann('outlook')],
+    teams: [t('export.foot.teams', {state: t(cfg.teams_attachments || cfg.teams_channel_files
+                                             ? 'export.foot.on' : 'export.foot.off')}),
+            wann('teams')],
+    onedrive: [ordner(s.folders_onedrive || {}),
+               cfg.onedrive_max_mb ? t('export.foot.max', {mb: zahl(cfg.onedrive_max_mb)}) : '',
+               t('cadence.' + (kad.onedrive || 'always')), wann('onedrive')],
+    sharepoint: [t('export.foot.urls', {n: zahl(anzahl(cfg.sharepoint_urls) +
+                                                anzahl(cfg.sharepoint_pages_urls))}),
+                 wann('sharepoint')],
+    planner: [t('export.foot.boards', {n: zahl(anzahl(cfg.planner_urls))}), wann('planner')],
+    todo: [wann('todo')],
+    onenote: [nb.abgeglichen ? t('export.foot.notebooks', {an: zahl(nb.gewaehlt || 0),
+                                                            gesamt: zahl(nb.gesamt || 0)}) : '',
+              wann('onenote')]
+  };
+  Object.keys(zeilen).forEach(function(k){
+    var text = zeilen[k].filter(Boolean).join(' · ');
+    var info = el('q-' + k + '-info'), kopf = el('q-' + k + '-zf');
+    if(info){ info.title = text; info.setAttribute('aria-label', text);
+              info.classList.toggle('hide', !text); }
+    if(kopf) kopf.textContent = text;
+  });
+}
+function fuelleZeitplan(cfg){
+  var p = cfg.schedule || {};
+  el('s-enabled').checked = !!p.enabled;
+  el('s-interval').value = p.interval_minutes;
+  el('s-outlook').checked = !!p.outlook;
+  el('s-teams').checked = !!p.teams;
+  el('s-onedrive').checked = p.onedrive !== false;
+  el('s-sharepoint').checked = p.sharepoint !== false;
+  el('s-sharepoint_pages').checked = p.sharepoint_pages !== false;
+  el('s-planner').checked = p.planner !== false;
+  el('s-todo').checked = p.todo !== false;
+  el('s-onenote').checked = p.onenote !== false;
+  el('s-index').checked = !!p.index;
+  el('s-calendar').checked = !!p.calendar;
+}
+
 function fill(id, keys, active, pre){
+  // One chip per category: the checkbox inside carries the state, the chip
+  // shows it. The channels warning sits in the card's footer (#teams-note).
   el(id).innerHTML = keys.map(function(k){
-    var box = '<label class="chk"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
+    return '<label class="chip"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
       k + '"' + (active.indexOf(k) >= 0 ? ' checked' : '') +
-      ' onchange="saveCats()"> ' + esc(t('export.cat.' + k)) + '</label>';
-    // Channels stand apart: they pull whole teams and grow the archive fast,
-    // so ticking them reveals a warning right below the box.
-    return k === 'channels'
-      ? '<div class="chk-sep">' + box + '<p class="small chk-note" id="teams-note"></p></div>'
-      : box;
+      ' onchange="saveCats()">' + ikon('haken', 'haken klein') + '<span>' +
+      esc(t('export.cat.' + k)) + '</span></label>';
   }).join('');
 }
 function checked(pre){
@@ -1576,17 +1976,21 @@ function saveCats(){
                        onedrive_enabled: el('c-onedrive_enabled').checked,
                        sharepoint_enabled: el('c-sharepoint_enabled').checked,
                        sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked,
-                       planner_enabled: el('c-planner_enabled').checked}).then(refresh);
+                       planner_enabled: el('c-planner_enabled').checked,
+                       todo_enabled: el('c-todo_enabled').checked,
+                       onenote_enabled: el('c-onenote_enabled').checked}).then(refresh);
 }
 
 /* ---------- Runs ---------- */
 function run(what, label){
   what.label = label;
   merke('flow.run', label);
+  LAUF.eigener = true;                 // started here: the window opens with it
   post('/api/run', what).then(function(r){
     // Even a 500 says something: better the raw error line than an empty
     // alert nobody can dig into.
-    if(!r.ok) alert(mtext(r.message) || String(r.error || r.message || ''));
+    if(!r.ok){ LAUF.eigener = false;
+               alert(mtext(r.message) || String(r.error || r.message || '')); }
     refresh();
   });
 }
@@ -1596,11 +2000,13 @@ function runExport(){
   var sp = el('c-sharepoint_enabled').checked;
   var sps = el('c-sharepoint_pages_enabled').checked;
   var pl = el('c-planner_enabled').checked;
-  if(!o && !tm && !od && !sp && !sps && !pl){ alert(t('export.nothing')); return; }
+  var td = el('c-todo_enabled').checked;
+  var on = el('c-onenote_enabled').checked;
+  if(!o && !tm && !od && !sp && !sps && !pl && !td && !on){ alert(t('export.nothing')); return; }
   // Calendar only with Outlook: events, contacts and the reconstruction of
   // deleted events come exclusively from the mailbox.
   run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
-       planner:pl, index:true, calendar:o}, t('job.export'));
+       planner:pl, todo:td, onenote:on, index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Progress ----------
@@ -1615,6 +2021,7 @@ function zeigeFortschritt(jobs){
   if(!jobs.busy){
     var L = jobs.last;
     el('fortschritt-text').textContent = '';
+    el('lauf-schritte').innerHTML = '';
     if(L) el('log-letzte').textContent = L.ok
       ? t('log.job.done', {label: mtext(L.label), when: fmt(L.finished)})
       : t('log.job.failed', {label: mtext(L.label), when: fmt(L.finished),
@@ -1627,6 +2034,10 @@ function zeigeFortschritt(jobs){
 
   balken.classList.toggle('unbekannt', !kennt);
   if(kennt) el('balken-fuell').style.width = Math.round((i + anteil) / n * 100) + '%';
+  // The pill in the header carries the same bar – by steps when the step
+  // itself knows no total.
+  el('lauf-pille-balken').style.width = Math.round((i + anteil) / n * 100) + '%';
+  el('lauf-pille-t').textContent = t('lauf.pill', {i: i + 1, n: n});
 
   // The step name arrives as a text key from the server (job.step.…); the
   // run's label was translated by the browser before it started the run.
@@ -1640,22 +2051,137 @@ function zeigeFortschritt(jobs){
     : t('progress.count', {done: p.done.toLocaleString(LOC), what: einheit(p.what)}));
   el('fortschritt-text').textContent = zeile;
   el('log-letzte').textContent = zeile;
+  zeigeSchritte(j, i, p);
+}
+/* ---------- The run window ----------
+   Everything about a running export happens here. The window opens with
+   the run, stays until the run is done and is closed by hand – a result
+   that vanishes on its own is a result nobody read. "Minimise" puts it
+   into the header as a pill; the pill opens it again. Whoever opens the
+   page while a run is on lands in the window, however the run began; a
+   scheduled run that starts while someone works here appears as the pill
+   first and does not jump over a search. */
+var LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null};
+
+/* Only this run's lines in the console: the runner names the log cursor
+   before the run's first line, everything at or below it goes. */
+function logAbLauf(job){
+  LAUF.abSeq = (job && typeof job.log_seq === 'number') ? job.log_seq : null;
+  if(LAUF.abSeq === null) return;
+  var box = el('log');
+  [].slice.call(box.querySelectorAll('[data-n]')).forEach(function(d){
+    if(Number(d.dataset.n) <= LAUF.abSeq) box.removeChild(d);
+  });
+}
+
+function laufVerfolgen(jobs, first){
+  if(jobs.busy){
+    if(!LAUF.gesehen){
+      LAUF.gesehen = true;
+      LAUF.ergebnis = null;
+      logAbLauf(jobs.job);
+      el('lauf-ergebnis').innerHTML = '';
+      el('lauf-ergebnis').classList.add('hide');
+      el('lauf-fertig').classList.add('hide');
+      el('lauf-zu').classList.add('hide');
+      el('lauf-minimieren').classList.remove('hide');
+      el('lauf-hinweis').classList.remove('hide');
+      if(first || LAUF.eigener) laufOeffnen(); else laufMinimieren();
+      LAUF.eigener = false;
+    }
+    var j = jobs.job || {}, n = (j.steps || []).length || 1;
+    el('lauf-titel').textContent = t('lauf.title');
+    el('lauf-sub').textContent = t('lauf.sub', {i: (j.index || 0) + 1, n: n,
+                                               when: fmt(j.started)});
+  } else if(LAUF.gesehen && !LAUF.ergebnis){
+    LAUF.ergebnis = jobs.last || {};
+    laufErgebnisZeigen(LAUF.ergebnis);
+  }
+}
+function laufOeffnen(){
+  el('lauf-overlay').classList.remove('hide');
+  el('lauf-pille').classList.add('hide');
+  var box = el('log'); box.scrollTop = box.scrollHeight;
+}
+function laufMinimieren(){
+  el('lauf-overlay').classList.add('hide');
+  el('lauf-pille').classList.remove('hide');
+}
+function laufSchliessen(){
+  LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null};
+  el('lauf-overlay').classList.add('hide');
+  el('lauf-pille').classList.add('hide');
+}
+/* The result stays in the window: headline with what came and how long it
+   took, the steps with their numbers from the run history, the log below
+   – and one button. */
+function laufErgebnisZeigen(L){
+  el('lauf-minimieren').classList.add('hide');
+  el('lauf-hinweis').classList.add('hide');
+  el('lauf-zu').classList.remove('hide');
+  el('lauf-fertig').classList.remove('hide');
+  el('lauf-titel').innerHTML = L.ok
+    ? '<span class="lauf-titel-ok">' + ikon('fertig', 'ok') + '<span id="lauf-titel-text"></span></span>'
+    : '<span id="lauf-titel-text"></span>';
+  el('lauf-titel-text').textContent = L.ok ? t('lauf.done.title.plain')
+    : t('lauf.failed.title', {detail: mtext(L.detail)});
+  el('lauf-sub').textContent = L.finished ? fmt(L.finished) : '';
+  el('lauf-pille-t').textContent = t(L.ok ? 'lauf.pill.done' : 'lauf.pill.failed');
+  el('lauf-pille-balken').style.width = '100%';
+  api('/api/runs?limit=1').then(function(r){
+    var lauf = (r.runs || [])[0];
+    if(!lauf || !LAUF.ergebnis) return;
+    var dauer = (lauf.finished_at && lauf.started_at) ? lauf.finished_at - lauf.started_at : null;
+    var neu = null;
+    (lauf.steps || []).forEach(function(s){
+      if(quelleName(s.key) && s.new !== null && s.new !== undefined) neu = (neu || 0) + s.new;
+    });
+    if(L.ok) el('lauf-titel-text').textContent = neu === null
+      ? t('lauf.done.title.plain.dauer', {dauer: durationText(dauer)})
+      : t('lauf.done.title', {n: zahl(neu), dauer: durationText(dauer)});
+    if(lauf.started_at) el('lauf-sub').textContent = t('lauf.done.sub',
+      {from: new Date(lauf.started_at * 1000).toLocaleTimeString(LOC, {timeStyle: 'short'}),
+       to: lauf.finished_at ? new Date(lauf.finished_at * 1000).toLocaleTimeString(LOC, {timeStyle: 'short'}) : '–'});
+    var box = el('lauf-ergebnis');
+    box.innerHTML = (lauf.steps || []).map(function(s){
+      var gut = s.ok !== 0 && !s.errors;
+      return '<div class="schritt">' +
+        ikon(s.skipped ? 'kreis' : gut ? 'fertig' : 'kreis', s.skipped ? 'blass' : gut ? 'ok' : 'blass') +
+        '<span class="name">' + esc(t(s.label)) + '</span>' +
+        '<span class="small muted num">' + esc(s.skipped ? t('ana.runs.skipped')
+                                                : schrittTeile(s, false).join(' · ')) + '</span>' +
+        '<span class="small muted num" style="text-align:right">' +
+        esc(s.duration_s !== null && s.duration_s !== undefined ? durationText(s.duration_s) : '') + '</span></div>';
+    }).join('');
+    box.classList.toggle('hide', !box.innerHTML);
+  }).catch(function(){});
+}
+
+/* The steps of the run as a list: done, running (with its progress), still
+   to come. The labels are text keys – translated here like the line above. */
+function zeigeSchritte(j, i, p){
+  el('lauf-schritte').innerHTML = (j.steps || []).map(function(label, k){
+    var lage = k < i ? 'fertig' : k === i ? 'aktiv' : 'offen';
+    var detail = '';
+    if(lage === 'aktiv' && p) detail = p.total
+      ? t('progress.of', {done: p.done.toLocaleString(LOC),
+                          total: p.total.toLocaleString(LOC), what: einheit(p.what)})
+      : t('progress.count', {done: p.done.toLocaleString(LOC), what: einheit(p.what)});
+    return '<div class="schritt ' + lage + '">' +
+      ikon(lage === 'fertig' ? 'fertig' : lage === 'aktiv' ? 'uhr' : 'kreis',
+           lage === 'fertig' ? 'ok' : lage === 'aktiv' ? 'akzent' : 'blass') +
+      '<span class="name">' + esc(label ? t(label) : '') + '</span>' +
+      '<span class="small muted num">' + esc(detail) + '</span></div>';
+  }).join('');
 }
 function einheit(was){
   return was ? t('progress.unit.' + was) : '';
 }
 
-/* ---------- Log ---------- */
-function protokollPlatz(){
-  // The box floats fixed above the page – the content gets exactly enough
-  // foot room that nothing disappears behind it: from the page's point of
-  // view the log is its end.
-  var haupt = document.querySelector('main');
-  if(!haupt) return;
-  var p = el('protokoll');
-  haupt.style.paddingBottom = p.classList.contains('hide')
-    ? '20px' : (p.offsetHeight + 16) + 'px';
-}
+/* ---------- Log ----------
+   A strip inside the run panel, open while a run is on; whether someone
+   folded it is remembered in the browser. The box itself resizes with
+   the browser's own handle. */
 function protokollUmschalten(){
   var p = el('protokoll');
   p.classList.toggle('zu');
@@ -1663,36 +2189,11 @@ function protokollUmschalten(){
   if(!p.classList.contains('zu')){
     var box = el('log'); box.scrollTop = box.scrollHeight;
   }
-  protokollPlatz();
-}
-function protokollHoehe(h){
-  var grenze = Math.max(80, Math.min(Math.round(window.innerHeight * 0.7), h));
-  el('protokoll').style.setProperty('--loghoehe', grenze + 'px');
-  return grenze;
-}
-function protokollZiehen(ev){
-  ev.preventDefault();
-  var start = ev.clientY, hoehe = el('log').offsetHeight;
-  function bewegt(e){
-    protokollHoehe(hoehe + (start - e.clientY));
-    protokollPlatz();
-  }
-  function ende(e){
-    document.removeEventListener('pointermove', bewegt);
-    document.removeEventListener('pointerup', ende);
-    var h = protokollHoehe(hoehe + (start - e.clientY));
-    try { localStorage.setItem('protokoll_hoehe', String(h)); } catch(e2){}
-  }
-  document.addEventListener('pointermove', bewegt);
-  document.addEventListener('pointerup', ende);
 }
 function stelleProtokollHer(){
   try {
-    if(localStorage.getItem('protokoll') === 'auf') el('protokoll').classList.remove('zu');
-    var h = parseInt(localStorage.getItem('protokoll_hoehe'), 10);
-    if(h) protokollHoehe(h);
+    if(localStorage.getItem('protokoll') === 'zu') el('protokoll').classList.add('zu');
   } catch(e){}
-  protokollPlatz();
 }
 
 function pullLog(){
@@ -1701,8 +2202,12 @@ function pullLog(){
     if(!r.lines || !r.lines.length){ seen = r.seq; return; }
     var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
     r.lines.forEach(function(l){
+      // The run window shows this run's lines only – what the app logged
+      // before the run began stays out of it.
+      if(LAUF.abSeq !== null && l.n <= LAUF.abSeq) return;
       var d = document.createElement('div');
       d.className = 'l-' + l.level;
+      d.dataset.n = l.n;
       d.textContent = l.t + '  ' + mtext(l.text);
       box.appendChild(d);
     });
@@ -1860,6 +2365,8 @@ var ORDNER_ALLE = {
   teams:    'search.folder.all.teams',
   kontakte: 'search.folder.all.kontakte',
   planner:  'search.folder.all.planner',
+  todo:     'search.folder.all.todo',
+  onenote:  'search.folder.all.onenote',
   sharepoint: 'search.folder.all.sharepoint',
   pages:    'search.folder.all.pages'
 };
@@ -1910,7 +2417,9 @@ function zeichneOrdner(liste){
 var KANN_TYP = false;
 function typenMoeglich(quelle){
   return KANN_TYP && (quelle === 'all' || quelle === 'outlook' ||
-                      quelle === 'onedrive' || quelle === 'sharepoint');
+                      quelle === 'onedrive' || quelle === 'sharepoint' ||
+                      quelle === 'teams' || quelle === 'planner' ||
+                      quelle === 'todo');
 }
 function zeichneTypen(liste){
   fuelleAuswahl('f-typ', liste.map(function(e){
@@ -1970,8 +2479,7 @@ function suchmodus(art){
   el('q').placeholder = t('search.ph.' + art);
   TREFFER_OFFEN = art !== 'ki';
   el('ki-klappe').classList.toggle('hide', art !== 'ki');
-  el('results').classList.toggle('hide', !TREFFER_OFFEN);
-  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
+  el('treffer-split').classList.toggle('hide', !TREFFER_OFFEN);
   if(el('q').value.trim() || filterFelder().length) doSearch(0);
   else abbrechenKI();
 }
@@ -1991,8 +2499,7 @@ function modiPruefen(moeglich, abgeschaltet){
 
 function klappeTreffer(){
   TREFFER_OFFEN = !TREFFER_OFFEN;
-  el('results').classList.toggle('hide', !TREFFER_OFFEN);
-  el('pager').classList.toggle('hide', !TREFFER_OFFEN);
+  el('treffer-split').classList.toggle('hide', !TREFFER_OFFEN);
   zeigeKlappknopf();
 }
 function zeigeKlappknopf(n){
@@ -2025,7 +2532,7 @@ function doSearch(off){
     filetype: el('f-typ').value,
     mode: MODUS_ZU_SERVER[SUCHMODUS], k: proSeite, offset: offset});
   zeigeFilterstand();
-  el('results').textContent = t('search.running');
+  el('results').innerHTML = '<p class="hint">' + esc(t('search.running')) + '</p>';
   api('/api/search?' + p.toString()).then(function(r){
     renderHits(r);
     // Only the AI variant asks the model – and only after the hits are in.
@@ -2052,31 +2559,11 @@ function hervor(text){
   return h;
 }
 
-/* One menu per hit, but only ever one open. A click elsewhere and ESC close
-   it – without that it would stay standing while paging. */
-var offenesMenu = null;
-function menuZu(){
-  if(offenesMenu === null) return;
-  var m = el('menu-' + offenesMenu);
-  if(m){ m.classList.add('hide');
-         m.previousElementSibling.setAttribute('aria-expanded', 'false'); }
-  offenesMenu = null;
-}
-function menuAuf(ev, i){
-  ev.stopPropagation();
-  var war = offenesMenu;
-  menuZu();
-  if(war === i) return;                    // the same button closes it again
-  el('menu-' + i).classList.remove('hide');
-  ev.currentTarget.setAttribute('aria-expanded', 'true');
-  offenesMenu = i;
-}
-document.addEventListener('click', menuZu);
-
+/* From a hit to everything with that person: the person filter can do it
+   already, this merely sets it. */
 function filterPerson(wer){
-  menuZu();
   el('f-person').value = wer;
-  el('filter').classList.remove('hide');
+  zeigeFilterstand();
   doSearch(0);
 }
 
@@ -2202,9 +2689,8 @@ document.addEventListener('click', function(ev){
    has to be embedded. That is why the entry is available even while the
    variant above is grayed out. */
 function aehnlicheZu(cid){
-  menuZu();
   el('q').value = '';
-  el('results').textContent = t('search.running');
+  el('results').innerHTML = '<p class="hint">' + esc(t('search.running')) + '</p>';
   api('/api/similar?cid=' + encodeURIComponent(cid) +
       '&k=' + trefferProSeite()).then(function(r){
     offset = 0;
@@ -2213,61 +2699,53 @@ function aehnlicheZu(cid){
   });
 }
 
+/* The tag speaks the interface language – the server label is only the
+   fallback for sources this page does not know yet. */
+function quellTag(h){
+  var key = h.source === 'datei'
+    ? (h.root === 'sharepoint' ? 'search.source.sharepoint'
+                               : 'search.source.onedrive')
+    : 'search.source.' + h.source;
+  var wert = t(key);
+  return wert === key ? (h.source_label || h.source || '') : wert;
+}
+function quellIkon(h){
+  if(h.source === 'datei') return 'datei';
+  return {teams: 'teams', outlook: 'mail', kalender: 'kalender', kontakte: 'kontakt',
+          planner: 'planner', todo: 'todo', onenote: 'onenote',
+          pages: 'sharepoint'}[h.source] || 'datei';
+}
+function trefferLink(h){
+  var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
+  return m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
+}
+
+/* The list on the left is for picking: icon, title, date, who, one line of
+   preview. Everything one does with a hit sits in the detail on the right –
+   the actions differ per hit and would otherwise dominate the list. */
+var TREFFER = [];
+
 function renderHits(r){
-  if(r.error){ el('results').innerHTML = '<span class="err">' + esc(mtext(r.error)) + '</span>'; return; }
+  if(r.error){ el('results').innerHTML = '<p class="hint err">' + esc(mtext(r.error)) + '</p>'; return; }
   var hits = r.results || [];
-  if(!hits.length){ el('results').textContent = t('search.nohits');
+  TREFFER = hits;
+  el('detail').classList.add('hide');
+  el('treffer-zahl').textContent = hits.length ? zahl(r.count || hits.length) : '';
+  if(!hits.length){ el('results').innerHTML = '<p class="hint">' + esc(t('search.nohits')) + '</p>';
                     el('pager').innerHTML = ''; abbrechenKI(); return; }
-  // "Find similar" hangs on the VECTORS in the index, not on Ollama: the
-  // vector of this passage sits ready, nothing gets embedded.
-  // Without vectors – a pure full-text index – the entry would run into the
-  // void, so it stands grayed out instead of vanishing.
-  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
-  // The tag speaks the interface language – the server label is only the
-  // fallback for sources this page does not know yet.
-  function quellTag(h){
-    var key = h.source === 'datei'
-      ? (h.root === 'sharepoint' ? 'search.source.sharepoint'
-                                 : 'search.source.onedrive')
-      : 'search.source.' + h.source;
-    var wert = t(key);
-    return wert === key ? (h.source_label || h.source || '') : wert;
-  }
   el('results').innerHTML = hits.map(function(h, i){
-    var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
-    var link = m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
-    var faden = h.thread && KANN_VERLAUF ? esc(h.thread).replace(/'/g, "\\'") : '';
-    return '<div class="hit" id="treffer-' + (i + 1) + '">' +
-      '<h3><span class="fussnote">[' + (i + 1) + ']</span>' +
-      (link ? '<a href="' + link + '" target="_blank">' : '') +
-      esc(h.title || t('search.nosubject')) + (link ? '</a>' : '') + '</h3>' +
-      '<div class="wer"><span class="tag">' + esc(quellTag(h)) + '</span>' +
+    return '<div class="hit" id="treffer-' + (i + 1) + '" tabindex="0" role="button" ' +
+      'onclick="waehleTreffer(' + i + ')" ' +
+      'onkeydown="if(event.key===\'Enter\')waehleTreffer(' + i + ')">' +
+      '<span class="ikon">' + ikon(quellIkon(h)) + '</span>' +
+      '<h3>' + (SUCHMODUS === 'ki' ? '<span class="fussnote">[' + (i + 1) + ']</span>' : '') +
+      esc(h.title || t('search.nosubject')) + '</h3>' +
+      '<span class="wann">' + esc(h.date || '') + '</span>' +
+      '<span class="wer"><span class="tag">' + esc(quellTag(h)) + '</span>' +
       (h.gone ? '<span class="tag weg" title="' +
         esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
-        esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</div>' +
-      '<div class="wann">' + esc(h.date || '') + '</div>' +
-      '<div class="menuzelle">' +
-        '<button class="punkte-knopf" aria-haspopup="true" aria-expanded="false" ' +
-        'aria-label="' + esc(t('search.menu')) + '" onclick="menuAuf(event,' + i + ')">⋯</button>' +
-        '<div class="menu hide" id="menu-' + i + '">' +
-          (link ? '<a class="mini" href="' + link + '" target="_blank" ' +
-                  'style="text-decoration:none;border:0;padding:7px 10px">' +
-                  esc(t('search.menu.source')) + '</a>'
-                : '<button disabled>' + esc(t('search.menu.source')) + '</button>') +
-          '<button' + (faden ? ' onclick="zeigeVerlauf(' + (i + 1) + ',\'' + faden + '\')"'
-                             : ' disabled') + '>' +
-            esc(t('search.menu.thread')) + '</button>' +
-          '<button' + (h.cid && aehnlichMoeglich
-                       ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
-                       : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
-            '>' + esc(t('search.menu.similar')) + '</button>' +
-          (h.who ? '<hr><button onclick="filterPerson(\'' +
-                   esc(h.who).replace(/'/g, "\\'") + '\')">' +
-                   esc(t('search.menu.person')) + '</button>' : '') +
-        '</div>' +
-      '</div>' +
-      '<div class="prev">' + hervor(h.preview || '') + '…</div>' +
-      '<div class="verlauf" id="verlauf-' + (i + 1) + '"></div>' +
+        esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</span>' +
+      '<span class="prev">' + hervor(h.preview || '') + '…</span>' +
       '</div>';
   }).join('');
   // Paging follows the setting too – otherwise "next" would skip hits or
@@ -2282,12 +2760,61 @@ function renderHits(r){
   if(SUCHMODUS === 'ki') zeigeKlappknopf(hits.length);
 }
 
+function waehleTreffer(i){
+  var h = TREFFER[i];
+  if(!h) return;
+  document.querySelectorAll('#results .hit').forEach(function(z, k){
+    z.classList.toggle('on', k === i);
+  });
+  zeigeDetail(h, i + 1);
+}
+
+/* The chosen hit: its origin, the three actions, and the content – the
+   archive's own HTML in a frame, otherwise the excerpt the index holds.
+   What cannot be done for this hit stands greyed with its reason, not
+   missing: otherwise the buttons would wander from hit to hit. */
+function zeigeDetail(h, nr){
+  var link = trefferLink(h);
+  var faden = h.thread && KANN_VERLAUF ? esc(h.thread).replace(/'/g, "\\'") : '';
+  // "Find similar" hangs on the VECTORS in the index, not on Ollama: the
+  // vector of this passage sits ready, nothing gets embedded.
+  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
+  var seite = !!(link && /\.html?$/i.test(h.uri || ''));
+  el('detail').classList.remove('hide');
+  el('detail-verlauf').innerHTML = '';
+  el('detail-inhalt').innerHTML =
+    '<div class="dkopf"><span class="tag">' + esc(quellTag(h)) + '</span>' +
+    (h.gone ? '<span class="tag weg">' + esc(t('search.gone.since', {when: fmt(h.gone)})) + '</span>' : '') +
+    '</div>' +
+    '<div class="dtitel">' + esc(h.title || t('search.nosubject')) + '</div>' +
+    '<div class="muted small">' + esc([h.who, h.date].filter(Boolean).join(' · ')) + '</div>' +
+    '<div class="daktionen">' +
+      (link ? '<a class="ghost" href="' + esc(link) + '" target="_blank" rel="noopener">' +
+              esc(t('search.menu.source')) + '</a>'
+            : '<button class="ghost" disabled>' + esc(t('search.menu.source')) + '</button>') +
+      '<button class="ghost"' + (faden ? ' onclick="zeigeVerlauf(' + nr + ',\'' + faden + '\')"'
+                                       : ' disabled') + '>' +
+        esc(t('search.menu.thread')) + '</button>' +
+      '<button class="ghost"' + (h.cid && aehnlichMoeglich
+                                 ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
+                                 : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
+        '>' + esc(t('search.menu.similar')) + '</button>' +
+      (h.who ? '<a href="javascript:void(0)" class="small rechts" onclick="filterPerson(\'' +
+               esc(h.who).replace(/'/g, "\\'") + '\')">' + esc(t('search.menu.person')) + '</a>' : '') +
+    '</div>' +
+    '<div class="dinhalt">' + (seite
+      ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
+      : hervor(h.preview || '') + '…') + '</div>' +
+    (h.uri ? '<div class="dfuss">' + ikon('datei', 'klein') + '<span>' +
+             esc(t('search.detail.path', {path: (h.uri || '').replace(/^o365:\/\//, '')})) +
+             '</span></div>' : '');
+}
+
 /* A hit alone often says too little: "yes, let's do it that way" only means
-   something with the question before it. So the thread unfolds below the
-   hit instead of jumping to another view. */
+   something with the question before it. So the thread unfolds inside the
+   detail instead of jumping to another view. */
 function zeigeVerlauf(nr, schluessel){
-  var kasten = el('verlauf-' + nr);
-  if(!kasten) return;
+  var kasten = el('detail-verlauf');
   kasten.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
   api('/api/thread?key=' + encodeURIComponent(schluessel)).then(function(r){
     if(r.error || !(r.messages || []).length){
@@ -2605,6 +3132,12 @@ function runElements(r){
     if(k === 'outlook' || k === 'teams') return;
     if(e[k]) parts.push(quelleName(k) + ' (' + t('ana.runs.all') + ')');
   });
+  // A run without a source – the calendar rebuild, a check, a folder sync
+  // – is named after its steps; otherwise the row would say nothing.
+  if(!parts.length) (r.steps || []).forEach(function(s){
+    var name = t(s.label);
+    if(s.key !== 'index' && parts.indexOf(name) < 0) parts.push(name);
+  });
   (r.steps || []).forEach(function(s){
     if(s.key === 'index' && parts.indexOf('Index') < 0) parts.push('Index');
   });
@@ -2613,15 +3146,20 @@ function runElements(r){
 
 function runStepLine(s){
   if(s.skipped) return t(s.label) + ': ' + t('ana.runs.skipped');
+  return t(s.label) + ': ' + (schrittTeile(s, true).join(' · ') || '–');
+}
+/* A step's numbers as the run history's atoms; the duration only when the
+   line has no column of its own for it. */
+function schrittTeile(s, mitDauer){
   var bits = [];
-  if(s.duration_s !== null && s.duration_s !== undefined) bits.push(durationText(s.duration_s));
+  if(mitDauer && s.duration_s !== null && s.duration_s !== undefined) bits.push(durationText(s.duration_s));
   if(s.new !== null && s.new !== undefined) bits.push(t('ana.runs.new') + ' ' + zahl(s.new));
   if(s.unchanged !== null && s.unchanged !== undefined)
     bits.push(t('ana.runs.unchanged') + ' ' + zahl(s.unchanged));
   if(s.excluded) bits.push(t('ana.runs.excluded') + ' ' + zahl(s.excluded));
   if(s.errors) bits.push(t('ana.runs.errors') + ' ' + zahl(s.errors));
   if(s.ok === 0) bits.push(t('ana.runs.failed'));
-  return t(s.label) + ': ' + (bits.join(' · ') || '–');
+  return bits;
 }
 
 function renderRuns(runs){
@@ -2660,7 +3198,7 @@ function renderRuns(runs){
       '<tr class="hide" id="lauf-details-' + i + '"><td colspan="6" class="small muted">' +
       (r.steps || []).map(runStepLine).map(esc).join('<br>') +
       '<div class="row" style="margin-top:8px"><button class="mini" ' +
-      'onclick="event.stopPropagation();zeigeRunLog(' + r.id + ', ' + i + ')">' +
+      'onclick="event.stopPropagation();zeigeRunLog(' + r.id + ', \'lauf-log-' + i + '\')">' +
       esc(t('ana.runs.log')) + '</button></div>' +
       '<div id="lauf-log-' + i + '" class="lauflog hide"></div></td></tr>';
   });
@@ -2672,11 +3210,11 @@ function toggleRun(i){
   if(d) d.classList.toggle('hide');
 }
 
-function zeigeRunLog(id, i){
-  // The stored log of one run, inline below its steps. Second click folds
-  // it away again; the lines come from runs.db and translate on display,
-  // like the live log bar.
-  var box = el('lauf-log-' + i);
+function zeigeRunLog(id, kastenId){
+  // The stored log of one run, inline below its row. Second click folds it
+  // away again; the lines come from runs.db and translate on display, like
+  // the live log.
+  var box = el(kastenId);
   if(!box.classList.contains('hide')){ box.classList.add('hide'); return; }
   box.classList.remove('hide');
   box.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
@@ -2867,7 +3405,8 @@ function zeigeAnalytics(a){
   if(d.onedrive) teile.push('OneDrive ' + zahl(d.onedrive));
   if(d.sharepoint)
     teile.push(t('search.source.sharepoint') + ' ' + zahl(d.sharepoint));
-  var pl = a.planner || {};
+  if(d.teams) teile.push(t('search.source.teams') + ' ' + zahl(d.teams));
+  var pl = a.planner || {}, td = a.todo || {}, on = a.onenote || {};
   el('ana-kpi-dateien').innerHTML =
     // No mirror, no file tiles – "0 files" tells nobody anything.
     (d.n ? kachelHtml(zahl(d.n), t('ana.files'), teile.join(' · '),
@@ -2875,11 +3414,15 @@ function zeigeAnalytics(a){
     (d.pages ? kachelHtml(zahl(d.pages), t('ana.pages')) : '') +
     (pl.n ? kachelHtml(zahl(pl.n), t('ana.planner'), '',
                        t('ana.planner.hint')) : '') +
-    (d.n || d.pages || pl.n
-      ? kachelHtml(zahl((d.verschwunden || 0) + (pl.verschwunden || 0)),
+    (td.n ? kachelHtml(zahl(td.n), t('ana.todo'), '', t('ana.todo.hint')) : '') +
+    (on.n ? kachelHtml(zahl(on.n), t('ana.onenote'), '', t('ana.onenote.hint')) : '') +
+    (d.n || d.pages || pl.n || td.n || on.n
+      ? kachelHtml(zahl((d.verschwunden || 0) + (pl.verschwunden || 0) +
+                        (td.verschwunden || 0) + (on.verschwunden || 0)),
                    t('ana.gone.files'), '', t('ana.gone.files.hint')) : '') +
     kachelHtml(bytes((g.teams || 0) + (g.outlook || 0) + (g.onedrive || 0) +
-                     (g.sharepoint || 0) + (g.pages || 0) + (g.planner || 0)),
+                     (g.sharepoint || 0) + (g.pages || 0) + (g.planner || 0) +
+                     (g.todo || 0) + (g.onenote || 0)),
                t('ana.size'), t('ana.size.hint', {index: bytes(g.index)}));
   zeigeVerlaeufe(a);
 }
@@ -2900,7 +3443,6 @@ function fmtTag(ts){
 function zeigeVerschwundene(){
   el('f-gone').checked = true;
   el('q').value = ''; el('f-person').value = '';
-  el('filter').classList.remove('hide');   // otherwise an invisible filter takes effect
   tab('suche'); sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
@@ -2993,9 +3535,9 @@ function cardHtml(e){
                            '</span>' : '') + '</div>';
   if(sub) h += '<div class="crole">' + esc(sub) + '</div>';
   (r.em||[]).forEach(function(m){
-    h += '<div class="cline"><span>✉</span><a href="mailto:' + esc(m) + '">' + esc(m) + '</a></div>'; });
+    h += '<div class="cline">' + ikon('mail', 'klein') + '<a href="mailto:' + esc(m) + '">' + esc(m) + '</a></div>'; });
   (r.tel||[]).forEach(function(x){
-    h += '<div class="cline"><span>☎</span><a href="' + esc(telHref(x)) + '">' + esc(x) + '</a></div>'; });
+    h += '<div class="cline">' + ikon('telefon', 'klein') + '<a href="' + esc(telHref(x)) + '">' + esc(x) + '</a></div>'; });
   if(e.n) h += '<div class="cline muted small">' + esc(t('book.messages', {n: e.n.toLocaleString(LOC)})) + '</div>';
   h += '<button class="mini" onclick="zeigeKommunikation(' +
        JSON.stringify(e.name).replace(/"/g, '&quot;') + ')">' +
@@ -3205,6 +3747,7 @@ function planAusFormular(){
     onedrive: el('s-onedrive').checked, sharepoint: el('s-sharepoint').checked,
     sharepoint_pages: el('s-sharepoint_pages').checked,
     planner: el('s-planner').checked,
+    todo: el('s-todo').checked, onenote: el('s-onenote').checked,
     index: el('s-index').checked, calendar: el('s-calendar').checked};
 }
 
@@ -3238,6 +3781,9 @@ function zeigeUpdate(u){
   var vorab = u.status === 'ok' && u.ahead;
   banner.classList.toggle('hide', !u.newer && !vorab);
   banner.classList.toggle('warn', vorab);
+  // The notice lives under Settings › App; the dot on that entry says
+  // there is something to read.
+  el('p-app').classList.toggle('hide', !u.newer && !vorab);
   if(u.newer){
     banner.innerHTML = esc(t('update.banner', {v: u.latest, current: u.current})) +
       ' <a href="' + esc(u.url || u.releases_url || '#') + '" target="_blank" rel="noopener">' +
@@ -3263,13 +3809,14 @@ function pruefeUpdate(){
 /* ---------- Settings ---------- */
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
-                'ollama_enabled','planner_attachments'];
+                'ollama_enabled','planner_attachments',
+                'teams_attachments','teams_channel_files'];
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
-                'onedrive_max_mb','sharepoint_max_mb',
-                'sharepoint_pages_image_max_mb','semantic_min',
+                'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
+                'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months','log_retention_days'];
 var TEXTE    = ['ollama','embed_model','chat_model',
-                'folder_rules','onedrive_rules','calendar_rules',
+                'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
                 'sharepoint_types_include','sharepoint_types_exclude'];
 var cfgGefuellt = false;
 
@@ -3288,6 +3835,7 @@ function fuelleEinstellungen(cfg){
   fuelleUrlTabelle('pl-urls', cfg.planner_urls, kad, 'planner-url');
   el('c-cadence-onedrive').value = kad.onedrive || 'always';
   el('c-cadence-teams').value = kad.teams || 'always';
+  el('c-cadence-todo').value = kad.todo || 'always';
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -3300,8 +3848,15 @@ function fuelleEinstellungen(cfg){
 function leseKadenzen(){
   // Rebuilt from scratch: URL keys always mirror the current tables, so a
   // removed or edited row cannot leave a stale cadence behind.
-  return {onedrive: el('c-cadence-onedrive').value,
-          teams: el('c-cadence-teams').value};
+  var kad = {onedrive: el('c-cadence-onedrive').value,
+             teams: el('c-cadence-teams').value,
+             todo: el('c-cadence-todo').value};
+  // Per notebook, from the table – only what is not the default.
+  [].forEach.call(document.querySelectorAll('#on-notebooks .zeile[data-id]'), function(z){
+    var wahl = z.querySelector('select');
+    if(wahl && wahl.value !== 'always') kad['onenote:' + z.getAttribute('data-id')] = wahl.value;
+  });
+  return kad;
 }
 
 function urlZeile(tabId, wert, kadenz){
@@ -3367,6 +3922,7 @@ function liesUrlTabelle(tabId, kadenzen, praefix){
 
 function speichereEinstellungen(){
   merke('flow.save', 'settings');
+  speichernLaeuft = true;
   // One save button for the whole tab – but only really post the schedule
   // when it changed: /api/schedule restarts the interval, and a settings
   // save must not keep postponing a run that is nearly due.
@@ -3390,22 +3946,51 @@ function speichereEinstellungen(){
   TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
   body.index_semantic = INDEX_SEMANTISCH;
   post('/api/config', body).then(function(r){
+    var cfg = r.config || {};
     // The language is baked into the delivered page – switching needs a
     // rebuild, everything else takes effect immediately.
-    if(r.config.language !== spracheVorher){ location.reload(); return; }
+    if(cfg.language !== undefined && cfg.language !== spracheVorher){ location.reload(); return; }
     cfgGefuellt = false;                 // play back saved (and clamped) values
-    fuelleEinstellungen(r.config);
+    fuelleEinstellungen(cfg);
     // The hidden types affect the select list – it sits cached and would
     // otherwise stay stale until the next index run.
     typenJeQuelle = {};
     ladeTypen(el('f-source').value || 'all');
+    speichernLaeuft = false;
+    einstGeaendert = false;
     var m = el('cfg-msg');
     m.className = 'small ok';
     m.textContent = t('settings.saved');
-    setTimeout(function(){ m.textContent = ''; }, 4000);
+    setTimeout(function(){
+      m.textContent = '';
+      if(!einstGeaendert) el('speichern').classList.add('hide');
+    }, 4000);
     refresh();
-  });
+  }).catch(function(){ speichernLaeuft = false; });
 }
+/* The save bar appears with the first change and goes with the save – a
+   button that is always there is a button nobody knows the state of. Fields
+   that save themselves (the URL tables, the MCP switch) pass through here
+   too and are cleared again by their own save. */
+var einstGeaendert = false, speichernLaeuft = false;
+function markiereGeaendert(){
+  if(speichernLaeuft || !cfgGefuellt) return;
+  einstGeaendert = true;
+  el('speichern').classList.remove('hide');
+}
+function einstellungenVerwerfen(){
+  einstGeaendert = false;
+  cfgGefuellt = false;
+  if(S && S.config){ fuelleEinstellungen(S.config); fuelleZeitplan(S.config); }
+  if(S){ el('c-data-dir').value = S.data_dir || ''; el('c-index-dir').value = S.index_dir || ''; }
+  el('speichern').classList.add('hide');
+}
+(function(){
+  var e = document.getElementById('tab-einstellungen');
+  if(!e || !e.addEventListener) return;
+  e.addEventListener('input', markiereGeaendert);
+  e.addEventListener('change', markiereGeaendert);
+})();
 /* The folder tree is its own result, not a by-product of every export.
    This line says how old it is and what the rules make of it. */
 function zeigeOrdnerstand(f, id){
@@ -3438,11 +4023,68 @@ function zeigeKalenderstand(c){
   kasten.textContent = text;
 }
 
+function zeigeNotizbuchstand(c){
+  var kasten = el('on-state');
+  if(!kasten) return;
+  if(!c || !c.abgeglichen){ kasten.textContent = t('settings.onenote.none'); return; }
+  var text = t('settings.onenote.state',
+               {an: (c.gewaehlt || 0).toLocaleString(LOC),
+                gesamt: (c.gesamt || 0).toLocaleString(LOC),
+                when: fmt(c.abgeglichen)});
+  if((c.neu || []).length) text += ' ' + t('folders.new', {n: c.neu.length});
+  kasten.textContent = text;
+}
+
+/* One row per notebook from the last list sync: name, its own cadence,
+   "sync now". Rebuilt only when the list itself changes – the status
+   arrives every 2.5 seconds, and a fresh table would throw away a cadence
+   just picked and not yet saved. A notebook the rules leave out is listed
+   greyed, without controls: cadence and sync only mean something for what
+   comes along. */
+var notizbuchKennung = null;
+function fuelleNotizbuchTabelle(nb, kad){
+  var tab = el('on-notebooks');
+  if(!tab) return;
+  var liste = (nb && nb.eintraege) || [];
+  var kennung = (nb && nb.abgeglichen) + '|' + liste.map(function(e){
+    return e.id + ':' + (e.an ? 1 : 0); }).join(',');
+  if(kennung === notizbuchKennung) return;
+  notizbuchKennung = kennung;
+  tab.innerHTML = '';
+  tab.setAttribute('data-leer', t('settings.onenote.cadence.none'));
+  var optionen = ['always', 'daily', 'weekly', 'monthly'];
+  liste.forEach(function(e){
+    var zeile = document.createElement('div');
+    zeile.className = 'zeile' + (e.an ? '' : ' muted');
+    zeile.setAttribute('data-id', e.id);
+    var kadenz = kad['onenote:' + e.id] || 'always';
+    zeile.innerHTML = '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis">' +
+      esc(e.name) + (e.an ? '' : ' <span class="small">' + esc(t('settings.onenote.cadence.out')) + '</span>') +
+      '</span>' + (e.an
+        ? '<select>' + optionen.map(function(o){
+            return '<option value="' + o + '"' + (o === kadenz ? ' selected' : '') +
+              '>' + esc(t('cadence.' + o)) + '</option>'; }).join('') + '</select>' +
+          '<button class="mini">' + esc(t('cadence.sync_now')) + '</button>'
+        : '');
+    if(e.an){
+      zeile.querySelector('select').onchange = speichereEinstellungen;
+      zeile.querySelector('button').onclick = function(ev){
+        ev.stopPropagation();
+        merke('flow.run', 'sync_now');
+        post('/api/run', {onenote: true, nur_einheit: e.id, label: 'job.export'})
+          .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+      };
+    }
+    tab.appendChild(zeile);
+  });
+}
+
 var ABGLEICH = {
   onedrive: {msg: 'od-folders-msg', lauf: {sync_onedrive: true, label: 'job.folders'}},
   sharepoint: {msg: 'sp-msg', lauf: {sync_sharepoint: true, label: 'job.folders'},
                save: function(){ return speichereSharepointFelder(); }},
   calendar: {msg: 'cal-msg', lauf: {sync_calendars: true, label: 'job.calendars'}},
+  onenote:  {msg: 'on-msg', lauf: {sync_notebooks: true, label: 'job.notebooks'}},
   outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}}
 };
 
@@ -3561,6 +4203,8 @@ function zeigeExportliste(quelle){
       ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
       : planQuelle === 'calendar'
       ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}
+      : planQuelle === 'onenote'
+      ? {quelle: 'onenote', onenote_rules: el('c-onenote_rules').value}
       : {folder_rules: el('c-folder_rules').value,
          skip_folders: el('c-skip_folders').value})
     .then(function(p){
@@ -3582,7 +4226,8 @@ function planFenster(){
       '<div id="plan-listen"></div>';
   }
   oeffneEigenes('plan', modalKopf(t('plan.title'), 'plan') + koerper +
-    modalFuss({text: t(planQuelle === 'calendar' ? 'settings.calendars.sync' : 'folders.sync'),
+    modalFuss({text: t(planQuelle === 'calendar' ? 'settings.calendars.sync'
+                       : planQuelle === 'onenote' ? 'settings.onenote.sync' : 'folders.sync'),
                tun: 'planAbgleichen(&quot;' + planQuelle + '&quot;)'}));
   if(p && p.ok) planListen();
 }
@@ -3623,6 +4268,7 @@ function planListen(){
   // assembled, so the comparison against the language files finds the
   // keys.
   var dat = planQuelle === 'onedrive', kal = planQuelle === 'calendar';
+  var nb = planQuelle === 'onenote';
   // For calendars there is nothing to compare: how many events are inside,
   // Graph does not reveal when listing. So what already lies on disk is
   // counted – the only number honestly available here.
@@ -3633,6 +4279,10 @@ function planListen(){
     ? gruppe('plan.an.cal',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
       gruppe('plan.aus.cal', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
       gruppe('plan.weg.cal', p.weg, 'archiv', p.mails_weg,   'err',  false)
+    : nb
+    ? gruppe('plan.an.nb',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
+      gruppe('plan.aus.nb', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
+      gruppe('plan.weg.nb', p.weg, 'archiv', p.mails_weg,   'err',  false)
     : gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
       gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
       gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);
@@ -3747,9 +4397,11 @@ function closeWizard(kind){
    to close, the action at the bottom left, the fallback next to it – so no
    window makes "close" its primary button while the real action sits pale
    beside it. */
-function modalKopf(titel, kind){
+function modalKopf(titel, kind, info){
   var zu = esc(t('wizard.close'));
-  return '<div class="modal-kopf"><h2>' + esc(titel) + '</h2>' +
+  return '<div class="modal-kopf"><h2>' + esc(titel) +
+    (info ? ' <span class="info" tabindex="0" role="img" aria-label="' + esc(info) +
+            '" title="' + esc(info) + '">i</span>' : '') + '</h2>' +
     '<button class="modal-zu" title="' + zu + '" aria-label="' + zu + '" ' +
     'onclick="closeWizard(&quot;' + kind + '&quot;)">&times;</button></div>';
 }
@@ -3821,11 +4473,11 @@ function loginTeil(){
   var au = S.auth || {}, dev = au.device;
   var kopf;
   if(au.signed_in)
-    kopf = banner('', '<span class="ok">✓</span> ' +
+    kopf = banner('', '<span class="dot ok"></span>' +
       t(au.account ? 'wizard.login.state.in' : 'wizard.login.state.in.plain',
         {who: esc(au.account || '')}));
   else
-    kopf = banner('warn', esc(t('wizard.login.state.out')));
+    kopf = banner('warn', '<span class="dot warn"></span>' + esc(t('wizard.login.state.out')));
 
   var mitte = '';
   if(dev && !dev.done){
@@ -3844,8 +4496,7 @@ function loginTeil(){
   var sekundaer = au.signed_in
     ? {text: t('wizard.login.logout'), tun: 'abmelden()'} : null;
 
-  return '<p class="muted small">' + esc(t('wizard.login.intro')) + '</p>' +
-    kopf + mitte + eigeneRegistrierung() + modalFuss(primaer, sekundaer);
+  return kopf + mitte + eigeneRegistrierung() + modalFuss(primaer, sekundaer);
 }
 
 function schluesselTeil(){
@@ -3860,11 +4511,10 @@ function schluesselTeil(){
     var k = hatWer && hatZeit ? 'wizard.token.ok'
           : hatWer ? 'wizard.token.ok.unknown'
           : hatZeit ? 'wizard.token.ok.nowho' : 'wizard.token.ok.plain';
-    head = banner('', '<span class="ok">✓</span> ' + t(k, {who: esc(tk.account || ''),
-                                                          rest: restzeit(tk.expires_in_minutes)}));
+    head = banner('', '<span class="dot ok"></span>' + t(k, {who: esc(tk.account || ''),
+                                                       rest: restzeit(tk.expires_in_minutes)}));
   }
-  return '<p class="muted small">' + esc(t('wizard.token.intro')) + '</p>' + head +
-    rechteBlock(fehlen) +
+  return head + rechteBlock(fehlen) +
     '<ol><li>' + t('wizard.token.step1', {url: esc(S.graph_explorer)}) + '</li>' +
     '<li>' + t('wizard.token.step2') + '</li>' +
     '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
@@ -3873,13 +4523,14 @@ function schluesselTeil(){
               '<span class="small muted" id="tok-msg"></span>');
 }
 
+/* What the window is for and where the key stays sits in the (i) next to
+   the title – the window itself shows the choice, the state and the steps. */
 function tokenWizard(){
   var login = (S.auth && S.auth.mode) === 'login';
-  return modalKopf(t('wizard.token.title'), 'token') +
+  return modalKopf(t('wizard.token.title'), 'token',
+                   t(login ? 'wizard.login.intro' : 'wizard.token.intro')) +
     modusWahl() +
-    (login ? loginTeil() : schluesselTeil()) +
-    '<p class="small muted" style="margin-top:14px">' +
-    t(login ? 'wizard.login.privacy' : 'wizard.token.privacy') + '</p>';
+    (login ? loginTeil() : schluesselTeil());
 }
 
 function setzeModus(wert){
@@ -3927,7 +4578,7 @@ function ollamaWizard(){
     // Re-indexing is the action this window opens for in the first place –
     // so it leads, rather than sitting pale next to "close".
     return modalKopf(t('wizard.ollama.ready.title'), 'ollama') +
-      banner('', '<span class="ok">✓</span> ' + t('wizard.ollama.ready', {model: esc(o.model)})) +
+      banner('', '<span class="dot ok"></span>' + t('wizard.ollama.ready', {model: esc(o.model)})) +
       modalFuss({text: t('wizard.ollama.reindex'),
                  tun: 'closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))'},
                 null);
@@ -3972,7 +4623,7 @@ function beenden(){
   // that no longer runs – and their buttons would call a dead API.
   el('pills').classList.add('hide');
   el('protokoll').classList.add('hide');
-  protokollPlatz();
+  el('lauf-overlay').classList.add('hide');
 }
 
 /* ---------- Loop ---------- */

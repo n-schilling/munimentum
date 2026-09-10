@@ -108,10 +108,15 @@ UID_F1 = "datei:Dateien/Projekte/Angebot.pdf:0"
 UID_F2 = "datei:TeamX/Dokumente/Dateien/Plan.xlsx:0"
 UID_PG = "pages:TeamX/SitePages/Start.html:0"
 UID_PL = "planner:Board A/task1:0"
+UID_TD = "todo:Einkauf__abcd1234/task1:0"
+UID_ON = "onenote:Projekte/Allgemein/Besprechung__aaaa1111.html:0"
+UID_TF = "teamsdatei:1on1/Anhaenge/alice__abc123/Angebot__1a2b3c4d.pdf:0"
+UID_TK = "teamsdatei:channels/Team Rakete/Dateien/Allgemein/Plan.xlsx:0"
 
 
 def _extra_records():
-    """Files, a page and a Planner task – the sources the base sample lacks."""
+    """Files, a page, a Planner task, a To Do task, a OneNote page and the
+    files next to Teams conversations – the sources the base sample lacks."""
     f1 = _rec(UID_F1, "datei", "onedrive", "Dateien/Projekte/Angebot.pdf", "",
               "", _ts("2025-06-20 10:00"), "2025-06-20 10:00", "Angebot.pdf",
               "Dateien/Projekte", "Angebot.pdf Dateien/Projekte")
@@ -128,7 +133,25 @@ def _extra_records():
               "2025-06-23 10:00", "Angebot prüfen", "Board A/Zu tun",
               "Angebot prüfen. Kommentar: bitte bis Freitag.")
     pl["att"] = "Angebot.pdf"
-    return [f1, f2, pg, pl]
+    td = _rec(UID_TD, "todo", "todo", "Einkauf__abcd1234/list.html", "", "",
+              _ts("2025-06-24 10:00"), "2025-06-24 10:00", "Milch kaufen",
+              "Einkauf", "Bio. Vollmilch. Rezept")
+    td["att"] = "Bon.pdf"
+    on = _rec(UID_ON, "onenote", "onenote",
+              "Projekte/Allgemein/Besprechung__aaaa1111.html", "", "",
+              _ts("2025-06-25 10:00"), "2025-06-25 10:00", "Besprechung",
+              "Projekte/Allgemein", "Notizen zur Besprechung mit dem Angebot.")
+    tf = _rec(UID_TF, "datei", "teams",
+              "1on1/Anhaenge/alice__abc123/Angebot__1a2b3c4d.pdf", "", "",
+              _ts("2025-06-26 10:00"), "2025-06-26 10:00", "Angebot__1a2b3c4d.pdf",
+              "1on1/Anhaenge/alice__abc123", "Angebot__1a2b3c4d.pdf")
+    tf["att"] = "Angebot__1a2b3c4d.pdf"
+    tk = _rec(UID_TK, "datei", "teams",
+              "channels/Team Rakete/Dateien/Allgemein/Plan.xlsx", "", "",
+              _ts("2025-06-27 10:00"), "2025-06-27 10:00", "Plan.xlsx",
+              "channels/Team Rakete/Dateien/Allgemein", "Plan.xlsx")
+    tk["att"] = "Plan.xlsx"
+    return [f1, f2, pg, pl, td, on, tf, tk]
 
 
 @pytest.fixture
@@ -139,7 +162,7 @@ def state_alle(tmp_path, monkeypatch):
     store.mkdir()
     ordner = {}
     for name in ("teams", "outlook", "onedrive", "sharepoint", "pages",
-                 "planner"):
+                 "planner", "todo", "onenote"):
         ordner[name] = tmp_path / f"{name}_export"
     (ordner["onedrive"] / "Dateien" / "Projekte").mkdir(parents=True)
     (ordner["onedrive"] / "Dateien" / "Projekte" / "Angebot.pdf").write_bytes(
@@ -157,7 +180,24 @@ def state_alle(tmp_path, monkeypatch):
     (board / "Anhaenge" / "Angebot.pdf").write_bytes(b"%PDF-1.4 binary")
     (board / "Anhaenge" / "notizen.txt").write_text("Notizen zum Angebot",
                                                     encoding="utf-8")
-    ordner["teams"].mkdir()
+    liste = ordner["todo"] / "Einkauf__abcd1234"
+    (liste / "Anhaenge").mkdir(parents=True)
+    (liste / "list.html").write_text('<html><a href="Anhaenge/Bon.pdf">Bon</a></html>',
+                                     encoding="utf-8")
+    (liste / "Anhaenge" / "Bon.pdf").write_bytes(b"%PDF-1.4 binary")
+    seite = ordner["onenote"] / "Projekte" / "Allgemein"
+    (seite / "Besprechung__aaaa1111.files").mkdir(parents=True)
+    (seite / "Besprechung__aaaa1111.html").write_text(
+        '<html><body><p>Notizen</p><a class="mn-anhang" '
+        'href="Besprechung__aaaa1111.files/Protokoll.pdf">Protokoll</a></body></html>',
+        encoding="utf-8")
+    (seite / "Besprechung__aaaa1111.files" / "Protokoll.pdf").write_bytes(b"%PDF-1.4 x")
+    anh = ordner["teams"] / "1on1" / "Anhaenge" / "alice__abc123"
+    anh.mkdir(parents=True)
+    (anh / "Angebot__1a2b3c4d.pdf").write_bytes(b"%PDF-1.4 binary")
+    kanal = ordner["teams"] / "channels" / "Team Rakete" / "Dateien" / "Allgemein"
+    kanal.mkdir(parents=True)
+    (kanal / "Plan.xlsx").write_bytes(b"PK\x03\x04xlsx")
     ordner["outlook"].mkdir()
     chunks = corpus.chunk_records(_sample_records() + _extra_records())
     for c in chunks:
@@ -289,10 +329,13 @@ def test_where_builds_fragments():
     w, p = mcp_server._where("", None, None, "all")
     # _WHERE_ALL is the fast-path marker in _semantic_rank – pin its value
     assert w == "1=1" and w == mcp_server._WHERE_ALL and p == []
-    w, p = mcp_server._where("Alice", 1.0, 2.0, "teams")
+    w, p = mcp_server._where("Alice", 1.0, 2.0, "outlook")
     assert "src = ?" in w and "ppl LIKE ?" in w
     assert "ts >= ?" in w and "ts <= ?" in w
-    assert p == ["teams", "%alice%", 1.0, 2.0]  # person is lowercased
+    assert p == ["outlook", "%alice%", 1.0, 2.0]  # person is lowercased
+    # Teams means the conversations and the files next to them.
+    w, p = mcp_server._where("", None, None, "teams")
+    assert w == "(src = 'teams' OR (src = 'datei' AND root = 'teams'))" and p == []
 
 
 def test_fts_match_sanitizes_query():
@@ -684,7 +727,7 @@ def test_read_source_file_rejects_symlink_escape(state):
 def test_read_source_file_invalid_root_and_missing_file(state):
     out = mcp_server.read_source_file("kalender", "termin.ics")
     assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
-           "'sharepoint', 'pages' or 'planner'."}
+           "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
     out = mcp_server.read_source_file("teams", "1on1/fehlt.html")
     assert out == {"error": "File not found: 1on1/fehlt.html"}
     out = mcp_server.read_source_file("teams", "")  # a directory, not a file
@@ -714,7 +757,7 @@ def test_tools_without_initialized_state(empty_state):
     # read_source_file fails in a controlled way (no export directory known) …
     out = mcp_server.read_source_file("teams", "x.html")
     assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
-           "'sharepoint', 'pages' or 'planner'."}
+           "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
     # … the DB-backed tools raise a KeyError for lack of STATE["db"]
     # (current behavior – pinned down here)
     with pytest.raises(KeyError):
@@ -1639,8 +1682,11 @@ def test_quellenfilter_nimmt_mehrere_quellen(state_alle):
     assert ordner == {"Dateien/Projekte", "Board A"}
     assert mcp_server.list_folders(source="unbekannt")["folders"] == []
     assert mcp_server._quelle_cond("outlook") == ("src = ?", ["outlook"])
-    assert mcp_server._quelle_cond("outlook, teams")[0] == \
+    assert mcp_server._quelle_cond("outlook, kalender")[0] == \
         "(src = ? OR src = ?)"
+    assert mcp_server._quelle_cond("outlook, teams") == (
+        "(src = ? OR (src = 'teams' OR (src = 'datei' AND root = 'teams')))",
+        ["outlook"])
 
 
 def test_list_sources_beschreibt_jede_quelle(state_alle):
@@ -1649,8 +1695,15 @@ def test_list_sources_beschreibt_jede_quelle(state_alle):
     aus = mcp_server.list_sources()
     keys = {q["key"] for q in aus["sources"]}
     assert keys == {"outlook", "teams", "kalender", "kontakte", "onedrive",
-                    "sharepoint", "pages", "planner"}
+                    "sharepoint", "pages", "planner", "todo", "onenote"}
     assert aus["not_in_archive"] == []
+    je = {q["key"]: q for q in aus["sources"]}
+    assert je["todo"]["folder_filter"] == "the list"
+    assert "notebook" in je["onenote"]["folder_filter"]
+    nachrichten = sum(1 for r in _sample_records() if r["src"] == "teams")
+    assert je["teams"]["items"] == nachrichten + 2, \
+        "the files next to the chats count as Teams"
+    assert "list_files" in je["teams"]["indexed"]
     je = {q["key"]: q for q in aus["sources"]}
     assert je["onedrive"]["items"] == 1 and je["outlook"]["items"] == 3
     assert "not indexed" in je["onedrive"]["indexed"]
@@ -1663,7 +1716,7 @@ def test_list_sources_beschreibt_jede_quelle(state_alle):
 def test_list_sources_nennt_was_nie_exportiert_wurde(state):
     aus = mcp_server.list_sources()
     assert set(aus["not_in_archive"]) == {"onedrive", "sharepoint", "pages",
-                                          "planner"}
+                                          "planner", "todo", "onenote"}
 
 
 def test_get_document_datei_liefert_metadaten(state_alle):
@@ -1765,3 +1818,47 @@ def test_beschreibungen_nennen_die_dateiinhalte_ehrlich():
         assert "not indexed" in fn.__doc__, fn.__name__
     assert "list_sources" in mcp_server._INSTRUCTIONS
     assert "NAME, PATH and TYPE" in mcp_server._INSTRUCTIONS
+
+
+def test_neue_quellen_sind_ueberall_gleichberechtigt(state_alle):
+    """To Do, OneNote and the Teams files answer every filter like the
+    older sources: search, browse, folders, filetypes, get_document,
+    read_source_file, list_files."""
+    treffer = {h["uid"] for h in mcp_server.search_messages(
+        "Angebot", mode="lexical", k=20)["results"]}
+    assert UID_ON in treffer and UID_TF in treffer
+    assert [h["uid"] for h in mcp_server.browse_messages(source="todo")["results"]] == [UID_TD]
+    assert [h["uid"] for h in mcp_server.browse_messages(source="onenote")["results"]] == [UID_ON]
+    teams = {h["uid"] for h in mcp_server.browse_messages(source="teams")["results"]}
+    assert {UID_TF, UID_TK} <= teams and UID_ON not in teams
+    nur_chats = {h["uid"] for h in
+                 mcp_server.browse_messages(source="teams", folder="1on1")["results"]}
+    assert UID_TF in nur_chats and UID_TK not in nur_chats
+    ordner = {f["path"] for f in mcp_server.list_folders(source="todo,onenote")["folders"]}
+    assert ordner == {"Einkauf", "Projekte"}, "notebook and list are the units"
+    typen = {t["type"] for t in mcp_server.list_filetypes(source="teams")["filetypes"]}
+    assert typen == {"pdf", "xlsx"}
+    assert {t["type"] for t in
+            mcp_server.list_filetypes(source="todo")["filetypes"]} == {"pdf"}
+    doc = mcp_server.get_document(UID_TK)
+    assert doc["file"]["name"] == "Plan.xlsx" and doc["file"]["binary"] is True
+    assert mcp_server.read_source_file("todo", "Einkauf__abcd1234/list.html")["content"]
+    assert mcp_server.read_source_file(
+        "onenote", "Projekte/Allgemein/Besprechung__aaaa1111.html")["content"]
+    assert mcp_server.read_source_file(
+        "teams", "channels/Team Rakete/Dateien/Allgemein/Plan.xlsx")["binary"] is True
+    assert mcp_server.corpus_stats()["todo_dir"].endswith("todo_export")
+
+
+def test_list_files_kennt_die_teams_dateien(state_alle):
+    wurzeln = mcp_server.list_files()["roots"]
+    teams = [w for w in wurzeln if w["root"] == "teams"]
+    assert [(w["path"], w["label"], w["files"]) for w in teams] == [
+        ("1on1/Anhaenge", "Teams: files shared in 1:1 chats", 1),
+        ("channels/Team Rakete", "Teams: Team Rakete", 1)]
+    ebene = mcp_server.list_files("teams", "channels/Team Rakete")
+    assert ebene["base"] == 2 and ebene["label"] == "Teams: Team Rakete"
+    assert [d["name"] for d in ebene["dirs"]] == ["Dateien"] and ebene["files"] == []
+    unten = mcp_server.list_files("teams", "channels/Team Rakete/Dateien/Allgemein")
+    assert [f["name"] for f in unten["files"]] == ["Plan.xlsx"]
+    assert unten["files"][0]["rel"] == "channels/Team Rakete/Dateien/Allgemein/Plan.xlsx"

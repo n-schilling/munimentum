@@ -1,45 +1,69 @@
-## New in 7.1.0
+## New in 8.0.0
 
-**Claude sees every source the same way.** The MCP server now covers the
-whole archive with one filter vocabulary — mail, Teams, calendar, contacts,
-OneDrive and SharePoint files, SharePoint pages, Planner boards — with the
-same filters the search tab offers: source (one or several), person, dates,
-folder (mailbox folder, calendar, chat kind, OneDrive folder, site/library,
-board, site) and file type. A `list_sources` tool says up front what each
-source holds and how the filters read there; files are searchable by name,
-path and type, never by content, and the tools say so wherever a file is
-touched.
+**A new front: two doors.** The page now has two main tabs, *Build
+archive* and *Search archive*, with *Overview* and *Settings* at the side.
+The archive page shows one line — how current the archive is — and one
+button, the sources as cards with their categories as chips, an (i) with
+their state and a gear into their settings; a running job opens its own
+window with progress, steps and log, stays until you close it and can be
+minimised into the header; an empty archive starts with three steps. The search keeps its filters in view
+and opens a chosen hit on the right with its actions. Settings have a
+navigation on the left, one block per source with the rest under
+*Advanced*, and a save bar that appears only with unsaved changes. Access,
+AI and MCP show their state where they are fixed: one state frame in the
+header, dots in the settings navigation. `DESIGN.md` in the repository
+says how the page is built and where a new element goes.
 
-**Appointments and contacts, structured.** `list_events` returns
-appointments as the calendar view shows them — start, end, location,
-attendees, status, including the ones recovered from invitation and
-cancellation mails — and `lookup_contact` reads the address book: e-mail,
-phone, organisation. Planner attachments can be browsed with `list_files`;
-a binary file (PDF, Office, image) comes back as metadata instead of noise.
+**Two more sources, both off until you switch them on.** *To Do* exports
+every list the account sees — one folder per list with a standalone
+`list.html`: open and completed tasks with steps, due dates, reminders,
+notes, linked resources and attachments; a task that leaves a list stays,
+greyed. *OneNote* exports every notebook page by page — one HTML per page
+with its images and attachments, so it opens offline; only pages that
+changed are fetched again, and a page that leaves its section keeps its
+file with a marker. Which notebooks come along works like the mailbox
+folders — sync the list, include/exclude rules, an export list — and each
+notebook has its own sync cadence and *Sync now*. OneNote allows 400
+requests an hour, so the export paces itself and a large notebook takes
+several runs, each continuing where the last stopped — a cancelled one
+included. Both sources are
+full-text searchable, in the app and via MCP, with the list or the notebook
+as the folder filter. To Do needs Tasks.Read, OneNote Notes.Read; the token
+wizard lists them.
 
-**The archive about itself.** `corpus_stats` reports how far the archive
-reaches, which months are empty and when each source last synced;
-`archive_analytics` returns the figures of the Analytics tab — so an answer
-can say what the archive does not cover instead of guessing.
+**The files shared in Teams, kept.** Two switches in the Teams settings,
+off by default: *Download shared files* fetches every file a chat or
+channel post references next to its conversation and links the local copy;
+*Mirror the channel folders* takes the Files tab of every exported channel
+the way a SharePoint library is mirrored, tombstones included, and channel
+posts link into that mirror. A size cap applies to both. The files are
+searchable by name, path and type under the Teams source, the file browser
+lists them per chat kind and per team, and the MCP `list_files` tool has a
+`teams` root. Needs Files.Read.All; the token wizard lists it.
 
-What 7.0.1 fixed — folders honoured after a restart, storage paths saved
-with the settings — is in the notes of that release.
+**Archive HTML opens from the app.** Every board, list, page and
+conversation served through the app now has its relative links —
+attachments, mirrored files, a page's files folder — routed back through
+the app, so what works on disk works in the browser too.
 
-## Upgrading from 6.x
+## Upgrading
+
+**From 7.x:** nothing to do. Archive, settings and index are used as they
+are; only the interface is new. What you will look for: the log bar and the
+header pills are gone — the log lives in the run window, AI and MCP show
+their state in the settings navigation, and the notice about a newer
+release sits under *Settings → App*.
 
 **Coming from 6.1 or older?** Run the latest 6.x release once first — it
-moves the export bookkeeping into each folder's `state.db`; 7.x no longer
-carries that migration.
-
-Only if you had redirected the data folder with the old pointer file
-(`datenordner.txt`): it is no longer read. Move `app_config.json`,
-`gx_token.txt`, `msal_cache.bin` and `runs.db` into the app folder (macOS
-`~/Library/Application Support/Munimentum`, Windows
+moves the export bookkeeping into each folder's `state.db`; 7.x and 8.x no
+longer carry that migration. Only if you had redirected the data folder
+with the old pointer file (`datenordner.txt`): it is no longer read. Move
+`app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` into the
+app folder (macOS `~/Library/Application Support/Munimentum`, Windows
 `%LOCALAPPDATA%\Munimentum`, Linux `~/.local/share/Munimentum`), then set
-the data and index paths in *Settings* to where your archive lives.
-
-**Claude Desktop users:** the stdio MCP snippet changed in 7.0 (it names the
-app folder) — copy it again from *Settings*.
+the data and index paths in *Settings* to where your archive lives. Claude
+Desktop users: the stdio MCP snippet changed in 7.0 (it names the app
+folder) — copy it again from *Settings*.
 
 ## Which file?
 
@@ -84,8 +108,8 @@ Without Ollama everything works except *meaning-based* search — export,
 full-text search and the MCP server for Claude run normally. The app asks at
 startup and explains the installation if you want it.
 
-With Ollama, *Search data* gains two more kinds of search: *Similar search* and
-*AI summary*. Both run on your machine; nothing leaves it. See the README.
+With Ollama, *Search archive* gains two more kinds of search: *Similar search*
+and *AI answer*. Both run on your machine; nothing leaves it. See the README.
 
 ## Checksums
 

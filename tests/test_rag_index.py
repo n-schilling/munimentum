@@ -484,7 +484,7 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
 
     def fake_build(teams, outlook, store, model, url, batch, embeddings=True,
                    onedrive_dir=None, sharepoint_dir=None, pages_dir=None,
-                   planner_dir=None):
+                   planner_dir=None, todo_dir=None, onenote_dir=None):
         seen["args"] = (teams, outlook, store, model, url, batch, embeddings)
         seen["onedrive"] = onedrive_dir
         return 3, 1, 8
@@ -493,7 +493,7 @@ def test_main_reicht_argumente_an_build_index_weiter(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv",
                         ["rag_index.py", "t_dir", "o_dir", "od_dir",
                          "--store", "s", "--batch", "7",
-                         "--sharepoint", "sp", "--pages", "pg", "--planner", "pl"])
+                         "--sharepoint", "sp", "--pages", "pg", "--planner", "pl", "--todo", "td", "--onenote", "on"])
     rag_index.main()
     assert seen["args"] == ("t_dir", "o_dir", "s", rag_index.DEFAULT_MODEL,
                             rag_index.DEFAULT_OLLAMA, 7, True)
@@ -508,7 +508,7 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
 
     def fake_build(teams, outlook, store, model, url, batch, embeddings=True,
                    onedrive_dir=None, sharepoint_dir=None, pages_dir=None,
-                   planner_dir=None):
+                   planner_dir=None, todo_dir=None, onenote_dir=None):
         seen["embeddings"] = embeddings
         return 3, 0, 0
 
@@ -516,7 +516,7 @@ def test_main_no_embeddings_schaltet_einbetten_ab(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv",
                         ["rag_index.py", "t", "o", "od", "--no-embeddings",
                          "--store", "s", "--sharepoint", "sp",
-                         "--pages", "pg", "--planner", "pl"])
+                         "--pages", "pg", "--planner", "pl", "--todo", "td", "--onenote", "on"])
     rag_index.main()
     assert seen["embeddings"] is False
     # The app knows the mode itself; the numbers arrive as a result event.

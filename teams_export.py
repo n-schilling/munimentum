@@ -25,8 +25,19 @@ activity per conversation. A new run re-exports chats with NEW messages and
 skips unchanged ones; channels are re-checked each run and only written on
 change (REFRESH_CHANNELS=0 turns that off). Delete the database (or folder)
 for a full re-export.
+
+Files, both optional and off by default (TEAMS_ATTACHMENTS,
+TEAMS_CHANNEL_FILES, TEAMS_FILES_MAX_MB): a file a message references lives
+in the sender's OneDrive or the team's library and dies with the access. With
+the first switch every such file is fetched next to its conversation
+(<kind>/Anhaenge/<conversation>/) and the HTML links the local copy; with
+the second, each exported channel's files folder is mirrored through
+drive_mirror (channels/<Team>/Dateien/<channel folder>/…) – one delta walk
+per team library, its own state.db, tombstones included – and channel posts
+link into that mirror instead of fetching twice.
 """
 
+import os
 import sys
 import re
 import json
@@ -38,8 +49,10 @@ import html as html_lib
 from datetime import datetime
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import unquote
 
 import auth
+import drive_mirror
 import export_util
 import state_db
 import graph_client
@@ -90,6 +103,27 @@ CACHE_IMAGES = settings.flag("CACHE_IMAGES", "cache_images")
 # changes, …) and no real message are NOT exported by default and not added
 # to the index. SKIP_EMPTY_CHATS=0 exports them anyway.
 SKIP_EMPTY_CHATS = settings.flag("SKIP_EMPTY_CHATS", "skip_empty_chats")
+
+# The two file switches, off by default: a chat history is small, the files
+# it points at may not be. Both need Files.Read.All – requested only when
+# one of them is on, so a plain chat export keeps its small scope.
+ATTACHMENTS = settings.flag("TEAMS_ATTACHMENTS", "teams_attachments")
+CHANNEL_FILES = settings.flag("TEAMS_CHANNEL_FILES", "teams_channel_files")
+
+ANHANG_DIR = "Anhaenge"          # files a message references, per conversation
+DATEI_DIR = drive_mirror.DATEI_DIR   # the mirrored channel folders
+
+
+def files_max_bytes():
+    """The size cap for both file switches; 0 means no limit."""
+    mb = settings.number("TEAMS_FILES_MAX_MB", "teams_files_max_mb", low=0)
+    return int(mb) * 1024 * 1024
+
+
+def _dateiscopes(scopes):
+    if ATTACHMENTS or CHANNEL_FILES:
+        return scopes + [RES + "Files.Read.All"]
+    return list(scopes)
 
 TYPEMAP = {"oneOnOne": "1on1", "group": "group", "meeting": "meeting"}
 SUBNAME = {"1on1": "1:1-Chat", "group": "Gruppenchat",
@@ -145,19 +179,20 @@ class _BildClient:
         raise ImageUnavailable("429")
 
 
-class Graph(_BildClient, graph_client.Graph):
+class Graph(_BildClient, drive_mirror.DriveOps, graph_client.Graph):
     """Signed-in access with the channel question.
 
     Channel permissions are requested first and dropped on failure –
     ChannelMessage.Read.All requires admin consent in many tenants, and a
-    chat export must not fail over that."""
+    chat export must not fail over that. The drive operations serve the
+    channel files mirror; drive_base is set per team library."""
 
     def __init__(self, want_channels, nur_still=False):
         self.want_channels = want_channels
         self.channels_enabled = False
 
         if want_channels:
-            anmeldung = auth.Login(SCOPES_FULL)
+            anmeldung = auth.Login(_dateiscopes(SCOPES_FULL))
             if anmeldung.anmelden(nur_still=nur_still, weich=True):
                 self.channels_enabled = True
                 super().__init__(anmeldung=anmeldung)
@@ -165,10 +200,10 @@ class Graph(_BildClient, graph_client.Graph):
             progress.event("run.teams.channels_denied", "warn",
                            error=(anmeldung.fehler or "").splitlines()[0]
                            if anmeldung.fehler else "")
-        super().__init__(SCOPES_CHAT, nur_still=nur_still)
+        super().__init__(_dateiscopes(SCOPES_CHAT), nur_still=nur_still)
 
 
-class TokenClient(_BildClient, graph_client.TokenClient):
+class TokenClient(_BildClient, drive_mirror.DriveOps, graph_client.TokenClient):
     """Ready-made bearer token; only the caller knows whether channels work."""
 
     def __init__(self, token, channels_enabled):
@@ -306,16 +341,31 @@ def embed_hosted_images(html_content, counter=None):
     return HOSTED_RE.sub(repl, html_content)
 
 
-def render_attachments(atts):
+def render_attachments(atts, lokal=None):
+    """The attachment line; `lokal` maps a file URL to the relative path of
+    its copy next to the conversation – then the link stays usable once
+    the access is gone."""
     items = []
     for a in atts or []:
         nm = a.get("name") or a.get("contentType") or "Anhang"
         url = a.get("contentUrl")
         if url:
-            items.append(f'📎 <a href="{html_lib.escape(url)}">{html_lib.escape(nm)}</a>')
+            ziel = (lokal or {}).get(url, url)
+            items.append(f'📎 <a href="{html_lib.escape(ziel)}">{html_lib.escape(nm)}</a>')
         else:
             items.append(f"📎 {html_lib.escape(nm)}")
     return f'<div class="att">{"<br>".join(items)}</div>' if items else ""
+
+
+def _referenzen(msgs):
+    """(url, name) of every file the messages point at – reference
+    attachments only; cards, code snippets and quoted messages carry no
+    file."""
+    for m in msgs:
+        for a in m.get("attachments") or []:
+            url = a.get("contentUrl")
+            if url and (a.get("contentType") or "") == "reference":
+                yield url, str(a.get("name") or "datei")
 
 
 def render_reactions(rs):
@@ -326,7 +376,7 @@ def render_reactions(rs):
         " ".join(f"{k} ×{v}" for k, v in c.items())) + "</div>"
 
 
-def render_message(msg, is_reply=False, img_counter=None):
+def render_message(msg, is_reply=False, img_counter=None, lokal=None):
     when = human_time(msg.get("createdDateTime"))
     if msg.get("messageType", "message") != "message":   # system event
         ed = msg.get("eventDetail") or {}
@@ -358,7 +408,7 @@ def render_message(msg, is_reply=False, img_counter=None):
             f'<span class="name">{html_lib.escape(name)}</span>'
             f'<span class="time">{when}</span></div>{subj_html}'
             f'<div class="body">{body_html}</div>'
-            f'{render_attachments(msg.get("attachments"))}'
+            f'{render_attachments(msg.get("attachments"), lokal)}'
             f'{render_reactions(msg.get("reactions"))}</div>')
 
 
@@ -430,6 +480,206 @@ def render_conversation(title, subtitle, meta, blocks):
 
 
 # ---------------------------------------------------------------------------
+# Files: referenced attachments next to the conversation
+# ---------------------------------------------------------------------------
+def anhang_ordner(rel):
+    """Where a conversation's files live, relative to the output folder:
+    1on1/Name__id.html -> 1on1/Anhaenge/Name__id."""
+    ordner, _, datei = rel.rpartition("/")
+    stamm = datei[:-5] if datei.endswith(".html") else datei
+    return f"{ordner}/{ANHANG_DIR}/{stamm}" if ordner else f"{ANHANG_DIR}/{stamm}"
+
+
+def _anhang_name(url, name):
+    """A file name the file system and the /source route can trust; the
+    URL tag keeps two same-named files from two messages apart."""
+    roh = re.sub(r"[&#%?]", "_", safe(str(name or "datei")))
+    stamm, punkt, endung = roh.rpartition(".")
+    kurz = short_id(url)
+    return f"{stamm}__{kurz}.{endung}" if punkt and stamm else f"{roh}__{kurz}"
+
+
+def _lade_datei(graph, url, ziel):
+    """Stream a file to `ziel` – sidecar first, renamed at the end, so an
+    abort never leaves a half file that would pass as complete."""
+    r = graph.stream(url, timeout=drive_mirror.TIMEOUT_BYTES, label=" (Datei)")
+    ziel.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ziel.with_name(ziel.name + ".teil")
+    with open(tmp, "wb") as f:
+        for stueck in r.iter_content(chunk_size=1 << 20):
+            if stueck:
+                f.write(stueck)
+    os.replace(tmp, ziel)
+
+
+def anhaenge_umziehen(out, prior, new_rel):
+    """A renamed conversation takes its files folder along – before the
+    run looks for them under the new name."""
+    if not prior or not prior.get("rel") or prior["rel"] == new_rel:
+        return
+    alt, neu = out / anhang_ordner(prior["rel"]), out / anhang_ordner(new_rel)
+    if alt.is_dir() and not neu.exists():
+        neu.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            alt.replace(neu)
+        except OSError:
+            pass
+
+
+def anhaenge_laden(graph, out, key, rel, msgs, ausser=None):
+    """The files the messages reference, fetched next to the conversation.
+
+    Returns ({url: href relative to the HTML}, files fetched, left out by
+    size, failed). Refreshed by the driveItem's cTag whenever the
+    conversation is exported again; a file that will not come keeps its
+    cloud link and says so once in the log. `ausser` names URLs the channel
+    mirror already holds – linked, never fetched twice."""
+    db = state_db.StateDb(out)
+    kv = f"files:{key}"
+    try:
+        stand = json.loads(db.kv_lesen(kv) or "{}")
+    except ValueError:
+        stand = {}
+    ordner_rel = anhang_ordner(rel)
+    href_basis = ordner_rel.split("/", 1)[1] if "/" in rel else ordner_rel
+    grenze = files_max_bytes()
+    lokal, geladen, ausgelassen, fehler = {}, 0, 0, 0
+    for url, name in _referenzen(msgs):
+        if url in lokal:
+            continue
+        if ausser and url in ausser:
+            lokal[url] = ausser[url]
+            continue
+        token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
+        alt = stand.get(url) or {}
+        try:
+            meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem"
+                             "?$select=name,cTag,size")
+            groesse = int(meta.get("size") or 0)
+            if grenze and groesse > grenze:
+                ausgelassen += 1
+                continue
+            dateiname = _anhang_name(url, meta.get("name") or name)
+            ziel_rel = f"{ordner_rel}/{dateiname}"
+            href = f"{href_basis}/{dateiname}"
+            if alt.get("ctag") == (meta.get("cTag") or "") and (out / ziel_rel).exists():
+                lokal[url] = href
+                continue
+            _lade_datei(graph, f"{GRAPH}/shares/u!{token}/driveItem/content",
+                        out / ziel_rel)
+            stand[url] = {"rel": ziel_rel, "ctag": meta.get("cTag") or "",
+                          "size": groesse}
+            lokal[url] = href
+            geladen += 1
+        except TokenExpired:
+            raise
+        except Exception as e:
+            fehler += 1
+            progress.event("run.teams.file_failed", "warn", name=name[:60],
+                           error=f"{type(e).__name__}: {e}")
+    db.kv_schreiben(kv, json.dumps(stand, ensure_ascii=False))
+    return lokal, geladen, ausgelassen, fehler
+
+
+# ---------------------------------------------------------------------------
+# Files: the channel folders, mirrored
+# ---------------------------------------------------------------------------
+def spiegel_links(out, info, msgs):
+    """URL -> href for the files of channel posts that the mirror holds –
+    the post links into the mirror instead of fetching the file twice."""
+    lokal = {}
+    basis = info["weburl"].rstrip("/").lower() + "/"
+    for url, _name in _referenzen(msgs):
+        u = unquote(url)
+        if not u.lower().startswith(basis):
+            continue
+        rest = [drive_mirror.safe(s) for s in u[len(basis):].split("/") if s]
+        if not rest:
+            continue
+        rel = "/".join([info["rel"], *rest])
+        if (out / info["wurzel"] / rel).exists():
+            lokal[url] = f'{info["praefix"]}/{rel}' if info["praefix"] else rel
+    return lokal
+
+
+def kanal_dateien_spiegeln(graph, out, channel_jobs):
+    """Mirror the files folder of every channel being exported.
+
+    Standard channels share the team's library, so one delta walk per team
+    serves them all, scoped to their folders and written below
+    channels/<Team>/Dateien/. A private or shared channel brings a library
+    of its own and lands in a folder of its own. Returns ({channel id:
+    mirror info}, the summed mirror counts)."""
+    je_drive = {}
+    for _kind, team, ch in channel_jobs:
+        tname = team.get("displayName", "Team")
+        cname = ch.get("displayName", "Kanal")
+        try:
+            ordner = graph.get(f"{GRAPH}/teams/{team['id']}/channels/{ch['id']}"
+                               "/filesFolder")
+            drive_id = (ordner.get("parentReference") or {}).get("driveId")
+            if not drive_id or not ordner.get("id"):
+                raise ValueError("files folder without a drive")
+            item = graph.get(f"{GRAPH}/drives/{drive_id}/items/{ordner['id']}"
+                             "?$select=id,name,parentReference,root,webUrl")
+        except TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.teams.files_failed", "warn",
+                           name=f"{tname} / {cname}",
+                           error=f"{type(e).__name__}: {e}")
+            continue
+        eintrag = je_drive.setdefault(drive_id, {"team": team, "kanaele": []})
+        eintrag["kanaele"].append((ch, item))
+
+    spiegel = {}
+    summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
+    grenze = files_max_bytes()
+    for drive_id, d in je_drive.items():
+        team = d["team"]
+        tname = safe(team.get("displayName", "Team"))
+        standard = all((ch.get("membershipType") or "standard") == "standard"
+                       for ch, _i in d["kanaele"])
+        if standard:
+            wurzel_rel, praefix = f"channels/{tname}", ""
+        else:
+            ch0, _i = d["kanaele"][0]
+            praefix = f"{safe(ch0.get('displayName', 'Kanal'))}__{short_id(ch0['id'])}"
+            wurzel_rel = f"channels/{tname}/{praefix}"
+        regeln, ganz = [(False, "**")], False
+        for ch, item in d["kanaele"]:
+            if "root" in item:
+                ganz, rel = True, DATEI_DIR
+            else:
+                rel = drive_mirror.rel_pfad(item)
+                regeln.append((True, f"{rel}/**"))
+            spiegel[ch["id"]] = {"wurzel": wurzel_rel, "praefix": praefix,
+                                 "rel": rel,
+                                 "weburl": unquote(item.get("webUrl") or "")}
+        auswahl = drive_mirror.Selection(scope=None if ganz else regeln,
+                                         max_bytes=grenze)
+        graph.drive_base = f"{GRAPH}/drives/{drive_id}"
+        progress.event("run.teams.files", name=team.get("displayName", "Team"),
+                       n=len(d["kanaele"]))
+        ziel = out / wurzel_rel
+        try:
+            zahlen = drive_mirror.lauf(graph, ziel, auswahl, drive_mirror.workers(),
+                                       still=True,
+                                       zustand=state_db.DbZustand(ziel))
+        except TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.teams.files_failed", "warn",
+                           name=team.get("displayName", "Team"),
+                           error=f"{type(e).__name__}: {e}")
+            summe["errors"] += 1
+            continue
+        for k in summe:
+            summe[k] += int(zahlen.get(k) or 0)
+    return spiegel, summe
+
+
+# ---------------------------------------------------------------------------
 # Progress (thread-safe)
 # ---------------------------------------------------------------------------
 def load_state(out):
@@ -494,12 +744,15 @@ def record_done(out, state, key, category, title, rel, count, last_activity=None
 # ---------------------------------------------------------------------------
 # Export of ONE conversation (runs in a worker thread)
 # ---------------------------------------------------------------------------
-def render_blocks(msgs):
+def render_blocks(msgs, lokal=None):
     """Render every message block; returns (blocks, embedded image count)."""
     img, blocks = [0], []
     for m in msgs:
-        blocks.append(render_message(m, img_counter=img))
+        blocks.append(render_message(m, img_counter=img, lokal=lokal))
     return blocks, img[0]
+
+
+_KEINE_DATEIEN = {"files": 0, "excluded": 0, "file_errors": 0}
 
 
 def export_one_chat(graph, out, state, my_id, chat):
@@ -522,12 +775,18 @@ def export_one_chat(graph, out, state, my_id, chat):
         last_act = newest_iso(m.get("createdDateTime") for m in msgs)
         record_done(out, state, key, folder, title, None, len(msgs),
                     last_activity=last_act, empty=True)
-        return ("empty", folder, title, len(msgs), time.monotonic() - t0)
+        return ("empty", folder, title, len(msgs), time.monotonic() - t0,
+                dict(_KEINE_DATEIEN))
 
-    blocks, nimg = render_blocks(msgs)
     meta = f"{len(msgs)} Nachrichten · Chat-ID {key}"
     fname = f"{safe(title)}__{short_id(key)}.html"
     new_rel = f"{folder}/{fname}"
+    lokal, zahlen = None, dict(_KEINE_DATEIEN)
+    if ATTACHMENTS:
+        anhaenge_umziehen(out, prior, new_rel)
+        lokal, zahlen["files"], zahlen["excluded"], zahlen["file_errors"] = \
+            anhaenge_laden(graph, out, key, new_rel, msgs)
+    blocks, nimg = render_blocks(msgs, lokal)
     (out / folder).mkdir(parents=True, exist_ok=True)
     (out / folder / fname).write_text(
         render_conversation(title, SUBNAME.get(folder, "Chat"), meta, blocks),
@@ -536,10 +795,11 @@ def export_one_chat(graph, out, state, my_id, chat):
     last_act = newest_iso(m.get("createdDateTime") for m in msgs)
     record_done(out, state, key, folder, title, new_rel, len(msgs),
                 last_activity=last_act)
-    return ("updated" if prior else "new", folder, title, len(msgs), time.monotonic() - t0)
+    return ("updated" if prior else "new", folder, title, len(msgs),
+            time.monotonic() - t0, zahlen)
 
 
-def export_one_channel(graph, out, state, team, ch):
+def export_one_channel(graph, out, state, team, ch, spiegel=None):
     t0 = time.monotonic()
     tname = team.get("displayName", "Team")
     cname = ch.get("displayName", "Kanal")
@@ -549,10 +809,9 @@ def export_one_channel(graph, out, state, team, ch):
     # Fetch root posts WITH embedded replies (up to 1000 inline)
     roots = list(graph.paged(base, {"$top": PAGE, "$expand": "replies"}))
     roots.sort(key=lambda m: m.get("createdDateTime") or "")
-    img = [0]
-    blocks, count, times = [], 0, []
+    reihe, count, times = [], 0, []
     for root in roots:
-        blocks.append(render_message(root, img_counter=img))
+        reihe.append((root, False))
         count += 1
         times.append(root.get("createdDateTime"))
         times.append(root.get("lastModifiedDateTime"))
@@ -564,39 +823,56 @@ def export_one_channel(graph, out, state, team, ch):
             nxt = data.get("@odata.nextLink")
         replies.sort(key=lambda m: m.get("createdDateTime") or "")
         for rep in replies:
-            blocks.append(render_message(rep, is_reply=True, img_counter=img))
+            reihe.append((rep, True))
             count += 1
             times.append(rep.get("createdDateTime"))
             times.append(rep.get("lastModifiedDateTime"))
     fp = newest_iso(times)   # newest activity (incl. replies/edits)
 
-    # Unchanged since the last run? -> don't rewrite
-    if prior:
+    # Unchanged since the last run? -> don't rewrite. A mirror that just
+    # brought files the posts point at is a change too: the links must
+    # move from the cloud to the copy.
+    if prior and not (spiegel and spiegel.get("neu")):
         ps, cs = parse_ts(prior.get("last_activity")), parse_ts(fp)
         if cs is None or (ps is not None and cs <= ps):
-            return ("unchanged", "channels", f"{tname} / {cname}", count, time.monotonic() - t0)
+            return ("unchanged", "channels", f"{tname} / {cname}", count,
+                    time.monotonic() - t0, dict(_KEINE_DATEIEN))
 
     title = f"{tname} / {cname}"
     meta = f"{count} Nachrichten (inkl. Antworten) · {ch.get('membershipType', 'standard')}"
-    tdir = out / "channels" / safe(tname)
-    tdir.mkdir(parents=True, exist_ok=True)
     fname = f"{safe(cname)}__{short_id(ch['id'])}.html"
     new_rel = f"channels/{safe(tname)}/{fname}"
+    msgs = [m for m, _r in reihe]
+    lokal, zahlen = {}, dict(_KEINE_DATEIEN)
+    if spiegel:
+        lokal = spiegel_links(out, spiegel, msgs)
+    if ATTACHMENTS:
+        anhaenge_umziehen(out, prior, new_rel)
+        lokal, zahlen["files"], zahlen["excluded"], zahlen["file_errors"] = \
+            anhaenge_laden(graph, out, key, new_rel, msgs, ausser=lokal)
+    img, blocks = [0], []
+    for m, antwort in reihe:
+        blocks.append(render_message(m, is_reply=antwort, img_counter=img,
+                                     lokal=lokal or None))
+    tdir = out / "channels" / safe(tname)
+    tdir.mkdir(parents=True, exist_ok=True)
     (tdir / fname).write_text(
         render_conversation(title, "Team-Kanal", meta, blocks), encoding="utf-8")
     cleanup_old(out, prior, new_rel)
     record_done(out, state, key, "channels", title, new_rel, count, last_activity=fp)
-    return ("updated" if prior else "new", "channels", title, count, time.monotonic() - t0)
+    return ("updated" if prior else "new", "channels", title, count,
+            time.monotonic() - t0, zahlen)
 
 
-def make_runner(graph, out, state, my_id, kind, a, b):
+def make_runner(graph, out, state, my_id, kind, a, b, spiegel=None):
     def run():
         if STOP.is_set():
             return ("stopped", None, None, 0, 0.0)
         try:
             if kind == "chat":
                 return export_one_chat(graph, out, state, my_id, a)
-            return export_one_channel(graph, out, state, a, b)
+            return export_one_channel(graph, out, state, a, b,
+                                      spiegel=(spiegel or {}).get(b["id"]))
         except TokenExpired:
             STOP.set()
             return ("expired", None, None, 0, 0.0)
@@ -684,6 +960,8 @@ def run_parallel(runners, stats, workers):
                 res = ("error", None, str(e), 0, 0.0)
             status, cat, label, count = res[0], res[1], res[2], res[3]
             secs = res[4] if len(res) > 4 else 0.0
+            for k, v in (res[5] if len(res) > 5 else {}).items():
+                stats[k] = stats.get(k, 0) + int(v or 0)
             dur = f"{secs:.0f}s" if secs >= 1 else f"{secs * 1000:.0f}ms"
             kind = progress.atom("export.cat." + cat) if cat else ""
             with PRINT_LOCK:
@@ -751,7 +1029,8 @@ def main():
         IMGCACHE_DIR = out / ".imgcache"
         IMGCACHE_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state(out)
-    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0,
+             "files": 0, "excluded": 0, "file_errors": 0, "gone": 0}
     result = "done"
 
     try:
@@ -766,7 +1045,19 @@ def main():
         channel_jobs = (build_channel_jobs(graph, out, state, stats, selected_teams)
                         if (want_channels and selected_teams) else [])
 
-        runners = [make_runner(graph, out, state, my_id, k, a, b)
+        # The channel folders first, in this thread: the posts then link
+        # into the mirror, and drive_base is touched by nobody else.
+        spiegel = {}
+        if CHANNEL_FILES and channel_jobs:
+            spiegel, zahlen = kanal_dateien_spiegeln(graph, out, channel_jobs)
+            stats["files"] += zahlen["new"]
+            stats["excluded"] += zahlen["excluded"]
+            stats["file_errors"] += zahlen["errors"]
+            stats["gone"] += zahlen["gone"]
+            for info in spiegel.values():
+                info["neu"] = zahlen["new"]
+
+        runners = [make_runner(graph, out, state, my_id, k, a, b, spiegel)
                    for (k, a, b) in (chat_jobs + channel_jobs)]
         if runners:
             progress.event("run.teams.exporting", n=len(runners))
@@ -779,9 +1070,16 @@ def main():
         sys.exit(1)
 
     # Updated conversations count as well: their files have changed, so the
-    # index knows them only in the old version.
-    progress.ergebnis(stats["new"] + stats["updated"], unchanged=stats["skipped"],
-                      extra={"updated": stats["updated"], "empty": stats["empty"]})
+    # index knows them only in the old version. Files fetched count too –
+    # they are new archive content the index has not seen.
+    extra = {"updated": stats["updated"], "empty": stats["empty"]}
+    if ATTACHMENTS or CHANNEL_FILES:
+        extra.update(files=stats["files"], gone=stats["gone"])
+    progress.ergebnis(stats["new"] + stats["updated"] + stats["files"],
+                      unchanged=stats["skipped"],
+                      excluded=stats["excluded"] if (ATTACHMENTS or CHANNEL_FILES) else None,
+                      errors=stats["file_errors"] if (ATTACHMENTS or CHANNEL_FILES) else None,
+                      extra=extra)
 
 
 if __name__ == "__main__":

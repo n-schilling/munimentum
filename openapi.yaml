@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 7.0.0
+  version: 8.0.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -72,7 +72,7 @@ paths:
                       built_at: { type: [string, "null"] }
                   exports:
                     type: object
-                    description: Per source (teams, outlook, onedrive, sharepoint, pages, planner) dir/exists/last_run.
+                    description: Per source (teams, outlook, onedrive, sharepoint, pages, planner, todo, onenote) dir/exists/last_run.
                   jobs: { $ref: "#/components/schemas/JobsState" }
                   mcp: { $ref: "#/components/schemas/McpState" }
                   config:
@@ -143,7 +143,7 @@ paths:
         - { name: person, in: query, schema: { type: string }, description: "Sender / author filter (substring)." }
         - { name: from, in: query, schema: { type: string, format: date }, description: "Inclusive lower date bound." }
         - { name: to, in: query, schema: { type: string, format: date }, description: "Inclusive upper date bound." }
-        - { name: source, in: query, schema: { type: string, default: all }, description: "One key or several comma-separated (\"onedrive,sharepoint\"): teams, outlook, kalender, kontakte, onedrive, sharepoint, pages, planner; datei = both file mirrors, all = everything." }
+        - { name: source, in: query, schema: { type: string, default: all }, description: "One key or several comma-separated (\"onedrive,sharepoint\"): teams, outlook, kalender, kontakte, onedrive, sharepoint, pages, planner, todo, onenote; teams includes the files next to the conversations, datei = every file mirror, all = everything." }
         - { name: k, in: query, schema: { type: integer, default: 20, maximum: 100 }, description: "Page size." }
         - { name: offset, in: query, schema: { type: integer, default: 0 }, description: "Results to skip." }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned messages." }
@@ -222,9 +222,9 @@ paths:
 
   /api/files:
     get:
-      summary: Browse the mirrored drives
+      summary: Browse the mirrored drives and the files next to conversations
       parameters:
-        - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint, planner] }, description: "Empty lists the entry points; planner browses a board's downloaded attachments." }
+        - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint, teams, planner] }, description: "Empty lists the entry points; teams browses the files shared in chats and the mirrored channel folders, planner a board's downloaded attachments." }
         - { name: path, in: query, schema: { type: string }, description: "Folder inside the mirror, as returned here." }
       responses:
         "200":
@@ -428,10 +428,11 @@ paths:
         root, exactly as hits and file listings return it; `..` escapes are
         blocked. Non-HTML files come with `Content-Disposition: attachment`;
         everything is sandboxed via `Content-Security-Policy: sandbox`.
-        A Planner `board.html` is rewritten in memory so its relative
-        attachment links route back through this endpoint.
+        An HTML file of the archive – board, list, page, conversation –
+        is rewritten in memory so its relative links (attachments, mirrored
+        files, a page's files folder) route back through this endpoint.
       parameters:
-        - { name: root, in: query, required: true, schema: { type: string, enum: [teams, outlook, onedrive, sharepoint, pages, planner] } }
+        - { name: root, in: query, required: true, schema: { type: string, enum: [teams, outlook, onedrive, sharepoint, pages, planner, todo, onenote] } }
         - { name: path, in: query, required: true, schema: { type: string } }
       responses:
         "200":
@@ -488,13 +489,14 @@ paths:
       summary: Start an export/index run
       description: |
         Step flags are the registry's request keys; absent means off. A
-        cadence below its interval can silently drop onedrive/teams for
-        this run (the log says so). `nur_einheit` narrows a SharePoint,
+        cadence below its interval can silently drop onedrive, teams, todo
+        or onenote for this run (the log says so). `nur_einheit` narrows a SharePoint,
         pages or Planner run to one URL and forces its sync.
 
         Note: the master switches from the settings (onedrive_enabled,
-        sharepoint_enabled, sharepoint_pages_enabled, planner_enabled)
-        gate the interface and the schedule, not this endpoint — asking
+        sharepoint_enabled, sharepoint_pages_enabled, planner_enabled,
+        todo_enabled, onenote_enabled) gate the interface and the schedule,
+        not this endpoint — asking
         for a source here runs it even when its switch is off. That is
         what the settings' per-URL "sync now" button relies on.
       requestBody:
@@ -507,11 +509,14 @@ paths:
                 onedrive: { type: boolean }
                 sharepoint: { type: boolean }
                 planner: { type: boolean }
+                todo: { type: boolean }
+                onenote: { type: boolean }
                 sharepoint_pages: { type: boolean }
                 teams: { type: boolean }
                 index: { type: boolean }
                 calendar: { type: boolean }
                 sync_onedrive: { type: boolean, description: "Folder tree only." }
+                sync_notebooks: { type: boolean, description: "OneNote notebook list only." }
                 sync_sharepoint: { type: boolean }
                 sync_folders: { type: boolean, description: "Outlook folder tree only." }
                 sync_calendars: { type: boolean }
@@ -600,7 +605,7 @@ paths:
             schema:
               type: object
               properties:
-                quelle: { type: string, description: "onedrive | calendar | sharepoint | anything else = mailbox." }
+                quelle: { type: string, description: "onedrive | calendar | sharepoint | onenote | anything else = mailbox." }
                 onedrive_rules: { type: [string, "null"], description: "Rule text; null = stored config." }
                 calendar_rules: { type: [string, "null"] }
                 folder_rules: { type: [string, "null"] }
@@ -661,7 +666,10 @@ paths:
         refresh_channels, skip_empty_chats, include_hidden,
         calendar_reconstruct, ollama_enabled, index_semantic,
         onedrive_enabled, sharepoint_enabled, sharepoint_pages_enabled,
-        planner_enabled, planner_attachments, calendar_rules, folder_rules,
+        planner_enabled, planner_attachments, todo_enabled, onenote_enabled,
+        onenote_rules, onenote_image_max_mb, teams_attachments,
+        teams_channel_files,
+        teams_files_max_mb, calendar_rules, folder_rules,
         onedrive_rules, sharepoint_urls, sharepoint_pages_urls,
         planner_urls, sharepoint_types_include, sharepoint_types_exclude,
         analytics_skip, filetype_hidden, skip_folders, auth_mode,
@@ -697,6 +705,8 @@ paths:
                 sharepoint: { type: boolean }
                 sharepoint_pages: { type: boolean }
                 planner: { type: boolean }
+                todo: { type: boolean }
+                onenote: { type: boolean }
                 index: { type: boolean }
                 calendar: { type: boolean }
                 interval_minutes: { type: integer, minimum: 5 }
@@ -886,7 +896,10 @@ components:
         busy: { type: boolean }
         job:
           type: [object, "null"]
-          description: label, steps, step, index, progress, started.
+          description: >-
+            label, steps, step, index, progress, started, log_seq (the
+            /api/log cursor before the run's first line – lines with a
+            greater `n` belong to this run).
         last:
           type: [object, "null"]
           description: label, ok, detail, finished.
@@ -975,8 +988,10 @@ components:
           description: nachrichten, gespraeche, mit_anhang, verschwunden, personen, von, bis (null = index too old to know).
         dateien:
           type: object
-          description: n, pages, onedrive, sharepoint, verschwunden.
+          description: n, pages, onedrive, sharepoint, teams, verschwunden.
         planner: { type: object }
+        todo: { type: object }
+        onenote: { type: object }
         verlauf: { type: array, description: "Message counts over time (mail and chat only)." }
         luecken: { type: array, description: "Months with no message at all." }
         anhang_typen: { type: [array, "null"] }

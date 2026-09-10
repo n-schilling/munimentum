@@ -95,8 +95,8 @@ STATE = {}          # populated in main(): db path, V (mmap), np, dirs, flags
 # about choosing between the tools; details belong in the docstrings.
 _INSTRUCTIONS = """\
 Offline archive of the user's own Teams chats, Outlook mail, calendar and
-contacts, OneDrive and SharePoint files, SharePoint pages and Planner boards.
-Everything is local and read-only; there is no live mailbox access, so
+contacts, OneDrive and SharePoint files, SharePoint pages, Planner boards,
+To Do lists and OneNote notebooks. Everything is local and read-only; there is no live mailbox access, so
 anything not exported is simply absent – and the archive has edges: it
 starts and ends somewhere, sources sync on their own cadence, and months can
 be empty. corpus_stats knows those edges; ask it before concluding that
@@ -104,10 +104,11 @@ something does not exist.
 
 Which tool to use:
   • list_sources    – START HERE once per session: which sources this archive
-    holds, what is indexed in each (mail, Teams, pages and Planner tasks by
-    full text; calendar and contacts by their text; OneDrive and SharePoint
-    files by NAME, PATH and TYPE only – contents are not indexed), what
-    `folder` and `person` mean per source, and what was never exported.
+    holds, what is indexed in each (mail, Teams, pages, OneNote pages,
+    Planner and To Do tasks by full text; calendar and contacts by their
+    text; OneDrive, SharePoint and Teams files by NAME, PATH and TYPE only
+    – contents are not indexed), what `folder` and `person` mean per
+    source, and what was never exported.
   • search_messages – the default entry point for content. Ranking depends on this archive:
     with embeddings it fuses BM25 and semantic scoring, so exact tokens and
     paraphrases both work; without them it is BM25 only, and a paraphrase will
@@ -124,16 +125,18 @@ Which tool to use:
     substring match over names and addresses. Files and pages carry none.
   • list_folders / list_filetypes – what the folder and filetype filters can
     take, per source: mailbox folders, calendars, Teams conversation kinds,
-    OneDrive folders, SharePoint site/library, Planner boards, pages sites.
+    OneDrive folders, SharePoint site/library, Planner boards, To Do lists,
+    OneNote notebooks, pages sites.
   • list_events     – appointments structured (start, end, location,
     attendees), including those recovered from invitation and cancellation
     mails; the search knows them only as text. Upcoming ones need
     date_from/date_to.
   • lookup_contact  – the address book, structured: e-mail, phone,
     organisation.
-  • list_files      – browse OneDrive, the SharePoint libraries and the
-    Planner attachments folder by folder; the files' contents are not
-    indexed, only their names.
+  • list_files      – browse OneDrive, the SharePoint libraries, the files
+    shared in Teams and mirrored channel folders, and the Planner
+    attachments folder by folder; the files' contents are not indexed, only
+    their names.
   • corpus_stats    – what is indexed, which ranking backend is live, and how
     far the archive reaches: coverage (first and last message), gaps (months
     without a single message) and when each source last exported
@@ -154,7 +157,8 @@ dates are "YYYY-MM-DD", and days=N is a shorthand for the last N days (no need
 to work out the date); folder restricts to one unit and everything below it –
 "E-Mail/Kunden", "kalender/Privat", "channels" for every Teams channel,
 "Dateien/Projekte" in OneDrive, "TeamX/Dokumente" for a library, a board name
-for Planner – and list_folders shows what exists, per source; results are one
+for Planner, a list name for To Do, a notebook (or notebook/section) for
+OneNote – and list_folders shows what exists, per source; results are one
 hit per item – page with offset rather than raising k; a hit's "uri" can be
 read as an MCP resource.
 """
@@ -216,7 +220,8 @@ _WORD = re.compile(r"\w+", re.UNICODE)
 _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "File",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
                  "pages": "SharePoint page", "kalender": "Calendar",
-                 "kontakte": "Contacts", "planner": "Planner task"}
+                 "kontakte": "Contacts", "planner": "Planner task",
+                 "todo": "To Do task", "onenote": "OneNote page"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 # What read_source_file hands over as text; everything else is binary and
 # comes back as metadata only.
@@ -278,7 +283,7 @@ def _hat_spalte(con, name):
 
 # Which sources offer a folder selection – all whose ctx is a path.
 _LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
-            "kalender", "teams", "kontakte", "planner")
+            "kalender", "teams", "kontakte", "planner", "todo", "onenote")
 
 
 def _quellen(text):
@@ -292,13 +297,18 @@ def _quelle_cond(quelle):
     """One or more sources as SQL condition – the mirrors are told apart.
 
     "onedrive" and "sharepoint" are both src='datei' rows; the stored root
-    column separates them. "datei" stays as the umbrella for both. Several
-    sources ("onedrive,sharepoint") become an OR; no source means no filter.
+    column separates them. "datei" stays as the umbrella for every file
+    mirror. "teams" means the conversations AND the files next to them –
+    what a chat shared belongs to the chat. Several sources
+    ("onedrive,sharepoint") become an OR; no source means no filter.
     """
     teile, werte = [], []
     for q in _quellen(quelle):
         if q in ("onedrive", "sharepoint"):
             teile.append("(src = 'datei' AND root = ?)")
+        elif q == "teams":
+            teile.append("(src = 'teams' OR (src = 'datei' AND root = 'teams'))")
+            continue
         else:
             teile.append("src = ?")
         werte.append(q)
@@ -320,10 +330,13 @@ _QUELLEN_INFO = {
                           "folder and everything below it",
                 "person": "sender and recipients", "step": "outlook"},
     "teams": {"label": "Teams",
-              "indexed": "full text of chats and channel messages",
+              "indexed": "full text of chats and channel messages; the files "
+                         "a message shared and the mirrored channel folders "
+                         "by NAME, PATH and TYPE only (when the export fetches "
+                         "them – list_files root \"teams\")",
               "folder": "the kind of conversation: 1on1, group, meeting, "
                         "channels",
-              "person": "the author", "step": "teams"},
+              "person": "the author (files carry none)", "step": "teams"},
     "kalender": {"label": "Calendar",
                  "indexed": "appointments of the exported calendars – title, "
                             "description, location; list_events returns them "
@@ -358,6 +371,16 @@ _QUELLEN_INFO = {
                            "list_files and read_source_file",
                 "folder": "the board", "person": "the assignees",
                 "step": "planner"},
+    "todo": {"label": "To Do tasks",
+             "indexed": "task title, notes, steps, linked resources and "
+                        "attachment NAMES; the attachments themselves via "
+                        "read_source_file",
+             "folder": "the list", "person": None, "step": "todo"},
+    "onenote": {"label": "OneNote pages",
+                "indexed": "full text of every page",
+                "folder": "the notebook, optionally deeper: "
+                          "Projekte/2026/Q3 (notebook/section group/section)",
+                "person": None, "step": "onenote"},
 }
 # Channels are folded into one entry: a team easily has twenty of them, and
 # "which channel" is rarely the question – "channels rather than chats" often
@@ -369,7 +392,9 @@ _QUELLEN_INFO = {
 # folder tree – there the folders themselves are the point.
 _OBERSTE_EINHEIT = (
     "CASE "
-    "WHEN src IN ('teams', 'planner', 'pages') AND instr(ctx, '/') > 0 "
+    "WHEN src IN ('teams', 'planner', 'pages', 'onenote') AND instr(ctx, '/') > 0 "
+    "THEN substr(ctx, 1, instr(ctx, '/') - 1) "
+    "WHEN src = 'datei' AND root = 'teams' AND instr(ctx, '/') > 0 "
     "THEN substr(ctx, 1, instr(ctx, '/') - 1) "
     "WHEN src = 'datei' AND root = 'sharepoint' "
     "AND instr(substr(ctx, instr(ctx, '/') + 1), '/') > 0 "
@@ -779,10 +804,12 @@ def _resolve_source(source_root, rel):
             "onedrive": STATE.get("onedrive_dir"),
             "sharepoint": STATE.get("sharepoint_dir"),
             "pages": STATE.get("pages_dir"),
-            "planner": STATE.get("planner_dir")}.get(source_root)
+            "planner": STATE.get("planner_dir"),
+            "todo": STATE.get("todo_dir"),
+            "onenote": STATE.get("onenote_dir")}.get(source_root)
     if not base:
         return None, ("source_root must be 'teams', 'outlook', 'onedrive', "
-                      "'sharepoint', 'pages' or 'planner'.")
+                      "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'.")
     base = Path(base).resolve()
     target = (base / rel).resolve()
     if base != target and base not in target.parents:      # prevent path escape
@@ -819,16 +846,18 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     preview_chars: int = 200, only_gone: bool = False,
                     folder: str = "", filetype: str = "") -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
-    SharePoint files, SharePoint pages, Planner tasks – or any subset of it.
+    SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
+    pages – or any subset of it.
 
     Hybrid ranking (BM25 + semantic embeddings, fused) when available. One
     hit per message/file/task/page; get_document(uid) returns the full
     text, offset pages through more results. What is searchable differs by
-    source – list_sources says it per source; in short: mail, Teams, pages
-    and Planner tasks by their full text; calendar and contacts by their
-    text; OneDrive and SharePoint files by NAME, PATH and TYPE only – file
-    contents are not indexed, so a query about what a document says will
-    not find it, a query for its name or a `filetype` will.
+    source – list_sources says it per source; in short: mail, Teams, pages,
+    OneNote pages, Planner and To Do tasks by their full text; calendar and
+    contacts by their text; OneDrive, SharePoint and Teams files by NAME,
+    PATH and TYPE only – file contents are not indexed, so a query about
+    what a document says will not find it, a query for its name or a
+    `filetype` will.
 
     Args:
         query: Natural-language query or keywords (German or English).
@@ -845,8 +874,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             date_to for those. Ignored when date_from is given.
         source: One key or several comma-separated: "outlook", "teams",
             "kalender", "kontakte", "onedrive", "sharepoint", "pages",
-            "planner" – "datei" means both file mirrors, "all" or empty
-            means everything. Example: "onedrive,sharepoint" for files only.
+            "planner", "todo", "onenote" – "datei" means every file mirror
+            (OneDrive, SharePoint, Teams files), "all" or empty means
+            everything. Example: "onedrive,sharepoint" for files only.
         k: Number of results per page (default 12).
         offset: Results to skip, for pagination (default 0).
         mode: "auto" (hybrid if embeddings available, else lexical),
@@ -859,8 +889,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             depends on the source – mailbox folder ("E-Mail/Kunden"),
             calendar ("kalender/Privat"), Teams conversation kind ("channels"),
             OneDrive folder ("Dateien/Projekte"), SharePoint site/library
-            ("TeamX/Dokumente"), Planner board, pages site. list_folders
-            lists what exists, per source.
+            ("TeamX/Dokumente"), Planner board, To Do list, OneNote
+            notebook ("Projekte" or "Projekte/2026/Q3"), pages site.
+            list_folders lists what exists, per source.
         filetype: Restrict to messages carrying an attachment of this type,
             or to mirrored files of it – "pdf", "xlsx". One type; use
             list_filetypes to see what exists.
@@ -933,7 +964,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             given.
         source: One key or several comma-separated – "outlook", "teams",
             "kalender", "kontakte", "onedrive", "sharepoint", "pages",
-            "planner"; "datei" both mirrors, "all" or empty everything.
+            "planner", "todo", "onenote"; "datei" every file mirror, "all"
+            or empty everything.
         k: Max results per page (default 30).
         offset: Results to skip, for pagination (default 0).
         preview_chars: Preview length per hit (default 200; 0 disables previews).
@@ -941,8 +973,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             archived). Everything stays on disk either way.
         folder: Restrict to one unit and everything below it – mailbox
             folder, calendar, Teams conversation kind, OneDrive folder,
-            SharePoint site/library, Planner board, pages site. Use
-            list_folders to see what exists.
+            SharePoint site/library, Planner board, To Do list, OneNote
+            notebook, pages site. Use list_folders to see what exists.
         filetype: Restrict to messages carrying an attachment of this type,
             or to mirrored files of it – "pdf", "xlsx".
     """
@@ -1006,7 +1038,8 @@ def get_thread(thread: str, limit: int = 50) -> dict:
 @mcp.tool(annotations=_READONLY)
 def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> dict:
     """Full text and metadata of one item by its uid – mail, chat message,
-    appointment, contact, Planner task, SharePoint page, or a mirrored file.
+    appointment, contact, Planner or To Do task, SharePoint or OneNote
+    page, or a mirrored file.
 
     The uid comes from a search/browse hit. For chat messages,
     context_before/context_after also return the neighbouring messages of
@@ -1138,8 +1171,9 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
 def read_source_file(source_root: str, path: str, max_chars: int = 100000,
                      offset: int = 0) -> dict:
     """Read a raw exported source file in windows – the .eml, the Teams
-    conversation, an .ics or .vcf, a rendered SharePoint page, a Planner
-    board.html, a Planner attachment or a mirrored file.
+    conversation, an .ics or .vcf, a rendered SharePoint or OneNote page, a
+    Planner board.html or To Do list.html, an attachment next to them, or
+    a mirrored file.
 
     Text formats come back as text; binary files (PDF, Office documents,
     images – anything not a text format) come back as metadata with
@@ -1149,8 +1183,8 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
     Prefer get_document with context for chat history; it is far cheaper.
 
     Args:
-        source_root: "teams", "outlook", "onedrive", "sharepoint", "pages" or
-            "planner" (the export the file belongs to).
+        source_root: "teams", "outlook", "onedrive", "sharepoint", "pages",
+            "planner", "todo" or "onenote" (the export the file belongs to).
         path: Relative path within that export, as returned in a hit's "path"
             or a list_files entry's "rel".
         max_chars: Max bytes to return (default 100000, cap 500000).
@@ -1181,16 +1215,16 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
     offers: mailbox folders and calendars (full path, e.g. E-Mail/Kunden,
     kalender/Privat), the kind of Teams conversation (1on1, group, meeting,
     channels), OneDrive folders (Dateien/…), SharePoint site/library,
-    Planner boards, and SharePoint pages sites. A folder always means
-    everything below it as well.
+    Planner boards, To Do lists, OneNote notebooks, and SharePoint pages
+    sites. A folder always means everything below it as well.
 
     Args:
         contains: Only folders whose path contains this text.
         limit: Max number of folders (default 200, most items first).
         source: One key or several comma-separated – "outlook", "teams",
             "kalender", "kontakte", "onedrive", "sharepoint", "pages",
-            "planner"; "datei" both mirrors. Empty or "all" lists every
-            source.
+            "planner", "todo", "onenote"; "datei" every file mirror. Empty
+            or "all" lists every source.
     """
     con = _db()
     try:
@@ -1209,7 +1243,7 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
             f"SELECT ordner, COUNT(DISTINCT uid) FROM "
             f"(SELECT uid, src, root, {_OBERSTE_EINHEIT} AS ordner FROM chunks "
             f" WHERE src IN ('outlook', 'datei', 'pages', 'kalender', 'teams',"
-            f" 'kontakte', 'planner')"
+            f" 'kontakte', 'planner', 'todo', 'onenote')"
             f" AND ctx IS NOT NULL AND ctx != '') "
             f"WHERE 1=1 {wo} "
             f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
@@ -1225,15 +1259,15 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
     """List the attachment and file types present, with counts.
 
     The counterpart to the `filetype` filter. A count is the number of mails
-    carrying at least one attachment of that type, of Planner tasks with such
-    an attachment, or of mirrored OneDrive/SharePoint files of that type.
-    Types are extensions without the dot ("pdf", "xlsx").
+    carrying at least one attachment of that type, of Planner or To Do tasks
+    with such an attachment, or of mirrored OneDrive/SharePoint/Teams files
+    of that type. Types are extensions without the dot ("pdf", "xlsx").
 
     Args:
         limit: Max number of types (default 40, most frequent first).
         source: One key or several comma-separated – "outlook", "planner",
-            "onedrive", "sharepoint" ("datei" = both mirrors). Empty lists
-            every source.
+            "todo", "teams", "onedrive", "sharepoint" ("datei" = every file
+            mirror). Empty lists every source.
     """
     con = _db()
     try:
@@ -1454,7 +1488,8 @@ def archive_analytics() -> dict:
     The block every index run materialises: messages per source (quellen),
     the communication summary (komm: messages, conversations, people, first
     and last timestamp), the mirrored files (dateien), the Planner boards
-    (planner), the monthly timeline (verlauf) and its gaps (luecken),
+    (planner), To Do lists (todo) and OneNote pages (onenote), the monthly
+    timeline (verlauf) and its gaps (luecken),
     attachment and file types (anhang_typen, datei_typen), the largest files
     (grosse_dateien), disk usage per source (groesse) and the people the
     user exchanges the most with (top_personen). Keys are the app's own
@@ -1495,6 +1530,8 @@ def corpus_stats() -> dict:
             "sharepoint_dir": STATE.get("sharepoint_dir"),
             "pages_dir": STATE.get("pages_dir"),
             "planner_dir": STATE.get("planner_dir"),
+            "todo_dir": STATE.get("todo_dir"),
+            "onenote_dir": STATE.get("onenote_dir"),
             **_archiv_stand(),
         }
     finally:
@@ -1503,20 +1540,21 @@ def corpus_stats() -> dict:
 
 @mcp.tool(annotations=_READONLY)
 def list_files(root: str = "", path: str = "") -> dict:
-    """Browse the mirrored drives and the Planner attachments one folder level
-    at a time.
+    """Browse the mirrored drives, the files next to Teams conversations and
+    the Planner attachments one folder level at a time.
 
     Without arguments: the entry points – "onedrive", one per mirrored
-    SharePoint site/library, and "planner" once per board that carries
-    attachments. With root and a folder path: the immediate subfolders with
-    their file counts, and the files sitting right there – name, date,
-    tombstone (gone = no longer at Microsoft). File contents are not indexed;
-    a text file can be read via read_source_file with the matching root,
-    a binary one only named.
+    SharePoint site/library, "teams" once per chat kind that carries shared
+    files and once per team with mirrored channel folders, and "planner"
+    once per board that carries attachments. With root and a folder path:
+    the immediate subfolders with their file counts, and the files sitting
+    right there – name, date, tombstone (gone = no longer at Microsoft).
+    File contents are not indexed; a text file can be read via
+    read_source_file with the matching root, a binary one only named.
 
     Args:
-        root: "" for the entry points, else "onedrive", "sharepoint" or
-            "planner".
+        root: "" for the entry points, else "onedrive", "sharepoint",
+            "teams" or "planner".
         path: Folder inside that root, as returned by this tool ("" for the
             top level; for planner the board name).
     """
@@ -1526,13 +1564,15 @@ def list_files(root: str = "", path: str = "") -> dict:
             rows = con.execute("SELECT root, rel FROM chunks "
                                "WHERE src = 'datei' AND seq = 0").fetchall()
             eigene = sum(1 for r in rows if r[0] == "onedrive")
-            bibliotheken = {}
+            bibliotheken, teams = {}, {}
             for wurzel, rel in rows:
-                if wurzel == "sharepoint":
-                    teile = rel.split("/")
-                    if len(teile) >= 2:
-                        k = "/".join(teile[:2])
-                        bibliotheken[k] = bibliotheken.get(k, 0) + 1
+                teile = rel.split("/")
+                if wurzel == "sharepoint" and len(teile) >= 2:
+                    k = "/".join(teile[:2])
+                    bibliotheken[k] = bibliotheken.get(k, 0) + 1
+                elif wurzel == "teams" and len(teile) >= 2:
+                    k = "/".join(teile[:2])
+                    teams[k] = teams.get(k, 0) + 1
             wurzeln = []
             if eigene:
                 wurzeln.append({"root": "onedrive", "path": "",
@@ -1540,6 +1580,10 @@ def list_files(root: str = "", path: str = "") -> dict:
             for k in sorted(bibliotheken):
                 wurzeln.append({"root": "sharepoint", "path": k,
                                 "label": k, "files": bibliotheken[k]})
+            for k in sorted(teams):          # chat kinds first, then teams
+                wurzeln.append({"root": "teams", "path": k,
+                                "label": _teams_wurzel_label(k),
+                                "files": teams[k]})
             for board, dateien in _planner_anhaenge().items():
                 wurzeln.append({"root": "planner", "path": board,
                                 "label": f"Planner: {board}",
@@ -1560,10 +1604,12 @@ def list_files(root: str = "", path: str = "") -> dict:
         # The fixed prefix depth and the level label travel with the answer:
         # the client renders breadcrumbs generically instead of knowing that
         # SharePoint paths start with site/library.
-        basis = 2 if root == "sharepoint" else 0
+        basis = 2 if root in ("sharepoint", "teams") else 0
         teile = praefix.split("/") if praefix else []
         label = ("/".join(teile[:basis]) if basis and len(teile) >= basis
                  else "OneDrive" if root == "onedrive" else root)
+        if root == "teams" and len(teile) >= basis:
+            label = _teams_wurzel_label("/".join(teile[:basis]))
         wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
         if praefix:
             wo += " AND rel LIKE ? ESCAPE '\\'"
@@ -1589,6 +1635,18 @@ def list_files(root: str = "", path: str = "") -> dict:
                 "files": dateien[:2000]}
     finally:
         con.close()
+
+
+_TEAMS_ARTEN = {"1on1": "1:1 chats", "group": "group chats",
+                "meeting": "meeting chats"}
+
+
+def _teams_wurzel_label(pfad):
+    """The entry point's name: a chat kind's shared files, or a team."""
+    art, _, rest = pfad.partition("/")
+    if art in _TEAMS_ARTEN:
+        return f"Teams: files shared in {_TEAMS_ARTEN[art]}"
+    return f"Teams: {rest or art}"
 
 
 def _planner_anhaenge():
@@ -1732,6 +1790,8 @@ def main():
     ap.add_argument("--sharepoint", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--pages", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--planner", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--todo", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--onenote", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--embed-model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
     # Switched off means: do not even try. Without this, the server decides
@@ -1766,6 +1826,8 @@ def main():
     a.sharepoint = a.sharepoint or str(basis / settings.SHAREPOINT_DIR)
     a.pages = a.pages or str(basis / settings.SHAREPOINT_PAGES_DIR)
     a.planner = a.planner or str(basis / settings.PLANNER_DIR)
+    a.todo = a.todo or str(basis / settings.TODO_DIR)
+    a.onenote = a.onenote or str(basis / settings.ONENOTE_DIR)
 
     # The hard switch. It sits here and not in the tools because the app
     # calls the same functions in-process for its own search – what is
@@ -1811,6 +1873,7 @@ def main():
                  teams_dir=a.teams, outlook_dir=a.outlook,
                  onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
                  pages_dir=a.pages, planner_dir=a.planner,
+                 todo_dir=a.todo, onenote_dir=a.onenote,
                  embed_model=a.embed_model, ollama=a.ollama,
                  # The run history lives in the app's home folder, which the
                  # app hands to every subprocess; started by hand there is none.

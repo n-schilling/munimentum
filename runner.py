@@ -127,9 +127,13 @@ class JobRunner:
         # skip); 0 when the app already knows that every requested export
         # was dropped before it could run.
         self.neu = 0 if self._context.get("nichts_neues") else None
+        # log_seq: the log cursor before the run's first line – the page
+        # shows the run window with this run's lines only, not with what
+        # the app logged before it.
         self.job = {"label": label, "steps": [s["label"] for s in steps],
                     "step": steps[0]["label"], "index": 0, "progress": None,
-                    "started": datetime.now().isoformat(timespec="seconds")}
+                    "started": datetime.now().isoformat(timespec="seconds"),
+                    "log_seq": self.seq}
         self.thread = threading.Thread(target=self._run, args=(steps, label), daemon=True)
         self.thread.start()
         return True

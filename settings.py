@@ -35,6 +35,8 @@ ONEDRIVE_DIR = "onedrive_export"
 SHAREPOINT_DIR = "sharepoint_export"
 SHAREPOINT_PAGES_DIR = "sharepoint_pages"
 PLANNER_DIR = "planner_export"
+TODO_DIR = "todo_export"
+ONENOTE_DIR = "onenote_export"
 STORE_DIR = "rag_store"
 
 # Mailbox folders that the default selection of outlook_export.py skips.
@@ -153,6 +155,24 @@ VORGABEN = {
     "planner_enabled": False,
     "planner_urls": "",
     "planner_attachments": False,
+    # To Do lists and OneNote notebooks: off until someone turns them on,
+    # like every mirror-style source. Neither needs a URL list – both are
+    # "mine" and come whole.
+    "todo_enabled": False,
+    "onenote_enabled": False,
+    # Notebook selection, the same ordered rules as for mailbox folders over
+    # the notebook folder names. Empty means: every notebook.
+    "onenote_rules": "",
+    # OneNote pages: embed images up to this size, larger ones land as
+    # files next to the page. 0 = embed every image.
+    "onenote_image_max_mb": 4,
+    # Files a Teams message references live in the sender's OneDrive or the
+    # team's library – both gone with the access. Off by default: a chat
+    # history is small, its files may not be. The size cap applies to both
+    # switches; 0 = no limit.
+    "teams_attachments": False,
+    "teams_channel_files": False,
+    "teams_files_max_mb": 0,
     "runs_retention_months": 24,
     # Levels 3 and 4 of the storage model: empty means subfolders of the
     # fixed home directory ("rag_store" and "data"). Resolved in app.py.
@@ -185,6 +205,8 @@ VORGABEN = {
         "sharepoint": True,
         "sharepoint_pages": True,
         "planner": True,
+        "todo": True,
+        "onenote": True,
         "index": True,
         "calendar": True,
     },

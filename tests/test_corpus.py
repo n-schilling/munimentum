@@ -679,3 +679,42 @@ def test_load_pages_liest_titel_text_und_grabstein(tmp_path):
     assert r["title"] == "Start & Ziel"
     assert "Inhalt der Seite" in r["text"]
     assert r["gone"].startswith("2026-04-01")
+
+
+def test_teams_dateien_gehoeren_zu_ihrer_art(tmp_path):
+    """Files next to a conversation – referenced attachments and mirrored
+    channel folders – are file records with the conversation kind as
+    context, and never parsed as conversations."""
+    import state_db
+    (tmp_path / "1on1").mkdir()
+    (tmp_path / "1on1" / "alice__abc123.html").write_text(
+        '<div class="msg"><div class="head"><span class="name">Alice</span>'
+        '<span class="time">2025-06-01 09:30</span></div><div class="body">hi</div></div>',
+        encoding="utf-8")
+    anh = tmp_path / "1on1" / "Anhaenge" / "alice__abc123"
+    anh.mkdir(parents=True)
+    (anh / "Angebot__1a2b3c4d.pdf").write_bytes(b"PDF")
+    (anh / "seite__ffffffff.html").write_text("<p>attached page</p>", encoding="utf-8")
+    kanal = tmp_path / "channels" / "Team Rakete" / "Dateien" / "Allgemein"
+    kanal.mkdir(parents=True)
+    (kanal / "Plan.xlsx").write_bytes(b"X")
+    (kanal / "halb.pdf.teil").write_bytes(b"X")
+    state_db.StateDb(tmp_path / "channels" / "Team Rakete").verschwunden_ergaenzen(
+        ["Dateien/Allgemein/weg.docx"], "2026-01-02T00:00:00+00:00")
+    (kanal / "weg.docx").write_bytes(b"X")
+
+    gespraeche = corpus.load_teams(tmp_path)
+    assert [r["rel"] for r in gespraeche] == ["1on1/alice__abc123.html"]
+    dateien = sorted(corpus.load_teams_files(tmp_path), key=lambda r: r["rel"])
+    assert [r["rel"] for r in dateien] == [
+        "1on1/Anhaenge/alice__abc123/Angebot__1a2b3c4d.pdf",
+        "1on1/Anhaenge/alice__abc123/seite__ffffffff.html",
+        "channels/Team Rakete/Dateien/Allgemein/Plan.xlsx",
+        "channels/Team Rakete/Dateien/Allgemein/weg.docx"]
+    pdf = dateien[0]
+    assert pdf["src"] == "datei" and pdf["root"] == "teams"
+    assert pdf["uid"].startswith("teamsdatei:") and pdf["ctx"] == "1on1/Anhaenge/alice__abc123"
+    assert pdf["att"] == "Angebot__1a2b3c4d.pdf"
+    assert dateien[3]["gone"] == "2026-01-02T00:00:00+00:00" and "gone" not in dateien[2]
+    assert set(corpus.manifest("teams_files", tmp_path)) == {r["rel"] for r in dateien}
+    assert set(corpus.manifest("teams", tmp_path)) == {"1on1/alice__abc123.html"}

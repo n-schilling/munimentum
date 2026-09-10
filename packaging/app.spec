@@ -52,6 +52,7 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "progress", "answer", "notify",
                  "drive_mirror", "sharepoint_export", "state_db",
                  "planner_export", "analytics_db",
+                 "todo_export", "onenote_export",
                  "steps", "runner"]
 
 def ohne_cli(name):

@@ -11,7 +11,7 @@ recommend updating.
 Format: MAJOR.MINOR.PATCH, without a leading "v" (only the tag carries that).
 """
 
-VERSION = "7.1.0"
+VERSION = "8.0.0"
 
 # For the update check: this is where the releases live.
 REPO = "n-schilling/munimentum"

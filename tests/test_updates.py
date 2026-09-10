@@ -216,13 +216,19 @@ def test_ahead_ist_bei_jedem_anderen_ausgang_falsch(github):
     assert updates.check("4.0.0", "n/x", enabled=False)["ahead"] is False
 
 
-def test_fehlermeldung_steht_nur_im_protokoll():
-    """It belongs to the log, which is open from every tab – in the update
-    line it was the same thing a second time in a foreign place."""
+def test_fehlermeldung_steht_im_protokoll_und_bei_der_app():
+    """It belongs to the log – and, since the log lives on the archive page
+    now, once more under Settings › App, next to the version. Not a third
+    time, and not in the update line, where it was a foreign thing."""
     import app as app_mod
-    assert app_mod.seite().count('data-i18n="report.button"') == 1
-    kopf = app_mod.seite()[app_mod.seite().index('id="protokoll"'):]
+    seite = app_mod.seite()
+    assert seite.count('data-i18n="report.button"') == 2
+    kopf = seite[seite.index('id="protokoll"'):]
     assert 'data-i18n="report.button"' in kopf[:1200]
+    app = seite[seite.index('id="app-karte"'):seite.index('id="expert-karte"')]
+    assert 'data-i18n="report.button"' in app
+    update = app[app.index('id="update-current"'):app.index('id="update-link"')]
+    assert "report.button" not in update
 
 
 def test_zu_den_releases_sieht_aus_wie_ein_knopf():

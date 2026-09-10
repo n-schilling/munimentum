@@ -802,6 +802,22 @@ def test_jobrunner_fuehrt_schritte_der_reihe_nach_aus(sandbox):
     assert r.job is None and r.proc is None
 
 
+def test_job_nennt_den_logstand_vor_seiner_ersten_zeile(sandbox):
+    """The run window shows the run's lines only: the job carries the log
+    cursor from before its first line, and /api/log from there on yields
+    nothing of what the app logged earlier."""
+    r = app_mod.JobRunner()
+    r.logk("srv.token.ok")
+    r.logk("srv.token.ok")
+    vorher = r.seq
+    assert r.start([_py_step("print('eins')", "A")], "Lauf")
+    assert r.snapshot()["job"]["log_seq"] == vorher
+    _warte(r)
+    danach = [str(ln["text"]) for ln in r.log_since(vorher)[0]]
+    assert danach and all("srv.token.ok" not in t for t in danach)
+    assert any("eins" in t for t in danach)
+
+
 def test_notify_user_mode_decides(monkeypatch, sandbox):
     """"errors" keeps quiet on success, "all" reports it, cancelled is never
     reported – and every body arrives translated, without raw keys."""
@@ -3255,10 +3271,10 @@ def test_beenden_warnt_bei_laufendem_auftrag():
     _in_node(PRUEFUNG_BEENDEN_LAUF)
 
 
-# The four tiles used to stand for their building blocks: "Token", "Ollama",
-# "270,000 chunks", "MCP running". For someone who does not know the words,
-# that was four times no answer. The test pins down both halves of the fix –
-# everyday language on the tile, the technical term in the tooltip.
+# The states used to stand as tiles in the header, named after their
+# building blocks: "Token", "Ollama", "MCP running". Now the account chip
+# in the header and the two dots in the settings navigation say what the
+# state means in everyday words; the technical term stays in the tooltip.
 PRUEFUNG_KACHELN = GRUNDZUSTAND + """
 function kachel(id){ return document.getElementById('p-' + id + '-t').textContent; }
 function hinweis(id){ return document.getElementById('pill-' + id).title || ''; }
@@ -3281,11 +3297,12 @@ var SYSTEMWORT = ['Chunk', 'chunk', 'Token', 'token', 'Ollama', 'Index'];
            'Kachel ' + id + ' spricht Systemsprache: "' + text + '"');
   });
 });
-// "MCP" ist hier die Ausnahme und steht nur dieser einen Kachel zu: sie nennt
+// "MCP" ist hier die Ausnahme und steht nur diesem einen Eintrag zu: er nennt
 // einen Endpunkt, und die buergerliche Umschreibung ("Zugriff fuer Claude")
 // war schlicht falsch - MCP koennen auch andere Programme, und abgeschaltet
-// war nur der HTTP-Weg.
-pruefe(kachel('mcp').indexOf('MCP') >= 0, 'Kachel nennt das Protokoll nicht');
+// war nur der HTTP-Weg. Das Wort steht in der festen Beschriftung des
+// Navigationspunkts; das Zustandswort daneben sagt nur an oder aus.
+pruefe(t('settings.nav.mcp').indexOf('MCP') >= 0, 'Eintrag nennt das Protokoll nicht');
 pruefe(kachel('token').indexOf('MCP') < 0, 'Andere Kacheln bleiben ohne Fachwort');
 
 // Der Zustand des Index steht im Analytics-Reiter, nicht im Kopf: zweimal
@@ -3935,9 +3952,15 @@ renderHits({results: [
   {uid: 'b', title: 'Einzeln', who: 'Bob', date: '2025-06-02', source_label: 'Mail',
    preview: 'Text', uri: 'o365://outlook/b.eml', thread: null}
 ], count: 2, backend: 'bm25'});
-var html = document.getElementById('results').innerHTML;
+// Die Aktionen stehen im Detail rechts, nicht in der Liste: erst waehlen.
+waehleTreffer(0);
+var html = document.getElementById('detail-inhalt').innerHTML;
 pruefe(html.indexOf('zeigeVerlauf(1') >= 0, 'Kein Verlauf beim ersten Treffer');
-pruefe(html.indexOf('zeigeVerlauf(2') < 0, 'Verlauf ohne Gespraech angeboten');
+waehleTreffer(1);
+html = document.getElementById('detail-inhalt').innerHTML;
+pruefe(html.indexOf('zeigeVerlauf(') < 0, 'Verlauf ohne Gespraech angeboten');
+pruefe(html.indexOf('disabled') >= 0, 'Unmoeglicher Verlauf fehlt statt ausgegraut zu sein');
+waehleTreffer(0);
 
 // Aufklappen holt die Nachrichten und zeigt sie chronologisch untereinander.
 global.ANTWORT = {count: 3, messages: [
@@ -3947,7 +3970,7 @@ global.ANTWORT = {count: 3, messages: [
 zeigeVerlauf(1, 'tix:abc');
 // Das Nachladen laeuft ueber ein Promise – erst danach steht der Kasten.
 setTimeout(function(){
-  var kasten = document.getElementById('verlauf-1').innerHTML;
+  var kasten = document.getElementById('detail-verlauf').innerHTML;
   pruefe(kasten.indexOf('3 Nachrichten') >= 0, 'Anzahl fehlt: ' + kasten.slice(0, 120));
   pruefe(kasten.indexOf('RE: Frage') >= 0, 'Antwort fehlt im Verlauf');
   pruefe(kasten.indexOf('2025-06-01') < kasten.indexOf('2025-06-03'),
@@ -3957,7 +3980,7 @@ setTimeout(function(){
 """
 
 
-def test_verlauf_klappt_unter_dem_treffer_auf():
+def test_verlauf_klappt_im_detail_auf():
     _in_node(PRUEFUNG_VERLAUF)
 
 
@@ -5776,18 +5799,35 @@ def test_export_status_kennt_onedrive(sandbox):
     assert app_mod.export_status(cfg)["onedrive"]["last_run"]
 
 
-def test_export_reiter_zeigt_weder_zeiten_noch_datenordner():
-    """Both live elsewhere: the times in Analytics, the folder in the
-    settings. The same thing in two places goes stale in one of them."""
-    kopf = app_mod.seite().split('<section id="tab-suche"')[0]
-    assert 'id="export-state"' not in kopf, "Zeiten stehen noch im Export-Reiter"
-    assert 'id="data-dir"' not in kopf
-    assert 'id="export-state"' in app_mod.seite(), "Zeiten sind ganz verschwunden"
+def test_archivseite_zeigt_zeiten_je_quelle_und_keinen_datenordner():
+    """When a source last ran stands once, in the (i) of its card on the
+    archive page – not on the card itself and not as a summary line in the
+    overview. The data folder lives in the settings. The same thing in two
+    places goes stale in one of them; the archive page stays bare."""
+    seite = app_mod.seite()
+    archiv = seite.split('<section id="tab-suche"')[0]
+    for quelle in ("outlook", "teams", "onedrive", "sharepoint", "planner",
+                   "todo", "onenote"):
+        assert f'id="q-{quelle}-info"' in archiv, f"{quelle}: kein (i) mit dem Stand"
+        assert f'id="q-{quelle}-fuss"' not in archiv, f"{quelle}: Zustandszeile auf der Karte"
+    assert 'id="export-state"' not in seite, "Sammelzeile mit Zeiten ist zurueck"
+    # Neither the last runs nor the update notice belong on the archive page.
+    assert 'id="letzte-laeufe"' not in seite, "Letzte Laeufe sind zurueck"
+    assert 'id="update-banner"' not in archiv, "Versionshinweis auf der Archivseite"
+    # A running job lives in its own window, the log with it – the archive
+    # page keeps the headline and the button.
+    assert 'id="protokoll"' not in archiv and 'id="fortschritt"' not in archiv
+    fenster = seite[seite.index('id="lauf-fenster"'):seite.index("</body>")]
+    for teil in ('id="fortschritt"', 'id="protokoll"', 'id="btn-cancel"', 'id="lauf-fertig"'):
+        assert teil in fenster, f"{teil} steht nicht im Lauf-Fenster"
+    kopf = seite.split("</header>")[0]
+    assert 'id="lauf-pille"' in kopf, "die Pille des minimierten Laufs fehlt in der Kopfzeile"
+    assert 'id="c-data-dir"' not in archiv
     # The value sits in the input field itself; the fixed locations (app
     # folder, application) stand below as their own immutable rows.
-    assert 'id="data-dir2"' not in app_mod.seite(), "doppelte Pfadanzeige ist zurueck"
-    assert 'id="c-data-dir"' in app_mod.seite()
-    assert 'id="home-dir"' in app_mod.seite() and 'id="app-ort"' in app_mod.seite()
+    assert 'id="data-dir2"' not in seite, "doppelte Pfadanzeige ist zurueck"
+    assert 'id="c-data-dir"' in seite
+    assert 'id="home-dir"' in seite and 'id="app-ort"' in seite
 
 
 PRUEFUNG_SCHRITTNAME = GRUNDZUSTAND + """
@@ -5809,18 +5849,17 @@ def test_schrittname_wird_uebersetzt():
     _in_node(PRUEFUNG_SCHRITTNAME)
 
 
-def test_erklaerung_am_startknopf_ist_ein_tooltip_kein_fliesstext():
-    """Prose next to every button makes the UI restless. The explanation now
-    sits in the title attribute of an (i) – visible on demand, readable by a
-    screen reader, and without its own window that has to open and close."""
-    kopf = app_mod.seite().split('<section id="tab-suche"')[0]
-    assert 'data-i18n="export.start.hint"' not in kopf, "steht wieder als Text da"
-    assert 'data-i18n-title="export.start.hint"' in kopf
-    # The text itself is kept – only its form changes.
-    assert i18n.strings("de")["export.start.hint"]
+def test_startknopf_erklaert_sich_selbst():
+    """The one button of the archive page says what it does in its label;
+    neither prose nor an (i) sits next to it. The status card is meant to
+    stay bare: one line, one button."""
+    seite = app_mod.seite()
+    knoepfe = seite[seite.index('id="stand-knoepfe"'):seite.index('id="erststart"')]
+    assert 'class="info"' not in knoepfe, "wieder ein (i) am Startknopf"
+    assert "export.start.hint" not in seite
 
 
-ERKLAERUNGEN_ALS_INFO = ["export.start.hint", "export.what.sub",
+ERKLAERUNGEN_ALS_INFO = ["export.what.sub",
                          "export.index.only.when", "export.calendar.build.when",
                          "search.gone.note"]
 
@@ -5847,7 +5886,7 @@ def test_jedes_infozeichen_ist_erreichbar():
 def test_infozeichen_ist_erreichbar_und_erklaert_sich():
     """An (i) that only the mouse knows is, for the keyboard, a letter
     without meaning."""
-    i = app_mod.seite().index('data-i18n-title="export.start.hint"')
+    i = app_mod.seite().index('data-i18n-title="export.what.sub"')
     block = app_mod.seite()[i - 200:i + 200]
     assert 'tabindex="0"' in block, "mit der Tastatur nicht erreichbar"
     assert 'aria-label=' in block, "ohne Namen für den Screenreader"
@@ -5935,17 +5974,21 @@ def test_infozeichen_behaelt_seine_groesse():
     assert "flex:0 0 auto" in regel, "sonst zieht der nächste Flex-Behälter daran"
 
 
-def test_kopfleiste_zeigt_nur_was_eine_handlung_verlangt():
-    """The state of the index sat as a tile in the header and now lives in
-    Analytics. The same number in two places helps nobody – eventually they
-    contradict each other. The header keeps what demands something of you:
-    access, AI search, Claude."""
-    kopf = app_mod.seite().split("<nav")[0]
-    assert 'id="pill-index"' not in kopf
-    for erwartet in ('id="pill-token"', 'id="pill-ollama"', 'id="pill-mcp"'):
-        assert erwartet in kopf, f"{erwartet} ist mit verschwunden"
+def test_kopfleiste_zeigt_nur_den_zugang():
+    """State is shown where it is fixed (DESIGN.md §1): the access as a
+    chip in the header, because its wizard opens from there; AI and MCP as
+    dots next to their entries in the settings navigation. Nothing else
+    becomes a header pill – the index state lives in the overview."""
+    seite = app_mod.seite()
+    kopf = seite.split("</header>")[0]
+    assert 'id="pill-token"' in kopf, "Der Zugang ist aus der Kopfzeile verschwunden"
+    for weg in ('id="pill-index"', 'id="pill-ollama"', 'id="pill-mcp"'):
+        assert weg not in kopf, f"{weg} steht wieder in der Kopfzeile"
+    einst = seite[seite.index('<section id="tab-einstellungen"'):]
+    for erwartet in ('id="pill-ollama"', 'id="pill-mcp"'):
+        assert erwartet in einst, f"{erwartet} fehlt in der Einstellungs-Navigation"
     # The number still appears somewhere – just in the key figures now.
-    assert 'id="ana-kpi"' in app_mod.seite()
+    assert 'id="ana-kpi"' in seite
 
 
 PRUEFUNG_SUCHMASKE = GRUNDZUSTAND + """
@@ -5957,34 +6000,29 @@ global.fetch = function(pfad){
                                              : statusGeruest()); }});
 };
 
-// Der Schalter zaehlt, was eingestellt ist - sonst waere zugeklappt eine Falle.
+// Ein gesetzter Filter leuchtet an Ort und Stelle; "Zuruecksetzen" erscheint
+// erst, wenn es etwas zurueckzusetzen gibt.
 document.getElementById('f-person').value = 'Alice';
 document.getElementById('f-source').value = 'outlook';
 zeigeFilterstand();
-var text = document.getElementById('filter-auf').textContent;
-pruefe(/2/.test(text), 'Zahl der Filter fehlt: ' + text);
+pruefe(filterFelder().length === 2, 'Zahl der Filter falsch: ' + filterFelder().length);
+pruefe(document.getElementById('f-person').classList.contains('on'), 'Person leuchtet nicht');
+pruefe(document.getElementById('f-source').classList.contains('on'), 'Quelle leuchtet nicht');
 pruefe(!document.getElementById('filter-weg').classList.contains('hide'),
        '"Zuruecksetzen" fehlt trotz Filter');
 
 // "Alle Quellen" ist kein Filter.
 document.getElementById('f-source').value = 'all';
 zeigeFilterstand();
-pruefe(/1/.test(document.getElementById('filter-auf').textContent),
-       '"Alle Quellen" wurde mitgezaehlt');
+pruefe(filterFelder().length === 1, '"Alle Quellen" wurde mitgezaehlt');
+pruefe(!document.getElementById('f-source').classList.contains('on'),
+       '"Alle Quellen" leuchtet wie ein Filter');
 
 filterLeeren();
 pruefe(document.getElementById('f-person').value === '', 'Nicht geleert');
-pruefe(document.getElementById('filter-auf').textContent.indexOf('2') < 0, 'Zaehler bleibt');
-
-// Auf- und zuklappen sagt der Tastatur, was es tut. Der Ausgangszustand wird
-// hier gesetzt: die Attrappe liest die class-Attribute des Markups nicht.
-document.getElementById('filter').classList.add('hide');
-filterUmschalten();
-pruefe(document.getElementById('filter-auf').getAttribute('aria-expanded') === 'true',
-       'aria-expanded folgt dem Aufklappen nicht');
-filterUmschalten();
-pruefe(document.getElementById('filter-auf').getAttribute('aria-expanded') === 'false',
-       'aria-expanded folgt dem Zuklappen nicht');
+pruefe(!document.getElementById('f-person').classList.contains('on'), 'Leuchtet noch');
+pruefe(document.getElementById('filter-weg').classList.contains('hide'),
+       '"Zuruecksetzen" bleibt ohne Filter stehen');
 
 // Geloeschtes ist ein Filter wie die anderen: er zaehlt mit, sucht nicht von
 // selbst und geht beim Zuruecksetzen weg. Als eigene Sicht neben Kalender und
@@ -5993,9 +6031,9 @@ gesucht = [];
 document.getElementById('f-gone').checked = true;
 zeigeFilterstand();
 pruefe(gesucht.length === 0, 'Der Filter sucht von selbst');
-pruefe(/1/.test(document.getElementById('filter-auf').textContent),
-       'Geloeschtes wird nicht mitgezaehlt: ' +
-       document.getElementById('filter-auf').textContent);
+pruefe(filterFelder().length === 1, 'Geloeschtes wird nicht mitgezaehlt');
+pruefe(document.getElementById('gone-feld').classList.contains('on'),
+       'Geloeschtes leuchtet nicht');
 doSearch(0);
 pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length === 1,
        'Es wurde nicht mit gone=1 gesucht: ' + gesucht.join(' '));
@@ -6003,12 +6041,10 @@ pruefe(gesucht.filter(function(u){ return u.indexOf('gone=1') >= 0; }).length ==
 filterLeeren();
 pruefe(document.getElementById('f-gone').checked === false, 'Filter blieb haengen');
 
-// Von der Kachel in der Auswertung aus: Filter gesetzt UND aufgeklappt, sonst
-// wirkte er, ohne dass man ihn sieht.
-document.getElementById('filter').classList.add('hide');
+// Von der Kachel in der Auswertung aus: der Filter ist gesetzt und leuchtet.
 zeigeVerschwundene();
 pruefe(document.getElementById('f-gone').checked === true, 'Kachel setzt nichts');
-pruefe(!document.getElementById('filter').classList.contains('hide'),
+pruefe(document.getElementById('gone-feld').classList.contains('on'),
        'Filter wirkt, ohne sichtbar zu sein');
 
 // Zweimal dieselbe Sicht sucht nicht doppelt.
@@ -6023,14 +6059,15 @@ def test_suchmaske_filter_und_geloeschtes_als_filter():
     _in_node(PRUEFUNG_SUCHMASKE)
 
 
-def test_filter_beginnen_zugeklappt():
-    """Whoever filters nothing – the normal case – sees a search field and a
-    button. Checked in the markup: the JS tests' DOM stub reads no class
-    attributes."""
+def test_filter_stehen_offen_und_zuruecksetzen_erst_mit_filter():
+    """The filters are always in view – a folded-away filter that still acts
+    on the search is a trap. "Clear filters" appears only once there is
+    something to clear. Checked in the markup: the JS tests' DOM stub reads
+    no class attributes."""
     i = app_mod.seite().index('id="filter"')
-    assert 'class="row hide"' in app_mod.seite()[i - 60:i], "Filter stehen offen da"
+    assert 'hide' not in app_mod.seite()[i - 60:i], "Filter stehen zugeklappt da"
     j = app_mod.seite().index('id="filter-weg"')
-    assert 'class="mini hide"' in app_mod.seite()[j - 60:j], "„Zurücksetzen“ ohne Filter sichtbar"
+    assert 'class="hide"' in app_mod.seite()[j - 60:j], "„Zurücksetzen“ ohne Filter sichtbar"
 
 
 def test_suchkarte_hat_weder_ueberschrift_noch_systemsprache():
@@ -6590,6 +6627,17 @@ pruefe(html.indexOf('title="Outlook: 3\\nOneDrive: 5"') >= 0,
 pruefe(html.indexOf('>8<') >= 0, 'Summe stimmt nicht (nur Exporte): ' + html);
 pruefe(html.indexOf('>5.868<') < 0 && html.indexOf('>5868<') < 0,
        'Der Kalender-Neuaufbau steht in der Summe: ' + html);
+
+// A run without a source is named after its step – a row saying "–" for
+// the calendar rebuild says nothing.
+renderRuns([{started_at: 1755000000, finished_at: 1755000294, origin: 'manual',
+  result: 'done', elements: {outlook: [], teams: []},
+  steps: [{key: 'calendar', label: 'job.step.calendar', started_at: 1755000000,
+           duration_s: 294, new: 8625, unchanged: null, excluded: null, errors: null,
+           skipped: 0, ok: 1, extra: null}]}]);
+html = el('ana-runs').innerHTML;
+pruefe(html.indexOf('Kalender &amp; Kontakte') >= 0, 'Kalenderlauf ohne Namen: ' + html);
+pruefe(html.indexOf('>–<') >= 0, 'Der Neuaufbau zaehlt als neu');
 console.log('OK');
 """
 
@@ -6736,6 +6784,7 @@ PRUEFUNG_TREFFERZEILE = GRUNDZUSTAND + """
 // „Ähnliche finden" haengt an Vektoren im Index – ohne die waere der Eintrag
 // zu Recht gesperrt, und dieser Test prueft die Zeile, nicht die Sperre.
 S = statusGeruest(); S.store.semantic = true;
+KANN_VERLAUF = true;      // otherwise set from store.features on the status poll
 renderHits({count: 2, results: [
   {uid: 'u:1', cid: 7, title: 'Rechnung 4711', who: 'Alice', date: '2026-03-04',
    source_label: 'Mail', preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'x'},
@@ -6748,19 +6797,27 @@ var h = document.getElementById('results').innerHTML;
 pruefe(h.indexOf('class="wann"') >= 0, 'Datum hat keine eigene Spalte');
 pruefe(h.indexOf('2026-03-04') >= 0, 'Datum fehlt');
 
-// Ein Menue je Treffer statt Knopfreihen.
-pruefe((h.match(/punkte-knopf/g) || []).length === 2, 'Nicht je Treffer ein Menue');
-pruefe(h.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt im Menue');
+// Keine Knopfreihe und kein Menue in der Liste: die Aktionen stehen im
+// Detail des gewaehlten Treffers.
+pruefe(h.indexOf('aehnlicheZu(') < 0 && h.indexOf('punkte-knopf') < 0,
+       'Aktionen stehen in der Liste');
+waehleTreffer(0);
+var d = document.getElementById('detail-inhalt').innerHTML;
+pruefe(d.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt im Detail');
+pruefe(d.indexOf('zeigeVerlauf(1') >= 0, 'Verlauf fehlt im Detail');
+pruefe(d.indexOf('Rechnung 4711') >= 0, 'Detail zeigt nicht den gewaehlten Treffer');
 
 // Was fuer diesen Treffer nicht geht, steht ausgegraut drin statt zu fehlen -
-// sonst wandern die Eintraege je Treffer an andere Stellen.
-var zweites = h.split('id="menu-1"')[1];
-pruefe(zweites.indexOf('disabled') >= 0, 'Unmoegliches fehlt statt ausgegraut zu sein');
+// sonst wandern die Knoepfe je Treffer an andere Stellen.
+waehleTreffer(1);
+d = document.getElementById('detail-inhalt').innerHTML;
+pruefe(d.indexOf('zeigeVerlauf(') < 0 && d.indexOf('disabled') >= 0,
+       'Unmoegliches fehlt statt ausgegraut zu sein');
 console.log('OK');
 """
 
 
-def test_trefferzeile_ist_kompakt_und_hat_ein_menue():
+def test_trefferzeile_ist_kompakt_und_die_aktionen_stehen_im_detail():
     _in_node(PRUEFUNG_TREFFERZEILE)
 
 
@@ -7054,11 +7111,13 @@ def test_jedes_feld_ist_auch_gelistet():
                  "sharepoint_enabled",   # likewise, saveCats()
                  "sharepoint_pages_enabled",  # likewise, saveCats()
                  "planner_enabled",   # likewise, saveCats()
+                 "todo_enabled",      # likewise, saveCats()
+                 "onenote_enabled",   # likewise, saveCats()
                  "sharepoint_urls",      # multi-line text, handled separately
                  "planner_urls",         # URL table, liesUrlTabelle()
                  "sharepoint_pages_urls",     # likewise
                  "cadence-onedrive",     # cadence selects, leseKadenzen()
-                 "cadence-teams"}
+                 "cadence-teams", "cadence-todo"}
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.seite()))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"
@@ -7179,17 +7238,17 @@ function lage(o){
 }
 
 var an = lage({running: true, has_model: true, has_chat_model: true, models: []});
-pruefe(an.text === 'KI an', 'Laufend nicht als an bezeichnet: ' + an.text);
+pruefe(an.text === 'an', 'Laufend nicht als an bezeichnet: ' + an.text);
 pruefe(an.adresse.length > 0, 'Kein Stand neben der Adresse');
 pruefe(an.modell.length > 0, 'Kein Stand neben dem Modell');
 
 var fehlt = lage({running: true, has_model: false, has_chat_model: false, models: []});
-pruefe(fehlt.text === 'KI aus', 'Fehlendes Modell nicht als aus bezeichnet: ' + fehlt.text);
+pruefe(fehlt.text === 'aus', 'Fehlendes Modell nicht als aus bezeichnet: ' + fehlt.text);
 pruefe(fehlt.tip.indexOf('Modell') >= 0, 'Mouseover nennt den Grund nicht: ' + fehlt.tip);
 pruefe(fehlt.adresse.length > 0, 'Adresse ist erreichbar, sagt es aber nicht');
 
 var weg = lage({running: false, has_model: false, has_chat_model: false, models: []});
-pruefe(weg.text === 'KI aus', 'Nicht erreichbar, aber nicht als aus bezeichnet');
+pruefe(weg.text === 'aus', 'Nicht erreichbar, aber nicht als aus bezeichnet');
 // Ohne erreichbares Ollama ist "Modell fehlt" eine zweite Meldung ueber
 // dieselbe Ursache - dann steht dort nichts.
 pruefe(weg.modell === '', 'Zweite Meldung ueber dieselbe Ursache: ' + weg.modell);
@@ -7274,7 +7333,8 @@ function zeichne(semantisch){
   S.store.semantic = semantisch;
   renderHits({count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'A',
     date: '2026-03-04', source_label: 'Datei', preview: 'p'}]});
-  return document.getElementById('results').innerHTML;
+  waehleTreffer(0);
+  return document.getElementById('detail-inhalt').innerHTML;
 }
 
 // Mit Vektoren im Index ist der Eintrag bedienbar - auch wenn Ollama gerade
@@ -7285,7 +7345,7 @@ pruefe(mit.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt trotz Vektoren'
 // Ohne Vektoren liefe der Aufruf ins Leere. Ausgegraut statt verschwunden -
 // sonst sucht man den Eintrag beim naechsten Mal an anderer Stelle.
 var ohne = zeichne(false);
-var menue = ohne.split('id="menu-0"')[1].split('</div>')[0];
+var menue = ohne.split('class="daktionen"')[1].split('</div>')[0];
 pruefe(menue.indexOf('aehnlicheZu(') < 0, 'Aehnliche finden ist noch anklickbar');
 pruefe(menue.indexOf('Find similar') >= 0 || menue.indexOf('hnliche finden') >= 0,
        'Der Eintrag verschwand ganz statt auszugrauen');
@@ -7299,3 +7359,191 @@ def test_aehnliche_finden_haengt_an_den_vektoren():
     """Not on Ollama: the chunk's vector sits in the index. Without vectors
     – a pure full-text index – the entry would lead nowhere."""
     _in_node(PRUEFUNG_AEHNLICHE_GESPERRT)
+
+
+def test_links_umleiten_schickt_nur_relative_pfade_durch_die_route():
+    """Every archive HTML links its files relatively; served through /source
+    those links must come back through the route – absolute ones, anchors
+    and embedded images untouched, ".." resolved inside the same root."""
+    roh = (b'<a href="Anhaenge/Bon__1.pdf">x</a>'
+           b'<a href="../Dateien/Ordner/a.pdf#s">y</a>'
+           b'<img src="data:image/png;base64,AAAA">'
+           b'<a href="https://example.com/x">z</a>'
+           b'<a href="#oben">o</a><a href="/source?root=teams&path=q">q</a>'
+           b'<a href="Besprechung__a.files/Protokoll%20A.pdf">p</a>')
+    neu = app_mod._links_umleiten(roh, "todo", "Einkauf__x/list.html")
+    assert b'href="/source?root=todo&path=Einkauf__x%2FAnhaenge%2FBon__1.pdf"' in neu
+    assert b'href="/source?root=todo&path=Dateien%2FOrdner%2Fa.pdf#s"' in neu
+    assert b'src="data:image/png;base64,AAAA"' in neu
+    assert b'href="https://example.com/x"' in neu and b'href="#oben"' in neu
+    assert b'href="/source?root=teams&path=q"' in neu
+    assert b'path=Einkauf__x%2FBesprechung__a.files%2FProtokoll%20A.pdf"' in neu
+    # A page at the root of its export: no folder to prepend.
+    assert b'path=Anhaenge%2FBon__1.pdf' in app_mod._links_umleiten(
+        b'<a href="Anhaenge/Bon__1.pdf">', "planner", "board.html")
+
+
+# --------------------------------------------------------------------------
+# OneNote notebooks: the same mechanics as the mailbox folders
+# --------------------------------------------------------------------------
+def _notizbuchliste(sandbox, eintraege, seiten=()):
+    ordner = sandbox / app_mod.ONENOTE_DIR
+    folders_mod.speichere(ordner, eintraege, datei=folders_mod.NOTIZBUECHER)
+    for pfad, anzahl in seiten:
+        (ordner / pfad).mkdir(parents=True, exist_ok=True)
+        for i in range(anzahl):
+            (ordner / pfad / f"s{i}__ab.html").write_text("x", encoding="utf-8")
+    return ordner
+
+
+NOTIZBUECHER = [{"id": "n1", "pfad": "Projekte", "name": "Projekte", "standard": False,
+                 "elemente": 0},
+                {"id": "n2", "pfad": "Privat", "name": "Privat", "standard": True,
+                 "elemente": 0}]
+
+
+def test_notizbuchregeln_ohne_eintrag_alle(sandbox):
+    daten = {"ordner": NOTIZBUECHER}
+    assert len(folders_mod.gewaehlt(daten, app_mod.notizbuchregeln({"onenote_rules": ""}))) == 2
+    eigene = app_mod.notizbuchregeln({"onenote_rules": "- **\n+ Projekte"})
+    assert [e["name"] for e in folders_mod.gewaehlt(daten, eigene)] == ["Projekte"]
+
+
+def test_notizbuchliste_zaehlt_seiten_je_notizbuch(server, sandbox):
+    """Pages sit in section folders below the notebook – the export list
+    sums them per notebook, and a notebook only on disk shows as such."""
+    a, port = server
+    _notizbuchliste(sandbox, NOTIZBUECHER,
+                    [("Projekte/Allgemein", 2), ("Projekte/2026/Q3", 3),
+                     ("Privat/Ideen", 1), ("Weg/Alt", 4)])
+    code, r = call(port, "POST", "/api/folder-plan",
+                   {"quelle": "onenote", "onenote_rules": "- **\n+ Projekte"})
+    assert code == 200 and r["ok"]
+    assert [z["pfad"] for z in r["an"]] == ["Projekte"] and r["an"][0]["archiv"] == 5
+    assert [z["pfad"] for z in r["aus"]] == ["Privat"] and r["aus"][0]["archiv"] == 1
+    assert r["aus"][0]["regel"] == "- **"
+    assert r["weg"] == [{"pfad": "Weg", "archiv": 4}]
+    assert not a.cfg["onenote_rules"]
+
+
+def test_notizbuchstand_nennt_die_eintraege_mit_auswahl(server, sandbox):
+    a, port = server
+    _notizbuchliste(sandbox, NOTIZBUECHER)
+    call(port, "POST", "/api/config", {"onenote_rules": "- **\n+ Privat"})
+    assert a.cfg["onenote_rules"] == "- **\n+ Privat"
+    c = call(port, "GET", "/api/status")[1]["notebooks"]
+    assert (c["gesamt"], c["gewaehlt"], c["namen"]) == (2, 1, ["Privat"])
+    assert c["abgeglichen"]
+    assert [(e["id"], e["an"]) for e in c["eintraege"]] == [("n1", False), ("n2", True)]
+
+
+def test_notizbuchstand_ohne_liste(server):
+    c = call(server[1], "GET", "/api/status")[1]["notebooks"]
+    assert c == {"abgeglichen": None, "gesamt": 0, "gewaehlt": 0, "namen": [],
+                 "neu": [], "eintraege": []}
+
+
+def test_notizbuchregeln_und_kadenz_erreichen_den_export(sandbox):
+    cfg = dict(app_mod.load_config(), onenote_rules="+ Projekte",
+               sync_cadence={"onenote:n1": "weekly"})
+    schritt = [s for s in app_mod.build_steps(cfg, {"onenote": True}) if s["key"] == "onenote"][0]
+    assert schritt["env"]["ONENOTE_RULES"] == "+ Projekte"
+    assert json.loads(schritt["env"]["SYNC_CADENCE"]) == {"onenote:n1": "weekly"}
+    assert "ONENOTE_ONLY" not in schritt["env"]
+    einzeln = [s for s in app_mod.build_steps(cfg, {"onenote": True}, nur_einheit="n1")
+               if s["key"] == "onenote"][0]
+    assert einzeln["env"]["ONENOTE_ONLY"] == "n1" and einzeln["env"]["SYNC_NOW"] == "1"
+    liste = [s for s in app_mod.build_steps(cfg, {"sync_notebooks": True})]
+    assert [s["key"] for s in liste] == ["notebooks"]
+    assert liste[0]["argv"][-2:] == ["--notebooks", app_mod.ONENOTE_DIR]
+    assert liste[0]["env"]["ONENOTE_RULES"] == "+ Projekte"
+
+
+# The run window: opens with the run, stays until the run is done, is
+# closed by hand; minimised it becomes a pill in the header.
+PRUEFUNG_LAUFFENSTER = GRUNDZUSTAND + """
+function laeuft(i){
+  var st = statusGeruest();
+  st.jobs = {busy: true, seq: 1, token_expired: false, last: null,
+             job: {label: 'Export', steps: ['job.step.outlook', 'job.step.index'],
+                   step: 'job.step.outlook', index: i, progress: {done: 50, total: 100, what: 'mails'},
+                   started: '2026-09-10T15:07:00'}};
+  return st;
+}
+function offen(){ return !el('lauf-overlay').classList.contains('hide'); }
+function pille(){ return !el('lauf-pille').classList.contains('hide'); }
+
+// Opening the page while a run is on: straight into the window.
+var erster = laeuft(0);
+S = null;
+renderStatus(erster);
+pruefe(offen() && !pille(), 'Beim Oeffnen der Seite nicht im Fenster');
+pruefe(el('lauf-sub').textContent.indexOf('1') >= 0, 'Schritt fehlt in der Unterzeile');
+pruefe(!el('btn-cancel').classList.contains('hide'), 'Abbrechen fehlt waehrend des Laufs');
+pruefe(el('lauf-fertig').classList.contains('hide'), 'Schliessen steht schon waehrend des Laufs da');
+
+// Minimised: the pill in the header, the window gone – and the status poll
+// must not reopen it.
+laufMinimieren();
+renderStatus(laeuft(1));
+pruefe(!offen() && pille(), 'Minimiert, aber Fenster wieder offen oder Pille fehlt');
+pruefe(el('lauf-pille-t').textContent.indexOf('2/2') >= 0,
+       'Pille nennt den Schritt nicht: ' + el('lauf-pille-t').textContent);
+laufOeffnen();
+pruefe(offen() && !pille(), 'Klick auf die Pille oeffnet nicht');
+
+// Done: the window stays, shows the result, and only "Close" removes it.
+var fertig = statusGeruest();
+fertig.jobs = {busy: false, seq: 2, token_expired: false,
+               job: null, last: {label: 'Export', ok: true, detail: '', finished: '2026-09-10T15:11:00'}};
+renderStatus(fertig);
+pruefe(offen(), 'Fenster verschwand von selbst');
+pruefe(!el('lauf-fertig').classList.contains('hide'), 'Schliessen fehlt am Ende');
+pruefe(el('btn-cancel').classList.contains('hide'), 'Abbrechen nach dem Lauf');
+renderStatus(fertig);
+pruefe(offen(), 'Statusabruf schloss das Fenster');
+laufSchliessen();
+pruefe(!offen() && !pille(), 'Schliessen raeumt nicht auf');
+renderStatus(fertig);
+pruefe(!offen(), 'Ein alter Lauf oeffnet das Fenster erneut');
+
+// A scheduled run that starts while someone works here: the pill first,
+// no window over the search.
+renderStatus(laeuft(0));
+pruefe(!offen() && pille(), 'Zeitplan-Lauf springt ueber die Seite');
+laufSchliessen();
+
+// A run started here opens the window with it.
+LAUF.eigener = true;
+renderStatus(laeuft(0));
+pruefe(offen(), 'Eigener Lauf oeffnet das Fenster nicht');
+
+// Only this run's lines: what the app logged before the run stays out.
+laufSchliessen();
+var mitCursor = laeuft(0); mitCursor.jobs.job.log_seq = 7;
+var vorher = null;
+global.fetch = function(pfad){
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/log') >= 0
+      ? {seq: 9, lines: [{n: 7, level: 'info', t: '1', text: 'alt'},
+                          {n: 8, level: 'head', t: '2', text: 'neu'},
+                          {n: 9, level: 'info', t: '3', text: 'neu'}]}
+      : statusGeruest()); }});
+};
+var angehaengt = [];
+el('log').appendChild = function(d){ angehaengt.push(d.textContent); };
+LAUF.eigener = true;
+renderStatus(mitCursor);
+pruefe(LAUF.abSeq === 7, 'Logstand des Laufs nicht uebernommen: ' + LAUF.abSeq);
+seen = 0;
+pullLog();
+setTimeout(function(){
+  pruefe(angehaengt.length === 2 && angehaengt.every(function(z){ return z.indexOf('neu') >= 0; }),
+         'Alte Zeilen im Lauf-Fenster: ' + JSON.stringify(angehaengt));
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_lauffenster_bleibt_bis_zum_schliessen():
+    _in_node(PRUEFUNG_LAUFFENSTER)

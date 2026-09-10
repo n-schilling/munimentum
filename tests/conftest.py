@@ -23,5 +23,7 @@ def _throttle_gate_reset():
     any test that fakes a 429 leaves a gate the NEXT test waits out – a
     flaky-order hang of up to 300 s."""
     graph_client._DROSSEL["bis"] = 0.0
+    graph_client.TAKT = None
     yield
     graph_client._DROSSEL["bis"] = 0.0
+    graph_client.TAKT = None

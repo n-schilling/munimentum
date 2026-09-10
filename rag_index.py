@@ -337,15 +337,19 @@ def _alter_bestand(store):
 
 
 # The sources the index can read file by file – (registry art, chunk root).
-# Calendars, contacts and Planner boards are few files and always parsed.
-_QUELLEN = (("teams", corpus.load_teams), ("outlook", corpus.load_outlook),
+# Calendars, contacts, Planner boards and To Do lists are few files and
+# always parsed. The Teams folder is walked twice on purpose: once for the
+# conversations, once for the files next to them.
+_QUELLEN = (("teams", corpus.load_teams), ("teams_files", corpus.load_teams_files),
+            ("outlook", corpus.load_outlook),
             ("onedrive", corpus.load_onedrive),
             ("sharepoint", corpus.load_sharepoint),
-            ("pages", corpus.load_pages))
+            ("pages", corpus.load_pages), ("onenote", corpus.load_onenote))
 
 
 def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
-                 pages_dir, planner_dir, store):
+                 pages_dir, planner_dir, store, todo_dir=None,
+                 onenote_dir=None):
     """Every chunk of the archive – re-used from the previous index where the
     file did not change, parsed where it did.
 
@@ -360,9 +364,10 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
     Returns (chunks, manifest, files reused, files read).
     """
     alt_manifest, alt_chunks = _alter_bestand(store)
-    ordner = {"teams": teams_dir, "outlook": outlook_dir,
+    ordner = {"teams": teams_dir, "teams_files": teams_dir,
+              "outlook": outlook_dir,
               "onedrive": onedrive_dir, "sharepoint": sharepoint_dir,
-              "pages": pages_dir}
+              "pages": pages_dir, "onenote": onenote_dir}
     chunks, manifest, wieder, gelesen = [], {}, 0, 0
     for art, laden in _QUELLEN:
         wurzel = ordner[art]
@@ -394,19 +399,22 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
                                            + corpus.load_contacts(wurzel))
     if planner_dir and Path(planner_dir).is_dir():
         chunks += corpus.chunk_records(corpus.load_planner(planner_dir))
+    if todo_dir and Path(todo_dir).is_dir():
+        chunks += corpus.chunk_records(corpus.load_todo(todo_dir))
     return chunks, manifest, wieder, gelesen
 
 
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None, sharepoint_dir=None,
-                pages_dir=None, planner_dir=None):
+                pages_dir=None, planner_dir=None, todo_dir=None,
+                onenote_dir=None):
     # Reading a large archive takes a minute or more and used to be silent –
     # long enough for someone watching the log to suspect a hang.
     progress.event("run.index.reading")
     begonnen = time.time()
     chunks, manifest, wieder, gelesen = lese_bestand(
         teams_dir, outlook_dir, onedrive_dir, sharepoint_dir, pages_dir,
-        planner_dir, store)
+        planner_dir, store, todo_dir=todo_dir, onenote_dir=onenote_dir)
     if corpus.POOL_FEHLER:
         # Don't keep quiet about this: the index is correct, but reading ran
         # on one core instead of all, and with large archives that shows.
@@ -513,6 +521,8 @@ def main():
     ap.add_argument("--sharepoint", required=True)
     ap.add_argument("--pages", required=True)
     ap.add_argument("--planner", required=True)
+    ap.add_argument("--todo", required=True)
+    ap.add_argument("--onenote", required=True)
     ap.add_argument("--store", required=True)
     ap.add_argument("--model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
@@ -527,7 +537,8 @@ def main():
                               a.batch, embeddings=not a.no_embeddings,
                               onedrive_dir=a.onedrive,
                               sharepoint_dir=a.sharepoint, pages_dir=a.pages,
-                              planner_dir=a.planner)
+                              planner_dir=a.planner, todo_dir=a.todo,
+                              onenote_dir=a.onenote)
     # The Analytics tab reads a materialised block instead of aggregating on
     # every visit – this run just touched everything, so build it now. Its
     # failure must not fail the index.
@@ -535,7 +546,7 @@ def main():
         analytics_db.baue(a.store, {
             "teams": a.teams, "outlook": a.outlook, "onedrive": a.onedrive,
             "sharepoint": a.sharepoint, "pages": a.pages,
-            "planner": a.planner})
+            "planner": a.planner, "todo": a.todo, "onenote": a.onenote})
     except Exception as e:
         progress.event("run.index.analytics_failed", "warn",
                        error=f"{type(e).__name__}: {e}")

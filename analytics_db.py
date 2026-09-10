@@ -139,7 +139,7 @@ def baue(store, ordner):
     """Aggregate the archive and store the result in corpus.db.
 
     ``ordner`` maps the size-tile names (teams, outlook, onedrive,
-    sharepoint, pages) to their export folders. Returns the payload; None
+    sharepoint, pages, planner, todo, onenote) to their export folders. Returns the payload; None
     when there is no index to aggregate."""
     db = store_layout.db_path(store)
     if not db.exists():
@@ -185,12 +185,12 @@ def baue(store, ordner):
 
         out["dateien"] = {
             "n": je_quelle.get("datei", 0), "pages": je_quelle.get("pages", 0),
-            "onedrive": 0, "sharepoint": 0, "verschwunden": None}
+            "onedrive": 0, "sharepoint": 0, "teams": 0, "verschwunden": None}
         if "root" in spalten:
             for wurzel, n in con.execute(
                     "SELECT root, COUNT(DISTINCT uid) FROM chunks "
                     "WHERE src = 'datei' GROUP BY root"):
-                if wurzel in ("onedrive", "sharepoint"):
+                if wurzel in ("onedrive", "sharepoint", "teams"):
                     out["dateien"][wurzel] = n
         if "gone" in spalten:
             out["dateien"]["verschwunden"] = con.execute(
@@ -198,12 +198,14 @@ def baue(store, ordner):
                 "AND gone IS NOT NULL "
                 "AND src IN ('datei', 'pages')").fetchone()[0]
 
-        out["planner"] = {"n": je_quelle.get("planner", 0),
-                          "verschwunden": None}
-        if "gone" in spalten:
-            out["planner"]["verschwunden"] = con.execute(
-                "SELECT COUNT(*) FROM chunks WHERE seq = 0 "
-                "AND gone IS NOT NULL AND src = 'planner'").fetchone()[0]
+        # The task and note sources: one block each, items and how many
+        # of them are only still here.
+        for quelle in ("planner", "todo", "onenote"):
+            out[quelle] = {"n": je_quelle.get(quelle, 0), "verschwunden": None}
+            if "gone" in spalten:
+                out[quelle]["verschwunden"] = con.execute(
+                    "SELECT COUNT(*) FROM chunks WHERE seq = 0 "
+                    "AND gone IS NOT NULL AND src = ?", (quelle,)).fetchone()[0]
 
         verlauf, luecken = _verlauf(con)
         out["verlauf"], out["luecken"] = verlauf, luecken
