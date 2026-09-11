@@ -181,15 +181,18 @@ class Login:
     style towards whoever has to consent.
     """
 
-    def __init__(self, scopes, ausgabe=print, client=None, mandant=None):
+    def __init__(self, scopes, ausgabe=print, client=None, mandant=None,
+                 cache=None):
         # `client`/`mandant` is passed through by the app: it manages its own
         # configuration and does not first write it into a file that
         # settings.py then reads back. Without them, whatever is configured
         # applies – so a manual call in the terminal stays unchanged.
+        # `cache` names another profile's cache file – only to READ whose
+        # account it holds.
         import msal
         self.scopes = list(scopes)
         self.ausgabe = ausgabe
-        self._cache = _Cache(cache_datei())
+        self._cache = _Cache(Path(cache) if cache else cache_datei())
         self.app = msal.PublicClientApplication(
             client or client_id(),
             authority=f"https://login.microsoftonline.com/{mandant or tenant()}",
@@ -304,21 +307,23 @@ class DeviceLogin:
         return False, ((res or {}).get("error_description") or "abgebrochen")
 
 
-def angemeldet(client=None, mandant=None):
+def angemeldet(client=None, mandant=None, heim=None):
     """Is a usable cache present? Without asking the user.
 
     For the UI: it should be able to show the state without ripping open a
-    sign-in window.
+    sign-in window. `heim` asks another profile's folder instead of this
+    process's own – the chooser tells archives apart by account.
     """
     try:
         import msal                              # noqa: F401
     except ImportError:
         return None
-    if not cache_datei().exists():
+    datei = Path(heim) / CACHE_DATEI if heim else cache_datei()
+    if not datei.exists():
         return None
     try:
         anmeldung = Login([RES + "User.Read"], ausgabe=lambda *_: None,
-                          client=client, mandant=mandant)
+                          client=client, mandant=mandant, cache=datei)
         for acc in anmeldung.app.get_accounts():
             return acc.get("username") or True
     except Exception:                            # noqa: BLE001 – display only

@@ -18,7 +18,10 @@ tracking, no fonts or scripts loaded from a CDN.
 
 Settings, access token and run history live in a fixed folder in your user
 profile; exports and the search index live below it by default and can each
-point elsewhere — all paths are shown in *Settings*. Each export's
+point elsewhere — all paths are shown in *Settings*. Every archive is a
+profile folder of its own below that one, with its own token, exports and
+index; nothing crosses between profiles, and the only things outside them
+are a small file naming the one opened last and the start-up log. Each export's
 bookkeeping — change tokens, inventories, for Teams the message texts the
 pages are rendered from — sits in a `state.db` inside its export folder,
 nowhere else. The app serves its

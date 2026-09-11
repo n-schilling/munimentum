@@ -27,6 +27,10 @@ planner_export/
 app_config.json
 runs.db
 app.log
+# Further profiles of a source run – each one a whole archive – and the
+# register saying which was opened last.
+profiles/
+profiles.json
 
 # Tool and system residue
 __pycache__/

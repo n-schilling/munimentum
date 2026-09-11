@@ -55,23 +55,54 @@ for you.
 ## Where the data goes
 
 Four places, deliberately separate. The app itself lives where the operating
-system puts it. Its **app folder** is fixed and holds the small things —
-settings, access token, run history:
+system puts it. Its **app folder** is fixed and holds the profiles, one
+folder each under `profiles/`:
 
 * macOS: `~/Library/Application Support/Munimentum`
 * Windows: `%LOCALAPPDATA%\Munimentum`
 * Linux: `~/.local/share/Munimentum`
 
-The two heavy parts live below it by default and can each point elsewhere in
-*Settings*: the **data folder** (`data/`, all exports — a mailbox can take
-tens of gigabytes, a slow disk is fine) and the **index folder**
-(`rag_store/`, hot random-access reads — keep it on a fast disk). Changing a
-path moves nothing and takes effect after a restart: **Munimentum never
-moves your data** — copy or move the folders yourself, then set the paths.
-An archive from before the split keeps working untouched: the app then
-points the data folder at the app folder and says so in the log. For a
-single run, `--data-dir FOLDER` and `MUNIMENTUM_DATA_DIR` put everything
-into one folder.
+A **profile folder** holds the small things of one archive — settings,
+access token, run history. The two heavy parts live below it by default and
+can each point elsewhere in *Settings*: the **data folder** (`data/`, all
+exports — a mailbox can take tens of gigabytes, a slow disk is fine) and
+the **index folder** (`rag_store/`, hot random-access reads — keep it on a
+fast disk). Changing a path moves nothing and takes effect after a restart:
+**Munimentum never moves your data** — copy or move the folders yourself,
+then set the paths. An archive from before the split keeps working
+untouched: the app then points the data folder at the profile folder and
+says so in the log. For a single run, `--data-dir FOLDER` and
+`MUNIMENTUM_DATA_DIR` put everything into one folder.
+
+**Every archive is a profile.** A profile is an archive of its own — its
+own access, sources, rules, run history, data folder and index — in
+`profiles/<name>/` below the app folder, and nothing crosses between
+profiles. The first one is called `standard`; more than one account means
+more than one profile, each created empty from *Settings › Profiles* and
+set up like a first start: access, sources, build. With more than one
+profile the app asks on start which archive to open — a small page before
+the app, one card per profile — unless you tick *open without asking*,
+which then opens the last one; `--profile NAME` (or `MUNIMENTUM_PROFILE`)
+names it outright and skips the question. The header then names the open
+profile, and a click on it opens the switch window: the other profile's
+row restarts the app with it on the same port. A second profile started
+while one is running takes the next free port, so two archives can be
+open side by side. A profile that is not open can be renamed —
+that is a folder rename, paths inside it follow. Names are short slugs
+(`nordwind`, not an e-mail address) because they land in paths and in the
+MCP snippet. Two profiles may never share a data or index folder — the
+settings refuse it — and nothing is ever copied or moved between them.
+Under `--data-dir` there is one archive and no profiles.
+
+**Upgrading from 9.x or older:** an archive that sits in the app folder
+itself is moved into `profiles/standard/` on the first start — a rename on
+the same disk, instant whatever the size, all or nothing. Data or index
+folders you pointed elsewhere stay where they are; folders inside the app
+folder move along and the settings follow them. That is the one move this
+app ever makes — and should a program hold a file open at that moment
+(Windows refuses to move it then), that start runs the archive where it
+is, without profiles, and the next start tries again. Claude Desktop users
+copy the stdio MCP snippet again afterwards, because its paths changed.
 
 ---
 
@@ -79,8 +110,9 @@ into one folder.
 
 One browser page with two doors — **Build archive** and **Search archive**
 — and two side rooms, *Overview* and *Settings*. The header carries nothing
-else but one frame with the states — your access, and a run while it is
-minimised — and the power button to quit.
+else but one frame with the states — your access, a run while it is
+minimised, and the open profile once there is more than one, a click on it
+switches — and the power button to quit.
 
 ### Build archive
 
@@ -318,7 +350,10 @@ kept are two separate settings (24 months and 14 days by default).
 ### Settings
 
 A navigation on the left — Sources, Schedule, AI (Ollama), Claude (MCP),
-Storage, App, Expert mode — and one card per topic on the right. Each source
+Profiles, App, Expert mode — and one card per topic on the right.
+*Profiles* lists the profiles with their accounts, switches, creates and
+renames them, and holds the folders of the current profile below. Each
+source
 is a block with its essentials open and everything else under *Advanced*;
 the gear on the archive page leads straight to it. Each setting is one line
 with an **(i)** that explains what it does and what happens if you change
@@ -390,6 +425,15 @@ also ask the archive about itself — how far it reaches, which months are
 empty, when each source last synced, and the same figures the overview
 shows — so an answer can say what the archive does not cover instead of
 guessing. *Settings* prints the exact snippet to paste into your client.
+The stdio snippet names nothing but the profile — `--profile <name>` —
+and the server takes folders, model, Ollama address and port from that
+profile's settings, so nothing in the snippet goes stale. Its entry is
+named after the profile — `munimentum` for the first, `munimentum-<name>`
+for every other — so a client can hold two archives apart; a server
+started without the flag where several profiles exist serves nothing but
+a sentence saying so, and so does a stdio entry from before 10.0. The
+HTTP endpoint is the app's and serves whichever profile is open, so its
+entry stays `munimentum`.
 
 There are two routes, and the app controls them differently. It runs the **HTTP
 endpoint** itself; *Start* / *Stop* and the autostart apply to that one. A client
@@ -423,10 +467,12 @@ Python 3.12 or newer:
 python3 -m venv .venv
 source .venv/bin/activate          # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python3 app.py
+python3 app.py                      # or: python3 app.py --profile nordwind
 ```
 
-That is the whole app. The export and index scripts are its subprograms: the
+That is the whole app — the project folder is its app folder then, and
+the profiles land in `profiles/` below it, which git ignores. The
+export and index scripts are its subprograms: the
 app starts them itself and hands them their settings, and they never ask
 questions of their own. Each still explains itself with `--help`; how the
 pieces fit together is written in their headers rather than repeated here.

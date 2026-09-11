@@ -46,7 +46,9 @@ import base64
 import html
 import posixpath
 import shutil
+import socket
 import sqlite3
+import subprocess
 import argparse
 import platform
 import importlib
@@ -84,7 +86,7 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-APP_DIRNAME = "Munimentum"
+APP_DIRNAME = settings.APP_DIRNAME
 FROZEN = bool(getattr(sys, "frozen", False))
 
 # Subprograms the bundled file can start itself via "--run <name>". As
@@ -114,15 +116,7 @@ def standard_data_dir():
     unpacks into a temp directory that vanishes on every exit, and an app
     must not write into /Applications or C:\\Program Files.
     """
-    if not FROZEN:
-        return Path(__file__).resolve().parent
-    if sys.platform == "darwin":
-        return Path.home() / "Library" / "Application Support" / APP_DIRNAME
-    if sys.platform == "win32":
-        root = os.environ.get("LOCALAPPDATA") or str(Path.home())
-        return Path(root) / APP_DIRNAME
-    root = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
-    return Path(root) / APP_DIRNAME
+    return settings.app_wurzel(FROZEN)
 
 
 DATEN_UNTERORDNER = "data"
@@ -147,19 +141,19 @@ def data_dir():
     return standard_data_dir()
 
 
-def _split_pfade(heim):
-    """(export root, index folder) – the override mode keeps the flat layout."""
+def _split_pfade(heim, cfg=None):
+    """(export root, index folder) – the override mode keeps the flat layout.
+
+    Without `cfg` the profile's own file is read by path through
+    settings.load(): without one it looks next to the module, which in the
+    bundle is the unpacked archive. Another profile's configuration comes
+    in as a dict (see profil_pfade) – settings' cache is this process's.
+    """
     if settings.data_dir_env():
         return heim, heim / STORE_DIR
-    # Our own file, by path: settings.load() without one looks next to the
-    # module, which in the bundle is the unpacked archive – so every path
-    # set in the settings fell back to the default on the next start.
-    cfg = settings.load(heim / settings.CONFIG_NAME)
-    daten = (Path(str(cfg.get("data_dir"))).expanduser().resolve()
-             if cfg.get("data_dir") else heim / DATEN_UNTERORDNER)
-    store = (Path(str(cfg.get("index_dir"))).expanduser().resolve()
-             if cfg.get("index_dir") else heim / STORE_DIR)
-    return daten, store
+    if cfg is None:
+        cfg = settings.load(heim / settings.CONFIG_NAME)
+    return settings.datenpfade(heim, cfg)
 
 
 RES = resource_dir()
@@ -179,6 +173,13 @@ def seite():
         _SEITE = (RES / "page.html").read_text(encoding="utf-8")
     return _SEITE
 HEIM = data_dir()
+# The fixed app folder holds the profiles (profiles/<name>/); HEIM is the
+# folder of the one this process runs, set by set_profil() in main().
+WURZEL = HEIM
+PROFIL = settings.STANDARD_PROFIL
+PROFIL_REGISTER = "profiles.json"            # last opened, "open without asking"
+_UMZUG = {}                                  # what layout_umzug() did this start
+_NEUSTART = None                             # argv to start over with, once the server stopped
 CONFIG_FILE = HEIM / settings.CONFIG_NAME   # the same file the scripts read
 TOKEN_FILE = HEIM / "gx_token.txt"
 BASE, STORE_PFAD = None, None                # set below, after STORE_DIR
@@ -198,6 +199,387 @@ def set_data_dir(path):
     os.environ["MUNIMENTUM_DATA_DIR"] = str(HEIM)
     settings.reset()
     return HEIM
+
+# --------------------------------------------------------------------------
+# Profiles – every one its own archive
+# --------------------------------------------------------------------------
+def profile_moeglich():
+    """Profiles live inside the fixed app folder; the all-in-one override
+    (--data-dir, MUNIMENTUM_DATA_DIR) knows exactly one archive – and so
+    does a start whose move into profiles/ failed: it runs the archive
+    where it lies, as one archive, until a later start manages the move."""
+    return not settings.data_dir_env() and not _UMZUG.get("fehler")
+
+
+def profil_namen():
+    return settings.profil_namen(WURZEL) if profile_moeglich() else [PROFIL]
+
+
+def _config_lesen(pfad):
+    """A configuration file as a dict – {} when missing or broken. Not
+    settings.load(): its one cache slot belongs to THIS process's own
+    configuration, and other profiles' files must not push it out."""
+    try:
+        daten = json.loads(Path(pfad).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return daten if isinstance(daten, dict) else {}
+
+
+def _relativ(pfad, ordner):
+    """`pfad` relative to `ordner` – None when it lies elsewhere."""
+    try:
+        return Path(pfad).relative_to(ordner)
+    except ValueError:
+        return None
+
+
+def _aufgeloest(wert):
+    try:
+        return Path(wert).expanduser().resolve()
+    except OSError:
+        return None
+
+
+def _pfade_folgen(cfg, alt, neu):
+    """The path settings that pointed into folder `alt`, rewritten to
+    `neu` – as a dict of the changed keys. Paths elsewhere are the user's
+    choice and stay."""
+    geaendert = {}
+    for key in ("data_dir", "index_dir"):
+        wert = str(cfg.get(key) or "").strip()
+        pfad = _aufgeloest(wert) if wert else None
+        rel = _relativ(pfad, alt) if pfad is not None else None
+        if rel is not None:
+            geaendert[key] = str(Path(neu) / rel)
+    return geaendert
+
+
+def profil_register_lesen():
+    return _config_lesen(WURZEL / PROFIL_REGISTER)
+
+
+def profil_register_schreiben(**werte):
+    daten = profil_register_lesen()
+    daten.update(werte)
+    WURZEL.mkdir(parents=True, exist_ok=True)
+    save_config(daten, WURZEL / PROFIL_REGISTER)
+    return daten
+
+
+def profil_pfade(name):
+    """(home, exports, index) of a profile. The running one is wherever
+    this process runs it – its globals, no disk; every other one is its
+    folder, read from ITS configuration."""
+    if name == PROFIL:
+        return HEIM, BASE, STORE_PFAD
+    heim = settings.profil_ordner(name, WURZEL)
+    daten, store = _split_pfade(heim, _config_lesen(heim / settings.CONFIG_NAME))
+    return heim, daten, store
+
+
+def profil_konto(heim):
+    """Whose archive: the account of the pasted key, else of the sign-in
+    – the one thing that tells two profiles apart on the chooser."""
+    token = read_token(heim / "gx_token.txt")
+    if token:
+        try:
+            konto = token_status(token).get("account")
+        except Exception:
+            konto = None
+        if konto:
+            return konto
+    cfg = _config_lesen(heim / settings.CONFIG_NAME)
+    try:
+        konto = auth.angemeldet(
+            client=str(cfg.get("client_id") or "").strip() or auth.STANDARD_CLIENT_ID,
+            mandant=str(cfg.get("tenant") or "").strip() or auth.STANDARD_TENANT,
+            heim=heim)
+    except Exception:
+        return None
+    return konto if isinstance(konto, str) else None
+
+
+def profil_info(name):
+    heim, daten, store = profil_pfade(name)
+    return {"name": name, "aktiv": name == PROFIL, "ordner": str(heim),
+            "konto": profil_konto(heim),
+            "last_run": _mtime_iso(heim / run_history.DB_NAME),
+            "index": store_layout.db_path(store).exists()}
+
+
+def profil_zustand():
+    """The little every status poll carries: which profile, whether there
+    are others, whether profiles exist at all – one directory listing."""
+    return {"name": PROFIL, "moeglich": profile_moeglich(),
+            "mehrere": len(profil_namen()) > 1}
+
+
+def profil_status():
+    """Everything the storage card, the switch window and the chooser
+    show – on demand (GET /api/profiles), never in the status poll: it
+    reads every profile's files."""
+    namen = profil_namen()
+    reg = profil_register_lesen()
+    return {"name": PROFIL, "moeglich": profile_moeglich(), "mehrere": len(namen) > 1,
+            "ohne_nachfrage": bool(reg.get("ohne_nachfrage")),
+            "zuletzt": reg.get("zuletzt") if reg.get("zuletzt") in namen else None,
+            "alle": [profil_info(n) for n in namen]}
+
+
+def profil_geteilt(name, daten, store):
+    """The other profile whose export or index folder this one would share
+    or nest with – two archives in one tree would be one archive nobody
+    asked for."""
+    eigene = [Path(daten).resolve(), Path(store).resolve()]
+    for anderes in profil_namen():
+        if anderes == name:
+            continue
+        _heim, d2, s2 = profil_pfade(anderes)
+        for fremd in (d2.resolve(), s2.resolve()):
+            if any(_relativ(a, fremd) is not None or _relativ(fremd, a) is not None
+                   for a in eigene):
+                return anderes
+    return None
+
+
+def profil_anlegen(name):
+    """A new, empty profile folder. Returns (info, error message)."""
+    name = str(name or "").strip().lower()
+    if not profile_moeglich():
+        return None, {"k": "srv.profile.impossible", "v": {}}
+    if not settings.profil_name_ok(name):
+        return None, {"k": "srv.profile.badname", "v": {}}
+    ordner = settings.profil_ordner(name, WURZEL)
+    if ordner.exists():
+        return None, {"k": "srv.profile.exists", "v": {"name": name}}
+    try:
+        ordner.mkdir(parents=True)
+    except OSError as e:
+        return None, {"k": "srv.profile.createfail", "v": {"detail": str(e)}}
+    return profil_info(name), None
+
+
+def profil_umbenennen(alt, neu, port=None):
+    """Rename a profile that is not open – not here, not in a second
+    instance next door: the folder under profiles/ gets the new name,
+    paths in its configuration that pointed into the folder follow it,
+    the register keeps up. Returns (name, error)."""
+    alt = str(alt or "").strip().lower()
+    neu = str(neu or "").strip().lower()
+    if not profile_moeglich():
+        return None, {"k": "srv.profile.impossible", "v": {}}
+    if alt not in profil_namen():
+        return None, {"k": "srv.profile.unknown", "v": {"name": alt}}
+    if alt == PROFIL or (port and eigene_instanz(port, profil=alt)):
+        return None, {"k": "srv.profile.active", "v": {"name": alt}}
+    if not settings.profil_name_ok(neu):
+        return None, {"k": "srv.profile.badname", "v": {}}
+    von, nach = settings.profil_ordner(alt, WURZEL), settings.profil_ordner(neu, WURZEL)
+    if nach.exists():
+        return None, {"k": "srv.profile.exists", "v": {"name": neu}}
+    cfg = _config_lesen(von / settings.CONFIG_NAME)
+    folgen = _pfade_folgen(cfg, von.resolve(), nach)
+    try:
+        os.rename(von, nach)
+        if folgen:
+            cfg.update(folgen)
+            try:
+                save_config(cfg, nach / settings.CONFIG_NAME)
+            except OSError:
+                os.rename(nach, von)
+                raise
+    except OSError as e:
+        return None, {"k": "srv.profile.renamefail", "v": {"detail": str(e)}}
+    if profil_register_lesen().get("zuletzt") == alt:
+        profil_register_schreiben(zuletzt=neu)
+    return neu, None
+
+
+# The files an archive consists of besides its data and index folders.
+ARCHIV_DATEIEN = (settings.CONFIG_NAME, "gx_token.txt", "msal_cache.bin",
+                  run_history.DB_NAME)
+
+
+def layout_umzug(wurzel=None):
+    """The one move this app makes: an archive that a version before 10.0
+    left in the app folder itself goes into profiles/standard/ – once,
+    and only while no profile exists yet.
+
+    Renames on the same disk, so it is instant whatever the size, and all
+    or nothing: a rename that fails puts the ones before it back. Data and
+    index folders the user pointed outside the app folder are not touched;
+    ones inside it move along and the configuration follows. Runs before
+    any file is opened (Windows would refuse to move an open one) and says
+    what it did once the app is up (serve). Returns what it did, and keeps
+    it in _UMZUG.
+    """
+    global _UMZUG
+    wurzel = Path(wurzel or WURZEL)
+    ergebnis = {}
+    profile = wurzel / settings.PROFIL_ORDNER
+    if profile.is_dir() and any(p.is_dir() and settings.profil_name_ok(p.name)
+                                for p in profile.iterdir()):
+        # Profiles exist: the layout is the new one. A stray file in the
+        # app folder is not an archive and must not become a profile.
+        _UMZUG = ergebnis
+        return ergebnis
+    cfg = _config_lesen(wurzel / settings.CONFIG_NAME)
+    ziel = profile / settings.STANDARD_PROFIL
+    wurzel_r = _aufgeloest(wurzel) or wurzel
+    zuege, neu = {}, {}
+    for name in ARCHIV_DATEIEN:
+        if (wurzel / name).is_file():
+            zuege[wurzel / name] = ziel / name
+    # The flat layout – export folders in the app folder itself, pinned
+    # (data_dir names the app folder) or never pinned: they go along, and
+    # the pin points at the new home so nothing has to find them again.
+    daten_roh = str(cfg.get("data_dir") or "").strip()
+    if not daten_roh or _aufgeloest(daten_roh) == wurzel_r:
+        flach = [n for n in ALT_ORDNER if (wurzel / n).is_dir()]
+        for n in flach:
+            zuege[wurzel / n] = ziel / n
+        if flach:
+            neu["data_dir"] = str(ziel)
+    # The default subfolders, and paths the user set INSIDE the app
+    # folder: the top-level entry moves and the setting follows it.
+    for key, vorgabe in (("data_dir", DATEN_UNTERORDNER), ("index_dir", STORE_DIR)):
+        wert = str(cfg.get(key) or "").strip()
+        if not wert:
+            if (wurzel / vorgabe).is_dir():
+                zuege[wurzel / vorgabe] = ziel / vorgabe
+            continue
+        pfad = _aufgeloest(wert)
+        rel = _relativ(pfad, wurzel_r) if pfad is not None else None
+        if not rel or not rel.parts or rel.parts[0] == settings.PROFIL_ORDNER:
+            continue                       # elsewhere, or the pin handled above
+        if (wurzel / rel.parts[0]).exists():
+            zuege[wurzel / rel.parts[0]] = ziel / rel.parts[0]
+        neu[key] = str(ziel / rel)
+    if not zuege:
+        _UMZUG = ergebnis                  # nothing of an archive here
+        return ergebnis
+    getan = []
+    try:
+        geraet = wurzel.stat().st_dev
+        for quelle in zuege:
+            if quelle.stat().st_dev != geraet:
+                raise OSError(f"{quelle} lies on another volume")
+        for nach in zuege.values():
+            if nach.exists():
+                raise OSError(f"{nach} already exists")
+        ziel.mkdir(parents=True, exist_ok=True)
+        for quelle, nach in zuege.items():
+            os.rename(quelle, nach)
+            getan.append((quelle, nach))
+        if neu:
+            cfg.update(neu)
+            save_config(cfg, ziel / settings.CONFIG_NAME)   # tmp + replace
+        ergebnis = {"nach": str(ziel),
+                    "bewegt": [str(q.relative_to(wurzel)) for q in zuege]}
+    except OSError as e:
+        haengt = []
+        for quelle, nach in reversed(getan):
+            try:
+                os.rename(nach, quelle)
+            except OSError:
+                haengt.append(str(nach))
+        for leer in (ziel, profile):
+            try:
+                leer.rmdir()
+            except OSError:
+                pass
+        fehler = str(e)
+        if haengt:
+            fehler += " – not put back: " + ", ".join(haengt)
+        ergebnis = {"nach": str(ziel), "fehler": fehler}
+    _UMZUG = ergebnis
+    return ergebnis
+
+
+def set_profil(name):
+    """Point this process at one profile – before the App is built."""
+    global HEIM, BASE, STORE_PFAD, CONFIG_FILE, TOKEN_FILE, PROFIL
+    PROFIL = str(name or settings.STANDARD_PROFIL).strip().lower()
+    HEIM = settings.profil_ordner(PROFIL, WURZEL)
+    if (_UMZUG.get("fehler") and PROFIL == settings.STANDARD_PROFIL
+            and not HEIM.is_dir()):
+        # The move did not happen: this start runs the archive where it
+        # still lies, says so, and the next start tries again.
+        HEIM = WURZEL
+    CONFIG_FILE = HEIM / settings.CONFIG_NAME
+    TOKEN_FILE = HEIM / "gx_token.txt"
+    # In-process readers (the sign-in, the settings helpers) find the
+    # profile's files the same way every subprocess does.
+    os.environ["MUNIMENTUM_HOME"] = str(HEIM)
+    settings.reset()
+    BASE, STORE_PFAD = _split_pfade(HEIM)
+    return HEIM
+
+
+def profil_waehlen(gewuenscht, port, open_browser):
+    """Which profile this start runs: the named one, the only one, the last
+    one when asking is switched off – otherwise the chooser in the
+    browser. Returns (name, browser already open)."""
+    namen = profil_namen()
+    if gewuenscht:
+        gewuenscht = str(gewuenscht).strip().lower()
+        if gewuenscht not in namen:
+            raise SystemExit(f"Unbekanntes Profil: {gewuenscht}. "
+                             f"Vorhanden: {', '.join(namen)}")
+        profil_register_schreiben(zuletzt=gewuenscht)
+        return gewuenscht, False
+    if len(namen) == 1:
+        return namen[0], False
+    reg = profil_register_lesen()
+    if reg.get("ohne_nachfrage") and reg.get("zuletzt") in namen:
+        return reg["zuletzt"], False
+    return waehle_profil_im_browser(port, open_browser)
+
+
+def profil_seite(code):
+    """The chooser: one small page before the app, nothing of the app's
+    own page in it – that one needs a profile to exist."""
+    texte = i18n.strings(code, RES)
+    t = lambda k: texte.get(k, k)          # noqa: E731
+    return (RES / "profil.html").read_text(encoding="utf-8").replace(
+        "/*__PROFIL__*/", json.dumps({
+            "lang": code,
+            "texte": {k: v for k, v in texte.items()
+                      if k.startswith(("profile.", "srv.profile."))},
+            "profile": profil_status()}, ensure_ascii=False).replace("<", "\\u003c")
+    ).replace("__TITEL__", t("profile.title"))
+
+
+def neustart_mit_profil(httpd, name, port):
+    """Switch profiles from inside the app: the server stops, and serve()
+    – on the main thread, after its own clean-up – starts this process
+    over with --profile: the same executable, the same port; the page
+    that asked reloads when the new instance answers.
+
+    Deliberately NOT exec'd from this thread: main() returning would race
+    a daemon thread on its way to execv, and whoever loses leaves a page
+    waiting for a process that simply ended.
+    """
+    global _NEUSTART
+    _NEUSTART = ([sys.executable] if FROZEN
+                 else [sys.executable, str(Path(__file__).resolve())])
+    _NEUSTART += ["--profile", name, "--port", str(port), "--no-browser"]
+    threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+
+def neustart_ausfuehren():
+    """The end of serve(): start this process over when a switch asked
+    for it. Windows' execv joins the arguments with spaces and quotes
+    nothing – a path with a space would fall apart – so there a child is
+    started and this process ends."""
+    if not _NEUSTART:
+        return
+    if sys.platform == "win32":
+        subprocess.Popen(list(_NEUSTART), close_fds=True)
+        return
+    os.execv(_NEUSTART[0], list(_NEUSTART))
+
 
 def pruefe_datenordner(pfad):
     """Is the folder usable? Returns (path, error key).
@@ -1330,18 +1712,32 @@ def mcp_client_config(cfg, port):
     variant gets absolute paths: Claude starts it in an unknown working
     directory.
     """
-    argv = script_argv("mcp_server", "--transport", "stdio",
-                       "--data-dir", str(BASE), "--store", str(STORE_PFAD))
-    if not cfg.get("ollama_enabled", True):
-        argv.append("--no-ollama")
+    # The stdio entry is bound to its profile and named after it – the
+    # first profile keeps the plain name, so a 9.x entry is replaced, not
+    # joined, when the snippet is copied again. The HTTP endpoint is the
+    # app's: it serves whichever profile is open, so its name never changes.
+    name = ("munimentum" if PROFIL == settings.STANDARD_PROFIL
+            else f"munimentum-{PROFIL}")
+    if profile_moeglich():
+        # The profile is the whole address: the server takes folders,
+        # model, Ollama address and port from that profile's settings.
+        eintrag = {"command": None, "args": script_argv(
+            "mcp_server", "--transport", "stdio", "--profile", PROFIL)}
+    else:
+        # One archive under --data-dir: no profile to name, so the paths
+        # and the home folder go along.
+        argv = script_argv("mcp_server", "--transport", "stdio",
+                           "--data-dir", str(BASE), "--store", str(STORE_PFAD))
+        if not cfg.get("ollama_enabled", True):
+            argv.append("--no-ollama")
+        eintrag = {"command": None, "args": argv,
+                   "env": {"MUNIMENTUM_HOME": str(HEIM)}}
+    eintrag["command"] = eintrag["args"][0]
+    eintrag["args"] = eintrag["args"][1:]
     return {
         "http": {"mcpServers": {"munimentum": {
             "type": "http", "url": f"http://127.0.0.1:{port}/mcp"}}},
-        "stdio": {"mcpServers": {"munimentum": {
-            "command": argv[0], "args": argv[1:],
-            # Configuration (mcp_enabled, models) lives in the fixed
-            # home folder – Claude starts the server anywhere.
-            "env": {"MUNIMENTUM_HOME": str(HEIM)}}}},
+        "stdio": {"mcpServers": {name: eintrag}},
     }
 
 
@@ -1600,6 +1996,7 @@ class App:
             "exports": export_status(self.cfg),
             "jobs": jobs,
             "mcp": self.mcp.status(self.cfg),
+            "profile": profil_zustand(),
             "config": self.cfg,
             "schedule_next": (datetime.fromtimestamp(nxt).isoformat(timespec="seconds")
                               if nxt else None),
@@ -1964,6 +2361,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, self._page(), "text/html; charset=utf-8")
             if u.path == "/api/status":
                 return self._json(app.status())
+            if u.path == "/api/profiles":
+                return self._json(profil_status())
             if u.path == "/api/log":
                 lines, seq = app.jobs.log_since(int(one.get("since", 0) or 0))
                 return self._json({"lines": lines, "seq": seq})
@@ -2089,6 +2488,15 @@ class Handler(BaseHTTPRequestHandler):
                     neu[key] = "" if ziel == vorgabe else str(ziel)
                     antwort[feld] = str(ziel)
                     neustart = neustart or str(ziel) != str(aktuell)
+                # Two profiles must never share an export or index folder:
+                # their archives would run into each other.
+                anderes = profil_geteilt(
+                    PROFIL, antwort.get("path", str(BASE)),
+                    antwort.get("index", str(STORE_PFAD)))
+                if anderes:
+                    fehler = {"k": "srv.datadir.shared", "v": {"profile": anderes}}
+                    app.jobs.log(fehler, "err")
+                    return self._json({"ok": False, "message": fehler}, 400)
                 vorher = {key: app.cfg.get(key) or "" for key in neu}
                 app.konfiguriere(lambda cfg: cfg.update(neu))
                 # One line per path that really changed, each naming its
@@ -2109,6 +2517,51 @@ class Handler(BaseHTTPRequestHandler):
                                    "restart": neustart})
             if u.path == "/api/folder-plan":
                 return self._json(self._ordnerplan(data))
+            if u.path == "/api/profiles":
+                info, fehler = profil_anlegen(data.get("name"))
+                if fehler:
+                    return self._json({"ok": False, "message": fehler}, 400)
+                app.jobs.logk("srv.profile.created", "info", name=info["name"])
+                return self._json({"ok": True, "profile": info,
+                                   "profiles": profil_status()})
+            if u.path == "/api/profile-switch":
+                name = str(data.get("name") or "").strip().lower()
+                if not profile_moeglich():
+                    return self._json({"ok": False, "message": {
+                        "k": "srv.profile.impossible", "v": {}}}, 400)
+                if name not in profil_namen():
+                    return self._json({"ok": False, "message": {
+                        "k": "srv.profile.unknown", "v": {"name": name}}}, 400)
+                port = self.server.server_address[1]
+                if name == PROFIL:
+                    return self._json({"ok": True, "name": name, "url": "/"})
+                lauft = eigene_instanz(port, profil=name)
+                if lauft:
+                    # Already open next door: that instance, not a second one.
+                    return self._json({"ok": True, "name": name,
+                                       "url": f"http://127.0.0.1:{lauft}/"})
+                if app.jobs.busy:
+                    return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+                profil_register_schreiben(zuletzt=name)
+                # The answer first, then the server stops (serve() restarts).
+                self._json({"ok": True, "name": name})
+                neustart_mit_profil(self.server, name, port)
+                return None
+            if u.path == "/api/profile-rename":
+                if app.jobs.busy:
+                    return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+                alt = str(data.get("name") or "").strip().lower()
+                neu, fehler = profil_umbenennen(alt, data.get("neu"),
+                                                port=self.server.server_address[1])
+                if fehler:
+                    return self._json({"ok": False, "message": fehler}, 400)
+                app.jobs.logk("srv.profile.renamed", "info", old=alt, name=neu)
+                return self._json({"ok": True, "name": neu, "profiles": profil_status()})
+            if u.path == "/api/profile-prefs":
+                reg = profil_register_schreiben(
+                    ohne_nachfrage=bool(data.get("ohne_nachfrage")))
+                return self._json({"ok": True,
+                                   "ohne_nachfrage": bool(reg.get("ohne_nachfrage"))})
             if u.path == "/api/logout":
                 return self._json({"ok": app.abmelden()})
             if u.path == "/api/cancel":
@@ -2769,7 +3222,7 @@ def _sicherer_name(name):
     return sauber or "datei"
 
 
-def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
+def laeuft_bereits(port, host="127.0.0.1", timeout=1.5, profil=None):
     """Is an instance of this app already answering on the port?
 
     Without this check every further double-click would start a second
@@ -2785,8 +3238,15 @@ def laeuft_bereits(port, host="127.0.0.1", timeout=1.5):
     except Exception:
         return False
     # Something entirely different could be listening on the port; only
-    # our own answer counts as "already running".
-    return isinstance(daten, dict) and "data_dir" in daten and "token" in daten
+    # our own answer counts as "already running" – and only with the same
+    # profile: another profile's instance keeps its port, this one takes
+    # the next free one.
+    if not (isinstance(daten, dict) and "data_dir" in daten and "token" in daten):
+        return False
+    if profil is not None:
+        laufend = (daten.get("profile") or {}).get("name") or settings.STANDARD_PROFIL
+        return laufend == profil
+    return True
 
 
 class Server(ThreadingHTTPServer):
@@ -2803,7 +3263,15 @@ class Server(ThreadingHTTPServer):
     interface appeared.
     """
 
+    # SO_REUSEADDR (HTTPServer's default) lets a second Windows process bind
+    # a port that is in use – two instances on one port, requests landing
+    # on either. Exclusive use there; elsewhere the default keeps a quick
+    # restart from tripping over TIME_WAIT.
+    allow_reuse_address = sys.platform != "win32"
+
     def server_bind(self):
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         socketserver.TCPServer.server_bind(self)
         self.server_name, self.server_port = self.server_address[0], self.server_address[1]
 
@@ -2822,7 +3290,11 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def make_server(app, port, host="127.0.0.1", tries=12):
+PORT_VERSUCHE = 12          # a taken port: the next ones are tried
+POLL = 0.5                  # serve_forever's poll interval (tests shorten it)
+
+
+def make_server(app, port, host="127.0.0.1", tries=PORT_VERSUCHE, handler=None):
     """Bind the server and fix the allowed Host headers.
 
     Bind first, then build the list: with port=0 the operating system
@@ -2831,24 +3303,120 @@ def make_server(app, port, host="127.0.0.1", tries=12):
     next ones are tried – a double-click must not end in a traceback
     nobody sees.
     """
+    handler = handler or Handler
     httpd = None
     for versuch in range(tries if port else 1):
         try:
-            httpd = Server((host, port + versuch), Handler)
+            httpd = Server((host, port + versuch), handler)
             break
         except OSError as e:
             if versuch == tries - 1:
                 raise SystemExit(f"Kein freier Port ab {port}: {e}") from None
     real = httpd.server_address[1]
-    Handler.app = app
-    Handler.allowed_hosts = (f"{host}:{real}", f"localhost:{real}",
+    handler.app = app
+    handler.allowed_hosts = (f"{host}:{real}", f"localhost:{real}",
                              f"127.0.0.1:{real}", f"[::1]:{real}")
     return httpd
 
 
+def eigene_instanz(port, host="127.0.0.1", profil=None, spanne=PORT_VERSUCHE):
+    """The port on which an instance of this profile already answers – the
+    one asked for, or one of the neighbours a bumped start may have taken
+    (make_server tries the next ones) – or None. A second start must open
+    that instance, never a second one on the same archive."""
+    if not port:
+        return None
+    for p in range(max(1024, port - spanne + 1), port + spanne):
+        if laeuft_bereits(p, host, timeout=0.5, profil=profil):
+            return p
+    return None
+
+
+class Wahl(Handler):
+    """The chooser's handler: the app's own transport – Host check, body
+    cap, headers – with three routes of its own and no app behind it.
+    Every connection is closed after its answer: a kept-alive one would
+    outlive shutdown() and keep answering from the old server while the
+    app already holds the port, and the page polling on it would wait
+    forever."""
+    ZU = {"Connection": "close"}
+
+    def _json(self, obj, code=200):
+        self._send(code, json.dumps(obj, ensure_ascii=False), extra=self.ZU)
+
+    def do_GET(self):
+        if not self._host_ok():
+            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
+                              "text/plain; charset=utf-8", extra=self.ZU)
+        u = urlsplit(self.path)
+        if u.path == "/api/profiles":
+            return self._json(profil_status())
+        if u.path == "/api/status":
+            # Not the app yet: the page polls this until the app answers.
+            return self._json({"chooser": True})
+        code = i18n.negotiate(None, self.headers.get("Accept-Language"), RES)
+        return self._send(200, profil_seite(code), "text/html; charset=utf-8",
+                          extra=self.ZU)
+
+    def do_POST(self):
+        if not self._host_ok():
+            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
+                              "text/plain; charset=utf-8", extra=self.ZU)
+        u = urlsplit(self.path)
+        data = self._body()
+        if not isinstance(data, dict):
+            data = {}
+        if u.path == "/api/profile-open":
+            name = str(data.get("name") or "").strip().lower()
+            if name not in profil_namen():
+                return self._json({"ok": False, "message": {
+                    "k": "srv.profile.unknown", "v": {"name": name}}}, 400)
+            profil_register_schreiben(zuletzt=name,
+                                      ohne_nachfrage=bool(data.get("ohne_nachfrage")))
+            antwort = {"ok": True}
+            lauft = eigene_instanz(self.server.server_address[1], profil=name)
+            if lauft:
+                # Already open in another instance: the page goes there,
+                # and this start ends once the chooser has handed over.
+                antwort["url"] = f"http://127.0.0.1:{lauft}/"
+            self.server.gewaehlt["name"] = name
+            self._json(antwort)
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            return None
+        return self._json({"error": "Unbekannter Pfad"}, 404)
+
+
+def chooser_server(port, host="127.0.0.1"):
+    """The chooser, bound on the app's port (or the next free one)."""
+    httpd = make_server(None, port, host, handler=Wahl)
+    httpd.gewaehlt = {}
+    return httpd
+
+
+def _wahl_abwarten(httpd, open_browser):
+    """Serve the chooser until a profile is picked. Returns (name, True) –
+    the browser is on the page by then, no second tab is wanted."""
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+    print(f"Profil wählen: {url}")
+    if open_browser:
+        threading.Timer(0.4, webbrowser.open, args=(url,)).start()
+    try:
+        httpd.serve_forever(poll_interval=POLL)
+    except KeyboardInterrupt:
+        raise SystemExit(0) from None
+    finally:
+        httpd.server_close()
+    return httpd.gewaehlt["name"], True
+
+
+def waehle_profil_im_browser(port, open_browser):
+    return _wahl_abwarten(chooser_server(port), open_browser)
+
+
 def serve(app, port, open_browser=True, host="127.0.0.1"):
-    if port and laeuft_bereits(port, host):
-        url = f"http://{host}:{port}/"
+    lauft = eigene_instanz(port, host, PROFIL) if port else None
+    if lauft:
+        url = f"http://{host}:{lauft}/"
         print(f"Läuft bereits – öffne {url}")
         print("Beenden geht dort oben rechts über „Beenden“.")
         if open_browser:
@@ -2858,9 +3426,14 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
     app.log_token_state()
+    if _UMZUG.get("bewegt"):
+        app.jobs.logk("srv.layout.moved", "info", path=_UMZUG["nach"])
+    elif _UMZUG.get("fehler"):
+        app.jobs.logk("srv.layout.movefail", "warn", path=_UMZUG["nach"],
+                      detail=_UMZUG["fehler"])
     if _ALT_GEPINNT:
-        # Detected, said, nothing moved: data and index stay in the app
-        # folder; splitting is on offer, never demanded.
+        # Detected, said, nothing moved: data and index stay in the flat
+        # layout; splitting is on offer, never demanded.
         app.jobs.logk("srv.layout.kept", "info", data=str(BASE))
     # The paths stand in the settings; the log only speaks up when the
     # configured index folder holds no index.
@@ -2883,7 +3456,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
         # server down, which in turn stops the loop.
         def bedienen():
             try:
-                httpd.serve_forever()
+                httpd.serve_forever(poll_interval=POLL)
             finally:
                 notify.stop_loop()
         threading.Thread(target=bedienen, daemon=True).start()
@@ -2893,28 +3466,31 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
             httpd.shutdown()
             app.shutdown()
             httpd.server_close()
+        neustart_ausfuehren()
         return httpd
     try:
-        httpd.serve_forever()
+        httpd.serve_forever(poll_interval=POLL)
     except KeyboardInterrupt:
         print("\nBeende…")
     finally:
         app.shutdown()
         httpd.server_close()
+    neustart_ausfuehren()
     return httpd
 
 
 def ensure_streams():
     """Without a console (Windows bundle) sys.stdout is None – print() dies.
 
-    Both then land in app.log next to the data; otherwise a failed start
-    of a windowless application would be completely mute.
+    Both then land in app.log in the app folder – outside every profile,
+    because at this point none is chosen yet; otherwise a failed start of a
+    windowless application would be completely mute.
     """
     if sys.stdout is not None and sys.stderr is not None:
         return None
     try:
-        BASE.mkdir(parents=True, exist_ok=True)
-        f = open(BASE / "app.log", "a", encoding="utf-8", errors="replace", buffering=1)
+        WURZEL.mkdir(parents=True, exist_ok=True)
+        f = open(WURZEL / "app.log", "a", encoding="utf-8", errors="replace", buffering=1)
     except OSError:
         f = open(os.devnull, "w")
     if sys.stdout is None:
@@ -2943,17 +3519,30 @@ def main(argv=None):
                     help="Ordner für Exporte, Index, Konfiguration und Token "
                          "(Vorgabe gebündelt: Benutzerdatenordner, als Skript: "
                          "der Projektordner). Wie OFFICE365_DATA_DIR.")
+    ap.add_argument("--profile", metavar="NAME",
+                    help="Profil – ein eigenes Archiv im App-Ordner. Ohne "
+                         "Angabe fragt die App, sobald es mehrere gibt. Wie "
+                         "MUNIMENTUM_PROFILE.")
     ap.epilog = ("Als erstes Argument startet --run NAME [Optionen] ein "
                  f"Teilprogramm direkt: {', '.join(RUNNABLE)}. So ruft sich die "
                  "gebündelte Datei selbst auf; von Hand nur zum Nachsehen nötig.")
     a = ap.parse_args(argv)
-    if a.data_dir:
-        set_data_dir(a.data_dir)
+    browser_offen = False
+    if a.data_dir or settings.data_dir_env():
+        # One archive, no profiles – the flag and the variable alike.
+        set_data_dir(a.data_dir or settings.data_dir_env())
     else:
+        # Before anything opens a file: an archive from before 10.0 moves
+        # into its profile folder (ensure_streams touched only the app
+        # folder's own log).
+        layout_umzug()
+        profil, browser_offen = profil_waehlen(
+            a.profile or os.environ.get("MUNIMENTUM_PROFILE"), a.port, not a.no_browser)
+        set_profil(profil)
         altbestand_pinnen()
     HEIM.mkdir(parents=True, exist_ok=True)
     BASE.mkdir(parents=True, exist_ok=True)
-    serve(App(), a.port, open_browser=not a.no_browser)
+    serve(App(), a.port, open_browser=not a.no_browser and not browser_offen)
 
 
 

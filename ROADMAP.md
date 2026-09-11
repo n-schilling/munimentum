@@ -6,6 +6,12 @@ the code, not here.
 
 ## Later, maybe
 
+* **Searching across profiles.** Since 10.0 every profile is one archive
+  with one account, one index, and its own MCP snippet. A search that
+  spans two of them would need a merged view over two indexes and a
+  header that says which hit came from where. Parked: keeping the
+  archives apart is what a profile is for, and Claude can hold two
+  servers.
 * **Searching file contents.** The index knows file names, not what is in
   them. Deliberately parked: extraction is a heavy step, and whether the
   archive needs it at all is not settled yet.

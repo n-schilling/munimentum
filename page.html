@@ -488,6 +488,7 @@ details.erweitert>.gruppe{margin-top:4px}
 .aktionen{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
 .aktionen>.small:first-child{margin-right:auto}
 .aktionen:has(>:only-child:empty){display:none}
+.gruppe>h3 .name{text-transform:none;letter-spacing:0;color:var(--ink)}
 .gruppe>h3{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
   margin:0 0 4px;display:flex;align-items:center;gap:7px;font-weight:600}
 .aus{opacity:.42;pointer-events:none}
@@ -581,6 +582,12 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .planliste li{display:flex;gap:10px;align-items:baseline;padding:3px 0;font-size:13px;border-top:1px solid var(--line)}
 .planliste li:first-child{border-top:0}
 .planliste .pfad{flex:1;word-break:break-word}
+.modal-kopf .zahnrad{flex:0 0 auto;margin-top:-2px}
+/* A list of hit rows inside a window (the profile switch): the same rows
+   as the search, framed like a card. A .fest row is shown, not chosen. */
+.modal .hits{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:10px}
+.hit.fest{cursor:default}
+.hit.fest:hover{background:var(--accent-weich)}
 .planliste .zahl{flex:0 0 auto;min-width:5em;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
 .planliste .regel{flex:0 0 auto;color:var(--muted);font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 ol{padding-left:20px;margin:12px 0} ol li{margin-bottom:9px}
@@ -625,6 +632,7 @@ details.rechte p{margin:6px 0}
          access always – and one icon button for the one action. -->
     <div class="zustaende" id="zustaende">
       <button class="zustand lauf-pille hide" id="lauf-pille" onclick="laufOeffnen()"><span data-ikon="uhr" data-ikon-klasse="klein akzent"></span><span id="lauf-pille-t"></span><span class="mini-balken"><span id="lauf-pille-balken"></span></span></button>
+      <button class="zustand hide" id="pill-profil" onclick="profilWechselnFenster()" data-i18n-title="profile.pill.tip"><span data-ikon="person" data-ikon-klasse="klein"></span><span id="p-profil-t"></span></button>
       <button class="zustand" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
     </div>
     <button class="ikonknopf quit" onclick="beenden()" id="btn-quit" data-i18n-title="app.quit.tip" data-ikon="aus"></button>
@@ -1250,7 +1258,16 @@ details.rechte p{margin:6px 0}
   <div class="card" id="ablage-karte">
     <h2 class="mit-info"><span data-i18n="settings.storage.title">Speicherorte</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.storage.i">i</span></h2>
-    <div class="gruppe">
+    <div class="gruppe" id="profil-gruppe"><h3 data-i18n="settings.profile.all">Diese Profile gibt es</h3>
+      <div id="profil-liste" class="urltab abw"></div>
+      <div class="aktionen">
+        <span class="small muted" id="profil-msg"></span>
+        <button class="mini" onclick="profilWechselnFenster()" data-i18n="settings.profile.switch">Profil wechseln…</button>
+        <button class="mini" onclick="profilAnlegenFenster()" data-i18n="settings.profile.create">Neues Profil anlegen…</button>
+      </div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.profile.noask"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.profile.noask.i">i</span></span><input type="checkbox" id="profil-ohne-nachfrage" onchange="profilNachfrage(this.checked)"></div>
+    </div>
+    <div class="gruppe"><h3><span data-i18n="settings.profile.this">Aktuelles Profil</span> <span class="name" id="profil-dies"></span></h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.datadir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.datadir.i">i</span></span><span></span></div>
       <div class="feldzeile breit">
         <div class="row">
@@ -1483,6 +1500,7 @@ uebersetzeSeite();
    One set of inline SVG paths for the whole page – headings, chips, rows,
    the step list. No emoji, no icon font: the same stroke everywhere. */
 var IKON = {
+  person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   teams: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-4.5A8 8 0 1 1 21 12z"/>',
   onedrive: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-9 7 7 0 0 0-13.4 1.5A4 4 0 0 0 6 19h11.5z"/>',
@@ -1634,6 +1652,7 @@ function tab(name){
   });
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); }
   if(name === 'analytics') ladeAnalytics();
+  if(name === 'einstellungen') profileLaden();
 }
 
 /* "Deleted" is in truth its own view onto the same inventory – like
@@ -1951,6 +1970,7 @@ function renderStatus(s){
   if(first){ el('c-data-dir').value = s.data_dir;
               el('c-index-dir').value = s.index_dir || ''; }
   el('home-dir').textContent = s.home_dir || '';
+  zeigeProfile(s.profile || {});
   el('app-ort').textContent = s.app_location || '';
   zeigeUpdate(s.update || {});
   fuelleEinstellungen(s.config);
@@ -4184,6 +4204,146 @@ function leseKadenzen(){
   return kad;
 }
 
+/* ---------- Profiles: one archive each ----------
+   The header names the profile only when there is more than one; the
+   storage card lists them all. Switching restarts the process with
+   --profile, and this page waits for the new instance to answer. */
+var PROFILE = null;                  // the full list, fetched when it is looked at
+function profilName(p){ return String(p.name || ''); }
+/* The status carries only what the header needs; the list of profiles –
+   accounts, folders, last runs of every archive – is fetched when the
+   storage card or the switch window shows it. */
+function zeigeProfile(pr){
+  el('pill-profil').classList.toggle('hide', !pr.mehrere);
+  el('p-profil-t').textContent = t('profile.pill', {name: profilName(pr)});
+  el('profil-gruppe').classList.toggle('hide', pr.moeglich === false);
+}
+function profileLaden(){
+  return api('/api/profiles').then(function(pr){ if(pr && pr.alle) zeigeProfilliste(pr); return pr; });
+}
+function zeigeProfilliste(pr){
+  PROFILE = pr;
+  var alle = pr.alle || [];
+  el('profil-dies').textContent = profilName(pr);
+  el('profil-ohne-nachfrage').checked = !!pr.ohne_nachfrage;
+  // Name, whether it is the open one, whose account. The folders belong to
+  // the open profile's group below; every other profile's are its own.
+  el('profil-liste').innerHTML = alle.map(function(p){
+    var n = esc(JSON.stringify(p.name));
+    return '<div class="zeile"><span class="pfad"><b>' + esc(profilName(p)) + '</b>' +
+      (p.aktiv ? ' <span class="tag">' + esc(t('profile.active')) + '</span>' : '') +
+      ' <span class="muted">' + esc(p.konto || t('profile.noaccess')) + '</span></span>' +
+      (p.aktiv ? '' : '<button class="mini" onclick="profilUmbenennenFenster(' + n + ')">' +
+                      esc(t('settings.profile.rename')) + '</button>') + '</div>';
+  }).join('');
+}
+function profilNachfrage(an){
+  post('/api/profile-prefs', {ohne_nachfrage: !!an}).then(function(r){
+    el('profil-msg').textContent = r.ok ? '' : mtext(r.message);
+  });
+}
+/* The header state opens this window: the whole row of another profile
+   is the switch, the gear at the top leads to the profile settings – the
+   window itself stays free of them. */
+function profilWechselnFenster(){
+  // Drawn at once from what is known, redrawn when the fresh list is in.
+  zeichneWechsel(PROFILE || {alle: []});
+  profileLaden().then(function(pr){ if(pr && pr.alle && wizardOffen === 'profil' && !PROFIL_GEWAEHLT) zeichneWechsel(pr); });
+}
+function zeichneWechsel(pr){
+  // The same rows as the chooser page, in the search's hit shape: name,
+  // when it last ran, whose account. The open one is shown, every other
+  // one is a click.
+  var zeilen = (pr.alle || []).map(function(p){
+    var n = esc(JSON.stringify(p.name));
+    var stand = p.index ? t('profile.last', {when: p.last_run ? fmt(p.last_run) : '–'}) : t('profile.empty');
+    return '<div class="hit' + (p.aktiv ? ' on fest' : '') + '"' +
+      (p.aktiv ? '' : ' tabindex="0" role="button" onclick="profilWechseln(' + n + ')" ' +
+                      'onkeydown="if(event.key===\'Enter\')profilWechseln(' + n + ')"') + '>' +
+      '<span class="ikon">' + ikon('person') + '</span>' +
+      '<h3>' + esc(profilName(p)) + '</h3>' +
+      '<span class="wann">' + (p.aktiv ? '<span class="tag">' + esc(t('profile.active')) + '</span>' : esc(stand)) + '</span>' +
+      '<span class="wer">' + esc(p.konto || t('profile.noaccess')) + '</span></div>';
+  }).join('');
+  var rad = '<button class="zahnrad" onclick="profilEinstellungen()" title="' + esc(t('profile.settings.tip')) +
+    '" aria-label="' + esc(t('profile.settings.tip')) + '">' + ikon('zahnrad') + '</button>';
+  oeffneEigenes('profil', modalKopf(t('settings.profile.switch.title'), 'profil', t('settings.profile.switch.i'), rad) +
+    '<div class="hits">' + zeilen + '</div>' +
+    '<p class="hint small hide" id="profil-warten"></p>', true);
+}
+function profilEinstellungen(){
+  closeWizard('profil');
+  zeigeEinstellung('ablage-karte');
+}
+var PROFIL_GEWAEHLT = null;          // one switch, one waiting loop
+var PROFIL_VERSUCHE = 0;
+function profilWechseln(name){
+  if(PROFIL_GEWAEHLT) return;
+  PROFIL_GEWAEHLT = name;              // a second click changes nothing
+  var hinweis = document.getElementById('profil-warten');
+  if(hinweis){ hinweis.textContent = t('profile.opening', {name: name}); hinweis.classList.remove('hide'); }
+  post('/api/profile-switch', {name: name}).then(function(r){
+    if(!r.ok){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = mtext(r.message); return; }
+    if(r.url){ location.replace(r.url); return; }      // already open next door
+    beendet = true;                                    // this instance is going; stop the polls
+    setTimeout(profilWarten, 1000);
+  }).catch(function(){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = t('profile.notback', {url: location.origin + '/'}); });
+}
+function profilWarten(){
+  // The old instance is gone; the new one answers on the same port with
+  // the profile that was asked for – asked with growing patience, and
+  // after a minute the page says how to get there by hand.
+  PROFIL_VERSUCHE++;
+  var pause = PROFIL_VERSUCHE < 5 ? 1000 : PROFIL_VERSUCHE < 15 ? 2000 : 5000;
+  function nochmal(){
+    if(PROFIL_VERSUCHE >= 30){
+      var hinweis = document.getElementById('profil-warten');
+      if(hinweis) hinweis.textContent = t('profile.notback', {url: location.origin + '/'});
+      return;
+    }
+    setTimeout(profilWarten, pause);
+  }
+  fetch('/api/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
+    if(s && s.profile && s.profile.name === PROFIL_GEWAEHLT){ location.replace('/'); return; }
+    nochmal();
+  }).catch(nochmal);
+}
+function profilAnlegenFenster(){
+  oeffneEigenes('profil', modalKopf(t('settings.profile.create.title'), 'profil', t('settings.profile.create.i')) +
+    '<div class="feldzeile "><span class="bez"><span>' + esc(t('settings.profile.name')) + '</span></span>' +
+    '<input type="text" id="profil-neu" placeholder="' + esc(t('profile.new.ph')) + '" maxlength="32"></div>' +
+    '<p class="small err" id="profil-fehler"></p>' +
+    modalFuss({text: t('profile.create'), tun: 'profilAnlegen()'}));
+}
+function profilAnlegen(){
+  var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
+  var name = ((feld && feld.value) || '').trim().toLowerCase();
+  post('/api/profiles', {name: name}).then(function(r){
+    if(!r.ok){ if(fehler) fehler.textContent = mtext(r.message); return; }
+    zeigeProfilliste(r.profiles);
+    closeWizard('profil');
+    profilWechselnFenster();
+  });
+}
+/* Renaming is a folder rename under profiles/ – only for a profile that is
+   not open, so nothing this process holds changes under it. */
+function profilUmbenennenFenster(alt){
+  oeffneEigenes('profil', modalKopf(t('settings.profile.rename.title'), 'profil', t('settings.profile.rename.i')) +
+    '<div class="feldzeile "><span class="bez"><span>' + esc(t('settings.profile.name')) + '</span></span>' +
+    '<input type="text" id="profil-neu" value="' + esc(alt) + '" maxlength="32"></div>' +
+    '<p class="small err" id="profil-fehler"></p>' +
+    modalFuss({text: t('settings.profile.rename.do'), tun: 'profilUmbenennen(' + esc(JSON.stringify(alt)) + ')'}));
+}
+function profilUmbenennen(alt){
+  var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
+  var neu = ((feld && feld.value) || '').trim().toLowerCase();
+  post('/api/profile-rename', {name: alt, neu: neu}).then(function(r){
+    if(!r.ok){ if(fehler) fehler.textContent = mtext(r.message); return; }
+    zeigeProfilliste(r.profiles);
+    closeWizard('profil');
+  });
+}
+
 /* ---------- Cadence per folder, team, channel or chat ----------
    The general cadence of a category is the rule; a unit below it may
    depart from it, and everything below that unit inherits the departure
@@ -5033,10 +5193,10 @@ document.addEventListener('keydown', modalTaste);
    the wizard redraws (see refresh). */
 var WIZARDS = {token: 1, ollama: 1};
 
-function oeffneEigenes(kind, html){
+function oeffneEigenes(kind, html, schmal){
   var warOffen = !!wizardOffen;
   if(!warOffen) fokusVorher = document.activeElement;
-  el('modal').className = 'modal breit';
+  el('modal').className = schmal ? 'modal' : 'modal breit';
   el('modal').innerHTML = html;
   el('overlay').classList.add('on');
   wizardOffen = kind;
@@ -5084,11 +5244,11 @@ function closeWizard(kind){
    to close, the action at the bottom left, the fallback next to it – so no
    window makes "close" its primary button while the real action sits pale
    beside it. */
-function modalKopf(titel, kind, info){
+function modalKopf(titel, kind, info, extra){
   var zu = esc(t('wizard.close'));
   return '<div class="modal-kopf"><h2>' + esc(titel) +
     (info ? ' <span class="info" tabindex="0" role="img" aria-label="' + esc(info) +
-            '" title="' + esc(info) + '">i</span>' : '') + '</h2>' +
+            '" title="' + esc(info) + '">i</span>' : '') + '</h2>' + (extra || '') +
     '<button class="modal-zu" title="' + zu + '" aria-label="' + zu + '" ' +
     'onclick="closeWizard(&quot;' + kind + '&quot;)">&times;</button></div>';
 }

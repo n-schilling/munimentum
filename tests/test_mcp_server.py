@@ -1497,6 +1497,9 @@ def test_abgeschaltet_liefert_der_server_nichts_aus(state, monkeypatch):
     monkeypatch.setattr(mcp_server.mcp, "run", lambda **kw: echt.append(kw))
 
     class FakeServer:
+        def __init__(self, text=None):
+            self.text = text
+
         def run(self, **kw):
             aus.append(kw)
 

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITEL__</title>
+<style>
+/* The chooser before the app: the same tokens as page.html, nothing else
+   of it – this page has no profile yet to draw its state from. */
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --muted:#5b6570; --line:#dfe3e8;
+  --accent:#2f6fed; --accent-weich:#eaf0fe; --ok:#1a7f4b; --warn:#a2650a; --err:#b3261e; --code:#f1f3f6;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#14171a; --card:#1c2024; --ink:#e8eaed; --muted:#9aa4ae; --line:#2c3238;
+         --accent:#7aa2ff; --accent-weich:#22304a; --ok:#4cc38a; --warn:#e0a33a; --err:#f2837c; --code:#22272c; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{display:flex;align-items:center;gap:10px;padding:0 24px;height:56px;background:var(--card);border-bottom:1px solid var(--line)}
+header b{font-size:17px;font-weight:650}
+main{max-width:900px;margin:48px auto 0;padding:0 24px 40px;display:flex;flex-direction:column;gap:18px}
+h1{margin:0;font-size:20px;font-weight:650}
+.muted{color:var(--muted)} .small{font-size:13px}
+.raster{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.profil{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;display:flex;flex-direction:column;gap:8px;min-height:150px}
+.profil.an{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weich)}
+.profil.klick{cursor:pointer}
+.profil.klick:hover,.profil.klick:focus-visible{border-color:var(--accent);outline:none}
+.profil h3{margin:0;font-size:16px;font-weight:650;display:flex;align-items:center;gap:8px}
+.fuss{margin-top:auto;display:flex;gap:8px;align-items:center}
+.fuss .small{margin-left:auto}
+button{font:inherit;cursor:pointer;border-radius:8px;padding:8px 14px}
+.act{background:var(--accent);color:#fff;border:0;font-weight:600}
+.ghost{background:transparent;border:1px solid var(--line);color:var(--ink)}
+button:disabled{opacity:.5;cursor:default}
+.zeile{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.kipp{appearance:none;width:40px;height:23px;border-radius:12px;background:var(--line);position:relative;cursor:pointer;flex:none}
+.kipp::after{content:"";position:absolute;top:3px;left:3px;width:17px;height:17px;border-radius:50%;background:#fff;transition:transform .15s}
+.kipp:checked{background:var(--accent)} .kipp:checked::after{transform:translateX(17px)}
+svg{flex:none}
+</style>
+</head>
+<body>
+<header><svg width="24" height="24" viewBox="0 0 1024 1024" aria-hidden="true"><rect width="1024" height="1024" rx="229" fill="#2f6fed"/><rect x="196" y="330" width="632" height="158" rx="34" fill="#fff"/><rect x="246" y="500" width="532" height="300" rx="34" fill="#fff" opacity="0.93"/><rect x="430" y="596" width="164" height="44" rx="22" fill="#2f6fed"/></svg><b>Munimentum</b></header>
+<main>
+  <div><h1 id="titel"></h1><div class="muted" id="sub"></div></div>
+  <div class="raster" id="profile"></div>
+  <div class="zeile small muted"><input type="checkbox" class="kipp" id="ohne"><label for="ohne" id="ohne-t"></label></div>
+  <div id="warten" class="muted" hidden></div>
+</main>
+<script type="application/json" id="daten">/*__PROFIL__*/</script>
+<script>
+var D = JSON.parse(document.getElementById('daten').textContent);
+var T = D.texte, P = D.profile;
+function t(k, v){ var s = T[k] || k; Object.keys(v || {}).forEach(function(n){ s = s.split('{' + n + '}').join(String(v[n])); }); return s; }
+function esc(s){ return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function el(id){ return document.getElementById(id); }
+var PERSON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>';
+function post(pfad, body){
+  return fetch(pfad, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})})
+    .then(function(r){ return r.json(); });
+}
+function karte(p, zuletzt){
+  var name = p.name;
+  var konto = p.konto ? esc(p.konto) : t('profile.noaccess');
+  var stand = p.index ? t('profile.last', {when: p.last_run ? new Date(p.last_run).toLocaleString(D.lang, {dateStyle: 'short', timeStyle: 'short'}) : '–'}) : t('profile.empty');
+  var an = p.name === zuletzt, n = JSON.stringify(p.name).replace(/"/g, '&quot;');
+  // The whole card is the choice; the button inside only says so.
+  return '<div class="profil klick' + (an ? ' an' : '') + '" role="button" tabindex="0" onclick="oeffnen(' + n + ')" ' +
+    'onkeydown="if(event.key === \'Enter\' || event.key === \' \'){ event.preventDefault(); oeffnen(' + n + '); }">' +
+    '<h3>' + PERSON + esc(name) + '</h3>' +
+    '<div class="small muted">' + konto + '</div><div class="small muted">' + esc(stand) + '</div>' +
+    '<div class="fuss"><button class="' + (an ? 'act' : 'ghost') + '" tabindex="-1">' + esc(t('profile.open')) + '</button>' +
+    (an ? '<span class="small muted">' + esc(t('profile.lastopened')) + '</span>' : '') + '</div></div>';
+}
+function zeichnen(){
+  el('titel').textContent = t('profile.title');
+  el('sub').textContent = t('profile.sub');
+  el('ohne-t').textContent = t('profile.noask');
+  el('ohne').checked = !!P.ohne_nachfrage;
+  var zuletzt = P.zuletzt || (P.alle[0] && P.alle[0].name);
+  el('profile').innerHTML = P.alle.map(function(p){ return karte(p, zuletzt); }).join('');
+}
+var GEWAEHLT = null, VERSUCHE = 0;   // one choice, one waiting loop
+function sperren(an){
+  Array.prototype.forEach.call(document.querySelectorAll('button, input'), function(k){ k.disabled = an; });
+  Array.prototype.forEach.call(document.querySelectorAll('.profil'), function(k){ k.classList.toggle('klick', !an); });
+}
+function fehlschlag(text){
+  el('warten').textContent = text;
+  GEWAEHLT = null;
+  sperren(false);
+}
+function oeffnen(name){
+  if(GEWAEHLT) return;
+  GEWAEHLT = name;
+  sperren(true);
+  el('warten').hidden = false; el('warten').textContent = t('profile.opening', {name: name});
+  post('/api/profile-open', {name: name, ohne_nachfrage: el('ohne').checked}).then(function(r){
+    if(!r || !r.ok){
+      var m = (r && r.message) || {};
+      fehlschlag(m.k ? t(m.k, m.v || {name: name}) : t('profile.notback', {url: location.origin + '/'}));
+      return;
+    }
+    if(r.url){ location.replace(r.url); return; }       // already open in another instance
+    setTimeout(warten, 1000);
+  }).catch(function(){ fehlschlag(t('profile.notback', {url: location.origin + '/'})); });
+}
+function warten(){
+  // The chooser has closed; the app takes the port. Asked with growing
+  // patience until it answers with the profile that was asked for – then
+  // reload; after a minute the page says how to get there by hand.
+  VERSUCHE++;
+  var pause = VERSUCHE < 5 ? 1000 : VERSUCHE < 15 ? 2000 : 5000;
+  function nochmal(){
+    if(VERSUCHE >= 30){ el('warten').textContent = t('profile.notback', {url: location.origin + '/'}); return; }
+    setTimeout(warten, pause);
+  }
+  fetch('/api/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
+    if(s && s.profile && s.profile.name === GEWAEHLT){ location.replace('/'); return; }
+    nochmal();
+  }).catch(nochmal);
+}
+zeichnen();
+</script>
+</body>
+</html>

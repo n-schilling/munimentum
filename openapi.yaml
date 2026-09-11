@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 9.0.0
+  version: 10.0.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -50,7 +50,9 @@ paths:
         Polled by the page. Carries token state, Ollama state, index and
         export inventories, the job runner snapshot (`jobs.seq` is the log
         cursor), MCP state, the full configuration, storage paths, update
-        info, auth state and folder summaries.
+        info, auth state and folder summaries. While the chooser holds the
+        port (more than one profile, none named at start) the answer is
+        `{"chooser": true}` instead – the page polls until the app answers.
       responses:
         "200":
           description: The state object.
@@ -106,6 +108,7 @@ paths:
                   folders_onedrive: { type: object }
                   conversations: { type: object, description: "Teams conversation list summary (same shape as folders)." }
                   lists: { type: object, description: "To Do list summary (same shape as folders)." }
+                  profile: { $ref: "#/components/schemas/ProfileState" }
 
   /api/log:
     get:
@@ -598,10 +601,195 @@ paths:
                   index: { type: string }
                   restart: { type: boolean }
         "400":
-          description: Target not writable.
+          description: Target not writable, or already used by another profile (`srv.datadir.shared`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/profiles:
+    get:
+      summary: Every profile, with account, folder and last run
+      description: |
+        Fetched when the storage card or the switch window shows the list;
+        the status poll carries only `ProfileState`. Served by the chooser
+        too.
+      responses:
+        "200":
+          description: The complete profile state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileStatus" }
+    post:
+      summary: Create a profile
+      description: |
+        A profile is an archive of its own – configuration, key, run
+        history, exports and index – in `profiles/<name>/` below the app
+        folder; the first one is called `standard`. The new profile
+        starts empty; nothing is copied or moved. Names are slugs
+        (`^[a-z0-9][a-z0-9-]{0,31}$`) because they land in paths and on
+        command lines.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: The new profile and the complete profile state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  profile: { $ref: "#/components/schemas/ProfileInfo" }
+                  profiles: { $ref: "#/components/schemas/ProfileStatus" }
+        "400":
+          description: Bad name, name taken, or profiles impossible (--data-dir).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/profile-switch:
+    post:
+      summary: Restart with another profile
+      description: |
+        Answers first, then the process starts over with `--profile NAME`
+        on the same port. The page polls `/api/status` until the new
+        instance answers with that profile and reloads. When that profile
+        is already open in another instance nearby, the answer carries its
+        `url` instead and nothing restarts. Refused while a job runs, and
+        refused altogether where there are no profiles (--data-dir).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "200":
+          description: Restart under way – or, with `url`, the instance that already serves the profile.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  name: { type: string }
+                  url: { type: string }
+        "400":
+          description: Unknown profile, or no profiles at all.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409":
+          description: A job is running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/profile-open:
+    post:
+      summary: Choose the profile to start (chooser only)
+      description: |
+        Served only by the chooser page before the app. Records the choice
+        (and *open without asking*), answers, then the chooser stops and
+        the app takes the port with that profile. When the profile is
+        already open in another instance nearby, the answer carries its
+        `url` and this start ends.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                ohne_nachfrage: { type: boolean }
+      responses:
+        "200":
+          description: Chosen.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  url: { type: string }
+        "400":
+          description: Unknown profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/profile-rename:
+    post:
+      summary: Rename a profile that is not open
+      description: |
+        Renames `profiles/<name>/` to `profiles/<neu>/`; data or index
+        paths in its configuration that pointed into the folder follow it,
+        paths elsewhere stay. The open profile cannot be renamed
+        (`srv.profile.active`); refused while a job runs.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, neu]
+              properties:
+                name: { type: string }
+                neu: { type: string }
+      responses:
+        "200":
+          description: The new name and the complete profile state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  name: { type: string }
+                  profiles: { $ref: "#/components/schemas/ProfileStatus" }
+        "400":
+          description: Unknown, open, bad name, name taken, or the rename failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409":
+          description: A job is running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/profile-prefs:
+    post:
+      summary: Open the last profile without asking
+      description: |
+        With more than one profile the app asks on start which one to open;
+        `ohne_nachfrage` skips that and opens the last one. Stored in
+        `profiles.json` in the app folder, outside every profile.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ohne_nachfrage: { type: boolean }
+      responses:
+        "200":
+          description: The stored value.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  ohne_nachfrage: { type: boolean }
 
   /api/folder-plan:
     post:
@@ -884,6 +1072,31 @@ components:
       properties:
         ok: { type: boolean }
         message: { $ref: "#/components/schemas/MessageOrKey" }
+    ProfileInfo:
+      type: object
+      properties:
+        name: { type: string }
+        aktiv: { type: boolean, description: "The profile this instance runs." }
+        ordner: { type: string }
+        konto: { type: [string, "null"], description: "Account of the stored access, if any." }
+        last_run: { type: [string, "null"] }
+        index: { type: boolean, description: "Whether an index exists." }
+    ProfileState:
+      type: object
+      description: What every status poll carries about profiles.
+      properties:
+        name: { type: string }
+        moeglich: { type: boolean, description: "False under --data-dir, and while an archive from before 10.0 has not moved into profiles/ yet: one archive, no profiles." }
+        mehrere: { type: boolean }
+    ProfileStatus:
+      type: object
+      properties:
+        name: { type: string }
+        moeglich: { type: boolean, description: "As in ProfileState." }
+        mehrere: { type: boolean }
+        ohne_nachfrage: { type: boolean }
+        zuletzt: { type: [string, "null"], description: "The profile opened last, if it still exists." }
+        alle: { type: array, items: { $ref: "#/components/schemas/ProfileInfo" } }
     TokenStatus:
       type: object
       properties:

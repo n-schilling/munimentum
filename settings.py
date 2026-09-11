@@ -18,6 +18,8 @@ The file is looked up in MUNIMENTUM_DATA_DIR (OFFICE365_DATA_DIR until
 
 import json
 import os
+import re
+import sys
 from pathlib import Path
 
 import ollama_client
@@ -247,6 +249,81 @@ def _vorgabe(key, default):
 
 
 _cache = {"pfad": None, "daten": None}
+
+
+APP_DIRNAME = "Munimentum"
+# Profiles: every one its own archive – configuration, key, history, data
+# and index – in a folder of its own below the fixed app folder,
+# profiles/<name>/. The first one is called "standard"; an archive an older
+# version left in the app folder itself is moved there once (app.py).
+PROFIL_ORDNER = "profiles"
+STANDARD_PROFIL = "standard"
+PROFIL_MUSTER = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
+# Windows treats these as devices inside any folder – a profile of that
+# name could never be a folder there.
+PROFIL_RESERVIERT = frozenset(["con", "prn", "aux", "nul"]
+                              + [f"com{i}" for i in range(1, 10)]
+                              + [f"lpt{i}" for i in range(1, 10)])
+DATEN_UNTERORDNER = "data"
+
+
+def profil_name_ok(name):
+    return bool(PROFIL_MUSTER.match(name)) and name not in PROFIL_RESERVIERT
+
+
+def app_wurzel(frozen=None):
+    """The fixed app folder: configuration, key, run history, profiles.
+
+    As a script: the project folder – exports and rag_store already live
+    there. Bundled: the user's data folder, because the bundle itself
+    unpacks into a temp directory that vanishes on every exit, and an app
+    must not write into /Applications or C:\\Program Files.
+    """
+    if frozen is None:
+        frozen = bool(getattr(sys, "frozen", False))
+    if not frozen:
+        return Path(__file__).resolve().parent
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / APP_DIRNAME
+    if sys.platform == "win32":
+        root = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(root) / APP_DIRNAME
+    root = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    return Path(root) / APP_DIRNAME
+
+
+def profil_ordner(name, wurzel=None):
+    """A profile's folder, profiles/<name>/ below the app folder. Raises
+    ValueError for a name that is not a slug – names land in paths and
+    command lines."""
+    wurzel = Path(wurzel) if wurzel else app_wurzel()
+    name = str(name or STANDARD_PROFIL).strip().lower()
+    if not profil_name_ok(name):
+        raise ValueError(f"Not a profile name: {name!r}")
+    return wurzel / PROFIL_ORDNER / name
+
+
+def profil_namen(wurzel=None):
+    """Every profile by name – or the implied first one while none exists,
+    which the first start creates."""
+    wurzel = Path(wurzel) if wurzel else app_wurzel()
+    ordner = wurzel / PROFIL_ORDNER
+    namen = (sorted(p.name for p in ordner.iterdir()
+                    if p.is_dir() and profil_name_ok(p.name))
+             if ordner.is_dir() else [])
+    return namen or [STANDARD_PROFIL]
+
+
+def datenpfade(heim, cfg):
+    """(exports, index) of a profile folder from its configuration: the
+    two paths a user may point elsewhere, else the fixed subfolders. The
+    one rule for the app and the MCP server alike."""
+    heim = Path(heim)
+    daten = (Path(str(cfg.get("data_dir"))).expanduser().resolve()
+             if cfg.get("data_dir") else heim / DATEN_UNTERORDNER)
+    store = (Path(str(cfg.get("index_dir"))).expanduser().resolve()
+             if cfg.get("index_dir") else heim / STORE_DIR)
+    return daten, store
 
 
 def data_dir_env():

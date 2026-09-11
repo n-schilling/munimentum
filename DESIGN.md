@@ -38,6 +38,7 @@ State is shown **where it is fixed**, not in a status bar:
 | State | Where |
 |---|---|
 | Access (token / sign-in) | the state frame in the header (`#zustaende`), click opens the wizard |
+| Which profile is open | the state frame in the header (`#pill-profil`), only while there is more than one profile; click opens the switch window (`profilWechselnFenster`), whose gear leads to *Settings › Profiles* |
 | AI (Ollama) | dot next to *AI (Ollama)* in the settings sub-navigation |
 | Claude (MCP) | dot next to *Claude (MCP)* in the settings sub-navigation |
 | How current the archive is | the one line of the status card on *Build archive* |
@@ -55,7 +56,8 @@ The header has three kinds of things and one shape for each:
   that must be seen from every page, each a `.zustand` — a dot or an icon
   plus a word — separated by hairlines, and each a click to the place
   where it is fixed. Today: a minimised run (`#lauf-pille`, only while one
-  exists) and the access (`#pill-token`). A new state that truly belongs
+  exists), the open profile (`#pill-profil`, only while there is more than
+  one) and the access (`#pill-token`). A new state that truly belongs
   up here goes into this frame as another `.zustand`, never beside it.
 - **Action**: one icon button (`.ikonknopf`, 8 px) — *Quit*. A second one
   is allowed only for an action that must be reachable from every page;
@@ -103,10 +105,29 @@ top.
 **Overview** (`#tab-analytics`): tiles, charts, completeness, all runs.
 Read-only apart from *Refresh* and *Check now*.
 
+**The chooser** (`profil.html`): the one page before the doors, served
+only while there is more than one profile and none was named at start. One
+card per profile — name, account, last run — and the whole card is the
+choice (the *Open* inside only says so), plus one switch *open without
+asking*. Nothing else: no creating, no command-line hints — the chooser
+chooses, everything about profiles lives under *Settings › Profiles*. It
+carries the tokens and, of the app's page, only the name bar: no tabs, no
+state frame, because there is no profile yet to draw a state from. Every
+text comes from `profile.*` through the JSON the server injects. It is
+served by `Wahl`, a `Handler` with three routes and no app behind it —
+the same Host check, body cap and headers as the app.
+
 **Settings** (`#tab-einstellungen`): sub-navigation on the left
 (`.snav`), one card per topic on the right, in the order of the
-navigation: Sources, Schedule, AI (Ollama), Claude (MCP), Storage, App,
-Expert mode. Each source is a collapsible block (`details.quelle-einst`)
+navigation: Sources, Schedule, AI (Ollama), Claude (MCP), Profiles, App,
+Expert mode. *Profiles* has two groups, top to bottom: *These profiles
+exist* — one `.urltab.abw` row per profile with name, the *open* tag and
+its account (no folder: that is the group below), each profile that is
+not open with its *Rename…*, then *Switch profile…* and *New profile…* in
+the `.aktionen` row and the switch *open without asking* — and *Current
+profile ‹name›* with its data folder, index folder, profile folder and
+the application's location. The first group hides under `--data-dir`.
+Each source is a collapsible block (`details.quelle-einst`)
 with the essential fields open and everything else under *Advanced*. The
 save bar is sticky at the bottom and appears only with unsaved changes.
 
@@ -174,7 +195,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | State line | `.stand` | dot + word, next to a field |
 | Info | `.info` | 17 px circle with an `i`; text in `data-i18n-title` |
 | Banner | `.banner`, `.banner.warn`, `.banner.err` | one sentence, optional link |
-| Modal | `.modal` via `modalKopf(title, kind, info)` + `modalFuss` | cross top right, primary action bottom left; what the window is for and where data stays goes into the `(i)` at the title, not into paragraphs |
+| Modal | `.modal` via `modalKopf(title, kind, info, extra)` + `modalFuss` | cross top right, primary action bottom left; what the window is for and where data stays goes into the `(i)` at the title, not into paragraphs; `extra` is one `.zahnrad` next to the cross when the window has settings elsewhere (the switch window) |
 | Wizard state | `.banner` with `.dot` + one sentence | "Connected as … — valid for another …"; nothing about what happens next |
 | Console | `#log`, `.lauflog` | dark, monospace, 12 px, lines coloured by level; in the run window only the current run's lines (from the job's `log_seq` on) |
 | Step list | `.schritte .schritt` | icon, name, detail, duration |
@@ -182,7 +203,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Header state | `.zustaende .zustand` | dot or icon + word inside the one frame; `.lauf-pille` adds the `.mini-balken` |
 | Icon button | `.ikonknopf` | 32 px square, 8 px radius, name in the tooltip; the header's *Quit* |
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
-| Hit row | `.hit` | icon, title, date, who, preview; `.on` when selected |
+| Hit row | `.hit` | icon, title, date, who, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
 | Detail | `#detail` | `#detail-inhalt` with tag, title, meta, `.daktionen`, content, path; `#detail-verlauf` for the thread |
 | Settings navigation | `.snav .snav-punkt` | one per topic card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
 | Source block | `details.quelle-einst` | summary with name and state line `.zf`, `.qinhalt`, `details.erweitert` |
@@ -266,6 +287,23 @@ whole, files in a folder not yet due wait in state.db. A library's own
 cadence is its URL row; the window shows the site as a heading and the
 library as the root.
 
+**Something that belongs to the app rather than to a profile** (the list
+of profiles, which one was opened last, *open without asking*): it lives in
+the app folder outside every profile (`profiles.json`), is set under
+*Settings › Profiles* through its own route, never inside `app_config.json`.
+The status poll carries only what the header needs (`profile`: name,
+whether there are others, whether profiles exist at all); the list with
+accounts, folders and last runs comes from `GET /api/profiles` when the
+card or the switch window shows it. A profile is a folder under
+`profiles/`, the first one `standard`; the app never copies or moves
+anything into or out of one — the one exception is the layout upgrade at
+start (`layout_umzug`: an archive from before 10.0 is renamed into
+`profiles/standard/`, all or nothing, before any file is opened), and a
+rename of a profile that is not open is a folder rename with its paths
+following. Switching is a restart with `--profile` on the same port, and
+the page waits for the new instance before it reloads — no in-place
+repointing of a running app.
+
 **A new run or job**: nothing to add on the page — the run window renders
 from `jobs.job.steps`, the console from the log, the runs table in
 Overview from `/api/runs`. Give the step a `job.step.<key>` label and a `job.start.<key>`
@@ -333,7 +371,8 @@ element is in the markup.
 These tests encode the guide; adapt them consciously, never delete them:
 
 - `test_die_reiterzeile_bleibt_kurz` — four tabs, views under the search.
-- `test_kopfleiste_zeigt_nur_den_zugang` — header chip only; AI and MCP
+- `test_kopfleiste_zeigt_nur_den_zugang` — the header's one frame holds
+  the run, the profile and the access, nothing beside it; AI and MCP
   dots in the settings navigation.
 - `test_archivseite_zeigt_zeiten_je_quelle_und_keinen_datenordner` — the
   archive page stays bare: state in the `(i)`, no runs, no notice, the
@@ -355,6 +394,14 @@ These tests encode the guide; adapt them consciously, never delete them:
 - `test_rundgang_ziele_existieren` / `test_rundgang_kapitel_laufen_durch` —
   every tour step points at an element, the chapters run through and are
   marked seen once.
+- `test_profil_in_kopfzeile_und_speicherorten` — the profile state shows
+  only with more than one profile; the switch window offers only the
+  others; the group hides under `--data-dir`.
+- `test_profilseite_liegt_als_datei_neben_dem_code` — the chooser is a
+  data file the bundle ships, with nothing of the app's page in it.
+- `test_umzug_alles_oder_nichts` / `test_umzug_laesst_eigene_pfade_in_ruhe`
+  — the one move the app makes is a set of renames that either all happen
+  or none, and never touches a folder the user pointed elsewhere.
 
 ## 9. Before you change the interface
 

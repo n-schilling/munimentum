@@ -177,8 +177,9 @@ AUS_TEXT = (
 )
 
 
-def _abgeschaltet_server():
-    """A server that gives exactly one answer: that it is switched off.
+def _abgeschaltet_server(text=AUS_TEXT):
+    """A server that gives exactly one answer: why nothing is served –
+    access switched off, or no profile named where several exist.
 
     Same name as usual – the client has it registered that way. Only the
     tool list is different: one tool instead of nine, and that one reads
@@ -186,7 +187,7 @@ def _abgeschaltet_server():
     """
     aus = MCPServer("munimentum", title="Munimentum", version=version.VERSION,
                     website_url="https://github.com/n-schilling/munimentum",
-                    instructions=AUS_TEXT, log_level="WARNING")
+                    instructions=text, log_level="WARNING")
 
     @aus.tool(annotations=_READONLY)
     def archive_unavailable() -> dict:
@@ -195,9 +196,18 @@ def _abgeschaltet_server():
         There is no way around it from here: no other tool, no file path, no
         retry. It is a setting in the Munimentum app.
         """
-        return {"available": False, "reason": AUS_TEXT}
+        return {"available": False, "reason": text}
 
     return aus
+
+
+def _profil_text(namen):
+    return ("Munimentum has more than one profile (" + ", ".join(namen) + ") and "
+            "this server was started without --profile, so it cannot know which "
+            "archive to serve. Nothing is served. Tell the user to copy the "
+            "snippet for the wanted profile from Munimentum under Settings -> "
+            "Claude (MCP) – it carries --profile <name> – and to replace the "
+            "entry in this client with it.")
 
 
 mcp = MCPServer(
@@ -1772,6 +1782,77 @@ def _open_vectors(store, n_chunks):
     return np, V
 
 
+def _argumente(a):
+    """Resolve what the command line left open. Returns (args, answer).
+
+    --profile alone is a complete address: the profile's folder holds the
+    configuration, and from it come the data folder, the index, the
+    embedding model, the Ollama address, the port and whether Ollama is
+    used at all. Explicit flags still win. Without a profile the
+    configuration is the one MUNIMENTUM_HOME (or the module folder) names,
+    as before – and with several profiles and nothing named, `answer` is
+    the one sentence the server will give instead of an archive.
+    """
+    auskunft = None
+    if a.profile:
+        try:
+            heim = settings.profil_ordner(a.profile)
+        except ValueError:
+            raise SystemExit(f"Not a profile name: {a.profile}") from None
+        if not heim.is_dir():
+            raise SystemExit(f"Unknown profile: {a.profile}. Existing: "
+                             + ", ".join(settings.profil_namen()))
+        # The profile's own files: configuration, key, history – for this
+        # process and its readers alike.
+        os.environ["MUNIMENTUM_HOME"] = str(heim)
+        settings.reset()
+        daten, store = settings.datenpfade(heim, settings.load(heim / settings.CONFIG_NAME))
+        a.data_dir = a.data_dir or str(daten)
+        a.store = a.store or str(store)
+    elif not a.data_dir and not settings.home_env() and len(settings.profil_namen()) > 1:
+        auskunft = _profil_text(settings.profil_namen())
+    a.embed_model = a.embed_model or settings.value("embed_model")
+    a.ollama = a.ollama or settings.value("ollama")
+    a.port = int(a.port or settings.value("mcp_port"))
+    if not settings.flag("OLLAMA_ENABLED", "ollama_enabled"):
+        a.no_ollama = True
+    return a, auskunft
+
+
+def _nur_auskunft(a, text):
+    """Run the one-answer server over the chosen transport."""
+    print(text, file=sys.stderr)
+    server = _abgeschaltet_server(text)
+    if a.transport == "http":
+        server.run(transport="streamable-http", host=a.host, port=a.port,
+                   streamable_http_path=_HTTP_PATH,
+                   transport_security=_transport_security(
+                       a.host, a.port, a.allowed_host))
+    else:
+        server.run(transport="stdio")
+
+
+def _alter_schnipsel(a):
+    """A stdio entry from before 10.0 names the folders the archive had
+    in the app folder; since the move they are empty. Recognised by what
+    it carries: an app folder in MUNIMENTUM_HOME that holds profiles but
+    no configuration of its own."""
+    heim = settings.home_env()
+    if not heim or not a.data_dir:
+        return False
+    heim = Path(heim).expanduser()
+    return (not (heim / settings.CONFIG_NAME).exists()
+            and len(settings.profil_namen(heim)) >= 1
+            and (heim / settings.PROFIL_ORDNER).is_dir())
+
+
+ALT_TEXT = ("This Munimentum entry is from before version 10.0: it names folders "
+            "that the archive has left – it lives in a profile folder now. "
+            "Nothing is served. Tell the user to copy the stdio snippet again "
+            "from Munimentum under Settings -> Claude (MCP) and replace this "
+            "entry with it.")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1783,6 +1864,10 @@ def main():
                     help="Data folder holding the export folders. The index "
                          "has a path of its own (--store). Without it the "
                          "current directory applies.")
+    ap.add_argument("--profile", metavar="NAME",
+                    help="Profile – its own archive inside the app folder. "
+                         "Required once more than one exists; sets the data "
+                         "folder and the index from that profile's settings.")
     ap.add_argument("--store", help=argparse.SUPPRESS)
     ap.add_argument("--teams", help=argparse.SUPPRESS)
     ap.add_argument("--outlook", help=argparse.SUPPRESS)
@@ -1792,8 +1877,10 @@ def main():
     ap.add_argument("--planner", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--todo", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--onenote", default=None, help=argparse.SUPPRESS)
-    ap.add_argument("--embed-model", default=settings.value("embed_model"))
-    ap.add_argument("--ollama", default=settings.value("ollama"))
+    # Model, address and port default to the configuration – resolved in
+    # _argumente(), after --profile has said WHICH configuration.
+    ap.add_argument("--embed-model", default=None)
+    ap.add_argument("--ollama", default=None)
     # Switched off means: do not even try. Without this, the server decides
     # anew per request and runs into the same error every time.
     ap.add_argument("--no-ollama", action="store_true",
@@ -1805,7 +1892,7 @@ def main():
     ap.add_argument("--host", default="127.0.0.1",
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "
                          "auth and serves your mail/chat history.")
-    ap.add_argument("--port", type=int, default=settings.value("mcp_port"))
+    ap.add_argument("--port", type=int, default=None)
     # For manual invocation: whoever starts the program themselves does not
     # have the switch in front of them and should not have to puzzle out why
     # nothing works.
@@ -1815,7 +1902,10 @@ def main():
                     help="Hostname clients may use in the Host/Origin header. "
                          "Required when --host is not the loopback interface; "
                          "repeat for several. Port defaults to --port.")
-    a = ap.parse_args()
+    a, auskunft = _argumente(ap.parse_args())
+    if auskunft:
+        # Several archives, none named: one answer instead of a guess.
+        return _nur_auskunft(a, auskunft)
     # --store/--teams/--outlook stay accepted as hidden flags: an old Claude
     # configuration that still names them should not run into nothing.
     basis = Path(a.data_dir).expanduser() if a.data_dir else Path(".")
@@ -1843,18 +1933,13 @@ def main():
     # in the process: no tool that reads data, and the index is not even
     # opened.
     if not a.force and not settings.flag("MCP_ENABLED", "mcp_enabled"):
-        print(AUS_TEXT, file=sys.stderr)
-        server = _abgeschaltet_server()
-        if a.transport == "http":
-            server.run(transport="streamable-http", host=a.host, port=a.port,
-                       streamable_http_path=_HTTP_PATH,
-                       transport_security=_transport_security(
-                           a.host, a.port, a.allowed_host))
-        else:
-            server.run(transport="stdio")
-        return
+        return _nur_auskunft(a, AUS_TEXT)
 
     dbp = store_layout.db_path(a.store)
+    if not dbp.exists() and _alter_schnipsel(a):
+        # The same rule as the switch: an entry that would only fail at
+        # every start says once, through the model, what to do instead.
+        return _nur_auskunft(a, ALT_TEXT)
     if not dbp.exists():
         raise SystemExit(f"No store at '{dbp}'. Build the index in "
                          f"Munimentum first (Export tab, or Settings -> "

@@ -1,68 +1,52 @@
-## New in 9.0.0
+## New in 10.0.0
 
-**Every source asks only for what changed.** Mail folders, calendars and
-contact folders keep a change token after their first pass, so a run
-receives only what was added, changed or removed — a deletion no longer
-needs a check per mail, a changed appointment or contact is written again.
-Teams channels are read the same way, a chat that moved fetches only the
-messages since its last one, and To Do lists keep a token per list.
-Runs that used to list a whole mailbox or every channel's history are
-minutes now.
+**More than one account: profiles.** A profile is an archive of its own —
+its own access, sources, rules, run history, data folder and index — in
+`profiles/<name>/` below the app folder, and nothing crosses between
+profiles. Your archive is the first one, `standard`; every further one is
+an empty folder created from *Settings › Profiles* and set up like a first
+start. With more than one profile the app asks on start which archive to
+open — a small page before the app — unless *open without asking* is on;
+`--profile NAME` or `MUNIMENTUM_PROFILE` names it outright. The header
+names the open profile, and a click on it opens the switch window, which
+restarts the app with the other profile on the same port; a second
+profile started while one runs takes the next free port, so two archives
+can be open side by side. A profile that is not open can be renamed. Two
+profiles may never share a data or index folder — the settings refuse it
+— and nothing is ever copied or moved between them.
 
-**Cadences where you need them.** Mail, calendar and contacts each have
-their own sync cadence, so do the four kinds of Teams conversations; OneDrive
-and To Do keep theirs per source and gain *Sync now*. A single mail folder,
-team, channel, chat, OneDrive or library folder or To Do list can depart
-from it: *Pick folders…*, *Pick teams and chats…* and *Pick lists…* open
-the tree of the last list sync, and a value set there reaches everything
-below it until a deeper one is set — in the mirrors it paces the downloads,
-files in a folder not yet due wait. Every gate lives inside the export and
-says so in the log when it skips.
-
-**Rules for Teams and To Do, path rules for SharePoint.** *Sync team list*
-and *Sync lists* fetch the names, ordered rules decide — `1on1/<title>`,
-`group/<title>`, `meeting/<title>`, `channels/<team>/<channel>`, or the
-list titles — and *Show export list* spells out the outcome, as for the
-mailbox folders. SharePoint libraries take path rules on top of their URL
-list and type filters. A changed selection makes the next run read that
-library or drive once in full, so newly included files arrive. A first
-export can start at a day of your choosing, for mail and for chats.
-
-**The calendar as a window.** After the first export the calendar is read
-as a window — a configurable number of months back (one by default) plus
-everything ahead; *Read the calendar in full* reads everything once.
-
-**Planner and OneNote.** Chat comments on Planner tasks are re-read at an
-interval you set instead of on every *Sync now*; boards and lists are
-written only when something changed. OneNote reuses images and attachments
-already on disk when a page is fetched again, which spares the hourly
-budget.
-
-**A tour for the first days.** The empty archive offers a tour: coach
-marks in the real interface walk you through building the archive, setting
-up a source in detail and searching, one element at a time. The result of
-the first run offers the search chapter, and *Settings › App* starts any
-chapter again.
-
-**Under the hood.** One database connection per run instead of one per
-write, row-level updates of the mirror inventories, Graph requests bundled
-twenty at a time where they used to run one by one, Planner and To Do in
-parallel, and the calendar rebuild parsing only the mails that changed.
-Legacy Planner comments are frozen since February 2026 and no longer
-checked after a board's first export; a button reads them again on request.
+**Claude per profile.** The stdio MCP snippet names nothing but the
+profile — `--profile <name>` — and the server takes folders, model,
+Ollama address and port from that profile's settings. Its entry is named
+after the profile (`munimentum` for the first, `munimentum-<name>` for
+every other), so a client can hold two archives apart; a server started
+without the flag where several profiles exist serves nothing but a
+sentence saying which flag it needs. The HTTP endpoint serves whichever
+profile is open in the app.
 
 ## Upgrading
 
-**From 8.x or 7.x:** nothing to do. The first run after the upgrade lists
-every mail folder, calendar, contact folder and channel once in full to
-obtain its change token — it downloads nothing that is already there, but
-it takes as long as a run used to, and every Teams conversation is rendered
-once more from its new message store. A Teams cadence set before 9.0
-applies to all four kinds until you set them apart.
+**From 9.x:** the first start moves your archive from the app folder into
+`profiles/standard/` — a rename on the same disk, instant whatever the
+size, all or nothing; data or index folders you pointed elsewhere stay
+where they are, folders inside the app folder move along and the settings
+follow them. The log says what moved. **Claude Desktop:** copy the stdio
+MCP snippet again from *Settings* — it names only the profile now; the
+HTTP snippet for Claude Code is unchanged. Windows only: if the move is refused because a
+program holds the index open (Claude Desktop's MCP server, for one), the
+archive runs where it was for that start, and the next start tries again
+once that program is closed.
+
+**From 8.x or 7.x:** the first run after the upgrade lists every mail
+folder, calendar, contact folder and channel once in full to obtain its
+change token — it downloads nothing that is already there, but it takes
+as long as a run used to, and every Teams conversation is rendered once
+more from its new message store. A Teams cadence set before 9.0 applies
+to all four kinds until you set them apart.
 
 **Coming from 6.1 or older?** Run the latest 6.x release once first — it
-moves the export bookkeeping into each folder's `state.db`; 7.x and 8.x no
-longer carry that migration. Only if you had redirected the data folder
+moves the export bookkeeping into each folder's `state.db`; 7.x and later
+no longer carry that migration. Only if you had redirected the data folder
 with the old pointer file (`datenordner.txt`): it is no longer read. Move
 `app_config.json`, `gx_token.txt`, `msal_cache.bin` and `runs.db` into the
 app folder (macOS `~/Library/Application Support/Munimentum`, Windows

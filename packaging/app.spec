@@ -81,7 +81,8 @@ datas = [(str(p), "lang") for p in sorted((ROOT / "lang").glob("*.json"))]
 assert datas, "lang/ is empty – the interface would have no texts"
 # The interface itself and the API description that /api/openapi serves –
 # app.py reads both from RES; without them the app would start blank.
-datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "openapi.yaml"), ".")]
+datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "profil.html"), "."),
+          (str(ROOT / "openapi.yaml"), ".")]
 
 for paket in ("mcp", "uvicorn", "starlette", "pydantic", "msal", "requests"):
     try:

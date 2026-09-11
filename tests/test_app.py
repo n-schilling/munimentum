@@ -30,6 +30,7 @@ import pytest
 
 import app as app_mod
 import runner as runner_mod
+from hilfen import call
 import i18n
 import corpus
 import folders as folders_mod
@@ -63,6 +64,7 @@ def make_jwt(exp=None, scp="Mail.Read User.Read", upn="a@example.com", name="A B
 @pytest.fixture
 def sandbox(tmp_path, monkeypatch):
     """Bend app.py so that all paths live in tmp_path."""
+    monkeypatch.setattr(app_mod, "WURZEL", tmp_path)
     monkeypatch.setattr(app_mod, "HEIM", tmp_path)
     monkeypatch.setattr(app_mod, "BASE", tmp_path)
     monkeypatch.setattr(app_mod, "STORE_PFAD", tmp_path / app_mod.STORE_DIR)
@@ -92,15 +94,6 @@ def no_ollama(monkeypatch):
                             "running": False, "models": [], "has_model": False,
                             "has_chat_model": False, "error": "ConnectionError",
                             "model": model, "chat_model": chat_model, "url": url})
-
-
-@pytest.fixture
-def with_ollama(monkeypatch):
-    monkeypatch.setattr(app_mod, "check_ollama",
-                        lambda url, model, chat_model=None, timeout=1.5: {
-                            "running": True, "models": [model], "has_model": True,
-                            "has_chat_model": True, "error": None, "model": model,
-                            "chat_model": chat_model, "url": url})
 
 
 # --------------------------------------------------------------------------
@@ -2137,21 +2130,6 @@ def server(sandbox, with_ollama):
     httpd.server_close()
 
 
-def call(port, method, path, body=None, host=None):
-    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    headers = {"Content-Type": "application/json"}
-    if host:
-        headers["Host"] = host
-    con.request(method, path, json.dumps(body) if body is not None else None, headers)
-    r = con.getresponse()
-    raw = r.read()
-    con.close()
-    try:
-        return r.status, json.loads(raw)
-    except ValueError:
-        return r.status, raw.decode("utf-8", "replace")
-
-
 def call_roh(port, path):
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     con.request("GET", path)
@@ -2610,18 +2588,30 @@ def test_data_dir_als_skript_ist_der_projektordner(monkeypatch):
     assert app_mod.data_dir() == Path(app_mod.__file__).resolve().parent
 
 
-def test_mcp_client_config_nennt_absolute_pfade(sandbox):
+def test_mcp_client_config_nennt_nur_das_profil(sandbox):
+    """The profile is the whole address: the server reads everything else
+    from that profile's settings. No paths, no environment, nothing that
+    goes stale when a setting changes."""
     cfg = app_mod.load_config()
     conf = app_mod.mcp_client_config(cfg, 8365)
     assert conf["http"]["mcpServers"]["munimentum"]["url"] \
         == "http://127.0.0.1:8365/mcp"
-    args = conf["stdio"]["mcpServers"]["munimentum"]["args"]
-    assert "--transport" in args and "stdio" in args
-    # One folder instead of three paths: the subfolders have fixed names.
-    assert "--data-dir" in args
-    # Claude starts the command in an unknown working directory
+    eintrag = conf["stdio"]["mcpServers"]["munimentum"]
+    assert eintrag["args"][-4:] == ["--transport", "stdio", "--profile", "standard"]
+    assert "--data-dir" not in eintrag["args"] and "env" not in eintrag
+
+
+def test_mcp_client_config_unter_data_dir_nennt_die_pfade(sandbox, monkeypatch):
+    """No profiles under the all-in-one override – so the paths and the
+    home folder go along, absolute: Claude starts the command anywhere."""
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(sandbox))
+    conf = app_mod.mcp_client_config(app_mod.load_config(), 8365)
+    eintrag = conf["stdio"]["mcpServers"]["munimentum"]
+    args = eintrag["args"]
+    assert "--profile" not in args and "--data-dir" in args
     ordner = args[args.index("--data-dir") + 1]
     assert Path(ordner).is_absolute() and ordner.startswith(str(sandbox))
+    assert eintrag["env"] == {"MUNIMENTUM_HOME": str(sandbox)}
 
 
 def test_mcp_client_config_gebuendelt(sandbox, frozen):
@@ -3389,6 +3379,55 @@ def test_jeder_reiter_liegt_im_hauptbereich():
         assert f'<section id="tab-{reiter}"' in haupt, f"{reiter} liegt außerhalb <main>"
 
 
+# The profile in the header only once there is more than one; the storage
+# card lists them all, the switch window offers only the others.
+PRUEFUNG_PROFIL = GRUNDZUSTAND + """
+var pille = document.getElementById('pill-profil');
+// The status carries the light state; the list arrives on demand.
+zeigeProfile({name: 'standard', moeglich: true, mehrere: false});
+pruefe(pille.classList.contains('hide'), 'Ein Profil: die Kopfzeile schweigt');
+var std = {name: 'standard', aktiv: false, ordner: '/x', konto: 'a@example.com',
+           last_run: null, index: false};
+var nw = {name: 'nordwind', aktiv: true, ordner: '/x/profiles/nordwind',
+          konto: null, last_run: null, index: false};
+var zwei = {name: 'nordwind', moeglich: true, mehrere: true, ohne_nachfrage: true, alle: [std, nw]};
+zeigeProfile(zwei);
+pruefe(!pille.classList.contains('hide'), 'Zwei Profile: die Kopfzeile nennt das offene');
+pruefe(document.getElementById('p-profil-t').textContent === 'Profil: nordwind',
+       'Kopfzeile: ' + document.getElementById('p-profil-t').textContent);
+zeigeProfilliste(zwei);
+pruefe(document.getElementById('profil-dies').textContent === 'nordwind', 'Das aktuelle Profil steht nicht in der Gruppe');
+pruefe(document.getElementById('profil-ohne-nachfrage').checked === true, 'Schalter nicht uebernommen');
+var liste = document.getElementById('profil-liste').innerHTML;
+pruefe(liste.indexOf('a@example.com') >= 0 && liste.indexOf('nordwind') >= 0, 'Liste unvollstaendig');
+pruefe(liste.indexOf('/x/profiles/nordwind') < 0, 'Der Ordner steht in der Liste – er gehoert zum aktuellen Profil darunter');
+pruefe(liste.indexOf('profilUmbenennenFenster(&quot;standard&quot;)') >= 0, 'Kein Umbenennen fuer das andere Profil');
+pruefe(liste.indexOf('profilUmbenennenFenster(&quot;nordwind&quot;)') < 0, 'Das offene Profil bekommt ein Umbenennen');
+profilUmbenennenFenster('standard');
+pruefe(modal.innerHTML.indexOf('value="standard"') >= 0, 'Name nicht vorbelegt');
+pruefe(modal.innerHTML.indexOf('profilUmbenennen(&quot;standard&quot;)') >= 0, 'Kein Umbenennen-Knopf');
+closeWizard('profil');
+profilWechselnFenster();
+pruefe(modal.innerHTML.indexOf('<div class="hit" tabindex="0" role="button" onclick="profilWechseln(&quot;standard&quot;)"') >= 0, 'Die Zeile des anderen Profils ist kein Schalter');
+pruefe(modal.innerHTML.indexOf('<div class="hit on fest">') >= 0, 'Das offene Profil ist nicht als solches gezeigt');
+pruefe(modal.innerHTML.indexOf('profilWechseln(&quot;nordwind&quot;)') < 0, 'Das offene Profil bekommt einen Schalter');
+pruefe(modal.innerHTML.indexOf('profilEinstellungen()') >= 0, 'Kein Zahnrad zu den Einstellungen');
+closeWizard('profil');
+profilAnlegenFenster();
+pruefe(modal.innerHTML.indexOf('id="profil-neu"') >= 0, 'Kein Namensfeld');
+pruefe(modal.innerHTML.indexOf('profilAnlegen()') >= 0, 'Kein Anlegen-Knopf');
+closeWizard('profil');
+zeigeProfile({name: 'standard', moeglich: false, mehrere: false});
+pruefe(document.getElementById('profil-gruppe').classList.contains('hide'),
+       'Unter --data-dir bleibt die Gruppe weg');
+console.log('OK');
+"""
+
+
+def test_profil_in_kopfzeile_und_speicherorten():
+    _in_node(PRUEFUNG_PROFIL)
+
+
 def test_die_reiterzeile_bleibt_kurz():
     """Fetch data, view data, judge the corpus, configure. More levels on top
     confuse more than they order.
@@ -3778,7 +3817,9 @@ def test_serve_mit_port_null_prueft_nicht(sandbox, with_ollama, monkeypatch):
     assert box
 
 
-def test_main_reicht_argumente_an_serve_weiter(monkeypatch):
+def test_main_reicht_argumente_an_serve_weiter(sandbox, monkeypatch):
+    # sandbox: main() without --data-dir runs the layout move against the
+    # app folder – never the real one from a test.
     gesehen = {}
     monkeypatch.setattr(app_mod, "serve",
                         lambda a, port, open_browser=True: gesehen.update(
@@ -4196,6 +4237,14 @@ def standardort(tmp_path, monkeypatch):
     ort = tmp_path / "standard"
     ort.mkdir()
     monkeypatch.setattr(app_mod, "standard_data_dir", lambda: ort)
+    # Everything the app would touch lives there too – an App() built in
+    # such a test must never write its runs.db into the project folder.
+    monkeypatch.setattr(app_mod, "WURZEL", ort)
+    monkeypatch.setattr(app_mod, "HEIM", ort)
+    monkeypatch.setattr(app_mod, "BASE", ort)
+    monkeypatch.setattr(app_mod, "STORE_PFAD", ort / app_mod.STORE_DIR)
+    monkeypatch.setattr(app_mod, "CONFIG_FILE", ort / "app_config.json")
+    monkeypatch.setattr(app_mod, "TOKEN_FILE", ort / "gx_token.txt")
     for _n in ("MUNIMENTUM_DATA_DIR", "OFFICE365_DATA_DIR"):
         monkeypatch.delenv(_n, raising=False)
     return ort
@@ -6113,15 +6162,21 @@ def test_infozeichen_behaelt_seine_groesse():
 
 
 def test_kopfleiste_zeigt_nur_den_zugang():
-    """State is shown where it is fixed (DESIGN.md §1): the access as a
-    chip in the header, because its wizard opens from there; AI and MCP as
-    dots next to their entries in the settings navigation. Nothing else
-    becomes a header pill – the index state lives in the overview."""
+    """State is shown where it is fixed (DESIGN.md §1): the access and the
+    open profile as states in the header's one frame, because their
+    windows open from there; AI and MCP as dots next to their entries in
+    the settings navigation. Nothing else goes up there, and nothing sits
+    beside the frame – the index state lives in the overview."""
     seite = app_mod.seite()
     kopf = seite.split("</header>")[0]
     assert 'id="pill-token"' in kopf, "Der Zugang ist aus der Kopfzeile verschwunden"
     for weg in ('id="pill-index"', 'id="pill-ollama"', 'id="pill-mcp"'):
         assert weg not in kopf, f"{weg} steht wieder in der Kopfzeile"
+    rahmen = kopf[kopf.index('id="zustaende"'):]
+    rahmen = rahmen[:rahmen.index("</div>")]
+    for drin in ('id="lauf-pille"', 'id="pill-profil"', 'id="pill-token"'):
+        assert drin in rahmen, f"{drin} steht neben dem Rahmen statt darin"
+    assert rahmen.count('class="zustand') == 3, "Ein Zustand mehr im Rahmen – bewusst?"
     einst = seite[seite.index('<section id="tab-einstellungen"'):]
     for erwartet in ('id="pill-ollama"', 'id="pill-mcp"'):
         assert erwartet in einst, f"{erwartet} fehlt in der Einstellungs-Navigation"
@@ -7024,11 +7079,17 @@ def test_volltext_auch_mit_laufendem_ollama(sandbox, with_ollama):
     assert a.semantisch_gewollt() is True
 
 
-def test_mcp_bekommt_den_verzicht_mitgeteilt(sandbox):
+def test_mcp_bekommt_den_verzicht_mitgeteilt(sandbox, monkeypatch):
     """Otherwise the server retries on every request and runs into the same
-    error every time."""
+    error every time. With a profile the server reads the switch from that
+    profile's settings itself (mcp_server._argumente), so the snippet
+    carries nothing; the app's own launch and the --data-dir form say it."""
     cfg = app_mod.load_config()
     cfg["ollama_enabled"] = False
+    args = app_mod.mcp_client_config(cfg, 8365)["stdio"]["mcpServers"]["munimentum"]["args"]
+    assert "--no-ollama" not in args and "--profile" in args
+    assert "--no-ollama" in app_mod._mcp_befehl(cfg)["argv"]
+    monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(sandbox))
     args = app_mod.mcp_client_config(cfg, 8365)["stdio"]["mcpServers"]["munimentum"]["args"]
     assert "--no-ollama" in args
     cfg["ollama_enabled"] = True
