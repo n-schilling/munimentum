@@ -7,6 +7,7 @@ for pages that left the notebook.
 """
 
 import json
+import re
 
 import pytest
 
@@ -18,6 +19,12 @@ import state_db
 def _events(capsys):
     return [e for e in (progress.lies_event(z) for z in
                         capsys.readouterr().out.splitlines()) if e]
+
+
+def _stand(ziel):
+    """The page bookkeeping – one record per page in the notebook's state.db."""
+    return {k: json.loads(v) for k, v in
+            state_db.StateDb(ziel).saetze_lesen("pages").items()}
 
 
 IMG = "https://graph.microsoft.com/v1.0/users('u')/onenote/resources/img-1/$value"
@@ -153,14 +160,14 @@ def test_verschwundene_seite_bleibt_mit_marker(tmp_path):
     on.notebook_lauf(_graph([_page("p1", "A"), _page("p2", "B")]), tmp_path, NB, 0)
     on.notebook_lauf(_graph([_page("p1", "A")]), tmp_path, NB, 0)
     ziel = on.notebook_ziel(tmp_path, NB)
-    stand = json.loads(state_db.StateDb(ziel).kv_lesen("pages"))
+    stand = _stand(ziel)
     assert stand["p2"]["deleted"] and not stand["p1"]["deleted"]
     html = (ziel / stand["p2"]["rel"]).read_text(encoding="utf-8")
     assert "Nicht mehr im Notizbuch seit" in html
     seit = stand["p2"]["deleted"]
     # A third run must not move the timestamp.
     on.notebook_lauf(_graph([_page("p1", "A")]), tmp_path, NB, 0)
-    stand = json.loads(state_db.StateDb(ziel).kv_lesen("pages"))
+    stand = _stand(ziel)
     assert stand["p2"]["deleted"] == seit
     assert html.count("mn-weg") == (ziel / stand["p2"]["rel"]).read_text(
         encoding="utf-8").count("mn-weg")
@@ -172,7 +179,7 @@ def test_listenfehler_verhindern_grabsteine(tmp_path, capsys):
     g.antworten["/onenote/sections/s2/pages"] = RuntimeError("429")
     neu, unveraendert, fehler = on.notebook_lauf(g, tmp_path, NB, 0)
     assert fehler == 1
-    stand = json.loads(state_db.StateDb(on.notebook_ziel(tmp_path, NB)).kv_lesen("pages"))
+    stand = _stand(on.notebook_ziel(tmp_path, NB))
     assert not stand["p2"]["deleted"]
     assert any(e["k"] == "run.onenote.section_failed" for e in _events(capsys))
 
@@ -180,12 +187,12 @@ def test_listenfehler_verhindern_grabsteine(tmp_path, capsys):
 def test_umbenannter_abschnitt_raeumt_die_alte_kopie_weg(tmp_path):
     on.notebook_lauf(_graph([_page("p1", "A")]), tmp_path, NB, 0)
     ziel = on.notebook_ziel(tmp_path, NB)
-    alt = json.loads(state_db.StateDb(ziel).kv_lesen("pages"))["p1"]["rel"]
+    alt = _stand(ziel)["p1"]["rel"]
     g = _graph([_page("p1", "A")])
     g.antworten["/onenote/notebooks/nb1/sections"] = {"value": [
         {"id": "s1", "displayName": "Umbenannt"}]}
     on.notebook_lauf(g, tmp_path, NB, 0)
-    neu = json.loads(state_db.StateDb(ziel).kv_lesen("pages"))["p1"]["rel"]
+    neu = _stand(ziel)["p1"]["rel"]
     assert neu != alt and neu.startswith("Umbenannt/")
     assert not (ziel / alt).exists() and (ziel / neu).exists()
 
@@ -297,7 +304,7 @@ def test_corpus_liest_seiten_und_marker(tmp_path):
     (ordner.parent / (ordner.name[:-5] + on.DATEI_SUFFIX) / "anhang.html").write_text("<p>x</p>")
     saetze = sorted(corpus.load_onenote(tmp_path), key=lambda s: s["rel"])
     assert len(saetze) == 3, "die angehängte .html ist eine Datei, keine Seite"
-    stand = json.loads(state_db.StateDb(ziel).kv_lesen("pages"))
+    stand = _stand(ziel)
     je_rel = {s["rel"]: s for s in saetze}
     s = je_rel[f'{ziel.name}/{stand["p1"]["rel"]}']
     assert s["src"] == "onenote" and s["root"] == "onenote"
@@ -378,7 +385,7 @@ def test_budget_beendet_den_lauf_sauber_und_der_naechste_macht_weiter(tmp_path, 
     budget = [e for e in ereignisse if e["k"] == "run.onenote.budget"]
     assert budget and budget[0]["v"]["n"] >= 1 and budget[0]["v"]["name"] == "Projekte"
     assert any(e["k"] == "run.onenote.budget_rest" and e["v"]["n"] == 1 for e in ereignisse)
-    stand_vorher = json.loads(state_db.StateDb(on.notebook_ziel(tmp_path, zwei)).kv_lesen("pages"))
+    stand_vorher = _stand(on.notebook_ziel(tmp_path, zwei))
     assert 1 <= len(stand_vorher) < 3, "what arrived is kept, the rest waits"
     assert not state_db.StateDb(on.notebook_ziel(tmp_path, zwei)).kv_lesen("last_sync"), \
         "a cut-short notebook must not count as synced"
@@ -386,7 +393,7 @@ def test_budget_beendet_den_lauf_sauber_und_der_naechste_macht_weiter(tmp_path, 
     graph_client.takt(on.PRO_MINUTE, on.PRO_STUNDE, [])
     g2 = _zaehlend(_graph([_page("p1", "A"), _page("p2", "B"), _page("p3", "C")]))
     on.lauf(g2, tmp_path, [zwei])
-    stand = json.loads(state_db.StateDb(on.notebook_ziel(tmp_path, zwei)).kv_lesen("pages"))
+    stand = _stand(on.notebook_ziel(tmp_path, zwei))
     assert len(stand) == 3
     assert len([u for u in g2.geladen if "/pages/" in u]) == 3 - len(stand_vorher), \
         "only the pages that never arrived are fetched"
@@ -436,12 +443,139 @@ def test_seitenstand_wird_nach_jeder_seite_gesichert(tmp_path):
         on.notebook_lauf(g, tmp_path, nb, 4 * 1024 * 1024)
     db = state_db.StateDb(on.notebook_ziel(tmp_path, nb))
     assert json.loads(db.kv_lesen("notebook"))["id"] == "nb1"
-    assert list(json.loads(db.kv_lesen("pages"))) == ["p1"], "the first page is kept"
+    assert list(_stand(db.pfad.parent)) == ["p1"], "the first page is kept"
     # The pacer's moments too: the next process must know this hour's cost.
     assert json.loads(state_db.StateDb(tmp_path).kv_lesen("takt"))
     # Next run: only the pages that never arrived are fetched.
     g2 = _zaehlend(_graph([_page("p1", "A"), _page("p2", "B"), _page("p3", "C")]))
     assert on.notebook_lauf(g2, tmp_path, nb, 4 * 1024 * 1024)[:2] == (2, 1)
+
+
+def test_seitenstand_kommt_als_eine_zeile_je_seite(tmp_path):
+    """One row per page, written when the page is done – the whole table
+    is never rewritten; the tombstone run touches only the rows it marks."""
+    on.notebook_lauf(_graph([_page("p1", "A"), _page("p2", "B")]), tmp_path, NB, 0)
+    db = state_db.StateDb(on.notebook_ziel(tmp_path, NB))
+    assert set(db.saetze_lesen("pages")) == {"p1", "p2"}
+    aufrufe = []
+    urspruenglich = db.saetze_schreiben
+
+    def merkend(bereich, eintraege):
+        aufrufe.append((bereich, sorted(eintraege)))
+        return urspruenglich(bereich, eintraege)
+
+    db.saetze_schreiben = merkend
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(state_db, "StateDb", lambda ordner: db)
+        on.notebook_lauf(_graph([_page("p1", "A", lm="2026-07-09T10:00:00Z")]),
+                         tmp_path, NB, 0)
+    assert ("pages", ["p1"]) in aufrufe and ("pages", ["p2"]) in aufrufe
+    assert all(len(keys) == 1 for bereich, keys in aufrufe if bereich == "pages")
+    assert _stand(db.pfad.parent)["p2"]["deleted"]
+
+
+def test_alter_seitenstand_zieht_in_die_saetze_um(tmp_path):
+    """A notebook from 8.x holds its bookkeeping as one kv blob – it moves
+    over once, and nothing is fetched again for it."""
+    on.notebook_lauf(_graph([_page("p1", "A")]), tmp_path, NB, 0)
+    db = state_db.StateDb(on.notebook_ziel(tmp_path, NB))
+    # The 8.x shape: one kv blob, no rows.
+    zeilen = {k: json.loads(v) for k, v in db.saetze_lesen("pages").items()}
+    db.saetze_leeren("pages")
+    db.kv_schreiben("pages", json.dumps(zeilen, ensure_ascii=False))
+    g = _graph([_page("p1", "A")])
+    assert on.notebook_lauf(g, tmp_path, NB, 0)[:2] == (0, 1)
+    assert g.geladen == [] and set(db.saetze_lesen("pages")) == {"p1"}
+
+
+def test_ressourcen_werden_beim_erneuten_abruf_nicht_neu_geladen(tmp_path):
+    """The hour's 400 requests: a page that moved costs its content, not
+    its images and attachments again – embedded or filed alike."""
+    on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, 0)
+    ziel = on.notebook_ziel(tmp_path, NB)
+    saetze = {k: json.loads(v) for k, v in
+              state_db.StateDb(ziel).saetze_lesen("ressourcen").items()}
+    assert set(saetze) == {"img-1", "file-1"}
+    assert saetze["img-1"]["inline"] and saetze["img-1"]["rel"].endswith(".html")
+    assert (ziel / saetze["file-1"]["rel"]).read_bytes() == b"PDF"
+    assert saetze["file-1"]["size"] == 3 and saetze["file-1"]["seen"]
+    g2 = _graph([_page("p1", "Besprechung", lm="2026-07-09T10:00:00Z")])
+    neu, _, fehler = on.notebook_lauf(g2, tmp_path, NB, 0)
+    assert (neu, fehler) == (1, 0)
+    assert [u for u in g2.geladen if "/pages/" in u], "the content itself comes"
+    assert not any("/resources/" in u for u in g2.geladen), "no resource request"
+    html = next(ziel.rglob("*.html")).read_text(encoding="utf-8")
+    assert 'src="data:image/png;base64,UE5H"' in html    # b"PNG" again
+    assert "Protokoll.pdf" in html and 'class="mn-anhang" href="' in html
+
+
+def test_abgelegte_ressourcen_ziehen_mit_der_seite_um(tmp_path, monkeypatch):
+    """A renamed section moves the page: the filed image is copied along
+    from disk, not fetched, and the old folder goes as before."""
+    monkeypatch.setenv("ONENOTE_IMAGE_MAX_MB", "1")
+    gross = b"x" * (2 * 1024 * 1024)
+    on.notebook_lauf(_graph([_page("p1", "A")], bild=gross), tmp_path, NB, on.bild_max())
+    ziel = on.notebook_ziel(tmp_path, NB)
+    alt = _stand(ziel)["p1"]["rel"]
+    g = _graph([_page("p1", "A", lm="2026-07-09T10:00:00Z")], bild=gross)
+    g.antworten["/onenote/notebooks/nb1/sections"] = {"value": [
+        {"id": "s1", "displayName": "Umbenannt"}]}
+    on.notebook_lauf(g, tmp_path, NB, on.bild_max())
+    assert not any("/resources/" in u for u in g.geladen)
+    neu = _stand(ziel)["p1"]["rel"]
+    assert neu.startswith("Umbenannt/") and not (ziel / alt).exists()
+    assert not (ziel / (alt[:-5] + on.DATEI_SUFFIX)).exists()
+    ordner = ziel / (neu[:-5] + on.DATEI_SUFFIX)
+    assert any(f.read_bytes() == gross for f in ordner.iterdir())
+    saetze = {k: json.loads(v) for k, v in
+              state_db.StateDb(ziel).saetze_lesen("ressourcen").items()}
+    assert saetze["img-1"]["rel"].startswith(neu[:-5] + on.DATEI_SUFFIX + "/")
+
+
+def test_geaenderte_grenze_entscheidet_neu_ohne_abruf(tmp_path, monkeypatch):
+    """Embedded last time, filed now: the bytes come from the old page."""
+    on.notebook_lauf(_graph([_page("p1", "A")], bild=b"x" * 3000), tmp_path, NB, 0)
+    monkeypatch.setenv("ONENOTE_IMAGE_MAX_MB", "0")
+    g = _graph([_page("p1", "A", lm="2026-07-09T10:00:00Z")], bild=b"x" * 3000)
+    on.notebook_lauf(g, tmp_path, NB, 1000)
+    assert not any("/resources/" in u for u in g.geladen)
+    ziel = on.notebook_ziel(tmp_path, NB)
+    html = next(ziel.rglob("*.html")).read_text(encoding="utf-8")
+    assert "base64" not in html.split("<img")[1].split(">")[0]
+    ordner = next(p for p in ziel.rglob("*" + on.DATEI_SUFFIX) if p.is_dir())
+    assert any(f.read_bytes() == b"x" * 3000 for f in ordner.iterdir())
+
+
+def test_fehlende_datei_wird_wieder_geholt(tmp_path, monkeypatch):
+    """A record whose file is gone (somebody tidied the folder) is no
+    reason to leave a hole: the resource is fetched again."""
+    monkeypatch.setenv("ONENOTE_IMAGE_MAX_MB", "1")
+    gross = b"x" * (2 * 1024 * 1024)
+    on.notebook_lauf(_graph([_page("p1", "A")], bild=gross), tmp_path, NB, on.bild_max())
+    ziel = on.notebook_ziel(tmp_path, NB)
+    ordner = next(p for p in ziel.rglob("*" + on.DATEI_SUFFIX) if p.is_dir())
+    next(f for f in ordner.iterdir() if f.suffix == ".png").unlink()
+    g = _graph([_page("p1", "A", lm="2026-07-09T10:00:00Z")], bild=gross)
+    on.notebook_lauf(g, tmp_path, NB, on.bild_max())
+    assert [u for u in g.geladen if "/resources/" in u] == [IMG]
+    ordner = next(p for p in ziel.rglob("*" + on.DATEI_SUFFIX) if p.is_dir())
+    assert any(f.read_bytes() == gross for f in ordner.iterdir())
+
+
+def test_abgelegte_dateien_sind_von_der_seite_aus_verlinkt(tmp_path, monkeypatch):
+    """The page links its folder relative to itself – opened from disk or
+    through the app's route, every link must resolve."""
+    monkeypatch.setenv("ONENOTE_IMAGE_MAX_MB", "1")
+    on.notebook_lauf(_graph([_page("p1", "Fotos")], bild=b"x" * (2 * 1024 * 1024)),
+                     tmp_path, NB, on.bild_max())
+    seite = next(on.notebook_ziel(tmp_path, NB).rglob("*.html"))
+    html = seite.read_text(encoding="utf-8")
+    ziele = [z for z in re.findall(r'(?:src|href)="([^"]+)"', html)
+             if not z.startswith("data:")]
+    assert len(ziele) == 2, "one filed image, one attachment"
+    for z in ziele:
+        assert "/" in z and not z.startswith("/")
+        assert (seite.parent / z).is_file(), z
 
 
 def test_abbruchsignal_wird_zum_sauberen_stopp(monkeypatch):

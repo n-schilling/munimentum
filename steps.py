@@ -39,11 +39,35 @@ def _flag(wert):
     return "1" if wert else "0"
 
 
+TEAMS_KATEGORIEN = ("1on1", "group", "meeting", "channels")
+
+
+def kadenzen(cfg):
+    """The cadence table as the exports read it. Every gate lives inside
+    the export that it paces (per category, per URL, per notebook); the app
+    only hands the table over. An old whole-source "teams" entry (before
+    9.0) stands in for the four category keys until they are set."""
+    kad = dict(cfg.get("sync_cadence") or {})
+    alt = kad.pop("teams", None)
+    if alt:
+        for kat in TEAMS_KATEGORIEN:
+            kad.setdefault(f"teams:{kat}", alt)
+    return kad
+
+
+def _kadenz_env(cfg, ctx):
+    """SYNC_CADENCE for every paced export, SYNC_NOW when the run was asked
+    to ignore the cadences once (a "sync now" button)."""
+    return {"SYNC_CADENCE": json.dumps(kadenzen(cfg)),
+            **({"SYNC_NOW": "1"} if ctx.get("sync_now") else {})}
+
+
 def _sharepoint_env(cfg, ctx):
     # Always set, even empty: empty means "no filter", unset would mean
     # "whatever app_config.json says" – the run must mirror the form.
-    return {"SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+    return {**_kadenz_env(cfg, ctx),
             "SHAREPOINT_URLS": str(cfg.get("sharepoint_urls") or ""),
+            "SHAREPOINT_RULES": str(cfg.get("sharepoint_rules") or ""),
             "SHAREPOINT_TYPES_INCLUDE": str(cfg.get("sharepoint_types_include") or ""),
             "SHAREPOINT_TYPES_EXCLUDE": str(cfg.get("sharepoint_types_exclude") or ""),
             "SHAREPOINT_MAX_MB": str(int(cfg.get("sharepoint_max_mb") or 0))}
@@ -52,8 +76,30 @@ def _sharepoint_env(cfg, ctx):
 def _onedrive_env(cfg, ctx):
     # Always set, even empty: empty means "take everything", unset would
     # mean "whatever app_config.json says".
-    return {"ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
+    return {**_kadenz_env(cfg, ctx),
+            "ONEDRIVE_RULES": str(cfg.get("onedrive_rules") or ""),
             "ONEDRIVE_MAX_MB": str(int(cfg.get("onedrive_max_mb") or 0))}
+
+
+def _teams_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            "EXPORT_CATEGORIES": ",".join(ctx["cats_teams"]),
+            # Always set, even empty: empty means "every conversation".
+            "TEAMS_RULES": str(cfg.get("teams_rules") or ""),
+            "TEAMS_SINCE": str(cfg.get("teams_since") or ""),
+            "EMBED_IMAGES": _flag(cfg.get("embed_images")),
+            "CACHE_IMAGES": _flag(cfg.get("cache_images")),
+            "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
+            "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats")),
+            "TEAMS_ATTACHMENTS": _flag(cfg.get("teams_attachments")),
+            "TEAMS_CHANNEL_FILES": _flag(cfg.get("teams_channel_files")),
+            "TEAMS_FILES_MAX_MB": str(int(cfg.get("teams_files_max_mb") or 0))}
+
+
+def _todo_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            # Always set, even empty: empty means "every list".
+            "TODO_RULES": str(cfg.get("todo_rules") or "")}
 
 
 def _index_argv(cfg, ctx, pfade):
@@ -85,11 +131,19 @@ REGISTRY = (
      "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
      "argv": lambda cfg, ctx, pfade: [pfade["outlook"]],
      "env": lambda cfg, ctx: {
+         **_kadenz_env(cfg, ctx),
          "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
          "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
          # Always set, even empty: empty means "skip nothing", unset would
          # mean "the script's default".
-         "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or [])}},
+         "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or []),
+         "OUTLOOK_SINCE": str(cfg.get("outlook_since") or ""),
+         "CALENDAR_MONTHS_BACK": str(int(cfg.get("calendar_months_back") or 0)),
+         # The "read the calendar in full" button: window and change
+         # tokens step aside once. Always set, so the script never falls
+         # back to app_config.json for it.
+         "CALENDAR_FULL": _flag(ctx.get("calendar_full")),
+         **({"SYNC_NOW": "1"} if ctx.get("calendar_full") else {})}},
 
     {"key": "onedrive", "anfrage": "onedrive", "script": "onedrive_export",
      "start": "job.start.onedrive",
@@ -118,11 +172,14 @@ REGISTRY = (
      "quelle": "search.source.planner",
      "argv": lambda cfg, ctx, pfade: [pfade["planner"]],
      "env": lambda cfg, ctx: {
-         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+         **_kadenz_env(cfg, ctx),
          "PLANNER_URLS": (ctx["nur_einheit"] or
                           str(cfg.get("planner_urls") or "")),
          "PLANNER_ATTACHMENTS": _flag(cfg.get("planner_attachments")),
-         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {})}},
+         "PLANNER_SWEEP_HOURS": str(int(cfg.get("planner_sweep_hours") or 0)),
+         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
+         **({"PLANNER_LEGACY_SYNC": "1"} if ctx["legacy_comments"]
+            else {})}},
 
     {"key": "todo", "anfrage": "todo", "script": "todo_export",
      "start": "job.start.todo",
@@ -130,7 +187,7 @@ REGISTRY = (
      "schedule": "todo", "master": "todo_enabled",
      "quelle": "search.source.todo",
      "argv": lambda cfg, ctx, pfade: [pfade["todo"]],
-     "env": lambda cfg, ctx: {}},
+     "env": _todo_env},
 
     {"key": "onenote", "anfrage": "onenote", "script": "onenote_export",
      "start": "job.start.onenote",
@@ -139,9 +196,9 @@ REGISTRY = (
      "quelle": "search.source.onenote",
      "argv": lambda cfg, ctx, pfade: [pfade["onenote"]],
      "env": lambda cfg, ctx: {
+         **_kadenz_env(cfg, ctx),
          "ONENOTE_IMAGE_MAX_MB":
              str(int(cfg.get("onenote_image_max_mb") or 0)),
-         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
          # Always set, even empty: empty means "every notebook".
          "ONENOTE_RULES": str(cfg.get("onenote_rules") or ""),
          **({"ONENOTE_ONLY": ctx["nur_einheit"], "SYNC_NOW": "1"}
@@ -155,7 +212,7 @@ REGISTRY = (
      "quelle": "search.source.pages",
      "argv": lambda cfg, ctx, pfade: ["--pages", pfade["sharepoint_pages"]],
      "env": lambda cfg, ctx: {
-         "SYNC_CADENCE": json.dumps(cfg.get("sync_cadence") or {}),
+         **_kadenz_env(cfg, ctx),
          "SHAREPOINT_PAGES_URLS": (ctx["nur_einheit"] or
                                    str(cfg.get("sharepoint_pages_urls") or "")),
          **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
@@ -168,15 +225,7 @@ REGISTRY = (
      "schedule": "teams", "master": None, "quelle": "Teams",
      "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
      "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
-     "env": lambda cfg, ctx: {
-         "EXPORT_CATEGORIES": ",".join(ctx["cats_teams"]),
-         "EMBED_IMAGES": _flag(cfg.get("embed_images")),
-         "CACHE_IMAGES": _flag(cfg.get("cache_images")),
-         "REFRESH_CHANNELS": _flag(cfg.get("refresh_channels")),
-         "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats")),
-         "TEAMS_ATTACHMENTS": _flag(cfg.get("teams_attachments")),
-         "TEAMS_CHANNEL_FILES": _flag(cfg.get("teams_channel_files")),
-         "TEAMS_FILES_MAX_MB": str(int(cfg.get("teams_files_max_mb") or 0))}},
+     "env": _teams_env},
 
     {"key": "index", "anfrage": "index", "script": "rag_index",
      "start": "job.start.index",
@@ -222,6 +271,27 @@ REGISTRY = (
      "schedule": None, "master": None, "quelle": None,
      "argv": lambda cfg, ctx, pfade: ["--folders", pfade["outlook"]],
      "env": lambda cfg, ctx: {}},
+
+    {"key": "teams_list", "anfrage": "sync_teams",
+     "start": "job.start.teams_list",
+     "script": "teams_export",
+     "label": "job.step.teams_list", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--teams", pfade["teams"]],
+     # The list names every conversation the ticked categories would see;
+     # the same environment as the export, so both agree on the paths.
+     "env": lambda cfg, ctx: {
+         **_teams_env(cfg, ctx),
+         "EXPORT_CATEGORIES": ",".join(
+             ctx["cats_teams"] or list(TEAMS_KATEGORIEN))}},
+
+    {"key": "todo_lists", "anfrage": "sync_todo",
+     "start": "job.start.todo_lists",
+     "script": "todo_export",
+     "label": "job.step.todo_lists", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: ["--lists", pfade["todo"]],
+     "env": _todo_env},
 
     {"key": "notebooks", "anfrage": "sync_notebooks",
      "start": "job.start.notebooks",

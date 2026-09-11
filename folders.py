@@ -310,6 +310,11 @@ def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI, archiv=None):
             "pfad": e["pfad"],
             "elemente": int(e.get("elemente") or 0),
             "archiv": archiv.get(e["pfad"], 0),
+            # What a unit list knows beyond the count – a display name, the
+            # last activity of a chat – rides along for the cadence window.
+            **({"name": e["name"]} if e.get("name") else {}),
+            **({"zuletzt": e["zuletzt"]} if e.get("zuletzt") else {}),
+            **({"urls": e["urls"]} if e.get("urls") else {}),
             "regel": (("+ " if regel[0] else "- ") + regel[1]) if regel else None,
         })
     bekannt = {e["pfad"] for e in eintraege}

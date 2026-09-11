@@ -23,12 +23,21 @@ Runs as a subprogram of app.py; standard library only.
 --no-reconstruct skips restoring deleted appointments from mails. It is by
 far the most expensive part – every .eml gets read, minutes on a large
 mailbox – and is not needed for appointments and contacts alone.
+
+Reading the mails is incremental: kalender.db in the Outlook folder keeps a
+manifest with one row per .eml – its (mtime_ns, size) and the invitation
+facts it yielded, an empty list for the vast majority that carry no
+text/calendar part. A run stats every file, parses only new and changed
+ones, drops the rows of vanished files and builds calendar.json from the
+union; the result is what a full parse would produce. Without a usable
+manifest everything is simply read again – slower, never wrong.
 """
 
 import os
 import sys
 import re
 import json
+import sqlite3
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
@@ -39,6 +48,7 @@ from urllib.parse import quote, unquote
 import export_util
 import progress
 import settings
+import state_db
 # The parser primitives for .eml, iCalendar and vCard live in corpus.py –
 # they are only reused here, not maintained a second time.
 from corpus import addr_people, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
@@ -67,51 +77,175 @@ def mail_ical(msg):
     return "", ""
 
 
-def read_outlook(root, out_dir, invites):
+def _mail_when(raw_date):
+    """(timestamp, display) of a mail's Date header – (None, raw) where it
+    does not parse. Derived when the invites are built, not stored: the
+    display string follows the machine's time zone."""
+    ts, disp = None, raw_date
+    try:
+        dt = parsedate_to_datetime(raw_date)
+        if dt is not None:
+            ts = dt.timestamp()
+            disp = dt.astimezone().strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return ts, disp
+
+
+def eml_facts(path):
+    """The invitation facts of one .eml – all the reconstruction needs of
+    it and exactly what the manifest stores: one entry per VEVENT with a
+    UID, an empty list for a mail without a text/calendar part. Plain
+    JSON-serialisable data; raises when the file cannot be read."""
+    with open(path, "rb") as f:
+        msg = BytesParser(policy=policy.default).parse(f)
+    method, ical = mail_ical(msg)
+    if not ical:
+        return []
+    m2, evs = parse_vevents(ical)
+    meth = method or m2
+    # Reply mails carry no ORGANIZER, only the replying ATTENDEE –
+    # the organiser is their recipient. Invitations and cancellations
+    # come the other way round, from the organiser themselves.
+    fn, fe = addr_people(msg, "from")
+    hn, hm = addr_people(msg, "to") if meth in ("REPLY", "COUNTER") else (fn, fe)
+    hint = [hn[0] if hn else "", hm[0] if hm else ""]
+    date = hdr(msg, "date")
+    return [{"method": meth, "ev": ev, "org_hint": hint, "date": date}
+            for ev in evs if ev["uid"]]
+
+
+def _invite_rec(fact, href):
+    """One reconstruction input from a fact, parsed or stored. Link and
+    mail date are derived here, so the manifest depends on neither the
+    link base nor the time zone."""
+    ts, disp = _mail_when(fact["date"])
+    return {"method": fact["method"], "ev": fact["ev"],
+            "org_hint": tuple(fact["org_hint"]),
+            "href": href, "mts": ts, "md": disp}
+
+
+# The manifest: area "kalender_manifest" in the Outlook folder's kalender.db,
+# one row per .eml keyed by its path relative to the export root, holding
+# {"v", "mtime_ns", "size", "facts"}. Some 200–300 bytes a row, so a
+# mailbox of 45,000 mails costs around 10 MB.
+MANIFEST_AREA = "kalender_manifest"
+# Bump when the stored facts change shape (a new VEVENT field, say): rows
+# of another version count as changed and their files are parsed again.
+MANIFEST_DB = "kalender.db"      # its own file: the export's state.db mtime dates the last run
+MANIFEST_VERSION = 1
+# Parsed files per write: an aborted first run keeps what it got through.
+_MANIFEST_FLUSH = 1000
+
+
+def _manifest_row_ok(row, ev_keys):
+    """Only a row of the current shape is trusted; anything else counts as
+    "not there" and its file is parsed again."""
+    if not (isinstance(row, dict) and row.get("v") == MANIFEST_VERSION
+            and isinstance(row.get("mtime_ns"), int)
+            and isinstance(row.get("size"), int)
+            and isinstance(row.get("facts"), list)):
+        return False
+    return all(isinstance(f, dict)
+               and isinstance(f.get("method"), str)
+               and isinstance(f.get("date"), str)
+               and isinstance(f.get("org_hint"), list) and len(f["org_hint"]) == 2
+               and isinstance(f.get("ev"), dict) and ev_keys <= f["ev"].keys()
+               for f in row["facts"])
+
+
+def _manifest_lesen(db):
+    """rel -> row of the previous run. Empty when there is none or it cannot
+    be read – then everything is parsed, which is only slower, never wrong."""
+    try:
+        rows = db.saetze_lesen(MANIFEST_AREA)
+    except (sqlite3.Error, OSError):
+        return {}
+    ev_keys = _new_event().keys()
+    out = {}
+    for rel, raw in rows.items():
+        try:
+            row = json.loads(raw)
+        except (TypeError, ValueError):
+            continue
+        if _manifest_row_ok(row, ev_keys):
+            out[rel] = row
+    return out
+
+
+def _manifest_schreiben(db, neu, weg=()):
+    """Upsert `neu` (rel -> row) and drop the rows in `weg`. A failure
+    costs nothing but the next run's head start."""
+    try:
+        db.saetze_schreiben(MANIFEST_AREA, {rel: json.dumps(row, ensure_ascii=False)
+                                            for rel, row in neu.items()})
+        db.saetze_loeschen(MANIFEST_AREA, weg)
+        return True
+    except (sqlite3.Error, OSError):
+        return False
+
+
+def read_outlook(root, out_dir, invites, db=None):
     """Collect appointment parts (text/calendar) from all .eml files.
 
     That is the only reason mails are read here – their contents are
-    indexed by corpus.py.
+    indexed by corpus.py. With `db` (the export folder's StateDb) the
+    manifest does most of the work: a file whose mtime and size still
+    match is served from its stored facts, only new and changed files are
+    parsed, rows of vanished files are dropped. Without `db` every file is
+    parsed. Returns (files reused, files parsed).
     """
     dateien = sorted(root.rglob("*.eml"))
     progress.melde(0, len(dateien), "mails")
+    alt = _manifest_lesen(db) if db is not None else {}
+    neu, gesehen = {}, set()
+    wieder = gelesen = 0
     for n, p in enumerate(dateien, 1):
         if n % 200 == 0:
             progress.melde(n, len(dateien), "mails")
         try:
-            with open(p, "rb") as f:
-                msg = BytesParser(policy=policy.default).parse(f)
-        except Exception:
+            st = p.stat()
+        except OSError:
             continue
-        method, ical = mail_ical(msg)
-        if not ical:
-            continue
-        m2, evs = parse_vevents(ical)
-        meth = method or m2
-        # Reply mails carry no ORGANIZER, only the replying ATTENDEE –
-        # the organiser is their recipient. Invitations and cancellations
-        # come the other way round, from the organiser themselves.
-        fn, fe = addr_people(msg, "from")
-        hn, hm = addr_people(msg, "to") if meth in ("REPLY", "COUNTER") else (fn, fe)
-        hint = (hn[0] if hn else "", hm[0] if hm else "")
-        raw_date = hdr(msg, "date")
-        ts, disp = None, raw_date
-        try:
-            dt = parsedate_to_datetime(raw_date)
-            if dt is not None:
-                ts = dt.timestamp()
-                disp = dt.astimezone().strftime("%Y-%m-%d %H:%M")
-        except Exception:
-            pass
-        for ev in evs:
-            if ev["uid"]:
-                invites.append({"method": meth, "ev": ev, "org_hint": hint,
-                                "href": link(p, out_dir), "mts": ts, "md": disp})
+        rel = p.relative_to(root).as_posix()
+        row = alt.get(rel)
+        if row is not None and (row["mtime_ns"], row["size"]) == (st.st_mtime_ns, st.st_size):
+            facts = row["facts"]
+            wieder += 1
+        else:
+            try:
+                facts = eml_facts(p)
+            except Exception:
+                continue      # unreadable: no row, so the next run tries again
+            gelesen += 1
+            if db is not None:
+                neu[rel] = {"v": MANIFEST_VERSION, "mtime_ns": st.st_mtime_ns,
+                            "size": st.st_size, "facts": facts}
+                if len(neu) >= _MANIFEST_FLUSH:
+                    _manifest_schreiben(db, neu)
+                    neu = {}
+        gesehen.add(rel)
+        href = link(p, out_dir)
+        invites.extend(_invite_rec(f, href) for f in facts)
+    if db is not None:
+        _manifest_schreiben(db, neu, [rel for rel in alt if rel not in gesehen])
+    return wieder, gelesen
 
 
 # ===========================================================================
 # Calendar (.ics) and contacts (.vcf) – part of the Outlook export
 # ===========================================================================
+def _new_event():
+    """The VEVENT fields the reconstruction works with – a fresh dict each
+    time, the lists must not be shared between events."""
+    return {"uid": "", "recid": "", "summary": "", "location": "",
+            "description": "", "dtstart": "", "dateonly": False,
+            "tzstart": "", "dtend": "", "enddateonly": False,
+            "tzend": "", "status": "", "seq": 0,
+            "org_cn": "", "org_mail": "",
+            "att_names": [], "att_mails": []}
+
+
 def parse_vevents(text):
     """iCalendar text -> (METHOD, [VEVENT fields, …]).
 
@@ -128,12 +262,7 @@ def parse_vevents(text):
         if name == "BEGIN":
             stack.append(value.strip().upper())
             if stack[-1] == "VEVENT":
-                ev = {"uid": "", "recid": "", "summary": "", "location": "",
-                      "description": "", "dtstart": "", "dateonly": False,
-                      "tzstart": "", "dtend": "", "enddateonly": False,
-                      "tzend": "", "status": "", "seq": 0,
-                      "org_cn": "", "org_mail": "",
-                      "att_names": [], "att_mails": []}
+                ev = _new_event()
             continue
         if name == "END":
             if value.strip().upper() == "VEVENT" and ev is not None:
@@ -400,11 +529,16 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
     # exactly what the app's /source route expects.
     #
     # Reading all .eml files is the expensive part – minutes on a large
-    # mailbox – and happens solely for the invitations. Whoever builds the
+    # mailbox the first time, a stat per file afterwards thanks to the
+    # manifest – and happens solely for the invitations. Whoever builds the
     # calendar just for the events or the contacts would otherwise pay for
     # it without getting anything in return.
     if reconstruct:
-        read_outlook(root, root, invites)
+        db = state_db.StateDb(root, MANIFEST_DB)
+        try:
+            read_outlook(root, root, invites, db)
+        finally:
+            db.close()
     cal = read_calendar(root, root)
     if reconstruct:
         ghosts, marked, dupes = reconstruct_events(invites, cal)

@@ -12,12 +12,29 @@ broken once on a real drive:
   * Deleted in OneDrive means recorded, not thrown away.
 """
 
+import json
+import time
+
 import pytest
 
 import folders
 import onedrive_export as od
 import progress
 import state_db
+
+
+@pytest.fixture(autouse=True)
+def _ohne_kadenz(monkeypatch):
+    """The mirror gates itself by SYNC_CADENCE["onedrive"] since 9.0 – the
+    developer's own app_config.json must not decide whether a test's second
+    run happens. Tests that want the gate set the environment themselves."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    monkeypatch.delenv("SYNC_NOW", raising=False)
+
+
+def _events(capsys):
+    return [e for e in (progress.lies_event(z) for z in
+                        capsys.readouterr().out.splitlines()) if e]
 
 
 def _datei(kennung, name, pfad="/drive/root:/Ordner", groesse=10, ctag="c1", **extra):
@@ -358,6 +375,374 @@ def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
     assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
     b = od.pruefe_vollstaendigkeit(gross, tmp_path, wahl)
     assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"
+
+
+# --------------------------------------------------------------------------
+# Cadence: the mirror gates itself, SYNC_NOW steps over the gate
+# --------------------------------------------------------------------------
+def test_lauf_ueberspringt_onedrive_unter_kadenz(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"onedrive": "weekly"}))
+    g = FakeGraph([_datei("1", "a.pdf")])
+    assert od.lauf(g, tmp_path)["new"] == 1
+    assert state_db.StateDb(tmp_path).kv_lesen("last_sync"), \
+        "a clean run stamps the sync"
+    capsys.readouterr()
+    assert od.lauf(g, tmp_path) is None
+    assert g.geladen == ["1"], "the skipped run must not touch the drive"
+    events = _events(capsys)
+    skip = [e for e in events if e["k"] == "run.cadence.skip"]
+    assert len(skip) == 1
+    assert skip[0]["v"]["name"] == progress.atom("settings.onedrive.title")
+    assert skip[0]["v"]["cadence"]["k"] == "cadence.weekly"
+    capsys.readouterr()
+    # "Sync now": the gate steps aside.
+    monkeypatch.setenv("SYNC_NOW", "1")
+    assert od.lauf(g, tmp_path)["new"] == 0
+    assert not any(e["k"] == "run.cadence.skip" for e in _events(capsys))
+
+
+def test_abgebrochener_lauf_stempelt_keinen_sync(tmp_path, monkeypatch):
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"onedrive": "weekly"}))
+    g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")], fehlerhaft={"2"})
+    assert od.lauf(g, tmp_path)["errors"] == 1
+    assert not state_db.StateDb(tmp_path).kv_lesen("last_sync")
+    # Still due, then: the next run comes back for the missing file.
+    g.fehlerhaft = set()
+    assert od.lauf(g, tmp_path)["new"] == 1
+
+
+def test_kadenz_gilt_nicht_fuer_pruefen_und_ordner(tmp_path, monkeypatch):
+    """--check and --folders are outside the cadence – a stamped sync
+    must not silence them."""
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"onedrive": "monthly"}))
+    state_db.StateDb(tmp_path).kv_schreiben("last_sync", str(time.time()))
+    g = FakeGraph([_datei("1", "a.pdf")])
+    assert od.nur_pruefen(g, tmp_path)["erwartet"] == 1
+    assert od.nur_ordner(g, tmp_path) is not None
+
+
+# --------------------------------------------------------------------------
+# A changed selection: the delta cannot bring what it never fetched
+# --------------------------------------------------------------------------
+class _DeltaGraph:
+    """Two files, one in Archiv; the delta after the first walk is empty."""
+
+    def __init__(self):
+        self.aufrufe = []
+        self.geladen = []
+
+    def delta(self, weiter=None):
+        self.aufrufe.append(weiter)
+        if weiter is None:
+            yield _datei("alt", "alt.pdf", "/drive/root:/Archiv"), None
+            yield _datei("neu", "neu.pdf"), None
+        yield None, "delta-1"
+
+    def lade(self, item_id, ziel, geaendert=None):
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        ziel.write_bytes(b"x" * 10)
+        self.geladen.append(item_id)
+        return 10
+
+
+def test_erster_lauf_merkt_sich_die_auswahl_ohne_neustart(tmp_path, capsys):
+    g = _DeltaGraph()
+    wahl = od.Selection(rules=folders.lies_regeln("- Dateien/Archiv/**"))
+    assert od.drive_mirror.lauf(g, tmp_path, wahl, 1)["new"] == 1
+    assert g.aufrufe == [None] and g.geladen == ["neu"]
+    assert state_db.StateDb(tmp_path).kv_lesen("auswahl") == wahl.kennzeichen()
+    assert not any(e["k"] == "run.rules_changed" for e in _events(capsys))
+
+
+def test_gleiche_auswahl_liest_nur_das_delta(tmp_path, capsys):
+    g = _DeltaGraph()
+    regeln = folders.lies_regeln("- Dateien/Archiv/**")
+    od.drive_mirror.lauf(g, tmp_path, od.Selection(rules=regeln), 1)
+    capsys.readouterr()
+    # A fresh Selection with the same content – not the same object.
+    od.drive_mirror.lauf(g, tmp_path, od.Selection(rules=regeln), 1)
+    assert g.aufrufe == [None, "delta-1"]
+    assert not any(e["k"] == "run.rules_changed" for e in _events(capsys))
+
+
+def test_geaenderte_auswahl_liest_den_ordner_einmal_voll(tmp_path, capsys):
+    """The regression this guards: a rule opened later never fetched the
+    files that did not change since – the delta had nothing to say."""
+    g = _DeltaGraph()
+    od.drive_mirror.lauf(g, tmp_path, od.Selection(
+        rules=folders.lies_regeln("- Dateien/Archiv/**")), 1)
+    assert not (tmp_path / "Dateien/Archiv/alt.pdf").exists()
+    capsys.readouterr()
+    weit = od.Selection()
+    zahlen = od.drive_mirror.lauf(g, tmp_path, weit, 1, name="Nordwind")
+    assert g.aufrufe == [None, None], "full read, not the delta"
+    assert zahlen["new"] == 1 and (tmp_path / "Dateien/Archiv/alt.pdf").is_file()
+    events = [e for e in _events(capsys) if e["k"] == "run.rules_changed"]
+    assert len(events) == 1 and events[0]["v"]["name"] == "Nordwind"
+    assert state_db.StateDb(tmp_path).kv_lesen("auswahl") == weit.kennzeichen()
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "delta-1"
+
+
+def test_engere_auswahl_laesst_liegen_was_da_ist(tmp_path):
+    """Narrowing excludes from now on – files already here stay on disk."""
+    g = _DeltaGraph()
+    od.drive_mirror.lauf(g, tmp_path, od.Selection(), 1)
+    assert (tmp_path / "Dateien/Archiv/alt.pdf").is_file()
+    zahlen = od.drive_mirror.lauf(g, tmp_path, od.Selection(
+        rules=folders.lies_regeln("- Dateien/Archiv/**")), 1)
+    assert zahlen["new"] == 0 and zahlen["excluded"] == 1
+    assert (tmp_path / "Dateien/Archiv/alt.pdf").is_file()
+
+
+# --------------------------------------------------------------------------
+# Folder cadences: one delta stream, downloads gated per folder unit
+# --------------------------------------------------------------------------
+class _Antwort:
+    def __init__(self, status):
+        self.status_code = status
+
+
+class _KadenzGraph:
+    """Delta entries per run, item lookups by id (None = 404), and a log of
+    every call in order – the waiting list must be handled before the
+    delta is asked."""
+
+    drive_base = "https://graph.microsoft.com/v1.0/me/drive"
+
+    def __init__(self, seiten=(), items=None):
+        self.seiten = list(seiten)
+        self.items = items or {}
+        self.log = []
+        self.geladen = []
+
+    def delta(self, weiter=None):
+        self.log.append(("delta", weiter))
+        for e in self.seiten:
+            yield e, None
+        yield None, f"delta-{len(self.log)}"
+
+    def get(self, url):
+        import requests
+        kennung = url.split("/items/")[1].split("?")[0]
+        self.log.append(("get", kennung))
+        meta = self.items.get(kennung)
+        if meta is None:
+            raise requests.HTTPError(response=_Antwort(404))
+        return meta
+
+    def lade(self, item_id, ziel, geaendert=None):
+        self.log.append(("lade", item_id))
+        ziel.parent.mkdir(parents=True, exist_ok=True)
+        ziel.write_bytes(b"x" * 10)
+        self.geladen.append(item_id)
+        return 10
+
+
+FOTO = "/drive/root:/Fotos"
+FOTOS_KEY = "last_sync:onedrive:Dateien/Fotos"
+
+
+def _wartend(out):
+    return {k: json.loads(v) for k, v in
+            state_db.StateDb(out).saetze_lesen("wartend").items()}
+
+
+def _erster_lauf(tmp_path, monkeypatch, kadenzen=None):
+    """Run 1 brings both files and stamps drive and folder."""
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps(
+        kadenzen or {"onedrive:Dateien/Fotos": "monthly"}))
+    g = _KadenzGraph([_datei("f1", "f1.jpg", FOTO), _datei("a1", "a1.pdf")])
+    assert od.lauf(g, tmp_path)["new"] == 2
+    db = state_db.StateDb(tmp_path)
+    assert db.kv_lesen("last_sync") and db.kv_lesen(FOTOS_KEY)
+    return db
+
+
+def test_datei_im_getakteten_ordner_wartet_und_der_zeiger_rueckt_vor(
+        tmp_path, monkeypatch, capsys):
+    db = _erster_lauf(tmp_path, monkeypatch)
+    capsys.readouterr()
+    g = _KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2"),
+                      _datei("a1", "a1.pdf", ctag="c2")])
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == ["a1"], "the sibling comes, the paced file waits"
+    assert zahlen["new"] == 1 and zahlen["waiting"] == 1
+    assert _wartend(tmp_path) == {"f1": {"rel": "Dateien/Fotos/f1.jpg", "ctag": "c2",
+                                         "size": 10, "einheit": "Dateien/Fotos"}}
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "delta-1"
+    assert db.bestand_lesen()["f1"]["ctag"] == "c1", "the inventory keeps the old version"
+    events = _events(capsys)
+    paced = [e for e in events if e["k"] == "run.onedrive.folders_paced"]
+    assert len(paced) == 1 and paced[0]["v"] == {"n": 1}
+    assert not any(e["k"] == "run.cadence.skip" for e in events)
+
+
+def test_ergebnis_traegt_die_wartenden(tmp_path, monkeypatch, capsys):
+    _erster_lauf(tmp_path, monkeypatch)
+    capsys.readouterr()
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    zeilen = [z for z in capsys.readouterr().out.splitlines() if progress.lies_ergebnis(z)]
+    assert progress.lies_ergebnis(zeilen[-1])["extra"]["waiting"] == 1
+
+
+def test_faelliger_ordner_holt_die_wartenden_vor_dem_delta(tmp_path, monkeypatch,
+                                                            capsys):
+    db = _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    alt = db.kv_lesen(FOTOS_KEY)
+    db.kv_schreiben(FOTOS_KEY, str(time.time() - 31 * 86400))   # a month passed
+    capsys.readouterr()
+    g = _KadenzGraph([], items={"f1": _datei("f1", "f1.jpg", FOTO, ctag="c2")})
+    zahlen = od.lauf(g, tmp_path)
+    assert g.log[:2] == [("get", "f1"), ("delta", "delta-1")], "waiting list first"
+    assert g.geladen == ["f1"] and zahlen["new"] == 1 and zahlen["waiting"] == 0
+    assert _wartend(tmp_path) == {}
+    assert db.bestand_lesen()["f1"]["ctag"] == "c2"
+    assert float(db.kv_lesen(FOTOS_KEY)) > float(alt), "the unit is stamped"
+    assert not any(e["k"] == "run.onedrive.folders_paced" for e in _events(capsys))
+
+
+def test_wartende_die_schon_aktuell_ist_faellt_ohne_download_weg(tmp_path,
+                                                                  monkeypatch):
+    db = _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    db.kv_schreiben(FOTOS_KEY, str(time.time() - 31 * 86400))
+    # The lookup says c1 – what lies here already.
+    g = _KadenzGraph([], items={"f1": _datei("f1", "f1.jpg", FOTO, ctag="c1")})
+    assert od.lauf(g, tmp_path)["waiting"] == 0
+    assert g.geladen == [] and _wartend(tmp_path) == {}
+
+
+def test_am_quellort_geloeschte_wartende_verlaesst_die_liste(tmp_path, monkeypatch):
+    db = _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    g = _KadenzGraph([{"id": "f1", "deleted": {"state": "deleted"}}])
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == [] and zahlen["waiting"] == 0 and zahlen["gone"] == 1
+    assert _wartend(tmp_path) == {}
+    assert "Dateien/Fotos/f1.jpg" in db.verschwunden_lesen()
+    # Gone by the time the unit is due: the lookup's 404 clears it too.
+    od.lauf(_KadenzGraph([_datei("f2", "f2.jpg", FOTO)]), tmp_path)
+    od.lauf(_KadenzGraph([_datei("f2", "f2.jpg", FOTO, ctag="c2")]), tmp_path)
+    assert set(_wartend(tmp_path)) == {"f2"}
+    db.kv_schreiben(FOTOS_KEY, str(time.time() - 31 * 86400))
+    g = _KadenzGraph([], items={})
+    assert od.lauf(g, tmp_path)["waiting"] == 0 and g.geladen == []
+
+
+def test_verschobene_wartende_wartet_unter_dem_neuen_pfad(tmp_path, monkeypatch):
+    _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    g = _KadenzGraph([_datei("f1", "f1.jpg", FOTO + "/2026", ctag="c2")])
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == [] and zahlen["waiting"] == 1
+    assert _wartend(tmp_path)["f1"] == {"rel": "Dateien/Fotos/2026/f1.jpg", "ctag": "c2",
+                                        "size": 10, "einheit": "Dateien/Fotos"}
+    # The local copy of the old version moved along, as for every rename.
+    assert (tmp_path / "Dateien/Fotos/2026/f1.jpg").is_file()
+    # Moved out of the paced folder into a due unit: downloaded, list cleared.
+    g = _KadenzGraph([_datei("f1", "f1.jpg", "/drive/root:/Ordner", ctag="c2")])
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == ["f1"] and zahlen["waiting"] == 0
+
+
+def test_sync_now_holt_alles_wartende(tmp_path, monkeypatch):
+    db = _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    stempel = db.kv_lesen(FOTOS_KEY)
+    monkeypatch.setenv("SYNC_NOW", "1")
+    g = _KadenzGraph([], items={"f1": _datei("f1", "f1.jpg", FOTO, ctag="c2")})
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == ["f1"] and zahlen["waiting"] == 0
+    assert float(db.kv_lesen(FOTOS_KEY)) > float(stempel)
+
+
+def test_getaktetes_laufwerk_mit_faelligem_ordner_listet_trotzdem(tmp_path,
+                                                                   monkeypatch,
+                                                                   capsys):
+    """The drive itself is monthly, one folder always: the run lists (the
+    folder is due), the folder's file comes, the drive's file waits – and
+    no folder is reported as paced."""
+    db = _erster_lauf(tmp_path, monkeypatch,
+                      {"onedrive": "monthly", "onedrive:Dateien/Fotos": "always"})
+    drive_stempel = db.kv_lesen("last_sync")
+    capsys.readouterr()
+    g = _KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2"),
+                      _datei("a1", "a1.pdf", ctag="c2")])
+    zahlen = od.lauf(g, tmp_path)
+    assert g.geladen == ["f1"] and zahlen["waiting"] == 1
+    assert _wartend(tmp_path)["a1"]["einheit"] == ""
+    assert db.kv_lesen("last_sync") == drive_stempel, "the drive unit was not due"
+    assert not any(e["k"] == "run.onedrive.folders_paced" for e in _events(capsys))
+    # Nothing due at all: the whole run is skipped, before any listing.
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps(
+        {"onedrive": "monthly", "onedrive:Dateien/Fotos": "monthly"}))
+    g = _KadenzGraph([_datei("a1", "a1.pdf", ctag="c3")])
+    assert od.lauf(g, tmp_path) is None and g.log == []
+    assert any(e["k"] == "run.cadence.skip" for e in _events(capsys))
+
+
+def test_fehlgeschlagener_download_laesst_die_einheit_faellig(tmp_path, monkeypatch):
+    """Only a unit whose downloads all succeeded is stamped; a failed
+    waiting download stays on the list – the walk store does not know it."""
+    db = _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    db.kv_schreiben(FOTOS_KEY, str(time.time() - 31 * 86400))
+    alt = db.kv_lesen(FOTOS_KEY)
+    g = _KadenzGraph([_datei("a1", "a1.pdf", ctag="c2")],
+                     items={"f1": _datei("f1", "f1.jpg", FOTO, ctag="c2")})
+    heil = g.lade
+
+    def lade(item_id, ziel, geaendert=None):
+        if item_id == "f1":
+            raise RuntimeError("Netz weg")
+        return heil(item_id, ziel, geaendert)
+
+    g.lade = lade
+    zahlen = od.lauf(g, tmp_path)
+    assert zahlen["errors"] == 1 and zahlen["new"] == 1 and zahlen["waiting"] == 1
+    assert set(_wartend(tmp_path)) == {"f1"}
+    assert db.kv_lesen(FOTOS_KEY) == alt, "the folder unit stays due"
+    assert float(db.kv_lesen("last_sync")) > float(alt), "the drive unit is stamped"
+
+
+def test_einheiten_ordnen_pfade_der_tiefsten_taste_zu(tmp_path):
+    e = od.drive_mirror.Einheiten(
+        {"onedrive": "weekly", "onedrive:Dateien/Fotos": "monthly",
+         "onedrive:Dateien/Fotos/Urlaub": "daily", "onedrive:": "x"},
+        "onedrive", state_db.StateDb(tmp_path))
+    assert e.ordner == ["Dateien/Fotos", "Dateien/Fotos/Urlaub"]
+    assert e.einheit("Dateien/Fotos/Urlaub/2026/a.jpg") == "Dateien/Fotos/Urlaub"
+    assert e.einheit("Dateien/Fotos/a.jpg") == "Dateien/Fotos"
+    assert e.einheit("Dateien/Ordner/a.pdf") == "" and e.einheit("Dateien/Fotosalbum/a.jpg") == ""
+    assert e.kadenz("") == "weekly" and e.kadenz("Dateien/Fotos/Urlaub") == "daily"
+    assert e.kv_key("") == "last_sync"
+    assert e.kv_key("Dateien/Fotos") == "last_sync:onedrive:Dateien/Fotos"
+    assert e.irgendeine_faellig() and e.zurueckgehalten() == []
+
+
+def test_kadenzen_gehoeren_nicht_zum_kennzeichen(tmp_path, monkeypatch, capsys):
+    _erster_lauf(tmp_path, monkeypatch)
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"onedrive:Dateien/Fotos": "daily"}))
+    capsys.readouterr()
+    g = _KadenzGraph([])
+    od.lauf(g, tmp_path)
+    assert g.log == [("delta", "delta-1")], "delta, not a full read"
+    assert not any(e["k"] == "run.rules_changed" for e in _events(capsys))
+
+
+def test_kennzeichen_haengt_an_allem_was_die_auswahl_entscheidet():
+    basis = od.Selection().kennzeichen()
+    assert od.Selection().kennzeichen() == basis
+    assert od.Selection(max_bytes=1).kennzeichen() != basis
+    assert od.Selection(include_ext=["pdf"]).kennzeichen() != basis
+    assert od.Selection(exclude_ext=["mp4"]).kennzeichen() != basis
+    assert od.Selection(rules=[(False, "Dateien/x/**")]).kennzeichen() != basis
+    assert od.Selection(scope=[(False, "**")]).kennzeichen() != basis
+    assert od.Selection(prefix="S/L").kennzeichen() != basis
+    # Order of the type sets must not matter.
+    assert od.Selection(include_ext=["pdf", "docx"]).kennzeichen() == \
+        od.Selection(include_ext=["docx", "PDF"]).kennzeichen()
 
 
 def test_lauf_erneuert_abgelaufenen_delta_zeiger(tmp_path, capsys):

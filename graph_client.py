@@ -163,8 +163,10 @@ def takt(pro_minute=None, pro_stunde=None, zeiten=None):
     return TAKT
 
 
-def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label=""):
-    """One GET against Graph; retries ONLY on network errors.
+def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="",
+          json_body=None):
+    """One GET against Graph (a POST when `json_body` is given – the JSON
+    batch is the only caller); retries ONLY on network errors.
 
     Its own counter: a network hiccup must not use up the attempts for
     429/5xx. Without this retry, a single ReadTimeout ends the whole export
@@ -179,6 +181,9 @@ def fetch(url, headers, params=None, timeout=TIMEOUT_JSON, stream=False, label="
             TAKT.warten()
         try:
             with GATE:   # only the actual request counts against the limit
+                if json_body is not None:
+                    return SESSION.post(url, headers=headers, json=json_body,
+                                        timeout=timeout)
                 return SESSION.get(url, headers=headers, params=params,
                                    timeout=timeout, **extra)
         except requests.exceptions.RequestException as e:
@@ -199,22 +204,28 @@ def warte_auf(r, versuch, was=""):
     every thread: the gate belongs to the process. Only whoever extends the
     gate reports it; sixteen simultaneous 429s are one log line, not
     sixteen."""
-    ra = r.headers.get("Retry-After")
-    if ra and ra.isdigit():
-        w = min(int(ra), 300)
-    elif TAKT is not None and r.status_code == 429:
+    _drosseln(_wartezeit(r.headers, r.status_code, versuch), r.status_code)
+
+
+def _wartezeit(headers, status, versuch):
+    ra = (headers or {}).get("Retry-After")
+    if ra and str(ra).isdigit():
+        return min(int(ra), 300)
+    if TAKT is not None and status == 429:
         # A paced service refuses without saying for how long: its minute
         # window is the honest wait, not a guess that starts at a second.
-        w = 60
-    else:
-        w = min(2 ** versuch, 60)
+        return 60
+    return min(2 ** versuch, 60)
+
+
+def _drosseln(w, status):
     bis = time.time() + w
     with _DROSSEL_LOCK:
         neu = bis > _DROSSEL["bis"]
         if neu:
             _DROSSEL["bis"] = bis
     if neu:
-        progress.event("run.throttled", "warn", status=r.status_code, s=w)
+        progress.event("run.throttled", "warn", status=status, s=w)
 
 
 def _aufgeben(r, versuch):
@@ -231,8 +242,20 @@ def _erschoepft(r, url):
     return RuntimeError(f"Zu viele Fehlversuche: {url}")
 
 
+BATCH_GROESSE = 20           # Graph's cap on requests per JSON batch
+
+
+def _batch_ziel(url):
+    """Where a URL's batch goes and how it is spelled inside: the batch
+    endpoint is version-bound, the parts are relative to it."""
+    for basis in (GRAPH, GRAPH.replace("/v1.0", "/beta")):
+        if url.startswith(basis + "/"):
+            return basis + "/$batch", url[len(basis):]
+    raise ValueError(f"Not a Graph address: {url}")
+
+
 class Basis:
-    """What both access paths share: retries, paging, downloads."""
+    """What both access paths share: retries, paging, downloads, batches."""
 
     def _headers(self):
         raise NotImplementedError
@@ -242,12 +265,15 @@ class Basis:
         raise TokenExpired()
 
     def get(self, url, params=None, extra_headers=None):
+        return self._json(url, params, extra_headers)
+
+    def _json(self, url, params=None, extra_headers=None, json_body=None):
         headers = self._headers()
         if extra_headers:
             headers = {**headers, **extra_headers}
         r = None
         for versuch in range(HTTP_RETRIES):
-            r = fetch(url, headers, params, TIMEOUT_JSON)
+            r = fetch(url, headers, params, TIMEOUT_JSON, json_body=json_body)
             if r.status_code == 401:
                 self._erneuern()
                 headers = {**self._headers(), **(extra_headers or {})}
@@ -293,6 +319,69 @@ class Basis:
             r.raise_for_status()
             return r
         raise _erschoepft(r, url)
+
+    def batch_get(self, urls, extra_headers=None):
+        """Many small GETs as JSON batches of twenty: {url: (status, body)}.
+
+        The per-item round trips this replaces – a tombstone check per
+        mail, a name per user id, the metadata per attachment – used to run
+        one by one. A part answered 429/5xx is retried in a later batch,
+        after the wait one request would take (the part's Retry-After, else
+        the ladder); any other status is an answer and is handed back as it
+        is – a 404 says "gone", it is not a failure. A 401 on the envelope
+        renews the token like a single request would."""
+        ergebnis = {}
+        offen = list(dict.fromkeys(urls))
+        letzter = None
+        for versuch in range(HTTP_RETRIES):
+            if not offen:
+                break
+            gruppen = {}
+            for url in offen:
+                endpunkt, rel = _batch_ziel(url)
+                gruppen.setdefault(endpunkt, []).append((url, rel))
+            naechste, warten, erneuern = [], None, False
+            for endpunkt, teile in gruppen.items():
+                for i in range(0, len(teile), BATCH_GROESSE):
+                    stueck = teile[i:i + BATCH_GROESSE]
+                    koerper = {"requests": [
+                        {"id": str(n), "method": "GET", "url": rel,
+                         **({"headers": extra_headers} if extra_headers else {})}
+                        for n, (_url, rel) in enumerate(stueck)]}
+                    antwort = self._json(endpunkt, json_body=koerper)
+                    gesehen = set()
+                    for a in antwort.get("responses") or []:
+                        try:
+                            url = stueck[int(a.get("id"))][0]
+                        except (TypeError, ValueError, IndexError):
+                            continue
+                        gesehen.add(url)
+                        status = int(a.get("status") or 0)
+                        if status == 429 or 500 <= status < 600:
+                            letzter = status
+                            naechste.append(url)
+                            w = _wartezeit(a.get("headers"), status, versuch)
+                            warten = max(warten or 0, w)
+                        elif status == 401:
+                            # The token ran out between two batches: renew
+                            # like a single request would, then ask again.
+                            letzter = status
+                            naechste.append(url)
+                            erneuern = True
+                        else:
+                            ergebnis[url] = (status, a.get("body"))
+                    # A part the envelope did not answer counts as a retry.
+                    naechste.extend(u for u, _rel in stueck if u not in gesehen)
+            if erneuern:
+                self._erneuern()
+            if warten is not None:
+                _drosseln(warten, letzter or 429)
+            offen = naechste
+        if offen:
+            if letzter == 429:
+                raise Ueberlastet(f"Zu viele Fehlversuche (429): {offen[0]}")
+            raise RuntimeError(f"Zu viele Fehlversuche: {offen[0]}")
+        return ergebnis
 
     def paged(self, url, params=None, extra_headers=None):
         data = self.get(url, params, extra_headers)

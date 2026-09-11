@@ -86,15 +86,21 @@ minimised — and the power button to quit.
 
 The page opens with one line — how current the archive is — and one
 button, *Update archive now*. An empty archive shows three steps instead:
-set up access, choose sources, build. Below sit the sources as cards —
+set up access, choose sources, build — and offers a **tour**: coach marks
+in the real interface that walk you through building the archive, setting
+up a source in detail and searching, one element at a time; the result of
+the first run offers the search chapter, and *Settings › App* starts any
+chapter again. Below sit the sources as cards —
 mail, calendar, contacts; 1:1, group, meeting and channel chats; OneDrive
 files; SharePoint libraries and pages; Planner boards; To Do lists; OneNote
 notebooks — each with its categories as chips to tick, an **(i)** that says
 what is chosen and when it last ran, and a gear leading straight to its
 settings. Nothing is preselected:
-any one of these can mean tens of thousands of items. Every run fetches only
-what is new, so the second one takes minutes rather than hours — and the
-index that follows reads only the files that changed since its last run.
+any one of these can mean tens of thousands of items. Every run asks
+Microsoft only for what changed since the last one — mail folders,
+calendars, contacts, chats, channels, lists and drives each keep a change
+token — so the second run takes minutes rather than hours, and the index
+that follows reads only the files that changed since its last run.
 Deleted items **stay in the archive** and get a marker; that is the point of
 keeping one. A running job opens its own window over the page: progress,
 the steps, the log, *Cancel*. It stays until the run is done and shows the
@@ -104,7 +110,9 @@ the page while a run is on — started by hand or by the schedule — and you
 land in that window. Every run with its log is in the overview afterwards.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
-folder. Updating from 6.1 or older? Run the latest 6.x release once first —
+folder — change tokens, inventories, and for Teams the messages the HTML is
+rendered from; the calendar rebuild keeps its own `kalender.db` next to the
+mailbox's. Updating from 6.1 or older? Run the latest 6.x release once first —
 it moves the older loose bookkeeping files into this format; 7.x and 8.x no
 longer carry that migration.
 
@@ -113,16 +121,44 @@ export list* spells out what they currently mean: what comes along, what is left
 out and why, and what is only in your archive because it is gone from the
 source. Calendars work the same way — a mailbox usually carries birthdays,
 holidays and calendars other people shared, so by default only your own comes
-along until you say otherwise. A schedule can repeat the whole thing — the
+along until you say otherwise. So do Teams conversations and To Do lists:
+*Sync team list* and *Sync lists* fetch the names, rules decide over
+`1on1/<title>`, `group/<title>`, `meeting/<title>` and
+`channels/<team>/<channel>`, or over the list titles, and *Show export
+list* spells out the outcome. SharePoint libraries take path rules on top of
+their URL list and type filters. A first export can start at a day of your
+choosing — nothing older comes along for mail and chats; what is already
+exported is not touched. A schedule can repeat the whole thing — the
 mirrors and the pages export included, each with its own toggle — while the
 app is open.
 
 Not everything needs syncing every run: a **sync cadence** (always, daily,
-weekly, monthly) can be set per source — OneDrive, Teams — and per SharePoint
-URL. Libraries and pages are configured as a small table, one row per URL
-with its cadence and a *Sync now* button that runs exactly that one
-immediately, cadence ignored. Cadences apply to scheduled and manual runs
-alike; below its interval a source is skipped with a clear log line.
+weekly, monthly) can be set per part of a source — mail, calendar and
+contacts each have their own, so do the four kinds of Teams conversations —
+per source for OneDrive and To Do, and per URL or notebook for SharePoint,
+Planner and OneNote. Libraries, pages and boards are configured as a small
+table, one row per URL with its cadence and a *Sync now* button; OneDrive
+has the same button in its settings. A single mail folder, team, channel,
+chat, OneDrive or library folder or To Do list can depart from its
+cadence: *Pick folders…*, *Pick teams and chats…* and *Pick lists…* open
+the tree of the last list sync, drillable to any depth, and a value set
+there reaches everything below it until a deeper one is set — an archive
+folder monthly, one project folder inside it every run. In the mirrors that
+paces the downloads: the listing stays one pass, and files in a folder not
+yet due wait until it is. Cadences
+apply to scheduled and manual runs alike; below its interval a part is
+skipped with a clear log line, the export list shows the cadence each
+folder or conversation has, and *Sync now* lets every gate of that run
+step aside once.
+
+**Mail, calendar and contacts** are read by change tracking: after the
+first pass every folder, calendar and contact folder keeps a token, and the
+next run receives only what was added, changed or removed — a deletion no
+longer needs a check per mail, and a changed appointment or contact is
+written again. The calendar is read as a window after the first export: a
+number of months back that you set (one by default) plus everything ahead;
+what was archived before stays, and *Read the calendar in full* in the
+settings reads everything once, window or not.
 
 **SharePoint libraries** mirror the document libraries behind the site or
 folder URLs you list in the settings (sharing links work too; a folder URL
@@ -133,19 +169,35 @@ never certain ones, a size cap — and a **size preview** that enumerates
 without downloading and tells you per library what a run would fetch, in
 files and megabytes, before you commit. The first run walks the library
 once, every later run asks Microsoft only for what has changed since — and
-an interrupted run resumes where it stopped instead of starting over.
+an interrupted run resumes where it stopped instead of starting over. A
+changed selection — a rule, a size cap, a type filter — makes the next run
+read that library (or the OneDrive) once in full, so what is newly included
+arrives instead of waiting for the file to change.
 
 **Planner boards** are archived one standalone `board.html` per plan:
 buckets, cards with labels, assignees, checklists, descriptions — and the
 comments, the legacy ones from the group conversation as well as the new
-chat-based ones. List the board addresses in the settings, one per row with
-its own sync cadence; a task that disappears from the board stays in the
+chat-based ones. Planner has taken no new legacy comments since February
+2026, so after a board's first export they are kept as they are and no
+longer checked; a button in the Planner settings, *Read legacy comments
+again*, reads them once more, should someone still have replied from
+Outlook. Chat comments carry no change signal of their own, so the export
+re-reads them at an interval you set — a day by default. List the board
+addresses in the settings, one per row with its
+own sync cadence; a task that disappears from the board stays in the
 archive, greyed, in a section of its own. Files a task references can be
 downloaded next to the board on request — the cards then link the local
 copies — since the library behind a board is rarely mirrored on its own.
 Task texts, comments and attachment names are full-text searchable under
 their own source. Reading needs Tasks.Read plus Group.Read.All for the
 legacy comments; the token wizard lists both.
+
+**Teams chats and channels** keep their messages in the export's
+bookkeeping: a chat that moved fetches only the messages since its last
+one, and a channel is read by change tracking instead of its whole history
+on every run — replies on posts of the last two weeks are checked every
+run, older threads once a week — and the HTML is rendered from what is
+stored.
 
 **Files shared in Teams** are, by default, links — into the sender's
 OneDrive or the team's library, both gone with the access. Two switches in
@@ -160,12 +212,12 @@ cap applies to both. The files land in the index by name, path and type
 under the Teams source, and the file browser lists them per chat kind and
 per team. Both need Files.Read.All; the token wizard lists it.
 
-**To Do lists** come whole — every list the account sees, own, shared and
-the built-in ones — one folder per list with a standalone `list.html`:
-open and completed tasks with their steps, due dates, reminders,
-recurrence, notes, linked resources and attachments, downloaded next to
-the list. A task that leaves a list stays, greyed. Lists are small, so
-every run lists them and refreshes only the tasks whose change tag moved.
+**To Do lists** — every list the account sees, own, shared and the
+built-in ones, or the ones your rules pick — one folder per list with a
+standalone `list.html`: open and completed tasks with their steps, due
+dates, reminders, recurrence, notes, linked resources and attachments,
+downloaded next to the list. A task that leaves a list stays, greyed. Each
+list keeps a change token, so a run fetches only the tasks that moved.
 Title, notes, steps and linked resources are full-text searchable under
 their own source, the list being the folder. Needs Tasks.Read.
 
@@ -173,8 +225,10 @@ their own source, the list being the folder. Needs Tasks.Read.
 the section groups and sections below it, one standalone HTML per page as
 Graph renders it — images embedded up to a configurable size, larger ones
 and every attachment in a folder next to the page — so each page opens
-offline. Only pages that changed are fetched again, and a page that leaves
-its section keeps its file with a marker at the top. Which notebooks come
+offline. Only pages that changed are fetched again — images and
+attachments already on disk are reused, which spares the hourly budget —
+and a page that leaves its section keeps its file with a marker at the top.
+Which notebooks come
 along works like the mailbox folders: *Sync notebook list* fetches the
 list, ordered include/exclude rules decide over it (empty means every
 notebook), and *Show export list* spells out what comes along, what is

@@ -11,7 +11,9 @@ libraries, and every library is mirrored into its own folder
 
 Runs as a subprogram of app.py: output folder as the only argument, settings
 as environment variables (SHAREPOINT_URLS – one site or library URL per
-line; SHAREPOINT_TYPES_INCLUDE / SHAREPOINT_TYPES_EXCLUDE – comma-separated
+line; SHAREPOINT_RULES – ordered include/exclude rules on paths of the form
+"<site>/<library>/Dateien/…", exactly as the export list shows them;
+SHAREPOINT_TYPES_INCLUDE / SHAREPOINT_TYPES_EXCLUDE – comma-separated
 file extensions, include empty = every type, exclude wins;
 SHAREPOINT_MAX_MB – skip larger files, 0 = no limit; MIRROR_WORKERS –
 parallel requests). Special runs: --folders syncs the folder trees,
@@ -31,6 +33,18 @@ the usual tombstone note.
 Access needs Sites.Read.All. A pasted key without that scope does not kill
 the run: the affected site is reported and skipped.
 
+Folder cadences: SYNC_CADENCE may carry keys "sharepoint:<site>/<library>/
+<folder path>" – the very paths the export list and SHAREPOINT_RULES use
+("Nordwind/Dokumente/Dateien/Archiv"). The library's own cadence stays the
+merged per-URL one. A library has one delta stream, so a folder cadence
+gates downloads, not the listing: the library is listed whenever any of
+its units is due, files of units not due wait in the library's state.db
+(records "wartend") and come when their cadence is round; every unit has
+its own stamp there ("last_sync:sharepoint:<folder path>", the library's
+"last_sync"). Every library's state.db also holds kv "urls", the configured
+URLs that resolved to it – the settings page maps a library to its rows
+by it.
+
 A folder URL narrows a library to that subtree. Scoped mirrors use the
 same drive delta as everything else – the first run enumerates the library
 once, every later run costs one request when nothing changed, and deletions
@@ -40,6 +54,7 @@ those files keep their last mirrored state.
 """
 
 import base64
+import json
 import os
 import re
 import sys
@@ -52,6 +67,7 @@ from urllib.parse import parse_qs, urlsplit, unquote
 
 import auth
 import export_util
+import folders
 import progress
 import settings
 
@@ -73,6 +89,7 @@ GRAPH = graph_client.GRAPH
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Sites.Read.All", RES + "Files.Read.All", RES + "User.Read"]
 
+KADENZ_PRAEFIX = "sharepoint"    # folder cadence keys: sharepoint:<site>/<library>/<folder>
 
 
 workers = drive_mirror.workers
@@ -115,13 +132,24 @@ _haeufigere = export_util.haeufigere
 einheit_faellig = export_util.einheit_faellig
 
 
-def auswahl():
-    """The SharePoint selection: extension filters and a size cap.
+def aktuelle_regeln():
+    """Include/exclude on paths – the same mechanics as for OneDrive, over
+    "<site>/<library>/Dateien/…" the way the export list shows a path.
 
-    No path rules here (v1) – which libraries come along is already the
-    decision the URL list makes.
+    Which libraries come along is the URL list's decision; the rules
+    narrow within them. Without rules everything comes along.
     """
-    return Selection(max_bytes=max_bytes(),
+    roh = os.environ.get("SHAREPOINT_RULES")
+    if roh is None:
+        roh = settings.value("sharepoint_rules", None)
+    return folders.lies_regeln(roh or "")
+
+
+def auswahl():
+    """The SharePoint selection: path rules, extension filters and a size
+    cap – shared by every library; drive_auswahl adds the library's own
+    path prefix and scope."""
+    return Selection(rules=aktuelle_regeln(), max_bytes=max_bytes(),
                      include_ext=_types("SHAREPOINT_TYPES_INCLUDE",
                                         "sharepoint_types_include"),
                      exclude_ext=_types("SHAREPOINT_TYPES_EXCLUDE",
@@ -267,7 +295,8 @@ def resolve_drives(graph, urls):
                            "name": d.get("name") or "Bibliothek",
                            "kadenz": kadenz,
                            "prefixes": None if unterpfad is None
-                           else {unterpfad}}
+                           else {unterpfad},
+                           "urls": []}
                 nach_id[d["id"]] = eintrag
                 gefunden.append(eintrag)
             elif unterpfad is None:
@@ -276,6 +305,10 @@ def resolve_drives(graph, urls):
             elif eintrag["prefixes"] is not None:
                 eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
                 _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
+            # Which configured lines led here – the library's state.db
+            # remembers them for the settings page.
+            if url not in eintrag["urls"]:
+                eintrag["urls"].append(url)
     return gefunden, fehl
 
 
@@ -300,11 +333,12 @@ def _scope_regeln(prefixes):
 
 
 def drive_auswahl(basis, drive):
-    """The per-library Selection: the shared filters, plus the subtree scope
-    when the URL pointed below the library root."""
-    if not drive.get("prefixes"):
-        return basis
-    return Selection(scope=_scope_regeln(drive["prefixes"]),
+    """The per-library Selection: the shared filters and rules, the
+    library's "<site>/<library>" in front of the rule paths, plus the
+    subtree scope when the URL pointed below the library root."""
+    return Selection(rules=basis.rules, prefix=drive_praefix(drive),
+                     scope=(_scope_regeln(drive["prefixes"])
+                            if drive.get("prefixes") else None),
                      max_bytes=basis.max_bytes,
                      include_ext=basis.include_ext,
                      exclude_ext=basis.exclude_ext)
@@ -320,8 +354,39 @@ def _library_event(drive):
                        name=drive["name"])
 
 
+def _drive_segmente(drive):
+    return (safe(drive.get("site") or "Site", 80),
+            safe(drive.get("name") or "Bibliothek", 80))
+
+
+def drive_praefix(drive):
+    """"<site>/<library>" as the folders lie on disk – the path the rules
+    and the export list speak of, in front of the mirror's "Dateien/…"."""
+    return "/".join(_drive_segmente(drive))
+
+
 def drive_ziel(out, drive):
-    return Path(out) / safe(drive["site"], 80) / safe(drive["name"], 80)
+    return Path(out).joinpath(*_drive_segmente(drive))
+
+
+def drive_einheiten(kadenz_map, drive, db):
+    """The library and its folder cadences as units over its state.db: the
+    drive unit runs on the library's merged URL cadence, folder units come
+    from the "sharepoint:<site>/<library>/<folder path>" keys, stamped as
+    "last_sync:sharepoint:<folder path>" in the library's state.db."""
+    return drive_mirror.Einheiten(kadenz_map, KADENZ_PRAEFIX, db,
+                                  laufwerk=drive.get("kadenz") or "always",
+                                  unter=drive_praefix(drive))
+
+
+def _urls_merken(db, drive):
+    """kv "urls": the configured URLs that resolved to this library."""
+    db.kv_schreiben("urls", json.dumps(list(drive.get("urls") or []),
+                                       ensure_ascii=False))
+
+
+def _anzeigename(drive):
+    return f'{drive["site"]} / {drive["name"]}'
 
 
 def je_drive(graph, drives):
@@ -335,30 +400,47 @@ def je_drive(graph, drives):
 # The three runs: mirror, folder sync, check/preview
 # ---------------------------------------------------------------------------
 def lauf(graph, out, drives, fehl=0):
+    """The mirror runs, one library after the other, behind each library's
+    cadence gate. A library is skipped before listing only when none of
+    its units is due; with folder cadences below it the listing runs and
+    the units decide per file (drive_mirror.Einheiten stamps every due unit
+    after its downloads succeeded – the library's "last_sync" included)."""
     wahl = auswahl()
+    kadenz_map = kadenzen()
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
-    uebersprungen = 0
+    uebersprungen = wartend = 0
+    getaktet = False
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
         db = state_db.StateDb(ziel)
-        kadenz = d.get("kadenz") or "always"
-        if not einheit_faellig(db, kadenz):
+        _urls_merken(db, d)
+        takt = drive_einheiten(kadenz_map, d, db)
+        if not takt.irgendeine_faellig():
             uebersprungen += 1
-            progress.event("run.cadence.skip",
-                           name=f'{d["site"]} / {d["name"]}',
-                           cadence=progress.atom(f"cadence.{kadenz}"))
+            progress.event("run.cadence.skip", name=_anzeigename(d),
+                           cadence=progress.atom(f"cadence.{takt.kadenz('')}"))
             continue
         _library_event(d)
         zahlen = drive_mirror.lauf(graph, ziel, drive_auswahl(wahl, d),
                                    workers(), still=True,
-                                   zustand=state_db.DbZustand(ziel))
-        if not zahlen["errors"]:
-            db._kv_schreiben("last_sync", str(datetime.now(UTC).timestamp()))
+                                   zustand=state_db.DbZustand(ziel),
+                                   name=_anzeigename(d), einheiten=takt)
+        if takt.ordner:
+            # One line per library for the folders held back, never one
+            # per file; what waits for them adds up in the result.
+            getaktet = True
+            wartend += zahlen.get("waiting", 0)
+            n = len(takt.zurueckgehalten())
+            if n:
+                progress.event("run.sharepoint.folders_paced",
+                               name=_anzeigename(d), n=n)
         for k in summe:
             summe[k] += zahlen[k]
     extras = {"moved": summe["moved"], "gone": summe["gone"]}
     if uebersprungen:
         extras["skipped"] = uebersprungen
+    if getaktet:
+        extras["waiting"] = wartend
     progress.ergebnis(summe["new"], excluded=summe["excluded"],
                       errors=summe["errors"] + fehl, extra=extras)
     return summe
@@ -370,6 +452,7 @@ def nur_ordner(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         ziel = drive_ziel(out, d)
+        _urls_merken(state_db.StateDb(ziel), d)
         daten = drive_mirror.nur_ordner(graph, ziel, drive_auswahl(wahl, d),
                                         still=True,
                                         zustand=state_db.DbZustand(ziel))
@@ -393,17 +476,20 @@ def nur_pruefen(graph, out, drives, fehl=0):
     for d in je_drive(graph, drives):
         _library_event(d)
         ziel = drive_ziel(out, d)
+        _urls_merken(state_db.StateDb(ziel), d)
         b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
                                      still=True,
                                      zustand=state_db.DbZustand(ziel))
-        zeilen.append({"ordner": f'{d["site"]}/{d["name"]}',
+        # Row names carry "<site>/<library>" as the folders lie on disk –
+        # the very paths SHAREPOINT_RULES are written against.
+        zeilen.append({"ordner": drive_praefix(d),
                        "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
                        "geloescht": b["geloescht"], "fehlt": b["fehlt"],
                        "ausgelassen": False, "bytes": b["bytes"]})
         ausgelassen += b["ausgelassen"]
         ausgelassen_bytes += b.get("bytes_ausgelassen", 0)
         fehl_summe += b["fehlt"]
-        ausgelassene += [f'{d["site"]}/{d["name"]}/{o}'
+        ausgelassene += [f"{drive_praefix(d)}/{o}"
                          for o in b.get("ausgelassene_ordner") or ()]
         for z in b.get("typen") or ():
             ganz = typen.setdefault(z["ext"], {"ext": z["ext"], "n": 0, "bytes": 0})
@@ -626,9 +712,14 @@ def seiten_lauf(graph, out, sites, fehl=0):
     gesehen = set()
     sauber = []      # sites whose page listing succeeded this run
 
-    def exportiere(site, sid, rel):
-        voll = graph.get(f"{GRAPH}/sites/{site['id']}/pages/{sid}"
-                         "/microsoft.graph.sitePage?$expand=canvasLayout")
+    def exportiere(site, seite, rel):
+        # The listing carries no canvasLayout today, so the changed page is
+        # fetched once more with it – only the changed one. Should the
+        # listing ever bring the layout along, that second call goes.
+        voll = seite
+        if not seite.get("canvasLayout"):
+            voll = graph.get(f"{GRAPH}/sites/{site['id']}/pages/{seite['id']}"
+                             "/microsoft.graph.sitePage?$expand=canvasLayout")
         html = render_page(voll, voll.get("canvasLayout"))
         html = bilder_einbetten(graph, html, site.get("host") or "", zaehler,
                                 grenze, cache=cache, lock=lock)
@@ -677,12 +768,14 @@ def seiten_lauf(graph, out, sites, fehl=0):
             if alt and alt["etag"] == etag and (out / alt["rel"]).is_file():
                 unveraendert += 1
                 continue
-            auftraege.append((sid, rel, etag, alt))
+            auftraege.append((seite, rel, etag, alt))
         # Pages fetch and render side by side – the same worker budget the
-        # file mirrors use; the inventory is written by this thread only.
+        # file mirrors use; the inventory is written by this thread only,
+        # and only the rows that changed – the table is never rewritten.
+        geaendert = {}
         with ThreadPoolExecutor(max_workers=workers()) as pool:
-            offen = {pool.submit(exportiere, s, sid, rel): (sid, rel, etag, alt)
-                     for sid, rel, etag, alt in auftraege}
+            offen = {pool.submit(exportiere, s, seite, rel): (seite["id"], rel, etag, alt)
+                     for seite, rel, etag, alt in auftraege}
             for f in as_completed(offen):
                 sid, rel, etag, alt = offen[f]
                 try:
@@ -698,9 +791,10 @@ def seiten_lauf(graph, out, sites, fehl=0):
                     # Renamed, not deleted: the old file would otherwise
                     # linger untracked as a stale duplicate in the index.
                     (out / alt["rel"]).unlink(missing_ok=True)
-                eintraege_bestand[sid] = {"rel": rel, "etag": etag}
+                eintraege_bestand[sid] = geaendert[sid] = {"rel": rel, "etag": etag}
                 neu += 1
-        db.seiten_schreiben(eintraege_bestand)
+        if geaendert:
+            db.seiten_aktualisieren(geaendert)
         db._kv_schreiben(f'last_sync:{s["id"]}',
                          str(datetime.now(UTC).timestamp()))
     # Pages gone at Microsoft: in the inventory, reported by no site.
@@ -716,7 +810,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
     if weg:
         jetzt = datetime.now(UTC).isoformat(timespec="seconds")
         db.verschwunden_ergaenzen(weg, jetzt)
-    db.seiten_schreiben(eintraege_bestand)
+        db.seiten_aktualisieren({}, weg_ids)
     if zaehler["fehl"]:
         progress.event("run.pages.images_failed", "warn", n=zaehler["fehl"])
     extras = {"sites": len(sites), "gone": len(weg),

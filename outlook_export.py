@@ -33,14 +33,28 @@ stored lists, --check reports completeness against the mailbox.
 Resume: the done log in the output folder's state.db, one row per finished
 mail – a new run skips everything already there. Delete the database for a
 full re-export.
+
+Change tracking: every mail folder, calendar and contact folder is read as a
+Graph delta round – the first time in full, afterwards only what changed
+since the stored link (state.db, kv "delta:…"). Deletions arrive as removed
+entries; changed appointments and contacts are rewritten. OUTLOOK_SINCE
+bounds a folder's first export, CALENDAR_MONTHS_BACK the calendar window,
+CALENDAR_FULL reads the calendars once in full. SYNC_CADENCE gates calendar
+and contacts as categories (outlook:calendar, outlook:contacts) and mail per
+folder: "outlook:mail" for all, "outlook:mail:<folder path>" for a folder and
+everything below it until a deeper folder sets its own.
 """
 
 import os
 import sys
 import re
 import html
+import json
+import time
 import threading
+from calendar import monthrange
 from datetime import datetime, UTC
+from itertools import chain
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
@@ -73,6 +87,10 @@ SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES 
 # Environment variable > app_config.json > default here (see settings.py)
 INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden")
 PAGE = 50                   # $top for list requests
+DELTA_PAGE = 200            # Prefer: odata.maxpagesize for delta rounds (no documented cap)
+YEARS_AHEAD = 10            # the calendar window always reaches this far ahead
+EPOCH = "1970-01-01T00:00:00Z"     # the window's start when it has no start
+UTC_PREF = 'outlook.timezone="UTC"'  # times in UTC -> correct .ics
 MAIL_DIR = "E-Mail"          # the mailbox folder tree lives below (next to kalender/kontakte)
 KALENDER_DIR = "kalender"    # one subfolder per calendar, the .ics inside
 
@@ -145,6 +163,30 @@ def selected_categories():
         return env
     progress.event("run.default_selection")
     return {k for k, _ in options}
+
+
+def outlook_since():
+    """First export of a folder only: nothing older than this day – or None.
+
+    Applied while listing, not as a Graph $filter: a filtered delta round
+    stops at 5,000 messages (documented), and a folder that silently ends
+    there would be a gap nobody sees.
+    """
+    roh = os.environ.get("OUTLOOK_SINCE")
+    if roh is None:
+        roh = settings.value("outlook_since", "")
+    roh = str(roh or "").strip()
+    return roh if re.fullmatch(r"\d{4}-\d{2}-\d{2}", roh) else None
+
+
+def calendar_months_back():
+    """How far back the calendar window reaches; 0 means every appointment."""
+    return settings.number("CALENDAR_MONTHS_BACK", "calendar_months_back", low=0)
+
+
+def calendar_full():
+    """One full read of the calendars: window and change links set aside once."""
+    return settings.flag("CALENDAR_FULL", "calendar_full", False)
 
 
 def kalender_eintraege(cals):
@@ -304,18 +346,71 @@ def build_tree(graph):
 
 
 class Bestand:
-    """What really lay in the mailbox during this run."""
+    """What really lay in the mailbox during this run – and what the run
+    owes the next one."""
 
     def __init__(self):
         self.gesehen = set()        # IDs from completely listed folders
         self.briefe = set()         # their internetMessageId (survives a move)
         self.vollstaendig = []      # their paths, with a trailing slash
+        self.entfernt = set()       # IDs Graph reported as removed (delta rounds)
+        self.links = {}             # folder path -> (folder id, delta link)
+        self.gestoert = set()       # folder paths with a failed download or listing
+        self.per_link = set()       # folder paths read from their link this run
+        self.ausgelassen = set()    # folder paths the cadence left out this run
 
     def ordner_fertig(self, rel_path):
         self.vollstaendig.append(rel_path.rstrip("/") + "/")
 
     def aus_gelistetem_ordner(self, rel):
+        """Does the file's folder count as listed in full?
+
+        A folder read from its link, or left out by its cadence, is
+        excluded by name: a full round of its parent must not turn its
+        unlisted mails into suspects. The prefix test stays, so a folder
+        that vanished with its mails still resolves through the parent.
+        """
+        ordner = rel.rsplit("/", 1)[0]
+        if ordner in self.per_link or ordner in self.ausgelassen:
+            return False
         return any(rel.startswith(p) for p in self.vollstaendig)
+
+    def ordner_gestoert(self, rel_path):
+        """A listing that broke off: nothing this folder reported counts."""
+        self.gestoert.add(rel_path)
+
+    def link_merken(self, rel_path, folder_id, link):
+        self.links[rel_path] = (folder_id, link)
+
+    def download_fehlgeschlagen(self, rel):
+        self.gestoert.add(rel.rsplit("/", 1)[0])
+
+    def sauber(self, rel):
+        """No failed download in the folder this file belongs to."""
+        return rel.rsplit("/", 1)[0] not in self.gestoert
+
+    def gemeldet(self, done):
+        """Removed entries that name an exported mail, as (id, rel).
+
+        Only from folders without a download error: such a folder keeps
+        its old link, so the next round reports its removals again.
+        """
+        return sorted((mid, done.done[mid]) for mid in self.entfernt
+                      if mid in done.done and self.sauber(done.done[mid]))
+
+    def links_sichern(self, db):
+        """Store the links of the folders that finished clean – and mark
+        that clean run for the folder's cadence, keyed by id so a rename
+        does not reset the clock.
+
+        A folder with a failed download keeps its old start: the mail has
+        to show up again in the next round, or it would never be fetched.
+        """
+        jetzt = str(time.time())
+        for rel_path, (fid, link) in self.links.items():
+            if rel_path not in self.gestoert:
+                db.kv_schreiben(f"delta:{fid}", link)
+                db.kv_schreiben(f"last_sync:mail:{fid}", jetzt)
 
 
 def brief_kennung(pfad):
@@ -397,36 +492,188 @@ def verdaechtige(done, bestand):
 
 
 def wirklich_weg(graph, kandidaten, grenze=2000):
-    """Ask Graph about every suspicion. Returns (gone, moved).
+    """Ask Graph about every suspicion – twenty per request, as a JSON
+    batch. Returns (gone, moved).
 
-    An error that is not a 404 (throttling, network) counts as "not gone":
-    better to report a deletion later than a wrong one now.
+    Only a 404 counts as gone. Anything else (throttling, network, a batch
+    that never came back) counts as "not gone": better to report a
+    deletion later than a wrong one now.
     """
     weg, verschoben = [], 0
-    for mid, rel in kandidaten[:grenze]:
+    urls = {f"{GRAPH}/me/messages/{mid}?$select=id": rel
+            for mid, rel in kandidaten[:grenze]}
+    antworten = {}
+    if urls:
         try:
-            graph.get(f"{GRAPH}/me/messages/{mid}", {"$select": "id"})
-            verschoben += 1
+            antworten = graph.batch_get(list(urls))
         except TokenExpired:
             raise
-        except Exception as e:
-            if "404" in str(e) or getattr(e, "status", None) == 404:
-                weg.append(rel)
-            # otherwise: unclear – claim nothing
+        except Exception:
+            antworten = {}          # unclear – claim nothing
+    for url, rel in urls.items():
+        status = (antworten.get(url) or (None,))[0]
+        if status == 404:
+            weg.append(rel)
+        elif status is not None and 200 <= status < 300:
+            verschoben += 1
     if len(kandidaten) > grenze:
         progress.event("run.gone.deferred", n=len(kandidaten) - grenze)
     return weg, verschoben
 
 
+# ---------------------------------------------------------------------------
+# Change tracking (delta queries)
+#
+# Graph remembers, per collection, where a client left off: a round of
+# delta calls hands out every entry once, then a link the next round starts
+# from – and from then on only what changed, deletions as "@removed"
+# entries. The links live in the output folder's state.db, one per mail
+# folder, calendar and contact folder.
+# ---------------------------------------------------------------------------
+_TOKEN_TOT = re.compile(
+    r"^(HTTP )?410\b|syncStateNotFound|resyncRequired|SyncStateInvalid", re.I)
+
+
+def token_ungueltig(e):
+    """Does Graph no longer know the stored link? 410 Gone, or an error
+    naming the sync state – either way the round starts over in full."""
+    antwort = getattr(e, "response", None)
+    if getattr(antwort, "status_code", None) == 410:
+        return True
+    text = str(e)
+    try:
+        text += " " + (antwort.text or "")
+    except Exception:
+        pass
+    return bool(_TOKEN_TOT.search(text))
+
+
+def delta_seiten(graph, url, params=None, prefer=()):
+    """One delta round, page by page: (entries, link) – the link only with
+    the last page. Pages are handed on as they arrive, so a big folder is
+    never held in memory at once."""
+    headers = {"Prefer": ", ".join((f"odata.maxpagesize={DELTA_PAGE}", *prefer))}
+    daten = graph.get(url, params, headers)
+    while True:
+        weiter = daten.get("@odata.nextLink")
+        yield daten.get("value") or [], (None if weiter else daten.get("@odata.deltaLink"))
+        if not weiter:
+            return
+        daten = graph.get(weiter, extra_headers=headers)
+
+
+def delta_runde(graph, db, key, url, params=None, prefer=(), name=""):
+    """Start a round: from the stored link when there is one, from the top
+    otherwise. Returns (pages, full) – full says whether the round lists
+    the whole collection or only the changes since the last one.
+
+    The first page is fetched here: a dead link shows on that request, and
+    the answer is to forget it, say so, and read the collection once more
+    in full.
+    """
+    token = db.kv_lesen(key)
+    if token:
+        seiten = delta_seiten(graph, token, prefer=prefer)
+        try:
+            erste = next(seiten)
+        except TokenExpired:
+            raise
+        except Exception as e:
+            if not token_ungueltig(e):
+                raise
+            db.kv_schreiben(key, None)
+            progress.event("run.outlook.delta_reset", "warn", name=name)
+        else:
+            return chain([erste], seiten), False
+    seiten = delta_seiten(graph, url, params, prefer)
+    return chain([next(seiten)], seiten), True
+
+
+class Stempel:
+    """lastModifiedDateTime per exported event or contact – the records
+    area a change is measured against ("events", "contacts").
+
+    Writes are collected and land in one go per source, before the
+    source's link is stored: a crash in between costs one repeated
+    comparison, never a missed change.
+    """
+
+    def __init__(self, db, bereich):
+        self.db, self.bereich = db, bereich
+        self.alt = db.saetze_lesen(bereich)
+        self.neu, self.weg = {}, set()
+
+    def bekannt(self, key):
+        roh = self.neu.get(key) or self.alt.get(key)
+        if not roh:
+            return None
+        try:
+            return (json.loads(roh) or {}).get("lm")
+        except ValueError:
+            return None
+
+    def merke(self, key, lm):
+        self.neu[key] = json.dumps({"lm": lm or ""})
+        self.weg.discard(key)
+
+    def vergiss(self, key):
+        self.neu.pop(key, None)
+        if key in self.alt:
+            self.weg.add(key)
+
+    def schreibe(self):
+        self.db.saetze_loeschen(self.bereich, self.weg)
+        self.db.saetze_schreiben(self.bereich, self.neu)
+        for key in self.weg:
+            self.alt.pop(key, None)
+        self.alt.update(self.neu)
+        self.neu, self.weg = {}, set()
+
+
+def veraendert(out, done, stempel, key, lm, datei_stempel=None):
+    """New, or changed since its file was written?
+
+    Archives from before change tracking carry no record: for those the
+    file itself answers when it can (an .ics holds the DTSTAMP the export
+    wrote), and an unchanged item is adopted without a rewrite.
+    """
+    if not done.is_done(out, key):
+        return True
+    alt = stempel.bekannt(key)
+    if alt is not None:
+        return (lm or "") != alt
+    if datei_stempel is not None and lm:
+        vorher = datei_stempel(out / done.done[key])
+        if vorher is not None and vorher != _ics_stempel(lm):
+            return True
+    stempel.merke(key, lm)
+    return False
+
+
+def _alte_datei_weg(out, alt, rel):
+    """A rewrite under a new name (subject or start changed): the old file
+    would stand as a second entry."""
+    if alt and alt != rel:
+        try:
+            (out / alt).unlink()
+        except OSError:
+            pass
+
+
+MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
 
 
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
     """Mirrors the folders onto the filesystem and yields (mid, rel) for
-    every mail not yet exported. Listing runs in the main thread (lazily)."""
-    # internetMessageId costs nothing extra and is the only key that survives
-    # a move – see brief_kennung and pruefe_verschwundene.
-    select = ("id,internetMessageId,subject,receivedDateTime,sentDateTime,"
-              "from,hasAttachments")
+    every mail not yet exported. Listing runs in the main thread (lazily).
+
+    Every folder is a delta round of its own: the first one lists it in
+    full, later ones only what changed since the stored link. A round that
+    breaks off counts as a folder error; its link is never stored, so the
+    next run reads the folder from the same start again.
+    """
+    db = state_db.StateDb(out)
+    seit = outlook_since()
     for top in selected:
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
@@ -435,20 +682,38 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                 progress.event("run.folder", name=rel_path, n=int(total))
             else:
                 progress.event("run.folder_plain", name=rel_path)
-            seen = 0
+            seen, link = 0, None
             try:
-                for msg in graph.paged(f"{GRAPH}/me/mailFolders/{folder['id']}/messages",
-                                       {"$top": PAGE, "$select": select}):
-                    seen += 1
-                    mid = msg["id"]
-                    if bestand is not None:
-                        bestand.gesehen.add(mid)
-                        if msg.get("internetMessageId"):
-                            bestand.briefe.add(msg["internetMessageId"].strip())
-                    if done.is_done(out, mid):
-                        stats["skipped"] += 1
-                        continue
-                    yield mid, f"{rel_path}/{mail_filename(msg)}"
+                seiten, voll = delta_runde(
+                    graph, db, f"delta:{folder['id']}",
+                    f"{GRAPH}/me/mailFolders/{folder['id']}/messages/delta",
+                    {"$select": MAIL_SELECT}, name=rel_path)
+                if bestand is not None and not voll:
+                    bestand.per_link.add(rel_path)
+                for eintraege, ende in seiten:
+                    link = ende or link      # the link comes with the last page
+                    for msg in eintraege:
+                        mid = msg.get("id")
+                        if not mid:
+                            continue
+                        if "@removed" in msg:
+                            if bestand is not None:
+                                bestand.entfernt.add(mid)
+                            continue
+                        seen += 1
+                        if bestand is not None:
+                            bestand.gesehen.add(mid)
+                            if msg.get("internetMessageId"):
+                                bestand.briefe.add(msg["internetMessageId"].strip())
+                        if done.is_done(out, mid):
+                            stats["skipped"] += 1
+                            continue
+                        empfangen = (msg.get("receivedDateTime") or "")[:10]
+                        if voll and seit and empfangen and empfangen < seit:
+                            # First export only: older than the cut-off day.
+                            stats["excluded"] = stats.get("excluded", 0) + 1
+                            continue
+                        yield mid, f"{rel_path}/{mail_filename(msg)}"
             except TokenExpired:
                 raise
             except Exception as e:
@@ -456,13 +721,23 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                 # skip the rest, on to the next one. What is already exported
                 # sits in the done log – the next run fetches the rest.
                 stats["folder_errors"] = stats.get("folder_errors", 0) + 1
+                if bestand is not None:
+                    # Removals it reported before the break are not trusted:
+                    # tombstones come from clean folders only. Its link is
+                    # withheld anyway, so the next round reports them again.
+                    bestand.ordner_gestoert(rel_path)
                 progress.event("run.folder_incomplete", "err", name=rel_path,
                                error=f"{type(e).__name__}: {e}")
                 continue
-            # Only a fully traversed folder is fit for comparison – after a
-            # break above we never get here at all.
             if bestand is not None:
-                bestand.ordner_fertig(rel_path)
+                # Only a fully traversed folder is fit for comparison – after
+                # a break above we never get here at all. A round from a
+                # link lists changes, not the folder: it names its removals
+                # itself instead.
+                if voll:
+                    bestand.ordner_fertig(rel_path)
+                if link:
+                    bestand.link_merken(rel_path, folder["id"], link)
             if seen:
                 progress.event("run.scanned", n=seen,
                                unit=progress.atom("progress.unit.mails"))
@@ -492,6 +767,7 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
     gen = iter_messages_to_export(graph, out, done, stats, selected, bestand)
     cap = max(workers * 8, workers)      # this many tasks in the pipeline at once
     pending = set()
+    ziele = {}                           # future -> rel: which folder a failure hits
     expired = False
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -506,13 +782,16 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     expired = True
                     STOP.set()
                     return
-                pending.add(ex.submit(download_one, graph, out, done, mid, rel))
+                fut = ex.submit(download_one, graph, out, done, mid, rel)
+                pending.add(fut)
+                ziele[fut] = rel
 
         fill()
         while pending:
             finished, rest = wait(pending, return_when=FIRST_COMPLETED)
             pending = set(rest)
             for fut in finished:
+                rel = ziele.pop(fut, "")
                 try:
                     status, info = fut.result()
                 except Exception as e:
@@ -526,6 +805,10 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     expired = True
                     STOP.set()
                 elif status == "error":
+                    # The folder's link must not advance past this mail.
+                    stats["mail_errors"] = stats.get("mail_errors", 0) + 1
+                    if bestand is not None:
+                        bestand.download_fehlgeschlagen(rel)
                     progress.event("run.mail_skipped", "warn", detail=str(info))
                 # "stopped" -> ignore
             if not expired:
@@ -705,51 +988,183 @@ def build_ics(ev):
     return "\r\n".join(_fold(x) for x in L) + "\r\n"
 
 
-def export_calendar(graph, out, done, stats, cals):
-    if not cals:
-        return
-    progress.event("run.section", name=progress.atom("export.cat.calendar"))
-    pref = {"Prefer": 'outlook.timezone="UTC"'}      # times in UTC -> correct .ics
-    select = ("id,iCalUId,subject,start,end,isAllDay,location,organizer,attendees,"
-              "body,showAs,isCancelled,recurrence,seriesMasterId,type,"
-              "createdDateTime,lastModifiedDateTime")
-    for cal in cals:
-        cname = safe(cal.get("name") or "Kalender")
-        url = (f"{GRAPH}/me/calendars/{cal['id']}/events" if cal.get("id")
-               else f"{GRAPH}/me/events")
-        progress.event("run.folder_plain", name=cname)
-        seen = 0
-        try:
-            for ev in graph.paged(url, {"$top": PAGE, "$select": select}, extra_headers=pref):
+def ics_stempel(pfad):
+    """The DTSTAMP the export wrote into a stored .ics – or None."""
+    try:
+        with open(pfad, encoding="utf-8", errors="replace") as f:
+            for zeile in f:
+                if zeile.startswith("DTSTAMP:"):
+                    return zeile[8:].strip()
+    except OSError:
+        pass
+    return None
+
+
+def _ics_stempel(lm):
+    """A Graph timestamp the way build_ics writes DTSTAMP."""
+    dt = _graph_dt(lm)
+    return dt.strftime("%Y%m%dT%H%M%SZ") if dt else None
+
+
+def _verschiebe_monate(dt, monate):
+    """The same clock time this many months away; the day clamped to the
+    target month (the 31st of a month that has 30 days)."""
+    m = dt.month - 1 + monate
+    jahr, monat = dt.year + m // 12, m % 12 + 1
+    return dt.replace(year=jahr, month=monat, day=min(dt.day, monthrange(jahr, monat)[1]))
+
+
+def kalender_fenster(monate, jetzt=None):
+    """(start, end) of the calendar view: this many months back – from the
+    start of that day – and ten years ahead. 0 months: no start, meaning
+    everything."""
+    jetzt = jetzt or datetime.now(UTC)
+    heute = jetzt.replace(hour=0, minute=0, second=0, microsecond=0)
+    von = _verschiebe_monate(heute, -monate) if monate else None
+    return von, _verschiebe_monate(heute, 12 * YEARS_AHEAD)
+
+
+def _graph_zeit(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+EVENT_SELECT = ("id,iCalUId,subject,start,end,isAllDay,location,organizer,attendees,"
+                "body,showAs,isCancelled,recurrence,seriesMasterId,type,"
+                "createdDateTime,lastModifiedDateTime")
+
+
+def hole_termine(graph, ids):
+    """Series masters by id, as JSON batches: {id: (status, event)} – a 404
+    means the series is gone meanwhile."""
+    urls = {f"{GRAPH}/me/events/{eid}?$select={EVENT_SELECT}": eid for eid in ids}
+    antworten = graph.batch_get(list(urls), extra_headers={"Prefer": UTC_PREF})
+    return {eid: antworten.get(url) or (0, None) for url, eid in urls.items()}
+
+
+def schreibe_termin(out, done, stats, stempel, cname, ev, lm):
+    """Write or rewrite one .ics. Returns 1 on a write error, else 0."""
+    rel = f"kalender/{cname}/{event_filename(ev)}"
+    # Events without a Graph ID: the file path as a stable fallback key,
+    # else None lands in the log and resume never kicks in.
+    key = ev.get("id") or ev.get("iCalUId") or rel
+    neu = not done.is_done(out, key)
+    (out / "kalender" / cname).mkdir(parents=True, exist_ok=True)
+    try:
+        (out / rel).write_text(build_ics(ev), encoding="utf-8")
+    except Exception as e:
+        progress.event("run.event_skipped", "warn", detail=str(e))
+        return 1
+    _alte_datei_weg(out, done.done.get(key), rel)
+    done.mark(key, rel)
+    stempel.merke(key, lm)
+    if neu:
+        stats["new"] += 1
+    else:
+        stats["updated"] = stats.get("updated", 0) + 1
+    return 0
+
+
+def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, monate):
+    """One calendar: the view's round, then the series masters that are
+    new or changed. Returns the number of errors."""
+    db = stempel.db
+    familien, entfernt = {}, []      # series master -> newest date's stamp
+    fehler = seen = 0
+    link = None
+    try:
+        seiten, _voll = delta_runde(graph, db, key, url, params,
+                                    prefer=(UTC_PREF,), name=cname)
+        for eintraege, ende in seiten:
+            link = ende or link      # the link comes with the last page
+            for ev in eintraege:
+                if "@removed" in ev:
+                    entfernt.append(ev.get("id"))
+                    continue
                 seen += 1
                 if seen % 100 == 0:
                     # Heartbeat: large calendars page for minutes with no
                     # other line – the bar must show life.
                     progress.melde(seen, what="events")
+                master = ev.get("seriesMasterId")
+                if master and ev.get("type") in ("occurrence", "exception"):
+                    # The view expands a series into its dates; the file is
+                    # the series itself, and its newest date speaks for it.
+                    lm = ev.get("lastModifiedDateTime") or ""
+                    if lm > familien.get(master, ""):
+                        familien[master] = lm
+                    continue
                 rel = f"kalender/{cname}/{event_filename(ev)}"
-                # Events without a Graph ID: the file path as a stable
-                # fallback key, else None lands in the log and resume never
-                # kicks in.
-                key = ev.get("id") or ev.get("iCalUId") or rel
-                if done.is_done(out, key):
+                ekey = ev.get("id") or ev.get("iCalUId") or rel
+                lm = ev.get("lastModifiedDateTime") or ""
+                if veraendert(out, done, stempel, ekey, lm, ics_stempel):
+                    fehler += schreibe_termin(out, done, stats, stempel, cname, ev, lm)
+                else:
                     stats["skipped"] += 1
-                    continue
-                (out / "kalender" / cname).mkdir(parents=True, exist_ok=True)
-                try:
-                    (out / rel).write_text(build_ics(ev), encoding="utf-8")
-                except Exception as e:
-                    progress.event("run.event_skipped", "warn", detail=str(e))
-                    continue
-                done.mark(key, rel)
-                stats["new"] += 1
-        except TokenExpired:
-            raise
-        except Exception as e:
-            progress.event("run.folder_incomplete", "err", name=cname, error=str(e))
-            continue
-        if seen:
-            progress.event("run.scanned", n=seen,
-                           unit=progress.atom("progress.unit.events"))
+        offen = []
+        for master, lm in familien.items():
+            if veraendert(out, done, stempel, master, lm, ics_stempel):
+                offen.append(master)
+            else:
+                stats["skipped"] += 1
+        for i in range(0, len(offen), 100):
+            for master, (status, ev) in hole_termine(graph, offen[i:i + 100]).items():
+                if 200 <= status < 300 and isinstance(ev, dict):
+                    fehler += schreibe_termin(out, done, stats, stempel, cname, ev,
+                                              familien[master])
+                elif status != 404:              # 404: gone meanwhile, nothing to write
+                    progress.event("run.event_skipped", "warn",
+                                   detail=f"HTTP {status}: {master[:16]}…")
+                    fehler += 1
+    except TokenExpired:
+        raise
+    except Exception as e:
+        progress.event("run.folder_incomplete", "err", name=cname, error=str(e))
+        stempel.schreibe()
+        return 1
+    for eid in entfernt:
+        # An exported event or series Graph no longer lists keeps its file,
+        # as it always has – only the record goes, so a return is measured
+        # afresh. Removed dates of a living series never had a file.
+        if eid in done.done:
+            stempel.vergiss(eid)
+    stempel.schreibe()
+    if link and not fehler:
+        db.kv_schreiben(key, link)
+        db.kv_schreiben(f"{key}:window", str(monate))
+    if seen:
+        progress.event("run.scanned", n=seen,
+                       unit=progress.atom("progress.unit.events"))
+    return fehler
+
+
+def export_calendar(graph, out, done, stats, cals):
+    """Every selected calendar as a window of change tracking: this many
+    months back plus everything ahead. Returns the number of errors –
+    zero means the category ran clean."""
+    if not cals:
+        return 0
+    progress.event("run.section", name=progress.atom("export.cat.calendar"))
+    db = state_db.StateDb(out)
+    stempel = Stempel(db, "events")
+    monate, voll = calendar_months_back(), calendar_full()
+    von, bis = kalender_fenster(monate)
+    params = {"startDateTime": _graph_zeit(von) if von and not voll else EPOCH,
+              "endDateTime": _graph_zeit(bis)}
+    fehler = 0
+    for cal in cals:
+        cname = safe(cal.get("name") or "Kalender")
+        key = f"delta:cal:{cal.get('id') or cname}"
+        if voll or db.kv_lesen(f"{key}:window") != str(monate):
+            db.kv_schreiben(key, None)      # another window, or a full read asked for
+        if von is not None and not voll:
+            progress.event("run.calendar.window", name=cal.get("name") or cname,
+                           **{"from": von.strftime("%Y-%m-%d")})
+        url = (f"{GRAPH}/me/calendars/{cal['id']}/calendarView/delta" if cal.get("id")
+               else f"{GRAPH}/me/calendarView/delta")
+        progress.event("run.folder_plain", name=cname)
+        fehler += kalender_runde(graph, out, done, stats, stempel, cname, key, url,
+                                 params, monate)
+    return fehler
 
 
 def contact_filename(c):
@@ -787,65 +1202,121 @@ def build_vcf(c):
     return "\r\n".join(_fold(x) for x in L) + "\r\n"
 
 
-def export_contacts(graph, out, done, stats):
-    progress.event("run.section", name=progress.atom("export.cat.contacts"))
-    sources = [("", f"{GRAPH}/me/contacts")]          # default contacts (no folder)
+CONTACT_SELECT = ("id,displayName,givenName,surname,middleName,companyName,department,"
+                  "jobTitle,emailAddresses,businessPhones,homePhones,mobilePhone,"
+                  "personalNotes,lastModifiedDateTime")
+
+
+def _kontakt_seiten(graph, db, key, url, ersatz, name):
+    """The source's round – or, should Graph refuse change tracking on the
+    default folder, its plain listing as one page without a link."""
     try:
-        folders = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
+        return delta_runde(graph, db, key, url, {"$select": CONTACT_SELECT}, name=name)
     except TokenExpired:
         raise
     except Exception as e:
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if ersatz is None or status not in (400, 404):
+            raise
+    alle = list(graph.paged(ersatz, {"$top": PAGE, "$select": CONTACT_SELECT}))
+    return iter([(alle, None)]), True
+
+
+def export_contacts(graph, out, done, stats):
+    """The default folder and every contact folder, each a round of change
+    tracking. Returns the number of errors – zero means the category ran
+    clean."""
+    progress.event("run.section", name=progress.atom("export.cat.contacts"))
+    db = state_db.StateDb(out)
+    stempel = Stempel(db, "contacts")
+    quellen = [("", "delta:contacts", f"{GRAPH}/me/contacts/delta", f"{GRAPH}/me/contacts")]
+    fehler_gesamt = 0
+    try:
+        ordner = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
+    except TokenExpired:
+        raise
+    except Exception as e:
+        # The folders stay unknown this run: not a clean run, or a cadence
+        # would skip them for its whole interval.
         progress.event("run.unreadable", "warn",
                        name=progress.atom("export.cat.contacts"), error=str(e))
-        folders = []
-    for f in folders:
-        sources.append((safe(f.get("displayName") or "Ordner"),
-                        f"{GRAPH}/me/contactFolders/{f['id']}/contacts"))
-    select = ("id,displayName,givenName,surname,middleName,companyName,department,"
-              "jobTitle,emailAddresses,businessPhones,homePhones,mobilePhone,personalNotes")
-    for sub, url in sources:
+        ordner, fehler_gesamt = [], 1
+    for f in ordner:
+        quellen.append((safe(f.get("displayName") or "Ordner"), f"delta:contacts:{f['id']}",
+                        f"{GRAPH}/me/contactFolders/{f['id']}/contacts/delta", None))
+    for sub, key, url, ersatz in quellen:
         rel_dir = "kontakte" + (f"/{sub}" if sub else "")
-        seen = 0
+        seen = fehler = 0
+        link = None
         try:
-            for c in graph.paged(url, {"$top": PAGE, "$select": select}):
-                if seen and seen % 100 == 0:
-                    progress.melde(seen, what="contacts")
-                seen += 1
-                rel = f"{rel_dir}/{contact_filename(c)}"
-                # Contacts without a Graph ID: the file path as a stable
-                # fallback key (else key None in the log and a re-export on
-                # every run).
-                key = c.get("id") or rel
-                if done.is_done(out, key):
-                    stats["skipped"] += 1
-                    continue
-                (out / rel_dir).mkdir(parents=True, exist_ok=True)
-                try:
-                    (out / rel).write_text(build_vcf(c), encoding="utf-8")
-                except Exception as e:
-                    progress.event("run.contact_skipped", "warn", detail=str(e))
-                    continue
-                done.mark(key, rel)
-                stats["new"] += 1
+            seiten, _voll = _kontakt_seiten(graph, db, key, url, ersatz, rel_dir)
+            for eintraege, ende in seiten:
+                link = ende or link      # the link comes with the last page
+                for c in eintraege:
+                    if "@removed" in c:
+                        # A gone contact keeps its file, as it always has –
+                        # only the record goes.
+                        if c.get("id") in done.done:
+                            stempel.vergiss(c["id"])
+                        continue
+                    if seen and seen % 100 == 0:
+                        progress.melde(seen, what="contacts")
+                    seen += 1
+                    rel = f"{rel_dir}/{contact_filename(c)}"
+                    # Contacts without a Graph ID: the file path as a stable
+                    # fallback key (else key None in the log and a re-export
+                    # on every run).
+                    ckey = c.get("id") or rel
+                    lm = c.get("lastModifiedDateTime") or ""
+                    if not veraendert(out, done, stempel, ckey, lm):
+                        stats["skipped"] += 1
+                        continue
+                    neu = not done.is_done(out, ckey)
+                    (out / rel_dir).mkdir(parents=True, exist_ok=True)
+                    try:
+                        (out / rel).write_text(build_vcf(c), encoding="utf-8")
+                    except Exception as e:
+                        progress.event("run.contact_skipped", "warn", detail=str(e))
+                        fehler += 1
+                        continue
+                    _alte_datei_weg(out, done.done.get(ckey), rel)
+                    done.mark(ckey, rel)
+                    stempel.merke(ckey, lm)
+                    if neu:
+                        stats["new"] += 1
+                    else:
+                        stats["updated"] = stats.get("updated", 0) + 1
         except TokenExpired:
             raise
         except Exception as e:
             progress.event("run.folder_incomplete", "err", name=rel_dir, error=str(e))
+            stempel.schreibe()
+            fehler_gesamt += 1
             continue
+        stempel.schreibe()
+        if link and not fehler:
+            db.kv_schreiben(key, link)
+        fehler_gesamt += fehler
         if seen:
             progress.event("run.scanned_in", name=rel_dir, n=seen,
                            unit=progress.atom("progress.unit.contacts"))
+    return fehler_gesamt
 
 
 # ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
-def pruefe_verschwundene(graph, out, done, bestand):
+def pruefe_verschwundene(graph, out, done, bestand, listing=True):
     """What has vanished from the mailbox since the last run.
 
-    Runs only after a clean pass: after an abort or an incompletely listed
-    folder we would not know whether something is missing or we just did not
-    look. Better no statement at all than a wrong one.
+    Two signals. A folder read in full is compared against the done log –
+    `listing` says whether that comparison is allowed: only after a clean
+    pass, since after an incompletely listed folder we would not know
+    whether something is missing or we just did not look – and every
+    suspicion is confirmed with Graph. A folder read from its link names
+    its removals itself; those need no confirmation. Both go through the
+    same healing first: what shows up elsewhere under the same Message-ID
+    was moved, not deleted.
     """
     db = state_db.StateDb(out)
     bekannt = db.verschwunden_lesen()
@@ -855,15 +1326,19 @@ def pruefe_verschwundene(graph, out, done, bestand):
         db.verschwunden_ersetzen(bekannt)
         progress.event("run.gone.healed", n=geheilt)
 
-    kandidaten = verdaechtige(done, bestand)
-    if not kandidaten:
+    vermutet = ([k for k in verdaechtige(done, bestand) if bestand.sauber(k[1])]
+                if listing else [])
+    gemeldet = bestand.gemeldet(done)
+    if not vermutet and not gemeldet:
         return {"gone_healed": geheilt} if geheilt else {}
-    progress.event("run.gone.checking", n=len(kandidaten))
+    progress.event("run.gone.checking", n=len(vermutet) + len(gemeldet))
     # Without a single request: whatever sits elsewhere in the mailbox under
     # the same Message-ID was moved, not deleted.
-    kandidaten, verschoben_lokal = verschoben_statt_weg(out, kandidaten, bestand)
-    weg, verschoben = wirklich_weg(graph, kandidaten)
-    verschoben += verschoben_lokal
+    vermutet, verschoben = verschoben_statt_weg(out, vermutet, bestand)
+    gemeldet, verschoben_gemeldet = verschoben_statt_weg(out, gemeldet, bestand)
+    weg, bestaetigt = wirklich_weg(graph, vermutet)
+    weg = list(dict.fromkeys(weg + [rel for _mid, rel in gemeldet]))
+    verschoben += verschoben_gemeldet + bestaetigt
     neue = [rel for rel in weg if rel not in bekannt]
     if neue:
         db.verschwunden_ergaenzen(
@@ -1068,6 +1543,93 @@ def pruefe_vollstaendigkeit(graph, out, weg=None):
 
 
 
+def kategorie_faellig(db, kategorie):
+    """The cadence gate of one category (mail, calendar, contacts): due, or
+    said to be skipped. SYNC_NOW steps over every gate."""
+    kadenz = export_util.kadenzen().get(f"outlook:{kategorie}") or "always"
+    if export_util.einheit_faellig(db, kadenz, kv_key=f"last_sync:{kategorie}"):
+        return True
+    progress.event("run.cadence.skip", name=progress.atom(f"export.cat.{kategorie}"),
+                   cadence=progress.atom(f"cadence.{kadenz}"))
+    return False
+
+
+def kategorie_erledigt(db, kategorie):
+    """Mark a category's clean run – the cadence counts from here."""
+    db.kv_schreiben(f"last_sync:{kategorie}", str(time.time()))
+
+
+def faellige_ordner(db, auswahl):
+    """The mail gate, per folder: (the due part of the selection, the
+    paths left out).
+
+    A folder's cadence is its own key, else the nearest parent's, else the
+    category's (export_util.kadenz_fuer); its clock is kept by id, so a
+    rename does not reset it. One line says what was left out: the
+    category line when nothing is due, a count otherwise – never a line
+    per folder.
+    """
+    kadenzen = export_util.kadenzen()
+    faellig, ausgelassen = [], []
+    for top in auswahl:
+        subtree = []
+        for folder, rel_path in top["subtree"]:
+            kadenz = export_util.kadenz_fuer(kadenzen, "outlook:mail", rel_path)
+            if export_util.einheit_faellig(db, kadenz,
+                                           kv_key=f"last_sync:mail:{folder['id']}"):
+                subtree.append((folder, rel_path))
+            else:
+                ausgelassen.append(rel_path)
+        if subtree:
+            faellig.append({**top, "subtree": subtree})
+    if ausgelassen and not faellig:
+        kadenz = kadenzen.get("outlook:mail") or "always"
+        progress.event("run.cadence.skip", name=progress.atom("export.cat.mail"),
+                       cadence=progress.atom(f"cadence.{kadenz}"))
+    elif ausgelassen:
+        progress.event("run.outlook.folders_paced", n=len(ausgelassen))
+    return faellig, ausgelassen
+
+
+def exportiere(graph, out, done, stats, workers):
+    """The regular run: mail, calendar, contacts – each behind its cadence
+    gate, each marking its last clean run. Returns the run's outcome."""
+    db_root = state_db.StateDb(out)
+    categories = selected_categories()
+    selected_mail, ausgelassen, sel_cals = [], [], []
+    if "mail" in categories:
+        selected_mail, ausgelassen = faellige_ordner(db_root, waehle_ordner(graph, out))
+    if "calendar" in categories and kategorie_faellig(db_root, "calendar"):
+        sel_cals = waehle_kalender(graph, out)
+    want_con = "contacts" in categories and kategorie_faellig(db_root, "contacts")
+
+    result = "done"
+    if selected_mail:
+        bestand = Bestand()
+        bestand.ausgelassen.update(ausgelassen)     # not listed: no removals inferred
+        result = run_export(graph, out, done, stats, selected_mail, workers, bestand)
+        if result == "done":
+            # Deletions first, links after: a round reports its removals
+            # once, and only a stored link makes that round count as read.
+            # The clean folders' cadence clocks advance with their links.
+            stats.update(pruefe_verschwundene(
+                graph, out, done, bestand, listing=not stats.get("folder_errors")))
+            bestand.links_sichern(db_root)
+    if result != "expired" and sel_cals:
+        try:
+            if not export_calendar(graph, out, done, stats, sel_cals):
+                kategorie_erledigt(db_root, "calendar")
+        except TokenExpired:
+            result = "expired"
+    if result != "expired" and want_con:
+        try:
+            if not export_contacts(graph, out, done, stats):
+                kategorie_erledigt(db_root, "contacts")
+        except TokenExpired:
+            result = "expired"
+    return result
+
+
 def main():
     if _hilfe_gewuenscht(sys.argv[1:]):
         print(__doc__.strip())
@@ -1097,34 +1659,11 @@ def main():
     out = export_util.ausgabeordner(sys.argv[1:])
     out.mkdir(parents=True, exist_ok=True)
     done = DoneLog(state_db.StateDb(out))
-    stats = {"new": 0, "skipped": 0, "folder_errors": 0}
+    stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
 
     try:
-        categories = selected_categories()
-        selected_mail, sel_cals, want_con = [], [], False
-
-        if "mail" in categories:
-            selected_mail = waehle_ordner(graph, out)
-        if "calendar" in categories:
-            sel_cals = waehle_kalender(graph, out)
-        want_con = "contacts" in categories
-
-        if selected_mail:
-            bestand = Bestand()
-            result = run_export(graph, out, done, stats, selected_mail, workers, bestand)
-            if result == "done" and not stats.get("folder_errors"):
-                stats.update(pruefe_verschwundene(graph, out, done, bestand))
-        if result != "expired" and sel_cals:
-            try:
-                export_calendar(graph, out, done, stats, sel_cals)
-            except TokenExpired:
-                result = "expired"
-        if result != "expired" and want_con:
-            try:
-                export_contacts(graph, out, done, stats)
-            except TokenExpired:
-                result = "expired"
+        result = exportiere(graph, out, done, stats, workers)
     except TokenExpired:
         result = "expired"
     except (requests.exceptions.RequestException, RuntimeError) as e:
@@ -1148,9 +1687,10 @@ def main():
     # No prose summary: the numbers travel in the result event, and the app
     # logs a translated line from it. The archive totals live in Analytics.
     progress.ergebnis(stats["new"], unchanged=stats["skipped"],
+                      excluded=stats.get("excluded"),
                       errors=stats.get("folder_errors"),
                       extra={k: v for k, v in stats.items()
-                             if k in ("gone_new", "moved", "gone_healed")})
+                             if k in ("updated", "gone_new", "moved", "gone_healed")})
     if stats.get("folder_errors"):
         progress.event("run.folders_failed", "warn", n=stats["folder_errors"])
 

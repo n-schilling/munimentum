@@ -6,6 +6,7 @@ app.py – all from synthetic export trees in tmp_path. No network access.
 """
 
 import json
+import os
 import re
 import sys
 
@@ -13,6 +14,7 @@ import pytest
 
 import combined_search
 import progress
+import state_db
 
 
 # --------------------------------------------------------------------------
@@ -474,3 +476,197 @@ def test_main_json_folgt_der_app_config(tmp_path, monkeypatch):
         assert json.loads(ziel.read_text(encoding="utf-8"))["reconstruct"] is False
     finally:
         settings.reset()
+
+
+# --------------------------------------------------------------------------
+# The manifest: every mail is parsed once, afterwards state.db answers
+# --------------------------------------------------------------------------
+def _absage(uid):
+    return make_ical_eml(MAIL_ICS.replace("GELOESCHT-1", uid))
+
+
+def _parse_zaehler(monkeypatch):
+    """The files eml_facts really opens – the manifest's whole point is
+    that this list stays empty on the second run."""
+    gelesen = []
+    echt = combined_search.eml_facts
+    monkeypatch.setattr(combined_search, "eml_facts",
+                        lambda p: gelesen.append(p) or echt(p))
+    return gelesen
+
+
+def _manifest(root):
+    db = state_db.StateDb(root, combined_search.MANIFEST_DB)
+    try:
+        return {rel: json.loads(v)
+                for rel, v in db.saetze_lesen(combined_search.MANIFEST_AREA).items()}
+    finally:
+        db.close()
+
+
+def test_manifest_zweiter_lauf_liefert_dieselben_bytes_ohne_eine_mail_zu_lesen(
+        tmp_path, monkeypatch):
+    outlook = _kalender_export(tmp_path)
+    post = outlook / "E-Mail" / "Posteingang"
+    (post / "normal.eml").write_bytes(make_eml())
+    (post / "antwort.eml").write_bytes(make_ical_eml(
+        MAIL_ICS.replace("METHOD:CANCEL", "METHOD:REPLY").replace("GELOESCHT-1", "NIE-1"),
+        subject="Angenommen: Jour Fixe", frm="Carol Chef <carol@example.com>",
+        method="REPLY"))
+    ziel = tmp_path / "calendar.json"
+
+    def lauf():
+        combined_search.write_calendar_json(str(outlook), ziel)
+        # only the time stamp of the run may differ
+        return re.sub(rb'"generated": "[^"]*"', b'"generated": "-"', ziel.read_bytes())
+
+    gelesen = _parse_zaehler(monkeypatch)
+    voll = lauf()
+    assert len(gelesen) == 3 and (outlook / combined_search.MANIFEST_DB).exists()
+    assert json.loads(voll)["counts"]["rekonstruiert"] == 2
+
+    gelesen.clear()
+    assert lauf() == voll
+    assert gelesen == [], "the second run parsed mails although nothing changed"
+
+    # no manifest: full parse, same bytes
+    (outlook / combined_search.MANIFEST_DB).unlink()
+    gelesen.clear()
+    assert lauf() == voll and len(gelesen) == 3
+
+
+def test_manifest_hat_eine_zeile_pro_mail(tmp_path):
+    root = tmp_path / "outlook_export"
+    post = root / "E-Mail" / "Posteingang"
+    post.mkdir(parents=True)
+    (post / "absage.eml").write_bytes(make_ical_eml(MAIL_ICS))
+    (post / "normal.eml").write_bytes(make_eml())   # no text/calendar -> empty facts
+    (root / "kaputt.eml").mkdir()                   # unreadable -> no row, retried next time
+
+    invites = []
+    db = state_db.StateDb(root, combined_search.MANIFEST_DB)
+    try:
+        assert combined_search.read_outlook(root, root, invites, db) == (0, 2)
+        nochmal = []
+        assert combined_search.read_outlook(root, root, nochmal, db) == (2, 0)
+    finally:
+        db.close()
+
+    rows = _manifest(root)
+    assert set(rows) == {"E-Mail/Posteingang/absage.eml", "E-Mail/Posteingang/normal.eml"}
+    normal = rows["E-Mail/Posteingang/normal.eml"]
+    st = (post / "normal.eml").stat()
+    assert normal == {"v": combined_search.MANIFEST_VERSION, "mtime_ns": st.st_mtime_ns,
+                      "size": st.st_size, "facts": []}
+    fakten = rows["E-Mail/Posteingang/absage.eml"]["facts"]
+    assert len(fakten) == 1 and fakten[0]["method"] == "CANCEL"
+    assert fakten[0]["ev"]["uid"] == "GELOESCHT-1"
+    assert fakten[0]["org_hint"] == ["Alice Example", "alice@example.com"]
+    assert fakten[0]["date"] == "Tue, 08 Jul 2025 08:00:00 +0000"
+    # served from the manifest: the same invites, org_hint a tuple again
+    assert nochmal == invites
+    assert nochmal[0]["org_hint"] == ("Alice Example", "alice@example.com")
+    assert nochmal[0]["href"] == "E-Mail/Posteingang/absage.eml"
+    assert nochmal[0]["mts"] is not None and re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
+                                                          nochmal[0]["md"])
+
+
+def test_manifest_ohne_db_bleibt_alles_beim_alten(tmp_path):
+    """read_outlook without a StateDb parses everything and writes nothing."""
+    root = tmp_path / "outlook_export"
+    root.mkdir()
+    (root / "absage.eml").write_bytes(make_ical_eml(MAIL_ICS))
+    invites = []
+    assert combined_search.read_outlook(root, root, invites) == (0, 1)
+    assert len(invites) == 1 and not (root / "state.db").exists()
+    assert combined_search._mail_when("kein Datum") == (None, "kein Datum")
+
+
+def test_manifest_parst_nur_neue_und_geaenderte_mails(tmp_path, monkeypatch):
+    root = tmp_path / "outlook_export"
+    post = root / "E-Mail"
+    post.mkdir(parents=True)
+    for name in ("a", "b", "c"):
+        (post / f"{name}.eml").write_bytes(_absage(name.upper()))
+    db = state_db.StateDb(root, combined_search.MANIFEST_DB)
+    try:
+        assert combined_search.read_outlook(root, root, [], db) == (0, 3)
+
+        # b: same size, new content and mtime – c: gone – d: new
+        st = (post / "b.eml").stat()
+        (post / "b.eml").write_bytes(_absage("X"))
+        os.utime(post / "b.eml", ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        (post / "c.eml").unlink()
+        (post / "d.eml").write_bytes(_absage("D"))
+
+        gelesen = _parse_zaehler(monkeypatch)
+        invites = []
+        assert combined_search.read_outlook(root, root, invites, db) == (1, 2)
+    finally:
+        db.close()
+    assert sorted(p.name for p in gelesen) == ["b.eml", "d.eml"]
+    assert sorted(i["ev"]["uid"] for i in invites) == ["A", "D", "X"]
+    assert set(_manifest(root)) == {"E-Mail/a.eml", "E-Mail/b.eml", "E-Mail/d.eml"}
+
+
+def test_manifest_unlesbar_heisst_voller_lauf(tmp_path, monkeypatch):
+    outlook = _kalender_export(tmp_path)
+    (outlook / combined_search.MANIFEST_DB).write_bytes(b"kein sqlite")
+    gelesen = _parse_zaehler(monkeypatch)
+    daten = combined_search.collect_calendar_data(str(outlook))
+    assert daten["counts"]["rekonstruiert"] == 1 and len(gelesen) == 1
+
+
+def test_manifest_verwirft_fremde_zeilen(tmp_path, monkeypatch):
+    """A row of another version, one that is not JSON, one of a file that
+    is gone: none of them is trusted, and the files are parsed again."""
+    root = tmp_path / "outlook_export"
+    root.mkdir()
+    (root / "absage.eml").write_bytes(make_ical_eml(MAIL_ICS))
+    (root / "normal.eml").write_bytes(make_eml())
+    db = state_db.StateDb(root, combined_search.MANIFEST_DB)
+    try:
+        assert combined_search.read_outlook(root, root, [], db) == (0, 2)
+        rows = _manifest(root)
+        alt = dict(rows["absage.eml"], v=combined_search.MANIFEST_VERSION - 1)
+        db.saetze_schreiben(combined_search.MANIFEST_AREA, {
+            "absage.eml": json.dumps(alt), "normal.eml": "{kaputt",
+            "weg.eml": json.dumps(rows["normal.eml"])})
+
+        gelesen = _parse_zaehler(monkeypatch)
+        invites = []
+        assert combined_search.read_outlook(root, root, invites, db) == (0, 2)
+    finally:
+        db.close()
+    assert len(gelesen) == 2 and len(invites) == 1
+    rows = _manifest(root)
+    assert set(rows) == {"absage.eml", "normal.eml"}
+    assert rows["absage.eml"]["v"] == combined_search.MANIFEST_VERSION
+
+
+def test_manifest_abbruch_behaelt_das_geschaffte(tmp_path, monkeypatch):
+    """The manifest is written in slices: whoever stops a first run over a
+    large mailbox does not start from zero next time."""
+    root = tmp_path / "outlook_export"
+    root.mkdir()
+    for n in range(1, 6):
+        (root / f"m{n}.eml").write_bytes(make_eml(subject=f"Mail {n}"))
+    monkeypatch.setattr(combined_search, "_MANIFEST_FLUSH", 2)
+    echt = combined_search.eml_facts
+
+    def abbruch(p):
+        if p.name == "m5.eml":
+            raise KeyboardInterrupt
+        return echt(p)
+
+    monkeypatch.setattr(combined_search, "eml_facts", abbruch)
+    db = state_db.StateDb(root, combined_search.MANIFEST_DB)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            combined_search.read_outlook(root, root, [], db)
+        assert set(_manifest(root)) == {"m1.eml", "m2.eml", "m3.eml", "m4.eml"}
+        monkeypatch.setattr(combined_search, "eml_facts", echt)
+        assert combined_search.read_outlook(root, root, [], db) == (4, 1)
+    finally:
+        db.close()
+    assert len(_manifest(root)) == 5

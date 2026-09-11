@@ -40,3 +40,21 @@ def test_safe_und_kuerzel():
     assert export_util.safe("") == "unbenannt"
     assert len(export_util.kuerzel("x")) == 8
     assert export_util.kuerzel("x") != export_util.kuerzel("y")
+
+
+def test_kadenz_fuer_nimmt_den_tiefsten_pfad_sonst_die_kategorie():
+    kad = {"outlook:mail": "daily", "outlook:mail:E-Mail/Archiv": "monthly",
+           "outlook:mail:E-Mail/Archiv/2025/Q1": "always",
+           "teams:channels": "weekly", "teams:channels/Nordwind": "monthly"}
+    f = export_util.kadenz_fuer
+    assert f(kad, "outlook:mail", "E-Mail/Posteingang") == "daily"
+    assert f(kad, "outlook:mail", "E-Mail/Archiv") == "monthly"
+    assert f(kad, "outlook:mail", "E-Mail/Archiv/2024") == "monthly"       # inherited
+    assert f(kad, "outlook:mail", "E-Mail/Archiv/2025/Q1") == "always"     # deeper wins
+    assert f(kad, "outlook:mail", "E-Mail/Archiv/2025/Q1/x") == "always"
+    assert f(kad, "outlook:mail", "E-Mail/Archivar") == "daily"            # no prefix by name
+    assert f(kad, "teams:1on1", "1on1/Alice Beispiel") == "always"         # nothing set
+    assert f(kad, "teams", "channels/Nordwind/Releases") == "monthly"
+    assert f(kad, "teams", "channels/Vertrieb/Allgemein") == "weekly"
+    assert f(kad, "teams", "group/Projekt") == "always"
+    assert f({}, "outlook:mail", "E-Mail", vorgabe="weekly") == "weekly"

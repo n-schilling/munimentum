@@ -175,6 +175,24 @@ def haeufigere(a, b):
     return a if _KADENZ_RANG.get(a, 0) <= _KADENZ_RANG.get(b, 0) else b
 
 
+def kadenz_fuer(kadenzen, praefix, pfad, vorgabe="always"):
+    """The cadence that applies to one unit inside a hierarchy.
+
+    `kadenzen` holds "<praefix>:<path>" keys – a whole category ("teams:1on1",
+    "outlook:mail") as well as any folder, team, channel or chat below it
+    ("outlook:mail:E-Mail/Archiv", "teams:channels/Nordwind/Releases"). The
+    deepest key on the unit's path wins, the category key is the last
+    resort, then `vorgabe`. A value set on a parent therefore reaches every
+    child until a child sets its own."""
+    teile = [t for t in str(pfad or "").split("/") if t]
+    while teile:
+        wert = kadenzen.get(f"{praefix}:{'/'.join(teile)}")
+        if wert:
+            return wert
+        teile.pop()
+    return kadenzen.get(praefix) or vorgabe
+
+
 def einheit_faellig(db, kadenz, kv_key="last_sync"):
     if sync_jetzt() or (kadenz or "always") == "always":
         return True

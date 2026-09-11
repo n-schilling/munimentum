@@ -16,9 +16,11 @@ The mirror promise is the same everywhere: the CURRENT version of every
 file is kept, deleted files stay here with a tombstone entry.
 """
 
+import json
 import os
 import re
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -35,6 +37,10 @@ import progress
 GRAPH = graph_client.GRAPH
 
 DATEI_DIR = "Dateien"           # root in the output folder; the rules match on it
+AUSWAHL_KEY = "auswahl"         # kv: the selection the last mirror run was built on
+WARTEND_BEREICH = "wartend"     # records: files whose folder cadence is not due yet
+# What a waiting file's lookup asks for – enough to plan its download.
+_ITEM_SELECT = "id,name,size,cTag,parentReference,fileSystemInfo,file,deleted"
 
 # Network, throttling, retry and paging live in graph_client.py; all that
 # stays here is the download timeout – a big file takes longer than a page.
@@ -60,8 +66,13 @@ class Selection:
     """
 
     def __init__(self, rules=None, max_bytes=0, include_ext=None,
-                 exclude_ext=None, scope=None):
+                 exclude_ext=None, scope=None, prefix=None):
         self.rules = rules or []
+        # The rules may speak of a longer path than the mirror's own
+        # "Dateien/…": a SharePoint rule names "<site>/<library>/Dateien/…",
+        # the way the export list shows it. The prefix is what stands in
+        # front of the rel path when a rule is matched.
+        self.prefix = (prefix or "").strip("/")
         # Scope rules are machinery (a folder URL narrowing a library), not
         # user choice: what falls outside is IGNORED silently, never counted
         # as "excluded" – the report would otherwise drown in the rest of
@@ -85,7 +96,8 @@ class Selection:
 
     def pfad_ok(self, rel):
         """Only the path scope – the type list counts inside it, unfiltered."""
-        return folders.gilt(rel, self.rules)
+        pfad = f"{self.prefix}/{rel}" if self.prefix else rel
+        return folders.gilt(pfad, self.rules)
 
     def takes(self, rel, size):
         """One verdict per file – used identically by plan, check and preview."""
@@ -94,6 +106,21 @@ class Selection:
         if self.max_bytes and int(size or 0) > self.max_bytes:
             return False
         return self._ext_ok(rel)
+
+    def kennzeichen(self):
+        """Everything the verdict depends on, as one stable string.
+
+        A mirror reads only the delta, so a widened selection – a path
+        newly included, a higher size cap, a type filter opened – would
+        never fetch files that did not change since. The run compares this
+        against what the last run stored and re-reads the drive once when
+        it differs (see lauf)."""
+        return json.dumps({"rules": [list(r) for r in self.rules],
+                           "scope": [list(r) for r in self.scope],
+                           "prefix": self.prefix, "max_bytes": self.max_bytes,
+                           "include": sorted(self.include_ext),
+                           "exclude": sorted(self.exclude_ext)},
+                          sort_keys=True, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +307,188 @@ class Bestand:
 
 
 # ---------------------------------------------------------------------------
+# Folder cadences: units, their stamps, and the files that wait for them
+# ---------------------------------------------------------------------------
+class Einheiten:
+    """Cadences over one drive's folder tree.
+
+    The mirror has ONE delta stream per drive, so a folder cadence gates
+    the downloads, not the listing. A file's unit is the deepest folder on
+    its path that carries its own key ("<praefix>:<unter>/<folder path>",
+    ``unter`` being the drive's own prefix in the keys – empty for OneDrive,
+    "<site>/<library>" for a SharePoint library), else the drive itself.
+    The drive's cadence is ``laufwerk`` when given (a SharePoint library
+    brings its merged URL cadence), else the "<praefix>" key.
+
+    Every unit keeps its own stamp in the drive's state.db –
+    ``last_sync:<praefix>:<folder path>`` for a folder, the drive's
+    ``last_sync`` for the drive – and moves it only after a run in which
+    its downloads finished without error. SYNC_NOW makes every unit due.
+
+    The mirrors that pass none behave as before. A cadence is not part of
+    the selection's kennzeichen: changing it changes when files come, not
+    which.
+    """
+
+    def __init__(self, kadenzen, praefix, db, laufwerk=None, unter=""):
+        self.kadenzen = kadenzen or {}
+        self.praefix = praefix
+        self.db = db
+        self.laufwerk = laufwerk
+        self.unter = (unter or "").strip("/")
+        marke = f"{praefix}:{self.unter}/" if self.unter else f"{praefix}:"
+        self.ordner = sorted({k[len(marke):].strip("/") for k in self.kadenzen
+                              if k.startswith(marke) and k[len(marke):].strip("/")})
+        self._ordner = set(self.ordner)
+        self._faellig = {}           # decided once per run, so a stamp does not flip it
+
+    def einheit(self, rel):
+        """The unit a path belongs to – the deepest folder with a key of
+        its own, "" for the drive. The same walk as export_util.kadenz_fuer."""
+        teile = [t for t in str(rel or "").split("/") if t]
+        while teile:
+            pfad = "/".join(teile)
+            if pfad in self._ordner:
+                return pfad
+            teile.pop()
+        return ""
+
+    def kadenz(self, einheit):
+        if not einheit:
+            if self.laufwerk is not None:
+                return self.laufwerk
+            return export_util.kadenz_fuer(self.kadenzen, self.praefix, "")
+        pfad = f"{self.unter}/{einheit}" if self.unter else einheit
+        return export_util.kadenz_fuer(self.kadenzen, self.praefix, pfad,
+                                       vorgabe=self.kadenz(""))
+
+    def kv_key(self, einheit):
+        return f"last_sync:{self.praefix}:{einheit}" if einheit else "last_sync"
+
+    def faellig(self, einheit):
+        if einheit not in self._faellig:
+            self._faellig[einheit] = export_util.einheit_faellig(
+                self.db, self.kadenz(einheit), kv_key=self.kv_key(einheit))
+        return self._faellig[einheit]
+
+    def irgendeine_faellig(self):
+        return any(self.faellig(e) for e in ["", *self.ordner])
+
+    def zurueckgehalten(self):
+        """The folder units not due this run."""
+        return [o for o in self.ordner if not self.faellig(o)]
+
+    def stempeln(self, gestoert=()):
+        """Stamp every due unit except those with a failed download or
+        lookup – they stay due and come back next run."""
+        jetzt = str(time.time())
+        for e in ["", *self.ordner]:
+            if self.faellig(e) and e not in gestoert:
+                self.db.kv_schreiben(self.kv_key(e), jetzt)
+
+
+class Warteliste:
+    """Files the delta reported while their unit was not due – one record
+    per item id in the state.db, downloaded when the unit's cadence comes
+    round. The delta token advances past them; this list is what keeps
+    them from being forgotten."""
+
+    def __init__(self, db):
+        self.db = db
+        self.eintraege = {}
+        for kennung, roh in db.saetze_lesen(WARTEND_BEREICH).items():
+            try:
+                self.eintraege[kennung] = json.loads(roh)
+            except ValueError:
+                continue
+
+    def __len__(self):
+        return len(self.eintraege)
+
+    def merke(self, aufgaben):
+        neu = {a["id"]: {"rel": a["rel"], "ctag": a["ctag"], "size": a["size"],
+                         "einheit": a.get("einheit", "")} for a in aufgaben}
+        if not neu:
+            return
+        self.eintraege.update(neu)
+        self.db.saetze_schreiben(WARTEND_BEREICH, {
+            k: json.dumps(v, ensure_ascii=False) for k, v in neu.items()})
+
+    def vergiss(self, kennungen):
+        weg = [k for k in kennungen if k in self.eintraege]
+        for k in weg:
+            self.eintraege.pop(k, None)
+        self.db.saetze_loeschen(WARTEND_BEREICH, weg)
+
+
+def _items_holen(graph, urls):
+    """id -> (status, body) for each item URL – one $batch when the client
+    offers it, else one GET each. A 404 is an answer (gone), not a failure;
+    any other refusal leaves the item waiting."""
+    if hasattr(graph, "batch_get") and len(urls) > 1:
+        roh = graph.batch_get(list(urls.values()))
+        return {k: roh.get(u, (None, None)) for k, u in urls.items()}
+    out = {}
+    for k, u in urls.items():
+        try:
+            out[k] = (200, graph.get(u))
+        except requests.HTTPError as e:
+            out[k] = (getattr(e.response, "status_code", 0) or 0, None)
+    return out
+
+
+def wartende_pruefen(graph, warteliste, einheiten, bestand, auswahl, wurzel):
+    """The waiting entries whose unit is due now – BEFORE the delta.
+
+    Graph is asked for each item's current state; what still differs from
+    the inventory becomes a download task, what is current, gone or no
+    longer taken leaves the list. Returns (tasks, units whose lookup
+    failed – they are not stamped this run)."""
+    faellige = {k: e for k, e in warteliste.eintraege.items()
+                if einheiten.faellig(einheiten.einheit(e["rel"]))}
+    if not faellige:
+        return [], set()
+    basis = getattr(graph, "drive_base", f"{GRAPH}/me/drive")
+    urls = {k: f"{basis}/items/{k}?$select={_ITEM_SELECT}" for k in faellige}
+    antworten = _items_holen(graph, urls)
+    aufgaben, weg, gestoert = [], [], set()
+    for k, e in faellige.items():
+        status, meta = antworten.get(k, (None, None))
+        if status == 404 or (meta is not None and "deleted" in meta):
+            weg.append(k)
+            continue
+        if meta is None or not (status and 200 <= status < 300):
+            gestoert.add(einheiten.einheit(e["rel"]))
+            continue
+        # The lookup knows the current path; the delta will tell the same
+        # story later and find the file already there.
+        rel = (rel_pfad(meta) if (meta.get("parentReference") or {}).get("path")
+               and meta.get("name") else e["rel"])
+        groesse = int(meta.get("size") or e.get("size") or 0)
+        ctag = meta.get("cTag") or e.get("ctag") or ""
+        if not auswahl.takes(rel, groesse) or bestand.aktuell(k, ctag, groesse, wurzel):
+            weg.append(k)
+            continue
+        aufgaben.append({"id": k, "rel": rel, "ctag": ctag, "size": groesse,
+                         "mtime": geaendert_am(meta)})
+    warteliste.vergiss(weg)
+    return aufgaben, gestoert
+
+
+def nach_faelligkeit(einheiten, warteliste, vorab, laden, entfernt=()):
+    """Merge the waiting tasks with the delta's (the delta's version of an
+    item wins, it is the fresher one) and split by unit: due ones are
+    downloaded now, the rest are written to the waiting list."""
+    alle = {a["id"]: a for a in [*vorab, *laden] if a["id"] not in entfernt}
+    jetzt, spaeter = [], []
+    for a in alle.values():
+        a["einheit"] = einheiten.einheit(a["rel"])
+        (jetzt if einheiten.faellig(a["einheit"]) else spaeter).append(a)
+    warteliste.merke(spaeter)
+    return jetzt
+
+
+# ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 _EINTRAG_FELDER = ("id", "name", "size", "cTag", "lastModifiedDateTime")
@@ -446,11 +655,13 @@ def verschiebe(wurzel, paare):
 
 
 def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
-    """The planned downloads – in parallel, with progress."""
-    fertig = fehler = 0
+    """The planned downloads – in parallel, with progress. Returns
+    (done, failed, the failed tasks)."""
+    fertig = 0
+    fehlgeschlagen = []
     gesamt = len(aufgaben)
     if not gesamt:
-        return 0, 0
+        return 0, 0, []
     progress.melde(0, gesamt, "files")
     with ThreadPoolExecutor(max_workers=arbeiter) as pool:
         auftrag = {pool.submit(graph.lade, a["id"], wurzel / a["rel"], a.get("mtime")): a
@@ -462,31 +673,83 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
                 bestand.merke(a["id"], a["rel"], a["ctag"], geladen)
                 fertig += 1
             except Exception as e:
-                fehler += 1
+                fehlgeschlagen.append(a)
                 progress.event("run.file_failed", "err", name=a["rel"],
                                error=f"{type(e).__name__}: {e}")
-            if (fertig + fehler) % 10 == 0 or fertig + fehler == gesamt:
-                progress.melde(fertig + fehler, gesamt, "files")
+            if (fertig + len(fehlgeschlagen)) % 10 == 0 or \
+                    fertig + len(fehlgeschlagen) == gesamt:
+                progress.melde(fertig + len(fehlgeschlagen), gesamt, "files")
                 bestand.schreibe()
     bestand.schreibe()
-    return fertig, fehler
+    return fertig, len(fehlgeschlagen), fehlgeschlagen
 
 
-def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
+def auswahl_abgleichen(zustand, auswahl, name):
+    """Reset the enumeration when the selection differs from the one the
+    last run was built on, and store the current one.
+
+    The very first run (nothing stored yet) only writes it down. A backend
+    without a state.db, or a selection without a kennzeichen (a caller
+    that passes none), counts as unchanged. The reset comes BEFORE the
+    store: a crash in between repeats it next time instead of losing it."""
+    db = getattr(zustand, "db", None)
+    kennung = getattr(auswahl, "kennzeichen", None)
+    if db is None or kennung is None:
+        return False
+    neu = kennung()
+    alt = db.kv_lesen(AUSWAHL_KEY)
+    if alt == neu:
+        return False
+    geaendert = alt is not None
+    if geaendert:
+        progress.event("run.rules_changed", name=name)
+        zustand.delta_loeschen()
+        zustand.walk_leeren()
+    db.kv_schreiben(AUSWAHL_KEY, neu)
+    return geaendert
+
+
+def ergebnis_melden(zahlen, waiting=None):
+    """The one result event of a mirror run – from the counts lauf returns."""
+    extra = {"moved": zahlen["moved"], "gone": zahlen["gone"]}
+    if waiting is not None:
+        extra["waiting"] = waiting
+    progress.ergebnis(zahlen["new"], excluded=zahlen["excluded"],
+                      errors=zahlen["errors"], extra=extra)
+
+
+def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None, name=None,
+         einheiten=None):
     """One full mirror pass for one drive; returns the result counts.
 
     ``still`` suppresses the result event – sharepoint_export mirrors several
-    drives in one step and reports one combined result at the end.
+    drives in one step and reports one combined result at the end. ``name``
+    is how the log calls this mirror; the folder name stands in for it.
+    ``einheiten`` (an Einheiten) brings folder cadences: files of a unit
+    not due go to the waiting list instead of being downloaded, waiting
+    files of a unit now due are handled first, and every due unit is
+    stamped after its downloads succeeded. Without it every file is due.
 
     The walk is checkpointed: every delta page lands in the state backend
     together with its resume link, so a killed run continues mid-walk
     instead of starting over – and when only the downloads were left, the
     next run replans from the stored walk without asking Graph at all.
+
+    A changed selection (rules, size cap, type filters) drops the delta
+    pointer and the stored walk first: only a full read brings the files
+    the wider selection now takes. Files now excluded are simply not
+    downloaded any more – what lies here stays, as always.
     """
     out = Path(out)
     wurzel = out
     zustand = zustand or _db_zustand(out)
     bestand = zustand.bestand()
+    auswahl_abgleichen(zustand, auswahl, name or out.name)
+    warteliste = Warteliste(zustand.db) if einheiten is not None else None
+    vorab, gestoert = [], set()
+    if warteliste is not None:
+        vorab, gestoert = wartende_pruefen(graph, warteliste, einheiten,
+                                           bestand, auswahl, wurzel)
     status = zustand.walk_status()
     if status["fertig"]:
         # The aborted run had already finished enumerating – only the work
@@ -513,13 +776,27 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
     progress.event("run.scanned", n=zustand.walk_status()["n"],
                    unit=progress.atom("progress.unit.entries"))
     plan = plane(zustand.walk_eintraege(), bestand, wurzel, auswahl)
+    laden = plan["laden"]
+    if warteliste is not None:
+        # A deleted file leaves the list; the rest is split by its unit.
+        warteliste.vergiss(plan["entfernt"])
+        laden = nach_faelligkeit(einheiten, warteliste, vorab, laden,
+                                 plan["entfernt"])
 
     bewegt = verschiebe(wurzel, plan["verschoben"])
-    fertig, fehler = hole_alle(graph, wurzel, bestand, plan["laden"], arbeiter)
+    fertig, fehler, fehlgeschlagen = hole_alle(graph, wurzel, bestand, laden,
+                                               arbeiter)
     # Always, not only after downloads: a deletion or a move changes the
     # inventory too. Without this write a deleted file would still be listed
     # on the next run and its tombstone would be set a second time.
     bestand.schreibe()
+    if warteliste is not None:
+        # What arrived leaves the list; a failed waiting download stays on
+        # it – the walk store does not know it, the list is its only memory.
+        misslungen = {a["id"] for a in fehlgeschlagen}
+        warteliste.vergiss(a["id"] for a in laden if a["id"] not in misslungen)
+        gestoert |= {a.get("einheit", "") for a in fehlgeschlagen}
+        einheiten.stempeln(gestoert)
 
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
     zustand.verschwunden_ergaenzen(plan["geloescht"], jetzt)
@@ -539,9 +816,10 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None):
         progress.event("run.drive.retry", "warn")
     zahlen = {"new": fertig, "excluded": plan["ausgelassen"], "errors": fehler,
               "moved": bewegt, "gone": len(plan["geloescht"])}
+    if warteliste is not None:
+        zahlen["waiting"] = len(warteliste)
     if not still:
-        progress.ergebnis(fertig, excluded=plan["ausgelassen"], errors=fehler,
-                          extra={"moved": bewegt, "gone": len(plan["geloescht"])})
+        ergebnis_melden(zahlen)
     return zahlen
 
 
@@ -665,7 +943,11 @@ def nur_ordner(graph, out, auswahl, still=False, zustand=None):
     alt = zustand.baum_lesen()
     daten = zustand.baum_schreiben(
         baum_zusammenfuehren(alt, plan["baum"], plan["entfernt"]), alt)
-    z = folders.zusammenfassung(daten, auswahl.rules)
+    # Counted through the Selection, not folders.zusammenfassung: the rules
+    # may carry a prefix in front of the tree's paths.
+    z = {"ordner_gesamt": len(daten.get("ordner") or []),
+         "ordner_gewaehlt": sum(1 for e in daten.get("ordner") or []
+                                if auswahl.pfad_ok(e["pfad"]))}
     progress.event("run.sync.result", total=z["ordner_gesamt"],
                    chosen=z["ordner_gewaehlt"],
                    unit=progress.atom("progress.unit.folders"))

@@ -190,7 +190,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
-           "lauf.")
+           "lauf.", "kadenz.", "tour.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -227,6 +227,11 @@ DYNAMISCH = (
     ("ana.runs.col.", ("time", "origin", "elements", "duration", "new",
                        "result")),
     ("ana.runs.origin.", ("manual", "schedule")),
+    # The cadence window serves two sources; title, (i) and filter text
+    # are composed from the source key.
+    ("kadenz.title.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
+    ("kadenz.info.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
+    ("kadenz.filter.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
     ("ana.runs.result.", ("done", "error", "aborted", "token_expired",
                           "running")),
 )

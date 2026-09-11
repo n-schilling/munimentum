@@ -521,6 +521,22 @@ def _clean_categories(values, allowed):
     return [k for k in allowed if k in picked]
 
 
+def _ohne_kennung(name):
+    """"Title__k3y" -> "Title": the exports suffix a short id so renamed
+    units keep their folder; the rules and the export list speak titles."""
+    kopf, trenner, _rest = name.rpartition("__")
+    return kopf if trenner else name
+
+
+def _clean_datum(wert):
+    """A calendar day as YYYY-MM-DD, or empty."""
+    roh = str(wert or "").strip()
+    try:
+        return datetime.strptime(roh, "%Y-%m-%d").date().isoformat() if roh else ""
+    except ValueError:
+        return ""
+
+
 def _clean_endungen(values):
     """File extensions from list or text: lowercase, no dot, no duplicates."""
     if isinstance(values, str):
@@ -591,6 +607,27 @@ def notizbuchregeln(cfg, roh=None):
     notizbuch_regeln. Empty means every notebook."""
     return folders.lies_regeln(
         (cfg.get("onenote_rules") if roh is None else roh) or "")
+
+
+def teamsregeln(cfg, roh=None):
+    """Teams conversations – paths "1on1/<title>", "group/<title>",
+    "meeting/<title>", "channels/<team>/<channel>". Empty means every
+    conversation of the ticked categories."""
+    return folders.lies_regeln(
+        (cfg.get("teams_rules") if roh is None else roh) or "")
+
+
+def sharepointregeln(cfg, roh=None):
+    """SharePoint libraries – path rules over "<site>/<library>/<path>" on
+    top of the URL list. Empty means every path."""
+    return folders.lies_regeln(
+        (cfg.get("sharepoint_rules") if roh is None else roh) or "")
+
+
+def todoregeln(cfg, roh=None):
+    """To Do lists by title. Empty means every list."""
+    return folders.lies_regeln(
+        (cfg.get("todo_rules") if roh is None else roh) or "")
 
 
 # --------------------------------------------------------------------------
@@ -1147,7 +1184,8 @@ def _auth_env(cfg):
 
 
 def build_steps(cfg, angefragt, *, embeddings=True, token="",
-                reconstruct=None, nur_einheit=None):
+                reconstruct=None, nur_einheit=None, legacy_comments=False,
+                sync_now=False, calendar_full=False):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1164,8 +1202,16 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
     ctx = {
         "embeddings": embeddings, "reconstruct": reconstruct,
         "nur_einheit": nur_einheit,
-        "cats_outlook": _clean_categories(cfg["outlook_categories"],
-                                          ["mail", "calendar", "contacts"]),
+        # The Planner settings' "Read legacy comments again" button.
+        "legacy_comments": bool(legacy_comments),
+        # "Sync now" for a whole source: the cadences step aside once.
+        "sync_now": bool(sync_now),
+        # The calendar's "read in full" button: only the calendar runs,
+        # window and change tokens ignored once.
+        "calendar_full": bool(calendar_full),
+        "cats_outlook": (["calendar"] if calendar_full else
+                         _clean_categories(cfg["outlook_categories"],
+                                           ["mail", "calendar", "contacts"])),
         "cats_teams": _clean_categories(cfg["teams_categories"],
                                         ["1on1", "group", "meeting",
                                          "channels"]),
@@ -1583,6 +1629,10 @@ class App:
             "folders_onedrive": folders.zusammenfassung(
                 folders.lade(BASE / ONEDRIVE_DIR),
                 folders.lies_regeln(self.cfg.get("onedrive_rules") or "")),
+            "conversations": folders.zusammenfassung(
+                folders.lade(BASE / TEAMS_DIR), teamsregeln(self.cfg)),
+            "lists": folders.zusammenfassung(
+                folders.lade(BASE / TODO_DIR), todoregeln(self.cfg)),
         }
 
     def _kalenderstand(self):
@@ -1681,7 +1731,8 @@ class App:
         return self._calendar_cache[1], self._calendar_cache[2]
 
     def launch(self, anfrage, *, embeddings=None, label="Lauf",
-               reconstruct=None, nur_einheit=None, origin="manual"):
+               reconstruct=None, nur_einheit=None, legacy_comments=False,
+               sync_now=False, calendar_full=False, origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
         shape; unknown keys are ignored, missing ones are off."""
@@ -1697,42 +1748,20 @@ class App:
             embeddings = (self.semantisch_gewollt()
                           and self.ollama()["running"] and self.ollama()["has_model"])
         # The check queries the mailbox, so it needs the same access.
-        # The cadence gate narrows EVERY run, scheduled and manual alike –
-        # a source below its interval is skipped with a clear log line.
-        kadenzen = self.cfg.get("sync_cadence") or {}
         # One picture of what this run was asked for – normalised to the
-        # registry's keys (a private copy: the cadence gate narrows it), and
-        # read by the access question, the "nothing new" gate and the run
-        # record alike, so none of them can fall behind a new entry.
+        # registry's keys, and read by the access question, the "nothing
+        # new" gate and the run record alike, so none of them can fall
+        # behind a new entry.
         angefragt = {e["anfrage"]: bool(anfrage.get(e["anfrage"]))
                      for e in steps_mod.REGISTRY}
-        # Asked for BEFORE the gate: a source the cadence drops was still
-        # wanted, and that is what makes "nothing new" true rather than
-        # unknown further down.
         export_gewollt = any(angefragt.get(e["anfrage"])
                              for e in steps_mod.REGISTRY if e.get("corpus"))
-        # The gate does not drop a source – it stays a step of the run and
-        # is skipped IN the run, under its own heading and with the reason.
-        # The log then reads like the run happened, not like the code
-        # decided: selected sources first, then every step in turn.
+        # The cadences narrow EVERY run, scheduled and manual alike – but
+        # inside the exports, per category, URL or notebook: a source below
+        # its interval says so in the log and reports nothing new, which is
+        # what lets the runner skip the index afterwards.
         ausgelassen = {}                 # step key -> why it will not run
-        # OneNote is missing on purpose: its cadence lives per notebook,
-        # inside the export, like the SharePoint libraries.
-        for dienst, dienst_label in (("onedrive", "job.step.onedrive"),
-                                     ("teams", "job.step.teams"),
-                                     ("todo", "job.step.todo")):
-            kadenz = kadenzen.get(dienst) or "always"
-            if kadenz == "always" or not angefragt[dienst]:
-                continue
-            if cadence_faellig(kadenz, self.history.last_step_ok(dienst)):
-                continue
-            ausgelassen[dienst] = {
-                "k": "srv.cadence.skip",
-                "v": {"step": {"k": dienst_label, "v": {}},
-                      "cadence": {"k": f"cadence.{kadenz}", "v": {}}}}
-        # Access is needed only for what will really talk to Graph.
-        braucht_zugang = steps_mod.braucht_zugang(
-            {k: v and k not in ausgelassen for k, v in angefragt.items()})
+        braucht_zugang = steps_mod.braucht_zugang(angefragt)
         token = read_token() if braucht_zugang else ""
         # In login mode the on-disk cache carries the run – a pasted key is
         # then unnecessary, and its absence must not prevent a run.
@@ -1743,7 +1772,9 @@ class App:
                            else "srv.lexical.noollama", "warn")
         steps = build_steps(self.cfg, angefragt, embeddings=embeddings,
                             token=token, reconstruct=reconstruct,
-                            nur_einheit=nur_einheit)
+                            nur_einheit=nur_einheit,
+                            legacy_comments=legacy_comments,
+                            sync_now=sync_now, calendar_full=calendar_full)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         for s in steps:
@@ -1765,7 +1796,8 @@ class App:
             # source is a yes/no, taken straight from the registry so the
             # runs table cannot miss a newly added one.
             "elements": {
-                "outlook": (_clean_categories(self.cfg["outlook_categories"],
+                "outlook": (["calendar"] if calendar_full else
+                            _clean_categories(self.cfg["outlook_categories"],
                                               ["mail", "calendar", "contacts"])
                             if angefragt["outlook"] else []),
                 "teams": (_clean_categories(self.cfg["teams_categories"],
@@ -2023,7 +2055,10 @@ class Handler(BaseHTTPRequestHandler):
                                  or None),
                     embeddings=data.get("embeddings"),
                     label=str(data.get("label") or "job.export"),
-                    reconstruct=rekonstruktion)
+                    reconstruct=rekonstruktion,
+                    legacy_comments=bool(data.get("legacy_comments")),
+                    sync_now=bool(data.get("sync_now")),
+                    calendar_full=bool(data.get("calendar_full")))
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
             if u.path == "/api/login":
                 ok, daten = app.login_starten()
@@ -2165,6 +2200,10 @@ class Handler(BaseHTTPRequestHandler):
                                    ("sharepoint_pages_image_max_mb", 0, 100),
                                    ("onenote_image_max_mb", 0, 100),
                                    ("teams_files_max_mb", 0, 100000),
+                                   # 0 = the whole calendar, every run.
+                                   ("calendar_months_back", 0, 240),
+                                   # 0 = never re-read the chat comments.
+                                   ("planner_sweep_hours", 0, 8760),
                                    ("search_results", 5, 100),
                                    # 0 means: userflow recording off.
                                    ("userflow_actions", 0, 50),
@@ -2211,9 +2250,16 @@ class Handler(BaseHTTPRequestHandler):
             if "onedrive_rules" in data:
                 cfg["onedrive_rules"] = folders.schreibe_regeln(
                     folders.lies_regeln(str(data["onedrive_rules"] or "")))
-            if "onenote_rules" in data:
-                cfg["onenote_rules"] = folders.schreibe_regeln(
-                    folders.lies_regeln(str(data["onenote_rules"] or "")))
+            for key in ("onenote_rules", "teams_rules", "sharepoint_rules",
+                        "todo_rules"):
+                if key in data:
+                    cfg[key] = folders.schreibe_regeln(
+                        folders.lies_regeln(str(data[key] or "")))
+            # A day or nothing: anything else would silently mean "nothing
+            # older than never".
+            for key in ("outlook_since", "teams_since"):
+                if key in data:
+                    cfg[key] = _clean_datum(data[key])
             if "analytics_skip" in data:
                 cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
             if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
@@ -2238,6 +2284,9 @@ class Handler(BaseHTTPRequestHandler):
                 wert = str(data["notifications"] or "").strip().lower()
                 if wert in ("off", "errors", "all"):
                     cfg["notifications"] = wert
+            if "tour_seen" in data and isinstance(data["tour_seen"], dict):
+                cfg["tour_seen"] = {k: bool(v) for k, v in data["tour_seen"].items()
+                                    if k in ("archiv", "suche", "quelle")}
             if "language" in data:
                 # Only known codes – one typo otherwise and the interface would
                 # speak the fallback language forever.
@@ -2417,9 +2466,13 @@ class Handler(BaseHTTPRequestHandler):
         cfg = self.app.cfg
         quelle = str(data.get("quelle") or "")
         if quelle == "sharepoint":
-            return self._sharepoint_plan()
+            return self._sharepoint_plan(data.get("sharepoint_rules"))
         if quelle == "onenote":
             return self._notizbuch_plan(data.get("onenote_rules"))
+        if quelle == "teams":
+            return self._teams_plan(data.get("teams_rules"))
+        if quelle == "todo":
+            return self._todo_plan(data.get("todo_rules"))
         datei = folders.KALENDER if quelle == "calendar" else folders.DATEI
         if quelle == "onedrive":
             ordner, endung = BASE / ONEDRIVE_DIR, None
@@ -2464,31 +2517,87 @@ class Handler(BaseHTTPRequestHandler):
                 **folders.plan(wurzel, regeln, daten, ".html",
                                folders.NOTIZBUECHER, archiv=je_buch)}
 
-    def _sharepoint_plan(self):
+    def _teams_plan(self, roh):
+        """The export list for Teams: the stored conversation list against
+        the rules from the form. A conversation is one file, named after
+        its title with the id as suffix – so "in the archive" is counted
+        per title, and a file whose title left the list shows as "only
+        here"."""
+        wurzel = BASE / TEAMS_DIR
+        daten = folders.lade(wurzel, folders.DATEI)
+        if not daten:
+            return {"ok": False, "leer": True}
+        regeln = teamsregeln(self.app.cfg, roh)
+        archiv = {}
+        if wurzel.is_dir():
+            for datei in wurzel.glob("*/*.html"):
+                archiv[f"{datei.parent.name}/{_ohne_kennung(datei.stem)}"] = \
+                    archiv.get(f"{datei.parent.name}/{_ohne_kennung(datei.stem)}", 0) + 1
+            for datei in wurzel.glob("channels/*/*.html"):
+                pfad = f"channels/{datei.parent.name}/{_ohne_kennung(datei.stem)}"
+                archiv[pfad] = archiv.get(pfad, 0) + 1
+        return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
+                **folders.plan(wurzel, regeln, daten, ".html",
+                               folders.DATEI, archiv=archiv)}
+
+    def _todo_plan(self, roh):
+        """The export list for To Do: the stored list of lists against the
+        rules from the form; a list's folder carries the id as suffix, its
+        tasks are counted from the folder's state."""
+        wurzel = BASE / TODO_DIR
+        daten = folders.lade(wurzel, folders.DATEI)
+        if not daten:
+            return {"ok": False, "leer": True}
+        regeln = todoregeln(self.app.cfg, roh)
+        archiv = {}
+        if wurzel.is_dir():
+            for ordner in wurzel.iterdir():
+                if not ordner.is_dir() or ordner.name.startswith("."):
+                    continue
+                try:
+                    n = len(json.loads(
+                        state_db.StateDb(ordner).kv_lesen("tasks") or "{}"))
+                except ValueError:
+                    n = 0
+                pfad = _ohne_kennung(ordner.name)
+                archiv[pfad] = archiv.get(pfad, 0) + n
+        return {"ok": True, "regeln": folders.schreibe_regeln(regeln),
+                **folders.plan(wurzel, regeln, daten, ".html",
+                               folders.DATEI, archiv=archiv)}
+
+    def _sharepoint_plan(self, roh=None):
         """The export list for the SharePoint mirror: every library's tree,
-        paths prefixed with site/library. No path rules here – the URL list
-        does the choosing, so everything known simply shows as coming along."""
+        paths prefixed with site/library, judged by the path rules on top
+        of the URL list. Each entry names the URLs its library came from,
+        so the page can tell which cadence row paces it."""
         wurzel = BASE / SHAREPOINT_DIR
         eintraege, stand = [], None
         if wurzel.is_dir():
             for lib in sorted(p for p in wurzel.glob("*/*") if p.is_dir()):
-                d = state_db.StateDb(lib).baum_lesen()
+                db = state_db.StateDb(lib)
+                d = db.baum_lesen()
                 if not d:
                     continue
                 praefix = lib.relative_to(wurzel).as_posix()
                 stand = max(stand or "", d.get("abgeglichen") or "") or None
+                try:
+                    urls = json.loads(db.kv_lesen("urls") or "[]")
+                except ValueError:
+                    urls = []
                 for e in d.get("ordner", []):
-                    eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}"})
+                    eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}",
+                                      **({"urls": urls} if urls else {})})
         if not eintraege:
             return {"ok": False, "leer": True}
         daten = {"ordner": eintraege, "abgeglichen": stand}
-        plan = folders.plan(wurzel, [], daten, None)
+        regeln = sharepointregeln(self.app.cfg, roh)
+        plan = folders.plan(wurzel, regeln, daten, None)
         # The walk under the site roots also sees each library's bookkeeping
         # (state.db and other leftovers) – real content lives below Dateien/.
         plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
                        if "/Dateien/" in z["pfad"] + "/"]
         plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
-        return {"ok": True, "regeln": "", **plan}
+        return {"ok": True, "regeln": folders.schreibe_regeln(regeln), **plan}
 
     def _files(self, q):
         """One level of the mirrored file tree, sizes taken from disk."""

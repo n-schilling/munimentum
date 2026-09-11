@@ -16,16 +16,23 @@ Comments live in two worlds, and both come along:
     lastDeliveredDateTime per thread.
   * new (chat-based): GET /beta/planner/tasks/{id}/messages. There is no
     change signal, so changed tasks are asked immediately and everything
-    else at most once per day (a full sweep per plan).
+    else at most every PLANNER_SWEEP_HOURS (a full sweep per plan; 0 turns
+    the sweep off).
 
 Planner has no delta feed, but boards are small: every run lists all tasks
-(one paged call) and refreshes only what changed, by task etag. Absence in
-a clean listing is the deletion signal.
+(one paged call) and refreshes only what changed, by task etag – the
+refreshes run side by side (EXPORT_WORKERS). Absence in a clean listing is
+the deletion signal. A board whose cadence is not due costs nothing at all:
+its folder on disk answers the question before the plan is fetched. The
+board file and the state blobs are written only when the run changed
+something – an unchanged board keeps its file, bytes and timestamp.
 
 Runs as a subprogram of app.py: output folder as the only argument,
 settings as environment variables (PLANNER_URLS – one plan URL per line;
-SYNC_CADENCE/SYNC_NOW – see export_util). Progress, results and failures
-are structured lines (progress.py).
+SYNC_CADENCE/SYNC_NOW – see export_util; PLANNER_SWEEP_HOURS – see above;
+PLANNER_ATTACHMENTS; PLANNER_LEGACY_SYNC – read the legacy comment threads
+again, see plan_lauf; EXPORT_WORKERS). Progress, results and failures are
+structured lines (progress.py).
 """
 
 import base64
@@ -34,7 +41,9 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import unquote
@@ -53,8 +62,6 @@ BETA = "https://graph.microsoft.com/beta"
 RES = "https://graph.microsoft.com/"
 SCOPES = [RES + "Tasks.Read", RES + "Group.Read.All", RES + "User.Read"]
 
-SWEEP_S = 24 * 3600            # full new-comment sweep at most this often
-
 # Planner's fixed label palette – the plan's details name the categories,
 # the colours are Planner's own.
 FARBEN = {"category1": "#e8919b", "category2": "#eb8f5b", "category3": "#edc23e",
@@ -66,6 +73,24 @@ FARBEN = {"category1": "#e8919b", "category2": "#eb8f5b", "category3": "#edc23e"
           "category19": "#8595c6", "category20": "#a5c695",
           "category21": "#c6a585", "category22": "#85c695", "category23": "#9585c6",
           "category24": "#c68595", "category25": "#95c6b5"}
+
+# Log lines may come from a worker (a reference that would not download):
+# one at a time, so the app's parser always gets whole lines.
+_AUSGABE = threading.Lock()
+
+
+def _event(key, level="info", **vars):
+    with _AUSGABE:
+        progress.event(key, level, **vars)
+
+
+def _json(roh):
+    """A stored JSON object, {} for nothing or nonsense."""
+    try:
+        daten = json.loads(roh) if roh else {}
+    except ValueError:
+        return {}
+    return daten if isinstance(daten, dict) else {}
 
 
 def planner_urls():
@@ -90,6 +115,21 @@ def anhaenge_laden():
     return settings.flag("PLANNER_ATTACHMENTS", "planner_attachments")
 
 
+def sweep_stunden():
+    """How often the chat comments of otherwise untouched tasks are re-read
+    (PLANNER_SWEEP_HOURS): the chat endpoint has no change signal, so the
+    sweep is the only way to catch a comment on a task nobody edited.
+    0 means never – the board then only follows task changes."""
+    return settings.number("PLANNER_SWEEP_HOURS", "planner_sweep_hours", low=0)
+
+
+def legacy_sync_erzwungen():
+    """The "Read legacy comments again" button: this run lists the group
+    conversation once more – in case someone still replied from Outlook –
+    and ignores the boards' cadence, being the user's explicit wish."""
+    return bool((os.environ.get("PLANNER_LEGACY_SYNC") or "").strip())
+
+
 class Graph(graph_client.Graph):
     def __init__(self, nur_still=False):
         scopes = list(SCOPES)
@@ -105,11 +145,47 @@ class TokenClient(graph_client.TokenClient):
 # ---------------------------------------------------------------------------
 # Resolving: URL -> plan with its cadence
 # ---------------------------------------------------------------------------
-def resolve_plans(graph, urls):
-    """[(plan, kadenz)] for the configured URLs; broken URLs cost the others
-    nothing."""
+def plan_ordner(out, pid):
+    """The folder a plan already has on disk, found by the id short-code
+    its name ends with – so the cadence can be decided before the plan is
+    fetched (the title, the name's other half, is not known yet). A plan
+    renamed since its last run has two candidates; the one synced last
+    wins. None on a first run."""
+    if out is None:
+        return None
+    endung = f"__{export_util.kuerzel(pid)}"
+    try:
+        kandidaten = sorted(p for p in Path(out).iterdir()
+                            if p.is_dir() and p.name.endswith(endung))
+    except OSError:
+        return None
+    beste, juengst = None, -1.0
+    for p in kandidaten:
+        try:
+            stand = float(state_db.StateDb(p).kv_lesen("last_sync") or 0)
+        except ValueError:
+            stand = 0.0
+        if stand > juengst:
+            beste, juengst = p, stand
+    return beste
+
+
+def _gemerkter_titel(ordner, pid):
+    """The plan's title as its last run stored it – for the skip line of a
+    board that is not fetched this time."""
+    plan = _json(state_db.StateDb(ordner).kv_lesen("plan"))
+    rest = ordner.name[:-len(f"__{export_util.kuerzel(pid)}")]
+    return str(plan.get("titel") or rest or pid)
+
+
+def resolve_plans(graph, urls, out=None):
+    """The configured plans with their cadence, plus the number of broken
+    URLs (they cost the others nothing). The cadence is decided BEFORE a
+    plan is fetched: a board whose folder on disk says "not due" is handed
+    on unfetched, with that folder and its stored title, so lauf() can say
+    why it skips – without a single request for it."""
     kadenz_map = export_util.kadenzen()
-    plaene, fehl, gesehen = [], 0, {}
+    kadenz_je, url_je, fehl = {}, {}, 0
     for url in urls:
         pid = plan_id_aus(url)
         if not pid:
@@ -117,33 +193,44 @@ def resolve_plans(graph, urls):
             fehl += 1
             continue
         kadenz = kadenz_map.get(f"planner-url:{url}") or "always"
-        if pid in gesehen:
-            gesehen[pid]["kadenz"] = export_util.haeufigere(
-                gesehen[pid]["kadenz"], kadenz)
+        if pid in kadenz_je:
+            kadenz = export_util.haeufigere(kadenz_je[pid], kadenz)
+        else:
+            url_je[pid] = url
+        kadenz_je[pid] = kadenz
+    plaene = []
+    for pid, kadenz in kadenz_je.items():
+        ordner = plan_ordner(out, pid)
+        if ordner is not None and not legacy_sync_erzwungen() and \
+                not export_util.einheit_faellig(state_db.StateDb(ordner), kadenz):
+            plaene.append({"id": pid, "titel": _gemerkter_titel(ordner, pid),
+                           "gruppe": None, "kadenz": kadenz,
+                           "ordner": ordner.name})
             continue
         try:
             plan = graph.get(f"{GRAPH}/planner/plans/{pid}")
         except auth.TokenExpired:
             raise
         except Exception as e:
-            progress.event("run.planner.plan_failed", "err", url=url,
+            progress.event("run.planner.plan_failed", "err", url=url_je[pid],
                            error=f"{type(e).__name__}: {e}")
             fehl += 1
             continue
         container = plan.get("container") or {}
-        eintrag = {"id": pid, "titel": str(plan.get("title") or pid),
-                   "gruppe": (container.get("containerId")
-                              if container.get("type", "").lower() == "group"
-                              else plan.get("owner")),
-                   "kadenz": kadenz}
-        gesehen[pid] = eintrag
-        plaene.append(eintrag)
+        plaene.append({"id": pid, "titel": str(plan.get("title") or pid),
+                       "gruppe": (container.get("containerId")
+                                  if container.get("type", "").lower() == "group"
+                                  else plan.get("owner")),
+                       "kadenz": kadenz})
     return plaene, fehl
 
 
 def plan_ziel(out, plan):
-    """One folder per plan; the id short-code keeps same-titled plans apart."""
-    name = f'{export_util.safe(plan["titel"])}__{export_util.kuerzel(plan["id"])}'
+    """One folder per plan; the id short-code keeps same-titled plans apart.
+    A plan that arrives with its folder (known from disk, not fetched)
+    keeps it."""
+    name = plan.get("ordner") or \
+        f'{export_util.safe(plan["titel"])}__{export_util.kuerzel(plan["id"])}'
     return Path(out) / name
 
 
@@ -154,45 +241,62 @@ def _alle(graph, url):
     return list(graph.paged(url))
 
 
-def _namen(graph, db, ids):
-    """user id -> display name, cached in the plan's state.db forever –
-    names hardly change, and the cache spares one request per person."""
-    try:
-        cache = json.loads(db.kv_lesen("namen") or "{}")
-    except ValueError:
-        cache = {}
-    neu = False
-    for kennung in ids:
-        if not kennung or kennung in cache:
-            continue
+def _namen(graph, wurzel, ids, bekannt=None):
+    """user id -> display name for the given ids, cached forever in the
+    Planner root's state.db (records area "namen") – the same people sit on
+    several boards, and names hardly change. The ids nobody knows yet go
+    out as one JSON batch instead of one request per person. `bekannt` is
+    a plan's own cache from before 9.0: taken over, not asked again."""
+    cache = {}
+    for kennung, roh in wurzel.saetze_lesen("namen").items():
         try:
-            u = graph.get(f"{GRAPH}/users/{kennung}?$select=displayName")
-            cache[kennung] = str(u.get("displayName") or kennung)
+            cache[kennung] = str(json.loads(roh))
+        except ValueError:
+            cache[kennung] = str(roh)
+    ids = sorted(k for k in ids if k)
+    neu = {k: str(bekannt[k]) for k in ids
+           if k not in cache and (bekannt or {}).get(k) and bekannt[k] != k}
+    offen = [k for k in ids if k not in cache and k not in neu]
+    if offen:
+        urls = {f"{GRAPH}/users/{k}?$select=displayName": k for k in offen}
+        try:
+            antworten = graph.batch_get(list(urls))
         except auth.TokenExpired:
             raise
-        except Exception:
-            cache[kennung] = kennung
-        neu = True
+        except Exception as e:
+            _event("run.planner.names_failed", "warn", n=len(offen),
+                   error=f"{type(e).__name__}: {e}")
+            antworten = {}
+        for url, k in urls.items():
+            status, body = antworten.get(url, (0, None))
+            if status == 200 and isinstance(body, dict):
+                neu[k] = str(body.get("displayName") or k)
+            elif status == 404:
+                # Gone: the id stands in for the name and stays cached,
+                # nobody asks a deleted user twice. Anything else – a
+                # missing permission, a batch that failed – is asked again
+                # next run, so a permission granted later heals the cards.
+                neu[k] = k
     if neu:
-        db.kv_schreiben("namen", json.dumps(cache, ensure_ascii=False))
-    return cache
+        wurzel.saetze_schreiben("namen", {k: json.dumps(v, ensure_ascii=False)
+                                          for k, v in neu.items()})
+        cache.update(neu)
+    return {k: cache.get(k, k) for k in ids}
 
 
 ANHANG_DIR = "Anhaenge"
 
 
-def _referenzen_laden(graph, db, ziel, task, det):
+def _referenzen_laden(graph, stand, ziel, task, det):
     """The task's referenced files, downloaded next to the board.
 
-    Returns {url: rel} for the cards to link locally. Refreshed by the
+    Returns ({url: rel}, {url: state}) – the local links for the card and
+    the state entries the caller merges and stores once per run; `stand` is
+    the stored state, read only (this runs in a worker). Refreshed by the
     driveItem cTag whenever the task itself is refreshed; a file that will
     not come (gone, no permission, not a drive item) keeps its cloud link
     and says so once in the log."""
-    try:
-        stand = json.loads(db.kv_lesen("anhaenge") or "{}")
-    except ValueError:
-        stand = {}
-    lokal = {}
+    lokal, neu = {}, {}
     for roh in (det.get("references") or {}):
         url = unquote(roh)
         token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
@@ -211,24 +315,29 @@ def _referenzen_laden(graph, db, ziel, task, det):
             name = f"{stamm}__{kurz}.{endung}" if punkt else \
                 f"{roh_name}__{kurz}"
             rel = f"{ANHANG_DIR}/{name}"
-            if alt.get("ctag") == (meta.get("cTag") or "") and                     (ziel / rel).exists():
+            if alt.get("ctag") == (meta.get("cTag") or "") and \
+                    (ziel / rel).exists():
                 lokal[url] = rel
                 continue
             daten, _typ = graph.get_bytes(
                 f"{GRAPH}/shares/u!{token}/driveItem/content",
                 label=" (Anhang)")
             (ziel / ANHANG_DIR).mkdir(parents=True, exist_ok=True)
-            (ziel / rel).write_bytes(daten)
-            stand[url] = {"rel": rel, "ctag": meta.get("cTag") or ""}
+            # Two cards may reference one file and refresh side by side:
+            # each writer finishes its own copy, the last replace wins –
+            # never a half file under the shared name.
+            tmp = (ziel / rel).with_name(f"{name}.{threading.get_ident()}.tmp")
+            tmp.write_bytes(daten)
+            tmp.replace(ziel / rel)
+            neu[url] = {"rel": rel, "ctag": meta.get("cTag") or ""}
             lokal[url] = rel
         except auth.TokenExpired:
             raise
         except Exception as e:
-            progress.event("run.planner.ref_failed", "warn",
-                           name=str(task.get("title") or "?")[:60],
-                           error=f"{type(e).__name__}: {e}")
-    db.kv_schreiben("anhaenge", json.dumps(stand, ensure_ascii=False))
-    return lokal
+            _event("run.planner.ref_failed", "warn",
+                   name=str(task.get("title") or "?")[:60],
+                   error=f"{type(e).__name__}: {e}")
+    return lokal, neu
 
 
 def _saeubere(html):
@@ -395,11 +504,13 @@ def _task_html(eintrag, labels, namen, weg=False):
     return "".join(teile)
 
 
-def render_board(plan, buckets, eintraege, labels, namen):
+def render_board(plan, buckets, eintraege, labels, namen, stand=None):
     """Three collapsed levels: the chip row up top says which swimlanes the
     board has, a lane opens into its task list, a task into its body, the
-    comments into their thread – native <details>, no library."""
-    jetzt = datetime.now(UTC).isoformat(timespec="seconds")
+    comments into their thread – native <details>, no library. `stand` is
+    the moment of the last change, not of this run: the file is only
+    rewritten when something changed, and its timestamp says just that."""
+    jetzt = stand or datetime.now(UTC).isoformat(timespec="seconds")
     lebend = [e for e in eintraege.values() if not e.get("deleted")]
     reihen = sorted(buckets.values(), key=lambda b: str(b.get("orderHint") or ""))
     lanes = []
@@ -444,14 +555,55 @@ def render_board(plan, buckets, eintraege, labels, namen):
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
-def plan_lauf(graph, out, plan, threads_cache):
-    """One plan: list, refresh what changed, mark what vanished, render."""
+def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
+                      threads, sweep, anhang_stand):
+    """One task's refresh – runs in a worker and touches no shared state.
+    Returns (record, thread mark, attachment state): the new record, the
+    legacy thread's (id, delivered-at) or None, and the attachment state
+    entries the caller merges."""
+    tid = t["id"]
+    thread = t.get("conversationThreadId")
+    # Same etag, same task: the stored copy stays, so a sweep that finds
+    # nothing new leaves the record byte for byte as it was.
+    eintrag = {"etag": t.get("@odata.etag") or "",
+               "task": t if geaendert else (alt.get("task") or t),
+               "deleted": None,
+               "details": alt.get("details"),
+               "anhaenge": alt.get("anhaenge") or {},
+               "kommentare": alt.get("kommentare") or []}
+    anhang_neu = {}
+    if geaendert or not eintrag["details"]:
+        eintrag["details"] = graph.get(f"{GRAPH}/planner/tasks/{tid}/details")
+        if anhaenge_laden():
+            eintrag["anhaenge"], anhang_neu = _referenzen_laden(
+                graph, anhang_stand, ziel, t, eintrag["details"])
+        else:
+            eintrag["anhaenge"] = alt.get("anhaenge") or {}
+    kommentare, faden = [], None
+    if legacy_holen:
+        kommentare += _legacy_posts(graph, plan.get("gruppe"), thread)
+        # Without a listing the latest post dates the thread – the group's
+        # lastDeliveredDateTime is exactly that.
+        faden = (thread, threads.get(thread, "") if threads is not None else
+                 max((k["wann"] for k in kommentare if k["art"] == "legacy"),
+                     default=""))
+    elif thread:
+        kommentare += [k for k in eintrag["kommentare"] if k["art"] == "legacy"]
+    neue = _neue_kommentare(graph, tid) if (geaendert or sweep) else None
+    kommentare += (neue if neue is not None else
+                   [k for k in eintrag["kommentare"] if k["art"] == "neu"])
+    eintrag["kommentare"] = kommentare
+    return eintrag, faden, anhang_neu
+
+
+def plan_lauf(graph, out, plan, threads_cache, workers=1):
+    """One plan: list, refresh what changed, mark what vanished, render –
+    and write only when this run changed something."""
     ziel = plan_ziel(out, plan)
     db = state_db.StateDb(ziel)
-    try:
-        eintraege = json.loads(db.kv_lesen("tasks") or "{}")
-    except ValueError:
-        eintraege = {}
+    vorher = {k: db.kv_lesen(k) or ""
+              for k in ("plan", "tasks", "threads", "namen", "anhaenge")}
+    eintraege = _json(vorher["tasks"])
 
     details = graph.get(f"{GRAPH}/planner/plans/{plan['id']}/details")
     labels = {k: v for k, v in
@@ -461,17 +613,22 @@ def plan_lauf(graph, out, plan, threads_cache):
     tasks = _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/tasks")
 
     gruppe = plan.get("gruppe")
-    try:
-        stand_threads = json.loads(db.kv_lesen("threads") or "{}")
-    except ValueError:
-        stand_threads = {}
-    # Which legacy threads moved since last time – ONE listing per group.
-    # NOT on the first comment sync: there every post is fetched anyway, and
-    # the listing walks the group's ENTIRE conversation store (Teams posts
-    # included) at Graph's tiny page size – on a big group that is minutes
-    # of silence for nothing.
+    stand_threads = _json(vorher["threads"])
+    # Legacy comments live in the group conversation, and Planner has taken
+    # no new ones since February 2026 (task chat replaced them). So a thread
+    # synced once is final, and the ONE listing per group that used to spot
+    # moved threads – a walk over the group's ENTIRE conversation store,
+    # Teams posts included, at Graph's tiny page size: minutes of silence
+    # and 504s on a big group – runs only when asked for
+    # (PLANNER_LEGACY_SYNC, the button in the Planner settings). Never on
+    # the first sync: there every post is fetched anyway. A thread the state
+    # does not know (first run, or its task failed then) is fetched
+    # directly, no listing needed.
     erste = not stand_threads
-    if gruppe and not erste and gruppe not in threads_cache:
+    erzwungen = legacy_sync_erzwungen()
+    if gruppe and not erste and not erzwungen:
+        progress.event("run.planner.legacy_skip", name=plan["titel"])
+    if gruppe and not erste and erzwungen and gruppe not in threads_cache:
         progress.event("run.planner.threads", name=plan["titel"])
         try:
             threads_cache[gruppe] = {
@@ -487,8 +644,12 @@ def plan_lauf(graph, out, plan, threads_cache):
                            error=f"{type(e).__name__}: {e}")
     threads = threads_cache.get(gruppe)
 
-    sweep = export_util.sync_jetzt() or \
-        (time.time() - float(db.kv_lesen("sweep") or 0)) > SWEEP_S
+    # The sweep follows its own clock, never the "Sync now" button: that
+    # button only lets the cadence gate step aside.
+    takt = sweep_stunden() * 3600
+    sweep = takt > 0 and \
+        (time.time() - float(db.kv_lesen("sweep") or 0)) > takt
+    anhang_stand = _json(vorher["anhaenge"])
     neu = unveraendert = fehler = 0
     gesehen = set()
     # Decide first, then work: the progress bar then knows its target, and
@@ -504,61 +665,53 @@ def plan_lauf(graph, out, plan, threads_cache):
         etag_neu = t.get("@odata.etag") or ""
         geaendert = alt.get("etag") != etag_neu or alt.get("deleted")
         thread = t.get("conversationThreadId")
-        legacy_neu = bool(thread and (erste or (
+        legacy_neu = bool(thread and (thread not in stand_threads or (
             threads is not None and threads.get(thread, "") !=
             stand_threads.get(thread, ""))))
         if not (geaendert or legacy_neu or sweep):
             unveraendert += 1
             continue
-        faellig.append((t, alt, etag_neu, geaendert, thread))
+        legacy_holen = bool(thread and gruppe and (
+            thread not in stand_threads or threads is not None))
+        faellig.append((t, alt, geaendert, legacy_holen))
     progress.event("run.planner.start", name=plan["titel"], n=len(tasks),
                    m=len(faellig))
     if faellig:
         progress.melde(0, len(faellig), "tasks")
-    for lfd, (t, alt, etag_neu, geaendert, thread) in enumerate(faellig):
-        tid = t["id"]
-        eintrag = {"etag": etag_neu, "task": t, "deleted": None,
-                   "details": alt.get("details"),
-                   "anhaenge": alt.get("anhaenge") or {},
-                   "kommentare": alt.get("kommentare") or []}
-        try:
-            if geaendert or not eintrag["details"]:
-                eintrag["details"] = graph.get(
-                    f"{GRAPH}/planner/tasks/{tid}/details")
-                if anhaenge_laden():
-                    eintrag["anhaenge"] = _referenzen_laden(
-                        graph, db, ziel, t, eintrag["details"])
-                else:
-                    eintrag["anhaenge"] = alt.get("anhaenge") or {}
-            kommentare = []
-            if thread and gruppe and (erste or threads is not None):
-                kommentare += _legacy_posts(graph, gruppe, thread)
-                # Without a listing (first run) the latest post dates the
-                # thread – the group's lastDeliveredDateTime is exactly
-                # that.
-                stand_threads[thread] = (
-                    threads.get(thread, "") if threads is not None else
-                    max((k["wann"] for k in kommentare
-                         if k["art"] == "legacy"), default=""))
-            elif thread:
-                kommentare += [k for k in eintrag["kommentare"]
-                               if k["art"] == "legacy"]
-            neue = _neue_kommentare(graph, tid) if (geaendert or sweep) \
-                else None
-            kommentare += (neue if neue is not None else
-                           [k for k in eintrag["kommentare"]
-                            if k["art"] == "neu"])
-            eintrag["kommentare"] = kommentare
-            eintraege[tid] = eintrag
-            neu += 1
-            progress.melde(lfd + 1, len(faellig), "tasks")
-        except auth.TokenExpired:
-            raise
-        except Exception as e:
-            fehler += 1
-            progress.event("run.planner.task_failed", "err",
-                           name=str(t.get("title") or tid)[:60],
-                           error=f"{type(e).__name__}: {e}")
+    # The refreshes run side by side; the shared state is touched only
+    # here, in this thread, once the workers are done.
+    ergebnisse = {}
+    with ThreadPoolExecutor(max_workers=max(1, int(workers or 1))) as pool:
+        offen = {pool.submit(_task_auffrischen, graph, ziel, plan, t, alt,
+                             geaendert, legacy_holen, threads, sweep,
+                             anhang_stand): t
+                 for t, alt, geaendert, legacy_holen in faellig}
+        for lfd, fut in enumerate(as_completed(offen), 1):
+            t = offen[fut]
+            try:
+                ergebnisse[t["id"]] = fut.result()
+            except auth.TokenExpired:
+                pool.shutdown(cancel_futures=True)
+                raise
+            except Exception as e:
+                fehler += 1
+                _event("run.planner.task_failed", "err",
+                       name=str(t.get("title") or t["id"])[:60],
+                       error=f"{type(e).__name__}: {e}")
+            progress.melde(lfd, len(faellig), "tasks")
+    # Merged in listing order, whatever order the workers finished in: the
+    # board (cards of one bucket with equal order hints) and the stored
+    # blob must not depend on thread timing.
+    anhang_neu = {}
+    for t, _alt, _geaendert, _legacy in faellig:
+        if t["id"] not in ergebnisse:
+            continue
+        eintrag, faden, anhang = ergebnisse[t["id"]]
+        eintraege[t["id"]] = eintrag
+        if faden:
+            stand_threads[faden[0]] = faden[1]
+        anhang_neu.update(anhang)
+        neu += 1
     # Absence in a complete, error-free listing is the deletion signal –
     # the record stays, the card moves to the greyed section.
     if not fehler:
@@ -568,42 +721,59 @@ def plan_lauf(graph, out, plan, threads_cache):
                 e["deleted"] = jetzt
     if sweep and not fehler:
         db.kv_schreiben("sweep", str(time.time()))
+    anhang_stand.update(anhang_neu)
 
     kennungen = set()
     for e in eintraege.values():
         kennungen |= set((e.get("task") or {}).get("assignments") or {})
         kennungen |= {k["wer"] for k in e.get("kommentare") or []
                       if k["art"] == "neu"}
-    namen = _namen(graph, db, kennungen)
+    namen = _namen(graph, state_db.StateDb(out), kennungen,
+                   bekannt=_json(vorher["namen"]))
 
-    db.kv_schreiben("plan", json.dumps(
-        {"id": plan["id"], "titel": plan["titel"], "labels": labels,
-         "buckets": {b["id"]: str(b.get("name") or "") for b in
-                     buckets.values()}}, ensure_ascii=False))
-    db.kv_schreiben("tasks", json.dumps(eintraege, ensure_ascii=False))
-    db.kv_schreiben("threads", json.dumps(stand_threads, ensure_ascii=False))
-    ziel.mkdir(parents=True, exist_ok=True)
-    export_util.schreibe_atomar(
-        ziel / "board.html",
-        render_board(plan, buckets, eintraege, labels, namen))
+    # Written only when different from what is stored: an unchanged board
+    # keeps its blobs, its file and its "Stand" line. The plan's own name
+    # blob is the corpus reader's view of the shared cache.
+    nachher = {
+        "plan": json.dumps(
+            {"id": plan["id"], "titel": plan["titel"], "labels": labels,
+             "buckets": {b["id"]: str(b.get("name") or "") for b in
+                         buckets.values()}}, ensure_ascii=False),
+        "tasks": json.dumps(eintraege, ensure_ascii=False),
+        "threads": json.dumps(stand_threads, ensure_ascii=False),
+        "namen": json.dumps(namen, ensure_ascii=False, sort_keys=True),
+        "anhaenge": json.dumps(anhang_stand, ensure_ascii=False),
+    }
+    geaendert = {k: v for k, v in nachher.items() if v != vorher[k]}
+    stand = db.kv_lesen("stand")
+    board = ziel / "board.html"
+    if geaendert or not stand or not board.exists():
+        if geaendert or not stand:
+            stand = datetime.now(UTC).isoformat(timespec="seconds")
+        for k, v in geaendert.items():
+            db.kv_schreiben(k, v)
+        db.kv_schreiben("stand", stand)
+        export_util.schreibe_atomar(
+            board, render_board(plan, buckets, eintraege, labels, namen, stand))
     progress.event("run.planner.plan", name=plan["titel"], n=len(tasks))
     return neu, unveraendert, fehler
 
 
-def lauf(graph, out, plaene, fehl=0):
+def lauf(graph, out, plaene, fehl=0, workers=1):
     out = Path(out)
     neu = unveraendert = fehler = uebersprungen = 0
     threads_cache = {}
     for plan in plaene:
         db = state_db.StateDb(plan_ziel(out, plan))
         kadenz = plan.get("kadenz") or "always"
-        if not export_util.einheit_faellig(db, kadenz):
+        if not (legacy_sync_erzwungen()
+                or export_util.einheit_faellig(db, kadenz)):
             uebersprungen += 1
             progress.event("run.cadence.skip", name=plan["titel"],
                            cadence=progress.atom(f"cadence.{kadenz}"))
             continue
         try:
-            n, u, f = plan_lauf(graph, out, plan, threads_cache)
+            n, u, f = plan_lauf(graph, out, plan, threads_cache, workers)
         except auth.TokenExpired:
             raise
         except Exception as e:
@@ -633,10 +803,12 @@ def main():
         progress.event("run.planner.none", "warn")
         progress.ergebnis(0)
         return
+    workers = settings.number("EXPORT_WORKERS", "workers")
+    graph_client.konfiguriere(workers)
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
     try:
-        plaene, fehl = resolve_plans(graph, urls)
-        lauf(graph, out, plaene, fehl)
+        plaene, fehl = resolve_plans(graph, urls, out)
+        lauf(graph, out, plaene, fehl, workers)
     except auth.TokenExpired:
         progress.fehler("token_expired")
         sys.exit(1)

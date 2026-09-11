@@ -164,6 +164,10 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Wide row | `.feldzeile.breit` | textarea below its title row |
 | Switch | `.kipp` / checkbox inside `.feldzeile` | every boolean is this switch |
 | URL table | `.urltab .zeile` | one row per URL: field, cadence, *Sync now* |
+| Cadence row | `.feldzeile` + `select#c-cadence-<key>` | last row of the group it paces; key = source or `source:category` in `sync_cadence` |
+| Cadence departures | `.urltab.abw` + `.mini` *Pick …* | one row per unit that departs from the cadence above it: path, select, `×`; keys `source:category:<path>` |
+| Tour | `#tour` with `.tour-loch` + `.tour-karte` | coach marks: the cut-out dims everything but the step's element, the card next to it carries chapter · step counter, title, one sentence, *Next* / *Back* / *Skip*; steps are data in `TOUR`, texts `tour.<chapter>.<step>` |
+| Cadence window | `.baum` inside `.modal.breit` | the unit tree of the last list sync: filter, *Only set* chip, one row per unit with indent, count, tags (`n subfolders`, `n set below`, `not exported`) and ONE select (`.erbt` "as above · …" or `.gesetzt` with `×`); roots show the general cadence as text |
 | Action row | `.aktionen` | status text left, small buttons right |
 | Tag | `.tag` | source, deleted, origin; `.tag.weg` for deleted |
 | Status dot | `.dot.ok/.warn/.err` | always next to a word, never alone |
@@ -223,6 +227,45 @@ acts on. If it takes a while, its result text goes into the `.small.muted`
 span at the left of that row (the `ABGLEICH` pattern). Only one `.act`
 per screen.
 
+**A selection** (which units of a source come along): one shape for every
+source — a `.feldzeile` whose label names the choice ("Which folders are
+exported") with the `(i)` explaining the rule syntax and a state line
+(`#<key>-state`, "n of m chosen, as of …") at the right, the rules
+textarea as `.feldzeile.breit` below it, then an `.aktionen` row with
+*Sync … list* (the `--<list>` mode of the export, via `ABGLEICH`) and
+*Show export list* (`zeigeExportliste('<key>')`, three groups: comes
+along, left out with the rule, only in the archive). Nothing else decides
+what a source exports; no prose paragraph says "everything comes along".
+
+**A cadence**: a `.feldzeile` with the `settings.cadence` label at the END
+of the group it paces — a whole source (OneDrive, To Do) or one category
+of it (Mail, Calendar, Contacts; the four Teams kinds under their own
+*Sync cadence* heading). Every gate lives inside the export, and a skip
+is one `run.cadence.skip` line in the log. *Sync now* — the button in a
+URL row, or a `.mini` in the source's `.aktionen` row — lets every gate of
+that run step aside once; it never changes the cadence itself.
+
+**A departure from a cadence** (one mail folder, team, channel, chat,
+drive or library folder or To Do list that syncs differently): never a
+second select in the block. The block gets a
+*Per …* row with a state text ("n set – everything below inherits") and
+the departures as `.urltab.abw` rows below it, plus *Pick …* in the
+`.aktionen` row. Picking happens in the cadence window (`kadenzFenster`):
+the tree of the last list sync, drillable to any depth, one select per
+row that reads "as above · <inherited> (<from>)" until a value is set. A
+value on a unit reaches everything below it until a deeper unit sets its
+own — the rule is `export_util.kadenz_fuer` on the export side and
+`kadenzWirksam` on the page, and the export list shows the effective
+cadence as a `.tag`. A unit the rules leave out has no select. The window
+writes rows, the save bar saves them; the exports skip per unit and say so
+in ONE line per category (`run.outlook.folders_paced`, `run.teams.paced`,
+`run.onedrive.folders_paced`, `run.sharepoint.folders_paced`,
+`run.todo.paced`). In the drive mirrors (OneDrive, SharePoint libraries)
+the departure paces downloads, not the listing: the delta stream stays
+whole, files in a folder not yet due wait in state.db. A library's own
+cadence is its URL row; the window shows the site as a heading and the
+library as the root.
+
 **A new run or job**: nothing to add on the page — the run window renders
 from `jobs.job.steps`, the console from the log, the runs table in
 Overview from `/api/runs`. Give the step a `job.step.<key>` label and a `job.start.<key>`
@@ -235,6 +278,17 @@ top-level tab.
 **Explanations**: on the `(i)`, in `data-i18n-title`. A sentence next to a
 button is allowed only when it says what the button will do *right now*
 (a count, a date, a warning that applies).
+
+**A workflow explanation** (how to click through something): a chapter of
+the tour, never text on the doors. A step is one entry in `TOUR` — its
+element (an id, optionally an ancestor via `rahmen`), the tab, what to
+open first (a block, *Advanced*), title and one-sentence text. The tour
+explains and never changes a setting. Entry points: the first-start card,
+the result of the first run (search chapter), the gear on a source card
+(source chapter from inside the archive chapter), and *Settings › App*.
+Seen chapters live in `tour_seen` in the settings; a tour never restarts
+on its own. `test_rundgang_ziele_existieren` checks that every step's
+element is in the markup.
 
 ## 6. Copy and languages
 
@@ -267,6 +321,9 @@ button is allowed only when it says what the button will do *right now*
   primary button, *Discard*.
 - Progress: in the run window, bar plus step list; a step without a known total moves striped
   instead of inventing a percentage.
+- Guidance: the tour (`#tour`) — a dimmed page with one element lit and a
+  card beside it, started only by the user (or offered once after the
+  first run), ended with *Skip*, *Done* or Esc; never a permanent hint.
 - The status poll every 2.5 s must never overwrite what someone is typing:
   fill fields once (`cfgGefuellt`), rebuild tables only when their
   fingerprint changes (`notizbuchKennung`, `wizardKennung`).
@@ -293,6 +350,11 @@ These tests encode the guide; adapt them consciously, never delete them:
 - `test_lauffenster_bleibt_bis_zum_schliessen` — the run window opens with
   the run, stays until *Close*, minimises into the pill.
 - `test_keine_verwaisten_texte` / `test_jeder_verwendete_schluessel_ist_uebersetzt`.
+- `test_kadenzfenster_baum_und_vererbung` — the cadence window's tree and
+  the inheritance rule match the exports.
+- `test_rundgang_ziele_existieren` / `test_rundgang_kapitel_laufen_durch` —
+  every tour step points at an element, the chapters run through and are
+  marked seen once.
 
 ## 9. Before you change the interface
 

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 8.0.0
+  version: 9.0.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -104,6 +104,8 @@ paths:
                     description: Mailbox folder summary (abgeglichen, ordner_gesamt, ordner_gewaehlt, mails_gesamt, mails_gewaehlt, neu, verschwunden).
                   calendars: { type: object }
                   folders_onedrive: { type: object }
+                  conversations: { type: object, description: "Teams conversation list summary (same shape as folders)." }
+                  lists: { type: object, description: "To Do list summary (same shape as folders)." }
 
   /api/log:
     get:
@@ -517,6 +519,10 @@ paths:
                 calendar: { type: boolean }
                 sync_onedrive: { type: boolean, description: "Folder tree only." }
                 sync_notebooks: { type: boolean, description: "OneNote notebook list only." }
+                sync_teams: { type: boolean, description: "Teams conversation list only (teams and channels, chats by category)." }
+                sync_todo: { type: boolean, description: "To Do list of lists only." }
+                sync_now: { type: boolean, description: "Ignore every sync cadence once (the source's \"Sync now\" button)." }
+                calendar_full: { type: boolean, description: "Outlook: read the calendar once in full – only the calendar category runs, window and change tokens ignored." }
                 sync_sharepoint: { type: boolean }
                 sync_folders: { type: boolean, description: "Outlook folder tree only." }
                 sync_calendars: { type: boolean }
@@ -525,6 +531,7 @@ paths:
                 check_sharepoint: { type: boolean, description: "Mirror preview." }
                 check_pages: { type: boolean }
                 nur_einheit: { type: string, description: "Single site/library/plan URL." }
+                legacy_comments: { type: boolean, description: "Planner: list the legacy comment threads again, ignoring the boards' cadence (skipped after a board's first sync otherwise)." }
                 embeddings: { type: [boolean, "null"], description: "null = decide automatically." }
                 label: { type: string, default: job.export, description: "Run label (i18n key)." }
       responses:
@@ -605,8 +612,11 @@ paths:
             schema:
               type: object
               properties:
-                quelle: { type: string, description: "onedrive | calendar | sharepoint | onenote | anything else = mailbox." }
+                quelle: { type: string, description: "onedrive | calendar | sharepoint | onenote | teams | todo | anything else = mailbox." }
                 onedrive_rules: { type: [string, "null"], description: "Rule text; null = stored config." }
+                teams_rules: { type: [string, "null"] }
+                todo_rules: { type: [string, "null"] }
+                sharepoint_rules: { type: [string, "null"] }
                 calendar_rules: { type: [string, "null"] }
                 folder_rules: { type: [string, "null"] }
                 skip_folders: { description: "Legacy name list (array or comma/newline string)." }
@@ -670,10 +680,19 @@ paths:
         onenote_rules, onenote_image_max_mb, teams_attachments,
         teams_channel_files,
         teams_files_max_mb, calendar_rules, folder_rules,
-        onedrive_rules, sharepoint_urls, sharepoint_pages_urls,
+        onedrive_rules, teams_rules, sharepoint_rules, todo_rules,
+        calendar_months_back, planner_sweep_hours, outlook_since,
+        teams_since, sharepoint_urls, sharepoint_pages_urls,
         planner_urls, sharepoint_types_include, sharepoint_types_exclude,
         analytics_skip, filetype_hidden, skip_folders, auth_mode,
-        client_id, tenant, sync_cadence, notifications, language.
+        client_id, tenant, sync_cadence, notifications, language,
+        tour_seen (object: archiv | suche | quelle -> boolean).
+        sync_cadence maps keys to always|daily|weekly|monthly: a source
+        (onedrive, todo), a category (outlook:mail, teams:1on1), a unit
+        (sharepoint-url:<url>, planner-url:<url>, pages-url:<url>,
+        onenote:<id>) or a departure below a category
+        (outlook:mail:<folder path>, teams:<conversation path>) – the
+        deepest key on a unit's path wins.
       requestBody:
         content:
           application/json:

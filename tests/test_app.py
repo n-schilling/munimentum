@@ -13,6 +13,7 @@ import base64
 import gzip
 import http.client
 import json
+import state_db
 import os
 import re
 import types
@@ -550,6 +551,11 @@ def test_planner_schritt_wird_gebaut(sandbox):
 
     nur = app_mod.build_steps(cfg, {"planner": True}, nur_einheit=url)
     assert nur[0]["env"]["SYNC_NOW"] == "1"
+
+    # "Read legacy comments again": only on request, never by default.
+    assert "PLANNER_LEGACY_SYNC" not in steps[0]["env"]
+    erneut = app_mod.build_steps(cfg, {"planner": True}, legacy_comments=True)
+    assert erneut[0]["env"]["PLANNER_LEGACY_SYNC"] == "1"
 
     index = app_mod.build_steps(cfg, {"index": True})
     assert "--planner" in index[0]["argv"]
@@ -1460,46 +1466,29 @@ def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
     assert code == 200 and roh == b"PDF"
 
 
-def test_kadenz_ueberspringt_quelle_mit_klarer_logzeile(sandbox, with_ollama):
-    """The cadence gate applies to EVERY run – a manual export click too –
-    and says so in the log instead of silently dropping the source."""
-    app_mod.write_token(make_jwt(exp=time.time() + 3600))
-    a = app_mod.App(app_mod.load_config())
-    a.cfg["outlook_categories"] = ["mail"]
-    a.cfg["onedrive_enabled"] = True
-    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
-    a.history.last_step_ok = lambda key: time.time() - 3600   # an hour ago
-    gebaut = {}
-
-    def fake_build(cfg, angefragt, **kw):
-        gebaut.update(angefragt)
-        return [{"key": k, "label": f"job.step.{k}", "argv": [], "env": {},
-                 "corpus": True} for k in ("outlook", "onedrive")
-                if angefragt.get(k)]
-
-    gestartet = {}
-    a.jobs.start = (lambda steps, label, **kw:
-                    gestartet.update(label=label, steps=steps) or True)
-    alt_build = app_mod.build_steps
-    app_mod.build_steps = fake_build
-    try:
-        a.launch({"outlook": True, "onedrive": True}, label="job.export")
-    finally:
-        app_mod.build_steps = alt_build
-    # The source stays selected and stays a step – it is skipped IN the run,
-    # under its own heading, so the log reads like the run happened.
-    assert gebaut["onedrive"] is True and gebaut["outlook"] is True
-    schritte = {s["key"]: s for s in gestartet["steps"]}
-    assert "auslassen" not in schritte["outlook"]
-    grund = schritte["onedrive"]["auslassen"]
-    assert grund["k"] == "srv.cadence.skip"
-    assert grund["v"]["cadence"]["k"] == "cadence.weekly"
-    # The gate's loop variable must not shadow the run label – every run
-    # was suddenly called "Teams export".
-    assert gestartet["label"] == "job.export"
-    # Nothing is said before the run: the reason is logged by the runner.
-    assert not [z for z in a.jobs.lines if isinstance(z.get("text"), dict)
-                and z["text"].get("k") == "srv.cadence.skip"]
+def test_kadenz_reist_in_den_export(sandbox):
+    """Since 9.0 every cadence gate lives inside the export it paces – per
+    category, URL or notebook – so the app hands the table over instead of
+    dropping a step itself. An old whole-source "teams" entry stands in
+    for the four category keys until each has its own."""
+    cfg = app_mod.load_config()
+    cfg["outlook_categories"] = ["mail"]
+    cfg["teams_categories"] = ["1on1", "channels"]
+    cfg["onedrive_enabled"] = True
+    cfg["sync_cadence"] = {"onedrive": "weekly", "teams": "daily",
+                           "teams:channels": "monthly", "outlook:mail": "daily"}
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        cfg, {"outlook": True, "onedrive": True, "teams": True})}
+    assert not any("auslassen" in s for s in steps.values())
+    for key in ("outlook", "onedrive", "teams"):
+        kad = json.loads(steps[key]["env"]["SYNC_CADENCE"])
+        assert kad["onedrive"] == "weekly" and kad["outlook:mail"] == "daily"
+        assert kad["teams:1on1"] == "daily" and kad["teams:channels"] == "monthly"
+        assert "teams" not in kad
+        assert "SYNC_NOW" not in steps[key]["env"]
+    # "Sync now" for a whole source: the cadences step aside once.
+    jetzt = app_mod.build_steps(cfg, {"onedrive": True}, sync_now=True)
+    assert jetzt[0]["env"]["SYNC_NOW"] == "1"
 
 
 def test_jobrunner_protokoll_liest_sich_wie_der_lauf(sandbox):
@@ -1509,10 +1498,11 @@ def test_jobrunner_protokoll_liest_sich_wie_der_lauf(sandbox):
     ziel = sandbox / "corpus.db"
     ziel.write_text("x", encoding="utf-8")
     gated = _py_step("print('DARF NICHT LAUFEN')", "job.step.onedrive")
+    # A step the app decided not to run, with its reason attached – the
+    # runner prints the reason under the step's own heading.
     gated.update(corpus=True, auslassen={
-        "k": "srv.cadence.skip",
-        "v": {"step": {"k": "job.step.onedrive", "v": {}},
-              "cadence": {"k": "cadence.daily", "v": {}}}})
+        "k": "srv.job.skipped",
+        "v": {"step": {"k": "job.step.onedrive", "v": {}}}})
     index = _py_step("print('INDIZIERT')", "job.step.index")
     index.update(nur_bei_neuem=True, ziel=ziel)
     r = app_mod.JobRunner()
@@ -1523,7 +1513,7 @@ def test_jobrunner_protokoll_liest_sich_wie_der_lauf(sandbox):
     _warte(r)
     folge = [z["text"]["k"] for z in r.lines if isinstance(z["text"], dict)]
     assert folge == ["srv.job.start", "srv.job.elements",
-                     "srv.job.step", "srv.cadence.skip",
+                     "srv.job.step", "srv.job.skipped",
                      "srv.job.step", "srv.job.skipped",
                      "srv.job.done"], folge
     text = "\n".join(str(z["text"]) for z in r.lines)
@@ -1656,13 +1646,14 @@ def test_lauf_sperren_kennt_jede_upgrade_lage(standardort, tmp_path,
 
 
 def test_nur_uebersprungene_exporte_lassen_den_index_aus(sandbox, with_ollama):
-    """Every requested export dropped by its cadence means nothing new by
-    definition – the run must not re-read the whole archive for the index.
-    An index-only run asked for no export and keeps running."""
+    """Every requested export dropped before the run (an empty category
+    list) means nothing new by definition – the run must not re-read the
+    whole archive for the index. An index-only run asked for no export and
+    keeps running. A cadence-skipped export reports zero new items itself,
+    which the runner turns into the same skip."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
     a = app_mod.App(app_mod.load_config())
-    a.cfg["onedrive_enabled"] = True
-    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
+    a.cfg["outlook_categories"] = []
     jetzt = time.time()
     # Exported an hour ago, indexed afterwards: the index is current.
     a.history.last_step_ok = lambda key: (jetzt - 60 if key == "index"
@@ -1671,7 +1662,7 @@ def test_nur_uebersprungene_exporte_lassen_den_index_aus(sandbox, with_ollama):
                                                else jetzt - 3600)
     gestartet = {}
     a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
-    a.launch({"onedrive": True, "index": True}, label="job.export")
+    a.launch({"outlook": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is True
     a.launch({"index": True}, label="job.index")
     assert gestartet["context"]["nichts_neues"] is False
@@ -1681,12 +1672,11 @@ def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
                                                                    with_ollama):
     """"No export ran" only means "nothing to do" while the index is really
     newer than the last export. After a failed or cancelled index step the
-    archive has moved on without it – then a run whose exports are all gated
-    must still catch up instead of skipping for good."""
+    archive has moved on without it – then a run whose exports are all
+    dropped must still catch up instead of skipping for good."""
     app_mod.write_token(make_jwt(exp=time.time() + 3600))
     a = app_mod.App(app_mod.load_config())
-    a.cfg["onedrive_enabled"] = True
-    a.cfg["sync_cadence"] = {"onedrive": "weekly"}
+    a.cfg["outlook_categories"] = []
     jetzt = time.time()
     # Last successful index BEFORE the last export: stale.
     a.history.last_step_ok = lambda key: (jetzt - 7200 if key == "index"
@@ -1695,13 +1685,13 @@ def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
                                                else jetzt - 3600)
     gestartet = {}
     a.jobs.start = lambda steps, label, **kw: gestartet.update(kw) or True
-    a.launch({"onedrive": True, "index": True}, label="job.export")
+    a.launch({"outlook": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
     # Never indexed at all: nothing to be current about.
     a.history.last_step_ok = lambda key: None if key == "index" else jetzt
     a.history.last_step_started = lambda key: None if key == "index" else jetzt
-    a.launch({"onedrive": True, "index": True}, label="job.export")
+    a.launch({"outlook": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
     # The one an "ok only" reading would miss: an export that DIED part-way
@@ -1710,7 +1700,7 @@ def test_ausgelassener_index_holt_einen_fehlgeschlagenen_lauf_nach(sandbox,
     a.history.last_step_ok = lambda key: jetzt - 7200      # index, and the
     a.history.last_step_started = lambda key: (jetzt - 7200 if key == "index"
                                                else jetzt - 60)
-    a.launch({"onedrive": True, "index": True}, label="job.export")
+    a.launch({"outlook": True, "index": True}, label="job.export")
     assert gestartet["context"]["nichts_neues"] is False
 
 
@@ -2273,6 +2263,30 @@ def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwar
     assert code == 200 and r["ok"]
     kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
     assert (bool(kal), bool(kal) and "--no-reconstruct" not in kal[0]["argv"]) == erwartet
+
+
+def test_http_legacy_kommentare_neu_lesen(server, monkeypatch):
+    """The Planner settings' "Read legacy comments again" button: the flag
+    travels from the request into the step's environment, and the page
+    wires the button through the ABGLEICH map like every other sync."""
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
+
+    code, r = call(port, "POST", "/api/run",
+                   {"planner": True, "legacy_comments": True,
+                    "label": "job.planner.legacy"})
+    assert code == 200 and r["ok"]
+    (schritt,) = gesehen["steps"]
+    assert schritt["key"] == "planner"
+    assert schritt["env"]["PLANNER_LEGACY_SYNC"] == "1"
+
+    seite = app_mod.seite()
+    assert "gleicheOrdnerAb('planner_legacy')" in seite
+    assert "legacy_comments: true" in seite
+    assert 'data-i18n="settings.planner.legacy"' in seite
 
 
 def test_http_kalenderknopf_bleibt_vollstaendig(server, monkeypatch):
@@ -4866,6 +4880,110 @@ def test_exportliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
     assert not a.cfg["folder_rules"]
 
 
+def test_build_steps_traegt_die_neuen_umgebungen(sandbox):
+    """9.0: window, start dates, rules, sweep interval and the two list
+    syncs travel from the settings into the scripts' environment."""
+    cfg = app_mod.load_config()
+    cfg.update(outlook_categories=["mail", "calendar"], teams_categories=["group"],
+               onedrive_enabled=True, sharepoint_enabled=True,
+               planner_enabled=True, todo_enabled=True,
+               outlook_since="2025-01-01", teams_since="2025-06-01",
+               calendar_months_back=3, teams_rules="- group/Alt**",
+               sharepoint_rules="- Nordwind/Dokumente/Archiv/**",
+               todo_rules="+ Einkauf", planner_sweep_hours=12,
+               sharepoint_urls="https://nordwind.sharepoint.com/sites/x",
+               planner_urls="https://planner.cloud.microsoft/webui/v1/plan/abc/view")
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        cfg, {"outlook": True, "teams": True, "onedrive": True, "sharepoint": True,
+              "planner": True, "todo": True, "sync_teams": True, "sync_todo": True})}
+    o = steps["outlook"]["env"]
+    assert o["OUTLOOK_SINCE"] == "2025-01-01" and o["CALENDAR_MONTHS_BACK"] == "3"
+    assert o["CALENDAR_FULL"] == "0" and o["EXPORT_CATEGORIES"] == "mail,calendar"
+    assert steps["teams"]["env"]["TEAMS_RULES"] == "- group/Alt**"
+    assert steps["teams"]["env"]["TEAMS_SINCE"] == "2025-06-01"
+    assert steps["sharepoint"]["env"]["SHAREPOINT_RULES"].startswith("- Nordwind")
+    assert steps["todo"]["env"]["TODO_RULES"] == "+ Einkauf"
+    assert steps["planner"]["env"]["PLANNER_SWEEP_HOURS"] == "12"
+    assert steps["teams_list"]["argv"][-2:] == ["--teams", app_mod.TEAMS_DIR]
+    assert steps["teams_list"]["env"]["EXPORT_CATEGORIES"] == "group"
+    assert steps["todo_lists"]["argv"][-2:] == ["--lists", app_mod.TODO_DIR]
+    assert steps["todo_lists"]["env"]["TODO_RULES"] == "+ Einkauf"
+    # The calendar's "read in full" button: only the calendar, window and
+    # tokens ignored once – even when the category is not ticked.
+    cfg["outlook_categories"] = ["mail"]
+    voll = app_mod.build_steps(cfg, {"outlook": True}, calendar_full=True)
+    assert voll[0]["env"]["EXPORT_CATEGORIES"] == "calendar"
+    assert voll[0]["env"]["CALENDAR_FULL"] == "1" and voll[0]["env"]["SYNC_NOW"] == "1"
+
+
+def test_http_run_kalender_vollstaendig(server, monkeypatch):
+    """The button posts outlook + calendar_full; the run record then names
+    the calendar as the only category that ran."""
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, **kw) or True)
+    code, r = call(port, "POST", "/api/run",
+                   {"outlook": True, "calendar_full": True, "label": "job.calendar.full"})
+    assert code == 200 and r["ok"]
+    (schritt,) = [s for s in gesehen["steps"] if s["key"] == "outlook"]
+    assert schritt["env"]["CALENDAR_FULL"] == "1"
+    assert gesehen["context"]["elements"]["outlook"] == ["calendar"]
+
+
+def test_config_nimmt_regeln_daten_und_zahlen_der_neun(server, sandbox):
+    a, port = server
+    code, r = call(port, "POST", "/api/config",
+                   {"teams_rules": "- channels/Nordwind/**\n", "todo_rules": "+ Einkauf",
+                    "sharepoint_rules": "- Nordwind/Dokumente/Archiv/**",
+                    "outlook_since": "2025-01-15", "teams_since": "gestern",
+                    "calendar_months_back": 3, "planner_sweep_hours": 99999})
+    assert code == 200
+    assert r["config"]["teams_rules"] == "- channels/Nordwind/**"
+    assert r["config"]["todo_rules"] == "+ Einkauf"
+    assert r["config"]["sharepoint_rules"] == "- Nordwind/Dokumente/Archiv/**"
+    assert r["config"]["outlook_since"] == "2025-01-15"
+    assert r["config"]["teams_since"] == ""             # not a day: nothing
+    assert r["config"]["calendar_months_back"] == 3
+    assert r["config"]["planner_sweep_hours"] == 8760   # clamped
+
+
+def test_exportliste_kennt_teams_und_todo(server, sandbox):
+    """Teams conversations and To Do lists get the same export list as the
+    folders: the stored list against the rules from the form, what lies in
+    the archive counted per title (the files carry an id suffix)."""
+    import folders
+    a, port = server
+    teams = sandbox / app_mod.TEAMS_DIR
+    folders.speichere(teams, [
+        {"id": "c1", "pfad": "group/Projekt Nordwind", "name": "Projekt Nordwind", "elemente": 0},
+        {"id": "c2", "pfad": "channels/Nordwind/Allgemein", "name": "Allgemein", "elemente": 0}])
+    (teams / "group").mkdir(parents=True)
+    (teams / "group" / "Projekt Nordwind__k1.html").write_text("x", encoding="utf-8")
+    (teams / "group" / "Alt__k2.html").write_text("x", encoding="utf-8")
+    code, r = call(port, "POST", "/api/folder-plan",
+                   {"quelle": "teams", "teams_rules": "- channels/**"})
+    assert code == 200 and r["ok"]
+    assert [z["pfad"] for z in r["an"]] == ["group/Projekt Nordwind"]
+    assert r["an"][0]["archiv"] == 1
+    assert [z["pfad"] for z in r["aus"]] == ["channels/Nordwind/Allgemein"]
+    assert r["weg"] == [{"pfad": "group/Alt", "archiv": 1}]
+
+    todo = sandbox / app_mod.TODO_DIR
+    folders.speichere(todo, [
+        {"id": "l1", "pfad": "Einkauf", "name": "Einkauf", "elemente": 3, "ordner": "Einkauf__l1"},
+        {"id": "l2", "pfad": "Aufgaben", "name": "Aufgaben", "elemente": 0, "ordner": "Aufgaben__l2"}])
+    (todo / "Einkauf__l1").mkdir(parents=True)
+    state_db.StateDb(todo / "Einkauf__l1").kv_schreiben(
+        "tasks", json.dumps({"t1": {}, "t2": {}}))
+    code, r = call(port, "POST", "/api/folder-plan",
+                   {"quelle": "todo", "todo_rules": "- Aufgaben"})
+    assert code == 200 and r["ok"]
+    assert [z["pfad"] for z in r["an"]] == ["Einkauf"] and r["an"][0]["archiv"] == 2
+    assert [z["pfad"] for z in r["aus"]] == ["Aufgaben"]
+
+
 def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
     """Without rules, whatever is in the folder list still applies – exactly
     as in the export (outlook_export.aktuelle_regeln)."""
@@ -5595,6 +5713,26 @@ def test_exportliste_kennt_beide_quellen(server, sandbox):
              {"quelle": "onedrive", "onedrive_rules": "- Dateien/Kunden/**"})[1]
     assert [z["pfad"] for z in r["aus"]] == ["Dateien/Kunden"]
     assert r["aus"][0]["regel"] == "- Dateien/Kunden/**"
+
+
+def test_exportliste_sharepoint_mit_regeln_und_urls(server, sandbox):
+    """The library list is judged by the path rules on top of the URL list,
+    and every entry names the URLs its library came from – the cadence
+    window maps a library to its URL rows with that."""
+    a, port = server
+    lib = sandbox / app_mod.SHAREPOINT_DIR / "Nordwind" / "Dokumente"
+    folders_mod.speichere(lib, [
+        {"id": "1", "pfad": "Dateien", "name": "Dateien", "elemente": 5},
+        {"id": "2", "pfad": "Dateien/Archiv", "name": "Archiv", "elemente": 3}])
+    state_db.StateDb(lib).kv_schreiben(
+        "urls", json.dumps(["https://nordwind.sharepoint.com/sites/x"]))
+    r = call(port, "POST", "/api/folder-plan",
+             {"quelle": "sharepoint", "sharepoint_rules": "- Nordwind/Dokumente/Dateien/Archiv/**"})[1]
+    assert r["ok"]
+    assert [z["pfad"] for z in r["an"]] == ["Nordwind/Dokumente/Dateien"]
+    assert r["an"][0]["urls"] == ["https://nordwind.sharepoint.com/sites/x"]
+    assert [z["pfad"] for z in r["aus"]] == ["Nordwind/Dokumente/Dateien/Archiv"]
+    assert r["aus"][0]["regel"] == "- Nordwind/Dokumente/Dateien/Archiv/**"
 
 
 PRUEFUNG_OD_ORDNER = GRUNDZUSTAND + """
@@ -7116,8 +7254,13 @@ def test_jedes_feld_ist_auch_gelistet():
                  "sharepoint_urls",      # multi-line text, handled separately
                  "planner_urls",         # URL table, liesUrlTabelle()
                  "sharepoint_pages_urls",     # likewise
-                 "cadence-onedrive",     # cadence selects, leseKadenzen()
-                 "cadence-teams", "cadence-todo"}
+                 # cadence selects, leseKadenzen() – a whole source or one
+                 # category of it
+                 "cadence-onedrive", "cadence-todo",
+                 "cadence-outlook-mail", "cadence-outlook-calendar",
+                 "cadence-outlook-contacts",
+                 "cadence-teams-1on1", "cadence-teams-group",
+                 "cadence-teams-meeting", "cadence-teams-channels"}
     im_markup = set(re.findall(r'id="c-([\w_-]+)"', app_mod.seite()))
     verwaist = im_markup - gelistet - ausnahmen
     assert not verwaist, f"Bedienelemente, die niemand speichert: {sorted(verwaist)}"
@@ -7547,3 +7690,105 @@ setTimeout(function(){
 
 def test_lauffenster_bleibt_bis_zum_schliessen():
     _in_node(PRUEFUNG_LAUFFENSTER)
+
+
+# --------------------------------------------------------------------------
+# The cadence window: the tree and the inheritance rule, pure functions
+# --------------------------------------------------------------------------
+PRUEFUNG_KADENZ = r"""
+var eintraege = [
+  {pfad: 'E-Mail/Posteingang', elemente: 100, an: true},
+  {pfad: 'E-Mail/Posteingang/Kunden/Nordwind', elemente: 40, an: true},
+  {pfad: 'E-Mail/Archiv', elemente: 900, an: false},
+  {pfad: 'E-Mail/Archiv/2025', elemente: 300, an: false}];
+var baum = kadenzKnoten(eintraege, null);
+var wurzeln = baum.wurzeln.map(function(k){ return k.pfad; });
+if(wurzeln.join() !== 'E-Mail') throw new Error('Wurzel: ' + wurzeln.join());
+// The list never named "E-Mail/Posteingang/Kunden": made up so Nordwind hangs somewhere.
+var kunden = baum.knoten['E-Mail/Posteingang/Kunden'];
+if(!kunden || kunden.echt || kunden.kinder.length !== 1) throw new Error('Zwischenordner fehlt');
+if(baum.knoten['E-Mail/Archiv'].an !== false) throw new Error('ausgelassen nicht markiert');
+if(baum.knoten['E-Mail'].kinder.length !== 2) throw new Error('Kinder der Wurzel');
+// Inheritance: the deepest departure on the path wins, else the general one.
+var abw = {'E-Mail/Archiv': 'monthly', 'E-Mail/Archiv/2025': 'always'};
+if(kadenzWirksam('E-Mail/Posteingang', abw, 'daily').wert !== 'daily') throw new Error('allgemein');
+if(kadenzWirksam('E-Mail/Archiv/2024', abw, 'daily').von !== 'E-Mail/Archiv') throw new Error('erbt');
+if(kadenzWirksam('E-Mail/Archiv/2025/Q1', abw, 'daily').wert !== 'always') throw new Error('tiefer gewinnt');
+if(kadenzWirksam('E-Mail/Archivar', abw, 'daily').wert !== 'daily') throw new Error('Namenspräfix zählt nicht');
+// Teams: the four kinds are the roots even when the list is empty.
+var teams = kadenzKnoten([{pfad: 'channels/Nordwind/Releases', an: true, zuletzt: '2026-09-10T10:00:00Z'}],
+                         ['1on1', 'group', 'meeting', 'channels']);
+if(teams.wurzeln.length !== 4) throw new Error('vier Wurzeln');
+if(teams.knoten['channels/Nordwind'].kinder[0].zuletzt !== '2026-09-10T10:00:00Z') throw new Error('zuletzt');
+console.log('OK');
+"""
+
+
+def test_kadenzfenster_baum_und_vererbung():
+    """The window's tree is built from the export list; parents the list
+    does not name are made up, and the cadence of a unit is the deepest
+    departure on its path – the rule the exports apply too."""
+    _in_node(PRUEFUNG_KADENZ)
+
+
+# --------------------------------------------------------------------------
+# The tour: every step's element exists, and the chapters run through
+# --------------------------------------------------------------------------
+def test_rundgang_ziele_existieren():
+    """A coach mark pointing at nothing would dim the page and explain the
+    void. Every step's element (the id part of its selector) is in the
+    markup; a step without an element is the centred card by design."""
+    seite = app_mod.seite()
+    block = seite[seite.index("var TOUR = {"):seite.index("var TOURSTAND")]
+    ziele = re.findall(r"ziel: '#([\w-]+)", block)
+    assert len(ziele) >= 19, ziele
+    vorhanden = set(re.findall(r'id="([\w-]+)"', seite))
+    fehlt = sorted(set(ziele) - vorhanden)
+    assert not fehlt, f"Rundgang zeigt ins Leere: {fehlt}"
+    # Every step names its texts as literals, so the i18n test sees them.
+    for k in re.findall(r"(?:titel|text): '([\w.]+)'", block):
+        assert k.startswith("tour."), k
+
+
+PRUEFUNG_TOUR = GRUNDZUSTAND + """
+var gesendet = [];
+var altFetch = global.fetch;
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true}); }});
+};
+S.config = S.config || {}; S.config.tour_seen = {};
+S.store = S.store || {exists: true};
+// The source chapter: eight steps, the last one without an element.
+tourStart('quelle');
+pruefe(TOURSTAND.kap === 'quelle' && TOURSTAND.i === 0, 'Kapitel nicht gestartet');
+pruefe(!el('tour').classList.contains('hide'), 'Schicht nicht sichtbar');
+for(var i = 0; i < 7; i++) tourWeiter();
+pruefe(TOURSTAND.i === 7, 'nicht beim letzten Schritt: ' + TOURSTAND.i);
+pruefe(el('tour').classList.contains('frei'), 'letzter Schritt ohne Element muss die Karte frei stellen');
+tourZurueck();
+pruefe(TOURSTAND.i === 6, 'Zurück');
+tourWeiter(); tourWeiter();
+pruefe(TOURSTAND.kap === null && el('tour').classList.contains('hide'), 'Kapitel nicht beendet');
+var speicherung = gesendet.filter(function(g){ return g.pfad.indexOf('/api/config') >= 0; }).pop();
+pruefe(speicherung && JSON.parse(speicherung.body).tour_seen.quelle === true, 'Kapitel nicht als gesehen gemerkt');
+pruefe(S.config.tour_seen.quelle === true, 'Stand nicht übernommen');
+// Skipping marks the chapter seen as well – it never comes back on its own.
+tourStart('archiv');
+tourEnde(false);
+pruefe(S.config.tour_seen.archiv === true, 'Überspringen gilt als gesehen');
+// The search chapter before the first run: one card, nothing marked seen.
+S.store = {exists: false};
+tourStart('suche');
+pruefe(TOURSTAND.kap === 'suche' && !el('tour').classList.contains('hide'), 'Hinweis vor dem ersten Lauf');
+tourEnde(false);
+pruefe(!S.config.tour_seen.suche, 'ohne Index darf die Suche nicht als gesehen gelten');
+console.log('OK');
+"""
+
+
+def test_rundgang_kapitel_laufen_durch():
+    """Next, back, done and skip: the chapter ends, is marked seen once,
+    and the search chapter waits for an index."""
+    _in_node(PRUEFUNG_TOUR)

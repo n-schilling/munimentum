@@ -1,58 +1,64 @@
-## New in 8.0.0
+## New in 9.0.0
 
-**A new front: two doors.** The page now has two main tabs, *Build
-archive* and *Search archive*, with *Overview* and *Settings* at the side.
-The archive page shows one line — how current the archive is — and one
-button, the sources as cards with their categories as chips, an (i) with
-their state and a gear into their settings; a running job opens its own
-window with progress, steps and log, stays until you close it and can be
-minimised into the header; an empty archive starts with three steps. The search keeps its filters in view
-and opens a chosen hit on the right with its actions. Settings have a
-navigation on the left, one block per source with the rest under
-*Advanced*, and a save bar that appears only with unsaved changes. Access,
-AI and MCP show their state where they are fixed: one state frame in the
-header, dots in the settings navigation. `DESIGN.md` in the repository
-says how the page is built and where a new element goes.
+**Every source asks only for what changed.** Mail folders, calendars and
+contact folders keep a change token after their first pass, so a run
+receives only what was added, changed or removed — a deletion no longer
+needs a check per mail, a changed appointment or contact is written again.
+Teams channels are read the same way, a chat that moved fetches only the
+messages since its last one, and To Do lists keep a token per list.
+Runs that used to list a whole mailbox or every channel's history are
+minutes now.
 
-**Two more sources, both off until you switch them on.** *To Do* exports
-every list the account sees — one folder per list with a standalone
-`list.html`: open and completed tasks with steps, due dates, reminders,
-notes, linked resources and attachments; a task that leaves a list stays,
-greyed. *OneNote* exports every notebook page by page — one HTML per page
-with its images and attachments, so it opens offline; only pages that
-changed are fetched again, and a page that leaves its section keeps its
-file with a marker. Which notebooks come along works like the mailbox
-folders — sync the list, include/exclude rules, an export list — and each
-notebook has its own sync cadence and *Sync now*. OneNote allows 400
-requests an hour, so the export paces itself and a large notebook takes
-several runs, each continuing where the last stopped — a cancelled one
-included. Both sources are
-full-text searchable, in the app and via MCP, with the list or the notebook
-as the folder filter. To Do needs Tasks.Read, OneNote Notes.Read; the token
-wizard lists them.
+**Cadences where you need them.** Mail, calendar and contacts each have
+their own sync cadence, so do the four kinds of Teams conversations; OneDrive
+and To Do keep theirs per source and gain *Sync now*. A single mail folder,
+team, channel, chat, OneDrive or library folder or To Do list can depart
+from it: *Pick folders…*, *Pick teams and chats…* and *Pick lists…* open
+the tree of the last list sync, and a value set there reaches everything
+below it until a deeper one is set — in the mirrors it paces the downloads,
+files in a folder not yet due wait. Every gate lives inside the export and
+says so in the log when it skips.
 
-**The files shared in Teams, kept.** Two switches in the Teams settings,
-off by default: *Download shared files* fetches every file a chat or
-channel post references next to its conversation and links the local copy;
-*Mirror the channel folders* takes the Files tab of every exported channel
-the way a SharePoint library is mirrored, tombstones included, and channel
-posts link into that mirror. A size cap applies to both. The files are
-searchable by name, path and type under the Teams source, the file browser
-lists them per chat kind and per team, and the MCP `list_files` tool has a
-`teams` root. Needs Files.Read.All; the token wizard lists it.
+**Rules for Teams and To Do, path rules for SharePoint.** *Sync team list*
+and *Sync lists* fetch the names, ordered rules decide — `1on1/<title>`,
+`group/<title>`, `meeting/<title>`, `channels/<team>/<channel>`, or the
+list titles — and *Show export list* spells out the outcome, as for the
+mailbox folders. SharePoint libraries take path rules on top of their URL
+list and type filters. A changed selection makes the next run read that
+library or drive once in full, so newly included files arrive. A first
+export can start at a day of your choosing, for mail and for chats.
 
-**Archive HTML opens from the app.** Every board, list, page and
-conversation served through the app now has its relative links —
-attachments, mirrored files, a page's files folder — routed back through
-the app, so what works on disk works in the browser too.
+**The calendar as a window.** After the first export the calendar is read
+as a window — a configurable number of months back (one by default) plus
+everything ahead; *Read the calendar in full* reads everything once.
+
+**Planner and OneNote.** Chat comments on Planner tasks are re-read at an
+interval you set instead of on every *Sync now*; boards and lists are
+written only when something changed. OneNote reuses images and attachments
+already on disk when a page is fetched again, which spares the hourly
+budget.
+
+**A tour for the first days.** The empty archive offers a tour: coach
+marks in the real interface walk you through building the archive, setting
+up a source in detail and searching, one element at a time. The result of
+the first run offers the search chapter, and *Settings › App* starts any
+chapter again.
+
+**Under the hood.** One database connection per run instead of one per
+write, row-level updates of the mirror inventories, Graph requests bundled
+twenty at a time where they used to run one by one, Planner and To Do in
+parallel, and the calendar rebuild parsing only the mails that changed.
+Legacy Planner comments are frozen since February 2026 and no longer
+checked after a board's first export; a button reads them again on request.
 
 ## Upgrading
 
-**From 7.x:** nothing to do. Archive, settings and index are used as they
-are; only the interface is new. What you will look for: the log bar and the
-header pills are gone — the log lives in the run window, AI and MCP show
-their state in the settings navigation, and the notice about a newer
-release sits under *Settings → App*.
+**From 8.x or 7.x:** nothing to do. The first run after the upgrade lists
+every mail folder, calendar, contact folder and channel once in full to
+obtain its change token — it downloads nothing that is already there, but
+it takes as long as a run used to, and every Teams conversation is rendered
+once more from its new message store. A Teams cadence set before 9.0
+applies to all four kinds until you set them apart.
 
 **Coming from 6.1 or older?** Run the latest 6.x release once first — it
 moves the export bookkeeping into each folder's `state.db`; 7.x and 8.x no

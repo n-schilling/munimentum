@@ -196,9 +196,12 @@ def test_lauf_summiert_ueber_bibliotheken(tmp_path, monkeypatch, capsys):
     drives = [{"id": "d1", "site": "S", "name": "A"},
               {"id": "d2", "site": "S", "name": "B"}]
 
+    namen = []
+
     def fake_lauf(graph, out, wahl, arbeiter, still=False, sammler=None,
-                  zustand=None):
+                  zustand=None, name=None, einheiten=None):
         assert still, "je Bibliothek darf kein eigenes RESULT kommen"
+        namen.append(name)
         return {"new": 2, "excluded": 1, "errors": 0, "moved": 0, "gone": 1}
 
     monkeypatch.setattr(sp.drive_mirror, "lauf", fake_lauf)
@@ -213,6 +216,7 @@ def test_lauf_summiert_ueber_bibliotheken(tmp_path, monkeypatch, capsys):
     e = progress.lies_ergebnis(letzte[0])
     assert e == {"new": 4, "excluded": 2, "errors": 1,
                  "extra": {"moved": 0, "gone": 2}}
+    assert namen == ["S / A", "S / B"], "the log calls the mirror by site and library"
     assert G().__dict__ == {}                      # drive_base sits on the client
 
 
@@ -466,6 +470,292 @@ def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
     # URL removed from the configuration: same promise.
     sp.seiten_lauf(g, tmp_path, [])
     assert db.verschwunden_lesen() == {}
+
+
+# ---------------------------------------------------------------------------
+# SHAREPOINT_RULES: path rules over "<site>/<library>/Dateien/…"
+# ---------------------------------------------------------------------------
+def test_regeln_greifen_ueber_site_und_bibliothek(monkeypatch):
+    monkeypatch.setenv("SHAREPOINT_RULES", "- Nordwind/Dokumente/Dateien/Archiv/**")
+    basis = sp.auswahl()
+    wahl = sp.drive_auswahl(basis, {"id": "d1", "site": "Nordwind", "name": "Dokumente"})
+    assert wahl.takes("Dateien/Aktuell/plan.pdf", 1)
+    assert not wahl.takes("Dateien/Archiv/alt.pdf", 1)
+    assert not wahl.pfad_ok("Dateien/Archiv/alt.pdf")
+    # The same folder name in another library is another path.
+    andere = sp.drive_auswahl(basis, {"id": "d2", "site": "Nordwind", "name": "Assets"})
+    assert andere.takes("Dateien/Archiv/alt.pdf", 1)
+    # On top of the scope and the type filters, not instead of them.
+    monkeypatch.setenv("SHAREPOINT_TYPES_EXCLUDE", "mp4")
+    eng = sp.drive_auswahl(sp.auswahl(), {"id": "d1", "site": "Nordwind",
+                                          "name": "Dokumente",
+                                          "prefixes": {"Aktuell"}})
+    assert eng.takes("Dateien/Aktuell/plan.pdf", 1)
+    assert not eng.takes("Dateien/Aktuell/film.mp4", 1)
+    assert not eng.takes("Dateien/Archiv/alt.pdf", 1)
+
+
+def test_regeln_ohne_umgebung_kommen_aus_der_datei(monkeypatch):
+    monkeypatch.delenv("SHAREPOINT_RULES", raising=False)
+    monkeypatch.setattr(sp.settings, "value",
+                        lambda key, default=None: "- Nordwind/**"
+                        if key == "sharepoint_rules" else default)
+    assert sp.aktuelle_regeln() == [(False, "Nordwind/**")]
+    monkeypatch.setenv("SHAREPOINT_RULES", "")
+    assert sp.aktuelle_regeln() == []
+
+
+def test_regeln_gehoeren_zum_kennzeichen(monkeypatch):
+    drive = {"id": "d1", "site": "Nordwind", "name": "Dokumente"}
+    monkeypatch.setenv("SHAREPOINT_RULES", "")
+    ohne = sp.drive_auswahl(sp.auswahl(), drive).kennzeichen()
+    monkeypatch.setenv("SHAREPOINT_RULES", "- Nordwind/Dokumente/Dateien/Archiv/**")
+    mit = sp.drive_auswahl(sp.auswahl(), drive).kennzeichen()
+    assert ohne != mit
+    assert sp.drive_auswahl(sp.auswahl(), drive).kennzeichen() == mit
+
+
+def test_vorschau_und_liste_kennen_die_regeln(tmp_path, monkeypatch):
+    """--check reflects the rules, and the report rows carry the very
+    "<site>/<library>" the rules are written against."""
+    import drive_mirror
+    monkeypatch.setenv("SHAREPOINT_RULES", "- Nordwind/Dokumente/Dateien/Archiv/**")
+    drive = {"id": "d1", "site": "Nordwind", "name": "Dokumente"}
+    wahl = sp.drive_auswahl(sp.auswahl(), drive)
+    eintraege = [
+        {"id": "a", "name": "alt.pdf", "file": {}, "size": 5, "cTag": "c",
+         "parentReference": {"path": "/drive/root:/Archiv"}},
+        {"id": "b", "name": "plan.pdf", "file": {}, "size": 7, "cTag": "c",
+         "parentReference": {"path": "/drive/root:/Aktuell"}}]
+    b = drive_mirror.pruefe_vollstaendigkeit(eintraege, tmp_path, wahl)
+    assert b["erwartet"] == 1 and b["ausgelassen"] == 1
+    assert b["ausgelassene_ordner"] == ["Dateien/Archiv"]
+    assert sp.drive_praefix(drive) == "Nordwind/Dokumente"
+    assert sp.drive_praefix({"site": "A: B?", "name": "Docs"}) == "A_ B_/Docs"
+    assert sp.drive_ziel(tmp_path, drive) == tmp_path / "Nordwind" / "Dokumente"
+
+
+# ---------------------------------------------------------------------------
+# Pages: rows are upserted, the table is never rewritten
+# ---------------------------------------------------------------------------
+def test_seiten_lauf_schreibt_nur_die_geaenderte_zeile(tmp_path, monkeypatch):
+    g = _SeitenGraph()
+    g.seiten = [{"id": "p1", "name": "Home.aspx", "title": "Home", "eTag": "e1"},
+                {"id": "p2", "name": "Team.aspx", "title": "Team", "eTag": "e1"}]
+    sites = [{"id": "s1", "pfad": ["Team X"]}]
+    assert sp.seiten_lauf(g, tmp_path, sites) == 2
+    aufrufe = []
+    urspruenglich = sp.state_db.StateDb.seiten_aktualisieren
+
+    def merkend(self, geaendert, geloescht=()):
+        aufrufe.append((set(geaendert), list(geloescht)))
+        return urspruenglich(self, geaendert, geloescht)
+
+    monkeypatch.setattr(sp.state_db.StateDb, "seiten_aktualisieren", merkend)
+    monkeypatch.setattr(sp.state_db.StateDb, "seiten_schreiben",
+                        lambda *a, **kw: pytest.fail("the table was rewritten"))
+    g.seiten[1] = {**g.seiten[1], "eTag": "e2"}
+    assert sp.seiten_lauf(g, tmp_path, sites) == 1
+    assert aufrufe == [({"p2"}, [])]
+    assert g.detailabrufe == 3, "the changed page is fetched once more, only it"
+    bestand = sp.state_db.StateDb(tmp_path).seiten_lesen()
+    assert set(bestand) == {"p1", "p2"} and bestand["p2"]["etag"] == "e2"
+    # Gone at Microsoft: one delete, no rewrite.
+    g.seiten = g.seiten[:1]
+    sp.seiten_lauf(g, tmp_path, sites)
+    assert aufrufe[-1] == (set(), ["p2"])
+    assert set(sp.state_db.StateDb(tmp_path).seiten_lesen()) == {"p1"}
+
+
+def test_seiten_lauf_nimmt_das_layout_aus_der_liste_wenn_es_da_ist(tmp_path):
+    g = _SeitenGraph()
+    g.seiten[0]["canvasLayout"] = g.layout
+    sp.seiten_lauf(g, tmp_path, [{"id": "s1", "pfad": ["Team X"]}])
+    assert g.detailabrufe == 0
+    html = next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")
+    assert "Inhalt der Startseite" in html
+
+
+# ---------------------------------------------------------------------------
+# Folder cadences per library, the OneDrive way
+# ---------------------------------------------------------------------------
+class _TaktGraph:
+    """A library drive for sp.lauf: delta entries per run, item lookups by
+    id (None = 404), every call in order."""
+
+    def __init__(self, seiten=(), items=None):
+        self.seiten = list(seiten)
+        self.items = items or {}
+        self.log = []
+        self.geladen = []
+
+    def delta(self, weiter=None):
+        self.log.append(("delta", weiter))
+        for e in self.seiten:
+            yield e, None
+        yield None, f"delta-{len(self.log)}"
+
+    def get(self, url):
+        kennung = url.split("/items/")[1].split("?")[0]
+        self.log.append(("get", kennung))
+        meta = self.items.get(kennung)
+        if meta is None:
+            raise requests.HTTPError(response=_Antwort(404))
+        return meta
+
+    def lade(self, item_id, ziel, geaendert=None):
+        self.log.append(("lade", item_id))
+        self.geladen.append(item_id)
+        return _lade_x(item_id, ziel, geaendert)
+
+
+def _sp_datei(kennung, name, pfad, ctag="c1"):
+    return {"id": kennung, "name": name, "file": {}, "size": 1, "cTag": ctag,
+            "parentReference": {"path": pfad}}
+
+
+NORDWIND = {"id": "d1", "site": "Nordwind", "name": "Dokumente",
+            "urls": ["https://firma.sharepoint.com/sites/Nordwind"]}
+ARCHIV_KEY = "sharepoint:Nordwind/Dokumente/Dateien/Archiv"
+ARCHIV_STEMPEL = "last_sync:sharepoint:Dateien/Archiv"
+
+
+def _beide(ctag="c1"):
+    return [_sp_datei("alt", "alt.pdf", "/drive/root:/Archiv", ctag),
+            _sp_datei("neu", "neu.pdf", "/drive/root:/Aktuell", ctag)]
+
+
+def _wartend(ziel):
+    return {k: json.loads(v) for k, v in
+            sp.state_db.StateDb(ziel).saetze_lesen("wartend").items()}
+
+
+def _ergebnis(capsys):
+    zeilen = [z for z in capsys.readouterr().out.splitlines()
+              if progress.lies_ergebnis(z)]
+    return progress.lies_ergebnis(zeilen[-1])
+
+
+def test_getakteter_ordner_in_faelliger_bibliothek_wartet(tmp_path, monkeypatch,
+                                                           capsys):
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({ARCHIV_KEY: "monthly"}))
+    d = dict(NORDWIND)
+    assert sp.lauf(_TaktGraph(_beide()), tmp_path, [d])["new"] == 2
+    ziel = sp.drive_ziel(tmp_path, d)
+    db = sp.state_db.StateDb(ziel)
+    assert db.kv_lesen("last_sync") and db.kv_lesen(ARCHIV_STEMPEL)
+    capsys.readouterr()
+    g = _TaktGraph(_beide("c2"))
+    summe = sp.lauf(g, tmp_path, [d])
+    assert g.geladen == ["neu"] and summe["new"] == 1
+    assert _wartend(ziel) == {"alt": {"rel": "Dateien/Archiv/alt.pdf", "ctag": "c2",
+                                      "size": 1, "einheit": "Dateien/Archiv"}}
+    assert sp.state_db.DbZustand(ziel).delta_lesen() == "delta-1"
+    out = capsys.readouterr().out
+    events = [e for e in (progress.lies_event(z) for z in out.splitlines()) if e]
+    paced = [e for e in events if e["k"] == "run.sharepoint.folders_paced"]
+    assert len(paced) == 1 and paced[0]["v"] == {"name": "Nordwind / Dokumente", "n": 1}
+    ergebnis = progress.lies_ergebnis(
+        [z for z in out.splitlines() if progress.lies_ergebnis(z)][-1])
+    assert ergebnis["extra"]["waiting"] == 1
+
+
+def test_faelliger_ordner_leert_die_warteliste_vor_dem_delta(tmp_path, monkeypatch,
+                                                              capsys):
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({ARCHIV_KEY: "monthly"}))
+    d = dict(NORDWIND)
+    sp.lauf(_TaktGraph(_beide()), tmp_path, [d])
+    sp.lauf(_TaktGraph(_beide("c2")), tmp_path, [d])
+    ziel = sp.drive_ziel(tmp_path, d)
+    db = sp.state_db.StateDb(ziel)
+    import time
+    alt = db.kv_lesen(ARCHIV_STEMPEL)
+    db.kv_schreiben(ARCHIV_STEMPEL, str(time.time() - 31 * 86400))
+    capsys.readouterr()
+    g = _TaktGraph([], items={"alt": _sp_datei("alt", "alt.pdf", "/drive/root:/Archiv", "c2")})
+    sp.lauf(g, tmp_path, [d])
+    assert g.log[:2] == [("get", "alt"), ("delta", "delta-1")], "waiting list first"
+    assert g.geladen == ["alt"] and _wartend(ziel) == {}
+    assert db.bestand_lesen()["alt"]["ctag"] == "c2"
+    assert float(db.kv_lesen(ARCHIV_STEMPEL)) > float(alt)
+    assert _ergebnis(capsys)["extra"]["waiting"] == 0
+
+
+def test_nicht_faellige_bibliothek_mit_faelligem_ordner_wird_gelistet(
+        tmp_path, monkeypatch, capsys):
+    """The library is monthly, one folder always: listed all the same,
+    only the folder's file comes, the library's own file waits."""
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({ARCHIV_KEY: "always"}))
+    d = dict(NORDWIND, kadenz="monthly")
+    sp.lauf(_TaktGraph(_beide()), tmp_path, [d])
+    ziel = sp.drive_ziel(tmp_path, d)
+    db = sp.state_db.StateDb(ziel)
+    stempel = db.kv_lesen("last_sync")
+    capsys.readouterr()
+    g = _TaktGraph(_beide("c2"))
+    sp.lauf(g, tmp_path, [d])
+    assert g.geladen == ["alt"]
+    assert _wartend(ziel)["neu"]["einheit"] == ""
+    assert db.kv_lesen("last_sync") == stempel, "the library unit was not due"
+    events = _events(capsys)
+    assert not any(e["k"] in ("run.cadence.skip", "run.sharepoint.folders_paced")
+                   for e in events)
+    # Folder monthly as well, both stamped: skipped before any listing.
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({ARCHIV_KEY: "monthly"}))
+    g = _TaktGraph(_beide("c3"))
+    sp.lauf(g, tmp_path, [d])
+    assert g.log == []
+    assert any(e["k"] == "run.cadence.skip" and e["v"]["cadence"]["k"] == "cadence.monthly"
+               for e in _events(capsys))
+
+
+def test_ohne_ordnertakt_bleibt_alles_wie_es_war(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    d = dict(NORDWIND)
+    g = _TaktGraph(_beide())
+    sp.lauf(g, tmp_path, [d])
+    ziel = sp.drive_ziel(tmp_path, d)
+    assert g.geladen == ["alt", "neu"] and _wartend(ziel) == {}
+    assert sp.state_db.StateDb(ziel).kv_lesen("last_sync"), "a clean run stamps the library"
+    assert "waiting" not in _ergebnis(capsys)["extra"]
+
+
+def test_urls_landen_in_der_state_db_der_bibliothek(tmp_path, monkeypatch, capsys):
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
+        "id": "s1", "name": "Team X",
+        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary"}]}})
+    urls = ["https://firma.sharepoint.com/sites/TeamX",
+            "https://firma.sharepoint.com/sites/TeamX/Unterseite"]
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    drives, _ = sp.resolve_drives(g, urls)
+    assert drives[0]["urls"] == urls
+    # The --folders sync writes the key …
+    monkeypatch.setattr(sp.drive_mirror, "nur_ordner",
+                        lambda *a, **kw: {"neu": [], "verschwunden": [],
+                                          "umbenannt": [], "ordner": []})
+    sp.nur_ordner(_TaktGraph(), tmp_path, drives)
+    db = sp.state_db.StateDb(sp.drive_ziel(tmp_path, drives[0]))
+    assert json.loads(db.kv_lesen("urls")) == urls
+    # … and so does the export run.
+    db.kv_schreiben("urls", "[]")
+    sp.lauf(_TaktGraph(), tmp_path, drives)
+    assert json.loads(db.kv_lesen("urls")) == urls
+
+
+def test_drive_einheiten_nehmen_nur_die_eigenen_ordner(tmp_path):
+    db = sp.state_db.StateDb(tmp_path)
+    e = sp.drive_einheiten(
+        {ARCHIV_KEY: "monthly", "sharepoint:Nordwind/Assets/Dateien/Alt": "daily",
+         "sharepoint": "weekly"},
+        {"site": "Nordwind", "name": "Dokumente", "kadenz": "weekly"}, db)
+    assert e.ordner == ["Dateien/Archiv"]
+    assert e.einheit("Dateien/Archiv/tief/a.pdf") == "Dateien/Archiv"
+    assert e.einheit("Dateien/Alt/a.pdf") == ""
+    assert e.kadenz("") == "weekly" and e.kadenz("Dateien/Archiv") == "monthly"
+    assert e.kv_key("Dateien/Archiv") == ARCHIV_STEMPEL and e.kv_key("") == "last_sync"
+    # The library's cadence is what resolve_drives merged, not a category key.
+    assert sp.drive_einheiten({"sharepoint": "daily"},
+                              {"site": "Nordwind", "name": "Dokumente"}, db).kadenz("") == "always"
 
 
 def test_praefix_aufnehmen_haelt_die_menge_flach():
@@ -765,7 +1055,8 @@ def test_lauf_ueberspringt_bibliothek_unter_ihrer_kadenz(tmp_path, monkeypatch,
               {"id": "d2", "site": "S", "name": "B"}]
     gelaufen = []
 
-    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None):
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None,
+                  name=None, einheiten=None):
         gelaufen.append(str(out))
         return {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
 
@@ -793,7 +1084,8 @@ def test_sync_jetzt_ignoriert_kadenz(tmp_path, monkeypatch):
     drives = [{"id": "d1", "site": "S", "name": "A", "kadenz": "monthly"}]
     gelaufen = []
 
-    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None):
+    def fake_lauf(graph, out, wahl, arbeiter, still=False, zustand=None,
+                  name=None, einheiten=None):
         gelaufen.append(str(out))
         return {"new": 1, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
 

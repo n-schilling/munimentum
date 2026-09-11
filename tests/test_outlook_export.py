@@ -4,7 +4,8 @@ the HTTP layer itself is covered in test_graph_client.py."""
 
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+import time
+from datetime import datetime, UTC
 
 import pytest
 import requests
@@ -25,6 +26,28 @@ def _stop_zuruecksetzen():
     """Clear the global STOP event after every test (module state)."""
     yield
     outlook_export.STOP.clear()
+
+
+@pytest.fixture(autouse=True)
+def _lauf_umgebung(monkeypatch):
+    """The variables the app sets for every Outlook run – neutral here, so
+    a local app_config.json cannot steer the tests."""
+    monkeypatch.setenv("OUTLOOK_SINCE", "")
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "1")
+    monkeypatch.setenv("CALENDAR_FULL", "0")
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    monkeypatch.delenv("SYNC_NOW", raising=False)
+
+
+def _seite(eintraege, url="", weiter=None):
+    """One delta page the way Graph answers it – the last page carries the
+    link for the next round."""
+    seite = {"value": list(eintraege)}
+    if weiter:
+        seite["@odata.nextLink"] = weiter
+    else:
+        seite["@odata.deltaLink"] = url.split("?")[0] + "?$deltatoken=t1"
+    return seite
 
 
 # --------------------------------------------------------------------------
@@ -489,13 +512,13 @@ def test_list_children_faengt_fehler_ab_und_reicht_tokenexpired_durch():
 
 
 class FakeMsgGraph:
-    """paged() delivers prepared message lists for mail folders."""
+    """get() answers a folder's delta round with the prepared messages."""
 
     def __init__(self, msgs):
         self.msgs = msgs
 
-    def paged(self, url, params=None, extra_headers=None):
-        yield from self.msgs
+    def get(self, url, params=None, extra_headers=None):
+        return _seite(self.msgs, url)
 
 
 def test_iter_messages_ueberspringt_erledigte_und_legt_ordner_an(tmp_path):
@@ -527,11 +550,13 @@ def test_iter_messages_ueberspringt_ordner_mit_netzwerkfehler(tmp_path):
     selected = [{"subtree": [(kaputt, "E-Mail/Ablage"), (heil, "E-Mail/Posteingang")]}]
 
     class HalbKaputt:
-        def paged(self, url, params=None, extra_headers=None):
-            if "f1" in url:
-                yield {"id": "m1", "subject": "geht noch"}
+        def get(self, url, params=None, extra_headers=None):
+            if url.endswith("/f1/messages/delta"):
+                return {"value": [{"id": "m1", "subject": "geht noch"}],
+                        "@odata.nextLink": "https://example.com/f1/weiter"}
+            if url.endswith("/f1/weiter"):
                 raise requests.exceptions.ReadTimeout("read timed out")
-            yield {"id": "m2", "subject": "danach"}
+            return _seite([{"id": "m2", "subject": "danach"}], url)
 
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
@@ -547,9 +572,8 @@ def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
     selected = [{"subtree": [(folder, "E-Mail/Posteingang")]}]
 
     class Abgelaufen:
-        def paged(self, url, params=None, extra_headers=None):
+        def get(self, url, params=None, extra_headers=None):
             raise outlook_export.TokenExpired()
-            yield   # pragma: no cover – makes paged a generator
 
     done = _donelog(tmp_path)
     with pytest.raises(outlook_export.TokenExpired):
@@ -562,14 +586,14 @@ def test_iter_messages_reicht_tokenexpired_durch(tmp_path):
 # Download worker and parallel driver
 # --------------------------------------------------------------------------
 class FakeExportGraph:
-    """paged() delivers mails, get_bytes() the MIME content (or TokenExpired)."""
+    """get() answers the delta round, get_bytes() the MIME content (or TokenExpired)."""
 
     def __init__(self, msgs, fail=False):
         self.msgs = msgs
         self.fail = fail
 
-    def paged(self, url, params=None, extra_headers=None):
-        yield from self.msgs
+    def get(self, url, params=None, extra_headers=None):
+        return _seite(self.msgs, url)
 
     def get_bytes(self, url, timeout=None, label=""):
         if self.fail:
@@ -641,11 +665,11 @@ def test_run_export_meldet_expired_und_setzt_stop(tmp_path):
 # --------------------------------------------------------------------------
 def test_export_calendar_schreibt_ics_und_markiert(tmp_path):
     class KalGraph:
-        def paged(self, url, params=None, extra_headers=None):
-            assert "/me/calendars/cal1/events" in url
+        def get(self, url, params=None, extra_headers=None):
+            assert "/me/calendars/cal1/calendarView/delta" in url
             # Times must be requested in UTC via the Prefer header
-            assert extra_headers == {"Prefer": 'outlook.timezone="UTC"'}
-            yield EVENT
+            assert 'outlook.timezone="UTC"' in extra_headers["Prefer"]
+            return _seite([EVENT], url)
 
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
@@ -668,10 +692,12 @@ def test_export_contacts_standard_und_ordner(tmp_path):
         def paged(self, url, params=None, extra_headers=None):
             if url.endswith("/me/contactFolders"):
                 yield {"id": "cf1", "displayName": "Team"}
-            elif url.endswith("/me/contacts"):
-                yield CONTACT
-            elif "/contactFolders/cf1/contacts" in url:
-                yield {"id": "c2", "displayName": "Bob Builder"}
+
+        def get(self, url, params=None, extra_headers=None):
+            if url.endswith("/me/contacts/delta"):
+                return _seite([CONTACT], url)
+            assert "/contactFolders/cf1/contacts/delta" in url
+            return _seite([{"id": "c2", "displayName": "Bob Builder"}], url)
 
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
@@ -707,8 +733,8 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
     ev = {k: v for k, v in EVENT.items() if k not in ("id", "iCalUId")}
 
     class KalGraph:
-        def paged(self, url, params=None, extra_headers=None):
-            yield ev
+        def get(self, url, params=None, extra_headers=None):
+            return _seite([ev], url)
 
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
@@ -722,8 +748,10 @@ def test_export_ohne_graph_id_resumt_ueber_dateipfad(tmp_path):
 
     class KonGraph:
         def paged(self, url, params=None, extra_headers=None):
-            if url.endswith("/me/contacts"):
-                yield kontakt
+            return iter(())                       # no contact folders
+
+        def get(self, url, params=None, extra_headers=None):
+            return _seite([kontakt], url)
 
     stats = {"new": 0, "skipped": 0}
     for _ in range(2):
@@ -785,20 +813,24 @@ def test_umzug_zwischen_gelisteten_ordnern_ist_keine_loeschung():
 
 
 class _FakeGraph:
-    """get() raises a 404 for deleted ids, otherwise returns something."""
+    """batch_get() answers 404 for deleted ids and 200 otherwise; an id
+    marked as failing sinks the whole batch, as the client does once its
+    retries are spent."""
 
     def __init__(self, weg=(), fehler=()):
         self.weg, self.fehler = set(weg), set(fehler)
-        self.gefragt = []
+        self.gefragt, self.urls = [], []
 
-    def get(self, url, params=None):
-        mid = url.rsplit("/", 1)[-1]
-        self.gefragt.append(mid)
-        if mid in self.weg:
-            raise RuntimeError("HTTP 404 Not Found")
-        if mid in self.fehler:
-            raise RuntimeError("HTTP 429 zu viele Anfragen")
-        return {"id": mid}
+    def batch_get(self, urls, extra_headers=None):
+        self.urls.append(list(urls))
+        antworten = {}
+        for url in urls:
+            mid = url.rsplit("/", 1)[-1].split("?")[0]
+            self.gefragt.append(mid)
+            if mid in self.fehler:
+                raise RuntimeError("Zu viele Fehlversuche (429)")
+            antworten[url] = (404, None) if mid in self.weg else (200, {"id": mid})
+        return antworten
 
 
 def test_nur_ein_404_zaehlt_als_geloescht():
@@ -837,16 +869,19 @@ def test_verschwunden_behaelt_den_ersten_zeitpunkt(tmp_path):
 
 
 class _ListenGraph:
-    """paged() delivers mails and optionally aborts midway."""
+    """get() answers the delta round in pages of two and optionally breaks
+    off at a given mail."""
 
     def __init__(self, mails, abbruch_nach=None):
         self.mails, self.abbruch_nach = mails, abbruch_nach
 
-    def paged(self, url, params=None):
-        for i, m in enumerate(self.mails):
-            if self.abbruch_nach is not None and i == self.abbruch_nach:
-                raise RuntimeError("Ordner haengt")
-            yield m
+    def get(self, url, params=None, extra_headers=None):
+        ab = int(url.rsplit("ab=", 1)[1]) if "ab=" in url else 0
+        if self.abbruch_nach is not None and ab <= self.abbruch_nach < ab + 2:
+            raise RuntimeError("Ordner haengt")
+        if ab + 2 < len(self.mails):
+            return _seite(self.mails[ab:ab + 2], url, weiter=f"https://example.com/delta?ab={ab + 2}")
+        return _seite(self.mails[ab:ab + 2], url)
 
 
 def _lauf(graph, tmp_path):
@@ -1159,8 +1194,8 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
     bestand.gesehen = {"neu-1"}
 
     class FakeGraph:
-        def get(self, *a, **kw):
-            raise RuntimeError("404 Not Found")       # the old id is dead
+        def batch_get(self, urls, extra_headers=None):
+            return {u: (404, None) for u in urls}       # the old id is dead
 
     stats = outlook_export.pruefe_verschwundene(FakeGraph(), tmp_path, done, bestand)
     done.close()
@@ -1173,3 +1208,676 @@ def test_pruefe_verschwundene_der_gemeldete_fall(tmp_path, capsys):
     assert sorted(vermerke) == ["E-Mail/Posteingang/b.eml"]
     events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
     assert {"k": "run.gone.healed", "level": "info", "v": {"n": 1}} in events
+
+
+# --------------------------------------------------------------------------
+# Cadence per category
+# --------------------------------------------------------------------------
+def _events(capsys):
+    return [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+
+
+def _skip(kategorie, kadenz):
+    return {"k": "run.cadence.skip", "level": "info",
+            "v": {"name": {"k": f"export.cat.{kategorie}", "v": {}},
+                  "cadence": {"k": f"cadence.{kadenz}", "v": {}}}}
+
+
+def test_kategorie_faellig_folgt_der_kadenz(tmp_path, monkeypatch, capsys):
+    """Calendar and contacts are gated as categories."""
+    db = state_db.StateDb(tmp_path)
+    monkeypatch.setenv("SYNC_CADENCE", '{"outlook:contacts": "daily"}')
+    assert outlook_export.kategorie_faellig(db, "contacts")      # never ran: due
+    outlook_export.kategorie_erledigt(db, "contacts")
+    assert not outlook_export.kategorie_faellig(db, "contacts")  # just ran: skipped
+    assert _skip("contacts", "daily") in _events(capsys)
+    assert outlook_export.kategorie_faellig(db, "calendar")      # no cadence: always
+    monkeypatch.setenv("SYNC_NOW", "1")
+    assert outlook_export.kategorie_faellig(db, "contacts")      # the gate steps aside
+
+
+_KADENZ = ('{"outlook:mail": "daily", "outlook:mail:E-Mail/Archiv": "monthly", '
+           '"outlook:mail:E-Mail/Archiv/Alt/Immer": "always"}')
+_BAUM = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang"),
+                      ({"id": "f2"}, "E-Mail/Archiv"),
+                      ({"id": "f3"}, "E-Mail/Archiv/Alt"),
+                      ({"id": "f4"}, "E-Mail/Archiv/Alt/Immer")]}]
+
+
+def _gerade_gelaufen(db, *ids):
+    for fid in ids:
+        db.kv_schreiben(f"last_sync:mail:{fid}", str(time.time()))
+
+
+def test_faellige_ordner_mit_eigener_kadenz_und_vererbung(tmp_path, monkeypatch, capsys):
+    """The archive's monthly cadence reaches its subfolder; a deeper folder
+    with its own "always" runs; the sibling under the daily category runs.
+    One line counts what was left out."""
+    monkeypatch.setenv("SYNC_CADENCE", _KADENZ)
+    db = state_db.StateDb(tmp_path)
+    _gerade_gelaufen(db, "f1", "f2", "f3", "f4")
+    faellig, ausgelassen = outlook_export.faellige_ordner(db, _BAUM)
+    assert [rel for _, rel in faellig[0]["subtree"]] == ["E-Mail/Archiv/Alt/Immer"]
+    assert ausgelassen == ["E-Mail/Posteingang", "E-Mail/Archiv", "E-Mail/Archiv/Alt"]
+    events = _events(capsys)
+    assert {"k": "run.outlook.folders_paced", "level": "info", "v": {"n": 3}} in events
+    assert not any(e and e["k"] == "run.cadence.skip" for e in events)
+
+    # A day later the inbox is due, the archive and its child are not.
+    db.kv_schreiben("last_sync:mail:f1", str(time.time() - 86400))
+    faellig, ausgelassen = outlook_export.faellige_ordner(db, _BAUM)
+    assert [rel for _, rel in faellig[0]["subtree"]] == ["E-Mail/Posteingang",
+                                                         "E-Mail/Archiv/Alt/Immer"]
+    assert ausgelassen == ["E-Mail/Archiv", "E-Mail/Archiv/Alt"]
+    assert {"k": "run.outlook.folders_paced", "level": "info", "v": {"n": 2}} in _events(capsys)
+
+
+def test_faellige_ordner_nichts_faellig_und_sync_now(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("SYNC_CADENCE", '{"outlook:mail": "weekly", "outlook:mail:E-Mail/Archiv": "monthly"}')
+    db = state_db.StateDb(tmp_path)
+    baum = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang"), ({"id": "f2"}, "E-Mail/Archiv")]}]
+    _gerade_gelaufen(db, "f1", "f2")
+    faellig, ausgelassen = outlook_export.faellige_ordner(db, baum)
+    assert faellig == [] and ausgelassen == ["E-Mail/Posteingang", "E-Mail/Archiv"]
+    events = _events(capsys)
+    assert _skip("mail", "weekly") in events            # the category line, as before
+    assert not any(e and e["k"] == "run.outlook.folders_paced" for e in events)
+
+    monkeypatch.setenv("SYNC_NOW", "1")
+    faellig, ausgelassen = outlook_export.faellige_ordner(db, baum)
+    assert faellig == baum and ausgelassen == []
+    assert _events(capsys) == []
+
+
+def test_exportiere_nichts_faellig_listet_keinen_ordner(tmp_path, monkeypatch):
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail")
+    monkeypatch.setenv("SYNC_CADENCE", '{"outlook:mail": "daily"}')
+    db = state_db.StateDb(tmp_path)
+    _gerade_gelaufen(db, "f1")
+    monkeypatch.setattr(outlook_export, "waehle_ordner", lambda g, o: _POST)
+
+    def nie(*a, **kw):
+        raise AssertionError("run_export trotz Kadenz gestartet")
+    monkeypatch.setattr(outlook_export, "run_export", nie)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
+    assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
+    done.close()
+    assert db.kv_lesen("last_sync:mail") is None
+
+
+def test_last_sync_je_ordner_nur_nach_sauberem_ordner(tmp_path):
+    class Wackelig(DeltaMailGraph):
+        def get_bytes(self, url, timeout=None, label=""):
+            if "/m2/" in url:
+                raise RuntimeError("HTTP 500 Internal Server Error")
+            return super().get_bytes(url, timeout, label)
+
+    mails = [{"id": "m1", "subject": "a"}, {"id": "m2", "subject": "b"}]
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    bestand = outlook_export.Bestand()
+    outlook_export.run_export(Wackelig(mails), tmp_path, done, stats, _POST, 2, bestand)
+    bestand.links_sichern(db)
+    assert db.kv_lesen("last_sync:mail:f1") is None
+    bestand = outlook_export.Bestand()
+    outlook_export.run_export(DeltaMailGraph(mails), tmp_path, done, stats, _POST, 2, bestand)
+    bestand.links_sichern(db)
+    done.close()
+    assert time.time() - float(db.kv_lesen("last_sync:mail:f1")) < 60
+    assert db.kv_lesen("last_sync:mail") is None      # the category mark is history
+
+
+def test_ausgelassener_ordner_bleibt_unangetastet(tmp_path, monkeypatch):
+    """A folder the cadence leaves out is not listed: no removals are
+    inferred for it, its link and its clock stay as they were."""
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail")
+    monkeypatch.setenv("SYNC_CADENCE", '{"outlook:mail:E-Mail/Posteingang/Archiv": "monthly"}')
+    db = state_db.StateDb(tmp_path)
+    alt_link = f"{outlook_export.GRAPH}/me/mailFolders/f2/messages/delta?$deltatoken=alt"
+    db.kv_schreiben("delta:f2", alt_link)
+    vorher = str(time.time() - 3600)
+    db.kv_schreiben("last_sync:mail:f2", vorher)
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/Archiv/a.eml", "<archiv@example.com>")
+    done = _donelog(tmp_path)
+    done.mark("a1", "E-Mail/Posteingang/Archiv/a.eml")
+    baum = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang"),
+                         ({"id": "f2"}, "E-Mail/Posteingang/Archiv")]}]
+    monkeypatch.setattr(outlook_export, "waehle_ordner", lambda g, o: baum)
+    g = DeltaMailGraph([{"id": "m1", "subject": "neu"}])
+    stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
+    assert outlook_export.exportiere(g, tmp_path, done, stats, 2) == "done"
+    done.close()
+    assert g.urls == [_DELTA_F1]                       # the archive was never asked
+    assert stats["new"] == 1 and "gone_new" not in stats
+    assert db.verschwunden_lesen() == {}
+    assert db.kv_lesen("delta:f2") == alt_link
+    assert db.kv_lesen("last_sync:mail:f2") == vorher
+    assert db.kv_lesen("delta:f1") and db.kv_lesen("last_sync:mail:f1")
+
+
+def test_exportiere_markiert_nur_saubere_laeufe(tmp_path, monkeypatch, capsys):
+    """A skipped category runs nothing; last_sync only after a clean run."""
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail,calendar,contacts")
+    monkeypatch.setenv("SYNC_CADENCE", '{"outlook:calendar": "weekly"}')
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("last_sync:calendar", str(time.time()))
+    aufrufe = []
+    monkeypatch.setattr(outlook_export, "waehle_ordner",
+                        lambda g, o: [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang")]}])
+    monkeypatch.setattr(outlook_export, "waehle_kalender",
+                        lambda g, o: aufrufe.append("kalender") or [{"id": "c", "name": "A"}])
+
+    def run_export(graph, out, done, stats, selected, workers, bestand=None):
+        aufrufe.append("mail")
+        stats["folder_errors"] = 1
+        return "done"
+
+    monkeypatch.setattr(outlook_export, "run_export", run_export)
+    monkeypatch.setattr(outlook_export, "pruefe_verschwundene", lambda *a, **kw: {})
+    monkeypatch.setattr(outlook_export, "export_contacts",
+                        lambda *a: aufrufe.append("kontakte") or 0)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
+    assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
+    done.close()
+    assert aufrufe == ["mail", "kontakte"]
+    assert db.kv_lesen("last_sync:mail:f1") is None, "Ordnerfehler, trotzdem als sauber vermerkt"
+    assert db.kv_lesen("last_sync:mail") is None
+    assert db.kv_lesen("last_sync:contacts")
+    assert _skip("calendar", "weekly") in _events(capsys)
+
+
+# --------------------------------------------------------------------------
+# Mail: change tracking per folder
+# --------------------------------------------------------------------------
+class DeltaMailGraph:
+    """A folder with change tracking: the first round lists `mails`, a
+    round from a stored link answers `aenderungen`. Records every request."""
+
+    def __init__(self, mails, aenderungen=(), tot=False):
+        self.mails, self.aenderungen, self.tot = list(mails), list(aenderungen), tot
+        self.urls, self.params, self.headers = [], [], []
+
+    def get(self, url, params=None, extra_headers=None):
+        self.urls.append(url)
+        self.params.append(params)
+        self.headers.append(extra_headers)
+        if "$deltatoken" in url:
+            if self.tot:
+                raise RuntimeError("HTTP 410 Gone")
+            return _seite(self.aenderungen, url)
+        return _seite(self.mails, url)
+
+    def get_bytes(self, url, timeout=None, label=""):
+        return b"MIME " + url.encode(), "message/rfc822"
+
+    def batch_get(self, urls, extra_headers=None):
+        raise AssertionError("Nachfrage je Mail trotz gemeldeter Löschung")
+
+
+_POST = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang")]}]
+_DELTA_F1 = f"{outlook_export.GRAPH}/me/mailFolders/f1/messages/delta"
+
+
+def test_delta_erste_runde_ohne_link_mit_stichtag(tmp_path, monkeypatch):
+    monkeypatch.setenv("OUTLOOK_SINCE", "2025-06-01")
+    alt = {"id": "m1", "subject": "alt", "receivedDateTime": "2025-05-31T23:00:00Z"}
+    neu = {"id": "m2", "subject": "neu", "receivedDateTime": "2025-06-01T00:00:00Z"}
+    ohne = {"id": "m3", "subject": "ohne Datum"}
+    g = DeltaMailGraph([alt, neu, ohne])
+    bestand = outlook_export.Bestand()
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _POST, bestand))
+    done.close()
+    assert [mid for mid, _ in got] == ["m2", "m3"]
+    assert stats["excluded"] == 1
+    assert g.urls == [_DELTA_F1]
+    assert g.params == [{"$select": outlook_export.MAIL_SELECT}]
+    assert g.headers == [{"Prefer": "odata.maxpagesize=200"}]
+    # The old mail was seen all the same – it is no tombstone suspect.
+    assert bestand.gesehen == {"m1", "m2", "m3"}
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"]
+    # The link waits for a clean finish – nothing is stored yet.
+    assert bestand.links == {"E-Mail/Posteingang": ("f1", _DELTA_F1 + "?$deltatoken=t1")}
+    assert state_db.StateDb(tmp_path).kv_lesen("delta:f1") is None
+
+
+def test_delta_link_nur_nach_sauberem_ordner(tmp_path):
+    class Wackelig(DeltaMailGraph):
+        def get_bytes(self, url, timeout=None, label=""):
+            if "/m2/" in url:
+                raise RuntimeError("HTTP 500 Internal Server Error")
+            return super().get_bytes(url, timeout, label)
+
+    mails = [{"id": "m1", "subject": "a"}, {"id": "m2", "subject": "b"}]
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    bestand = outlook_export.Bestand()
+    assert outlook_export.run_export(Wackelig(mails), tmp_path, done, stats,
+                                     _POST, 2, bestand) == "done"
+    assert stats["mail_errors"] == 1 and stats["new"] == 1
+    bestand.links_sichern(db)
+    assert db.kv_lesen("delta:f1") is None, "Link trotz fehlgeschlagenem Download gespeichert"
+
+    # The clean run stores it – the next round then starts from the link.
+    bestand = outlook_export.Bestand()
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.run_export(DeltaMailGraph(mails), tmp_path, done, stats, _POST, 2, bestand)
+    bestand.links_sichern(db)
+    assert db.kv_lesen("delta:f1") == _DELTA_F1 + "?$deltatoken=t1"
+    assert stats == {"new": 1, "skipped": 1}
+    g = DeltaMailGraph(mails, aenderungen=[{"id": "m7", "subject": "neu"}])
+    bestand = outlook_export.Bestand()
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _POST, bestand))
+    done.close()
+    assert g.urls == [_DELTA_F1 + "?$deltatoken=t1"]
+    assert [mid for mid, _ in got] == ["m7"]
+
+
+def test_delta_zweite_runde_meldet_loeschungen_ohne_nachfrage(tmp_path):
+    """A round from the link names its removals – no GET per mail. What
+    was not listed this round is no suspect: the round is not a listing."""
+    db = state_db.StateDb(tmp_path)
+    link = _DELTA_F1 + "?$deltatoken=alt"
+    db.kv_schreiben("delta:f1", link)
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<weg@example.com>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/b.eml", "<bleibt@example.com>")
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/c.eml", "<umgezogen@example.com>")
+    done = _donelog(tmp_path)
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    done.mark("m2", "E-Mail/Posteingang/b.eml")
+    done.mark("m3", "E-Mail/Posteingang/c.eml")
+    aenderungen = [{"id": "m1", "@removed": {"reason": "deleted"}},
+                   {"id": "m3", "@removed": {"reason": "deleted"}},
+                   {"id": "m9", "subject": "neu", "internetMessageId": "<umgezogen@example.com>"}]
+    g = DeltaMailGraph([], aenderungen)
+    bestand = outlook_export.Bestand()
+    stats = {"new": 0, "skipped": 0}
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _POST, bestand))
+    assert g.urls == [link]
+    assert [mid for mid, _ in got] == ["m9"]
+    assert bestand.vollstaendig == []
+    assert bestand.entfernt == {"m1", "m3"}
+    assert outlook_export.verdaechtige(done, bestand) == []
+    ergebnis = outlook_export.pruefe_verschwundene(g, tmp_path, done, bestand)
+    done.close()
+    assert ergebnis["gone_new"] == 1 and ergebnis["moved"] == 1
+    assert sorted(state_db.StateDb(tmp_path).verschwunden_lesen()) == ["E-Mail/Posteingang/a.eml"]
+
+
+def test_delta_gemeldetes_aus_gestoertem_ordner_wartet(tmp_path):
+    """A folder with a failed download keeps its link – and so its removals
+    are reported again next time; nothing is inferred from it now."""
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<weg@example.com>")
+    done = _donelog(tmp_path)
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    bestand = outlook_export.Bestand()
+    bestand.entfernt = {"m1"}
+    bestand.link_merken("E-Mail/Posteingang", "f1", "https://example.com/delta?$deltatoken=x")
+    bestand.download_fehlgeschlagen("E-Mail/Posteingang/z.eml")
+    assert bestand.gemeldet(done) == []
+    db = state_db.StateDb(tmp_path)
+    bestand.links_sichern(db)
+    assert db.kv_lesen("delta:f1") is None
+    assert outlook_export.pruefe_verschwundene(DeltaMailGraph([]), tmp_path, done, bestand) == {}
+    done.close()
+
+
+def test_delta_gemischte_runden_machen_keine_verdaechtigen(tmp_path):
+    """A parent read in full, a subfolder read from its link: the prefix
+    test must not turn the subfolder's unchanged mails into suspects. A
+    folder that vanished with its mails still resolves through the parent."""
+    db = state_db.StateDb(tmp_path)
+    link = f"{outlook_export.GRAPH}/me/mailFolders/f2/messages/delta?$deltatoken=sub"
+    db.kv_schreiben("delta:f2", link)
+    done = _donelog(tmp_path)
+    done.mark("p1", "E-Mail/Posteingang/a.eml")
+    done.mark("s1", "E-Mail/Posteingang/Sub/b.eml")
+    done.mark("w1", "E-Mail/Posteingang/Weg/c.eml")        # folder gone with its mail
+    selected = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang"),
+                             ({"id": "f2"}, "E-Mail/Posteingang/Sub")]}]
+    g = DeltaMailGraph([{"id": "p1", "subject": "a"}], aenderungen=[])
+    bestand = outlook_export.Bestand()
+    stats = {"new": 0, "skipped": 0}
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, selected, bestand))
+    assert [mid for mid, _ in got] == ["p1"]         # no file yet: fetched again
+    assert g.urls[1] == link
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"]
+    assert bestand.per_link == {"E-Mail/Posteingang/Sub"}
+    assert outlook_export.verdaechtige(done, bestand) == [("w1", "E-Mail/Posteingang/Weg/c.eml")]
+
+    class Ohne(DeltaMailGraph):
+        def batch_get(self, urls, extra_headers=None):
+            assert [u.rsplit("/", 1)[-1] for u in urls] == ["w1?$select=id"]
+            return {u: (404, None) for u in urls}
+
+    ergebnis = outlook_export.pruefe_verschwundene(Ohne([]), tmp_path, done, bestand)
+    done.close()
+    assert ergebnis["gone_new"] == 1
+    assert sorted(db.verschwunden_lesen()) == ["E-Mail/Posteingang/Weg/c.eml"]
+
+
+def test_delta_abgebrochene_runde_meldet_keine_loeschungen(tmp_path):
+    """Removals a round reported before it broke off are not trusted –
+    tombstones come from clean folders only. The link is withheld, so the
+    next round reports them again."""
+    db = state_db.StateDb(tmp_path)
+    link = _DELTA_F1 + "?$deltatoken=alt"
+    db.kv_schreiben("delta:f1", link)
+    _eml_mit_kennung(tmp_path / "E-Mail/Posteingang/a.eml", "<weg@example.com>")
+    done = _donelog(tmp_path)
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+
+    class Bricht(DeltaMailGraph):
+        def get(self, url, params=None, extra_headers=None):
+            if "$deltatoken" in url:
+                return {"value": [{"id": "m1", "@removed": {"reason": "deleted"}}],
+                        "@odata.nextLink": "https://example.com/f1/weiter"}
+            raise RuntimeError("Ordner haengt")
+
+    g = Bricht([])
+    bestand = outlook_export.Bestand()
+    stats = {"new": 0, "skipped": 0}
+    list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _POST, bestand))
+    assert stats["folder_errors"] == 1
+    assert bestand.entfernt == {"m1"} and bestand.gemeldet(done) == []
+    assert bestand.links == {}
+    assert outlook_export.pruefe_verschwundene(g, tmp_path, done, bestand, listing=False) == {}
+    done.close()
+    assert db.verschwunden_lesen() == {}
+    assert db.kv_lesen("delta:f1") == link
+
+
+def test_delta_toter_link_wird_verworfen_und_voll_gelesen(tmp_path, capsys):
+    db = state_db.StateDb(tmp_path)
+    link = _DELTA_F1 + "?$deltatoken=alt"
+    db.kv_schreiben("delta:f1", link)
+    g = DeltaMailGraph([{"id": "m1", "subject": "x"}], tot=True)
+    bestand = outlook_export.Bestand()
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _POST, bestand))
+    done.close()
+    assert [mid for mid, _ in got] == ["m1"]
+    assert g.urls == [link, _DELTA_F1]
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"]
+    assert stats.get("folder_errors", 0) == 0
+    assert db.kv_lesen("delta:f1") is None
+    assert {"k": "run.outlook.delta_reset", "level": "warn",
+            "v": {"name": "E-Mail/Posteingang"}} in _events(capsys)
+
+
+def test_token_ungueltig_erkennt_410_und_syncstate():
+    def http(status, text, msg):
+        antwort = type("Antwort", (), {"status_code": status, "text": text})()
+        return requests.exceptions.HTTPError(msg, response=antwort)
+
+    assert outlook_export.token_ungueltig(http(410, "", "410 Client Error: Gone for url: x"))
+    assert outlook_export.token_ungueltig(
+        http(400, '{"error":{"code":"syncStateNotFound"}}', "400 Client Error"))
+    # A 410 inside an id is no 410
+    assert not outlook_export.token_ungueltig(
+        http(500, "", "500 Server Error for url: https://example.com/AAA410BBB"))
+    assert not outlook_export.token_ungueltig(requests.exceptions.ReadTimeout("read timed out"))
+
+
+def test_wirklich_weg_fragt_als_batch():
+    g = _FakeGraph(weg={"m2"})
+    outlook_export.wirklich_weg(g, [("m1", "a.eml"), ("m2", "b.eml")])
+    assert g.urls == [[f"{outlook_export.GRAPH}/me/messages/m1?$select=id",
+                       f"{outlook_export.GRAPH}/me/messages/m2?$select=id"]]
+
+
+# --------------------------------------------------------------------------
+# Calendar: a window of change tracking, series via their master
+# --------------------------------------------------------------------------
+class KalDeltaGraph:
+    """calendarView/delta answers `eintraege` (a stored link `aenderungen`);
+    batch_get hands out series masters by id."""
+
+    def __init__(self, eintraege, aenderungen=(), masters=None):
+        self.eintraege, self.aenderungen = list(eintraege), list(aenderungen)
+        self.masters = masters or {}
+        self.urls, self.params, self.geholt = [], [], []
+
+    def get(self, url, params=None, extra_headers=None):
+        self.urls.append(url)
+        self.params.append(params)
+        assert 'outlook.timezone="UTC"' in extra_headers["Prefer"]
+        return _seite(self.aenderungen if "$deltatoken" in url else self.eintraege, url)
+
+    def batch_get(self, urls, extra_headers=None):
+        assert extra_headers == {"Prefer": 'outlook.timezone="UTC"'}
+        antworten = {}
+        for u in urls:
+            eid = u.rsplit("/", 1)[-1].split("?")[0]
+            self.geholt.append(eid)
+            ev = self.masters.get(eid)
+            antworten[u] = (200, ev) if ev else (404, None)
+        return antworten
+
+
+_ARBEIT = [{"id": "cal1", "name": "Arbeit"}]
+_VIEW = f"{outlook_export.GRAPH}/me/calendars/cal1/calendarView/delta"
+MASTER = {**EVENT, "id": "s1", "subject": "Jour fixe", "type": "seriesMaster",
+          "recurrence": {"pattern": {"type": "weekly", "daysOfWeek": ["monday"]},
+                         "range": {"type": "noEnd"}}}
+TERMIN = {"id": "o1", "type": "occurrence", "seriesMasterId": "s1", "subject": "Jour fixe",
+          "start": {"dateTime": "2025-06-02T12:00:00.0000000", "timeZone": "UTC"},
+          "lastModifiedDateTime": EVENT["lastModifiedDateTime"]}
+
+
+def test_kalender_fenster_rechnet_monate_und_jahre():
+    jetzt = datetime(2026, 3, 31, 15, 30, tzinfo=UTC)
+    von, bis = outlook_export.kalender_fenster(1, jetzt)
+    assert von == datetime(2026, 2, 28, tzinfo=UTC)          # the day is clamped
+    assert bis == datetime(2036, 3, 31, tzinfo=UTC)
+    assert outlook_export.kalender_fenster(14, jetzt)[0] == datetime(2025, 1, 31, tzinfo=UTC)
+    assert outlook_export.kalender_fenster(0, jetzt)[0] is None
+
+
+def test_export_calendar_serie_ueber_den_master(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "2")
+    g = KalDeltaGraph([TERMIN], masters={"s1": MASTER})
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    # The view was asked for the window, the series only for its master.
+    von, bis = outlook_export.kalender_fenster(2)
+    assert g.urls == [_VIEW]
+    assert g.params == [{"startDateTime": von.strftime("%Y-%m-%dT00:00:00Z"),
+                         "endDateTime": bis.strftime("%Y-%m-%dT00:00:00Z")}]
+    assert g.geholt == ["s1"]
+    assert stats == {"new": 1, "skipped": 0}
+    files = list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))
+    assert len(files) == 1
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in files[0].read_text(encoding="utf-8")
+    assert done.is_done(tmp_path, "s1") and "o1" not in done.done
+    db = state_db.StateDb(tmp_path)
+    link = db.kv_lesen("delta:cal:cal1")
+    assert link == _VIEW + "?$deltatoken=t1"
+    assert db.kv_lesen("delta:cal:cal1:window") == "2"
+    assert {"k": "run.calendar.window", "level": "info",
+            "v": {"name": "Arbeit", "from": von.strftime("%Y-%m-%d")}} in _events(capsys)
+
+    # The next round starts from the link; an unchanged date leaves the series alone.
+    g = KalDeltaGraph([], aenderungen=[TERMIN], masters={"s1": MASTER})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert g.urls == [link] and g.geholt == []
+    assert stats == {"new": 1, "skipped": 1}
+
+    # A changed date: the master is fetched and rewritten – under its new name.
+    spaeter = "2025-06-01T08:00:00Z"
+    g = KalDeltaGraph([], aenderungen=[{**TERMIN, "lastModifiedDateTime": spaeter}],
+                      masters={"s1": {**MASTER, "subject": "Jour fixe neu",
+                                      "lastModifiedDateTime": spaeter}})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    done.close()
+    assert g.geholt == ["s1"]
+    assert stats == {"new": 1, "skipped": 1, "updated": 1}
+    files = list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))
+    assert len(files) == 1 and "SUMMARY:Jour fixe neu" in files[0].read_text(encoding="utf-8")
+
+
+def test_export_calendar_altes_archiv_schreibt_nur_geaendertes_neu(tmp_path):
+    """An archive from before change tracking has no records: the DTSTAMP
+    in the file decides, and what is unchanged is adopted without a write."""
+    done = _donelog(tmp_path)
+    ev2 = {**EVENT, "id": "ev2", "subject": "Anders"}
+    (tmp_path / "kalender" / "Arbeit").mkdir(parents=True)
+    for ev in (EVENT, ev2):
+        rel = f"kalender/Arbeit/{outlook_export.event_filename(ev)}"
+        (tmp_path / rel).write_text(outlook_export.build_ics(ev), encoding="utf-8")
+        done.mark(ev["id"], rel)
+    g = KalDeltaGraph([EVENT, {**ev2, "lastModifiedDateTime": "2025-07-01T08:00:00Z"}])
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert stats == {"new": 0, "skipped": 1, "updated": 1}
+    text = (tmp_path / done.done["ev2"]).read_text(encoding="utf-8")
+    assert "DTSTAMP:20250701T080000Z" in text
+    done.close()
+    saetze = state_db.StateDb(tmp_path).saetze_lesen("events")
+    assert set(saetze) == {"ev1", "ev2"}
+
+
+def test_export_calendar_entferntes_behaelt_die_datei(tmp_path):
+    """Gone events keep their file, as they always have – only the record
+    goes. A removed date of a living series was never a file."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.export_calendar(KalDeltaGraph([EVENT]), tmp_path, done, stats, _ARBEIT)
+    weg = [{"id": "ev1", "@removed": {"reason": "deleted"}},
+           {"id": "o77", "@removed": {"reason": "deleted"}}]
+    outlook_export.export_calendar(KalDeltaGraph([], aenderungen=weg), tmp_path, done,
+                                   stats, _ARBEIT)
+    done.close()
+    assert stats == {"new": 1, "skipped": 0}
+    assert len(list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))) == 1
+    assert "ev1" not in state_db.StateDb(tmp_path).saetze_lesen("events")
+
+
+def test_export_calendar_voll_und_fensterwechsel_verwerfen_den_link(tmp_path, monkeypatch, capsys):
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    db = state_db.StateDb(tmp_path)
+    outlook_export.export_calendar(KalDeltaGraph([EVENT]), tmp_path, done, stats, _ARBEIT)
+    link = db.kv_lesen("delta:cal:cal1")
+    assert link
+    capsys.readouterr()
+
+    # A full read: no window, no link – and the read starts a fresh link.
+    monkeypatch.setenv("CALENDAR_FULL", "1")
+    g = KalDeltaGraph([EVENT])
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert g.urls == [_VIEW]
+    assert g.params[0]["startDateTime"] == "1970-01-01T00:00:00Z"
+    assert not any(e and e["k"] == "run.calendar.window" for e in _events(capsys))
+    assert db.kv_lesen("delta:cal:cal1:window") == "1"
+
+    monkeypatch.setenv("CALENDAR_FULL", "0")
+    g = KalDeltaGraph([], aenderungen=[EVENT])
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert g.urls == [link]                                   # continues from it
+
+    # Another window: the old link would answer for the old range.
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "3")
+    g = KalDeltaGraph([EVENT])
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    done.close()
+    assert g.urls == [_VIEW]
+    assert db.kv_lesen("delta:cal:cal1:window") == "3"
+    assert stats == {"new": 1, "skipped": 3}
+
+
+# --------------------------------------------------------------------------
+# Contacts: change tracking per folder
+# --------------------------------------------------------------------------
+class KonDeltaGraph:
+    def __init__(self, kontakte, aenderungen=(), ordner=()):
+        self.kontakte, self.aenderungen, self.ordner = list(kontakte), list(aenderungen), list(ordner)
+        self.urls, self.params = [], []
+
+    def paged(self, url, params=None, extra_headers=None):
+        if url.endswith("/me/contactFolders"):
+            yield from self.ordner
+
+    def get(self, url, params=None, extra_headers=None):
+        self.urls.append(url)
+        self.params.append(params)
+        if "/contactFolders/" in url:
+            return _seite([], url)                # the folders stay empty here
+        return _seite(self.aenderungen if "$deltatoken" in url else self.kontakte, url)
+
+
+def test_export_contacts_delta_schreibt_nur_neues_und_geaendertes(tmp_path):
+    g = KonDeltaGraph([CONTACT], ordner=[{"id": "cf1", "displayName": "Team"}])
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_contacts(g, tmp_path, done, stats) == 0
+    assert g.urls == [f"{outlook_export.GRAPH}/me/contacts/delta",
+                      f"{outlook_export.GRAPH}/me/contactFolders/cf1/contacts/delta"]
+    assert g.params[0] == {"$select": outlook_export.CONTACT_SELECT}
+    assert "lastModifiedDateTime" in outlook_export.CONTACT_SELECT
+    db = state_db.StateDb(tmp_path)
+    link = db.kv_lesen("delta:contacts")
+    assert link == f"{outlook_export.GRAPH}/me/contacts/delta?$deltatoken=t1"
+    assert db.kv_lesen("delta:contacts:cf1")
+    assert stats == {"new": 1, "skipped": 0}
+
+    # From the link: a renamed contact is rewritten under its new name, an
+    # unknown removal ignored.
+    umbenannt = {**CONTACT, "displayName": "Alice Beispiel",
+                 "lastModifiedDateTime": "2026-01-01T00:00:00Z"}
+    g = KonDeltaGraph([], aenderungen=[umbenannt, {"id": "c9", "@removed": {"reason": "deleted"}}])
+    outlook_export.export_contacts(g, tmp_path, done, stats)
+    assert g.urls == [link]
+    assert stats == {"new": 1, "skipped": 0, "updated": 1}
+    files = list((tmp_path / "kontakte").glob("*.vcf"))
+    assert [f.name for f in files] == [outlook_export.contact_filename(umbenannt)]
+
+    # Unchanged since: skipped. Removed: the file stays, the record goes.
+    g = KonDeltaGraph([], aenderungen=[umbenannt, {"id": "c1", "@removed": {"reason": "deleted"}}])
+    outlook_export.export_contacts(g, tmp_path, done, stats)
+    done.close()
+    assert stats == {"new": 1, "skipped": 1, "updated": 1}
+    assert len(list((tmp_path / "kontakte").glob("*.vcf"))) == 1
+    assert "c1" not in db.saetze_lesen("contacts")
+
+
+def test_export_contacts_unlesbare_ordnerliste_ist_kein_sauberer_lauf(tmp_path, capsys):
+    """The default folder still gets exported – but the run counts an
+    error, so a cadence does not skip the unknown folders next time."""
+    class OhneOrdner(KonDeltaGraph):
+        def paged(self, url, params=None, extra_headers=None):
+            raise ValueError("keine Berechtigung")
+
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_contacts(OhneOrdner([CONTACT]), tmp_path, done, stats) == 1
+    done.close()
+    assert stats == {"new": 1, "skipped": 0}
+    assert any(e and e["k"] == "run.unreadable" for e in _events(capsys))
+
+
+def test_export_contacts_faellt_auf_die_liste_zurueck(tmp_path):
+    """Should Graph refuse change tracking on the default folder, its plain
+    listing still delivers – without a link."""
+    class OhneDelta:
+        def paged(self, url, params=None, extra_headers=None):
+            if url.endswith("/me/contacts"):
+                yield CONTACT
+
+        def get(self, url, params=None, extra_headers=None):
+            antwort = type("Antwort", (), {"status_code": 400, "text": ""})()
+            raise requests.exceptions.HTTPError("400 Client Error: Bad Request", response=antwort)
+
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_contacts(OhneDelta(), tmp_path, done, stats) == 0
+    done.close()
+    assert stats == {"new": 1, "skipped": 0}
+    assert state_db.StateDb(tmp_path).kv_lesen("delta:contacts") is None

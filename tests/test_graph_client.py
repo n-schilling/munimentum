@@ -44,6 +44,14 @@ class FakeSession:
             raise r
         return r
 
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.calls.append({"url": url, "headers": dict(headers or {}),
+                           "json": json, "timeout": timeout, "post": True})
+        r = self.responses.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return r
+
 
 @pytest.fixture
 def session(monkeypatch):
@@ -416,3 +424,78 @@ def test_takt_sagt_die_pause_und_haelt_kein_volles_fenster_aus(monkeypatch, caps
     with pytest.raises(graph_client.Ueberlastet):
         voll.warten()
     assert len(voll.zeiten) == 3, "nothing registered for a refused request"
+
+
+# ---------------------------------------------------------------------------
+# JSON batch: twenty small GETs per round trip
+# ---------------------------------------------------------------------------
+def _batch_antwort(anfragen, status=200, koerper=None, throttled=()):
+    """A batch envelope answering every part – throttled ids get a 429."""
+    return FakeResponse(payload={"responses": [
+        {"id": r["id"], "status": 429 if r["id"] in throttled else status,
+         "headers": {"Retry-After": "7"} if r["id"] in throttled else {},
+         "body": (koerper or {}).get(r["id"], {"url": r["url"]})}
+        for r in anfragen]})
+
+
+def test_batch_get_buendelt_zwanzig_und_ordnet_die_antworten_zu(session):
+    urls = [f"{graph_client.GRAPH}/me/messages/m{i}?$select=id" for i in range(45)]
+    session.responses = [None, None, None]
+    fake_post = session.post
+
+    def post(url, headers=None, json=None, timeout=None):
+        session.responses[0] = _batch_antwort(json["requests"])
+        return fake_post(url, headers=headers, json=json, timeout=timeout)
+    session.post = post
+    g = _bare_graph()
+    ergebnis = g.batch_get(urls)
+    posts = [c for c in session.calls if c.get("post")]
+    assert len(posts) == 3 and [len(c["json"]["requests"]) for c in posts] == [20, 20, 5]
+    assert all(c["url"] == f"{graph_client.GRAPH}/$batch" for c in posts)
+    assert posts[0]["json"]["requests"][0]["url"] == "/me/messages/m0?$select=id"
+    assert len(ergebnis) == 45
+    assert ergebnis[urls[44]] == (200, {"url": "/me/messages/m44?$select=id"})
+
+
+def test_batch_get_wiederholt_gedrosselte_teile_und_reicht_404_durch(session, sleeps, monkeypatch):
+    monkeypatch.setattr(graph_client, "_DROSSEL", {"bis": 0.0})
+    urls = [f"{graph_client.GRAPH}/users/u1", f"{graph_client.GRAPH}/users/u2",
+            f"{graph_client.GRAPH}/users/u3"]
+    erste = FakeResponse(payload={"responses": [
+        {"id": "0", "status": 200, "body": {"displayName": "Alice Beispiel"}},
+        {"id": "1", "status": 404, "body": {"error": {"code": "Request_ResourceNotFound"}}},
+        {"id": "2", "status": 429, "headers": {"Retry-After": "3"}, "body": {}}]})
+    zweite = FakeResponse(payload={"responses": [
+        {"id": "0", "status": 200, "body": {"displayName": "Bob Baumeister"}}]})
+    session.responses = [erste, zweite]
+    g = _bare_graph()
+    ergebnis = g.batch_get(urls)
+    assert ergebnis[urls[0]] == (200, {"displayName": "Alice Beispiel"})
+    assert ergebnis[urls[1]][0] == 404
+    assert ergebnis[urls[2]] == (200, {"displayName": "Bob Baumeister"})
+    posts = [c for c in session.calls if c.get("post")]
+    assert len(posts) == 2 and posts[1]["json"]["requests"][0]["url"] == "/users/u3"
+    assert graph_client._DROSSEL["bis"] > 0, "der Teil-429 hat das Gatter nicht gesetzt"
+
+
+def test_batch_get_trennt_beta_von_v1(session):
+    beta = graph_client.GRAPH.replace("/v1.0", "/beta")
+    urls = [f"{graph_client.GRAPH}/me", f"{beta}/planner/tasks/t1/messages"]
+    session.responses = [
+        FakeResponse(payload={"responses": [{"id": "0", "status": 200, "body": {}}]}),
+        FakeResponse(payload={"responses": [{"id": "0", "status": 200, "body": {}}]})]
+    g = _bare_graph()
+    g.batch_get(urls)
+    posts = [c for c in session.calls if c.get("post")]
+    assert {c["url"] for c in posts} == {f"{graph_client.GRAPH}/$batch", f"{beta}/$batch"}
+
+
+def test_batch_get_gibt_nach_der_leiter_auf(session, sleeps, monkeypatch):
+    monkeypatch.setattr(graph_client, "_DROSSEL", {"bis": 0.0})
+    url = f"{graph_client.GRAPH}/me/messages/m1"
+    session.responses = [FakeResponse(payload={"responses": [
+        {"id": "0", "status": 429, "headers": {}, "body": {}}]})
+        for _ in range(graph_client.HTTP_RETRIES)]
+    g = _bare_graph()
+    with pytest.raises(graph_client.Ueberlastet):
+        g.batch_get([url])

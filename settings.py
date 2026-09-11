@@ -131,6 +131,25 @@ VORGABEN = {
     # Calendar selection, the same mechanics as above. Empty means: only the
     # default calendar (see folders.nur_standard).
     "calendar_rules": "",
+    # After the first export the calendar is read as a window: this many
+    # months back plus everything ahead. 0 = every appointment, every run.
+    "calendar_months_back": 1,
+    # First export only: nothing older than this day (YYYY-MM-DD). Empty =
+    # the whole history. One for the mailbox, one for the chats.
+    "outlook_since": "",
+    "teams_since": "",
+    # Teams selection: ordered rules over "1on1/<title>", "group/<title>",
+    # "meeting/<title>", "channels/<team>/<channel>". Empty means: every
+    # conversation of the ticked categories.
+    "teams_rules": "",
+    # SharePoint libraries: path rules over "<site>/<library>/<path>" on top
+    # of the URL list and the type filters. Empty means: every path.
+    "sharepoint_rules": "",
+    # To Do: ordered rules over the list titles. Empty means: every list.
+    "todo_rules": "",
+    # Planner re-reads every task's chat comments this often – they carry no
+    # change signal of their own.
+    "planner_sweep_hours": 24,
     # 128 measured on a real archive: roughly a fifth faster than 64, and
     # even the longest chunks still get through. Ollama rejects 256.
     "index_batch": 128,
@@ -194,6 +213,9 @@ VORGABEN = {
     "tenant": "",           # empty = organizations
     "device_code": False,   # scripts in the terminal: code instead of browser window
     "language": "auto",   # "auto" = browser language, otherwise a code from lang/
+    # The tour's chapters someone has finished or skipped – it never comes
+    # back on its own; Settings › App can start it again.
+    "tour_seen": {},
     "schedule": {
         "enabled": False,
         "interval_minutes": 60,

@@ -1095,8 +1095,13 @@ def grabsteine(art, root_dir):
         import state_db
         weg = {}
         for nb in sorted(p for p in root.iterdir() if p.is_dir()):
+            db = state_db.StateDb(nb)
             try:
-                seiten = json.loads(state_db.StateDb(nb).kv_lesen("pages") or "{}")
+                # One row per page since 9.0; an archive written by 8.x
+                # still carries the one blob until its next run.
+                zeilen = db.saetze_lesen("pages")
+                seiten = ({k: json.loads(v) for k, v in zeilen.items()} if zeilen
+                          else json.loads(db.kv_lesen("pages") or "{}"))
             except ValueError:
                 continue
             for e in seiten.values():

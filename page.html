@@ -504,6 +504,34 @@ details.erweitert>.gruppe{margin-top:4px}
 .urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
 .urltab input[type=text]{flex:1;min-width:0}
 .urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
+/* Cadence overrides: one row per folder, team, channel or chat that
+   departs from the general cadence – path, cadence, remove. */
+.abw .zeile .pfad{flex:1;min-width:0;font-size:13.5px;word-break:break-word}
+.abw .zeile select{min-width:150px}
+.abw-weg,.baum .abw-weg{border:0;background:transparent;color:var(--muted);font-size:16px;line-height:1;
+  padding:2px 6px;cursor:pointer;border-radius:6px}
+.abw-weg:hover{color:var(--ink);background:var(--code)}
+/* The cadence window's tree: one row per unit, indented by depth. */
+.kadenz-kopf{display:flex;align-items:center;gap:8px;margin:12px 0 10px}
+.kadenz-kopf input[type=text]{flex:1;min-width:0}
+.baum-rahmen{border:1px solid var(--line);border-radius:8px;padding:2px 12px;max-height:52vh;overflow:auto}
+.baum .zeile{display:flex;align-items:center;gap:10px;padding:5px 0;border-top:1px solid var(--line);font-size:13.5px}
+.baum .zeile:first-child{border-top:0}
+.baum .pfeil{width:16px;flex:0 0 16px;display:inline-flex;color:var(--muted);border:0;background:transparent;padding:0;cursor:pointer}
+.baum .pfeil svg{transition:transform .15s}
+.baum .zeile.offen .pfeil svg{transform:rotate(90deg)}
+.baum .name{flex:1;min-width:0;word-break:break-word}
+.baum .name b{background:var(--accent-weich);border-radius:3px;padding:0 2px;font-weight:600}
+.baum .vor{color:var(--muted)}
+.baum .zahl{color:var(--muted);font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 auto}
+.baum .erbe{color:var(--muted);font-size:12.5px;flex:0 0 auto}
+.baum select{min-width:150px;padding:5px 9px;font-size:13px}
+.baum select.erbt{color:var(--muted)}
+.baum select.gesetzt{background:var(--accent-weich);border-color:var(--accent)}
+.baum .zeile.aus .name{color:var(--muted)}
+.baum .tag.blau{background:var(--accent-weich);color:var(--accent)}
+.baum .tag.warn{background:transparent;border:1px solid var(--warn);color:var(--warn)}
+.kadenz-fuss{color:var(--muted);font-size:13px}
 .folgen{font-size:12.5px;color:var(--muted);margin:10px 0 0}
 .folgen:empty{display:none}
 #ollama-kinder>.gruppe:first-child{margin-top:0}
@@ -517,6 +545,24 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .speichern .rechts{margin-left:auto}
 
 /* ---- Wizards and windows ---- */
+/* The tour: a layer that dims everything but the element of the step (the
+   cut-out is one element whose shadow paints the dimming), and a card next
+   to it. Below the wizards, above the run window. */
+#tour{position:fixed;inset:0;z-index:19;pointer-events:none}
+#tour.hide{display:none}
+.tour-loch{position:fixed;border-radius:10px;box-shadow:0 0 0 4px var(--card),0 0 0 9999px rgba(13,16,19,.55);
+  pointer-events:none;transition:top .15s,left .15s,width .15s,height .15s}
+.tour-loch.weg{display:none}
+#tour.frei::before{content:"";position:fixed;inset:0;background:rgba(13,16,19,.55)}
+.tour-karte{position:fixed;width:380px;max-width:calc(100vw - 32px);background:var(--card);color:var(--ink);
+  border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.28);padding:16px 18px;pointer-events:auto;font-size:14px;line-height:1.5}
+.tour-karte .kapitel{letter-spacing:.06em;text-transform:uppercase;font-size:11px;font-weight:600;color:var(--muted)}
+.tour-karte h3{margin:4px 0 4px;font-size:15px;font-weight:650}
+.tour-karte .tour-fuss{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.tour-karte .tour-fuss .esc{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.tour-karte .pfeil-auf,.tour-karte .pfeil-ab{position:absolute;left:28px;width:14px;height:14px;background:var(--card);transform:rotate(45deg)}
+.tour-karte .pfeil-auf{top:-7px} .tour-karte .pfeil-ab{bottom:-7px}
+.erststart .tour-einstieg{grid-column:1/-1;margin-top:4px}
 #overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;padding:20px;z-index:20}
 #overlay.on{display:flex}
 .modal{background:var(--card);border-radius:14px;max-width:660px;width:100%;max-height:88vh;overflow:auto;padding:24px}
@@ -611,6 +657,7 @@ details.rechte p{margin:6px 0}
         <div><b data-i18n="stand.step3">Archiv aufbauen</b>
           <span class="muted small" data-i18n="stand.step3.sub"></span>
           <button class="act" id="btn-run-erst" onclick="runExport()" data-i18n="stand.step3">Archiv aufbauen</button></div></div>
+      <div class="tour-einstieg"><button class="mini" onclick="tourStart('archiv', 'quelle')" data-i18n="tour.start">Rundgang: so klickst du dich durch Archiv und Suche</button></div>
     </div>
 
   </div>
@@ -875,7 +922,7 @@ details.rechte p{margin:6px 0}
     <details class="quelle-einst" id="q-outlook">
       <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.outlook.title">Outlook</b><span class="muted small zf" id="q-outlook-zf"></span></summary>
       <div class="qinhalt">
-        <div class="gruppe">
+        <div class="gruppe" id="g-mail"><h3 data-i18n="export.cat.mail">E-Mail</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="folders.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="folders.rules.i">i</span></span><span class="small muted" id="folders-state"></span></div>
           <div class="feldzeile breit">
             <textarea id="c-folder_rules"
@@ -886,8 +933,17 @@ details.rechte p{margin:6px 0}
             <button class="mini" onclick="gleicheOrdnerAb()" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
             <button class="mini" onclick="zeigeExportliste()" data-i18n="plan.open">Exportliste anzeigen</button>
           </div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-outlook-mail"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div id="mail-abw-gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.mail"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.mail.i">i</span></span><span class="small muted" id="mail-abw-state"></span></div>
+          <div id="mail-abw" class="urltab abw" data-praefix="outlook:mail"></div>
+          <div class="aktionen">
+            <span class="small muted"></span>
+            <button class="mini" onclick="kadenzFenster('mail')" data-i18n="settings.cadence.overrides.mail.pick">Ordner festlegen…</button>
+          </div>
+          </div>
         </div>
-        <div class="gruppe"><h3 data-i18n="settings.calendars.title">Kalender</h3>
+        <div class="gruppe" id="g-kalender"><h3 data-i18n="settings.calendars.title">Kalender</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendars.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendars.rules.i">i</span></span><span class="small muted" id="cal-state"></span></div>
           <div class="feldzeile breit">
             <textarea id="c-calendar_rules"
@@ -897,10 +953,17 @@ details.rechte p{margin:6px 0}
             <span class="small muted" id="cal-msg"></span>
             <button class="mini" onclick="gleicheOrdnerAb('calendar')" data-i18n="settings.calendars.sync">Kalenderliste abgleichen</button>
             <button class="mini" onclick="zeigeExportliste('calendar')" data-i18n="plan.open">Exportliste anzeigen</button>
+            <button class="mini" onclick="gleicheOrdnerAb('calendar_full')" data-i18n="settings.calendars.full">Kalender vollständig neu lesen</button>
           </div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_months_back"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_months_back.i">i</span></span><span><input type="number" id="c-calendar_months_back" min="0" max="240"> <span class="muted small" data-i18n="settings.calendar_months_back.unit">Monate</span></span></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-outlook-calendar"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
         </div>
-        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+        <div class="gruppe"><h3 data-i18n="export.cat.contacts">Kontakte</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-outlook-contacts"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+        </div>
+        <details class="erweitert" id="q-outlook-erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.outlook_since"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.outlook_since.i">i</span></span><input type="date" id="c-outlook_since"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.include_hidden"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.include_hidden.i">i</span></span><input type="checkbox" id="c-include_hidden"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.calendar_reconstruct"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.calendar_reconstruct.i">i</span></span><input type="checkbox" id="c-calendar_reconstruct"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_folders.sub"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_folders.i">i</span></span><span class="small muted"></span></div>
@@ -918,13 +981,37 @@ details.rechte p{margin:6px 0}
       <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.teams.title">Teams</b><span class="muted small zf" id="q-teams-zf"></span></summary>
       <div class="qinhalt">
         <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.rules.i">i</span></span><span class="small muted" id="teams-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-teams_rules"
+              placeholder="- channels/Nordwind/**&#10;+ channels/Nordwind/Allgemein"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="teams-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('teams')" data-i18n="settings.teams.sync">Teamliste abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste('teams')" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
+        </div>
+        <div class="gruppe"><h3 data-i18n="settings.teams.files.title">Dateien</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.attachments.i">i</span></span><input type="checkbox" id="c-teams_attachments"></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.channel_files"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.channel_files.i">i</span></span><input type="checkbox" id="c-teams_channel_files"></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_max.i">i</span></span><span><input type="number" id="c-teams_files_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-teams"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+        </div>
+        <div class="gruppe"><h3 data-i18n="settings.cadence">Sync-Häufigkeit</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.1on1"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-1on1"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.group"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-group"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.meeting"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-meeting"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-channels"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.teams"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.teams.i">i</span></span><span class="small muted" id="teams-abw-state"></span></div>
+          <div id="teams-abw" class="urltab abw" data-praefix="teams"></div>
+          <div class="aktionen">
+            <span class="small muted"></span>
+            <button class="mini" onclick="kadenzFenster('teams')" data-i18n="settings.cadence.overrides.teams.pick">Teams und Chats festlegen…</button>
+          </div>
         </div>
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams_since"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams_since.i">i</span></span><input type="date" id="c-teams_since"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.embed_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.embed_images.i">i</span></span><input type="checkbox" id="c-embed_images"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
@@ -947,12 +1034,19 @@ details.rechte p{margin:6px 0}
             <span class="small muted" id="od-folders-msg"></span>
             <button class="mini" onclick="gleicheOrdnerAb('onedrive')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
             <button class="mini" onclick="zeigeExportliste('onedrive')" data-i18n="plan.open">Exportliste anzeigen</button>
+            <button class="mini" onclick="syncQuelle('onedrive')" data-i18n="cadence.sync_now">Jetzt syncen</button>
+          </div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.onedrive"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.onedrive.i">i</span></span><span class="small muted" id="od-abw-state"></span></div>
+          <div id="od-abw" class="urltab abw" data-praefix="onedrive"></div>
+          <div class="aktionen">
+            <span class="small muted"></span>
+            <button class="mini" onclick="kadenzFenster('onedrive')" data-i18n="settings.cadence.overrides.onedrive.pick">Ordner festlegen…</button>
           </div>
         </div>
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
-            <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-onedrive"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
           </div>
         </details>
       </div>
@@ -974,6 +1068,12 @@ details.rechte p{margin:6px 0}
             <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
           </div>
           <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.sharepoint.i">i</span></span><span class="small muted" id="sp-abw-state"></span></div>
+          <div id="sp-abw" class="urltab abw" data-praefix="sharepoint"></div>
+          <div class="aktionen">
+            <span class="small muted"></span>
+            <button class="mini" onclick="kadenzFenster('sharepoint')" data-i18n="settings.cadence.overrides.sharepoint.pick">Ordner festlegen…</button>
+          </div>
         </div>
         <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
@@ -986,6 +1086,11 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.include"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.include.i">i</span></span><input type="text" id="c-sharepoint_types_include" placeholder="pdf, docx, xlsx"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.exclude.i">i</span></span><input type="text" id="c-sharepoint_types_exclude" placeholder="mp4, iso"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.maxmb.i">i</span></span><span><input type="number" id="c-sharepoint_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.rules.i">i</span></span><span class="small muted"></span></div>
+            <div class="feldzeile breit">
+              <textarea id="c-sharepoint_rules"
+                placeholder="- Nordwind/Dokumente/Archiv/**&#10;+ Nordwind/Dokumente/Archiv/2026/**"></textarea>
+            </div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
           </div>
         </details>
@@ -1000,10 +1105,15 @@ details.rechte p{margin:6px 0}
             <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
             <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
           <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
+          <div class="aktionen">
+            <span class="small muted" id="pl-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('planner_legacy')" data-i18n="settings.planner.legacy" data-i18n-title="settings.planner.legacy.i">Alte Kommentare neu lesen</button>
+          </div>
         </div>
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
+            <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner_sweep_hours"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner_sweep_hours.i">i</span></span><span><input type="number" id="c-planner_sweep_hours" min="0" max="8760"> <span class="muted small" data-i18n="settings.planner_sweep_hours.unit">Stunden</span></span></div>
           </div>
         </details>
       </div>
@@ -1012,9 +1122,24 @@ details.rechte p{margin:6px 0}
     <details class="quelle-einst" id="q-todo">
       <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.todo.title">To Do</b><span class="muted small zf" id="q-todo-zf"></span></summary>
       <div class="qinhalt">
-        <p class="sub" data-i18n="settings.todo.note"></p>
         <div class="gruppe">
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.todo.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.todo.rules.i">i</span></span><span class="small muted" id="todo-state"></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-todo_rules"
+              placeholder="- **&#10;+ Einkauf"></textarea>
+          </div>
+          <div class="aktionen">
+            <span class="small muted" id="todo-msg"></span>
+            <button class="mini" onclick="gleicheOrdnerAb('todo')" data-i18n="settings.todo.sync">Listen abgleichen</button>
+            <button class="mini" onclick="zeigeExportliste('todo')" data-i18n="plan.open">Exportliste anzeigen</button>
+          </div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.i">i</span></span><select id="c-cadence-todo"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.todo"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.todo.i">i</span></span><span class="small muted" id="todo-abw-state"></span></div>
+          <div id="todo-abw" class="urltab abw" data-praefix="todo"></div>
+          <div class="aktionen">
+            <span class="small muted"></span>
+            <button class="mini" onclick="kadenzFenster('todo')" data-i18n="settings.cadence.overrides.todo.pick">Listen festlegen…</button>
+          </div>
         </div>
       </div>
     </details>
@@ -1171,6 +1296,12 @@ details.rechte p{margin:6px 0}
          data-i18n="update.download">Release herunterladen</a>
     </div>
     <div class="aktionen">
+      <span class="small muted" data-i18n="tour.again">Rundgang erneut starten:</span>
+      <button class="mini" onclick="tourStart('archiv')" data-i18n="tour.chapter.archiv">Archiv aufbauen</button>
+      <button class="mini" onclick="tourStart('suche')" data-i18n="tour.chapter.suche">Archiv durchsuchen</button>
+      <button class="mini" onclick="tourStart('quelle')" data-i18n="tour.chapter.quelle">Eine Quelle einrichten</button>
+    </div>
+    <div class="aktionen">
       <span class="small muted"></span>
       <button class="mini" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
     </div>
@@ -1204,6 +1335,10 @@ details.rechte p{margin:6px 0}
 </section>
 </main>
 
+<div id="tour" class="hide" aria-live="polite">
+  <div class="tour-loch weg" id="tour-loch"></div>
+  <div class="tour-karte" id="tour-karte" role="dialog" aria-modal="false"></div>
+</div>
 <div id="overlay"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
 
 <!-- The run window: everything about a running export happens here –
@@ -1242,6 +1377,7 @@ details.rechte p{margin:6px 0}
     </div>
     <div class="row modal-fuss">
       <button class="act hide" id="lauf-fertig" onclick="laufSchliessen()" data-i18n="lauf.close">Schließen</button>
+      <button class="ghost hide" id="lauf-tour" onclick="laufSchliessen();tourStart('suche')" data-i18n="tour.after_run">Zeig mir die Suche</button>
       <button class="ghost rot" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Lauf abbrechen</button>
       <span class="small muted rechts" id="lauf-hinweis" data-i18n="lauf.minimize.note">Minimiert wandert der Lauf in die Kopfzeile – suchen geht dann weiter.</span>
     </div>
@@ -1807,6 +1943,8 @@ function renderStatus(s){
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
   zeigeKalenderstand(s.calendars || {});
   zeigeNotizbuchstand(s.notebooks || {});
+  zeigeListenstand(s.conversations || {}, 'teams-state', 'settings.teams.none', 'settings.teams.state');
+  zeigeListenstand(s.lists || {}, 'todo-state', 'settings.todo.none', 'settings.todo.state');
   fuelleNotizbuchTabelle(s.notebooks || {}, (s.config && s.config.sync_cadence) || {});
   // Fill only on the first render – otherwise the status poll would
   // overwrite every 2.5 seconds what is being typed right now.
@@ -2083,6 +2221,7 @@ function laufVerfolgen(jobs, first){
       el('lauf-ergebnis').innerHTML = '';
       el('lauf-ergebnis').classList.add('hide');
       el('lauf-fertig').classList.add('hide');
+      el('lauf-tour').classList.add('hide');
       el('lauf-zu').classList.add('hide');
       el('lauf-minimieren').classList.remove('hide');
       el('lauf-hinweis').classList.remove('hide');
@@ -2115,11 +2254,178 @@ function laufSchliessen(){
 /* The result stays in the window: headline with what came and how long it
    took, the steps with their numbers from the run history, the log below
    – and one button. */
+/* ---------- The tour: coach marks through the core workflows ----------
+   Three chapters, one per door and one for a source's settings. Each step
+   names its element; the layer dims everything else and puts a card next
+   to it. The tour explains only – it never sets a chip or a rule. A step
+   whose element is not there (no run window open) is skipped; "seen" per
+   chapter lives in the settings, so it does not come back on its own. */
+var TOUR = {
+  archiv: [
+    {ziel: '#pill-token', tab: 'export', titel: 'tour.archiv.zugang', text: 'tour.archiv.zugang.t'},
+    {ziel: '#qk-outlook', tab: 'export', titel: 'tour.archiv.quellen', text: 'tour.archiv.quellen.t'},
+    {ziel: '#q-outlook-info', tab: 'export', titel: 'tour.archiv.info', text: 'tour.archiv.info.t'},
+    {ziel: '#qk-outlook .zahnrad', tab: 'export', titel: 'tour.archiv.zahnrad', text: 'tour.archiv.zahnrad.t', abzweig: 'quelle'},
+    {ziel: '#btn-run', tab: 'export', titel: 'tour.archiv.lauf', text: 'tour.archiv.lauf.t'},
+    {ziel: '#lauf-fenster', tab: 'export', titel: 'tour.archiv.fenster', text: 'tour.archiv.fenster.t', optional: true}],
+  suche: [
+    {ziel: '#q', rahmen: '.suchzeile', tab: 'suche', titel: 'tour.suche.feld', text: 'tour.suche.feld.t'},
+    {ziel: '#filter', tab: 'suche', titel: 'tour.suche.filter', text: 'tour.suche.filter.t'},
+    {ziel: '#sichten', tab: 'suche', titel: 'tour.suche.sichten', text: 'tour.suche.sichten.t'},
+    {ziel: '#treffer-split', tab: 'suche', titel: 'tour.suche.treffer', text: 'tour.suche.treffer.t'},
+    {ziel: '#sched-karte', tab: 'einstellungen', karte: 'sched-karte', titel: 'tour.suche.zeitplan', text: 'tour.suche.zeitplan.t'},
+    {ziel: '#mcp-karte', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.suche.claude', text: 'tour.suche.claude.t'}],
+  quelle: [
+    {ziel: '#q-outlook', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.block', text: 'tour.quelle.block.t'},
+    {ziel: '#g-mail', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.regeln', text: 'tour.quelle.regeln.t'},
+    {ziel: '#g-kalender', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.kalender', text: 'tour.quelle.kalender.t'},
+    {ziel: '#c-calendar_months_back', rahmen: '.feldzeile', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.fenster', text: 'tour.quelle.fenster.t'},
+    {ziel: '#c-cadence-outlook-mail', rahmen: '.feldzeile', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.kadenz', text: 'tour.quelle.kadenz.t'},
+    {ziel: '#mail-abw-gruppe', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.abweichend', text: 'tour.quelle.abweichend.t'},
+    {ziel: '#q-outlook-erweitert', tab: 'einstellungen', block: 'q-outlook', erweitert: 'q-outlook-erweitert', titel: 'tour.quelle.erweitert', text: 'tour.quelle.erweitert.t'},
+    {ziel: null, tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.speichern', text: 'tour.quelle.speichern.t'}]
+};
+var TOURSTAND = {kap: null, i: 0, dann: null, fokus: null};
+
+function tourGesehen(kap){
+  return !!(S && S.config && S.config.tour_seen && S.config.tour_seen[kap]);
+}
+function tourStart(kap, dann){
+  if(!TOUR[kap]) return;
+  TOURSTAND = {kap: kap, i: 0, dann: dann || null, fokus: document.activeElement};
+  merke('flow.tab', 'tour');
+  // The search chapter needs something to search in: before the first run
+  // it says so and comes back with the run's result.
+  if(kap === 'suche' && !(S && S.store && S.store.exists)){
+    tourKarte(null, {titel: 'tour.suche.later', text: 'tour.suche.later.t', allein: true});
+    return;
+  }
+  tourZeige();
+}
+function tourSchritt(){ return TOUR[TOURSTAND.kap] && TOUR[TOURSTAND.kap][TOURSTAND.i]; }
+function tourZiel(schritt){
+  if(!schritt || !schritt.ziel || !document.querySelector) return null;
+  var ziel = document.querySelector(schritt.ziel);
+  if(ziel && schritt.rahmen && ziel.closest) ziel = ziel.closest(schritt.rahmen) || ziel;
+  // Not on the page right now (a run window that is closed): skipped.
+  if(ziel && ziel.offsetParent === null && !(ziel.getBoundingClientRect && ziel.getBoundingClientRect().height)) return null;
+  return ziel;
+}
+function tourZeige(richtung){
+  var schritt = tourSchritt();
+  if(!schritt){ tourEnde(true); return; }
+  if(schritt.tab) tab(schritt.tab);
+  if(schritt.block){ var b = el(schritt.block); if(b) b.open = true; markiereEinstellungsnav('quellen-karte'); }
+  if(schritt.karte) markiereEinstellungsnav(schritt.karte);
+  if(schritt.erweitert){ var e = el(schritt.erweitert); if(e) e.open = true; }
+  var ziel = tourZiel(schritt);
+  if(schritt.optional && !ziel){
+    TOURSTAND.i += (richtung || 1);
+    if(TOURSTAND.i < 0 || TOURSTAND.i >= TOUR[TOURSTAND.kap].length){ tourEnde(true); return; }
+    tourZeige(richtung); return;
+  }
+  if(ziel && ziel.scrollIntoView) ziel.scrollIntoView({block: 'center'});
+  tourKarte(ziel, schritt);
+}
+function tourKarte(ziel, schritt){
+  var kap = TOURSTAND.kap, n = TOUR[kap].length, i = TOURSTAND.i;
+  var karte = el('tour-karte'), letzter = i >= n - 1;
+  karte.innerHTML =
+    '<div class="kapitel">' + esc(t('tour.title')) + ' · ' + esc(t('tour.chapter.' + kap)) +
+      (schritt.allein ? '' : ' · ' + esc(t('tour.counter', {i: i + 1, n: n}))) + '</div>' +
+    '<h3>' + esc(t(schritt.titel)) + '</h3>' +
+    '<div>' + esc(t(schritt.text)) + '</div>' +
+    '<div class="tour-fuss">' +
+      (schritt.allein
+        ? '<button class="act" onclick="tourEnde(false)">' + esc(t('tour.ok')) + '</button>'
+        : '<button class="act" id="tour-weiter" onclick="tourWeiter()">' + esc(t(letzter ? 'tour.done' : 'tour.next')) + '</button>' +
+          (i > 0 ? '<button class="ghost" onclick="tourZurueck()">' + esc(t('tour.back')) + '</button>' : '') +
+          (schritt.abzweig ? '<button class="ghost" onclick="tourAbzweig(&quot;' + schritt.abzweig + '&quot;)">' + esc(t('tour.chapter.' + schritt.abzweig)) + '</button>' : '') +
+          '<button class="ghost" onclick="tourEnde(false)">' + esc(t('tour.skip')) + '</button>') +
+      '<span class="esc">' + esc(t('tour.esc')) + '</span></div>' +
+    '<div class="pfeil-auf hide" id="tour-pfeil-auf"></div><div class="pfeil-ab hide" id="tour-pfeil-ab"></div>';
+  el('tour').classList.remove('hide');
+  TOURSTAND.ziel = ziel || null;
+  tourPositionieren();
+  var knopf = karte.querySelector('button.act');
+  if(knopf && knopf.focus) knopf.focus();
+}
+function tourPositionieren(){
+  if(!TOURSTAND.kap || el('tour').classList.contains('hide')) return;
+  var loch = el('tour-loch'), karte = el('tour-karte'), ziel = TOURSTAND.ziel;
+  var fenster = typeof window !== 'undefined' ? window : {};
+  var breit = fenster.innerWidth || 1280, hoch = fenster.innerHeight || 800;
+  if(!ziel || !ziel.getBoundingClientRect){
+    loch.classList.add('weg');
+    el('tour').classList.add('frei');
+    karte.style.left = Math.max(16, (breit - 380) / 2) + 'px';
+    karte.style.top = Math.max(16, hoch / 2 - 120) + 'px';
+    return;
+  }
+  el('tour').classList.remove('frei');
+  var r = ziel.getBoundingClientRect();
+  loch.classList.remove('weg');
+  loch.style.left = (r.left - 6) + 'px'; loch.style.top = (r.top - 6) + 'px';
+  loch.style.width = (r.width + 12) + 'px'; loch.style.height = (r.height + 12) + 'px';
+  var kh = karte.offsetHeight || 180, unten = r.bottom + 14 + kh < hoch - 16;
+  karte.style.left = Math.min(Math.max(16, r.left), Math.max(16, breit - 396)) + 'px';
+  karte.style.top = (unten ? r.bottom + 14 : Math.max(16, r.top - 14 - kh)) + 'px';
+  var auf = document.getElementById('tour-pfeil-auf'), ab = document.getElementById('tour-pfeil-ab');
+  if(auf) auf.classList.toggle('hide', !unten);
+  if(ab) ab.classList.toggle('hide', unten);
+}
+function tourWeiter(){
+  TOURSTAND.i += 1;
+  if(TOURSTAND.i >= TOUR[TOURSTAND.kap].length){ tourEnde(true); return; }
+  tourZeige(1);
+}
+function tourZurueck(){
+  if(TOURSTAND.i === 0) return;
+  TOURSTAND.i -= 1;
+  tourZeige(-1);
+}
+function tourAbzweig(kap){
+  // The gear's card: into the source's chapter, back to this one after.
+  var zurueck = TOURSTAND.kap;
+  tourMerken(zurueck);
+  tourStart(kap, zurueck);
+}
+function tourMerken(kap){
+  var seen = Object.assign({}, (S && S.config && S.config.tour_seen) || {});
+  if(seen[kap]) return;
+  seen[kap] = true;
+  if(S && S.config) S.config.tour_seen = seen;
+  post('/api/config', {tour_seen: seen});
+}
+function tourEnde(fertig){
+  var kap = TOURSTAND.kap, dann = fertig ? TOURSTAND.dann : null, fokus = TOURSTAND.fokus;
+  el('tour').classList.add('hide');
+  el('tour').classList.remove('frei');
+  el('tour-loch').classList.add('weg');
+  TOURSTAND = {kap: null, i: 0, dann: null, fokus: null};
+  if(kap && !(kap === 'suche' && !(S && S.store && S.store.exists))) tourMerken(kap);
+  if(dann && !tourGesehen(dann)){ tourStart(dann); return; }
+  if(fokus && fokus.focus) fokus.focus();
+}
+function tourTaste(ev){
+  if(!TOURSTAND.kap) return;
+  if(ev.key === 'Escape'){ tourEnde(false); ev.preventDefault(); }
+  else if(ev.key === 'ArrowRight'){ tourWeiter(); ev.preventDefault(); }
+  else if(ev.key === 'ArrowLeft'){ tourZurueck(); ev.preventDefault(); }
+}
+document.addEventListener('keydown', tourTaste);
+if(typeof window !== 'undefined' && window.addEventListener){
+  window.addEventListener('resize', tourPositionieren);
+  window.addEventListener('scroll', tourPositionieren, true);
+}
+
 function laufErgebnisZeigen(L){
   el('lauf-minimieren').classList.add('hide');
   el('lauf-hinweis').classList.add('hide');
   el('lauf-zu').classList.remove('hide');
   el('lauf-fertig').classList.remove('hide');
+  // The first successful run is the moment for the search chapter.
+  el('lauf-tour').classList.toggle('hide', !(L.ok && !tourGesehen('suche') && S && S.store && S.store.exists));
   el('lauf-titel').innerHTML = L.ok
     ? '<span class="lauf-titel-ok">' + ikon('fertig', 'ok') + '<span id="lauf-titel-text"></span></span>'
     : '<span id="lauf-titel-text"></span>';
@@ -3814,10 +4120,22 @@ var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_cha
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
                 'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
-                'userflow_actions','runs_retention_months','log_retention_days'];
+                'userflow_actions','runs_retention_months','log_retention_days',
+                'calendar_months_back','planner_sweep_hours'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
+                'teams_rules','sharepoint_rules','todo_rules',
+                'outlook_since','teams_since',
                 'sharepoint_types_include','sharepoint_types_exclude'];
+// Cadence selects and the keys they carry in sync_cadence: a whole source
+// (OneDrive, To Do) or one category of it (Outlook, Teams).
+var KADENZ_FELDER = {'onedrive': 'c-cadence-onedrive', 'todo': 'c-cadence-todo',
+                     'outlook:mail': 'c-cadence-outlook-mail',
+                     'outlook:calendar': 'c-cadence-outlook-calendar',
+                     'outlook:contacts': 'c-cadence-outlook-contacts',
+                     'teams:1on1': 'c-cadence-teams-1on1', 'teams:group': 'c-cadence-teams-group',
+                     'teams:meeting': 'c-cadence-teams-meeting',
+                     'teams:channels': 'c-cadence-teams-channels'};
 var cfgGefuellt = false;
 
 function fuelleEinstellungen(cfg){
@@ -3833,9 +4151,13 @@ function fuelleEinstellungen(cfg){
   fuelleUrlTabelle('sp-urls', cfg.sharepoint_urls, kad, 'sharepoint-url');
   fuelleUrlTabelle('pg-urls', cfg.sharepoint_pages_urls, kad, 'pages-url');
   fuelleUrlTabelle('pl-urls', cfg.planner_urls, kad, 'planner-url');
-  el('c-cadence-onedrive').value = kad.onedrive || 'always';
-  el('c-cadence-teams').value = kad.teams || 'always';
-  el('c-cadence-todo').value = kad.todo || 'always';
+  Object.keys(KADENZ_FELDER).forEach(function(k){
+    // Before 9.0 Teams had one cadence for the whole source: it stands in
+    // for the four categories until each has its own.
+    var erbe = k.indexOf('teams:') === 0 ? kad.teams : '';
+    el(KADENZ_FELDER[k]).value = kad[k] || erbe || 'always';
+  });
+  ABW_QUELLEN.forEach(function(q){ abwFuellen(q, kad); });
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -3848,15 +4170,324 @@ function fuelleEinstellungen(cfg){
 function leseKadenzen(){
   // Rebuilt from scratch: URL keys always mirror the current tables, so a
   // removed or edited row cannot leave a stale cadence behind.
-  var kad = {onedrive: el('c-cadence-onedrive').value,
-             teams: el('c-cadence-teams').value,
-             todo: el('c-cadence-todo').value};
+  var kad = {};
+  Object.keys(KADENZ_FELDER).forEach(function(k){ kad[k] = el(KADENZ_FELDER[k]).value; });
+  ABW_QUELLEN.forEach(function(q){
+    var abw = abwLesen(q);
+    Object.keys(abw).forEach(function(pfad){ kad[ABW[q].praefix + ':' + pfad] = abw[pfad]; });
+  });
   // Per notebook, from the table – only what is not the default.
   [].forEach.call(document.querySelectorAll('#on-notebooks .zeile[data-id]'), function(z){
     var wahl = z.querySelector('select');
     if(wahl && wahl.value !== 'always') kad['onenote:' + z.getAttribute('data-id')] = wahl.value;
   });
   return kad;
+}
+
+/* ---------- Cadence per folder, team, channel or chat ----------
+   The general cadence of a category is the rule; a unit below it may
+   depart from it, and everything below that unit inherits the departure
+   until a deeper unit sets its own. The departures live in sync_cadence
+   as "<praefix>:<path>" and show as one row each in the source's block;
+   the window (kadenzFenster) is where they are set – a tree of the last
+   list sync, drillable to any depth, one select per row. */
+var ABW = {
+  mail:  {tab: 'mail-abw', state: 'mail-abw-state', praefix: 'outlook:mail',
+          wurzeln: null,                          // the tree's own top folder
+          allgemein: function(){ return el('c-cadence-outlook-mail').value; }},
+  teams: {tab: 'teams-abw', state: 'teams-abw-state', praefix: 'teams',
+          wurzeln: ['1on1', 'group', 'meeting', 'channels'],
+          allgemein: function(kat){ return el('c-cadence-teams-' + kat).value; }},
+  // The drive: a folder cadence paces downloads, the listing stays one
+  // delta stream – files in a folder not yet due wait for it.
+  onedrive: {tab: 'od-abw', state: 'od-abw-state', praefix: 'onedrive',
+             wurzeln: null,
+             allgemein: function(){ return el('c-cadence-onedrive').value; }},
+  // Lists have no hierarchy: every list is its own row under the source.
+  todo:  {tab: 'todo-abw', state: 'todo-abw-state', praefix: 'todo',
+          wurzeln: null, flach: true,
+          allgemein: function(){ return el('c-cadence-todo').value; }},
+  // Libraries: the tree starts with the sites, the library below is the
+  // unit whose cadence the URL rows set – the departures live under it.
+  sharepoint: {tab: 'sp-abw', state: 'sp-abw-state', praefix: 'sharepoint',
+               wurzeln: null, wurzelTiefe: 1,
+               allgemein: function(pfad){
+                 var lib = String(pfad || '').split('/').slice(0, 2).join('/');
+                 return spKadenzAusUrls((KADENZ.libs || {})[lib] || []);
+               }}
+};
+var ABW_QUELLEN = ['mail', 'teams', 'onedrive', 'todo', 'sharepoint'];
+var KADENZ_RANG = {always: 0, daily: 1, weekly: 2, monthly: 3};
+
+/* A library's cadence is what its URL rows say – two rows feeding one
+   library: the more frequent wins (export_util.haeufigere). Read from the
+   form, so the window follows an unsaved change in the table. */
+function spKadenzAusUrls(urls){
+  var beste = null;
+  [].forEach.call(el('sp-urls').querySelectorAll('.zeile'), function(z){
+    var feld = z.querySelector('input'), wahl = z.querySelector('select');
+    if(!feld || !wahl || urls.indexOf(feld.value.trim()) < 0) return;
+    if(beste === null || KADENZ_RANG[wahl.value] < KADENZ_RANG[beste]) beste = wahl.value;
+  });
+  return beste || 'always';
+}
+var KADENZ_WERTE = ['always', 'daily', 'weekly', 'monthly'];
+
+function abwZeile(pfad, wert){
+  var zeile = document.createElement('div');
+  zeile.className = 'zeile';
+  zeile.dataset.pfad = pfad;
+  zeile.innerHTML = '<span class="pfad">' + esc(pfad) + '</span>' +
+    '<select>' + KADENZ_WERTE.map(function(o){
+      return '<option value="' + o + '"' + (o === wert ? ' selected' : '') + '>' +
+        esc(t('cadence.' + o)) + '</option>'; }).join('') + '</select>' +
+    '<button class="abw-weg" title="' + esc(t('kadenz.remove')) + '" aria-label="' +
+      esc(t('kadenz.remove')) + '" onclick="abwEntfernen(this)">&times;</button>';
+  return zeile;
+}
+function abwFuellen(quelle, kad){
+  var w = ABW[quelle], tab = el(w.tab);
+  tab.innerHTML = '';
+  tab.dataset.leer = t('settings.cadence.overrides.none');
+  var vorsatz = w.praefix + ':';
+  Object.keys(kad || {}).sort().forEach(function(k){
+    if(k.indexOf(vorsatz) !== 0) return;
+    var pfad = k.slice(vorsatz.length);
+    // The category keys ("teams:1on1") are the general cadences, not rows.
+    if(w.wurzeln && w.wurzeln.indexOf(pfad) >= 0) return;
+    if(KADENZ_WERTE.indexOf(kad[k]) < 0) return;
+    tab.appendChild(abwZeile(pfad, kad[k]));
+  });
+  abwStand(quelle);
+}
+function abwLesen(quelle){
+  var abw = {};
+  [].forEach.call(el(ABW[quelle].tab).querySelectorAll('.zeile'), function(z){
+    var wahl = z.querySelector('select');
+    if(z.dataset.pfad && wahl) abw[z.dataset.pfad] = wahl.value;
+  });
+  return abw;
+}
+function abwStand(quelle){
+  var n = Object.keys(abwLesen(quelle)).length;
+  el(ABW[quelle].state).textContent = n ? t('settings.cadence.overrides.state', {n: n}) : '';
+}
+function abwEntfernen(knopf){
+  var zeile = knopf.closest('.zeile'), tab = zeile.parentNode;
+  var quelle = ABW_QUELLEN.filter(function(q){ return ABW[q].tab === tab.id; })[0];
+  tab.removeChild(zeile);
+  abwStand(quelle);
+  markiereGeaendert();
+}
+
+/* The cadence that reaches a unit: the deepest departure on its path,
+   else the general one of its root – the same rule the exports apply
+   (export_util.kadenz_fuer). */
+function kadenzWirksam(pfad, abw, allgemein){
+  var teile = String(pfad || '').split('/').filter(Boolean);
+  while(teile.length){
+    var p = teile.join('/');
+    if(abw[p]) return {wert: abw[p], von: p};
+    teile.pop();
+  }
+  return {wert: allgemein || 'always', von: null};
+}
+/* The units as a tree: parents that the list does not name (a team above
+   its channels, a folder above its subfolders) are made up so every unit
+   hangs somewhere. Pure – it knows nothing of the page. */
+function kadenzKnoten(eintraege, wurzeln){
+  var knoten = {}, reihenfolge = [];
+  function hole(pfad){
+    if(!knoten[pfad]){
+      var teile = pfad.split('/');
+      knoten[pfad] = {pfad: pfad, name: teile[teile.length - 1], kinder: [],
+                      elemente: 0, an: true, echt: false, tiefe: teile.length - 1};
+      reihenfolge.push(pfad);
+      if(teile.length > 1) hole(teile.slice(0, -1).join('/')).kinder.push(knoten[pfad]);
+    }
+    return knoten[pfad];
+  }
+  (wurzeln || []).forEach(hole);
+  (eintraege || []).forEach(function(e){
+    var k = hole(e.pfad);
+    k.echt = true; k.elemente = e.elemente || 0; k.an = e.an !== false;
+    k.zuletzt = e.zuletzt || null; k.name = e.name || k.name;
+    if(e.urls) k.urls = e.urls;
+  });
+  return {knoten: knoten,
+          wurzeln: reihenfolge.filter(function(p){ return p.indexOf('/') < 0; }).map(function(p){ return knoten[p]; })};
+}
+
+var KADENZ = {quelle: null, abw: {}, offen: {}, filter: '', nurGesetzte: false, daten: null};
+
+function kadenzFenster(quelle){
+  KADENZ = {quelle: quelle, abw: abwLesen(quelle), offen: {}, filter: '', nurGesetzte: false, daten: null};
+  kadenzFensterZeichnen();
+  var koerper = quelle === 'teams'
+    ? {quelle: 'teams', teams_rules: el('c-teams_rules').value}
+    : quelle === 'onedrive'
+    ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
+    : quelle === 'todo'
+    ? {quelle: 'todo', todo_rules: el('c-todo_rules').value}
+    : quelle === 'sharepoint'
+    ? {quelle: 'sharepoint', sharepoint_rules: el('c-sharepoint_rules').value}
+    : {folder_rules: el('c-folder_rules').value, skip_folders: el('c-skip_folders').value};
+  post('/api/folder-plan', koerper).then(function(p){
+    KADENZ.daten = p;
+    // Which URL rows feed which library – for the library's own cadence.
+    KADENZ.libs = {};
+    ((p && p.an) || []).concat((p && p.aus) || []).forEach(function(e){
+      if(e.urls) KADENZ.libs[String(e.pfad).split('/').slice(0, 2).join('/')] = e.urls;
+    });
+    if(wizardOffen === 'kadenz') kadenzFensterZeichnen();
+  });
+}
+function kadenzEintraege(){
+  // The export list's two groups, marked: what the rules leave out keeps
+  // no select – a cadence on a folder that never exports says nothing.
+  var p = KADENZ.daten;
+  return (p.an || []).map(function(e){ return Object.assign({an: true}, e); })
+    .concat((p.aus || []).map(function(e){ return Object.assign({}, e, {an: false}); }));
+}
+function kadenzAllgemein(pfad){
+  // The general cadence a unit falls back to: per category for Teams,
+  // per library for SharePoint, one value for the rest (they ignore the
+  // path).
+  var w = ABW[KADENZ.quelle];
+  if(w.wurzeln) return w.allgemein(String(pfad).split('/')[0]);
+  return w.allgemein(pfad);
+}
+function kadenzFensterZeichnen(){
+  var q = KADENZ.quelle, p = KADENZ.daten, koerper;
+  if(!p){
+    koerper = '<p class="small muted">' + esc(t('plan.loading')) + '</p>';
+  } else if(!p.ok){
+    koerper = '<div class="banner warn">' + esc(t(q === 'teams' ? 'settings.teams.none'
+                                                    : q === 'todo' ? 'settings.todo.none' : 'folders.none')) + '</div>';
+  } else {
+    koerper = '<div class="kadenz-kopf">' +
+      '<input type="text" id="kadenz-filter" oninput="kadenzFiltern(this.value)" value="' + esc(KADENZ.filter) + '" ' +
+        'placeholder="' + esc(t('kadenz.filter.' + q)) + '">' +
+      '<button class="chip' + (KADENZ.nurGesetzte ? ' on' : '') + '" onclick="kadenzNurGesetzte()">' +
+        esc(t('kadenz.only_set')) + '</button></div>' +
+      '<div class="baum-rahmen"><div class="baum" id="kadenz-baum"></div></div>';
+  }
+  var n = Object.keys(KADENZ.abw).length;
+  oeffneEigenes('kadenz', modalKopf(t('kadenz.title.' + q), 'kadenz', t('kadenz.info.' + q)) + koerper +
+    modalFuss({text: t('kadenz.apply'), tun: 'kadenzUebernehmen()'}, null,
+              '<span class="kadenz-fuss" id="kadenz-zaehler">' + esc(t('kadenz.count', {n: n})) + '</span>'));
+  if(p && p.ok) kadenzBaumZeichnen();
+}
+function kadenzFiltern(wert){ KADENZ.filter = wert; kadenzBaumZeichnen(); }
+function kadenzNurGesetzte(){ KADENZ.nurGesetzte = !KADENZ.nurGesetzte; kadenzFensterZeichnen(); }
+function kadenzKlappen(pfad){ KADENZ.offen[pfad] = !KADENZ.offen[pfad]; kadenzBaumZeichnen(); }
+function kadenzSetzen(pfad, wert){
+  if(wert) KADENZ.abw[pfad] = wert; else delete KADENZ.abw[pfad];
+  var z = document.getElementById('kadenz-zaehler');
+  if(z) z.textContent = t('kadenz.count', {n: Object.keys(KADENZ.abw).length});
+  kadenzBaumZeichnen();
+}
+function kadenzUebernehmen(){
+  var q = KADENZ.quelle, tab = el(ABW[q].tab);
+  tab.innerHTML = '';
+  Object.keys(KADENZ.abw).sort().forEach(function(pfad){ tab.appendChild(abwZeile(pfad, KADENZ.abw[pfad])); });
+  abwStand(q);
+  markiereGeaendert();
+  closeWizard('kadenz');
+}
+function kadenzAuswahl(k){
+  // One select per row: "as above · <inherited>" or an own value.
+  var eigen = KADENZ.abw[k.pfad];
+  var ueber = kadenzWirksam(k.pfad.split('/').slice(0, -1).join('/'), KADENZ.abw, kadenzAllgemein(k.pfad));
+  var erbtText = ueber.von ? t('kadenz.inherit_from', {cadence: t('cadence.' + ueber.wert), from: ueber.von.split('/').pop()})
+                           : t('kadenz.inherit', {cadence: t('cadence.' + ueber.wert)});
+  return '<select class="' + (eigen ? 'gesetzt' : 'erbt') + '" onchange="kadenzSetzen(' + JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ', this.value)">' +
+    '<option value=""' + (eigen ? '' : ' selected') + '>' + esc(erbtText) + '</option>' +
+    KADENZ_WERTE.map(function(o){
+      return '<option value="' + o + '"' + (o === eigen ? ' selected' : '') + '>' + esc(t('cadence.' + o)) + '</option>';
+    }).join('') + '</select>' +
+    (eigen ? '<button class="abw-weg" title="' + esc(t('kadenz.remove')) + '" onclick="kadenzSetzen(' +
+             JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ', &quot;&quot;)">&times;</button>' : '');
+}
+function kadenzZahl(k){
+  var q = KADENZ.quelle;
+  if(q === 'teams'){
+    if(k.zuletzt) return t('kadenz.last', {when: fmt(k.zuletzt)});
+    return '';
+  }
+  return k.elemente ? k.elemente.toLocaleString(LOC) : '';
+}
+function kadenzZeile(k, tiefe, vor, treffer){
+  var q = KADENZ.quelle, offen = !!KADENZ.offen[k.pfad];
+  // The root shows the general cadence as text – except for a flat source
+  // (To Do lists), where every top-level row is a unit of its own. For the
+  // libraries the root is the library (depth 1); the site above it is a
+  // heading with nothing to set.
+  var wt = ABW[q].wurzelTiefe || 0;
+  var wurzel = k.tiefe === wt && !ABW[q].flach, ueberWurzel = k.tiefe < wt;
+  var darunter = Object.keys(KADENZ.abw).filter(function(p){ return p.indexOf(k.pfad + '/') === 0; }).length;
+  var tags = '';
+  if(k.kinder.length && !vor && !offen){
+    tags += '<span class="tag">' + esc(t(q === 'teams'
+      ? (k.tiefe === 0 ? (k.pfad === 'channels' ? 'kadenz.sub.teams' : 'kadenz.sub.chats') : 'kadenz.sub.channels')
+      : (q === 'sharepoint' && k.tiefe === 0) ? 'kadenz.sub.libraries'
+      : 'kadenz.sub.folders', {n: k.kinder.length})) + '</span>';
+    if(darunter) tags += '<span class="tag blau">' + esc(t('kadenz.below_set', {n: darunter})) + '</span>';
+  }
+  var name = treffer ? esc(k.name).replace(new RegExp('(' + treffer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'i'), '<b>$1</b>') : esc(k.name);
+  if(q === 'teams' && k.tiefe === 0) name = esc(t('export.cat.' + k.pfad));
+  var rechts;
+  if(ueberWurzel){
+    rechts = '';
+  } else if(wurzel){
+    rechts = '<span class="erbe">' + esc(t('kadenz.general', {cadence: t('cadence.' + kadenzAllgemein(k.pfad))})) + '</span>';
+  } else if(!k.an){
+    rechts = '<span class="tag warn">' + esc(t('kadenz.excluded')) + '</span>';
+  } else {
+    rechts = kadenzAuswahl(k);
+  }
+  var pfeil = k.kinder.length && !vor
+    ? '<button class="pfeil" onclick="kadenzKlappen(' + JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ')" aria-expanded="' + offen + '">' + ikon('rechts', 'klein') + '</button>'
+    : '<span class="pfeil"></span>';
+  return '<div class="zeile' + (offen ? ' offen' : '') + (k.an ? '' : ' aus') + '" style="padding-left:' + (tiefe * 22) + 'px">' +
+    pfeil + '<span class="name">' + (vor ? '<span class="vor">' + esc(vor) + '</span>' : '') + name + '</span>' +
+    '<span class="zahl">' + esc(kadenzZahl(k)) + '</span>' + tags + rechts + '</div>';
+}
+function kadenzBaumZeichnen(){
+  var box = document.getElementById('kadenz-baum');
+  if(!box || !KADENZ.daten || !KADENZ.daten.ok) return;
+  var q = KADENZ.quelle, w = ABW[q];
+  var baum = kadenzKnoten(kadenzEintraege(), w.wurzeln);
+  var zeilen = [], filter = KADENZ.filter.trim().toLowerCase();
+  function vorsatz(k){ var teile = k.pfad.split('/'); teile.pop(); return teile.length ? teile.join(' / ') + ' / ' : ''; }
+  if(KADENZ.nurGesetzte){
+    Object.keys(KADENZ.abw).sort().forEach(function(pfad){
+      var k = baum.knoten[pfad];
+      if(k){ zeilen.push(kadenzZeile(k, 0, vorsatz(k), null)); return; }
+      // A departure whose unit the list no longer knows: kept visible, so
+      // the setting cannot vanish unnoticed – the cross removes it.
+      var fremd = {pfad: pfad, name: pfad.split('/').pop(), kinder: [], elemente: 0, an: true, echt: false, tiefe: pfad.split('/').length - 1};
+      zeilen.push('<div class="zeile aus"><span class="pfeil"></span><span class="name"><span class="vor">' + esc(vorsatz(fremd)) + '</span>' + esc(fremd.name) + '</span>' +
+        '<span class="zahl"></span><span class="tag warn">' + esc(t('kadenz.gone')) + '</span>' + kadenzAuswahl(fremd) + '</div>');
+    });
+  } else if(filter){
+    var passt = Object.keys(baum.knoten).sort().map(function(p){ return baum.knoten[p]; })
+      .filter(function(k){ return (k.tiefe > (w.wurzelTiefe || 0) || w.flach) && k.name.toLowerCase().indexOf(filter) >= 0; });
+    passt.forEach(function(k){ zeilen.push(kadenzZeile(k, 0, vorsatz(k), KADENZ.filter.trim())); });
+    var z = document.getElementById('kadenz-zaehler');
+    if(z) z.textContent = t('kadenz.matches', {n: passt.length, total: Object.keys(baum.knoten).length}) + ' · ' + t('kadenz.count', {n: Object.keys(KADENZ.abw).length});
+  } else {
+    (function ab(liste, tiefe){
+      liste.forEach(function(k){
+        zeilen.push(kadenzZeile(k, tiefe, '', null));
+        if(k.kinder.length && (KADENZ.offen[k.pfad] || (tiefe === 0 && !w.wurzeln && !w.flach))){
+          KADENZ.offen[k.pfad] = true;
+          ab(k.kinder, tiefe + 1);
+        }
+      });
+    })(baum.wurzeln, 0);
+  }
+  box.innerHTML = zeilen.join('') || '<p class="small muted">' + esc(t('plan.nothing')) + '</p>';
 }
 
 function urlZeile(tabId, wert, kadenz){
@@ -4023,6 +4654,20 @@ function zeigeKalenderstand(c){
   kasten.textContent = text;
 }
 
+/* Teams conversations and To Do lists: chosen of known, as of when – the
+   same shape as the notebook line, one function for both. */
+function zeigeListenstand(c, id, leer, stand){
+  var kasten = el(id);
+  if(!kasten) return;
+  if(!c || !c.abgeglichen){ kasten.textContent = t(leer); return; }
+  var text = t(stand,
+               {an: (c.ordner_gewaehlt || 0).toLocaleString(LOC),
+                gesamt: (c.ordner_gesamt || 0).toLocaleString(LOC),
+                when: fmt(c.abgeglichen)});
+  if((c.neu || []).length) text += ' ' + t('folders.new', {n: c.neu.length});
+  kasten.textContent = text;
+}
+
 function zeigeNotizbuchstand(c){
   var kasten = el('on-state');
   if(!kasten) return;
@@ -4085,8 +4730,26 @@ var ABGLEICH = {
                save: function(){ return speichereSharepointFelder(); }},
   calendar: {msg: 'cal-msg', lauf: {sync_calendars: true, label: 'job.calendars'}},
   onenote:  {msg: 'on-msg', lauf: {sync_notebooks: true, label: 'job.notebooks'}},
-  outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}}
+  outlook:  {msg: 'folders-msg', lauf: {sync_folders: true, label: 'job.folders'}},
+  teams:    {msg: 'teams-msg', lauf: {sync_teams: true, label: 'job.teams_list'}},
+  todo:     {msg: 'todo-msg', lauf: {sync_todo: true, label: 'job.todo_lists'}},
+  // The calendar read once in full: window and change tokens step aside.
+  calendar_full: {msg: 'cal-msg', lauf: {outlook: true, calendar_full: true,
+                                         label: 'job.calendar.full'}},
+  // Planner takes no legacy comments since 2026-02, so a normal run leaves
+  // them alone; this button lists the group threads once more.
+  planner_legacy: {msg: 'pl-msg', lauf: {planner: true, legacy_comments: true,
+                                         label: 'job.planner.legacy'}}
 };
+
+/* "Sync now" for a whole source: the run ignores the cadences once – the
+   same as the button in a URL row, only without a URL. */
+function syncQuelle(quelle){
+  var lauf = {label: 'job.export', sync_now: true};
+  lauf[quelle] = true;
+  merke('flow.run', 'sync_now');
+  post('/api/run', lauf).then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+}
 
 function speichereSharepointFelder(){
   // The buttons must act on what the form shows, not on the last save –
@@ -4198,13 +4861,17 @@ function zeigeExportliste(quelle){
   planQuelle = quelle || 'outlook';
   planFenster();
   post('/api/folder-plan', planQuelle === 'sharepoint'
-      ? {quelle: 'sharepoint'}
+      ? {quelle: 'sharepoint', sharepoint_rules: el('c-sharepoint_rules').value}
       : planQuelle === 'onedrive'
       ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
       : planQuelle === 'calendar'
       ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}
       : planQuelle === 'onenote'
       ? {quelle: 'onenote', onenote_rules: el('c-onenote_rules').value}
+      : planQuelle === 'teams'
+      ? {quelle: 'teams', teams_rules: el('c-teams_rules').value}
+      : planQuelle === 'todo'
+      ? {quelle: 'todo', todo_rules: el('c-todo_rules').value}
       : {folder_rules: el('c-folder_rules').value,
          skip_folders: el('c-skip_folders').value})
     .then(function(p){
@@ -4236,8 +4903,20 @@ function planFenster(){
    For skipped folders, what nevertheless already sits in the archive stands
    in between: "skipped" does not mean "empty", and whoever confuses the two
    will later search for mails that have long been there. */
+function planKadenzTag(e){
+  // Mail folders and Teams conversations carry their effective cadence –
+  // from the form, not the saved state, like the rules above them.
+  var q = planQuelle === 'teams' ? 'teams' : planQuelle === 'outlook' ? 'mail'
+        : planQuelle === 'onedrive' ? 'onedrive' : planQuelle === 'todo' ? 'todo'
+        : planQuelle === 'sharepoint' ? 'sharepoint' : null;
+  if(!q || !e.pfad) return '';
+  var w = ABW[q], allgemein = q === 'sharepoint' ? spKadenzAusUrls(e.urls || [])
+        : w.wurzeln ? w.allgemein(e.pfad.split('/')[0]) : w.allgemein();
+  var k = kadenzWirksam(e.pfad, abwLesen(q), allgemein);
+  return k.wert === 'always' ? '' : '<span class="tag">' + esc(t('cadence.' + k.wert)) + '</span>';
+}
 function planZeile(e, zahl, mitArchiv){
-  return '<li><span class="pfad">' + esc(e.pfad) + '</span>' +
+  return '<li><span class="pfad">' + esc(e.pfad) + '</span>' + planKadenzTag(e) +
     '<span class="zahl">' + (e[zahl] || 0).toLocaleString(LOC) + '</span>' +
     (mitArchiv && e.archiv
       ? '<span class="regel">' + esc(t(planQuelle === 'onedrive' ? 'plan.here' : 'plan.inarchive',
@@ -4268,7 +4947,7 @@ function planListen(){
   // assembled, so the comparison against the language files finds the
   // keys.
   var dat = planQuelle === 'onedrive', kal = planQuelle === 'calendar';
-  var nb = planQuelle === 'onenote';
+  var nb = planQuelle === 'onenote', tm = planQuelle === 'teams', td = planQuelle === 'todo';
   // For calendars there is nothing to compare: how many events are inside,
   // Graph does not reveal when listing. So what already lies on disk is
   // counted – the only number honestly available here.
@@ -4283,6 +4962,14 @@ function planListen(){
     ? gruppe('plan.an.nb',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
       gruppe('plan.aus.nb', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
       gruppe('plan.weg.nb', p.weg, 'archiv', p.mails_weg,   'err',  false)
+    : tm
+    ? gruppe('plan.an.teams',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
+      gruppe('plan.aus.teams', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
+      gruppe('plan.weg.teams', p.weg, 'archiv', p.mails_weg,   'err',  false)
+    : td
+    ? gruppe('plan.an.todo',  p.an,  'archiv', ablage(p.an),  'ok',   false) +
+      gruppe('plan.aus.todo', p.aus, 'archiv', ablage(p.aus), 'warn', false) +
+      gruppe('plan.weg.todo', p.weg, 'archiv', p.mails_weg,   'err',  false)
     : gruppe(dat ? 'plan.an.files'  : 'plan.an',  p.an,  'elemente', p.mails_an,  'ok',   false) +
       gruppe(dat ? 'plan.aus.files' : 'plan.aus', p.aus, 'elemente', p.mails_aus, 'warn', true) +
       gruppe(dat ? 'plan.weg.files' : 'plan.weg', p.weg, 'archiv',   p.mails_weg, 'err',  false);

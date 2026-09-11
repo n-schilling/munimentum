@@ -7,7 +7,9 @@ and one standalone HTML per page – the page as Graph renders it, with the
 notebook, group and section named up top. Images come along embedded up to
 a size limit, larger ones and file attachments land next to the page in a
 folder of their own; every link then works offline. A notebook's state.db
-remembers each page's last change, so a run fetches only pages that moved.
+remembers each page's last change, so a run fetches only pages that moved –
+and where every image and attachment of it already lies, so a page that
+moved costs its content and nothing else.
 
 The mirror promise is the same as everywhere: the current version of every
 page is kept, and a page that disappears from its section stays here with
@@ -41,6 +43,7 @@ nothing. Progress, results and failures are structured lines (progress.py).
 """
 
 import base64
+import binascii
 import html as html_lib
 import json
 import mimetypes
@@ -71,6 +74,9 @@ SCOPES = [RES + "Notes.Read", RES + "User.Read"]
 DATEI_SUFFIX = ".files"          # per page: the folder for large images and attachments
 SEITE = 100                      # $top – the OneNote maximum
 KADENZ_PRAEFIX = "onenote:"      # sync_cadence key per notebook: onenote:<id>
+SEITEN_BEREICH = "pages"         # records per notebook: page id -> bookkeeping
+RESSOURCEN_BEREICH = "ressourcen"  # records per notebook: resource id -> where it lies
+_RES_ATTR = "data-mn-res"        # an embedded image keeps its resource id for reuse
 
 # OneNote's own limits are 120 a minute and 400 an hour per user and app;
 # a little below them, so a stray request from elsewhere does not tip a
@@ -409,42 +415,122 @@ def _endung(ctype, name=None):
     return ".jpg" if e == ".jpe" else e
 
 
+# An embedded image as the export wrote it: its resource id first, the
+# data URI further on in the same tag.
+_INLINE_RE = re.compile(
+    r'<img\s+' + _RES_ATTR + r'="([^"]*)"[^>]*?\ssrc="(data:[^"]*)"', re.I)
+
+
 class _Ressourcen:
     """Fetches a page's images and attachments once each and decides for
-    every one: inline data URI or a file next to the page."""
+    every one: inline data URI or a file next to the page.
 
-    def __init__(self, graph, ziel, rel_dir, grenze):
-        self.graph, self.ziel, self.rel_dir, self.grenze = graph, ziel, rel_dir, grenze
+    What an earlier run already brought is not asked for again: the
+    notebook's state.db holds a record per resource id – the file next to
+    the page, or the page itself for an embedded image, which keeps its id
+    as an attribute. A re-fetched page then costs its content and nothing
+    else; OneNote's 400 requests an hour are the reason. The bytes come
+    back from disk and go through the same decision as fresh ones, so a
+    changed size limit or a moved page still lands right."""
+
+    def __init__(self, graph, ziel, seite_rel, grenze, stand=None):
+        self.graph, self.ziel, self.grenze = graph, ziel, grenze
+        self.seite_rel = seite_rel
+        self.rel_dir = seite_rel[:-5] + DATEI_SUFFIX
+        self.stand = stand if stand is not None else {}   # id -> record, from the db
+        self.neu = {}                # id -> record, this page's outcome
         self.cache = {}
+        self._seiten = {}            # old page file -> {id: data URI}, read once
+        self._herkunft = {}          # id -> the file the reused bytes came from
         self.fehler = 0
         self.dateien = 0
+        self.wiederverwendet = 0
 
-    def _hole(self, url):
+    def _aus_seite(self, pfad, kennung):
+        if pfad not in self._seiten:
+            try:
+                html = pfad.read_text(encoding="utf-8")
+            except OSError:
+                html = ""
+            self._seiten[pfad] = {html_lib.unescape(k): v
+                                  for k, v in _INLINE_RE.findall(html)}
+        uri = self._seiten[pfad].get(kennung)
+        if not uri:
+            return None
+        kopf, _, b64 = uri.partition(",")
+        try:
+            daten = base64.b64decode(b64)
+        except (ValueError, binascii.Error):
+            return None
+        return daten, kopf[5:].split(";")[0]
+
+    def _vorrat(self, kennung):
+        """The resource as an earlier run left it – (bytes, type), or None
+        when nothing usable lies here."""
+        satz = self.stand.get(kennung)
+        if not satz or not satz.get("rel"):
+            return None
+        pfad = self.ziel / satz["rel"]
+        if satz.get("inline"):
+            gefunden = self._aus_seite(pfad, kennung)
+        else:
+            try:
+                daten = pfad.read_bytes()
+            except OSError:
+                return None
+            if satz.get("size") is not None and len(daten) != int(satz["size"]):
+                return None
+            gefunden = (daten, satz.get("type")
+                        or mimetypes.guess_type(pfad.name)[0] or "")
+        if gefunden is not None:
+            self._herkunft[kennung] = pfad
+        return gefunden
+
+    def _hole(self, url, kennung):
         if url in self.cache:
             return self.cache[url]
+        vorrat = self._vorrat(kennung)
+        if vorrat is not None:
+            self.wiederverwendet += 1
+            self.cache[url] = vorrat
+            return vorrat
         daten, ctype = self.graph.get_bytes(url, label=" (OneNote)")
         self.cache[url] = (daten, ctype)
         return self.cache[url]
 
-    def _ablegen(self, name, daten):
-        (self.ziel / self.rel_dir).mkdir(parents=True, exist_ok=True)
-        (self.ziel / self.rel_dir / name).write_bytes(daten)
-        self.dateien += 1
-        return f"{self.rel_dir}/{name}"
+    def _merke(self, kennung, rel, daten, ctype, inline=False):
+        satz = {"rel": rel, "size": len(daten),
+                "type": (ctype or "").split(";")[0],
+                "seen": datetime.now(UTC).isoformat(timespec="seconds")}
+        if inline:
+            satz["inline"] = True
+        self.neu[kennung] = satz
+
+    def _ablegen(self, name, daten, kennung, ctype):
+        rel = f"{self.rel_dir}/{name}"
+        pfad = self.ziel / rel
+        if self._herkunft.get(kennung) != pfad:
+            pfad.parent.mkdir(parents=True, exist_ok=True)
+            pfad.write_bytes(daten)
+            self.dateien += 1
+        self._merke(kennung, rel, daten, ctype)
+        # The link is relative to the page, which lies next to its folder.
+        return f"{self.rel_dir.rsplit('/', 1)[-1]}/{name}"
 
     def bild(self, url, kennung):
-        daten, ctype = self._hole(url)
+        daten, ctype = self._hole(url, kennung)
         if not self.grenze or len(daten) <= self.grenze:
+            self._merke(kennung, self.seite_rel, daten, ctype, inline=True)
             return (f"data:{ctype.split(';')[0] or 'image/png'};base64,"
                     + base64.b64encode(daten).decode())
         name = export_util.kuerzel(kennung) + _endung(ctype)
-        return self._ablegen(name, daten)
+        return self._ablegen(name, daten, kennung, ctype)
 
     def anhang(self, url, kennung, name):
-        daten, ctype = self._hole(url)
+        daten, ctype = self._hole(url, kennung)
         sicher = re.sub(r"[&#%?]", "_", export_util.safe(name or "datei"))
         return self._ablegen(f"{export_util.kuerzel(kennung)}_{sicher}"
-                             + _endung(ctype, sicher), daten)
+                             + _endung(ctype, sicher), daten, kennung, ctype)
 
 
 def _attr(tag, name):
@@ -479,8 +565,13 @@ def ressourcen_offline(html, res):
             return tag
         tag = _ohne_attr(tag, "data-fullres-src")
         tag = _ohne_attr(tag, "data-fullres-src-type")
-        return re.sub(r'(\ssrc\s*=\s*)("[^"]*"|\'[^\']*\')',
-                      lambda a: a.group(1) + '"' + html_lib.escape(neu, quote=True) + '"',
+        tag = re.sub(r'(\ssrc\s*=\s*)("[^"]*"|\'[^\']*\')',
+                     lambda a: a.group(1) + '"' + html_lib.escape(neu, quote=True) + '"',
+                     tag, count=1, flags=re.I)
+        # The id stays on the tag: the next fetch of this page finds the
+        # embedded bytes here instead of asking Graph again.
+        return re.sub(r"^<img\b", '<img ' + _RES_ATTR + '="'
+                      + html_lib.escape(treffer.group(1), quote=True) + '"',
                       tag, count=1, flags=re.I)
 
     def objekt(m):
@@ -589,13 +680,13 @@ def _entferne(ziel, rel):
             pass
 
 
-def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze):
-    """Fetch one page and write it; returns the number of resources that
-    did not come."""
+def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze, ressourcen=None):
+    """Fetch one page and write it; returns (rel, resources that did not
+    come, the resource records this page leaves behind)."""
     rel = seiten_rel(section, gruppen, page)
     roh, _typ = graph.get_bytes(f'{GRAPH}/me/onenote/pages/{page["id"]}/content',
                                 label=" (Seite)")
-    res = _Ressourcen(graph, ziel, rel[:-5] + DATEI_SUFFIX, grenze)
+    res = _Ressourcen(graph, ziel, rel, grenze, stand=ressourcen)
     html = ressourcen_offline(roh.decode("utf-8", "replace"), res)
     datei = export_util.schreibe_atomar(
         ziel / rel, seite_html(html, _kopfzeile(nb, gruppen, section, page)))
@@ -608,7 +699,42 @@ def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze):
             os.utime(datei, (dt.timestamp(), dt.timestamp()))
         except OSError:
             pass
-    return rel, res.fehler
+    return rel, res.fehler, res.neu
+
+
+def _saetze(db, bereich):
+    out = {}
+    for key, roh in db.saetze_lesen(bereich).items():
+        try:
+            out[key] = json.loads(roh)
+        except ValueError:
+            continue
+    return out
+
+
+def _saetze_schreiben(db, bereich, eintraege):
+    if eintraege:
+        db.saetze_schreiben(bereich, {k: json.dumps(v, ensure_ascii=False)
+                                      for k, v in eintraege.items()})
+
+
+def seitenstand(db):
+    """The notebook's page bookkeeping – one record per page.
+
+    A notebook from before 9.0 holds it as one kv blob; it moves into the
+    records once, and the blob goes with that."""
+    stand = _saetze(db, SEITEN_BEREICH)
+    if stand:
+        return stand
+    try:
+        alt = json.loads(db.kv_lesen("pages") or "{}")
+    except ValueError:
+        alt = {}
+    if isinstance(alt, dict) and alt:
+        _saetze_schreiben(db, SEITEN_BEREICH, alt)
+        db.kv_loeschen("pages")
+        return alt
+    return {}
 
 
 def notebook_lauf(graph, out, nb, grenze):
@@ -621,15 +747,16 @@ def notebook_lauf(graph, out, nb, grenze):
     listen_erlaubt(nb["titel"])
     ziel = notebook_ziel(out, nb)
     db = state_db.StateDb(ziel)
-    try:
-        stand = json.loads(db.kv_lesen("pages") or "{}")
-    except ValueError:
-        stand = {}
+    stand = seitenstand(db)
+    ressourcen = _saetze(db, RESSOURCEN_BEREICH)
     db.kv_schreiben("notebook", json.dumps(
         {"id": nb["id"], "titel": nb["titel"]}, ensure_ascii=False))
 
-    def sichern():
-        db.kv_schreiben("pages", json.dumps(stand, ensure_ascii=False))
+    def sichern(seiten=None, neue_ressourcen=None):
+        """The rows this step touched – one per page, one per resource –
+        and the pacer's moments; never the whole table."""
+        _saetze_schreiben(db, SEITEN_BEREICH, seiten)
+        _saetze_schreiben(db, RESSOURCEN_BEREICH, neue_ressourcen)
         takt_merken(out)
 
     abschnitte = sections(graph, nb)
@@ -668,8 +795,9 @@ def notebook_lauf(graph, out, nb, grenze):
     for lfd, (section, gruppen, p, alt) in enumerate(faellig):
         try:
             budget_pruefen()
-            rel, res_fehler = seite_lauf(graph, ziel, nb, gruppen, section, p,
-                                         grenze)
+            rel, res_fehler, res_neu = seite_lauf(graph, ziel, nb, gruppen,
+                                                  section, p, grenze, ressourcen)
+            ressourcen.update(res_neu)
             if alt.get("rel") and alt["rel"] != rel:
                 _entferne(ziel, alt["rel"])
             if res_fehler:
@@ -681,7 +809,7 @@ def notebook_lauf(graph, out, nb, grenze):
                               "section": section["titel"],
                               "notebook": nb["titel"], "deleted": None}
             neu += 1
-            sichern()
+            sichern({p["id"]: stand[p["id"]]}, res_neu)
             progress.melde(lfd + 1, len(faellig), "pages")
         except auth.TokenExpired:
             raise
@@ -706,12 +834,14 @@ def notebook_lauf(graph, out, nb, grenze):
     # the complete listing all the same: what is missing from it is gone.
     if not fehler and not listen_fehler:
         jetzt = datetime.now(UTC).isoformat(timespec="seconds")
+        weg = {}
         for pid, e in stand.items():
             if pid not in gesehen and not e.get("deleted"):
                 e["deleted"] = jetzt
                 markiere_weg(ziel / e["rel"], jetzt)
-
-    sichern()
+                weg[pid] = e
+        _saetze_schreiben(db, SEITEN_BEREICH, weg)
+    takt_merken(out)
     progress.event("run.onenote.notebook", name=nb["titel"], n=len(gesehen))
     if offen:
         raise BudgetLeer((neu, unveraendert, fehler + listen_fehler))
