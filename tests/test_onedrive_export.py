@@ -771,3 +771,62 @@ def test_lauf_erneuert_abgelaufenen_delta_zeiger(tmp_path, capsys):
     events = [progress.lies_event(z)
               for z in capsys.readouterr().out.splitlines()]
     assert any(e and e["k"] == "run.drive.resync" for e in events)
+
+
+# --------------------------------------------------------------------------
+# "Force full sync": pointer, walk and versions go – every file again
+# --------------------------------------------------------------------------
+def test_full_sync_holt_alles_neu_und_loescht_nichts(tmp_path, monkeypatch, capsys):
+    """The button's promise: the drive is walked and fetched as on the first
+    run, a local copy is written over, and a file the drive no longer lists
+    stays where it is."""
+    g = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
+    assert od.lauf(g, tmp_path)["new"] == 2
+    (tmp_path / "Dateien/Ordner/a.pdf").write_bytes(b"a" * 10)   # same size, other bytes
+    capsys.readouterr()
+    # Without the flag the same listing brings nothing: version and size match.
+    g1 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
+    assert od.lauf(g1, tmp_path)["new"] == 0 and g1.geladen == []
+    assert (tmp_path / "Dateien/Ordner/a.pdf").read_bytes() == b"a" * 10
+    capsys.readouterr()
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = FakeGraph([_datei("1", "a.pdf")])          # b.pdf no longer listed
+    zahlen = od.lauf(g2, tmp_path)
+    assert g2.geladen == ["1"] and zahlen["new"] == 1 and zahlen["gone"] == 0
+    assert (tmp_path / "Dateien/Ordner/a.pdf").read_bytes() == b"x" * 10
+    assert (tmp_path / "Dateien/Ordner/b.pdf").is_file(), "nothing is deleted"
+    assert state_db.StateDb(tmp_path).verschwunden_lesen() == {}
+    events = [e["k"] for e in _events(capsys)]
+    assert "run.full_sync" in events and "run.drive.full" in events
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "https://delta/neu"
+    # The next regular run is incremental again.
+    monkeypatch.delenv("FULL_SYNC")
+    g3 = FakeGraph([_datei("1", "a.pdf")])
+    assert od.lauf(g3, tmp_path)["new"] == 0 and g3.geladen == []
+
+
+def test_full_sync_unterbrochen_holt_der_naechste_lauf_den_rest(tmp_path, monkeypatch):
+    """The versions are forgotten on disk before the first download: a run
+    cut short leaves the rest due, and the next regular run – replanning
+    from the stored walk – fetches exactly that."""
+    od.lauf(FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")]), tmp_path)
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")], fehlerhaft={"2"})
+    assert od.lauf(g2, tmp_path)["errors"] == 1 and g2.geladen == ["1"]
+    monkeypatch.delenv("FULL_SYNC")
+    g3 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
+    assert od.lauf(g3, tmp_path)["new"] == 1 and g3.geladen == ["2"]
+
+
+def test_full_sync_leert_die_warteliste(tmp_path, monkeypatch):
+    """A file waiting for its folder's cadence needs no lookup of its own:
+    the full walk names it, the gates step aside, it comes."""
+    _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    assert set(_wartend(tmp_path)) == {"f1"}
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g = _KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2"), _datei("a1", "a1.pdf")])
+    zahlen = od.lauf(g, tmp_path)
+    assert sorted(g.geladen) == ["a1", "f1"] and zahlen["waiting"] == 0
+    assert not any(art == "get" for art, _k in g.log), "no lookup per waiting file"
+    assert _wartend(tmp_path) == {}

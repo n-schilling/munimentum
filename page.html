@@ -979,6 +979,7 @@ details.rechte p{margin:6px 0}
             <div class="aktionen">
               <span class="small muted"></span>
               <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
+              <button class="mini" onclick="vollSync('outlook')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
             </div>
           </div>
         </details>
@@ -1024,6 +1025,10 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.cache_images"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cache_images.i">i</span></span><input type="checkbox" id="c-cache_images"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.refresh_channels"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.refresh_channels.i">i</span></span><input type="checkbox" id="c-refresh_channels"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('teams')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
           </div>
         </details>
       </div>
@@ -1055,6 +1060,10 @@ details.rechte p{margin:6px 0}
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('onedrive')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
           </div>
         </details>
       </div>
@@ -1100,6 +1109,10 @@ details.rechte p{margin:6px 0}
                 placeholder="- Nordwind/Dokumente/Archiv/**&#10;+ Nordwind/Dokumente/Archiv/2026/**"></textarea>
             </div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('sharepoint')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
           </div>
         </details>
       </div>
@@ -1122,6 +1135,10 @@ details.rechte p{margin:6px 0}
           <div class="gruppe">
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.attachments.i">i</span></span><input type="checkbox" id="c-planner_attachments"></div>
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner_sweep_hours"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner_sweep_hours.i">i</span></span><span><input type="number" id="c-planner_sweep_hours" min="0" max="8760"> <span class="muted small" data-i18n="settings.planner_sweep_hours.unit">Stunden</span></span></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('planner')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
           </div>
         </details>
       </div>
@@ -1149,6 +1166,14 @@ details.rechte p{margin:6px 0}
             <button class="mini" onclick="kadenzFenster('todo')" data-i18n="settings.cadence.overrides.todo.pick">Listen festlegen…</button>
           </div>
         </div>
+        <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
+          <div class="gruppe">
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('todo')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
+          </div>
+        </details>
       </div>
     </details>
 
@@ -1175,6 +1200,10 @@ details.rechte p{margin:6px 0}
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.onenote.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onenote.image_max.i">i</span></span><span><input type="number" id="c-onenote_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('onenote')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+            </div>
           </div>
         </details>
       </div>
@@ -4908,6 +4937,30 @@ function syncQuelle(quelle){
   var lauf = {label: 'job.export', sync_now: true};
   lauf[quelle] = true;
   merke('flow.run', 'sync_now');
+  post('/api/run', lauf).then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+}
+
+/* "Force full sync" for one source (its Advanced group): the run forgets
+   every stored change pointer of that source and reads it again as on
+   its first export – everything written over, nothing in the archive
+   deleted. It costs a first export, so it asks once; the cadences step
+   aside like with "Sync now". SharePoint takes its pages along when they
+   are in use. */
+var VOLLSYNC = {
+  outlook:    {lauf: {outlook: true},    titel: 'settings.outlook.title'},
+  teams:      {lauf: {teams: true},      titel: 'settings.teams.title'},
+  onedrive:   {lauf: {onedrive: true},   titel: 'settings.onedrive.title'},
+  sharepoint: {lauf: {sharepoint: true}, titel: 'settings.sharepoint.title'},
+  planner:    {lauf: {planner: true},    titel: 'settings.planner.title'},
+  todo:       {lauf: {todo: true},       titel: 'settings.todo.title'},
+  onenote:    {lauf: {onenote: true},    titel: 'settings.onenote.title'}
+};
+function vollSync(quelle){
+  var wahl = VOLLSYNC[quelle];
+  if(!confirm(t('settings.full_sync.confirm', {source: t(wahl.titel)}))) return;
+  var lauf = Object.assign({label: 'job.full', full_sync: true}, wahl.lauf);
+  if(quelle === 'sharepoint' && nutztPages()) lauf.sharepoint_pages = true;
+  merke('flow.run', 'full_sync');
   post('/api/run', lauf).then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
 }
 

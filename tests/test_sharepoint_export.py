@@ -1117,3 +1117,29 @@ def test_seiten_lauf_ueberspringt_site_unter_kadenz(tmp_path, capsys):
     assert any(e["k"] == "run.cadence.skip" and e["v"]["name"] == "Team X"
                for e in events)
     assert g.detailabrufe == 1                      # nothing fetched again
+
+
+def test_full_sync_rendert_jede_seite_erneut(tmp_path, monkeypatch, capsys):
+    """"Force full sync": every page's eTag is forgotten, so each one is
+    fetched and rendered again, and the inventory carries the fresh tag."""
+    g = _SeitenGraph()
+    sites = [{"id": "s1", "pfad": ["Team X"]}]
+    assert sp.seiten_lauf(g, tmp_path, sites) == 1
+    monkeypatch.setenv("FULL_SYNC", "1")
+    capsys.readouterr()
+    assert sp.seiten_lauf(g, tmp_path, sites) == 1 and g.detailabrufe == 2
+    assert any(e["k"] == "run.full_sync" for e in _events(capsys))
+    assert sp.state_db.StateDb(tmp_path).seiten_lesen()["p1"]["etag"] == "e1"
+
+
+def test_full_sync_sagt_es_auch_fuer_bibliotheken(tmp_path, monkeypatch, capsys):
+    drives = [{"id": "d1", "site": "S", "name": "A", "kadenz": "always"}]
+    monkeypatch.setattr(sp.drive_mirror, "lauf", lambda *a, **kw: {
+        "new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0})
+    monkeypatch.setenv("FULL_SYNC", "1")
+
+    class G:
+        pass
+
+    sp.lauf(G(), tmp_path, drives)
+    assert [e["k"] for e in _events(capsys)].count("run.full_sync") == 1

@@ -25,7 +25,9 @@ Runs as a subprogram of app.py: output folder as the only argument, settings
 as environment variables (ONEDRIVE_RULES – include/exclude rules on paths,
 one per line, like the mailbox; ONEDRIVE_MAX_MB – skip larger files, 0 = no
 limit; MIRROR_WORKERS – parallel requests; SYNC_CADENCE key "onedrive" –
-how often the mirror runs at most, SYNC_NOW steps over it once; environment
+how often the mirror runs at most, SYNC_NOW steps over it once, FULL_SYNC
+forgets pointer, walk and every file's version and fetches the drive again
+as on the first run, see export_util.voll_neu; environment
 beats app_config.json, see settings.py). Special runs: --folders syncs the
 folder tree, --check reports what is missing – both outside the cadence.
 
@@ -143,6 +145,8 @@ def lauf(graph, out):
     None when skipped."""
     takt = einheiten(out)
     name = progress.atom("settings.onedrive.title")
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     if not takt.irgendeine_faellig():
         progress.event("run.cadence.skip", name=name,
                        cadence=progress.atom(f"cadence.{takt.kadenz('')}"))

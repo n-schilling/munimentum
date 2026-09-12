@@ -603,3 +603,34 @@ def test_leeres_kontingent_stoppt_vor_dem_listen(tmp_path, capsys):
     with pytest.raises(on.BudgetLeer):
         on.gleiche_notizbuecher_ab(g, tmp_path)
     assert g.aufrufe == []
+
+
+def test_full_sync_holt_jede_seite_und_ressource_erneut(tmp_path, monkeypatch, capsys):
+    """"Force full sync": the page stamps and the resource records are
+    forgotten – content, images and attachments come again."""
+    on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, 0)
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _graph([_page("p1", "Besprechung")])
+    neu, unveraendert, fehler = on.notebook_lauf(g2, tmp_path, NB, 0)
+    assert (neu, unveraendert, fehler) == (1, 0, 0)
+    assert any("/pages/p1/content" in u for u in g2.geladen)
+    assert any("/resources/" in u for u in g2.geladen), "resources fetched again"
+    ziel = on.notebook_ziel(tmp_path, NB)
+    assert _stand(ziel)["p1"]["lm"] == "2026-07-01T10:00:00Z"
+    assert set(state_db.StateDb(ziel).saetze_lesen("ressourcen")) == {"img-1", "file-1"}
+
+
+def test_full_sync_vergisst_die_stempel_vor_dem_ersten_abruf(tmp_path, monkeypatch):
+    """The hour's budget may end the run before the first page: the stamps
+    are already gone, so the next regular run fetches what is left."""
+    on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, 0)
+    ziel = on.notebook_ziel(tmp_path, NB)
+    monkeypatch.setenv("FULL_SYNC", "1")
+
+    def leer():
+        raise on.BudgetLeer()
+    monkeypatch.setattr(on, "budget_pruefen", leer)
+    with pytest.raises(on.BudgetLeer):
+        on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, 0)
+    assert _stand(ziel)["p1"]["lm"] == ""
+    assert state_db.StateDb(ziel).saetze_lesen("ressourcen") == {}

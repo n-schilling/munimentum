@@ -29,7 +29,9 @@ something – an unchanged board keeps its file, bytes and timestamp.
 
 Runs as a subprogram of app.py: output folder as the only argument,
 settings as environment variables (PLANNER_URLS – one plan URL per line;
-SYNC_CADENCE/SYNC_NOW – see export_util; PLANNER_SWEEP_HOURS – see above;
+SYNC_CADENCE/SYNC_NOW – see export_util; FULL_SYNC – no task's etag or
+reference cTag counts, every card and file is fetched again, see
+export_util.voll_neu; PLANNER_SWEEP_HOURS – see above;
 PLANNER_ATTACHMENTS; PLANNER_LEGACY_SYNC – read the legacy comment threads
 again, see plan_lauf; EXPORT_WORKERS). Progress, results and failures are
 structured lines (progress.py).
@@ -604,6 +606,12 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     vorher = {k: db.kv_lesen(k) or ""
               for k in ("plan", "tasks", "threads", "namen", "anhaenge")}
     eintraege = _json(vorher["tasks"])
+    alles = export_util.voll_neu()
+    if alles:
+        # "Force full sync": no task's etag counts – every card is fetched
+        # again, its referenced files with it.
+        for e in eintraege.values():
+            e["etag"] = ""
 
     details = graph.get(f"{GRAPH}/planner/plans/{plan['id']}/details")
     labels = {k: v for k, v in
@@ -649,7 +657,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     takt = sweep_stunden() * 3600
     sweep = takt > 0 and \
         (time.time() - float(db.kv_lesen("sweep") or 0)) > takt
-    anhang_stand = _json(vorher["anhaenge"])
+    anhang_stand = {} if alles else _json(vorher["anhaenge"])
     neu = unveraendert = fehler = 0
     gesehen = set()
     # Decide first, then work: the progress bar then knows its target, and
@@ -763,6 +771,8 @@ def lauf(graph, out, plaene, fehl=0, workers=1):
     out = Path(out)
     neu = unveraendert = fehler = uebersprungen = 0
     threads_cache = {}
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     for plan in plaene:
         db = state_db.StateDb(plan_ziel(out, plan))
         kadenz = plan.get("kadenz") or "always"

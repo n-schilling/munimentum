@@ -300,6 +300,14 @@ class Bestand:
         with self._lock:
             return self.eintraege.pop(kennung, None)
 
+    def versionen_vergessen(self):
+        """Forget what version lies here, remember where: the next plan
+        finds nothing current and fetches every file again – a rename in
+        between still moves the old copy along instead of leaving it."""
+        with self._lock:
+            for e in self.eintraege.values():
+                e["ctag"] = ""
+
     def schreibe(self):
         pass                   # the backend persists (state_db.DbBestand)
 
@@ -746,6 +754,16 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None, name=None,
     bestand = zustand.bestand()
     auswahl_abgleichen(zustand, auswahl, name or out.name)
     warteliste = Warteliste(zustand.db) if einheiten is not None else None
+    if export_util.voll_neu():
+        # The "Force full sync" button: the pointer, the stored walk and
+        # every file's version go – the drive is walked and fetched once
+        # more as on its first run. What lies here stays and is written
+        # over; the waiting list is redundant, the walk names it all.
+        zustand.delta_loeschen()
+        zustand.walk_leeren()
+        bestand.versionen_vergessen()
+        if warteliste is not None:
+            warteliste.vergiss(list(warteliste.eintraege))
     vorab, gestoert = [], set()
     if warteliste is not None:
         vorab, gestoert = wartende_pruefen(graph, warteliste, einheiten,

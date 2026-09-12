@@ -1,30 +1,19 @@
-## New in 10.0.0
+## New in 10.1.0
 
-**More than one account: profiles.** A profile is an archive of its own —
-its own access, sources, rules, run history, data folder and index — in
-`profiles/<name>/` below the app folder, and nothing crosses between
-profiles. Your archive is the first one, `standard`; every further one is
-an empty folder created from *Settings › Profiles* and set up like a first
-start. With more than one profile the app asks on start which archive to
-open — a small page before the app — unless *open without asking* is on;
-`--profile NAME` or `MUNIMENTUM_PROFILE` names it outright. The header
-names the open profile, and a click on it opens the switch window, which
-restarts the app with the other profile on the same port; a second
-profile started while one runs takes the next free port, so two archives
-can be open side by side. A profile that is not open can be renamed. Two
-profiles may never share a data or index folder — the settings refuse it
-— and nothing is ever copied or moved between them.
-
-**Claude per profile.** The stdio MCP snippet names nothing but the
-profile — `--profile <name>` — and the server takes folders, model,
-Ollama address and port from that profile's settings. Its entry is named
-after the profile (`munimentum` for the first, `munimentum-<name>` for
-every other), so a client can hold two archives apart; a server started
-without the flag where several profiles exist serves nothing but a
-sentence saying which flag it needs. The HTTP endpoint serves whichever
-profile is open in the app.
+**Force full sync.** Change tracking has one blind spot: a setting that
+only applies when a unit is touched — *Download shared files* for Teams,
+the channel folders, Planner references — does not reach conversations or
+boards that have not moved since. Every source's settings now carry
+*Force full sync* under *Advanced*: the source forgets its stored change
+pointers and is read again as on its first export, everything fetched and
+written over, attachments and files included, cadences stepping aside.
+Nothing in the archive is deleted — what Microsoft no longer has stays,
+tombstone and all. It costs what a first export costs, so the button asks
+once, and the log says in one line that the run reads everything.
 
 ## Upgrading
+
+**From 10.0:** nothing to do.
 
 **From 9.x:** the first start moves your archive from the app folder into
 `profiles/standard/` — a rename on the same disk, instant whatever the

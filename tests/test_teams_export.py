@@ -1888,3 +1888,72 @@ def test_gleiche_liste_ab_entries_carry_the_last_activity(tmp_path):
     te.gleiche_liste_ab(_listen_graph(), tmp_path)
     ordner = folders.lade(tmp_path)["ordner"]
     assert [e.get("zuletzt") for e in ordner] == ["2025-06-05T00:00:00Z"] * 3 + [None]
+
+
+# --- "Force full sync": every conversation again, every file again ----------
+def test_full_sync_nimmt_jeden_chat_und_kanal_mit(monkeypatch, tmp_path):
+    monkeypatch.setenv("FULL_SYNC", "1")
+    monkeypatch.setattr(te, "REFRESH_CHANNELS", False)
+    chats = [{"id": "alt", "chatType": "meeting",
+              "lastMessagePreview": {"createdDateTime": "2025-06-01T00:00:00Z"}}]
+    graph = FakeGraph(pages={f"{GRAPH}/me/chats": chats,
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "A"}]})
+    state = {"version": 1, "conversations": {
+        "alt": {"done": True, "rel": "meeting/alt.html", "count": 1, "empty": False,
+                "last_activity": "2025-06-02T00:00:00Z"},
+        "ch:k1": {"done": True, "rel": "channels/T1/a.html"}}}
+    for rel in ("meeting/alt.html", "channels/T1/a.html"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x", encoding="utf-8")
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    jobs = te.build_chat_jobs(graph, tmp_path, state, stats, "me", {"meeting"})
+    assert [c["id"] for _k, c, _ in jobs] == ["alt"] and stats["skipped"] == 0
+    jobs = te.build_channel_jobs(graph, tmp_path, state, stats,
+                                 [{"id": "t1", "displayName": "T1"}])
+    assert [ch["id"] for _k, _t, ch in jobs] == ["k1"] and stats["skipped"] == 0
+
+
+def test_full_sync_liest_den_chat_ohne_wasserzeichen(tmp_path, monkeypatch):
+    chat, graph = _chat_fixture(danach=[_msg("Alice Example", "dritte", "2025-06-03T08:00:00Z")])
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    monkeypatch.setenv("FULL_SYNC", "1")
+    status, _f, _t, count, _s, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert graph.paged_calls[-1] == f"{GRAPH}/me/chats/c1/messages", \
+        "listed in full, not from the watermark"
+    assert status == "updated" and count == 2
+
+
+def test_full_sync_liest_den_kanal_ohne_link(tmp_path, monkeypatch):
+    """The stored link is not offered: the channel comes as on its first
+    read, replies inline, and the fresh link replaces the old one."""
+    import state_db
+    team, ch, graph = _channel_fixture()
+    state = te.load_state(tmp_path)
+    te.export_one_channel(graph, tmp_path, state, team, ch)
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("delta:k1", "https://example.invalid/never-offered")
+    graph.paged_calls.clear()
+    graph.get_calls.clear()
+    monkeypatch.setenv("FULL_SYNC", "1")
+    status, _c, _t, count, _s, _z = te.export_one_channel(graph, tmp_path, state, team, ch)
+    assert count == 2
+    assert KANAL in graph.paged_calls, "the listing with replies inline"
+    assert all("never-offered" not in url for url, _p in graph.get_calls)
+    assert db.kv_lesen("delta:k1") == LINK1
+
+
+def test_full_sync_holt_jede_datei_erneut(tmp_path, monkeypatch):
+    msgs = [_msg("Alice Example", "eins", "2025-06-02T08:00:00Z",
+                 attachments=[{"id": "a1", "contentType": "reference",
+                               "contentUrl": DATEI_URL, "name": "Angebot.pdf"}])]
+    rel = "1on1/Alice Example__x.html"
+    graph = _DateiGraph()
+    _l, geladen, _a, _f = te.anhaenge_laden(graph, tmp_path, "c1", rel, msgs)
+    assert geladen == 1
+    monkeypatch.setenv("FULL_SYNC", "1")
+    graph2 = _DateiGraph()
+    lokal, geladen2, _a, _f = te.anhaenge_laden(graph2, tmp_path, "c1", rel, msgs,
+                                                unveraendert=True)
+    assert len(graph2.gefragt) == 1 and geladen2 == 1 and len(graph2.geladen) == 1
+    assert DATEI_URL in lokal

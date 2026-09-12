@@ -163,8 +163,23 @@ def kadenzen():
 
 def sync_jetzt():
     """The per-row "Sync now" button: the run carries just that URL and
-    this flag – the cadence gate steps aside once."""
-    return bool((os.environ.get("SYNC_NOW") or "").strip())
+    this flag – the cadence gate steps aside once. A full sync (voll_neu)
+    counts as one: nothing may wait for its cadence in a run that reads
+    everything."""
+    return bool((os.environ.get("SYNC_NOW") or "").strip()) or voll_neu()
+
+
+def voll_neu():
+    """The source's "Force full sync" button (FULL_SYNC): the run sets
+    every stored change pointer of the source aside – delta links, chat
+    watermarks, inventory versions, page stamps, task etags – and reads
+    the source once as on its first export, writing everything again.
+    Nothing in the archive is deleted: a file Microsoft no longer has
+    stays, with its tombstone if it ever got one. The pointers are
+    forgotten, not bypassed, so a run cut short continues on the next
+    regular one wherever an export keeps its stamps per item. Every
+    cadence gate steps aside as well (sync_jetzt)."""
+    return bool((os.environ.get("FULL_SYNC") or "").strip())
 
 
 _KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}

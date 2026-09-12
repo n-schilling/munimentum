@@ -43,7 +43,9 @@ its units is due, files of units not due wait in the library's state.db
 its own stamp there ("last_sync:sharepoint:<folder path>", the library's
 "last_sync"). Every library's state.db also holds kv "urls", the configured
 URLs that resolved to it – the settings page maps a library to its rows
-by it.
+by it. FULL_SYNC (export_util.voll_neu) makes every library forget pointer,
+walk and file versions and the pages export forget every page's eTag, so
+both fetch everything again as on their first run.
 
 A folder URL narrows a library to that subtree. Scoped mirrors use the
 same drive delta as everything else – the first run enumerates the library
@@ -410,6 +412,8 @@ def lauf(graph, out, drives, fehl=0):
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     uebersprungen = wartend = 0
     getaktet = False
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
         db = state_db.StateDb(ziel)
@@ -703,6 +707,12 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
 def seiten_lauf(graph, out, sites, fehl=0):
     out = Path(out)
     db = state_db.StateDb(out)
+    if export_util.voll_neu():
+        # "Force full sync": every page's version is forgotten first, so
+        # each one is fetched and rendered again – and a run cut short
+        # leaves the rest due for the next one.
+        progress.event("run.full_sync")
+        db.seiten_versionen_loeschen()
     eintraege_bestand = db.seiten_lesen()
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}

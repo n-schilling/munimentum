@@ -183,6 +183,15 @@ skipped with a clear log line, the export list shows the cadence each
 folder or conversation has, and *Sync now* lets every gate of that run
 step aside once.
 
+Change tracking has one blind spot: a setting that only applies when a unit
+is touched — attachments for Teams, channel files, Planner references — does
+not reach conversations or boards that have not moved since. *Force full
+sync*, under *Advanced* in every source's settings, closes it: the source
+forgets its stored change pointers and is read again as on its first export,
+everything fetched and written over, cadences stepping aside. Nothing in the
+archive is deleted — what Microsoft no longer has stays, tombstone and all —
+and it costs what a first export costs, so the button asks once.
+
 **Mail, calendar and contacts** are read by change tracking: after the
 first pass every folder, calendar and contact folder keeps a token, and the
 next run receives only what was added, changed or removed — a deletion no

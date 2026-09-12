@@ -1881,3 +1881,45 @@ def test_export_contacts_faellt_auf_die_liste_zurueck(tmp_path):
     done.close()
     assert stats == {"new": 1, "skipped": 0}
     assert state_db.StateDb(tmp_path).kv_lesen("delta:contacts") is None
+
+
+# --------------------------------------------------------------------------
+# "Force full sync": links go first, every mail, event and contact again
+# --------------------------------------------------------------------------
+def test_full_sync_liest_den_ordner_neu_und_schreibt_jede_mail(tmp_path, monkeypatch):
+    """The stored link is dropped before the round (a run cut short lists
+    in full again next time), the round lists the folder, and a mail the
+    resume log knows is written again."""
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("delta:f1", _DELTA_F1 + "?$deltatoken=alt")
+    mails = [{"id": "m1", "subject": "a"}, {"id": "m2", "subject": "b"}]
+    done = _donelog(tmp_path)
+    (tmp_path / "E-Mail/Posteingang").mkdir(parents=True)
+    (tmp_path / "E-Mail/Posteingang/a.eml").write_bytes(b"alt")
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g = DeltaMailGraph(mails, aenderungen=[{"id": "m9", "subject": "nur im Link"}])
+    stats = {"new": 0, "skipped": 0}
+    bestand = outlook_export.Bestand()
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats,
+                                                       _POST, bestand))
+    done.close()
+    assert [mid for mid, _ in got] == ["m1", "m2"] and stats["skipped"] == 0
+    assert not any("$deltatoken" in u for u in g.urls), "the stored link was offered"
+    assert db.kv_lesen("delta:f1") is None
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"], "a full round, fit for comparison"
+    assert "E-Mail/Posteingang" not in bestand.per_link
+
+
+def test_veraendert_sagt_bei_full_sync_immer_ja(tmp_path, monkeypatch):
+    """Events and contacts: the stamp is not asked, every item is rewritten."""
+    done = _donelog(tmp_path)
+    (tmp_path / "kontakte").mkdir()
+    (tmp_path / "kontakte/a.vcf").write_text("x", encoding="utf-8")
+    done.mark("c1", "kontakte/a.vcf")
+    stempel = outlook_export.Stempel(state_db.StateDb(tmp_path), "contacts")
+    stempel.merke("c1", "2026-01-01T00:00:00Z")
+    assert not outlook_export.veraendert(tmp_path, done, stempel, "c1", "2026-01-01T00:00:00Z")
+    monkeypatch.setenv("FULL_SYNC", "1")
+    assert outlook_export.veraendert(tmp_path, done, stempel, "c1", "2026-01-01T00:00:00Z")
+    done.close()

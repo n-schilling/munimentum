@@ -58,3 +58,18 @@ def test_kadenz_fuer_nimmt_den_tiefsten_pfad_sonst_die_kategorie():
     assert f(kad, "teams", "channels/Vertrieb/Allgemein") == "weekly"
     assert f(kad, "teams", "group/Projekt") == "always"
     assert f({}, "outlook:mail", "E-Mail", vorgabe="weekly") == "weekly"
+
+
+def test_voll_neu_liest_full_sync(monkeypatch):
+    """The "Force full sync" flag – set by the app, blank means off."""
+    monkeypatch.delenv("FULL_SYNC", raising=False)
+    assert not export_util.voll_neu()
+    monkeypatch.setenv("FULL_SYNC", "1")
+    assert export_util.voll_neu()
+    monkeypatch.setenv("FULL_SYNC", " ")
+    assert not export_util.voll_neu()
+    # A full sync lets every cadence gate step aside, SYNC_NOW or not.
+    monkeypatch.delenv("SYNC_NOW", raising=False)
+    assert not export_util.sync_jetzt()
+    monkeypatch.setenv("FULL_SYNC", "1")
+    assert export_util.sync_jetzt()

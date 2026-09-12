@@ -114,3 +114,30 @@ def test_spiegel_lauf_hinterlaesst_genau_eine_zustandsdatei(tmp_path):
     assert list(db.bestand_lesen().values())[0]["rel"] == "Dateien/a.pdf"
     dateien = {p.name for p in tmp_path.rglob("*") if p.is_file()}
     assert dateien == {"a.pdf", state_db.DB_NAME}
+
+
+def test_versionen_vergessen_behaelt_die_orte(tmp_path):
+    """A full sync forgets what version lies here, never where: the rows
+    stay with an empty tag, so the next plan fetches every file and every
+    page again – and a rename in between still moves the copy along."""
+    db = state_db.StateDb(tmp_path)
+    db.bestand_schreiben({"a": {"rel": "Dateien/x.pdf", "ctag": "c1", "size": 5}},
+                         delta_link="link-1")
+    db.seiten_schreiben({"p": {"rel": "S/p.html", "etag": "e1"}})
+    db.bestand_versionen_loeschen()
+    db.seiten_versionen_loeschen()
+    assert db.bestand_lesen() == {"a": {"rel": "Dateien/x.pdf", "ctag": "", "size": 5}}
+    assert db.seiten_lesen() == {"p": {"rel": "S/p.html", "etag": ""}}
+    assert db.delta_lesen() == "link-1", "the pointer is the export's business"
+    # Forgetting on a folder without a file creates none.
+    leer = state_db.StateDb(tmp_path / "leer")
+    leer.bestand_versionen_loeschen()
+    leer.seiten_versionen_loeschen()
+    assert not (tmp_path / "leer" / state_db.DB_NAME).exists()
+    # The mirror inventory forgets in memory and on disk at once.
+    bestand = state_db.DbBestand(db)
+    bestand.merke("b", "Dateien/y.pdf", "c9", 1)
+    bestand.schreibe()
+    bestand.versionen_vergessen()
+    assert bestand.eintraege["b"]["ctag"] == "" and bestand.eintraege["a"]["ctag"] == ""
+    assert db.bestand_lesen()["b"]["ctag"] == ""

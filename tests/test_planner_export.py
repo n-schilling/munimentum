@@ -589,3 +589,19 @@ def test_fehler_im_worker_zaehlt_und_stoert_die_anderen_nicht(tmp_path, capsys):
     assert pl.plan_lauf(g, tmp_path, PLAN, {}, workers=3) == (1, 0, 1)
     assert any(e["k"] == "run.planner.task_failed" and
                e["v"]["name"] == "Aufgabe B" for e in _events(capsys))
+
+
+def test_full_sync_holt_jede_karte_und_referenz_erneut(tmp_path, monkeypatch):
+    """"Force full sync": no etag and no cTag counts – details, comments
+    and the referenced files come again, the board is written over."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    neu, unveraendert, fehler = pl.plan_lauf(g2, tmp_path, PLAN, {})
+    assert (neu, unveraendert, fehler) == (1, 0, 0)
+    assert any("/planner/tasks/t1/details" in u for u in g2.aufrufe)
+    assert len(g2.geladen) == 1, "the referenced file is fetched again"
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    assert len(list((ziel / pl.ANHANG_DIR).glob("*"))) == 1

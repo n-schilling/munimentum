@@ -23,7 +23,9 @@ run changed something.
 Runs as a subprogram of app.py: output folder as the only argument,
 settings as environment variables (SYNC_CADENCE – key "todo" for the whole
 source, "todo:<pfad>" for one list, <pfad> being the list title as a folder
-name; SYNC_NOW steps over every gate; see export_util. TODO_RULES – ordered
+name; SYNC_NOW steps over every gate; FULL_SYNC drops every list's link and
+task etag, so the lists are read in full and every card fetched again,
+attachments included; see export_util. TODO_RULES – ordered
 include/exclude rules over the same paths, see folders.py, empty means
 every list). --lists refreshes the stored list of lists and exports
 nothing. Progress, results and failures are structured lines (progress.py).
@@ -459,6 +461,14 @@ def list_lauf(graph, out, liste):
     eintraege = _json(vorher["tasks"])
     delta_key = f'delta:{liste["id"]}'
     token = db.kv_lesen(delta_key) or ""
+    if export_util.voll_neu():
+        # "Force full sync": the link goes and no task's etag counts – the
+        # list is read in full and every card fetched again, attachments
+        # included.
+        db.kv_schreiben(delta_key, "")
+        token = ""
+        for e in eintraege.values():
+            e["etag"] = ""
     anfang = (f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks/delta'
               "?$expand=checklistItems,linkedResources&$top=100")
     voll = not token
@@ -563,6 +573,8 @@ def lauf(graph, out, listen, workers=1):
     regeln = todo_regeln()
     kadenzen = export_util.kadenzen()
     wurzel = state_db.StateDb(out)
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     gewaehlt, ausgeschlossen, gehalten = [], 0, []
     for liste in listen:
         pfad = list_pfad(liste)

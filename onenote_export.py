@@ -38,7 +38,9 @@ key "onenote:<id>") and its own "sync now" (ONENOTE_ONLY).
 Runs as a subprogram of app.py: output folder as the only argument,
 settings as environment variables (ONENOTE_RULES, ONENOTE_IMAGE_MAX_MB –
 embed images up to this size, 0 = always; SYNC_CADENCE, SYNC_NOW – see
-export_util). --notebooks refreshes the stored notebook list and exports
+export_util; FULL_SYNC forgets every page stamp and resource record and
+fetches the notebooks again, see export_util.voll_neu). --notebooks
+refreshes the stored notebook list and exports
 nothing. Progress, results and failures are structured lines (progress.py).
 """
 
@@ -749,6 +751,15 @@ def notebook_lauf(graph, out, nb, grenze):
     db = state_db.StateDb(ziel)
     stand = seitenstand(db)
     ressourcen = _saetze(db, RESSOURCEN_BEREICH)
+    if export_util.voll_neu():
+        # "Force full sync": every page's stamp and every resource record
+        # is forgotten first – written at once, so a run the hour's budget
+        # cuts short leaves the rest due for the next regular one.
+        for e in stand.values():
+            e["lm"] = ""
+        _saetze_schreiben(db, SEITEN_BEREICH, stand)
+        db.saetze_leeren(RESSOURCEN_BEREICH)
+        ressourcen = {}
     db.kv_schreiben("notebook", json.dumps(
         {"id": nb["id"], "titel": nb["titel"]}, ensure_ascii=False))
 
@@ -852,6 +863,8 @@ def lauf(graph, out, buecher):
     out = Path(out)
     grenze = bild_max()
     neu = unveraendert = fehler = fehl = uebersprungen = 0
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     for nb in buecher:
         db = state_db.StateDb(notebook_ziel(out, nb))
         kadenz = nb.get("kadenz") or "always"

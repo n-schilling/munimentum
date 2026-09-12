@@ -225,6 +225,15 @@ class StateDb:
                  for k, e in eintraege.items()])
             self._delta_setzen(con, delta_link)
 
+    def bestand_versionen_loeschen(self):
+        """Forget every file's version, keep its place: the next plan finds
+        no entry current and fetches all of them – a full sync."""
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return
+        with con:
+            con.execute("UPDATE bestand SET ctag = ''")
+
     def bestand_aktualisieren(self, geaendert, geloescht=(), delta_link=None):
         """Write only what moved: upsert the changed rows, delete the gone
         ones, advance the pointer – one transaction. A mirror of 100k files
@@ -261,6 +270,14 @@ class StateDb:
             con.executemany(
                 "INSERT INTO seiten(id, rel, etag) VALUES(?,?,?)",
                 [(k, e["rel"], e["etag"]) for k, e in eintraege.items()])
+
+    def seiten_versionen_loeschen(self):
+        """Forget every page's version, keep its place – a full sync."""
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return
+        with con:
+            con.execute("UPDATE seiten SET etag = ''")
 
     def seiten_aktualisieren(self, geaendert, geloescht=()):
         """Upsert the changed pages, delete the gone ones – nothing else
@@ -476,6 +493,12 @@ class DbBestand(drive_mirror.Bestand):
             geaendert, geloescht = self._geaendert, self._geloescht
             self._geaendert, self._geloescht = {}, set()
         self.db.bestand_aktualisieren(geaendert, geloescht, delta_link)
+
+    def versionen_vergessen(self):
+        """Every version unknown, on disk as in memory – written at once,
+        so a run cut short still finds the rest due next time."""
+        super().versionen_vergessen()
+        self.db.bestand_versionen_loeschen()
 
 
 class DbZustand:

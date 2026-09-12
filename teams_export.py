@@ -16,7 +16,10 @@ PARALLEL: several chats/channels at once (default 4, via env EXPORT_WORKERS).
 Runs as a subprogram of app.py: output folder as the only argument, every
 setting as an environment variable (EXPORT_CATEGORIES, EXPORT_WORKERS,
 EMBED_IMAGES, CACHE_IMAGES, REFRESH_CHANNELS, SKIP_EMPTY_CHATS, TEAMS_RULES,
-TEAMS_SINCE, SYNC_CADENCE, SYNC_NOW, GRAPH_TOKEN/GRAPH_AUTH; environment
+TEAMS_SINCE, SYNC_CADENCE, SYNC_NOW, FULL_SYNC – every conversation again:
+chats listed in full instead of from their watermark, channels read without
+their delta link, every referenced file fetched again, see
+export_util.voll_neu; GRAPH_TOKEN/GRAPH_AUTH; environment
 beats app_config.json, see settings.py). There are no prompts; with
 "channels" selected, every joined team comes along. `--teams <out>` only
 refreshes the stored conversation list (the folders.py tree in state.db:
@@ -871,6 +874,8 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     grenze = files_max_bytes()
     lokal, geladen, ausgelassen, fehler = {}, 0, 0, 0
     offen = {}
+    # A full sync fetches every file again, known cTag or not.
+    alles = export_util.voll_neu()
     for url, name in _referenzen(msgs):
         if url in lokal or url in offen:
             continue
@@ -878,7 +883,7 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             lokal[url] = ausser[url]
             continue
         alt = stand.get(url) or {}
-        if unveraendert and alt.get("ctag") and alt.get("rel"):
+        if unveraendert and not alles and alt.get("ctag") and alt.get("rel"):
             dateiname = alt["rel"].rsplit("/", 1)[-1]
             if (out / ordner_rel / dateiname).exists():
                 lokal[url] = f"{href_basis}/{dateiname}"
@@ -910,7 +915,8 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             dateiname = _anhang_name(url, meta.get("name") or name)
             ziel_rel = f"{ordner_rel}/{dateiname}"
             href = f"{href_basis}/{dateiname}"
-            if alt.get("ctag") == (meta.get("cTag") or "") and (out / ziel_rel).exists():
+            if (not alles and alt.get("ctag") == (meta.get("cTag") or "")
+                    and (out / ziel_rel).exists()):
                 lokal[url] = href
                 continue
             _lade_datei(graph, f"{GRAPH}/shares/u!{_freigabe(url)}/driveItem/content",
@@ -1166,12 +1172,14 @@ def chat_delta_url(key, wasserzeichen):
             f"&$filter=lastModifiedDateTime gt {wasserzeichen}")
 
 
-def lade_chat_nachrichten(graph, key, speicher, seit=None):
+def lade_chat_nachrichten(graph, key, speicher, seit=None, alles=False):
     """Bring a chat's store up to date: the first fetch lists everything
     (bounded by `seit`), every later one only what was modified after the
-    stored watermark."""
+    stored watermark – unless `alles` asks for a full read (the source's
+    "Force full sync"), which lists the chat as on its first fetch."""
     base = f"{GRAPH}/me/chats/{key}/messages"
-    wasser = None if speicher.leer() else graph_zeitstempel(speicher.wasserzeichen())
+    wasser = (None if alles or speicher.leer()
+              else graph_zeitstempel(speicher.wasserzeichen()))
     if wasser:
         speicher.merge(list(graph.paged(chat_delta_url(key, wasser))))
         return
@@ -1196,7 +1204,8 @@ def export_one_chat(graph, out, state, my_id, chat):
     prior = get_record(out, state, key)
     db = state_db.StateDb(out)
     speicher = Nachrichtenspeicher(db, key)
-    lade_chat_nachrichten(graph, key, speicher, _seit_gilt(state, key, speicher))
+    lade_chat_nachrichten(graph, key, speicher, _seit_gilt(state, key, speicher),
+                          alles=export_util.voll_neu())
     msgs = speicher.nachrichten()
     msgs.sort(key=lambda m: m.get("createdDateTime") or "")
 
@@ -1395,9 +1404,13 @@ def export_one_channel(graph, out, state, team, ch, spiegel=None):
     speicher = Nachrichtenspeicher(db, ch["id"])
     delta_kv = f"delta:{ch['id']}"
     link = db.kv_lesen(delta_kv) or None
+    # "Force full sync": the stored link is not offered, so the channel is
+    # read in full with its replies, and the fresh link replaces it.
+    alles = export_util.voll_neu()
     neuer_link, zurueckgesetzt, delta_fehler, voll = lade_kanal_nachrichten(
-        graph, team["id"], ch["id"], speicher, link,
-        seit=_seit_gilt(state, key, speicher), vollpass=_vollpass_faellig(db, ch["id"]))
+        graph, team["id"], ch["id"], speicher, None if alles else link,
+        seit=_seit_gilt(state, key, speicher),
+        vollpass=alles or _vollpass_faellig(db, ch["id"]))
     if zurueckgesetzt:
         progress.event("run.teams.delta_reset", name=title)
     if delta_fehler:
@@ -1510,6 +1523,8 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
             progress.melde(len(chats), what="chats")
     wanted = [c for c in chats if TYPEMAP.get(c.get("chatType"), "other") in chat_cats]
     jobs, new, upd, same = [], 0, 0, 0
+    # A full sync exports every chat again, whether or not it moved.
+    alles = export_util.voll_neu()
     for chat in wanted:
         folder = TYPEMAP.get(chat.get("chatType"), "other")
         if regeln or takt is not None:
@@ -1531,7 +1546,7 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
             new += 1
             continue
         ps, cs = parse_ts(rec.get("last_activity")), parse_ts(cur)
-        if cs is not None and (ps is None or cs > ps):
+        if alles or (cs is not None and (ps is None or cs > ps)):
             jobs.append(("chat", chat, None))   # new messages -> export again
             upd += 1
         else:
@@ -1547,6 +1562,7 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
 def build_channel_jobs(graph, out, state, stats, selected_teams, regeln=None, fehler=None,
                        takt=None):
     jobs = []
+    alles = export_util.voll_neu()        # every channel again, done or not
     for team in selected_teams:
         tname = team.get("displayName", "Team")
         try:
@@ -1565,7 +1581,7 @@ def build_channel_jobs(graph, out, state, stats, selected_teams, regeln=None, fe
                 _ausgeschlossen(stats)
             elif takt is not None and not takt.faellig("channels", pfad, ch["id"]):
                 continue                      # counted and said once per category
-            elif REFRESH_CHANNELS:
+            elif REFRESH_CHANNELS or alles:
                 # the delta link says what changed; the worker only
                 # rewrites on an actual change
                 jobs.append(("channel", team, ch))
@@ -1736,6 +1752,8 @@ def main():
     if not categories:
         progress.ergebnis(0, extra={"skipped": uebersprungen} if uebersprungen else None)
         return
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     want_channels = "channels" in categories
 
     # 2) Login or token mode

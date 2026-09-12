@@ -555,3 +555,21 @@ def test_listen_laufen_nebeneinander_mit_monotonem_fortschritt(tmp_path, capsys)
     assert all(z.startswith("@@") for z in ausgabe.splitlines() if z.strip())
     assert sum(1 for z in ausgabe.splitlines()
                if (progress.lies_event(z) or {}).get("k") == "run.todo.list") == 5
+
+
+def test_full_sync_liest_die_liste_neu_und_jeden_anhang(tmp_path, monkeypatch):
+    """"Force full sync": the stored link is dropped, the list read in
+    full, every task refreshed and its attachments fetched again."""
+    g = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+               anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    td.list_lauf(g, tmp_path, LISTE)
+    db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
+    db.kv_schreiben("delta:l1", "https://example.invalid/never-offered")
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+                anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    neu, unveraendert, fehler = td.list_lauf(g2, tmp_path, LISTE)
+    assert (neu, unveraendert, fehler) == (1, 0, 0)
+    assert len(g2.geladen) == 1, "the attachment comes again"
+    assert not any("never-offered" in u for u in g2.aufrufe)
+    assert db.kv_lesen("delta:l1") == ""

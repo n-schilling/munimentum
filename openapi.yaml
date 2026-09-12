@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 10.0.0
+  version: 10.1.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -526,6 +526,7 @@ paths:
                 sync_todo: { type: boolean, description: "To Do list of lists only." }
                 sync_now: { type: boolean, description: "Ignore every sync cadence once (the source's \"Sync now\" button)." }
                 calendar_full: { type: boolean, description: "Outlook: read the calendar once in full – only the calendar category runs, window and change tokens ignored." }
+                full_sync: { type: boolean, description: "The source's \"Force full sync\" button: the requested exports forget their stored change pointers (delta links, watermarks, inventory versions, page stamps, task etags) and read the source again as on its first export, writing everything over – attachments and files included. Nothing in the archive is deleted. Implies sync_now; for Outlook it reads the calendar in full as calendar_full does, with every configured category." }
                 sync_sharepoint: { type: boolean }
                 sync_folders: { type: boolean, description: "Outlook folder tree only." }
                 sync_calendars: { type: boolean }

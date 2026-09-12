@@ -264,7 +264,14 @@ of it (Mail, Calendar, Contacts; the four Teams kinds under their own
 *Sync cadence* heading). Every gate lives inside the export, and a skip
 is one `run.cadence.skip` line in the log. *Sync now* — the button in a
 URL row, or a `.mini` in the source's `.aktionen` row — lets every gate of
-that run step aside once; it never changes the cadence itself.
+that run step aside once; it never changes the cadence itself. *Force full sync* —
+a `.mini` in the `.aktionen` row of the source's *Advanced* group, one per
+source, asked once with `confirm` — starts a run of that source alone with
+`full_sync`: the export forgets its stored change pointers and reads the
+source again as on its first export (`export_util.voll_neu`, one
+`run.full_sync` line in the log), writing everything over and deleting
+nothing. It is the way a setting that only reaches touched units
+(attachments, files, images) reaches what is already archived.
 
 **A departure from a cadence** (one mail folder, team, channel, chat,
 drive or library folder or To Do list that syncs differently): never a
@@ -391,6 +398,8 @@ These tests encode the guide; adapt them consciously, never delete them:
 - `test_keine_verwaisten_texte` / `test_jeder_verwendete_schluessel_ist_uebersetzt`.
 - `test_kadenzfenster_baum_und_vererbung` — the cadence window's tree and
   the inheritance rule match the exports.
+- `test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert` — one *Force
+  full sync* per source, under *Advanced*, in an `.aktionen` row.
 - `test_rundgang_ziele_existieren` / `test_rundgang_kapitel_laufen_durch` —
   every tour step points at an element, the chapters run through and are
   marked seen once.

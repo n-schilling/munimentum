@@ -1567,7 +1567,7 @@ def _auth_env(cfg):
 
 def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 reconstruct=None, nur_einheit=None, legacy_comments=False,
-                sync_now=False, calendar_full=False):
+                sync_now=False, calendar_full=False, full_sync=False):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1588,6 +1588,10 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         "legacy_comments": bool(legacy_comments),
         # "Sync now" for a whole source: the cadences step aside once.
         "sync_now": bool(sync_now),
+        # "Force full sync" for a source: the export forgets its change
+        # pointers and reads everything again (FULL_SYNC, see
+        # export_util.voll_neu); the cadences step aside as well.
+        "full_sync": bool(full_sync),
         # The calendar's "read in full" button: only the calendar runs,
         # window and change tokens ignored once.
         "calendar_full": bool(calendar_full),
@@ -2129,7 +2133,8 @@ class App:
 
     def launch(self, anfrage, *, embeddings=None, label="Lauf",
                reconstruct=None, nur_einheit=None, legacy_comments=False,
-               sync_now=False, calendar_full=False, origin="manual"):
+               sync_now=False, calendar_full=False, full_sync=False,
+               origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
         shape; unknown keys are ignored, missing ones are off."""
@@ -2171,7 +2176,8 @@ class App:
                             token=token, reconstruct=reconstruct,
                             nur_einheit=nur_einheit,
                             legacy_comments=legacy_comments,
-                            sync_now=sync_now, calendar_full=calendar_full)
+                            sync_now=sync_now, calendar_full=calendar_full,
+                            full_sync=full_sync)
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         for s in steps:
@@ -2457,7 +2463,8 @@ class Handler(BaseHTTPRequestHandler):
                     reconstruct=rekonstruktion,
                     legacy_comments=bool(data.get("legacy_comments")),
                     sync_now=bool(data.get("sync_now")),
-                    calendar_full=bool(data.get("calendar_full")))
+                    calendar_full=bool(data.get("calendar_full")),
+                    full_sync=bool(data.get("full_sync")))
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
             if u.path == "/api/login":
                 ok, daten = app.login_starten()

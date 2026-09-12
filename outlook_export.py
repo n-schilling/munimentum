@@ -39,7 +39,10 @@ Graph delta round – the first time in full, afterwards only what changed
 since the stored link (state.db, kv "delta:…"). Deletions arrive as removed
 entries; changed appointments and contacts are rewritten. OUTLOOK_SINCE
 bounds a folder's first export, CALENDAR_MONTHS_BACK the calendar window,
-CALENDAR_FULL reads the calendars once in full. SYNC_CADENCE gates calendar
+CALENDAR_FULL reads the calendars once in full. FULL_SYNC (the source's
+"Force full sync", see export_util.voll_neu) drops every stored link first
+and writes every mail, event and contact again – the resume log is not
+asked. SYNC_CADENCE gates calendar
 and contacts as categories (outlook:calendar, outlook:contacts) and mail per
 folder: "outlook:mail" for all, "outlook:mail:<folder path>" for a folder and
 everything below it until a deeper folder sets its own.
@@ -572,6 +575,11 @@ def delta_runde(graph, db, key, url, params=None, prefer=(), name=""):
     in full.
     """
     token = db.kv_lesen(key)
+    if token and export_util.voll_neu():
+        # "Force full sync": the link goes before the round starts, so a
+        # run cut short lists the collection in full again next time.
+        db.kv_schreiben(key, None)
+        token = None
     if token:
         seiten = delta_seiten(graph, token, prefer=prefer)
         try:
@@ -635,9 +643,10 @@ def veraendert(out, done, stempel, key, lm, datei_stempel=None):
 
     Archives from before change tracking carry no record: for those the
     file itself answers when it can (an .ics holds the DTSTAMP the export
-    wrote), and an unchanged item is adopted without a rewrite.
+    wrote), and an unchanged item is adopted without a rewrite. A full
+    sync writes every item again.
     """
-    if not done.is_done(out, key):
+    if export_util.voll_neu() or not done.is_done(out, key):
         return True
     alt = stempel.bekannt(key)
     if alt is not None:
@@ -674,6 +683,8 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
     """
     db = state_db.StateDb(out)
     seit = outlook_since()
+    # A full sync writes every mail again – the resume log is not asked.
+    alles = export_util.voll_neu()
     for top in selected:
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
@@ -705,7 +716,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                             bestand.gesehen.add(mid)
                             if msg.get("internetMessageId"):
                                 bestand.briefe.add(msg["internetMessageId"].strip())
-                        if done.is_done(out, mid):
+                        if not alles and done.is_done(out, mid):
                             stats["skipped"] += 1
                             continue
                         empfangen = (msg.get("receivedDateTime") or "")[:10]
@@ -1596,6 +1607,8 @@ def exportiere(graph, out, done, stats, workers):
     gate, each marking its last clean run. Returns the run's outcome."""
     db_root = state_db.StateDb(out)
     categories = selected_categories()
+    if export_util.voll_neu():
+        progress.event("run.full_sync")
     selected_mail, ausgelassen, sel_cals = [], [], []
     if "mail" in categories:
         selected_mail, ausgelassen = faellige_ordner(db_root, waehle_ordner(graph, out))

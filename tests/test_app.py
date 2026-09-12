@@ -4981,6 +4981,98 @@ def test_http_run_kalender_vollstaendig(server, monkeypatch):
     assert gesehen["context"]["elements"]["outlook"] == ["calendar"]
 
 
+QUELLEN_MIT_VOLLSYNC = ("outlook", "teams", "onedrive", "sharepoint", "planner",
+                        "todo", "onenote")
+
+
+def test_build_steps_full_sync_setzt_die_flags(sandbox):
+    """"Force full sync": FULL_SYNC with SYNC_NOW alongside for every export
+    step; Outlook reads the calendar in full too, with every configured
+    category – not the calendar alone as the calendar button does."""
+    cfg = app_mod.load_config()
+    cfg.update(outlook_categories=["mail", "contacts"], teams_categories=["group"])
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        cfg, {"outlook": True, "onedrive": True, "teams": True, "todo": True,
+              "planner": True, "onenote": True, "sharepoint": True,
+              "sharepoint_pages": True}, full_sync=True)}
+    for key in ("outlook", "onedrive", "teams", "todo", "planner", "onenote",
+                "sharepoint", "sharepoint_pages"):
+        assert steps[key]["env"]["FULL_SYNC"] == "1", key
+        assert steps[key]["env"]["SYNC_NOW"] == "1", key
+    assert steps["outlook"]["env"]["CALENDAR_FULL"] == "1"
+    assert steps["outlook"]["env"]["EXPORT_CATEGORIES"] == "mail,contacts"
+    ohne = {s["key"]: s for s in app_mod.build_steps(cfg, {"onedrive": True}, sync_now=True)}
+    assert "FULL_SYNC" not in ohne["onedrive"]["env"]
+
+
+def test_http_run_full_sync(server, monkeypatch):
+    """The button posts the source with full_sync and its own label; the
+    step carries the flag."""
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+    code, r = call(port, "POST", "/api/run",
+                   {"todo": True, "full_sync": True, "label": "job.full"})
+    assert code == 200 and r["ok"]
+    (schritt,) = gesehen["steps"]
+    assert schritt["key"] == "todo" and schritt["env"]["FULL_SYNC"] == "1"
+    assert gesehen["label"] == "job.full"
+
+
+def test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert():
+    """DESIGN.md §5: one *Force full sync* per source, a `.mini` in the
+    `.aktionen` row of its *Advanced* group – never in the open part, never
+    twice, and every source that tracks changes has one."""
+    seite = app_mod.seite()
+    assert seite.count('data-i18n="settings.full_sync"') == len(QUELLEN_MIT_VOLLSYNC)
+    for key in QUELLEN_MIT_VOLLSYNC:
+        start = seite.index(f'id="q-{key}"')
+        knopf = seite.index(f"vollSync('{key}')", start)
+        erweitert = seite.rfind('<details class="erweitert"', start, knopf)
+        assert erweitert > start, f"{key}: the button is not under Advanced"
+        naechster_block = seite.find('<details class="quelle-einst"', start + 1)
+        assert naechster_block == -1 or knopf < naechster_block, f"{key}: button in another block"
+        zeile = seite[seite.rfind('<div class="aktionen">', start, knopf):knopf]
+        assert "</div>" not in zeile, f"{key}: the button is outside an .aktionen row"
+        assert 'data-i18n-title="settings.full_sync.i"' in seite[knopf:knopf + 200]
+    assert "full_sync: true" in seite and "label: 'job.full'" in seite
+
+
+PRUEFUNG_VOLLSYNC = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true}); }});
+};
+global.confirm = function(text){ global.gefragt = text; return false; };
+S.config = {};
+vollSync('teams');
+pruefe(String(global.gefragt).indexOf('Teams') >= 0, 'Rueckfrage nennt die Quelle nicht: ' + global.gefragt);
+pruefe(!gesendet.some(function(g){ return g.pfad.indexOf('/api/run') >= 0; }),
+       'Abgelehnt und trotzdem gestartet');
+global.confirm = function(){ return true; };
+vollSync('sharepoint');
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+pruefe(lauf && lauf.body.sharepoint === true && lauf.body.full_sync === true, 'Lauf nicht gestartet: ' + JSON.stringify(lauf));
+pruefe(lauf.body.label === 'job.full', 'falsches Etikett: ' + lauf.body.label);
+pruefe(!lauf.body.sharepoint_pages, 'Seiten ohne eine URL mitgeschickt');
+pruefe(!lauf.body.onedrive && !lauf.body.outlook, 'andere Quellen mitgeschickt');
+S.config = {sharepoint_pages_enabled: true,
+            sharepoint_pages_urls: 'https://firma.sharepoint.com/sites/x'};
+vollSync('sharepoint');
+lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[1];
+pruefe(lauf.body.sharepoint_pages === true, 'Seiten trotz URL nicht mitgeschickt');
+console.log('OK');
+"""
+
+
+def test_vollsync_fragt_zurueck_und_startet_nur_die_quelle():
+    _in_node(PRUEFUNG_VOLLSYNC)
+
+
 def test_config_nimmt_regeln_daten_und_zahlen_der_neun(server, sandbox):
     a, port = server
     code, r = call(port, "POST", "/api/config",

@@ -57,9 +57,13 @@ def kadenzen(cfg):
 
 def _kadenz_env(cfg, ctx):
     """SYNC_CADENCE for every paced export, SYNC_NOW when the run was asked
-    to ignore the cadences once (a "sync now" button)."""
+    to ignore the cadences once (a "sync now" button), FULL_SYNC – with
+    SYNC_NOW alongside – when a source's "Force full sync" button asked
+    for everything to be read again (export_util.voll_neu)."""
+    voll = bool(ctx.get("full_sync"))
     return {"SYNC_CADENCE": json.dumps(kadenzen(cfg)),
-            **({"SYNC_NOW": "1"} if ctx.get("sync_now") else {})}
+            **({"SYNC_NOW": "1"} if ctx.get("sync_now") or voll else {}),
+            **({"FULL_SYNC": "1"} if voll else {})}
 
 
 def _sharepoint_env(cfg, ctx):
@@ -141,8 +145,10 @@ REGISTRY = (
          "CALENDAR_MONTHS_BACK": str(int(cfg.get("calendar_months_back") or 0)),
          # The "read the calendar in full" button: window and change
          # tokens step aside once. Always set, so the script never falls
-         # back to app_config.json for it.
-         "CALENDAR_FULL": _flag(ctx.get("calendar_full")),
+         # back to app_config.json for it. A full sync of the source
+         # reads the calendar the same way.
+         "CALENDAR_FULL": _flag(ctx.get("calendar_full")
+                                or ctx.get("full_sync")),
          **({"SYNC_NOW": "1"} if ctx.get("calendar_full") else {})}},
 
     {"key": "onedrive", "anfrage": "onedrive", "script": "onedrive_export",
