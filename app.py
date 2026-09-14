@@ -62,7 +62,9 @@ import socketserver
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
+import archive_check
 import auth
+import completeness
 import export_util
 import folders
 import i18n
@@ -98,7 +100,8 @@ RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             # bundle this is the only way to check that without network –
             # the smoke test does exactly that.
             "auth", "onedrive_export", "sharepoint_export",
-            "planner_export", "todo_export", "onenote_export")
+            "planner_export", "todo_export", "onenote_export",
+            "archive_check")
 
 
 def resource_dir():
@@ -165,9 +168,10 @@ def seite():
     """The interface: one HTML file next to the code, shipped as a data file
     like lang/ and openapi.yaml. Read on first use, not at import – the
     bundle's multiprocessing workers import this module too and have no
-    business loading 200 KB of markup. The /-route fills its two
-    placeholders, /*__I18N__*/ (language strings) and /*__STEPS__*/ (the
-    step metadata of the registry), on every request."""
+    business loading 200 KB of markup. The /-route fills its three
+    placeholders, /*__I18N__*/ (language strings), /*__STEPS__*/ (the
+    step metadata of the registry) and /*__PRUEFUNGEN__*/ (the balance
+    rows of the overview), on every request."""
     global _SEITE
     if _SEITE is None:
         _SEITE = (RES / "page.html").read_text(encoding="utf-8")
@@ -1266,14 +1270,40 @@ def _zaehle(db):
     return zahlen
 
 
-def lies_bericht(ordner=OUTLOOK_DIR):
-    """The last completeness report, if there is one.
+# The export folder behind each balance row (steps.PRUEFUNGEN names them
+# by the pfade key the steps use).
+EXPORT_ORDNER = {"outlook": OUTLOOK_DIR, "teams": TEAMS_DIR, "onedrive": ONEDRIVE_DIR,
+                 "sharepoint": SHAREPOINT_DIR, "sharepoint_pages": SHAREPOINT_PAGES_DIR,
+                 "planner": PLANNER_DIR, "todo": TODO_DIR, "onenote": ONENOTE_DIR}
 
-    It is only created at the push of a button: the check queries
-    Microsoft, and nothing should do that unasked just because a view
-    opens.
-    """
-    return state_db.StateDb(BASE / ordner).bericht_lesen()
+
+def archiv_bericht_pfad():
+    """Where the inward check (archive_check.py) writes its report: next to
+    the settings of the open profile – read at call time, since the home
+    folder is settled after import (profiles, --data-dir)."""
+    return HEIM / "archivpruefung.json"
+
+
+def archiv_bericht():
+    """The last inward check, or None."""
+    try:
+        return json.loads(archiv_bericht_pfad().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def pruefungen(cfg):
+    """The last completeness balance of every source, and whether the
+    source is in use – so the page draws a row for a used source even
+    before its first check, and none for a source nobody uses. Reports are
+    only ever written at the push of a button: the check queries
+    Microsoft, and nothing should do that unasked because a view opens."""
+    out = {}
+    for e in steps_mod.PRUEFUNGEN:
+        db = state_db.StateDb(BASE / EXPORT_ORDNER[e["ordner"]])
+        out[e["quelle"]] = {"bericht": completeness.lesen(db, e["quelle"]),
+                            "genutzt": bool(e["nutzt"](cfg))}
+    return out
 
 
 # The analytics numbers come materialised from the index (analytics_db):
@@ -1308,14 +1338,8 @@ def analytics_daten(cfg, neu=False):
     aus = {str(n).strip().lower() for n in (cfg.get("analytics_skip") or [])}
     out["top_personen"] = [pe for pe in out.get("top_personen") or []
                            if pe["who"].strip().lower() not in aus][:10]
-    out.update({
-        "vollstaendigkeit": lies_bericht(),
-        "vollstaendigkeit_onedrive": lies_bericht(ONEDRIVE_DIR),
-        "vollstaendigkeit_sharepoint":
-            state_db.StateDb(BASE / SHAREPOINT_DIR).bericht_lesen(),
-        "vollstaendigkeit_pages":
-            state_db.StateDb(BASE / SHAREPOINT_PAGES_DIR).bericht_lesen(),
-    })
+    out["pruefungen"] = pruefungen(cfg)
+    out["archiv"] = archiv_bericht()
     return out
 
 
@@ -1565,9 +1589,18 @@ def _auth_env(cfg):
     return env
 
 
+def _quellname(eintrag):
+    """How a message names a registry entry's source: the literal, or the
+    text key as an atom the page translates."""
+    q = eintrag.get("quelle") or eintrag["key"]
+    return {"k": q, "v": {}} if "." in q else q
+
+
 def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 reconstruct=None, nur_einheit=None, legacy_comments=False,
-                sync_now=False, calendar_full=False, full_sync=False):
+                sync_now=False, calendar_full=False, full_sync=False,
+                resync=False, archiv=None, nachgeholt=None, nachholen=None,
+                resync_ordner=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1592,6 +1625,22 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # pointers and reads everything again (FULL_SYNC, see
         # export_util.voll_neu); the cadences step aside as well.
         "full_sync": bool(full_sync),
+        # "Fetch now" / "Fetch again": the export forgets its change
+        # pointers but keeps every file's version, so only what is not
+        # here is fetched (RESYNC, see export_util.abgleich).
+        "resync": bool(resync),
+        # "Fetch now" from the balance: the folders with something open –
+        # the resync lists those alone (RESYNC_FOLDERS, Outlook).
+        "resync_ordner": [str(p) for p in (resync_ordner or []) if str(p).strip()],
+        # An archive action's request: the source and, for the note, the
+        # kinds to note (archive_check.py --aktion).
+        "archiv": dict(archiv or {}),
+        # "Fetch again": {quelle, liste} – the source whose step fetches
+        # exactly the files in the list (FETCH_LIST), ticked or not.
+        "nachholen": dict(nachholen or {}),
+        # Source -> when its last resync completed, for the archive
+        # check's "still missing after a fetch" verdict.
+        "nachgeholt": dict(nachgeholt or {}),
         # The calendar's "read in full" button: only the calendar runs,
         # window and change tokens ignored once.
         "calendar_full": bool(calendar_full),
@@ -1612,6 +1661,9 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # the status and /api/calendar read it. Spelled relative it landed
         # under the subprocess cwd (BASE) instead of the index folder.
         "calendar_json": str(calendar_file(cfg)),
+        # The inward check's report – next to the settings, not in an
+        # export folder: it speaks about all of them.
+        "archiv_bericht": str(archiv_bericht_pfad()),
         "calendar_file": calendar_file(cfg),
     }
     # Subprocesses (and auth's MSAL cache) find configuration and token via
@@ -2131,9 +2183,21 @@ class App:
         self._calendar_cache = (stamp, roh, gzip.compress(roh, 6))
         return self._calendar_cache[1], self._calendar_cache[2]
 
+    def nachgeholt(self):
+        """Source -> when its last resync or full sync completed (ISO,
+        UTC), from the run history – what the archive check needs to call
+        a file "still missing after a fetch"."""
+        out = {}
+        for key in EXPORT_ORDNER:
+            wann = self.history.last_resync(key)
+            if wann:
+                out[key] = datetime.fromtimestamp(wann, UTC).isoformat(timespec="seconds")
+        return out
+
     def launch(self, anfrage, *, embeddings=None, label="Lauf",
                reconstruct=None, nur_einheit=None, legacy_comments=False,
                sync_now=False, calendar_full=False, full_sync=False,
+               resync=False, archiv=None, nachholen=None, resync_ordner=None,
                origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
@@ -2177,7 +2241,17 @@ class App:
                             nur_einheit=nur_einheit,
                             legacy_comments=legacy_comments,
                             sync_now=sync_now, calendar_full=calendar_full,
-                            full_sync=full_sync)
+                            full_sync=full_sync, resync=resync, archiv=archiv,
+                            nachgeholt=self.nachgeholt(), nachholen=nachholen,
+                            resync_ordner=resync_ordner)
+        # A button of one source – sync now, fetch again, full sync, a
+        # single URL – on a source the settings do not tick: say so, rather
+        # than starting a run that carries nothing but the index step.
+        if sync_now or resync or full_sync or nur_einheit:
+            gebaut = {s["key"] for s in steps}
+            for e in steps_mod.REGISTRY:
+                if e.get("corpus") and angefragt.get(e["anfrage"]) and e["key"] not in gebaut:
+                    return False, {"k": "srv.inactive", "v": {"source": _quellname(e)}}
         if not steps:
             return False, {"k": "srv.nothing", "v": {}}
         for s in steps:
@@ -2216,6 +2290,7 @@ class App:
             "retention_months": int(self.cfg.get("runs_retention_months") or 24),
             "log_retention_days": int(self.cfg.get("log_retention_days") or 14),
             "notify": str(self.cfg.get("notifications") or "errors"),
+            "keep_awake": bool(self.cfg.get("keep_awake", True)),
             "lang": self.ui_lang or i18n.negotiate(self.cfg.get("language"),
                                                    None, RES),
         }
@@ -2382,8 +2457,8 @@ class Handler(BaseHTTPRequestHandler):
                 # The preview/type views need only this one small file –
                 # not the full analytics aggregation behind /api/analytics.
                 return self._json(
-                    {"bericht": state_db.StateDb(
-                        BASE / SHAREPOINT_DIR).bericht_lesen()})
+                    {"bericht": completeness.lesen(
+                        state_db.StateDb(BASE / SHAREPOINT_DIR), "sharepoint")})
             if u.path == "/api/files":
                 return self._json(self._files(one))
             if u.path == "/api/filetypes":
@@ -2464,7 +2539,10 @@ class Handler(BaseHTTPRequestHandler):
                     legacy_comments=bool(data.get("legacy_comments")),
                     sync_now=bool(data.get("sync_now")),
                     calendar_full=bool(data.get("calendar_full")),
-                    full_sync=bool(data.get("full_sync")))
+                    full_sync=bool(data.get("full_sync")),
+                    resync=bool(data.get("resync")),
+                    resync_ordner=(data.get("resync_folders")
+                                   if isinstance(data.get("resync_folders"), list) else None))
                 return self._json({"ok": ok, "message": why}, 200 if ok else 409)
             if u.path == "/api/login":
                 ok, daten = app.login_starten()
@@ -2554,6 +2632,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": True, "name": name})
                 neustart_mit_profil(self.server, name, port)
                 return None
+            if u.path == "/api/bilanz/holen":
+                return self._bilanz_holen(data)
+            if u.path in ("/api/archiv/ordner", "/api/archiv/nachholen",
+                          "/api/archiv/vermerken", "/api/archiv/beiseitelegen",
+                          "/api/archiv/zurueckholen", "/api/archiv/neu-aufbauen"):
+                return self._archiv(u.path.rsplit("/", 1)[1], data)
             if u.path == "/api/profile-rename":
                 if app.jobs.busy:
                     return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
@@ -2602,6 +2686,94 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
 
     # -- Route implementations --------------------------------------------
+    def _bilanz_holen(self, data):
+        """"Fetch now" on a balance row: only what the row found open, the
+        cheapest way each source allows. The mailbox: a resync limited to
+        the folders with something open. The mirrors: the open files by
+        id, straight from the stored report – no walk – unless the report
+        had to cap them, then a resync. Every other source: its regular
+        run, which fetches what changed anyway. The row is judged afresh
+        at the end of the same run (the mirrors adjust it themselves)."""
+        app = self.app
+        quelle = str(data.get("quelle") or "").strip()
+        eintrag = next((e for e in steps_mod.PRUEFUNGEN if e["quelle"] == quelle), None)
+        if eintrag is None:
+            return self._json({"ok": False, "message": {"k": "srv.archiv.unknown", "v": {}}}, 400)
+        if app.jobs.busy:
+            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+        ordner = eintrag["ordner"]
+        bericht = completeness.lesen(state_db.StateDb(BASE / EXPORT_ORDNER[ordner]), quelle) or {}
+        anfrage = {**eintrag["lauf"], "index": True, eintrag["anfrage"]: True}
+        (key,) = [k for k, an in eintrag["lauf"].items() if an]
+        if ordner == "outlook":
+            ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
+                                 resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []])
+        elif ordner in ("onedrive", "sharepoint") and bericht.get("offene") \
+                and not bericht.get("offene_gekappt"):
+            liste = HEIM / f"nachholen-{key}.json"
+            export_util.schreibe_atomar(liste, json.dumps(
+                {"quelle": key, "dateien": bericht["offene"]}, ensure_ascii=False))
+            anfrage.pop(eintrag["anfrage"])          # the fetch adjusts the row itself
+            ok, why = app.launch(anfrage, label='job.holen', sync_now=True,
+                                 nachholen={"quelle": key, "liste": str(liste)})
+        elif ordner in ("onedrive", "sharepoint"):
+            ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True)
+        else:
+            ok, why = app.launch(anfrage, label='job.holen', sync_now=True)
+        return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+
+    def _archiv(self, aktion, data):
+        """The archive check's actions (archive_check.py): one source at a
+        time, explicit, each a run of its own – the run window shows what
+        happens, the run history keeps it, and nothing runs while another
+        run writes into the folders. The step judges the source afresh
+        afterwards and updates its row in the stored report; the rebuild's
+        run carries the source's export and the index behind it. Opening
+        the folder is no process and answers at once."""
+        app = self.app
+        quelle = str(data.get("quelle") or "").strip()
+        unterordner = EXPORT_ORDNER.get(quelle)
+        if unterordner is None or quelle not in archive_check.PRUEFER:
+            return self._json({"ok": False, "message": {"k": "srv.archiv.unknown", "v": {}}}, 400)
+        ordner = BASE / unterordner
+        if aktion == "ordner":
+            ok = archive_check.ordner_oeffnen(ordner if ordner.is_dir() else BASE)
+            return self._json({"ok": ok, "message": None if ok else
+                               {"k": "srv.archiv.open.fail", "v": {}}}, 200 if ok else 500)
+        if aktion not in archive_check.AKTIONEN and aktion != "nachholen":
+            return self._json({"error": "Unbekannter Pfad"}, 404)
+        if app.jobs.busy:
+            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+        if not ordner.is_dir() or (aktion == "neu-aufbauen"
+                                   and not archive_check.beschaedigte(ordner)):
+            return self._json({"ok": True, "message": {"k": "srv.archiv.nothing", "v": {}}})
+        if aktion == "nachholen":
+            # "Fetch again": exactly the files the stored report found
+            # missing or short, written to a list the source's step reads;
+            # the row is judged afresh at the end of the same run.
+            zeile = archive_check.zeile_lesen(archiv_bericht_pfad(), quelle)
+            befunde = (zeile or {}).get("befunde") or {}
+            dateien = list(befunde.get("fehlt") or []) + list(befunde.get("unvollstaendig") or [])
+            if not dateien:
+                return self._json({"ok": True, "message": {"k": "srv.archiv.nothing", "v": {}}})
+            liste = HEIM / f"nachholen-{quelle}.json"
+            export_util.schreibe_atomar(liste, json.dumps(
+                {"quelle": quelle, "dateien": dateien}, ensure_ascii=False))
+            ok, why = app.launch({quelle: True, "index": True, "archiv_pruefen": True},
+                                 label='job.archiv.nachholen', sync_now=True,
+                                 archiv={"quelle": quelle},
+                                 nachholen={"quelle": quelle, "liste": str(liste)})
+            return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+        anfrage = {"archiv_" + aktion.replace("-", "_"): True}
+        if aktion == "neu-aufbauen":
+            anfrage.update({quelle: True, "index": True})
+        arten = [str(a) for a in (data.get("arten") or ["verloren"])
+                 if str(a) in archive_check.ARTEN_VERMERKBAR] or ["verloren"]
+        ok, why = app.launch(anfrage, label='job.archiv.' + aktion,
+                             sync_now=aktion == "neu-aufbauen",
+                             archiv={"quelle": quelle, "arten": arten})
+        return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+
     def _page(self):
         """Serve the interface together with its strings.
 
@@ -2616,8 +2788,11 @@ class Handler(BaseHTTPRequestHandler):
                               ensure_ascii=False).replace("<", "\\u003c")
         schritte = json.dumps(steps_mod.ui_metadaten(),
                               ensure_ascii=False).replace("<", "\\u003c")
+        pruefungen_meta = json.dumps(steps_mod.pruef_metadaten(),
+                                     ensure_ascii=False).replace("<", "\\u003c")
         return (seite().replace("/*__I18N__*/", nutzlast)
-                    .replace("/*__STEPS__*/", schritte))
+                    .replace("/*__STEPS__*/", schritte)
+                    .replace("/*__PRUEFUNGEN__*/", pruefungen_meta))
 
     def _save_token(self, data):
         token = normalize_token(data.get("token"))
@@ -2683,7 +2858,7 @@ class Handler(BaseHTTPRequestHandler):
                         "sharepoint_pages_enabled", "planner_enabled",
                         "planner_attachments", "todo_enabled",
                         "onenote_enabled", "teams_attachments",
-                        "teams_channel_files"):
+                        "teams_channel_files", "keep_awake"):
                 if key in data:
                     cfg[key] = bool(data[key])
             # Whoever switches Ollama off no longer means the check from just now.

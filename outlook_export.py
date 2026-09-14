@@ -53,6 +53,7 @@ import sys
 import re
 import html
 import json
+from collections import Counter
 import time
 import threading
 from calendar import monthrange
@@ -64,6 +65,7 @@ from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 
 import auth
 import export_util
+import completeness
 import folders
 import state_db
 import graph_client
@@ -575,9 +577,11 @@ def delta_runde(graph, db, key, url, params=None, prefer=(), name=""):
     in full.
     """
     token = db.kv_lesen(key)
-    if token and export_util.voll_neu():
-        # "Force full sync": the link goes before the round starts, so a
-        # run cut short lists the collection in full again next time.
+    if token and export_util.abgleich():
+        # "Fetch again" and "Force full sync": the link goes before the
+        # round starts, so a run cut short lists the collection in full
+        # again next time. The resync then skips what the resume log knows
+        # and finds on disk; the full sync writes everything over.
         db.kv_schreiben(key, None)
         token = None
     if token:
@@ -1460,98 +1464,223 @@ def aktuelle_regeln():
 
 
 def nur_pruefen(argv):
-    """--check: only report completeness, export nothing."""
+    """--check: the completeness balance of every ticked category – mail,
+    calendar, contacts – against Microsoft's state of now. Exports
+    nothing, writes nothing but the reports (completeness.py)."""
     out = export_util.ausgabeordner(argv)
     graph = auth.waehle_zugang(TokenClient, graph_login)
-    bericht = pruefe_vollstaendigkeit(
-        graph, out, state_db.StateDb(out).verschwunden_lesen())
-    # No prose: the check UI renders the report file, the result event
-    # carries the counts.
-    state_db.StateDb(out).bericht_schreiben(bericht)
-    progress.ergebnis(0, excluded=bericht["ausgelassen"],
-                      extra={"expected": bericht["erwartet"],
-                             "present": bericht["vorhanden"],
-                             "missing": bericht["fehlt"]})
-
-
-# ---------------------------------------------------------------------------
-# Completeness: what Graph counts against what lies on disk
-#
-# Graph delivers totalItemCount with the folder list anyway – so the
-# comparison costs nothing extra. Alone it would only be an indicator:
-# deleted mails create a difference that is no gap. Only together with the
-# tombstones does it become a balance sheet in which every number is
-# explained.
-# ---------------------------------------------------------------------------
-
-
-def zaehle_dateien(ordner):
+    db = state_db.StateDb(out)
+    done = DoneLog(db)
+    kategorien = selected_categories()
+    berichte = []
     try:
-        return sum(1 for p in Path(ordner).glob("*.eml") if p.is_file())
+        if "mail" in kategorien:
+            berichte.append(pruefe_mails(graph, out, done, db.verschwunden_lesen()))
+        if "calendar" in kategorien:
+            berichte.append(pruefe_kalender(graph, out, done, db))
+        if "contacts" in kategorien:
+            berichte.append(pruefe_kontakte(graph, out, done, db))
+    finally:
+        done.close()
+    for b in berichte:
+        completeness.schreiben(db, b)
+    completeness.melden(*berichte)
+
+
+# ---------------------------------------------------------------------------
+# Completeness: what Graph has against what the export knows it fetched
+#
+# The mail check costs one folder listing – Graph hands out totalItemCount
+# with the folders anyway. "Here" is the resume log, not a count of files:
+# a stray file is not an exported mail. Tombstoned mails still lie here
+# and are not a gap; nor is a folder the rules leave out, nor a mail from
+# before the start day – those are counted as deliberately excluded, the
+# start day only in folders where a gap would otherwise remain (one count
+# request each).
+# ---------------------------------------------------------------------------
+
+
+def _ordner_von(rel):
+    return rel.rsplit("/", 1)[0] if "/" in rel else ""
+
+
+def _vor_stichtag(graph, folder, seit):
+    """How many mails of the folder Graph dates before the start day – one
+    count request; an answer it refuses counts as none."""
+    try:
+        daten = graph.get(f"{GRAPH}/me/mailFolders/{folder['id']}/messages",
+                          {"$filter": f"receivedDateTime lt {seit}T00:00:00Z",
+                           "$count": "true", "$top": 1})
+        return int(daten.get("@odata.count") or 0)
+    except TokenExpired:
+        raise
+    except Exception:
+        return 0
+
+
+def _alt_auf_platte(out, rel_path, seit):
+    """Mails from before the start day that already lie here – their file
+    name starts with the received date."""
+    try:
+        return sum(1 for p in (Path(out) / rel_path).glob("*.eml")
+                   if p.name[:10] < seit)
     except OSError:
         return 0
 
 
-def _is_default_skip(top):
-    """Is the top-level folder one of the default exclusions (archive, junk …)?"""
-    name = (top["folder"].get("displayName") or "").strip().lower()
-    return name in DEFAULT_SKIP_FOLDERS
-
-
-def pruefe_vollstaendigkeit(graph, out, weg=None):
-    """Per mailbox folder: expected, present, deleted, difference.
-
-    `weg` holds the paths recorded as vanished – they explain why less lies
-    on disk than Graph counts.
-    """
+def pruefe_mails(graph, out, done, weg=None):
+    """The mail balance, per folder the rules take."""
     weg = weg or {}
-    weg_je_ordner = {}
+    regeln = aktuelle_regeln()
+    seit = outlook_since()
+    da_je, weg_je = Counter(), Counter()
+    for rel in done.done.values():
+        if (Path(out) / rel).exists():
+            da_je[_ordner_von(rel)] += 1
     for rel in weg:
-        ordner = rel.rsplit("/", 1)[0] if "/" in rel else ""
-        weg_je_ordner[ordner] = weg_je_ordner.get(ordner, 0) + 1
-
+        weg_je[_ordner_von(rel)] += 1
+    da = offen = ausgeschlossen = 0
     zeilen = []
     for top in build_tree(graph):
-        # Folders the selection leaves out (archive, deleted items, junk …)
-        # are not incomplete – they are intentionally empty. Reporting them
-        # as a gap was, on the first real run, a false alarm over almost
-        # 20,000 mails, and a report that shows nonsense the first time is
-        # never opened again.
-        ausgelassen = _is_default_skip(top)
         for folder, rel_path in top["subtree"]:
             erwartet = folder.get("totalItemCount")
             if erwartet is None:
                 continue
-            da = zaehle_dateien(out / rel_path)
-            geloescht = weg_je_ordner.get(rel_path, 0)
-            zeilen.append({
-                "ordner": rel_path,
-                "erwartet": int(erwartet),
-                "vorhanden": da,
-                "geloescht": geloescht,
-                "ausgelassen": ausgelassen,
-                # Positive means: something is missing. Deleted items do not
-                # count as a gap – they still lie in the archive, just no
-                # longer in the mailbox.
-                "fehlt": 0 if ausgelassen else max(0, int(erwartet) - (da - geloescht)),
-            })
-    zeilen.sort(key=lambda z: (-z["fehlt"], z["ordner"]))
-    gezaehlt = [z for z in zeilen if not z["ausgelassen"]]
-    return {
-        "geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
-        "ordner": zeilen,
-        "erwartet": sum(z["erwartet"] for z in gezaehlt),
-        "vorhanden": sum(z["vorhanden"] for z in gezaehlt),
-        "geloescht": sum(z["geloescht"] for z in gezaehlt),
-        "fehlt": sum(z["fehlt"] for z in gezaehlt),
-        # What the selection deliberately leaves out – as a number, not a gap.
-        "ausgelassen": sum(z["erwartet"] for z in zeilen if z["ausgelassen"]),
-        "ausgelassene_ordner": sorted({z["ordner"].split("/")[1]
-                                       for z in zeilen if z["ausgelassen"]
-                                       and "/" in z["ordner"]}),
-    }
+            erwartet = int(erwartet)
+            if not folders.gilt(rel_path, regeln):
+                ausgeschlossen += erwartet
+                continue
+            # Tombstoned mails still lie here; what counts against the
+            # folder's items is the rest.
+            lebend = max(0, da_je[rel_path] - weg_je[rel_path])
+            if seit and erwartet > lebend:
+                alt = _vor_stichtag(graph, folder, seit) - _alt_auf_platte(out, rel_path, seit)
+                alt = max(0, min(erwartet - lebend, alt))
+                ausgeschlossen += alt
+                erwartet -= alt
+            z_da = min(lebend, erwartet)
+            zeilen.append(completeness.zeile(rel_path, z_da, erwartet - z_da))
+            da += z_da
+            offen += erwartet - z_da
+    return completeness.bilanz("outlook_mail", "mails", da=da, offen=offen,
+                               ausgeschlossen=ausgeschlossen, behalten=len(weg),
+                               zeilen=zeilen)
 
 
+def _aktuell(out, done, stempel, key, lm):
+    """Exported, and the stored change stamp matches – or, for an archive
+    from before change tracking, no stamp at all to contradict it."""
+    if not done.is_done(out, key):
+        return False
+    alt = stempel.bekannt(key)
+    return alt is None or alt == (lm or "")
+
+
+def pruefe_kalender(graph, out, done, db):
+    """The calendar balance: the events of the window per chosen calendar,
+    a series counted once by its master. Excluded are whole calendars."""
+    cals = waehle_kalender(graph, out)
+    alle = len((folders.lade(out, folders.KALENDER) or {}).get("ordner", []))
+    stempel = Stempel(db, "events")
+    von, bis = kalender_fenster(calendar_months_back())
+    params = {"startDateTime": _graph_zeit(von) if von else EPOCH,
+              "endDateTime": _graph_zeit(bis),
+              "$select": "id,seriesMasterId,type,lastModifiedDateTime",
+              "$top": 100}
+    gesehen = set()
+    da = offen = 0
+    zeilen, fehler = [], []
+    for cal in cals:
+        cname = safe(cal.get("name") or "Kalender")
+        pfad = f"kalender/{cname}"
+        url = (f"{GRAPH}/me/calendars/{cal['id']}/calendarView" if cal.get("id")
+               else f"{GRAPH}/me/calendarView")
+        try:
+            eintraege = list(graph.paged(url, params, {"Prefer": UTC_PREF}))
+        except TokenExpired:
+            raise
+        except Exception:
+            fehler.append(completeness.fehler(pfad, "run.folder_incomplete"))
+            continue
+        familien = {}
+        z_da = z_offen = 0
+        for ev in eintraege:
+            master = ev.get("seriesMasterId")
+            lm = ev.get("lastModifiedDateTime") or ""
+            if master and ev.get("type") in ("occurrence", "exception"):
+                if lm > familien.get(master, ""):
+                    familien[master] = lm
+                continue
+            key = ev.get("id")
+            if not key:
+                continue
+            gesehen.add(key)
+            if _aktuell(out, done, stempel, key, lm):
+                z_da += 1
+            else:
+                z_offen += 1
+        for master, lm in familien.items():
+            gesehen.add(master)
+            if _aktuell(out, done, stempel, master, lm):
+                z_da += 1
+            else:
+                z_offen += 1
+        zeilen.append(completeness.zeile(pfad, z_da, z_offen))
+        da += z_da
+        offen += z_offen
+    behalten = sum(1 for key in stempel.alt
+                   if key not in gesehen and done.is_done(out, key))
+    return completeness.bilanz("outlook_calendar", "events", da=da, offen=offen,
+                               ausgeschlossen=max(0, alle - len(cals)),
+                               ausgeschlossen_einheit="calendars",
+                               behalten=behalten, zeilen=zeilen, fehler=fehler)
+
+
+def pruefe_kontakte(graph, out, done, db):
+    """The contact balance: the default folder and every contact folder.
+    Nothing is excluded – there is no filter."""
+    stempel = Stempel(db, "contacts")
+    quellen = [("kontakte", f"{GRAPH}/me/contacts")]
+    fehler = []
+    try:
+        ordner = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
+    except TokenExpired:
+        raise
+    except Exception:
+        fehler.append(completeness.fehler("kontakte", "run.unreadable"))
+        ordner = []
+    for f in ordner:
+        quellen.append((f"kontakte/{safe(f.get('displayName') or 'Ordner')}",
+                        f"{GRAPH}/me/contactFolders/{f['id']}/contacts"))
+    gesehen = set()
+    da = offen = 0
+    zeilen = []
+    for pfad, url in quellen:
+        try:
+            eintraege = list(graph.paged(url, {"$top": PAGE,
+                                               "$select": "id,lastModifiedDateTime"}))
+        except TokenExpired:
+            raise
+        except Exception:
+            fehler.append(completeness.fehler(pfad, "run.unreadable"))
+            continue
+        z_da = z_offen = 0
+        for c in eintraege:
+            key = c.get("id")
+            if not key:
+                continue
+            gesehen.add(key)
+            if _aktuell(out, done, stempel, key, c.get("lastModifiedDateTime")):
+                z_da += 1
+            else:
+                z_offen += 1
+        zeilen.append(completeness.zeile(pfad, z_da, z_offen))
+        da += z_da
+        offen += z_offen
+    behalten = sum(1 for key in stempel.alt
+                   if key not in gesehen and done.is_done(out, key))
+    return completeness.bilanz("outlook_contacts", "contacts", da=da, offen=offen,
+                               behalten=behalten, zeilen=zeilen, fehler=fehler)
 
 
 def kategorie_faellig(db, kategorie):
@@ -1602,6 +1731,60 @@ def faellige_ordner(db, auswahl):
     return faellig, ausgelassen
 
 
+def nachholen(graph, out, done, rels):
+    """"Fetch again": exactly the files the archive check found missing,
+    each by the id the resume log keeps – mails as MIME, events and
+    contacts rendered anew – written to the path the log knows, so the
+    bookkeeping and the disk agree again. Nothing is listed. A 404 says
+    the item is gone at Microsoft: the entry stays, the log says so, and
+    the check's row calls it a card to note. Returns the run's outcome."""
+    kennung = {rel: key for key, rel in done.done.items()}
+    progress.event("run.nachholen.start", n=len(rels))
+    db = state_db.StateDb(out)
+    stempel = {"events": Stempel(db, "events"), "contacts": Stempel(db, "contacts")}
+    stats = {"new": 0, "updated": 0, "skipped": 0}
+    geholt = weg = fehler = unbekannt = 0
+    for rel in rels:
+        key = kennung.get(rel)
+        if not key:
+            unbekannt += 1
+            continue
+        try:
+            (out / rel).parent.mkdir(parents=True, exist_ok=True)
+            if rel.endswith(".ics"):
+                ev = graph.get(f"{GRAPH}/me/events/{key}?$select={EVENT_SELECT}",
+                               extra_headers={"Prefer": UTC_PREF})
+                teile = rel.split("/")
+                cname = teile[1] if len(teile) >= 3 else "Kalender"
+                if schreibe_termin(out, done, stats, stempel["events"], cname, ev,
+                                   ev.get("lastModifiedDateTime") or ""):
+                    fehler += 1
+                    continue
+            elif rel.endswith(".vcf"):
+                c = graph.get(f"{GRAPH}/me/contacts/{key}")
+                (out / rel).write_text(build_vcf(c), encoding="utf-8")
+                done.mark(key, rel)
+                stempel["contacts"].merke(key, c.get("lastModifiedDateTime") or "")
+            else:
+                content, _ = graph.get_bytes(f"{GRAPH}/me/messages/{key}/$value",
+                                             label=" (MIME)")
+                (out / rel).write_bytes(content)
+                done.mark(key, rel)
+            geholt += 1
+        except TokenExpired:
+            raise
+        except Exception as e:
+            if export_util.http_status(e) == 404:
+                weg += 1
+                progress.event("run.nachholen.gone", "warn", name=rel)
+            else:
+                fehler += 1
+                progress.event("run.nachholen.failed", "warn", name=rel,
+                               error=f"{type(e).__name__}: {e}")
+    export_util.nachholen_melden(geholt, weg, fehler, unbekannt)
+    return "done"
+
+
 def exportiere(graph, out, done, stats, workers):
     """The regular run: mail, calendar, contacts – each behind its cadence
     gate, each marking its last clean run. Returns the run's outcome."""
@@ -1609,11 +1792,32 @@ def exportiere(graph, out, done, stats, workers):
     categories = selected_categories()
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     selected_mail, ausgelassen, sel_cals = [], [], []
+    # "Fetch now" from the balance names the folders with something open:
+    # the resync then lists those alone – a calendar or the contacts only
+    # when a row of theirs is open – and leaves the rest as it is.
+    nur = export_util.abgleich_ordner() if export_util.abgleich() else None
+    if nur is not None:
+        progress.event("run.resync.folders", n=len(nur))
+        nur_mail = {p for p in nur if p.startswith(f"{MAIL_DIR}/")}
+        nur_kal = {p[len("kalender/"):] for p in nur if p.startswith("kalender/")}
+        nur_kon = any(p.startswith("kontakte") for p in nur)
+        categories = set(categories) - {k for k, da in
+                                        (("mail", nur_mail), ("calendar", nur_kal),
+                                         ("contacts", nur_kon)) if not da}
     if "mail" in categories:
-        selected_mail, ausgelassen = faellige_ordner(db_root, waehle_ordner(graph, out))
+        auswahl = waehle_ordner(graph, out)
+        if nur is not None:
+            auswahl = [{**top, "subtree": [(f, rel) for f, rel in top["subtree"] if rel in nur_mail]}
+                       for top in auswahl]
+            auswahl = [top for top in auswahl if top["subtree"]]
+        selected_mail, ausgelassen = faellige_ordner(db_root, auswahl)
     if "calendar" in categories and kategorie_faellig(db_root, "calendar"):
         sel_cals = waehle_kalender(graph, out)
+        if nur is not None:
+            sel_cals = [c for c in sel_cals if safe(c.get("name") or "Kalender") in nur_kal]
     want_con = "contacts" in categories and kategorie_faellig(db_root, "contacts")
 
     result = "done"
@@ -1675,8 +1879,10 @@ def main():
     stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
 
+    nachzuholen = export_util.nachhol_liste()
     try:
-        result = exportiere(graph, out, done, stats, workers)
+        result = (nachholen(graph, out, done, nachzuholen) if nachzuholen is not None
+                  else exportiere(graph, out, done, stats, workers))
     except TokenExpired:
         result = "expired"
     except (requests.exceptions.RequestException, RuntimeError) as e:

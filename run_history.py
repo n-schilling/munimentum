@@ -213,6 +213,25 @@ class RunHistory:
         except (sqlite3.Error, OSError):
             return None
 
+    def last_resync(self, key):
+        """When the step last finished successfully inside a resync, a
+        targeted fetch or a full sync – the runs "Fetch now", "Fetch
+        again" and "Force full sync" start. The archive check asks this: a
+        file still missing after such a run is not coming back on its own."""
+        try:
+            con = self._connect()
+            try:
+                row = con.execute(
+                    "SELECT MAX(s.started_at) FROM steps s JOIN runs r ON r.id = s.run_id"
+                    " WHERE s.key = ? AND s.ok = 1 AND r.job_type IN"
+                    " ('job.resync', 'job.full', 'job.archiv.nachholen', 'job.holen')",
+                    (str(key),)).fetchone()
+                return row[0] if row and row[0] is not None else None
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError):
+            return None
+
     # -- housekeeping ------------------------------------------------------
     def prune(self, months):
         """Drop runs older than the retention window, steps included."""

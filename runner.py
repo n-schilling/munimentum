@@ -17,6 +17,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
+import awake
 import i18n
 import notify
 import progress
@@ -164,6 +165,38 @@ class JobRunner:
         elemente = self._context.get("elements") or {}
         if any(elemente.values()):
             self.logk("srv.job.elements", "info", elements=elemente)
+        # "Keep awake": the machine must not doze off halfway through. Taken
+        # and released on this thread (Windows binds the request to it),
+        # released in the finally so a crashed step lets go as well.
+        wach = awake.Wachhalter() if self._context.get("keep_awake") else None
+        if wach is not None:
+            self.logk("srv.awake.on" if wach.an() else "srv.awake.fail",
+                      "info" if wach.aktiv else "warn")
+        try:
+            ok, detail = self._schritte(steps, hist, run_id)
+        finally:
+            if wach is not None:
+                wach.aus()
+        if ok:
+            self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
+        art = ("done" if ok else "aborted" if self.cancelled
+               else "token_expired" if self.token_expired else "error")
+        self._run_id = None
+        self._log_flush()          # the rest of the run, before anyone reads
+        if hist:
+            hist.finish_run(run_id, art)
+            monate = self._context.get("retention_months")
+            if monate:
+                hist.prune(monate)
+            hist.prune_log(self._context.get("log_retention_days") or 14)
+        self._notify_user(art, label)
+        self.last = {"label": label, "ok": ok, "detail": detail,
+                     "finished": datetime.now().isoformat(timespec="seconds")}
+        self.job = None
+        self.proc = None
+
+    def _schritte(self, steps, hist, run_id):
+        """The steps, one after the other. Returns (ok, detail)."""
         ok = True
         detail = ""
         for i, step in enumerate(steps):
@@ -209,23 +242,7 @@ class JobRunner:
                 self.logk("srv.job.stepfail", "err", detail=detail)
                 break
             self.logk("srv.job.stepdone", "ok", step={"k": step["label"], "v": {}})
-        if ok:
-            self.logk("srv.job.done", "ok", label={"k": label, "v": {}})
-        art = ("done" if ok else "aborted" if self.cancelled
-               else "token_expired" if self.token_expired else "error")
-        self._run_id = None
-        self._log_flush()          # the rest of the run, before anyone reads
-        if hist:
-            hist.finish_run(run_id, art)
-            monate = self._context.get("retention_months")
-            if monate:
-                hist.prune(monate)
-            hist.prune_log(self._context.get("log_retention_days") or 14)
-        self._notify_user(art, label)
-        self.last = {"label": label, "ok": ok, "detail": detail,
-                     "finished": datetime.now().isoformat(timespec="seconds")}
-        self.job = None
-        self.proc = None
+        return ok, detail
 
     def _notify_user(self, art, label):
         """One system notification per run – or none: the mode decides.

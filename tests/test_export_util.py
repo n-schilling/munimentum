@@ -73,3 +73,44 @@ def test_voll_neu_liest_full_sync(monkeypatch):
     assert not export_util.sync_jetzt()
     monkeypatch.setenv("FULL_SYNC", "1")
     assert export_util.sync_jetzt()
+
+
+def test_abgleich_liest_resync_und_ein_vollsync_zaehlt_als_einer(monkeypatch):
+    """"Fetch now" / "Fetch again": the pointers go, the versions stay.
+    A full sync forgets the pointers too, so it counts as a resync; every
+    cadence gate steps aside for both."""
+    for name in ("RESYNC", "FULL_SYNC", "SYNC_NOW"):
+        monkeypatch.delenv(name, raising=False)
+    assert not export_util.abgleich() and not export_util.sync_jetzt()
+    monkeypatch.setenv("RESYNC", "1")
+    assert export_util.abgleich() and export_util.sync_jetzt()
+    assert not export_util.voll_neu(), "a resync writes nothing current over"
+    monkeypatch.setenv("RESYNC", " ")
+    assert not export_util.abgleich()
+    monkeypatch.setenv("FULL_SYNC", "1")
+    assert export_util.abgleich()
+
+
+def test_nachhol_liste_liest_die_datei_des_abgleichs(tmp_path, monkeypatch):
+    """"Fetch again": the list of files travels as a JSON file named in
+    FETCH_LIST – None on a regular run, empty when unreadable."""
+    monkeypatch.delenv("FETCH_LIST", raising=False)
+    assert export_util.nachhol_liste() is None
+    liste = tmp_path / "nachholen-outlook.json"
+    liste.write_text('{"quelle": "outlook", "dateien": ["E-Mail/a.eml", 7, "E-Mail/b.eml"]}',
+                     encoding="utf-8")
+    monkeypatch.setenv("FETCH_LIST", str(liste))
+    assert export_util.nachhol_liste() == ["E-Mail/a.eml", "E-Mail/b.eml"]
+    liste.write_text("kaputt", encoding="utf-8")
+    assert export_util.nachhol_liste() == []
+    monkeypatch.setenv("FETCH_LIST", str(tmp_path / "fehlt.json"))
+    assert export_util.nachhol_liste() == []
+
+
+def test_abgleich_ordner_liest_die_ordnerliste(monkeypatch):
+    monkeypatch.delenv("RESYNC_FOLDERS", raising=False)
+    assert export_util.abgleich_ordner() is None
+    monkeypatch.setenv("RESYNC_FOLDERS", '["E-Mail/Posteingang", 3, "kalender/Arbeit"]')
+    assert export_util.abgleich_ordner() == ["E-Mail/Posteingang", "kalender/Arbeit"]
+    monkeypatch.setenv("RESYNC_FOLDERS", "kaputt")
+    assert export_util.abgleich_ordner() is None

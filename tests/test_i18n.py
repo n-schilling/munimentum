@@ -199,7 +199,7 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py",
-           "todo_export.py", "onenote_export.py")
+           "todo_export.py", "onenote_export.py", "archive_check.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
@@ -208,7 +208,8 @@ DYNAMISCH = (
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks",
-                        "pages", "notebooks")),
+                        "pages", "notebooks", "events", "contacts",
+                        "conversations", "lists", "calendars")),
     # The placeholder in the search field changes with the search type.
     ("search.ph.", ("text", "aehnlich", "ki")),
     # The four Teams kinds are named in the index after their storage
@@ -234,6 +235,14 @@ DYNAMISCH = (
     ("kadenz.filter.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
     ("ana.runs.result.", ("done", "error", "aborted", "token_expired",
                           "running")),
+    # The archive check's actions are steps whose keys steps.py composes
+    # from the action name (_archiv_eintrag), the run's label app.py.
+    ("job.archiv.", ("vermerken", "beiseitelegen", "zurueckholen", "neu-aufbauen",
+                     "nachholen")),
+    ("job.step.archiv.", ("vermerken", "beiseitelegen", "zurueckholen", "neu-aufbauen",
+                          "pruefen")),
+    ("job.start.archiv.", ("vermerken", "beiseitelegen", "zurueckholen", "neu-aufbauen",
+                           "pruefen")),
 )
 
 

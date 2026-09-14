@@ -13,6 +13,7 @@ import pytest
 
 import app as app_mod
 import graph_client
+import awake
 import notify
 
 # The project folder is the app folder of a source run – and so it holds
@@ -21,7 +22,7 @@ import notify
 # a profile of its own.
 PROJEKT = Path(__file__).resolve().parents[1]
 ARCHIV_NAMEN = ("app_config.json", "gx_token.txt", "msal_cache.bin", "runs.db",
-                "data", "rag_store", "profiles.json")
+                "data", "rag_store", "profiles.json", "archivpruefung.json")
 
 
 def _projekt_stand():
@@ -33,6 +34,16 @@ def _projekt_stand():
 @pytest.fixture(autouse=True)
 def _no_system_notifications(monkeypatch):
     monkeypatch.setattr(notify, "send", lambda *a, **kw: None)
+
+
+@pytest.fixture(autouse=True)
+def _kein_wachhalten(monkeypatch):
+    """Every launched run would hold the developer's machine off idle sleep
+    (caffeinate, a power request): the guard says yes and touches nothing.
+    test_awake.py puts the real methods back for its own cases."""
+    monkeypatch.setattr(awake.Wachhalter, "an", lambda self: True)
+    monkeypatch.setattr(awake.Wachhalter, "aktiv", property(lambda self: True))
+    monkeypatch.setattr(awake.Wachhalter, "aus", lambda self: None)
 
 
 @pytest.fixture(autouse=True)

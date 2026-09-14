@@ -1,19 +1,62 @@
-## New in 10.1.0
+## New in 10.2.0
 
-**Force full sync.** Change tracking has one blind spot: a setting that
-only applies when a unit is touched — *Download shared files* for Teams,
-the channel folders, Planner references — does not reach conversations or
-boards that have not moved since. Every source's settings now carry
-*Force full sync* under *Advanced*: the source forgets its stored change
-pointers and is read again as on its first export, everything fetched and
-written over, attachments and files included, cadences stepping aside.
-Nothing in the archive is deleted — what Microsoft no longer has stays,
-tombstone and all. It costs what a first export costs, so the button asks
-once, and the log says in one line that the run reads everything.
+**The completeness balance.** *Check now* in Insights asks one
+question per source in use: would a run with today's settings fetch
+anything now that is not here yet? Each row answers in plain words with
+four numbers — here, not fetched yet, deliberately excluded, deleted at
+Microsoft but kept — and now covers every source: mail, calendar, contacts,
+Teams, OneDrive, SharePoint libraries and pages, Planner, To Do, OneNote.
+Excluded is what your own rules, filters and start days leave out, counted
+and never named; a file waiting for its folder cadence waits rather than
+counting as missing; Teams is judged by conversations. A row with
+something open offers *Fetch now*, which fetches only what the row found
+open: the mailbox reads just the folders with something open, OneDrive
+and SharePoint fetch the open files by id without walking the library
+again, every other source runs its regular run – then the index, and the
+row is checked again in the same run. OneNote says "not checked" when
+its hourly budget is spent instead of inventing a gap.
+
+**Archive and bookkeeping.** A second card in Insights looks inward:
+*Check archive* holds each export's own bookkeeping against the files on
+disk without asking Microsoft — files the bookkeeping knows that are not
+there (*Fetch again* brings them back), files here that nothing knows
+(they stay), mirrored files shorter than recorded, files a tombstone lists
+as kept that are gone — and the index against the archive: how many files
+changed, arrived or vanished since it last read them, with *Index only*
+one click away. Each kind of finding has one explicit action: *Findings…*
+lists the files, *Fetch again* fetches exactly the missing files through
+the source's own bookkeeping – a mail by its id, a file by its drive
+item, a Teams page by its conversation – whether or not the source is
+ticked, and ends by judging the row afresh; *Note as lost*
+records a tombstone whose file is gone – and settles files still missing
+after a fetch, which the row then calls by that name – *Set aside* moves
+files no bookkeeping knows into a `_fremd/` folder and *Put back*
+reverses it, *Rebuild bookkeeping* sets a damaged `state.db` aside and
+lets the next run fill a fresh one. Nothing deletes; what moves comes
+back. Every action, every check and every fetch is a run: the run window
+opens with it and its log says what happened.
+
+**Keep awake during a run.** A new switch under *Settings › App*, on by
+default, holds the machine off idle sleep while a run is on — macOS
+`caffeinate`, a Windows power request, `systemd-inhibit` on Linux — so a
+laptop no longer dozes off halfway through an export. The lid still
+sleeps.
+
+**Insights.** *Overview* is now *Insights*, with a side navigation like
+the settings' – one entry per card – and a dot on the two checks that
+says at a glance whether something is open or found.
+
+**Smaller.** The header stays at the top while the page scrolls. *Force
+full sync* has an (i) per source that says what its full read takes
+along. *Sync now*, *Force full sync*, *Read the calendar in full* and
+*Read legacy comments again* now index what they fetched, and every
+one of them opens the run window. *Sync now*, *Force full sync* and the
+balance's *Fetch now* on a source that is not ticked in the settings say
+so instead of running nothing.
 
 ## Upgrading
 
-**From 10.0:** nothing to do.
+**From 10.1 or 10.0:** nothing to do.
 
 **From 9.x:** the first start moves your archive from the app folder into
 `profiles/standard/` — a rename on the same disk, instant whatever the

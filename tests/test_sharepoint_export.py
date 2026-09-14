@@ -229,31 +229,60 @@ def test_je_drive_setzt_die_drive_basis(tmp_path):
         assert g.drive_base.endswith("/drives/d7")
 
 
-def test_preview_schreibt_gesamtbericht_mit_bytes(tmp_path, monkeypatch, capsys):
+def _bibliothek(da, offen, ausgeschlossen=0, behalten=0, wartend=0, mb=0, mb_aus=0):
+    import completeness
+    return completeness.bilanz("sharepoint", "files", da=da, offen=offen,
+                               ausgeschlossen=ausgeschlossen, behalten=behalten,
+                               wartend=wartend,
+                               extra={"bytes": mb * 1048576,
+                                      "bytes_ausgeschlossen": mb_aus * 1048576,
+                                      "typen": [{"ext": "pdf", "n": da + offen,
+                                                 "bytes": mb * 1048576}]})
+
+
+def test_preview_schreibt_eine_bilanz_ueber_alle_bibliotheken(tmp_path, monkeypatch, capsys):
+    """One report at the root, one row per "site/library" with something
+    open, the bytes and types merged for the size preview."""
+    import completeness
     drives = [{"id": "d1", "site": "S", "name": "A"},
               {"id": "d2", "site": "S", "name": "B"}]
-
-    berichte = iter([
-        {"erwartet": 10, "vorhanden": 4, "geloescht": 0, "fehlt": 6,
-         "ausgelassen": 2, "bytes": 3 * 1048576, "bytes_ausgelassen": 1048576},
-        {"erwartet": 5, "vorhanden": 5, "geloescht": 1, "fehlt": 0,
-         "ausgelassen": 0, "bytes": 1048576, "bytes_ausgelassen": 0}])
+    berichte = iter([_bibliothek(4, 6, ausgeschlossen=2, mb=3, mb_aus=1),
+                     _bibliothek(5, 0, behalten=1, mb=1)])
     monkeypatch.setattr(sp.drive_mirror, "nur_pruefen",
-                        lambda graph, out, wahl, still=False, sammler=None,
-                        zustand=None: next(berichte))
+                        lambda graph, out, wahl, still=False, zustand=None,
+                        quelle="onedrive": next(berichte))
 
     class G:
         pass
 
     bericht = sp.nur_pruefen(G(), tmp_path, drives)
-    assert bericht["erwartet"] == 15 and bericht["fehlt"] == 6
-    assert bericht["bytes"] == 4 * 1048576
-    gespeichert = sp.state_db.StateDb(tmp_path).bericht_lesen()
-    assert {z["ordner"] for z in gespeichert["ordner"]} == {"S/A", "S/B"}
+    assert (bericht["da"], bericht["offen"], bericht["ausgeschlossen"], bericht["behalten"]) == (9, 6, 2, 1)
+    assert bericht["bytes"] == 4 * 1048576 and bericht["bytes_ausgeschlossen"] == 1048576
+    assert bericht["typen"] == [{"ext": "pdf", "n": 15, "bytes": 4 * 1048576}]
+    gespeichert = completeness.lesen(sp.state_db.StateDb(tmp_path), "sharepoint")
+    assert [(z["pfad"], z["offen"]) for z in gespeichert["zeilen"]] == [("S/A", 6)]
     events = _events(capsys)
     vorschau = [e for e in events if e["k"] == "run.sharepoint.preview"]
-    assert len(vorschau) == 2 and vorschau[0]["v"]["mb"] == 3
+    assert len(vorschau) == 2 and vorschau[0]["v"] == {"site": "S", "name": "A", "n": 10, "mb": 3, "skipped": 2}
 
+
+def test_preview_nennt_eine_bibliothek_die_nicht_antwortet(tmp_path, monkeypatch, capsys):
+    drives = [{"id": "d1", "site": "S", "name": "A"},
+              {"id": "d2", "site": "S", "name": "B"}]
+
+    def wackelig(graph, out, wahl, still=False, zustand=None, quelle="onedrive"):
+        if str(out).endswith("B"):
+            raise RuntimeError("HTTP 503")
+        return _bibliothek(3, 0)
+    monkeypatch.setattr(sp.drive_mirror, "nur_pruefen", wackelig)
+
+    class G:
+        pass
+
+    bericht = sp.nur_pruefen(G(), tmp_path, drives)
+    assert bericht["stand"] == "teilweise" and bericht["da"] == 3
+    assert bericht["fehler"] == [{"pfad": "S/B", "grund": "run.sharepoint.library_failed"}]
+    assert any(e["k"] == "run.sharepoint.library_failed" for e in _events(capsys))
 
 
 # ---------------------------------------------------------------------------
@@ -442,13 +471,15 @@ def test_seiten_pruefen_zaehlt_je_site(tmp_path, capsys):
                      "eTag": "e2"})
     capsys.readouterr()
     b = sp.seiten_pruefen(g, tmp_path, sites)
-    assert b["erwartet"] == 2 and b["vorhanden"] == 1 and b["fehlt"] == 1
-    assert b["ordner"][0]["ordner"] == "Team X"
-    assert sp.state_db.StateDb(tmp_path).bericht_lesen()["erwartet"] == 2
+    assert (b["quelle"], b["einheit"]) == ("sharepoint_pages", "pages")
+    assert (b["da"], b["offen"]) == (1, 1)
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Team X", 1)]
+    import completeness
+    assert completeness.lesen(sp.state_db.StateDb(tmp_path), "sharepoint_pages")["da"] == 1
     e = progress.lies_ergebnis(
         [z for z in capsys.readouterr().out.splitlines()
          if progress.lies_ergebnis(z)][0])
-    assert e["extra"] == {"expected": 2, "present": 1, "missing": 1}
+    assert e["extra"] == {"present": 1, "open": 1, "kept": 0}
 
 
 def test_seiten_lauf_grabstein_nur_bei_sauberer_site(tmp_path, capsys):
@@ -528,8 +559,8 @@ def test_vorschau_und_liste_kennen_die_regeln(tmp_path, monkeypatch):
         {"id": "b", "name": "plan.pdf", "file": {}, "size": 7, "cTag": "c",
          "parentReference": {"path": "/drive/root:/Aktuell"}}]
     b = drive_mirror.pruefe_vollstaendigkeit(eintraege, tmp_path, wahl)
-    assert b["erwartet"] == 1 and b["ausgelassen"] == 1
-    assert b["ausgelassene_ordner"] == ["Dateien/Archiv"]
+    assert b["da"] + b["offen"] == 1 and b["ausgeschlossen"] == 1
+    assert "ausgelassene_ordner" not in b
     assert sp.drive_praefix(drive) == "Nordwind/Dokumente"
     assert sp.drive_praefix({"site": "A: B?", "name": "Docs"}) == "A_ B_/Docs"
     assert sp.drive_ziel(tmp_path, drive) == tmp_path / "Nordwind" / "Dokumente"
@@ -798,8 +829,8 @@ def test_seiten_lauf_zieht_umbenannte_seite_um(tmp_path):
     assert sp.state_db.StateDb(tmp_path).verschwunden_lesen() == {}
 
 
-def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
-    """A tombstone under a subsite belongs to the deepest row only."""
+def test_seiten_pruefen_zaehlt_grabsteine_als_behalten(tmp_path, capsys):
+    """A page gone at Microsoft is kept here – a number, not a gap."""
     g = _SeitenGraph()
     g.seiten = []
     sites = [{"id": "s1", "pfad": ["A"], "host": "h"},
@@ -807,9 +838,7 @@ def test_seiten_pruefen_zaehlt_grabstein_genau_einmal(tmp_path, capsys):
     sp.state_db.StateDb(tmp_path).verschwunden_ergaenzen(
         ["A/Sub/page.html"], "2026-08-01T00:00:00+00:00")
     b = sp.seiten_pruefen(g, tmp_path, sites)
-    assert b["geloescht"] == 1
-    je = {z["ordner"]: z["geloescht"] for z in b["ordner"]}
-    assert je == {"A": 0, "A/Sub": 1}
+    assert b["behalten"] == 1 and b["offen"] == 0 and b["zeilen"] == []
 
 
 def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
@@ -1143,3 +1172,62 @@ def test_full_sync_sagt_es_auch_fuer_bibliotheken(tmp_path, monkeypatch, capsys)
 
     sp.lauf(G(), tmp_path, drives)
     assert [e["k"] for e in _events(capsys)].count("run.full_sync") == 1
+
+
+def test_nachholen_findet_die_bibliothek_ueber_ihre_gespeicherten_urls(tmp_path, monkeypatch, capsys):
+    """"Fetch again" across the libraries: the files are grouped by the
+    library folder they lie in, the library is resolved again through the
+    URLs stored with it – no configured list – and the mirror's targeted
+    fetch runs with the drive set; a library without stored URLs leaves its
+    files open."""
+    import state_db
+    lib = tmp_path / "Team X" / "Dokumente"
+    state_db.StateDb(lib).kv_schreiben("urls", json.dumps(["https://firma.sharepoint.com/sites/TeamX"]))
+    ohne = tmp_path / "Team X" / "Assets"
+    state_db.StateDb(ohne).kv_schreiben("urls", "[]")
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
+        "id": "s1", "name": "Team X",
+        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary"}]}})
+    gesehen = []
+
+    def fake_nachholen(graph, wurzel, rels, arbeiter, zustand=None, still=False):
+        assert still and graph.drive_base.endswith("/drives/d1")
+        gesehen.append((wurzel, list(rels)))
+        return {"new": len(rels), "errors": 0, "gone": 0, "unknown": 0}
+
+    monkeypatch.setattr(sp.drive_mirror, "nachholen", fake_nachholen)
+    sp.nachholen(g, tmp_path, ["Team X/Dokumente/Dateien/a.pdf", "Team X/Dokumente/Dateien/b.pdf",
+                               "Team X/Assets/Dateien/c.pdf", "Nirgends/x.pdf"])
+    assert gesehen == [(lib, ["Dateien/a.pdf", "Dateien/b.pdf"])]
+    zeilen = capsys.readouterr().out.splitlines()
+    events = [e for e in (progress.lies_event(z) for z in zeilen) if e]
+    (offen,) = [e for e in events if e["k"] == "run.nachholen.nolibrary"]
+    assert offen["v"]["n"] == 1
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 2 and ergebnis["extra"] == {"gone": 0, "unknown": 2}
+
+
+def test_bilanz_fuehrt_die_offenen_dateien_unter_ihrer_bibliothek(tmp_path, monkeypatch):
+    """The merged report names every open file by id under the library's
+    path, so "Fetch now" can hand them straight to the libraries."""
+    import completeness
+    drives = [{"id": "d1", "site": "S", "name": "A", "kadenz": "always"},
+              {"id": "d2", "site": "S", "name": "B", "kadenz": "always"}]
+
+    def fake_pruefen(graph, ziel, auswahl, still=False, zustand=None, quelle="onedrive"):
+        name = ziel.name
+        return completeness.bilanz(
+            quelle, "files", da=1, offen=1,
+            zeilen=[completeness.zeile("Dateien", 1, 1)],
+            extra={"bytes": 0, "bytes_ausgeschlossen": 0, "typen": [],
+                   "offene": [{"id": f"i-{name}", "rel": "Dateien/x.pdf"}],
+                   "offene_gekappt": name == "B"})
+    monkeypatch.setattr(sp.drive_mirror, "nur_pruefen", fake_pruefen)
+
+    class G:
+        pass
+
+    b = sp.nur_pruefen(G(), tmp_path, drives)
+    assert b["offene"] == [{"id": "i-A", "rel": "S/A/Dateien/x.pdf"},
+                           {"id": "i-B", "rel": "S/B/Dateien/x.pdf"}]
+    assert b["offene_gekappt"]

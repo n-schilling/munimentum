@@ -53,7 +53,8 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "drive_mirror", "sharepoint_export", "state_db",
                  "planner_export", "analytics_db",
                  "todo_export", "onenote_export",
-                 "steps", "runner"]
+                 "steps", "runner", "awake", "completeness",
+                 "archive_check"]
 
 def ohne_cli(name):
     """mcp.cli needs typer – an optional extra we do not ship.

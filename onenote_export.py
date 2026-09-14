@@ -40,8 +40,9 @@ settings as environment variables (ONENOTE_RULES, ONENOTE_IMAGE_MAX_MB –
 embed images up to this size, 0 = always; SYNC_CADENCE, SYNC_NOW – see
 export_util; FULL_SYNC forgets every page stamp and resource record and
 fetches the notebooks again, see export_util.voll_neu). --notebooks
-refreshes the stored notebook list and exports
-nothing. Progress, results and failures are structured lines (progress.py).
+refreshes the stored notebook list and exports nothing; --check writes
+the page balance per notebook (completeness.py), paced like the export.
+Progress, results and failures are structured lines (progress.py).
 """
 
 import base64
@@ -61,6 +62,7 @@ import requests
 
 import auth
 import export_util
+import completeness
 import folders
 import graph_client
 import progress
@@ -720,11 +722,12 @@ def _saetze_schreiben(db, bereich, eintraege):
                                       for k, v in eintraege.items()})
 
 
-def seitenstand(db):
+def seitenstand(db, nur_lesen=False):
     """The notebook's page bookkeeping – one record per page.
 
     A notebook from before 9.0 holds it as one kv blob; it moves into the
-    records once, and the blob goes with that."""
+    records once, and the blob goes with that – in an export, never in a
+    check (`nur_lesen`: the blob is read as it is and left alone)."""
     stand = _saetze(db, SEITEN_BEREICH)
     if stand:
         return stand
@@ -733,8 +736,9 @@ def seitenstand(db):
     except ValueError:
         alt = {}
     if isinstance(alt, dict) and alt:
-        _saetze_schreiben(db, SEITEN_BEREICH, alt)
-        db.kv_loeschen("pages")
+        if not nur_lesen:
+            _saetze_schreiben(db, SEITEN_BEREICH, alt)
+            db.kv_loeschen("pages")
         return alt
     return {}
 
@@ -859,12 +863,49 @@ def notebook_lauf(graph, out, nb, grenze):
     return neu, unveraendert, fehler + listen_fehler
 
 
+def nachholen(graph, out, rels):
+    """"Fetch again": the notebooks the listed files belong to are walked
+    again – a page whose file is gone is due, and comes (notebook_lauf
+    fetches what is not here), within the hour's budget. The notebook is
+    known from the folder's own bookkeeping (kv "notebook"); no rules, no
+    cadence."""
+    out = Path(out)
+    progress.event("run.nachholen.start", n=len(rels))
+    einheiten, unbekannt = {}, 0
+    for rel in rels:
+        name = rel.split("/", 1)[0]
+        if (out / name / state_db.DB_NAME).exists():
+            einheiten[name] = einheiten.get(name, 0) + 1
+        else:
+            unbekannt += 1
+    buecher = []
+    for name, n in einheiten.items():
+        try:
+            nb = json.loads(state_db.StateDb(out / name).kv_lesen("notebook") or "{}")
+        except ValueError:
+            nb = {}
+        if not isinstance(nb, dict) or not nb.get("id"):
+            unbekannt += n
+            continue
+        progress.event("run.nachholen.unit", name=str(nb.get("titel") or nb["id"]), n=n)
+        buecher.append({"id": nb["id"], "titel": str(nb.get("titel") or nb["id"]),
+                        "ordner": name, "kadenz": "always"})
+    if unbekannt:
+        progress.event("run.nachholen.done", n=0, gone=0, failed=0, unknown=unbekannt)
+    if not buecher:
+        progress.ergebnis(0, extra={"unknown": unbekannt})
+        return
+    lauf(graph, out, buecher)
+
+
 def lauf(graph, out, buecher):
     out = Path(out)
     grenze = bild_max()
     neu = unveraendert = fehler = fehl = uebersprungen = 0
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     for nb in buecher:
         db = state_db.StateDb(notebook_ziel(out, nb))
         kadenz = nb.get("kadenz") or "always"
@@ -908,6 +949,69 @@ def lauf(graph, out, buecher):
                                 if uebersprungen else {})})
 
 
+def nur_pruefen(graph, out):
+    """--check: the page balance of every notebook the rules take – the
+    notebook-wide listing, a hundred pages a request, one per section when
+    the API refuses it. A page is here when its record carries the same
+    change date and its file lies here. Runs through the pacer: a spent
+    hour ends the check and says so instead of inventing a gap."""
+    try:
+        buecher = waehle_notizbuecher(graph, out)
+    except BudgetLeer:
+        bericht = completeness.nicht_geprueft("onenote", "pages", "ana.check.reason.budget")
+        completeness.schreiben(state_db.StateDb(out), bericht)
+        completeness.melden(bericht)
+        return bericht
+    alle = len((folders.lade(out, folders.NOTIZBUECHER) or {}).get("ordner", []))
+    zeilen, fehler = [], []
+    behalten = 0
+    for i, nb in enumerate(buecher):
+        try:
+            listen_erlaubt(nb["titel"])
+            je_section = notebook_pages(graph, nb)
+            if je_section is None:
+                seiten = [p for section, _gruppen in sections(graph, nb)
+                          for p in pages(graph, section)]
+            else:
+                seiten = [p for liste in je_section.values() for p in liste]
+        except auth.TokenExpired:
+            raise
+        except (BudgetLeer, graph_client.Ueberlastet):
+            fehler += [completeness.fehler(rest["titel"], "ana.check.reason.budget")
+                       for rest in buecher[i:]]
+            break
+        except Exception as e:
+            progress.event("run.onenote.notebook_failed", "err",
+                           name=nb["titel"], error=f"{type(e).__name__}: {e}")
+            fehler.append(completeness.fehler(nb["titel"], "run.onenote.notebook_failed"))
+            continue
+        ziel = notebook_ziel(out, nb)
+        stand = seitenstand(state_db.StateDb(ziel), nur_lesen=True)   # a check moves nothing
+        z_da = z_offen = 0
+        for p in seiten:
+            alt = stand.get(p["id"]) or {}
+            if alt.get("lm") and alt["lm"] == (p.get("lastModifiedDateTime") or "") \
+                    and not alt.get("deleted") and alt.get("rel") \
+                    and (ziel / alt["rel"]).exists():
+                z_da += 1
+            else:
+                z_offen += 1
+        behalten += sum(1 for e in stand.values() if e.get("deleted"))
+        zeilen.append(completeness.zeile(nb["titel"], z_da, z_offen))
+    if buecher and not zeilen and fehler:
+        bericht = completeness.nicht_geprueft("onenote", "pages", fehler[0]["grund"])
+    else:
+        bericht = completeness.bilanz(
+            "onenote", "pages",
+            da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
+            ausgeschlossen=max(0, alle - len(buecher)),
+            ausgeschlossen_einheit="notebooks",
+            behalten=behalten, zeilen=zeilen, fehler=fehler)
+    completeness.schreiben(state_db.StateDb(out), bericht)
+    completeness.melden(bericht)
+    return bericht
+
+
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     if export_util.hilfe_gewuenscht(sys.argv[1:]):
@@ -921,6 +1025,13 @@ def main():
     try:
         if "--notebooks" in sys.argv[1:]:
             gleiche_notizbuecher_ab(graph, out)
+            return
+        if "--check" in sys.argv[1:]:
+            nur_pruefen(graph, out)
+            return
+        nachzuholen = export_util.nachhol_liste()
+        if nachzuholen is not None:
+            nachholen(graph, out, nachzuholen)
             return
         buecher = waehle_notizbuecher(graph, out)
         if not buecher:

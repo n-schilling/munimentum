@@ -123,3 +123,25 @@ def test_ui_metadaten_nennen_nur_quellen():
     assert set(meta) == {e["key"] for e in steps.REGISTRY if e["quelle"]}
     for wert in meta.values():
         assert wert["quelle"]
+
+
+def test_bilanzzeilen_passen_zum_register():
+    """Every balance row names a check step, an export folder the app
+    knows, a run the registry can start, and a title every language has."""
+    import app as app_mod
+    de = _de()
+    anfragen = {e["anfrage"] for e in steps.REGISTRY}
+    for z in steps.PRUEFUNGEN:
+        assert z["anfrage"] in anfragen and z["anfrage"].startswith("check"), z["quelle"]
+        assert z["ordner"] in app_mod.EXPORT_ORDNER, z["quelle"]
+        assert set(z["lauf"]) <= anfragen and all(z["lauf"].values()), z["quelle"]
+        assert z["titel"] in de, z["titel"]
+        assert callable(z["nutzt"])
+    assert [z["quelle"] for z in steps.pruef_metadaten()] == [z["quelle"] for z in steps.PRUEFUNGEN]
+    # A source in use draws a row: the mailbox categories decide per row.
+    cfg = dict(settings.VORGABEN)
+    cfg["outlook_categories"] = ["calendar"]
+    genutzt = {z["quelle"]: z["nutzt"](cfg) for z in steps.PRUEFUNGEN}
+    assert genutzt["outlook_calendar"] and not genutzt["outlook_mail"]
+    assert not genutzt["todo"]
+

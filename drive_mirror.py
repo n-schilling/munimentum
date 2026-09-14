@@ -28,6 +28,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+import completeness
 import export_util
 import settings
 import folders
@@ -692,6 +693,60 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
     return fertig, len(fehlgeschlagen), fehlgeschlagen
 
 
+def nachholen(graph, wurzel, rels, arbeiter, zustand=None, still=False):
+    """A targeted fetch for one mirror: the files named – rels the
+    inventory knows (the archive check's missing or short files), or
+    {id, rel} pairs that carry the drive item themselves (the balance's
+    open files, new ones included) – asked for in one batch, then
+    downloaded to their paths, so inventory and disk agree again. Nothing
+    is walked. A 404 (or a deleted item) says the file is gone at
+    Microsoft: the entry stays, the log says so. Returns the counts and
+    the fetched rels; with `still` the caller reports them."""
+    wurzel = Path(wurzel)
+    zustand = zustand or _db_zustand(wurzel)
+    bestand = zustand.bestand()
+    kennung = {e["rel"]: k for k, e in bestand.eintraege.items()}
+    gefragt, unbekannt = {}, 0
+    for r in rels:
+        if isinstance(r, dict):
+            gefragt[r["id"]] = r["rel"]
+        elif r in kennung:
+            gefragt[kennung[r]] = r
+        else:
+            unbekannt += 1
+    if not still:
+        progress.event("run.nachholen.start", n=len(rels))
+    aufgaben, weg, fehler = [], 0, 0
+    if gefragt:
+        basis = getattr(graph, "drive_base", f"{GRAPH}/me/drive")
+        urls = {k: f"{basis}/items/{k}?$select={_ITEM_SELECT}" for k in gefragt}
+        antworten = _items_holen(graph, urls)
+        for k, rel in gefragt.items():
+            status, meta = antworten.get(k, (None, None))
+            if status == 404 or (meta is not None and "deleted" in meta):
+                weg += 1
+                progress.event("run.nachholen.gone", "warn", name=rel)
+                continue
+            if meta is None or not (status and 200 <= status < 300):
+                fehler += 1
+                progress.event("run.nachholen.failed", "warn", name=rel,
+                               error=f"HTTP {status}" if status else "no answer")
+                continue
+            e = bestand.eintraege.get(k) or {}
+            aufgaben.append({"id": k, "rel": rel,
+                             "ctag": meta.get("cTag") or e.get("ctag") or "",
+                             "size": int(meta.get("size") or e.get("size") or 0),
+                             "mtime": geaendert_am(meta)})
+    geholt, fehlgeschlagen, rest = hole_alle(graph, wurzel, bestand, aufgaben, arbeiter)
+    misslungen = {a["rel"] for a in rest}
+    zahlen = {"new": geholt, "errors": fehler + fehlgeschlagen, "gone": weg,
+              "unknown": unbekannt,
+              "geholt": [a["rel"] for a in aufgaben if a["rel"] not in misslungen]}
+    if not still:
+        export_util.nachholen_melden(geholt, weg, zahlen["errors"], unbekannt)
+    return zahlen
+
+
 def auswahl_abgleichen(zustand, auswahl, name):
     """Reset the enumeration when the selection differs from the one the
     last run was built on, and store the current one.
@@ -754,14 +809,17 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None, name=None,
     bestand = zustand.bestand()
     auswahl_abgleichen(zustand, auswahl, name or out.name)
     warteliste = Warteliste(zustand.db) if einheiten is not None else None
-    if export_util.voll_neu():
-        # The "Force full sync" button: the pointer, the stored walk and
-        # every file's version go – the drive is walked and fetched once
-        # more as on its first run. What lies here stays and is written
-        # over; the waiting list is redundant, the walk names it all.
+    if export_util.abgleich():
+        # "Fetch again" and "Force full sync" alike: the pointer and the
+        # stored walk go – the drive is walked once more as on its first
+        # run, and the waiting list is redundant, the walk names it all.
+        # The full sync forgets every file's version as well, so everything
+        # is fetched and written over; the resync keeps them and fetches
+        # only what is not here (Bestand.aktuell looks at the disk).
         zustand.delta_loeschen()
         zustand.walk_leeren()
-        bestand.versionen_vergessen()
+        if export_util.voll_neu():
+            bestand.versionen_vergessen()
         if warteliste is not None:
             warteliste.vergiss(list(warteliste.eintraege))
     vorab, gestoert = [], set()
@@ -848,23 +906,24 @@ def _db_zustand(out):
     return state_db.DbZustand(out)
 
 
-def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
-    """What the drive holds against what lies here – per folder.
+def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None, wartend=(),
+                            quelle="onedrive"):
+    """The drive's balance against what lies here – per folder.
 
-    The same shape as for the mailbox, so the UI can draw it without a
-    second view. The difference is in the question: for the mailbox Graph
-    counts items per folder, here the delta knows every single file – the
-    check is therefore more precise and also knows whether a file arrived
-    only half. The byte sums alongside make it double as the size preview:
-    what would a mirror run fetch, and what would it leave out.
+    The delta knows every single file, so the check is exact and knows a
+    half-arrived file too (present means same size). Files the rules, the
+    size cap or the type filters leave out are counted as excluded, never
+    named; files on the waiting list of a folder cadence are neither here
+    nor open – they wait. Tombstones are kept, not missing. The byte sums
+    and the type table come along for the size preview.
     """
     if weg is None:
         weg = _db_zustand(out).verschwunden_lesen()
+    wartend = set(wartend or ())
     je = {}
     typen = {}
-    ausgelassen = 0
-    ausgelassen_bytes = 0
-    ausgelassene = set()
+    offene, offene_gekappt = [], False
+    ausgeschlossen = ausgeschlossen_bytes = n_wartend = 0
     for e in eintraege:
         if "deleted" in e or "file" not in e or "root" in e:
             continue
@@ -874,8 +933,8 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
         ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
         groesse = int(e.get("size") or 0)
         # Counted inside the path scope but BEFORE type and size filters:
-        # this list is what include/exclude gets decided on, so it must show
-        # what is there, not what survived.
+        # this table is what include/exclude gets decided on, so it must
+        # show what is there, not what survived.
         if auswahl.pfad_ok(rel):
             name = rel.rsplit("/", 1)[-1]
             ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -883,65 +942,54 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None):
             z["n"] += 1
             z["bytes"] += groesse
         if not auswahl.takes(rel, groesse):
-            ausgelassen += 1
-            ausgelassen_bytes += groesse
-            ausgelassene.add(ordner)
+            ausgeschlossen += 1
+            ausgeschlossen_bytes += groesse
             continue
-        z = je.setdefault(ordner, {"ordner": ordner, "erwartet": 0, "vorhanden": 0,
-                                   "geloescht": 0, "ausgelassen": False, "fehlt": 0,
-                                   "bytes": 0})
-        z["erwartet"] += 1
+        z = je.setdefault(ordner, {"da": 0, "offen": 0, "bytes": 0})
         z["bytes"] += groesse
+        if e.get("id") in wartend:
+            n_wartend += 1
+            continue
         datei = Path(out) / rel
         try:
             da = datei.stat().st_size == groesse
         except OSError:
             da = False
-        if da:
-            z["vorhanden"] += 1
-    # Tombstones belong in the balance: they explain why more lies here
-    # than the drive still knows – they are not a gap.
-    for rel in weg:
-        ordner = rel.rsplit("/", 1)[0] if "/" in rel else DATEI_DIR
-        z = je.setdefault(ordner, {"ordner": ordner, "erwartet": 0, "vorhanden": 0,
-                                   "geloescht": 0, "ausgelassen": False, "fehlt": 0,
-                                   "bytes": 0})
-        z["geloescht"] += 1
-    for o in ausgelassene:
-        je.setdefault(o, {"ordner": o, "erwartet": 0, "vorhanden": 0,
-                          "geloescht": 0, "ausgelassen": True, "fehlt": 0,
-                          "bytes": 0})
-    for z in je.values():
-        z["fehlt"] = max(0, z["erwartet"] - z["vorhanden"])
-    liste = sorted(je.values(), key=lambda z: (-z["fehlt"], z["ordner"]))
-    return {
-        "geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
-        "ordner": liste,
-        "erwartet": sum(z["erwartet"] for z in liste),
-        "vorhanden": sum(z["vorhanden"] for z in liste),
-        "geloescht": sum(z["geloescht"] for z in liste),
-        "fehlt": sum(z["fehlt"] for z in liste),
-        "ausgelassen": ausgelassen,
-        "ausgelassene_ordner": sorted(ausgelassene)[:20],
-        "bytes": sum(z["bytes"] for z in liste),
-        "bytes_ausgelassen": ausgelassen_bytes,
-        "typen": sorted(typen.values(), key=lambda z: -z["bytes"]),
-    }
+        z["da" if da else "offen"] += 1
+        if not da:
+            # The open files by id: what "Fetch now" then fetches without a
+            # second walk – capped, and the cap is said.
+            if len(offene) < completeness.OFFENE_GRENZE:
+                offene.append({"id": str(e.get("id")), "rel": rel})
+            else:
+                offene_gekappt = True
+    zeilen = [completeness.zeile(o, z["da"], z["offen"]) for o, z in je.items()]
+    return completeness.bilanz(
+        quelle, "files",
+        da=sum(z["da"] for z in je.values()),
+        offen=sum(z["offen"] for z in je.values()),
+        ausgeschlossen=ausgeschlossen, behalten=len(weg), wartend=n_wartend,
+        zeilen=zeilen,
+        extra={"bytes": sum(z["bytes"] for z in je.values()),
+               "bytes_ausgeschlossen": ausgeschlossen_bytes,
+               "typen": sorted(typen.values(), key=lambda z: -z["bytes"]),
+               "offene": offene, "offene_gekappt": offene_gekappt})
 
 
-def nur_pruefen(graph, out, auswahl, still=False, zustand=None):
-    """--check: only report what is missing. Loads nothing, leaves the pointer alone."""
+def nur_pruefen(graph, out, auswahl, still=False, zustand=None, quelle="onedrive"):
+    """--check: only report the balance. Loads nothing, leaves the pointer
+    alone. `still` (a library among several) writes and reports nothing
+    – the caller merges."""
     out = Path(out)
     zustand = zustand or _db_zustand(out)
     eintraege, _ = sammle(graph, None)
+    wartend = Warteliste(zustand.db).eintraege if getattr(zustand, "db", None) else ()
     bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl,
-                                      weg=zustand.verschwunden_lesen())
-    zustand.bericht_schreiben(bericht)
+                                      weg=zustand.verschwunden_lesen(),
+                                      wartend=wartend, quelle=quelle)
     if not still:
-        progress.ergebnis(0, excluded=bericht["ausgelassen"],
-                          extra={"expected": bericht["erwartet"],
-                                 "present": bericht["vorhanden"],
-                                 "missing": bericht["fehlt"]})
+        completeness.schreiben(zustand.db, bericht)
+        completeness.melden(bericht)
     return bericht
 
 

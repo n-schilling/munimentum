@@ -995,6 +995,16 @@ def load_teams_files(root_dir, nur=None):
 # incremental read in rag_index: ONE enumeration per source, so a file the
 # manifest lists is exactly a file the loader would parse.
 # --------------------------------------------------------------------------
+# Where the archive check (archive_check.py) sets foreign files aside, at the
+# root of an export folder: not part of the archive, never read.
+FREMD_DIR = "_fremd"
+
+
+def _im_archiv(p, root):
+    """Not below the set-aside folder."""
+    return p.relative_to(root).parts[:1] != (FREMD_DIR,)
+
+
 def _teams_datei_ordner(teile):
     """Below an attachment or mirror folder? Those hold files, not
     conversations – and an attached .html must not read as a chat."""
@@ -1004,12 +1014,14 @@ def _teams_datei_ordner(teile):
 def _dateien_teams(root):
     return [p for p in sorted(root.rglob("*.html"))
             if p.name not in ("index.html", "search.html")
+            and _im_archiv(p, root)
             and not _teams_datei_ordner(p.relative_to(root).parts)]
 
 
 def _dateien_teams_files(root):
     return [p for p in sorted(root.rglob("*"))
             if p.is_file() and not p.name.endswith(".teil")
+            and _im_archiv(p, root)
             and _teams_datei_ordner(p.relative_to(root).parts)]
 
 
@@ -1017,12 +1029,13 @@ def _dateien_onenote(root):
     # A page's .files folder may hold an attached .html – that is a file,
     # not a page.
     return [p for p in sorted(root.rglob("*.html"))
-            if not any(t.endswith(ONENOTE_SUFFIX)
-                       for t in p.relative_to(root).parts[:-1])]
+            if _im_archiv(p, root)
+            and not any(t.endswith(ONENOTE_SUFFIX)
+                        for t in p.relative_to(root).parts[:-1])]
 
 
 def _dateien_outlook(root):
-    return sorted(root.rglob("*.eml"))
+    return [p for p in sorted(root.rglob("*.eml")) if _im_archiv(p, root)]
 
 
 def _dateien_onedrive(root):
@@ -1035,14 +1048,14 @@ def _dateien_onedrive(root):
 
 def _dateien_sharepoint(root):
     dateien = []
-    for lib in sorted(p for p in root.glob("*/*") if p.is_dir()):
+    for lib in sorted(p for p in root.glob("*/*") if p.is_dir() and _im_archiv(p, root)):
         dateien += [p for p in sorted((lib / ONEDRIVE_DIR).rglob("*"))
                     if p.is_file() and not p.name.endswith(".teil")]
     return dateien
 
 
 def _dateien_pages(root):
-    return sorted(root.rglob("*.html"))
+    return [p for p in sorted(root.rglob("*.html")) if _im_archiv(p, root)]
 
 
 DATEIEN = {"teams": _dateien_teams, "outlook": _dateien_outlook,

@@ -138,3 +138,36 @@ def test_log_schreiben_wirft_nie(tmp_path):
     kaputt.log_lines([(1, 1.0, "info", '"x"')])
     kaputt.prune_log(7)
     assert kaputt.run_log(1) == []
+
+
+def test_last_resync_kennt_nur_abgleich_und_vollsync(tmp_path):
+    """The archive check asks when a source was last read in full for
+    what is missing: a step inside a resync or full-sync run that ended
+    well – not a plain export, not a failed one."""
+    h = _history(tmp_path)
+    r1 = h.start_run("job.export", "manual")
+    h.record_step(r1, "outlook", "job.step.outlook", 100.0, 1.0, ok=True)
+    h.finish_run(r1, "done")
+    assert h.last_resync("outlook") is None
+    r2 = h.start_run("job.resync", "manual")
+    h.record_step(r2, "outlook", "job.step.outlook", 200.0, 1.0, ok=False)
+    h.finish_run(r2, "error")
+    assert h.last_resync("outlook") is None
+    r3 = h.start_run("job.resync", "manual")
+    h.record_step(r3, "outlook", "job.step.outlook", 300.0, 1.0, ok=True)
+    h.record_step(r3, "index", "job.step.index", 301.0, 1.0, ok=True)
+    h.finish_run(r3, "done")
+    r4 = h.start_run("job.full", "manual")
+    h.record_step(r4, "teams", "job.step.teams", 400.0, 1.0, ok=True)
+    h.finish_run(r4, "done")
+    assert h.last_resync("outlook") == 300.0
+    assert h.last_resync("teams") == 400.0
+    assert h.last_resync("onedrive") is None
+    r5 = h.start_run("job.archiv.nachholen", "manual")
+    h.record_step(r5, "onedrive", "job.step.onedrive", 500.0, 1.0, ok=True)
+    h.finish_run(r5, "done")
+    assert h.last_resync("onedrive") == 500.0
+    r6 = h.start_run("job.holen", "manual")
+    h.record_step(r6, "todo", "job.step.todo", 600.0, 1.0, ok=True)
+    h.finish_run(r6, "done")
+    assert h.last_resync("todo") == 600.0

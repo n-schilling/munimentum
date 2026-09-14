@@ -33,7 +33,8 @@ SYNC_CADENCE/SYNC_NOW – see export_util; FULL_SYNC – no task's etag or
 reference cTag counts, every card and file is fetched again, see
 export_util.voll_neu; PLANNER_SWEEP_HOURS – see above;
 PLANNER_ATTACHMENTS; PLANNER_LEGACY_SYNC – read the legacy comment threads
-again, see plan_lauf; EXPORT_WORKERS). Progress, results and failures are
+again, see plan_lauf; EXPORT_WORKERS). --check writes the card balance per
+board (completeness.py). Progress, results and failures are
 structured lines (progress.py).
 """
 
@@ -55,6 +56,7 @@ import export_util
 import graph_client
 import progress
 import settings
+import completeness
 import state_db
 
 export_util.erzwinge_utf8()
@@ -557,6 +559,12 @@ def render_board(plan, buckets, eintraege, labels, namen, stand=None):
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
+def _anhaenge_da(ziel, alt):
+    """The stored etag counts only while the card's referenced files lie
+    here: a missing one makes the task due again."""
+    return all((ziel / rel).exists() for rel in (alt.get("anhaenge") or {}).values() if rel)
+
+
 def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
                       threads, sweep, anhang_stand):
     """One task's refresh – runs in a worker and touches no shared state.
@@ -671,7 +679,8 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
         gesehen.add(tid)
         alt = eintraege.get(tid) or {}
         etag_neu = t.get("@odata.etag") or ""
-        geaendert = alt.get("etag") != etag_neu or alt.get("deleted")
+        geaendert = (alt.get("etag") != etag_neu or alt.get("deleted")
+                     or not _anhaenge_da(ziel, alt))
         thread = t.get("conversationThreadId")
         legacy_neu = bool(thread and (thread not in stand_threads or (
             threads is not None and threads.get(thread, "") !=
@@ -767,12 +776,51 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     return neu, unveraendert, fehler
 
 
+def nachholen(graph, out, rels, workers=1):
+    """"Fetch again": the boards the listed files belong to are read
+    again – the board file and every card whose referenced file is
+    missing come back (plan_lauf fetches what is not here). The plan is
+    known from the folder's own bookkeeping (kv "plan"); no configured
+    list, no cadence."""
+    out = Path(out)
+    progress.event("run.nachholen.start", n=len(rels))
+    einheiten, unbekannt = {}, 0
+    for rel in rels:
+        name = rel.split("/", 1)[0]
+        if (out / name / state_db.DB_NAME).exists():
+            einheiten[name] = einheiten.get(name, 0) + 1
+        else:
+            unbekannt += 1
+    neu = fehler = 0
+    for name, n in einheiten.items():
+        db = state_db.StateDb(out / name)
+        plan = _json(db.kv_lesen("plan") or "")
+        if not plan.get("id"):
+            unbekannt += n
+            continue
+        eintrag = {"id": plan["id"], "titel": str(plan.get("titel") or plan["id"]),
+                   "gruppe": None, "kadenz": "always", "ordner": name}
+        progress.event("run.nachholen.unit", name=eintrag["titel"], n=n)
+        try:
+            g, _u, f = plan_lauf(graph, out, eintrag, {}, workers)
+            neu, fehler = neu + g, fehler + f
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            fehler += 1
+            progress.event("run.nachholen.failed", "warn", name=eintrag["titel"],
+                           error=f"{type(e).__name__}: {e}")
+    export_util.nachholen_melden(neu, 0, fehler, unbekannt)
+
+
 def lauf(graph, out, plaene, fehl=0, workers=1):
     out = Path(out)
     neu = unveraendert = fehler = uebersprungen = 0
     threads_cache = {}
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     for plan in plaene:
         db = state_db.StateDb(plan_ziel(out, plan))
         kadenz = plan.get("kadenz") or "always"
@@ -802,14 +850,55 @@ def lauf(graph, out, plaene, fehl=0, workers=1):
                                 if uebersprungen else {})})
 
 
+def nur_pruefen(graph, out, urls):
+    """--check: the card balance of every listed board – one listing per
+    board, a card is here when its stored copy carries the same etag and
+    the board file lies here. Nothing is excluded: a board that is not
+    listed is not part of the archive."""
+    plaene, fehl = resolve_plans(graph, urls, out)
+    zeilen, fehler = [], []
+    behalten = 0
+    for plan in plaene:
+        ziel = plan_ziel(out, plan)
+        eintraege = _json(state_db.StateDb(ziel).kv_lesen("tasks") or "")
+        try:
+            tasks = _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/tasks")
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.planner.plan_failed", "err", url=plan["titel"],
+                           error=f"{type(e).__name__}: {e}")
+            fehler.append(completeness.fehler(plan["titel"], "run.planner.plan_failed"))
+            continue
+        datei_da = (ziel / "board.html").exists()
+        z_da = z_offen = 0
+        for t in tasks:
+            alt = eintraege.get(t.get("id") or "") or {}
+            if datei_da and alt.get("etag") and alt["etag"] == (t.get("@odata.etag") or "") \
+                    and not alt.get("deleted"):
+                z_da += 1
+            else:
+                z_offen += 1
+        behalten += sum(1 for e in eintraege.values() if e.get("deleted"))
+        zeilen.append(completeness.zeile(plan["titel"], z_da, z_offen))
+    bericht = completeness.bilanz(
+        "planner", "tasks",
+        da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
+        behalten=behalten, zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl})
+    completeness.schreiben(state_db.StateDb(out), bericht)
+    completeness.melden(bericht)
+    return bericht
+
+
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     if export_util.hilfe_gewuenscht(sys.argv[1:]):
         print(__doc__)
         return
     out = export_util.ausgabeordner(argv)
+    nachzuholen = export_util.nachhol_liste()
     urls = planner_urls()
-    if not urls:
+    if not urls and nachzuholen is None:
         progress.event("run.planner.none", "warn")
         progress.ergebnis(0)
         return
@@ -817,6 +906,12 @@ def main():
     graph_client.konfiguriere(workers)
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
     try:
+        if nachzuholen is not None:
+            nachholen(graph, out, nachzuholen, workers)
+            return
+        if "--check" in sys.argv[1:]:
+            nur_pruefen(graph, out, urls)
+            return
         plaene, fehl = resolve_plans(graph, urls, out)
         lauf(graph, out, plaene, fehl, workers)
     except auth.TokenExpired:

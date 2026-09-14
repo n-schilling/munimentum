@@ -14,7 +14,7 @@ The app does two things, and the header says exactly that:
 - **Search archive** (`nav.search`) — everything about getting data out:
   search, filters, hits, calendar, address book, files.
 
-Two smaller rooms sit at the right of the header: **Overview**
+Two smaller rooms sit at the right of the header: **Insights**
 (`nav.analytics`, what the archive holds) and **Settings**. Nothing else
 becomes a top-level tab; `tests/test_app.py::test_die_reiterzeile_bleibt_kurz`
 counts four and fails on a fifth.
@@ -23,14 +23,14 @@ counts four and fails on a fifth.
 what the action at hand needs: the state in one line, the controls, and
 while something runs, the run window or its pill. No counts, no history,
 no schedule line, no notice, no prose. Whatever explains goes into an `(i)`; whatever
-happened goes into Overview; whatever can be configured goes into
+happened goes into Insights; whatever can be configured goes into
 Settings — including the notice about a newer release, which sits under
 *Settings › App* with a dot on that entry. If a new element would add a
 line to one of the two doors, it belongs somewhere else.
 
 Every screen has **one primary action**, blue, and it is the thing a
 first-time user should press. Build archive: *Update archive now*. Search
-archive: *Search*. Overview: *Check now*. Settings: *Save settings* (only
+archive: *Search*. Insights: *Check now*. Settings: *Save settings* (only
 shown when something changed).
 
 State is shown **where it is fixed**, not in a status bar:
@@ -42,7 +42,7 @@ State is shown **where it is fixed**, not in a status bar:
 | AI (Ollama) | dot next to *AI (Ollama)* in the settings sub-navigation |
 | Claude (MCP) | dot next to *Claude (MCP)* in the settings sub-navigation |
 | How current the archive is | the one line of the status card on *Build archive* |
-| Counts, runs, completeness | Overview |
+| Counts, runs, completeness | Insights |
 | Per source: folders chosen, last run | the `(i)` on that source's card, and the summary line of its settings block |
 | A running job, and its log | the run window (`#lauf-overlay`), open until the run is done and closed by hand; minimised, the run state in the header frame |
 | A newer release | banner under *Settings › App*, dot on the *App* entry |
@@ -63,7 +63,11 @@ The header has three kinds of things and one shape for each:
   is allowed only for an action that must be reachable from every page;
   it sits next to it, same size, name in the tooltip.
 
-No pills, no third radius: everything up here is text, or 8 px.
+No pills, no third radius: everything up here is text, or 8 px. The
+header is sticky (`position: sticky; top: 0`): the doors, the state frame
+and the pill stay in reach however far the page scrolls, and what the
+page scrolls to (`scroll-margin-top`) or pins below it (`#detail`,
+`.snav`) keeps clear of it.
 
 ## 2. Anatomy of each area
 
@@ -91,9 +95,15 @@ No pills, no third radius: everything up here is text, or 8 px.
    person). The AI answer sits above the list and cites into it.
 
 **The run window** (`#lauf-overlay`, the wizards' frame, wider):
-everything about a running export — headline with step and start time,
+everything about a running process — headline with step and start time,
 progress bar, step list, the log (`#protokoll`) with *Copy* and *Report a
-problem*, *Cancel*. It opens when a run starts here or when the page is
+problem*, *Cancel*. **Every process is a run and starts through `run()`**:
+the export, *Sync now*, *Force full sync*, *Fetch now* and *Fetch again*,
+the completeness check, the archive check and each of its actions, the
+folder-structure syncs. Not one of them writes a state of its own next to
+its button ("Checking…", "Syncing…"): the window opens with it, its log
+says what happens, and Insights reloads its numbers when the run is
+done. It opens when a run starts here or when the page is
 opened while a run is on (by hand or by the schedule); a scheduled run
 that starts while someone works on the page appears as the pill first. It
 stays until the run is done, then shows the result (headline with count
@@ -102,8 +112,45 @@ hides it and shows the run state in the header frame; a click there reopens it. 
 sits below the wizards' overlay, so an expired token can still ask on
 top.
 
-**Overview** (`#tab-analytics`): tiles, charts, completeness, all runs.
-Read-only apart from *Refresh* and *Check now*.
+**Insights** (`#tab-analytics`): the same shape as Settings – a
+sub-navigation on the left (`.snav`, `#ana-nav`), one card per entry on
+the right, in the order of the navigation: Key figures, History,
+Completeness, Archive and bookkeeping, Runs. The two checks carry their
+state as a dot next to their entry (`#p-ana-check`, `#p-ana-archiv`:
+warn while something is open or found, ok when all agrees, none before
+the first check). Read-only apart from *Refresh* and *Check now*. The
+completeness card is one button and one **balance row** (`.bilanz
+.zeile`) per source in use,
+drawn from `steps.PRUEFUNGEN` in that order: icon, name, one sentence with
+the four numbers (here · not fetched yet · deliberately excluded · deleted
+but kept; mirrors add "waiting for their cadence"), when it was checked,
+and *Fetch now* only while something is open. The units with something
+open sit collapsed below the row; excluded units are never named. A used
+source without a report says "not checked yet", an unused one without a
+report is not drawn. Below it the **archive and bookkeeping** card: the
+inward check (`archive_check.py`, no access needed), a `.ghost` button
+since the screen's primary is *Check now*, the same row shape per export
+folder with five file counts (agree · missing · incomplete · without
+bookkeeping · lost) and one row for the index against the archive, whose
+only action is *Index only*. A row carries one `.mini` per kind of
+finding it has, and none otherwise: *Findings…* (the window `befunde`,
+in the export list's shape: one `details.plangruppe` per kind, *Copy*,
+*Open folder*), *Fetch again* (`/api/archiv/nachholen`: exactly the
+missing and incomplete files of the row, written to a list the source's
+step reads as `FETCH_LIST` – each fetched through its own bookkeeping,
+the source ticked or not, nothing listed; the run is source, index and
+the archive step `pruefen`, which judges the row afresh and dates it as
+fetched), *Note as lost* (lost tombstones – and files still missing
+after a fetch that ran since the finding, `nachgeholt > fehlt_seit`: the
+row then reads "still missing after a fetch", the note asks with the
+count and takes them along), *Set aside* / *Put back*, *Rebuild
+bookkeeping*. Set aside, rebuild and the note of missing files ask with
+`confirm` and the count; every action goes to `/api/archiv/<aktion>` and
+is a run of its own (a step of `archive_check --aktion`, the rebuild
+followed by the source's export and the index) – the run window opens
+with it, the log says what moved, and the row is judged afresh when the
+step is done. Nothing on that card deletes; what moves goes to `_fremd/`
+and comes back.
 
 **The chooser** (`profil.html`): the one page before the doors, served
 only while there is more than one profile and none was named at start. One
@@ -203,9 +250,10 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Header state | `.zustaende .zustand` | dot or icon + word inside the one frame; `.lauf-pille` adds the `.mini-balken` |
 | Icon button | `.ikonknopf` | 32 px square, 8 px radius, name in the tooltip; the header's *Quit* |
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
+| Balance row | `.bilanz .zeile` | icon, name, `.dot` + one sentence (`bilanzSatz`), `.wann`, *Fetch now* while open; a `details` with the open units below |
 | Hit row | `.hit` | icon, title, date, who, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
 | Detail | `#detail` | `#detail-inhalt` with tag, title, meta, `.daktionen`, content, path; `#detail-verlauf` for the thread |
-| Settings navigation | `.snav .snav-punkt` | one per topic card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
+| Side navigation | `.snav .snav-punkt` | Settings and Insights alike: one per card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
 | Source block | `details.quelle-einst` | summary with name and state line `.zf`, `.qinhalt`, `details.erweitert` |
 | Filter pill | `.filter` or the control itself in `.filterzeile` | `.on` while a value is set |
 | View tab | `.sicht` | exactly one `.on` under `#sichten` |
@@ -225,11 +273,15 @@ Use the existing class; do not invent a sibling that looks almost the same.
    `ORDNER_ALLE` if its "folder" has a name of its own, an icon in
    `quellIkon`.
 4. A row in the schedule card (`s-<key>`) when it can run on the schedule.
-5. A tile in Overview when it has a count, a legend colour only if it is
+5. A tile in Insights when it has a count, a legend colour only if it is
    communication.
 6. Strings in all three language files: `export.<key>`, `export.cat.*`,
    `search.source.<key>`, `search.folder.all.<key>`, `sched.<key>` (+`.i`),
    `settings.<key>.title`, `job.step.<key>`, `job.start.<key>`, `run.<key>.*`.
+7. A check: a `--check` mode of the export that writes one balance
+   (`completeness.bilanz`) with the export's own notion of "excluded", a
+   `check_<key>` step in the registry with the export's environment, and a
+   row in `steps.PRUEFUNGEN` with its title key `ana.check.title.<key>`.
 
 **A new setting**: a `.feldzeile` in the matching topic card. Essential
 (decides *what* comes in) → open; everything else → *Advanced*. Boolean →
@@ -244,9 +296,10 @@ card, in a `.stand` next to a field. Not in the header, not in a toast, not in t
 log alone.
 
 **A new action**: a `.mini` button in the `.aktionen` row of the group it
-acts on. If it takes a while, its result text goes into the `.small.muted`
-span at the left of that row (the `ABGLEICH` pattern). Only one `.act`
-per screen.
+acts on. If it is a process, it starts through `run()` and speaks in the
+run window (the `ABGLEICH` pattern); only a synchronous answer – a save
+the server refuses – goes into the `.small.muted` span at the left of
+that row. Only one `.act` per screen.
 
 **A selection** (which units of a source come along): one shape for every
 source — a `.feldzeile` whose label names the choice ("Which folders are
@@ -266,12 +319,40 @@ is one `run.cadence.skip` line in the log. *Sync now* — the button in a
 URL row, or a `.mini` in the source's `.aktionen` row — lets every gate of
 that run step aside once; it never changes the cadence itself. *Force full sync* —
 a `.mini` in the `.aktionen` row of the source's *Advanced* group, one per
-source, asked once with `confirm` — starts a run of that source alone with
+source, asked once with `confirm`, with an `(i)` beside it that says what
+this source's full read takes along (`settings.full_sync.i.<key>`: the
+ticked parts, the rules, what a first-export date still bounds) — starts a
+run of that source alone with
 `full_sync`: the export forgets its stored change pointers and reads the
 source again as on its first export (`export_util.voll_neu`, one
 `run.full_sync` line in the log), writing everything over and deleting
 nothing. It is the way a setting that only reaches touched units
-(attachments, files, images) reaches what is already archived.
+(attachments, files, images) reaches what is already archived. Between
+the two sits the **resync** (`resync` on `/api/run`, `RESYNC`,
+`export_util.abgleich`, one `run.resync` line): the pointers are
+forgotten, the versions kept, so the source is listed once in full and
+only what is not here comes. *Fetch now* in the balance (`holeQuelle`
+→ `/api/bilanz/holen`, label `job.holen`) uses it only where it is the
+cheapest way: the mailbox as a resync limited to the row's open folders
+(`resync_folders`, `RESYNC_FOLDERS`, `export_util.abgleich_ordner`, one
+`run.resync.folders` line), the mirrors by the open files' ids the check
+noted in the report (`offene`, `FETCH_LIST` with `{id, rel}` pairs, the
+row adjusted by `completeness.abgeholt` – a resync only when the report
+capped them), every other source as its regular sync-now run; the
+source's check step follows the index in the same run, so the row is
+judged afresh without a second click. The resync has
+no button of its own in the settings: it is the answer to a finding, not
+a mode to pick. A full sync forgets the pointers as well, so
+`abgleich()` is true for both. *Sync now*, *Force full sync* and *Fetch
+now* on a source the settings do not tick are refused with
+`srv.inactive`, naming the source – never a run that carries nothing but
+the index. The archive card's *Fetch again* is different in kind: a
+**targeted fetch** (`FETCH_LIST`, `export_util.nachhol_liste`, one
+`run.nachholen.start` line, one `run.nachholen.done` line) that reads no
+listing at all – every export answers it from its own bookkeeping
+(`nachholen()` in each exporter: Outlook by id, the mirrors by drive
+item, Teams by conversation, Planner, To Do and OneNote by unit) – and
+therefore runs whether or not the source is ticked.
 
 **A departure from a cadence** (one mail folder, team, channel, chat,
 drive or library folder or To Do list that syncs differently): never a
@@ -313,7 +394,7 @@ repointing of a running app.
 
 **A new run or job**: nothing to add on the page — the run window renders
 from `jobs.job.steps`, the console from the log, the runs table in
-Overview from `/api/runs`. Give the step a `job.step.<key>` label and a `job.start.<key>`
+Insights from `/api/runs`. Give the step a `job.step.<key>` label and a `job.start.<key>`
 line.
 
 **A new view onto the archive** (like calendar or files): a `.sicht` tab
@@ -400,6 +481,21 @@ These tests encode the guide; adapt them consciously, never delete them:
   the inheritance rule match the exports.
 - `test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert` — one *Force
   full sync* per source, under *Advanced*, in an `.aktionen` row.
+- `test_bilanzzeilen_passen_zum_register` /
+  `test_bilanzzeile_spricht_in_saetzen_und_zahlen` — every balance row has
+  its check step, folder and title; the sentence carries numbers, never
+  names, and *Fetch now* only while something is open.
+- `test_archivzeile_spricht_in_saetzen` / `test_archivaktionen_auf_der_seite`
+  (every action and check opens the run window; the note of missing files
+  only after a resync) / `test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie`
+  / `test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten` /
+  `test_http_nachholen_schreibt_die_liste_und_startet_den_lauf` /
+  `test_http_run_lehnt_eine_nicht_angehakte_quelle_ab` — the
+  inward rows speak in sentences, carry one button per kind of finding,
+  and the actions move files aside and back but never delete one.
+- `test_insights_hat_eine_seitennavigation_je_karte` — Insights is shaped
+  like Settings: one navigation entry per card, each pointing at a card
+  that exists, the two checks with a dot.
 - `test_rundgang_ziele_existieren` / `test_rundgang_kapitel_laufen_durch` —
   every tour step points at an element, the chapters run through and are
   marked seen once.
@@ -414,7 +510,7 @@ These tests encode the guide; adapt them consciously, never delete them:
 
 ## 9. Before you change the interface
 
-1. Which door does it belong to? Build, search, overview or settings.
+1. Which door does it belong to? Build, search, Insights or settings.
 2. Is there an existing component for it? Use that class.
 3. Where is its state shown, and is it next to the thing it describes?
 4. Is the explanation on an `(i)`?

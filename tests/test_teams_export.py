@@ -1957,3 +1957,165 @@ def test_full_sync_holt_jede_datei_erneut(tmp_path, monkeypatch):
                                                 unveraendert=True)
     assert len(graph2.gefragt) == 1 and geladen2 == 1 and len(graph2.geladen) == 1
     assert DATEI_URL in lokal
+
+
+# --- the conversation balance -------------------------------------------------
+def test_nur_pruefen_zaehlt_konversationen_ohne_eine_nachricht_zu_lesen(monkeypatch, tmp_path, capsys):
+    """The check judges by the listings alone: a record with a newer last
+    message is open, a chat never exported is open, one the rules leave out
+    or a never exported one from before the start day is excluded, a record
+    nobody lists any more is kept – and not one message is read."""
+    import completeness
+    import state_db
+    monkeypatch.setenv("EXPORT_CATEGORIES", "1on1,group,channels")
+    monkeypatch.setenv("TEAMS_RULES", "- group/Geheim*")
+    monkeypatch.setenv("TEAMS_SINCE", "2025-06-03")
+    chats = [
+        _chat_eintrag("neu", "oneOnOne", name="Alice Beispiel", ts="2025-06-05T00:00:00Z"),
+        _chat_eintrag("alt", "oneOnOne", name="Bob Baumeister", ts="2025-06-01T00:00:00Z"),
+        _chat_eintrag("da", "group", topic="Nordwind", ts="2025-06-05T00:00:00Z"),
+        _chat_eintrag("bewegt", "group", topic="Rakete", ts="2025-06-09T00:00:00Z"),
+        _chat_eintrag("geheim", "group", topic="Geheimprojekt", ts="2025-06-05T00:00:00Z"),
+        _chat_eintrag("meet", "meeting", topic="Standup", ts="2025-06-05T00:00:00Z"),
+    ]
+    graph = FakeGraph(pages={f"{GRAPH}/me/chats": chats,
+                             f"{GRAPH}/me/joinedTeams": [{"id": "t1", "displayName": "Nordwind"}],
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "Allgemein"},
+                                                            {"id": "k2", "displayName": "Neu"}]},
+                      gets={f"{GRAPH}/me": {"id": "me"}})
+    monkeypatch.setattr(te, "_zugang", lambda want: graph)
+    state = te.load_state(tmp_path)
+    for key, cat, rel, last in (("da", "group", "group/Nordwind__x.html", "2025-06-06T00:00:00Z"),
+                                ("bewegt", "group", "group/Rakete__x.html", "2025-06-01T00:00:00Z"),
+                                ("ch:k1", "channels", "channels/Nordwind/Allgemein__x.html", None),
+                                ("weg", "1on1", "1on1/Weg__x.html", "2025-06-01T00:00:00Z")):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x", encoding="utf-8")
+        te.record_done(tmp_path, state, key, cat, "t", rel, 1, last_activity=last)
+    b = te.nur_pruefen(tmp_path)
+    assert (b["quelle"], b["einheit"], b["stand"]) == ("teams", "conversations", "ganz")
+    assert (b["da"], b["offen"], b["ausgeschlossen"], b["behalten"]) == (2, 3, 2, 1)
+    assert sorted((z["pfad"], z["offen"]) for z in b["zeilen"]) == \
+        [("1on1", 1), ("channels/Nordwind", 1), ("group", 1)]
+    assert completeness.lesen(state_db.StateDb(tmp_path), "teams")["offen"] == 3
+    assert not any("/messages" in u for u in graph.paged_calls), "a message was read"
+    e = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()]
+    (ergebnis,) = [x for x in e if x]
+    assert ergebnis["excluded"] == 2 and ergebnis["extra"]["open"] == 3
+
+
+def test_nur_pruefen_nennt_ein_team_das_nicht_antwortet(monkeypatch, tmp_path):
+    monkeypatch.setenv("EXPORT_CATEGORIES", "channels")
+    monkeypatch.delenv("TEAMS_RULES", raising=False)
+    monkeypatch.setenv("TEAMS_RULES", "")
+    monkeypatch.setenv("TEAMS_SINCE", "")
+    graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": [{"id": "t1", "displayName": "T1"},
+                                                          {"id": "t2", "displayName": "T2"}],
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "A"}],
+                             f"{GRAPH}/teams/t2/channels": RuntimeError("keine Rechte")},
+                      gets={f"{GRAPH}/me": {"id": "me"}})
+    monkeypatch.setattr(te, "_zugang", lambda want: graph)
+    b = te.nur_pruefen(tmp_path)
+    assert b["stand"] == "teilweise" and b["offen"] == 1
+    assert b["fehler"] == [{"pfad": "channels/T2", "grund": "run.teams.channels_failed"}]
+
+
+
+# --- "Fetch again": every conversation again, messages from the watermark --
+def test_resync_nimmt_jeden_chat_und_kanal_mit(monkeypatch, tmp_path):
+    monkeypatch.setenv("RESYNC", "1")
+    monkeypatch.setattr(te, "REFRESH_CHANNELS", False)
+    chats = [{"id": "alt", "chatType": "meeting",
+              "lastMessagePreview": {"createdDateTime": "2025-06-01T00:00:00Z"}}]
+    graph = FakeGraph(pages={f"{GRAPH}/me/chats": chats,
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "A"}]})
+    state = {"version": 1, "conversations": {
+        "alt": {"done": True, "rel": "meeting/alt.html", "count": 1, "empty": False,
+                "last_activity": "2025-06-02T00:00:00Z"},
+        "ch:k1": {"done": True, "rel": "channels/T1/a.html"}}}
+    for rel in ("meeting/alt.html", "channels/T1/a.html"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x", encoding="utf-8")
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    jobs = te.build_chat_jobs(graph, tmp_path, state, stats, "me", {"meeting"})
+    assert [c["id"] for _k, c, _ in jobs] == ["alt"] and stats["skipped"] == 0
+    jobs = te.build_channel_jobs(graph, tmp_path, state, stats,
+                                 [{"id": "t1", "displayName": "T1"}])
+    assert [ch["id"] for _k, _t, ch in jobs] == ["k1"] and stats["skipped"] == 0
+
+
+def test_resync_liest_den_chat_vom_wasserzeichen(tmp_path, monkeypatch):
+    """Unlike the full sync, the resync keeps the watermark: only newer
+    messages are asked for, the conversation is rendered again from what
+    is stored."""
+    chat, graph = _chat_fixture(danach=[_msg("Alice Example", "dritte", "2025-06-03T08:00:00Z")])
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    monkeypatch.setenv("RESYNC", "1")
+    status, _f, _t, count, _s, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert "$filter=lastModifiedDateTime gt 2025-06-02T08:00:00.000Z" in graph.paged_calls[-1]
+    assert status == "updated" and count == 3
+
+
+# --- "Fetch again": the conversations behind the missing files ------------
+def test_nachholen_exportiert_die_konversationen_der_fehlenden_dateien(tmp_path, capsys):
+    """The chat behind a missing page is exported again (messages from the
+    watermark), a chat Microsoft no longer has is said so and keeps its
+    record, a path no record knows counts as unknown – no chat list, no
+    categories, no cadence."""
+    chat, graph = _chat_fixture()
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    rel = state["conversations"]["c1"]["rel"]
+    (tmp_path / rel).unlink()
+    te.record_done(tmp_path, state, "weg", "1on1", "Weg", "1on1/Weg__weg.html", 1)
+    graph.gets[f"{GRAPH}/me"] = {"id": "me"}
+    graph.gets[f"{GRAPH}/me/chats/c1"] = chat
+    graph.gets[f"{GRAPH}/me/chats/weg"] = _http_error(404)
+    capsys.readouterr()
+    te.nachholen(graph, tmp_path, [rel, "1on1/Weg__weg.html", "group/niemand.html"])
+    assert (tmp_path / rel).is_file()
+    assert not any(u.endswith("/me/chats") for u in graph.paged_calls), "the chat list was read"
+    assert "weg" in te.load_state(tmp_path)["conversations"], "the record stays"
+    zeilen = capsys.readouterr().out.splitlines()
+    events = [e for e in (progress.lies_event(z) for z in zeilen) if e]
+    assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.gone"] == ["weg"]
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 1 and ergebnis["extra"] == {"gone": 1, "unknown": 1}
+
+
+def test_spiegelwurzel_und_kanalsuche(tmp_path):
+    """A file below a channel mirror belongs to the deepest folder with a
+    state.db on its path; a channel id is found by listing the joined
+    teams' channels once."""
+    import state_db
+    state_db.StateDb(tmp_path / "channels/Team Rakete").bestand_schreiben({})
+    assert te._spiegelwurzel(tmp_path, "channels/Team Rakete/Dateien/a.pdf") == "channels/Team Rakete"
+    assert te._spiegelwurzel(tmp_path, "channels/Team Rakete/x.html") == "channels/Team Rakete"
+    assert te._spiegelwurzel(tmp_path, "group/x.html") is None
+    graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": [{"id": "t1", "displayName": "Team Rakete"}],
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "Allgemein",
+                                                             "membershipType": "standard"}]},
+                      gets={f"{GRAPH}/teams/t1/channels/k1/filesFolder":
+                            {"id": "f1", "parentReference": {"driveId": "d9"}}})
+    cache = {}
+    team, ch = te._kanal_finden(graph, "k1", cache)
+    assert (team["id"], ch["id"]) == ("t1", "k1")
+    assert te._kanal_finden(graph, "k2", cache) is None
+    assert te._spiegel_drive(graph, "channels/Team Rakete", cache) == "d9"
+    assert te._spiegel_drive(graph, "channels/Anderes", cache) is None
+    assert graph.paged_calls.count(f"{GRAPH}/teams/t1/channels") == 1, "listed once, cached"
+
+
+def test_load_state_liest_den_alten_blob_ohne_ihn_zu_bewegen(tmp_path):
+    """A check reads the pre-9.0 blob as it is; only an export carries it
+    over into rows."""
+    import state_db
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("state", json.dumps({"conversations": {
+        "c1": {"done": True, "rel": "1on1/a.html", "count": 1, "empty": False}}}))
+    state = te.load_state(tmp_path, nur_lesen=True)
+    assert list(state["conversations"]) == ["c1"]
+    assert db.saetze_lesen("conversations") == {} and db.kv_lesen("state"), "the check moved the blob"
+    te.load_state(tmp_path)
+    assert list(db.saetze_lesen("conversations")) == ["c1"]

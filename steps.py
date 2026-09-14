@@ -57,12 +57,17 @@ def kadenzen(cfg):
 
 def _kadenz_env(cfg, ctx):
     """SYNC_CADENCE for every paced export, SYNC_NOW when the run was asked
-    to ignore the cadences once (a "sync now" button), FULL_SYNC – with
-    SYNC_NOW alongside – when a source's "Force full sync" button asked
-    for everything to be read again (export_util.voll_neu)."""
+    to ignore the cadences once (a "sync now" button), RESYNC – with
+    SYNC_NOW alongside – when "Fetch now" or "Fetch again" asked for the
+    pointers to be forgotten and only what is not here to be fetched
+    (export_util.abgleich), FULL_SYNC – with SYNC_NOW alongside – when a
+    source's "Force full sync" button asked for everything to be read
+    again (export_util.voll_neu)."""
     voll = bool(ctx.get("full_sync"))
+    neu = bool(ctx.get("resync"))
     return {"SYNC_CADENCE": json.dumps(kadenzen(cfg)),
-            **({"SYNC_NOW": "1"} if ctx.get("sync_now") or voll else {}),
+            **({"SYNC_NOW": "1"} if ctx.get("sync_now") or voll or neu else {}),
+            **({"RESYNC": "1"} if neu else {}),
             **({"FULL_SYNC": "1"} if voll else {})}
 
 
@@ -106,6 +111,53 @@ def _todo_env(cfg, ctx):
             "TODO_RULES": str(cfg.get("todo_rules") or "")}
 
 
+def _outlook_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
+            "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
+            # Always set, even empty: empty means "skip nothing", unset would
+            # mean "the script's default".
+            "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or []),
+            "OUTLOOK_SINCE": str(cfg.get("outlook_since") or ""),
+            "CALENDAR_MONTHS_BACK": str(int(cfg.get("calendar_months_back") or 0)),
+            # The "read the calendar in full" button: window and change
+            # tokens step aside once. Always set, so the script never falls
+            # back to app_config.json for it. A full sync of the source
+            # reads the calendar the same way.
+            "CALENDAR_FULL": _flag(ctx.get("calendar_full") or ctx.get("full_sync")),
+            **({"SYNC_NOW": "1"} if ctx.get("calendar_full") else {}),
+            **({"RESYNC_FOLDERS": json.dumps(ctx["resync_ordner"], ensure_ascii=False)}
+               if ctx.get("resync") and ctx.get("resync_ordner") else {})}
+
+
+def _planner_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            "PLANNER_URLS": (ctx["nur_einheit"] or
+                             str(cfg.get("planner_urls") or "")),
+            "PLANNER_ATTACHMENTS": _flag(cfg.get("planner_attachments")),
+            "PLANNER_SWEEP_HOURS": str(int(cfg.get("planner_sweep_hours") or 0)),
+            **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
+            **({"PLANNER_LEGACY_SYNC": "1"} if ctx["legacy_comments"] else {})}
+
+
+def _onenote_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            "ONENOTE_IMAGE_MAX_MB": str(int(cfg.get("onenote_image_max_mb") or 0)),
+            # Always set, even empty: empty means "every notebook".
+            "ONENOTE_RULES": str(cfg.get("onenote_rules") or ""),
+            **({"ONENOTE_ONLY": ctx["nur_einheit"], "SYNC_NOW": "1"}
+               if ctx["nur_einheit"] else {})}
+
+
+def _pages_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            "SHAREPOINT_PAGES_URLS": (ctx["nur_einheit"] or
+                                      str(cfg.get("sharepoint_pages_urls") or "")),
+            **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
+            "SHAREPOINT_PAGES_IMAGE_MAX_MB":
+                str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))}
+
+
 def _index_argv(cfg, ctx, pfade):
     argv = [pfade["teams"], pfade["outlook"], pfade["onedrive"],
             "--sharepoint", pfade["sharepoint"],
@@ -127,29 +179,54 @@ def _calendar_argv(cfg, ctx, pfade):
     return argv
 
 
+def _archiv_pfade(pfade):
+    """The inward check and its actions see every export folder, the
+    index and the stored report – the same folders as the index step."""
+    return [pfade["teams"], pfade["outlook"], pfade["onedrive"],
+            "--sharepoint", pfade["sharepoint"], "--pages", pfade["sharepoint_pages"],
+            "--planner", pfade["planner"], "--todo", pfade["todo"],
+            "--onenote", pfade["onenote"], "--store", pfade["store"],
+            "--report", pfade["archiv_bericht"]]
+
+
+def _archiv_argv(aktion):
+    """One archive action as a step: the source and, for the note, the
+    kinds to note come from the request (ctx["archiv"])."""
+    def argv(cfg, ctx, pfade):
+        a = ctx.get("archiv") or {}
+        out = [*_archiv_pfade(pfade), "--aktion", aktion, "--quelle", str(a.get("quelle") or "")]
+        if aktion == "vermerken":
+            out += ["--arten", ",".join(a.get("arten") or ("verloren",))]
+        return out
+    return argv
+
+
+def _archiv_eintrag(aktion):
+    """One archive step: an action, or "pruefen" – the row of one source
+    judged afresh after a fetch (the last step of a "Fetch again" run)."""
+    key = "archiv_" + aktion.replace("-", "_")
+    return {"key": key, "anfrage": key, "script": "archive_check",
+            "start": 'job.start.archiv.' + aktion, "label": 'job.step.archiv.' + aktion,
+            "corpus": False, "zugang": False, "schedule": None, "master": None,
+            "quelle": None, "argv": _archiv_argv(aktion), "env": lambda cfg, ctx: {}}
+
+
 REGISTRY = (
+    # The archive check's actions come first: a rebuild sets the damaged
+    # bookkeeping aside before the source's export, in the same run,
+    # fills the fresh one.
+    _archiv_eintrag("vermerken"),
+    _archiv_eintrag("beiseitelegen"),
+    _archiv_eintrag("zurueckholen"),
+    _archiv_eintrag("neu-aufbauen"),
+
     {"key": "outlook", "anfrage": "outlook", "script": "outlook_export",
      "start": "job.start.outlook",
      "label": "job.step.outlook", "corpus": True, "zugang": True,
      "schedule": "outlook", "master": None, "quelle": "Outlook",
      "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
      "argv": lambda cfg, ctx, pfade: [pfade["outlook"]],
-     "env": lambda cfg, ctx: {
-         **_kadenz_env(cfg, ctx),
-         "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
-         "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
-         # Always set, even empty: empty means "skip nothing", unset would
-         # mean "the script's default".
-         "SKIP_FOLDERS": ",".join(cfg.get("skip_folders") or []),
-         "OUTLOOK_SINCE": str(cfg.get("outlook_since") or ""),
-         "CALENDAR_MONTHS_BACK": str(int(cfg.get("calendar_months_back") or 0)),
-         # The "read the calendar in full" button: window and change
-         # tokens step aside once. Always set, so the script never falls
-         # back to app_config.json for it. A full sync of the source
-         # reads the calendar the same way.
-         "CALENDAR_FULL": _flag(ctx.get("calendar_full")
-                                or ctx.get("full_sync")),
-         **({"SYNC_NOW": "1"} if ctx.get("calendar_full") else {})}},
+     "env": _outlook_env},
 
     {"key": "onedrive", "anfrage": "onedrive", "script": "onedrive_export",
      "start": "job.start.onedrive",
@@ -177,15 +254,7 @@ REGISTRY = (
      "schedule": "planner", "master": "planner_enabled",
      "quelle": "search.source.planner",
      "argv": lambda cfg, ctx, pfade: [pfade["planner"]],
-     "env": lambda cfg, ctx: {
-         **_kadenz_env(cfg, ctx),
-         "PLANNER_URLS": (ctx["nur_einheit"] or
-                          str(cfg.get("planner_urls") or "")),
-         "PLANNER_ATTACHMENTS": _flag(cfg.get("planner_attachments")),
-         "PLANNER_SWEEP_HOURS": str(int(cfg.get("planner_sweep_hours") or 0)),
-         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
-         **({"PLANNER_LEGACY_SYNC": "1"} if ctx["legacy_comments"]
-            else {})}},
+     "env": _planner_env},
 
     {"key": "todo", "anfrage": "todo", "script": "todo_export",
      "start": "job.start.todo",
@@ -201,14 +270,7 @@ REGISTRY = (
      "schedule": "onenote", "master": "onenote_enabled",
      "quelle": "search.source.onenote",
      "argv": lambda cfg, ctx, pfade: [pfade["onenote"]],
-     "env": lambda cfg, ctx: {
-         **_kadenz_env(cfg, ctx),
-         "ONENOTE_IMAGE_MAX_MB":
-             str(int(cfg.get("onenote_image_max_mb") or 0)),
-         # Always set, even empty: empty means "every notebook".
-         "ONENOTE_RULES": str(cfg.get("onenote_rules") or ""),
-         **({"ONENOTE_ONLY": ctx["nur_einheit"], "SYNC_NOW": "1"}
-            if ctx["nur_einheit"] else {})}},
+     "env": _onenote_env},
 
     {"key": "sharepoint_pages", "anfrage": "sharepoint_pages",
      "start": "job.start.sharepoint_pages",
@@ -217,13 +279,7 @@ REGISTRY = (
      "schedule": "sharepoint_pages", "master": "sharepoint_pages_enabled",
      "quelle": "search.source.pages",
      "argv": lambda cfg, ctx, pfade: ["--pages", pfade["sharepoint_pages"]],
-     "env": lambda cfg, ctx: {
-         **_kadenz_env(cfg, ctx),
-         "SHAREPOINT_PAGES_URLS": (ctx["nur_einheit"] or
-                                   str(cfg.get("sharepoint_pages_urls") or "")),
-         **({"SYNC_NOW": "1"} if ctx["nur_einheit"] else {}),
-         "SHAREPOINT_PAGES_IMAGE_MAX_MB":
-             str(int(cfg.get("sharepoint_pages_image_max_mb") or 0))}},
+     "env": _pages_env},
 
     {"key": "teams", "anfrage": "teams", "script": "teams_export",
      "start": "job.start.teams",
@@ -316,26 +372,43 @@ REGISTRY = (
      "argv": lambda cfg, ctx, pfade: ["--calendars", pfade["outlook"]],
      "env": lambda cfg, ctx: {}},
 
+    # The completeness checks (completeness.py): one per source, with the
+    # export's own environment – so "excluded" means exactly what the
+    # export would leave out – and gated on whether the source is in use.
     {"key": "check", "anfrage": "check", "script": "outlook_export",
      "start": "job.start.check",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["outlook"]],
-     "env": lambda cfg, ctx: {}},
+     "env": _outlook_env},
+
+    {"key": "check_teams", "anfrage": "check_teams",
+     "start": "job.start.check_teams",
+     "script": "teams_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["teams"]],
+     "env": _teams_env},
 
     {"key": "check_onedrive", "anfrage": "check_onedrive",
      "start": "job.start.check_onedrive",
      "script": "onedrive_export",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: nutzt_onedrive(cfg),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["onedrive"]],
      "env": _onedrive_env},
 
     {"key": "check_sharepoint", "anfrage": "check_sharepoint",
      "start": "job.start.check_sharepoint",
      "script": "sharepoint_export",
-     "label": "job.step.preview", "corpus": False, "zugang": True,
+     "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
+     # Gated on the URL list alone: the size preview in the settings asks
+     # for this step before anyone ticks the mirror on.
+     "aktiv": lambda cfg, ctx: bool(str(cfg.get("sharepoint_urls") or "").strip()),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["sharepoint"]],
      "env": _sharepoint_env},
 
@@ -344,12 +417,121 @@ REGISTRY = (
      "script": "sharepoint_export",
      "label": "job.step.check", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(str(cfg.get("sharepoint_pages_urls") or "").strip()),
      "argv": lambda cfg, ctx, pfade: ["--check-pages",
                                       pfade["sharepoint_pages"]],
-     "env": lambda cfg, ctx: {
-         "SHAREPOINT_PAGES_URLS":
-             str(cfg.get("sharepoint_pages_urls") or "")}},
+     "env": _pages_env},
+
+    {"key": "check_planner", "anfrage": "check_planner",
+     "start": "job.start.check_planner",
+     "script": "planner_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(str(cfg.get("planner_urls") or "").strip()),
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["planner"]],
+     "env": _planner_env},
+
+    {"key": "check_todo", "anfrage": "check_todo",
+     "start": "job.start.check_todo",
+     "script": "todo_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(cfg.get("todo_enabled")),
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["todo"]],
+     "env": _todo_env},
+
+    {"key": "check_onenote", "anfrage": "check_onenote",
+     "start": "job.start.check_onenote",
+     "script": "onenote_export",
+     "label": "job.step.check", "corpus": False, "zugang": True,
+     "schedule": None, "master": None, "quelle": None,
+     "aktiv": lambda cfg, ctx: bool(cfg.get("onenote_enabled")),
+     "argv": lambda cfg, ctx, pfade: ["--check", pfade["onenote"]],
+     "env": _onenote_env},
+
+    {"key": "check_archive", "anfrage": "check_archive",
+     "start": "job.start.archive_check",
+     "script": "archive_check",
+     "label": "job.step.archive_check", "corpus": False, "zugang": False,
+     "schedule": None, "master": None, "quelle": None,
+     "argv": lambda cfg, ctx, pfade: [
+         *_archiv_pfade(pfade),
+         "--nachgeholt", json.dumps(ctx.get("nachgeholt") or {})],
+     "env": lambda cfg, ctx: {}},
+
+    # After a "Fetch again": the source's row judged afresh, dated as
+    # fetched – so the overview says at once what is still missing.
+    _archiv_eintrag("pruefen"),
 )
+
+
+def nutzt_onedrive(cfg):
+    return bool(cfg.get("onedrive_enabled"))
+
+
+def nutzt_sharepoint(cfg):
+    return bool(cfg.get("sharepoint_enabled")
+                and str(cfg.get("sharepoint_urls") or "").strip())
+
+
+def nutzt_pages(cfg):
+    return bool(cfg.get("sharepoint_pages_enabled")
+                and str(cfg.get("sharepoint_pages_urls") or "").strip())
+
+
+def nutzt_planner(cfg):
+    return bool(cfg.get("planner_enabled")
+                and str(cfg.get("planner_urls") or "").strip())
+
+
+def _kategorien(cfg, key, erlaubt):
+    return {k for k in (cfg.get(key) or []) if k in erlaubt}
+
+
+# The balance rows of the overview, in the order they are drawn: which
+# report (completeness.py keys them by `quelle`) lives in which export
+# folder, which check step writes it, what the row is called, which run
+# "fetch now" starts – and whether the source is in use at all, so a row
+# with no report is drawn only for a source someone actually uses.
+PRUEFUNGEN = (
+    {"quelle": "outlook_mail", "anfrage": "check", "ordner": "outlook",
+     "titel": "ana.check.title.mail", "lauf": {"outlook": True},
+     "nutzt": lambda cfg: "mail" in _kategorien(cfg, "outlook_categories", {"mail"})},
+    {"quelle": "outlook_calendar", "anfrage": "check", "ordner": "outlook",
+     "titel": "ana.check.title.calendar", "lauf": {"outlook": True},
+     "nutzt": lambda cfg: "calendar" in _kategorien(cfg, "outlook_categories", {"calendar"})},
+    {"quelle": "outlook_contacts", "anfrage": "check", "ordner": "outlook",
+     "titel": "ana.check.title.contacts", "lauf": {"outlook": True},
+     "nutzt": lambda cfg: "contacts" in _kategorien(cfg, "outlook_categories", {"contacts"})},
+    {"quelle": "teams", "anfrage": "check_teams", "ordner": "teams",
+     "titel": "ana.check.title.teams", "lauf": {"teams": True},
+     "nutzt": lambda cfg: bool(_kategorien(cfg, "teams_categories", set(TEAMS_KATEGORIEN)))},
+    {"quelle": "onedrive", "anfrage": "check_onedrive", "ordner": "onedrive",
+     "titel": "ana.check.title.onedrive", "lauf": {"onedrive": True},
+     "nutzt": nutzt_onedrive},
+    {"quelle": "sharepoint", "anfrage": "check_sharepoint", "ordner": "sharepoint",
+     "titel": "ana.check.title.sharepoint", "lauf": {"sharepoint": True},
+     "nutzt": nutzt_sharepoint},
+    {"quelle": "sharepoint_pages", "anfrage": "check_pages", "ordner": "sharepoint_pages",
+     "titel": "ana.check.title.pages", "lauf": {"sharepoint_pages": True},
+     "nutzt": nutzt_pages},
+    {"quelle": "planner", "anfrage": "check_planner", "ordner": "planner",
+     "titel": "ana.check.title.planner", "lauf": {"planner": True},
+     "nutzt": nutzt_planner},
+    {"quelle": "todo", "anfrage": "check_todo", "ordner": "todo",
+     "titel": "ana.check.title.todo", "lauf": {"todo": True},
+     "nutzt": lambda cfg: bool(cfg.get("todo_enabled"))},
+    {"quelle": "onenote", "anfrage": "check_onenote", "ordner": "onenote",
+     "titel": "ana.check.title.onenote", "lauf": {"onenote": True},
+     "nutzt": lambda cfg: bool(cfg.get("onenote_enabled"))},
+)
+
+
+def pruef_metadaten():
+    """What the page needs to draw the balance rows: order, title key and
+    the run "fetch now" starts – injected into /*__PRUEFUNGEN__*/."""
+    return [{"quelle": e["quelle"], "titel": e["titel"], "lauf": e["lauf"],
+             "anfrage": e["anfrage"]} for e in PRUEFUNGEN]
 
 ANFRAGEN = tuple(e["anfrage"] for e in REGISTRY)
 
@@ -357,16 +539,23 @@ ANFRAGEN = tuple(e["anfrage"] for e in REGISTRY)
 def baue(cfg, ctx, pfade, base_env, script_argv, angefragt):
     """The step list of one run – the registry, filtered and instantiated."""
     schritte = []
+    # "Fetch again" names one source and the list of files it fetches:
+    # that source's step runs whatever the settings tick, with the list
+    # in FETCH_LIST and every cadence gate aside.
+    nachholen = ctx.get("nachholen") or {}
     for e in REGISTRY:
         if not angefragt.get(e["anfrage"]):
             continue
-        if "aktiv" in e and not e["aktiv"](cfg, ctx):
+        geholt = bool(nachholen.get("liste")) and e["key"] == nachholen.get("quelle")
+        if "aktiv" in e and not e["aktiv"](cfg, ctx) and not geholt:
             continue
         label = e["label"](ctx) if callable(e["label"]) else e["label"]
         schritt = {"key": e["key"], "label": label, "start": e["start"],
                    "argv": script_argv(e["script"],
                                        *e["argv"](cfg, ctx, pfade)),
-                   "env": {**base_env, **e["env"](cfg, ctx)}}
+                   "env": {**base_env, **e["env"](cfg, ctx),
+                           **({"FETCH_LIST": str(nachholen["liste"]), "SYNC_NOW": "1"}
+                              if geholt else {})}}
         if e.get("corpus"):
             schritt["corpus"] = True
         if e.get("ziel"):

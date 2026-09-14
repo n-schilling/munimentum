@@ -605,3 +605,79 @@ def test_full_sync_holt_jede_karte_und_referenz_erneut(tmp_path, monkeypatch):
     assert len(g2.geladen) == 1, "the referenced file is fetched again"
     ziel = pl.plan_ziel(tmp_path, PLAN)
     assert len(list((ziel / pl.ANHANG_DIR).glob("*"))) == 1
+
+
+def test_nur_pruefen_zaehlt_karten_je_board_ohne_eine_zu_holen(tmp_path, capsys):
+    """One listing per board: a card with the stored etag is here, a
+    changed or new one is open; no details, no comments are fetched."""
+    import completeness
+    pid = "p1planid001"
+    url = f"https://planner.cloud.microsoft/webui/v1/plan/{pid}/view/board"
+    plan = {"title": "Team X Board", "container": {"type": "group", "containerId": "g1"}}
+    g = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")], pid=pid)
+    g.antworten[f"/planner/plans/{pid}"] = plan
+    plaene, fehl = pl.resolve_plans(g, [url], out=tmp_path)
+    pl.plan_lauf(g, tmp_path, plaene[0], {})            # the board lies here
+    g2 = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B", etag="e2"),
+                           _task("t3", "Neu")], pid=pid)
+    g2.antworten[f"/planner/plans/{pid}"] = plan
+    capsys.readouterr()
+    b = pl.nur_pruefen(g2, tmp_path, [url])
+    assert (b["quelle"], b["einheit"], b["stand"]) == ("planner", "tasks", "ganz")
+    assert (b["da"], b["offen"], b["ausgeschlossen"]) == (1, 2, 0)
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Team X Board", 2)]
+    assert completeness.lesen(state_db.StateDb(tmp_path), "planner")["da"] == 1
+    assert not any("/details" in u or "beta/" in u for u in g2.aufrufe), "the check fetched a card"
+    assert any(progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines())
+
+
+def test_nur_pruefen_nennt_ein_board_das_nicht_antwortet(tmp_path):
+    pid = "p1planid001"
+    url = f"https://planner.cloud.microsoft/webui/v1/plan/{pid}/view/board"
+    g = _Graph({f"/planner/plans/{pid}/tasks": RuntimeError("HTTP 503"),
+                f"/planner/plans/{pid}": {"title": "Team X Board", "owner": "g9"}})
+    b = pl.nur_pruefen(g, tmp_path, [url])
+    assert b["stand"] == "teilweise" and b["da"] == b["offen"] == 0
+    assert b["fehler"] == [{"pfad": "Team X Board", "grund": "run.planner.plan_failed"}]
+
+
+
+def test_karte_mit_fehlender_referenz_ist_wieder_faellig(tmp_path, monkeypatch):
+    """The stored etag counts only while the card's files lie here: a
+    referenced file that is gone makes the card due – any run fetches it
+    again, no flag needed, since every run lists all cards."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    pl.plan_lauf(_graph_mit_referenz([_task("t1", "Aufgabe A")]), tmp_path, PLAN, {})
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    (anhang,) = (ziel / pl.ANHANG_DIR).glob("*")
+    g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 1, 0) and g2.geladen == []
+    anhang.unlink()
+    g3 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    assert pl.plan_lauf(g3, tmp_path, PLAN, {}) == (1, 0, 0)
+    assert len(g3.geladen) == 1 and anhang.is_file()
+
+
+def test_nachholen_liest_die_boards_der_fehlenden_dateien(tmp_path, monkeypatch, capsys):
+    """"Fetch again": the board behind a missing file is read again from
+    the folder's own bookkeeping – the board file and the referenced file
+    come back – no configured URL, no cadence; a folder without
+    bookkeeping counts as unknown."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    pl.plan_lauf(_graph_mit_referenz([_task("t1", "Aufgabe A")]), tmp_path, PLAN, {})
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    (anhang,) = (ziel / pl.ANHANG_DIR).glob("*")
+    anhang.unlink()
+    (ziel / "board.html").unlink()
+    capsys.readouterr()
+    g = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    pl.nachholen(g, tmp_path, [f"{ziel.name}/board.html",
+                               f"{ziel.name}/{pl.ANHANG_DIR}/{anhang.name}",
+                               "Fremd__x/board.html"])
+    assert anhang.is_file() and (ziel / "board.html").is_file()
+    assert len(g.geladen) == 1
+    zeilen = capsys.readouterr().out.splitlines()
+    events = [e for e in (progress.lies_event(z) for z in zeilen) if e]
+    assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.unit"] == ["Team X Board"]
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 1 and ergebnis["extra"]["unknown"] == 1

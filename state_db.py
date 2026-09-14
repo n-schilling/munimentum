@@ -12,6 +12,8 @@ What the file holds, by export:
     seiten        inventory, id -> (rel, etag)         [pages export]
     done          resume log, mail id -> rel           [Outlook]
     verschwunden  tombstones, rel -> gone-since        (append-only)
+    verloren      tombstones whose file is gone too, acknowledged by the
+                  user in the archive check, rel -> noted-since
     walk          checkpointed enumeration            [drive mirrors]
     kv            delta pointer, folder tree, calendar list, completeness
                   report, small JSON blobs
@@ -54,6 +56,10 @@ CREATE TABLE IF NOT EXISTS seiten(
     etag TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS verschwunden(
+    rel  TEXT PRIMARY KEY,
+    seit TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS verloren(
     rel  TEXT PRIMARY KEY,
     seit TEXT NOT NULL
 );
@@ -326,6 +332,48 @@ class StateDb:
                 "INSERT INTO verschwunden(rel, seit) VALUES(?, ?)",
                 list(eintraege.items()))
 
+    # -- acknowledged losses: a tombstone whose file is gone as well --------
+    def verloren_lesen(self):
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return {}
+        return dict(con.execute("SELECT rel, seit FROM verloren"))
+
+    def verloren_vermerken(self, rels, jetzt):
+        """Note the loss – the tombstone itself stays, as always."""
+        rels = list(rels)
+        if not rels:
+            return
+        con = self._verbinden()
+        with con:
+            con.executemany(
+                "INSERT INTO verloren(rel, seit) VALUES(?, ?) "
+                "ON CONFLICT(rel) DO NOTHING",
+                [(rel, jetzt) for rel in rels])
+
+    # -- the resume log and the file's own health (read-only) --------------
+    def done_lesen(self):
+        """The resume log as mid -> rel, without opening it for writing."""
+        con = self._verbinden(lesend=True)
+        if con is None:
+            return {}
+        return dict(con.execute("SELECT mid, rel FROM done"))
+
+    def integritaet(self):
+        """SQLite's own verdict on the file: "ok", the first complaint, or
+        "ok" for a file that does not exist – nothing to be wrong about."""
+        if not self.pfad.exists():
+            return "ok"
+        try:
+            con = sqlite3.connect(f"file:{self.pfad}?mode=ro", uri=True)
+            try:
+                row = con.execute("PRAGMA quick_check").fetchone()
+                return str(row[0]) if row else "ok"
+            finally:
+                con.close()
+        except sqlite3.Error as e:
+            return f"{type(e).__name__}: {e}"
+
     # -- delta pointer, tree, report --------------------------------------
     def delta_lesen(self):
         return self._kv_lesen("delta") or None
@@ -354,15 +402,17 @@ class StateDb:
         self._kv_schreiben("baum", json.dumps(daten, ensure_ascii=False))
         return daten
 
-    def bericht_lesen(self):
-        roh = self._kv_lesen("bericht")
+    def bericht_lesen(self, key="bericht"):
+        """A stored report – the completeness balance of one source
+        (completeness.py keys them `pruefung:<quelle>`)."""
+        roh = self._kv_lesen(key)
         try:
             return json.loads(roh) if roh else None
         except ValueError:
             return None
 
-    def bericht_schreiben(self, bericht):
-        self._kv_schreiben("bericht", json.dumps(bericht, ensure_ascii=False))
+    def bericht_schreiben(self, bericht, key="bericht"):
+        self._kv_schreiben(key, json.dumps(bericht, ensure_ascii=False))
 
     # -- walk staging (checkpointed enumeration) ---------------------------
     def walk_status(self):
@@ -538,8 +588,8 @@ class DbZustand:
     def baum_schreiben(self, eintraege, vorher):
         return self.db.baum_schreiben(eintraege, vorher)
 
-    def bericht_schreiben(self, bericht):
-        self.db.bericht_schreiben(bericht)
+    def bericht_schreiben(self, bericht, key="bericht"):
+        self.db.bericht_schreiben(bericht, key)
 
     def walk_status(self):
         return self.db.walk_status()

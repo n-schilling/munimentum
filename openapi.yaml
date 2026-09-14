@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 10.1.0
+  version: 10.2.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -213,17 +213,20 @@ paths:
 
   /api/sharepoint-report:
     get:
-      summary: Last SharePoint completeness report
-      description: The stored report blob of the mirror's check step; cheaper than /api/analytics.
+      summary: Last balance of the SharePoint libraries
+      description: |
+        The stored balance of the libraries' check step – the size preview
+        reads its `bytes`, `bytes_ausgeschlossen` and `typen` from it;
+        cheaper than /api/analytics.
       responses:
         "200":
-          description: The report, or null when the check never ran.
+          description: The balance, or null when the check never ran.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  bericht: { type: [object, "null"] }
+                  bericht: { anyOf: [{ $ref: "#/components/schemas/Bilanz" }, { type: "null" }] }
 
   /api/files:
     get:
@@ -527,13 +530,23 @@ paths:
                 sync_now: { type: boolean, description: "Ignore every sync cadence once (the source's \"Sync now\" button)." }
                 calendar_full: { type: boolean, description: "Outlook: read the calendar once in full – only the calendar category runs, window and change tokens ignored." }
                 full_sync: { type: boolean, description: "The source's \"Force full sync\" button: the requested exports forget their stored change pointers (delta links, watermarks, inventory versions, page stamps, task etags) and read the source again as on its first export, writing everything over – attachments and files included. Nothing in the archive is deleted. Implies sync_now; for Outlook it reads the calendar in full as calendar_full does, with every configured category." }
+                resync: { type: boolean, description: "\"Fetch now\" in the completeness balance and \"Fetch again\" in the archive card: the requested exports forget their stored change pointers (delta links, walk pointers, chat watermarks) but keep every file's version, so each source is listed once in full and only what is not here is fetched – a mail whose file is gone, a card whose attachment is missing. Nothing current is written over, nothing is deleted. Implies sync_now." }
+                resync_folders:
+                  type: array
+                  items: { type: string }
+                  description: "With resync: the folders the balance found something open in (rel paths: E-Mail/…, kalender/<name>, kontakte). The Outlook resync then lists those alone – a calendar or the contacts only when a row of theirs is named – and leaves every other folder untouched. Other sources ignore the list."
                 sync_sharepoint: { type: boolean }
                 sync_folders: { type: boolean, description: "Outlook folder tree only." }
                 sync_calendars: { type: boolean }
-                check: { type: boolean, description: "Mailbox completeness check." }
+                check: { type: boolean, description: "Completeness check of the mailbox (mail, calendar, contacts – the ticked categories)." }
+                check_teams: { type: boolean, description: "Completeness check of Teams (conversations)." }
                 check_onedrive: { type: boolean }
-                check_sharepoint: { type: boolean, description: "Mirror preview." }
+                check_sharepoint: { type: boolean, description: "Completeness check of the SharePoint libraries; doubles as the size preview." }
                 check_pages: { type: boolean }
+                check_planner: { type: boolean }
+                check_todo: { type: boolean }
+                check_onenote: { type: boolean }
+                check_archive: { type: boolean, description: "The inward check (archive_check.py): every export's bookkeeping against the files on disk, plus the index against the archive. Needs no access; writes nothing but its report." }
                 nur_einheit: { type: string, description: "Single site/library/plan URL." }
                 legacy_comments: { type: boolean, description: "Planner: list the legacy comment threads again, ignoring the boards' cadence (skipped after a board's first sync otherwise)." }
                 embeddings: { type: [boolean, "null"], description: "null = decide automatically." }
@@ -549,6 +562,187 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
+
+  /api/archiv/ordner:
+    post:
+      summary: Show an export folder in the system's file manager
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string, description: "outlook | teams | onedrive | sharepoint | sharepoint_pages | planner | todo | onenote" }
+      responses:
+        "200": { description: Opened. }
+        "400": { description: Unknown source. }
+        "500": { description: No way to open a folder on this system. }
+
+  /api/bilanz/holen:
+    post:
+      summary: Fetch what a balance row found open (a run)
+      description: |
+        "Fetch now" on a row of the completeness balance: one run that
+        fetches only what the row found open, the cheapest way the source
+        allows – the mailbox as a resync limited to the folders with
+        something open (resync_folders from the stored report), OneDrive
+        and SharePoint by the open files' ids straight from the stored
+        report (FETCH_LIST, no walk; a resync when the report had to cap
+        them), every other source as its regular sync-now run – then the
+        index, and the source's check step so the row is judged afresh
+        (the mirrors adjust the row themselves). `quelle` is the balance
+        row's key (outlook_mail, outlook_calendar, outlook_contacts,
+        teams, onedrive, sharepoint, sharepoint_pages, planner, todo,
+        onenote).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+      responses:
+        "200":
+          description: The run started (message null).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "400": { description: Unknown row. }
+        "409": { description: A run is on, or the run could not start (the source is not ticked, srv.inactive). }
+
+  /api/archiv/nachholen:
+    post:
+      summary: Fetch the source's missing files again (a run)
+      description: |
+        "Fetch again" on a row of the archive card: exactly the files the
+        stored report found missing or incomplete are written to a list,
+        and one run starts – the source's export step with that list
+        (FETCH_LIST: each file fetched through its own bookkeeping – the
+        mail's id, the drive item, the conversation, the unit that holds
+        it – nothing else read, the source ticked in the settings or not),
+        the index, and the archive step "pruefen" that judges the row
+        afresh and dates it as fetched, so what is still missing reads as
+        a card to note. A file Microsoft no longer has is said so in the
+        log and stays an entry without a file. Nothing to do when the row
+        lists no missing file.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+      responses:
+        "200":
+          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409": { description: A run is on, or the run could not start. }
+
+  /api/archiv/vermerken:
+    post:
+      summary: Note the source's lost files as lost (a run)
+      description: |
+        An action of the archive check (archive_check.py), started as a
+        run of its own so the run window shows it and the run history
+        keeps it: every tombstone of the source whose file is gone – and,
+        with `arten` including `fehlt`, every file still missing after a
+        resync – is noted in the state.db table `verloren`; the records
+        stay. Judged afresh, not from the stored report; the source's row
+        in the report is updated when the step is done. Refused while a
+        run is on.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+                arten:
+                  type: array
+                  items: { type: string, enum: [verloren, fehlt] }
+                  description: "The kinds to note; default [verloren]. The page adds fehlt only when the report says a resync ran since the files went missing (nachgeholt > fehlt_seit)."
+      responses:
+        "200":
+          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409": { description: A run is on. }
+
+  /api/archiv/beiseitelegen:
+    post:
+      summary: Set the source's foreign files aside (a run)
+      description: |
+        Started as a run of its own: moves every file no bookkeeping knows
+        into `_fremd/<stamp>/` inside the export folder, path kept, with a
+        list of what moved next to them. A target that exists is skipped,
+        never overwritten; nothing is deleted; the index and the checks
+        ignore the folder. The log line says how many moved.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+      responses:
+        "200":
+          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409": { description: A run is on. }
+
+  /api/archiv/zurueckholen:
+    post:
+      summary: Put the newest set-aside batch back (a run)
+      description: |
+        Started as a run of its own: moves the files of the newest
+        `_fremd/<stamp>/` batch back to their paths; a file whose place is
+        taken meanwhile stays in the batch. Emptied batch folders are
+        removed – they held nothing but the move.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+      responses:
+        "200":
+          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409": { description: A run is on. }
+
+  /api/archiv/neu-aufbauen:
+    post:
+      summary: Set a damaged bookkeeping aside and rebuild it (a run)
+      description: |
+        One run of three steps: the archive step sets every damaged
+        state.db of the source aside as `state.db.beschaedigt-<stamp>` and
+        salvages what it still yields (the whole file when it dumps
+        through, else the tombstones) into a fresh one; the source's
+        sync-now export fills it as on a first export; the index follows.
+        The source's row in the report says "rebuilding" until the next
+        check. Nothing to do when no state.db of the source is damaged.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quelle: { type: string }
+      responses:
+        "200":
+          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkMessage" }
+        "409": { description: A run is on, or the run could not start. }
 
   /api/login:
     post:
@@ -861,7 +1055,7 @@ paths:
         answer_sources, semantic_min, onedrive_max_mb, sharepoint_max_mb,
         sharepoint_pages_image_max_mb, search_results, userflow_actions,
         runs_retention_months, log_retention_days, mcp_enabled,
-        mcp_autostart, update_check, embed_images, cache_images,
+        mcp_autostart, update_check, keep_awake, embed_images, cache_images,
         refresh_channels, skip_empty_chats, include_hidden,
         calendar_reconstruct, ollama_enabled, index_semantic,
         onedrive_enabled, sharepoint_enabled, sharepoint_pages_enabled,
@@ -1073,6 +1267,45 @@ components:
       properties:
         ok: { type: boolean }
         message: { $ref: "#/components/schemas/MessageOrKey" }
+    Bilanz:
+      type: object
+      description: |
+        One source's completeness balance (completeness.py). The question
+        it answers: would a run with today's settings fetch anything now
+        that is not here yet? erwartet = da + offen + wartend; nothing the
+        settings leave out counts towards it.
+      properties:
+        quelle: { type: string, description: "Source key, as in /api/analytics → pruefungen." }
+        einheit: { type: string, description: "Unit of the counts: mails, events, contacts, conversations, files, pages, tasks (progress.unit.* text keys)." }
+        geprueft: { type: string, format: date-time }
+        stand: { type: string, enum: [ganz, teilweise, nicht], description: "Whether the check itself came through; teilweise names the units in `fehler`, nicht carries a `grund`." }
+        grund: { type: [string, "null"], description: "Text key saying why the check could not run (stand = nicht)." }
+        da: { type: integer, description: "Here and current, from the export's own bookkeeping." }
+        offen: { type: integer, description: "Expected but not here: new since the last run, changed since, or failed then." }
+        ausgeschlossen: { type: integer, description: "Deliberately left out by the settings – a count, never names." }
+        ausgeschlossen_einheit: { type: string, description: "Unit of `ausgeschlossen` where it differs (calendars, lists, notebooks)." }
+        behalten: { type: integer, description: "Gone at Microsoft, kept here." }
+        wartend: { type: integer, description: "Mirrors only: files waiting for their folder cadence." }
+        zeilen:
+          type: array
+          description: Only units with something open – a folder, calendar, board, list, notebook, site.
+          items:
+            type: object
+            properties:
+              pfad: { type: string }
+              da: { type: integer }
+              offen: { type: integer }
+        fehler:
+          type: array
+          description: Units the check could not judge.
+          items:
+            type: object
+            properties:
+              pfad: { type: string }
+              grund: { type: string, description: "A run.* or ana.check.reason.* text key." }
+        bytes: { type: integer, description: "Mirrors only: bytes a run would hold." }
+        bytes_ausgeschlossen: { type: integer, description: "Mirrors only." }
+        typen: { type: array, description: "Mirrors only: files per extension (ext, n, bytes) inside the path scope, before type and size filters." }
     ProfileInfo:
       type: object
       properties:
@@ -1232,7 +1465,30 @@ components:
         top_personen: { type: array }
         groesse: { type: object, description: "Bytes per source and for the index." }
         grosse_dateien: { type: array }
-        vollstaendigkeit: { type: [object, "null"] }
-        vollstaendigkeit_onedrive: { type: [object, "null"] }
-        vollstaendigkeit_sharepoint: { type: [object, "null"] }
-        vollstaendigkeit_pages: { type: [object, "null"] }
+        pruefungen:
+          type: object
+          description: |
+            The completeness balance per source, keyed by source
+            (outlook_mail, outlook_calendar, outlook_contacts, teams,
+            onedrive, sharepoint, sharepoint_pages, planner, todo,
+            onenote): `bericht` is the last balance its check wrote (null
+            before the first check), `genutzt` whether the source is in
+            use – the page draws a row for a used source even without a
+            report, and none for an unused one.
+          additionalProperties:
+            type: object
+            properties:
+              bericht: { anyOf: [{ $ref: "#/components/schemas/Bilanz" }, { type: "null" }] }
+              genutzt: { type: boolean }
+        archiv:
+          type: [object, "null"]
+          description: |
+            The last inward check, null before the first: `geprueft`,
+            `quellen` (one entry per export folder: quelle, stand, grund,
+            stimmig, fehlt, fremd, unvollstaendig, verloren – all files –,
+            `zeilen` with the units that have findings, `fehler`) and
+            `index` (stand, grund, geaendert, neu, weg, gebaut – files
+            changed, new or gone since the index last read them). Each
+            source entry also carries `befunde` (kind -> the files behind
+            the numbers, capped at 5000 per kind – `gekappt` says so) and
+            `beiseite`, how many files an earlier "set aside" holds.

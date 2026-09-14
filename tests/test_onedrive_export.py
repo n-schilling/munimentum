@@ -306,14 +306,15 @@ def test_delta_lauf_kuerzt_den_ordnerbaum_nicht(tmp_path):
 # --------------------------------------------------------------------------
 # Completeness: what the drive has against what lies here
 # --------------------------------------------------------------------------
-def test_check_findet_die_fehlende_datei(tmp_path):
+def test_check_findet_die_offene_datei(tmp_path):
     da = tmp_path / "Dateien/Ordner/da.pdf"
     da.parent.mkdir(parents=True)
     da.write_bytes(b"x" * 10)
     b = od.pruefe_vollstaendigkeit(
         [_datei("1", "da.pdf"), _datei("2", "weg.pdf")], tmp_path, od.Selection())
-    assert (b["erwartet"], b["vorhanden"], b["fehlt"]) == (2, 1, 1)
-    assert [z["ordner"] for z in b["ordner"] if z["fehlt"]] == ["Dateien/Ordner"]
+    assert (b["quelle"], b["einheit"], b["stand"]) == ("onedrive", "files", "ganz")
+    assert (b["da"], b["offen"], b["wartend"]) == (1, 1, 0)
+    assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("Dateien/Ordner", 1, 1)]
 
 
 def test_check_erkennt_die_halb_uebertragene_datei(tmp_path):
@@ -322,33 +323,54 @@ def test_check_erkennt_die_halb_uebertragene_datei(tmp_path):
     halb.parent.mkdir(parents=True)
     halb.write_bytes(b"x" * 3)                      # 10 are expected
     b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf")], tmp_path, od.Selection())
-    assert b["fehlt"] == 1
+    assert b["offen"] == 1 and b["da"] == 0
 
 
-def test_check_rechnet_ausgelassenes_nicht_als_luecke(tmp_path):
-    """Otherwise the first check would report hundreds of false alarms for
-    folders one excluded oneself – a report that shows nonsense the first
-    time is never opened again."""
+def test_check_zaehlt_ausgeschlossenes_ohne_es_zu_nennen(tmp_path):
+    """What the rules and the size cap leave out is no gap – and it is a
+    number, never a folder name: the export list is where names live."""
     regeln = folders.lies_regeln("- Dateien/Fotos/**")
     b = od.pruefe_vollstaendigkeit(
         [_datei("1", "a.jpg", "/drive/root:/Fotos"),
          _datei("2", "gross.zip", groesse=99_000_000)],
         tmp_path, od.Selection(rules=regeln, max_bytes=1_000_000))
-    assert b["fehlt"] == 0 and b["erwartet"] == 0
-    assert b["ausgelassen"] == 2
-    assert any(z["ausgelassen"] for z in b["ordner"])
+    assert b["offen"] == 0 and b["da"] == 0
+    assert b["ausgeschlossen"] == 2 and b["bytes_ausgeschlossen"] == 99_000_010
+    assert b["zeilen"] == [] and "ausgelassene_ordner" not in b
 
 
 def test_check_erklaert_geloeschtes_statt_es_zu_vermissen(tmp_path):
     state_db.StateDb(tmp_path).verschwunden_ergaenzen(
         ["Dateien/Ordner/alt.pdf"], "2026-01-01")
     b = od.pruefe_vollstaendigkeit([], tmp_path, od.Selection())
-    assert b["geloescht"] == 1 and b["fehlt"] == 0
+    assert b["behalten"] == 1 and b["offen"] == 0
 
 
-def test_check_schreibt_den_bericht_in_die_db(tmp_path):
-    state_db.StateDb(tmp_path).bericht_schreiben({"erwartet": 1})
-    assert state_db.StateDb(tmp_path).bericht_lesen() == {"erwartet": 1}
+def test_check_wartende_dateien_sind_weder_da_noch_offen(tmp_path):
+    """A file waiting for its folder cadence is not a gap – it waits, and
+    the balance says so with a number of its own."""
+    b = od.pruefe_vollstaendigkeit([_datei("1", "a.pdf"), _datei("2", "b.pdf")],
+                                   tmp_path, od.Selection(), wartend={"2"})
+    assert (b["da"], b["offen"], b["wartend"]) == (0, 1, 1)
+
+
+def test_check_schreibt_den_bericht_unter_seiner_quelle(tmp_path):
+    import completeness
+    db = state_db.StateDb(tmp_path)
+    completeness.schreiben(db, completeness.bilanz("onedrive", "files", da=1))
+    assert completeness.lesen(db, "onedrive")["da"] == 1
+    assert db.bericht_lesen() is None          # the old unkeyed slot stays empty
+
+
+def test_nur_pruefen_kennt_die_warteliste(tmp_path, monkeypatch):
+    _erster_lauf(tmp_path, monkeypatch)
+    od.lauf(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2")]), tmp_path)
+    assert set(_wartend(tmp_path)) == {"f1"}
+    b = od.nur_pruefen(_KadenzGraph([_datei("f1", "f1.jpg", FOTO, ctag="c2"),
+                                     _datei("a1", "a1.pdf")]), tmp_path)
+    assert (b["da"], b["offen"], b["wartend"]) == (1, 0, 1)
+    import completeness
+    assert completeness.lesen(state_db.StateDb(tmp_path), "onedrive")["wartend"] == 1
 
 
 def test_null_heisst_ohne_grenze(monkeypatch):
@@ -374,7 +396,7 @@ def test_ohne_grenze_wird_nichts_ausgelassen(tmp_path, monkeypatch):
     plan = od.plane(gross, od.Bestand(), tmp_path, wahl)
     assert plan["ausgelassen"] == 0 and len(plan["laden"]) == 3
     b = od.pruefe_vollstaendigkeit(gross, tmp_path, wahl)
-    assert b["ausgelassen"] == 0, "Bericht meldet Ausgelassenes ohne jede Regel"
+    assert b["ausgeschlossen"] == 0, "Bericht meldet Ausgeschlossenes ohne jede Regel"
 
 
 # --------------------------------------------------------------------------
@@ -417,7 +439,7 @@ def test_kadenz_gilt_nicht_fuer_pruefen_und_ordner(tmp_path, monkeypatch):
     monkeypatch.setenv("SYNC_CADENCE", json.dumps({"onedrive": "monthly"}))
     state_db.StateDb(tmp_path).kv_schreiben("last_sync", str(time.time()))
     g = FakeGraph([_datei("1", "a.pdf")])
-    assert od.nur_pruefen(g, tmp_path)["erwartet"] == 1
+    assert od.nur_pruefen(g, tmp_path)["offen"] == 1
     assert od.nur_ordner(g, tmp_path) is not None
 
 
@@ -830,3 +852,96 @@ def test_full_sync_leert_die_warteliste(tmp_path, monkeypatch):
     assert sorted(g.geladen) == ["a1", "f1"] and zahlen["waiting"] == 0
     assert not any(art == "get" for art, _k in g.log), "no lookup per waiting file"
     assert _wartend(tmp_path) == {}
+
+
+def test_resync_geht_den_ganzen_baum_und_holt_nur_was_fehlt(tmp_path, monkeypatch, capsys):
+    """"Fetch again": pointer and walk go, the versions stay – the drive is
+    listed in full, a file that lies here in its size is left alone, one
+    that is gone comes back. The next regular run is incremental again."""
+    od.lauf(FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")]), tmp_path)
+    (tmp_path / "Dateien/Ordner/a.pdf").write_bytes(b"a" * 10)   # same size, other bytes
+    (tmp_path / "Dateien/Ordner/b.pdf").unlink()
+    capsys.readouterr()
+    monkeypatch.setenv("RESYNC", "1")
+    g2 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
+    zahlen = od.lauf(g2, tmp_path)
+    assert g2.geladen == ["2"] and zahlen["new"] == 1
+    assert (tmp_path / "Dateien/Ordner/a.pdf").read_bytes() == b"a" * 10, "written over"
+    assert (tmp_path / "Dateien/Ordner/b.pdf").is_file()
+    events = [e["k"] for e in _events(capsys)]
+    assert "run.resync" in events and "run.full_sync" not in events
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "https://delta/neu"
+    monkeypatch.delenv("RESYNC")
+    g3 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")])
+    assert od.lauf(g3, tmp_path)["new"] == 0 and g3.geladen == []
+
+
+class _NachholGraph(FakeGraph):
+    """Item metadata by id – one batch – and downloads; ids in `weg` are
+    gone."""
+
+    def __init__(self, items, weg=()):
+        super().__init__([])
+        self.items, self.weg, self.gefragt = items, set(weg), []
+
+    def batch_get(self, urls, extra_headers=None):
+        out = {}
+        for u in urls:
+            k = u.split("/items/")[1].split("?")[0]
+            self.gefragt.append(k)
+            out[u] = (404, None) if k in self.weg else (200, self.items[k])
+        return out
+
+
+def test_nachholen_holt_nur_die_genannten_dateien_ueber_ihre_kennung(tmp_path, capsys):
+    """"Fetch again" on a mirror: the listed files by their inventory ids,
+    one metadata batch, no walk; a file Microsoft no longer has is said so
+    and stays in the inventory; a path the inventory does not know counts
+    as unknown; everything else is left alone."""
+    od.lauf(FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf"), _datei("3", "c.pdf")]), tmp_path)
+    (tmp_path / "Dateien/Ordner/b.pdf").unlink()
+    (tmp_path / "Dateien/Ordner/c.pdf").unlink()
+    capsys.readouterr()
+    g = _NachholGraph({"2": _datei("2", "b.pdf"), "3": _datei("3", "c.pdf")}, weg={"3"})
+    zahlen = od.drive_mirror.nachholen(
+        g, tmp_path, ["Dateien/Ordner/b.pdf", "Dateien/Ordner/c.pdf", "Dateien/x.pdf"], 2)
+    assert zahlen == {"new": 1, "errors": 0, "gone": 1, "unknown": 1, "geholt": ["Dateien/Ordner/b.pdf"]}
+    assert g.geladen == ["2"] and sorted(g.gefragt) == ["2", "3"]
+    assert (tmp_path / "Dateien/Ordner/b.pdf").is_file()
+    assert not (tmp_path / "Dateien/Ordner/c.pdf").exists()
+    bestand = state_db.StateDb(tmp_path).bestand_lesen()
+    assert "3" in bestand, "the entry of the gone file stays – the check calls it a card"
+    events = [e["k"] for e in _events(capsys)]
+    assert "run.nachholen.start" in events and "run.nachholen.gone" in events \
+        and "run.nachholen.done" in events and "run.drive.full" not in events
+
+
+def test_bilanz_nennt_die_offenen_dateien_je_kennung_und_der_abruf_holt_genau_die(tmp_path, capsys):
+    """The check names its open files by id, capped; "Fetch now" then
+    fetches exactly those – new files included, no walk – and the stored
+    balance follows: the row closes without a second walk."""
+    import completeness
+    od.lauf(FakeGraph([_datei("1", "a.pdf")]), tmp_path)
+    (tmp_path / "Dateien/Ordner/a.pdf").unlink()
+    capsys.readouterr()
+    b = od.nur_pruefen(FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf")]), tmp_path)
+    assert (b["da"], b["offen"]) == (0, 2)
+    assert sorted(e["id"] for e in b["offene"]) == ["1", "2"] and not b["offene_gekappt"]
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Dateien/Ordner", 2)]
+    g = _NachholGraph({"1": _datei("1", "a.pdf"), "2": _datei("2", "b.pdf")})
+    zahlen = od.drive_mirror.nachholen(g, tmp_path, b["offene"], 2)
+    assert zahlen["new"] == 2 and sorted(zahlen["geholt"]) == ["Dateien/Ordner/a.pdf", "Dateien/Ordner/b.pdf"]
+    assert (tmp_path / "Dateien/Ordner/b.pdf").is_file(), "a file the inventory never knew"
+    assert "2" in state_db.StateDb(tmp_path).bestand_lesen()
+    db = state_db.StateDb(tmp_path)
+    completeness.abgeholt(db, "onedrive", zahlen["geholt"])
+    nachher = completeness.lesen(db, "onedrive")
+    assert (nachher["da"], nachher["offen"], nachher["zeilen"], nachher["offene"]) == (2, 0, [], [])
+
+
+def test_offene_liste_ist_gekappt(tmp_path, monkeypatch):
+    import completeness
+    monkeypatch.setattr(completeness, "OFFENE_GRENZE", 2)
+    b = od.pruefe_vollstaendigkeit([_datei(str(i), f"f{i}.pdf") for i in range(3)],
+                                   tmp_path, od.Selection())
+    assert b["offen"] == 3 and len(b["offene"]) == 2 and b["offene_gekappt"]

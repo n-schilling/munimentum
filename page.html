@@ -40,7 +40,10 @@ svg.ik.akzent{color:var(--accent)} svg.ik.ok{color:var(--ok)} svg.ik.blass{color
 
 /* ---- Header: brand, the two doors, the two side rooms, account, quit ---- */
 header{display:flex;align-items:center;gap:12px;padding:0 24px;min-height:56px;
-  background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap}
+  background:var(--card);border-bottom:1px solid var(--line);flex-wrap:wrap;
+  position:sticky;top:0;z-index:17}
+/* Anything the page scrolls to lands below the header, not under it. */
+[id]{scroll-margin-top:72px}
 .marke-zeile{display:flex;align-items:center;gap:10px;margin-right:12px}
 header .marke{width:24px;height:24px;flex:0 0 auto}
 nav{display:flex;align-items:stretch;flex:1 1 320px;gap:4px;align-self:stretch;min-height:56px}
@@ -289,7 +292,7 @@ input.fehler{border-color:var(--err)!important}
 .hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
 #pager{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
 #pager:empty{display:none}
-#detail{position:sticky;top:16px;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
+#detail{position:sticky;top:72px;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
 #detail-inhalt{display:flex;flex-direction:column;gap:14px}
 #detail-verlauf:empty{display:none}
 .dkopf{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -444,7 +447,7 @@ input.fehler{border-color:var(--err)!important}
 
 /* ---- Settings: sub-navigation left, one card per topic right ---- */
 .einst{display:grid;grid-template-columns:220px minmax(0,1fr);gap:20px;align-items:start}
-.snav{display:flex;flex-direction:column;gap:2px;position:sticky;top:16px}
+.snav{display:flex;flex-direction:column;gap:2px;position:sticky;top:72px}
 .snav-punkt{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;font:inherit;
   font-size:14px;color:var(--ink);background:transparent;border:0;cursor:pointer;text-align:left;width:100%}
 .snav-punkt:hover{background:var(--code)}
@@ -485,6 +488,19 @@ details.erweitert>.gruppe{margin-top:4px}
 .feldzeile.breit textarea{min-height:76px}
 .gruppe{margin-top:20px}
 .card>h2+.gruppe,.card>p.sub+.gruppe{margin-top:10px}
+.bilanz{margin-top:8px}
+.bilanz .zeile{display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 0;border-top:1px solid var(--line)}
+.bilanz .zeile:first-child{border-top:0}
+.bilanz .zeile .ik{width:16px;height:16px;color:var(--muted);flex:0 0 auto}
+.bilanz .text{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:2px}
+.bilanz .text b{font-weight:600}
+.bilanz .text span{font-size:13px}
+.bilanz .text .dot{margin-right:6px}
+.bilanz .wann{font-size:12.5px;color:var(--muted);white-space:nowrap}
+.bilanz details{margin:-4px 0 8px 28px}
+.bilanz details>summary{cursor:pointer;font-size:13px;color:var(--muted);list-style:none}
+.bilanz details>summary::-webkit-details-marker{display:none}
+.bilanz details .anatab{margin-top:6px}
 .aktionen{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:flex-end;margin-top:10px}
 .aktionen>.small:first-child{margin-right:auto}
 .aktionen:has(>:only-child:empty){display:none}
@@ -877,32 +893,56 @@ details.rechte p{margin:6px 0}
     <span class="muted small" data-i18n="ana.sub">Einmal je Indexlauf gerechnet – Microsoft wird dafür nicht gefragt.</span>
     <button class="ghost rechts" onclick="ladeAnalytics(true)" data-i18n="ana.reload">Aktualisieren</button>
   </div>
-  <div class="card">
+  <div class="einst">
+    <!-- The sub-navigation of the room: one entry per card, in the order
+         of the cards; the two checks carry their state as a dot. -->
+    <div class="snav" id="ana-nav">
+      <button class="snav-punkt on" data-ziel="ana-zahlen-karte" onclick="zeigeInsight('ana-zahlen-karte')" data-i18n="ana.nav.kpi">Kennzahlen</button>
+      <button class="snav-punkt" data-ziel="ana-verlauf-karte" onclick="zeigeInsight('ana-verlauf-karte')" data-i18n="ana.verlauf.titel">Verlauf</button>
+      <button class="snav-punkt" data-ziel="ana-check-karte" onclick="zeigeInsight('ana-check-karte')"><span data-i18n="ana.check.title">Vollständigkeit</span><span class="dot hide" id="p-ana-check"></span></button>
+      <button class="snav-punkt" data-ziel="ana-archiv-karte" onclick="zeigeInsight('ana-archiv-karte')"><span data-i18n="ana.archiv.title">Archiv und Buchhaltung</span><span class="dot hide" id="p-ana-archiv"></span></button>
+      <button class="snav-punkt" data-ziel="ana-runs-karte" onclick="zeigeInsight('ana-runs-karte')" data-i18n="ana.runs.title">Läufe</button>
+    </div>
+
+    <div class="einst-inhalt">
+  <div class="card" id="ana-zahlen-karte">
     <div class="dia-titel" data-i18n="ana.komm.title">Kommunikation</div>
     <div id="ana-kpi" class="kpis"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     <div class="dia-titel" data-i18n="ana.dateien.title">Dateien &amp; Platz</div>
     <div id="ana-kpi-dateien" class="kpis"></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="ana-verlauf-karte">
     <h2 data-i18n="ana.verlauf.titel">Verlauf</h2>
     <div id="ana-dia"></div>
   </div>
 
-  <div class="card">
-    <h2 data-i18n="ana.check.title">Vollständigkeit</h2>
-    <p class="sub" data-i18n="ana.check.sub">Vergleicht, was Microsoft je Ordner zählt, mit dem, was hier liegt.</p>
+  <div class="card" id="ana-check-karte">
+    <h2 class="mit-info"><span data-i18n="ana.check.title">Vollständigkeit</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="ana.check.i">i</span></h2>
+    <p class="sub" data-i18n="ana.check.sub">Würde ein Lauf mit den heutigen Einstellungen jetzt etwas holen, das hier noch nicht liegt?</p>
     <div class="row">
       <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
-      <span class="small muted" id="ana-check-state"></span>
     </div>
-    <div id="ana-checks"></div>
+    <div id="ana-checks" class="bilanz"></div>
   </div>
 
-  <div class="card">
+  <div class="card" id="ana-archiv-karte">
+    <h2 class="mit-info"><span data-i18n="ana.archiv.title">Archiv und Buchhaltung</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="ana.archiv.i">i</span></h2>
+    <p class="sub" data-i18n="ana.archiv.sub">Passt die Buchhaltung jedes Exports zu den Dateien auf der Platte, und kennt der Index den Stand? Fragt niemanden, ändert nichts.</p>
+    <div class="row">
+      <button class="ghost" id="ana-archiv" onclick="pruefeArchiv()" data-i18n="ana.archiv.run">Archiv prüfen</button>
+    </div>
+    <div id="ana-archiv-zeilen" class="bilanz"></div>
+  </div>
+
+  <div class="card" id="ana-runs-karte">
     <h2 data-i18n="ana.runs.title">Läufe</h2>
     <p class="sub" data-i18n="ana.runs.sub">Jeder Lauf der App, mit Dauer und Ergebnis je Schritt.</p>
     <div id="ana-runs"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
+  </div>
+    </div>
   </div>
 </section>
 
@@ -979,7 +1019,7 @@ details.rechte p{margin:6px 0}
             <div class="aktionen">
               <span class="small muted"></span>
               <button class="mini" onclick="ordnerZuruecksetzen()" data-i18n="settings.skip_folders.reset">Auf Vorgabe zurücksetzen</button>
-              <button class="mini" onclick="vollSync('outlook')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('outlook')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.outlook">i</span>
             </div>
           </div>
         </details>
@@ -1027,7 +1067,7 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.skip_empty_chats"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.skip_empty_chats.i">i</span></span><input type="checkbox" id="c-skip_empty_chats"></div>
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('teams')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('teams')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.teams">i</span>
             </div>
           </div>
         </details>
@@ -1062,7 +1102,7 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.onedrive.maxmb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onedrive.maxmb.i">i</span></span><span><input type="number" id="c-onedrive_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('onedrive')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('onedrive')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.onedrive">i</span>
             </div>
           </div>
         </details>
@@ -1111,7 +1151,7 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.pages.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.pages.image_max.i">i</span></span><span><input type="number" id="c-sharepoint_pages_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('sharepoint')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('sharepoint')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.sharepoint">i</span>
             </div>
           </div>
         </details>
@@ -1137,7 +1177,7 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner_sweep_hours"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner_sweep_hours.i">i</span></span><span><input type="number" id="c-planner_sweep_hours" min="0" max="8760"> <span class="muted small" data-i18n="settings.planner_sweep_hours.unit">Stunden</span></span></div>
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('planner')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('planner')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.planner">i</span>
             </div>
           </div>
         </details>
@@ -1170,7 +1210,7 @@ details.rechte p{margin:6px 0}
           <div class="gruppe">
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('todo')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('todo')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.todo">i</span>
             </div>
           </div>
         </details>
@@ -1202,7 +1242,7 @@ details.rechte p{margin:6px 0}
             <div class="feldzeile "><span class="bez"><span data-i18n="settings.onenote.image_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.onenote.image_max.i">i</span></span><span><input type="number" id="c-onenote_image_max_mb" min="0" max="100"> <span class="muted small">MB</span></span></div>
             <div class="aktionen">
               <span class="small muted"></span>
-              <button class="mini" onclick="vollSync('onenote')" data-i18n="settings.full_sync" data-i18n-title="settings.full_sync.i">Vollständig neu synchronisieren</button>
+              <button class="mini" onclick="vollSync('onenote')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.onenote">i</span>
             </div>
           </div>
         </details>
@@ -1332,6 +1372,7 @@ details.rechte p{margin:6px 0}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.runs_retention_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.runs_retention_months.i">i</span></span><input type="number" id="c-runs_retention_months" min="1" max="120"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.log_retention_days"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.log_retention_days.i">i</span></span><input type="number" id="c-log_retention_days" min="1" max="365"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.keep_awake"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.keep_awake.i">i</span></span><input type="checkbox" id="c-keep_awake"></div>
     </div>
     <div class="banner hide" id="update-banner" style="margin-top:14px"></div>
     <div class="aktionen">
@@ -1432,6 +1473,7 @@ details.rechte p{margin:6px 0}
 
 <script type="application/json" id="i18n">/*__I18N__*/</script>
 <script type="application/json" id="schritte">/*__STEPS__*/</script>
+<script type="application/json" id="pruefungen">/*__PRUEFUNGEN__*/</script>
 <script>
 var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null, wizardStand = null;
 
@@ -1902,6 +1944,25 @@ function markiereEinstellungsnav(id){
     k.classList.toggle('on', k.dataset.ziel === id);
   });
 }
+/* Insights has the same side navigation: one entry per card, a click
+   scrolls to it; the two checks show their state as a dot next to their
+   entry – warn while something is open or found, ok when all agrees. */
+function zeigeInsight(anker){
+  tab('analytics');
+  var ziel = document.getElementById(anker);
+  if(!ziel) return;
+  markiereInsightnav(anker);
+  ziel.scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function markiereInsightnav(id){
+  document.querySelectorAll('#ana-nav [data-ziel]').forEach(function(k){
+    k.classList.toggle('on', k.dataset.ziel === id);
+  });
+}
+function insightPunkt(id, zustand){
+  var p = el(id);
+  if(p) p.className = 'dot ' + (zustand || 'hide');
+}
 
 /* ---------- Status ----------
    Labels in everyday language, the technical term in the tooltip. Whoever
@@ -2168,10 +2229,14 @@ function saveCats(){
                        onenote_enabled: el('c-onenote_enabled').checked}).then(refresh);
 }
 
-/* ---------- Runs ---------- */
-function run(what, label){
+/* ---------- Runs ----------
+   EVERY process starts here – the export, a check, a fetch, an archive
+   action: the window opens with it and its log says what happens. Nothing
+   writes a state of its own next to a button. `flow` names the gesture
+   for the tour where it differs from the label. */
+function run(what, label, flow){
   what.label = label;
-  merke('flow.run', label);
+  merke('flow.run', flow || label);
   LAUF.eigener = true;                 // started here: the window opens with it
   post('/api/run', what).then(function(r){
     // Even a 500 says something: better the raw error line than an empty
@@ -2284,6 +2349,9 @@ function laufVerfolgen(jobs, first){
   } else if(LAUF.gesehen && !LAUF.ergebnis){
     LAUF.ergebnis = jobs.last || {};
     laufErgebnisZeigen(LAUF.ergebnis);
+    // The overview's numbers are stale after any run: reload them while
+    // it is on screen, or on the next visit.
+    if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
   }
 }
 function laufOeffnen(){
@@ -3732,6 +3800,7 @@ function zeigeAnalytics(a){
   el('ana-stand').textContent = a.built_at
     ? t('ana.stand', {when: fmt(a.built_at)}) : '';
   zeigeBerichte(a);
+  zeigeArchiv(a.archiv);
   if(!a.exists){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(t('search.sub.none')) + '</p>';
     el('ana-kpi-dateien').innerHTML = '';
@@ -3782,13 +3851,280 @@ function zeigeAnalytics(a){
   zeigeVerlaeufe(a);
 }
 
+/* ---------- Completeness ----------
+   One row per source in use, drawn from the balance its check wrote
+   (completeness.py): a sentence in plain words, when it was checked, and
+   "fetch now" while something is open. The rows and their order come from
+   steps.PRUEFUNGEN, injected at serve time – a new source is one entry
+   there, not a hand-wired box. */
+var PRUEFUNGEN = JSON.parse(document.getElementById('pruefungen').textContent || '[]');
+
 function zeigeBerichte(a){
-  // One block per report, straight from the registry – adding a checkable
-  // source is one line there, not a fourth hand-wired box.
-  el('ana-checks').innerHTML = Object.keys(BERICHTKAESTEN).map(function(feld){
-    return berichtHtml(a[feld], BERICHTKAESTEN[feld].titel,
-                       feld !== 'vollstaendigkeit');
-  }).join('');
+  var alle = a.pruefungen || {};
+  var zeilen = PRUEFUNGEN.filter(function(e){
+    var p = alle[e.quelle] || {};
+    return p.bericht || p.genutzt;
+  }).map(function(e){ return bilanzZeile(e, (alle[e.quelle] || {}).bericht); });
+  el('ana-checks').innerHTML = zeilen.join('') ||
+    '<p class="hint">' + esc(t('ana.check.none')) + '</p>';
+  var berichte = Object.keys(alle).map(function(k){ return alle[k].bericht; }).filter(Boolean);
+  insightPunkt('p-ana-check', !berichte.length ? null
+    : berichte.some(function(b){ return b.offen > 0 || b.stand !== 'ganz'; }) ? 'warn' : 'ok');
+}
+
+function bilanzSatz(b){
+  // {dot, text} – the one sentence of a row. Numbers only for what is
+  // larger than zero; the unit word comes from the report.
+  if(b.stand === 'nicht'){
+    return {dot: 'aus', text: t('ana.check.not', {reason: t(b.grund || 'ana.check.reason.unknown')})};
+  }
+  var einheit = t('progress.unit.' + b.einheit);
+  var teile = [];
+  if(b.offen > 0){
+    teile.push(t(b.quelle === 'teams' ? 'ana.check.open.teams' : 'ana.check.open',
+                 {n: zahl(b.offen), unit: einheit}));
+  }else{
+    teile.push(t('ana.check.all', {n: zahl(b.da), unit: einheit}));
+  }
+  if(b.wartend > 0) teile.push(t('ana.check.waiting', {n: zahl(b.wartend)}));
+  if(b.ausgeschlossen > 0){
+    var andere = b.ausgeschlossen_einheit && b.ausgeschlossen_einheit !== b.einheit;
+    teile.push(andere
+      ? t('ana.check.excluded.unit', {n: zahl(b.ausgeschlossen),
+                                      unit: t('progress.unit.' + b.ausgeschlossen_einheit)})
+      : t('ana.check.excluded', {n: zahl(b.ausgeschlossen)}));
+  }
+  if(b.behalten > 0) teile.push(t('ana.check.kept', {n: zahl(b.behalten)}));
+  var text = teile.join(' · ');
+  if(b.stand === 'teilweise'){
+    text = t('ana.check.partial', {n: zahl((b.fehler || []).length)}) + ' · ' + text;
+  }
+  return {dot: b.offen > 0 ? 'warn' : 'ok', text: text};
+}
+
+function bilanzZeile(e, b){
+  var ikonName = quellIkon({source: e.quelle.indexOf('outlook_calendar') === 0 ? 'kalender'
+                            : e.quelle.indexOf('outlook_contacts') === 0 ? 'kontakte'
+                            : e.quelle.indexOf('outlook') === 0 ? 'outlook'
+                            : e.quelle === 'sharepoint_pages' ? 'pages'
+                            : e.quelle === 'sharepoint' || e.quelle === 'onedrive' ? 'datei'
+                            : e.quelle});
+  var satz = b ? bilanzSatz(b) : {dot: 'aus', text: t('ana.check.never')};
+  var offen = b && b.offen > 0;
+  // "Fetch now" hands the row to the server, which knows the cheapest
+  // way to fetch what it found open (see /api/bilanz/holen).
+  var lauf = JSON.stringify(e.quelle).replace(/"/g, '&quot;');
+  var html = '<div class="zeile">' + ikon(ikonName) +
+    '<div class="text"><b>' + esc(t(e.titel)) + '</b>' +
+    '<span><span class="dot ' + satz.dot + '"></span>' + esc(satz.text) + '</span></div>' +
+    (b ? '<span class="wann">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</span>' : '') +
+    (offen ? '<button class="mini" onclick="holeQuelle(' + lauf + ')">' +
+             esc(t('ana.check.fetch')) + '</button>' : '') +
+    '</div>';
+  var details = (b && b.zeilen || []).slice(0, 30);
+  if(details.length){
+    html += '<details><summary>' + esc(t('ana.check.details', {n: zahl(details.length)})) + '</summary>' +
+      '<table class="anatab"><thead><tr><th>' + esc(t('ana.check.col.path')) + '</th><th>' +
+      esc(t('ana.check.col.open')) + '</th></tr></thead><tbody>' +
+      details.map(function(z){
+        return '<tr><td>' + esc(z.pfad) + '</td><td class="fehlt">' + zahl(z.offen) + '</td></tr>';
+      }).join('') + '</tbody></table></details>';
+  }
+  return html;
+}
+
+/* ---------- Archive and bookkeeping ----------
+   The inward check (archive_check.py): one row per export folder, five
+   numbers, all of them files – and the index against the archive. Same
+   row shape as the balance, a sentence in plain words, and nothing to
+   repair: "Index only" is the one thing it offers. */
+var ARCHIV_TITEL = {outlook: 'settings.outlook.title', teams: 'ana.check.title.teams',
+                    onedrive: 'ana.check.title.onedrive', sharepoint: 'ana.check.title.sharepoint',
+                    sharepoint_pages: 'ana.check.title.pages', planner: 'ana.check.title.planner',
+                    todo: 'ana.check.title.todo', onenote: 'ana.check.title.onenote'};
+var ARCHIV = null;            // the last inward report – the findings window reads it
+var BEFUNDE_TEXT = '';         // what "Copy" in the findings window puts on the clipboard
+function archivSatz(z){
+  if(z.stand === 'nicht'){
+    return {dot: 'aus', text: t('ana.archiv.not', {reason: t(z.grund || 'ana.check.reason.unknown')})};
+  }
+  var teile = [];
+  if(z.fehlt > 0) teile.push(t(nachholenErschoepft(z) ? 'ana.archiv.missing.stubborn' : 'ana.archiv.missing', {n: zahl(z.fehlt)}));
+  if(z.unvollstaendig > 0) teile.push(t('ana.archiv.partial', {n: zahl(z.unvollstaendig)}));
+  if(z.fremd > 0) teile.push(t('ana.archiv.foreign', {n: zahl(z.fremd)}));
+  if(z.verloren > 0) teile.push(t('ana.archiv.lost', {n: zahl(z.verloren)}));
+  var text = teile.length ? teile.join(' · ') : t('ana.archiv.ok', {n: zahl(z.stimmig)});
+  if(z.beiseite > 0) text += ' · ' + t('ana.archiv.aside.state', {n: zahl(z.beiseite)});
+  if(z.vermerkt > 0) text += ' · ' + t('ana.archiv.noted.state', {n: zahl(z.vermerkt)});
+  if(z.stand === 'teilweise'){
+    text = t('ana.check.partial', {n: zahl((z.fehler || []).length)}) + ' · ' + text;
+  }
+  return {dot: teile.length ? 'warn' : 'ok', text: text};
+}
+/* One button per kind of finding, and only while that kind is there:
+   the findings window, "fetch again" (exactly the missing files, each
+   through the source's own bookkeeping – ticked in the settings or not),
+   the note – for lost tombstones, and for files a fetch did not bring
+   back – set aside, put back, rebuild. Nothing here deletes. */
+function archivKnoepfe(z){
+  var q = JSON.stringify(z.quelle).replace(/"/g, '&quot;');
+  function knopf(aktion, key){
+    return '<button class="mini" onclick="archivAktion(&quot;' + aktion + '&quot;, ' + q + ')">' +
+      esc(t(key)) + '</button>';
+  }
+  var k = [];
+  // The findings window only while there is a finding to show: what was
+  // set aside is no finding any more – "Put back" is its one button.
+  var befunde = z.fehlt + z.fremd + z.unvollstaendig + z.verloren;
+  if(befunde > 0){
+    k.push('<button class="mini" onclick="befundeFenster(' + q + ')">' + esc(t('ana.archiv.findings')) + '</button>');
+  }
+  if(z.fehlt + z.unvollstaendig > 0) k.push(knopf('nachholen', 'ana.archiv.fetch'));
+  if(z.verloren > 0 || nachholenErschoepft(z)) k.push(knopf('vermerken', 'ana.archiv.note'));
+  if(z.fremd > 0) k.push(knopf('beiseitelegen', 'ana.archiv.aside'));
+  if(z.beiseite > 0) k.push(knopf('zurueckholen', 'ana.archiv.restore'));
+  if((z.stand === 'nicht' && z.grund === 'ana.archiv.reason.db') || (z.fehler || []).length){
+    k.push(knopf('neu-aufbauen', 'ana.archiv.rebuild'));
+  }
+  return k.join('');
+}
+function archivZeile(z){
+  var quelle = z.quelle === 'outlook' ? 'outlook' : z.quelle === 'sharepoint_pages' ? 'pages'
+             : (z.quelle === 'sharepoint' || z.quelle === 'onedrive') ? 'datei' : z.quelle;
+  var satz = archivSatz(z);
+  var html = '<div class="zeile">' + ikon(quellIkon({source: quelle})) +
+    '<div class="text"><b>' + esc(t(ARCHIV_TITEL[z.quelle] || z.quelle)) + '</b>' +
+    '<span><span class="dot ' + satz.dot + '"></span>' + esc(satz.text) + '</span></div>' +
+    archivKnoepfe(z) + '</div>';
+  var details = (z.zeilen || []).slice(0, 30);
+  if(details.length){
+    html += '<details><summary>' + esc(t('ana.archiv.details', {n: zahl(details.length)})) + '</summary>' +
+      '<table class="anatab"><thead><tr><th>' + esc(t('ana.archiv.col.path')) + '</th><th>' +
+      esc(t('ana.archiv.col.missing')) + '</th><th>' + esc(t('ana.archiv.col.partial')) + '</th><th>' +
+      esc(t('ana.archiv.col.foreign')) + '</th><th>' + esc(t('ana.archiv.col.lost')) +
+      '</th></tr></thead><tbody>' +
+      details.map(function(d){
+        return '<tr><td>' + esc(d.pfad) + '</td><td>' + zahl(d.fehlt) + '</td><td>' +
+          zahl(d.unvollstaendig) + '</td><td>' + zahl(d.fremd) + '</td><td>' + zahl(d.verloren) + '</td></tr>';
+      }).join('') + '</tbody></table></details>';
+  }
+  return html;
+}
+function indexZeile(ix){
+  var satz, knopf = '';
+  if(ix.stand === 'nicht'){
+    satz = {dot: 'aus', text: t('ana.archiv.not', {reason: t(ix.grund || 'ana.check.reason.unknown')})};
+  }else if(ix.geaendert || ix.neu || ix.weg){
+    satz = {dot: 'warn', text: t('ana.archiv.index.stale',
+                                 {changed: zahl(ix.geaendert), fresh: zahl(ix.neu), gone: zahl(ix.weg)})};
+    knopf = '<button class="mini" onclick="run({index:true}, t(\'job.index\'))">' +
+            esc(t('ana.archiv.index.run')) + '</button>';
+  }else{
+    satz = {dot: 'ok', text: t('ana.archiv.index.ok')};
+  }
+  return '<div class="zeile">' + ikon('lupe') +
+    '<div class="text"><b>' + esc(t('ana.archiv.index')) + '</b>' +
+    '<span><span class="dot ' + satz.dot + '"></span>' + esc(satz.text) + '</span></div>' +
+    (ix.gebaut ? '<span class="wann">' + esc(t('ana.archiv.index.built', {when: fmt(ix.gebaut)})) + '</span>' : '') +
+    knopf + '</div>';
+}
+function archivQuelle(quelle){
+  return ((ARCHIV || {}).quellen || []).filter(function(q){ return q.quelle === quelle; })[0];
+}
+/* The findings window: the files behind the numbers, one group per kind,
+   in the shape of the export list – and the two things one can do with a
+   list: copy it, open the folder. */
+function befundeFenster(quelle){
+  var z = archivQuelle(quelle);
+  if(!z) return;
+  var titel = t(ARCHIV_TITEL[quelle] || quelle);
+  var b = z.befunde || {};
+  var q = JSON.stringify(quelle).replace(/"/g, '&quot;');
+  function gruppe(key, liste){
+    if(!liste.length) return '';
+    return '<details class="plangruppe" open><summary>' + esc(t(key, {n: zahl(liste.length)})) + '</summary>' +
+      '<ul class="planliste">' + liste.slice(0, 500).map(function(p){
+        return '<li><code>' + esc(p) + '</code></li>'; }).join('') + '</ul>' +
+      (liste.length > 500 ? '<p class="small muted">' + esc(t('ana.archiv.findings.more', {n: zahl(liste.length - 500)})) + '</p>' : '') +
+      '</details>';
+  }
+  BEFUNDE_TEXT = ['fehlt', 'unvollstaendig', 'fremd', 'verloren'].map(function(k){
+    return (b[k] || []).join('\n'); }).filter(Boolean).join('\n');
+  oeffneEigenes('befunde',
+    modalKopf(t('ana.archiv.findings.title', {source: titel}), 'befunde', t('ana.archiv.findings.i')) +
+    (z.gekappt ? '<p class="small muted">' + esc(t('ana.archiv.findings.capped', {n: zahl(5000)})) + '</p>' : '') +
+    gruppe('ana.archiv.findings.missing', b.fehlt || []) +
+    gruppe('ana.archiv.findings.partial', b.unvollstaendig || []) +
+    gruppe('ana.archiv.findings.foreign', b.fremd || []) +
+    gruppe('ana.archiv.findings.lost', b.verloren || []) +
+    '<div class="row modal-fuss">' +
+    '<button class="ghost" onclick="inZwischenablage(BEFUNDE_TEXT, this)">' + esc(t('ana.archiv.findings.copy')) + '</button>' +
+    '<button class="ghost" onclick="archivAktion(&quot;ordner&quot;, ' + q + ')">' + esc(t('ana.archiv.open')) + '</button>' +
+    '</div>');
+}
+/* Every action is a run of its own: the window opens with it, its log
+   says what moved, and the row is judged afresh when it is done. The
+   ones that move or settle something ask the user first, with the count.
+   Opening the folder is no process and answers at once. */
+function archivAktion(aktion, quelle){
+  var z = archivQuelle(quelle) || {};
+  var titel = t(ARCHIV_TITEL[quelle] || quelle);
+  if(aktion === 'ordner'){
+    post('/api/archiv/ordner', {quelle: quelle}).then(function(r){ if(!r.ok) alert(mtext(r.message)); });
+    return;
+  }
+  var koerper = {quelle: quelle};
+  if(aktion === 'vermerken'){
+    koerper.arten = ['verloren'];
+    if(nachholenErschoepft(z)){
+      if(!confirm(t('ana.archiv.note.confirm', {n: zahl(z.fehlt || 0), source: titel}))) return;
+      koerper.arten.push('fehlt');
+    }
+  }
+  if(aktion === 'beiseitelegen' && !confirm(t('ana.archiv.aside.confirm', {n: zahl(z.fremd || 0), source: titel}))) return;
+  if(aktion === 'neu-aufbauen' && !confirm(t('ana.archiv.rebuild.confirm', {source: titel}))) return;
+  merke('flow.run', 'archiv.' + aktion);
+  LAUF.eigener = true;
+  post('/api/archiv/' + aktion, koerper).then(function(r){
+    if(!r.ok){ LAUF.eigener = false; alert(mtext(r.message)); return; }
+    if(r.message){ LAUF.eigener = false; alert(mtext(r.message)); return; }   // nothing to do
+    refresh();
+  });
+}
+/* A file still missing after a resync that ran since the finding: the
+   next fetch will not bring it either – it is a dead card to note. */
+function nachholenErschoepft(z){
+  return !!(z && z.fehlt > 0 && z.fehlt_seit && z.nachgeholt && z.nachgeholt > z.fehlt_seit);
+}
+function zeigeArchiv(b){
+  ARCHIV = b;
+  if(!b){
+    el('ana-archiv-zeilen').innerHTML = '<p class="hint">' + esc(t('ana.archiv.none')) + '</p>';
+    insightPunkt('p-ana-archiv', null);
+    return;
+  }
+  el('ana-archiv-zeilen').innerHTML =
+    '<p class="small muted">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</p>' +
+    (b.quellen || []).map(archivZeile).join('') + indexZeile(b.index || {stand: 'nicht'});
+  var auffaellig = (b.quellen || []).some(function(z){
+    return z.stand !== 'ganz' || z.fehlt + z.fremd + z.unvollstaendig + z.verloren > 0; });
+  insightPunkt('p-ana-archiv', auffaellig ? 'warn' : 'ok');
+}
+function pruefeArchiv(){
+  run({check_archive: true}, 'job.archive_check');
+}
+
+/* "Fetch now" on a balance row: the server fetches only what the row
+   found open – the mailbox's open folders, a mirror's open files by id,
+   otherwise the source's regular run – indexes it and judges the row
+   afresh. The window opens with the run. */
+function holeQuelle(quelle){
+  merke('flow.run', 'holen');
+  LAUF.eigener = true;
+  post('/api/bilanz/holen', {quelle: quelle}).then(function(r){
+    if(!r.ok){ LAUF.eigener = false; alert(mtext(r.message)); return; }
+    refresh();
+  });
 }
 
 function fmtTag(ts){
@@ -3801,80 +4137,17 @@ function zeigeVerschwundene(){
   tab('suche'); sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
 
-var BERICHTKAESTEN = {
-  vollstaendigkeit:            {titel: 'ana.check.title.mail'},
-  vollstaendigkeit_onedrive:   {titel: 'ana.check.title.onedrive'},
-  vollstaendigkeit_sharepoint: {titel: 'ana.check.title.sharepoint'},
-  vollstaendigkeit_pages:      {titel: 'ana.check.title.pages'}
-};
-
-function berichtHtml(b, titelKey, od){
-  // od: all mirror/pages reports speak of files instead of mails.
-  // The mailbox gets the "never checked" hint; for a mirror a block would
-  // otherwise stand there permanently although the source is not used at
-  // all.
-  if(!b){ return od ? '' :
-            '<p class="hint">' + esc(t('ana.check.none')) + '</p>'; }
-  var titel = '<h3 style="margin:14px 0 6px;font-size:14px">' +
-              esc(t(titelKey)) + '</h3>';
-  var luecken = (b.ordner || []).filter(function(z){ return z.fehlt > 0; });
-  var kopf = titel + '<p class="' + (b.fehlt ? 'warnzeile' : 'okzeile') + '">' +
-    esc(t(b.fehlt ? (od ? 'ana.check.gaps.files' : 'ana.check.gaps')
-                  : 'ana.check.complete',
-          {n: zahl(b.fehlt), erwartet: zahl(b.erwartet), da: zahl(b.vorhanden),
-           weg: zahl(b.geloescht)})) + '</p>' +
-    '<p class="small muted">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</p>' +
-    // Without this line it would look as if 20,000 mails were missing. They
-    // are not – they were never fetched because the selection skips them.
-    (b.ausgelassen ? '<p class="small muted">' +
-      esc(t(od ? 'ana.check.skipped.files' : 'ana.check.skipped',
-            {n: zahl(b.ausgelassen),
-                                  ordner: (b.ausgelassene_ordner || []).join(', ')})) +
-      '</p>' : '');
-  if(!luecken.length){ return kopf; }
-  return kopf + '<table class="anatab"><thead><tr>' +
-    '<th>' + esc(t('ana.check.folder')) + '</th><th>' + esc(t('ana.check.expected')) +
-    '</th><th>' + esc(t('ana.check.present')) + '</th><th>' + esc(t('ana.check.missing')) +
-    '</th></tr></thead><tbody>' +
-    luecken.slice(0, 30).map(function(z){
-      return '<tr><td>' + esc(z.ordner) + '</td><td>' + zahl(z.erwartet) +
-        '</td><td>' + zahl(z.vorhanden) + '</td><td class="fehlt">' + zahl(z.fehlt) +
-        '</td></tr>';
-    }).join('') + '</tbody></table>';
-}
-
-/* One button, not two. "Check" is a question to the archive, not to one
-   source – whoever sees two buttons first has to decide what they actually
-   want to know. OneDrive only comes along when it is used, though:
-   otherwise it would be a network request for an answer nobody cares
-   about. */
-function nutztOneDrive(){
-  return !!((S.config && S.config.onedrive_enabled) ||
-            (S.folders_onedrive && S.folders_onedrive.abgeglichen));
-}
-function nutztSharePoint(){
-  return !!(S.config && S.config.sharepoint_enabled &&
-            (S.config.sharepoint_urls || '').trim());
-}
+/* One button, not one per source: "check" is a question to the archive.
+   Every check is asked for; the registry drops the ones whose source is
+   not in use, so the run costs nothing for what nobody exports. */
 function nutztPages(){
   return !!(S.config && S.config.sharepoint_pages_enabled &&
             (S.config.sharepoint_pages_urls || '').trim());
 }
 function pruefeVollstaendigkeit(){
-  el('ana-check-state').textContent = t('ana.check.running');
-  post('/api/run', {check: true, check_onedrive: nutztOneDrive(),
-                    check_sharepoint: nutztSharePoint(),
-                    check_pages: nutztPages(),
-                    label: 'job.check'}).then(function(r){
-    if(!r.ok){ el('ana-check-state').textContent = mtext(r.message); return; }
-    warteAufLauf();
-  });
-}
-function warteAufLauf(){
-  wennLaufFertig(function(){
-    el('ana-check-state').textContent = '';
-    ladeAnalytics(true);
-  });
+  var lauf = {};
+  PRUEFUNGEN.forEach(function(e){ lauf[e.anfrage] = true; });
+  run(lauf, 'job.check');
 }
 
 /* ---------- Address book ---------- */
@@ -4165,7 +4438,7 @@ function pruefeUpdate(){
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled','planner_attachments',
-                'teams_attachments','teams_channel_files'];
+                'teams_attachments','teams_channel_files','keep_awake'];
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
                 'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
@@ -4705,9 +4978,7 @@ function urlZeile(tabId, wert, kadenz){
     if(!url) return;
     var lauf = tabId === 'sp-urls' ? {sharepoint: true}
       : tabId === 'pl-urls' ? {planner: true} : {sharepoint_pages: true};
-    merke('flow.run', 'sync_now');
-    post('/api/run', Object.assign({nur_einheit: url, label: 'job.export'}, lauf))
-      .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+    run(Object.assign({nur_einheit: url, index: true}, lauf), 'job.export', 'sync_now');
   };
   tab.appendChild(zeile);
   return zeile;
@@ -4904,9 +5175,7 @@ function fuelleNotizbuchTabelle(nb, kad){
       zeile.querySelector('select').onchange = speichereEinstellungen;
       zeile.querySelector('button').onclick = function(ev){
         ev.stopPropagation();
-        merke('flow.run', 'sync_now');
-        post('/api/run', {onenote: true, nur_einheit: e.id, label: 'job.export'})
-          .then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+        run({onenote: true, nur_einheit: e.id, index: true}, 'job.export', 'sync_now');
       };
     }
     tab.appendChild(zeile);
@@ -4923,21 +5192,20 @@ var ABGLEICH = {
   teams:    {msg: 'teams-msg', lauf: {sync_teams: true, label: 'job.teams_list'}},
   todo:     {msg: 'todo-msg', lauf: {sync_todo: true, label: 'job.todo_lists'}},
   // The calendar read once in full: window and change tokens step aside.
-  calendar_full: {msg: 'cal-msg', lauf: {outlook: true, calendar_full: true,
+  calendar_full: {msg: 'cal-msg', lauf: {outlook: true, calendar_full: true, index: true,
                                          label: 'job.calendar.full'}},
   // Planner takes no legacy comments since 2026-02, so a normal run leaves
   // them alone; this button lists the group threads once more.
-  planner_legacy: {msg: 'pl-msg', lauf: {planner: true, legacy_comments: true,
+  planner_legacy: {msg: 'pl-msg', lauf: {planner: true, legacy_comments: true, index: true,
                                          label: 'job.planner.legacy'}}
 };
 
 /* "Sync now" for a whole source: the run ignores the cadences once – the
    same as the button in a URL row, only without a URL. */
 function syncQuelle(quelle){
-  var lauf = {label: 'job.export', sync_now: true};
+  var lauf = {sync_now: true, index: true};
   lauf[quelle] = true;
-  merke('flow.run', 'sync_now');
-  post('/api/run', lauf).then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+  run(lauf, 'job.export', 'sync_now');
 }
 
 /* "Force full sync" for one source (its Advanced group): the run forgets
@@ -4958,10 +5226,9 @@ var VOLLSYNC = {
 function vollSync(quelle){
   var wahl = VOLLSYNC[quelle];
   if(!confirm(t('settings.full_sync.confirm', {source: t(wahl.titel)}))) return;
-  var lauf = Object.assign({label: 'job.full', full_sync: true}, wahl.lauf);
+  var lauf = Object.assign({full_sync: true, index: true}, wahl.lauf);
   if(quelle === 'sharepoint' && nutztPages()) lauf.sharepoint_pages = true;
-  merke('flow.run', 'full_sync');
-  post('/api/run', lauf).then(function(r){ if(!r.ok) alert(mtext(r.message)); refresh(); });
+  run(lauf, 'job.full', 'full_sync');
 }
 
 function speichereSharepointFelder(){
@@ -4989,10 +5256,11 @@ function sharepointVorschau(){
         clearInterval(timer);
         api('/api/sharepoint-report').then(function(r){
           var b = r.bericht;
-          el('sp-msg').textContent = b && (b.erwartet || b.ausgelassen)
+          var n = b ? (b.da || 0) + (b.offen || 0) + (b.wartend || 0) : 0;
+          el('sp-msg').textContent = b && (n || b.ausgeschlossen)
             ? t('sharepoint.preview.result',
-                {n: zahl(b.erwartet), mb: zahl(Math.round((b.bytes || 0) / 1048576)),
-                 skipped: zahl(b.ausgelassen || 0)})
+                {n: zahl(n), mb: zahl(Math.round((b.bytes || 0) / 1048576)),
+                 skipped: zahl(b.ausgeschlossen || 0)})
             : t('sharepoint.preview.empty');
           malSharepointTypen(b);
         });
@@ -5018,17 +5286,14 @@ function malSharepointTypen(b){
 }
 function gleicheOrdnerAb(quelle){
   var wahl = ABGLEICH[quelle] || ABGLEICH.outlook;
-  var kasten = wahl.msg;
-  el(kasten).textContent = t('folders.syncing');
+  var lauf = Object.assign({}, wahl.lauf), label = lauf.label;
+  delete lauf.label;
   // Only SharePoint saves its form first – the other sources start
-  // synchronously, their rules travel inside the request itself.
-  var start = wahl.save
-    ? function(){ return wahl.save().then(function(){ return post('/api/run', wahl.lauf); }); }
-    : function(){ return post('/api/run', wahl.lauf); };
-  start().then(function(r){
-    if(!r.ok){ el(kasten).textContent = mtext(r.message); return; }
-    wennLaufFertig(function(){ el(kasten).textContent = ''; });
-  });
+  // synchronously, their rules travel inside the request itself. The run
+  // window says what happens; the box beside the button stays for what
+  // the save itself has to say.
+  var starte = function(){ run(lauf, label, 'abgleich'); };
+  if(wahl.save) wahl.save().then(starte); else starte();
 }
 
 /* The two storage paths travel with the settings save – one button for

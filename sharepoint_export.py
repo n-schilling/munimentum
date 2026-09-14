@@ -69,6 +69,7 @@ from urllib.parse import parse_qs, urlsplit, unquote
 
 import auth
 import export_util
+import completeness
 import folders
 import progress
 import settings
@@ -414,6 +415,8 @@ def lauf(graph, out, drives, fehl=0):
     getaktet = False
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     for d in je_drive(graph, drives):
         ziel = drive_ziel(out, d)
         db = state_db.StateDb(ziel)
@@ -450,6 +453,61 @@ def lauf(graph, out, drives, fehl=0):
     return summe
 
 
+def _bibliotheken(out):
+    """Every library folder below the root: two levels down, with a
+    state.db of its own – as the mirrors wrote them."""
+    out = Path(out)
+    return sorted(p.parent for p in out.glob(f"*/*/{state_db.DB_NAME}"))
+
+
+def nachholen(graph, out, rels):
+    """A targeted fetch across the libraries: each file by its drive item
+    – the id its library's inventory keeps, or the id the balance names.
+    The library is found again through the URLs stored with it (kv
+    "urls"), so no configured list is needed – a library whose URLs are
+    gone counts its files as unknown. The stored balance follows what
+    came."""
+    out = Path(out)
+    progress.event("run.nachholen.start", n=len(rels))
+    je_bibliothek = {}
+    unbekannt = 0
+    for eintrag in rels:
+        rel = eintrag["rel"] if isinstance(eintrag, dict) else eintrag
+        for wurzel in _bibliotheken(out):
+            praefix = wurzel.relative_to(out).as_posix() + "/"
+            if rel.startswith(praefix):
+                innen = rel[len(praefix):]
+                je_bibliothek.setdefault(wurzel, []).append(
+                    {"id": eintrag["id"], "rel": innen} if isinstance(eintrag, dict) else innen)
+                break
+        else:
+            unbekannt += 1
+    summe = {"new": 0, "errors": 0, "gone": 0}
+    geholt = []
+    for wurzel, unter in je_bibliothek.items():
+        db = state_db.StateDb(wurzel)
+        try:
+            urls = json.loads(db.kv_lesen("urls") or "[]")
+        except ValueError:
+            urls = []
+        drives, _fehl = resolve_drives(graph, urls) if urls else ([], 0)
+        drive = next((d for d in drives if drive_ziel(out, d) == wurzel), None)
+        if drive is None:
+            unbekannt += len(unter)
+            progress.event("run.nachholen.nolibrary", "warn",
+                           name=wurzel.relative_to(out).as_posix(), n=len(unter))
+            continue
+        graph.drive_base = f"{GRAPH}/drives/{drive['id']}"
+        zahlen = drive_mirror.nachholen(graph, wurzel, unter, workers(), still=True)
+        for k in summe:
+            summe[k] += zahlen[k]
+        unbekannt += zahlen["unknown"]
+        praefix = wurzel.relative_to(out).as_posix() + "/"
+        geholt += [praefix + r for r in zahlen.get("geholt") or ()]
+    completeness.abgeholt(state_db.StateDb(out), "sharepoint", geholt)
+    export_util.nachholen_melden(summe["new"], summe["gone"], summe["errors"], unbekannt)
+
+
 def nur_ordner(graph, out, drives, fehl=0):
     wahl = auswahl()
     neu = gesamt = 0
@@ -466,59 +524,60 @@ def nur_ordner(graph, out, drives, fehl=0):
 
 
 def nur_pruefen(graph, out, drives, fehl=0):
-    """--check: the size preview. Enumerates every library without loading.
-
-    Per library one report in its folder plus one merged report at the root –
-    the row names carry "site/library", so the completeness view reads it
-    like any folder table. The events alongside answer the question the
-    preview exists for: what would a run fetch, and how big is it.
-    """
+    """--check: the balance of every listed library, merged into one report
+    at the root – one row per "site/library", as the folders lie on disk.
+    Doubles as the size preview: the events alongside say what a run would
+    fetch and how big it is."""
     wahl = auswahl()
-    zeilen, ausgelassen, ausgelassen_bytes, fehl_summe = [], 0, 0, 0
-    ausgelassene = []
+    berichte, fehler = [], []
     typen = {}
     for d in je_drive(graph, drives):
         _library_event(d)
         ziel = drive_ziel(out, d)
         _urls_merken(state_db.StateDb(ziel), d)
-        b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
-                                     still=True,
-                                     zustand=state_db.DbZustand(ziel))
-        # Row names carry "<site>/<library>" as the folders lie on disk –
-        # the very paths SHAREPOINT_RULES are written against.
-        zeilen.append({"ordner": drive_praefix(d),
-                       "erwartet": b["erwartet"], "vorhanden": b["vorhanden"],
-                       "geloescht": b["geloescht"], "fehlt": b["fehlt"],
-                       "ausgelassen": False, "bytes": b["bytes"]})
-        ausgelassen += b["ausgelassen"]
-        ausgelassen_bytes += b.get("bytes_ausgelassen", 0)
-        fehl_summe += b["fehlt"]
-        ausgelassene += [f"{drive_praefix(d)}/{o}"
-                         for o in b.get("ausgelassene_ordner") or ()]
+        try:
+            b = drive_mirror.nur_pruefen(graph, ziel, drive_auswahl(wahl, d),
+                                         still=True,
+                                         zustand=state_db.DbZustand(ziel))
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.sharepoint.library_failed", "err",
+                           name=_anzeigename(d), error=f"{type(e).__name__}: {e}")
+            fehler.append(completeness.fehler(drive_praefix(d),
+                                              "run.sharepoint.library_failed"))
+            continue
+        berichte.append((drive_praefix(d), b))
         for z in b.get("typen") or ():
             ganz = typen.setdefault(z["ext"], {"ext": z["ext"], "n": 0, "bytes": 0})
             ganz["n"] += z["n"]
             ganz["bytes"] += z["bytes"]
         progress.event("run.sharepoint.preview", site=d["site"], name=d["name"],
-                       n=b["erwartet"], mb=round(b["bytes"] / 1048576),
-                       skipped=b["ausgelassen"])
-    bericht = {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
-               "ordner": sorted(zeilen, key=lambda z: (-z["fehlt"], z["ordner"])),
-               "erwartet": sum(z["erwartet"] for z in zeilen),
-               "vorhanden": sum(z["vorhanden"] for z in zeilen),
-               "geloescht": sum(z["geloescht"] for z in zeilen),
-               "fehlt": fehl_summe,
-               "ausgelassen": ausgelassen,
-               "ausgelassene_ordner": sorted(ausgelassene)[:20],
-               "bytes": sum(z["bytes"] for z in zeilen),
-               "bytes_ausgelassen": ausgelassen_bytes,
-               "typen": sorted(typen.values(), key=lambda z: -z["bytes"])}
-    state_db.StateDb(out).bericht_schreiben(bericht)
-    progress.ergebnis(0, errors=fehl, excluded=ausgelassen,
-                      extra={"expected": bericht["erwartet"],
-                             "present": bericht["vorhanden"],
-                             "missing": bericht["fehlt"],
-                             "mb": round(bericht["bytes"] / 1048576)})
+                       n=b["da"] + b["offen"] + b["wartend"],
+                       mb=round(b["bytes"] / 1048576), skipped=b["ausgeschlossen"])
+    bericht = completeness.bilanz(
+        "sharepoint", "files",
+        da=sum(b["da"] for _p, b in berichte),
+        offen=sum(b["offen"] for _p, b in berichte),
+        ausgeschlossen=sum(b["ausgeschlossen"] for _p, b in berichte),
+        behalten=sum(b["behalten"] for _p, b in berichte),
+        wartend=sum(b["wartend"] for _p, b in berichte),
+        zeilen=[completeness.zeile(pfad, b["da"], b["offen"]) for pfad, b in berichte],
+        fehler=fehler,
+        extra={"bytes": sum(b["bytes"] for _p, b in berichte),
+               "bytes_ausgeschlossen": sum(b["bytes_ausgeschlossen"] for _p, b in berichte),
+               "typen": sorted(typen.values(), key=lambda z: -z["bytes"]),
+               "kaputt": fehl,
+               # The open files by id, under their library's path – what
+               # "Fetch now" fetches without a second walk.
+               "offene": [{"id": e["id"], "rel": f"{pfad}/{e['rel']}"}
+                          for pfad, b in berichte for e in b.get("offene") or ()
+                          ][:completeness.OFFENE_GRENZE],
+               "offene_gekappt": any(b.get("offene_gekappt") for _p, b in berichte)
+               or sum(len(b.get("offene") or ()) for _p, b in berichte)
+               > completeness.OFFENE_GRENZE})
+    completeness.schreiben(state_db.StateDb(out), bericht)
+    completeness.melden(bericht)
     return bericht
 
 
@@ -713,6 +772,10 @@ def seiten_lauf(graph, out, sites, fehl=0):
         # leaves the rest due for the next one.
         progress.event("run.full_sync")
         db.seiten_versionen_loeschen()
+    elif export_util.abgleich():
+        # A resync needs nothing more: every run lists all pages and
+        # fetches a page whose file is gone.
+        progress.event("run.resync")
     eintraege_bestand = db.seiten_lesen()
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}
@@ -833,57 +896,35 @@ def seiten_lauf(graph, out, sites, fehl=0):
 
 
 def seiten_pruefen(graph, out, sites, fehl=0):
-    """--check-pages: what Microsoft lists against what lies here, per site.
-
-    The same shape as the mirror check, so the completeness view draws it
-    without a second renderer. Nothing is rendered or written except the
-    report file."""
+    """--check-pages: what Microsoft lists against what lies here, per
+    site. Nothing is rendered or written except the report."""
     out = Path(out)
     db = state_db.StateDb(out)
-    eintraege_bestand = db.seiten_lesen()
+    bestand = db.seiten_lesen()
     weg = db.verschwunden_lesen()
-    zeilen = []
+    zeilen, fehler = [], []
     for s in sites:
+        pfad = "/".join(s["pfad"])
         try:
             seiten = list(graph.paged(
                 f"{GRAPH}/sites/{s['id']}/pages/microsoft.graph.sitePage"))
         except auth.TokenExpired:
             raise
         except Exception as e:
-            progress.event("run.pages.site_failed", "err",
-                           url="/".join(s["pfad"]),
+            progress.event("run.pages.site_failed", "err", url=pfad,
                            error=f"{type(e).__name__}: {e}")
-            fehl += 1
+            fehler.append(completeness.fehler(pfad, "run.pages.site_failed"))
             continue
-        pfad = "/".join(s["pfad"])
-        vorhanden = sum(
-            1 for seite in seiten
-            if (e := eintraege_bestand.get(seite.get("id") or ""))
-            and (out / e["rel"]).is_file())
-        zeilen.append({"ordner": pfad, "erwartet": len(seiten),
-                       "vorhanden": vorhanden, "geloescht": 0,
-                       "ausgelassen": False,
-                       "fehlt": max(0, len(seiten) - vorhanden)})
-    # Each tombstone counts exactly once, on its deepest matching site –
-    # subsites are rows of their own, nested under the parent's path.
-    nach_tiefe = sorted(zeilen, key=lambda z: -z["ordner"].count("/"))
-    for rel in weg:
-        for z in nach_tiefe:
-            if rel.startswith(z["ordner"] + "/"):
-                z["geloescht"] += 1
-                break
-    bericht = {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
-               "ordner": sorted(zeilen, key=lambda z: (-z["fehlt"], z["ordner"])),
-               "erwartet": sum(z["erwartet"] for z in zeilen),
-               "vorhanden": sum(z["vorhanden"] for z in zeilen),
-               "geloescht": sum(z["geloescht"] for z in zeilen),
-               "fehlt": sum(z["fehlt"] for z in zeilen),
-               "ausgelassen": 0, "ausgelassene_ordner": []}
-    db.bericht_schreiben(bericht)
-    progress.ergebnis(0, errors=fehl,
-                      extra={"expected": bericht["erwartet"],
-                             "present": bericht["vorhanden"],
-                             "missing": bericht["fehlt"]})
+        da = sum(1 for seite in seiten
+                 if (e := bestand.get(seite.get("id") or ""))
+                 and (out / e["rel"]).is_file())
+        zeilen.append(completeness.zeile(pfad, da, len(seiten) - da))
+    bericht = completeness.bilanz(
+        "sharepoint_pages", "pages",
+        da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
+        behalten=len(weg), zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl})
+    completeness.schreiben(db, bericht)
+    completeness.melden(bericht)
     return bericht
 
 
@@ -898,6 +939,18 @@ def main():
     seiten = "--pages" in argv or seiten_pruefung
     argv = [a for a in argv if not a.startswith("--")]
     out = export_util.ausgabeordner(argv)
+    nachzuholen = export_util.nachhol_eintraege()
+    if nachzuholen is not None and not seiten:
+        # "Fetch again" for the libraries: the files by their inventory
+        # ids, the libraries found through their stored URLs – no list.
+        graph_client.konfiguriere(workers())
+        graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+        try:
+            nachholen(graph, out, nachzuholen)
+        except auth.TokenExpired:
+            progress.fehler("token_expired")
+            sys.exit(1)
+        return
     urls = pages_urls() if seiten else configured_urls()
     if not urls:
         progress.event("run.pages.none" if seiten else "run.sharepoint.none",

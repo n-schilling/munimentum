@@ -170,6 +170,9 @@ VORGABEN = {
     # report – only the kind (tab, search, run), never contents, purely in
     # the memory of the open page. 0 turns it off.
     "notifications": "errors",  # system notifications: off | errors | all
+    # Hold the machine off idle sleep while a run is on (awake.py). On by
+    # default: a laptop that dozes off leaves the export hanging.
+    "keep_awake": True,
     "userflow_actions": 20,
     # How far back the run history (runs.db) reaches. Cleaned up at startup
     # and after every run; the file stays in the kilobyte range.

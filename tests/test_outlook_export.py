@@ -110,14 +110,6 @@ def test_folder_params_beruecksichtigt_include_hidden(monkeypatch):
 # --------------------------------------------------------------------------
 # Selection logic (indices, default exclusions, prompts)
 # --------------------------------------------------------------------------
-def test_is_default_skip_vergleicht_case_insensitive():
-    assert outlook_export._is_default_skip({"folder": {"displayName": "Junk-E-Mail"}})
-    assert outlook_export._is_default_skip({"folder": {"displayName": "  DRAFTS  "}})
-    assert outlook_export._is_default_skip({"folder": {"displayName": "Gelöschte Elemente"}})
-    assert not outlook_export._is_default_skip({"folder": {"displayName": "Posteingang"}})
-    assert not outlook_export._is_default_skip({"folder": {}})
-
-
 def test_selected_categories_folgt_der_umgebung(monkeypatch):
     """EXPORT_CATEGORIES determines the selection; without it, everything.
 
@@ -919,106 +911,252 @@ def test_vollstaendiges_listing_taugt_zum_vergleich(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# Completeness: Graph counts, so does the disk
+# Completeness: what Graph has against what the export knows it fetched
 # --------------------------------------------------------------------------
-class _BaumGraph:
-    """paged() delivers folders with totalItemCount."""
+class _PruefGraph:
+    """The check's Graph: paged() answers listings by URL fragment, get()
+    the count of mails before the start day per folder id."""
 
-    def __init__(self, ordner):
-        self.ordner = ordner
+    def __init__(self, listen=None, alt_je_ordner=None):
+        self.listen = listen or {}
+        self.alt = alt_je_ordner or {}
+        self.gefragt = []
+        self.gelistet = []
 
-    def paged(self, url, params=None):
-        if "mailFolders" in url and "childFolders" not in url:
-            yield from self.ordner
+    def paged(self, url, params=None, extra_headers=None):
+        self.gelistet.append(url)
+        for muster, liste in self.listen.items():
+            if muster in url:
+                yield from liste
+                return
         return
 
-
-def test_vollstaendigkeit_rechnet_geloeschtes_heraus(tmp_path, monkeypatch):
-    """Deleted items are not a gap – they still sit in the archive, just no
-    longer in the mailbox. Without this offset every deletion would raise
-    a false alarm."""
-    post = tmp_path / "E-Mail" / "Posteingang"
-    post.mkdir(parents=True)
-    for i in range(8):
-        (post / f"m{i}.eml").write_bytes(b"x")
-
-    monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
-        {"folder": {"displayName": "Posteingang"},
-         "subtree": [({"totalItemCount": 10}, "E-Mail/Posteingang")]}])
-    weg = {f"E-Mail/Posteingang/m{i}.eml": "2026-01-01T00:00:00" for i in range(3)}
-    b = outlook_export.pruefe_vollstaendigkeit(None, tmp_path, weg)
-
-    zeile = b["ordner"][0]
-    assert zeile["erwartet"] == 10 and zeile["vorhanden"] == 8
-    assert zeile["geloescht"] == 3
-    # 8 on disk, 3 of them deleted -> 5 count against the 10 -> 5 missing
-    assert zeile["fehlt"] == 5
-    assert b["fehlt"] == 5 and b["geloescht"] == 3
+    def get(self, url, params=None, extra_headers=None):
+        fid = url.split("/mailFolders/")[1].split("/")[0]
+        self.gefragt.append(fid)
+        return {"@odata.count": self.alt.get(fid, 0), "value": []}
 
 
-def test_vollstaendigkeit_ohne_luecke(tmp_path, monkeypatch):
-    post = tmp_path / "E-Mail" / "Posteingang"
-    post.mkdir(parents=True)
-    for i in range(10):
-        (post / f"m{i}.eml").write_bytes(b"x")
-    monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
-        {"folder": {"displayName": "Posteingang"},
-         "subtree": [({"totalItemCount": 10}, "E-Mail/Posteingang")]}])
-    b = outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})
-    assert b["fehlt"] == 0
+def _baum(monkeypatch, *ordner):
+    """(name, rel_path, count[, id]) -> the folder tree the check walks."""
+    def bauen(g):
+        return [{"folder": {"displayName": o[0]},
+                 "subtree": [({"id": o[3] if len(o) > 3 else o[0],
+                               "totalItemCount": o[2]}, o[1])]}
+                for o in ordner]
+    monkeypatch.setattr(outlook_export, "build_tree", bauen)
 
 
-def test_mehr_da_als_erwartet_ist_keine_luecke(tmp_path, monkeypatch):
+def _mails_da(tmp_path, done, rel_path, n, praefix="2025-07-01_1000__m"):
+    """n exported mails in the folder: file on disk AND in the resume log."""
+    (tmp_path / rel_path).mkdir(parents=True, exist_ok=True)
+    rels = []
+    for i in range(n):
+        rel = f"{rel_path}/{praefix}{i}__x.eml"
+        (tmp_path / rel).write_bytes(b"x")
+        done.mark(f"{rel_path}:{praefix}{i}", rel)
+        rels.append(rel)
+    return rels
+
+
+@pytest.fixture
+def _ohne_auswahl(monkeypatch):
+    """No rules, no start day – the check sees every folder."""
+    monkeypatch.setattr(outlook_export, "aktuelle_regeln", lambda: [])
+    monkeypatch.setenv("OUTLOOK_SINCE", "")
+
+
+def test_pruefe_mails_rechnet_behaltenes_heraus(tmp_path, monkeypatch, _ohne_auswahl):
+    """Deleted mails are not a gap – they still lie here, just no longer in
+    the mailbox. Without this offset every deletion would raise a false
+    alarm."""
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10))
+    done = _donelog(tmp_path)
+    rels = _mails_da(tmp_path, done, "E-Mail/Posteingang", 8)
+    weg = {rel: "2026-01-01T00:00:00" for rel in rels[:3]}
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, weg)
+    done.close()
+    assert (b["quelle"], b["einheit"]) == ("outlook_mail", "mails")
+    # 8 here, 3 of them deleted -> 5 count against the 10 -> 5 open
+    assert (b["da"], b["offen"], b["behalten"]) == (5, 5, 3)
+    assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("E-Mail/Posteingang", 5, 5)]
+
+
+def test_pruefe_mails_ohne_luecke_hat_keine_zeilen(tmp_path, monkeypatch, _ohne_auswahl):
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10))
+    done = _donelog(tmp_path)
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 10)
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert (b["da"], b["offen"]) == (10, 0) and b["zeilen"] == []
+
+
+def test_mehr_da_als_erwartet_ist_keine_luecke(tmp_path, monkeypatch, _ohne_auswahl):
     """Does happen: a mail was exported and then moved within the mailbox.
-    A negative number would be no information."""
-    post = tmp_path / "E-Mail" / "Posteingang"
-    post.mkdir(parents=True)
-    for i in range(12):
-        (post / f"m{i}.eml").write_bytes(b"x")
-    monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
-        {"folder": {"displayName": "Posteingang"},
-         "subtree": [({"totalItemCount": 10}, "E-Mail/Posteingang")]}])
-    assert outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})["fehlt"] == 0
+    The balance still adds up: da is what counts against the folder."""
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10))
+    done = _donelog(tmp_path)
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 12)
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert (b["da"], b["offen"]) == (10, 0)
 
 
-def test_ordner_ohne_zahl_wird_uebergangen(tmp_path, monkeypatch):
+def test_fremde_datei_ist_keine_exportierte_mail(tmp_path, monkeypatch, _ohne_auswahl):
+    """"Here" is the resume log, not a count of files: a stray file in the
+    folder does not stand in for a mail the export never fetched."""
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 1))
+    (tmp_path / "E-Mail/Posteingang").mkdir(parents=True)
+    (tmp_path / "E-Mail/Posteingang/fremd.eml").write_bytes(b"x")
+    done = _donelog(tmp_path)
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert (b["da"], b["offen"]) == (0, 1)
+
+
+def test_ordner_ohne_zahl_wird_uebergangen(tmp_path, monkeypatch, _ohne_auswahl):
     """Some folders deliver no totalItemCount – nothing can be said there."""
     monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
-        {"folder": {"displayName": "Ohne"},
-         "subtree": [({}, "E-Mail/Ohne")]}])
-    assert outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})["ordner"] == []
+        {"folder": {"displayName": "Ohne"}, "subtree": [({}, "E-Mail/Ohne")]}])
+    done = _donelog(tmp_path)
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert b["zeilen"] == [] and (b["da"], b["offen"]) == (0, 0)
 
 
-def test_bericht_landet_in_der_db(tmp_path):
-    state_db.StateDb(tmp_path).bericht_schreiben({"fehlt": 0, "ordner": []})
-    assert state_db.StateDb(tmp_path).bericht_lesen()["fehlt"] == 0
+def test_ausgeschlossene_ordner_sind_eine_zahl_und_keine_namen(tmp_path, monkeypatch):
+    """The rules decide what a run fetches – so a folder they leave out can
+    never be a gap. On the first real run the old check reported nearly
+    twenty thousand missing mails from exactly such a folder. And the
+    number is all there is: no folder name, the export list has those."""
+    monkeypatch.setenv("OUTLOOK_SINCE", "")
+    monkeypatch.setattr(outlook_export, "aktuelle_regeln",
+                        lambda: folders.lies_regeln("- E-Mail/Archiv/**"))
+    _baum(monkeypatch, ("Archiv", "E-Mail/Archiv", 14000),
+          ("Posteingang", "E-Mail/Posteingang", 10))
+    done = _donelog(tmp_path)
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 10)
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert b["offen"] == 0, "ausgeschlossener Ordner wurde als Lücke gezählt"
+    assert b["da"] == 10, "ausgeschlossener Ordner wurde mitgezählt"
+    assert b["ausgeschlossen"] == 14000
+    assert b["zeilen"] == [] and "ausgelassene_ordner" not in b
 
 
-def test_ausgelassene_ordner_sind_keine_luecke(tmp_path, monkeypatch):
-    """On the first real run the check reported nearly twenty thousand missing mails in the
-    archive – a folder the default selection deliberately never exports.
-    A report that shows nonsense the first time is never opened again.
-    """
-    monkeypatch.setattr(outlook_export, "DEFAULT_SKIP_FOLDERS", {"archiv"})
-    monkeypatch.setattr(outlook_export, "build_tree", lambda g: [
-        {"folder": {"displayName": "Archiv"},
-         "subtree": [({"totalItemCount": 14000}, "E-Mail/Archiv")]},
-        {"folder": {"displayName": "Posteingang"},
-         "subtree": [({"totalItemCount": 10}, "E-Mail/Posteingang")]},
-    ])
-    post = tmp_path / "E-Mail" / "Posteingang"
-    post.mkdir(parents=True)
-    for i in range(10):
-        (post / f"m{i}.eml").write_bytes(b"x")
+def test_stichtag_zaehlt_aeltere_nur_wo_eine_luecke_bliebe(tmp_path, monkeypatch):
+    """A start day keeps older mail out of a first export – so it is
+    excluded, not open. Counted with one request per folder, and only in
+    folders where a gap would otherwise remain; mails from before the day
+    that already lie here are not counted twice."""
+    monkeypatch.setenv("OUTLOOK_SINCE", "2025-06-01")
+    monkeypatch.setattr(outlook_export, "aktuelle_regeln", lambda: [])
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10, "f1"),
+          ("Gesendet", "E-Mail/Gesendet", 5, "f2"))
+    done = _donelog(tmp_path)
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 4)
+    _mails_da(tmp_path, done, "E-Mail/Gesendet", 5)
+    g = _PruefGraph(alt_je_ordner={"f1": 6, "f2": 5})
+    b = outlook_export.pruefe_mails(g, tmp_path, done, {})
+    assert (b["da"], b["offen"], b["ausgeschlossen"]) == (9, 0, 6)
+    assert g.gefragt == ["f1"], "only the folder with a gap costs a request"
+    # Two of the six old mails already lie here (exported before the day
+    # was set): they count as here, the other four as excluded.
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 2, praefix="2025-05-02_0900__alt")
+    g = _PruefGraph(alt_je_ordner={"f1": 6})
+    b = outlook_export.pruefe_mails(g, tmp_path, done, {})
+    done.close()
+    assert (b["da"], b["offen"], b["ausgeschlossen"]) == (11, 0, 4)
 
-    b = outlook_export.pruefe_vollstaendigkeit(None, tmp_path, {})
-    assert b["fehlt"] == 0, "ausgelassener Ordner wurde als Lücke gezählt"
-    assert b["erwartet"] == 10, "ausgelassener Ordner wurde mitgezählt"
-    assert b["ausgelassen"] == 14000
-    assert b["ausgelassene_ordner"] == ["Archiv"]
-    # It stays visible nonetheless – just as a row without a gap.
-    archiv = [z for z in b["ordner"] if z["ordner"] == "E-Mail/Archiv"][0]
-    assert archiv["ausgelassen"] is True and archiv["fehlt"] == 0
+
+def test_bericht_landet_unter_seiner_quelle(tmp_path):
+    import completeness
+    db = state_db.StateDb(tmp_path)
+    completeness.schreiben(db, completeness.bilanz("outlook_mail", "mails", da=3))
+    assert completeness.lesen(db, "outlook_mail")["da"] == 3
+    assert completeness.lesen(db, "outlook_calendar") is None
+
+
+def _termin(eid, lm, **extra):
+    return {"id": eid, "lastModifiedDateTime": lm, "type": "singleInstance", **extra}
+
+
+def test_pruefe_kalender_zaehlt_termine_serien_und_kalender(tmp_path, monkeypatch):
+    """Events of the window per chosen calendar, a series once by its
+    master; a calendar the rules leave out is excluded as a calendar."""
+    folders.speichere(tmp_path, [
+        {"id": "c1", "pfad": "kalender/Arbeit", "name": "Arbeit", "elemente": 0},
+        {"id": "c2", "pfad": "kalender/Geburtstage", "name": "Geburtstage", "elemente": 0}],
+        datei=folders.KALENDER)
+    monkeypatch.setattr(outlook_export, "waehle_kalender",
+                        lambda g, o: [{"id": "c1", "name": "Arbeit"}])
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "1")
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    (tmp_path / "kalender/Arbeit").mkdir(parents=True)
+    for key in ("e1", "s1", "alt"):
+        (tmp_path / f"kalender/Arbeit/{key}.ics").write_text("x", encoding="utf-8")
+        done.mark(key, f"kalender/Arbeit/{key}.ics")
+    stempel = outlook_export.Stempel(db, "events")
+    stempel.merke("e1", "2026-01-01T10:00:00Z")
+    stempel.merke("s1", "2026-01-01T10:00:00Z")        # the series moved since
+    stempel.merke("alt", "2025-01-01T10:00:00Z")       # no longer in the window
+    stempel.schreibe()
+    g = _PruefGraph(listen={"/calendars/c1/calendarView": [
+        _termin("e1", "2026-01-01T10:00:00Z"),
+        _termin("e2", "2026-02-01T10:00:00Z"),
+        {"id": "o1", "seriesMasterId": "s1", "type": "occurrence",
+         "lastModifiedDateTime": "2026-03-01T10:00:00Z"},
+        {"id": "o2", "seriesMasterId": "s1", "type": "occurrence",
+         "lastModifiedDateTime": "2026-02-01T10:00:00Z"}]})
+    b = outlook_export.pruefe_kalender(g, tmp_path, done, db)
+    done.close()
+    assert (b["quelle"], b["einheit"], b["ausgeschlossen_einheit"]) == \
+        ("outlook_calendar", "events", "calendars")
+    assert (b["da"], b["offen"], b["ausgeschlossen"], b["behalten"]) == (1, 2, 1, 1)
+    assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("kalender/Arbeit", 1, 2)]
+    assert b["stand"] == "ganz" and b["fehler"] == []
+
+
+def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monkeypatch):
+    monkeypatch.setattr(outlook_export, "waehle_kalender",
+                        lambda g, o: [{"id": "c1", "name": "Arbeit"}])
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "1")
+
+    class Kaputt(_PruefGraph):
+        def paged(self, url, params=None, extra_headers=None):
+            raise RuntimeError("HTTP 503")
+            yield
+    done = _donelog(tmp_path)
+    b = outlook_export.pruefe_kalender(Kaputt(), tmp_path, done, state_db.StateDb(tmp_path))
+    done.close()
+    assert b["stand"] == "teilweise" and b["fehler"][0]["pfad"] == "kalender/Arbeit"
+
+
+def test_pruefe_kontakte_je_ordner(tmp_path):
+    """The default folder and every contact folder; nothing is excluded."""
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    (tmp_path / "kontakte/Kunden").mkdir(parents=True)
+    for key, rel in (("k1", "kontakte/k1.vcf"), ("k3", "kontakte/Kunden/k3.vcf"),
+                     ("weg", "kontakte/weg.vcf")):
+        (tmp_path / rel).write_text("x", encoding="utf-8")
+        done.mark(key, rel)
+    stempel = outlook_export.Stempel(db, "contacts")
+    stempel.merke("k1", "2026-01-01T10:00:00Z")
+    stempel.merke("k3", "2026-01-01T10:00:00Z")
+    stempel.merke("weg", "2026-01-01T10:00:00Z")
+    stempel.schreibe()
+    g = _PruefGraph(listen={
+        "/me/contactFolders/cf1/contacts": [{"id": "k3", "lastModifiedDateTime": "2026-05-01T10:00:00Z"}],
+        "/me/contactFolders": [{"id": "cf1", "displayName": "Kunden"}],
+        "/me/contacts": [{"id": "k1", "lastModifiedDateTime": "2026-01-01T10:00:00Z"},
+                         {"id": "k2", "lastModifiedDateTime": "2026-01-01T10:00:00Z"}]})
+    b = outlook_export.pruefe_kontakte(g, tmp_path, done, db)
+    done.close()
+    assert (b["quelle"], b["einheit"]) == ("outlook_contacts", "contacts")
+    assert (b["da"], b["offen"], b["ausgeschlossen"], b["behalten"]) == (1, 2, 0, 1)
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("kontakte", 1), ("kontakte/Kunden", 1)]
 
 
 # --------------------------------------------------------------------------
@@ -1923,3 +2061,142 @@ def test_veraendert_sagt_bei_full_sync_immer_ja(tmp_path, monkeypatch):
     monkeypatch.setenv("FULL_SYNC", "1")
     assert outlook_export.veraendert(tmp_path, done, stempel, "c1", "2026-01-01T00:00:00Z")
     done.close()
+
+
+def test_resync_vergisst_den_link_und_holt_nur_was_fehlt(tmp_path, monkeypatch):
+    """"Fetch again": the stored link is not offered, the folder is listed
+    in full – a mail the resume log knows and finds on disk is skipped, one
+    whose file is gone or that no delta round ever named comes."""
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("delta:f1", _DELTA_F1 + "?$deltatoken=alt")
+    mails = [{"id": "m1", "subject": "a"}, {"id": "m2", "subject": "b"},
+             {"id": "m3", "subject": "c"}]
+    done = _donelog(tmp_path)
+    (tmp_path / "E-Mail/Posteingang").mkdir(parents=True)
+    (tmp_path / "E-Mail/Posteingang/a.eml").write_bytes(b"alt")
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    done.mark("m2", "E-Mail/Posteingang/b.eml")          # known, but gone
+    monkeypatch.setenv("RESYNC", "1")
+    g = DeltaMailGraph(mails, aenderungen=[{"id": "m9", "subject": "nur im Link"}])
+    stats = {"new": 0, "skipped": 0}
+    bestand = outlook_export.Bestand()
+    got = list(outlook_export.iter_messages_to_export(g, tmp_path, done, stats,
+                                                       _POST, bestand))
+    done.close()
+    assert [mid for mid, _ in got] == ["m2", "m3"] and stats["skipped"] == 1
+    assert (tmp_path / "E-Mail/Posteingang/a.eml").read_bytes() == b"alt"
+    assert not any("$deltatoken" in u for u in g.urls), "the stored link was offered"
+    assert db.kv_lesen("delta:f1") is None
+    assert bestand.vollstaendig == ["E-Mail/Posteingang/"], "a full round, fit for comparison"
+
+
+# --- "Fetch again": the missing files by their ids, nothing listed --------
+def _http404():
+    import types
+    err = requests.HTTPError("HTTP 404")
+    err.response = types.SimpleNamespace(status_code=404)
+    return err
+
+
+class _NachholGraph:
+    """Answers single items by id: MIME for mails, JSON for events and
+    contacts; ids in `weg` are gone (404). Records every URL."""
+
+    def __init__(self, weg=()):
+        self.weg, self.urls = set(weg), []
+
+    def get(self, url, params=None, extra_headers=None):
+        self.urls.append(url)
+        kennung = url.rsplit("/", 1)[-1].split("?")[0]
+        if kennung in self.weg:
+            raise _http404()
+        if "/events/" in url:
+            return dict(EVENT, id=kennung, lastModifiedDateTime="2026-02-01T00:00:00Z")
+        if "/contacts/" in url:
+            return {"id": kennung, "displayName": "Alice Beispiel",
+                    "lastModifiedDateTime": "2026-02-01T00:00:00Z"}
+        raise AssertionError(url)
+
+    def get_bytes(self, url, timeout=None, label=""):
+        self.urls.append(url)
+        kennung = url.split("/messages/")[1].split("/")[0]
+        if kennung in self.weg:
+            raise _http404()
+        return b"MIME " + kennung.encode(), "message/rfc822"
+
+
+def test_nachholen_holt_genau_die_fehlenden_ueber_ihre_kennung(tmp_path, capsys):
+    """A mail, an event and a contact the resume log knows and the disk
+    lost come back by id, to the path the log knows; a mail Microsoft no
+    longer has is said so and stays an entry; a path no log knows counts
+    as unknown. No folder is listed."""
+    done = _donelog(tmp_path)
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    done.mark("m2", "E-Mail/Posteingang/weg.eml")
+    done.mark("m3", "E-Mail/Posteingang/da.eml")
+    done.mark("e1", "kalender/Arbeit/t.ics")
+    done.mark("c1", "kontakte/alice.vcf")
+    (tmp_path / "E-Mail/Posteingang").mkdir(parents=True)
+    (tmp_path / "E-Mail/Posteingang/da.eml").write_bytes(b"bleibt")
+    g = _NachholGraph(weg={"m2"})
+    assert outlook_export.nachholen(g, tmp_path, done, [
+        "E-Mail/Posteingang/a.eml", "E-Mail/Posteingang/weg.eml",
+        "kalender/Arbeit/t.ics", "kontakte/alice.vcf", "E-Mail/Nirgends/x.eml"]) == "done"
+    done.close()
+    assert (tmp_path / "E-Mail/Posteingang/a.eml").read_bytes() == b"MIME m1"
+    assert not (tmp_path / "E-Mail/Posteingang/weg.eml").exists()
+    assert (tmp_path / "E-Mail/Posteingang/da.eml").read_bytes() == b"bleibt", "not asked for"
+    assert list((tmp_path / "kalender/Arbeit").glob("*.ics"))
+    assert "Alice Beispiel" in (tmp_path / "kontakte/alice.vcf").read_text(encoding="utf-8")
+    assert not any("/mailFolders/" in u or "delta" in u for u in g.urls), "something was listed"
+    zeilen = capsys.readouterr().out.splitlines()
+    events = [e for e in (progress.lies_event(z) for z in zeilen) if e]
+    assert [e["k"] for e in events if e["k"] == "run.nachholen.gone"] == ["run.nachholen.gone"]
+    (fazit,) = [e for e in events if e["k"] == "run.nachholen.done"]
+    assert fazit["v"] == {"n": 3, "gone": 1, "failed": 0, "unknown": 1}
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 3 and ergebnis["extra"] == {"gone": 1, "unknown": 1}
+    # The bookkeeping still knows the lost mail – the check calls it a card.
+    assert "E-Mail/Posteingang/weg.eml" in state_db.StateDb(tmp_path).done_lesen().values()
+
+
+def test_resync_mit_ordnerliste_liest_nur_diese_ordner(tmp_path, monkeypatch, capsys):
+    """"Fetch now" from the balance names the folders with something open:
+    the resync lists those alone – no other mail folder, no calendar, no
+    contacts unless a row of theirs is named."""
+    monkeypatch.setenv("EXPORT_CATEGORIES", "mail,calendar,contacts")
+    monkeypatch.setenv("RESYNC", "1")
+    monkeypatch.setenv("RESYNC_FOLDERS", '["E-Mail/Posteingang/Archiv", "kalender/Arbeit"]')
+    baum = [{"subtree": [({"id": "f1"}, "E-Mail/Posteingang"),
+                         ({"id": "f2"}, "E-Mail/Posteingang/Archiv"),
+                         ({"id": "f3"}, "E-Mail/Gesendet")]}]
+    monkeypatch.setattr(outlook_export, "waehle_ordner", lambda g, o: baum)
+    monkeypatch.setattr(outlook_export, "waehle_kalender",
+                        lambda g, o: [{"id": "c1", "name": "Arbeit"}, {"id": "c2", "name": "Privat"}])
+    gesehen = {}
+
+    def fake_run(graph, out, done, stats, selected, workers, bestand=None):
+        gesehen["ordner"] = [rel for top in selected for _f, rel in top["subtree"]]
+        return "done"
+    monkeypatch.setattr(outlook_export, "run_export", fake_run)
+    monkeypatch.setattr(outlook_export, "pruefe_verschwundene", lambda *a, **kw: {})
+    monkeypatch.setattr(outlook_export, "export_calendar",
+                        lambda g, o, d, s, cals: gesehen.setdefault("kalender", [c["name"] for c in cals]) and 0)
+    monkeypatch.setattr(outlook_export, "export_contacts",
+                        lambda *a, **kw: gesehen.setdefault("kontakte", True) and 0)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
+    assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
+    done.close()
+    assert gesehen["ordner"] == ["E-Mail/Posteingang/Archiv"]
+    assert gesehen["kalender"] == ["Arbeit"]
+    assert "kontakte" not in gesehen, "contacts listed without a row of theirs"
+    events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
+    assert any(e["k"] == "run.resync.folders" and e["v"]["n"] == 2 for e in events)
+    # Without the list a resync reads everything, as before.
+    monkeypatch.delenv("RESYNC_FOLDERS")
+    gesehen.clear()
+    done = _donelog(tmp_path)
+    assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
+    done.close()
+    assert len(gesehen["ordner"]) == 3 and gesehen["kalender"] == ["Arbeit", "Privat"] and gesehen["kontakte"]

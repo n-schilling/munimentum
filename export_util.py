@@ -166,7 +166,85 @@ def sync_jetzt():
     this flag – the cadence gate steps aside once. A full sync (voll_neu)
     counts as one: nothing may wait for its cadence in a run that reads
     everything."""
-    return bool((os.environ.get("SYNC_NOW") or "").strip()) or voll_neu()
+    return bool((os.environ.get("SYNC_NOW") or "").strip()) or abgleich()
+
+
+def abgleich():
+    """"Fetch now" and "Fetch again" (RESYNC): the run sets the stored
+    change pointers aside – delta links, walk pointers, chat watermarks –
+    but keeps every file's version, so the source is listed once in full
+    and only what is not here comes: a mail whose file is gone, a file the
+    last delta round never named, a card whose attachment is missing. What
+    lies here and is current is neither fetched nor written over; nothing
+    is deleted. Every cadence gate steps aside (sync_jetzt). A full sync
+    (voll_neu) forgets the pointers as well, so it counts as one."""
+    return bool((os.environ.get("RESYNC") or "").strip()) or voll_neu()
+
+
+def abgleich_ordner():
+    """RESYNC_FOLDERS: the folders the balance found something open in –
+    rel paths as the export lays them out ("E-Mail/…", "kalender/<name>",
+    "kontakte/…"). A resync that carries them lists only those and leaves
+    every other folder, calendar and contact folder untouched: a fetch for
+    26 open mails need not read the whole mailbox. None on a plain resync;
+    then everything is listed."""
+    roh = (os.environ.get("RESYNC_FOLDERS") or "").strip()
+    if not roh:
+        return None
+    try:
+        daten = json.loads(roh)
+    except ValueError:
+        return None
+    return [str(p) for p in daten if isinstance(p, str)] if isinstance(daten, list) else None
+
+
+def nachhol_liste():
+    """"Fetch again" (FETCH_LIST): the path of a JSON file naming the files
+    the archive check found missing or incomplete – rels below the source's
+    folder. An export that finds it fetches exactly those, each through its
+    own bookkeeping (the mail's id, the drive item, the conversation, the
+    unit that holds it), reads nothing else and touches nothing else; a
+    file Microsoft no longer has is said so and stays an entry without a
+    file. None on a regular run; an unreadable list counts as empty."""
+    eintraege = nachhol_eintraege()
+    if eintraege is None:
+        return None
+    return [e["rel"] if isinstance(e, dict) else e for e in eintraege]
+
+
+def nachhol_eintraege():
+    """The list as written: rels, or {id, rel} pairs where the caller knows
+    the drive item (the balance's open files) – the mirrors fetch those by
+    id without asking the inventory. None on a regular run."""
+    pfad = (os.environ.get("FETCH_LIST") or "").strip()
+    if not pfad:
+        return None
+    try:
+        daten = json.loads(Path(pfad).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    dateien = daten.get("dateien") if isinstance(daten, dict) else daten
+    out = []
+    for d in dateien or []:
+        if isinstance(d, str):
+            out.append(d)
+        elif isinstance(d, dict) and d.get("id") and d.get("rel"):
+            out.append({"id": str(d["id"]), "rel": str(d["rel"])})
+    return out
+
+
+def nachholen_melden(geholt, weg=0, fehler=0, unbekannt=0):
+    """The one result of a targeted fetch: what came, what Microsoft no
+    longer has, what failed, what no bookkeeping knew."""
+    import progress
+    progress.event("run.nachholen.done", n=geholt, gone=weg, failed=fehler,
+                   unknown=unbekannt)
+    progress.ergebnis(geholt, errors=fehler, extra={"gone": weg, "unknown": unbekannt})
+
+
+def http_status(e):
+    """The HTTP status an exception carries (requests.HTTPError), or None."""
+    return getattr(getattr(e, "response", None), "status_code", None)
 
 
 def voll_neu():

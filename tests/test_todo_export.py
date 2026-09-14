@@ -573,3 +573,88 @@ def test_full_sync_liest_die_liste_neu_und_jeden_anhang(tmp_path, monkeypatch):
     assert len(g2.geladen) == 1, "the attachment comes again"
     assert not any("never-offered" in u for u in g2.aufrufe)
     assert db.kv_lesen("delta:l1") == ""
+
+
+def test_nur_pruefen_zaehlt_aufgaben_je_liste(tmp_path, monkeypatch):
+    """One listing per list the rules take: a task with the stored etag is
+    here, a changed or new one open; a list the rules leave out is one
+    excluded list, never asked for."""
+    import completeness
+    monkeypatch.setenv("TODO_RULES", "- Privat")
+    listen = {"value": [{"id": "l1", "displayName": "Einkauf"},
+                        {"id": "l2", "displayName": "Privat"}]}
+    g = _Graph({"/me/todo/lists/l1/tasks": {"value": [_task("t1", "A"), _task("t2", "B")]},
+                "/me/todo/lists": listen})
+    td.list_lauf(g, tmp_path, LISTE)                    # Einkauf lies here
+    g2 = _Graph({"/me/todo/lists/l1/tasks": {"value": [_task("t1", "A"),
+                                                       _task("t2", "B", etag="e2"),
+                                                       _task("t3", "C")]},
+                 "/me/todo/lists": listen})
+    b = td.nur_pruefen(g2, tmp_path)
+    assert (b["quelle"], b["einheit"], b["ausgeschlossen_einheit"]) == ("todo", "tasks", "lists")
+    assert (b["da"], b["offen"], b["ausgeschlossen"]) == (1, 2, 1)
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Einkauf", 2)]
+    assert not any("/lists/l2/" in u for u in g2.aufrufe), "an excluded list was asked for"
+    assert completeness.lesen(state_db.StateDb(tmp_path), "todo")["offen"] == 2
+
+
+def test_nur_pruefen_laeuft_ausserhalb_der_kadenz(tmp_path, monkeypatch, capsys):
+    """A stamped sync must not silence the check."""
+    import time
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"todo": "weekly"}))
+    state_db.StateDb(tmp_path).kv_schreiben("last_sync", str(time.time()))
+    monkeypatch.setattr(td.sys, "argv", ["todo_export", "--check", str(tmp_path)])
+    g = _Graph({"/me/todo/lists": {"value": []}})
+    monkeypatch.setattr(td.auth, "waehle_zugang", lambda *a, **kw: g)
+    td.main()
+    assert g.aufrufe, "the check never asked for the lists"
+    assert any(progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines())
+
+
+
+def test_resync_liest_die_liste_neu_und_holt_nur_den_fehlenden_anhang(tmp_path, monkeypatch):
+    """"Fetch again": the stored link is dropped and the list read in
+    full; a card with the stored etag whose files lie here stays as it is,
+    one whose attachment is gone is due again – and only that file comes."""
+    g = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+               anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    td.list_lauf(g, tmp_path, LISTE)
+    ziel = td.list_ziel(tmp_path, LISTE)
+    db = state_db.StateDb(ziel)
+    db.kv_schreiben("delta:l1", "https://example.invalid/never-offered")
+    monkeypatch.setenv("RESYNC", "1")
+    g2 = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+                anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    assert td.list_lauf(g2, tmp_path, LISTE) == (0, 1, 0)
+    assert g2.geladen == [], "the card and its file lie here – nothing comes"
+    assert not any("never-offered" in u for u in g2.aufrufe)
+    assert db.kv_lesen("delta:l1") == ""
+    (anhang,) = (ziel / td.ANHANG_DIR).glob("*")
+    anhang.unlink()
+    g3 = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+                anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    assert td.list_lauf(g3, tmp_path, LISTE) == (1, 0, 0)
+    assert len(g3.geladen) == 1 and anhang.is_file(), "the missing file comes back"
+
+
+def test_nachholen_liest_die_listen_der_fehlenden_dateien(tmp_path, capsys):
+    """"Fetch again": the list behind a missing attachment is read again
+    in full, its link set aside, from the folder's own bookkeeping – the
+    file comes back; a folder without bookkeeping counts as unknown."""
+    g = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+               anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    td.list_lauf(g, tmp_path, LISTE)
+    ziel = td.list_ziel(tmp_path, LISTE)
+    (anhang,) = (ziel / td.ANHANG_DIR).glob("*")
+    anhang.unlink()
+    state_db.StateDb(ziel).kv_schreiben("delta:l1", "https://example.invalid/never-offered")
+    capsys.readouterr()
+    g2 = _graph([_task("t1", "Milch kaufen", hasAttachments=True)],
+                anhaenge=[{"id": "a1", "name": "Bon.pdf", "size": 3}])
+    td.nachholen(g2, tmp_path, [f"{ziel.name}/{td.ANHANG_DIR}/{anhang.name}", "Nirgends__x/list.html"])
+    assert anhang.is_file() and len(g2.geladen) == 1
+    assert not any("never-offered" in u for u in g2.aufrufe)
+    events = _events(capsys)
+    assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.unit"] == ["Einkauf"]
+    (fazit,) = [e for e in events if e["k"] == "run.nachholen.done"]
+    assert fazit["v"] == {"n": 1, "gone": 0, "failed": 0, "unknown": 1}

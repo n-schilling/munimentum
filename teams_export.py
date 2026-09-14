@@ -24,7 +24,9 @@ beats app_config.json, see settings.py). There are no prompts; with
 "channels" selected, every joined team comes along. `--teams <out>` only
 refreshes the stored conversation list (the folders.py tree in state.db:
 every chat and every channel with the path the rules see) and exports
-nothing. Progress, results and failures are structured lines (progress.py).
+nothing; `--check <out>` writes the conversation balance (completeness.py)
+without reading a message. Progress, results and failures are structured
+lines (progress.py).
 
 Selection: TEAMS_RULES are ordered include/exclude rules over the archive
 paths "1on1/<title>", "group/<title>", "meeting/<title>" and
@@ -90,6 +92,7 @@ from urllib.parse import unquote
 import auth
 import drive_mirror
 import export_util
+import completeness
 import folders
 import state_db
 import graph_client
@@ -1060,11 +1063,12 @@ def _satz(rec):
     return json.dumps(rec, ensure_ascii=False)
 
 
-def load_state(out):
+def load_state(out, nur_lesen=False):
     """The conversation records – one row each in the records area
     "conversations". An archive from before 9.0 still carries them as one
     kv blob ("state"): read once and carried over into rows, so nothing is
-    exported twice after the upgrade."""
+    exported twice after the upgrade – by an export, never by a check
+    (`nur_lesen`: the blob is read as it is and left alone)."""
     db = state_db.StateDb(out)
     zeilen = db.saetze_lesen("conversations")
     conversations = {}
@@ -1082,8 +1086,9 @@ def load_state(out):
                 data = json.loads(roh)
                 if isinstance(data, dict) and isinstance(data.get("conversations"), dict):
                     conversations = data["conversations"]
-                    db.saetze_schreiben("conversations",
-                                        {k: _satz(v) for k, v in conversations.items()})
+                    if not nur_lesen:
+                        db.saetze_schreiben("conversations",
+                                            {k: _satz(v) for k, v in conversations.items()})
             except Exception:
                 progress.event("run.state_unreadable", "warn")
     return {"version": 1, "conversations": conversations}
@@ -1472,6 +1477,142 @@ def export_one_channel(graph, out, state, team, ch, spiegel=None):
 _SAUBER = ("new", "updated", "unchanged", "empty")
 
 
+# ---------------------------------------------------------------------------
+# "Fetch again": the conversations and files the archive check found missing
+# ---------------------------------------------------------------------------
+def _spiegelwurzel(out, rel):
+    """The channel mirror a file lies in – the deepest folder on its path
+    below channels/ that has a state.db – or None."""
+    teile = rel.split("/")
+    if teile[0] != "channels":
+        return None
+    for i in range(len(teile) - 1, 1, -1):
+        kandidat = "/".join(teile[:i])
+        if (out / kandidat / state_db.DB_NAME).exists():
+            return kandidat
+    return None
+
+
+def _kanaele(graph, cache, team):
+    if team["id"] not in cache.setdefault("kanaele", {}):
+        cache["kanaele"][team["id"]] = list(graph.paged(
+            f"{GRAPH}/teams/{team['id']}/channels", {"$top": PAGE}))
+    return cache["kanaele"][team["id"]]
+
+
+def _teams(graph, cache):
+    if "teams" not in cache:
+        cache["teams"] = select_teams(graph)
+    return cache["teams"]
+
+
+def _kanal_finden(graph, cid, cache):
+    """(team, channel) for a channel id – one listing per joined team,
+    cached for the run. None when no team has it any more."""
+    for team in _teams(graph, cache):
+        for ch in _kanaele(graph, cache, team):
+            if ch.get("id") == cid:
+                return team, ch
+    return None
+
+
+def _spiegel_drive(graph, wurzel, cache):
+    """The drive behind a channel mirror folder: channels/<Team> holds the
+    team's library (any standard channel names it), channels/<Team>/
+    <Channel>__<id> the private channel's own."""
+    teile = wurzel.split("/")
+    team = next((t for t in _teams(graph, cache)
+                 if safe(t.get("displayName", "Team")) == teile[1]), None)
+    if team is None:
+        return None
+    kanaele = _kanaele(graph, cache, team)
+    if len(teile) == 2:
+        ch = next((c for c in kanaele
+                   if (c.get("membershipType") or "standard") == "standard"), None)
+    else:
+        sid = teile[2].rsplit("__", 1)[-1]
+        ch = next((c for c in kanaele if short_id(c.get("id") or "") == sid), None)
+    if ch is None:
+        return None
+    ordner = graph.get(f"{GRAPH}/teams/{team['id']}/channels/{ch['id']}/filesFolder")
+    return (ordner.get("parentReference") or {}).get("driveId")
+
+
+def nachholen(graph, out, rels):
+    """"Fetch again": the conversations the listed files belong to – a
+    conversation's page, a file it fetched – are exported again, messages
+    from the watermark, files only where missing; files below a channel
+    mirror come by their inventory ids. Nothing is listed beyond what the
+    ids need. A conversation no team or chat list has any more is gone."""
+    state = load_state(out)
+    db = state_db.StateDb(out)
+    je_rel = {rec["rel"]: key for key, rec in state["conversations"].items()
+              if rec.get("rel")}
+    con = db._verbinden(lesend=True)
+    if con is not None:
+        for key, roh in con.execute("SELECT key, value FROM kv WHERE key LIKE 'files:%'"):
+            try:
+                eintraege = json.loads(roh)
+            except ValueError:
+                continue
+            for e in (eintraege or {}).values():
+                if isinstance(e, dict) and e.get("rel"):
+                    je_rel[e["rel"]] = key[len("files:"):]
+    progress.event("run.nachholen.start", n=len(rels))
+    keys, spiegel, unbekannt = [], {}, 0
+    for rel in rels:
+        key = je_rel.get(rel)
+        if key:
+            if key not in keys:
+                keys.append(key)
+            continue
+        wurzel = _spiegelwurzel(out, rel)
+        if wurzel is None:
+            unbekannt += 1
+        else:
+            spiegel.setdefault(wurzel, []).append(rel[len(wurzel) + 1:])
+    my_id = graph.get(f"{GRAPH}/me").get("id") if keys else None
+    cache = {}
+    geholt = weg = fehler = 0
+    for key in keys:
+        try:
+            if key.startswith("ch:"):
+                paar = _kanal_finden(graph, key[3:], cache)
+                if paar is None:
+                    weg += 1
+                    progress.event("run.nachholen.gone", "warn", name=key)
+                    continue
+                export_one_channel(graph, out, state, *paar)
+            else:
+                chat = graph.get(f"{GRAPH}/me/chats/{key}")
+                export_one_chat(graph, out, state, my_id, chat)
+            geholt += 1
+        except TokenExpired:
+            raise
+        except Exception as e:
+            if _ist_status(e, 404):
+                weg += 1
+                progress.event("run.nachholen.gone", "warn", name=key)
+            else:
+                fehler += 1
+                progress.event("run.nachholen.failed", "warn", name=key,
+                               error=f"{type(e).__name__}: {e}")
+    for wurzel, unter in spiegel.items():
+        drive_id = _spiegel_drive(graph, wurzel, cache)
+        if not drive_id:
+            unbekannt += len(unter)
+            progress.event("run.nachholen.nolibrary", "warn", name=wurzel, n=len(unter))
+            continue
+        graph.drive_base = f"{GRAPH}/drives/{drive_id}"
+        zahlen = drive_mirror.nachholen(graph, out / wurzel, unter,
+                                        drive_mirror.workers(), still=True)
+        geholt += zahlen["new"]
+        weg += zahlen["gone"]
+        fehler += zahlen["errors"]
+        unbekannt += zahlen["unknown"]
+    export_util.nachholen_melden(geholt, weg, fehler, unbekannt)
+
+
 def make_runner(graph, out, state, my_id, kind, a, b, spiegel=None, fehler=None, takt=None):
     """The unit of work of one worker; `fehler` collects the categories
     whose run was not clean – they keep their cadence mark – and `takt`
@@ -1523,8 +1664,11 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
             progress.melde(len(chats), what="chats")
     wanted = [c for c in chats if TYPEMAP.get(c.get("chatType"), "other") in chat_cats]
     jobs, new, upd, same = [], 0, 0, 0
-    # A full sync exports every chat again, whether or not it moved.
+    # A full sync exports every chat again, whether or not it moved; a
+    # resync takes every chat as well, but reads its messages from the
+    # watermark and fetches only the files that are not here.
     alles = export_util.voll_neu()
+    abgleich = export_util.abgleich()
     for chat in wanted:
         folder = TYPEMAP.get(chat.get("chatType"), "other")
         if regeln or takt is not None:
@@ -1546,7 +1690,7 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
             new += 1
             continue
         ps, cs = parse_ts(rec.get("last_activity")), parse_ts(cur)
-        if alles or (cs is not None and (ps is None or cs > ps)):
+        if alles or abgleich or (cs is not None and (ps is None or cs > ps)):
             jobs.append(("chat", chat, None))   # new messages -> export again
             upd += 1
         else:
@@ -1563,6 +1707,7 @@ def build_channel_jobs(graph, out, state, stats, selected_teams, regeln=None, fe
                        takt=None):
     jobs = []
     alles = export_util.voll_neu()        # every channel again, done or not
+    abgleich = export_util.abgleich()     # every channel again, link kept
     for team in selected_teams:
         tname = team.get("displayName", "Team")
         try:
@@ -1581,7 +1726,7 @@ def build_channel_jobs(graph, out, state, stats, selected_teams, regeln=None, fe
                 _ausgeschlossen(stats)
             elif takt is not None and not takt.faellig("channels", pfad, ch["id"]):
                 continue                      # counted and said once per category
-            elif REFRESH_CHANNELS or alles:
+            elif REFRESH_CHANNELS or alles or abgleich:
                 # the delta link says what changed; the worker only
                 # rewrites on an actual change
                 jobs.append(("channel", team, ch))
@@ -1714,6 +1859,95 @@ def gleiche_liste_ab(graph, out):
 
 
 # ---------------------------------------------------------------------------
+# Completeness: the conversation balance
+# ---------------------------------------------------------------------------
+def nur_pruefen(out):
+    """--check: every chat of the ticked kinds and every channel of every
+    joined team that the rules take, judged by the listings alone – a
+    conversation is here when its record and file exist, open when it has
+    no record or its last message is newer than the stored stand; a channel
+    is here or not. Not one message is read. Excluded are conversations the
+    rules leave out and never exported chats from before the start day."""
+    global SEIT
+    kategorien = selected_categories([(k, "") for k in KATEGORIEN])
+    want_channels = "channels" in kategorien
+    graph = _zugang(want_channels)
+    fehler = []
+    if want_channels and not graph.channels_enabled:
+        progress.event("run.teams.channels_denied", "warn", error="")
+        fehler.append(completeness.fehler("channels", "run.teams.channels_denied"))
+        want_channels = False
+    SEIT = seit_grenze()
+    regeln = teams_regeln()
+    state = load_state(out, nur_lesen=True)   # a check moves no bookkeeping
+    my_id = graph.get(f"{GRAPH}/me").get("id")
+    je = {}                       # row path -> [da, offen]
+    gesehen = set()
+    ausgeschlossen = 0
+    chat_cats = kategorien & {"1on1", "group", "meeting"}
+    if chat_cats:
+        for chat in graph.paged(f"{GRAPH}/me/chats",
+                                {"$top": PAGE, "$expand": "members,lastMessagePreview"}):
+            folder = TYPEMAP.get(chat.get("chatType"), "other")
+            if folder not in chat_cats:
+                continue
+            if regeln and not folders.gilt(chat_pfad(folder, chat_title(graph, chat, my_id)),
+                                           regeln):
+                ausgeschlossen += 1
+                continue
+            cur = parse_ts((chat.get("lastMessagePreview") or {}).get("createdDateTime"))
+            rec = get_record(out, state, chat["id"])
+            if rec is None and SEIT is not None and cur is not None and cur < SEIT \
+                    and _bekannt(state, chat["id"]) is None:
+                ausgeschlossen += 1          # a first fetch would leave it out
+                continue
+            gesehen.add(chat["id"])
+            z = je.setdefault(folder, [0, 0])
+            if rec is None:
+                z[1] += 1
+            else:
+                ps = parse_ts(rec.get("last_activity"))
+                z[1 if cur is not None and (ps is None or cur > ps) else 0] += 1
+    if want_channels:
+        fehl_teams = set()
+        for team in select_teams(graph, fehler=fehl_teams):
+            tname = team.get("displayName", "Team")
+            pfad = f"channels/{safe(tname)}"
+            try:
+                channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels",
+                                            {"$top": PAGE}))
+            except TokenExpired:
+                raise
+            except Exception as e:
+                progress.event("run.teams.channels_failed", "warn", name=tname, error=str(e))
+                fehler.append(completeness.fehler(pfad, "run.teams.channels_failed"))
+                continue
+            z = je.setdefault(pfad, [0, 0])
+            for ch in channels:
+                if regeln and not folders.gilt(kanal_pfad(tname, ch.get("displayName", "Kanal")),
+                                               regeln):
+                    ausgeschlossen += 1
+                    continue
+                key = f"ch:{ch['id']}"
+                gesehen.add(key)
+                z[0 if get_record(out, state, key) is not None else 1] += 1
+        if fehl_teams:
+            fehler.append(completeness.fehler("channels", "run.teams.channels_failed"))
+    behalten = sum(1 for key, rec in state["conversations"].items()
+                   if rec.get("done") and rec.get("category") in kategorien
+                   and key not in gesehen)
+    bericht = completeness.bilanz(
+        "teams", "conversations",
+        da=sum(z[0] for z in je.values()), offen=sum(z[1] for z in je.values()),
+        ausgeschlossen=ausgeschlossen, behalten=behalten,
+        zeilen=[completeness.zeile(pfad, z[0], z[1]) for pfad, z in je.items()],
+        fehler=fehler)
+    completeness.schreiben(state_db.StateDb(out), bericht)
+    completeness.melden(bericht)
+    return bericht
+
+
+# ---------------------------------------------------------------------------
 # Main flow
 # ---------------------------------------------------------------------------
 _hilfe_gewuenscht = export_util.hilfe_gewuenscht
@@ -1730,12 +1964,36 @@ def main():
     graph_client.konfiguriere(workers)
     out = export_util.ausgabeordner(argv)
     out.mkdir(parents=True, exist_ok=True)
+    if "--check" in sys.argv[1:]:
+        try:
+            nur_pruefen(out)
+        except TokenExpired:
+            progress.fehler("token_expired")
+            sys.exit(1)
+        return
 
     if "--teams" in sys.argv[1:]:
         graph = _zugang(want_channels=True)
         _client = graph
         try:
             gleiche_liste_ab(graph, out)
+        except TokenExpired:
+            progress.fehler("token_expired")
+            sys.exit(1)
+        return
+
+    nachzuholen = export_util.nachhol_liste()
+    if nachzuholen is not None:
+        # "Fetch again": no categories, no cadences – the listed files by
+        # the conversations and mirrors that own them.
+        graph = _zugang(want_channels=any(r.startswith("channels/") for r in nachzuholen))
+        _client = graph
+        if EMBED_IMAGES and CACHE_IMAGES:
+            IMGCACHE_DIR = out / ".imgcache"
+            IMGCACHE_DIR.mkdir(parents=True, exist_ok=True)
+        SEIT = seit_grenze()
+        try:
+            nachholen(graph, out, nachzuholen)
         except TokenExpired:
             progress.fehler("token_expired")
             sys.exit(1)
@@ -1754,6 +2012,8 @@ def main():
         return
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     want_channels = "channels" in categories
 
     # 2) Login or token mode

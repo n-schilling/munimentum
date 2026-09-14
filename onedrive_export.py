@@ -54,6 +54,7 @@ import os
 import sys
 
 import auth
+import completeness
 import export_util
 import folders
 import progress
@@ -147,6 +148,8 @@ def lauf(graph, out):
     name = progress.atom("settings.onedrive.title")
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     if not takt.irgendeine_faellig():
         progress.event("run.cadence.skip", name=name,
                        cadence=progress.atom(f"cadence.{takt.kadenz('')}"))
@@ -188,7 +191,15 @@ def main():
     out = export_util.ausgabeordner(argv)
     graph_client.konfiguriere(workers())
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
+    nachzuholen = export_util.nachhol_eintraege()
     try:
+        if nachzuholen is not None:
+            # A targeted fetch – the archive check's missing files, or the
+            # balance's open ones – by id, nothing else: no walk, no
+            # cadence. The stored balance follows what came.
+            zahlen = drive_mirror.nachholen(graph, out, nachzuholen, workers())
+            completeness.abgeholt(state_db.StateDb(out), "onedrive", zahlen["geholt"])
+            return
         (nur_pruefen if pruefen else nur_ordner if struktur else lauf)(graph, out)
     except auth.TokenExpired:
         # Structured ending – the app reacts to the event and shows its wizard.

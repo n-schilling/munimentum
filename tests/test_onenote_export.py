@@ -634,3 +634,79 @@ def test_full_sync_vergisst_die_stempel_vor_dem_ersten_abruf(tmp_path, monkeypat
         on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, 0)
     assert _stand(ziel)["p1"]["lm"] == ""
     assert state_db.StateDb(ziel).saetze_lesen("ressourcen") == {}
+
+
+def _mit_notizbuechern(g):
+    g.antworten["/onenote/notebooks"] = {"value": [
+        {"id": "nb1", "displayName": "Projekte"},
+        {"id": "nb2", "displayName": "Privat"}]}
+    return g
+
+
+def test_nur_pruefen_zaehlt_seiten_je_notizbuch(tmp_path, monkeypatch):
+    """The notebook-wide listing (or one per section when the API refuses
+    it): a page with the stored change date is here, a new or changed one
+    open; a notebook the rules leave out is one excluded notebook."""
+    import completeness
+    monkeypatch.delenv("ONENOTE_ONLY", raising=False)
+    monkeypatch.setenv("ONENOTE_RULES", "- Privat")
+    g = _mit_notizbuechern(_graph([_page("p1", "Besprechung")]))
+    (buch,) = on.waehle_notizbuecher(g, tmp_path)
+    on.notebook_lauf(g, tmp_path, buch, 0)             # the page lies here
+    g2 = _mit_notizbuechern(_graph([_page("p1", "Besprechung"), _page("p2", "Neu")]))
+    b = on.nur_pruefen(g2, tmp_path)
+    assert (b["quelle"], b["einheit"], b["ausgeschlossen_einheit"]) == ("onenote", "pages", "notebooks")
+    assert (b["da"], b["offen"], b["ausgeschlossen"]) == (1, 1, 1)
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Projekte", 1)]
+    assert not any("/pages/p" in u and "/content" in u for u in g2.geladen), "a page was fetched"
+    assert completeness.lesen(state_db.StateDb(tmp_path), "onenote")["offen"] == 1
+
+
+def test_nur_pruefen_sagt_wenn_das_kontingent_verbraucht_ist(tmp_path, monkeypatch):
+    """A spent hour is no gap: the report says "not checked" and why."""
+    monkeypatch.delenv("ONENOTE_ONLY", raising=False)
+    monkeypatch.setenv("ONENOTE_RULES", "")
+    g = _mit_notizbuechern(_graph([_page("p1", "Besprechung")]))
+    on.waehle_notizbuecher(g, tmp_path)                 # the list is stored
+
+    def leer(name):
+        raise on.BudgetLeer()
+    monkeypatch.setattr(on, "listen_erlaubt", leer)
+    b = on.nur_pruefen(g, tmp_path)
+    assert b["stand"] == "nicht" and b["grund"] == "ana.check.reason.budget"
+    assert b["da"] == b["offen"] == 0
+
+
+
+def test_nachholen_liest_die_notizbuecher_der_fehlenden_seiten(tmp_path, monkeypatch, capsys):
+    """"Fetch again": the notebook behind a missing page is walked again
+    from the folder's own bookkeeping – the page comes back; a folder
+    without bookkeeping counts as unknown."""
+    monkeypatch.setenv("ONENOTE_IMAGE_MAX_MB", "1")
+    on.notebook_lauf(_graph([_page("p1", "Besprechung")]), tmp_path, NB, on.bild_max())
+    ziel = on.notebook_ziel(tmp_path, NB)
+    (seite,) = ziel.rglob("*.html")
+    seite.unlink()
+    capsys.readouterr()
+    on.nachholen(_graph([_page("p1", "Besprechung")]), tmp_path,
+                 [f"{ziel.name}/{seite.relative_to(ziel).as_posix()}", "Nirgends__x/a.html"])
+    assert seite.is_file()
+    zeilen = capsys.readouterr().out.splitlines()
+    events = [e for e in (progress.lies_event(z) for z in zeilen) if e]
+    assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.unit"] == ["Projekte"]
+    assert any(e["k"] == "run.nachholen.done" and e["v"]["unknown"] == 1 for e in events)
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 1
+
+
+def test_seitenstand_liest_den_alten_blob_ohne_ihn_zu_bewegen(tmp_path):
+    """A check reads the pre-9.0 page blob as it is; only an export carries
+    it over into rows and drops the blob."""
+    import json as _json
+    import state_db
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("pages", _json.dumps({"p1": {"rel": "Allgemein/A__p1.html", "lm": "x"}}))
+    assert list(on.seitenstand(db, nur_lesen=True)) == ["p1"]
+    assert db.saetze_lesen(on.SEITEN_BEREICH) == {} and db.kv_lesen("pages"), "the check moved the blob"
+    assert list(on.seitenstand(db)) == ["p1"]
+    assert list(db.saetze_lesen(on.SEITEN_BEREICH)) == ["p1"] and not db.kv_lesen("pages")

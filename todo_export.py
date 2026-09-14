@@ -28,7 +28,8 @@ task etag, so the lists are read in full and every card fetched again,
 attachments included; see export_util. TODO_RULES – ordered
 include/exclude rules over the same paths, see folders.py, empty means
 every list). --lists refreshes the stored list of lists and exports
-nothing. Progress, results and failures are structured lines (progress.py).
+nothing; --check writes the task balance per list (completeness.py).
+Progress, results and failures are structured lines (progress.py).
 """
 
 import html as html_lib
@@ -44,6 +45,7 @@ from pathlib import Path
 
 import auth
 import export_util
+import completeness
 import folders
 import graph_client
 import progress
@@ -452,6 +454,13 @@ def _delta_verfallen(e):
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
+def _anhaenge_da(ziel, alt):
+    """The stored etag counts only while the card's files lie here: a
+    missing attachment makes the task due again."""
+    return all((ziel / a["rel"]).exists()
+               for a in alt.get("anhaenge") or () if isinstance(a, dict) and a.get("rel"))
+
+
 def list_lauf(graph, out, liste):
     """One list: read the delta round, refresh what changed, mark what
     vanished, render – and write only when this run changed something."""
@@ -461,14 +470,16 @@ def list_lauf(graph, out, liste):
     eintraege = _json(vorher["tasks"])
     delta_key = f'delta:{liste["id"]}'
     token = db.kv_lesen(delta_key) or ""
-    if export_util.voll_neu():
-        # "Force full sync": the link goes and no task's etag counts – the
-        # list is read in full and every card fetched again, attachments
-        # included.
+    if export_util.abgleich():
+        # "Fetch again": the link goes, the list is read in full – a card
+        # with the stored etag whose files lie here stays as it is. "Force
+        # full sync": no task's etag counts either, every card is fetched
+        # again, attachments included.
         db.kv_schreiben(delta_key, "")
         token = ""
-        for e in eintraege.values():
-            e["etag"] = ""
+        if export_util.voll_neu():
+            for e in eintraege.values():
+                e["etag"] = ""
     anfang = (f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks/delta'
               "?$expand=checklistItems,linkedResources&$top=100")
     voll = not token
@@ -493,7 +504,8 @@ def list_lauf(graph, out, liste):
     for tid, t in lebend.items():
         alt = eintraege.get(tid) or {}
         etag_neu = t.get("@odata.etag") or ""
-        if alt.get("etag") == etag_neu and not alt.get("deleted"):
+        if alt.get("etag") == etag_neu and not alt.get("deleted") \
+                and _anhaenge_da(ziel, alt):
             unveraendert += 1
             continue
         faellig.append((t, alt, etag_neu))
@@ -563,6 +575,43 @@ def list_lauf(graph, out, liste):
     return neu, unveraendert, fehler
 
 
+def nachholen(graph, out, rels, workers=1):
+    """"Fetch again": the lists the listed files belong to are read again
+    in full – their link set aside – so the list file and every card whose
+    attachment is missing come back. The list is known from the folder's
+    own bookkeeping (kv "list"); no rules, no cadence."""
+    out = Path(out)
+    progress.event("run.nachholen.start", n=len(rels))
+    einheiten, unbekannt = {}, 0
+    for rel in rels:
+        name = rel.split("/", 1)[0]
+        if (out / name / state_db.DB_NAME).exists():
+            einheiten[name] = einheiten.get(name, 0) + 1
+        else:
+            unbekannt += 1
+    neu = fehler = 0
+    for name, n in einheiten.items():
+        db = state_db.StateDb(out / name)
+        liste = _json(db.kv_lesen("list") or "")
+        if not liste.get("id"):
+            unbekannt += n
+            continue
+        liste = {"id": liste["id"], "titel": str(liste.get("titel") or liste["id"]),
+                 "art": liste.get("art") or "none", "geteilt": bool(liste.get("geteilt"))}
+        db.kv_schreiben(f'delta:{liste["id"]}', "")
+        progress.event("run.nachholen.unit", name=liste["titel"], n=n)
+        try:
+            g, _u, f = list_lauf(graph, out, liste)
+            neu, fehler = neu + g, fehler + f
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            fehler += 1
+            progress.event("run.nachholen.failed", "warn", name=liste["titel"],
+                           error=f"{type(e).__name__}: {e}")
+    export_util.nachholen_melden(neu, 0, fehler, unbekannt)
+
+
 def lauf(graph, out, listen, workers=1):
     """Every chosen list, side by side. The rules decide which lists come
     along (a list already on disk that they now leave out stays as it is);
@@ -575,6 +624,8 @@ def lauf(graph, out, listen, workers=1):
     wurzel = state_db.StateDb(out)
     if export_util.voll_neu():
         progress.event("run.full_sync")
+    elif export_util.abgleich():
+        progress.event("run.resync")
     gewaehlt, ausgeschlossen, gehalten = [], 0, []
     for liste in listen:
         pfad = list_pfad(liste)
@@ -634,6 +685,50 @@ def lauf(graph, out, listen, workers=1):
                              **({"skipped": len(gehalten)} if gehalten else {})})
 
 
+def nur_pruefen(graph, out):
+    """--check: the task balance of every list the rules take – one
+    listing per list, a task is here when its stored copy carries the same
+    etag and the list file lies here. Lists the rules leave out are
+    excluded, counted as lists."""
+    regeln = todo_regeln()
+    zeilen, fehler = [], []
+    ausgeschlossen = behalten = 0
+    for liste in list_lists(graph):
+        if not folders.gilt(list_pfad(liste), regeln):
+            ausgeschlossen += 1
+            continue
+        ziel = list_ziel(out, liste)
+        eintraege = _json(state_db.StateDb(ziel).kv_lesen("tasks") or "")
+        try:
+            tasks = _alle(graph, f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks?$top=100')
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            _event("run.todo.list_failed", "err", name=liste["titel"],
+                   error=f"{type(e).__name__}: {e}")
+            fehler.append(completeness.fehler(liste["titel"], "run.todo.list_failed"))
+            continue
+        datei_da = (ziel / "list.html").exists()
+        z_da = z_offen = 0
+        for t in tasks:
+            alt = eintraege.get(t.get("id") or "") or {}
+            if datei_da and alt.get("etag") and alt["etag"] == (t.get("@odata.etag") or "") \
+                    and not alt.get("deleted"):
+                z_da += 1
+            else:
+                z_offen += 1
+        behalten += sum(1 for e in eintraege.values() if e.get("deleted"))
+        zeilen.append(completeness.zeile(liste["titel"], z_da, z_offen))
+    bericht = completeness.bilanz(
+        "todo", "tasks",
+        da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
+        ausgeschlossen=ausgeschlossen, ausgeschlossen_einheit="lists",
+        behalten=behalten, zeilen=zeilen, fehler=fehler)
+    completeness.schreiben(state_db.StateDb(out), bericht)
+    completeness.melden(bericht)
+    return bericht
+
+
 def main():
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     if export_util.hilfe_gewuenscht(sys.argv[1:]):
@@ -641,17 +736,26 @@ def main():
         return
     out = export_util.ausgabeordner(argv)
     nur_listen = "--lists" in sys.argv[1:]
+    pruefen = "--check" in sys.argv[1:]
+    nachzuholen = export_util.nachhol_liste()
     # The cadence question needs no Graph: a run that is not due ends
-    # before the sign-in.
-    if not nur_listen and not quelle_faellig(out):
+    # before the sign-in. The list sync, the check and a fetch are
+    # outside it.
+    if not nur_listen and not pruefen and nachzuholen is None and not quelle_faellig(out):
         progress.ergebnis(0, extra={"lists": 0, "skipped": 1})
         return
     workers = settings.number("EXPORT_WORKERS", "workers")
     graph_client.konfiguriere(workers)
     graph = auth.waehle_zugang(lambda tok: TokenClient(tok), Graph)
     try:
+        if nachzuholen is not None:
+            nachholen(graph, out, nachzuholen, workers)
+            return
         if nur_listen:
             gleiche_listen_ab(graph, out)
+            return
+        if pruefen:
+            nur_pruefen(graph, out)
             return
         listen = list_lists(graph)
         if not listen:

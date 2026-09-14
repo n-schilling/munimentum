@@ -109,10 +109,11 @@ copy the stdio MCP snippet again afterwards, because its paths changed.
 ## What it does
 
 One browser page with two doors — **Build archive** and **Search archive**
-— and two side rooms, *Overview* and *Settings*. The header carries nothing
+— and two side rooms, *Insights* and *Settings*. The header carries nothing
 else but one frame with the states — your access, a run while it is
 minimised, and the open profile once there is more than one, a click on it
-switches — and the power button to quit.
+switches — and the power button to quit; it stays at the top while the
+page scrolls.
 
 ### Build archive
 
@@ -139,7 +140,7 @@ the steps, the log, *Cancel*. It stays until the run is done and shows the
 result until you close it; *Minimise* turns it into a pill in the header,
 so you can search meanwhile, and a click on the pill brings it back. Open
 the page while a run is on — started by hand or by the schedule — and you
-land in that window. Every run with its log is in the overview afterwards.
+land in that window. Every run with its log is in Insights afterwards.
 
 Every export keeps its bookkeeping in a single `state.db` inside its output
 folder — change tokens, inventories, and for Teams the messages the HTML is
@@ -333,10 +334,12 @@ The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
 unchanged.
 
-### Overview
+### Insights
 
 What the archive holds, computed once per index run without asking
-Microsoft, so the page opens instantly. Communication and files are kept
+Microsoft, so the page opens instantly — with a side navigation like the
+settings', one entry per card, and a dot on the two checks that says at a
+glance whether something is open or found. Communication and files are kept
 apart: messages, conversations, people and period on one row; the mirrored
 files, pages and disk usage on their own. The timeline covers mail and chat
 only — a mirrored PDF must not fill a communication gap — and **gaps**,
@@ -345,9 +348,61 @@ outright, which is the one question an archive should answer about itself.
 Below that: attachments by type, the mirrored files by type, the largest
 single files, and who you exchange the most with.
 
-On request there is also a completeness check against Microsoft: what it
-counts against what is here — per mailbox folder, per mirrored library, and
-per site for the SharePoint pages.
+On request there is also a **completeness balance** against Microsoft.
+It answers one question: would a run with today's settings fetch anything
+now that is not here yet? One row per source in use — mail, calendar,
+contacts, Teams, OneDrive, SharePoint libraries and pages, Planner, To Do,
+OneNote — with four numbers in plain words: here, not fetched yet,
+deliberately excluded, and deleted at Microsoft but kept. Excluded is what
+your own rules, filters and start days leave out, counted, never named; a
+file waiting for its folder cadence waits rather than counting as missing;
+Teams is judged by conversations, since Graph counts no messages. A row
+with something open offers *Fetch now*, which fetches only what the row
+found open, the cheapest way the source allows: the mailbox reads just
+the folders with something open in full and fetches the mails it lacks —
+26 open mails in nine folders cost nine listings, not the whole mailbox;
+OneDrive and SharePoint fetch the open files one by one through the ids
+the check noted, without walking the library again; every other source
+runs its regular run, which fetches what changed anyway. Then the index
+runs over what arrived and the row is checked again in the same run, so
+the result shows without a second click.
+The check asks Microsoft for the state of now and
+changes nothing; large libraries take a while, and OneNote's hourly budget
+applies, in which case the row says "not checked" instead of inventing a
+gap.
+
+The second look points inward: **Archive and bookkeeping** holds each
+export's own `state.db` against the files on disk without asking anyone —
+a file the bookkeeping knows that is not there (*Fetch again* brings it
+back), a file here that no bookkeeping knows (it stays), a mirrored file
+shorter than recorded, a file a tombstone lists as kept that is gone — and
+the index against the archive: how many files changed, arrived or vanished
+since it last read them, with *Index only* one click away. It repairs,
+moves and deletes nothing on its own; it says where a look is worth it,
+and offers one explicit action per kind of finding: *Findings…* lists the
+files behind the numbers, to copy or to open the folder; *Fetch again*
+fetches exactly the missing and incomplete files, each through the
+source's own bookkeeping — a mail by the id the resume log keeps, a
+mirrored file by its drive item, a Teams page by its conversation, a
+board, list or notebook by the unit that holds it — whether or not the
+source is ticked in the settings, without listing a folder or writing
+anything current over; the run ends by judging the row afresh, so a file
+Microsoft no longer has is named in the log and the row then says "still
+missing after a fetch"; *Note as lost* records a tombstone whose file is
+gone, the tombstone itself stays — and settles those stubborn files the
+same way: the bookkeeping keeps the entries, the check stops counting
+them, and a file that does come back counts as agreeing again; *Set
+aside* moves files no
+bookkeeping knows into a `_fremd/` folder inside the export folder, path
+kept, with a list of what moved, and *Put back* reverses it — deleting is
+yours to do in the file manager; *Rebuild bookkeeping* sets a damaged
+`state.db` aside under a dated name, salvages what it still yields and
+lets the next run fill a fresh one. Every action asks before it moves
+anything, none deletes, and each is a run of its own: the run window
+opens with it and its log says what moved — as it does for the checks,
+*Fetch now* and *Fetch again*. Only the balance's *Fetch now* (a resync
+of a source in use) is refused, with a message naming the source, when
+that source is not ticked in the settings.
 
 **Runs** keeps the history of every export: when it ran, scheduled or by hand,
 which elements were enabled, how long each step took and what it produced —
@@ -380,6 +435,13 @@ Windows, clicking one opens the interface; on Linux they go through
 reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
 
+**Keep awake during a run** holds the machine off idle sleep while an
+export or index runs — macOS through `caffeinate`, Windows through a power
+request, Linux through `systemd-inhibit` — and lets go the moment the run
+ends. On by default, because a laptop that dozes off leaves the run
+hanging until someone comes back; the display may still go dark, and a
+closed lid still sleeps.
+
 An **Expert mode** card at the end collects what almost nobody needs day to
 day: how many requests run in parallel, running the index or the calendar
 rebuild as a single step, and the complete HTTP API of the interface as an OpenAPI description — for scripts
@@ -387,7 +449,7 @@ that talk to the backend directly, on `127.0.0.1` only, like everything else.
 
 The log sits in the run window, and it speaks the interface language: the
 exports report events, the app puts them into words; afterwards every
-run's log is in the overview. *Copy* puts the log on the clipboard;
+run's log is in Insights. *Copy* puts the log on the clipboard;
 *Report a problem* — there and under *Settings → App* — opens the
 matching GitHub issue
 form with description, system details and log filled in — including which
@@ -431,7 +493,7 @@ structured, including the ones recovered from mails; the address book can
 be looked up; the files next to Teams conversations and the Planner
 attachments can be browsed. It can
 also ask the archive about itself — how far it reaches, which months are
-empty, when each source last synced, and the same figures the overview
+empty, when each source last synced, and the same figures Insights
 shows — so an answer can say what the archive does not cover instead of
 guessing. *Settings* prints the exact snippet to paste into your client.
 The stdio snippet names nothing but the profile — `--profile <name>` —

@@ -817,6 +817,60 @@ def test_job_nennt_den_logstand_vor_seiner_ersten_zeile(sandbox):
     assert any("eins" in t for t in danach)
 
 
+def test_jobrunner_haelt_den_rechner_wach_und_laesst_wieder_los(monkeypatch, sandbox):
+    """"Keep awake" is taken before the first step and released after the
+    last – also after a failed one – and the log says so; off means the
+    guard is never asked."""
+    import runner
+    folge = []
+
+    class Fake:
+        def __init__(self):
+            self.aktiv = False
+
+        def an(self):
+            folge.append("an")
+            self.aktiv = True
+            return True
+
+        def aus(self):
+            folge.append("aus")
+            self.aktiv = False
+    monkeypatch.setattr(runner.awake, "Wachhalter", Fake)
+    r = app_mod.JobRunner()
+    r.start([_py_step("import sys; sys.exit(3)", "A"), _py_step("print('x')", "B")],
+            "Lauf", context={"keep_awake": True})
+    _warte(r)
+    assert folge == ["an", "aus"] and not r.last["ok"]
+    keys = [z["text"]["k"] for z in r.lines if isinstance(z["text"], dict)]
+    assert keys.index("srv.awake.on") < keys.index("srv.job.step")
+    folge.clear()
+    r.start([_py_step("print('x')", "A")], "Lauf", context={"keep_awake": False})
+    _warte(r)
+    assert folge == []
+    assert not any(isinstance(z["text"], dict) and z["text"]["k"].startswith("srv.awake")
+                   for z in list(r.lines)[-6:])
+
+
+def test_jobrunner_meldet_wenn_wachhalten_nicht_geht(monkeypatch, sandbox):
+    import runner
+
+    class Nein:
+        aktiv = False
+
+        def an(self):
+            return False
+
+        def aus(self):
+            pass
+    monkeypatch.setattr(runner.awake, "Wachhalter", Nein)
+    r = app_mod.JobRunner()
+    r.start([_py_step("print('x')", "A")], "Lauf", context={"keep_awake": True})
+    _warte(r)
+    zeilen = [z for z in r.lines if isinstance(z["text"], dict) and z["text"]["k"] == "srv.awake.fail"]
+    assert len(zeilen) == 1 and zeilen[0]["level"] == "warn" and r.last["ok"]
+
+
 def test_notify_user_mode_decides(monkeypatch, sandbox):
     """"errors" keeps quiet on success, "all" reports it, cancelled is never
     reported – and every body arrives translated, without raw keys."""
@@ -2783,6 +2837,7 @@ global.document = {
     // Die Seite liest ihre Texte aus diesem eingebetteten JSON-Block.
     if(id === 'i18n') return {textContent: global.I18N_ROH};
     if(id === 'schritte') return {textContent: global.SCHRITTE_ROH};
+    if(id === 'pruefungen') return {textContent: global.PRUEFUNGEN_ROH};
     // Kindknoten des Assistenten gibt es nur, solange sie in dessen HTML stehen.
     if(id === 'tok' && !knoten['tok']){
       if(modalRoh.innerHTML.indexOf('id="tok"') < 0) return null;
@@ -3193,7 +3248,9 @@ def _seiten_js():
     # As when serving: insert the registry's step metadata.
     import steps as steps_mod
     return ("global.SCHRITTE_ROH = " + json.dumps(json.dumps(
-        steps_mod.ui_metadaten())) + ";\n" + treffer.group(1))
+        steps_mod.ui_metadaten())) + ";\n" +
+            "global.PRUEFUNGEN_ROH = " + json.dumps(json.dumps(
+        steps_mod.pruef_metadaten())) + ";\n" + treffer.group(1))
 
 
 # Step headings arrive as a nested message and are resolved in the browser
@@ -4797,9 +4854,35 @@ def test_pruefschritt_braucht_einen_zugang(sandbox, no_ollama, monkeypatch):
 
 
 def test_pruefschritt_ruft_outlook_mit_check(sandbox):
-    steps = app_mod.build_steps(app_mod.load_config(), {"check": True})
+    cfg = _cfg_mit_kategorien()
+    steps = app_mod.build_steps(cfg, {"check": True})
     assert [s["key"] for s in steps] == ["check"]
     assert "--check" in steps[0]["argv"]
+    # The check gets the export's own environment – so "excluded" means
+    # exactly what the export would leave out.
+    assert steps[0]["env"]["EXPORT_CATEGORIES"] == "mail,calendar,contacts"
+    assert "OUTLOOK_SINCE" in steps[0]["env"] and "SKIP_FOLDERS" in steps[0]["env"]
+
+
+def test_pruefschritte_folgen_der_nutzung(sandbox):
+    """Every check is asked for; the registry keeps only the ones whose
+    source is in use – a source nobody exports costs no request."""
+    alle = {e["anfrage"]: True for e in app_mod.steps_mod.REGISTRY
+            if e["anfrage"].startswith("check") and e["anfrage"] != "check_archive"}
+    keys = [s["key"] for s in app_mod.build_steps(_cfg_mit_kategorien(), alle)]
+    assert keys == ["check", "check_teams"]
+    cfg = _cfg_mit_kategorien(onedrive_enabled=True, todo_enabled=True,
+                              onenote_enabled=True, planner_enabled=True,
+                              planner_urls="https://planner.cloud.microsoft/webui/v1/plan/abc/view",
+                              sharepoint_enabled=True,
+                              sharepoint_urls="https://nordwind.sharepoint.com/sites/x",
+                              sharepoint_pages_enabled=True,
+                              sharepoint_pages_urls="https://nordwind.sharepoint.com/sites/x")
+    keys = [s["key"] for s in app_mod.build_steps(cfg, alle)]
+    assert keys == ["check", "check_teams", "check_onedrive", "check_sharepoint",
+                    "check_pages", "check_planner", "check_todo", "check_onenote"]
+    for s in app_mod.build_steps(cfg, alle):
+        assert "--check" in s["argv"] or "--check-pages" in s["argv"]
 
 
 PRUEFUNG_ANALYTICS = GRUNDZUSTAND + """
@@ -4810,13 +4893,11 @@ zeigeAnalytics({exists: true, built_at: '2026-09-01T10:00:00+00:00',
   quellen: [{src: 'teams', n: 196668}, {src: 'outlook', n: 36827}],
   dateien: {n: 0, pages: 0, onedrive: 0, sharepoint: 0, verschwunden: null},
   groesse: {teams: 3758096384, outlook: 28879134720, index: 966367641},
-  vollstaendigkeit: {geprueft: '2026-08-10T20:00:00', erwartet: 40000,
-    vorhanden: 39994, geloescht: 12, fehlt: 6, ausgelassen: 15000,
-    ausgelassene_ordner: ['Archiv', 'Junk-E-Mail'],
-    ordner: [{ordner: 'E-Mail/Gesendete Elemente', erwartet: 100, vorhanden: 97,
-              geloescht: 0, fehlt: 3, ausgelassen: false},
-             {ordner: 'E-Mail/Archiv', erwartet: 14000, vorhanden: 0,
-              geloescht: 0, fehlt: 0, ausgelassen: true}]}});
+  pruefungen: {outlook_mail: {genutzt: true, bericht: {
+    quelle: 'outlook_mail', einheit: 'mails', geprueft: '2026-08-10T20:00:00',
+    stand: 'ganz', grund: null, da: 39994, offen: 6, ausgeschlossen: 15000,
+    ausgeschlossen_einheit: 'mails', behalten: 12, wartend: 0,
+    zeilen: [{pfad: 'E-Mail/Gesendete Elemente', da: 97, offen: 3}], fehler: []}}}});
 
 var kpi = document.getElementById('ana-kpi').innerHTML;
 pruefe(kpi.indexOf('238.408') >= 0, 'Nachrichtenzahl fehlt');
@@ -4833,12 +4914,12 @@ pruefe(document.getElementById('ana-stand').textContent.length > 0,
        'Stand-Zeile fehlt');
 
 var pruef = document.getElementById('ana-checks').innerHTML;
-pruefe(pruef.indexOf('15.000') >= 0, 'Ausgelassene Ordner nicht erklaert');
-pruefe(pruef.indexOf('Archiv') >= 0, 'Ausgelassene Ordner nicht benannt');
-// Der ausgelassene Ordner darf NICHT in der Luecken-Tabelle stehen.
+pruefe(pruef.indexOf('15.000') >= 0, 'Ausgeschlossenes nicht erklaert');
+pruefe(pruef.indexOf('Archiv') < 0, 'Ausgeschlossener Ordner beim Namen genannt');
+pruefe(pruef.indexOf('6 Mails noch nicht geholt') >= 0, 'Offenes nicht in Alltagssprache: ' + pruef.slice(0, 300));
+// Nur der Ordner mit Offenem steht in der eingeklappten Tabelle.
 var tab = pruef.split('<tbody>')[1] || '';
-pruefe(tab.indexOf('Gesendete Elemente') >= 0, 'Echte Luecke fehlt in der Tabelle');
-pruefe(tab.indexOf('Archiv') < 0, 'Ausgelassener Ordner steht als Luecke da');
+pruefe(tab.indexOf('Gesendete Elemente') >= 0, 'Offener Ordner fehlt in der Tabelle');
 console.log('OK');
 """
 
@@ -5003,6 +5084,40 @@ def test_build_steps_full_sync_setzt_die_flags(sandbox):
     assert steps["outlook"]["env"]["EXPORT_CATEGORIES"] == "mail,contacts"
     ohne = {s["key"]: s for s in app_mod.build_steps(cfg, {"onedrive": True}, sync_now=True)}
     assert "FULL_SYNC" not in ohne["onedrive"]["env"]
+    assert "RESYNC" not in ohne["onedrive"]["env"]
+
+
+def test_build_steps_resync_setzt_die_flags(sandbox):
+    """"Fetch now" / "Fetch again": RESYNC with SYNC_NOW alongside for every
+    export step – and never FULL_SYNC, a resync writes nothing over."""
+    cfg = app_mod.load_config()
+    cfg.update(outlook_categories=["mail", "contacts"], teams_categories=["group"])
+    steps = {s["key"]: s for s in app_mod.build_steps(
+        cfg, {"outlook": True, "onedrive": True, "teams": True, "todo": True,
+              "planner": True, "onenote": True, "sharepoint": True,
+              "sharepoint_pages": True}, resync=True)}
+    for key in ("outlook", "onedrive", "teams", "todo", "planner", "onenote",
+                "sharepoint", "sharepoint_pages"):
+        assert steps[key]["env"]["RESYNC"] == "1", key
+        assert steps[key]["env"]["SYNC_NOW"] == "1", key
+        assert "FULL_SYNC" not in steps[key]["env"], key
+    assert steps["outlook"]["env"].get("CALENDAR_FULL", "") != "1", "the window stays"
+
+
+def test_http_run_resync(server, monkeypatch):
+    """"Fetch again" posts the source with resync; the step carries the flag."""
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+    code, r = call(port, "POST", "/api/run",
+                   {"outlook": True, "resync": True, "index": True, "label": "job.resync"})
+    assert code == 200 and r["ok"]
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert schritte["outlook"]["env"]["RESYNC"] == "1"
+    assert "FULL_SYNC" not in schritte["outlook"]["env"]
+    assert "index" in schritte and gesehen["label"] == "job.resync"
 
 
 def test_http_run_full_sync(server, monkeypatch):
@@ -5023,8 +5138,9 @@ def test_http_run_full_sync(server, monkeypatch):
 
 def test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert():
     """DESIGN.md §5: one *Force full sync* per source, a `.mini` in the
-    `.aktionen` row of its *Advanced* group – never in the open part, never
-    twice, and every source that tracks changes has one."""
+    `.aktionen` row of its *Advanced* group with an (i) of its own – never
+    in the open part, never twice, and every source that tracks changes
+    has one."""
     seite = app_mod.seite()
     assert seite.count('data-i18n="settings.full_sync"') == len(QUELLEN_MIT_VOLLSYNC)
     for key in QUELLEN_MIT_VOLLSYNC:
@@ -5036,8 +5152,10 @@ def test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert():
         assert naechster_block == -1 or knopf < naechster_block, f"{key}: button in another block"
         zeile = seite[seite.rfind('<div class="aktionen">', start, knopf):knopf]
         assert "</div>" not in zeile, f"{key}: the button is outside an .aktionen row"
-        assert 'data-i18n-title="settings.full_sync.i"' in seite[knopf:knopf + 200]
-    assert "full_sync: true" in seite and "label: 'job.full'" in seite
+        # Its (i) sits right beside it and speaks for this source alone.
+        assert (f'data-i18n-title="settings.full_sync.i.{key}"'
+                in seite[knopf:knopf + 260]), f"{key}: no (i) of its own"
+    assert "full_sync: true" in seite and "'job.full'" in seite
 
 
 PRUEFUNG_VOLLSYNC = GRUNDZUSTAND + """
@@ -5057,6 +5175,7 @@ global.confirm = function(){ return true; };
 vollSync('sharepoint');
 var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
 pruefe(lauf && lauf.body.sharepoint === true && lauf.body.full_sync === true, 'Lauf nicht gestartet: ' + JSON.stringify(lauf));
+pruefe(lauf.body.index === true, 'Vollsync ohne Index-Schritt');
 pruefe(lauf.body.label === 'job.full', 'falsches Etikett: ' + lauf.body.label);
 pruefe(!lauf.body.sharepoint_pages, 'Seiten ohne eine URL mitgeschickt');
 pruefe(!lauf.body.onedrive && !lauf.body.outlook, 'andere Quellen mitgeschickt');
@@ -5889,14 +6008,16 @@ global.fetch = function(pfad, opt){
 };
 document.getElementById('c-onedrive_rules').value = '- Dateien/Fotos/**';
 
-// Abgleich: eigener Lauf, eigene Meldung.
+// Abgleich: eigener Lauf im Lauffenster – kein Zustandstext an einer Karte.
+LAUF.eigener = false;
 gleicheOrdnerAb('onedrive');
 var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
 pruefe(JSON.parse(lauf.body).sync_onedrive === true, 'Falscher Abgleich: ' + lauf.body);
-pruefe(document.getElementById('od-folders-msg').textContent.length > 0,
-       'Meldung steht nicht an der OneDrive-Karte');
-pruefe(document.getElementById('folders-msg').textContent === '',
-       'Meldung landete beim Postfach');
+pruefe(JSON.parse(lauf.body).label === 'job.folders', 'Etikett fehlt: ' + lauf.body);
+pruefe(LAUF.eigener === true, 'Der Abgleich oeffnet das Lauffenster nicht');
+pruefe(document.getElementById('od-folders-msg').textContent === '' &&
+       document.getElementById('folders-msg').textContent === '',
+       'Ein Zustandstext an einer Karte');
 
 // Exportliste: mit den OneDrive-Regeln, nicht mit denen des Postfachs.
 gesendet = [];
@@ -5972,7 +6093,8 @@ def test_vorabversion_wird_nicht_als_aktuell_ausgegeben():
 
 
 def test_onedrive_pruefschritt(sandbox):
-    schritt = next(s for s in app_mod.build_steps(app_mod.load_config(), {"check_onedrive": True})
+    cfg = _cfg_mit_kategorien(onedrive_enabled=True)
+    schritt = next(s for s in app_mod.build_steps(cfg, {"check_onedrive": True})
                    if s["key"] == "check_onedrive")
     argv = [str(x) for x in schritt["argv"]]
     assert "--check" in argv and "onedrive_export" in " ".join(argv)
@@ -5981,7 +6103,8 @@ def test_onedrive_pruefschritt(sandbox):
 def test_ein_pruefknopf_prueft_beides_in_einem_lauf(sandbox):
     """The mailbox first: it is the main source and belongs at the top of
     the log."""
-    keys = [s["key"] for s in app_mod.build_steps(app_mod.load_config(), {"check": True, "check_onedrive": True})]
+    cfg = _cfg_mit_kategorien(onedrive_enabled=True)
+    keys = [s["key"] for s in app_mod.build_steps(cfg, {"check": True, "check_onedrive": True})]
     assert keys == ["check", "check_onedrive"]
 
 
@@ -5993,15 +6116,22 @@ def test_vollstaendigkeit_hat_genau_einen_knopf():
     assert app_mod.seite().count("pruefeVollstaendigkeit(") == 2   # call + definition
 
 
-def test_analytics_liefert_beide_berichte(server, sandbox):
+def test_analytics_liefert_die_bilanz_je_quelle(server, sandbox):
+    """One entry per balance row: the last report (null before the first
+    check) and whether the source is in use."""
     a, port = server
+    import completeness
     import state_db
-    for ordner, inhalt in ((app_mod.OUTLOOK_DIR, {"erwartet": 5, "fehlt": 1, "ordner": []}),
-                           (app_mod.ONEDRIVE_DIR, {"erwartet": 9, "fehlt": 0, "ordner": []})):
-        state_db.StateDb(sandbox / ordner).bericht_schreiben(inhalt)
-    r = call(port, "GET", "/api/analytics")[1]
-    assert r["vollstaendigkeit"]["erwartet"] == 5
-    assert r["vollstaendigkeit_onedrive"]["erwartet"] == 9
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR),
+                           completeness.bilanz("outlook_mail", "mails", da=5, offen=1))
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR),
+                           completeness.bilanz("onedrive", "files", da=9))
+    r = call(port, "GET", "/api/analytics")[1]["pruefungen"]
+    assert list(r) == [e["quelle"] for e in app_mod.steps_mod.PRUEFUNGEN]
+    assert r["outlook_mail"]["bericht"]["offen"] == 1 and r["outlook_mail"]["genutzt"]
+    assert r["onedrive"]["bericht"]["da"] == 9 and not r["onedrive"]["genutzt"]
+    assert r["outlook_calendar"]["bericht"] is None and r["outlook_calendar"]["genutzt"]
+    assert r["todo"]["bericht"] is None and not r["todo"]["genutzt"]
 
 
 PRUEFUNG_PRUEFKNOPF = GRUNDZUSTAND + """
@@ -6010,59 +6140,513 @@ global.fetch = function(pfad, opt){
   gesendet.push({pfad: String(pfad), body: opt && opt.body});
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
-function starte(){ gesendet = []; pruefeVollstaendigkeit();
-  return JSON.parse(gesendet.filter(function(g){
-    return g.pfad.indexOf('/api/run') >= 0; })[0].body); }
-
-// OneDrive wird nicht benutzt: nur das Postfach pruefen, keine Netzanfrage
-// fuer eine Antwort, die niemanden interessiert.
-S.config = {onedrive_enabled: false};
-S.folders_onedrive = {};
-var a = starte();
-pruefe(a.check === true && a.check_onedrive === false,
-       'Ohne OneDrive trotzdem geprueft: ' + JSON.stringify(a));
-
-// Haekchen gesetzt: beides.
-S.config.onedrive_enabled = true;
-pruefe(starte().check_onedrive === true, 'Mit Haekchen nicht mitgeprueft');
-
-// Haekchen aus, aber schon einmal gespiegelt: der Bericht ist weiter sinnvoll.
-S.config.onedrive_enabled = false;
-S.folders_onedrive = {abgeglichen: '2026-08-10T12:00:00'};
-pruefe(starte().check_onedrive === true, 'Vorhandener Spiegel wird uebergangen');
+pruefeVollstaendigkeit();
+var a = JSON.parse(gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0].body);
+// Every check is asked for – the registry drops the unused ones.
+['check', 'check_teams', 'check_onedrive', 'check_sharepoint', 'check_pages',
+ 'check_planner', 'check_todo', 'check_onenote'].forEach(function(k){
+  pruefe(a[k] === true, 'Pruefung nicht angefragt: ' + k + ' ' + JSON.stringify(a));
+});
+pruefe(a.label === 'job.check', 'falsches Etikett');
+pruefe(!a.outlook && !a.index, 'Export oder Index mitgestartet');
 console.log('OK');
 """
 
 
-def test_ein_pruefknopf_entscheidet_selbst_ueber_onedrive():
+def test_ein_pruefknopf_fragt_jede_pruefung_an():
     _in_node(PRUEFUNG_PRUEFKNOPF)
 
 
-PRUEFUNG_BERICHT_EINHEIT = GRUNDZUSTAND + """
-var b = {geprueft: '2026-08-10T18:46:00', erwartet: 421, vorhanden: 420,
-         geloescht: 0, fehlt: 1, ausgelassen: 208,
-         ausgelassene_ordner: ['Dateien/Fotos'],
-         ordner: [{ordner: 'Dateien/Fotos', erwartet: 5, vorhanden: 4, fehlt: 1}]};
-var h = berichtHtml(b, 'ana.check.title.onedrive', true);
-pruefe(h.indexOf('Mails') < 0 && h.indexOf('mails') < 0,
-       'Bericht des Spiegels spricht von Mails: ' + h.slice(0, 220));
-pruefe(h.indexOf('Dateien fehlen') >= 0 || h.indexOf('files missing') >= 0,
-       'Einheit fehlt in der Luecken-Zeile');
+PRUEFUNG_BILANZ = GRUNDZUSTAND + """
+function b(extra){
+  return Object.assign({quelle: 'onedrive', einheit: 'files', geprueft: '2026-08-10T18:46:00',
+    stand: 'ganz', grund: null, da: 420, offen: 0, ausgeschlossen: 0,
+    ausgeschlossen_einheit: 'files', behalten: 0, wartend: 0, zeilen: [], fehler: []}, extra);
+}
+// All here: one sentence, unit word from the report, nothing about zeros.
+var s = bilanzSatz(b());
+pruefe(s.dot === 'ok' && s.text.indexOf('420') >= 0 && s.text.indexOf('Dateien') >= 0, 'Alles-da-Satz: ' + s.text);
+pruefe(s.text.indexOf('ausgeschlossen') < 0 && s.text.indexOf('behalten') < 0, 'Nullen genannt: ' + s.text);
+// Open, excluded, kept, waiting – a number each, no names.
+s = bilanzSatz(b({offen: 12, ausgeschlossen: 208, behalten: 3, wartend: 40}));
+pruefe(s.dot === 'warn', 'offen ohne Warnpunkt');
+['12', '208', '3', '40', 'noch nicht geholt', 'bewusst ausgeschlossen', 'behalten', 'Häufigkeit'].forEach(function(w){
+  pruefe(s.text.indexOf(w) >= 0, 'fehlt im Satz: ' + w + ' – ' + s.text);
+});
+pruefe(s.text.indexOf('Fotos') < 0, 'Ordnername im Satz');
+// Excluded in another unit: calendars, not events.
+s = bilanzSatz(b({quelle: 'outlook_calendar', einheit: 'events', ausgeschlossen: 4, ausgeschlossen_einheit: 'calendars'}));
+pruefe(s.text.indexOf('4 Kalender') >= 0, 'Einheit der Ausgeschlossenen: ' + s.text);
+// Teams speaks of newer messages, not of "not fetched".
+s = bilanzSatz(b({quelle: 'teams', einheit: 'conversations', offen: 3}));
+pruefe(s.text.indexOf('neueren Nachrichten') >= 0, 'Teams-Satz: ' + s.text);
+// Partly checked and not checked at all.
+s = bilanzSatz(b({stand: 'teilweise', fehler: [{pfad: 'S/B', grund: 'x'}]}));
+pruefe(s.text.indexOf('Nicht ganz geprüft: 1') >= 0, 'teilweise: ' + s.text);
+s = bilanzSatz(b({stand: 'nicht', grund: 'ana.check.reason.budget'}));
+pruefe(s.dot === 'aus' && s.text.indexOf('Kontingent') >= 0, 'nicht geprüft: ' + s.text);
 
-// Der Postfachbericht bleibt, wie er war.
-var m = berichtHtml(b, 'ana.check.title.mail', false);
-pruefe(m.indexOf('Mails') >= 0, 'Postfachbericht spricht nicht mehr von Mails');
-// Ohne Bericht: der Spiegel-Block verschwindet, das Postfach sagt "nie geprueft".
-pruefe(berichtHtml(null, 'ana.check.title.onedrive', true) === '',
-       'Leerer Spiegelbericht erzeugt einen Block');
-pruefe(berichtHtml(null, 'ana.check.title.mail', false).indexOf('hint') >= 0,
-       'Postfach ohne Bericht sagt nichts');
+// The rows: a used source without a report says so, an unused one without
+// a report is not drawn, "fetch now" only where something is open.
+zeigeBerichte({pruefungen: {
+  outlook_mail: {bericht: b({quelle: 'outlook_mail', einheit: 'mails', offen: 12,
+                             zeilen: [{pfad: 'E-Mail/Posteingang', da: 100, offen: 12}]}), genutzt: true},
+  outlook_calendar: {bericht: null, genutzt: true},
+  onedrive: {bericht: null, genutzt: false},
+  teams: {bericht: b({quelle: 'teams', einheit: 'conversations'}), genutzt: false}
+}});
+var html = el('ana-checks').innerHTML;
+pruefe(html.indexOf('Postfach') >= 0 && html.indexOf('Kalender') >= 0, 'Zeilen fehlen');
+pruefe(html.indexOf('OneDrive') < 0, 'Unbenutzte Quelle ohne Bericht gezeichnet');
+pruefe(html.indexOf('Teams') >= 0, 'Bericht einer nicht mehr genutzten Quelle verschwunden');
+pruefe(html.indexOf('Noch nicht geprüft') >= 0, 'Genutzte Quelle ohne Bericht sagt nichts');
+pruefe(html.split('holeQuelle(').length === 2, 'Jetzt holen nicht genau einmal: ' + html.split('holeQuelle(').length);
+pruefe(html.indexOf('E-Mail/Posteingang') >= 0 && html.indexOf('<details') >= 0, 'Offene Ordner nicht eingeklappt');
+pruefe(html.indexOf('erwartet') < 0 && html.indexOf('vorhanden') < 0, 'Buchhaltungswort auf der Seite');
+
+// "Fetch now" hands the row to the server – it knows the cheapest way –
+// and the window opens with the run.
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
+};
+pruefe(html.indexOf('holeQuelle(&quot;outlook_mail&quot;)') >= 0, 'Knopf nennt die Zeile nicht: ' + html);
+LAUF.eigener = false;
+holeQuelle('outlook_mail');
+pruefe(gesendet[0].pfad.indexOf('/api/bilanz/holen') >= 0 && gesendet[0].body.quelle === 'outlook_mail',
+       'Jetzt holen: ' + JSON.stringify(gesendet[0]));
+pruefe(LAUF.eigener === true, 'Jetzt holen oeffnet kein Fenster');
+// The navigation dot: warn while something is open, ok when all agrees.
+pruefe(el('p-ana-check').className.indexOf('warn') >= 0, 'Punkt nicht warn: ' + el('p-ana-check').className);
+zeigeBerichte({pruefungen: {outlook_mail: {genutzt: true, bericht: {quelle: 'outlook_mail', einheit: 'mails', stand: 'ganz', da: 5, offen: 0, ausgeschlossen: 0, behalten: 0, wartend: 0, zeilen: [], fehler: [], geprueft: 'x'}}}});
+pruefe(el('p-ana-check').className === 'dot ok', 'Punkt nicht ok: ' + el('p-ana-check').className);
+zeigeInsight('ana-check-karte');
 console.log('OK');
 """
 
 
-def test_bericht_nennt_die_richtige_einheit():
-    _in_node(PRUEFUNG_BERICHT_EINHEIT)
+def test_bilanzzeile_spricht_in_saetzen_und_zahlen():
+    _in_node(PRUEFUNG_BILANZ)
+
+
+def test_archivpruefung_ist_ein_schritt_ohne_zugang(sandbox):
+    """The inward check needs no Graph: the step runs without a token and
+    writes its report next to the settings, never into an export folder."""
+    cfg = _cfg_mit_kategorien()
+    (schritt,) = app_mod.build_steps(cfg, {"check_archive": True})
+    argv = [str(x) for x in schritt["argv"]]
+    assert "archive_check" in " ".join(argv) and "--report" in argv
+    assert argv[argv.index("--report") + 1] == str(app_mod.archiv_bericht_pfad())
+    assert str(sandbox) in argv[argv.index("--report") + 1], "the report leaves the profile"
+    assert not app_mod.steps_mod.braucht_zugang({"check_archive": True})
+    assert schritt.get("corpus") is not True
+
+
+def test_analytics_traegt_die_archivpruefung(server, sandbox):
+    a, port = server
+    assert call(port, "GET", "/api/analytics")[1]["archiv"] is None
+    app_mod.archiv_bericht_pfad().write_text('{"geprueft": "2026-09-13T10:00:00+00:00", "quellen": [], '
+                                      '"index": {"stand": "nicht", "grund": "ana.archiv.reason.noindex"}}',
+                                      encoding="utf-8")
+    r = call(port, "GET", "/api/analytics")[1]["archiv"]
+    assert r["index"]["grund"] == "ana.archiv.reason.noindex"
+
+
+def test_uebersicht_hat_eine_hauptaktion_und_die_archivpruefung_ist_keine():
+    """DESIGN.md §1: one primary action per screen – *Check now*. The
+    inward check is a secondary button beside it."""
+    seite = app_mod.seite()
+    block = seite[seite.index('<section id="tab-analytics"'):seite.index('<section id="tab-einstellungen"')]
+    assert block.count('class="act"') == 1 and 'id="ana-check"' in block
+    assert 'class="ghost" id="ana-archiv" onclick="pruefeArchiv()"' in block
+
+
+PRUEFUNG_ARCHIV = GRUNDZUSTAND + """
+function q(extra){
+  return Object.assign({quelle: 'onedrive', einheit: 'files', stand: 'ganz', grund: null,
+    stimmig: 4200, fehlt: 0, fremd: 0, unvollstaendig: 0, verloren: 0, zeilen: [], fehler: []}, extra);
+}
+var s = archivSatz(q());
+pruefe(s.dot === 'ok' && s.text.indexOf('4.200') >= 0 && s.text.indexOf('stimmen') >= 0, 'Alles-gut-Satz: ' + s.text);
+s = archivSatz(q({fehlt: 3, fremd: 2, unvollstaendig: 1, verloren: 4}));
+pruefe(s.dot === 'warn', 'Befund ohne Warnpunkt');
+['3 Dateien fehlen', '2 ohne Buchhaltung', '1 unvollständig', '4 verloren', 'Nachholen holt sie'].forEach(function(w){
+  pruefe(s.text.indexOf(w) >= 0, 'fehlt im Satz: ' + w + ' – ' + s.text);
+});
+s = archivSatz(q({stand: 'nicht', grund: 'ana.archiv.reason.db'}));
+pruefe(s.dot === 'aus' && s.text.indexOf('beschädigt') >= 0, 'nicht geprüft: ' + s.text);
+
+zeigeArchiv({geprueft: '2026-09-13T10:00:00+00:00',
+  quellen: [q({quelle: 'outlook', fehlt: 1, zeilen: [{pfad: 'E-Mail/Posteingang', fehlt: 1, fremd: 0, unvollstaendig: 0, verloren: 0}]}),
+            q({quelle: 'sharepoint_pages'})],
+  index: {stand: 'ganz', grund: null, geaendert: 40, neu: 3, weg: 1, gebaut: '2026-09-12T20:00:00+00:00'}});
+var html = el('ana-archiv-zeilen').innerHTML;
+pruefe(html.indexOf('Outlook') >= 0 && html.indexOf('SharePoint-Seiten') >= 0, 'Zeilen fehlen');
+pruefe(html.indexOf('E-Mail/Posteingang') >= 0 && html.indexOf('<details') >= 0, 'Befunde nicht eingeklappt');
+pruefe(html.indexOf('40') >= 0 && html.indexOf('geändert') >= 0, 'Index-Zeile fehlt: ' + html.slice(-400));
+pruefe(html.indexOf('run({index:true}') >= 0, 'Nur Index nicht angeboten');
+pruefe(html.indexOf('&quot;nachholen&quot;') >= 0 && html.indexOf('Nachholen') >= 0, 'Nachholen fehlt bei fehlenden Dateien');
+pruefe(html.indexOf('Jetzt holen') < 0, 'Die Archivpruefung spricht wie die Bilanz');
+zeigeArchiv({geprueft: 'x', quellen: [], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0, gebaut: null}});
+pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('run({index:true}') < 0, 'Nur Index trotz aktuellem Index');
+zeigeArchiv(null);
+pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('Noch nicht geprüft') >= 0, 'Ohne Bericht kein Hinweis');
+
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
+  return Promise.resolve({json: function(){ return Promise.resolve({ok: true}); }});
+};
+pruefeArchiv();
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0].body;
+pruefe(lauf.check_archive === true && lauf.label === 'job.archive_check' && !lauf.check, 'Archivpruefung: ' + JSON.stringify(lauf));
+console.log('OK');
+"""
+
+
+def test_archivzeile_spricht_in_saetzen():
+    _in_node(PRUEFUNG_ARCHIV)
+
+
+def _outlook_mit_befunden(sandbox):
+    """An Outlook folder with one mail the log knows, one foreign file and
+    one lost tombstone."""
+    import state_db
+    out = sandbox / app_mod.OUTLOOK_DIR
+    db = state_db.StateDb(out)
+    done = state_db.DbDoneLog(db)
+    (out / "E-Mail/Posteingang").mkdir(parents=True, exist_ok=True)
+    (out / "E-Mail/Posteingang/a.eml").write_bytes(b"x")
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    done.close()
+    (out / "E-Mail/Posteingang/fremd.eml").write_bytes(b"f")
+    db.verschwunden_ergaenzen(["E-Mail/Alt/weg.eml"], "2026-01-01")
+    return out
+
+
+def test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie(server, sandbox, monkeypatch):
+    """Every action over HTTP is a run of its own: the route starts one
+    step of archive_check with the source, the note with its kinds – and
+    the step, run here by hand, updates the source's row in the stored
+    report, deletes no file, and none of it starts while a job is on."""
+    import json
+    import archive_check
+    a, port = server
+    out = _outlook_mit_befunden(sandbox)
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+
+    def schritt(aktion, koerper):
+        code, r = call(port, "POST", "/api/archiv/" + aktion, koerper)
+        assert code == 200 and r["ok"] and r["message"] is None, r
+        (s,) = gesehen["steps"]
+        assert s["key"] == "archiv_" + aktion.replace("-", "_")
+        assert gesehen["label"] == "job.archiv." + aktion
+        argv = s["argv"]
+        assert argv[argv.index("--aktion") + 1] == aktion
+        assert argv[argv.index("--quelle") + 1] == "outlook"
+        # The step as the run would execute it – in this process.
+        pfade = {"outlook": str(out)}
+        arten = argv[argv.index("--arten") + 1] if "--arten" in argv else "verloren"
+        archive_check.aktion(aktion, "outlook", pfade, app_mod.archiv_bericht_pfad(), arten)
+        return [q for q in json.loads(app_mod.archiv_bericht_pfad().read_text(encoding="utf-8"))["quellen"]
+                if q["quelle"] == "outlook"][0]
+
+    zeile = schritt("vermerken", {"quelle": "outlook"})
+    assert (zeile["verloren"], zeile["fremd"], zeile["vermerkt"]) == (0, 1, 0)
+    zeile = schritt("beiseitelegen", {"quelle": "outlook"})
+    assert not (out / "E-Mail/Posteingang/fremd.eml").exists()
+    assert list((out / "_fremd").glob("*/E-Mail/Posteingang/fremd.eml"))
+    assert (out / "E-Mail/Posteingang/a.eml").exists()
+    assert (zeile["fremd"], zeile["beiseite"]) == (0, 1)
+    zeile = schritt("zurueckholen", {"quelle": "outlook"})
+    assert (out / "E-Mail/Posteingang/fremd.eml").read_bytes() == b"f"
+    assert not (out / "_fremd").exists() and zeile["fremd"] == 1
+    # The note takes its kinds from the request – unknown ones are dropped.
+    call(port, "POST", "/api/archiv/vermerken", {"quelle": "outlook", "arten": ["fehlt", "egal"]})
+    argv = gesehen["steps"][0]["argv"]
+    assert argv[argv.index("--arten") + 1] == "fehlt"
+    assert call(port, "POST", "/api/archiv/vermerken", {"quelle": "nirgends"})[0] == 400
+    assert call(port, "POST", "/api/archiv/irgendwas", {"quelle": "outlook"})[0] == 404
+    a.jobs.thread = __import__("threading").Thread(target=lambda: __import__("time").sleep(0.3))
+    a.jobs.thread.start()
+    assert call(port, "POST", "/api/archiv/beiseitelegen", {"quelle": "outlook"})[0] == 409
+    a.jobs.thread.join()
+
+
+def test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten(server, sandbox, monkeypatch):
+    """A damaged bookkeeping: the route starts ONE run – the archive step
+    first, then the source's sync-now export, then the index – and says
+    "nothing to do" without a run when no state.db is damaged."""
+    a, port = server
+    out = sandbox / app_mod.OUTLOOK_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "state.db").write_bytes(b"kein sqlite")
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+    code, r = call(port, "POST", "/api/archiv/neu-aufbauen", {"quelle": "outlook"})
+    assert code == 200 and r["ok"] and r["message"] is None
+    keys = [s["key"] for s in gesehen["steps"]]
+    assert keys == ["archiv_neu_aufbauen", "outlook", "index"], keys
+    assert gesehen["steps"][1]["env"]["SYNC_NOW"] == "1"
+    assert gesehen["label"] == "job.archiv.neu-aufbauen"
+    assert list(out.glob("state.db")) and not list(out.glob("state.db.beschaedigt-*")), \
+        "the route moves nothing – the step does, inside the run"
+    (out / "state.db").unlink()
+    code, r = call(port, "POST", "/api/archiv/neu-aufbauen", {"quelle": "outlook"})
+    assert code == 200 and r["message"]["k"] == "srv.archiv.nothing"
+
+
+def test_build_steps_resync_traegt_die_ordnerliste_nur_mit_abgleich(sandbox):
+    """The balance's folders travel as RESYNC_FOLDERS in the Outlook step,
+    and only with a resync – a plain run never narrows itself."""
+    cfg = app_mod.load_config()
+    cfg.update(outlook_categories=["mail"])
+    (schritt,) = [s for s in app_mod.build_steps(
+        cfg, {"outlook": True}, resync=True, resync_ordner=["E-Mail/Posteingang", " ", "kalender/Arbeit"])
+        if s["key"] == "outlook"]
+    assert json.loads(schritt["env"]["RESYNC_FOLDERS"]) == ["E-Mail/Posteingang", "kalender/Arbeit"]
+    (ohne,) = [s for s in app_mod.build_steps(cfg, {"outlook": True}, sync_now=True,
+                                              resync_ordner=["E-Mail/Posteingang"])
+               if s["key"] == "outlook"]
+    assert "RESYNC_FOLDERS" not in ohne["env"]
+
+
+def test_build_steps_nachholen_erzwingt_die_quelle_mit_der_liste(sandbox):
+    """"Fetch again": the source's step runs whether or not the settings
+    tick it, with the list in FETCH_LIST and every cadence aside – and the
+    row is judged afresh by the archive step at the end."""
+    cfg = app_mod.load_config()
+    cfg.update(outlook_categories=[])
+    steps = app_mod.build_steps(
+        cfg, {"outlook": True, "index": True, "archiv_pruefen": True},
+        nachholen={"quelle": "outlook", "liste": "/tmp/nachholen-outlook.json"},
+        archiv={"quelle": "outlook"})
+    assert [s["key"] for s in steps] == ["outlook", "index", "archiv_pruefen"]
+    assert steps[0]["env"]["FETCH_LIST"] == "/tmp/nachholen-outlook.json"
+    assert steps[0]["env"]["SYNC_NOW"] == "1"
+    argv = steps[2]["argv"]
+    assert argv[argv.index("--aktion") + 1] == "pruefen"
+    assert argv[argv.index("--quelle") + 1] == "outlook"
+    # Without the list the unticked source stays out, as before.
+    ohne = app_mod.build_steps(cfg, {"outlook": True, "index": True})
+    assert [s["key"] for s in ohne] == ["index"]
+
+
+def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox, monkeypatch):
+    """"Fetch again" on the archive card: the files the stored report found
+    missing go to a list, and one run starts – the source (unticked or
+    not), the index, the row judged afresh. Nothing to do without a
+    finding."""
+    import json
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    a.cfg["outlook_categories"] = []
+    out = sandbox / app_mod.OUTLOOK_DIR
+    out.mkdir(parents=True, exist_ok=True)
+    zeile = {"quelle": "outlook", "fehlt": 2, "unvollstaendig": 0,
+             "befunde": {"fehlt": ["E-Mail/a.eml", "E-Mail/b.eml"], "fremd": [],
+                         "unvollstaendig": [], "verloren": []}}
+    app_mod.archiv_bericht_pfad().write_text(json.dumps(
+        {"geprueft": "x", "quellen": [zeile], "index": {}}), encoding="utf-8")
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+    code, r = call(port, "POST", "/api/archiv/nachholen", {"quelle": "outlook"})
+    assert code == 200 and r["ok"] and r["message"] is None
+    assert [s["key"] for s in gesehen["steps"]] == ["outlook", "index", "archiv_pruefen"]
+    assert gesehen["label"] == "job.archiv.nachholen"
+    liste = sandbox / "nachholen-outlook.json"
+    assert gesehen["steps"][0]["env"]["FETCH_LIST"] == str(liste)
+    assert json.loads(liste.read_text(encoding="utf-8"))["dateien"] == ["E-Mail/a.eml", "E-Mail/b.eml"]
+    zeile["befunde"]["fehlt"] = []
+    app_mod.archiv_bericht_pfad().write_text(json.dumps(
+        {"geprueft": "x", "quellen": [zeile], "index": {}}), encoding="utf-8")
+    code, r = call(port, "POST", "/api/archiv/nachholen", {"quelle": "outlook"})
+    assert code == 200 and r["message"]["k"] == "srv.archiv.nothing"
+
+
+def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkeypatch):
+    """"Fetch now" on a balance row: the mailbox as a resync of the open
+    folders with its check behind the index; a mirror by the open files'
+    ids from the stored report, without the check (the fetch adjusts the
+    row itself) – or as a resync when the report capped them; every other
+    source as its regular run with its check."""
+    import json
+    import completeness
+    import state_db
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    a.cfg.update(outlook_categories=["mail"], teams_categories=["group"], onedrive_enabled=True)
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR), completeness.bilanz(
+        "outlook_mail", "mails", da=5, offen=2,
+        zeilen=[completeness.zeile("E-Mail/Posteingang", 3, 1), completeness.zeile("E-Mail/Archiv", 2, 1)]))
+    code, r = call(port, "POST", "/api/bilanz/holen", {"quelle": "outlook_mail"})
+    assert code == 200 and r["ok"] and gesehen["label"] == "job.holen"
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["outlook", "index", "check"]
+    assert schritte["outlook"]["env"]["RESYNC"] == "1"
+    assert sorted(json.loads(schritte["outlook"]["env"]["RESYNC_FOLDERS"])) == ["E-Mail/Archiv", "E-Mail/Posteingang"]
+    # A mirror with the open files by id: the list, no walk, no check step.
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(
+        "onedrive", "files", da=1, offen=1, zeilen=[completeness.zeile("Dateien", 1, 1)],
+        extra={"offene": [{"id": "i1", "rel": "Dateien/a.pdf"}], "offene_gekappt": False}))
+    code, r = call(port, "POST", "/api/bilanz/holen", {"quelle": "onedrive"})
+    assert code == 200 and r["ok"]
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["onedrive", "index"]
+    liste = sandbox / "nachholen-onedrive.json"
+    assert schritte["onedrive"]["env"]["FETCH_LIST"] == str(liste)
+    assert json.loads(liste.read_text(encoding="utf-8"))["dateien"] == [{"id": "i1", "rel": "Dateien/a.pdf"}]
+    assert "RESYNC" not in schritte["onedrive"]["env"]
+    # Capped: the resync walks, the check follows.
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(
+        "onedrive", "files", da=1, offen=9, extra={"offene": [{"id": "i1", "rel": "Dateien/a.pdf"}],
+                                                   "offene_gekappt": True}))
+    call(port, "POST", "/api/bilanz/holen", {"quelle": "onedrive"})
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["onedrive", "index", "check_onedrive"]
+    assert schritte["onedrive"]["env"]["RESYNC"] == "1" and "FETCH_LIST" not in schritte["onedrive"]["env"]
+    # Teams: the regular run is the diff already.
+    call(port, "POST", "/api/bilanz/holen", {"quelle": "teams"})
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["teams", "index", "check_teams"]
+    assert "RESYNC" not in schritte["teams"]["env"] and schritte["teams"]["env"]["SYNC_NOW"] == "1"
+    assert call(port, "POST", "/api/bilanz/holen", {"quelle": "nirgends"})[0] == 400
+
+
+def test_http_run_lehnt_eine_nicht_angehakte_quelle_ab(server, monkeypatch):
+    """"Fetch again" on a source the settings do not tick: no run that
+    carries nothing but the index – the answer names the source."""
+    a, port = server
+    monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
+    a.cfg["outlook_categories"] = []
+    code, r = call(port, "POST", "/api/run",
+                   {"outlook": True, "resync": True, "index": True, "label": "job.resync"})
+    assert code == 409 and not r["ok"]
+    assert r["message"]["k"] == "srv.inactive" and r["message"]["v"]["source"] == "Outlook"
+
+
+PRUEFUNG_ARCHIV_AKTIONEN = GRUNDZUSTAND + """
+function q(extra){
+  return Object.assign({quelle: 'outlook', einheit: 'files', stand: 'ganz', grund: null,
+    stimmig: 10, fehlt: 0, fremd: 0, unvollstaendig: 0, verloren: 0, beiseite: 0, gekappt: false,
+    zeilen: [], fehler: [], befunde: {fehlt: [], fremd: [], unvollstaendig: [], verloren: []}}, extra);
+}
+// Nothing to do: no button but none. Findings: one button per kind.
+zeigeArchiv({geprueft: 'x', quellen: [q()], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+var html = el('ana-archiv-zeilen').innerHTML;
+pruefe(html.indexOf('archivAktion(') < 0 && html.indexOf('befundeFenster(') < 0, 'Knoepfe ohne Befund: ' + html);
+zeigeArchiv({geprueft: 'x', quellen: [q({fehlt: 1, fremd: 2, verloren: 3, beiseite: 4,
+  befunde: {fehlt: ['E-Mail/a.eml'], fremd: ['E-Mail/f1.eml', 'E-Mail/f2.eml'], unvollstaendig: [], verloren: ['E-Mail/w.eml']}})],
+  index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+html = el('ana-archiv-zeilen').innerHTML;
+['befundeFenster(', '&quot;nachholen&quot;', '&quot;vermerken&quot;', '&quot;beiseitelegen&quot;', '&quot;zurueckholen&quot;'].forEach(function(w){
+  pruefe(html.indexOf(w) >= 0, 'Knopf fehlt: ' + w);
+});
+pruefe(html.indexOf('neu-aufbauen') < 0, 'Neu aufbauen ohne kaputte Buchhaltung');
+pruefe(html.indexOf('4 beiseitegelegt') >= 0, 'Beiseitegelegtes nicht im Satz: ' + html);
+// Only set aside, nothing found: "Put back" alone – no window with nothing in it.
+zeigeArchiv({geprueft: 'x', quellen: [q({beiseite: 4})], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+html = el('ana-archiv-zeilen').innerHTML;
+pruefe(html.indexOf('befundeFenster(') < 0 && html.indexOf('&quot;zurueckholen&quot;') >= 0,
+       'Befunde-Knopf ohne Befund oder Zurücklegen fehlt: ' + html);
+zeigeArchiv({geprueft: 'x', quellen: [q({stand: 'nicht', grund: 'ana.archiv.reason.db'})], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('neu-aufbauen') >= 0, 'Neu aufbauen fehlt bei kaputter Buchhaltung');
+
+// The findings window lists the files per kind and offers copy and open.
+zeigeArchiv({geprueft: 'x', quellen: [q({fremd: 2, verloren: 1,
+  befunde: {fehlt: [], fremd: ['E-Mail/f1.eml', 'E-Mail/f2.eml'], unvollstaendig: [], verloren: ['E-Mail/w.eml']}})],
+  index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+befundeFenster('outlook');
+var m = modal.innerHTML;
+pruefe(m.indexOf('E-Mail/f1.eml') >= 0 && m.indexOf('E-Mail/w.eml') >= 0, 'Befunde nicht gelistet');
+pruefe(m.indexOf('Fehlt (') < 0, 'Leere Gruppe gezeichnet');
+pruefe(m.indexOf('inZwischenablage(') >= 0 && m.indexOf('&quot;ordner&quot;') >= 0, 'Kopieren oder Ordner fehlt');
+var zeilen = BEFUNDE_TEXT.split(String.fromCharCode(10));
+pruefe(zeilen.length === 3 && zeilen[0] === 'E-Mail/f1.eml' && zeilen[2] === 'E-Mail/w.eml', 'Kopiertext: ' + BEFUNDE_TEXT);
+closeWizard('befunde');
+
+// Set aside asks first, with the count; a no sends nothing.
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
+};
+global.confirm = function(text){ global.gefragt = text; return false; };
+archivAktion('beiseitelegen', 'outlook');
+pruefe(String(global.gefragt).indexOf('2 Dateien') >= 0, 'Rueckfrage ohne Zahl: ' + global.gefragt);
+pruefe(!gesendet.length, 'Abgelehnt und trotzdem gesendet');
+global.confirm = function(){ return true; };
+archivAktion('beiseitelegen', 'outlook');
+pruefe(LAUF.eigener === true, 'Die Aktion oeffnet das Lauffenster nicht');
+archivAktion('vermerken', 'outlook');
+var pfade = gesendet.map(function(g){ return g.pfad; });
+pruefe(pfade.indexOf('/api/archiv/beiseitelegen') >= 0 && pfade.indexOf('/api/archiv/vermerken') >= 0, 'Aktionen nicht gesendet: ' + pfade.join(','));
+pruefe(gesendet.every(function(g){ return g.body.quelle === 'outlook'; }), 'Quelle fehlt im Koerper');
+var vermerkt = gesendet.filter(function(g){ return g.pfad.indexOf('vermerken') >= 0; })[0].body;
+pruefe(JSON.stringify(vermerkt.arten) === '["verloren"]', 'Vermerken ohne Nachholen nimmt Fehlendes mit: ' + JSON.stringify(vermerkt));
+
+// A file still missing after a resync that ran since the finding: the
+// sentence says so, the note offers itself and takes the missing along.
+var tot = q({fehlt: 2, fehlt_seit: '2026-09-13T10:00:00+00:00', nachgeholt: '2026-09-14T08:00:00+00:00',
+             befunde: {fehlt: ['E-Mail/a.eml', 'E-Mail/b.eml'], fremd: [], unvollstaendig: [], verloren: []}});
+zeigeArchiv({geprueft: 'x', quellen: [tot], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+html = el('ana-archiv-zeilen').innerHTML;
+pruefe(html.indexOf('auch nach dem Nachholen') >= 0, 'Satz nennt das erschoepfte Nachholen nicht: ' + html);
+pruefe(html.indexOf('&quot;vermerken&quot;') >= 0, 'Vermerken fehlt bei totem Eintrag');
+gesendet = []; global.gefragt = null;
+global.confirm = function(text){ global.gefragt = text; return true; };
+archivAktion('vermerken', 'outlook');
+pruefe(String(global.gefragt).indexOf('2 Dateien') >= 0, 'Rueckfrage zum Vermerken ohne Zahl: ' + global.gefragt);
+pruefe(JSON.stringify(gesendet[0].body.arten) === '["verloren","fehlt"]', 'Fehlendes nicht vermerkt: ' + JSON.stringify(gesendet[0].body));
+// Before a resync ran, a missing file is the fetch's job – no note.
+var frisch = q({fehlt: 2, fehlt_seit: '2026-09-14T09:00:00+00:00', nachgeholt: '2026-09-14T08:00:00+00:00'});
+zeigeArchiv({geprueft: 'x', quellen: [frisch], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+html = el('ana-archiv-zeilen').innerHTML;
+pruefe(html.indexOf('&quot;vermerken&quot;') < 0 && html.indexOf('Nachholen holt sie') >= 0, 'Vermerken vor dem Nachholen: ' + html);
+// What was noted stands in the sentence, quietly.
+zeigeArchiv({geprueft: 'x', quellen: [q({vermerkt: 3})], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
+pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('3 als verloren vermerkt') >= 0, 'Vermerktes fehlt im Satz');
+
+// "Fetch again" is an action of its own: no question, the window opens.
+gesendet = []; LAUF.eigener = false; global.gefragt = null;
+archivAktion('nachholen', 'outlook');
+pruefe(global.gefragt === null, 'Nachholen fragt zurueck');
+pruefe(gesendet[0].pfad.indexOf('/api/archiv/nachholen') >= 0 && gesendet[0].body.quelle === 'outlook',
+       'Nachholen nicht gesendet: ' + JSON.stringify(gesendet[0]));
+pruefe(LAUF.eigener === true, 'Nachholen oeffnet kein Fenster');
+
+// The checks and the fetch start through run(): the window opens with them.
+gesendet = []; LAUF.eigener = false;
+pruefeArchiv();
+pruefe(LAUF.eigener === true && gesendet[0].body.check_archive === true && gesendet[0].body.label === 'job.archive_check',
+       'Archiv pruefen oeffnet kein Fenster oder schickt nichts: ' + JSON.stringify(gesendet[0]));
+LAUF.eigener = false; gesendet = [];
+pruefeVollstaendigkeit();
+pruefe(LAUF.eigener === true && gesendet[0].body.label === 'job.check', 'Jetzt pruefen ohne Fenster');
+LAUF.eigener = false; gesendet = [];
+holeQuelle('outlook_mail');
+pruefe(LAUF.eigener === true && gesendet[0].pfad.indexOf('/api/bilanz/holen') >= 0, 'Jetzt holen ohne Fenster');
+console.log('OK');
+"""
+
+
+def test_archivaktionen_auf_der_seite():
+    _in_node(PRUEFUNG_ARCHIV_AKTIONEN)
+    # No state text of its own beside a button: the run window says what
+    # runs (DESIGN.md §2).
+    seite = app_mod.seite()
+    assert 'id="ana-archiv-state"' not in seite and 'id="ana-check-state"' not in seite
 
 
 def test_export_status_kennt_onedrive(sandbox):
@@ -7576,6 +8160,21 @@ def test_binden_loest_keine_namen_auf(sandbox, monkeypatch):
         assert httpd.server_name == "127.0.0.1"      # instead of a resolved name
     finally:
         httpd.server_close()
+
+
+def test_insights_hat_eine_seitennavigation_je_karte():
+    """DESIGN.md §2: Insights is shaped like Settings – one `.snav` entry per
+    card, each pointing at a card that exists, the two checks with a dot."""
+    seite = app_mod.seite()
+    block = seite[seite.index('<section id="tab-analytics"'):seite.index('<section id="tab-einstellungen"')]
+    assert 'id="ana-nav"' in block and 'class="einst"' in block
+    ziele = re.findall(r'data-ziel="([^"]+)"', block[:block.index('class="einst-inhalt"')])
+    assert ziele == ["ana-zahlen-karte", "ana-verlauf-karte", "ana-check-karte",
+                     "ana-archiv-karte", "ana-runs-karte"]
+    for ziel in ziele:
+        assert f'id="{ziel}"' in block, f"Sprungziel {ziel} fehlt"
+        assert f"zeigeInsight('{ziel}')" in block
+    assert 'id="p-ana-check"' in block and 'id="p-ana-archiv"' in block
 
 
 def test_kacheln_springen_an_eine_stelle_die_es_gibt():
