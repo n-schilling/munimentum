@@ -190,7 +190,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
-           "lauf.", "kadenz.", "tour.", "profile.")
+           "lauf.", "kadenz.", "tour.", "profile.", "cases.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -199,7 +199,8 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py",
-           "todo_export.py", "onenote_export.py", "archive_check.py")
+           "todo_export.py", "onenote_export.py", "archive_check.py",
+           "case_export.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
@@ -243,6 +244,11 @@ DYNAMISCH = (
                           "pruefen")),
     ("job.start.archiv.", ("vermerken", "beiseitelegen", "zurueckholen", "neu-aufbauen",
                            "pruefen")),
+    # Cases (11.0): a case's status, the history's retention line, and the
+    # export's status word – composed from the value.
+    ("cases.status.", ("offen", "zu")),
+    ("search.history.kept.", ("off", "forever", "days")),
+    ("cases.export.status.", ("open", "closed")),
 )
 
 

@@ -28,6 +28,7 @@ deliberately gets by without numpy.
 
 import json
 import re
+import sqlite3
 from pathlib import Path
 
 INFO = "info.json"
@@ -37,6 +38,30 @@ DB = "corpus.db"
 def db_path(store):
     """The store's database – one name, not the same literal nine times."""
     return Path(store) / DB
+
+
+def mit_schluesseln(db):
+    """Does this index carry the item keys of 11.0 (schluessel.py)? An
+    older one – or none – does not."""
+    db = Path(db)
+    if not db.exists():
+        return False
+    try:
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            return any(r[1] == "key" for r in con.execute("PRAGMA table_info(chunks)"))
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
+
+
+def veraltet(db):
+    """An index that exists but predates the item keys: the next index step
+    rebuilds it whether or not the exports brought anything, so cases can
+    point at its items. No index at all is not "outdated" – that case the
+    run gate handles by the missing file."""
+    return Path(db).exists() and not mit_schluesseln(db)
 
 # The fixed name of stores up to 4.1.0. Such a store carries no entry in
 # info.json – there this file remains the valid one, otherwise an existing

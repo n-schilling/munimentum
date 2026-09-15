@@ -34,6 +34,8 @@ touch no module state, so the registry can be read – and tested – as data.
 
 import json
 
+import store_layout
+
 
 def _flag(wert):
     return "1" if wert else "0"
@@ -201,6 +203,23 @@ def _archiv_argv(aktion):
     return argv
 
 
+def _fall_export_argv(cfg, ctx, pfade):
+    """case_export.py: the export folders (for the originals), the case
+    book, the case, the folder to write – all from the request."""
+    f = ctx.get("fall_export") or {}
+    out = [pfade["teams"], pfade["outlook"], pfade["onedrive"],
+           "--sharepoint", pfade["sharepoint"], "--pages", pfade["sharepoint_pages"],
+           "--planner", pfade["planner"], "--todo", pfade["todo"],
+           "--onenote", pfade["onenote"],
+           "--faelle", str(f.get("faelle") or ""), "--fall", str(f.get("fall") or 0),
+           "--ziel", str(f.get("ziel") or ""), "--lang", str(f.get("lang") or "de")]
+    if f.get("res"):
+        out += ["--res", str(f["res"])]
+    if f.get("zip"):
+        out.append("--zip")
+    return out
+
+
 def _archiv_eintrag(aktion):
     """One archive step: an action, or "pruefen" – the row of one source
     judged afresh after a fetch (the last step of a "Fetch again" run)."""
@@ -298,8 +317,11 @@ REGISTRY = (
      "argv": _index_argv, "env": lambda cfg, ctx: {},
      # If the export brought nothing new, this step indexes the same
      # corpus a second time. "ziel" is the condition under which skipping
-     # is safe: only when an index already exists.
-     "ziel": lambda cfg, pfade: pfade["store_db"]},
+     # is safe: only when an index already exists – and one that carries
+     # the item keys of 11.0; an older index is rebuilt on the next run
+     # whatever the exports brought, so hits can go into cases.
+     "ziel": lambda cfg, pfade: (None if store_layout.veraltet(pfade["store_db"])
+                                 else pfade["store_db"])},
 
     {"key": "calendar", "anfrage": "calendar", "script": "combined_search",
      "start": "job.start.calendar",
@@ -462,6 +484,13 @@ REGISTRY = (
     # After a "Fetch again": the source's row judged afresh, dated as
     # fetched – so the overview says at once what is still missing.
     _archiv_eintrag("pruefen"),
+
+    # A case as a folder of its own (case_export.py) – reads the archive,
+    # writes outside it, needs no Microsoft.
+    {"key": "fall_export", "anfrage": "fall_export", "script": "case_export",
+     "start": "job.start.case_export", "label": "job.step.case_export",
+     "corpus": False, "zugang": False, "schedule": None, "master": None,
+     "quelle": None, "argv": _fall_export_argv, "env": lambda cfg, ctx: {}},
 )
 
 

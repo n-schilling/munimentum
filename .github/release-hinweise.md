@@ -1,62 +1,54 @@
-## New in 10.2.0
+## New in 11.0.0
 
-**The completeness balance.** *Check now* in Insights asks one
-question per source in use: would a run with today's settings fetch
-anything now that is not here yet? Each row answers in plain words with
-four numbers — here, not fetched yet, deliberately excluded, deleted at
-Microsoft but kept — and now covers every source: mail, calendar, contacts,
-Teams, OneDrive, SharePoint libraries and pages, Planner, To Do, OneNote.
-Excluded is what your own rules, filters and start days leave out, counted
-and never named; a file waiting for its folder cadence waits rather than
-counting as missing; Teams is judged by conversations. A row with
-something open offers *Fetch now*, which fetches only what the row found
-open: the mailbox reads just the folders with something open, OneDrive
-and SharePoint fetch the open files by id without walking the library
-again, every other source runs its regular run – then the index, and the
-row is checked again in the same run. OneNote says "not checked" when
-its hourly budget is spent instead of inventing a gap.
+**Cases.** A third door beside *Build archive* and *Search archive*: a
+case collects what belongs to one matter — hits, whole result lists and
+saved searches, from every source — without copying anything. Every hit
+now carries a tick and, once it sits in a case, a small mark naming it;
+the chosen hit offers *Add to case*, the ticked ones a bar above the
+list, *Add all … to a case* takes the whole result, every page of it, as
+it stands now. A case has a **casebook** of short dated notes, stores
+**result lists** (a search as it stood at one moment, criteria and
+exactly those hits — searchable again), lists its items by source with a
+link into the original, and holds the **saved searches** attached to it:
+*Check for new hits* shows what they find today that the case lacks,
+*Add the new ones* takes them in. The **Cases** filter searches inside
+one case across every source; *Search in this case* sets it. A closed
+case is read-only, stays searchable and exportable, and reopens any time.
+**Export case…** is a run: one folder with the originals of every item
+under their source's name and path — mails as `.eml`, chats with their
+attachments, files, pages and boards as HTML, contacts and appointments
+— plus `index.html` (every item, linked into the original down to the
+message, card or task), `items.csv` and `casebook.md`, optionally as a
+zip; where it lands is a setting, *Munimentum cases* in your Documents
+folder by default.
 
-**Archive and bookkeeping.** A second card in Insights looks inward:
-*Check archive* holds each export's own bookkeeping against the files on
-disk without asking Microsoft — files the bookkeeping knows that are not
-there (*Fetch again* brings them back), files here that nothing knows
-(they stay), mirrored files shorter than recorded, files a tombstone lists
-as kept that are gone — and the index against the archive: how many files
-changed, arrived or vanished since it last read them, with *Index only*
-one click away. Each kind of finding has one explicit action: *Findings…*
-lists the files, *Fetch again* fetches exactly the missing files through
-the source's own bookkeeping – a mail by its id, a file by its drive
-item, a Teams page by its conversation – whether or not the source is
-ticked, and ends by judging the row afresh; *Note as lost*
-records a tombstone whose file is gone – and settles files still missing
-after a fetch, which the row then calls by that name – *Set aside* moves
-files no bookkeeping knows into a `_fremd/` folder and *Put back*
-reverses it, *Rebuild bookkeeping* sets a damaged `state.db` aside and
-lets the next run fill a fresh one. Nothing deletes; what moves comes
-back. Every action, every check and every fetch is a run: the run window
-opens with it and its log says what happened.
+**Search history and saved searches.** *History* next to *Search* lists
+every search by its criteria — words, kind of search, filters — never by
+its hits; a click runs it again, another saves it. How long it is kept
+is a setting under *Settings › App* (30, 90, 365 days, forever, or not at
+all). *Saved* holds searches under a name: run, rename, delete, or attach
+to a case; each remembers when it last ran and how many hits it had.
 
-**Keep awake during a run.** A new switch under *Settings › App*, on by
-default, holds the machine off idle sleep while a run is on — macOS
-`caffeinate`, a Windows power request, `systemd-inhibit` on Linux — so a
-laptop no longer dozes off halfway through an export. The lid still
-sleeps.
+**Stable keys.** The index gives every item a key that survives a
+rename or a move — the mail's Message-ID, the calendar and contact UID,
+the Teams message id, the drive item, the page, the task — so a case can
+point at it for months. The index assigns them on its next run; until
+then the ticks say so.
 
-**Insights.** *Overview* is now *Insights*, with a side navigation like
-the settings' – one entry per card – and a dot on the two checks that
-says at a glance whether something is open or found.
-
-**Smaller.** The header stays at the top while the page scrolls. *Force
-full sync* has an (i) per source that says what its full read takes
-along. *Sync now*, *Force full sync*, *Read the calendar in full* and
-*Read legacy comments again* now index what they fetched, and every
-one of them opens the run window. *Sync now*, *Force full sync* and the
-balance's *Fetch now* on a source that is not ticked in the settings say
-so instead of running nothing.
+**Claude.** New MCP tools: `list_cases`, `get_case`, `case_timeline`,
+`case_people`, `case_new_hits`, `list_saved_searches`, `run_saved_search`;
+`search_messages` and `browse_messages` take a `case`, and every hit says
+which cases it sits in. Claude changes nothing unless *Claude may change
+cases* is on under *Settings › Claude (MCP)* — then `add_to_case` and
+`add_case_note` can add to open cases, never delete or close one.
 
 ## Upgrading
 
-**From 10.1 or 10.0:** nothing to do.
+**From 10.x:** nothing to do. The next run — scheduled or by hand,
+*Index only* is the quickest — rebuilds the index once with every item's
+key, whether or not the exports brought anything new; until then hits
+cannot be put into cases and the page says so. Claude Desktop: the case
+tools appear once the MCP server is restarted.
 
 **From 9.x:** the first start moves your archive from the app folder into
 `profiles/standard/` — a rename on the same disk, instant whatever the

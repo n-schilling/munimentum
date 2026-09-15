@@ -276,9 +276,9 @@ def test_board_ist_dreistufig_zugeklappt(tmp_path):
         encoding="utf-8")
     assert '<nav class="lanes">' in html and ">Offen</b><span>1</span>" in html
     assert '<details class="lane"' in html
-    assert '<details class="karte"><summary>' in html
+    assert '<details class="karte" id="k-t1"><summary>' in html
     assert "<summary>Kommentare (1)</summary>" in html
-    karte_kopf = html.split('<details class="karte"><summary>')[1] \
+    karte_kopf = html.split('<details class="karte" id="k-t1"><summary>')[1] \
         .split("</summary>")[0]
     assert "1 Kommentar" in karte_kopf, \
         "Kommentarzahl fehlt in der zugeklappten Zeile"

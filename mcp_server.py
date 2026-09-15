@@ -78,6 +78,7 @@ from mcp.types import ToolAnnotations
 
 import analytics_db
 import export_util
+import faelle
 import ollama_client
 import run_history
 import settings
@@ -118,6 +119,16 @@ Which tool to use:
     corpus_stats says the same thing up front.
   • browse_messages – when there is no query, only filters ("everything from
     Bob in June"). Newest first.
+  • list_cases / get_case / case_timeline / case_people – the user's CASES:
+    matters they collect items, result lists and saved searches around.
+    "Summarise the Nordwind case" → get_case for the casebook and what it
+    holds, case_timeline for the chronology with excerpts, case_people for
+    who is involved; search_messages(case=…) searches inside one. Every hit
+    carries `cases` – where it already sits. case_new_hits says what the
+    attached searches find that the case lacks; add_to_case and
+    add_case_note write, but only when the user allowed that in Munimentum.
+  • list_saved_searches / run_saved_search – the user's saved searches, run
+    exactly as saved.
   • get_document    – full text of one hit, via the uid from a search/browse
     result. For chats, context_before/context_after return the neighbouring
     messages of the conversation.
@@ -433,8 +444,65 @@ def _wie(text):
     return "%" + _like_fest(roh).replace("*", "%") + "%"
 
 
-def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype=""):
+def _fallbuch():
+    """The profile's case book (faelle.py), or None when the server was
+    started without a home – then the case tools say so."""
+    pfad = STATE.get("faelle_db")
+    if not pfad:
+        return None
+    return faelle.Fallbuch(pfad)
+
+
+def _fall_finden(buch, case):
+    """A case by id or by name (exact, then case-insensitive). Returns
+    (case dict, error text)."""
+    text = str(case or "").strip()
+    if not text:
+        return None, "Name a case – list_cases shows them."
+    alle = buch.faelle()
+    if text.isdigit():
+        treffer = [f for f in alle if f["id"] == int(text)]
+    else:
+        treffer = [f for f in alle if f["name"] == text] or \
+                  [f for f in alle if f["name"].lower() == text.lower()]
+    if not treffer:
+        return None, f"No case named {text!r} – list_cases shows what exists."
+    return buch.fall(treffer[0]["id"]), None
+
+
+def _keys_tabelle(con, keys):
+    """The case's keys as a temp table the WHERE fragment joins against –
+    thousands of keys, one query, no variable limit."""
+    con.execute("CREATE TEMP TABLE IF NOT EXISTS fallkeys(key TEXT PRIMARY KEY)")
+    con.execute("DELETE FROM fallkeys")
+    con.executemany("INSERT OR IGNORE INTO fallkeys(key) VALUES(?)", ((k,) for k in keys))
+
+
+def _im_fall(con, case):
+    """Resolve a `case` argument for a query tool: fills the temp table and
+    returns (True, None), (False, None) without a case, or (False, error)."""
+    if not str(case or "").strip():
+        return False, None
+    buch = _fallbuch()
+    if buch is None:
+        return False, "This server knows no case book (started without a profile)."
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return False, fehler
+    if not _hat_spalte(con, "key"):
+        return False, ("This index predates item keys. Rebuild it (Build archive → "
+                       "Update archive now) to search inside a case.")
+    _keys_tabelle(con, buch.keys(fall["id"]))
+    return True, None
+
+
+def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
+           im_fall=False):
     conds, params = [], []
+    if im_fall:
+        # Only what the case holds: its keys sit in the temp table
+        # (_keys_tabelle) for the length of this connection.
+        conds.append("key IN (SELECT key FROM fallkeys)")
     if filetype:
         # ext holds a message's extensions separated by spaces ("pdf xlsx").
         # Wrapped in spaces, LIKE matches exactly one of them – "doc" would
@@ -742,6 +810,9 @@ def _hit(row, score, preview_chars, woerter=()):
         # Since when the message has been gone from the mailbox. Empty means:
         # it is still there. The file sits in the archive either way.
         "gone": (row["gone"] if "gone" in row.keys() else None),
+        # The stable key (schluessel.py) – what a case remembers a hit by.
+        # An index from before 11.0 has none.
+        "key": (row["key"] if "key" in row.keys() else None),
     }
     if preview_chars > 0:
         h["preview"] = _ausschnitt(row["text"], woerter, preview_chars)
@@ -773,6 +844,18 @@ def _ausschnitt(text, woerter, laenge):
     # The ellipsis counts toward the total: preview_chars is a promise about
     # the length, and a caller expecting 200 characters should get 200.
     return "…" + text[start:start + laenge - 1].lstrip()
+
+
+def _mit_faellen(hits):
+    """Every hit says which cases it already sits in – one lookup for the
+    page, nothing when there is no case book or no keys."""
+    buch = _fallbuch()
+    if buch is None or not hits:
+        return hits
+    zug = buch.zugehoerigkeit([h.get("key") for h in hits if h.get("key")])
+    for h in hits:
+        h["cases"] = zug.get(h.get("key"), [])
+    return hits
 
 
 def _rows_for(con, pairs, preview_chars, woerter=()):
@@ -854,10 +937,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     date_to: str = "", days: int = 0, source: str = "all",
                     k: int = 12, offset: int = 0, mode: str = "auto",
                     preview_chars: int = 200, only_gone: bool = False,
-                    folder: str = "", filetype: str = "") -> dict:
+                    folder: str = "", filetype: str = "", case: str = "") -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
     SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
-    pages – or any subset of it.
+    pages – or any subset of it, or only what one case holds.
 
     Hybrid ranking (BM25 + semantic embeddings, fused) when available. One
     hit per message/file/task/page; get_document(uid) returns the full
@@ -905,6 +988,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         filetype: Restrict to messages carrying an attachment of this type,
             or to mirrored files of it – "pdf", "xlsx". One type; use
             list_filetypes to see what exists.
+        case: Restrict to the items of one case (its name or id, see
+            list_cases): what the user collected there, from every source.
+            Every hit carries `key` and `cases` – the cases it already sits
+            in.
     """
     con = _db()
     try:
@@ -912,9 +999,12 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             return {"error": "This index predates deletion tracking. Rebuild it "
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
+        im_fall, fehler = _im_fall(con, case)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype)
+                               filetype, im_fall)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -923,8 +1013,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                              f"Is Ollama running? Try mode='lexical'."}
         page = _dedupe_page(con, pairs, max(1, k), max(0, offset))
         return {"backend": used, "count": len(page), "offset": max(0, offset),
-                "results": _rows_for(con, page, max(0, min(preview_chars, 2000)),
-                                    _WORD.findall(query.lower()))}
+                "results": _mit_faellen(_rows_for(con, page, max(0, min(preview_chars, 2000)),
+                                                  _WORD.findall(query.lower())))}
     finally:
         con.close()
 
@@ -956,7 +1046,7 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     days: int = 0, source: str = "all", k: int = 30,
                     offset: int = 0, preview_chars: int = 200,
                     only_gone: bool = False, folder: str = "",
-                    filetype: str = "") -> dict:
+                    filetype: str = "", case: str = "") -> dict:
     """List items by filter, newest first, without a search query.
 
     For "everything from <person> in <month>", "the last week in <folder>",
@@ -987,6 +1077,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             notebook, pages site. Use list_folders to see what exists.
         filetype: Restrict to messages carrying an attachment of this type,
             or to mirrored files of it – "pdf", "xlsx".
+        case: Restrict to the items of one case (name or id) – "everything
+            in the case, newest first" is the timeline of the matter.
     """
     con = _db()
     try:
@@ -994,9 +1086,12 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             return {"error": "This index predates deletion tracking. Rebuild it "
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
+        im_fall, fehler = _im_fall(con, case)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype)
+                               filetype, im_fall)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.
@@ -1006,7 +1101,7 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             [*params, max(1, k), max(0, offset)]).fetchall()
         pc = max(0, min(preview_chars, 2000))
         return {"count": len(rows), "offset": max(0, offset),
-                "results": [_hit(r, None, pc) for r in rows]}
+                "results": _mit_faellen([_hit(r, None, pc) for r in rows])}
     finally:
         con.close()
 
@@ -1688,6 +1783,328 @@ def _planner_anhaenge():
 # --------------------------------------------------------------------------
 # MCP resources – fetch a source file by its URI (as advertised in each hit)
 # --------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# Cases and saved searches (faelle.py) – what the user collected
+# --------------------------------------------------------------------------
+_KEIN_FALLBUCH = ("This server knows no case book: it was started without a "
+                  "profile, so cases and saved searches are out of reach.")
+_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                         idempotentHint=False, openWorldHint=False)
+
+
+def _fall_kurz(f):
+    return {"id": f["id"], "name": f["name"], "description": f["beschreibung"],
+            "status": "open" if f["status"] == "offen" else "closed",
+            "created": f["angelegt"], "changed": f["geaendert"], "closed_at": f["geschlossen"],
+            "items": f["eintraege"], "items_per_source": f["je_quelle"],
+            "result_lists": f["listen"], "notes": f["notizen"], "saved_searches": f["suchen"]}
+
+
+def _eintrag_aussen(e):
+    return {"key": e["key"], "source": e["src"],
+            "source_label": _SOURCE_LABEL.get(e["root"] if e["src"] == "datei" else e["src"],
+                                              e["src"]),
+            "root": e["root"], "path": e["rel"],
+            "uri": _source_uri(e["root"], e["rel"]) if e.get("root") and e.get("rel") else None,
+            "title": e["titel"], "date": e["datum"], "who": e["wer"],
+            "added": e["hinzugefuegt"], "from_result_list": e["liste"]}
+
+
+def _kriterien_aussen(k):
+    return {"query": k["q"], "mode": k["mode"], "person": k["person"], "source": k["source"],
+            "date_from": k["from"], "date_to": k["to"], "folder": k["folder"],
+            "filetype": k["filetype"], "only_gone": k["gone"], "case": k["fall"]}
+
+
+def _suche_aussen(g):
+    return {"id": g["id"], "name": g["name"], "criteria": _kriterien_aussen(g["kriterien"]),
+            "created": g["angelegt"], "last_run": g["zuletzt"], "hits_then": g["treffer"],
+            "case": g["fall_name"]}
+
+
+def _mit_kriterien(k, kk, offset=0, preview_chars=200):
+    """Run a search with stored criteria – a query searches, none browses."""
+    modus = {"text": "lexical", "aehnlich": "semantic", "ki": "hybrid"}.get(k["mode"], "auto")
+    gemeinsam = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
+                     source=k["source"], k=kk, offset=offset, preview_chars=preview_chars,
+                     only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
+                     case=str(k["fall"]) if k["fall"] else "")
+    if k["q"]:
+        return search_messages(query=k["q"], mode=modus, **gemeinsam)
+    return browse_messages(**gemeinsam)
+
+
+@mcp.tool(annotations=_READONLY)
+def list_cases(include_closed: bool = True) -> dict:
+    """The user's cases – the matters they collect archive items, result
+    lists and saved searches around. Start here before anything about a
+    case; a case is named by its `name` or `id` in the other case tools
+    and in the `case` filter of search_messages and browse_messages.
+
+    Args:
+        include_closed: Also list closed cases (read-only ones). Default true.
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH, "count": 0, "cases": []}
+    faelle_ = [_fall_kurz(f) for f in buch.faelle(mit_geschlossenen=include_closed)]
+    return {"count": len(faelle_), "cases": faelle_}
+
+
+@mcp.tool(annotations=_READONLY)
+def get_case(case: str) -> dict:
+    """One case in full: its description, the casebook (the user's notes,
+    newest first), every item it holds with source, title, date, people
+    and the uri read_source_file takes, the result lists it stores (a
+    search as it stood at one moment) and the saved searches attached to
+    it. Items say `from_result_list` when they came with a list.
+
+    Args:
+        case: The case's name or id (list_cases).
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    out = _fall_kurz(fall)
+    out["notes"] = [{"id": n["id"], "when": n["wann"], "text": n["text"]}
+                    for n in fall["notizen_liste"]]
+    out["items"] = [_eintrag_aussen(e) for e in fall["eintraege_liste"]]
+    out["result_lists"] = [{"id": li["id"], "taken": li["wann"], "hits": li["anzahl"],
+                            "criteria": _kriterien_aussen(li["kriterien"])}
+                           for li in fall["listen_liste"]]
+    out["saved_searches"] = [_suche_aussen(g) for g in fall["suchen_liste"]]
+    return out
+
+
+@mcp.tool(annotations=_READONLY)
+def case_timeline(case: str, limit: int = 200, preview_chars: int = 160) -> dict:
+    """The items of a case in the order they happened – oldest first, each
+    with a short excerpt from the index: the chronology of the matter, the
+    tool for "what happened" and "summarise this case". Items the index no
+    longer holds are listed at the end with what the case remembers.
+
+    Args:
+        case: The case's name or id.
+        limit: Items at most (default 200).
+        preview_chars: Excerpt length per item (0 disables).
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    con = _db()
+    try:
+        if not _hat_spalte(con, "key"):
+            return {"error": "This index predates item keys – rebuild it first."}
+        keys = buch.keys(fall["id"])
+        _keys_tabelle(con, keys)
+        rows = con.execute(
+            "SELECT * FROM chunks WHERE seq = 0 AND key IN (SELECT key FROM fallkeys) "
+            "ORDER BY (ts IS NULL), ts LIMIT ?", (max(1, limit),)).fetchall()
+        pc = max(0, min(preview_chars, 2000))
+        im_index = [_hit(r, None, pc) for r in rows]
+        gesehen = {h["key"] for h in im_index}
+        weg = [_eintrag_aussen(e) for e in fall["eintraege_liste"] if e["key"] not in gesehen]
+        return {"case": fall["name"], "count": len(im_index), "items": im_index,
+                "not_in_index": weg}
+    finally:
+        con.close()
+
+
+@mcp.tool(annotations=_READONLY)
+def case_people(case: str, limit: int = 50) -> dict:
+    """Who appears in a case – the people behind its items (senders,
+    authors, organisers, assignees) with how many items each has, most
+    frequent first. Files and pages carry no person.
+
+    Args:
+        case: The case's name or id.
+        limit: Names at most (default 50).
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    con = _db()
+    try:
+        if not _hat_spalte(con, "key"):
+            return {"error": "This index predates item keys – rebuild it first."}
+        _keys_tabelle(con, buch.keys(fall["id"]))
+        zaehler = {}
+        for who, in con.execute("SELECT who FROM chunks WHERE seq = 0 AND who IS NOT NULL "
+                                "AND who != '' AND key IN (SELECT key FROM fallkeys)"):
+            for name in str(who).split(", "):
+                name = name.strip()
+                if name and name != "(unbekannt)":
+                    zaehler[name] = zaehler.get(name, 0) + 1
+        leute = sorted(zaehler.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:max(1, limit)]
+        return {"case": fall["name"], "count": len(leute),
+                "people": [{"name": n, "items": c} for n, c in leute]}
+    finally:
+        con.close()
+
+
+@mcp.tool(annotations=_READONLY)
+def case_new_hits(case: str, k: int = 50) -> dict:
+    """What the case's attached saved searches find today that the case
+    does not hold yet – one block per search. The way to keep a case
+    current: run this, read the new hits, and (if allowed) add_to_case.
+
+    Args:
+        case: The case's name or id.
+        k: New hits at most per search (default 50).
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    keys = buch.keys(fall["id"])
+    bloecke = []
+    for g in fall["suchen_liste"]:
+        res = _mit_kriterien(g["kriterien"], min(max(1, k) * 4, 200))
+        if res.get("error"):
+            bloecke.append({"search": g["name"], "error": res["error"], "new": []})
+            continue
+        neu = [h for h in res.get("results") or () if h.get("key") and h["key"] not in keys]
+        bloecke.append({"search": g["name"], "id": g["id"], "new_count": len(neu[:max(1, k)]),
+                        "new": neu[:max(1, k)]})
+    return {"case": fall["name"], "searches": bloecke}
+
+
+@mcp.tool(annotations=_READONLY)
+def list_saved_searches() -> dict:
+    """The user's saved searches – criteria under a name, with when each
+    last ran and how many hits it had then, and the case it is attached
+    to, if any. run_saved_search runs one."""
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH, "count": 0, "searches": []}
+    suchen = [_suche_aussen(g) for g in buch.gespeicherte()]
+    return {"count": len(suchen), "searches": suchen}
+
+
+@mcp.tool(annotations=_READONLY)
+def run_saved_search(search: str, k: int = 12, offset: int = 0,
+                     preview_chars: int = 200) -> dict:
+    """Run a saved search by its name or id – exactly the criteria the user
+    saved, through search_messages (or browse_messages when it has no
+    words). Hits look like search hits.
+
+    Args:
+        search: Name or id of the saved search (list_saved_searches).
+        k: Results per page (default 12).
+        offset: Results to skip.
+        preview_chars: Preview length per hit.
+    """
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    text = str(search or "").strip()
+    alle = buch.gespeicherte()
+    treffer = ([g for g in alle if str(g["id"]) == text] if text.isdigit() else []) or \
+              [g for g in alle if g["name"] == text] or \
+              [g for g in alle if g["name"].lower() == text.lower()]
+    if not treffer:
+        return {"error": f"No saved search named {text!r} – list_saved_searches shows them."}
+    g = treffer[0]
+    res = _mit_kriterien(g["kriterien"], max(1, k), max(0, offset), preview_chars)
+    if not res.get("error") and offset == 0:
+        buch.gelaufen(g["id"], res.get("count", 0))
+    res["search"] = g["name"]
+    return res
+
+
+def _schreiben_erlaubt():
+    if not STATE.get("cases_write"):
+        return ("Changing cases through MCP is switched off. The user can allow "
+                "it under Settings → Claude (MCP) → “Claude may change cases”.")
+    return None
+
+
+@mcp.tool(annotations=_WRITE)
+def add_to_case(case: str, uids: list[str] | None = None,
+                keys: list[str] | None = None) -> dict:
+    """Add items to a case – hits by their `uid` (from a search) or by their
+    `key`. Only when the user allowed changes through MCP; nothing is
+    copied, the case merely points at the items. A closed case refuses.
+
+    Args:
+        case: The case's name or id.
+        uids: Hit uids to add.
+        keys: Item keys to add (a hit's `key`).
+    """
+    gesperrt = _schreiben_erlaubt()
+    if gesperrt:
+        return {"error": gesperrt}
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    con = _db()
+    try:
+        if not _hat_spalte(con, "key"):
+            return {"error": "This index predates item keys – rebuild it first."}
+        rows = []
+        for uid in uids or ():
+            r = con.execute("SELECT * FROM chunks WHERE uid = ? AND seq = 0", (uid,)).fetchone()
+            if r is not None:
+                rows.append(r)
+        for key in keys or ():
+            r = con.execute("SELECT * FROM chunks WHERE key = ? AND seq = 0 LIMIT 1",
+                            (key,)).fetchone()
+            if r is not None:
+                rows.append(r)
+    finally:
+        con.close()
+    eintraege = [{"key": r["key"], "src": r["src"], "root": r["root"], "rel": r["rel"],
+                  "titel": r["title"], "datum": r["date"], "wer": r["who"]}
+                 for r in rows if r["key"]]
+    try:
+        neu = buch.hinzufuegen(fall["id"], eintraege)
+    except faelle.FallGeschlossen:
+        return {"error": f"The case {fall['name']!r} is closed – reopen it in Munimentum first."}
+    return {"case": fall["name"], "added": neu, "already_there": len(eintraege) - neu,
+            "not_found": len(list(uids or ())) + len(list(keys or ())) - len(eintraege)}
+
+
+@mcp.tool(annotations=_WRITE)
+def add_case_note(case: str, text: str) -> dict:
+    """Add a note to a case's casebook – a short, dated remark. Only when
+    the user allowed changes through MCP; a closed case refuses.
+
+    Args:
+        case: The case's name or id.
+        text: The note.
+    """
+    gesperrt = _schreiben_erlaubt()
+    if gesperrt:
+        return {"error": gesperrt}
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    try:
+        kennung = buch.notiz(fall["id"], text)
+    except faelle.FallGeschlossen:
+        return {"error": f"The case {fall['name']!r} is closed – reopen it in Munimentum first."}
+    except ValueError:
+        return {"error": "The note is empty."}
+    return {"case": fall["name"], "note_id": kennung}
+
+
 @mcp.resource("o365://{root}/{path}")
 def source_resource(root: str, path: str) -> str:
     """Return a raw exported source file by URI.
@@ -1960,10 +2377,14 @@ def main():
                  pages_dir=a.pages, planner_dir=a.planner,
                  todo_dir=a.todo, onenote_dir=a.onenote,
                  embed_model=a.embed_model, ollama=a.ollama,
-                 # The run history lives in the app's home folder, which the
-                 # app hands to every subprocess; started by hand there is none.
+                 # The run history and the case book live in the app's home
+                 # folder, which the app hands to every subprocess; started
+                 # by hand there is neither.
                  runs_db=(str(Path(settings.home_env()) / run_history.DB_NAME)
-                          if settings.home_env() else None))
+                          if settings.home_env() else None),
+                 faelle_db=(str(Path(settings.home_env()) / faelle.DB_NAME)
+                            if settings.home_env() else None),
+                 cases_write=settings.flag("MCP_CASES_WRITE", "mcp_cases_write"))
 
     backend = ("hybrid (BM25 + semantic, RRF)" if np is not None
                else "lexical (FTS5/BM25) only")

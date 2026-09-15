@@ -5,33 +5,41 @@ that the page still looks like one piece afterwards. Read this before
 touching markup, CSS or the strings in `lang/`. The rules are short on
 purpose; the reasoning behind each is one sentence.
 
-## 1. The one idea: two doors
+## 1. The one idea: three doors
 
-The app does two things, and the header says exactly that:
+The app does three things, and the header says exactly that:
 
 - **Build archive** (`nav.export`) — everything about getting data in:
   the state in one line, the sources, the run window.
 - **Search archive** (`nav.search`) — everything about getting data out:
   search, filters, hits, calendar, address book, files.
+- **Cases** (`nav.cases`) — what someone keeps around one matter, for
+  months, across sources: the case list, one case with its casebook,
+  items, lists and searches, and the export.
 
 Two smaller rooms sit at the right of the header: **Insights**
 (`nav.analytics`, what the archive holds) and **Settings**. Nothing else
 becomes a top-level tab; `tests/test_app.py::test_die_reiterzeile_bleibt_kurz`
-counts four and fails on a fifth.
+counts five and fails on a sixth. Cases became a door in 11.0 because a
+case is neither building nor searching and has a primary action of its
+own; a view onto the archive (calendar, files) is still a `.sicht` under
+the search.
 
-**The two doors stay bare.** Build archive and Search archive carry only
+**The doors stay bare.** Build archive, Search archive and Cases carry only
 what the action at hand needs: the state in one line, the controls, and
 while something runs, the run window or its pill. No counts, no history,
 no schedule line, no notice, no prose. Whatever explains goes into an `(i)`; whatever
 happened goes into Insights; whatever can be configured goes into
 Settings — including the notice about a newer release, which sits under
-*Settings › App* with a dot on that entry. If a new element would add a
-line to one of the two doors, it belongs somewhere else.
+*Settings › App* with a dot on that entry. The search history and the
+saved searches are windows behind two `.ghost` buttons in the search row,
+not a second row on the door. If a new element would add a
+line to one of the doors, it belongs somewhere else.
 
 Every screen has **one primary action**, blue, and it is the thing a
 first-time user should press. Build archive: *Update archive now*. Search
-archive: *Search*. Insights: *Check now*. Settings: *Save settings* (only
-shown when something changed).
+archive: *Search*. Cases: *New case*. Insights: *Check now*. Settings:
+*Save settings* (only shown when something changed).
 
 State is shown **where it is fixed**, not in a status bar:
 
@@ -49,7 +57,7 @@ State is shown **where it is fixed**, not in a status bar:
 
 The header has three kinds of things and one shape for each:
 
-- **Navigation**: the four tabs. The two doors as underlined tabs, the two
+- **Navigation**: the five tabs. The three doors as underlined tabs, the two
   side rooms as small boxed tabs (`.nav-neben`). Nothing else becomes a
   tab.
 - **State**: one frame (`#zustaende`, 8 px, one line) holding every state
@@ -91,8 +99,37 @@ page scrolls to (`scroll-margin-top`) or pins below it (`#detail`,
    filter is highlighted, *Clear filters* appears only when one is set.
 3. View tabs (`.sicht`): Hits, Calendar, Address book, Files.
 4. Hits: list on the left, the selected hit on the right with its
-   actions (open original, whole conversation, find similar, only this
-   person). The AI answer sits above the list and cites into it.
+   actions (open original, whole conversation, find similar, add to
+   case, only this person). The AI answer sits above the list and cites
+   into it. Every hit row starts with a tick (`.wahl`, greyed with its
+   reason on an index without keys) and carries the case mark (`.im-fall`)
+   in its title when it sits in a case; the list head (`.liste-kopf`)
+   names the count and offers *Add all … to a case*, the selection bar
+   (`.auswahl-leiste`) appears only while something is ticked.
+
+The search row's two `.ghost` buttons open the **history window** and
+the **saved searches window** (`.modal.breit`, one `.hist` row per
+search: title, criteria as `.tag`s, time or last run, the `.mini`
+actions), each drawn as one string like every window. The *Cases* filter
+(`#f-fall`) is a select in the filter row like the folder, filled from
+`/api/faelle`.
+
+**Cases** (`#tab-faelle`): section head with the one `.act` (*New
+case*), then `.faelle-split` — the case list on the left (`.fall` rows:
+name, status `.tag.offen`/`.tag.zu`, one icon + count per source, one
+muted line; closed cases only behind the *Show closed* switch) and the
+open case on the right, drawn by `zeichneFall` top to bottom: name row
+with status, created, *Edit…* and *Search in this case*; description;
+the casebook (`.notiz` rows newest first, the add field at the end);
+the stored result lists (`.hist` rows with criteria tags, *Search again*,
+drop); one `.gruppe` per source with `.eintrag` rows (icon, title, who,
+date, *Open* into the original, `×`); the attached searches (`.hist`
+rows, *Run*, *Detach*, and *Check for new hits* in their `.aktionen`);
+and the case's `.aktionen` row: the count sentence left, *Show export
+folder*, *Export case…*, *Close case* / *Reopen*, *Delete case*. A closed
+case draws none of the buttons that would change it. Every write goes to
+`/api/faelle/*` and comes back as the whole case; the page never guesses
+what a write did.
 
 **The run window** (`#lauf-overlay`, the wizards' frame, wider):
 everything about a running process — headline with step and start time,
@@ -251,7 +288,14 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Icon button | `.ikonknopf` | 32 px square, 8 px radius, name in the tooltip; the header's *Quit* |
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
 | Balance row | `.bilanz .zeile` | icon, name, `.dot` + one sentence (`bilanzSatz`), `.wann`, *Fetch now* while open; a `details` with the open units below |
-| Hit row | `.hit` | icon, title, date, who, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
+| Hit row | `.hit` | tick (`.wahl`, under `#results` only), icon, title with the case mark, date, who, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
+| Case mark | `.im-fall` | pill with the case icon and the name (or the count for several) on a hit's title and in the detail's meta line; `.zu` when every case it sits in is closed |
+| List head / selection bar | `.liste-kopf` / `.auswahl-leiste` | above `#results` and the case list: count left, one `.mini` action right; the bar only while something is ticked |
+| Case row | `.fall` | name + status tag, icon + count per source, one muted line; `.on` when open on the right |
+| Item row | `.eintrag` | icon, title and who, date, *Open* + `×` — the items of a case, one `.gruppe` per source |
+| Note | `.notiz` | when, text, *Edit* + `×`; `.notiz-neu` is the add field at the end of the casebook |
+| History row | `.hist` | title, `.tag` criteria in `.tagleiste`, time or last run, `.knoepfe` of `.mini`s; the rows of the history, the saved searches, a case's lists and searches; `.hist-tag` is the day heading |
+| Choice list | `.wahl-liste` | one radio per open case and a *New case…* field — the one window for putting anything into a case |
 | Detail | `#detail` | `#detail-inhalt` with tag, title, meta, `.daktionen`, content, path; `#detail-verlauf` for the thread |
 | Side navigation | `.snav .snav-punkt` | Settings and Insights alike: one per card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
 | Source block | `details.quelle-einst` | summary with name and state line `.zf`, `.qinhalt`, `details.erweitert` |
@@ -401,6 +445,16 @@ line.
 under the search, a `#sicht-<name>` block, a branch in `sicht()`. Never a
 top-level tab.
 
+**Something about a case**: a `.gruppe` in `zeichneFall`, a `.mini` in
+the row it acts on, a route under `/api/faelle/` that answers with the
+whole case. Anything that puts items into a case goes through the one
+choice window (`fallWahl`), never a second picker. The case remembers
+items by their key (`schluessel.py`), so a new source gives its records a
+key in `corpus.py` or a rule in `schluessel.fuer`, and its export an
+anchor the export's `index.html` can link to (`id="m-…"`, `k-…`, `t-…`).
+What goes into an export lives in `case_export.py`, the page only names
+the folder.
+
 **Explanations**: on the `(i)`, in `data-i18n-title`. A sentence next to a
 button is allowed only when it says what the button will do *right now*
 (a count, a date, a warning that applies).
@@ -458,7 +512,7 @@ element is in the markup.
 
 These tests encode the guide; adapt them consciously, never delete them:
 
-- `test_die_reiterzeile_bleibt_kurz` — four tabs, views under the search.
+- `test_die_reiterzeile_bleibt_kurz` — five tabs, views under the search.
 - `test_kopfleiste_zeigt_nur_den_zugang` — the header's one frame holds
   the run, the profile and the access, nothing beside it; AI and MCP
   dots in the settings navigation.
@@ -507,6 +561,14 @@ These tests encode the guide; adapt them consciously, never delete them:
 - `test_umzug_alles_oder_nichts` / `test_umzug_laesst_eigene_pfade_in_ruhe`
   — the one move the app makes is a set of renames that either all happen
   or none, and never touches a folder the user pointed elsewhere.
+- `test_die_dritte_tuer_und_ihre_teile_stehen_im_markup` /
+  `test_die_seite_fuehrt_faelle_durch` (tests/test_app_faelle.py) — Cases
+  is a door with one primary action, the history and saved windows sit in
+  the search row, the case filter counts but does not search, a hit
+  without a key cannot be ticked, the choice window lists open cases
+  only, a closed case draws no changing button, the export opens the run
+  window; the HTTP tests there and in `test_mcp_faelle.py` hold the
+  routes and the MCP tools to the same rules.
 
 ## 9. Before you change the interface
 

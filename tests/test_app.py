@@ -3494,11 +3494,16 @@ def test_die_reiterzeile_bleibt_kurz():
     thing?". Calendar and address book, by contrast, are views of the same
     corpus as the search and live below it; schedule and MCP are settings.
 
-    The number stands here as a brake: whoever adds a fifth should have to
+    Cases became the third door in 11.0 because a case is neither building
+    nor searching: it is what someone keeps around one matter, across
+    sources, for months – a place of its own, with its own primary action.
+
+    The number stands here as a brake: whoever adds a sixth should have to
     read this rationale."""
     seite = app_mod.seite()
     nav = seite[seite.index("<nav>"):seite.index("</nav>")]
-    assert nav.count("data-tab=") == 4, "Die Reiterzeile ist wieder gewachsen"
+    assert nav.count("data-tab=") == 5, "Die Reiterzeile ist wieder gewachsen"
+    assert 'data-tab="faelle"' in nav, "die dritte Tür fehlt"
     for weg in ("kalender", "adressbuch", "zeitplan", "mcp"):
         assert f'data-tab="{weg}"' not in nav, f"{weg} ist wieder ein eigener Reiter"
     for sicht in ("treffer", "kalender", "adressbuch"):
@@ -7978,6 +7983,7 @@ def test_jedes_feld_ist_auch_gelistet():
                  "analytics_skip",    # multi-line text, handled separately
                  "language",          # its own select, fuelleSprachen()
                  "notifications",     # its own select, saved by hand
+                 "search_history",    # likewise: a select with fixed choices
                  "data-dir",          # posted to /api/data-dir by the save
                  "index-dir",         # likewise
                  "ollama_enabled",    # toggle, see ollamaSchalter()

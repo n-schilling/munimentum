@@ -40,6 +40,7 @@ import numpy as np
 
 import analytics_db
 import corpus
+import schluessel
 import export_util
 import ollama_client
 import progress
@@ -103,7 +104,8 @@ def _chunk_row(i, c):
             c.get("thread"), c.get("gone"), c.get("att"),
             # From the same names as att, but as its own column: SQL filters
             # on it, and that has to work in all three search modes.
-            corpus.endungen(c.get("att")) or None)
+            corpus.endungen(c.get("att")) or None,
+            c.get("key"))
 
 
 def _people_rows(chunks):
@@ -144,8 +146,12 @@ def write_db(store, chunks, manifest=None):
             thread TEXT,                  -- Gesprächskennung, siehe corpus.thread_key
             gone TEXT,                    -- seit wann nicht mehr im Postfach
             att TEXT,                     -- Namen der Anhänge, siehe corpus.anhaenge
-            ext TEXT);                    -- deren Dateitypen, siehe corpus.endungen
+            ext TEXT,                     -- deren Dateitypen, siehe corpus.endungen
+            key TEXT);                    -- stable item key, siehe schluessel.py
         CREATE INDEX ix_chunks_uid ON chunks(uid);
+        -- A case names its items by key: the case filter and the membership
+        -- mark on every hit look it up.
+        CREATE INDEX ix_chunks_key ON chunks(key);
         -- „Verlauf anzeigen“ holt alle Nachrichten eines Gesprächs. Ohne den
         -- Index wäre das ein voller Scan über alle Chunks.
         CREATE INDEX ix_chunks_thread ON chunks(thread) WHERE seq = 0;
@@ -177,7 +183,7 @@ def write_db(store, chunks, manifest=None):
                              mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
                              PRIMARY KEY (root, rel));
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO dateien VALUES (?,?,?,?)",
                     ((root, rel, mtime, size) for (root, rel), (mtime, size)
@@ -323,6 +329,10 @@ def _alter_bestand(store):
         spalten = ("uid", "seq", "src", "root", "rel", "who", "ppl", "ts",
                    "date", "title", "ctx", "text", "hash", "thread", "gone",
                    "att")
+        # The key came with 11.0: an older index has no such column, and
+        # its chunks get theirs on the way through (schluessel.zuweisen).
+        if any(r[1] == "key" for r in con.execute("PRAGMA table_info(chunks)")):
+            spalten += ("key",)
         chunks = {}
         for row in con.execute(f"SELECT {', '.join(spalten)} FROM chunks "
                                "ORDER BY id"):
@@ -401,6 +411,10 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
         chunks += corpus.chunk_records(corpus.load_planner(planner_dir))
     if todo_dir and Path(todo_dir).is_dir():
         chunks += corpus.chunk_records(corpus.load_todo(todo_dir))
+    # Every chunk gets its stable key – the ones the parse brought along
+    # keep it, the rest (files, pages, Teams, chunks taken over from an
+    # older index) are looked up in the exports' bookkeeping once.
+    schluessel.zuweisen(chunks, {**ordner, "planner": planner_dir, "todo": todo_dir})
     return chunks, manifest, wieder, gelesen
 
 

@@ -466,7 +466,8 @@ def _task_html(eintrag, labels, namen, weg=False):
     if kommentare:
         meta.append(f"{len(kommentare)} Kommentar"
                     + ("e" if len(kommentare) != 1 else ""))
-    teile = ['<details class="karte%s"><summary>' % (" weg" if weg else ""),
+    kennung = html_lib.escape(str(t.get("id") or ""))
+    teile = [f'<details class="karte{" weg" if weg else ""}" id="k-{kennung}"><summary>',
              '<span class="kopf">' + " ".join(kopf) + "</span>",
              '<div class="zeile">' + " · ".join(meta) + "</div>",
              '</summary><div class="rumpf">']

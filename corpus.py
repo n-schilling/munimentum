@@ -108,6 +108,9 @@ class ConvParser(HTMLParser):
                 self._cur = True
                 self._msg_depth = self._depth
                 self._nb, self._tb, self._bb = [], [], []
+                # The message id the export writes since 11.0 – the stable
+                # half of the message's key (schluessel.py).
+                self._id = next((v for k, v in attrs if k == "data-id"), None) or None
             if self._cur is not None and "body" in cls and not self._in_body:
                 self._in_body = True
                 self._body_depth = self._depth
@@ -137,7 +140,8 @@ class ConvParser(HTMLParser):
                 name = "".join(self._nb).strip()
                 time = "".join(self._tb).strip()
                 if text:
-                    self.msgs.append({"n": name, "t": time, "x": text})
+                    self.msgs.append({"n": name, "t": time, "x": text,
+                                      "id": getattr(self, "_id", None)})
                 self._cur = None
             self._depth -= 1
 
@@ -188,6 +192,7 @@ def _teams_file(p_str, root_str):
             "who": m["n"] or "(unbekannt)", "ppl": (m["n"] + " " + title).lower(),
             "ts": parse_local(m["t"]), "date": m["t"], "title": title, "ctx": ctx,
             "text": (m["x"] or "")[:SAFETY_CAP],
+            "msg_id": m.get("id"),
         })
     return out
 
@@ -427,8 +432,10 @@ def _outlook_file(p_str, root_str):
         pass
     rel = p.relative_to(root).as_posix()
     folder = rel.rsplit("/", 1)[0] if "/" in rel else "(Stamm)"
+    kennung = hdr(msg, "message-id").strip()
     return {
         "uid": f"outlook:{rel}:0", "src": "outlook", "root": "outlook", "rel": rel,
+        "key": f"mail:{kennung}" if kennung else None,
         "thread": thread_key(msg),
         "att": " ".join(anhaenge(msg)),
         "who": who, "ppl": " ".join(fn + fe + tn + te).lower(),
@@ -590,13 +597,16 @@ def _ics_when(val, dateonly, tzid=""):
 def _calendar_file(p_str, root_str):
     p, root = Path(p_str), Path(root_str)
     summary = location = description = org_cn = org_mail = dtstart = tzstart = ""
+    uid = ""
     dateonly = False
     att_names, att_mails = [], []
     for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
         name, params, value = _prop(line)
         if not name:
             continue
-        if name == "SUMMARY":
+        if name == "UID":
+            uid = value.strip()
+        elif name == "SUMMARY":
             summary = _unescape(value)
         elif name == "LOCATION":
             location = _unescape(value)
@@ -626,6 +636,7 @@ def _calendar_file(p_str, root_str):
     text = ((f"Ort: {location}. " if location else "") + description).strip()
     return {
         "uid": f"kalender:{rel}:0", "src": "kalender", "root": "outlook", "rel": rel,
+        "key": f"event:{uid}" if uid else None,
         "who": org_cn or org_mail or "(unbekannt)", "ppl": ppl,
         "ts": ts, "date": disp, "title": summary or "(kein Betreff)",
         "ctx": cal, "text": text[:SAFETY_CAP],
@@ -642,13 +653,15 @@ def load_contacts(root_dir):
     recs = []
     root = Path(root_dir)
     for p in sorted(root.rglob("*.vcf")):
-        fn = org = title = note = given = family = ""
+        fn = org = title = note = given = family = uid = ""
         emails, tels = [], []
         for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
             name, params, value = _prop(line)
             if not name:
                 continue
-            if name == "FN":
+            if name == "UID":
+                uid = value.strip()
+            elif name == "FN":
                 fn = _unescape(value)
             elif name == "N":
                 parts = [_unescape(x) for x in value.split(";")]
@@ -672,6 +685,7 @@ def load_contacts(root_dir):
         text = " · ".join(x for x in ([org, title] + emails + tels + ([note] if note else [])) if x)
         recs.append({
             "uid": f"kontakte:{rel}:0", "src": "kontakte", "root": "outlook", "rel": rel,
+            "key": f"contact:{uid}" if uid else None,
             "who": org or title or "Kontakt", "ppl": " ".join([fn] + emails).lower(),
             "ts": None, "date": "", "title": fn,
             "ctx": f"kontakte/{folder}" if folder else "kontakte",
@@ -851,6 +865,7 @@ def load_planner(root_dir):
                     ts = kt
             satz = {
                 "uid": f"planner:{ordner.name}/{tid}:0", "src": "planner",
+                "key": f"planner:{tid}",
                 "root": "planner", "rel": rel,
                 "who": ", ".join((zustaendig or leute)[:3]),
                 "ppl": " ".join(zustaendig + leute).lower(),
@@ -907,6 +922,7 @@ def load_todo(root_dir):
                   or export_util.graph_zeit(task.get("createdDateTime")))
             satz = {
                 "uid": f"todo:{ordner.name}/{tid}:0", "src": "todo",
+                "key": f"todo:{tid}",
                 "root": "todo", "rel": rel,
                 "who": "", "ppl": "",
                 "ts": ts.timestamp() if ts else None,

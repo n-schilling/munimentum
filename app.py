@@ -64,8 +64,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import answer
 import archive_check
 import auth
+import case_export
 import completeness
 import export_util
+import faelle
 import folders
 import i18n
 import notify
@@ -94,7 +96,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 # Subprograms the bundled file can start itself via "--run <name>". As
 # scripts they lie side by side, in the bundle as modules inside it.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
-            "mcp_server",
+            "mcp_server", "case_export",
             # auth is not an export step but a self-report: which sign-in
             # path applies, is a key present, is there a cache. In the
             # bundle this is the only way to check that without network –
@@ -1568,6 +1570,33 @@ def calendar_plan(cfg):
     return bool(cats & {"calendar", "contacts"}), "mail" in cats
 
 
+HISTORIE_WAHL = ("off", "30", "90", "365", "forever")
+
+
+def historie_tage(cfg):
+    """The search history's retention as Fallbuch.aufraeumen takes it:
+    None keeps everything, 0 keeps nothing, else days."""
+    wahl = str(cfg.get("search_history") or "90").strip().lower()
+    if wahl == "forever":
+        return None
+    if wahl == "off":
+        return 0
+    try:
+        return max(1, int(wahl))
+    except ValueError:
+        return 90
+
+
+def fall_export_basis(cfg):
+    """Where case exports land: the configured folder, else "Munimentum
+    cases" in the user's Documents folder (the home folder without one)."""
+    eigen = str(cfg.get("case_export_dir") or "").strip()
+    if eigen:
+        return Path(eigen).expanduser()
+    dokumente = Path.home() / "Documents"
+    return (dokumente if dokumente.is_dir() else Path.home()) / "Munimentum cases"
+
+
 def _auth_env(cfg):
     """Pass the sign-in on to the subprocesses.
 
@@ -1600,7 +1629,7 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 reconstruct=None, nur_einheit=None, legacy_comments=False,
                 sync_now=False, calendar_full=False, full_sync=False,
                 resync=False, archiv=None, nachgeholt=None, nachholen=None,
-                resync_ordner=None):
+                resync_ordner=None, fall_export=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1638,6 +1667,9 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # "Fetch again": {quelle, liste} – the source whose step fetches
         # exactly the files in the list (FETCH_LIST), ticked or not.
         "nachholen": dict(nachholen or {}),
+        # A case export: {faelle, fall, ziel, zip, lang, res} for
+        # case_export.py – the folder is named before the run starts.
+        "fall_export": dict(fall_export or {}),
         # Source -> when its last resync completed, for the archive
         # check's "still missing after a fetch" verdict.
         "nachgeholt": dict(nachgeholt or {}),
@@ -1892,6 +1924,10 @@ class SearchBridge:
                 todo_dir=str(BASE / TODO_DIR),
                 onenote_dir=str(BASE / ONENOTE_DIR),
                 runs_db=str(HEIM / run_history.DB_NAME),
+                # The case book: the `case` filter and the mark on every
+                # hit. The page writes through its own routes, never
+                # through the MCP write tools – those stay off here.
+                faelle_db=str(HEIM / faelle.DB_NAME), cases_write=False,
                 embed_model=cfg["embed_model"], ollama=cfg["ollama"])
             self.module, self.stamp, self.error = mcp_server, stamp, None
             return mcp_server
@@ -1907,6 +1943,11 @@ class App:
         self.history = run_history.RunHistory(HEIM / run_history.DB_NAME)
         self.history.prune(int(self.cfg.get("runs_retention_months") or 24))
         self.history.prune_log(int(self.cfg.get("log_retention_days") or 14))
+        # Search history, saved searches and cases – one file per profile,
+        # next to the run history. The history is pruned to its setting
+        # at every start, and again whenever the setting changes.
+        self.faelle = faelle.Fallbuch(HEIM / faelle.DB_NAME)
+        self.faelle.aufraeumen(historie_tage(self.cfg))
         self.jobs = JobRunner(self.history, cwd=lambda: str(BASE), res=RES)
         self.mcp = McpProcess(self.jobs, _mcp_befehl, mcp_client_config)
         self.search = SearchBridge()
@@ -2198,7 +2239,7 @@ class App:
                reconstruct=None, nur_einheit=None, legacy_comments=False,
                sync_now=False, calendar_full=False, full_sync=False,
                resync=False, archiv=None, nachholen=None, resync_ordner=None,
-               origin="manual"):
+               fall_export=None, origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
         shape; unknown keys are ignored, missing ones are off."""
@@ -2243,7 +2284,7 @@ class App:
                             sync_now=sync_now, calendar_full=calendar_full,
                             full_sync=full_sync, resync=resync, archiv=archiv,
                             nachgeholt=self.nachgeholt(), nachholen=nachholen,
-                            resync_ordner=resync_ordner)
+                            resync_ordner=resync_ordner, fall_export=fall_export)
         # A button of one source – sync now, fetch again, full sync, a
         # single URL – on a source the settings do not tick: say so, rather
         # than starting a run that carries nothing but the index step.
@@ -2449,6 +2490,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"lines": lines, "seq": seq})
             if u.path == "/api/search":
                 return self._json(self._search(one))
+            if u.path in ("/api/suche/historie", "/api/suche/gespeichert"):
+                return self._json(self._suche_lesen(u.path.rsplit("/", 1)[1]))
+            if u.path in ("/api/faelle", "/api/faelle/fall", "/api/faelle/neu"):
+                return self._json(self._faelle_lesen(u.path.rsplit("/", 1)[1], one))
             if u.path == "/api/similar":
                 return self._json(self._similar(one))
             if u.path == "/api/thread":
@@ -2659,6 +2704,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": app.jobs.cancel()})
             if u.path == "/api/config":
                 return self._json(self._save_config(data))
+            if u.path in ("/api/suche/historie-leeren", "/api/suche/speichern",
+                          "/api/suche/umbenennen", "/api/suche/loeschen",
+                          "/api/suche/anhaengen"):
+                return self._suche_schreiben(u.path.rsplit("/", 1)[1], data)
+            if u.path in ("/api/faelle/anlegen", "/api/faelle/aendern",
+                          "/api/faelle/schliessen", "/api/faelle/oeffnen",
+                          "/api/faelle/loeschen", "/api/faelle/hinzufuegen",
+                          "/api/faelle/entfernen", "/api/faelle/liste",
+                          "/api/faelle/liste-loeschen", "/api/faelle/notiz",
+                          "/api/faelle/notiz-aendern", "/api/faelle/notiz-loeschen",
+                          "/api/faelle/export", "/api/faelle/export-ordner"):
+                return self._faelle_schreiben(u.path.rsplit("/", 1)[1], data)
             if u.path == "/api/schedule":
                 return self._json(self._save_schedule(data))
             if u.path == "/api/mcp":
@@ -2858,9 +2915,17 @@ class Handler(BaseHTTPRequestHandler):
                         "sharepoint_pages_enabled", "planner_enabled",
                         "planner_attachments", "todo_enabled",
                         "onenote_enabled", "teams_attachments",
-                        "teams_channel_files", "keep_awake"):
+                        "teams_channel_files", "keep_awake", "mcp_cases_write"):
                 if key in data:
                     cfg[key] = bool(data[key])
+            if "search_history" in data:
+                wahl = str(data["search_history"] or "").strip().lower()
+                if wahl in HISTORIE_WAHL:
+                    cfg["search_history"] = wahl
+                    # The new rule applies at once – "off" empties the list.
+                    self.app.faelle.aufraeumen(historie_tage(cfg))
+            if "case_export_dir" in data:
+                cfg["case_export_dir"] = str(data["case_export_dir"] or "").strip()
             # Whoever switches Ollama off no longer means the check from just now.
             if "ollama_enabled" in data:
                 self.app._ollama_cache = (0, None)
@@ -3042,20 +3107,219 @@ class Handler(BaseHTTPRequestHandler):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "hits": [], "count": 0}
-        kw = dict(person=q.get("person", ""), date_from=q.get("from", ""),
-                  date_to=q.get("to", ""), source=q.get("source", "all"),
+        k = faelle.kriterien(q)
+        kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
+                  source=k["source"],
                   k=min(int(q.get("k", 20) or 20), 100),
                   offset=max(int(q.get("offset", 0) or 0), 0),
-                  only_gone=str(q.get("gone", "")).lower() in ("1", "true", "ja"),
-                  folder=str(q.get("folder", "") or ""),
-                  filetype=str(q.get("filetype", "") or ""))
-        query = (q.get("q") or "").strip()
-        if query:
-            res = mod.search_messages(query=query, mode=q.get("mode", "auto"), **kw)
+                  only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
+                  # The "Cases" filter: only what one case holds.
+                  case=str(k["fall"]) if k["fall"] else "")
+        if k["q"]:
+            res = mod.search_messages(query=k["q"], mode=q.get("mode", "auto"), **kw)
         else:
             res = mod.browse_messages(**kw)
         res["semantic"] = bool(mod.STATE.get("semantic"))
+        if kw["offset"] == 0 and not res.get("error"):
+            # The first page of a search is the search: the history keeps
+            # its criteria (never its hits) when the setting allows, and a
+            # saved search that was run remembers when and how many.
+            if historie_tage(self.app.cfg) != 0:
+                self.app.faelle.suche_merken(k, res.get("count", 0))
+            try:
+                gespeichert = int(q.get("saved") or 0)
+            except ValueError:
+                gespeichert = 0
+            if gespeichert:
+                self.app.faelle.gelaufen(gespeichert, res.get("count", 0))
         return res
+
+    def _alle_treffer(self, k, grenze=5000):
+        """Every hit of a search, for a result list: the criteria as the
+        page had them, paged through the same engine up to `grenze`."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return None, self.app.search.error
+        kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
+                  source=k["source"], only_gone=k["gone"], folder=k["folder"],
+                  filetype=k["filetype"], case=str(k["fall"]) if k["fall"] else "",
+                  preview_chars=0)
+        modus = {"text": "lexical", "aehnlich": "semantic", "ki": "hybrid"}[k["mode"]]
+        treffer, offset, schritt = [], 0, 100
+        while offset < grenze:
+            if k["q"]:
+                res = mod.search_messages(query=k["q"], mode=modus, k=schritt, offset=offset, **kw)
+            else:
+                res = mod.browse_messages(k=schritt, offset=offset, **kw)
+            if res.get("error"):
+                return None, res["error"]
+            seite = res.get("results") or []
+            treffer += seite
+            if len(seite) < schritt:
+                break
+            offset += schritt
+        return treffer[:grenze], None
+
+    # -- search history and saved searches ----------------------------------
+    def _suche_lesen(self, was):
+        buch = self.app.faelle
+        if was == "historie":
+            return {"searches": buch.suchen(), "retention": str(self.app.cfg.get("search_history") or "90")}
+        return {"searches": buch.gespeicherte()}
+
+    def _suche_schreiben(self, was, data):
+        buch = self.app.faelle
+        try:
+            kennung = int(data.get("id") or 0)
+        except (TypeError, ValueError):
+            kennung = 0
+        try:
+            if was == "historie-leeren":
+                buch.suchen_leeren()
+                return self._json({"ok": True})
+            if was == "speichern":
+                fall = data.get("fall")
+                fall_id = int(fall) if fall not in (None, "", 0) else None
+                if fall_id is not None and buch.fall(fall_id) is None:
+                    return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+                neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("kriterien")), fall_id)
+                return self._json({"ok": True, "id": neu, "search": buch.gespeichert(neu)})
+            if was == "umbenennen":
+                if not buch.umbenennen(kennung, data.get("name")):
+                    return self._json({"ok": False, "message": {"k": "srv.search.unknown", "v": {}}}, 404)
+                return self._json({"ok": True})
+            if was == "loeschen":
+                return self._json({"ok": buch.loeschen(kennung)})
+            if was == "anhaengen":
+                fall = data.get("fall")
+                fall_id = int(fall) if fall not in (None, "", 0) else None
+                if fall_id is not None and buch.fall(fall_id) is None:
+                    return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+                if not buch.anhaengen(kennung, fall_id):
+                    return self._json({"ok": False, "message": {"k": "srv.search.unknown", "v": {}}}, 404)
+                return self._json({"ok": True})
+        except ValueError:
+            return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
+        except faelle.FallGeschlossen:
+            return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
+        return self._json({"error": "Unbekannter Pfad"}, 404)
+
+    # -- cases -------------------------------------------------------------
+    def _faelle_lesen(self, was, q):
+        buch = self.app.faelle
+        if was == "faelle":
+            return {"cases": buch.faelle(), "export_dir": str(fall_export_basis(self.app.cfg))}
+        try:
+            kennung = int(q.get("id") or 0)
+        except ValueError:
+            kennung = 0
+        fall = buch.fall(kennung)
+        if fall is None:
+            return {"error": {"k": "srv.case.unknown", "v": {}}}
+        if was == "fall":
+            return {"case": fall}
+        # "neu": what the attached searches find today that the case lacks
+        keys = buch.keys(kennung)
+        bloecke = []
+        for g in fall["suchen_liste"]:
+            treffer, fehler = self._alle_treffer(g["kriterien"], grenze=500)
+            if fehler:
+                bloecke.append({"id": g["id"], "name": g["name"], "error": fehler, "new": []})
+                continue
+            neu = [h for h in treffer if h.get("key") and h["key"] not in keys]
+            bloecke.append({"id": g["id"], "name": g["name"], "new": neu[:200], "new_count": len(neu)})
+        return {"case": {"id": fall["id"], "name": fall["name"]}, "searches": bloecke}
+
+    def _faelle_schreiben(self, was, data):
+        app, buch = self.app, self.app.faelle
+        try:
+            kennung = int(data.get("id") or 0)
+        except (TypeError, ValueError):
+            kennung = 0
+        try:
+            if was == "anlegen":
+                neu = buch.fall_anlegen(data.get("name"), data.get("beschreibung"))
+                return self._json({"ok": True, "id": neu, "case": buch.fall(neu)})
+            if buch.fall(kennung) is None:
+                return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+            if was == "aendern":
+                buch.fall_aendern(kennung, data.get("name") if "name" in data else None,
+                                  data.get("beschreibung") if "beschreibung" in data else None)
+            elif was == "schliessen":
+                buch.schliessen(kennung)
+            elif was == "oeffnen":
+                buch.oeffnen(kennung)
+            elif was == "loeschen":
+                buch.fall_loeschen(kennung)
+                return self._json({"ok": True})
+            elif was == "hinzufuegen":
+                eintraege = [e for e in (data.get("eintraege") or []) if isinstance(e, dict)]
+                neu = buch.hinzufuegen(kennung, eintraege)
+                return self._json({"ok": True, "added": neu,
+                                   "already": len([e for e in eintraege if e.get("key")]) - neu})
+            elif was == "entfernen":
+                buch.entfernen(kennung, str(data.get("key") or ""))
+            elif was == "liste":
+                k = faelle.kriterien(data.get("kriterien"))
+                treffer, fehler = self._alle_treffer(k)
+                if fehler:
+                    return self._json({"ok": False, "message": fehler}, 409)
+                liste_id, neu = buch.liste_anlegen(kennung, k, treffer)
+                return self._json({"ok": True, "liste": liste_id, "hits": len(treffer), "added": neu})
+            elif was == "liste-loeschen":
+                buch.liste_loeschen(kennung, int(data.get("liste") or 0))
+            elif was == "notiz":
+                notiz = buch.notiz(kennung, data.get("text"))
+                return self._json({"ok": True, "id": notiz})
+            elif was == "notiz-aendern":
+                buch.notiz_aendern(kennung, int(data.get("notiz") or 0), data.get("text"))
+            elif was == "notiz-loeschen":
+                buch.notiz_loeschen(kennung, int(data.get("notiz") or 0))
+            elif was == "export":
+                return self._fall_export(kennung, bool(data.get("zip")))
+            elif was == "export-ordner":
+                fall = buch.fall(kennung)
+                pfad = Path(fall["exportiert"]) if fall.get("exportiert") else None
+                if pfad is not None and pfad.suffix == ".zip":
+                    pfad = pfad.parent
+                if pfad is None or not pfad.is_dir():
+                    pfad = fall_export_basis(app.cfg)
+                    if not pfad.is_dir():
+                        return self._json({"ok": False, "message": {"k": "srv.case.noexport", "v": {}}}, 404)
+                ok = archive_check.ordner_oeffnen(pfad)
+                return self._json({"ok": ok, "path": str(pfad), "message": None if ok else
+                                   {"k": "srv.archiv.open.fail", "v": {}}}, 200 if ok else 500)
+            else:
+                return self._json({"error": "Unbekannter Pfad"}, 404)
+            return self._json({"ok": True, "case": buch.fall(kennung)})
+        except ValueError:
+            return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
+        except faelle.FallGeschlossen:
+            return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
+        except faelle.KeinFall:
+            return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+
+    def _fall_export(self, kennung, mit_zip):
+        """The export as a run of its own (case_export.py): the folder is
+        named here, before the run, so the answer can already say where
+        it will lie."""
+        app = self.app
+        fall = app.faelle.fall(kennung)
+        if app.jobs.busy:
+            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+        basis = fall_export_basis(app.cfg)
+        try:
+            basis.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return self._json({"ok": False, "message": {"k": "srv.case.exportdir", "v": {"error": str(e)}}}, 400)
+        ziel = case_export.zielordner(basis, fall["name"])
+        ok, why = app.launch({"fall_export": True}, label="job.case_export",
+                             fall_export={"faelle": str(HEIM / faelle.DB_NAME), "fall": kennung,
+                                          "ziel": str(ziel), "zip": bool(mit_zip),
+                                          "lang": app.ui_lang or i18n.negotiate(app.cfg.get("language"), None, RES),
+                                          "res": str(RES)})
+        return self._json({"ok": ok, "message": None if ok else why, "path": str(ziel)},
+                          200 if ok else 409)
 
     def _similar(self, q):
         """Similar to one hit – needs no Ollama (see mcp_server)."""

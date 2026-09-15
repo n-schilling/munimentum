@@ -166,6 +166,13 @@ VORGABEN = {
     # Hits per page in the search. More means less paging, but also a longer
     # list one has to look through first.
     "search_results": 20,
+    # The search history: every search by its criteria – words, mode,
+    # filters – never its hits. "off" keeps none, a number of days, or
+    # "forever". Cases and saved searches are not affected.
+    "search_history": "90",
+    # Where an exported case lands: one folder per case below this path.
+    # Empty means "Munimentum cases" in the user's Documents folder.
+    "case_export_dir": "",
     # UI userflow recording: the last interaction steps for the error
     # report – only the kind (tab, search, run), never contents, purely in
     # the memory of the open page. 0 turns it off.
@@ -208,6 +215,9 @@ VORGABEN = {
     # over stdio. Start/stop next to it only concerns the HTTP endpoint
     # that this app runs itself.
     "mcp_enabled": True,
+    # Claude may add items and notes to cases through MCP. Off until
+    # someone turns it on: a read-only server stays read-only.
+    "mcp_cases_write": False,
     "mcp_autostart": True,
     "update_check": True,   # check GitHub once at startup
     # How the app signs in. "token" = pasted access key (no request to IT

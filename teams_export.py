@@ -596,7 +596,12 @@ def render_message(msg, is_reply=False, img_counter=None, lokal=None):
     subj = msg.get("subject")
     subj_html = f'<div class="subj"><strong>{html_lib.escape(subj)}</strong></div>' if subj else ""
 
-    return (f'<div class="{cls}"><div class="head">'
+    # The message id twice: data-id for the index (schluessel.py) and an
+    # id so a link – from a case export, say – lands on the message.
+    kennung = html_lib.escape(str(msg.get("id") or ""))
+    anker = f' id="m-{kennung}"' if kennung else ""
+    return (f'<div class="{cls}"{anker} data-id="{kennung}">'
+            f'<div class="head">'
             f'<span class="name">{html_lib.escape(name)}</span>'
             f'<span class="time">{when}</span></div>{subj_html}'
             f'<div class="body">{body_html}</div>'

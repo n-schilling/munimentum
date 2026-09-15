@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 10.2.0
+  version: 11.0.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -155,9 +155,14 @@ paths:
         - { name: folder, in: query, schema: { type: string }, description: "Restrict to a folder and below." }
         - { name: filetype, in: query, schema: { type: string }, description: "Attachment / file extension without dot." }
         - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical] } }
+        - { name: case, in: query, schema: { type: integer }, description: "The \"Cases\" filter: only items the case holds (its id, see /api/faelle)." }
+        - { name: saved, in: query, schema: { type: integer }, description: "Id of the saved search being run; the first page records when it ran and how many hits it had." }
       responses:
         "200":
-          description: Hits, or an in-band error.
+          description: |
+            Hits, or an in-band error. The first page (offset 0) of a
+            non-empty search is recorded in the search history – criteria
+            only, never hits – unless the setting `search_history` is off.
           content:
             application/json:
               schema:
@@ -1245,6 +1250,531 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
 
+  # ---- search history, saved searches, cases (11.0) ------------------------
+  /api/suche/historie:
+    get:
+      summary: The search history
+      description: |
+        Every search by its criteria, newest first – never its hits.
+        Kept per the setting `search_history` (off, 30, 90, 365 days,
+        forever); pruned at start and when the setting changes.
+      responses:
+        "200":
+          description: Searches and the retention in force.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  searches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        wann: { type: string, format: date-time }
+                        kriterien: { $ref: "#/components/schemas/Kriterien" }
+                        treffer: { type: [integer, "null"] }
+                  retention: { type: string, enum: [off, "30", "90", "365", forever] }
+
+  /api/suche/historie-leeren:
+    post:
+      summary: Empty the search history
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /api/suche/gespeichert:
+    get:
+      summary: The saved searches
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  searches:
+                    type: array
+                    items: { $ref: "#/components/schemas/GespeicherteSuche" }
+
+  /api/suche/speichern:
+    post:
+      summary: Save a search under a name
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                kriterien: { $ref: "#/components/schemas/Kriterien" }
+                fall: { type: [integer, "null"], description: "Attach to this case (must be open)." }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: integer }
+                  search: { $ref: "#/components/schemas/GespeicherteSuche" }
+        "400": { description: No name (srv.case.noname). }
+        "404": { description: No such case (srv.case.unknown). }
+        "409": { description: The case is closed (srv.case.closed). }
+
+  /api/suche/umbenennen:
+    post:
+      summary: Rename a saved search
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                name: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "404": { description: No such search (srv.search.unknown). }
+
+  /api/suche/loeschen:
+    post:
+      summary: Delete a saved search
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+
+  /api/suche/anhaengen:
+    post:
+      summary: Attach a saved search to a case, or detach it
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                fall: { type: [integer, "null"], description: "The case; null detaches." }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "404": { description: No such search or case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle:
+    get:
+      summary: The cases
+      description: Open cases first, most recently changed first; closed ones after.
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cases:
+                    type: array
+                    items: { $ref: "#/components/schemas/FallKurz" }
+                  export_dir: { type: string, description: "Where exports land (setting case_export_dir, else Documents/Munimentum cases)." }
+
+  /api/faelle/fall:
+    get:
+      summary: One case in full
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          description: The case, or an in-band error (srv.case.unknown).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  case: { $ref: "#/components/schemas/Fall" }
+                  error: { $ref: "#/components/schemas/I18nMessage" }
+
+  /api/faelle/neu:
+    get:
+      summary: New hits for a case
+      description: |
+        Runs every saved search attached to the case (up to 500 hits each)
+        and returns what the case does not hold yet – "new since". Nothing
+        is added; the page offers that.
+      parameters:
+        - { name: id, in: query, required: true, schema: { type: integer } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  case:
+                    type: object
+                    properties:
+                      id: { type: integer }
+                      name: { type: string }
+                  searches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: integer }
+                        name: { type: string }
+                        new: { type: array, items: { $ref: "#/components/schemas/Hit" }, description: "At most 200." }
+                        new_count: { type: integer }
+                        error: { $ref: "#/components/schemas/MessageOrKey" }
+                  error: { $ref: "#/components/schemas/I18nMessage" }
+
+  /api/faelle/anlegen:
+    post:
+      summary: Create a case
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                beschreibung: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: integer }
+                  case: { $ref: "#/components/schemas/Fall" }
+        "400": { description: No name (srv.case.noname). }
+
+  /api/faelle/aendern:
+    post:
+      summary: Rename a case or change its description
+      description: Fields act on presence; an open case only.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                name: { type: string }
+                beschreibung: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "400": { description: Empty name. }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/schliessen:
+    post:
+      summary: Close a case
+      description: A closed case is read-only – it can still be searched in and exported; reopen it to change it.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case. }
+        "409": { description: Already closed. }
+
+  /api/faelle/oeffnen:
+    post:
+      summary: Reopen a case
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case. }
+
+  /api/faelle/loeschen:
+    post:
+      summary: Delete a case
+      description: The case, its items, lists and notes; attached searches are detached, not deleted. Nothing in the archive is touched.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Ok" }
+        "404": { description: No such case. }
+
+  /api/faelle/hinzufuegen:
+    post:
+      summary: Add items to a case
+      description: |
+        Hits as the page has them (key, source, root, path, title, date,
+        who) – the case keeps a pointer and what the hit said. An item
+        already in the case is left as it is; one without a key is skipped.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                eintraege:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      key: { type: string }
+                      src: { type: string }
+                      root: { type: string }
+                      rel: { type: string }
+                      titel: { type: string }
+                      datum: { type: string }
+                      wer: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  added: { type: integer }
+                  already: { type: integer }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/entfernen:
+    post:
+      summary: Remove one item from a case
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                key: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/liste:
+    post:
+      summary: Store a result list in a case
+      description: |
+        Runs the search with the given criteria on the server – every
+        page, up to 5000 hits – and stores the list as it stands now: the
+        criteria, the moment, the count, and every hit as an item of the
+        case (marked with the list). What the list found later is not the
+        list; run the search again for that.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                kriterien: { $ref: "#/components/schemas/Kriterien" }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  liste: { type: integer }
+                  hits: { type: integer }
+                  added: { type: integer, description: "Hits new to the case." }
+        "404": { description: No such case. }
+        "409": { description: The case is closed, or the search failed (message says why). }
+
+  /api/faelle/liste-loeschen:
+    post:
+      summary: Drop a stored result list
+      description: The list goes, and with it the items it brought into the case – not those added by hand or by another list before it.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                liste: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/notiz:
+    post:
+      summary: Add a casebook note
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                text: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  id: { type: integer, description: "The note's id." }
+        "400": { description: Empty note. }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/notiz-aendern:
+    post:
+      summary: Change a casebook note
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                notiz: { type: integer }
+                text: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "400": { description: Empty note. }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/notiz-loeschen:
+    post:
+      summary: Delete a casebook note
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                notiz: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/export:
+    post:
+      summary: Export a case (a run)
+      description: |
+        Started as a run of its own (case_export.py): a folder named
+        `<case>_<date>` below the export folder (setting `case_export_dir`,
+        else Documents/Munimentum cases) with the originals of every item,
+        copied out of the archive under their source and path, plus
+        index.html, items.csv and casebook.md; with `zip` also a zip beside
+        it. The folder is named before the run starts and answered here;
+        the case remembers it as `exportiert` when the run is done. Nothing
+        in the archive is touched; a closed case can be exported. Refused
+        while a run is on.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                zip: { type: boolean }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  message: { $ref: "#/components/schemas/MessageOrKey" }
+                  path: { type: string, description: "The folder the run writes." }
+        "400": { description: The export folder cannot be created (srv.case.exportdir). }
+        "404": { description: No such case. }
+        "409": { description: A run is on. }
+
+  /api/faelle/export-ordner:
+    post:
+      summary: Show the case's last export in the file manager
+      description: The folder of the last export (the zip's folder for a zip), else the export folder itself. No process, answers at once.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  path: { type: string }
+                  message: { $ref: "#/components/schemas/MessageOrKey" }
+        "404": { description: No export folder exists yet (srv.case.noexport). }
+        "500": { description: The file manager could not be opened. }
+
 components:
   schemas:
     I18nMessage:
@@ -1267,6 +1797,12 @@ components:
       properties:
         ok: { type: boolean }
         message: { $ref: "#/components/schemas/MessageOrKey" }
+    OkFall:
+      type: object
+      description: The changed case, in full.
+      properties:
+        ok: { type: boolean }
+        case: { $ref: "#/components/schemas/Fall" }
     Bilanz:
       type: object
       description: |
@@ -1413,7 +1949,105 @@ components:
         thread: { type: [string, "null"], description: "Input for /api/thread." }
         attachments: { type: array, items: { type: string } }
         gone: { type: [string, "null"], description: "Tombstone date when the item vanished." }
+        key: { type: [string, "null"], description: "The item's stable key (schluessel.py): what a case remembers it by. Null in an index built before 11.0." }
+        cases:
+          type: array
+          description: The cases the item already sits in – the mark on the hit.
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              status: { type: string, enum: [offen, zu] }
         preview: { type: string }
+    Kriterien:
+      type: object
+      description: |
+        The criteria of one search – what the history, a saved search and
+        a stored result list keep (faelle.kriterien). Never any hit.
+      properties:
+        q: { type: string }
+        mode: { type: string, enum: [text, aehnlich, ki] }
+        person: { type: string }
+        source: { type: string }
+        from: { type: string }
+        to: { type: string }
+        folder: { type: string }
+        filetype: { type: string }
+        gone: { type: boolean }
+        fall: { type: [integer, "null"], description: "The \"Cases\" filter: a case id." }
+    GespeicherteSuche:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        kriterien: { $ref: "#/components/schemas/Kriterien" }
+        angelegt: { type: string, format: date-time }
+        zuletzt: { type: [string, "null"], format: date-time, description: "When it last ran." }
+        treffer: { type: [integer, "null"], description: "Hits then." }
+        fall: { type: [integer, "null"], description: "The case it is attached to." }
+        fall_name: { type: [string, "null"] }
+    FallKurz:
+      type: object
+      description: One case as the list shows it – counts, no contents.
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        beschreibung: { type: string }
+        status: { type: string, enum: [offen, zu] }
+        angelegt: { type: string, format: date-time }
+        geaendert: { type: string, format: date-time }
+        geschlossen: { type: [string, "null"], format: date-time }
+        exportiert: { type: [string, "null"], description: "Where the last export went (folder or zip)." }
+        exportiert_wann: { type: [string, "null"], format: date-time }
+        eintraege: { type: integer, description: "Items in the case." }
+        je_quelle: { type: object, additionalProperties: { type: integer }, description: "Items per source (src key)." }
+        listen: { type: integer }
+        notizen: { type: integer }
+        suchen: { type: integer, description: "Saved searches attached." }
+    Fall:
+      allOf:
+        - { $ref: "#/components/schemas/FallKurz" }
+        - type: object
+          properties:
+            eintraege_liste:
+              type: array
+              items: { $ref: "#/components/schemas/Eintrag" }
+            listen_liste:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: integer }
+                  wann: { type: string, format: date-time }
+                  kriterien: { $ref: "#/components/schemas/Kriterien" }
+                  anzahl: { type: integer, description: "Hits when the list was taken." }
+            notizen_liste:
+              type: array
+              description: The casebook, newest first.
+              items:
+                type: object
+                properties:
+                  id: { type: integer }
+                  wann: { type: string, format: date-time }
+                  text: { type: string }
+            suchen_liste:
+              type: array
+              items: { $ref: "#/components/schemas/GespeicherteSuche" }
+    Eintrag:
+      type: object
+      description: One item of a case – a pointer into the archive, with what the hit said at the time.
+      properties:
+        id: { type: integer }
+        key: { type: string }
+        src: { type: string }
+        root: { type: string }
+        rel: { type: string }
+        titel: { type: [string, "null"] }
+        datum: { type: [string, "null"] }
+        wer: { type: [string, "null"] }
+        hinzugefuegt: { type: string, format: date-time }
+        liste: { type: [integer, "null"], description: "The result list it came with, if any." }
     Run:
       type: object
       properties:

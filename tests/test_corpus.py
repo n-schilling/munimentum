@@ -133,7 +133,7 @@ def test_conv_parser_extracts_title_and_messages():
     assert pr.msgs[0]["n"] == "Alice Example"
     assert pr.msgs[0]["t"] == "2025-06-01 09:30"
     assert "Hallo Bob" in " ".join(pr.msgs[0]["x"].split())
-    assert pr.msgs[1] == {"n": "Bob", "t": "2025-06-01 09:35", "x": "Danke!"}
+    assert pr.msgs[1] == {"n": "Bob", "t": "2025-06-01 09:35", "x": "Danke!", "id": None}
 
 
 def test_load_teams_builds_records(tmp_path):

@@ -108,8 +108,8 @@ copy the stdio MCP snippet again afterwards, because its paths changed.
 
 ## What it does
 
-One browser page with two doors — **Build archive** and **Search archive**
-— and two side rooms, *Insights* and *Settings*. The header carries nothing
+One browser page with three doors — **Build archive**, **Search archive**
+and **Cases** — and two side rooms, *Insights* and *Settings*. The header carries nothing
 else but one frame with the states — your access, a run while it is
 minimised, and the open profile once there is more than one, a click on it
 switches — and the power button to quit; it stays at the top while the
@@ -334,6 +334,55 @@ The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
 unchanged.
 
+Two buttons next to *Search* keep what you searched for. **History** lists
+every search by its criteria — words, kind of search, filters — never by
+its hits; one click runs it again, another saves it. The setting under
+*Settings › App* says how long it is kept (30, 90, 365 days, forever, or
+not at all); the choice applies at once. **Saved** holds searches under a
+name: run one any time, rename it, delete it, or attach it to a case, so
+the case can tell you what the search finds today that it does not hold
+yet. A saved search remembers when it last ran and how many hits it had.
+
+Every hit carries a tick and, when it already sits in a case, a small
+mark naming the case; the chosen hit offers *Add to case* beside its other
+actions, the ticked ones a bar above the list, and *Add all … to a case*
+takes the whole result — every page of it. The **Cases** filter in the
+filter row searches only inside one case, across every source; *Search in
+this case* on a case sets it for you.
+
+### Cases
+
+A case collects what belongs to one matter — hits, whole result lists and
+saved searches, from every source — without copying anything: the case
+points at items in the archive by a key that survives a rename or a
+move (the mail's Message-ID, the file's drive item, the Teams message,
+the task); an index from before 11.0 is rebuilt with those keys on the
+next run, whatever the exports brought. The door
+lists the cases, open ones first; a case opens on the right with its
+description, the **casebook** (short dated notes: what was found, what is
+open, what was decided), the **result lists** it stores — a search as it
+stood at one moment, criteria and exactly the hits of that moment, which
+count as items of the case and can be searched again —, its items grouped
+by source with a link into the original, and the **saved searches**
+attached to it: *Check for new hits* runs them and shows what the case
+lacks, *Add the new ones* takes them in. Nothing is added on its own.
+
+*Close case* makes a case read-only — it stays in the list, can still be
+searched in and exported, and reopens any time; *Delete case* drops the
+case, its items, lists and notes and detaches its searches, and touches
+nothing in the archive. **Export case…** is a run like any other: the
+run window opens with it and its log says what was copied. It writes one
+folder — `<case>_<date>` under *Settings › App › Case exports go to*, by
+default *Munimentum cases* in your Documents folder — with the originals
+of every item under their source's name and path (mails as `.eml`, the
+chat's HTML with its attachments, files, pages and boards as HTML,
+contacts as `.vcf`, appointments as `.ics`), an `index.html` that lists
+every item with source, date, people and a link that lands on the
+message, card or task, the list as `items.csv`, and `casebook.md` with
+the notes; optionally the whole folder as a zip beside it. An item the
+archive no longer holds is listed all the same, marked. The case remembers
+where its last export went; *Show export folder* opens it.
+
 ### Insights
 
 What the archive holds, computed once per index run without asking
@@ -435,6 +484,10 @@ Windows, clicking one opens the interface; on Linux they go through
 reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
 
+The **App** card also holds how long the search history is kept and
+where case exports land; the **Claude (MCP)** card has *Claude may change
+cases*, off by default — see [Search with Claude](#search-with-claude).
+
 **Keep awake during a run** holds the machine off idle sleep while an
 export or index runs — macOS through `caffeinate`, Windows through a power
 request, Linux through `systemd-inhibit` — and lets go the moment the run
@@ -495,7 +548,17 @@ attachments can be browsed. It can
 also ask the archive about itself — how far it reaches, which months are
 empty, when each source last synced, and the same figures Insights
 shows — so an answer can say what the archive does not cover instead of
-guessing. *Settings* prints the exact snippet to paste into your client.
+guessing. Cases and saved searches are there too: `list_cases` and
+`get_case` give a case with its casebook, items, lists and searches,
+`case_timeline` its items in the order they happened with excerpts,
+`case_people` who is involved, `case_new_hits` what the attached searches
+find that the case lacks, `list_saved_searches` and `run_saved_search`
+run a search exactly as saved, and every search or browse takes a `case`
+to look only inside one — every hit says which cases it already sits in.
+Claude reads cases but changes nothing unless *Claude may change cases*
+is on under *Settings › Claude (MCP)*: then `add_to_case` and
+`add_case_note` can put items and notes into open cases, never delete or
+close one. *Settings* prints the exact snippet to paste into your client.
 The stdio snippet names nothing but the profile — `--profile <name>` —
 and the server takes folders, model, Ollama address and port from that
 profile's settings, so nothing in the snippet goes stale. Its entry is

@@ -872,7 +872,13 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "get_thread", "list_people", "list_folders", "list_filetypes",
               "list_files", "read_source_file", "corpus_stats",
               "archive_analytics", "list_sources", "list_events",
-              "lookup_contact"}
+              "lookup_contact",
+              # 11.0: cases and saved searches (tests/test_mcp_faelle.py)
+              "list_cases", "get_case", "case_timeline", "case_people",
+              "case_new_hits", "list_saved_searches", "run_saved_search",
+              "add_to_case", "add_case_note"}
+# The two that write – behind the "Claude may change cases" switch.
+SCHREIBEND = {"add_to_case", "add_case_note"}
 
 
 def _via_client(fn):
@@ -918,8 +924,14 @@ def test_alle_tools_sind_beim_sdk_registriert():
         # Without a docstring Claude gets no description to look at
         assert t.description, f"{t.name} hat keine Beschreibung"
         assert t.annotations is not None, f"{t.name} hat keine Annotations"
-        assert t.annotations.read_only_hint is True
-        assert t.annotations.idempotent_hint is True
+        if t.name in SCHREIBEND:
+            # Honest about writing, never destructive: adding to a case
+            # deletes nothing, and a closed case refuses.
+            assert t.annotations.read_only_hint is False
+            assert t.annotations.destructive_hint is False
+        else:
+            assert t.annotations.read_only_hint is True
+            assert t.annotations.idempotent_hint is True
         assert t.annotations.open_world_hint is False
 
 
@@ -928,7 +940,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     schema = next(t for t in tools if t.name == "search_messages").input_schema
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
-        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype"}
+        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case"}
     assert schema["required"] == ["query"]      # only query is required
 
 

@@ -331,7 +331,7 @@ def _task_html(eintrag, weg=False):
     if weg and eintrag.get("deleted"):
         meta.append("nicht mehr in der Liste seit " + str(eintrag["deleted"])[:10])
     klassen = "karte" + (" weg" if weg else "") + (" erledigt" if erledigt else "")
-    teile = [f'<details class="{klassen}"><summary>',
+    teile = [f'<details class="{klassen}" id="t-{html_lib.escape(str(t.get("id") or ""))}"><summary>',
              '<span class="kopf">' + " ".join(kopf) + "</span>",
              '<div class="zeile">' + " · ".join(m for m in meta if m) + "</div>",
              '</summary><div class="rumpf">']
