@@ -5338,7 +5338,8 @@ function zeigeUpdate(u){
   } else if(vorab){
     banner.textContent = t('update.ahead.banner', {v: u.current, latest: u.latest});
   }
-  el('update-current').textContent = t('update.current', {v: u.current || '?'});
+  el('update-current').textContent = t('update.current', {v: u.current || '?'}) +
+    (u.build ? ' · ' + t('update.build', {b: u.build}) : '');
   el('update-state').textContent =
       u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest})
                          : u.ahead ? t('update.ahead', {v: u.latest})

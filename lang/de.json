@@ -1437,5 +1437,6 @@
   "settings.case_export_dir.i": "Ein Ordner je exportiertem Fall unterhalb dieses Pfads: die Originale, eine Übersichtsseite und die Liste als CSV. Leer heißt „Munimentum cases“ im Dokumente-Ordner. Aus dem Archiv wird nichts verschoben.",
   "settings.case_export_dir.ph": "Dokumente/Munimentum cases",
   "settings.mcp_cases_write": "Claude darf Fälle ändern",
-  "settings.mcp_cases_write.i": "Aus: Claude liest Fälle und gespeicherte Suchen, ändert aber nichts. An: Claude kann über die MCP-Werkzeuge add_to_case und add_case_note Einträge und Notizen in offene Fälle legen – nie löschen, nie schließen. Gilt beim nächsten Start des MCP-Servers."
+  "settings.mcp_cases_write.i": "Aus: Claude liest Fälle und gespeicherte Suchen, ändert aber nichts. An: Claude kann über die MCP-Werkzeuge add_to_case und add_case_note Einträge und Notizen in offene Fälle legen – nie löschen, nie schließen. Gilt beim nächsten Start des MCP-Servers.",
+  "update.build": "Build {b}"
 }

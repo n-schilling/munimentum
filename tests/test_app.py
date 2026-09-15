@@ -1290,6 +1290,8 @@ def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
     assert s["update"]["current"] == app_mod.version.VERSION
     assert s["update"]["newer"] is False
     assert s["update"]["releases_url"].startswith("https://github.com/")
+    # the build id travels with it – from git in a checkout
+    assert s["update"]["build"] == app_mod.version.build() and s["update"]["build"]
 
 
 def test_update_check_laeuft_im_hintergrund(sandbox, with_ollama, monkeypatch):
@@ -6074,6 +6076,14 @@ pruefe(!a.banner.classList.contains('hide'), 'Kein Hinweis eingeblendet');
 pruefe(a.banner.classList.contains('warn'), 'Hinweis ist nicht als Warnung erkennbar');
 pruefe(a.text_inhalt.length > 40, 'Hinweistext fehlt');
 
+// Die Build-Kennung steht neben der Version – und fehlt, wo es keine gibt.
+lage({status: 'ok', latest: '4.0.0', newer: false, ahead: false, build: 'e727567'});
+var zeile = document.getElementById('update-current').textContent;
+pruefe(zeile.indexOf('4.0.0') >= 0 && zeile.indexOf('e727567') >= 0, 'Build fehlt neben der Version: ' + zeile);
+lage({status: 'ok', latest: '4.0.0', newer: false, ahead: false, build: ''});
+zeile = document.getElementById('update-current').textContent;
+pruefe(zeile.indexOf('4.0.0') >= 0 && zeile.toLowerCase().indexOf('build') < 0, 'Leere Build-Kennung wird gezeigt: ' + zeile);
+
 // 2) Normales Update: unveraendert, und KEINE Warnfarbe.
 var b = lage({status: 'ok', latest: '5.0.0', newer: true, ahead: false});
 pruefe(!b.banner.classList.contains('hide'), 'Update-Hinweis fehlt');
@@ -7174,6 +7184,7 @@ def test_systemangaben_nennen_was_zur_einordnung_noetig_ist(sandbox, with_ollama
             "categories", "index", "model", "ollama"} <= set(angaben)
     assert app_mod.version.VERSION in angaben["version"]
     assert "Skript" in angaben["version"], "gebündelt oder nicht ist die halbe Miete"
+    assert app_mod.version.build() in angaben["version"], "which commit – or the report needs a follow-up"
     assert angaben["lang"] == "de"
     assert angaben["cores"] == str(os.cpu_count())
 

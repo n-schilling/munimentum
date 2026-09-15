@@ -481,6 +481,11 @@ def test_api_profile_switch(server, wurzel, monkeypatch):
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: False))
     code, r = call(port, "POST", "/api/profile-switch", {"name": "Nordwind"})
     assert code == 200 and r == {"ok": True, "name": "nordwind"}
+    # The answer goes out before the restart is asked for (by design): on a
+    # slow runner the handler thread may still be on its way there.
+    ende = time.time() + 5
+    while not gestartet and time.time() < ende:
+        time.sleep(0.02)
     assert gestartet == [("nordwind", port)]
     assert app_mod.profil_register_lesen()["zuletzt"] == "nordwind"
     # Open in a second instance next door: the page is sent there instead.

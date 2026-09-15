@@ -1437,5 +1437,6 @@
   "settings.case_export_dir.i": "Un répertoire par dossier exporté sous ce chemin : les originaux, une page d’index et la liste en CSV. Vide signifie « Munimentum cases » dans le répertoire Documents. Rien n’est déplacé hors de l’archive.",
   "settings.case_export_dir.ph": "Documents/Munimentum cases",
   "settings.mcp_cases_write": "Claude peut modifier les dossiers",
-  "settings.mcp_cases_write.i": "Désactivé : Claude lit les dossiers et les recherches enregistrées mais ne change rien. Activé : Claude peut déposer des éléments et des notes dans les dossiers ouverts via les outils MCP add_to_case et add_case_note – jamais supprimer, jamais fermer. Prend effet au prochain démarrage du serveur MCP."
+  "settings.mcp_cases_write.i": "Désactivé : Claude lit les dossiers et les recherches enregistrées mais ne change rien. Activé : Claude peut déposer des éléments et des notes dans les dossiers ouverts via les outils MCP add_to_case et add_case_note – jamais supprimer, jamais fermer. Prend effet au prochain démarrage du serveur MCP.",
+  "update.build": "build {b}"
 }

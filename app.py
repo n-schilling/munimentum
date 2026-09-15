@@ -1483,7 +1483,8 @@ def systemangaben(status, lang=None):
     kats += [name for flag, _kategorie, name in SPIEGEL_QUELLEN
              if cfg.get(flag)]
     angaben = [
-        zeile("version", f"{version.VERSION} ({art})"),
+        zeile("version", f"{version.VERSION}"
+              + (f" build {version.build()}" if version.build() else "") + f" ({art})"),
         zeile("os", f"{platform.platform()} / {platform.machine()}"),
         zeile("python", platform.python_version()),
         zeile("cores", kerne),
@@ -2107,7 +2108,8 @@ class App:
             "index_dir": str(STORE_PFAD),
             "index_dir_default": str(HEIM / STORE_DIR),
             "frozen": FROZEN,
-            "update": dict(self._update, releases_url=version.RELEASES_URL),
+            "update": dict(self._update, releases_url=version.RELEASES_URL,
+                           build=version.build()),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
             "filetype_hidden_default": sorted(FILETYPE_HIDDEN_DEFAULT),
             "graph_explorer": GRAPH_EXPLORER,

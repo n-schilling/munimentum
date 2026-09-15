@@ -36,6 +36,9 @@ the Teams message id, the drive item, the page, the task — so a case can
 point at it for months. The index assigns them on its next run; until
 then the ticks say so.
 
+**Smaller.** *Settings › App* names the build next to the version —
+the commit a bundle was made from — and the bug report carries it.
+
 **Claude.** New MCP tools: `list_cases`, `get_case`, `case_timeline`,
 `case_people`, `case_new_hits`, `list_saved_searches`, `run_saved_search`;
 `search_messages` and `browse_messages` take a `case`, and every hit says

@@ -60,6 +60,11 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-build.txt
 
+      # The bundle carries no git: the commit it was built from is written
+      # into version.py here, and Settings › App shows it beside the version.
+      - name: Stamp build id
+        run: python packaging/stamp_build.py "${{ github.sha }}"
+
       # Tag runs only: that is when the certificate goes onto the runner and
       # when notarization costs waiting time. Pushes to main build unsigned.
       - name: Import certificate (macOS)

@@ -1437,5 +1437,6 @@
   "settings.case_export_dir.i": "One folder per exported case below this path: the originals, an index page and the list as CSV. Empty means “Munimentum cases” in the Documents folder. Nothing is moved out of the archive.",
   "settings.case_export_dir.ph": "Documents/Munimentum cases",
   "settings.mcp_cases_write": "Claude may change cases",
-  "settings.mcp_cases_write.i": "Off: Claude reads cases and saved searches but changes nothing. On: Claude can put items and notes into open cases through the MCP tools add_to_case and add_case_note – never delete, never close. Takes effect when the MCP server next starts."
+  "settings.mcp_cases_write.i": "Off: Claude reads cases and saved searches but changes nothing. On: Claude can put items and notes into open cases through the MCP tools add_to_case and add_case_note – never delete, never close. Takes effect when the MCP server next starts.",
+  "update.build": "build {b}"
 }
