@@ -21,6 +21,7 @@ import schluessel
 import store_layout
 from tests.test_mcp_server import (_build_store, _sample_records,
                                    UID_M1, UID_M2, UID_T0, UID_T1, UID_T2, UID_CAL, _payload)
+from tests.hilfen import ohne_schluesselspalte
 
 
 @pytest.fixture
@@ -141,12 +142,7 @@ def test_ohne_fallbuch_sagt_der_server_das(welt):
 def test_alter_index_ohne_schluesselspalte(welt):
     """An index from before 11.0: the filter says why instead of failing."""
     _nordwind(welt, UID_M1)
-    import sqlite3
-    con = sqlite3.connect(welt["store"] / "corpus.db")
-    con.execute("DROP INDEX IF EXISTS ix_chunks_key")
-    con.execute("ALTER TABLE chunks DROP COLUMN key")
-    con.commit()
-    con.close()
+    ohne_schluesselspalte(welt["store"] / "corpus.db")
     res = mcp_server.search_messages("Rechnung", case="Nordwind")
     assert "predates item keys" in res["error"]
     assert "predates item keys" in mcp_server.case_timeline("Nordwind")["error"]

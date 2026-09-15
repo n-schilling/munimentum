@@ -10,6 +10,7 @@ import corpus
 import rag_index
 import schluessel
 import state_db
+from tests.hilfen import ohne_schluesselspalte
 
 TEAMS_HTML = ('<html><body><h1>Projekt Alpha</h1>'
               '<div class="msg" data-id="m-1"><div class="head"><span class="name">Alice Example</span>'
@@ -142,11 +143,7 @@ def test_index_schreibt_und_liest_den_schluessel(tmp_path):
     manifest, alt = rag_index._alter_bestand(store)
     assert alt[("outlook", "E-Mail/a.eml")][0]["key"] == "mail:<abc@x>"
     # An older store: no key column, the chunks come back without one.
-    con = sqlite3.connect(store / "corpus.db")
-    con.execute("DROP INDEX ix_chunks_key")
-    con.execute("ALTER TABLE chunks DROP COLUMN key")
-    con.commit()
-    con.close()
+    ohne_schluesselspalte(store / "corpus.db")
     manifest, alt = rag_index._alter_bestand(store)
     assert "key" not in alt[("outlook", "E-Mail/a.eml")][0]
 
