@@ -347,8 +347,8 @@ Every hit carries a tick and, when it already sits in a case, a small
 mark naming the case; the chosen hit offers *Add to case* beside its other
 actions, the ticked ones a bar above the list, and *Add all … to a case*
 takes the whole result — every page of it. The **Cases** filter in the
-filter row searches only inside one case, across every source; *Search in
-this case* on a case sets it for you.
+filter row — there once a case exists — searches only inside one case,
+across every source; *Search in this case* on a case sets it for you.
 
 ### Cases
 

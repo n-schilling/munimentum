@@ -483,9 +483,10 @@ def test_die_dritte_tuer_und_ihre_teile_stehen_im_markup():
     # the cases tab has one primary action
     block = seite[seite.index('<section id="tab-faelle"'):seite.index('<section id="tab-analytics"')]
     assert block.count('class="act') == 1 and 'fallNeuFenster()' in block
-    # the case filter counts but does not search, like every filter
+    # the case filter counts but does not search, like every filter – and
+    # starts hidden: it appears with the first case
     feld = re.search(r'<select id="f-fall"[^>]*>', seite).group(0)
-    assert "zeigeFilterstand()" in feld and "doSearch" not in feld
+    assert "zeigeFilterstand()" in feld and "doSearch" not in feld and 'class="hide"' in feld
     # every setting row has its (i)
     for key in ("search_history", "case_export_dir", "mcp_cases_write"):
         assert f'data-i18n-title="settings.{key}.i"' in seite and f'id="c-{key}"' in seite
@@ -533,8 +534,12 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
 
 (async function(){
   renderStatus(statusGeruest());
+  // no case yet: the filter is not offered at all
+  FAELLE = []; fuelleFallFilter();
+  pruefe(el('f-fall').classList.contains('hide'), 'Fallfilter ohne Faelle sichtbar');
   await ladeFaelle();
   pruefe(FAELLE.length === 2, 'Faelle nicht geladen');
+  pruefe(!el('f-fall').classList.contains('hide'), 'Fallfilter trotz Faellen versteckt');
   // the filter lists every case, the closed one marked
   var optionen = el('f-fall').innerHTML;
   pruefe(optionen.indexOf('value="1">Nordwind<') >= 0, 'offener Fall fehlt im Filter: ' + optionen);

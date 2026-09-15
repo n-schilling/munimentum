@@ -857,7 +857,7 @@ details.rechte p{margin:6px 0}
     <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
       <option value="" data-i18n="search.folder.all">Alle Ordner</option>
     </select>
-    <select id="f-fall" onchange="zeigeFilterstand()" style="max-width:220px" data-i18n-title="search.case.i">
+    <select id="f-fall" class="hide" onchange="zeigeFilterstand()" style="max-width:220px" data-i18n-title="search.case.i">
       <option value="" data-i18n="search.case.all">Nicht auf einen Fall begrenzt</option>
     </select>
     <label class="filter" id="gone-feld" for="f-gone">
@@ -3418,9 +3418,12 @@ function statusTag(f){
     esc(t('cases.status.' + (f.status === 'zu' ? 'zu' : 'offen'))) + '</span>';
 }
 
-/* ---------- The "Cases" filter: one option per case ---------- */
+/* ---------- The "Cases" filter: one option per case ----------
+   Shown only while there is a case to choose – a filter that can narrow
+   nothing is not offered, as with the folder and type selects. */
 function fuelleFallFilter(){
   var sel = el('f-fall'), vorher = sel.value;
+  sel.classList.toggle('hide', !FAELLE.length);
   sel.innerHTML = '<option value="">' + esc(t('search.case.all')) + '</option>' +
     FAELLE.map(function(f){
       return '<option value="' + f.id + '">' + esc(f.name) +

@@ -11,8 +11,9 @@ it stands now. A case has a **casebook** of short dated notes, stores
 exactly those hits — searchable again), lists its items by source with a
 link into the original, and holds the **saved searches** attached to it:
 *Check for new hits* shows what they find today that the case lacks,
-*Add the new ones* takes them in. The **Cases** filter searches inside
-one case across every source; *Search in this case* sets it. A closed
+*Add the new ones* takes them in. The **Cases** filter, there once a
+case exists, searches inside one case across every source; *Search in
+this case* sets it. A closed
 case is read-only, stays searchable and exportable, and reopens any time.
 **Export case…** is a run: one folder with the originals of every item
 under their source's name and path — mails as `.eml`, chats with their

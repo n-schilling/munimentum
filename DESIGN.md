@@ -112,7 +112,9 @@ the **saved searches window** (`.modal.breit`, one `.hist` row per
 search: title, criteria as `.tag`s, time or last run, the `.mini`
 actions), each drawn as one string like every window. The *Cases* filter
 (`#f-fall`) is a select in the filter row like the folder, filled from
-`/api/faelle`.
+`/api/faelle` and shown only while there is a case to choose – a filter
+that can narrow nothing is not offered, the rule the folder and type
+selects follow.
 
 **Cases** (`#tab-faelle`): section head with the one `.act` (*New
 case*), then `.faelle-split` — the case list on the left (`.fall` rows:
