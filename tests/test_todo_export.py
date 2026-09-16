@@ -36,6 +36,7 @@ class _Graph:
     def __init__(self, antworten):
         self.antworten = antworten
         self.aufrufe = []
+        self.kopfzeilen = []
         self.geladen = []
 
     def _finde(self, url):
@@ -44,8 +45,9 @@ class _Graph:
                 return antwort
         raise AssertionError(f"unerwartete URL: {url}")
 
-    def get(self, url):
+    def get(self, url, params=None, extra_headers=None):
         self.aufrufe.append(url)
+        self.kopfzeilen.append(extra_headers)
         antwort = self._finde(url)
         if isinstance(antwort, Exception):
             raise antwort
@@ -177,6 +179,19 @@ def test_lauf_meldet_ergebnis_und_kaputte_listen(tmp_path, capsys):
                for z in ausgabe.splitlines())
 
 
+def test_kaputte_liste_nennt_graphs_eigene_worte(tmp_path, capsys):
+    """A refused request is logged with the service's error code and
+    message – "400" alone never said what was wrong."""
+    g = _graph([_task("t1", "A")])
+    g.antworten["/me/todo/lists/l2/tasks"] = _HttpFehler(
+        400, '{"error": {"code": "BadRequest", "message": "The query parameter \'$top\' is not supported."}}')
+    td.lauf(g, tmp_path, [LISTE, dict(LISTE, id="l2", titel="Aufgaben")])
+    ereignisse = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    (kaputt,) = [e for e in ereignisse if e and e["k"] == "run.todo.list_failed"]
+    assert kaputt["v"]["name"] == "Aufgaben"
+    assert kaputt["v"]["error"] == "_HttpFehler: HTTP 400 – BadRequest: The query parameter '$top' is not supported."
+
+
 def test_wiederholung_und_erinnerung_stehen_in_der_zeile():
     eintrag = {"task": _task("t1", "Wasser", isReminderOn=True,
                              reminderDateTime={"dateTime": "2026-08-03T08:00:00"},
@@ -234,6 +249,10 @@ def test_delta_link_wird_nach_sauberem_lauf_gemerkt_und_dann_benutzt(tmp_path):
     })
     assert td.list_lauf(g, tmp_path, LISTE) == (2, 0, 0)
     assert "$expand=checklistItems,linkedResources" in g.aufrufe[0]
+    # The page size is the Prefer header, never $top: the default list –
+    # the mailbox's Tasks folder – answers a delta with $top with a 400.
+    assert "$top" not in g.aufrufe[0]
+    assert g.kopfzeilen[0] == {"Prefer": "odata.maxpagesize=100"}
     db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
     assert db.kv_lesen("delta:l1") == LINK1
     # Second round: only what moved comes, asked via the stored link; a
@@ -247,6 +266,7 @@ def test_delta_link_wird_nach_sauberem_lauf_gemerkt_und_dann_benutzt(tmp_path):
     })
     assert td.list_lauf(g2, tmp_path, LISTE) == (1, 0, 0)
     assert g2.aufrufe == [LINK1]
+    assert g2.kopfzeilen == [{"Prefer": "odata.maxpagesize=100"}], "the header on every page"
     eintraege = json.loads(db.kv_lesen("tasks"))
     assert eintraege["t1"]["deleted"]
     assert eintraege["t2"]["task"]["title"] == "B neu"

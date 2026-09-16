@@ -118,6 +118,23 @@ def graph_zeit(iso):
 # ---------------------------------------------------------------------------
 # Atomic writes and the shared marker files
 # ---------------------------------------------------------------------------
+def fehlertext(e):
+    """An exception as the log names it: type and message – and, for a
+    request Graph refused, the service's own error code and message from
+    the response body. The status alone says that something was rejected;
+    the body says what ("The query parameter '$top' is not supported")."""
+    text = f"{type(e).__name__}: {e}"
+    roh = getattr(getattr(e, "response", None), "text", "") or ""
+    if roh:
+        try:
+            fehler = (json.loads(roh) or {}).get("error") or {}
+        except (ValueError, AttributeError):
+            fehler = {}
+        if isinstance(fehler, dict) and (fehler.get("code") or fehler.get("message")):
+            text += f" – {fehler.get('code') or '?'}: {fehler.get('message') or ''}".rstrip(": ")
+    return text
+
+
 def schreibe_atomar(ziel, text):
     """First .tmp, then replace – an abort never leaves a half file that the
     next run would take as finished."""

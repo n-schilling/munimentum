@@ -1684,7 +1684,7 @@ def list_files(root: str = "", path: str = "") -> dict:
                                 "label": "OneDrive", "files": eigene})
             for k in sorted(bibliotheken):
                 wurzeln.append({"root": "sharepoint", "path": k,
-                                "label": k, "files": bibliotheken[k]})
+                                "label": f"SharePoint: {k}", "files": bibliotheken[k]})
             for k in sorted(teams):          # chat kinds first, then teams
                 wurzeln.append({"root": "teams", "path": k,
                                 "label": _teams_wurzel_label(k),
@@ -1715,6 +1715,11 @@ def list_files(root: str = "", path: str = "") -> dict:
                  else "OneDrive" if root == "onedrive" else root)
         if root == "teams" and len(teile) >= basis:
             label = _teams_wurzel_label("/".join(teile[:basis]))
+        # Every root names its source in front – the browser lists the
+        # sites next to OneDrive, Teams and Planner, and a site called
+        # "Documents" alone would say nothing.
+        if root == "sharepoint" and len(teile) >= basis:
+            label = f"SharePoint: {label}"
         wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
         if praefix:
             wo += " AND rel LIKE ? ESCAPE '\\'"

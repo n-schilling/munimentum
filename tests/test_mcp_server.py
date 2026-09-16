@@ -1611,8 +1611,11 @@ def test_list_files_wurzeln_und_ebene(spiegel_db):
     wurzeln = mcp_server.list_files()["roots"]
     assert [(w["root"], w["path"], w["files"]) for w in wurzeln] == [
         ("onedrive", "", 1), ("sharepoint", "Team X/Projects", 2)]
+    # Every root says its source, like the Teams and Planner roots do
+    assert [w["label"] for w in wurzeln] == ["OneDrive", "SharePoint: Team X/Projects"]
 
     ebene = mcp_server.list_files("sharepoint", "Team X/Projects/Dateien/N")
+    assert ebene["label"] == "SharePoint: Team X/Projects" and ebene["base"] == 2
     assert [d["name"] for d in ebene["dirs"]] == ["tief"]
     assert [f["name"] for f in ebene["files"]] == ["x.pdf"]
     assert ebene["dirs"][0]["files"] == 1

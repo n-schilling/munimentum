@@ -1,52 +1,24 @@
-## New in 11.0.0
+## New in 11.0.1
 
-**Cases.** A third door beside *Build archive* and *Search archive*: a
-case collects what belongs to one matter — hits, whole result lists and
-saved searches, from every source — without copying anything. Every hit
-now carries a tick and, once it sits in a case, a small mark naming it;
-the chosen hit offers *Add to case*, the ticked ones a bar above the
-list, *Add all … to a case* takes the whole result, every page of it, as
-it stands now. A case has a **casebook** of short dated notes, stores
-**result lists** (a search as it stood at one moment, criteria and
-exactly those hits — searchable again), lists its items by source with a
-link into the original, and holds the **saved searches** attached to it:
-*Check for new hits* shows what they find today that the case lacks,
-*Add the new ones* takes them in. The **Cases** filter, there once a
-case exists, searches inside one case across every source; *Search in
-this case* sets it. A closed
-case is read-only, stays searchable and exportable, and reopens any time.
-**Export case…** is a run: one folder with the originals of every item
-under their source's name and path — mails as `.eml`, chats with their
-attachments, files, pages and boards as HTML, contacts and appointments
-— plus `index.html` (every item, linked into the original down to the
-message, card or task), `items.csv` and `casebook.md`, optionally as a
-zip; where it lands is a setting, *Munimentum cases* in your Documents
-folder by default.
+**To Do: the default list exports again.** The first read of a list
+asked its delta feed with `$top`, which the mailbox's own *Tasks* list
+("Aufgaben") refuses with a 400 while every other list takes it – so
+the list that holds most people's tasks never arrived. The page size
+now travels as the `Prefer: odata.maxpagesize` header the API
+documents, on every page.
 
-**Search history and saved searches.** *History* next to *Search* lists
-every search by its criteria — words, kind of search, filters — never by
-its hits; a click runs it again, another saves it. How long it is kept
-is a setting under *Settings › App* (30, 90, 365 days, forever, or not at
-all). *Saved* holds searches under a name: run, rename, delete, or attach
-to a case; each remembers when it last ran and how many hits it had.
+**Refusals in their own words.** When Graph refuses a request, the log
+line now carries the service's error code and message next to the
+status – "The query parameter '$top' is not supported" instead of a
+bare "400 Bad Request".
 
-**Stable keys.** The index gives every item a key that survives a
-rename or a move — the mail's Message-ID, the calendar and contact UID,
-the Teams message id, the drive item, the page, the task — so a case can
-point at it for months. The index assigns them on its next run; until
-then the ticks say so.
-
-**Smaller.** *Settings › App* names the build next to the version —
-the commit a bundle was made from — and the bug report carries it.
-
-**Claude.** New MCP tools: `list_cases`, `get_case`, `case_timeline`,
-`case_people`, `case_new_hits`, `list_saved_searches`, `run_saved_search`;
-`search_messages` and `browse_messages` take a `case`, and every hit says
-which cases it sits in. Claude changes nothing unless *Claude may change
-cases* is on under *Settings › Claude (MCP)* — then `add_to_case` and
-`add_case_note` can add to open cases, never delete or close one.
+**Smaller.** The file browser names the SharePoint sites with their
+source in front, as the Teams and Planner roots already were.
 
 ## Upgrading
+
+**From 11.0.0:** nothing to do; the next run reads the default To Do
+list.
 
 **From 10.x:** nothing to do. The next run — scheduled or by hand,
 *Index only* is the quickest — rebuilds the index once with every item's

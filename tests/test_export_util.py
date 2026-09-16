@@ -114,3 +114,22 @@ def test_abgleich_ordner_liest_die_ordnerliste(monkeypatch):
     assert export_util.abgleich_ordner() == ["E-Mail/Posteingang", "kalender/Arbeit"]
     monkeypatch.setenv("RESYNC_FOLDERS", "kaputt")
     assert export_util.abgleich_ordner() is None
+
+
+def test_fehlertext_traegt_graphs_meldung():
+    class Antwort:
+        def __init__(self, text):
+            self.text = text
+
+    class Fehler(Exception):
+        def __init__(self, text):
+            super().__init__("HTTP 400")
+            self.response = Antwort(text)
+
+    assert export_util.fehlertext(ValueError("kaputt")) == "ValueError: kaputt"
+    assert export_util.fehlertext(Fehler("")) == "Fehler: HTTP 400"
+    assert export_util.fehlertext(Fehler("<html>nicht json")) == "Fehler: HTTP 400"
+    assert export_util.fehlertext(Fehler('{"error": {"code": "BadRequest", "message": "Nope"}}')) \
+        == "Fehler: HTTP 400 – BadRequest: Nope"
+    assert export_util.fehlertext(Fehler('{"error": {"code": "ErrorX"}}')) == "Fehler: HTTP 400 – ErrorX"
+    assert export_util.fehlertext(Fehler('{"error": "text"}')) == "Fehler: HTTP 400"

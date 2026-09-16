@@ -230,7 +230,7 @@ def _anhaenge_laden(graph, liste, ziel, task):
         except Exception as e:
             _event("run.todo.attachment_failed", "warn",
                    name=str(task.get("title") or "?")[:60],
-                   error=f"{type(e).__name__}: {e}")
+                   error=export_util.fehlertext(e))
         out.append(eintrag)
     return out
 
@@ -426,12 +426,19 @@ def render_list(liste, eintraege, stand=None):
 # ---------------------------------------------------------------------------
 # The delta feed
 # ---------------------------------------------------------------------------
+DELTA_PAGE = 100             # Prefer: odata.maxpagesize on the delta feed
+
+
 def _delta_lesen(graph, url):
     """One round of the list's delta feed: every page, and the deltaLink
-    the last page carries for the next round."""
+    the last page carries for the next round. The page size travels as
+    the Prefer header the docs name, on every page: `$top` on the feed
+    is refused with a 400 by the default list – the mailbox's Tasks
+    folder – while any other list takes it."""
     tasks, link = [], None
+    kopf = {"Prefer": f"odata.maxpagesize={DELTA_PAGE}"}
     while url:
-        d = graph.get(url)
+        d = graph.get(url, extra_headers=kopf)
         tasks.extend(d.get("value") or [])
         link = d.get("@odata.deltaLink") or link
         url = d.get("@odata.nextLink")
@@ -481,7 +488,7 @@ def list_lauf(graph, out, liste):
             for e in eintraege.values():
                 e["etag"] = ""
     anfang = (f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks/delta'
-              "?$expand=checklistItems,linkedResources&$top=100")
+              "?$expand=checklistItems,linkedResources")
     voll = not token
     try:
         tasks, link = _delta_lesen(graph, token or anfang)
@@ -533,7 +540,7 @@ def list_lauf(graph, out, liste):
             fehler += 1
             _event("run.todo.task_failed", "err",
                    name=str(t.get("title") or tid)[:60],
-                   error=f"{type(e).__name__}: {e}")
+                   error=export_util.fehlertext(e))
     jetzt = datetime.now(UTC).isoformat(timespec="seconds")
     # What the feed reports as removed is gone, errors or not – an explicit
     # signal, unlike the absence a full read infers: that one needs a
@@ -608,7 +615,7 @@ def nachholen(graph, out, rels, workers=1):
         except Exception as e:
             fehler += 1
             progress.event("run.nachholen.failed", "warn", name=liste["titel"],
-                           error=f"{type(e).__name__}: {e}")
+                           error=export_util.fehlertext(e))
     export_util.nachholen_melden(neu, 0, fehler, unbekannt)
 
 
@@ -664,7 +671,7 @@ def lauf(graph, out, listen, workers=1):
                 raise
             except Exception as e:
                 _event("run.todo.list_failed", "err", name=liste["titel"],
-                       error=f"{type(e).__name__}: {e}")
+                       error=export_util.fehlertext(e))
                 fehl += 1
             else:
                 neu, unveraendert, fehler = neu + n, unveraendert + u, fehler + f
@@ -705,7 +712,7 @@ def nur_pruefen(graph, out):
             raise
         except Exception as e:
             _event("run.todo.list_failed", "err", name=liste["titel"],
-                   error=f"{type(e).__name__}: {e}")
+                   error=export_util.fehlertext(e))
             fehler.append(completeness.fehler(liste["titel"], "run.todo.list_failed"))
             continue
         datei_da = (ziel / "list.html").exists()
