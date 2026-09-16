@@ -121,9 +121,12 @@ The page opens with one line — how current the archive is — and one
 button, *Update archive now*. An empty archive shows three steps instead:
 set up access, choose sources, build — and offers a **tour**: coach marks
 in the real interface that walk you through building the archive, setting
-up a source in detail and searching, one element at a time; the result of
-the first run offers the search chapter, and *Settings › App* starts any
-chapter again. Below sit the sources as cards —
+up a source in detail, searching, working with cases, judging whether the
+archive is complete and connecting Claude, one element at a time; the
+result of the first run offers the search chapter, the empty cases door
+offers its own, and **Help** in the header opens the tour's window at any
+time: one row per chapter, marked once seen, and the full tour that walks
+all six in order. Below sit the sources as cards —
 mail, calendar, contacts; 1:1, group, meeting and channel chats; OneDrive
 files; SharePoint libraries and pages; Planner boards; To Do lists; OneNote
 notebooks — each with its categories as chips to tick, an **(i)** that says
@@ -396,7 +399,10 @@ puts anything into a case asks for the folder too. The *Cases* filter
 of the search page lists every folder under its case, and a hit's mark
 names the folder it sits in. Whatever Claude put into the case through
 MCP — an item, a note — carries *via MCP* on that item or note, nowhere
-else.
+else. How all of this is meant to be used — from a search into a case,
+through its views, to the export and to Claude — is the tour's fourth
+chapter, *Work with cases*: offered on the empty cases door, from the
+hits of the search chapter, and under *Help* in the header.
 
 Under the head sit three views of the same case. **Folders** is the
 view above. **Timeline** is every item and every casebook note in the

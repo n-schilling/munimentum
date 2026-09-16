@@ -55,6 +55,19 @@ nav button:hover{color:var(--ink)}
 .nav-haupt button.on{color:var(--ink);border-bottom-color:var(--accent)}
 .nav-neben button{padding:6px 10px;font-size:13.5px}
 .nav-neben button.on{background:var(--code);color:var(--ink);font-weight:600}
+#nav-hilfe{display:inline-flex;align-items:center;gap:5px}
+/* The help window: one row per chapter of the tour, the full tour below */
+.hilfe-liste{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.hilfe-kapitel{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:1px solid var(--line);border-radius:10px;background:transparent;padding:10px 12px;cursor:pointer;font:inherit;color:inherit}
+.hilfe-kapitel:hover,.hilfe-kapitel:focus-visible{border-color:var(--accent);background:var(--accent-weich);outline:none}
+.hilfe-kapitel .nr{width:26px;height:26px;border-radius:50%;background:var(--code);display:flex;align-items:center;justify-content:center;font-size:12.5px;font-weight:650;color:var(--muted);flex:0 0 auto}
+.hilfe-kapitel.gesehen .nr{background:var(--accent-weich);color:var(--accent)}
+.hilfe-kapitel .ik{color:var(--muted)}
+.hilfe-kapitel .text{min-width:0;flex:1;line-height:1.3}
+.hilfe-kapitel .text b{display:block;font-weight:600}
+.hilfe-kapitel .text span{color:var(--muted);font-size:12.5px}
+.hilfe-kapitel .stand{font-size:11.5px;color:var(--muted);white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.hilfe-kapitel .stand.naechst{color:var(--accent);font-weight:600}
 .pills{display:flex;gap:8px;align-items:center}
 /* The states share one frame, 8 px like every button; each state is a dot
    or an icon plus a word and leads to where it is fixed. */
@@ -814,6 +827,7 @@ details.rechte p{margin:6px 0}
     <div class="nav-neben">
       <button data-tab="analytics" onclick="tab('analytics')" data-i18n="nav.analytics">Übersicht</button>
       <button data-tab="einstellungen" onclick="tab('einstellungen')" data-i18n="nav.settings">Einstellungen</button>
+      <button id="nav-hilfe" onclick="hilfeFenster()"><span data-ikon="hilfe" data-ikon-klasse="klein"></span><span data-i18n="nav.help">Hilfe</span></button>
     </div>
   </nav>
   <!-- The account chip says what the access means for the user; the
@@ -1632,12 +1646,6 @@ details.rechte p{margin:6px 0}
          data-i18n="update.download">Release herunterladen</a>
     </div>
     <div class="aktionen">
-      <span class="small muted" data-i18n="tour.again">Rundgang erneut starten:</span>
-      <button class="mini" onclick="tourStart('archiv')" data-i18n="tour.chapter.archiv">Archiv aufbauen</button>
-      <button class="mini" onclick="tourStart('suche')" data-i18n="tour.chapter.suche">Archiv durchsuchen</button>
-      <button class="mini" onclick="tourStart('quelle')" data-i18n="tour.chapter.quelle">Eine Quelle einrichten</button>
-    </div>
-    <div class="aktionen">
       <span class="small muted"></span>
       <button class="mini" onclick="fehlerMelden()" data-i18n="report.button">Fehler melden</button>
     </div>
@@ -1850,6 +1858,8 @@ var IKON = {
   zufalten: '<path d="M7 9l5-5 5 5M7 20l5-5 5 5"/>',
   ordnerneu: '<path d="M3 7h6l2 2h10v10H3z"/><path d="M12 12v5M9.5 14.5h5"/>',
   stift: '<path d="M4 20h4l10-10-4-4L4 16z"/><path d="m12.5 7.5 4 4"/>',
+  hilfe: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 1-1 1.7"/><path d="M12 17h.01"/>',
+  funke: '<path d="M12 3l2.2 5.3L19.5 10l-5.3 2.2L12 17.5l-2.2-5.3L4.5 10l5.3-1.7z"/>',
   links: '<path d="M15 6l-6 6 6 6"/>',
   runter: '<path d="M6 9l6 6 6-6"/>',
   fertig: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
@@ -2642,7 +2652,8 @@ function laufSchliessen(){
    took, the steps with their numbers from the run history, the log below
    – and one button. */
 /* ---------- The tour: coach marks through the core workflows ----------
-   Three chapters, one per door and one for a source's settings. Each step
+   Six chapters: one per door, one for a source's settings, one for
+   Insights, one for Claude – and the full tour, all six in order. Each step
    names its element; the layer dims everything else and puts a card next
    to it. The tour explains only – it never sets a chip or a rule. A step
    whose element is not there (no run window open) is skipped; "seen" per
@@ -2659,7 +2670,8 @@ var TOUR = {
     {ziel: '#q', rahmen: '.suchzeile', tab: 'suche', titel: 'tour.suche.feld', text: 'tour.suche.feld.t'},
     {ziel: '#filter', tab: 'suche', titel: 'tour.suche.filter', text: 'tour.suche.filter.t'},
     {ziel: '#sichten', tab: 'suche', titel: 'tour.suche.sichten', text: 'tour.suche.sichten.t'},
-    {ziel: '#treffer-split', tab: 'suche', titel: 'tour.suche.treffer', text: 'tour.suche.treffer.t'},
+    {ziel: '#treffer-split', tab: 'suche', titel: 'tour.suche.treffer', text: 'tour.suche.treffer.t', abzweig: 'faelle'},
+    {ziel: '#suche-historie', tab: 'suche', titel: 'tour.suche.verlauf', text: 'tour.suche.verlauf.t'},
     {ziel: '#sched-karte', tab: 'einstellungen', karte: 'sched-karte', titel: 'tour.suche.zeitplan', text: 'tour.suche.zeitplan.t'},
     {ziel: '#mcp-karte', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.suche.claude', text: 'tour.suche.claude.t'}],
   quelle: [
@@ -2670,22 +2682,95 @@ var TOUR = {
     {ziel: '#c-cadence-outlook-mail', rahmen: '.feldzeile', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.kadenz', text: 'tour.quelle.kadenz.t'},
     {ziel: '#mail-abw-gruppe', tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.abweichend', text: 'tour.quelle.abweichend.t'},
     {ziel: '#q-outlook-erweitert', tab: 'einstellungen', block: 'q-outlook', erweitert: 'q-outlook-erweitert', titel: 'tour.quelle.erweitert', text: 'tour.quelle.erweitert.t'},
-    {ziel: null, tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.speichern', text: 'tour.quelle.speichern.t'}]
+    {ziel: '#q-outlook-erweitert .aktionen', tab: 'einstellungen', block: 'q-outlook', erweitert: 'q-outlook-erweitert', titel: 'tour.quelle.vollsync', text: 'tour.quelle.vollsync.t'},
+    {ziel: null, tab: 'einstellungen', block: 'q-outlook', titel: 'tour.quelle.speichern', text: 'tour.quelle.speichern.t'}],
+  // How a case is meant to be used: from the search into a case, the
+  // case itself, then who counts as external and what Claude may do.
+  faelle: [
+    {ziel: '#q', rahmen: '.suchzeile', tab: 'suche', titel: 'tour.faelle.anfang', text: 'tour.faelle.anfang.t'},
+    {ziel: '#treffer-split', tab: 'suche', titel: 'tour.faelle.hinein', text: 'tour.faelle.hinein.t'},
+    {ziel: '#suche-gespeichert', tab: 'suche', titel: 'tour.faelle.suchen', text: 'tour.faelle.suchen.t'},
+    {ziel: '#faelle-leiste', tab: 'faelle', titel: 'tour.faelle.uebersicht', text: 'tour.faelle.uebersicht.t'},
+    {ziel: '#fall-kopf', tab: 'faelle', titel: 'tour.faelle.kopf', text: 'tour.faelle.kopf.t'},
+    {ziel: '#fall-sichten', tab: 'faelle', titel: 'tour.faelle.sichten', text: 'tour.faelle.sichten.t'},
+    {ziel: '#fall-filter', rahmen: '.werkzeugzeile', tab: 'faelle', titel: 'tour.faelle.werkzeuge', text: 'tour.faelle.werkzeuge.t'},
+    {ziel: '#fall-inhalt', tab: 'faelle', titel: 'tour.faelle.ordner', text: 'tour.faelle.ordner.t'},
+    {ziel: '#fall-fuss', tab: 'faelle', titel: 'tour.faelle.export', text: 'tour.faelle.export.t'},
+    {ziel: '#c-internal_domains', rahmen: '.feldzeile', tab: 'einstellungen', karte: 'app-karte', titel: 'tour.faelle.extern', text: 'tour.faelle.extern.t'},
+    {ziel: '#mcp-karte', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.faelle.claude', text: 'tour.faelle.claude.t'}],
+  // Is the archive complete? The figures, the gaps, the two checks, the runs.
+  insights: [
+    {ziel: '#ana-zahlen-karte', tab: 'analytics', titel: 'tour.insights.zahlen', text: 'tour.insights.zahlen.t'},
+    {ziel: '#ana-verlauf-karte', tab: 'analytics', titel: 'tour.insights.verlauf', text: 'tour.insights.verlauf.t'},
+    {ziel: '#ana-check-karte', tab: 'analytics', titel: 'tour.insights.check', text: 'tour.insights.check.t'},
+    {ziel: '#ana-archiv-karte', tab: 'analytics', titel: 'tour.insights.archiv', text: 'tour.insights.archiv.t'},
+    {ziel: '#ana-runs-karte', tab: 'analytics', titel: 'tour.insights.runs', text: 'tour.insights.runs.t'}],
+  // Connect Claude: the switch, the two routes, the snippet, what it may change.
+  claude: [
+    {ziel: '#c-mcp_enabled', rahmen: '.feldzeile', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.claude.schalter', text: 'tour.claude.schalter.t'},
+    {ziel: '#mcp-json', rahmen: '.mitkopie', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.claude.http', text: 'tour.claude.http.t'},
+    {ziel: '#mcp-stdio', rahmen: '.mitkopie', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.claude.stdio', text: 'tour.claude.stdio.t'},
+    {ziel: '#c-mcp_cases_write', rahmen: '.feldzeile', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.claude.faelle', text: 'tour.claude.faelle.t'}]
 };
-var TOURSTAND = {kap: null, i: 0, dann: null, fokus: null};
+/* The order the full tour walks, and what the help window says about each
+   chapter – the keys as literals, so the language test sees them. */
+var TOUR_REIHE = ['archiv', 'quelle', 'suche', 'faelle', 'insights', 'claude'];
+var TOUR_KAPITEL = {
+  archiv: {titel: 'tour.chapter.archiv', sub: 'help.kap.archiv', ikon: 'aktualisieren'},
+  quelle: {titel: 'tour.chapter.quelle', sub: 'help.kap.quelle', ikon: 'zahnrad'},
+  suche: {titel: 'tour.chapter.suche', sub: 'help.kap.suche', ikon: 'lupe'},
+  faelle: {titel: 'tour.chapter.faelle', sub: 'help.kap.faelle', ikon: 'fall'},
+  insights: {titel: 'tour.chapter.insights', sub: 'help.kap.insights', ikon: 'liste'},
+  claude: {titel: 'tour.chapter.claude', sub: 'help.kap.claude', ikon: 'funke'}
+};
+var TOURSTAND = {kap: null, i: 0, dann: null, fokus: null, kette: null};
+
+/* ---------- The help window: the chapters, and the full tour ----------
+   One row per chapter with its size and whether it was seen, the first
+   unseen one marked as next; one primary button walks all six in order. */
+function hilfeFenster(){
+  merke('flow.wizard', 'hilfe');
+  var naechst = TOUR_REIHE.filter(function(k){ return !tourGesehen(k); })[0];
+  var schritte = 0;
+  var html = modalKopf(t('help.title'), 'hilfe', t('help.i')) + '<div class="hilfe-liste">' +
+    TOUR_REIHE.map(function(k, i){
+      var kap = TOUR_KAPITEL[k], n = TOUR[k].length, gesehen = tourGesehen(k);
+      schritte += n;
+      return '<button class="hilfe-kapitel' + (gesehen ? ' gesehen' : '') + '" onclick="closeWizard(\'hilfe\');tourStart(\'' + k + '\')">' +
+        '<span class="nr">' + (gesehen ? ikon('haken', 'klein') : (i + 1)) + '</span>' + ikon(kap.ikon) +
+        '<span class="text"><b>' + esc(t(kap.titel)) + '</b><span>' + esc(t(kap.sub)) + ' · ' + esc(t('help.steps', {n: n})) + '</span></span>' +
+        (k === naechst ? '<span class="stand naechst">' + esc(t('help.next')) + '</span>'
+                       : gesehen ? '<span class="stand">' + esc(t('help.seen')) + '</span>' : '') + '</button>';
+    }).join('') + '</div>' +
+    modalFuss({text: t('help.all'), tun: 'closeWizard(\'hilfe\');tourAlle()'}, null,
+              '<span class="small muted">' + esc(t('help.all.sub', {n: TOUR_REIHE.length, m: schritte})) + '</span>');
+  oeffneEigenes('hilfe', html, true);
+}
+/* The full tour: every chapter in order; skip or Esc ends the whole
+   thing, Done goes on to the next. */
+function tourAlle(){
+  tourStart(TOUR_REIHE[0], null, {rest: TOUR_REIHE.slice(1), nr: 1, n: TOUR_REIHE.length});
+}
 
 function tourGesehen(kap){
   return !!(S && S.config && S.config.tour_seen && S.config.tour_seen[kap]);
 }
-function tourStart(kap, dann){
+function tourStart(kap, dann, kette){
   if(!TOUR[kap]) return;
-  TOURSTAND = {kap: kap, i: 0, dann: dann || null, fokus: document.activeElement};
+  TOURSTAND = {kap: kap, i: 0, dann: dann || null, fokus: document.activeElement, kette: kette || null};
   merke('flow.tab', 'tour');
   // The search chapter needs something to search in: before the first run
-  // it says so and comes back with the run's result.
+  // it says so and comes back with the run's result – the full tour
+  // walks past it.
   if(kap === 'suche' && !(S && S.store && S.store.exists)){
+    if(kette && kette.rest.length){ tourStart(kette.rest[0], null, {rest: kette.rest.slice(1), nr: kette.nr + 1, n: kette.n}); return; }
     tourKarte(null, {titel: 'tour.suche.later', text: 'tour.suche.later.t', allein: true});
     return;
+  }
+  // The case chapter shows a real case where there is one: the first in
+  // the overview opens, so the steps inside the case point at something.
+  if(kap === 'faelle' && !FALL_OFFEN){
+    ladeFaelle().then(function(){ if(!FALL_OFFEN && FAELLE.length && TOURSTAND.kap === 'faelle') fallWaehlen(FAELLE[0].id); });
   }
   tourZeige();
 }
@@ -2717,8 +2802,9 @@ function tourZeige(richtung){
 function tourKarte(ziel, schritt){
   var kap = TOURSTAND.kap, n = TOUR[kap].length, i = TOURSTAND.i;
   var karte = el('tour-karte'), letzter = i >= n - 1;
+  var kette = TOURSTAND.kette;
   karte.innerHTML =
-    '<div class="kapitel">' + esc(t('tour.title')) + ' · ' + esc(t('tour.chapter.' + kap)) +
+    '<div class="kapitel">' + esc(kette ? t('tour.part', {i: kette.nr, n: kette.n}) : t('tour.title')) + ' · ' + esc(t('tour.chapter.' + kap)) +
       (schritt.allein ? '' : ' · ' + esc(t('tour.counter', {i: i + 1, n: n}))) + '</div>' +
     '<h3>' + esc(t(schritt.titel)) + '</h3>' +
     '<div>' + esc(t(schritt.text)) + '</div>' +
@@ -2775,7 +2861,7 @@ function tourAbzweig(kap){
   // The gear's card: into the source's chapter, back to this one after.
   var zurueck = TOURSTAND.kap;
   tourMerken(zurueck);
-  tourStart(kap, zurueck);
+  tourStart(kap, zurueck, TOURSTAND.kette);
 }
 function tourMerken(kap){
   var seen = Object.assign({}, (S && S.config && S.config.tour_seen) || {});
@@ -2786,11 +2872,17 @@ function tourMerken(kap){
 }
 function tourEnde(fertig){
   var kap = TOURSTAND.kap, dann = fertig ? TOURSTAND.dann : null, fokus = TOURSTAND.fokus;
+  var kette = fertig ? TOURSTAND.kette : null;
   el('tour').classList.add('hide');
   el('tour').classList.remove('frei');
   el('tour-loch').classList.add('weg');
-  TOURSTAND = {kap: null, i: 0, dann: null, fokus: null};
+  TOURSTAND = {kap: null, i: 0, dann: null, fokus: null, kette: null};
   if(kap && !(kap === 'suche' && !(S && S.store && S.store.exists))) tourMerken(kap);
+  // The full tour goes on to the next chapter; Done on the last one ends it.
+  if(kette && kette.rest.length){
+    tourStart(kette.rest[0], null, {rest: kette.rest.slice(1), nr: kette.nr + 1, n: kette.n});
+    return;
+  }
   if(dann && !tourGesehen(dann)){ tourStart(dann); return; }
   if(fokus && fokus.focus) fokus.focus();
 }
@@ -4179,7 +4271,10 @@ function zeichneFaelle(){
   var geschlossene = FAELLE.length - offeneFaelle().length;
   el('faelle-liste').innerHTML = liste.length
     ? liste.map(fallZeile).join('')
-    : '<p class="hint">' + esc(t(FAELLE.length ? 'cases.none.open' : 'cases.none')) + '</p>';
+    : '<p class="hint">' + esc(t(FAELLE.length ? 'cases.none.open' : 'cases.none')) + '</p>' +
+      // The first case is where the tour's chapter starts: offered here once, never again on its own
+      (FAELLE.length ? '' : '<div class="tour-einstieg" style="padding:0 14px 14px"><button class="mini" onclick="tourStart(\'faelle\')">' +
+                           esc(t('tour.faelle.start')) + '</button></div>');
   el('faelle-zu-zeile').classList.toggle('hide', !geschlossene);
   el('faelle-zu-link').textContent = FAELLE_ZU ? t('cases.closed.hide') : t('cases.closed.show', {n: zahl(geschlossene)});
   if(FALL_OFFEN && !fallAus(FALL_OFFEN.id)){ FALL_OFFEN = null; el('fall-detail').classList.add('hide'); leiste(true); }

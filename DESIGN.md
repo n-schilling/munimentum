@@ -19,8 +19,10 @@ The app does three things, and the header says exactly that:
   the export.
 
 Two smaller rooms sit at the right of the header: **Insights**
-(`nav.analytics`, what the archive holds) and **Settings**. Nothing else
-becomes a top-level tab; `tests/test_app.py::test_die_reiterzeile_bleibt_kurz`
+(`nav.analytics`, what the archive holds) and **Settings** — and beside
+them **Help** (`#nav-hilfe`), a button, not a tab: it opens the tour's
+window (`hilfeFenster`), one row per chapter and the full tour, and
+leads nowhere else. Nothing else becomes a top-level tab; `tests/test_app.py::test_die_reiterzeile_bleibt_kurz`
 counts five and fails on a sixth. Cases became a door in 11.0 because a
 case is neither building nor searching and has a primary action of its
 own; a view onto the archive (calendar, files) is still a `.sicht` under
@@ -59,8 +61,9 @@ State is shown **where it is fixed**, not in a status bar:
 The header has three kinds of things and one shape for each:
 
 - **Navigation**: the five tabs. The three doors as underlined tabs, the two
-  side rooms as small boxed tabs (`.nav-neben`). Nothing else becomes a
-  tab.
+  side rooms as small boxed tabs (`.nav-neben`), and *Help* beside them
+  in the same shape — a button that opens a window, never a tab. Nothing
+  else becomes a tab.
 - **State**: one frame (`#zustaende`, 8 px, one line) holding every state
   that must be seen from every page, each a `.zustand` — a dot or an icon
   plus a word — separated by hairlines, and each a click to the place
@@ -385,6 +388,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Run window | `#lauf-overlay` / `.lauf-fenster` | modal frame; `#fortschritt` while running, `#lauf-ergebnis` afterwards, `#protokoll`, footer with *Close* / *Cancel* |
 | Header state | `.zustaende .zustand` | dot or icon + word inside the one frame; `.lauf-pille` adds the `.mini-balken` |
 | Icon button | `.ikonknopf` | 32 px square, 8 px radius, name in the tooltip; the header's *Quit* |
+| Help window | `.hilfe-liste .hilfe-kapitel` | one button per tour chapter (number or check, icon, name, one line with the step count, *up next* / *seen*), the full tour as the window's one primary action |
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
 | Balance row | `.bilanz .zeile` | icon, name, `.dot` + one sentence (`bilanzSatz`), `.wann`, *Fetch now* while open; a `details` with the open units below |
 | Hit row | `.hit` | tick (`.wahl`, under `#results` only), icon, title with the case mark, date, who with the `.tag.extern` mark when a party is outside the internal domains, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
@@ -581,9 +585,25 @@ lives. Where both exist today, the sentence goes.
 the tour, never text on the doors. A step is one entry in `TOUR` — its
 element (an id, optionally an ancestor via `rahmen`), the tab, what to
 open first (a block, *Advanced*), title and one-sentence text. The tour
-explains and never changes a setting. Entry points: the first-start card,
-the result of the first run (search chapter), the gear on a source card
-(source chapter from inside the archive chapter), and *Settings › App*.
+explains and never changes a setting. Six chapters, in the order the
+full tour walks them (`TOUR_REIHE`): the archive, a source's settings,
+the search, the cases (`faelle`: from the search into a case, the
+overview, the case's head, views, tool row, folds and foot, then who is
+external and what Claude may do; it opens the first case where one
+exists, so its steps point at something), Insights (`insights`: the
+figures, the gaps, the two checks, the runs) and Claude (`claude`: the
+switch, the two routes, the snippet, what it may change). The **help
+window** (`hilfeFenster`, `.hilfe-kapitel` rows from `TOUR_KAPITEL`:
+number or check, icon, name, one line and the step count, *up next* on
+the first unseen chapter, *seen* on the others) starts one chapter or
+the **full tour** (`tourAlle`: every chapter in order as a chain
+`TOURSTAND.kette`, the card saying "Full tour k of n"; Done goes on,
+Skip or Esc ends the whole thing; the search chapter is walked past
+while there is no index). Entry points: the Help button in the header,
+the first-start card, the result of the first run (search chapter), the
+gear on a source card (source chapter from inside the archive chapter),
+the hits step of the search chapter (cases chapter as its branch) and
+the empty cases door — nothing under *Settings › App* any more.
 Seen chapters live in `tour_seen` in the settings; a tour never restarts
 on its own. `test_rundgang_ziele_existieren` checks that every step's
 element is in the markup.
@@ -630,7 +650,9 @@ element is in the markup.
 
 These tests encode the guide; adapt them consciously, never delete them:
 
-- `test_die_reiterzeile_bleibt_kurz` — five tabs, views under the search.
+- `test_die_reiterzeile_bleibt_kurz` — five tabs, views under the search;
+  Help beside the side rooms is a button, not a tab, and the chapters no
+  longer sit under *Settings › App*.
 - `test_kopfleiste_zeigt_nur_den_zugang` — the header's one frame holds
   the run, the profile and the access, nothing beside it; AI and MCP
   dots in the settings navigation.
@@ -669,8 +691,10 @@ These tests encode the guide; adapt them consciously, never delete them:
   like Settings: one navigation entry per card, each pointing at a card
   that exists, the two checks with a dot.
 - `test_rundgang_ziele_existieren` / `test_rundgang_kapitel_laufen_durch` —
-  every tour step points at an element, the chapters run through and are
-  marked seen once.
+  every tour step points at an element, the six chapters run through and
+  are marked seen once, the help window lists them with the first unseen
+  as next, and the full tour chains them in order, walking past the
+  search chapter without an index.
 - `test_profil_in_kopfzeile_und_speicherorten` — the profile state shows
   only with more than one profile; the switch window offers only the
   others; the group hides under `--data-dir`.

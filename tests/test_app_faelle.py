@@ -609,6 +609,9 @@ def test_die_dritte_tuer_und_ihre_teile_stehen_im_markup():
     assert block.count('class="act') == 1 and 'fallNeuFenster()' in block
     # the door's head is the name and its (i) – no explaining sentence beside it
     assert "cases.sub" not in seite and 'data-i18n-title="cases.i"' in block
+    # the tour's case chapter: in the full tour's order, and offered by the empty door
+    assert "var TOUR_REIHE = ['archiv', 'quelle', 'suche', 'faelle', 'insights', 'claude'];" in seite
+    assert "tourStart(\\'faelle\\')" in seite.split("function zeichneFaelle")[1].split("function geschlosseneZeigen")[0]
     # the overview: a quiet label and the one arrow – no counts, no filter
     kopf = block[block.index('class="liste-kopf"'):block.index('id="faelle-liste"')]
     assert 'data-i18n="cases.overview"' in kopf and 'id="leiste-knopf"' in kopf

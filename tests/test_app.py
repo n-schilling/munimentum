@@ -3506,6 +3506,9 @@ def test_die_reiterzeile_bleibt_kurz():
     nav = seite[seite.index("<nav>"):seite.index("</nav>")]
     assert nav.count("data-tab=") == 5, "Die Reiterzeile ist wieder gewachsen"
     assert 'data-tab="faelle"' in nav, "die dritte Tür fehlt"
+    # Help sits beside the side rooms as a button that opens the tour's window – no tab, no section
+    assert 'id="nav-hilfe" onclick="hilfeFenster()"' in nav and "data-tab" not in nav.split('id="nav-hilfe"')[1]
+    assert "tour.again" not in seite, "the chapters live in the help window now, not under Settings › App"
     for weg in ("kalender", "adressbuch", "zeitplan", "mcp"):
         assert f'data-tab="{weg}"' not in nav, f"{weg} ist wieder ein eigener Reiter"
     for sicht in ("treffer", "kalender", "adressbuch"):
@@ -8536,15 +8539,15 @@ global.fetch = function(pfad, opt){
 };
 S.config = S.config || {}; S.config.tour_seen = {};
 S.store = S.store || {exists: true};
-// The source chapter: eight steps, the last one without an element.
+// The source chapter: nine steps, the last one without an element.
 tourStart('quelle');
 pruefe(TOURSTAND.kap === 'quelle' && TOURSTAND.i === 0, 'Kapitel nicht gestartet');
 pruefe(!el('tour').classList.contains('hide'), 'Schicht nicht sichtbar');
-for(var i = 0; i < 7; i++) tourWeiter();
-pruefe(TOURSTAND.i === 7, 'nicht beim letzten Schritt: ' + TOURSTAND.i);
+for(var i = 0; i < 8; i++) tourWeiter();
+pruefe(TOURSTAND.i === 8, 'nicht beim letzten Schritt: ' + TOURSTAND.i);
 pruefe(el('tour').classList.contains('frei'), 'letzter Schritt ohne Element muss die Karte frei stellen');
 tourZurueck();
-pruefe(TOURSTAND.i === 6, 'Zurück');
+pruefe(TOURSTAND.i === 7, 'Zurück');
 tourWeiter(); tourWeiter();
 pruefe(TOURSTAND.kap === null && el('tour').classList.contains('hide'), 'Kapitel nicht beendet');
 var speicherung = gesendet.filter(function(g){ return g.pfad.indexOf('/api/config') >= 0; }).pop();
@@ -8560,6 +8563,48 @@ tourStart('suche');
 pruefe(TOURSTAND.kap === 'suche' && !el('tour').classList.contains('hide'), 'Hinweis vor dem ersten Lauf');
 tourEnde(false);
 pruefe(!S.config.tour_seen.suche, 'ohne Index darf die Suche nicht als gesehen gelten');
+// The case chapter: eleven steps from the search into the case and on to
+// the settings; without a case it still runs through, cards centred.
+S.store = {exists: true};
+tourStart('faelle');
+pruefe(TOURSTAND.kap === 'faelle' && TOUR.faelle.length === 11, 'Fallkapitel nicht gestartet');
+pruefe(el('tour-karte').innerHTML.indexOf('Mit Fällen arbeiten') >= 0, 'Kapitelname fehlt auf der Karte');
+for(var j = 0; j < 10; j++) tourWeiter();
+pruefe(TOURSTAND.i === 10, 'nicht beim letzten Schritt des Fallkapitels: ' + TOURSTAND.i);
+tourWeiter();
+pruefe(TOURSTAND.kap === null && S.config.tour_seen.faelle === true, 'Fallkapitel nicht beendet oder nicht gemerkt');
+// Insights and Claude: five and four steps, all with an element.
+tourStart('insights');
+pruefe(TOURSTAND.kap === 'insights' && TOUR.insights.length === 5, 'Insights-Kapitel nicht gestartet');
+for(var k = 0; k < 5; k++) tourWeiter();
+pruefe(TOURSTAND.kap === null && S.config.tour_seen.insights === true, 'Insights-Kapitel nicht beendet');
+tourStart('claude');
+pruefe(TOURSTAND.kap === 'claude' && TOUR.claude.length === 4, 'Claude-Kapitel nicht gestartet');
+for(var c = 0; c < 4; c++) tourWeiter();
+pruefe(TOURSTAND.kap === null && S.config.tour_seen.claude === true, 'Claude-Kapitel nicht beendet');
+// The source chapter names the full sync now, one step before the save.
+pruefe(TOUR.quelle[TOUR.quelle.length - 2].titel === 'tour.quelle.vollsync', 'Vollsync-Schritt fehlt im Quellenkapitel');
+// The help window: one row per chapter, the first unseen one marked next, the full tour below.
+S.config.tour_seen = {archiv: true};
+hilfeFenster();
+var hilfe = modal.innerHTML;
+pruefe(hilfe.split('class="hilfe-kapitel').length - 1 === 6, 'nicht sechs Kapitel im Hilfefenster');
+pruefe(hilfe.indexOf("tourStart('insights')") >= 0 && hilfe.indexOf('tourAlle()') >= 0, 'Kapitel oder ganzer Rundgang fehlen');
+pruefe(hilfe.indexOf('hilfe-kapitel gesehen') >= 0 && hilfe.indexOf('gesehen') >= 0, 'gesehenes Kapitel nicht markiert');
+pruefe(hilfe.split('stand naechst').length - 1 === 1 && hilfe.indexOf('als Nächstes') > hilfe.indexOf("tourStart('quelle')"), 'das erste ungesehene Kapitel ist nicht das naechste');
+pruefe(hilfe.split('class="act"').length - 1 === 1 && hilfe.indexOf('6 Kapitel') >= 0, 'ein primaerer Knopf mit der Summe fehlt');
+closeWizard('hilfe');
+// The full tour: chapter after chapter in order, the card says which part; skipping ends it all.
+S.store = {exists: false};
+tourAlle();
+pruefe(TOURSTAND.kap === 'archiv' && TOURSTAND.kette && TOURSTAND.kette.n === 6, 'ganzer Rundgang startet nicht beim Archiv');
+pruefe(el('tour-karte').innerHTML.indexOf('Ganzer Rundgang 1 von 6') >= 0, 'Karte nennt den Teil nicht');
+for(var a = 0; a < 6; a++) tourWeiter();
+pruefe(TOURSTAND.kap === 'quelle' && TOURSTAND.kette.nr === 2, 'geht nicht ins zweite Kapitel weiter: ' + TOURSTAND.kap);
+for(var q = 0; q < 9; q++) tourWeiter();
+pruefe(TOURSTAND.kap === 'faelle' && TOURSTAND.kette.nr === 4, 'ohne Index muss die Suche uebersprungen werden: ' + TOURSTAND.kap);
+tourEnde(false);
+pruefe(TOURSTAND.kap === null, 'Ueberspringen beendet den ganzen Rundgang nicht');
 console.log('OK');
 """
 

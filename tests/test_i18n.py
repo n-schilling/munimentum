@@ -190,7 +190,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
-           "lauf.", "kadenz.", "tour.", "profile.", "cases.")
+           "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
