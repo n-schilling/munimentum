@@ -67,7 +67,8 @@ def test_mail_ohne_datei_behaelt_die_fakten_der_zeile(tmp_path):
 
 ICS = (
     "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:ev1\nSUMMARY:Budget review\n"
-    "DTSTART;TZID=Europe/Berlin:20260916T140000\nDTEND;TZID=Europe/Berlin:20260916T150000\n"
+    # floating local times: the display must not depend on the runner's zone
+    "DTSTART:20260916T140000\nDTEND:20260916T150000\n"
     "LOCATION:Raum 3.12\nDESCRIPTION:Agenda\\: der Rahmen.\n"
     "ORGANIZER;CN=Alice Beispiel:mailto:alice@example.com\n"
     "ATTENDEE;CN=Bob Baumeister:mailto:bob@example.com\n"
