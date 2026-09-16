@@ -98,14 +98,23 @@ page scrolls to (`scroll-margin-top`) or pins below it (`#detail`,
 **Search archive** (`#tab-suche`):
 
 1. Search row: one field with the mode switch (`.modi`) inside it, one
-   button.
-2. Filter row (`#filter`): always visible, every filter a pill; a set
-   filter is highlighted, *Clear filters* appears only when one is set.
+   button, and the two `.merker` icons (history, saved searches).
+2. Filter row (`#filter`): always visible, every filter a `.pill` with
+   its control in a `.popover` under it — the select's options as a
+   `.wahl` list with counts, the date with `.schnell` ranges, the person
+   field with its suggestions, one `.satz` of explanation at the bottom.
+   A set pill carries its value and a `.x` that clears it; *Clear
+   filters* and the `.stand` count appear only when one is set. The
+   controls keep their ids (`#f-…`): the criteria, the history and the
+   saved searches read them.
 3. View tabs (`.sicht`): Hits, Calendar, Address book, Files.
-4. Hits: list on the left, the selected hit on the right with its
-   actions (open original, whole conversation, find similar, add to
-   case, only this person). The AI answer sits above the list and cites
-   into it. Every hit row starts with a tick (`.wahl`, greyed with its
+4. Hits: list on the left, the selected hit on the right: head
+   (`.dkopf` — kind, marks, the `.zaehler` place in the list with
+   arrows), title, the `.fakten` this kind of item is known by (a value
+   that is also a filter is a link), one `.daktionen` row (open
+   original, add to case, find similar), the content, and for mail and
+   chat the conversation as `details.verlauf`. The AI answer sits above
+   the list and cites into it. Every hit row starts with a tick (`.wahl`, greyed with its
    reason on an index without keys) and carries the case mark (`.im-fall`)
    in its title when it sits in a case; the list head (`.liste-kopf`)
    names the count and offers *Add all … to a case*, the selection bar
@@ -115,7 +124,7 @@ The search row's two `.ghost` buttons open the **history window** and
 the **saved searches window** (`.modal.breit`, one `.hist` row per
 search: title, criteria as `.tag`s, time or last run, the `.mini`
 actions), each drawn as one string like every window. The *Cases* filter
-(`#f-fall`) is a select in the filter row like the folder, filled from
+(`#f-fall`) is a pill like the folder, its select in the popover, filled from
 `/api/faelle` and shown only while there is a case to choose – a filter
 that can narrow nothing is not offered, the rule the folder and type
 selects follow. The *parties* filter (`#f-party`: internal and external
@@ -222,8 +231,10 @@ chosen case holds already; the text follows the chosen radio); a row
 whose conversation the case lacks part of carries *Thread +n*
 (`thread_offen` on the item), one click fetches the rest into the row's
 folder and says so in the toast (`.meldung`, the one fixed toast of the
-page, `meldung()`). The hit's detail names its conversation in the meta
-line once it is fetched ("conversation of n messages (m in <case>)").
+page, `meldung()`). The hit's detail names its conversation in one fold
+under the content once it is fetched ("Part of a conversation of n
+messages"; open, the rows the case holds carry a dot, and *Add the other
+n* fetches the rest).
 
 The export window is the title with its `(i)` (what the ZIP holds and
 where it lands), a `pre.export-inhalt` overview — the ZIP's name, the
@@ -392,7 +403,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
 | Balance row | `.bilanz .zeile` | icon, name, `.dot` + one sentence (`bilanzSatz`), `.wann`, *Fetch now* while open; a `details` with the open units below |
 | Hit row | `.hit` | tick (`.wahl`, under `#results` only), icon, title with the case mark, date, who with the `.tag.extern` mark when a party is outside the internal domains, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
-| Case mark | `.im-fall` | pill with the case icon and the name (or the count for several) on a hit's title and in the detail's meta line; `.zu` when every case it sits in is closed |
+| Case mark | `.im-fall` | pill with the case icon and the name (or the count for several) on a hit's title and in the detail's head; `.zu` when every case it sits in is closed |
 | List head / selection bar | `.liste-kopf` / `.auswahl-leiste` | above `#results`: count left, one `.mini` action right; the bar only while something is ticked |
 | Case overview | `.seitenleiste` | the case list: `.liste-kopf` with a quiet uppercase label and the one arrow `.ikonknopf`, `.fall` rows, the closed-cases link in `.fuss`; `.eng` on the split narrows it to the names while a case is open |
 | Case row | `.fall` | name + status tag, icon + count per source, one muted line; `.on` when open on the right; the name alone in `.eng` |
@@ -414,10 +425,10 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Note | `.notiz` | when (with the origin tag), text, *Edit* + `×`; `.notiz-neu` is the add field at the end of the casebook |
 | History row | `.hist` | title, `.tag` criteria in `.tagleiste`, time or last run, `.knoepfe` of `.mini`s; the rows of the history, the saved searches, a case's lists and searches; `.hist-tag` is the day heading |
 | Choice list | `.wahl-liste` | one radio per open case and a *New case…* field, then the folder select (*Unsorted*, the case's folders, *New folder…*) — the one window for putting anything into a case |
-| Detail | `#detail` | `#detail-inhalt` with tag (and the external mark), title, meta (who, date, the conversation once fetched, the case mark), `.daktionen`, content — no storage path, the original is a click away; `#detail-verlauf` for the thread |
+| Detail | `#detail` | `#detail-inhalt` with `.dkopf` (kind tag, external and deleted marks, the case mark, the `.zaehler` with arrows), `.dtitel`, `.fakten` (only the facts the kind has; person, folder and type as filter links), `.daktionen` (original, case, similar), `.dinhalt` (iframe or the index's text) — no storage path, the original is a click away; `#detail-verlauf` holds `details.verlauf`, the conversation as one fold of `.vzeile` rows (`.drin` in the case, `.dies` the open one) with a `.fuss` |
 | Side navigation | `.snav .snav-punkt` | Settings and Insights alike: one per card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
 | Source block | `details.quelle-einst` | summary with name and state line `.zf`, `.qinhalt`, `details.erweitert` |
-| Filter pill | `.filter` or the control itself in `.filterzeile` | `.on` while a value is set |
+| Filter pill | `.pill` in `.filterzeile` | `.wert` names the filter or its value, `.on` while set, `.x` clears it, the `.popover` under it holds the control |
 | View tab | `.sicht` | exactly one `.on` under `#sichten` |
 
 ## 5. Where a new element goes
@@ -634,7 +645,10 @@ element is in the markup.
   `.err` colour, in place — not an `alert` unless the page has no place
   for it (job start refusals).
 - Unavailable: greyed with a reason in `title`, not hidden. Whoever never
-  sees a possibility never learns it exists (`.aus`, `disabled`).
+  sees a possibility never learns it exists (`.aus`, `disabled`). The one
+  exception is a possibility that can never exist for that kind of item:
+  a file, a page or a task has no conversation, so the detail draws no
+  fold for one – the rule of the filter that can narrow nothing.
 - Unsaved settings: the sticky save bar with *Unsaved changes*, the
   primary button, *Discard*.
 - Progress: in the run window, bar plus step list; a step without a known total moves striped

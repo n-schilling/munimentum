@@ -345,6 +345,23 @@ def test_fts_match_sanitizes_query():
     assert mcp_server._fts_match("Größe") == '"größe"'
     assert mcp_server._fts_match("...!!!") == ""
     assert mcp_server._fts_match("") == ""
+    # A quoted phrase is one run of words and required; loose words stay an OR beside it.
+    assert mcp_server._fts_match('"Rechnung 4711" freigegeben heute') == '"rechnung 4711" AND ("freigegeben" OR "heute")'
+    assert mcp_server._fts_match('"Rechnung 4711" "Projekt Alpha"') == '"rechnung 4711" AND "projekt alpha"'
+    assert mcp_server._fts_match('"Größe: 4711"') == '"größe 4711"'
+    assert mcp_server._fts_match('"" x ""') == '"x"'
+
+
+def test_phrase_in_anfuehrungszeichen_muss_so_vorkommen(state):
+    """"Rechnung 4711" finds the mail and the chat that carry the words
+    side by side; the same words the other way round find nothing."""
+    treffer = mcp_server.search_messages('"Rechnung 4711"', mode="lexical")["results"]
+    assert {h["uid"] for h in treffer} >= {UID_M1, UID_T0}
+    assert mcp_server.search_messages('"4711 Rechnung"', mode="lexical")["count"] == 0
+    # loose words beside a phrase: the phrase in every hit, and at least one of the words
+    mit = mcp_server.search_messages('"Rechnung 4711" freigegeben Urlaub', mode="lexical")["results"]
+    assert {h["uid"] for h in mit} == {UID_M1}
+    assert mcp_server.search_messages('"Rechnung 4711" Urlaub', mode="lexical")["count"] == 0
 
 
 def test_rrf_merge_orders_by_reciprocal_rank():
@@ -626,6 +643,27 @@ def test_get_document_rejoins_chunks_to_full_text(state):
     assert out["source"] == "outlook" and out["source_label"] == "Mail"
     assert out["uri"] == "o365://outlook/" + quote("sent/protokoll.eml", safe="")
     assert "context_before" not in out  # no context without context parameters
+
+
+def test_get_document_traegt_die_fakten_je_art(state):
+    """The facts the search page's detail shows come with the document –
+    already extracted, so Claude parses nothing out of the text."""
+    doc = mcp_server.get_document(UID_M1)
+    f = doc["facts"]
+    assert f["from"] == {"name": "Carla Chef", "mail": "carla@example.com"}
+    assert f["to"] == [] and f["cc"] == [] and f["attachments"] == []
+    assert f["folder"] == "inbox" and f["date"] == doc["date"]
+    # what the document carries already is not repeated in the block
+    assert not {"uid", "kind", "text"} & set(f) and "4711" in doc["text"]
+    # a chat message: who, when, which chat – from the row alone
+    f = mcp_server.get_document(UID_T0)["facts"]
+    assert f == {"from": {"name": "Alice Beispiel", "mail": ""}, "date": "2025-06-01 09:30",
+                 "folder": "1on1", "chat": "Projekt Alpha"}
+    # an appointment and a contact without their file: the row's facts, empty lists
+    f = mcp_server.get_document(UID_CAL)["facts"]
+    assert f["organiser"]["name"] and f["attendees"] == [] and f["calendar"] == "kalender/Arbeit"
+    f = mcp_server.get_document(UID_CON)["facts"]
+    assert set(f) == {"org", "role", "emails", "phones", "note", "folder"} and f["emails"] == []
 
 
 def test_get_document_unknown_uid(state):
@@ -1767,6 +1805,7 @@ def test_get_document_datei_liefert_metadaten(state_alle):
     assert doc["file"]["name"] == "Angebot.pdf"
     assert doc["file"]["binary"] is True and doc["file"]["size_bytes"] > 0
     assert doc["file"]["content_indexed"] is False
+    assert doc["facts"]["ext"] == "pdf" and doc["facts"]["size"] == doc["file"]["size_bytes"]
     assert "file" not in mcp_server.get_document(UID_M1)
 
 

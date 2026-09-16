@@ -250,17 +250,40 @@ button.ghost.rot{color:var(--err)}
 .modi button:disabled{opacity:.4;cursor:not-allowed}
 #modus-fehlt{margin:6px 0 0}
 @media(max-width:720px){.suchfeld{flex-wrap:wrap;padding:6px 14px}.modi{width:100%}.modi button{flex:1}}
-/* Filters: always open, every filter a pill, a set one highlighted in place. */
-.filterzeile{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}
-.filterzeile select,.filterzeile input[type=text],.filter{border-radius:999px;padding:5px 11px;
-  font-size:13px;background:var(--card);border:1px solid var(--line);color:var(--ink);height:31px}
-.filterzeile .on{background:var(--accent-weich);border-color:var(--accent)}
-.filter{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
-.filter .bez{color:var(--muted);white-space:nowrap}
-.filter input[type=date]{border:0;background:transparent;padding:0;height:auto;font-size:13px;color:inherit}
-#gone-feld{height:auto;padding:3px 10px 3px 4px}
-.vorschlagfeld{position:relative;display:inline-block}
-.vorschlagfeld #f-person{width:180px}
+/* Filters (11.2): one row of pills, each filter's control in a popover
+   under its pill; a set pill carries its value and a × that clears it. */
+.filterzeile{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0 0}
+.pill{position:relative;display:inline-flex;user-select:none;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--card);font-size:13.5px;color:var(--muted);cursor:pointer;white-space:nowrap}
+.pill:hover,.pill:focus-visible{border-color:var(--muted);color:var(--ink);outline:none}
+.pill>[data-ikon] svg{color:var(--muted)}
+.pill.on{background:var(--accent-weich);border-color:var(--accent);color:var(--ink)}
+.pill.on>[data-ikon] svg{color:var(--accent)}
+.pill.on .wert{font-weight:600}
+.pill .wert{max-width:220px;overflow:hidden;text-overflow:ellipsis}
+.pill .x{margin-left:2px;width:16px;height:16px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:var(--muted);font-size:14px;line-height:1}
+.pill .x:hover{background:var(--card);color:var(--ink)}
+.pill .pfeil svg{width:12px;height:12px}
+.pill.offen{border-color:var(--accent)}
+.filterzeile .stand{font-size:12.5px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.filterzeile .stand:empty{display:none}
+/* the popover: one control, one sentence, done */
+.popover{position:absolute;top:calc(100% + 6px);left:0;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:12px 14px;min-width:260px;text-align:left;cursor:default;font-size:13.5px;font-weight:400;color:var(--ink);white-space:normal}
+.popover h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:650}
+.popover .zeile{display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer}
+.popover .zeile .bez{font-size:12.5px;color:var(--muted);min-width:34px}
+.popover .feld{width:100%;padding:6px 9px;font-size:13.5px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:inherit}
+.popover .halter{display:none}
+.popover .schnell{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 8px}
+.popover .schnell button{border:1px solid var(--line);background:transparent;border-radius:999px;padding:2px 9px;font-size:12px;color:var(--muted);font-family:inherit;cursor:pointer}
+.popover .schnell button:hover{border-color:var(--accent);color:var(--accent)}
+.popover .satz{font-size:12.5px;color:var(--muted);margin:8px 0 0;line-height:1.4}
+.popover .wahl{display:flex;flex-direction:column;gap:2px;max-height:240px;overflow:auto}
+.popover .wahl:empty{display:none}
+.popover .wahl button{border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:6px;display:flex;align-items:center;gap:8px;font:inherit;color:inherit;cursor:pointer}
+.popover .wahl button:hover{background:var(--code)}
+.popover .wahl button.on{background:var(--accent-weich);font-weight:600}
+.popover .wahl .n{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.vorschlagfeld{position:relative;display:block}
 #filter-weg{border:0;background:transparent;color:var(--accent);font:inherit;font-size:13px;padding:0 4px;cursor:pointer}
 #filter-weg:hover{text-decoration:underline}
 /* A field whose content the browser cannot read – a date that does not exist. */
@@ -305,22 +328,52 @@ input.fehler{border-color:var(--err)!important}
 .hit .fussnote{color:var(--accent);font-weight:700;margin-right:6px}
 #pager{padding:10px 14px;border-top:1px solid var(--line);display:flex;gap:10px;align-items:center}
 #pager:empty{display:none}
+/* The detail (11.2): head, title, facts, actions, content – and for mail
+   and chat the conversation as one quiet fold under it. */
 #detail{position:sticky;top:72px;padding:20px 22px;display:flex;flex-direction:column;gap:14px}
 #detail-inhalt{display:flex;flex-direction:column;gap:14px}
 #detail-verlauf:empty{display:none}
 .dkopf{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.dtitel{font-size:16px;font-weight:650;overflow-wrap:anywhere}
+.dkopf .im-fall{margin-left:0}
+.dkopf .zaehler{margin-left:auto;display:flex;align-items:center;gap:4px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.dkopf .zaehler .ikonknopf{width:26px;height:26px;border:1px solid var(--line);border-radius:8px}
+.dkopf .zaehler .ikonknopf:disabled{opacity:.4;cursor:not-allowed}
+.dtitel{font-size:17px;font-weight:650;line-height:1.3;overflow-wrap:anywhere}
+/* the facts: what this kind of item is known by – two quiet columns; a
+   value that is also a filter is a link */
+.fakten{display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 14px;margin:0;font-size:13.5px}
+.fakten:empty{display:none}
+.fakten dt{color:var(--muted);white-space:nowrap}
+.fakten dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.fakten dd a{color:inherit;border-bottom:1px dotted var(--muted);text-decoration:none}
+.fakten dd a:hover{color:var(--accent);border-color:var(--accent);text-decoration:none}
+.fakten .chips{display:flex;gap:6px;flex-wrap:wrap}
+.fakten .chip{display:inline-flex;align-items:center;gap:5px;padding:1px 8px;border-radius:999px;background:var(--code);font-size:12.5px}
+.fakten .pfad{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
+.fakten .pfad svg{width:10px;height:10px;color:var(--muted)}
 .daktionen{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.daktionen .rechts{margin-left:auto}
-.dinhalt{border-top:1px solid var(--line);padding-top:14px;font-size:14px;line-height:1.6;overflow-wrap:anywhere}
+.daktionen .ghost{display:inline-flex;align-items:center;gap:6px}
+.dinhalt{border:1px solid var(--line);border-radius:10px;padding:14px;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
+.dinhalt:empty{display:none}
+.dinhalt.rahmenlos{border:0;padding:0}
+.dinhalt .kommentar{margin-top:10px;padding-top:8px;border-top:1px solid var(--line)}
 .dframe{width:100%;height:60vh;border:0;border-radius:8px;background:#fff}
 @media(max-width:900px){.treffer-split{grid-template-columns:1fr}#detail{position:static}}
-/* Thread below the chosen hit: narrow and quiet. */
-.verlaufliste{border-left:2px solid var(--line);padding-left:12px;margin-top:6px}
-.verlaufliste p{margin:0 0 6px}
-.vzeile{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;font-size:13.5px;padding:3px 0}
-.vdatum{color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.vwer{color:var(--muted);flex:0 0 auto;min-width:120px}
+/* the conversation: one row per message, the dot says "in the case" */
+details.verlauf summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted);padding:2px 0}
+details.verlauf summary:hover{color:var(--ink)}
+details.verlauf summary::-webkit-details-marker{display:none}
+details.verlauf summary .pfeil{display:inline-flex}
+details.verlauf summary .pfeil svg{transition:transform .15s}
+details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
+.vzeile{display:grid;grid-template-columns:10px 110px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 0;font-size:13px;border-top:1px solid var(--line)}
+.vzeile .punkt{width:8px;height:8px;border-radius:50%;background:var(--line)}
+.vzeile.drin .punkt{background:var(--accent)}
+.vzeile.dies{font-weight:600}
+.vzeile .vdatum{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.vzeile .vtitel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vzeile .vwer{color:var(--muted);white-space:nowrap}
+.verlauf .fuss{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12.5px;color:var(--muted)}
 /* Answer box. Deliberately unlike a hit card: what stands here was written
    by no human but summarized by a model from the hits below. */
 .answer{background:var(--card);border:1px solid var(--line);
@@ -616,6 +669,9 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .hit.fest{cursor:default}
 /* Cases (11.0): the tick column on hits, the mark, the list heads */
 .suchzeile button.ghost{padding:0 14px;flex:0 0 auto}
+/* History and saved searches: two icons beside the button (11.2) */
+.merker{display:flex;gap:6px;align-items:stretch}
+.merker button.ghost{padding:0 10px}
 #results .hit{grid-template-columns:18px 22px minmax(0,1fr) auto}
 #results .hit .wahl{grid-row:1;grid-column:1;align-self:center;margin:0;width:15px;height:15px;cursor:pointer;accent-color:var(--accent)}
 #results .hit .wahl:disabled{cursor:not-allowed;opacity:.35}
@@ -953,63 +1009,135 @@ details.rechte p{margin:6px 0}
         <button id="m-ki" onclick="suchmodus('ki')"
                 data-i18n="search.mode.ki">KI-Antwort</button>
       </div>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.mode.i">i</span>
     </div>
     <button class="act" onclick="sofortSuchen()" data-i18n="search.go">Suchen</button>
-    <!-- What was searched, and what is worth keeping: two windows, no
-         second row on the door. -->
-    <button class="ghost" id="suche-historie" onclick="historieFenster()"><span data-ikon="uhr" data-ikon-klasse="klein"></span><span data-i18n="search.history">Verlauf</span></button>
-    <button class="ghost" id="suche-gespeichert" onclick="gespeicherteFenster()"><span data-ikon="marke" data-ikon-klasse="klein"></span><span data-i18n="search.saved">Gespeichert</span></button>
+    <!-- What was searched, and what is worth keeping: two windows behind
+         two icons, no second row on the door. -->
+    <span class="merker">
+      <button class="ghost" id="suche-historie" onclick="historieFenster()" data-i18n-title="search.history" aria-label="Verlauf"><span data-ikon="uhr"></span></button>
+      <button class="ghost" id="suche-gespeichert" onclick="gespeicherteFenster()" data-i18n-title="search.saved" aria-label="Gespeichert"><span data-ikon="marke"></span></button>
+    </span>
   </div>
   <p class="small muted hide" id="modus-fehlt" data-i18n="search.mode.needs">Braucht Ollama.</p>
 
-  <!-- Filters count, they do not search: one enters term, person, period
-       and folder in peace, then presses the button. -->
+  <!-- Filters count, they do not search: every filter is a pill with its
+       control in a popover under it, and a set pill carries its value.
+       One enters term, person, period and folder in peace, then presses
+       the button. The controls keep their ids: the criteria, the history
+       and the saved searches read them as before. -->
   <div class="filterzeile" id="filter">
-    <span class="vorschlagfeld">
-      <input type="text" id="f-person" data-i18n-ph="search.person.ph" placeholder="Person"
-             role="combobox" aria-expanded="false" aria-autocomplete="list"
-             aria-controls="personliste" autocomplete="off"
-             oninput="personVorschlagen()" onkeydown="personTaste(event)"
-             onchange="zeigeFilterstand()">
-      <div class="menu hide" id="personliste" role="listbox"></div>
-    </span>
-    <select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
-      <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
-      <option value="outlook" data-i18n="search.source.outlook">Mail</option>
-      <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
-      <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
-      <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
-      <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
-      <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
-      <option value="planner" data-i18n="search.source.planner">Planner</option>
-      <option value="todo" data-i18n="search.source.todo">To Do</option>
-      <option value="onenote" data-i18n="search.source.onenote">OneNote</option>
-    </select>
-    <label class="filter" id="fi-from"><span class="bez" data-i18n="search.from">von</span>
-      <input type="date" id="f-from" onchange="zeigeFilterstand()"></label>
-    <label class="filter" id="fi-to"><span class="bez" data-i18n="search.to">bis</span>
-      <input type="date" id="f-to" onchange="zeigeFilterstand()"></label>
-    <select id="f-typ" onchange="zeigeFilterstand()" style="max-width:170px">
-      <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
-    </select>
-    <select id="f-folder" onchange="zeigeFilterstand()" style="max-width:260px">
-      <option value="" data-i18n="search.folder.all">Alle Ordner</option>
-    </select>
-    <select id="f-fall" class="hide" onchange="zeigeFilterstand()" style="max-width:220px" data-i18n-title="search.case.i">
-      <option value="" data-i18n="search.case.all">Nicht auf einen Fall begrenzt</option>
-    </select>
-    <select id="f-party" class="hide" onchange="zeigeFilterstand()" style="max-width:200px" data-i18n-title="search.party.i">
-      <option value="all" data-i18n="search.party.all">Intern und extern</option>
-      <option value="internal" data-i18n="search.party.internal">Nur intern</option>
-      <option value="external" data-i18n="search.party.external">Mit externen Beteiligten</option>
-    </select>
-    <label class="filter" id="gone-feld" for="f-gone">
-      <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
-      <span class="bez" data-i18n="view.gone">Nur nicht mehr bei Microsoft</span>
-      <span class="info" tabindex="0" aria-label="i" data-i18n-title="search.gone.note">i</span>
-    </label>
+    <div class="pill" id="p-person" role="button" tabindex="0" onclick="pillAuf('person')" onkeydown="pillTaste(event, 'person')">
+      <span data-ikon="person" data-ikon-klasse="klein"></span><span class="wert" id="pw-person">Person</span><span class="pfeil" id="pf-person" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-person" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('person')">×</span>
+      <div class="popover hide" id="po-person" onclick="event.stopPropagation()">
+        <h4 data-i18n="search.pill.person">Person</h4>
+        <span class="vorschlagfeld">
+          <input type="text" id="f-person" class="feld" data-i18n-ph="search.person.ph" placeholder="Person"
+                 role="combobox" aria-expanded="false" aria-autocomplete="list"
+                 aria-controls="personliste" autocomplete="off"
+                 oninput="personVorschlagen()" onkeydown="personTaste(event)"
+                 onchange="zeigeFilterstand()">
+          <div class="menu hide" id="personliste" role="listbox"></div>
+        </span>
+        <p class="satz" data-i18n="search.person.i">Namen, die im Archiv vorkommen; * steht für beliebige Zeichen.</p>
+      </div>
+    </div>
+    <div class="pill" id="p-source" role="button" tabindex="0" onclick="pillAuf('source')" onkeydown="pillTaste(event, 'source')">
+      <span data-ikon="liste" data-ikon-klasse="klein"></span><span class="wert" id="pw-source">Quelle</span><span class="pfeil" id="pf-source" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-source" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('source')">×</span>
+      <div class="popover hide" id="po-source" onclick="event.stopPropagation()">
+        <h4 data-i18n="search.pill.source">Quelle</h4>
+        <div class="halter"><select id="f-source" onchange="ladeOrdner();zeigeFilterstand()">
+          <option value="all" data-i18n="search.source.all">Alle Quellen</option><option value="teams" data-i18n="search.source.teams">Teams</option>
+          <option value="outlook" data-i18n="search.source.outlook">Mail</option>
+          <option value="kalender" data-i18n="search.source.kalender">Kalender</option>
+          <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
+          <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
+          <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
+          <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
+          <option value="planner" data-i18n="search.source.planner">Planner</option>
+          <option value="todo" data-i18n="search.source.todo">To Do</option>
+          <option value="onenote" data-i18n="search.source.onenote">OneNote</option>
+        </select></div>
+        <div class="wahl" id="pl-source"></div>
+      </div>
+    </div>
+    <div class="pill" id="p-date" role="button" tabindex="0" onclick="pillAuf('date')" onkeydown="pillTaste(event, 'date')">
+      <span data-ikon="kalender" data-ikon-klasse="klein"></span><span class="wert" id="pw-date">Datum</span><span class="pfeil" id="pf-date" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-date" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('date')">×</span>
+      <div class="popover hide" id="po-date" onclick="event.stopPropagation()" style="min-width:320px">
+        <h4 data-i18n="search.pill.date">Datum</h4>
+        <div class="schnell">
+          <button type="button" onclick="datumSchnell(7)" data-i18n="search.date.7">Letzte 7 Tage</button>
+          <button type="button" onclick="datumSchnell(30)" data-i18n="search.date.30">Letzte 30 Tage</button>
+          <button type="button" onclick="datumSchnell('jahr')" data-i18n="search.date.year">Dieses Jahr</button>
+          <button type="button" onclick="datumSchnell('vorjahr')" data-i18n="search.date.lastyear">Letztes Jahr</button>
+        </div>
+        <label class="zeile" id="fi-from"><span class="bez" data-i18n="search.from">von</span>
+          <input type="date" id="f-from" class="feld" onchange="zeigeFilterstand()"></label>
+        <label class="zeile" id="fi-to"><span class="bez" data-i18n="search.to">bis</span>
+          <input type="date" id="f-to" class="feld" onchange="zeigeFilterstand()"></label>
+      </div>
+    </div>
+    <div class="pill hide" id="p-typ" role="button" tabindex="0" onclick="pillAuf('typ')" onkeydown="pillTaste(event, 'typ')">
+      <span data-ikon="datei" data-ikon-klasse="klein"></span><span class="wert" id="pw-typ">Dateityp</span><span class="pfeil" id="pf-typ" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-typ" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('typ')">×</span>
+      <div class="popover hide" id="po-typ" onclick="event.stopPropagation()">
+        <h4 data-i18n="search.pill.typ">Dateityp</h4>
+        <div class="halter"><select id="f-typ" onchange="zeigeFilterstand()">
+          <option value="" data-i18n="search.type.all">Alle Dateitypen</option>
+        </select></div>
+        <div class="wahl" id="pl-typ"></div>
+        <p class="satz" data-i18n="search.type.i">Mails mit einem Anhang dieses Typs und gespiegelte Dateien davon.</p>
+      </div>
+    </div>
+    <div class="pill" id="p-folder" role="button" tabindex="0" onclick="pillAuf('folder')" onkeydown="pillTaste(event, 'folder')">
+      <span data-ikon="ordner" data-ikon-klasse="klein"></span><span class="wert" id="pw-folder">Ordner</span><span class="pfeil" id="pf-folder" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-folder" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('folder')">×</span>
+      <div class="popover hide" id="po-folder" onclick="event.stopPropagation()" style="min-width:320px">
+        <h4 data-i18n="search.pill.folder">Ordner</h4>
+        <input type="text" class="feld" id="folder-filter" data-i18n-ph="search.folder.filter.ph" placeholder="Ordner eingrenzen…" oninput="pillListe('folder')" style="margin-bottom:6px">
+        <div class="halter"><select id="f-folder" onchange="zeigeFilterstand()">
+          <option value="" data-i18n="search.folder.all">Alle Ordner</option>
+        </select></div>
+        <div class="wahl" id="pl-folder"></div>
+        <p class="satz" data-i18n="search.folder.i">Ein Ordner meint immer auch seine Unterordner.</p>
+      </div>
+    </div>
+    <div class="pill hide" id="p-fall" role="button" tabindex="0" onclick="pillAuf('fall')" onkeydown="pillTaste(event, 'fall')">
+      <span data-ikon="fall" data-ikon-klasse="klein"></span><span class="wert" id="pw-fall">Fall</span><span class="pfeil" id="pf-fall" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-fall" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('fall')">×</span>
+      <div class="popover hide" id="po-fall" onclick="event.stopPropagation()">
+        <h4 data-i18n="search.pill.fall">Fall</h4>
+        <div class="halter"><select id="f-fall" class="hide" onchange="zeigeFilterstand()">
+          <option value="" data-i18n="search.case.all">Nicht auf einen Fall begrenzt</option>
+        </select></div>
+        <div class="wahl" id="pl-fall"></div>
+        <p class="satz" data-i18n="search.case.i">Nur, was ein Fall enthält.</p>
+      </div>
+    </div>
+    <div class="pill hide" id="p-party" role="button" tabindex="0" onclick="pillAuf('party')" onkeydown="pillTaste(event, 'party')">
+      <span data-ikon="kontakt" data-ikon-klasse="klein"></span><span class="wert" id="pw-party">Beteiligte</span><span class="pfeil" id="pf-party" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-party" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('party')">×</span>
+      <div class="popover hide" id="po-party" onclick="event.stopPropagation()">
+        <h4 data-i18n="search.pill.party">Beteiligte</h4>
+        <div class="halter"><select id="f-party" class="hide" onchange="zeigeFilterstand()">
+          <option value="all" data-i18n="search.party.all">Intern und extern</option>
+          <option value="internal" data-i18n="search.party.internal">Nur intern</option>
+          <option value="external" data-i18n="search.party.external">Mit externen Beteiligten</option>
+        </select></div>
+        <div class="wahl" id="pl-party"></div>
+        <p class="satz" data-i18n="search.party.i">Nach den Maildomains der eigenen Organisation.</p>
+      </div>
+    </div>
+    <div class="pill" id="p-weg" role="button" tabindex="0" onclick="pillAuf('weg')" onkeydown="pillTaste(event, 'weg')">
+      <span data-ikon="weg" data-ikon-klasse="klein"></span><span class="wert" id="pw-weg">Nur Gelöschtes</span><span class="pfeil" id="pf-weg" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-weg" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('weg')">×</span>
+      <div class="popover hide" id="po-weg" onclick="event.stopPropagation()" style="min-width:320px">
+        <h4 data-i18n="search.pill.weg">Nur Gelöschtes</h4>
+        <label class="zeile" id="gone-feld" for="f-gone">
+          <input type="checkbox" class="kipp" id="f-gone" onchange="zeigeFilterstand()">
+          <span class="bez" data-i18n="view.gone">Nur nicht mehr bei Microsoft</span>
+        </label>
+        <p class="satz" data-i18n="search.gone.note">Zeigt nur, was nicht mehr im Postfach ist.</p>
+      </div>
+    </div>
     <button class="hide" id="filter-weg" onclick="filterLeeren()"
             data-i18n="search.filter.clear">Filter zurücksetzen</button>
+    <span class="stand num" id="filter-stand"></span>
   </div>
 
   <div class="sichten" id="sichten">
@@ -1862,6 +1990,9 @@ var IKON = {
   funke: '<path d="M12 3l2.2 5.3L19.5 10l-5.3 2.2L12 17.5l-2.2-5.3L4.5 10l5.3-1.7z"/>',
   links: '<path d="M15 6l-6 6 6 6"/>',
   runter: '<path d="M6 9l6 6 6-6"/>',
+  hoch: '<path d="M6 15l6-6 6 6"/>',
+  klammer: '<path d="M21 12l-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"/>',
+  weg: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   fertig: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
   uhr: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   kreis: '<circle cx="12" cy="12" r="9"/>',
@@ -2150,7 +2281,137 @@ function zeigeFilterstand(){
   el('gone-feld').classList.toggle('on', !!el('f-gone').checked);
   el('f-fall').classList.toggle('on', !!el('f-fall').value);
   el('f-party').classList.toggle('on', el('f-party').value !== 'all');
+  var n = filterFelder().length;
+  el('filter-stand').textContent = n ? t('search.filters.set', {n: zahl(n)}) : '';
+  zeichnePillen();
 }
+
+/* ---------- The pills (11.2) ----------
+   Every filter keeps its control – the criteria, the history and the
+   saved searches read #f-… as before – but the control sits in a popover
+   under a pill. The pill says the filter's name, or its value once set,
+   and then carries a × that clears it. A filter the index or the source
+   cannot offer hides together with its control. */
+var PILLEN = ['person', 'source', 'date', 'typ', 'folder', 'fall', 'party', 'weg'];
+var PILL_FELD = {person: 'f-person', source: 'f-source', typ: 'f-typ', folder: 'f-folder', fall: 'f-fall', party: 'f-party'};
+function optionText(id){
+  var sel = el(id), o = sel.options && sel.options[sel.selectedIndex];
+  return o ? o.textContent : sel.value;
+}
+function tagText(iso){
+  var d = new Date(iso + 'T00:00');
+  return isNaN(d) ? iso : d.toLocaleDateString(LOC, {day: '2-digit', month: '2-digit', year: 'numeric'});
+}
+function datumText(){
+  var von = el('f-from').value, bis = el('f-to').value;
+  if(von && bis) return tagText(von) + ' – ' + tagText(bis);
+  if(von) return t('search.from') + ' ' + tagText(von);
+  if(bis) return t('search.to') + ' ' + tagText(bis);
+  return '';
+}
+function fallFilterText(){
+  var w = fallFilterWert(), f = w.fall ? fallAus(w.fall) : null;
+  if(!f) return el('f-fall').value;
+  var o = w.ordner ? (f.ordner_liste || []).filter(function(x){ return x.id === w.ordner; })[0] : null;
+  return f.name + (o ? ' › ' + o.name : '');
+}
+function pillWerte(){
+  return {person: el('f-person').value.trim(),
+          source: el('f-source').value && el('f-source').value !== 'all' ? optionText('f-source') : '',
+          date: datumText(),
+          typ: el('f-typ').value ? el('f-typ').value.toUpperCase() : '',
+          folder: el('f-folder').value ? ordnerName(el('f-folder').value) : '',
+          fall: el('f-fall').value ? fallFilterText() : '',
+          party: el('f-party').value && el('f-party').value !== 'all' ? t('search.party.' + el('f-party').value) : '',
+          weg: el('f-gone').checked ? t('search.pill.weg') : ''};
+}
+function zeichnePillen(){
+  var werte = pillWerte();
+  PILLEN.forEach(function(k){
+    var an = !!werte[k];
+    el('p-' + k).classList.toggle('on', an);
+    el('pw-' + k).textContent = an ? werte[k] : t('search.pill.' + k);
+    el('px-' + k).classList.toggle('hide', !an || k === 'weg');
+    el('pf-' + k).classList.toggle('hide', an && k !== 'weg');
+  });
+  ['typ', 'folder', 'fall', 'party'].forEach(function(k){
+    el('p-' + k).classList.toggle('hide', el(PILL_FELD[k]).classList.contains('hide'));
+  });
+}
+function pillAuf(k){
+  var po = el('po-' + k), war = !po.classList.contains('hide');
+  pillZu();
+  if(war) return;
+  if(PILL_FELD[k] && k !== 'person') pillListe(k);
+  po.classList.remove('hide');
+  el('p-' + k).classList.add('offen');
+  var feld = po.querySelector('input, select');
+  if(feld && feld.focus) feld.focus();
+}
+function pillZu(){
+  PILLEN.forEach(function(k){
+    el('po-' + k).classList.add('hide');
+    el('p-' + k).classList.remove('offen');
+  });
+}
+function pillTaste(ev, k){
+  // Keys inside the popover belong to its control, not to the pill.
+  if(ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  if(ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); pillAuf(k); }
+  else if(ev.key === 'Escape') pillZu();
+}
+/* The rows of a popover: the select's options, the chosen one marked, the
+   count an option carries at the right; the folder rows narrowed by what
+   is typed above them. */
+function pillListe(k){
+  var sel = el(PILL_FELD[k]), kasten = el('pl-' + k);
+  var wort = k === 'folder' ? el('folder-filter').value.trim().toLowerCase() : '';
+  kasten.innerHTML = [].map.call(sel.options || [], function(o){
+    var m = /^(.*) \(([^()]+)\)$/.exec(o.textContent);
+    var name = m ? m[1] : o.textContent, n = m ? m[2] : '';
+    if(wort && o.value && name.toLowerCase().indexOf(wort) < 0) return '';
+    return '<button type="button"' + (o.value === sel.value ? ' class="on"' : '') +
+      ' onclick="pillSetzen(\'' + k + '\', \'' + esc(o.value).replace(/'/g, "\\'") + '\')">' +
+      esc(name) + (n ? '<span class="n">' + esc(n) + '</span>' : '') + '</button>';
+  }).join('');
+}
+function pillSetzen(k, wert){
+  el(PILL_FELD[k]).value = wert;
+  if(k === 'source') ladeOrdner();
+  zeigeFilterstand();
+  pillZu();
+}
+function pillLeeren(k){
+  if(k === 'person') el('f-person').value = '';
+  else if(k === 'date'){ el('f-from').value = ''; el('f-to').value = ''; }
+  else if(k === 'weg') el('f-gone').checked = false;
+  else {
+    el(PILL_FELD[k]).value = k === 'source' || k === 'party' ? 'all' : '';
+    if(k === 'source') ladeOrdner();
+  }
+  zeigeFilterstand();
+}
+function isoTag(d){
+  return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
+}
+function datumSchnell(art){
+  var heute = new Date(), von = new Date(heute), bis = heute;
+  if(art === 'jahr') von = new Date(heute.getFullYear(), 0, 1);
+  else if(art === 'vorjahr'){ von = new Date(heute.getFullYear() - 1, 0, 1); bis = new Date(heute.getFullYear() - 1, 11, 31); }
+  else von.setDate(heute.getDate() - art);
+  el('f-from').value = isoTag(von); el('f-to').value = isoTag(bis);
+  zeigeFilterstand();
+  pillZu();
+}
+document.addEventListener('click', function(ev){
+  var k = ev.target;
+  while(k){
+    if(k.classList && k.classList.contains && k.classList.contains('pill')) return;
+    k = k.parentElement;
+  }
+  pillZu();
+});
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape') pillZu(); });
 
 /* The pill always leads to where something can be changed. A window that
    merely explains what is missing lets nobody fix anything – and half the
@@ -2320,13 +2581,14 @@ function renderStatus(s){
   // both. An old one lacks the columns – then the chip does not exist.
   var kann = (st.features || []);
   var kannGone = kann.indexOf('gone') >= 0;
-  el('gone-feld').classList.toggle('hide', !kannGone);
+  el('p-weg').classList.toggle('hide', !kannGone);
   if(!kannGone) el('f-gone').checked = false;
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   KANN_ADRESSEN = kann.indexOf('who_mail') >= 0;
   // The party filter can narrow nothing without the parties' domains
   el('f-party').classList.toggle('hide', kann.indexOf('domains') < 0);
   if(kann.indexOf('domains') < 0) el('f-party').value = 'all';
+  zeichnePillen();
   KANN_TYP = kann.indexOf('ext') >= 0;
   zeigeOrdnerstand(s.folders || {});
   zeigeOrdnerstand(s.folders_onedrive || {}, 'od-folders-state');
@@ -3347,10 +3609,17 @@ function hervor(text){
   // Only text search matches literally. In semantic search a highlight
   // would be a claim: there the meaning fits, not the word.
   if(!roh || SUCHMODUS !== 'text') return h;
-  roh.split(/\s+/).filter(Boolean).forEach(function(w){
-    var muster = new RegExp('(' + esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
-    h = h.replace(muster, '<mark>$1</mark>');
+  function flucht(w){ return esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+  // A quoted phrase is marked as one piece – its words as they stand next
+  // to each other – the words outside the quotes each on their own.
+  var muster = [];
+  roh.replace(/"([^"]*)"/g, function(ganz, p){
+    var w = p.trim().split(/\s+/).filter(Boolean);
+    if(w.length) muster.push(w.map(flucht).join('\\s+'));
+    return ' ';
   });
+  roh.replace(/"[^"]*"/g, ' ').split(/\s+/).filter(Boolean).forEach(function(w){ muster.push(flucht(w)); });
+  muster.forEach(function(m){ h = h.replace(new RegExp('(' + m + ')', 'gi'), '<mark>$1</mark>'); });
   return h;
 }
 
@@ -3549,7 +3818,7 @@ function zeichneTrefferListe(){
   el('results').innerHTML = TREFFER.map(function(h, i){
     return '<div class="hit' + (TREFFER_GEWAEHLT === i ? ' on' : '') + '" id="treffer-' + (i + 1) +
       '" tabindex="0" role="button" onclick="waehleTreffer(' + i + ')" ' +
-      'onkeydown="if(event.key===\'Enter\')waehleTreffer(' + i + ')">' +
+      'onkeydown="trefferTaste(event, ' + i + ')">' +
       '<input type="checkbox" class="wahl"' + (h.key && AUSWAHL[h.key] ? ' checked' : '') +
       (h.key ? '' : ' disabled title="' + esc(t('cases.add.nokey')) + '"') +
       ' aria-label="' + esc(t('cases.pick')) + '" onclick="event.stopPropagation()" ' +
@@ -3567,6 +3836,17 @@ function zeichneTrefferListe(){
   }).join('');
 }
 var TREFFER_GEWAEHLT = -1;
+/* Enter opens a hit, ↑ ↓ walk the list – the detail follows. */
+function trefferTaste(ev, i){
+  if(ev.key === 'Enter'){ waehleTreffer(i); return; }
+  if(ev.key !== 'ArrowDown' && ev.key !== 'ArrowUp') return;
+  var j = i + (ev.key === 'ArrowDown' ? 1 : -1);
+  if(j < 0 || j >= TREFFER.length) return;
+  ev.preventDefault();
+  waehleTreffer(j);
+  var zeile = dyn('treffer-' + (j + 1));
+  if(zeile && zeile.focus) zeile.focus();
+}
 
 function waehleTreffer(i){
   var h = TREFFER[i];
@@ -3578,85 +3858,254 @@ function waehleTreffer(i){
   zeigeDetail(h, i + 1);
 }
 
-/* The chosen hit: its origin, the three actions, and the content – the
-   archive's own HTML in a frame, otherwise the excerpt the index holds.
-   What cannot be done for this hit stands greyed with its reason, not
-   missing: otherwise the buttons would wander from hit to hit. */
+/* The chosen hit (11.2): head, title, facts, actions, content – and for
+   mail and chat the conversation as one quiet fold under it. The head
+   says what it is and where it sits in the list; the facts are the ones
+   this kind of item is known by, and a value that is also a filter is a
+   link; the actions stand in one row with the original first, greyed
+   with a reason where one cannot work for this hit. What the hit does
+   not carry comes with one fetch (/api/detail) and is drawn on arrival. */
+var DETAIL_STAND = 0;      // the fetch the detail is waiting for
+var OHNE_GESPRAECH = ['kalender', 'kontakte', 'datei', 'pages', 'planner', 'todo', 'onenote'];
 function zeigeDetail(h, nr){
   var link = trefferLink(h);
-  var faden = h.thread && KANN_VERLAUF ? esc(h.thread).replace(/'/g, "\\'") : '';
-  // "Find similar" hangs on the VECTORS in the index, not on Ollama: the
-  // vector of this passage sits ready, nothing gets embedded.
-  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
-  var seite = !!(link && /\.html?$/i.test(h.uri || ''));
+  // The archive's own HTML in a frame only where the page IS the item: a
+  // SharePoint or OneNote page. A chat message, a Planner or To Do task
+  // lives in a file that holds the whole conversation, board or list –
+  // the detail shows the item's own text instead.
+  var seite = !!(link && /\.html?$/i.test(h.uri || '') && (h.source === 'pages' || h.source === 'onenote'));
+  var kennung = ++DETAIL_STAND;
   el('detail').classList.remove('hide');
   el('detail-verlauf').innerHTML = '';
   el('detail-inhalt').innerHTML =
-    '<div class="dkopf"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
-    (h.gone ? '<span class="tag weg">' + esc(t('search.gone.since', {when: fmt(h.gone)})) + '</span>' : '') +
-    '</div>' +
+    detailKopf(h, nr) +
     '<div class="dtitel">' + esc(h.title || t('search.nosubject')) + '</div>' +
-    '<div class="muted small">' + esc([h.who, h.date].filter(Boolean).join(' · ')) +
-      '<span id="detail-thread"></span>' + fallMarke(h) + '</div>' +
-    '<div class="daktionen">' +
-      (link ? '<a class="ghost" href="' + esc(link) + '" target="_blank" rel="noopener">' +
-              esc(t('search.menu.source')) + '</a>'
-            : '<button class="ghost" disabled>' + esc(t('search.menu.source')) + '</button>') +
-      '<button class="ghost"' + (faden ? ' onclick="zeigeVerlauf(' + nr + ',\'' + faden + '\')"'
-                                       : ' disabled') + '>' +
-        esc(t('search.menu.thread')) + '</button>' +
-      '<button class="ghost"' + (h.cid && aehnlichMoeglich
-                                 ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
-                                 : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
-        '>' + esc(t('search.menu.similar')) + '</button>' +
-      '<button class="ghost"' + (h.key ? ' onclick="fallWahl(\'einer\', ' + (nr - 1) + ')"'
-                                       : ' disabled title="' + esc(t('cases.add.nokey')) + '"') +
-        '>' + ikon('fall', 'klein') + esc(t('cases.add.one')) + '</button>' +
-      (h.who ? '<a href="javascript:void(0)" class="small rechts" onclick="filterPerson(\'' +
-               esc(h.who).replace(/'/g, "\\'") + '\')">' + esc(t('search.menu.person')) + '</a>' : '') +
-    '</div>' +
-    '<div class="dinhalt">' + (seite
+    '<dl class="fakten" id="detail-fakten">' + detailFakten(h, null) + '</dl>' +
+    detailAktionen(h, nr, link) +
+    '<div class="dinhalt' + (seite ? ' rahmenlos' : '') + '" id="detail-text">' + (seite
       ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
       : hervor(h.preview || '') + '…') + '</div>';
-  // The conversation, once known: how long it is, how much of it the
-  // hit's case already holds.
-  if(faden) ladeThread(h.thread).then(function(r){
-    var stand = dyn('detail-thread');
-    if(!stand || TREFFER_GEWAEHLT !== nr - 1 || !(r.messages || []).length) return;
-    var text = t('search.detail.thread', {n: zahl(r.count || r.messages.length)});
-    var fall = (h.cases || [])[0];
-    if(fall){
-      var drin = r.messages.filter(function(m){ return (m.cases || []).some(function(c){ return c.id === fall.id; }); }).length;
-      text += ' (' + t('search.detail.thread.incase', {m: zahl(drin), name: fall.name}) + ')';
-    }
-    stand.textContent = ' · ' + text;
-  });
+  api('/api/detail?uid=' + encodeURIComponent(h.uid || '')).then(function(r){
+    if(kennung !== DETAIL_STAND || !r || r.error) return;
+    var fakten = dyn('detail-fakten'), text = dyn('detail-text');
+    if(fakten) fakten.innerHTML = detailFakten(h, r);
+    if(text && !seite) text.innerHTML = detailInhalt(h, r);
+  }).catch(function(){});
+  // A conversation exists for mail and chat only – a file, a page or a
+  // task gets nothing for something it can never have.
+  if(h.thread && KANN_VERLAUF && OHNE_GESPRAECH.indexOf(h.source) < 0){
+    ladeThread(h.thread).then(function(r){
+      if(kennung === DETAIL_STAND) zeichneGespraech(h, nr, r);
+    });
+  }
+}
+function detailKopf(h, nr){
+  var n = TREFFER.length;
+  return '<div class="dkopf"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
+    (h.gone ? '<span class="tag weg">' + esc(t('search.gone.since', {when: fmt(h.gone)})) + '</span>' : '') +
+    fallMarke(h) +
+    '<span class="zaehler"><span>' + esc(t('search.detail.of', {i: zahl(nr), n: zahl(n)})) + '</span>' +
+    '<button class="ikonknopf" title="' + esc(t('search.detail.prev')) + '" aria-label="' + esc(t('search.detail.prev')) + '"' +
+      (nr > 1 ? ' onclick="waehleTreffer(' + (nr - 2) + ')"' : ' disabled') + '>' + ikon('hoch', 'klein') + '</button>' +
+    '<button class="ikonknopf" title="' + esc(t('search.detail.next')) + '" aria-label="' + esc(t('search.detail.next')) + '"' +
+      (nr < n ? ' onclick="waehleTreffer(' + nr + ')"' : ' disabled') + '>' + ikon('runter', 'klein') + '</button></span></div>';
+}
+function detailAktionen(h, nr, link){
+  // "Find similar" hangs on the VECTORS in the index, not on Ollama: the
+  // vector of this passage sits ready, nothing gets embedded.
+  var aehnlichMoeglich = !!(S && S.store && S.store.semantic);
+  return '<div class="daktionen">' +
+    (link ? '<a class="ghost" href="' + esc(link) + '" target="_blank" rel="noopener">' + ikon('export', 'klein') + esc(t('search.menu.source')) + '</a>'
+          : '<button class="ghost" disabled>' + ikon('export', 'klein') + esc(t('search.menu.source')) + '</button>') +
+    '<button class="ghost"' + (h.key ? ' onclick="fallWahl(\'einer\', ' + (nr - 1) + ')"'
+                                     : ' disabled title="' + esc(t('cases.add.nokey')) + '"') +
+      '>' + ikon('fall', 'klein') + esc(t('cases.add.one')) + '</button>' +
+    '<button class="ghost"' + (h.cid && aehnlichMoeglich
+                               ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
+                               : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
+      '>' + ikon('lupe', 'klein') + esc(t('search.menu.similar')) + '</button>' +
+    '</div>';
 }
 
-/* A hit alone often says too little: "yes, let's do it that way" only means
-   something with the question before it. So the thread unfolds inside the
-   detail instead of jumping to another view. */
-function zeigeVerlauf(nr, schluessel){
-  var kasten = el('detail-verlauf');
-  kasten.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-  api('/api/thread?key=' + encodeURIComponent(schluessel)).then(function(r){
-    if(r.error || !(r.messages || []).length){
-      kasten.innerHTML = '<p class="hint">' + esc(t('search.thread.alone')) + '</p>';
-      return;
-    }
-    kasten.innerHTML = '<div class="verlaufliste"><p class="small muted">' +
-      esc(t('search.thread.count', {n: r.count})) + '</p>' +
-      r.messages.map(function(m){
-        var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
-        var link = g ? '/source?root=' + g[1] + '&path=' + g[2] : null;
-        return '<div class="vzeile"><span class="vdatum">' + esc(m.date || '') + '</span>' +
-          '<span class="vwer">' + esc(m.who || '') + '</span>' +
-          (link ? '<a href="' + link + '" target="_blank">' : '<span>') +
-          esc(m.title || t('search.nosubject')) + (link ? '</a>' : '</span>') +
-          '</div>';
-      }).join('') + '</div>';
-  }).catch(function(e){
-    kasten.innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
+/* ---------- The facts ----------
+   Rows of [text key, html]; only a row with a value is drawn – an empty
+   fact is no row, never "none". A person links to the person filter, a
+   folder to the folder filter, a file type to the type filter. */
+function adresseExtern(mail){
+  var intern = internDomains(), d = String(mail || '').split('@')[1] || '';
+  return !!(d && intern.length && intern.indexOf(d) < 0);
+}
+function personLink(name){
+  return '<a href="javascript:void(0)" title="' + esc(t('search.menu.person')) + '" onclick="filterPerson(\'' +
+    esc(name).replace(/'/g, "\\'") + '\')">' + esc(name) + '</a>';
+}
+function detailPerson(p){
+  if(!p) return '';
+  var name = p.name || p.mail || '';
+  if(!name) return '';
+  return personLink(name) + (p.mail && p.name ? ' <span class="muted small">' + esc(p.mail) + '</span>' : '') +
+    (adresseExtern(p.mail) ? ' <span class="tag extern">' + esc(t('cases.people.external')) + '</span>' : '');
+}
+function ordnerLink(h){
+  var pfad = h.context || '';
+  if(!pfad) return '';
+  var quelle = h.source === 'datei' ? (h.root || 'onedrive') : h.source;
+  return '<a href="javascript:void(0)" class="pfad" title="' + esc(t('search.filter.folder')) + '" onclick="filterOrdner(\'' +
+    esc(quelle) + '\', \'' + esc(pfad).replace(/'/g, "\\'") + '\')">' +
+    ordnerName(pfad).split('/').map(esc).join(ikon('rechts', 'klein')) + '</a>';
+}
+function typLink(ext){
+  if(!ext) return '';
+  return KANN_TYP ? '<a href="javascript:void(0)" title="' + esc(t('search.filter.type')) + '" onclick="filterTyp(\'' +
+    esc(ext) + '\')">' + esc(ext) + '</a>' : esc(ext);
+}
+function filterOrdner(quelle, pfad){
+  el('f-source').value = quelle;
+  ladeOrdner();
+  optionSicher(el('f-folder'), pfad);
+  el('f-folder').value = pfad;
+  sicht('treffer'); zeigeFilterstand(); doSearch(0);
+}
+function filterTyp(ext){
+  optionSicher(el('f-typ'), ext);
+  el('f-typ').value = ext;
+  zeigeFilterstand(); doSearch(0);
+}
+/* Dates as the index writes them ("2026-09-15 09:40", "2026-09-15"),
+   spoken in the interface language – unparsable ones stay as they are. */
+function detailWann(s){
+  if(!s) return '';
+  var d = new Date(String(s).replace(' ', 'T'));
+  if(isNaN(d)) return String(s);
+  var mitZeit = /\d:\d/.test(String(s));
+  return d.toLocaleString(LOC, mitZeit
+    ? {weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'}
+    : {weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'});
+}
+function detailZeitraum(von, bis){
+  if(!von) return '';
+  if(!bis) return detailWann(von);
+  var gleicherTag = String(von).slice(0, 10) === String(bis).slice(0, 10);
+  if(gleicherTag && /\d:\d/.test(String(bis))) return detailWann(von) + ' – ' + String(bis).slice(11, 16);
+  return detailWann(von) + ' – ' + detailWann(bis);
+}
+function detailChips(liste){
+  return '<span class="chips">' + liste.map(function(a){
+    return '<span class="chip">' + ikon('klammer', 'klein') + esc(a.name || a) +
+      (a.size != null ? ' · ' + esc(bytes(a.size)) : '') + '</span>';
+  }).join('') + '</span>';
+}
+function detailFakten(h, r){
+  var f = r || {}, z = [], src = h.source;
+  var att = f.attachments || (h.attachments || []).map(function(a){ return {name: a}; });
+  function leute(l){ return (l || []).map(detailPerson).filter(Boolean).join(', '); }
+  function schritte(s){ return s && s.total ? t('search.fact.steps.of', {done: zahl(s.done), n: zahl(s.total)}) : ''; }
+  function zustand(s, zusatz){ return s ? esc(t('search.state.' + s)) + (zusatz ? ' · ' + esc(zusatz) : '') : ''; }
+  if(src === 'outlook'){
+    z.push(['search.fact.from', detailPerson(f.from || {name: h.who, mail: h.who_mail})]);
+    z.push(['search.fact.to', leute(f.to)]);
+    z.push(['search.fact.cc', leute(f.cc)]);
+    z.push(['search.fact.date', esc(detailWann(h.date))]);
+    z.push(['search.fact.folder', ordnerLink(h)]);
+    z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
+  } else if(src === 'teams'){
+    z.push(['search.fact.from', detailPerson({name: h.who})]);
+    z.push(['search.fact.when', esc(detailWann(h.date))]);
+    z.push([(h.context || '').indexOf('channels') === 0 ? 'search.fact.channel' : 'search.fact.chat', ordnerLink(h)]);
+  } else if(src === 'kalender'){
+    z.push(['search.fact.when', esc(detailZeitraum(f.start || h.date, f.end))]);
+    z.push(['search.fact.where', esc(f.location || '')]);
+    z.push(['search.fact.organiser', detailPerson(f.organiser || {name: h.who, mail: h.who_mail})]);
+    z.push(['search.fact.attendees', leute(f.attendees)]);
+    z.push(['search.fact.calendar', ordnerLink(h)]);
+  } else if(src === 'kontakte'){
+    z.push(['search.fact.organisation', esc(f.org || '')]);
+    z.push(['search.fact.role', esc(f.role || '')]);
+    z.push(['search.fact.email', (f.emails || []).map(personLink).join(', ')]);
+    z.push(['search.fact.phone', esc((f.phones || []).join(', '))]);
+    z.push(['search.fact.folder', ordnerLink(h)]);
+  } else if(src === 'datei'){
+    var ext = f.ext || (/\.([A-Za-z0-9]{1,8})$/.exec(h.title || '') || [])[1] || '';
+    z.push(['search.fact.type', typLink(ext.toLowerCase())]);
+    z.push(['search.fact.size', f.size != null ? esc(bytes(f.size)) : '']);
+    z.push(['search.fact.modified', esc(detailWann(f.modified || h.date))]);
+    z.push(['search.fact.where', ordnerLink(h)]);
+  } else if(src === 'pages' || src === 'onenote'){
+    z.push([src === 'pages' ? 'search.fact.site' : 'search.fact.notebook', ordnerLink(h)]);
+    z.push(['search.fact.modified', esc(detailWann(h.date))]);
+  } else if(src === 'planner'){
+    z.push(['search.fact.plan', ordnerLink(h)]);
+    z.push(['search.fact.assigned', (f.assigned || (h.who ? h.who.split(', ') : [])).map(personLink).join(', ')]);
+    z.push(['search.fact.due', esc(detailWann(f.due))]);
+    z.push(['search.fact.state', zustand(f.state, schritte(f.checklist))]);
+    z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
+  } else if(src === 'todo'){
+    z.push(['search.fact.list', ordnerLink(h)]);
+    z.push(['search.fact.due', esc(detailWann(f.due))]);
+    z.push(['search.fact.state', zustand(f.state, f.completed ? detailWann(f.completed) : '')]);
+    z.push(['search.fact.steps', esc(schritte(f.steps))]);
+    z.push(['search.fact.linked', esc((f.linked || []).join(', '))]);
+    z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
+  } else {
+    z.push(['search.fact.from', detailPerson({name: h.who})]);
+    z.push(['search.fact.date', esc(detailWann(h.date))]);
+    z.push(['search.fact.folder', ordnerLink(h)]);
+  }
+  return z.filter(function(p){ return p[1]; }).map(function(p){
+    return '<dt>' + esc(t(p[0])) + '</dt><dd>' + p[1] + '</dd>';
+  }).join('');
+}
+/* The content: the text the index holds, the words marked; a task's
+   comments below its description. */
+function detailInhalt(h, r){
+  var html = hervor(r.text || h.preview || '').replace(/\n/g, '<br>');
+  (r.comments || []).forEach(function(k){
+    html += '<div class="kommentar"><span class="muted small">' +
+      esc([k.who, detailWann(k.when)].filter(Boolean).join(' · ')) + '</span><br>' + hervor(k.text || '') + '</div>';
+  });
+  return html;
+}
+
+/* ---------- The conversation ----------
+   One fold under the content, closed: how long the conversation is, and
+   opened, one row per message – the open one bold, a dot on those the
+   hit's case already holds – and the way to put the rest in. */
+function zeichneGespraech(h, nr, r){
+  var msgs = (r && r.messages) || [];
+  if(msgs.length < 2) return;
+  var n = r.count || msgs.length;
+  var fall = (h.cases || [])[0] || null;
+  function imFall(m){ return !!fall && (m.cases || []).some(function(c){ return c.id === fall.id; }); }
+  var drin = msgs.filter(imFall).length, rest = Math.max(0, n - drin);
+  var knopf = '';
+  if(h.key && fall && rest) knopf = '<button class="mini" onclick="gespraechInFall(' + fall.id + ', ' + (nr - 1) + ')">' +
+    esc(t('search.detail.thread.addrest', {n: zahl(rest)})) + '</button>';
+  else if(h.key && !fall) knopf = '<button class="mini" onclick="fallWahl(\'einer\', ' + (nr - 1) + ')">' +
+    esc(t('search.detail.thread.addall')) + '</button>';
+  el('detail-verlauf').innerHTML = '<details class="verlauf"><summary><span class="pfeil">' + ikon('rechts', 'klein') + '</span>' +
+    esc(t('search.detail.thread', {n: zahl(n)})) + '</summary>' +
+    msgs.map(function(m){
+      var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
+      var link = g ? '/source?root=' + g[1] + '&path=' + g[2] : null;
+      return '<div class="vzeile' + (imFall(m) ? ' drin' : '') + (m.uid === h.uid ? ' dies' : '') + '"><span class="punkt"></span>' +
+        '<span class="vdatum">' + esc(m.date || '') + '</span>' +
+        '<span class="vtitel">' + (link ? '<a href="' + link + '" target="_blank" rel="noopener">' : '') +
+        esc(m.title || t('search.nosubject')) + (link ? '</a>' : '') + '</span>' +
+        '<span class="vwer">' + esc(m.who || '') + '</span></div>';
+    }).join('') +
+    '<div class="fuss"><span>' + esc(fall
+      ? t('search.detail.thread.incase', {m: zahl(drin), n: zahl(n), name: fall.name})
+      : t('search.detail.thread.none')) + '</span>' + knopf + '</div></details>';
+}
+/* The rest of the conversation into the case the hit already sits in –
+   the route the choice window uses – then the fold drawn afresh. */
+function gespraechInFall(fallId, i){
+  var h = TREFFER[i];
+  if(!h || !h.key) return;
+  post('/api/faelle/thread', {id: fallId, keys: [h.key]}).then(function(r){
+    if(!r || !r.ok) return;
+    delete THREADS[h.thread];
+    zeigeDetail(h, i + 1);
   });
 }
 

@@ -1,34 +1,47 @@
-## New in 11.1.1
+## New in 11.2.0
 
-**Help, in the header.** A *Help* button beside Insights and Settings
-opens the tour's window: one row per chapter with what it covers and
-how many steps, marked once seen, the first unseen one as *up next* —
-and *Start the full tour*, which walks all six chapters in order, the
-card saying which part you are in. The chapters left *Settings › App*.
+**The search row, tidied.** Every filter is a pill — person, source,
+date, file type, folder, case, parties, deleted only — and opens its own
+small window under it: the source and folder lists with their counts,
+the date with four quick ranges, the person field with its suggestions.
+A set pill carries its value and a × that clears it; *Clear filters* and
+the count of set filters stand at the end of the row. History and saved
+searches are two icons beside *Search*.
 
-**The tour explains cases.** A new chapter, *Work with cases*, walks
-through how a case is meant to be used: from a search into a case (the
-tick, *Add to case*, the whole result, the rest of a conversation), a
-saved search that keeps watching, the overview, the case's head, its
-three views, the tool row, casebook, folders and remarks, the export,
-who counts as external, and what Claude may do. It opens your first case
-so every step points at something real; the empty cases door offers it,
-and the hits step of the search chapter branches into it.
+**One detail per kind of item.** The chosen hit shows only the facts its
+kind is known by: a mail its from, to, cc, date, folder and attachments
+with their sizes; a chat message who, when and which chat; an
+appointment when, where, organiser and attendees; a contact its
+organisation, role, addresses and phones; a file its type, size, modified
+and where — and nothing more; a page where it lies and when it changed; a
+Planner task its plan, assignees, due date, state and checklist; a To Do
+task its list, due date, state and steps. A person, a folder or a file
+type among the facts is a link that sets the filter. The head says where
+the hit sits in the list, with arrows (and ↑ ↓) to walk it; the actions
+are one row — *Open original*, *Add to case*, *Find similar*. For mail
+and chat the conversation is one quiet fold under the content: closed,
+its length; open, every message, the ones the case already holds marked,
+and *Add the other n* right there. The *Show conversation* button is
+gone. Claude gets the same facts: `get_document` (and `/api/document`)
+carries a `facts` block per kind, so an address, an attendee or a due
+date no longer has to be parsed out of the text.
 
-**Two chapters more.** *Is the archive complete?* walks Insights: the
-key figures, the history with its gaps, the completeness balance and
-*Fetch now*, the archive check with one button per finding, the runs.
-*Connect Claude* walks the MCP card: the one switch for both routes, the
-HTTP endpoint for Claude Code, the subprocess for Claude Desktop with its
-snippet per profile, and what Claude may change. The source chapter now
-tells the three ways to read a source again apart — *Sync now*, *Fetch
-now* and *Force full sync* — and the search chapter names the case and
-parties filters, *Add to case* on a hit, and the history and saved
-searches.
+**The parties filter shows up.** The page learns what an index can do
+from the status, and the status did not name the new address columns —
+so the *internal · external* filter stayed hidden and the People view
+kept saying "after the next index run", whatever the index held. Now
+it does; nothing to rebuild.
+
+**Phrases in the text search.** Words still match any of them, the best
+hits first — and a phrase in quotes, `"budget frame"`, now has to occur
+as it stands, adjacent and in order; every such phrase is required, and
+a loose word beside it must occur as well. The preview marks the phrase
+as one piece. Same for Claude's searches; the semantic search reads the
+whole text and knows no phrases.
 
 ## Upgrading
 
-**From 11.1.0:** nothing to do.
+**From 11.1.x:** nothing to do.
 
 **From 11.0.x:** the case book gets its new columns on the first start.
 The next index run reads the archive once in full — it adds the

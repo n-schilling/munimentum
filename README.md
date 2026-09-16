@@ -303,14 +303,18 @@ token wizard lists it.
 ### Search archive
 
 Three kinds of search, chosen in the search field. **Text search** is the default
-and always available: it finds the words that actually occur, ranked by
-relevance. **Similar search** finds related wording even when your words do not
+and always available: it finds the words that actually occur — any of them,
+the best matches first; a phrase in quotes, `"budget frame"`, must occur
+as it stands, and every such phrase is required. **Similar search** finds related wording even when your words do not
 appear. **AI answer** answers a question in a paragraph with source numbers and
 keeps the underlying hits one click away.
 
-Filters — person, source, date range, folder, file type, and messages no longer
-in the mailbox — sit in a row below the field, a set one highlighted where it
-stands, and nothing searches until you ask for it. Once the index carries
+Filters — person, source, date range, folder, file type, case, parties,
+and items no longer at Microsoft — are a row of pills below the field.
+A pill opens its own small window with the control: the source and
+folder lists with their counts, the date with four quick ranges, the
+person field with its suggestions. A set pill carries its value and a ×
+that clears it, and nothing searches until you ask for it. Once the index carries
 the parties' addresses, a further filter narrows mails and appointments to
 those whose every party lies inside your organisation's mail domains, or
 to those with at least one party outside — the domains are a setting under
@@ -321,11 +325,20 @@ an absence, and `*` stands for any run of characters when one name is too
 narrow. Picking a source narrows what the other two offer: calendars for
 the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. The
-hits stand on the left; a chosen one opens on the right with the original
-file, the whole conversation it belongs to (and how much of it a case
-already holds), *Find similar*, *Add to case*, and a link to everything
-with that person — the archive's own HTML shown in place, for everything
-else the excerpt the index holds.
+hits stand on the left; a chosen one opens on the right with only the
+facts its kind is known by — a mail its from, to, date, folder and
+attachments; a chat message who, when and which chat; an appointment
+when, where and who takes part; a contact its organisation, addresses
+and phones; a file its type, size and where it lies, and nothing more; a
+page where it lies and when it changed; a Planner task its plan,
+assignees, due date, state and checklist; a To Do task its list, due
+date, state and steps — a person, a folder or a file type among them one
+click from the matching filter. Then *Open original*, *Add to case* and
+*Find similar* in one row, and the content: the archive's own HTML shown
+in place, else the text the index holds. A mail or chat message names
+its conversation in one fold below — how long it is, which messages a
+case already holds, and the rest one click away. The head says where the
+hit sits in the list; its arrows (and ↑ ↓) walk the hits.
 
 Four views live here: results, calendar (including appointments recovered
 from invitation and cancellation mails), the address book, and a **file
@@ -343,7 +356,7 @@ The last two kinds of search need [Ollama](https://ollama.com). Without it they
 are visibly switched off rather than hidden, and everything else works
 unchanged.
 
-Two buttons next to *Search* keep what you searched for. **History** lists
+Two icons next to *Search* keep what you searched for. **History** lists
 every search by its criteria — words, kind of search, filters — never by
 its hits; one click runs it again, another saves it. The setting under
 *Settings › App* says how long it is kept (30, 90, 365 days, forever, or
@@ -610,7 +623,12 @@ pre-approved in almost every tenant.
 A built-in MCP server hands the archive to Claude Code or Claude Desktop — or
 any other MCP client: it searches, browses the mirrored drives, reads the
 sources and answers with citations
-— over your own mail and chats, not over the open web. Every source is
+— over your own mail and chats, not over the open web. An item it opens
+comes with its facts already extracted — a mail's from, to, cc and
+attachments, an appointment's time, place and attendees, a contact's
+addresses and phones, a task's due date, state and checklist — the same
+facts the search page's detail shows, so nothing has to be parsed out of
+the text or read from the source file. Every source is
 reachable the same way — mail, Teams and the files shared there, calendar,
 contacts, OneDrive and SharePoint files, SharePoint pages, Planner boards,
 To Do lists, OneNote notebooks — with the same filters the search page

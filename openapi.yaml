@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 11.1.1
+  version: 11.2.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -350,11 +350,43 @@ paths:
                   path: { type: string }
                   uri: { type: string }
                   text: { type: string }
+                  facts:
+                    type: object
+                    additionalProperties: true
+                    description: What the item is known by, per kind – the same block /api/detail returns, without uid, kind and text (a mail's from, to, cc, date, folder, attachments; an appointment's start, end, location, organiser, attendees; a task's due, state, checklist or steps …).
                   file:
                     type: object
                     description: Only for mirrored files – name, path, size_bytes, modified, gone, binary, content_indexed (always false).
                   context_before: { type: array, items: { type: object } }
                   context_after: { type: array, items: { type: object } }
+                  error: { $ref: "#/components/schemas/MessageOrKey" }
+
+  /api/detail:
+    get:
+      summary: The facts the hit's detail shows
+      description: |
+        Per kind of item, from the index row and the source file: a mail's
+        from, to, cc, date, folder and attachments (with sizes); a chat
+        message's from, when and chat; an appointment's start, end,
+        location, organiser and attendees; a contact's org, role, emails
+        and phones; a file's ext, size and modified; a task's plan or
+        list, assigned, due, state, checklist or steps, comments and
+        linked resources. `text` is the content the detail shows. A key
+        that is missing means the item has none of it.
+      parameters:
+        - { name: uid, in: query, required: true, schema: { type: string }, description: "The item's uid from a hit." }
+      responses:
+        "200":
+          description: The facts, or an in-band error.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  uid: { type: string }
+                  kind: { type: string, description: "The source: outlook, teams, kalender, kontakte, datei, pages, onenote, planner, todo." }
+                  text: { type: string }
                   error: { $ref: "#/components/schemas/MessageOrKey" }
 
   /api/run-log:

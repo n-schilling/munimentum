@@ -11,7 +11,7 @@ recommend updating.
 Format: MAJOR.MINOR.PATCH, without a leading "v" (only the tag carries that).
 """
 
-VERSION = "11.1.1"
+VERSION = "11.2.0"
 
 # The build: the short commit hash the bundle was built from. The release
 # workflow stamps it in (packaging/stamp_build.py) before PyInstaller runs;

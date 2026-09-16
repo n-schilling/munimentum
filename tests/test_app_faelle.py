@@ -537,6 +537,15 @@ def test_gespraech_in_den_fall(welt_thread):
     assert call(port, "POST", "/api/faelle/thread", {"id": fid, "keys": [m1["key"]]})[0] == 409
 
 
+def test_status_nennt_die_adressspalten_des_index(welt):
+    """The page offers the parties filter and the People view's addresses
+    only when the status says the index has the columns – so the status
+    must name them (11.1.1 did not, and the filter never appeared)."""
+    code, r = call(welt["port"], "GET", "/api/status")
+    assert code == 200
+    assert {"key", "who_mail", "domains", "thread"} <= set(r["store"]["features"]), r["store"]["features"]
+
+
 def test_bemerkung_am_eintrag_ueber_die_app(welt):
     port = welt["port"]
     fid = _fall(welt)
@@ -1164,3 +1173,24 @@ def test_index_ohne_schluessel_wird_nicht_uebersprungen(sandbox, monkeypatch):  
     assert r._erspart({"nur_bei_neuem": True, "ziel": db}) is True
     db.write_bytes(b"kein sqlite")
     assert store_layout.mit_schluesseln(db) is False and store_layout.veraltet(db) is True
+
+
+# --------------------------------------------------------------------------
+# The hit's detail (11.2): the facts per kind through the server
+# --------------------------------------------------------------------------
+def test_http_detail_liefert_die_fakten_je_art(welt):
+    from urllib.parse import quote
+    port = welt["port"]
+    h = _treffer(welt, "Rechnung", source="outlook")["results"][0]
+    code, d = call(port, "GET", "/api/detail?uid=" + quote(h["uid"], safe=""))
+    assert code == 200 and d["kind"] == "outlook" and d["uid"] == h["uid"]
+    assert d["from"] == {"name": "Carla Chef", "mail": "carla@example.com"}
+    assert d["to"] == [{"name": "", "mail": "alice@example.com"}] and d["cc"] == []
+    assert d["folder"] == "inbox" and "4711" in d["text"] and d["attachments"] == []
+    # a chat message: who, when, which chat – from the row alone
+    h = _treffer(welt, "Rechnung", source="teams")["results"][0]
+    code, d = call(port, "GET", "/api/detail?uid=" + quote(h["uid"], safe=""))
+    assert code == 200 and d["kind"] == "teams" and d["from"]["name"] and d["chat"]
+    # an unknown uid is an in-band error, never a 500
+    code, d = call(port, "GET", "/api/detail?uid=nix")
+    assert code == 200 and d["error"]["k"] == "srv.detail.none"

@@ -77,6 +77,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 import analytics_db
+import detail
 import export_util
 import faelle
 import ollama_client
@@ -675,10 +676,28 @@ def _zeitraum(date_from, date_to, tage):
 # --------------------------------------------------------------------------
 # Lexical backend: FTS5 / BM25
 # --------------------------------------------------------------------------
+_PHRASE = re.compile(r'"([^"]*)"')
+
+
 def _fts_match(query):
-    """Sanitize free text into an FTS5 OR-query of quoted tokens."""
-    toks = _WORD.findall(query.lower())
-    return " OR ".join(f'"{t}"' for t in toks)
+    """Free text into an FTS5 query: words outside quotes match any of
+    them (OR); a quoted "phrase" must occur as such – adjacent, in order –
+    every phrase is required, and beside a phrase at least one of the
+    loose words must occur too. Nothing of FTS5's own syntax gets
+    through: every word is quoted, every phrase is one quoted run of
+    words, and a stray quote is just dropped."""
+    query = query or ""
+    phrasen = []
+    for roh in _PHRASE.findall(query):
+        toks = _WORD.findall(roh.lower())
+        if toks:
+            phrasen.append('"' + " ".join(toks) + '"')
+    woerter = [f'"{t}"' for t in _WORD.findall(_PHRASE.sub(" ", query).lower())]
+    teile = list(phrasen)
+    if woerter:
+        lose = " OR ".join(woerter)
+        teile.append(f"({lose})" if phrasen else lose)
+    return " AND ".join(teile)
 
 
 def _lexical_rank(con, query, where, params, limit):
@@ -1024,6 +1043,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
 
     Args:
         query: Natural-language query or keywords (German or English).
+            Words match any of them; a quoted "phrase" must occur as it
+            stands – adjacent, in order – and every phrase is required.
+            That holds for the lexical search and the lexical half of the
+            hybrid one; the semantic half reads the whole text.
         person: Optional. Only items involving this name or e-mail –
             sender/recipients (mail), author (Teams), organizer/attendees
             (calendar), assignees (Planner). Files and pages carry no person;
@@ -1239,6 +1262,21 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     size, modification date, whether it is gone at the source, and the path
     read_source_file would take.
 
+    `facts` carries, per kind, what the item is known by – already
+    extracted, so nothing has to be parsed out of the text or read from
+    the source file: a mail its `from`, `to`, `cc` (name and mail each),
+    `date`, `folder` and `attachments` (name, size); a chat message its
+    `from`, `date`, `chat` and `folder`; an appointment its `start`,
+    `end`, `allday`, `location`, `organiser`, `attendees` and `calendar`;
+    a contact its `org`, `role`, `emails`, `phones`, `note`; a file its
+    `ext`, `size`, `modified`, `folder`; a page its `folder` and
+    `modified`; a Planner task its `plan`, `bucket`, `assigned`, `due`,
+    `state` (notstarted, inprogress, done), `checklist` (done, total),
+    `attachments`, `comments` (who, when, text); a To Do task its `list`,
+    `due`, `state` (notstarted, inprogress, completed), `completed`,
+    `steps`, `linked`, `attachments`. An empty value means the item has
+    none of it.
+
     Args:
         uid: The item's uid from a search or browse hit.
         context_before: Chat messages before this one (0–20).
@@ -1261,6 +1299,13 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
             "uri": _source_uri(row["root"], row["rel"]),
             "text": text,
         }
+        # The facts the search page's detail shows, from the same code –
+        # without the text, which stands above already.
+        ziel, _fehler = _resolve_source(row["root"], row["rel"])
+        fakten = detail.fakten(row, text, ziel, STATE)
+        for k in ("uid", "kind", "text"):
+            fakten.pop(k, None)
+        out["facts"] = fakten
         if row["src"] == "datei":
             # The text is name and path; what else is known about a file
             # sits on disk, and the size says whether reading it is worth it.

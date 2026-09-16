@@ -213,6 +213,10 @@ DYNAMISCH = (
                         "conversations", "lists", "calendars")),
     # The placeholder in the search field changes with the search type.
     ("search.ph.", ("text", "aehnlich", "ki")),
+    # The filter pills say their name until a value is set (11.2).
+    ("search.pill.", ("person", "source", "date", "typ", "folder", "fall", "party", "weg")),
+    # A task's state in the hit's detail.
+    ("search.state.", ("notstarted", "inprogress", "done", "completed")),
     # The four Teams kinds are named in the index after their storage
     # folder; the folder picker prefixes the namespace and shows the
     # readable name.

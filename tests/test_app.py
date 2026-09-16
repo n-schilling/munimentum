@@ -4060,50 +4060,192 @@ def test_http_thread_ohne_index(server, monkeypatch):
 
 
 PRUEFUNG_VERLAUF = GRUNDZUSTAND + """
-KANN_VERLAUF = true;      // wird sonst aus store.features gesetzt
-// Ein Treffer mit Gespraechskennung bietet den Verlauf an, einer ohne nicht.
+KANN_VERLAUF = true;      // otherwise set from store.features
+// The conversation comes with one fetch and stands as one fold under the
+// content; the facts beyond the hit come with another and are drawn on
+// arrival. A page can never have a conversation – nothing is fetched.
+global.ANTWORT = {count: 3, messages: [
+  {uid: 'a', date: '2025-06-01', who: 'Alice', title: 'Frage', uri: 'o365://outlook/a.eml'},
+  {uid: 'b', date: '2025-06-02', who: 'Bob', title: 'RE: Frage', uri: 'o365://outlook/b.eml'},
+  {uid: 'c', date: '2025-06-03', who: 'Alice', title: 'AW: Frage', uri: 'o365://outlook/c.eml'}]};
+var geholt = [];
 global.fetch = function(pfad){
+  geholt.push(String(pfad));
   return Promise.resolve({json: function(){
-    return Promise.resolve(String(pfad).indexOf('/api/thread') === 0
-      ? global.ANTWORT : statusGeruest());
+    if(String(pfad).indexOf('/api/thread') === 0) return Promise.resolve(global.ANTWORT);
+    if(String(pfad).indexOf('/api/detail') === 0) return Promise.resolve({kind: 'outlook', text: 'Voller Text',
+      from: {name: 'Alice', mail: 'alice@example.com'}, to: [{name: 'Bob', mail: 'bob@example.com'}], cc: [],
+      attachments: [{name: 'Rechnung.pdf', size: 2048}]});
+    return Promise.resolve(statusGeruest());
   }});
 };
 renderHits({results: [
-  {uid: 'a', title: 'Frage', who: 'Alice', date: '2025-06-01', source_label: 'Mail',
-   preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'tix:abc'},
-  {uid: 'b', title: 'Einzeln', who: 'Bob', date: '2025-06-02', source_label: 'Mail',
-   preview: 'Text', uri: 'o365://outlook/b.eml', thread: null}
-], count: 2, backend: 'bm25'});
-// Die Aktionen stehen im Detail rechts, nicht in der Liste: erst waehlen.
+  {uid: 'a', key: 'mail:a', title: 'Frage', who: 'Alice', date: '2025-06-01 09:00', source: 'outlook', source_label: 'Mail',
+   context: 'Inbox/Kunden', preview: 'Text', uri: 'o365://outlook/a.eml', thread: 'tix:abc', cases: [{id: 1, name: 'Nordwind'}]},
+  {uid: 'b', title: 'Einzeln', who: 'Bob', date: '2025-06-02', source: 'outlook', source_label: 'Mail',
+   preview: 'Text', uri: 'o365://outlook/b.eml', thread: null},
+  {uid: 'c', title: 'Seite', who: '', date: '2025-06-03', source: 'onenote', source_label: 'OneNote',
+   preview: 'Text', uri: 'o365://onenote/n/Seite.html', thread: 'chat:x'}
+], count: 3, backend: 'bm25'});
 waehleTreffer(0);
 var html = document.getElementById('detail-inhalt').innerHTML;
-pruefe(html.indexOf('zeigeVerlauf(1') >= 0, 'Kein Verlauf beim ersten Treffer');
-waehleTreffer(1);
-html = document.getElementById('detail-inhalt').innerHTML;
-pruefe(html.indexOf('zeigeVerlauf(') < 0, 'Verlauf ohne Gespraech angeboten');
-pruefe(html.indexOf('disabled') >= 0, 'Unmoeglicher Verlauf fehlt statt ausgegraut zu sein');
-waehleTreffer(0);
-
-// Aufklappen holt die Nachrichten und zeigt sie chronologisch untereinander.
-global.ANTWORT = {count: 3, messages: [
-  {date: '2025-06-01', who: 'Alice', title: 'Frage', uri: 'o365://outlook/a.eml'},
-  {date: '2025-06-02', who: 'Bob', title: 'RE: Frage', uri: 'o365://outlook/b.eml'},
-  {date: '2025-06-03', who: 'Alice', title: 'AW: Frage', uri: 'o365://outlook/c.eml'}]};
-zeigeVerlauf(1, 'tix:abc');
-// Das Nachladen laeuft ueber ein Promise – erst danach steht der Kasten.
+pruefe(html.indexOf('class="zaehler"') >= 0 && html.indexOf('waehleTreffer(1)') >= 0, 'Kein Blaettern im Kopf');
+pruefe(html.indexOf('zeigeVerlauf') < 0, 'Der alte Verlaufsknopf steht noch da');
+pruefe(html.indexOf("filterPerson('Alice')") >= 0 && html.indexOf("filterOrdner('outlook', 'Inbox/Kunden')") >= 0,
+       'Person oder Ordner sind keine Filterlinks: ' + html.slice(0, 400));
 setTimeout(function(){
   var kasten = document.getElementById('detail-verlauf').innerHTML;
-  pruefe(kasten.indexOf('3 Nachrichten') >= 0, 'Anzahl fehlt: ' + kasten.slice(0, 120));
+  pruefe(kasten.indexOf('<details class="verlauf">') === 0, 'Das Gespraech ist keine Falte: ' + kasten.slice(0, 80));
   pruefe(kasten.indexOf('RE: Frage') >= 0, 'Antwort fehlt im Verlauf');
-  pruefe(kasten.indexOf('2025-06-01') < kasten.indexOf('2025-06-03'),
-         'Verlauf steht nicht in zeitlicher Reihenfolge');
-  console.log('OK');
+  pruefe(kasten.indexOf('2025-06-01') < kasten.indexOf('2025-06-03'), 'Verlauf steht nicht in zeitlicher Reihenfolge');
+  pruefe(kasten.indexOf('vzeile dies') >= 0, 'Die offene Nachricht ist nicht markiert');
+  pruefe(kasten.indexOf('gespraechInFall(1, 0)') >= 0, 'Der Rest des Gespraechs laesst sich nicht in den Fall holen');
+  // The facts and the text are redrawn in place once the fetch is in – the
+  // DOM stub keeps them under their own ids.
+  var d = document.getElementById('detail-fakten').innerHTML;
+  pruefe(d.indexOf('bob@example.com') >= 0 && d.indexOf('Rechnung.pdf') >= 0, 'Fakten aus /api/detail fehlen: ' + d.slice(0, 300));
+  pruefe(document.getElementById('detail-text').innerHTML.indexOf('Voller Text') >= 0, 'Der volle Text fehlt');
+  // no fold without a conversation, and none at a page even with a thread id
+  waehleTreffer(1);
+  var vorher = geholt.length;
+  waehleTreffer(2);
+  setTimeout(function(){
+    pruefe(document.getElementById('detail-verlauf').innerHTML === '', 'Gespraech an einer Seite');
+    pruefe(!geholt.slice(vorher).some(function(p){ return p.indexOf('/api/thread') === 0; }), 'Die Seite fragt nach dem Gespraech');
+    console.log('OK');
+  }, 20);
 }, 20);
 """
 
 
 def test_verlauf_klappt_im_detail_auf():
     _in_node(PRUEFUNG_VERLAUF)
+
+
+PRUEFUNG_PILLEN = GRUNDZUSTAND + """
+// Every filter is a pill: it says its name, then its value, and a × clears it.
+zeigeFilterstand();
+pruefe(document.getElementById('pw-person').textContent === t('search.pill.person'), 'Leere Pille nennt nicht den Filter');
+pruefe(document.getElementById('px-person').classList.contains('hide'), 'Leere Pille traegt ein ×');
+document.getElementById('f-person').value = 'Alice';
+document.getElementById('f-source').value = 'outlook';
+document.getElementById('f-from').value = '2026-09-01';
+document.getElementById('f-gone').checked = true;
+zeigeFilterstand();
+pruefe(document.getElementById('p-person').classList.contains('on'), 'Personenpille leuchtet nicht');
+pruefe(document.getElementById('pw-person').textContent === 'Alice', 'Personenpille nennt den Wert nicht');
+pruefe(!document.getElementById('px-person').classList.contains('hide'), 'Gesetzte Pille ohne ×');
+pruefe(document.getElementById('pf-person').classList.contains('hide'), 'Gesetzte Pille zeigt noch den Pfeil');
+pruefe(document.getElementById('p-source').classList.contains('on'), 'Quellenpille leuchtet nicht');
+pruefe(document.getElementById('pw-date').textContent.indexOf('2026') >= 0, 'Datumspille ohne Datum: ' + document.getElementById('pw-date').textContent);
+pruefe(document.getElementById('p-weg').classList.contains('on') && document.getElementById('px-weg').classList.contains('hide'), 'Geloescht-Pille');
+pruefe(document.getElementById('filter-stand').textContent.indexOf('4') >= 0, 'Zahl der Filter fehlt: ' + document.getElementById('filter-stand').textContent);
+// × clears one filter, the others stay
+pillLeeren('person');
+pruefe(document.getElementById('f-person').value === '' && document.getElementById('f-source').value === 'outlook', '× leert den falschen Filter');
+pillLeeren('date');
+pruefe(document.getElementById('f-from').value === '' && document.getElementById('pw-date').textContent === t('search.pill.date'), 'Datum nicht geleert');
+pillLeeren('source');
+pruefe(document.getElementById('f-source').value === 'all' && !document.getElementById('p-source').classList.contains('on'), 'Quelle nicht geleert');
+// a quick range fills both dates and closes the popover
+datumSchnell(7);
+pruefe(document.getElementById('f-from').value < document.getElementById('f-to').value, 'Schnellwahl setzt kein Intervall');
+pruefe(document.getElementById('po-date').classList.contains('hide'), 'Popover bleibt offen');
+// one popover at a time, Escape closes it
+pillAuf('source');
+pruefe(!document.getElementById('po-source').classList.contains('hide') && document.getElementById('p-source').classList.contains('offen'), 'Popover geht nicht auf');
+pillAuf('typ');
+pruefe(document.getElementById('po-source').classList.contains('hide') && !document.getElementById('po-typ').classList.contains('hide'), 'Zwei Popover offen');
+taste('Escape');
+pruefe(document.getElementById('po-typ').classList.contains('hide'), 'Escape schliesst nicht');
+// a filter the index cannot offer hides with its control
+document.getElementById('f-party').classList.add('hide');
+zeigeFilterstand();
+pruefe(document.getElementById('p-party').classList.contains('hide'), 'Pille ohne Filter sichtbar');
+document.getElementById('f-party').classList.remove('hide');
+document.getElementById('f-party').value = 'external';
+zeigeFilterstand();
+pruefe(!document.getElementById('p-party').classList.contains('hide') && document.getElementById('pw-party').textContent === t('search.party.external'), 'Beteiligtenpille');
+// choosing in the popover sets the control and searches nothing
+var gesucht = 0;
+global.fetch = function(pfad){ if(String(pfad).indexOf('/api/search') >= 0) gesucht++; return Promise.resolve({json: function(){ return Promise.resolve({}); }}); };
+pillSetzen('party', 'internal');
+pruefe(document.getElementById('f-party').value === 'internal' && gesucht === 0, 'Pille sucht von selbst');
+pruefe(document.getElementById('po-party').classList.contains('hide'), 'Popover bleibt nach der Wahl offen');
+console.log('OK');
+"""
+
+
+def test_filterpillen_nennen_wert_und_leeren_sich():
+    _in_node(PRUEFUNG_PILLEN)
+
+
+PRUEFUNG_DETAIL_ARTEN = GRUNDZUSTAND + """
+// One detail per kind: only the facts that kind is known by, a value that
+// is also a filter as a link, nothing about what the kind cannot have.
+KANN_TYP = true;
+var FAKTEN = {
+  'k:1': {kind: 'kalender', start: '2026-09-16 14:00', end: '2026-09-16 15:00', location: 'Raum 3.12',
+          organiser: {name: 'Alice Beispiel', mail: 'alice@example.com'}, attendees: [{name: 'Dana', mail: 'dana@nordwind.example'}], text: 'Agenda'},
+  'c:1': {kind: 'kontakte', org: 'Nordwind GmbH', role: 'Einkauf', emails: ['dana@nordwind.example'], phones: ['+49 30 000000'], text: ''},
+  'd:1': {kind: 'datei', ext: 'xlsx', size: 86016, modified: '2026-09-14 11:20'},
+  'p:1': {kind: 'planner', assigned: ['Bob Baumeister'], due: '2026-09-20', state: 'inprogress', checklist: {done: 3, total: 5},
+          attachments: ['Angebot.pdf'], text: 'Beschreibung', comments: [{who: 'Bob', when: '2026-09-14 09:15', text: 'Kommentar'}]},
+  't:1': {kind: 'todo', due: '2026-09-11', state: 'completed', completed: '2026-09-11', steps: {done: 2, total: 2}, linked: ['Mail: Re: Angebot'], text: 'Notiz'}
+};
+// The status poll must not take the type filter away again
+function geruest(){ var st = statusGeruest(); st.store.features = ['ext', 'key']; return st; }
+global.fetch = function(pfad){
+  var m = /uid=([^&]+)/.exec(String(pfad));
+  return Promise.resolve({json: function(){
+    return Promise.resolve(String(pfad).indexOf('/api/detail') === 0 ? (FAKTEN[decodeURIComponent(m[1])] || {}) : geruest()); }});
+};
+renderHits({results: [
+  {uid: 'k:1', title: 'Budget', who: 'Alice Beispiel', who_mail: 'alice@example.com', date: '2026-09-16 14:00', source: 'kalender', context: 'kalender/Arbeit', preview: 'x', uri: 'o365://outlook/kalender/Arbeit/a.ics'},
+  {uid: 'c:1', title: 'Dana Dienstleister', who: 'Nordwind GmbH', date: '', source: 'kontakte', context: 'kontakte', preview: 'x', uri: 'o365://outlook/kontakte/d.vcf'},
+  {uid: 'd:1', title: 'Angebot_2026.xlsx', who: '', date: '2026-09-14 11:20', source: 'datei', root: 'sharepoint', context: 'Nordwind/Dokumente', preview: 'x', uri: 'o365://sharepoint/Nordwind/Dokumente/Angebot_2026.xlsx'},
+  {uid: 'p:1', title: 'Angebot vorbereiten', who: 'Bob Baumeister', date: '2026-09-14 09:15', source: 'planner', context: 'Nordwind board/Angebote', preview: 'x', uri: 'o365://planner/x/board.html'},
+  {uid: 't:1', title: 'Dana anrufen', who: '', date: '2026-09-11 16:40', source: 'todo', context: 'Aufgaben', preview: 'x', uri: 'o365://todo/x/list.html', gone: '2026-09-12T09:00:00'}
+], count: 5, backend: 'bm25'});
+// Head and actions from the hit, the facts and the text redrawn in place
+// once the fetch is in – the DOM stub keeps those under their own ids.
+function detail(i){
+  KANN_TYP = true;          // the first status poll may have reset it meanwhile
+  waehleTreffer(i);
+  return new Promise(function(f){ setTimeout(function(){
+    f(document.getElementById('detail-inhalt').innerHTML + document.getElementById('detail-fakten').innerHTML +
+      document.getElementById('detail-text').innerHTML); }, 10); });
+}
+detail(0).then(function(d){
+  pruefe(d.indexOf(t('search.fact.when')) >= 0 && d.indexOf('Raum 3.12') >= 0 && d.indexOf('dana@nordwind.example') >= 0, 'Terminfakten: ' + d.slice(0, 400));
+  pruefe(d.indexOf('tag extern') >= 0, 'Externer Teilnehmer nicht markiert');
+  pruefe(d.indexOf('15:00') >= 0, 'Das Ende fehlt');
+  pruefe(d.indexOf(t('search.fact.from')) < 0, 'Termin traegt eine Mailzeile');
+  return detail(1);
+}).then(function(d){
+  pruefe(d.indexOf('Nordwind GmbH') >= 0 && d.indexOf('+49 30 000000') >= 0, 'Kontaktfakten: ' + d.slice(0, 400));
+  pruefe(d.indexOf('<dt>' + t('search.fact.date') + '</dt>') < 0, 'Kontakt zeigt fremde Fakten');
+  return detail(2);
+}).then(function(d){
+  pruefe(d.indexOf("filterTyp('xlsx')") >= 0, 'Dateityp ist kein Filterlink');
+  pruefe(d.indexOf(t('search.fact.size')) >= 0 && d.indexOf("filterOrdner('sharepoint'") >= 0, 'Dateifakten: ' + d.slice(0, 400));
+  pruefe(d.indexOf('indexiert') < 0 && d.indexOf('indexed') < 0, 'Die Datei erklaert, was sie nicht kann');
+  return detail(3);
+}).then(function(d){
+  pruefe(d.indexOf(t('search.state.inprogress')) >= 0 && d.indexOf('Angebot.pdf') >= 0, 'Plannerfakten: ' + d.slice(0, 400));
+  pruefe(d.indexOf('class="kommentar"') >= 0 && d.indexOf('Kommentar') >= 0, 'Kommentare fehlen');
+  return detail(4);
+}).then(function(d){
+  pruefe(d.indexOf(t('search.state.completed')) >= 0 && d.indexOf('Mail: Re: Angebot') >= 0, 'To-Do-Fakten: ' + d.slice(0, 400));
+  pruefe(d.indexOf('tag weg') >= 0, 'Geloescht-Marke fehlt im Kopf');
+  pruefe(d.indexOf('waehleTreffer(3)') >= 0 && d.indexOf(t('search.detail.next')) >= 0, 'Kopf ohne Blaettern');
+  console.log('OK');
+});
+"""
+
+
+def test_jede_art_hat_ihr_eigenes_detail():
+    _in_node(PRUEFUNG_DETAIL_ARTEN)
 
 
 PRUEFUNG_GELOESCHT = GRUNDZUSTAND + """
@@ -4159,15 +4301,22 @@ PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """
 var st = statusGeruest();
 st.store.features = [];
 renderStatus(st);
-pruefe(document.getElementById('gone-feld').classList.contains('hide'),
+pruefe(document.getElementById('p-weg').classList.contains('hide'),
        'Filter wird trotz altem Index angeboten');
 pruefe(KANN_VERLAUF === false, 'Verlauf gilt trotz altem Index als moeglich');
+pruefe(document.getElementById('f-party').classList.contains('hide') && KANN_ADRESSEN === false,
+       'Beteiligtenfilter oder Adressen trotz altem Index angeboten');
 
 st.store.features = ['gone', 'thread'];
 renderStatus(st);
-pruefe(!document.getElementById('gone-feld').classList.contains('hide'),
+pruefe(!document.getElementById('p-weg').classList.contains('hide'),
        'Filter fehlt trotz passendem Index');
 pruefe(KANN_VERLAUF === true, 'Verlauf fehlt trotz passendem Index');
+// The address columns of 11.1: the parties filter and the People view's addresses hang on them.
+st.store.features = ['gone', 'thread', 'key', 'who_mail', 'domains'];
+renderStatus(st);
+pruefe(!document.getElementById('f-party').classList.contains('hide') && KANN_ADRESSEN === true,
+       'Beteiligtenfilter oder Adressen fehlen trotz passendem Index');
 console.log('OK');
 """
 
@@ -6747,9 +6896,10 @@ def test_startknopf_erklaert_sich_selbst():
     assert "export.start.hint" not in seite
 
 
+# search.gone.note sits in the *Deleted only* pill's popover since 11.2 –
+# on demand as well, one sentence under the switch, no (i) per pill.
 ERKLAERUNGEN_ALS_INFO = ["export.what.sub",
-                         "export.index.only.when", "export.calendar.build.when",
-                         "search.gone.note"]
+                         "export.index.only.when", "export.calendar.build.when"]
 
 
 @pytest.mark.parametrize("schluessel", ERKLAERUNGEN_ALS_INFO)
@@ -7066,6 +7216,12 @@ pruefe(gesucht.filter(function(x){ return x.indexOf('/api/search') >= 0; }).leng
 // ein Treffer einer ist.
 var markiert = hervor('Hier steht Betriebsrat mittendrin');
 pruefe(markiert.indexOf('<mark>Betriebsrat</mark>') >= 0, 'Nicht markiert: ' + markiert);
+// A quoted phrase is marked as one piece, the loose word beside it on its own.
+var qVorher = el('q').value;
+el('q').value = '"Betriebsrat mittendrin" Hier';
+var phrase = hervor('Hier steht Betriebsrat mittendrin');
+pruefe(phrase.indexOf('<mark>Betriebsrat mittendrin</mark>') >= 0 && phrase.indexOf('<mark>Hier</mark>') >= 0, 'Phrase nicht am Stueck markiert: ' + phrase);
+el('q').value = qVorher;
 // Maskiert wird trotzdem: sonst waere die Vorschau ein Einfallstor.
 pruefe(hervor('<b>x</b>').indexOf('&lt;b&gt;') >= 0, 'Vorschau nicht maskiert');
 console.log('OK');
@@ -7699,15 +7855,14 @@ pruefe(h.indexOf('aehnlicheZu(') < 0 && h.indexOf('punkte-knopf') < 0,
 waehleTreffer(0);
 var d = document.getElementById('detail-inhalt').innerHTML;
 pruefe(d.indexOf('aehnlicheZu(') >= 0, 'Aehnliche finden fehlt im Detail');
-pruefe(d.indexOf('zeigeVerlauf(1') >= 0, 'Verlauf fehlt im Detail');
+pruefe(d.indexOf('class="fakten"') >= 0 && d.indexOf('class="daktionen"') >= 0, 'Fakten oder Aktionen fehlen im Detail');
 pruefe(d.indexOf('Rechnung 4711') >= 0, 'Detail zeigt nicht den gewaehlten Treffer');
 
 // Was fuer diesen Treffer nicht geht, steht ausgegraut drin statt zu fehlen -
 // sonst wandern die Knoepfe je Treffer an andere Stellen.
 waehleTreffer(1);
 d = document.getElementById('detail-inhalt').innerHTML;
-pruefe(d.indexOf('zeigeVerlauf(') < 0 && d.indexOf('disabled') >= 0,
-       'Unmoegliches fehlt statt ausgegraut zu sein');
+pruefe(d.indexOf('disabled') >= 0, 'Unmoegliches fehlt statt ausgegraut zu sein');
 console.log('OK');
 """
 

@@ -66,6 +66,7 @@ import archive_check
 import auth
 import case_export
 import completeness
+import detail
 import export_util
 import faelle
 import folders
@@ -1264,7 +1265,7 @@ def _zaehle(db):
             # and deletions; the interface then simply does not offer them
             # instead of letting the user run into an error.
             "features": sorted({r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-                               & {"thread", "gone", "ext"}),
+                               & {"thread", "gone", "ext", "key", "who_mail", "domains"}),
         }
     finally:
         con.close()
@@ -2516,6 +2517,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(self._people(one))
             if u.path == "/api/document":
                 return self._json(self._document(one))
+            if u.path == "/api/detail":
+                return self._json(self._detail(one))
             if u.path == "/api/run-log":
                 try:
                     kennung = int(one.get("id") or 0)
@@ -3714,6 +3717,23 @@ class Handler(BaseHTTPRequestHandler):
         return mod.get_document(uid=q.get("uid", ""),
                                 context_before=int(q.get("before", 0) or 0),
                                 context_after=int(q.get("after", 0) or 0))
+
+    def _detail(self, q):
+        """The facts the hit's detail shows beyond the hit – per kind of
+        item, from the index row and the source file (detail.py). The
+        page draws only the keys that come back."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return {"error": self.app.search.error}
+        con = mod._db()
+        try:
+            row, text = mod._message_text(con, q.get("uid", ""))
+        finally:
+            con.close()
+        if row is None:
+            return {"error": {"k": "srv.detail.none", "v": {}}}
+        ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
+        return detail.fakten(row, text, ziel, mod.STATE)
 
     def _calendar(self):
         """Serve calendars, reconstructed appointments and contacts in one go.
