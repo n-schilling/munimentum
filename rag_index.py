@@ -105,7 +105,11 @@ def _chunk_row(i, c):
             # From the same names as att, but as its own column: SQL filters
             # on it, and that has to work in all three search modes.
             corpus.endungen(c.get("att")) or None,
-            c.get("key"))
+            c.get("key"),
+            # The sender's address and every party's domain (11.1) – mails
+            # and appointments carry them
+            c.get("who_mail") or None,
+            c.get("domains") or None)
 
 
 def _people_rows(chunks):
@@ -147,7 +151,9 @@ def write_db(store, chunks, manifest=None):
             gone TEXT,                    -- seit wann nicht mehr im Postfach
             att TEXT,                     -- Namen der Anhänge, siehe corpus.anhaenge
             ext TEXT,                     -- deren Dateitypen, siehe corpus.endungen
-            key TEXT);                    -- stable item key, siehe schluessel.py
+            key TEXT,                     -- stable item key, siehe schluessel.py
+            who_mail TEXT,                -- the sender's address, see corpus
+            domains TEXT);                -- every party's domain, see corpus.domains
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         -- A case names its items by key: the case filter and the membership
         -- mark on every hit look it up.
@@ -183,7 +189,7 @@ def write_db(store, chunks, manifest=None):
                              mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
                              PRIMARY KEY (root, rel));
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO dateien VALUES (?,?,?,?)",
                     ((root, rel, mtime, size) for (root, rel), (mtime, size)
@@ -329,9 +335,16 @@ def _alter_bestand(store):
         spalten = ("uid", "seq", "src", "root", "rel", "who", "ppl", "ts",
                    "date", "title", "ctx", "text", "hash", "thread", "gone",
                    "att")
+        vorhanden = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+        # The sender's address came with 11.1 and lives only in the parse:
+        # an index without it is read afresh, once, rather than carried
+        # over half-empty.
+        if not {"who_mail", "domains"} <= vorhanden:
+            return None, None
+        spalten += ("who_mail", "domains")
         # The key came with 11.0: an older index has no such column, and
         # its chunks get theirs on the way through (schluessel.zuweisen).
-        if any(r[1] == "key" for r in con.execute("PRAGMA table_info(chunks)")):
+        if "key" in vorhanden:
             spalten += ("key",)
         chunks = {}
         for row in con.execute(f"SELECT {', '.join(spalten)} FROM chunks "

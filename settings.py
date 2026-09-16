@@ -170,9 +170,17 @@ VORGABEN = {
     # filters – never its hits. "off" keeps none, a number of days, or
     # "forever". Cases and saved searches are not affected.
     "search_history": "90",
-    # Where an exported case lands: one folder per case below this path.
+    # Where an exported case lands: one ZIP per case below this path.
     # Empty means "Munimentum cases" in the user's Documents folder.
     "case_export_dir": "",
+    # The mail domains of your own organisation, comma-separated: a person
+    # in a case whose address lies elsewhere is marked external. Empty
+    # means the domain of the signed-in account.
+    "internal_domains": "",
+    # Your own name as the archive writes it – left out of a case's People
+    # view, with the address you signed in with. Empty means the name the
+    # sign-in carries.
+    "own_name": "",
     # UI userflow recording: the last interaction steps for the error
     # report – only the kind (tab, search, run), never contents, purely in
     # the memory of the open page. 0 turns it off.

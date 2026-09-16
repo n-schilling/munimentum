@@ -51,7 +51,8 @@ CREATE TABLE IF NOT EXISTS gespeichert(
     angelegt  TEXT NOT NULL,
     zuletzt   TEXT,                      -- last run
     treffer   INTEGER,                   -- hits then
-    fall_id   INTEGER                    -- attached to this case, or NULL
+    fall_id   INTEGER,                   -- attached to this case, or NULL
+    ordner_id INTEGER                    -- its new hits go into this folder
 );
 CREATE TABLE IF NOT EXISTS faelle(
     id           INTEGER PRIMARY KEY,
@@ -63,6 +64,13 @@ CREATE TABLE IF NOT EXISTS faelle(
     geschlossen  TEXT,
     exportiert   TEXT,                   -- where the last export went
     exportiert_wann TEXT
+);
+CREATE TABLE IF NOT EXISTS ordner(
+    id       INTEGER PRIMARY KEY,
+    fall_id  INTEGER NOT NULL,
+    name     TEXT NOT NULL,
+    angelegt TEXT NOT NULL,
+    UNIQUE(fall_id, name)
 );
 CREATE TABLE IF NOT EXISTS eintraege(
     id           INTEGER PRIMARY KEY,
@@ -76,6 +84,8 @@ CREATE TABLE IF NOT EXISTS eintraege(
     wer          TEXT,
     hinzugefuegt TEXT NOT NULL,
     liste_id     INTEGER,                -- came with this result list, or NULL
+    ordner_id    INTEGER,                -- the folder inside the case, NULL = unsorted
+    quelle       TEXT,                   -- who wrote it: 'ui' (the page) or 'mcp'
     UNIQUE(fall_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_eintraege_key ON eintraege(key);
@@ -84,18 +94,30 @@ CREATE TABLE IF NOT EXISTS listen(
     fall_id   INTEGER NOT NULL,
     kriterien TEXT NOT NULL,
     wann      TEXT NOT NULL,
-    anzahl    INTEGER NOT NULL
+    anzahl    INTEGER NOT NULL,
+    ordner_id INTEGER                    -- filed into this folder as a whole
 );
 CREATE TABLE IF NOT EXISTS notizen(
     id      INTEGER PRIMARY KEY,
     fall_id INTEGER NOT NULL,
     wann    TEXT NOT NULL,
-    text    TEXT NOT NULL
+    text    TEXT NOT NULL,
+    quelle  TEXT                         -- 'ui' or 'mcp'
 );
 """
 
+# 11.1 added columns to tables 11.0 created. They are added in place when
+# the file is opened – a column, not a move of data; rows keep everything.
+_ERGAENZUNGEN = (("gespeichert", "ordner_id", "INTEGER"), ("eintraege", "ordner_id", "INTEGER"),
+                 ("eintraege", "quelle", "TEXT"), ("listen", "ordner_id", "INTEGER"),
+                 ("notizen", "quelle", "TEXT"), ("eintraege", "bemerkung", "TEXT"))
+
+UI, MCP = "ui", "mcp"                     # who wrote an item or a note
+
 _LEER = {"q": "", "mode": "text", "person": "", "source": "all", "from": "",
-         "to": "", "folder": "", "filetype": "", "gone": False, "fall": None}
+         "to": "", "folder": "", "filetype": "", "gone": False, "fall": None, "ordner": None,
+         "party": "all"}
+PARTEIEN = ("internal", "external")       # the "party" filter's two narrowings
 
 
 class FallGeschlossen(Exception):
@@ -104,6 +126,10 @@ class FallGeschlossen(Exception):
 
 class KeinFall(Exception):
     """No case with that id."""
+
+
+class KeinOrdner(Exception):
+    """No folder with that id in this case."""
 
 
 def jetzt():
@@ -128,11 +154,19 @@ def kriterien(daten):
     out["mode"] = mode if mode in MODI else _modus_vom_server(mode)
     gone = daten.get("gone")
     out["gone"] = gone if isinstance(gone, bool) else str(gone).lower() in ("1", "true", "ja")
+    party = str(daten.get("party") or "all").strip().lower()
+    out["party"] = party if party in PARTEIEN else "all"
     fall = daten.get("fall", daten.get("case"))
     try:
         out["fall"] = int(fall) if fall not in (None, "", 0, "0") else None
     except (TypeError, ValueError):
         out["fall"] = None
+    # The folder inside the case – only with a case.
+    ordner = daten.get("ordner", daten.get("case_folder"))
+    try:
+        out["ordner"] = int(ordner) if out["fall"] and ordner not in (None, "", 0, "0") else None
+    except (TypeError, ValueError):
+        out["ordner"] = None
     return out
 
 
@@ -163,6 +197,10 @@ class Fallbuch:
         con = sqlite3.connect(self.pfad, timeout=5)
         con.row_factory = sqlite3.Row
         con.executescript(_SCHEMA)
+        for tabelle, spalte, art in _ERGAENZUNGEN:
+            if not any(r[1] == spalte for r in con.execute(f"PRAGMA table_info({tabelle})")):
+                con.execute(f"ALTER TABLE {tabelle} ADD COLUMN {spalte} {art}")
+        con.commit()
         return con
 
     # -- history -----------------------------------------------------------
@@ -225,7 +263,7 @@ class Fallbuch:
             con.close()
 
     # -- saved searches ----------------------------------------------------
-    def speichern(self, name, k, fall_id=None):
+    def speichern(self, name, k, fall_id=None, ordner_id=None):
         name = str(name or "").strip()
         if not name:
             raise ValueError("name")
@@ -233,9 +271,12 @@ class Fallbuch:
         try:
             if fall_id is not None:
                 self._fall_offen(con, fall_id)
+                ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            else:
+                ordner_id = None
             cur = con.execute(
-                "INSERT INTO gespeichert(name, kriterien, angelegt, fall_id) VALUES(?,?,?,?)",
-                (name, _json(k), jetzt(), fall_id))
+                "INSERT INTO gespeichert(name, kriterien, angelegt, fall_id, ordner_id) VALUES(?,?,?,?,?)",
+                (name, _json(k), jetzt(), fall_id, ordner_id))
             con.commit()
             return cur.lastrowid
         finally:
@@ -244,8 +285,8 @@ class Fallbuch:
     def gespeicherte(self, fall_id=None):
         con = self._connect()
         try:
-            sql = ("SELECT g.*, f.name AS fall_name FROM gespeichert g "
-                   "LEFT JOIN faelle f ON f.id = g.fall_id")
+            sql = ("SELECT g.*, f.name AS fall_name, o.name AS ordner_name FROM gespeichert g "
+                   "LEFT JOIN faelle f ON f.id = g.fall_id LEFT JOIN ordner o ON o.id = g.ordner_id")
             params = ()
             if fall_id is not None:
                 sql += " WHERE g.fall_id = ?"
@@ -258,9 +299,9 @@ class Fallbuch:
     def gespeichert(self, kennung):
         con = self._connect()
         try:
-            r = con.execute("SELECT g.*, f.name AS fall_name FROM gespeichert g "
-                            "LEFT JOIN faelle f ON f.id = g.fall_id WHERE g.id = ?",
-                            (kennung,)).fetchone()
+            r = con.execute("SELECT g.*, f.name AS fall_name, o.name AS ordner_name FROM gespeichert g "
+                            "LEFT JOIN faelle f ON f.id = g.fall_id LEFT JOIN ordner o ON o.id = g.ordner_id "
+                            "WHERE g.id = ?", (kennung,)).fetchone()
             return self._gespeichert(r) if r else None
         finally:
             con.close()
@@ -269,7 +310,8 @@ class Fallbuch:
     def _gespeichert(r):
         return {"id": r["id"], "name": r["name"], "kriterien": kriterien(r["kriterien"]),
                 "angelegt": r["angelegt"], "zuletzt": r["zuletzt"], "treffer": r["treffer"],
-                "fall": r["fall_id"], "fall_name": r["fall_name"]}
+                "fall": r["fall_id"], "fall_name": r["fall_name"],
+                "ordner": r["ordner_id"], "ordner_name": r["ordner_name"]}
 
     def umbenennen(self, kennung, name):
         name = str(name or "").strip()
@@ -301,14 +343,18 @@ class Fallbuch:
         finally:
             con.close()
 
-    def anhaengen(self, kennung, fall_id):
-        """Attach a saved search to a case (None detaches)."""
+    def anhaengen(self, kennung, fall_id, ordner_id=None):
+        """Attach a saved search to a case (None detaches), filing its new
+        hits into the folder."""
         con = self._connect()
         try:
             if fall_id is not None:
                 self._fall_offen(con, fall_id)
-            n = con.execute("UPDATE gespeichert SET fall_id = ? WHERE id = ?",
-                            (fall_id, kennung)).rowcount
+                ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            else:
+                ordner_id = None
+            n = con.execute("UPDATE gespeichert SET fall_id = ?, ordner_id = ? WHERE id = ?",
+                            (fall_id, ordner_id, kennung)).rowcount
             con.commit()
             return n > 0
         finally:
@@ -361,12 +407,16 @@ class Fallbuch:
         listen = con.execute("SELECT COUNT(*) FROM listen WHERE fall_id = ?", (r["id"],)).fetchone()[0]
         notizen = con.execute("SELECT COUNT(*) FROM notizen WHERE fall_id = ?", (r["id"],)).fetchone()[0]
         suchen = con.execute("SELECT COUNT(*) FROM gespeichert WHERE fall_id = ?", (r["id"],)).fetchone()[0]
+        ordner = con.execute("SELECT COUNT(*) FROM ordner WHERE fall_id = ?", (r["id"],)).fetchone()[0]
         return {"id": r["id"], "name": r["name"], "beschreibung": r["beschreibung"],
                 "status": r["status"], "angelegt": r["angelegt"], "geaendert": r["geaendert"],
                 "geschlossen": r["geschlossen"],
                 "exportiert": r["exportiert"], "exportiert_wann": r["exportiert_wann"],
                 "eintraege": sum(je_quelle.values()), "je_quelle": je_quelle,
-                "listen": listen, "notizen": notizen, "suchen": suchen}
+                "listen": listen, "notizen": notizen, "suchen": suchen, "ordner": ordner,
+                # The folders themselves travel with the list: the page's
+                # case filter and its choice windows name them.
+                "ordner_liste": self._ordner(con, r["id"])}
 
     def fall(self, fall_id):
         """The whole case: its entries, result lists, notes and attached
@@ -381,13 +431,12 @@ class Fallbuch:
                 "SELECT * FROM eintraege WHERE fall_id = ? ORDER BY src, datum DESC, id", (fall_id,))]
             fall["listen_liste"] = [self._liste(row) for row in con.execute(
                 "SELECT * FROM listen WHERE fall_id = ? ORDER BY wann DESC, id DESC", (fall_id,))]
-            fall["notizen_liste"] = [{"id": n["id"], "wann": n["wann"], "text": n["text"]}
-                                     for n in con.execute(
+            fall["notizen_liste"] = [self._notiz(n) for n in con.execute(
                 "SELECT * FROM notizen WHERE fall_id = ? ORDER BY wann DESC, id DESC", (fall_id,))]
             fall["suchen_liste"] = [self._gespeichert(g) for g in con.execute(
-                "SELECT g.*, f.name AS fall_name FROM gespeichert g "
-                "LEFT JOIN faelle f ON f.id = g.fall_id WHERE g.fall_id = ? "
-                "ORDER BY lower(g.name)", (fall_id,))]
+                "SELECT g.*, f.name AS fall_name, o.name AS ordner_name FROM gespeichert g "
+                "LEFT JOIN faelle f ON f.id = g.fall_id LEFT JOIN ordner o ON o.id = g.ordner_id "
+                "WHERE g.fall_id = ? ORDER BY lower(g.name)", (fall_id,))]
             return fall
         finally:
             con.close()
@@ -448,11 +497,120 @@ class Fallbuch:
         con = self._connect()
         try:
             n = con.execute("DELETE FROM faelle WHERE id = ?", (fall_id,)).rowcount
-            for tabelle in ("eintraege", "listen", "notizen"):
+            for tabelle in ("eintraege", "listen", "notizen", "ordner"):
                 con.execute(f"DELETE FROM {tabelle} WHERE fall_id = ?", (fall_id,))
             con.execute("UPDATE gespeichert SET fall_id = NULL WHERE fall_id = ?", (fall_id,))
             con.commit()
             return n > 0
+        finally:
+            con.close()
+
+    # -- folders -----------------------------------------------------------
+    # One level: every item sits in exactly one folder or in none
+    # ("unsorted", ordner_id NULL). A folder is a name inside one case.
+    @staticmethod
+    def _ordner_pruefen(con, fall_id, ordner_id):
+        """None passes; an id must name a folder of this case."""
+        if ordner_id in (None, "", 0, "0"):
+            return None
+        ordner_id = int(ordner_id)
+        if con.execute("SELECT 1 FROM ordner WHERE id = ? AND fall_id = ?",
+                       (ordner_id, fall_id)).fetchone() is None:
+            raise KeinOrdner(ordner_id)
+        return ordner_id
+
+    @staticmethod
+    def _ordner(con, fall_id):
+        return [{"id": o["id"], "name": o["name"], "angelegt": o["angelegt"],
+                 "anzahl": con.execute("SELECT COUNT(*) FROM eintraege WHERE ordner_id = ?",
+                                       (o["id"],)).fetchone()[0]}
+                for o in con.execute("SELECT * FROM ordner WHERE fall_id = ? ORDER BY lower(name), id",
+                                     (fall_id,))]
+
+    def ordner(self, fall_id):
+        con = self._connect()
+        try:
+            return self._ordner(con, fall_id)
+        finally:
+            con.close()
+
+    def ordner_anlegen(self, fall_id, name):
+        """A folder in an open case; the same name again is the same
+        folder. Returns its id."""
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("name")
+        con = self._connect()
+        try:
+            self._fall_offen(con, fall_id)
+            da = con.execute("SELECT id FROM ordner WHERE fall_id = ? AND name = ?",
+                             (fall_id, name)).fetchone()
+            if da:
+                return da["id"]
+            cur = con.execute("INSERT INTO ordner(fall_id, name, angelegt) VALUES(?,?,?)",
+                              (fall_id, name, jetzt()))
+            self._beruehrt(con, fall_id)
+            con.commit()
+            return cur.lastrowid
+        finally:
+            con.close()
+
+    def ordner_umbenennen(self, fall_id, ordner_id, name):
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("name")
+        con = self._connect()
+        try:
+            self._fall_offen(con, fall_id)
+            ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            if ordner_id is None:
+                raise KeinOrdner(ordner_id)
+            anderer = con.execute("SELECT id FROM ordner WHERE fall_id = ? AND name = ? AND id != ?",
+                                  (fall_id, name, ordner_id)).fetchone()
+            if anderer:
+                raise ValueError("exists")
+            con.execute("UPDATE ordner SET name = ? WHERE id = ?", (name, ordner_id))
+            self._beruehrt(con, fall_id)
+            con.commit()
+        finally:
+            con.close()
+
+    def ordner_loeschen(self, fall_id, ordner_id):
+        """The folder goes; what it held becomes unsorted – nothing leaves
+        the case."""
+        con = self._connect()
+        try:
+            self._fall_offen(con, fall_id)
+            ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            if ordner_id is None:
+                raise KeinOrdner(ordner_id)
+            for tabelle in ("eintraege", "listen", "gespeichert"):
+                con.execute(f"UPDATE {tabelle} SET ordner_id = NULL WHERE ordner_id = ?", (ordner_id,))
+            con.execute("DELETE FROM ordner WHERE id = ?", (ordner_id,))
+            self._beruehrt(con, fall_id)
+            con.commit()
+        finally:
+            con.close()
+
+    def verschieben(self, fall_id, keys, ordner_id):
+        """Items into a folder (None: unsorted). Returns how many moved."""
+        keys = [str(k) for k in (keys or ()) if k]
+        if not keys:
+            return 0
+        con = self._connect()
+        try:
+            self._fall_offen(con, fall_id)
+            ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            n = 0
+            for s in range(0, len(keys), 500):
+                teil = keys[s:s + 500]
+                q = ",".join("?" * len(teil))
+                n += con.execute(f"UPDATE eintraege SET ordner_id = ? WHERE fall_id = ? AND key IN ({q})",
+                                 (ordner_id, fall_id, *teil)).rowcount
+            if n:
+                self._beruehrt(con, fall_id)
+            con.commit()
+            return n
         finally:
             con.close()
 
@@ -461,20 +619,29 @@ class Fallbuch:
     def _eintrag(e):
         return {"id": e["id"], "key": e["key"], "src": e["src"], "root": e["root"],
                 "rel": e["rel"], "titel": e["titel"], "datum": e["datum"], "wer": e["wer"],
-                "hinzugefuegt": e["hinzugefuegt"], "liste": e["liste_id"]}
+                "hinzugefuegt": e["hinzugefuegt"], "liste": e["liste_id"],
+                "ordner": e["ordner_id"], "quelle": e["quelle"] or UI,
+                # The remark: one or two sentences on why the item is here
+                "bemerkung": e["bemerkung"] or ""}
 
     @staticmethod
     def _liste(row):
         return {"id": row["id"], "wann": row["wann"], "kriterien": kriterien(row["kriterien"]),
-                "anzahl": row["anzahl"]}
+                "anzahl": row["anzahl"], "ordner": row["ordner_id"]}
 
-    def hinzufuegen(self, fall_id, eintraege, liste_id=None):
+    @staticmethod
+    def _notiz(n):
+        return {"id": n["id"], "wann": n["wann"], "text": n["text"], "quelle": n["quelle"] or UI}
+
+    def hinzufuegen(self, fall_id, eintraege, liste_id=None, ordner_id=None, quelle=UI):
         """Add items to a case: dicts with key (required), src, root, rel,
-        titel, datum, wer. An item already in the case is left as it is.
-        Returns how many were new."""
+        titel, datum, wer and optionally a bemerkung – into the folder,
+        marked with who wrote them. An item already in the case is left as
+        it is, folder, remark and all. Returns how many were new."""
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
+            ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
             neu = 0
             for e in eintraege:
                 key = str((e or {}).get("key") or "").strip()
@@ -482,15 +649,32 @@ class Fallbuch:
                     continue
                 cur = con.execute(
                     "INSERT OR IGNORE INTO eintraege(fall_id, key, src, root, rel, titel, datum, "
-                    "wer, hinzugefuegt, liste_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    "wer, hinzugefuegt, liste_id, ordner_id, quelle, bemerkung) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (fall_id, key, e.get("src"), e.get("root"), e.get("rel"),
                      e.get("titel") or e.get("title"), e.get("datum") or e.get("date"),
-                     e.get("wer") or e.get("who"), jetzt(), liste_id))
+                     e.get("wer") or e.get("who"), jetzt(), liste_id, ordner_id,
+                     MCP if quelle == MCP else UI, str(e.get("bemerkung") or "").strip()))
                 neu += cur.rowcount
             if neu:
                 self._beruehrt(con, fall_id)
             con.commit()
             return neu
+        finally:
+            con.close()
+
+    def bemerkung_setzen(self, fall_id, key, text):
+        """The remark on one item – empty text removes it. Returns whether
+        the case holds the item."""
+        con = self._connect()
+        try:
+            self._fall_offen(con, fall_id)
+            n = con.execute("UPDATE eintraege SET bemerkung = ? WHERE fall_id = ? AND key = ?",
+                            (str(text or "").strip(), fall_id, str(key or ""))).rowcount
+            if n:
+                self._beruehrt(con, fall_id)
+            con.commit()
+            return n > 0
         finally:
             con.close()
 
@@ -515,11 +699,15 @@ class Fallbuch:
         finally:
             con.close()
 
-    def keys(self, fall_id):
+    def keys(self, fall_id, ordner_id=None):
+        """The keys of a case – of one folder with `ordner_id`."""
         con = self._connect()
         try:
-            return {r[0] for r in con.execute("SELECT key FROM eintraege WHERE fall_id = ?",
-                                              (fall_id,))}
+            if ordner_id is None:
+                return {r[0] for r in con.execute("SELECT key FROM eintraege WHERE fall_id = ?",
+                                                  (fall_id,))}
+            return {r[0] for r in con.execute(
+                "SELECT key FROM eintraege WHERE fall_id = ? AND ordner_id = ?", (fall_id, int(ordner_id)))}
         finally:
             con.close()
 
@@ -536,27 +724,30 @@ class Fallbuch:
                 teil = keys[s:s + 500]
                 q = ",".join("?" * len(teil))
                 for r in con.execute(
-                        f"SELECT e.key, f.id, f.name, f.status FROM eintraege e "
-                        f"JOIN faelle f ON f.id = e.fall_id WHERE e.key IN ({q}) "
-                        f"ORDER BY f.status = 'zu', f.name", teil):
-                    out.setdefault(r[0], []).append({"id": r[1], "name": r[2], "status": r[3]})
+                        f"SELECT e.key, f.id, f.name, f.status, o.name FROM eintraege e "
+                        f"JOIN faelle f ON f.id = e.fall_id LEFT JOIN ordner o ON o.id = e.ordner_id "
+                        f"WHERE e.key IN ({q}) ORDER BY f.status = 'zu', f.name", teil):
+                    out.setdefault(r[0], []).append({"id": r[1], "name": r[2], "status": r[3],
+                                                     "ordner": r[4]})
             return out
         finally:
             con.close()
 
-    def liste_anlegen(self, fall_id, k, treffer):
+    def liste_anlegen(self, fall_id, k, treffer, ordner_id=None, quelle=UI):
         """A result list as it stands now: the criteria, dated, and its hits
-        as entries of the case. Returns (list id, hits new to the case)."""
+        as entries of the case, filed into the folder. Returns (list id,
+        hits new to the case)."""
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
-            cur = con.execute("INSERT INTO listen(fall_id, kriterien, wann, anzahl) VALUES(?,?,?,?)",
-                              (fall_id, _json(k), jetzt(), len(treffer)))
+            ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
+            cur = con.execute("INSERT INTO listen(fall_id, kriterien, wann, anzahl, ordner_id) VALUES(?,?,?,?,?)",
+                              (fall_id, _json(k), jetzt(), len(treffer), ordner_id))
             con.commit()
             liste_id = cur.lastrowid
         finally:
             con.close()
-        neu = self.hinzufuegen(fall_id, treffer, liste_id=liste_id)
+        neu = self.hinzufuegen(fall_id, treffer, liste_id=liste_id, ordner_id=ordner_id, quelle=quelle)
         return liste_id, neu
 
     def liste(self, liste_id):
@@ -590,15 +781,15 @@ class Fallbuch:
             con.close()
 
     # -- casebook ----------------------------------------------------------
-    def notiz(self, fall_id, text):
+    def notiz(self, fall_id, text, quelle=UI):
         text = str(text or "").strip()
         if not text:
             raise ValueError("text")
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
-            cur = con.execute("INSERT INTO notizen(fall_id, wann, text) VALUES(?,?,?)",
-                              (fall_id, jetzt(), text))
+            cur = con.execute("INSERT INTO notizen(fall_id, wann, text, quelle) VALUES(?,?,?,?)",
+                              (fall_id, jetzt(), text, MCP if quelle == MCP else UI))
             self._beruehrt(con, fall_id)
             con.commit()
             return cur.lastrowid
@@ -608,7 +799,7 @@ class Fallbuch:
     def notizen(self, fall_id):
         con = self._connect()
         try:
-            return [{"id": n["id"], "wann": n["wann"], "text": n["text"]} for n in con.execute(
+            return [self._notiz(n) for n in con.execute(
                 "SELECT * FROM notizen WHERE fall_id = ? ORDER BY wann DESC, id DESC", (fall_id,))]
         finally:
             con.close()

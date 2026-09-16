@@ -307,16 +307,22 @@ keeps the underlying hits one click away.
 
 Filters — person, source, date range, folder, file type, and messages no longer
 in the mailbox — sit in a row below the field, a set one highlighted where it
-stands, and nothing searches until you ask for it. The
+stands, and nothing searches until you ask for it. Once the index carries
+the parties' addresses, a further filter narrows mails and appointments to
+those whose every party lies inside your organisation's mail domains, or
+to those with at least one party outside — the domains are a setting under
+*App*, else the domain you signed in with — and such a hit carries
+*external* in the list and the detail. The
 person field suggests names that actually occur, so a typo is not mistaken for
 an absence, and `*` stands for any run of characters when one name is too
 narrow. Picking a source narrows what the other two offer: calendars for
 the calendar, the four kinds of Teams conversation for Teams, attachment types
 for mail, and nothing at all where there is only one thing to choose from. The
-hits stand on the left; a chosen one opens on the right with its origin, the
-original file, the whole conversation it belongs to, *Find similar*, and a
-link to everything with that person — the archive's own HTML shown in place,
-for everything else the excerpt the index holds.
+hits stand on the left; a chosen one opens on the right with the original
+file, the whole conversation it belongs to (and how much of it a case
+already holds), *Find similar*, *Add to case*, and a link to everything
+with that person — the archive's own HTML shown in place, for everything
+else the excerpt the index holds.
 
 Four views live here: results, calendar (including appointments recovered
 from invitation and cancellation mails), the address book, and a **file
@@ -356,32 +362,91 @@ A case collects what belongs to one matter — hits, whole result lists and
 saved searches, from every source — without copying anything: the case
 points at items in the archive by a key that survives a rename or a
 move (the mail's Message-ID, the file's drive item, the Teams message,
-the task); an index from before 11.0 is rebuilt with those keys on the
-next run, whatever the exports brought. The door
-lists the cases, open ones first; a case opens on the right with its
-description, the **casebook** (short dated notes: what was found, what is
-open, what was decided), the **result lists** it stores — a search as it
-stood at one moment, criteria and exactly the hits of that moment, which
-count as items of the case and can be searched again —, its items grouped
-by source with a link into the original, and the **saved searches**
-attached to it: *Check for new hits* runs them and shows what the case
-lacks, *Add the new ones* takes them in. Nothing is added on its own.
+the task); an index from before 11.1 is read again in full on the next
+run, whatever the exports brought — it adds the keys and the parties'
+addresses the case views need. The door shows the **case
+overview** at the left — name, status, one count per source, the last
+change; closed cases behind *Show n closed cases* — and the case at the
+right. While a case is open the overview narrows to the names; the
+arrow in its head widens it again.
 
-*Close case* makes a case read-only — it stays in the list, can still be
-searched in and exported, and reopens any time; *Delete case* drops the
-case, its items, lists and notes and detaches its searches, and touches
-nothing in the archive. **Export case…** is a run like any other: the
-run window opens with it and its log says what was copied. It writes one
-folder — `<case>_<date>` under *Settings › App › Case exports go to*, by
-default *Munimentum cases* in your Documents folder — with the originals
-of every item under their source's name and path (mails as `.eml`, the
+A case opens with its name, status and *Edit…*, a line of facts and its
+description, then one tool row: a **filter field** that narrows every
+group of the case to the rows matching a title, a person, a date or a
+remark (every group opens as it is typed, and the row says "n of m
+shown"),
+*Search in this case*, and two buttons that expand or collapse every
+group. Every heading below is a fold, closed when the case opens, its
+closed line carrying the count: the **casebook** (short dated notes:
+what was found, what is open, what was decided), the **result lists**
+it stores — a search as it stood at one moment, criteria and exactly
+the hits of that moment, which count as items of the case and can be
+searched again —, the items, and the **saved searches** attached to it:
+*Check for new hits* runs them and shows what the case lacks, *Add the
+new ones* takes them in. Nothing is added on its own.
+
+**Folders** sort the items, one level deep. *New folder…* in the tool
+row makes one; ticked rows move with *Move to* — an existing folder, a
+new one, or back to *Unsorted*; a folder's heading offers *Search
+here*, *Rename* and `×` (its items stay in the case, unsorted). Inside
+a folder the items fold once more by source, thirty rows at a time. A
+result list and a saved search file into one folder as a whole, so a
+search's new hits land where its earlier ones went; the window that
+puts anything into a case asks for the folder too. The *Cases* filter
+of the search page lists every folder under its case, and a hit's mark
+names the folder it sits in. Whatever Claude put into the case through
+MCP — an item, a note — carries *via MCP* on that item or note, nowhere
+else.
+
+Under the head sit three views of the same case. **Folders** is the
+view above. **Timeline** is every item and every casebook note in the
+order they happened, month by month, the folder as a small tag, oldest
+first or newest first — with the case's activity above the rows: one
+soft bar per month (per week when the case spans less than a quarter),
+its height the items of that time, the notes as dots under it, so you
+see where the case was busy and where quiet; a click on a bar narrows
+the rows to it. **People** is a picture: you at the left, everyone the
+items name — senders, chat authors, organisers, assignees, contacts —
+in four columns by their last contact in the case (*This week · This
+month · This quarter · Older*), each a circle sized by how many items
+name them, with initials instead of photos; a person whose address
+lies outside your organisation's mail domains (*Settings › App*, else
+the domain you signed in with) has a dashed ring and the *external*
+mark, and you are left out yourself, by the address you signed in with
+and your name (the sign-in's, or the one you set). A click on a person
+opens a card with the address, the count per source, the span of their
+dates, and the two ways on: *Timeline* shows their items in order,
+*Search* asks the archive for the person inside the case. The filter
+field narrows whichever view is open. Every item can carry a **remark** — one or two sentences on why it is in the case —
+written in a small window from the pen on its row, shown under the
+title in the folder and timeline views and exported with the item. A
+mail or a chat message rarely stands alone: the window that adds a hit
+offers the **rest of the conversation** with the numbers the archive
+knows (how many more messages, how many the case holds already), and a
+row whose conversation the case lacks part of shows *Thread +n*, which
+fetches the rest into the row's folder.
+
+The foot has two groups: *Export case…* with the date and *Show folder*
+of the last export at the left; *Close case* / *Reopen* and *Delete
+case* at the right. *Close case* makes a case read-only — it stays in
+the list, can still be searched in and exported, and reopens any time;
+*Delete case* drops the case, its folders, items, lists and notes and
+detaches its searches, and touches nothing in the archive. **Export
+case…** shows what the ZIP will hold and is a run like any other: the
+run window opens with it and its log says what was copied. It writes
+one ZIP — `<case>_<date>.zip` under *Settings › App › Case exports go
+to*, by default *Munimentum cases* in your Documents folder — with the
+originals of every item under `<folder>/<source>/<path>` (just
+`<source>/<path>` when the case has no folders; mails as `.eml`, the
 chat's HTML with its attachments, files, pages and boards as HTML,
-contacts as `.vcf`, appointments as `.ics`), an `index.html` that lists
-every item with source, date, people and a link that lands on the
-message, card or task, the list as `items.csv`, and `casebook.md` with
-the notes; optionally the whole folder as a zip beside it. An item the
-archive no longer holds is listed all the same, marked. The case remembers
-where its last export went; *Show export folder* opens it.
+contacts as `.vcf`, appointments as `.ics`), an `index.html` with one
+section per folder that lists every item with source, date, people,
+remark, origin and a link that lands on the message, card or task, a
+`timeline.html` with the items and the notes in the order they
+happened, the list as `items.csv` with folder, remark and origin
+columns, and `casebook.md` with the notes. An item the archive no longer holds is
+listed all the same, marked. The case remembers where its last export
+went; *Show folder* opens it.
 
 ### Insights
 
@@ -484,9 +549,12 @@ Windows, clicking one opens the interface; on Linux they go through
 reported; "all runs" and "off" are a setting away. Everything stays on the
 machine.
 
-The **App** card also holds how long the search history is kept and
-where case exports land; the **Claude (MCP)** card has *Claude may change
-cases*, off by default — see [Search with Claude](#search-with-claude).
+The **App** card also holds how long the search history is kept, where
+case exports land, your organisation's mail domains (what *external*
+means; empty means the domain you signed in with) and your name (left
+out of a case's People view; empty means the sign-in's); the **Claude
+(MCP)** card has *Claude may change cases*, off by default — see
+[Search with Claude](#search-with-claude).
 
 **Keep awake during a run** holds the machine off idle sleep while an
 export or index runs — macOS through `caffeinate`, Windows through a power
@@ -554,11 +622,16 @@ guessing. Cases and saved searches are there too: `list_cases` and
 `case_people` who is involved, `case_new_hits` what the attached searches
 find that the case lacks, `list_saved_searches` and `run_saved_search`
 run a search exactly as saved, and every search or browse takes a `case`
-to look only inside one — every hit says which cases it already sits in.
-Claude reads cases but changes nothing unless *Claude may change cases*
-is on under *Settings › Claude (MCP)*: then `add_to_case` and
-`add_case_note` can put items and notes into open cases, never delete or
-close one. *Settings* prints the exact snippet to paste into your client.
+to look only inside one, `case_folder` for one folder of it and `party`
+for internal-only or external-involving mails — every hit says which
+cases, and which folders, it already sits in, and which domains its
+parties belong to. Claude
+reads cases but changes nothing unless *Claude may change cases* is on
+under *Settings › Claude (MCP)*: then `add_to_case` (into a folder of
+the case, when one is named, with a `remark` on why) and
+`add_case_note` can put items and notes into open cases, never delete
+or close one; what they put there is marked *via MCP* in the case, and
+`get_case` shows every item's remark. *Settings* prints the exact snippet to paste into your client.
 The stdio snippet names nothing but the profile — `--profile <name>` —
 and the server takes folders, model, Ollama address and port from that
 profile's settings, so nothing in the snippet goes stale. Its entry is

@@ -185,6 +185,8 @@ def test_load_outlook_parses_eml(tmp_path):
     r = recs[0]
     assert r["uid"] == "outlook:inbox/mail.eml:0"
     assert r["who"] == "Alice Example"
+    assert r["who_mail"] == "alice@example.com"
+    assert r["domains"] == "example.com"
     assert r["title"] == "Testmail"
     assert r["ctx"] == "inbox"
     assert "bob@example.com" in r["ppl"]

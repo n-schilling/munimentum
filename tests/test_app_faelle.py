@@ -13,6 +13,7 @@ import re
 import time
 import json
 import threading
+import urllib.parse
 
 import pytest
 
@@ -33,29 +34,46 @@ MAIL2 = ("Message-ID: <m2@example.com>\nFrom: Alice Beispiel <alice@example.com>
          "Hiermit beantrage ich Urlaub.\n")
 
 
+# A reply to MAIL: the two make one conversation – without a word the
+# other tests search for, so their counts stay.
+MAIL3 = ("Message-ID: <m3@example.com>\nIn-Reply-To: <m1@example.com>\nReferences: <m1@example.com>\n"
+         "From: Alice Beispiel <alice@example.com>\nTo: carla@example.com\nSubject: Re: Freigabe\n"
+         "Date: Wed, 11 Jun 2025 09:00:00 +0000\n\nDanke, dann buche ich sie.\n")
+
+
 @pytest.fixture
 def welt(sandbox, with_ollama):  # noqa: F811
     """A store with keys, the app on a port, an empty case book."""
-    teams = sandbox / "teams_export" / "1on1"
+    yield from _welt(sandbox, {"mail1.eml": MAIL, "mail2.eml": MAIL2})
+
+
+@pytest.fixture
+def welt_thread(sandbox, with_ollama):  # noqa: F811
+    """The same, with a reply that makes mail1 a conversation of two."""
+    yield from _welt(sandbox, {"mail1.eml": MAIL, "mail2.eml": MAIL2, "mail3.eml": MAIL3})
+
+
+def _welt(wurzel, mails):
+    teams = wurzel / "teams_export" / "1on1"
     teams.mkdir(parents=True)
     (teams / "alice__abc.html").write_text(TEAMS_HTML, encoding="utf-8")
-    outlook = sandbox / "outlook_export" / "inbox"
+    outlook = wurzel / "outlook_export" / "inbox"
     outlook.mkdir(parents=True)
-    (outlook / "mail1.eml").write_text(MAIL, encoding="utf-8")
-    (outlook / "mail2.eml").write_text(MAIL2, encoding="utf-8")
-    recs = corpus.load_records(str(sandbox / "teams_export"), str(sandbox / "outlook_export"))
+    for name, text in mails.items():
+        (outlook / name).write_text(text, encoding="utf-8")
+    recs = corpus.load_records(str(wurzel / "teams_export"), str(wurzel / "outlook_export"))
     chunks = corpus.chunk_records(recs)
     for c in chunks:
         c["hash"] = corpus.chunk_hash(c)
-    schluessel.zuweisen(chunks, {"teams": sandbox / "teams_export", "outlook": sandbox / "outlook_export"})
-    (sandbox / "rag_store").mkdir()
-    rag_index.write_db(sandbox / "rag_store", chunks)
-    rag_index.write_info(sandbox / "rag_store", None, 0, len(chunks))
+    schluessel.zuweisen(chunks, {"teams": wurzel / "teams_export", "outlook": wurzel / "outlook_export"})
+    (wurzel / "rag_store").mkdir()
+    rag_index.write_db(wurzel / "rag_store", chunks)
+    rag_index.write_info(wurzel / "rag_store", None, 0, len(chunks))
     a = app_mod.App(app_mod.load_config())
-    a.cfg["case_export_dir"] = str(sandbox / "exporte")
+    a.cfg["case_export_dir"] = str(wurzel / "exporte")
     httpd = app_mod.make_server(a, 0)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    yield {"app": a, "port": httpd.server_address[1], "sandbox": sandbox, "chunks": chunks}
+    yield {"app": a, "port": httpd.server_address[1], "sandbox": wurzel, "chunks": chunks}
     httpd.shutdown()
     httpd.server_close()
 
@@ -238,7 +256,7 @@ def test_treffer_in_den_fall_und_wieder_heraus(welt):
     assert r == {"ok": True, "added": 0, "already": 1}
     # the hit now wears the mark, the case holds what the hit said
     mail2 = next(h for h in _treffer(welt, "Rechnung")["results"] if h["source"] == "outlook")
-    assert mail2["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen"}]
+    assert mail2["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen", "ordner": None}]
     fall = call(port, "GET", f"/api/faelle/fall?id={fid}")[1]["case"]
     assert fall["eintraege"] == 1 and fall["je_quelle"] == {"outlook": 1}
     e = fall["eintraege_liste"][0]
@@ -374,18 +392,20 @@ def test_export_ist_ein_lauf_und_schreibt_den_ordner(welt, monkeypatch):
     hits = _treffer(welt, "")["results"]
     call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(h) for h in hits]})
     call(port, "POST", "/api/faelle/notiz", {"id": fid, "text": "Notiz"})
-    code, r = call(port, "POST", "/api/faelle/export", {"id": fid, "zip": True})
+    code, r = call(port, "POST", "/api/faelle/export", {"id": fid})
     assert code == 200 and r["ok"] and r["message"] is None, r
     ziel = r["path"]
-    assert ziel.startswith(str(welt["sandbox"] / "exporte")) and "Nordwind" in ziel
+    assert ziel.startswith(str(welt["sandbox"] / "exporte")) and "Nordwind" in ziel and ziel.endswith(".zip")
     assert a.jobs.busy
     _warte(a.jobs, 60)
     assert a.jobs.last["ok"], "\n".join(str(z.get("text")) for z in a.jobs.lines)
     ordner = welt["sandbox"] / "exporte"
-    assert (ordner / ziel.rsplit("/", 1)[1] / "index.html").exists()
-    assert (ordner / ziel.rsplit("/", 1)[1] / "Outlook" / "inbox" / "mail1.eml").exists()
-    assert (ordner / ziel.rsplit("/", 1)[1] / "Teams" / "1on1" / "alice__abc.html").exists()
-    assert (ordner / (ziel.rsplit("/", 1)[1] + ".zip")).exists()
+    import zipfile
+    namen = zipfile.ZipFile(ziel).namelist()
+    stamm = ziel.rsplit("/", 1)[1][:-4]
+    assert f"{stamm}/index.html" in namen and f"{stamm}/Outlook/inbox/mail1.eml" in namen
+    assert f"{stamm}/Teams/1on1/alice__abc.html" in namen
+    assert [p.name for p in ordner.iterdir()] == [ziel.rsplit("/", 1)[1]], "one ZIP, no folder beside it"
     log = "\n".join(json.dumps(z, ensure_ascii=False) for z in a.jobs.lines)
     assert "run.case.start" in log and "run.case.done" in log
     fall = call(port, "GET", f"/api/faelle/fall?id={fid}")[1]["case"]
@@ -412,20 +432,122 @@ def test_export_verweigert_waehrend_eines_laufs_und_ohne_fall(welt, monkeypatch)
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label) or True)
-    code, r = call(port, "POST", "/api/faelle/export", {"id": fid, "zip": False})
+    code, r = call(port, "POST", "/api/faelle/export", {"id": fid})
     assert code == 200 and r["ok"]
     (schritt,) = gesehen["steps"]
     assert schritt["key"] == "fall_export" and gesehen["label"] == "job.case_export"
     argv = schritt["argv"]
     assert argv[1].endswith("case_export.py") and "--zip" not in argv
     assert argv[argv.index("--fall") + 1] == str(fid)
-    assert argv[argv.index("--ziel") + 1] == r["path"]
+    assert argv[argv.index("--ziel") + 1] + ".zip" == r["path"]
     assert argv[argv.index("--faelle") + 1] == str(welt["sandbox"] / faelle.DB_NAME)
     assert "--lang" in argv and "--res" in argv
     assert schritt["env"]["MUNIMENTUM_HOME"] == str(welt["sandbox"])
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
     code, r = call(port, "POST", "/api/faelle/export", {"id": fid})
     assert code == 409 and r["message"]["k"] == "srv.busy"
+
+
+def test_ordner_im_fall(welt):
+    """Folders: made, renamed, dropped; items move in and out; a list and
+    a saved search file into one; the search narrows to one."""
+    port = welt["port"]
+    fid = _fall(welt)
+    code, r = call(port, "POST", "/api/faelle/ordner-anlegen", {"id": fid, "name": " Belege "})
+    assert code == 200 and r["ok"] and r["case"]["ordner_liste"][0]["name"] == "Belege"
+    belege = r["ordner"]
+    code, r = call(port, "POST", "/api/faelle/ordner-anlegen", {"id": fid, "name": ""})
+    assert code == 400 and r["message"]["k"] == "srv.case.noname"
+    vertraege = call(port, "POST", "/api/faelle/ordner-anlegen", {"id": fid, "name": "Verträge"})[1]["ordner"]
+    code, r = call(port, "POST", "/api/faelle/ordner-umbenennen", {"id": fid, "ordner": vertraege, "name": "Belege"})
+    assert code == 409 and r["message"]["k"] == "srv.case.folder.exists"
+    code, r = call(port, "POST", "/api/faelle/ordner-umbenennen", {"id": fid, "ordner": 999, "name": "x"})
+    assert code == 404 and r["message"]["k"] == "srv.case.nofolder"
+    code, r = call(port, "POST", "/api/faelle/ordner-umbenennen", {"id": fid, "ordner": vertraege, "name": "Contracts"})
+    assert code == 200 and [o["name"] for o in r["case"]["ordner_liste"]] == ["Belege", "Contracts"]
+    # items into a folder, straight from the search and by moving
+    hits = _treffer(welt, "")["results"]
+    mail1 = next(h for h in hits if h["path"] == "inbox/mail1.eml")
+    mail2 = next(h for h in hits if h["path"] == "inbox/mail2.eml")
+    code, r = call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(mail1)], "ordner": belege})
+    assert code == 200 and r["added"] == 1
+    call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(mail2)]})
+    code, r = call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(mail2)], "ordner": 999})
+    assert code == 404 and r["message"]["k"] == "srv.case.nofolder"
+    fall = call(port, "GET", f"/api/faelle/fall?id={fid}")[1]["case"]
+    je = {e["key"]: e["ordner"] for e in fall["eintraege_liste"]}
+    assert je[mail1["key"]] == belege and je[mail2["key"]] is None
+    assert [(o["name"], o["anzahl"]) for o in fall["ordner_liste"]] == [("Belege", 1), ("Contracts", 0)]
+    assert all(e["quelle"] == "ui" for e in fall["eintraege_liste"])
+    code, r = call(port, "POST", "/api/faelle/verschieben", {"id": fid, "keys": [mail2["key"]], "ordner": vertraege})
+    assert code == 200 and r["moved"] == 1
+    # the search narrows to the folder; the mark names it
+    im_ordner = _treffer(welt, "", case=str(fid), case_folder=str(belege))["results"]
+    assert [h["path"] for h in im_ordner] == ["inbox/mail1.eml"]
+    assert im_ordner[0]["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen", "ordner": "Belege"}]
+    assert "no folder" in _treffer(welt, "", case=str(fid), case_folder="999")["error"]
+    h = call(port, "GET", "/api/suche/historie")[1]["searches"][0]["kriterien"]
+    assert h["fall"] == fid and h["ordner"] == belege
+    # a list and a saved search file into a folder
+    code, r = call(port, "POST", "/api/faelle/liste", {"id": fid, "kriterien": {"q": "Rechnung", "mode": "text"}, "ordner": belege})
+    assert code == 200 and r["ok"]
+    sid = call(port, "POST", "/api/suche/speichern",
+               {"name": "R", "kriterien": {"q": "Rechnung"}, "fall": fid, "ordner": belege})[1]["id"]
+    fall = call(port, "GET", f"/api/faelle/fall?id={fid}")[1]["case"]
+    assert fall["listen_liste"][0]["ordner"] == belege and fall["suchen_liste"][0]["ordner_name"] == "Belege"
+    code, r = call(port, "POST", "/api/suche/anhaengen", {"id": sid, "fall": fid, "ordner": 999})
+    assert code == 404 and r["message"]["k"] == "srv.case.nofolder"
+    neu = call(port, "GET", f"/api/faelle/neu?id={fid}")[1]["searches"][0]
+    assert neu["ordner"] == belege and neu["ordner_name"] == "Belege"
+    # dropping the folder keeps its items, unsorted
+    code, r = call(port, "POST", "/api/faelle/ordner-loeschen", {"id": fid, "ordner": belege})
+    assert code == 200 and [o["name"] for o in r["case"]["ordner_liste"]] == ["Contracts"]
+    assert r["case"]["eintraege"] >= 2 and all(e["ordner"] in (None, vertraege) for e in r["case"]["eintraege_liste"])
+    call(port, "POST", "/api/faelle/schliessen", {"id": fid})
+    assert call(port, "POST", "/api/faelle/ordner-anlegen", {"id": fid, "name": "x"})[0] == 409
+
+
+def test_gespraech_in_den_fall(welt_thread):
+    """The rest of a conversation follows an item into its folder; the case
+    says per item how much of its conversation it lacks; the conversation
+    route marks every message with its cases."""
+    welt = welt_thread
+    port = welt["port"]
+    fid = _fall(welt)
+    belege = call(port, "POST", "/api/faelle/ordner-anlegen", {"id": fid, "name": "Belege"})[1]["ordner"]
+    hits = _treffer(welt, "")["results"]
+    m1 = next(h for h in hits if h["path"] == "inbox/mail1.eml")
+    m3 = next(h for h in hits if h["path"] == "inbox/mail3.eml")
+    assert m1["thread"] and m1["thread"] == m3["thread"]
+    call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(m1)], "ordner": belege})
+    fall = call(port, "GET", f"/api/faelle/fall?id={fid}")[1]["case"]
+    assert {e["key"]: e["thread_offen"] for e in fall["eintraege_liste"]} == {m1["key"]: 1}
+    assert fall["eintraege_liste"][0]["wer_mail"] == "carla@example.com"
+    # the conversation's messages say which cases hold them
+    code, r = call(port, "GET", "/api/thread?key=" + urllib.parse.quote(m1["thread"], safe=""))
+    assert code == 200 and r["count"] == 2
+    assert {m["path"]: [c["id"] for c in m["cases"]] for m in r["messages"]} == \
+        {"inbox/mail1.eml": [fid], "inbox/mail3.eml": []}
+    code, r = call(port, "POST", "/api/faelle/thread", {"id": fid, "keys": [m1["key"], "nix"]})
+    assert code == 200 and r["added"] == 1
+    je = {e["key"]: (e["ordner"], e["thread_offen"]) for e in r["case"]["eintraege_liste"]}
+    assert je == {m1["key"]: (belege, 0), m3["key"]: (belege, 0)}
+    assert call(port, "POST", "/api/faelle/thread", {"id": fid, "keys": [m1["key"]]})[1]["added"] == 0
+    call(port, "POST", "/api/faelle/schliessen", {"id": fid})
+    assert call(port, "POST", "/api/faelle/thread", {"id": fid, "keys": [m1["key"]]})[0] == 409
+
+
+def test_bemerkung_am_eintrag_ueber_die_app(welt):
+    port = welt["port"]
+    fid = _fall(welt)
+    hit = _treffer(welt)["results"][0]
+    call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(hit)]})
+    code, r = call(port, "POST", "/api/faelle/bemerkung", {"id": fid, "key": hit["key"], "text": " Der Beleg "})
+    assert code == 200 and r["case"]["eintraege_liste"][0]["bemerkung"] == "Der Beleg"
+    code, r = call(port, "POST", "/api/faelle/bemerkung", {"id": fid, "key": "nix", "text": "x"})
+    assert code == 404 and r["message"]["k"] == "srv.case.noitem"
+    code, r = call(port, "POST", "/api/faelle/bemerkung", {"id": fid, "key": hit["key"], "text": ""})
+    assert code == 200 and r["case"]["eintraege_liste"][0]["bemerkung"] == ""
 
 
 def test_export_ordner_ohne_export(welt, monkeypatch):
@@ -452,9 +574,11 @@ def test_export_basis(tmp_path, monkeypatch):
 def test_einstellungen_fuer_faelle_werden_gespeichert(welt):
     port = welt["port"]
     code, r = call(port, "POST", "/api/config",
-                   {"case_export_dir": "  /tmp/x  ", "mcp_cases_write": True, "search_history": "30"})
+                   {"case_export_dir": "  /tmp/x  ", "mcp_cases_write": True, "search_history": "30",
+                    "internal_domains": " example.com, example.org ", "own_name": " Carla Chef "})
     cfg = r["config"]
     assert cfg["case_export_dir"] == "/tmp/x" and cfg["mcp_cases_write"] is True and cfg["search_history"] == "30"
+    assert cfg["internal_domains"] == "example.com, example.org" and cfg["own_name"] == "Carla Chef"
     code, r = call(port, "POST", "/api/config", {"case_export_dir": "", "mcp_cases_write": False})
     assert r["config"]["case_export_dir"] == "" and r["config"]["mcp_cases_write"] is False
     # the MCP server reads the switch from the same file
@@ -483,6 +607,19 @@ def test_die_dritte_tuer_und_ihre_teile_stehen_im_markup():
     # the cases tab has one primary action
     block = seite[seite.index('<section id="tab-faelle"'):seite.index('<section id="tab-analytics"')]
     assert block.count('class="act') == 1 and 'fallNeuFenster()' in block
+    # the door's head is the name and its (i) – no explaining sentence beside it
+    assert "cases.sub" not in seite and 'data-i18n-title="cases.i"' in block
+    # the overview: a quiet label and the one arrow – no counts, no filter
+    kopf = block[block.index('class="liste-kopf"'):block.index('id="faelle-liste"')]
+    assert 'data-i18n="cases.overview"' in kopf and 'id="leiste-knopf"' in kopf
+    assert "faelle-stand" not in kopf and "<input" not in kopf
+    # the case's frame: the filter field, the fold buttons, "New folder…", the move bar
+    for kennung in ("fall-filter", "fall-ordner-neu", "fall-verschieben", "fall-auswahl", "fall-fuss",
+                    "fall-sichten", "fall-zeit", "fall-personen", "fall-zeit-richtung"):
+        assert f'id="{kennung}"' in block, kennung
+    # the three views are the strip the search page uses, under the head and above the tools
+    assert block.index('id="fall-kopf"') < block.index('class="sichten fall-sichten"') < block.index('id="fall-filter"')
+    assert block.count('data-fallsicht=') == 3
     # the case filter counts but does not search, like every filter – and
     # starts hidden: it appears with the first case
     feld = re.search(r'<select id="f-fall"[^>]*>', seite).group(0)
@@ -495,15 +632,16 @@ def test_die_dritte_tuer_und_ihre_teile_stehen_im_markup():
 PRUEFUNG_SEITE = GRUNDZUSTAND + """
 var anfragen = [];
 var FAELLE_ANTWORT = {cases: [
-  {id: 1, name: 'Nordwind', status: 'offen', eintraege: 3, je_quelle: {outlook: 2, teams: 1}, listen: 0, notizen: 1, suchen: 0,
+  {id: 1, name: 'Nordwind', status: 'offen', eintraege: 3, je_quelle: {outlook: 2, teams: 1}, listen: 0, notizen: 1, suchen: 1,
+   ordner: 1, ordner_liste: [{id: 3, name: 'Belege', angelegt: '2026-09-02T10:00:00+00:00', anzahl: 1}],
    angelegt: '2026-09-01T10:00:00+00:00', geaendert: '2026-09-14T10:00:00+00:00', geschlossen: null},
-  {id: 2, name: 'Alt', status: 'zu', eintraege: 1, je_quelle: {outlook: 1}, listen: 0, notizen: 0, suchen: 0,
+  {id: 2, name: 'Alt', status: 'zu', eintraege: 1, je_quelle: {outlook: 1}, listen: 0, notizen: 0, suchen: 0, ordner: 0, ordner_liste: [],
    angelegt: '2026-01-01T10:00:00+00:00', geaendert: '2026-02-01T10:00:00+00:00', geschlossen: '2026-02-01T10:00:00+00:00'}
  ], export_dir: '/tmp/exporte'};
 var TREFFER_ANTWORT = {count: 2, results: [
   {uid: 'outlook:inbox/mail1.eml:0', key: 'mail:<m1@example.com>', source: 'outlook', root: 'outlook',
    path: 'inbox/mail1.eml', title: 'Rechnung 4711', date: '2025-06-10', who: 'Carla Chef', preview: 'Die Rechnung',
-   cases: [{id: 1, name: 'Nordwind', status: 'offen'}]},
+   thread: 'tix:1', domains: ['example.com', 'nordwind.example'], cases: [{id: 1, name: 'Nordwind', status: 'offen'}]},
   {uid: 'teams:1on1/alice__abc.html:0', key: null, source: 'teams', root: 'teams',
    path: '1on1/alice__abc.html', title: 'Projekt Alpha', date: '2025-06-01', who: 'Alice', preview: 'Hallo', cases: []}
 ]};
@@ -511,10 +649,10 @@ global.fetch = function(pfad, opt){
   anfragen.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
   var antwort = statusGeruest();
   if(String(pfad).indexOf('/api/faelle/fall?') === 0) antwort = {case: Object.assign({eintraege_liste: [
-      {key: 'mail:<m1@example.com>', src: 'outlook', root: 'outlook', rel: 'inbox/mail1.eml', titel: 'Rechnung 4711', datum: '2025-06-10', wer: 'Carla Chef', liste: null},
-      {key: 'teams:x#1', src: 'teams', root: 'teams', rel: '1on1/alice__abc.html', titel: 'Projekt Alpha', datum: '2025-06-01', wer: 'Alice', liste: null}],
-    listen_liste: [], notizen_liste: [{id: 7, wann: '2026-09-14T10:00:00+00:00', text: 'Erste Notiz'}],
-    suchen_liste: [{id: 5, name: 'Rechnungen', kriterien: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}, zuletzt: null, treffer: null, fall: 1, fall_name: 'Nordwind'}]},
+      {key: 'mail:<m1@example.com>', src: 'outlook', root: 'outlook', rel: 'inbox/mail1.eml', titel: 'Rechnung 4711', datum: '2025-06-10 08:00', wer: 'Carla Chef', liste: null, ordner: 3, quelle: 'ui', bemerkung: 'Der Beleg', thread_offen: 2, wer_mail: 'carla@example.com'},
+      {key: 'teams:x#1', src: 'teams', root: 'teams', rel: '1on1/alice__abc.html', titel: 'Projekt Alpha', datum: '2025-06-01 09:30', wer: 'Alice', liste: null, ordner: null, quelle: 'mcp', bemerkung: '', thread_offen: 0, wer_mail: 'alice@nordwind.example'}],
+    listen_liste: [], notizen_liste: [{id: 7, wann: '2026-09-14T10:00:00+00:00', text: 'Erste Notiz', quelle: 'mcp'}],
+    suchen_liste: [{id: 5, name: 'Rechnungen', kriterien: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null, ordner: null}, zuletzt: null, treffer: null, fall: 1, fall_name: 'Nordwind', ordner: 3, ordner_name: 'Belege'}]},
     FAELLE_ANTWORT.cases[String(pfad).indexOf('id=2') > 0 ? 1 : 0])};
   else if(String(pfad) === '/api/faelle') antwort = FAELLE_ANTWORT;
   else if(String(pfad).indexOf('/api/search?') === 0) antwort = TREFFER_ANTWORT;
@@ -524,6 +662,10 @@ global.fetch = function(pfad, opt){
   else if(String(pfad) === '/api/suche/gespeichert') antwort = {searches: [
       {id: 5, name: 'Rechnungen', kriterien: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}, zuletzt: '2026-09-14T10:00:00+00:00', treffer: 4, fall: 1, fall_name: 'Nordwind'},
       {id: 6, name: 'Lose', kriterien: {q: 'x', mode: 'text', person: '', source: 'all', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}, zuletzt: null, treffer: null, fall: null, fall_name: null}]};
+  else if(String(pfad).indexOf('/api/thread?') === 0) antwort = {thread: 'tix:1', count: 3, messages: [
+      {key: 'mail:<m1@example.com>', path: 'inbox/mail1.eml', cases: [{id: 1, name: 'Nordwind', status: 'offen'}]},
+      {key: 'mail:<m3@example.com>', path: 'inbox/mail3.eml', cases: []},
+      {key: 'mail:<m4@example.com>', path: 'inbox/mail4.eml', cases: []}]};
   else if(opt && opt.method === 'POST') antwort = {ok: true, id: 9, added: 2, already: 0, hits: 2, case: FAELLE_ANTWORT.cases[0]};
   return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
 };
@@ -544,6 +686,20 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   var optionen = el('f-fall').innerHTML;
   pruefe(optionen.indexOf('value="1">Nordwind<') >= 0, 'offener Fall fehlt im Filter: ' + optionen);
   pruefe(optionen.indexOf('value="2">Alt · Geschlossen<') >= 0, 'geschlossener Fall nicht markiert: ' + optionen);
+  pruefe(optionen.indexOf('value="1/3">') >= 0 && optionen.indexOf('Belege') >= 0, 'Ordner fehlt im Fallfilter: ' + optionen);
+  kriterienAnwenden({fall: 1, ordner: 3});
+  pruefe(el('f-fall').value === '1/3' && kriterienAusForm().ordner === 3 && kriterienAusForm().fall === 1, 'Ordnerkriterium geht nicht durch das Formular');
+  kriterienAnwenden({});
+  // the parties filter: a select like the others; criteria and the request carry it
+  el('f-party').classList.remove('hide');
+  kriterienAnwenden({party: 'external'});
+  pruefe(el('f-party').value === 'external' && kriterienAusForm().party === 'external' && filterFelder().indexOf('external') >= 0, 'Beteiligtenfilter geht nicht durch das Formular');
+  pruefe(kriterienTags({party: 'internal'}).indexOf('Beteiligte') >= 0, 'Kriterien-Tag der Beteiligten fehlt');
+  doSearch(0);
+  await warte(10);
+  pruefe(letzte('/api/search?').pfad.indexOf('party=external') > 0, 'party fehlt in der Anfrage');
+  filterLeeren();
+  pruefe(el('f-party').value === 'all' && kriterienAusForm().party === 'all', 'Zuruecksetzen laesst den Beteiligtenfilter stehen');
 
   // --- filters: the case counts, clears, sends
   el('f-fall').value = '1';
@@ -566,6 +722,8 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   // --- hits: tick, mark, head
   var liste = el('results').innerHTML;
   pruefe(liste.indexOf('class="wahl"') >= 0, 'kein Haken am Treffer');
+  // "external": a party outside the signed-in domain (a@example.com) – on the one hit that has parties
+  pruefe(liste.split('tag extern').length - 1 === 1 && liste.indexOf('Rechnung 4711') < liste.indexOf('tag extern'), 'extern-Marke am Treffer fehlt oder doppelt');
   pruefe(liste.indexOf('im-fall') >= 0 && liste.indexOf('Nordwind') >= 0, 'keine Fallmarke am Treffer');
   pruefe(liste.indexOf('disabled title="') >= 0, 'Treffer ohne Schluessel nicht ausgegraut');
   pruefe(!el('treffer-kopf').classList.contains('hide'), 'Listenkopf fehlt');
@@ -676,48 +834,222 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   var sp = letzte('/api/suche/speichern');
   pruefe(sp && sp.body.name === 'Meine' && sp.body.kriterien.q === 'Neu', 'Speichern nicht geschickt: ' + JSON.stringify(sp && sp.body));
 
-  // --- the cases tab
+  // --- the cases tab: the overview, then the case
   tab('faelle');
   await warte(10);
   pruefe(el('faelle-liste').innerHTML.indexOf('Nordwind') >= 0, 'Fallliste leer');
-  pruefe(el('faelle-liste').innerHTML.indexOf('Alt') < 0, 'geschlossener Fall ohne Schalter sichtbar');
-  el('faelle-zu').checked = true;
-  zeichneFaelle();
-  pruefe(el('faelle-liste').innerHTML.indexOf('Alt') >= 0, 'geschlossener Fall trotz Schalter unsichtbar');
-  await fallOeffnen(1);
-  html = el('fall-inhalt').innerHTML;
+  pruefe(el('faelle-liste').innerHTML.indexOf('Alt') < 0, 'geschlossener Fall ohne Link sichtbar');
+  pruefe(!el('faelle-zu-zeile').classList.contains('hide') && el('faelle-zu-link').textContent.indexOf('1') >= 0, 'Link zu den geschlossenen fehlt');
+  geschlosseneZeigen();
+  pruefe(el('faelle-liste').innerHTML.indexOf('Alt') >= 0, 'geschlossener Fall trotz Link unsichtbar');
+  pruefe(!el('faelle-split').classList.contains('eng'), 'Uebersicht ohne offenen Fall schon eng');
+  // picking a case narrows the overview to the names; the arrow widens it
+  await fallWaehlen(1);
+  pruefe(el('faelle-split').classList.contains('eng'), 'Uebersicht bleibt breit');
+  pruefe(el('leiste-knopf').title.length > 3, 'Pfeil ohne Titel');
+  leisteUmschalten();
+  pruefe(!el('faelle-split').classList.contains('eng'), 'Pfeil verbreitert nicht');
+  leisteUmschalten();
   pruefe(!el('fall-detail').classList.contains('hide'), 'Falldetail bleibt versteckt');
+  // the head: name, status, edit – facts and description below, no fold
+  pruefe(el('fall-kopf').innerHTML.indexOf('Nordwind') >= 0 && el('fall-kopf').innerHTML.indexOf('fallBearbeitenFenster()') >= 0, 'Kopf unvollstaendig');
+  pruefe(el('fall-kopf').innerHTML.indexOf('<details') < 0, 'der Kopf klappt');
+  html = el('fall-inhalt').innerHTML;
+  // every group is a fold and starts closed
+  pruefe(html.indexOf('<details class="gruppe"') >= 0 && html.indexOf('<details class="gruppe" open') < 0, 'Gruppen nicht zugeklappt');
   pruefe(html.indexOf('Erste Notiz') >= 0 && html.indexOf('id="notiz-neu"') >= 0, 'Fallbuch nicht gezeichnet');
+  // folders: the case's own, then Unsorted; inside, the sources fold again
+  pruefe(html.indexOf('Belege') >= 0 && html.indexOf('Unsortiert') >= 0, 'Ordner fehlen');
+  pruefe(html.indexOf('<details class="quelle" open') >= 0, 'erste Quelle im Ordner nicht offen');
   pruefe(html.indexOf('Rechnung 4711') >= 0 && html.indexOf('Projekt Alpha') >= 0, 'Eintraege fehlen');
   pruefe(html.indexOf('/source?root=outlook&amp;path=inbox%2Fmail1.eml') >= 0, 'Eintrag ohne Link ins Original');
-  pruefe(html.indexOf('fallEntfernen(') >= 0 && html.indexOf('schliessenFenster()') >= 0, 'Aktionen des offenen Falls fehlen');
-  pruefe(html.indexOf('sucheImFall(1)') >= 0 && html.indexOf('exportFenster()') >= 0, 'Suchen/Export fehlen');
+  // "via MCP" sits on the item and on the note – nowhere else
+  pruefe(html.split('via MCP').length - 1 === 2, 'via MCP nicht genau am Eintrag und an der Notiz: ' + (html.split('via MCP').length - 1));
+  pruefe(html.indexOf('sucheImFall(1, 3)') >= 0 && html.indexOf('ordnerFenster(3)') >= 0 && html.indexOf('ordnerLoeschen(3)') >= 0, 'Ordnerwerkzeuge fehlen');
+  pruefe(html.indexOf('ordnerFenster(0)') < 0, 'Unsortiert laesst sich umbenennen');
+  // the remark stands under the item; the pen opens its window; the thread button names what is missing
+  pruefe(html.indexOf('class="bem"') >= 0 && html.indexOf('Der Beleg') >= 0, 'Bemerkung fehlt in der Zeile');
+  pruefe(html.indexOf("threadHolen('mail:") >= 0 && html.indexOf('+2') >= 0 && html.split('threadHolen(').length - 1 === 1, 'Thread-Knopf fehlt oder steht an der falschen Zeile');
+  bemerkungFenster('mail:<m1@example.com>');
+  pruefe(modal.innerHTML.indexOf('id="bemerkung-text"') >= 0 && modal.innerHTML.split('class="act"').length - 1 === 1, 'Bemerkungsfenster unvollstaendig');
+  pruefe(modal.innerHTML.indexOf('bemerkungSenden(true)') >= 0, 'Entfernen fehlt bei bestehender Bemerkung');
+  document.getElementById('bemerkung-text').value = 'Neu gesagt';
+  bemerkungSenden(false);
+  await warte(10);
+  var bm = letzte('/api/faelle/bemerkung');
+  pruefe(bm && bm.body.key === 'mail:<m1@example.com>' && bm.body.text === 'Neu gesagt', 'Bemerkung nicht geschickt: ' + JSON.stringify(bm && bm.body));
+  await fallOeffnen(1);
+  threadHolen('mail:<m1@example.com>');
+  await warte(10);
+  pruefe(letzte('/api/faelle/thread').body.keys[0] === 'mail:<m1@example.com>', 'Thread nicht geholt');
+  pruefe(el('meldung').classList.contains('an'), 'keine Meldung nach dem Thread');
+  // the timeline: month headings, the note between the items, the remark, the direction, the filter
+  await fallOeffnen(1);
+  fallSicht('zeit');
+  html = el('fall-zeit').innerHTML;
+  pruefe(!el('fall-zeit').classList.contains('hide') && el('fall-inhalt').classList.contains('hide'), 'Zeitleiste nicht sichtbar');
+  pruefe(html.indexOf('class="zeit-monat"') >= 0 && html.indexOf('notiz-zeit') >= 0 && html.indexOf('Erste Notiz') >= 0, 'Zeitleiste ohne Monat oder Notiz');
+  // the activity band: one bar per month from the first item to the last note, the note as a dot; a click narrows the rows
+  var band = el('fall-aktivitaet').innerHTML;
+  pruefe(band.split('class="monat').length - 1 === 16 && band.indexOf('class="punkte"><i></i>') >= 0, 'Aktivitaetsband falsch: ' + band.split('class="monat').length);
+  pruefe(band.indexOf('class="auswahl-zeile"') >= 0 && band.indexOf("zeitEimerWaehlen('2025-06')") >= 0, 'Balken ohne Monat oder Auswahlzeile');
+  zeitEimerWaehlen('2026-09');
+  pruefe(el('fall-zeit').innerHTML.indexOf('Rechnung 4711') < 0 && el('fall-zeit').innerHTML.indexOf('Erste Notiz') >= 0, 'Monatswahl grenzt die Zeilen nicht ein');
+  pruefe(el('fall-aktivitaet').innerHTML.indexOf('class="monat leer on"') >= 0 && el('fall-aktivitaet').innerHTML.indexOf('zeitEimerWaehlen(null)') >= 0, 'gewaehlter Monat nicht markiert');
+  zeitEimerWaehlen('2026-09');
+  pruefe(FALL_ZEIT_EIMER === null && el('fall-zeit').innerHTML.indexOf('Rechnung 4711') >= 0, 'zweiter Klick laesst nicht los');
+  pruefe(html.indexOf('Projekt Alpha') < html.indexOf('Rechnung 4711'), 'Zeitleiste nicht aelteste zuerst');
+  pruefe(html.indexOf('class="bem"') >= 0 && html.indexOf('Belege') >= 0, 'Zeitleiste ohne Bemerkung oder Ordner');
+  pruefe(!el('fall-werkzeug-zeit').classList.contains('hide') && el('fall-werkzeug-ordner').classList.contains('hide'), 'Werkzeuge folgen der Sicht nicht');
+  fallZeitRichtung('neu');
+  pruefe(el('fall-zeit').innerHTML.indexOf('Rechnung 4711') < el('fall-zeit').innerHTML.indexOf('Projekt Alpha'), 'Richtung wirkt nicht');
+  fallZeitRichtung('alt');
+  fallFiltern('Alpha');
+  pruefe(el('fall-zeit').innerHTML.indexOf('Rechnung 4711') < 0 && el('fall-filter-stand').textContent.indexOf('1') >= 0, 'Filter wirkt nicht in der Zeitleiste');
+  fallFiltern('');
+  // the people: counted from what the items name; Timeline sets the filter, Search asks the archive
+  KANN_ADRESSEN = true;
+  S.config = S.config || {};
+  fallSicht('personen');
+  html = el('fall-personen').innerHTML;
+  pruefe(html.indexOf('Carla Chef') >= 0 && html.indexOf('Alice') >= 0 && html.indexOf('cases.people') < 0, 'Personen nicht gezeichnet');
+  pruefe(el('fall-personen-zahl').textContent === '2', 'Personenzahl fehlt in der Leiste: ' + el('fall-personen-zahl').textContent);
+  // the picture: you at the left, four columns, every person a circle with initials; the 2025 items fall under "older"
+  pruefe(html.indexOf('class="bild"') >= 0 && html.split('class="periode"').length - 1 === 4 && html.indexOf('class="ich"') >= 0, 'Bild ohne Spalten oder ohne dich');
+  pruefe(html.split('class="knoten').length - 1 === 2 && html.indexOf('>CC</span>') >= 0 && html.indexOf('fallPersonWaehlen(') >= 0, 'Personenkreise fehlen');
+  pruefe(html.indexOf('person-karte') < 0, 'Karte ohne Wahl');
+  fallPersonWaehlen('Carla Chef');
+  html = el('fall-personen').innerHTML;
+  pruefe(html.indexOf('class="knoten on"') >= 0 && html.indexOf('person-karte') >= 0 && html.indexOf('carla@example.com') >= 0, 'Karte der gewaehlten Person fehlt');
+  pruefe(html.indexOf("personZeit('Carla Chef')") >= 0 && html.indexOf("sucheImFall(1, null, 'Carla Chef')") >= 0, 'Wege in der Karte fehlen');
+  fallPersonWaehlen('Carla Chef');
+  pruefe(el('fall-personen').innerHTML.indexOf('person-karte') < 0, 'zweiter Klick schliesst die Karte nicht');
+  html = el('fall-personen').innerHTML;
+  // addresses, and "external" against the signed-in domain (a@example.com)
+  // the address is not on the circle but in the card – and the filter reads it
+  pruefe(html.indexOf('carla@example.com') < 0, 'Adresse am Kreis');
+  fallFiltern('nordwind.example');
+  pruefe(el('fall-personen').innerHTML.indexOf('Alice') >= 0 && el('fall-personen').innerHTML.indexOf('Carla Chef') < 0, 'Filter liest die Adresse nicht');
+  fallFiltern('');
+  html = el('fall-personen').innerHTML;
+  pruefe(html.split('tag extern').length - 1 === 1 && html.indexOf('Alice<span class="tag extern"') >= 0, 'extern-Marke falsch: ' + html);
+  pruefe(html.indexOf('cases.people.noaddr') < 0 && html.indexOf('Indexlauf') < 0, 'Hinweis trotz Adressen');
+  // the setting overrides the domain; the name setting leaves you out
+  S.config.internal_domains = 'nordwind.example';
+  fallSicht('personen');
+  pruefe(el('fall-personen').innerHTML.indexOf('Carla Chef<span class="tag extern"') >= 0 && el('fall-personen').innerHTML.indexOf('Alice<span class="tag extern"') < 0, 'interne Domains wirken nicht');
+  S.config.internal_domains = '';
+  S.config.own_name = 'carla chef';
+  fallSicht('personen');
+  pruefe(el('fall-personen').innerHTML.indexOf('Carla Chef') < 0 && el('fall-personen').innerHTML.indexOf('1 Personen in 2') >= 0, 'ich selbst nicht ausgenommen: ' + el('fall-personen').innerHTML);
+  S.config.own_name = '';
+  S.token.account = 'alice@nordwind.example';
+  fallSicht('personen');
+  pruefe(el('fall-personen').innerHTML.indexOf('Alice') < 0 && el('fall-personen').innerHTML.indexOf('Carla Chef<span class="tag extern"') >= 0, 'Konto-Adresse nimmt mich nicht aus');
+  S.token.account = 'a@example.com';
+  KANN_ADRESSEN = false;
+  fallSicht('personen');
+  pruefe(el('fall-personen').innerHTML.indexOf('Indexlauf') >= 0, 'kein Hinweis ohne Adressen im Index');
+  KANN_ADRESSEN = true;
+  fallSicht('personen');
+  personZeit('Carla Chef');
+  pruefe(FALL_SICHT === 'zeit' && el('fall-filter').value === 'Carla Chef', 'Zeitleiste der Person nicht gesetzt');
+  pruefe(el('fall-zeit').innerHTML.indexOf('Rechnung 4711') >= 0 && el('fall-zeit').innerHTML.indexOf('Projekt Alpha') < 0, 'Zeitleiste der Person falsch');
+  fallFiltern('');
+  fallSicht('ordner');
+  sucheImFall(1, null, 'Carla Chef');
+  await warte(10);
+  pruefe(el('f-person').value === 'Carla Chef' && letzte('/api/search?').pfad.indexOf('person=Carla+Chef') > 0, 'Suche nach Person im Fall fehlt');
+  tab('faelle');
+  await fallOeffnen(1);
+  html = el('fall-inhalt').innerHTML;
+  pruefe(html.indexOf('fallEntfernen(') >= 0 && html.indexOf('class="wahl"') >= 0, 'Aktionen des offenen Falls fehlen');
   pruefe(html.indexOf('Rechnungen') >= 0 && html.indexOf('fallNeuPruefen()') >= 0, 'angehaengte Suche fehlt');
   pruefe(html.indexOf('fallSchreiben') < 0, 'roher Code im Markup');
+  // the foot: export at the left, the case's fate at the right
+  var fuss = el('fall-fuss').innerHTML;
+  pruefe(fuss.indexOf('exportFenster()') >= 0 && fuss.indexOf('schliessenFenster()') >= 0 && fuss.indexOf('fallLoeschen()') >= 0, 'Fuss unvollstaendig');
+  pruefe(fuss.indexOf('gruppe-links') < fuss.indexOf('gruppe-rechts'), 'Fuss nicht in zwei Gruppen');
+  pruefe(!el('fall-ordner-neu').classList.contains('hide'), 'Neuer Ordner am offenen Fall versteckt');
+  // expand all opens every fold, collapse all closes them
+  alleFalten(true);
+  pruefe(el('fall-inhalt').innerHTML.indexOf('<details class="gruppe" open') >= 0, 'Aufklappen wirkt nicht');
+  alleFalten(false);
+  pruefe(el('fall-inhalt').innerHTML.indexOf('<details class="gruppe" open') < 0, 'Zuklappen wirkt nicht');
+  // the filter: only matching rows, every fold open, the count
+  fallFiltern('4711');
+  html = el('fall-inhalt').innerHTML;
+  pruefe(html.indexOf('Rechnung 4711') >= 0 && html.indexOf('Projekt Alpha') < 0, 'Filter filtert nicht');
+  pruefe(html.indexOf('<details class="gruppe" open') >= 0, 'Filter klappt nicht auf');
+  // the folds stay the user's while the filter is on: collapse all still closes them
+  alleFalten(false);
+  pruefe(el('fall-inhalt').innerHTML.indexOf('<details class="gruppe" open') < 0 && el('fall-inhalt').innerHTML.indexOf('Rechnung 4711') >= 0, 'Zuklappen geht nicht bei gesetztem Filter');
+  fallFiltern('4711');
+  pruefe(el('fall-inhalt').innerHTML.indexOf('<details class="gruppe" open') < 0, 'derselbe Filter klappt erneut auf');
+  fallFiltern('Rechnung');
+  pruefe(el('fall-inhalt').innerHTML.indexOf('<details class="gruppe" open') >= 0, 'ein neuer Filter klappt nicht auf');
+  pruefe(el('fall-filter-stand').textContent.indexOf('1') >= 0 && el('fall-filter-stand').textContent.indexOf('2') >= 0, 'Filterstand fehlt: ' + el('fall-filter-stand').textContent);
+  fallFiltern('');
+  pruefe(el('fall-inhalt').innerHTML.indexOf('Projekt Alpha') >= 0 && el('fall-filter-stand').textContent === '', 'Filter nicht aufgehoben');
+  // ticked rows: the bar, "move to", the move
+  pruefe(el('fall-auswahl').classList.contains('hide'), 'Auswahlleiste ohne Auswahl sichtbar');
+  fallWahlZeile('teams:x#1', true);
+  pruefe(!el('fall-auswahl').classList.contains('hide') && el('fall-auswahl-zahl').textContent.indexOf('1') >= 0, 'Auswahl nicht gezaehlt');
+  pruefe(el('fall-verschieben').innerHTML.indexOf('value="3"') >= 0 && el('fall-verschieben').innerHTML.indexOf('value="neu"') >= 0, 'Verschieben-Auswahl unvollstaendig');
+  fallVerschieben('3');
+  await warte(10);
+  var mv = letzte('/api/faelle/verschieben');
+  pruefe(mv && mv.body.ordner === 3 && mv.body.keys[0] === 'teams:x#1', 'Verschieben nicht geschickt: ' + JSON.stringify(mv && mv.body));
+  pruefe(Object.keys(FALL_AUSWAHL).length === 0, 'Auswahl nach dem Verschieben nicht geleert');
+  // a new folder from the tool row: an overlay with one primary button
+  ordnerFenster(null);
+  pruefe(modal.innerHTML.indexOf('id="ordner-name"') >= 0 && modal.innerHTML.split('class="act"').length - 1 === 1, 'Ordnerfenster unvollstaendig');
+  document.getElementById('ordner-name').value = 'Verträge';
+  ordnerSenden();
+  await warte(10);
+  pruefe(letzte('/api/faelle/ordner-anlegen').body.name === 'Verträge', 'Ordner nicht angelegt');
+  // "new folder" while moving: the folder first, then the rows into it
+  fallWahlZeile('teams:x#1', true);
+  fallVerschieben('neu');
+  document.getElementById('ordner-name').value = 'Neu';
+  anfragen.length = 0;
+  ordnerSenden();
+  await warte(20);
+  pruefe(letzte('/api/faelle/ordner-anlegen') && letzte('/api/faelle/verschieben'), 'neuer Ordner beim Verschieben ohne Verschieben');
+  ordnerLoeschen(3);
+  await warte(10);
+  pruefe(letzte('/api/faelle/ordner-loeschen').body.ordner === 3, 'Ordner nicht aufgeloest');
+  await fallOeffnen(1);
   document.getElementById('notiz-neu').value = 'Zweite';
   notizHinzufuegen();
   await warte(10);
   pruefe(letzte('/api/faelle/notiz').body.text === 'Zweite', 'Notiz nicht geschickt');
+  // a closed case: read-only, and without folders the sources fold at the top
   await fallOeffnen(2);
   html = el('fall-inhalt').innerHTML;
-  pruefe(html.indexOf('fallEntfernen(') < 0 && html.indexOf('id="notiz-neu"') < 0, 'geschlossener Fall laesst aendern');
-  pruefe(html.indexOf('fallOeffnenWieder()') >= 0 && html.indexOf('exportFenster()') >= 0, 'Wieder oeffnen/Export fehlen');
-  // search in this case: the filter is set, the search fired
+  pruefe(html.indexOf('fallEntfernen(') < 0 && html.indexOf('id="notiz-neu"') < 0 && html.indexOf('class="wahl"') < 0, 'geschlossener Fall laesst aendern');
+  pruefe(html.indexOf('Unsortiert') < 0 && html.indexOf('<details class="gruppe"') >= 0, 'Fall ohne Ordner zeigt Ordner');
+  pruefe(el('fall-fuss').innerHTML.indexOf('fallOeffnenWieder()') >= 0 && el('fall-fuss').innerHTML.indexOf('exportFenster()') >= 0, 'Wieder oeffnen/Export fehlen');
+  pruefe(el('fall-ordner-neu').classList.contains('hide'), 'Neuer Ordner am geschlossenen Fall');
+  // search in this case, and in one folder: the filter is set, the search fired
   sucheImFall(1);
   await warte(10);
   pruefe(el('f-fall').value === '1' && letzte('/api/search?').pfad.indexOf('case=1') > 0, 'Suche im Fall setzt den Filter nicht');
-  // export window: one primary, the zip switch, the folder; the run
+  sucheImFall(1, 3);
+  await warte(10);
+  pruefe(el('f-fall').value === '1/3' && letzte('/api/search?').pfad.indexOf('case=1&case_folder=3') > 0, 'Suche im Ordner ohne Ordner: ' + letzte('/api/search?').pfad);
+  // export window: the overview, one primary button – always a ZIP, no switch
   await fallOeffnen(1);
   exportFenster();
   html = modal.innerHTML;
-  pruefe(html.split('class="act"').length - 1 === 1 && html.indexOf('fall-export-zip') >= 0, 'Exportfenster unvollstaendig');
+  pruefe(html.split('class="act"').length - 1 === 1 && html.indexOf('.zip') >= 0, 'Exportfenster unvollstaendig');
+  pruefe(html.indexOf('index.html') >= 0 && html.indexOf('items.csv') >= 0 && html.indexOf('casebook.md') >= 0 && html.indexOf('Belege') >= 0, 'Exportuebersicht unvollstaendig');
   pruefe(html.indexOf('/tmp/exporte') >= 0, 'Exportordner nicht genannt');
-  pruefe(html.indexOf('class="zahnrad"') >= 0, 'kein Zahnrad zur Einstellung');
-  document.getElementById('fall-export-zip').checked = true;
+  pruefe(html.indexOf('zahnrad') < 0 && html.indexOf('type="checkbox"') < 0, 'Exportfenster mit Schalter oder Zahnrad');
   fallExportStarten(true);
   await warte(10);
   var ex = letzte('/api/faelle/export');
-  pruefe(ex && ex.body.id === 1 && ex.body.zip === true, 'Export nicht geschickt: ' + JSON.stringify(ex && ex.body));
+  pruefe(ex && ex.body.id === 1 && !('zip' in ex.body), 'Export nicht geschickt: ' + JSON.stringify(ex && ex.body));
   pruefe(LAUF.eigener === true, 'Der Export oeffnet das Lauffenster nicht');
   // close with export first
   schliessenFenster();
@@ -733,10 +1065,28 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   fallFormularSenden();
   await warte(20);
   pruefe(letzte('/api/faelle/anlegen').body.name === 'Berlin', 'Anlegen nicht geschickt');
+  // the add-to-case window: the folder row follows the chosen case, the
+  // conversation switch counts what the case lacks
+  KANN_VERLAUF = true;
+  fallWahl('einer', 0);
+  await warte(20);
+  html = modal.innerHTML;
+  pruefe(html.indexOf('id="fall-wahl-ordner"') >= 0 && html.indexOf('id="fall-wahl-ordner-neu"') >= 0, 'Ordnerzeile fehlt im Auswahlfenster');
+  var faden = document.getElementById('fall-wahl-thread');
+  pruefe(!faden.classList.contains('hide') && faden.innerHTML.indexOf('fall-wahl-thread-kipp') >= 0 && faden.innerHTML.indexOf('2') >= 0, 'Gespraechsschalter fehlt: ' + faden.innerHTML);
+  pruefe(el('modal').innerHTML.indexOf('value="3"') >= 0 || document.getElementById('fall-wahl-ordner').innerHTML.indexOf('value="3"') >= 0, 'Ordner des Falls fehlen in der Ordnerzeile');
+  document.getElementById('fall-wahl-ordner').value = '3';
+  fallWahlAusfuehren();
+  await warte(20);
+  var hz = letzte('/api/faelle/hinzufuegen');
+  pruefe(hz && hz.body.ordner === 3, 'Ordner nicht mitgeschickt: ' + JSON.stringify(hz && hz.body));
+  var th = letzte('/api/faelle/thread');
+  pruefe(th && th.body.keys[0] === 'mail:<m1@example.com>' && th.body.id === 1, 'Gespraech nach dem Hinzufuegen nicht geholt');
   fallLoeschen();
   await warte(10);
   pruefe(letzte('/api/faelle/loeschen'), 'Loeschen nicht geschickt');
   pruefe(el('fall-detail').classList.contains('hide'), 'Detail nach dem Loeschen offen');
+  pruefe(!el('faelle-split').classList.contains('eng'), 'Uebersicht nach dem Loeschen eng');
 
   // --- settings: the three fields travel with the save
   cfgGefuellt = false;
@@ -792,6 +1142,13 @@ def test_index_ohne_schluessel_wird_nicht_uebersprungen(sandbox, monkeypatch):  
     assert index_schritt()["ziel"] is None, "an index without keys must be rebuilt"
     con = sqlite3.connect(db)
     con.execute("ALTER TABLE chunks ADD COLUMN key TEXT")
+    con.commit()
+    con.close()
+    assert store_layout.mit_schluesseln(db) is False, "11.0: keys, but no sender addresses yet"
+    assert index_schritt()["ziel"] is None
+    con = sqlite3.connect(db)
+    con.execute("ALTER TABLE chunks ADD COLUMN who_mail TEXT")
+    con.execute("ALTER TABLE chunks ADD COLUMN domains TEXT")
     con.commit()
     con.close()
     assert store_layout.mit_schluesseln(db) is True

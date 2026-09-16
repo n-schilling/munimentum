@@ -104,10 +104,27 @@ def test_jeder_treffer_traegt_schluessel_und_faelle(welt):
     res = mcp_server.search_messages("Rechnung 4711")
     m1 = next(h for h in res["results"] if h["uid"] == UID_M1)
     assert m1["key"] == _key(welt, UID_M1)
-    assert m1["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen"}]
+    assert m1["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen", "ordner": None}]
     andere = next(h for h in res["results"] if h["uid"] != UID_M1)
     assert andere["cases"] == []
     assert andere["key"]
+
+
+def test_suche_in_einem_ordner_des_falls(welt):
+    """case_folder narrows to one folder; the mark on a hit names it."""
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1, UID_T0)
+    belege = buch.ordner_anlegen(fid, "Belege")
+    buch.verschieben(fid, [_key(welt, UID_M1)], belege)
+    im_ordner = mcp_server.search_messages("Rechnung", case="Nordwind", case_folder="Belege")
+    assert [h["uid"] for h in im_ordner["results"]] == [UID_M1]
+    assert im_ordner["results"][0]["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen", "ordner": "Belege"}]
+    assert [h["uid"] for h in mcp_server.search_messages("Rechnung", case=str(fid), case_folder=str(belege))["results"]] == [UID_M1]
+    assert [h["uid"] for h in mcp_server.browse_messages(case="Nordwind", case_folder="belege")["results"]] == [UID_M1]
+    res = mcp_server.search_messages("Rechnung", case="Nordwind", case_folder="Nirgends")
+    assert "no folder 'Nirgends'" in res["error"] and "Belege" in res["error"] and res["results"] == []
+    # without a case the folder means nothing
+    assert mcp_server.search_messages("Rechnung", case_folder="Belege")["count"] >= 2
 
 
 def test_stoebern_im_fall(welt):
@@ -176,6 +193,29 @@ def test_list_cases_und_get_case(welt):
     assert mail["title"] == "Rechnung 4711 freigegeben" and mail["source_label"] == "Mail"
     assert mail["uri"] == mcp_server._source_uri("outlook", "inbox/mail1.eml")
     assert voll["result_lists"] == [] and voll["saved_searches"] == []
+    assert voll["folders"] == [] and nw["folders"] == 0
+    assert mail["folder"] is None and mail["origin"] == "page"
+    assert voll["notes"][0]["origin"] == "page"
+
+
+def test_get_case_kennt_ordner_und_herkunft(welt):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    belege = buch.ordner_anlegen(fid, "Belege")
+    buch.hinzufuegen(fid, [_eintrag(welt, UID_T0)], ordner_id=belege, quelle=faelle.MCP)
+    buch.notiz(fid, "Claude schrieb das", quelle=faelle.MCP)
+    buch.speichern("Rechnungen", faelle.kriterien({"q": "Rechnung"}), fid, belege)
+    buch.liste_anlegen(fid, faelle.kriterien({"q": "x"}), [_eintrag(welt, UID_CAL)], ordner_id=belege)
+    voll = mcp_server.get_case("Nordwind")
+    assert voll["folders"] == [{"id": belege, "name": "Belege", "items": 2}] and voll["folders"] == voll["folders"]
+    t0 = next(e for e in voll["items"] if e["key"] == _key(welt, UID_T0))
+    assert t0["folder"] == "Belege" and t0["origin"] == "mcp"
+    m1 = next(e for e in voll["items"] if e["key"] == _key(welt, UID_M1))
+    assert m1["folder"] is None and m1["origin"] == "page"
+    assert voll["notes"][0]["origin"] == "mcp"
+    assert voll["saved_searches"][0]["folder"] == "Belege"
+    assert voll["result_lists"][0]["folder"] == "Belege"
+    assert mcp_server.list_cases()["cases"][0]["folders"] == 1
 
 
 def test_get_case_kennt_listen_und_angehaengte_suchen(welt):
@@ -220,7 +260,8 @@ def test_case_timeline_ist_chronologisch_mit_auszug(welt):
 def test_case_people_zaehlt_die_beteiligten(welt):
     _nordwind(welt, UID_M1, UID_T0, UID_T1, UID_T2, UID_CAL)
     res = mcp_server.case_people("Nordwind")
-    assert res["people"][0] == {"name": "Alice Beispiel", "items": 3}
+    # the sample store carries no sender addresses – the field is there, empty
+    assert res["people"][0] == {"name": "Alice Beispiel", "items": 3, "email": None}
     namen = [p["name"] for p in res["people"]]
     assert namen == ["Alice Beispiel", "Bob Baumeister", "Carla Chef"]
     assert mcp_server.case_people("Nordwind", limit=1)["count"] == 1
@@ -272,7 +313,7 @@ def test_gespeicherte_suchen_laufen_wie_gespeichert(welt):
     assert g["name"] == "Mails von Carla" and g["last_run"] is None and g["case"] is None
     assert g["criteria"] == {"query": "", "mode": "text", "person": "Carla",
                              "source": "outlook", "date_from": "", "date_to": "",
-                             "folder": "", "filetype": "", "only_gone": False, "case": None}
+                             "folder": "", "filetype": "", "only_gone": False, "case": None, "party": "all"}
     lauf = mcp_server.run_saved_search("Mails von Carla")
     assert lauf["search"] == "Mails von Carla"
     assert [h["uid"] for h in lauf["results"]] == [UID_M1]      # browse: person + source
@@ -311,13 +352,43 @@ def test_add_to_case_mit_schalter(welt):
     fid = _nordwind(welt, UID_M1)
     res = mcp_server.add_to_case("Nordwind", uids=[UID_M1, UID_T0, "outlook:nix:0"],
                                  keys=[_key(welt, UID_CAL)])
-    assert res == {"case": "Nordwind", "added": 2, "already_there": 1, "not_found": 1}
+    assert res == {"case": "Nordwind", "folder": None, "added": 2, "already_there": 1, "not_found": 1}
+    # what Claude added says so; what the page added does not
+    herkunft = {e["key"]: e["quelle"] for e in welt["buch"].eintraege(fid)}
+    assert herkunft[_key(welt, UID_M1)] == "ui" and herkunft[_key(welt, UID_T0)] == "mcp"
     assert welt["buch"].keys(fid) == {_key(welt, UID_M1), _key(welt, UID_T0), _key(welt, UID_CAL)}
     e = next(e for e in welt["buch"].eintraege(fid) if e["key"] == _key(welt, UID_T0))
     assert e["titel"] == "Projekt Alpha" and e["wer"] == "Alice Beispiel" and e["src"] == "teams"
     # the hit now says so
     h = next(h for h in mcp_server.search_messages("Rechnung 4711")["results"] if h["uid"] == UID_T0)
     assert h["cases"][0]["name"] == "Nordwind"
+
+
+def test_add_to_case_mit_bemerkung(welt):
+    """The remark goes on the items this call adds; what was there keeps
+    its own – and get_case shows both."""
+    mcp_server.STATE["cases_write"] = True
+    fid = _nordwind(welt, UID_M1)
+    res = mcp_server.add_to_case("Nordwind", uids=[UID_M1, UID_T0], remark=" Belegt die Freigabe ")
+    assert res["added"] == 1 and res["already_there"] == 1
+    je = {e["key"]: e["remark"] for e in mcp_server.get_case("Nordwind")["items"]}
+    assert je[_key(welt, UID_T0)] == "Belegt die Freigabe" and je[_key(welt, UID_M1)] == ""
+    assert welt["buch"].eintraege(fid)[0]["bemerkung"] == ""
+
+
+def test_add_to_case_in_einen_ordner(welt):
+    mcp_server.STATE["cases_write"] = True
+    buch = welt["buch"]
+    fid = _nordwind(welt)
+    belege = buch.ordner_anlegen(fid, "Belege")
+    res = mcp_server.add_to_case("Nordwind", uids=[UID_M1], folder="belege")
+    assert res["folder"] == "Belege" and res["added"] == 1
+    assert buch.keys(fid, belege) == {_key(welt, UID_M1)}
+    res = mcp_server.add_to_case("Nordwind", uids=[UID_T0], folder="Nirgends")
+    assert "no folder 'Nirgends'" in res["error"] and buch.keys(fid) == {_key(welt, UID_M1)}
+    # the note Claude writes is marked as well
+    mcp_server.add_case_note("Nordwind", "Hinweis")
+    assert buch.notizen(fid)[0]["quelle"] == "mcp"
 
 
 def test_add_to_case_und_notiz_an_geschlossenem_fall(welt):
@@ -361,6 +432,7 @@ def test_die_falltools_sprechen_mcp(welt):
 
 
 def test_die_anleitung_nennt_die_faelle():
-    assert "list_cases" in mcp_server._INSTRUCTIONS
+    assert "list_cases" in mcp_server._INSTRUCTIONS and "case_folder" in mcp_server._INSTRUCTIONS
+    assert "via MCP" in mcp_server._INSTRUCTIONS
     assert "case_new_hits" in mcp_server._INSTRUCTIONS
     assert "run_saved_search" in mcp_server._INSTRUCTIONS

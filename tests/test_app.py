@@ -4140,6 +4140,13 @@ def test_http_search_reicht_den_filter_durch(server, monkeypatch):
     assert gesehen["only_gone"] is True
     call(port, "GET", "/api/search")
     assert gesehen["only_gone"] is False
+    # the parties filter travels too, with the internal domains the engine
+    # needs – the setting, else the signed-in account's domain
+    a.cfg["internal_domains"] = "nordwind.example"
+    call(port, "GET", "/api/search?party=external")
+    assert gesehen["party"] == "external" and FakeSuche.STATE["internal_domains"] == "nordwind.example"
+    call(port, "GET", "/api/search?party=x")
+    assert gesehen["party"] == "all"
 
 
 PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """

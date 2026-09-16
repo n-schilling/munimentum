@@ -9,6 +9,7 @@ files say, what happens to an item the archive no longer holds.
 import csv
 import sys
 import json
+import zipfile
 import subprocess
 from pathlib import Path
 
@@ -148,11 +149,22 @@ def test_quelle_key():
 # --------------------------------------------------------------------------
 # The export
 # --------------------------------------------------------------------------
+def _entpackt(zip_pfad):
+    """The ZIP's contents next to it, for looking inside."""
+    ziel = zip_pfad.parent / "entpackt"
+    zipfile.ZipFile(zip_pfad).extractall(ziel)
+    return ziel / zip_pfad.stem
+
+
 def test_export_kopiert_originale_und_schreibt_die_drei_dateien(welt):
-    ziel = welt["ziel"] / "Nordwind_2026-01-01_1200"
-    ordner, zip_pfad, zeilen, fehlt = case_export.exportieren(
-        welt["buch"], welt["fall"], welt["pfade"], ziel, lang="en", res=RES)
-    assert ordner == ziel and zip_pfad is None
+    ordner = welt["ziel"] / "Nordwind_2026-01-01_1200"
+    zip_pfad, zeilen, fehlt = case_export.exportieren(
+        welt["buch"], welt["fall"], welt["pfade"], ordner, lang="en", res=RES)
+    # one ZIP, nothing beside it
+    assert zip_pfad == ordner.with_suffix(".zip") and zip_pfad.exists()
+    assert not ordner.exists(), "the folder is packed and gone"
+    assert [p.name for p in welt["ziel"].iterdir()] == [zip_pfad.name]
+    ziel = _entpackt(zip_pfad)
     assert fehlt == 1 and len(zeilen) == len(EINTRAEGE)
     # the originals, under their source's folder and path
     assert (ziel / "Outlook" / "inbox" / "mail1.eml").read_text().startswith("Message-ID")
@@ -188,9 +200,9 @@ def test_export_kopiert_originale_und_schreibt_die_drei_dateien(welt):
     zeilen_csv = list(csv.DictReader((ziel / "items.csv").read_text(encoding="utf-8").splitlines()))
     assert len(zeilen_csv) == 11
     mail = next(z for z in zeilen_csv if z["key"] == "mail:<m1@example.com>")
-    assert mail == {"key": "mail:<m1@example.com>", "source": "Mail", "date": "2025-06-10 08:00",
-                    "who": "Carla Chef", "title": "Rechnung 4711", "file": "Outlook/inbox/mail1.eml",
-                    "original": "inbox/mail1.eml", "in_archive": "yes"}
+    assert mail == {"key": "mail:<m1@example.com>", "folder": "", "source": "Mail", "date": "2025-06-10 08:00",
+                    "who": "Carla Chef", "title": "Rechnung 4711", "remark": "", "origin": "page",
+                    "file": "Outlook/inbox/mail1.eml", "original": "inbox/mail1.eml", "in_archive": "yes"}
     weg = next(z for z in zeilen_csv if z["title"] == "Verschwunden")
     assert weg["in_archive"] == "no" and weg["file"] == ""
     planner = next(z for z in zeilen_csv if z["key"] == "planner:t1")
@@ -201,35 +213,83 @@ def test_export_kopiert_originale_und_schreibt_die_drei_dateien(welt):
     assert "Zweite Notiz <mit & Zeichen>" in md                              # plain text, not escaped
     assert "no longer in the archive" in md
 
-    # the case remembers where it went
+    # a case without folders: no folder level, no folder column filled
+    assert all(z["origin"] == "page" and z["folder"] == "" for z in zeilen_csv)
+    assert "via MCP" not in html
+    # the case remembers the ZIP – the page opens its folder
     fall = welt["buch"].fall(welt["fall"])
-    assert fall["exportiert"] == str(ziel) and fall["exportiert_wann"]
+    assert fall["exportiert"] == str(zip_pfad) and fall["exportiert_wann"]
 
 
-def test_export_in_deutsch_und_als_zip(welt):
-    ziel = welt["ziel"] / "Nordwind_de"
-    ordner, zip_pfad, zeilen, fehlt = case_export.exportieren(
-        welt["buch"], welt["fall"], welt["pfade"], ziel, mit_zip=True, lang="de", res=RES)
-    html = (ziel / "index.html").read_text(encoding="utf-8")
-    assert "Fallbuch" in html and "Einträge (11)" in html and "nicht mehr im Archiv" in html
-    assert zip_pfad == ziel.with_suffix(".zip") and zip_pfad.exists()
-    import zipfile
+def test_export_in_deutsch(welt):
+    ordner = welt["ziel"] / "Nordwind_de"
+    zip_pfad, zeilen, fehlt = case_export.exportieren(
+        welt["buch"], welt["fall"], welt["pfade"], ordner, lang="de", res=RES)
     namen = zipfile.ZipFile(zip_pfad).namelist()
     assert "Nordwind_de/index.html" in namen and "Nordwind_de/Outlook/inbox/mail1.eml" in namen
-    # the zip is what the case remembers – the page opens its folder
-    assert welt["buch"].fall(welt["fall"])["exportiert"] == str(zip_pfad)
+    html = (_entpackt(zip_pfad) / "index.html").read_text(encoding="utf-8")
+    assert "Fallbuch" in html and "Einträge (11)" in html and "nicht mehr im Archiv" in html
+
+
+def test_export_mit_ordnern_und_herkunft(welt):
+    """The case's folders become the ZIP's folders, unsorted items land in
+    "Unsorted"; what Claude added says "via MCP" – in the page, the CSV
+    and the casebook."""
+    buch, fid = welt["buch"], welt["fall"]
+    belege = buch.ordner_anlegen(fid, "Belege / Rechnungen")      # a name the disk cannot take as is
+    vertraege = buch.ordner_anlegen(fid, "Verträge")
+    buch.verschieben(fid, ["mail:<m1@example.com>", "teams:19:abc#42"], belege)
+    buch.verschieben(fid, ["file:sp1"], vertraege)
+    buch.hinzufuegen(fid, [{"key": "mail:<m9@example.com>", "src": "outlook", "root": "outlook",
+                            "rel": "inbox/m9.eml", "titel": "Von Claude"}], ordner_id=belege, quelle=faelle.MCP)
+    buch.notiz(fid, "Claudes Notiz", quelle=faelle.MCP)
+    buch.bemerkung_setzen(fid, "mail:<m1@example.com>", "Der Beleg <x>")
+    zip_pfad, zeilen, fehlt = case_export.exportieren(
+        buch, fid, welt["pfade"], welt["ziel"] / "Nordwind_ordner", lang="en", res=RES)
+    ziel = _entpackt(zip_pfad)
+    assert (ziel / "Belege _ Rechnungen" / "Outlook" / "inbox" / "mail1.eml").exists()
+    assert (ziel / "Belege _ Rechnungen" / "Teams" / "1on1" / "alice__abc.html").exists()
+    assert (ziel / "Verträge" / "SharePoint" / "TeamX" / "Dokumente" / "Plan.xlsx").exists()
+    assert (ziel / "Unsorted" / "OneDrive" / "Dateien" / "Projekte" / "Angebot.pdf").exists()
+    assert not (ziel / "Outlook").exists(), "with folders, nothing lies at the top"
+    html = (ziel / "index.html").read_text(encoding="utf-8")
+    # one heading per folder, the case's order, unsorted last
+    assert html.index("<h2>Belege / Rechnungen") < html.index("<h2>Verträge") < html.index("<h2>Unsorted")
+    assert 'href="Belege _ Rechnungen/Teams/1on1/alice__abc.html#m-42"' in html
+    assert html.count('class="mcp">via MCP<') == 2                  # the item and the note
+    assert "Von Claude" in html.split('<h2>Belege')[1].split("<h2>")[0]
+    zeilen_csv = list(csv.DictReader((ziel / "items.csv").read_text(encoding="utf-8").splitlines()))
+    claude = next(z for z in zeilen_csv if z["key"] == "mail:<m9@example.com>")
+    assert claude["folder"] == "Belege / Rechnungen" and claude["origin"] == "mcp" and claude["in_archive"] == "no"
+    ohne = next(z for z in zeilen_csv if z["key"] == "file:od1")
+    assert ohne["folder"] == "" and ohne["origin"] == "page"
+    assert ohne["file"] == "Unsorted/OneDrive/Dateien/Projekte/Angebot.pdf"
+    md = (ziel / "casebook.md").read_text(encoding="utf-8")
+    assert "### Belege / Rechnungen" in md and "### Unsorted" in md
+    assert "· via MCP – Claudes Notiz" in md and "Von Claude · via MCP" in md
+    # the remark: under the item in the page, a column in the CSV
+    assert 'class="bem">Der Beleg &lt;x&gt;</div>' in html
+    m1 = next(z for z in zeilen_csv if z["key"] == "mail:<m1@example.com>")
+    assert m1["remark"] == "Der Beleg <x>" and claude["remark"] == ""
+    # the timeline: items and notes by month, oldest first, undated last
+    zeit = (ziel / "timeline.html").read_text(encoding="utf-8")
+    assert zeit.index("<h2>2025-05</h2>") < zeit.index("<h2>2025-06</h2>") < zeit.index("Claudes Notiz")
+    assert zeit.index("Angebot.pdf") < zeit.index("Projekt Alpha") < zeit.index("Rechnung 4711")
+    assert 'class="bem">Der Beleg &lt;x&gt;</div>' in zeit and zeit.count('class="mcp">via MCP<') == 2
+    assert zeit.index("Claudes Notiz") < zeit.index("Without date") < zeit.index("Alice Beispiel</a>")
 
 
 def test_export_eines_geschlossenen_und_leeren_falls(welt):
     buch = welt["buch"]
     leer = buch.fall_anlegen("Leer", "")
     buch.schliessen(leer)
-    ziel = welt["ziel"] / "Leer"
-    ordner, zip_pfad, zeilen, fehlt = case_export.exportieren(buch, leer, welt["pfade"], ziel, lang="en", res=RES)
+    zip_pfad, zeilen, fehlt = case_export.exportieren(buch, leer, welt["pfade"], welt["ziel"] / "Leer",
+                                                      lang="en", res=RES)
+    ziel = _entpackt(zip_pfad)
     assert zeilen == [] and fehlt == 0
     html = (ziel / "index.html").read_text(encoding="utf-8")
     assert "No items." in html and "No notes." in html and "Closed" in html
-    assert (ziel / "items.csv").read_text().strip() == "key,source,date,who,title,file,original,in_archive"
+    assert (ziel / "items.csv").read_text().strip() == "key,folder,source,date,who,title,remark,origin,file,original,in_archive"
 
 
 def test_unbekannter_fall(welt):
@@ -250,9 +310,9 @@ def test_ohne_texte_bleiben_die_schluessel_lesbar(welt):
     keys rather than crashing."""
     t = case_export.Texte({})
     assert t("cases.export.items", n=3) == "cases.export.items"
-    ziel = welt["ziel"] / "roh"
-    case_export.exportieren(welt["buch"], welt["fall"], welt["pfade"], ziel, lang="xx", res=welt["ziel"])
-    assert (ziel / "index.html").exists()
+    zip_pfad, _, _ = case_export.exportieren(welt["buch"], welt["fall"], welt["pfade"], welt["ziel"] / "roh",
+                                             lang="xx", res=welt["ziel"])
+    assert "roh/index.html" in zipfile.ZipFile(zip_pfad).namelist()
 
 
 # --------------------------------------------------------------------------
@@ -276,12 +336,12 @@ def test_main_meldet_ueber_das_protokoll(welt):
     assert keys == ["run.case.start", "run.case.missing", "run.case.done"]
     assert events[0]["v"] == {"name": "Nordwind", "n": 11}
     assert events[1]["level"] == "warn" and events[1]["v"] == {"n": 1}
-    assert events[2]["v"]["n"] == 10 and events[2]["v"]["path"] == str(welt["ziel"] / "lauf")
+    assert events[2]["v"]["n"] == 10 and events[2]["v"]["path"] == str(welt["ziel"] / "lauf.zip")
     ergebnis = [progress.lies_ergebnis(z) for z in r.stdout.splitlines() if z.startswith(progress.MARKE_ERGEBNIS)]
     assert ergebnis == [{"new": 0, "extra": {"items": 10, "missing": 1}}]
     fortschritt = [z for z in r.stdout.splitlines() if z.startswith(progress.MARKE)]
     assert len(fortschritt) == 11                       # one line per item
-    assert (welt["ziel"] / "lauf" / "index.html").exists()
+    assert (welt["ziel"] / "lauf.zip").exists() and not (welt["ziel"] / "lauf").exists()
 
 
 def test_main_ohne_fall(welt):

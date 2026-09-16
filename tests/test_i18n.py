@@ -247,6 +247,9 @@ DYNAMISCH = (
     # Cases (11.0): a case's status, the history's retention line, and the
     # export's status word – composed from the value.
     ("cases.status.", ("offen", "zu")),
+    ("search.party.", ("all", "internal", "external")),
+    ("cases.people.period.", ("week", "month", "quarter", "older")),
+    ("cases.export.party.", ("internal", "external")),
     ("search.history.kept.", ("off", "forever", "days")),
     ("cases.export.status.", ("open", "closed")),
 )

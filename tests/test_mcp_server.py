@@ -940,7 +940,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     schema = next(t for t in tools if t.name == "search_messages").input_schema
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
-        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case"}
+        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party"}
     assert schema["required"] == ["query"]      # only query is required
 
 
@@ -1023,6 +1023,31 @@ def test_treffer_tragen_ihre_gespraechskennung(state):
     treffer = mcp_server.browse_messages(k=1)["results"]
     assert treffer and treffer[0]["thread"] == "tix:xyz", \
         "ohne Kennung am Treffer liesse sich der Verlauf nicht nachladen"
+
+
+def test_party_filter_intern_und_extern(state):
+    """The parties filter: a mail is external when one of its parties'
+    domains lies outside the internal ones, internal when all lie inside;
+    items without parties are on neither side; without known internal
+    domains the filter refuses rather than guesses."""
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET domains = 'example.com nordwind.example' WHERE uid = ?", (UID_M1,))
+    con.execute("UPDATE chunks SET domains = 'example.com' WHERE uid = ?", (UID_M2,))
+    con.commit()
+    con.close()
+    mcp_server.STATE["internal_domains"] = "Example.com, other.example"
+    extern = mcp_server.browse_messages(k=50, party="external")
+    assert [m["uid"] for m in extern["results"]] == [UID_M1]
+    assert extern["results"][0]["domains"] == ["example.com", "nordwind.example"]
+    intern = mcp_server.browse_messages(k=50, party="internal")
+    assert [m["uid"] for m in intern["results"]] == [UID_M2]
+    alle = mcp_server.browse_messages(k=50)
+    assert alle["count"] > 2 and next(m for m in alle["results"] if m["uid"] == UID_T0)["domains"] == []
+    treffer = mcp_server.search_messages("Rechnung", party="external", mode="lexical")["results"]
+    assert [m["uid"] for m in treffer] == [UID_M1]
+    mcp_server.STATE["internal_domains"] = ""
+    assert "No internal domains" in mcp_server.browse_messages(k=50, party="external")["error"]
+    assert "No internal domains" in mcp_server.search_messages("Rechnung", party="internal")["error"]
 
 
 def test_only_gone_zeigt_nur_verschwundenes(state):

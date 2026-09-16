@@ -396,6 +396,17 @@ def endungen(att):
     return " ".join(sorted(gefunden))
 
 
+def domains(adressen):
+    """The distinct mail domains of these addresses, lower-case, space-
+    separated – what "internal or external" is decided on."""
+    out = set()
+    for a in adressen or ():
+        a = str(a or "").strip().lower()
+        if "@" in a:
+            out.add(a.rsplit("@", 1)[1])
+    return " ".join(sorted(out))
+
+
 def addr_people(msg, *headers):
     raw = []
     for h in headers:
@@ -439,6 +450,12 @@ def _outlook_file(p_str, root_str):
         "thread": thread_key(msg),
         "att": " ".join(anhaenge(msg)),
         "who": who, "ppl": " ".join(fn + fe + tn + te).lower(),
+        # The sender's address – what a case's People view tells internal
+        # from external by, and you from everyone else.
+        "who_mail": (fe[0] if fe else "").lower(),
+        # Every party's domain – sender and recipients: a mail is "external"
+        # when one of them lies outside the user's own.
+        "domains": domains(fe + te),
         "ts": ts, "date": disp, "title": hdr(msg, "subject") or "(kein Betreff)",
         "ctx": folder, "text": extract_body(msg),
     }
@@ -638,6 +655,8 @@ def _calendar_file(p_str, root_str):
         "uid": f"kalender:{rel}:0", "src": "kalender", "root": "outlook", "rel": rel,
         "key": f"event:{uid}" if uid else None,
         "who": org_cn or org_mail or "(unbekannt)", "ppl": ppl,
+        "who_mail": (org_mail or "").lower(),
+        "domains": domains([org_mail] + att_mails),
         "ts": ts, "date": disp, "title": summary or "(kein Betreff)",
         "ctx": cal, "text": text[:SAFETY_CAP],
     }

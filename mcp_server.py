@@ -121,12 +121,16 @@ Which tool to use:
     Bob in June"). Newest first.
   • list_cases / get_case / case_timeline / case_people – the user's CASES:
     matters they collect items, result lists and saved searches around.
-    "Summarise the Nordwind case" → get_case for the casebook and what it
-    holds, case_timeline for the chronology with excerpts, case_people for
-    who is involved; search_messages(case=…) searches inside one. Every hit
-    carries `cases` – where it already sits. case_new_hits says what the
-    attached searches find that the case lacks; add_to_case and
-    add_case_note write, but only when the user allowed that in Munimentum.
+    "Summarise the Nordwind case" → get_case for the casebook, the folders
+    and what it holds, case_timeline for the chronology with excerpts,
+    case_people for who is involved; search_messages(case=…, case_folder=…)
+    searches inside one case or one of its folders. Every hit carries
+    `cases` – where it already sits, folder included. case_new_hits says
+    what the attached searches find that the case lacks; add_to_case (into
+    a folder the user made, with a `remark` saying why) and add_case_note
+    write, but only when the user allowed that in Munimentum – what they
+    wrote is marked "via MCP". Every item of a case can carry a remark;
+    get_case shows them.
   • list_saved_searches / run_saved_search – the user's saved searches, run
     exactly as saved.
   • get_document    – full text of one hit, via the uid from a search/browse
@@ -287,7 +291,28 @@ def _db():
     """Fresh read-only connection per call – safe across MCP worker threads."""
     con = sqlite3.connect(f'file:{STATE["db"]}?mode=ro', uri=True)
     con.row_factory = sqlite3.Row
+    con.create_function("extern", 2, _extern_sql, deterministic=True)
     return con
+
+
+def _intern_domains():
+    """The user's own mail domains, lower-case: what the app hands over
+    (the setting, else the signed-in account's domain), or – started by
+    hand – the setting alone."""
+    roh = STATE.get("internal_domains")
+    if roh is None:
+        roh = settings.value("internal_domains", "")
+    return sorted({d.strip().lower() for d in str(roh or "").replace(",", " ").split() if d.strip()})
+
+
+def _extern_sql(domains, intern):
+    """SQL function `extern(domains, intern)`: 1 when one of the item's
+    party domains lies outside the internal ones, 0 when all lie inside,
+    NULL when the item names no party – so it drops out of both sides."""
+    if not domains:
+        return None
+    drinnen = set(str(intern or "").split())
+    return 1 if any(d not in drinnen for d in str(domains).split()) else 0
 
 
 # --------------------------------------------------------------------------
@@ -478,9 +503,26 @@ def _keys_tabelle(con, keys):
     con.executemany("INSERT OR IGNORE INTO fallkeys(key) VALUES(?)", ((k,) for k in keys))
 
 
-def _im_fall(con, case):
-    """Resolve a `case` argument for a query tool: fills the temp table and
-    returns (True, None), (False, None) without a case, or (False, error)."""
+def _ordner_finden(fall, folder):
+    """A folder of the case by id or by name (exact, then case-insensitive).
+    Returns (folder dict or None, error text)."""
+    text = str(folder or "").strip()
+    if not text:
+        return None, None
+    alle = fall.get("ordner_liste") or []
+    treffer = ([o for o in alle if str(o["id"]) == text] if text.isdigit() else []) or \
+              [o for o in alle if o["name"] == text] or \
+              [o for o in alle if o["name"].lower() == text.lower()]
+    if not treffer:
+        namen = ", ".join(o["name"] for o in alle) or "none"
+        return None, f"The case {fall['name']!r} has no folder {text!r} – its folders: {namen}."
+    return treffer[0], None
+
+
+def _im_fall(con, case, case_folder=""):
+    """Resolve a `case` (and `case_folder`) argument for a query tool:
+    fills the temp table and returns (True, None), (False, None) without a
+    case, or (False, error)."""
     if not str(case or "").strip():
         return False, None
     buch = _fallbuch()
@@ -489,16 +531,24 @@ def _im_fall(con, case):
     fall, fehler = _fall_finden(buch, case)
     if fehler:
         return False, fehler
+    ordner, fehler = _ordner_finden(fall, case_folder)
+    if fehler:
+        return False, fehler
     if not _hat_spalte(con, "key"):
         return False, ("This index predates item keys. Rebuild it (Build archive → "
                        "Update archive now) to search inside a case.")
-    _keys_tabelle(con, buch.keys(fall["id"]))
+    _keys_tabelle(con, buch.keys(fall["id"], ordner["id"] if ordner else None))
     return True, None
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
-           im_fall=False):
+           im_fall=False, party="all"):
     conds, params = [], []
+    if party in ("internal", "external"):
+        # Whose mail is it: all parties inside the user's own domains, or
+        # one of them outside. Items without parties are on neither side.
+        conds.append("extern(domains, ?) = ?")
+        params.extend([" ".join(_intern_domains()), 1 if party == "external" else 0])
     if im_fall:
         # Only what the case holds: its keys sit in the temp table
         # (_keys_tabelle) for the length of this connection.
@@ -536,6 +586,20 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
         conds.append("ts <= ?")
         params.append(dto)
     return (" AND ".join(conds) or _WHERE_ALL), params
+
+
+def _party_pruefen(con, party):
+    """Can the `party` filter be answered? An index without the parties'
+    domains cannot, nor one without known internal domains."""
+    if party not in ("internal", "external"):
+        return None
+    if not _hat_spalte(con, "domains"):
+        return ("This index predates party tracking. Rebuild it (Export tab → "
+                "“Index only”) to use party.")
+    if not _intern_domains():
+        return ("No internal domains known – set them in Munimentum under "
+                "Settings › App, or sign in so the account's domain counts.")
+    return None
 
 
 def _to_ts(s, end):
@@ -813,6 +877,11 @@ def _hit(row, score, preview_chars, woerter=()):
         # The stable key (schluessel.py) – what a case remembers a hit by.
         # An index from before 11.0 has none.
         "key": (row["key"] if "key" in row.keys() else None),
+        # The sender's address (mail, appointments) – an index from before
+        # 11.1 has none.
+        "who_mail": (row["who_mail"] if "who_mail" in row.keys() else None),
+        # Every party's domain – the page marks a hit "external" by it.
+        "domains": ((row["domains"] or "").split() if "domains" in row.keys() else []),
     }
     if preview_chars > 0:
         h["preview"] = _ausschnitt(row["text"], woerter, preview_chars)
@@ -937,7 +1006,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     date_to: str = "", days: int = 0, source: str = "all",
                     k: int = 12, offset: int = 0, mode: str = "auto",
                     preview_chars: int = 200, only_gone: bool = False,
-                    folder: str = "", filetype: str = "", case: str = "") -> dict:
+                    folder: str = "", filetype: str = "", case: str = "",
+                    case_folder: str = "", party: str = "all") -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
     SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
     pages – or any subset of it, or only what one case holds.
@@ -991,7 +1061,14 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         case: Restrict to the items of one case (its name or id, see
             list_cases): what the user collected there, from every source.
             Every hit carries `key` and `cases` – the cases it already sits
-            in.
+            in, each with the folder inside the case.
+        case_folder: With `case`: only the items of one of its folders
+            (name or id; get_case lists them).
+        party: "all" (default), "internal" – mails and appointments whose
+            every party lies inside the user's own mail domains – or
+            "external" – at least one party outside them. Items without
+            addresses (chat, tasks, files) are on neither side. Every hit
+            carries `domains`.
     """
     con = _db()
     try:
@@ -999,12 +1076,15 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             return {"error": "This index predates deletion tracking. Rebuild it "
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
-        im_fall, fehler = _im_fall(con, case)
+        fehler = _party_pruefen(con, party)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
+        im_fall, fehler = _im_fall(con, case, case_folder)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall)
+                               filetype, im_fall, party)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -1046,7 +1126,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     days: int = 0, source: str = "all", k: int = 30,
                     offset: int = 0, preview_chars: int = 200,
                     only_gone: bool = False, folder: str = "",
-                    filetype: str = "", case: str = "") -> dict:
+                    filetype: str = "", case: str = "", case_folder: str = "",
+                    party: str = "all") -> dict:
     """List items by filter, newest first, without a search query.
 
     For "everything from <person> in <month>", "the last week in <folder>",
@@ -1079,6 +1160,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             or to mirrored files of it – "pdf", "xlsx".
         case: Restrict to the items of one case (name or id) – "everything
             in the case, newest first" is the timeline of the matter.
+        case_folder: With `case`: only one of its folders (name or id).
+        party: "all", "internal" or "external" – see search_messages.
     """
     con = _db()
     try:
@@ -1086,12 +1169,15 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             return {"error": "This index predates deletion tracking. Rebuild it "
                              "(Export tab → “Index only”) to use only_gone.",
                     "count": 0, "results": []}
-        im_fall, fehler = _im_fall(con, case)
+        fehler = _party_pruefen(con, party)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
+        im_fall, fehler = _im_fall(con, case, case_folder)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall)
+                               filetype, im_fall, party)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.
@@ -1802,7 +1888,8 @@ def _fall_kurz(f):
             "status": "open" if f["status"] == "offen" else "closed",
             "created": f["angelegt"], "changed": f["geaendert"], "closed_at": f["geschlossen"],
             "items": f["eintraege"], "items_per_source": f["je_quelle"],
-            "result_lists": f["listen"], "notes": f["notizen"], "saved_searches": f["suchen"]}
+            "result_lists": f["listen"], "notes": f["notizen"], "saved_searches": f["suchen"],
+            "folders": f["ordner"]}
 
 
 def _eintrag_aussen(e):
@@ -1812,19 +1899,27 @@ def _eintrag_aussen(e):
             "root": e["root"], "path": e["rel"],
             "uri": _source_uri(e["root"], e["rel"]) if e.get("root") and e.get("rel") else None,
             "title": e["titel"], "date": e["datum"], "who": e["wer"],
-            "added": e["hinzugefuegt"], "from_result_list": e["liste"]}
+            "added": e["hinzugefuegt"], "from_result_list": e["liste"],
+            "folder": e.get("ordner_name"), "origin": _herkunft(e.get("quelle")),
+            "remark": e.get("bemerkung") or ""}
+
+
+def _herkunft(quelle):
+    """Who wrote an item or a note: the page, or Claude through MCP."""
+    return "mcp" if quelle == faelle.MCP else "page"
 
 
 def _kriterien_aussen(k):
     return {"query": k["q"], "mode": k["mode"], "person": k["person"], "source": k["source"],
             "date_from": k["from"], "date_to": k["to"], "folder": k["folder"],
-            "filetype": k["filetype"], "only_gone": k["gone"], "case": k["fall"]}
+            "filetype": k["filetype"], "only_gone": k["gone"], "case": k["fall"],
+            "party": k.get("party", "all")}
 
 
 def _suche_aussen(g):
     return {"id": g["id"], "name": g["name"], "criteria": _kriterien_aussen(g["kriterien"]),
             "created": g["angelegt"], "last_run": g["zuletzt"], "hits_then": g["treffer"],
-            "case": g["fall_name"]}
+            "case": g["fall_name"], "folder": g.get("ordner_name")}
 
 
 def _mit_kriterien(k, kk, offset=0, preview_chars=200):
@@ -1833,7 +1928,9 @@ def _mit_kriterien(k, kk, offset=0, preview_chars=200):
     gemeinsam = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                      source=k["source"], k=kk, offset=offset, preview_chars=preview_chars,
                      only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
-                     case=str(k["fall"]) if k["fall"] else "")
+                     case=str(k["fall"]) if k["fall"] else "",
+                     case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
+                     party=k.get("party", "all"))
     if k["q"]:
         return search_messages(query=k["q"], mode=modus, **gemeinsam)
     return browse_messages(**gemeinsam)
@@ -1859,10 +1956,12 @@ def list_cases(include_closed: bool = True) -> dict:
 @mcp.tool(annotations=_READONLY)
 def get_case(case: str) -> dict:
     """One case in full: its description, the casebook (the user's notes,
-    newest first), every item it holds with source, title, date, people
-    and the uri read_source_file takes, the result lists it stores (a
-    search as it stood at one moment) and the saved searches attached to
-    it. Items say `from_result_list` when they came with a list.
+    newest first), its folders, every item it holds with source, title,
+    date, people, the folder it sits in and the uri read_source_file takes,
+    the result lists it stores (a search as it stood at one moment) and the
+    saved searches attached to it. Items say `from_result_list` when they
+    came with a list; `origin` says who wrote an item or a note – "page"
+    (the user) or "mcp" (Claude, through add_to_case / add_case_note).
 
     Args:
         case: The case's name or id (list_cases).
@@ -1874,11 +1973,16 @@ def get_case(case: str) -> dict:
     if fehler:
         return {"error": fehler}
     out = _fall_kurz(fall)
-    out["notes"] = [{"id": n["id"], "when": n["wann"], "text": n["text"]}
-                    for n in fall["notizen_liste"]]
-    out["items"] = [_eintrag_aussen(e) for e in fall["eintraege_liste"]]
+    ordner = {o["id"]: o["name"] for o in fall["ordner_liste"]}
+    out["folders"] = [{"id": o["id"], "name": o["name"], "items": o["anzahl"]}
+                      for o in fall["ordner_liste"]]
+    out["notes"] = [{"id": n["id"], "when": n["wann"], "text": n["text"],
+                     "origin": _herkunft(n.get("quelle"))} for n in fall["notizen_liste"]]
+    out["items"] = [_eintrag_aussen({**e, "ordner_name": ordner.get(e.get("ordner"))})
+                    for e in fall["eintraege_liste"]]
     out["result_lists"] = [{"id": li["id"], "taken": li["wann"], "hits": li["anzahl"],
-                            "criteria": _kriterien_aussen(li["kriterien"])}
+                            "criteria": _kriterien_aussen(li["kriterien"]),
+                            "folder": ordner.get(li.get("ordner"))}
                            for li in fall["listen_liste"]]
     out["saved_searches"] = [_suche_aussen(g) for g in fall["suchen_liste"]]
     return out
@@ -1925,7 +2029,9 @@ def case_timeline(case: str, limit: int = 200, preview_chars: int = 160) -> dict
 def case_people(case: str, limit: int = 50) -> dict:
     """Who appears in a case – the people behind its items (senders,
     authors, organisers, assignees) with how many items each has, most
-    frequent first. Files and pages carry no person.
+    frequent first, and the address the archive knows for them (mail and
+    appointments; null for chat authors and assignees). Files and pages
+    carry no person.
 
     Args:
         case: The case's name or id.
@@ -1942,16 +2048,21 @@ def case_people(case: str, limit: int = 50) -> dict:
         if not _hat_spalte(con, "key"):
             return {"error": "This index predates item keys – rebuild it first."}
         _keys_tabelle(con, buch.keys(fall["id"]))
-        zaehler = {}
-        for who, in con.execute("SELECT who FROM chunks WHERE seq = 0 AND who IS NOT NULL "
-                                "AND who != '' AND key IN (SELECT key FROM fallkeys)"):
-            for name in str(who).split(", "):
-                name = name.strip()
+        zaehler, adressen = {}, {}
+        felder = "who, who_mail" if _hat_spalte(con, "who_mail") else "who, NULL"
+        for who, who_mail in con.execute(f"SELECT {felder} FROM chunks WHERE seq = 0 AND who IS NOT NULL "
+                                         "AND who != '' AND key IN (SELECT key FROM fallkeys)"):
+            namen = [n.strip() for n in str(who).split(", ")]
+            for name in namen:
                 if name and name != "(unbekannt)":
                     zaehler[name] = zaehler.get(name, 0) + 1
+            # One name, one address: an assignee list names several people
+            # for one address, which would pin it on the wrong one.
+            if who_mail and len(namen) == 1 and namen[0] not in adressen:
+                adressen[namen[0]] = who_mail
         leute = sorted(zaehler.items(), key=lambda kv: (-kv[1], kv[0].lower()))[:max(1, limit)]
         return {"case": fall["name"], "count": len(leute),
-                "people": [{"name": n, "items": c} for n, c in leute]}
+                "people": [{"name": n, "items": c, "email": adressen.get(n)} for n, c in leute]}
     finally:
         con.close()
 
@@ -2037,15 +2148,24 @@ def _schreiben_erlaubt():
 
 @mcp.tool(annotations=_WRITE)
 def add_to_case(case: str, uids: list[str] | None = None,
-                keys: list[str] | None = None) -> dict:
+                keys: list[str] | None = None, folder: str = "",
+                remark: str = "") -> dict:
     """Add items to a case – hits by their `uid` (from a search) or by their
-    `key`. Only when the user allowed changes through MCP; nothing is
-    copied, the case merely points at the items. A closed case refuses.
+    `key` – into one of its folders, or unsorted, with a remark on why they
+    belong there. Only when the user allowed changes through MCP; nothing
+    is copied, the case merely points at the items, and they carry the
+    mark "via MCP" in Munimentum. A closed case refuses; folders are made
+    by the user, not here.
 
     Args:
         case: The case's name or id.
         uids: Hit uids to add.
         keys: Item keys to add (a hit's `key`).
+        folder: The folder inside the case (name or id, get_case lists
+            them); empty puts the items in unsorted.
+        remark: One or two sentences on why these items are in the case –
+            set on the items this call adds, shown under each in Munimentum
+            and in the export. Items already in the case keep theirs.
     """
     gesperrt = _schreiben_erlaubt()
     if gesperrt:
@@ -2054,6 +2174,9 @@ def add_to_case(case: str, uids: list[str] | None = None,
     if buch is None:
         return {"error": _KEIN_FALLBUCH}
     fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    ordner, fehler = _ordner_finden(fall, folder)
     if fehler:
         return {"error": fehler}
     con = _db()
@@ -2073,20 +2196,24 @@ def add_to_case(case: str, uids: list[str] | None = None,
     finally:
         con.close()
     eintraege = [{"key": r["key"], "src": r["src"], "root": r["root"], "rel": r["rel"],
-                  "titel": r["title"], "datum": r["date"], "wer": r["who"]}
+                  "titel": r["title"], "datum": r["date"], "wer": r["who"],
+                  "bemerkung": str(remark or "").strip()}
                  for r in rows if r["key"]]
     try:
-        neu = buch.hinzufuegen(fall["id"], eintraege)
+        neu = buch.hinzufuegen(fall["id"], eintraege, ordner_id=ordner["id"] if ordner else None,
+                               quelle=faelle.MCP)
     except faelle.FallGeschlossen:
         return {"error": f"The case {fall['name']!r} is closed – reopen it in Munimentum first."}
-    return {"case": fall["name"], "added": neu, "already_there": len(eintraege) - neu,
+    return {"case": fall["name"], "folder": ordner["name"] if ordner else None,
+            "added": neu, "already_there": len(eintraege) - neu,
             "not_found": len(list(uids or ())) + len(list(keys or ())) - len(eintraege)}
 
 
 @mcp.tool(annotations=_WRITE)
 def add_case_note(case: str, text: str) -> dict:
-    """Add a note to a case's casebook – a short, dated remark. Only when
-    the user allowed changes through MCP; a closed case refuses.
+    """Add a note to a case's casebook – a short, dated remark, marked
+    "via MCP" in Munimentum. Only when the user allowed changes through
+    MCP; a closed case refuses.
 
     Args:
         case: The case's name or id.
@@ -2102,7 +2229,7 @@ def add_case_note(case: str, text: str) -> dict:
     if fehler:
         return {"error": fehler}
     try:
-        kennung = buch.notiz(fall["id"], text)
+        kennung = buch.notiz(fall["id"], text, quelle=faelle.MCP)
     except faelle.FallGeschlossen:
         return {"error": f"The case {fall['name']!r} is closed – reopen it in Munimentum first."}
     except ValueError:

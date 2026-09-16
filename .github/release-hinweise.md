@@ -1,24 +1,82 @@
-## New in 11.0.1
+## New in 11.1.0
 
-**To Do: the default list exports again.** The first read of a list
-asked its delta feed with `$top`, which the mailbox's own *Tasks* list
-("Aufgaben") refuses with a 400 while every other list takes it – so
-the list that holds most people's tasks never arrived. The page size
-now travels as the `Prefer: odata.maxpagesize` header the API
-documents, on every page.
+**Folders in a case.** A case sorts its items one level deep: *New
+folder…* in the tool row, ticked rows move with *Move to* (an existing
+folder, a new one, or *Unsorted*), a folder's heading offers *Search
+here*, *Rename* and `×`. A result list and a saved search file into one
+folder as a whole, so a search's new hits land where its earlier ones
+went; the window that puts anything into a case asks for the folder.
+The *Cases* filter lists every folder under its case, and a hit's mark
+names the folder.
 
-**Refusals in their own words.** When Graph refuses a request, the log
-line now carries the service's error code and message next to the
-status – "The query parameter '$top' is not supported" instead of a
-bare "400 Bad Request".
+**Everything folds.** Every heading in a case — casebook, lists, each
+folder, the sources inside it, the searches — is a fold, closed when the
+case opens, its closed line carrying the count; two buttons expand or
+collapse them all. A **filter field** narrows the case to the rows
+matching a title, a person, a date or a remark, and opens every fold as
+it is typed.
 
-**Smaller.** The file browser names the SharePoint sites with their
-source in front, as the Teams and Planner roots already were.
+**The overview steps aside.** The case list is a *Case overview* with
+names, status, counts and the last change; while a case is open it
+narrows to the names, so the case takes the width, and the arrow in its
+head widens it again. Closed cases sit behind one link. The case's head
+is three lines — name and status, the facts, the description — then one
+tool row; the foot is two groups: the export at the left, *Close* and
+*Delete* at the right.
+
+**Three views of a case.** Under the head: *Folders*; *Timeline* —
+every item and every note in the order they happened, month by month,
+the folder as a tag, and above the rows the case's activity as one soft
+bar per month (per week for a short case), the notes as dots, a click
+narrowing the rows to that time; and *People* as a picture — you at the
+left, everyone the items name in four columns by their last contact,
+each a circle sized by how many items name them, initials instead of
+photos. A person outside your organisation's mail domains (a new
+setting under *App*, else the domain you signed in with) has a dashed
+ring and the *external* mark; you are left out yourself. A click on a
+person opens a card with the address, the counts, the span of dates and
+the two ways on: *Timeline* shows their items, *Search* asks the
+archive for them inside the case. The filter field narrows whichever
+view is open.
+
+**A remark on every item.** One or two sentences on why the item is in
+the case, from the pen on its row; shown under the title, exported in
+`index.html`, `timeline.html` and `items.csv`.
+
+**The whole conversation.** The window that adds a hit offers the rest
+of its conversation with the numbers the archive knows; a row whose
+conversation the case lacks part of shows *Thread +n* and fetches it
+into the row's folder.
+
+**External, in the search.** A mail or appointment with a party outside
+your organisation's mail domains carries *external* in the hit list and
+the detail, and a new filter narrows to *internal only* or *with
+external parties* — for Claude the `party` argument on every search.
+
+**Via MCP, on the item.** What Claude put into a case — an item, a note
+— carries *via MCP* on that item or note, nowhere else. For Claude:
+every search or browse takes `case_folder`, `get_case` lists the
+folders and each item's folder, origin and remark, `add_to_case` takes a
+`folder` and a `remark`.
+
+**Smaller.** The hit's detail no longer prints where the file is stored
+— the original is one click away.
+
+**One ZIP.** *Export case…* shows what the export will hold and always
+writes one ZIP — the originals under `<folder>/<source>/<path>`, an
+index page with one section per folder, `timeline.html`, `items.csv`
+with folder, remark and origin columns, the casebook. The switch and
+the folder beside the ZIP are gone.
 
 ## Upgrading
 
-**From 11.0.0:** nothing to do; the next run reads the default To Do
-list.
+**From 11.0.x:** the case book gets its new columns on the first start.
+The next index run reads the archive once in full — it adds the
+addresses the People view, the *external* mark and the parties filter
+need — and runs whether or not the exports brought anything; until then
+the People view says so and shows names only, and the filter stays
+hidden. Claude Desktop: `case_folder`, the folder and the remark on
+`add_to_case` appear once the MCP server is restarted.
 
 **From 10.x:** nothing to do. The next run — scheduled or by hand,
 *Index only* is the quickest — rebuilds the index once with every item's

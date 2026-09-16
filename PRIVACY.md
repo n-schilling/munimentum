@@ -28,9 +28,10 @@ nowhere else. The search history, saved searches and cases sit in a
 `faelle.db` next to the profile's settings: the history keeps a search's
 criteria — words, kind of search, filters — never its hits, for as long as
 *Settings › App* says (or not at all), and a case keeps pointers into the
-archive plus what a hit said when it was added. The one thing the app
+archive plus what a hit said when it was added and the remarks you write
+on its items. The one thing the app
 writes outside its folders is a **case export**, and only when you ask
-for one: a folder of copied originals under the path you chose (your
+for one: a ZIP of copied originals under the path you chose (your
 Documents folder by default) — from there on it is yours to move, share or
 delete. The app serves its
 interface on `127.0.0.1` and is not reachable from your network. System

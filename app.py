@@ -1668,8 +1668,8 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # "Fetch again": {quelle, liste} – the source whose step fetches
         # exactly the files in the list (FETCH_LIST), ticked or not.
         "nachholen": dict(nachholen or {}),
-        # A case export: {faelle, fall, ziel, zip, lang, res} for
-        # case_export.py – the folder is named before the run starts.
+        # A case export: {faelle, fall, ziel, lang, res} for case_export.py
+        # – the ZIP is named before the run starts.
         "fall_export": dict(fall_export or {}),
         # Source -> when its last resync completed, for the archive
         # check's "still missing after a fetch" verdict.
@@ -2713,9 +2713,12 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/api/faelle/anlegen", "/api/faelle/aendern",
                           "/api/faelle/schliessen", "/api/faelle/oeffnen",
                           "/api/faelle/loeschen", "/api/faelle/hinzufuegen",
-                          "/api/faelle/entfernen", "/api/faelle/liste",
+                          "/api/faelle/entfernen", "/api/faelle/verschieben",
+                          "/api/faelle/ordner-anlegen", "/api/faelle/ordner-umbenennen",
+                          "/api/faelle/ordner-loeschen", "/api/faelle/liste",
                           "/api/faelle/liste-loeschen", "/api/faelle/notiz",
                           "/api/faelle/notiz-aendern", "/api/faelle/notiz-loeschen",
+                          "/api/faelle/bemerkung", "/api/faelle/thread",
                           "/api/faelle/export", "/api/faelle/export-ordner"):
                 return self._faelle_schreiben(u.path.rsplit("/", 1)[1], data)
             if u.path == "/api/schedule":
@@ -2928,6 +2931,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.app.faelle.aufraeumen(historie_tage(cfg))
             if "case_export_dir" in data:
                 cfg["case_export_dir"] = str(data["case_export_dir"] or "").strip()
+            # Who counts as internal, and who you are – both plain text
+            for k in ("internal_domains", "own_name"):
+                if k in data:
+                    cfg[k] = str(data[k] or "").strip()
             # Whoever switches Ollama off no longer means the check from just now.
             if "ollama_enabled" in data:
                 self.app._ollama_cache = (0, None)
@@ -3110,13 +3117,17 @@ class Handler(BaseHTTPRequestHandler):
         if mod is None:
             return {"error": self.app.search.error, "hits": [], "count": 0}
         k = faelle.kriterien(q)
+        mod.STATE["internal_domains"] = self._interne_domains()
         kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                   source=k["source"],
                   k=min(int(q.get("k", 20) or 20), 100),
                   offset=max(int(q.get("offset", 0) or 0), 0),
                   only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
-                  # The "Cases" filter: only what one case holds.
-                  case=str(k["fall"]) if k["fall"] else "")
+                  party=k["party"],
+                  # The "Cases" filter: only what one case – or one of its
+                  # folders – holds.
+                  case=str(k["fall"]) if k["fall"] else "",
+                  case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "")
         if k["q"]:
             res = mod.search_messages(query=k["q"], mode=q.get("mode", "auto"), **kw)
         else:
@@ -3136,16 +3147,28 @@ class Handler(BaseHTTPRequestHandler):
                 self.app.faelle.gelaufen(gespeichert, res.get("count", 0))
         return res
 
+    def _interne_domains(self):
+        """Which mail domains are "us": the setting, else the domain of the
+        signed-in account – handed to the search engine with every search,
+        so a changed setting counts at once."""
+        roh = str(self.app.cfg.get("internal_domains") or "").strip()
+        if roh:
+            return roh
+        konto = str(token_status(read_token()).get("account") or "")
+        return konto.rsplit("@", 1)[1].lower() if "@" in konto else ""
+
     def _alle_treffer(self, k, grenze=5000):
         """Every hit of a search, for a result list: the criteria as the
         page had them, paged through the same engine up to `grenze`."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return None, self.app.search.error
+        mod.STATE["internal_domains"] = self._interne_domains()
         kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                   source=k["source"], only_gone=k["gone"], folder=k["folder"],
                   filetype=k["filetype"], case=str(k["fall"]) if k["fall"] else "",
-                  preview_chars=0)
+                  case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
+                  party=k["party"], preview_chars=0)
         modus = {"text": "lexical", "aehnlich": "semantic", "ki": "hybrid"}[k["mode"]]
         treffer, offset, schritt = [], 0, 100
         while offset < grenze:
@@ -3169,6 +3192,15 @@ class Handler(BaseHTTPRequestHandler):
             return {"searches": buch.suchen(), "retention": str(self.app.cfg.get("search_history") or "90")}
         return {"searches": buch.gespeicherte()}
 
+    @staticmethod
+    def _ordner_aus(data, feld="ordner"):
+        """A folder id from a request body: an integer or None."""
+        wert = data.get(feld)
+        try:
+            return int(wert) if wert not in (None, "", 0, "0") else None
+        except (TypeError, ValueError):
+            return None
+
     def _suche_schreiben(self, was, data):
         buch = self.app.faelle
         try:
@@ -3184,7 +3216,8 @@ class Handler(BaseHTTPRequestHandler):
                 fall_id = int(fall) if fall not in (None, "", 0) else None
                 if fall_id is not None and buch.fall(fall_id) is None:
                     return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
-                neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("kriterien")), fall_id)
+                neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("kriterien")), fall_id,
+                                     self._ordner_aus(data))
                 return self._json({"ok": True, "id": neu, "search": buch.gespeichert(neu)})
             if was == "umbenennen":
                 if not buch.umbenennen(kennung, data.get("name")):
@@ -3197,13 +3230,15 @@ class Handler(BaseHTTPRequestHandler):
                 fall_id = int(fall) if fall not in (None, "", 0) else None
                 if fall_id is not None and buch.fall(fall_id) is None:
                     return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
-                if not buch.anhaengen(kennung, fall_id):
+                if not buch.anhaengen(kennung, fall_id, self._ordner_aus(data)):
                     return self._json({"ok": False, "message": {"k": "srv.search.unknown", "v": {}}}, 404)
                 return self._json({"ok": True})
         except ValueError:
             return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
         except faelle.FallGeschlossen:
             return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
+        except faelle.KeinOrdner:
+            return self._json({"ok": False, "message": {"k": "srv.case.nofolder", "v": {}}}, 404)
         return self._json({"error": "Unbekannter Pfad"}, 404)
 
     # -- cases -------------------------------------------------------------
@@ -3219,6 +3254,7 @@ class Handler(BaseHTTPRequestHandler):
         if fall is None:
             return {"error": {"k": "srv.case.unknown", "v": {}}}
         if was == "fall":
+            self._index_stand(fall)
             return {"case": fall}
         # "neu": what the attached searches find today that the case lacks
         keys = buch.keys(kennung)
@@ -3229,8 +3265,105 @@ class Handler(BaseHTTPRequestHandler):
                 bloecke.append({"id": g["id"], "name": g["name"], "error": fehler, "new": []})
                 continue
             neu = [h for h in treffer if h.get("key") and h["key"] not in keys]
-            bloecke.append({"id": g["id"], "name": g["name"], "new": neu[:200], "new_count": len(neu)})
+            bloecke.append({"id": g["id"], "name": g["name"], "new": neu[:200], "new_count": len(neu),
+                            "ordner": g.get("ordner"), "ordner_name": g.get("ordner_name")})
         return {"case": {"id": fall["id"], "name": fall["name"]}, "searches": bloecke}
+
+    def _fall_voll(self, kennung):
+        """The case as every write answers it – with the conversations'
+        state on its items."""
+        fall = self.app.faelle.fall(kennung)
+        if fall is not None:
+            self._index_stand(fall)
+        return fall
+
+    def _index_stand(self, fall):
+        """What the index knows about the case's items beyond what the case
+        remembers: `thread_offen` – how many messages of the item's
+        conversation the case lacks, 0 where there is none – and
+        `wer_mail`, the address behind `wer` where the index has one. Two
+        queries, whatever the case's size; an index without the columns
+        leaves the zeros and the empty strings."""
+        for e in fall["eintraege_liste"]:
+            e["thread_offen"] = 0
+            e["wer_mail"] = ""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None or not fall["eintraege_liste"]:
+            return
+        try:
+            con = mod._db()
+        except Exception:
+            return
+        try:
+            if not mod._hat_spalte(con, "key"):
+                return
+            mit_thread = mod._hat_spalte(con, "thread")
+            mit_adresse = mod._hat_spalte(con, "who_mail")
+            if not (mit_thread or mit_adresse):
+                return
+            mod._keys_tabelle(con, {e["key"] for e in fall["eintraege_liste"]})
+            felder = "key, " + ("thread" if mit_thread else "NULL") + ", " + ("who_mail" if mit_adresse else "NULL")
+            je_key, im_fall, adressen = {}, {}, {}
+            for key, thread, who_mail in con.execute(
+                    f"SELECT {felder} FROM chunks WHERE seq = 0 AND key IN (SELECT key FROM fallkeys)"):
+                if thread:
+                    je_key[key] = thread
+                    im_fall[thread] = im_fall.get(thread, 0) + 1
+                if who_mail:
+                    adressen[key] = who_mail
+            for e in fall["eintraege_liste"]:
+                e["wer_mail"] = adressen.get(e["key"], "")
+            if not je_key:
+                return
+            con.execute("CREATE TEMP TABLE IF NOT EXISTS fallthreads(thread TEXT PRIMARY KEY)")
+            con.execute("DELETE FROM fallthreads")
+            con.executemany("INSERT OR IGNORE INTO fallthreads(thread) VALUES(?)",
+                            ((t,) for t in im_fall))
+            gesamt = dict(con.execute(
+                "SELECT thread, COUNT(*) FROM chunks WHERE seq = 0 AND key IS NOT NULL AND key != '' "
+                "AND thread IN (SELECT thread FROM fallthreads) GROUP BY thread"))
+            for e in fall["eintraege_liste"]:
+                t = je_key.get(e["key"])
+                if t:
+                    e["thread_offen"] = max(0, gesamt.get(t, 0) - im_fall.get(t, 0))
+        finally:
+            con.close()
+
+    def _thread_holen(self, kennung, keys):
+        """The rest of these items' conversations into the case – each
+        message into the folder its item sits in. Returns (added, error)."""
+        buch = self.app.faelle
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            return 0, {"k": "srv.case.nothread", "v": {}}
+        fall = buch.fall(kennung)
+        con = mod._db()
+        try:
+            if not (mod._hat_spalte(con, "thread") and mod._hat_spalte(con, "key")):
+                return 0, {"k": "srv.case.nothread", "v": {}}
+            im_fall = {e["key"]: e for e in fall["eintraege_liste"]}
+            neu = 0
+            for key in keys:
+                e = im_fall.get(key)
+                if e is None:
+                    continue
+                r = con.execute("SELECT thread FROM chunks WHERE key = ? AND seq = 0 LIMIT 1",
+                                (key,)).fetchone()
+                if r is None or not r[0]:
+                    continue
+                rows = con.execute(
+                    "SELECT * FROM chunks WHERE thread = ? AND seq = 0 AND key IS NOT NULL AND key != '' "
+                    "ORDER BY ts IS NULL, ts LIMIT 500", (r[0],)).fetchall()
+                eintraege = [{"key": m["key"], "src": m["src"], "root": m["root"], "rel": m["rel"],
+                              "titel": m["title"], "datum": m["date"], "wer": m["who"]}
+                             for m in rows if m["key"] not in im_fall]
+                if eintraege:
+                    neu += buch.hinzufuegen(kennung, eintraege, ordner_id=e.get("ordner"))
+                    for x in eintraege:
+                        im_fall[x["key"]] = x
+            return neu, None
+        finally:
+            con.close()
 
     def _faelle_schreiben(self, was, data):
         app, buch = self.app, self.app.faelle
@@ -3241,7 +3374,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if was == "anlegen":
                 neu = buch.fall_anlegen(data.get("name"), data.get("beschreibung"))
-                return self._json({"ok": True, "id": neu, "case": buch.fall(neu)})
+                return self._json({"ok": True, "id": neu, "case": self._fall_voll(neu)})
             if buch.fall(kennung) is None:
                 return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
             if was == "aendern":
@@ -3256,17 +3389,39 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True})
             elif was == "hinzufuegen":
                 eintraege = [e for e in (data.get("eintraege") or []) if isinstance(e, dict)]
-                neu = buch.hinzufuegen(kennung, eintraege)
+                neu = buch.hinzufuegen(kennung, eintraege, ordner_id=self._ordner_aus(data))
                 return self._json({"ok": True, "added": neu,
                                    "already": len([e for e in eintraege if e.get("key")]) - neu})
             elif was == "entfernen":
                 buch.entfernen(kennung, str(data.get("key") or ""))
+            elif was == "verschieben":
+                keys = [str(k) for k in (data.get("keys") or []) if isinstance(k, str)]
+                n = buch.verschieben(kennung, keys, self._ordner_aus(data))
+                return self._json({"ok": True, "moved": n, "case": self._fall_voll(kennung)})
+            elif was == "ordner-anlegen":
+                ordner = buch.ordner_anlegen(kennung, data.get("name"))
+                return self._json({"ok": True, "ordner": ordner, "case": self._fall_voll(kennung)})
+            elif was == "bemerkung":
+                if not buch.bemerkung_setzen(kennung, data.get("key"), data.get("text")):
+                    return self._json({"ok": False, "message": {"k": "srv.case.noitem", "v": {}}}, 404)
+            elif was == "thread":
+                if buch.fall(kennung)["status"] != faelle.OFFEN:
+                    raise faelle.FallGeschlossen()
+                keys = [str(k) for k in (data.get("keys") or []) if isinstance(k, str)]
+                neu, fehler = self._thread_holen(kennung, keys)
+                if fehler:
+                    return self._json({"ok": False, "message": fehler}, 409)
+                return self._json({"ok": True, "added": neu, "case": self._fall_voll(kennung)})
+            elif was == "ordner-umbenennen":
+                buch.ordner_umbenennen(kennung, self._ordner_aus(data), data.get("name"))
+            elif was == "ordner-loeschen":
+                buch.ordner_loeschen(kennung, self._ordner_aus(data))
             elif was == "liste":
                 k = faelle.kriterien(data.get("kriterien"))
                 treffer, fehler = self._alle_treffer(k)
                 if fehler:
                     return self._json({"ok": False, "message": fehler}, 409)
-                liste_id, neu = buch.liste_anlegen(kennung, k, treffer)
+                liste_id, neu = buch.liste_anlegen(kennung, k, treffer, ordner_id=self._ordner_aus(data))
                 return self._json({"ok": True, "liste": liste_id, "hits": len(treffer), "added": neu})
             elif was == "liste-loeschen":
                 buch.liste_loeschen(kennung, int(data.get("liste") or 0))
@@ -3278,7 +3433,7 @@ class Handler(BaseHTTPRequestHandler):
             elif was == "notiz-loeschen":
                 buch.notiz_loeschen(kennung, int(data.get("notiz") or 0))
             elif was == "export":
-                return self._fall_export(kennung, bool(data.get("zip")))
+                return self._fall_export(kennung)
             elif was == "export-ordner":
                 fall = buch.fall(kennung)
                 pfad = Path(fall["exportiert"]) if fall.get("exportiert") else None
@@ -3293,18 +3448,22 @@ class Handler(BaseHTTPRequestHandler):
                                    {"k": "srv.archiv.open.fail", "v": {}}}, 200 if ok else 500)
             else:
                 return self._json({"error": "Unbekannter Pfad"}, 404)
-            return self._json({"ok": True, "case": buch.fall(kennung)})
-        except ValueError:
+            return self._json({"ok": True, "case": self._fall_voll(kennung)})
+        except ValueError as e:
+            if str(e) == "exists":
+                return self._json({"ok": False, "message": {"k": "srv.case.folder.exists", "v": {}}}, 409)
             return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
         except faelle.FallGeschlossen:
             return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
         except faelle.KeinFall:
             return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+        except faelle.KeinOrdner:
+            return self._json({"ok": False, "message": {"k": "srv.case.nofolder", "v": {}}}, 404)
 
-    def _fall_export(self, kennung, mit_zip):
-        """The export as a run of its own (case_export.py): the folder is
-        named here, before the run, so the answer can already say where
-        it will lie."""
+    def _fall_export(self, kennung):
+        """The export as a run of its own (case_export.py): one ZIP, named
+        here before the run, so the answer can already say where it will
+        lie."""
         app = self.app
         fall = app.faelle.fall(kennung)
         if app.jobs.busy:
@@ -3317,11 +3476,11 @@ class Handler(BaseHTTPRequestHandler):
         ziel = case_export.zielordner(basis, fall["name"])
         ok, why = app.launch({"fall_export": True}, label="job.case_export",
                              fall_export={"faelle": str(HEIM / faelle.DB_NAME), "fall": kennung,
-                                          "ziel": str(ziel), "zip": bool(mit_zip),
+                                          "ziel": str(ziel),
                                           "lang": app.ui_lang or i18n.negotiate(app.cfg.get("language"), None, RES),
                                           "res": str(RES)})
-        return self._json({"ok": ok, "message": None if ok else why, "path": str(ziel)},
-                          200 if ok else 409)
+        return self._json({"ok": ok, "message": None if ok else why,
+                           "path": str(ziel.with_suffix(".zip"))}, 200 if ok else 409)
 
     def _similar(self, q):
         """Similar to one hit – needs no Ollama (see mcp_server)."""
@@ -3341,8 +3500,14 @@ class Handler(BaseHTTPRequestHandler):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
             return {"error": self.app.search.error, "messages": [], "count": 0}
-        return mod.get_thread(thread=q.get("key", ""),
-                              limit=min(int(q.get("limit", 50) or 50), 200))
+        res = mod.get_thread(thread=q.get("key", ""),
+                             limit=min(int(q.get("limit", 50) or 50), 200))
+        # Every message says which cases it sits in – the add-to-case
+        # window counts from that how much of the conversation is there.
+        marken = getattr(mod, "_mit_faellen", None)
+        if res.get("messages") and marken:
+            marken(res["messages"])
+        return res
 
     def _folders(self, q):
         """Which mailbox folders are in the archive – for the filter."""

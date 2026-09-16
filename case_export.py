@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-case_export.py – one case (faelle.py) as a folder that stands on its own.
+case_export.py – one case (faelle.py) as one ZIP that stands on its own.
 
     case_export.py <teams> <outlook> <onedrive> --sharepoint … --pages …
                    --planner … --todo … --onenote … --faelle <faelle.db>
-                   --fall <id> --ziel <folder> [--zip] [--lang de --res <dir>]
+                   --fall <id> --ziel <folder> [--lang de --res <dir>]
 
-The folder holds the originals of everything the case points at, copied
-out of the archive under their source's name and path – the .eml, the
-.ics, the chat's HTML with its attachment folder, the file, the page, the
-board – plus three files that tie them together:
+The ZIP holds the originals of everything the case points at, copied out
+of the archive under the case's folder, their source's name and path –
+the .eml, the .ics, the chat's HTML with its attachment folder, the file,
+the page, the board – plus three files that tie them together:
 
     index.html    the case: description, casebook, every item with a link
                   into the copied original, the stored result lists, the
@@ -18,10 +18,11 @@ board – plus three files that tie them together:
     casebook.md   description and notes as plain text
 
 An item whose original the archive no longer holds is listed all the
-same, marked, with what the case remembers about it. Nothing in the
-archive is touched; the target folder is the user's (Settings → Cases),
-never below the export folders. With --zip a zip of the folder lands
-beside it.
+same, marked, with what the case remembers about it; what Claude added
+through MCP says so. Nothing in the archive is touched; the folder named
+by --ziel is built, packed into <ziel>.zip and removed – only the ZIP
+stays, under the user's folder (Settings → App), never below the export
+folders.
 
 Runs as a step of the app (progress.py protocol) – the run window shows
 it, the run history keeps it.
@@ -175,7 +176,15 @@ td.datum{white-space:nowrap;font-variant-numeric:tabular-nums}a{color:var(--akz)
 .notiz{background:var(--karte);border-radius:6px;padding:10px 12px;margin:8px 0}.notiz .wann{color:var(--mute);font-size:12px}
 .notiz p{margin:4px 0 0;white-space:pre-wrap}.leer{color:var(--mute)}
 .kriterien{font-size:13px;color:var(--mute)}footer{margin-top:40px;color:var(--mute);font-size:12px}
+.mcp{font-size:11px;color:var(--akz);border:1px solid var(--akz);border-radius:999px;padding:0 6px;margin-left:6px;white-space:nowrap}
+h2 .n{font-weight:400;color:var(--mute);font-size:14px;margin-left:6px}
+.bem{margin-top:3px;padding-left:7px;border-left:2px solid var(--akz);font-size:13px}
+.zeit td.notiz-zeile{color:var(--mute)}.ordner{font-size:12px;color:var(--mute);white-space:nowrap}
 """
+
+
+def _mcp(t, herkunft):
+    return f' <span class="mcp">{html_lib.escape(t("cases.origin.mcp"))}</span>' if herkunft == "mcp" else ""
 
 
 def _kriterien_text(k, t):
@@ -199,6 +208,8 @@ def _kriterien_text(k, t):
         teile.append(f".{k['filetype']}")
     if k.get("gone"):
         teile.append(t("cases.export.gone"))
+    if k.get("party") in faelle.PARTEIEN:
+        teile.append(t('cases.export.party.' + k["party"]))
     if k.get("fall"):
         teile.append(t("cases.export.incase"))
     return " · ".join(teile) or t("cases.export.everything")
@@ -231,25 +242,37 @@ def index_html(fall, zeilen, t, lang):
     out.append(f'<h2>{esc(t("cases.export.casebook"))}</h2>')
     if fall["notizen_liste"]:
         for n in fall["notizen_liste"]:
-            out.append(f'<div class="notiz"><div class="wann">{esc(_wann(n["wann"]))}</div><p>{esc(n["text"])}</p></div>')
+            out.append(f'<div class="notiz"><div class="wann">{esc(_wann(n["wann"]))}{_mcp(t, _herkunft(n))}</div>'
+                       f'<p>{esc(n["text"])}</p></div>')
     else:
         out.append(f'<p class="leer">{esc(t("cases.export.nonotes"))}</p>')
 
-    out.append(f'<h2>{esc(t("cases.export.items", n=len(zeilen)))}</h2>')
-    if zeilen:
-        out.append(f'<table><thead><tr><th>{esc(t("cases.export.col.source"))}</th><th>{esc(t("cases.export.col.date"))}</th>'
-                   f'<th>{esc(t("cases.export.col.who"))}</th><th>{esc(t("cases.export.col.title"))}</th></tr></thead><tbody>')
-        for z in zeilen:
+    def tabelle(teil):
+        rows = [f'<table><thead><tr><th>{esc(t("cases.export.col.source"))}</th><th>{esc(t("cases.export.col.date"))}</th>'
+                f'<th>{esc(t("cases.export.col.who"))}</th><th>{esc(t("cases.export.col.title"))}</th></tr></thead><tbody>']
+        for z in teil:
             titel = esc(z["titel"] or z["rel"] or z["key"])
             if z["datei"]:
                 link = f'<a href="{esc(z["datei"] + z["anker"])}">{titel}</a>'
             else:
                 link = f'<span class="weg">{titel} – {esc(t("cases.export.missing"))}</span>'
-            out.append(f'<tr><td>{esc(t(z["quelle"]))}</td><td class="datum">{esc(z["datum"] or "")}</td>'
-                       f'<td>{esc(z["wer"] or "")}</td><td>{link}</td></tr>')
-        out.append("</tbody></table>")
-    else:
+            rows.append(f'<tr><td>{esc(t(z["quelle"]))}</td><td class="datum">{esc(z["datum"] or "")}</td>'
+                        f'<td>{esc(z["wer"] or "")}</td><td>{link}{_mcp(t, z["herkunft"])}{_bem(z)}</td></tr>')
+        rows.append("</tbody></table>")
+        return "\n".join(rows)
+
+    out.append(f'<h2>{esc(t("cases.export.items", n=len(zeilen)))}</h2>')
+    if not zeilen:
         out.append(f'<p class="leer">{esc(t("cases.export.noitems"))}</p>')
+    elif any(z["ordner"] for z in zeilen):
+        # The case's folders, in the case's order, unsorted last – each
+        # its own heading and table, like the ZIP's folders.
+        for name in _ordnerfolge(zeilen, fall):
+            teil = [z for z in zeilen if z["ordner"] == name]
+            out.append(f'<h2>{esc(name)}<span class="n">{len(teil)}</span></h2>')
+            out.append(tabelle(teil))
+    else:
+        out.append(tabelle(zeilen))
 
     if fall["listen_liste"]:
         out.append(f'<h2>{esc(t("cases.export.lists"))}</h2><table><thead><tr>'
@@ -273,13 +296,82 @@ def index_html(fall, zeilen, t, lang):
     return "\n".join(out)
 
 
+def _herkunft(e):
+    return "mcp" if (e.get("quelle") == faelle.MCP) else "page"
+
+
+def _bem(z):
+    """The remark under an item, in the index and the timeline."""
+    return f'<div class="bem">{html_lib.escape(z["bemerkung"])}</div>' if z.get("bemerkung") else ""
+
+
+def _zeitschluessel(text):
+    """A sortable "YYYY-MM-DD HH:MM" from what an item or a note carries –
+    empty when it has no date, so it sorts last."""
+    text = str(text or "").strip()
+    return text[:16] if len(text) >= 10 and text[4] == "-" else ""
+
+
+def timeline_html(fall, zeilen, t, lang):
+    """The case in the order it happened: every item and every note, month
+    by month, oldest first – the page's timeline view on paper."""
+    esc = html_lib.escape
+    stellen = []
+    for z in zeilen:
+        stellen.append((_zeitschluessel(z["datum"]), "eintrag", z))
+    for n in fall["notizen_liste"]:
+        stellen.append((_zeitschluessel(_wann(n["wann"])), "notiz", n))
+    stellen.sort(key=lambda s: (s[0] == "", s[0]))
+    out = [f'<!doctype html><html lang="{esc(lang)}"><head><meta charset="utf-8">',
+           f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+           f'<title>{esc(t("cases.export.timeline"))} – {esc(fall["name"])}</title>',
+           f"<style>{_STIL}</style></head><body>",
+           f'<h1>{esc(fall["name"])}</h1>',
+           f'<div class="meta">{esc(t("cases.export.timeline"))} · {esc(t("cases.export.items", n=len(zeilen)))}</div>']
+    if not stellen:
+        out.append(f'<p class="leer">{esc(t("cases.export.noitems"))}</p>')
+    monat = None
+    for schluessel, art, x in stellen:
+        kopf = schluessel[:7] if schluessel else t("cases.export.undated")
+        if kopf != monat:
+            if monat is not None:
+                out.append("</tbody></table>")
+            out.append(f"<h2>{esc(kopf)}</h2><table class=\"zeit\"><tbody>")
+            monat = kopf
+        if art == "notiz":
+            out.append(f'<tr><td class="datum">{esc(_wann(x["wann"]))}</td><td class="notiz-zeile" colspan="3">'
+                       f'{esc(t("cases.export.note"))}{_mcp(t, _herkunft(x))} · {esc(x["text"])}</td></tr>')
+            continue
+        titel = esc(x["titel"] or x["rel"] or x["key"])
+        link = (f'<a href="{esc(x["datei"] + x["anker"])}">{titel}</a>' if x["datei"]
+                else f'<span class="weg">{titel} – {esc(t("cases.export.missing"))}</span>')
+        ordner = f'<span class="ordner">{esc(x["ordner"])}</span>' if x["ordner"] else ""
+        out.append(f'<tr><td class="datum">{esc(x["datum"] or "")}</td><td>{esc(t(x["quelle"]))}</td>'
+                   f'<td>{esc(x["wer"] or "")}</td><td>{link}{_mcp(t, x["herkunft"])} {ordner}{_bem(x)}</td></tr>')
+    if monat is not None:
+        out.append("</tbody></table>")
+    out.append(f'<footer>{esc(t("cases.export.footer", version=version.VERSION, when=datetime.now().strftime("%Y-%m-%d %H:%M")))}</footer>')
+    out.append("</body></html>")
+    return "\n".join(out)
+
+
+def _ordnerfolge(zeilen, fall):
+    """The folder names in the case's order – only those with rows – and
+    the unsorted rows' name last."""
+    belegt = {z["ordner"] for z in zeilen if not z["unsortiert"]}
+    namen = [o["name"] for o in fall.get("ordner_liste") or () if o["name"] in belegt]
+    offen = [z["ordner"] for z in zeilen if z["unsortiert"]][:1]
+    return namen + offen
+
+
 def items_csv(zeilen, t):
     from io import StringIO
     buf = StringIO()
     w = csv.writer(buf)
-    w.writerow(["key", "source", "date", "who", "title", "file", "original", "in_archive"])
+    w.writerow(["key", "folder", "source", "date", "who", "title", "remark", "origin", "file", "original", "in_archive"])
     for z in zeilen:
-        w.writerow([z["key"], t(z["quelle"]), z["datum"] or "", z["wer"] or "", z["titel"] or "",
+        w.writerow([z["key"], z["ordner"] if not z["unsortiert"] else "", t(z["quelle"]),
+                    z["datum"] or "", z["wer"] or "", z["titel"] or "", z.get("bemerkung") or "", z["herkunft"],
                     (z["datei"] + z["anker"]) if z["datei"] else "", z["rel"] or "",
                     "yes" if z["datei"] else "no"])
     return buf.getvalue()
@@ -292,14 +384,22 @@ def casebook_md(fall, zeilen, t):
     out += [f"## {t('cases.export.casebook')}", ""]
     if fall["notizen_liste"]:
         for n in fall["notizen_liste"]:
-            out.append(f"- {_wann(n['wann'])} – {n['text']}")
+            marke = f" · {t('cases.origin.mcp')}" if _herkunft(n) == "mcp" else ""
+            out.append(f"- {_wann(n['wann'])}{marke} – {n['text']}")
     else:
         out.append(t("cases.export.nonotes"))
     out += ["", f"## {t('cases.export.items', n=len(zeilen))}", ""]
-    for z in zeilen:
+
+    def zeile(z):
         titel = z["titel"] or z["rel"] or z["key"]
         stelle = (z["datei"] + z["anker"]) if z["datei"] else t("cases.export.missing")
-        out.append(f"- {z['datum'] or ''} {z['wer'] or ''} – {titel} ({t(z['quelle'])}: {stelle})".replace("  ", " "))
+        marke = f" · {t('cases.origin.mcp')}" if z["herkunft"] == "mcp" else ""
+        return f"- {z['datum'] or ''} {z['wer'] or ''} – {titel}{marke} ({t(z['quelle'])}: {stelle})".replace("  ", " ")
+    if any(z["ordner"] for z in zeilen):
+        for name in _ordnerfolge(zeilen, fall):
+            out += [f"### {name}", ""] + [zeile(z) for z in zeilen if z["ordner"] == name] + [""]
+    else:
+        out += [zeile(z) for z in zeilen]
     out.append("")
     return "\n".join(out)
 
@@ -318,10 +418,10 @@ def zielordner(basis, name):
     return ziel
 
 
-def exportieren(buch, fall_id, pfade, ziel, mit_zip=False, lang="de", res=None):
-    """Write the folder `ziel` (the app picks it, see zielordner, so it can
-    name it before the run starts). Returns (folder, zip path or None,
-    rows, missing)."""
+def exportieren(buch, fall_id, pfade, ziel, lang="de", res=None):
+    """Build the folder `ziel` (the app names it, see zielordner, so it can
+    say before the run where the ZIP will lie), pack it into <ziel>.zip
+    and remove the folder. Returns (zip path, rows, missing)."""
     fall = buch.fall(fall_id)
     if fall is None:
         raise faelle.KeinFall(fall_id)
@@ -329,33 +429,42 @@ def exportieren(buch, fall_id, pfade, ziel, mit_zip=False, lang="de", res=None):
     ziel = Path(ziel)
     ziel.mkdir(parents=True, exist_ok=True)
     eintraege = fall["eintraege_liste"]
+    # The case's folders become folders in the ZIP – only when it has
+    # any; a case without folders keeps the sources at the top.
+    ordner = {o["id"]: o["name"] for o in fall.get("ordner_liste") or ()}
+    unsortiert = t("cases.folder.unsorted")
     progress.event("run.case.start", name=fall["name"], n=len(eintraege))
     zeilen, fehlt = [], 0
     for i, e in enumerate(eintraege, 1):
         quelle, kopien, anker = plan(e, pfade)
         unter = ORDNER.get(e.get("root"), e.get("root") or "?")
+        name = ordner.get(e.get("ordner")) if ordner else None
+        oben = (export_util.safe(name) if name else export_util.safe(unsortiert)) if ordner else ""
+        wohin = f"{oben}/{unter}" if oben else unter
         da = False
         if quelle is not None:
             for k in kopien:
-                ok = _kopieren(quelle, k, ziel / unter)
+                ok = _kopieren(quelle, k, ziel / wohin)
                 da = da or (ok and k == kopien[0])
-        datei = f"{unter}/{e['rel']}" if da else ""
+        datei = f"{wohin}/{e['rel']}" if da else ""
         if not da:
             fehlt += 1
         zeilen.append({"key": e["key"], "quelle": quelle_key(e), "datum": e.get("datum"),
                        "wer": e.get("wer"), "titel": e.get("titel"), "rel": e.get("rel"),
-                       "datei": datei, "anker": anker if da else ""})
+                       "datei": datei, "anker": anker if da else "",
+                       "ordner": (name or unsortiert) if ordner else "", "unsortiert": bool(ordner) and not name,
+                       "herkunft": _herkunft(e), "bemerkung": e.get("bemerkung") or ""})
         progress.melde(i, len(eintraege))
     (ziel / "index.html").write_text(index_html(fall, zeilen, t, lang), encoding="utf-8")
+    (ziel / "timeline.html").write_text(timeline_html(fall, zeilen, t, lang), encoding="utf-8")
     (ziel / "items.csv").write_text(items_csv(zeilen, t), encoding="utf-8", newline="")
     (ziel / "casebook.md").write_text(casebook_md(fall, zeilen, t), encoding="utf-8")
-    zip_pfad = None
-    if mit_zip:
-        zip_pfad = Path(shutil.make_archive(str(ziel), "zip", root_dir=ziel.parent, base_dir=ziel.name))
+    zip_pfad = Path(shutil.make_archive(str(ziel), "zip", root_dir=ziel.parent, base_dir=ziel.name))
+    shutil.rmtree(ziel, ignore_errors=True)
     # The case remembers where its last export went – the page's "Show
     # folder"; a closed case may be exported, so this is no write to it.
-    buch.export_vermerken(fall_id, str(zip_pfad or ziel))
-    return ziel, zip_pfad, zeilen, fehlt
+    buch.export_vermerken(fall_id, str(zip_pfad))
+    return zip_pfad, zeilen, fehlt
 
 
 def main():
@@ -371,8 +480,7 @@ def main():
     ap.add_argument("--onenote", required=True)
     ap.add_argument("--faelle", required=True, help="the profile's faelle.db")
     ap.add_argument("--fall", required=True, type=int, help="the case's id")
-    ap.add_argument("--ziel", required=True, help="the folder to write (zielordner)")
-    ap.add_argument("--zip", action="store_true")
+    ap.add_argument("--ziel", required=True, help="the folder to build and pack (zielordner)")
     ap.add_argument("--lang", default="de")
     ap.add_argument("--res", default=None, help="where the lang/ folder lies")
     a = ap.parse_args()
@@ -381,7 +489,7 @@ def main():
              "planner": a.planner, "todo": a.todo, "onenote": a.onenote}
     buch = faelle.Fallbuch(a.faelle)
     try:
-        ziel, zip_pfad, zeilen, fehlt = exportieren(buch, a.fall, pfade, a.ziel, a.zip, a.lang, a.res)
+        zip_pfad, zeilen, fehlt = exportieren(buch, a.fall, pfade, a.ziel, a.lang, a.res)
     except faelle.KeinFall:
         progress.event("run.case.unknown", "err", id=a.fall)
         progress.ergebnis(0, errors=1)
@@ -392,7 +500,7 @@ def main():
         sys.exit(1)
     if fehlt:
         progress.event("run.case.missing", "warn", n=fehlt)
-    progress.event("run.case.done", path=str(zip_pfad or ziel), n=len(zeilen) - fehlt)
+    progress.event("run.case.done", path=str(zip_pfad), n=len(zeilen) - fehlt)
     progress.ergebnis(0, extra={"items": len(zeilen) - fehlt, "missing": fehlt})
 
 

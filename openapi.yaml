@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 11.0.1
+  version: 11.1.0
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
@@ -156,6 +156,8 @@ paths:
         - { name: filetype, in: query, schema: { type: string }, description: "Attachment / file extension without dot." }
         - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical] } }
         - { name: case, in: query, schema: { type: integer }, description: "The \"Cases\" filter: only items the case holds (its id, see /api/faelle)." }
+        - { name: case_folder, in: query, schema: { type: integer }, description: "With `case`: only the items in this folder of the case (its id, see the case's `ordner_liste`)." }
+        - { name: party, in: query, schema: { type: string, default: all, enum: [all, internal, external] }, description: "Mails and appointments by their parties: `internal` – every party inside the internal mail domains (setting `internal_domains`, else the signed-in account's domain) – or `external` – at least one outside. Items without addresses are on neither side. Needs an index with the parties' domains." }
         - { name: saved, in: query, schema: { type: integer }, description: "Id of the saved search being run; the first page records when it ran and how many hits it had." }
       responses:
         "200":
@@ -205,7 +207,7 @@ paths:
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
       responses:
         "200":
-          description: The messages of the conversation, oldest first.
+          description: The messages of the conversation, oldest first – each with `cases`, the cases it already sits in.
           content:
             application/json:
               schema:
@@ -1312,6 +1314,7 @@ paths:
                 name: { type: string }
                 kriterien: { $ref: "#/components/schemas/Kriterien" }
                 fall: { type: [integer, "null"], description: "Attach to this case (must be open)." }
+                ordner: { type: [integer, "null"], description: "The folder of that case the search files into; its new hits land there. Null: unsorted." }
       responses:
         "200":
           content:
@@ -1371,6 +1374,7 @@ paths:
               properties:
                 id: { type: integer }
                 fall: { type: [integer, "null"], description: "The case; null detaches." }
+                ordner: { type: [integer, "null"], description: "The folder of that case the search files into. Null: unsorted." }
       responses:
         "200":
           content:
@@ -1441,6 +1445,8 @@ paths:
                         name: { type: string }
                         new: { type: array, items: { $ref: "#/components/schemas/Hit" }, description: "At most 200." }
                         new_count: { type: integer }
+                        ordner: { type: [integer, "null"], description: "The folder the search files into – where the page adds the new ones." }
+                        ordner_name: { type: [string, "null"] }
                         error: { $ref: "#/components/schemas/MessageOrKey" }
                   error: { $ref: "#/components/schemas/I18nMessage" }
 
@@ -1550,6 +1556,8 @@ paths:
         Hits as the page has them (key, source, root, path, title, date,
         who) – the case keeps a pointer and what the hit said. An item
         already in the case is left as it is; one without a key is skipped.
+        Items added here carry `quelle` "ui"; what Claude adds through MCP
+        carries "mcp" and is marked "via MCP" on the item.
       requestBody:
         content:
           application/json:
@@ -1557,6 +1565,7 @@ paths:
               type: object
               properties:
                 id: { type: integer }
+                ordner: { type: [integer, "null"], description: "The folder to file the items into. Null or absent: unsorted." }
                 eintraege:
                   type: array
                   items:
@@ -1569,6 +1578,7 @@ paths:
                       titel: { type: string }
                       datum: { type: string }
                       wer: { type: string }
+                      bemerkung: { type: string, description: "A remark on why the item is in the case; kept only for items new to the case." }
       responses:
         "200":
           content:
@@ -1581,6 +1591,149 @@ paths:
                   already: { type: integer }
         "404": { description: No such case. }
         "409": { description: The case is closed. }
+
+  /api/faelle/verschieben:
+    post:
+      summary: Move items of a case into a folder
+      description: "The items named by key go into the folder (null: unsorted); keys the case does not hold are ignored."
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                keys: { type: array, items: { type: string } }
+                ordner: { type: [integer, "null"] }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/OkFall" }
+                  - type: object
+                    properties:
+                      moved: { type: integer }
+        "404": { description: No such case or folder (srv.case.nofolder). }
+        "409": { description: The case is closed. }
+
+  /api/faelle/ordner-anlegen:
+    post:
+      summary: Make a folder in a case
+      description: Folders are one level deep. The same name again answers the existing folder.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                name: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/OkFall" }
+                  - type: object
+                    properties:
+                      ordner: { type: integer, description: "The folder's id." }
+        "400": { description: No name (srv.case.noname). }
+        "404": { description: No such case. }
+        "409": { description: The case is closed. }
+
+  /api/faelle/ordner-umbenennen:
+    post:
+      summary: Rename a folder
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                ordner: { type: integer }
+                name: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "400": { description: No name (srv.case.noname). }
+        "404": { description: No such case or folder (srv.case.nofolder). }
+        "409": { description: The case is closed, or the name is taken (srv.case.folder.exists). }
+
+  /api/faelle/ordner-loeschen:
+    post:
+      summary: Remove a folder
+      description: Its items, lists and searches stay in the case and become unsorted.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                ordner: { type: integer }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case or folder (srv.case.nofolder). }
+        "409": { description: The case is closed. }
+
+  /api/faelle/bemerkung:
+    post:
+      summary: The remark on one item
+      description: One or two sentences on why the item is in the case; empty text removes it. Shown under the item and exported with it.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                key: { type: string }
+                text: { type: string }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OkFall" }
+        "404": { description: No such case, or the case does not hold the item (srv.case.noitem). }
+        "409": { description: The case is closed. }
+
+  /api/faelle/thread:
+    post:
+      summary: The rest of the items' conversations into the case
+      description: |
+        For every key named: the other messages of its conversation (mail:
+        the thread, Teams: the chat or channel) that the case lacks go into
+        the folder the item sits in. Keys the case does not hold are
+        ignored. Needs an index that knows conversations.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id: { type: integer }
+                keys: { type: array, items: { type: string } }
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: "#/components/schemas/OkFall" }
+                  - type: object
+                    properties:
+                      added: { type: integer }
+        "404": { description: No such case. }
+        "409": { description: The case is closed, or the index knows no conversations (srv.case.nothread). }
 
   /api/faelle/entfernen:
     post:
@@ -1618,6 +1771,7 @@ paths:
               properties:
                 id: { type: integer }
                 kriterien: { $ref: "#/components/schemas/Kriterien" }
+                ordner: { type: [integer, "null"], description: "The folder the list and its hits file into. Null or absent: unsorted." }
       responses:
         "200":
           content:
@@ -1720,15 +1874,16 @@ paths:
     post:
       summary: Export a case (a run)
       description: |
-        Started as a run of its own (case_export.py): a folder named
-        `<case>_<date>` below the export folder (setting `case_export_dir`,
-        else Documents/Munimentum cases) with the originals of every item,
-        copied out of the archive under their source and path, plus
-        index.html, items.csv and casebook.md; with `zip` also a zip beside
-        it. The folder is named before the run starts and answered here;
-        the case remembers it as `exportiert` when the run is done. Nothing
-        in the archive is touched; a closed case can be exported. Refused
-        while a run is on.
+        Started as a run of its own (case_export.py): one ZIP named
+        `<case>_<date>.zip` below the export folder (setting
+        `case_export_dir`, else Documents/Munimentum cases) with the
+        originals of every item, copied out of the archive – under
+        `<folder>/<source>/<path>` when the case has folders (the unsorted
+        ones under "Unsorted"), else under `<source>/<path>` – plus
+        index.html, items.csv and casebook.md. The ZIP is named before the
+        run starts and answered here; the case remembers it as
+        `exportiert` when the run is done. Nothing in the archive is
+        touched; a closed case can be exported. Refused while a run is on.
       requestBody:
         content:
           application/json:
@@ -1736,7 +1891,6 @@ paths:
               type: object
               properties:
                 id: { type: integer }
-                zip: { type: boolean }
       responses:
         "200":
           content:
@@ -1746,7 +1900,7 @@ paths:
                 properties:
                   ok: { type: boolean }
                   message: { $ref: "#/components/schemas/MessageOrKey" }
-                  path: { type: string, description: "The folder the run writes." }
+                  path: { type: string, description: "The ZIP the run writes." }
         "400": { description: The export folder cannot be created (srv.case.exportdir). }
         "404": { description: No such case. }
         "409": { description: A run is on. }
@@ -1754,7 +1908,7 @@ paths:
   /api/faelle/export-ordner:
     post:
       summary: Show the case's last export in the file manager
-      description: The folder of the last export (the zip's folder for a zip), else the export folder itself. No process, answers at once.
+      description: The folder holding the last export's ZIP, else the export folder itself. No process, answers at once.
       requestBody:
         content:
           application/json:
@@ -1950,6 +2104,8 @@ components:
         attachments: { type: array, items: { type: string } }
         gone: { type: [string, "null"], description: "Tombstone date when the item vanished." }
         key: { type: [string, "null"], description: "The item's stable key (schluessel.py): what a case remembers it by. Null in an index built before 11.0." }
+        who_mail: { type: [string, "null"], description: "The sender's address (mail) or the organiser's (appointments), lower-case; null for other sources and in an index built before 11.1." }
+        domains: { type: array, items: { type: string }, description: "The mail domains of every party (sender and recipients, organiser and attendees); the page marks the hit external when one lies outside the internal domains. Empty for other sources." }
         cases:
           type: array
           description: The cases the item already sits in – the mark on the hit.
@@ -1958,6 +2114,7 @@ components:
             properties:
               id: { type: integer }
               name: { type: string }
+              ordner: { type: [string, "null"], description: "The name of the folder it sits in, if any." }
               status: { type: string, enum: [offen, zu] }
         preview: { type: string }
     Kriterien:
@@ -1976,6 +2133,8 @@ components:
         filetype: { type: string }
         gone: { type: boolean }
         fall: { type: [integer, "null"], description: "The \"Cases\" filter: a case id." }
+        ordner: { type: [integer, "null"], description: "With `fall`: one folder of that case." }
+        party: { type: string, enum: [all, internal, external], description: "The parties filter, see /api/search." }
     GespeicherteSuche:
       type: object
       properties:
@@ -1987,6 +2146,8 @@ components:
         treffer: { type: [integer, "null"], description: "Hits then." }
         fall: { type: [integer, "null"], description: "The case it is attached to." }
         fall_name: { type: [string, "null"] }
+        ordner: { type: [integer, "null"], description: "The folder of that case it files into; null: unsorted." }
+        ordner_name: { type: [string, "null"] }
     FallKurz:
       type: object
       description: One case as the list shows it – counts, no contents.
@@ -1998,13 +2159,25 @@ components:
         angelegt: { type: string, format: date-time }
         geaendert: { type: string, format: date-time }
         geschlossen: { type: [string, "null"], format: date-time }
-        exportiert: { type: [string, "null"], description: "Where the last export went (folder or zip)." }
+        exportiert: { type: [string, "null"], description: "The ZIP of the last export." }
         exportiert_wann: { type: [string, "null"], format: date-time }
         eintraege: { type: integer, description: "Items in the case." }
         je_quelle: { type: object, additionalProperties: { type: integer }, description: "Items per source (src key)." }
         listen: { type: integer }
         notizen: { type: integer }
         suchen: { type: integer, description: "Saved searches attached." }
+        ordner: { type: integer, description: "Folders in the case." }
+        ordner_liste:
+          type: array
+          description: The folders, in the order they were made.
+          items: { $ref: "#/components/schemas/Ordner" }
+    Ordner:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        angelegt: { type: string, format: date-time }
+        anzahl: { type: integer, description: "Items in the folder." }
     Fall:
       allOf:
         - { $ref: "#/components/schemas/FallKurz" }
@@ -2022,6 +2195,7 @@ components:
                   wann: { type: string, format: date-time }
                   kriterien: { $ref: "#/components/schemas/Kriterien" }
                   anzahl: { type: integer, description: "Hits when the list was taken." }
+                  ordner: { type: [integer, "null"], description: "The folder the list filed into." }
             notizen_liste:
               type: array
               description: The casebook, newest first.
@@ -2031,6 +2205,7 @@ components:
                   id: { type: integer }
                   wann: { type: string, format: date-time }
                   text: { type: string }
+                  quelle: { type: string, enum: [ui, mcp], description: "Who wrote it: the page, or Claude through MCP." }
             suchen_liste:
               type: array
               items: { $ref: "#/components/schemas/GespeicherteSuche" }
@@ -2048,6 +2223,11 @@ components:
         wer: { type: [string, "null"] }
         hinzugefuegt: { type: string, format: date-time }
         liste: { type: [integer, "null"], description: "The result list it came with, if any." }
+        ordner: { type: [integer, "null"], description: "The folder it sits in; null: unsorted." }
+        quelle: { type: string, enum: [ui, mcp], description: "Who added it: the page, or Claude through MCP." }
+        bemerkung: { type: string, description: "The remark on the item – why it is in the case; empty when none." }
+        thread_offen: { type: integer, description: "Messages of the item's conversation the case lacks; 0 when there is no conversation or the index knows none. Set on /api/faelle/fall and on every write's answer." }
+        wer_mail: { type: string, description: "The address behind `wer` where the index has one (mail: the sender, appointments: the organiser); empty otherwise. Set like thread_offen." }
     Run:
       type: object
       properties:

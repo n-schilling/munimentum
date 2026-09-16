@@ -215,8 +215,6 @@ def _fall_export_argv(cfg, ctx, pfade):
            "--ziel", str(f.get("ziel") or ""), "--lang", str(f.get("lang") or "de")]
     if f.get("res"):
         out += ["--res", str(f["res"])]
-    if f.get("zip"):
-        out.append("--zip")
     return out
 
 

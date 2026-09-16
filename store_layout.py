@@ -41,15 +41,17 @@ def db_path(store):
 
 
 def mit_schluesseln(db):
-    """Does this index carry the item keys of 11.0 (schluessel.py)? An
-    older one – or none – does not."""
+    """Does this index carry what cases need – the item keys of 11.0
+    (schluessel.py) and the sender addresses of 11.1? An older one – or
+    none – does not."""
     db = Path(db)
     if not db.exists():
         return False
     try:
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
-            return any(r[1] == "key" for r in con.execute("PRAGMA table_info(chunks)"))
+            spalten = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
+            return {"key", "who_mail", "domains"} <= spalten
         finally:
             con.close()
     except sqlite3.Error:
@@ -57,10 +59,11 @@ def mit_schluesseln(db):
 
 
 def veraltet(db):
-    """An index that exists but predates the item keys: the next index step
-    rebuilds it whether or not the exports brought anything, so cases can
-    point at its items. No index at all is not "outdated" – that case the
-    run gate handles by the missing file."""
+    """An index that exists but predates the item keys or the sender
+    addresses: the next index step rebuilds it whether or not the exports
+    brought anything, so cases can point at its items and name their
+    people. No index at all is not "outdated" – that case the run gate
+    handles by the missing file."""
     return Path(db).exists() and not mit_schluesseln(db)
 
 # The fixed name of stores up to 4.1.0. Such a store carries no entry in

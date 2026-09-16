@@ -15,7 +15,8 @@ The app does three things, and the header says exactly that:
   search, filters, hits, calendar, address book, files.
 - **Cases** (`nav.cases`) — what someone keeps around one matter, for
   months, across sources: the case list, one case with its casebook,
-  items, lists and searches, and the export.
+  folders, items, lists and searches, its timeline and its people, and
+  the export.
 
 Two smaller rooms sit at the right of the header: **Insights**
 (`nav.analytics`, what the archive holds) and **Settings**. Nothing else
@@ -114,24 +115,120 @@ actions), each drawn as one string like every window. The *Cases* filter
 (`#f-fall`) is a select in the filter row like the folder, filled from
 `/api/faelle` and shown only while there is a case to choose – a filter
 that can narrow nothing is not offered, the rule the folder and type
-selects follow.
+selects follow. The *parties* filter (`#f-party`: internal and external
+· internal only · with external parties) follows the same rule: it
+appears once the index carries the parties' domains. A hit whose
+parties reach outside the internal domains carries `.tag.extern` in
+its who line and in the detail's head.
 
-**Cases** (`#tab-faelle`): section head with the one `.act` (*New
-case*), then `.faelle-split` — the case list on the left (`.fall` rows:
-name, status `.tag.offen`/`.tag.zu`, one icon + count per source, one
-muted line; closed cases only behind the *Show closed* switch) and the
-open case on the right, drawn by `zeichneFall` top to bottom: name row
-with status, created, *Edit…* and *Search in this case*; description;
-the casebook (`.notiz` rows newest first, the add field at the end);
-the stored result lists (`.hist` rows with criteria tags, *Search again*,
-drop); one `.gruppe` per source with `.eintrag` rows (icon, title, who,
-date, *Open* into the original, `×`); the attached searches (`.hist`
-rows, *Run*, *Detach*, and *Check for new hits* in their `.aktionen`);
-and the case's `.aktionen` row: the count sentence left, *Show export
-folder*, *Export case…*, *Close case* / *Reopen*, *Delete case*. A closed
-case draws none of the buttons that would change it. Every write goes to
-`/api/faelle/*` and comes back as the whole case; the page never guesses
-what a write did.
+**Cases** (`#tab-faelle`): section head with the name, its `(i)` and
+the one `.act` (*New case*) — no sentence beside them; then
+`.faelle-split`: the **overview** at the left and the case at the right.
+The overview (`.card.liste.seitenleiste`) has a `.liste-kopf` with a
+quiet uppercase label and one `.ikonknopf` arrow, nothing else — no
+count, no filter; `.fall` rows (name, `.tag.offen`/`.tag.zu`, one icon +
+count per source, one muted line); closed cases behind the *Show n
+closed cases* link in its `.fuss`. Opening a case adds `.eng` to the
+split: the overview narrows to the names, the open one bold, and the
+arrow widens it again (`leiste()`). The case card is a static frame the
+JS fills: `.fallkopf` (`.titelzeile` with `h2`, status tag, *Edit…*;
+`.meta`, one sentence of facts; `.beschreibung`), the `.werkzeugzeile`
+(the filter field `#fall-filter` with its `.stand`, *Search in this
+case*, and `.falten` at the right: expand all, collapse all, *New
+folder…*), the sticky `.auswahl-fall` bar while rows are ticked (count,
+*Move to…* select, *Remove from case*, *Clear selection*),
+`#fall-inhalt` with the folds, and the foot `.aktionen.fuss-zwei` in
+two groups (`.gruppe-links`: *Export case…*, last export and *Show
+folder*; `.gruppe-rechts`: *Close case* / *Reopen*, *Delete case*).
+
+Every heading inside the case is a native `details.gruppe`, closed when
+the case opens (`FALL_AUF` keeps what the user opened across redraws),
+its `summary` carrying the chevron, the icon, the name, the count and
+the `(i)`; a folder's summary also carries `.werkzeuge` (*Search here*,
+*Rename*, `×`) that show on hover or while open. With folders the items
+are one fold per folder in case order plus *Unsorted* last, inside which
+the sources fold again as `details.quelle` (the first one open);
+without folders, one fold per source. Rows: `.notiz`, `.hist`,
+`.eintrag` with a tick, thirty per source then *show n more*. The filter
+(`fallFiltern`) is client-side over the loaded case: it redraws the
+folds with the matching rows only and says "n of m shown"; a new filter
+text opens every fold once (`alleAuf`), after that the folds are the
+user's again, collapse all included.
+*New folder…* and *Rename* open a window (`ordnerFenster`), never an
+inline field; *Move to… › New folder…* opens the same window and moves
+the ticked rows once the folder exists. A closed case draws no tick, no
+add field and no folder tools, and hides *New folder…*. Every write
+goes to `/api/faelle/*` and comes back as the whole case; the page never
+guesses what a write did. The *via MCP* tag (`.tag.mcp`) sits on the
+item's title and on the note's date line — never on a folder, a source
+or the case.
+
+**Three views, one strip.** Between the case head and the tool row sits
+`.sichten.fall-sichten` — the sub-view strip the search page uses —
+with `data-fallsicht` tabs *Folders*, *Timeline*, *People* (the people
+tab carries its count). `fallSicht()` swaps only what lies between the
+tool row and the foot: `#fall-inhalt` (the folds above),
+`#fall-zeit-sicht` (the activity band `#fall-aktivitaet` and the rows
+`#fall-zeit`) or `#fall-personen`; head, filter field, move bar and foot
+stay. The
+fold buttons and *New folder…* (`#fall-werkzeug-ordner`) belong to the
+folder view; the timeline shows one select for its direction
+(`#fall-werkzeug-zeit`) instead. The **timeline** is drawn from the
+loaded case: items by the "YYYY-MM-DD HH:MM" the index gave them and the
+casebook's notes in between (`.zeit.notiz-zeit`, greyed), under
+`.zeit-monat` headings, undated items last, fifty rows then *show n
+more*; a `.zeit` row has the tick, the day and time, the icon, title,
+who and the folder as a `.tag`, the remark, and the same actions as an
+item row. Above the rows sits the **activity** (`.aktivitaet`): one
+`.monat` bar per month – per week when the case spans less than 92 days
+– its height the items of that bucket against the busiest one, the
+notes as `.punkte` dots, the axis of short names below and one
+`.auswahl-zeile` that either sums the case up or names the chosen
+bucket with *Show all*; a click on a bar (`zeitEimerWaehlen`) narrows
+the rows to it, a second click lets go; the bars grow in when the view
+opens, off under reduced motion. The **people** are counted from what
+the items say (`wer`, split on ", ") and drawn as a picture (`.bild`):
+you at the left (`.ich`: the initials of *own_name*, else the sign-in's
+name, else the account's first letter; the address below), then four
+`.periode` columns by the person's last contact – this week, this
+month, this quarter, older, tinted from the accent to grey – each
+person a `.knoten` button with a circle sized by the square root of
+their item count against the busiest, initials inside, a dashed ring
+and the `.tag.extern` mark for an address outside the internal domains,
+the name and "n items · last contact" beside it; every second person
+steps 14px to the right, the people rise in when the view opens. A
+click (`fallPersonWaehlen`) opens the one `.person-karte` under the picture
+with the address, the per-source counts, the span of dates, *Timeline*
+(the timeline with the filter set to the name) and *Search* (the search
+page with the person and case filters set); a second click closes it. The
+address comes from the index (`who_mail`, mails and appointments) with
+the case on `/api/faelle/fall`; *external* is any address outside the
+setting *internal_domains* (else the signed-in account's domain), and
+the user is left out by the account address or the name (*own_name*,
+else the sign-in's). The filter field narrows whichever view is open
+and says "n of m shown" for it.
+
+**The remark** (`.bem`): one marked line under the item's title, in the
+folder view, the timeline and the export; the pen on the row
+(`.mini.nur-ikon`) opens a window with one textarea, *Save*, and *Remove
+the remark* as a link once one exists — never an inline field, and
+nothing of the item repeated in the window. **The rest of a conversation**: the add-to-case
+window shows one switch under the folder row when the hits have threads,
+worded with the counts from `/api/thread` (how many more, how many the
+chosen case holds already; the text follows the chosen radio); a row
+whose conversation the case lacks part of carries *Thread +n*
+(`thread_offen` on the item), one click fetches the rest into the row's
+folder and says so in the toast (`.meldung`, the one fixed toast of the
+page, `meldung()`). The hit's detail names its conversation in the meta
+line once it is fetched ("conversation of n messages (m in <case>)").
+
+The export window is the title with its `(i)` (what the ZIP holds and
+where it lands), a `pre.export-inhalt` overview — the ZIP's name, the
+index, timeline, CSV and casebook lines, one line per folder with count
+and sources — and one button; no switch, no gear. The choice window
+(`.wahl-liste`) has a folder row below the cases: a select with the
+chosen case's folders, *Unsorted* first and *New folder…* last (a text
+field appears for the name); a new case offers only those two.
 
 **The run window** (`#lauf-overlay`, the wizards' frame, wider):
 everything about a running process — headline with step and start time,
@@ -290,15 +387,30 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Icon button | `.ikonknopf` | 32 px square, 8 px radius, name in the tooltip; the header's *Quit* |
 | KPI tile | `.kpi` | value, title, hint; `.klickbar` when it leads somewhere |
 | Balance row | `.bilanz .zeile` | icon, name, `.dot` + one sentence (`bilanzSatz`), `.wann`, *Fetch now* while open; a `details` with the open units below |
-| Hit row | `.hit` | tick (`.wahl`, under `#results` only), icon, title with the case mark, date, who, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
+| Hit row | `.hit` | tick (`.wahl`, under `#results` only), icon, title with the case mark, date, who with the `.tag.extern` mark when a party is outside the internal domains, preview; `.on` when selected; also the rows of the switch window (`.modal .hits`), where `.fest` marks the open profile as shown, not chosen |
 | Case mark | `.im-fall` | pill with the case icon and the name (or the count for several) on a hit's title and in the detail's meta line; `.zu` when every case it sits in is closed |
-| List head / selection bar | `.liste-kopf` / `.auswahl-leiste` | above `#results` and the case list: count left, one `.mini` action right; the bar only while something is ticked |
-| Case row | `.fall` | name + status tag, icon + count per source, one muted line; `.on` when open on the right |
-| Item row | `.eintrag` | icon, title and who, date, *Open* + `×` — the items of a case, one `.gruppe` per source |
-| Note | `.notiz` | when, text, *Edit* + `×`; `.notiz-neu` is the add field at the end of the casebook |
+| List head / selection bar | `.liste-kopf` / `.auswahl-leiste` | above `#results`: count left, one `.mini` action right; the bar only while something is ticked |
+| Case overview | `.seitenleiste` | the case list: `.liste-kopf` with a quiet uppercase label and the one arrow `.ikonknopf`, `.fall` rows, the closed-cases link in `.fuss`; `.eng` on the split narrows it to the names while a case is open |
+| Case row | `.fall` | name + status tag, icon + count per source, one muted line; `.on` when open on the right; the name alone in `.eng` |
+| Case head | `.fallkopf` | `.titelzeile` (name, status, *Edit…*), `.meta` (one sentence of facts), `.beschreibung` — three lines, no fold |
+| Tool row | `.werkzeugzeile` | the filter field with its `.stand`, *Search in this case*, and `.falten` at the right (expand all, collapse all, *New folder…*) |
+| Fold | `details.gruppe` / `details.quelle` | every heading in a case; the summary carries chevron `.pfeil`, icon, `.name`, `.n` count, `(i)`, and on folders `.werkzeuge`; closed when the case opens, `.quelle` is the source fold inside a folder |
+| Move bar | `.auswahl-fall` | sticky while rows of a case are ticked: count, *Move to…* select (folders, *Unsorted*, *New folder…*), *Remove from case*, *Clear selection* |
+| Origin tag | `.tag.mcp` | *via MCP* on an item's title or a note's date line — never on a folder, a source or the case |
+| Two-group foot | `.aktionen.fuss-zwei` | `.gruppe-links` (the export) and `.gruppe-rechts` (what happens to the case) |
+| Case view tab | `.fall-sichten .sicht` | *Folders · Timeline · People* under the case head; exactly one `.on`, `data-fallsicht` names the view |
+| Timeline row | `.zeit` | tick, day and time, icon, title with who and the folder tag, the remark, the item's actions; `.notiz-zeit` is a casebook note in between, `.zeit-monat` the month heading |
+| People picture | `.bild` | `.ich` (you) and four `.periode` columns by last contact; a `.knoten` per person: circle sized by items, initials, the `.tag.extern` mark and dashed ring for an outside address, name and "n items · last contact"; `.on` on the chosen one |
+| Person card | `.person-karte` | under the picture for the chosen person: address, per-source counts, span of dates, *Timeline* + *Search* |
+| Activity band | `.aktivitaet` | above the timeline rows: `.monat` bars (`.leer` without items, `.on` when chosen, `.punkte` for notes), the `.achse` of names, the `.auswahl-zeile` |
+| Remark | `.bem` | one marked line under an item's title – in the item row, the timeline row and the export; the pen `.mini.nur-ikon` on the row opens its window |
+| Toast | `.meldung` | the one fixed message of the page, `meldung(text)`; for what just happened somewhere the eye is not (the conversation fetched into a folder) |
+| Export overview | `pre.export-inhalt` | what the ZIP will hold, one line per part and per folder, in the export window above its one button |
+| Item row | `.eintrag` | tick (open case only), icon, title with the origin tag, who, date, *Open* + `×` — the items of a case under their source fold, thirty then *show n more* |
+| Note | `.notiz` | when (with the origin tag), text, *Edit* + `×`; `.notiz-neu` is the add field at the end of the casebook |
 | History row | `.hist` | title, `.tag` criteria in `.tagleiste`, time or last run, `.knoepfe` of `.mini`s; the rows of the history, the saved searches, a case's lists and searches; `.hist-tag` is the day heading |
-| Choice list | `.wahl-liste` | one radio per open case and a *New case…* field — the one window for putting anything into a case |
-| Detail | `#detail` | `#detail-inhalt` with tag, title, meta, `.daktionen`, content, path; `#detail-verlauf` for the thread |
+| Choice list | `.wahl-liste` | one radio per open case and a *New case…* field, then the folder select (*Unsorted*, the case's folders, *New folder…*) — the one window for putting anything into a case |
+| Detail | `#detail` | `#detail-inhalt` with tag (and the external mark), title, meta (who, date, the conversation once fetched, the case mark), `.daktionen`, content — no storage path, the original is a click away; `#detail-verlauf` for the thread |
 | Side navigation | `.snav .snav-punkt` | Settings and Insights alike: one per card, `data-ziel` names the card; a `.stand` or `.dot` at the right |
 | Source block | `details.quelle-einst` | summary with name and state line `.zf`, `.qinhalt`, `details.erweitert` |
 | Filter pill | `.filter` or the control itself in `.filterzeile` | `.on` while a value is set |
@@ -447,7 +559,7 @@ line.
 under the search, a `#sicht-<name>` block, a branch in `sicht()`. Never a
 top-level tab.
 
-**Something about a case**: a `.gruppe` in `zeichneFall`, a `.mini` in
+**Something about a case**: a fold in `zeichneFallOrdner`, a `.mini` in
 the row it acts on, a route under `/api/faelle/` that answers with the
 whole case. Anything that puts items into a case goes through the one
 choice window (`fallWahl`), never a second picker. The case remembers
@@ -459,7 +571,11 @@ the folder.
 
 **Explanations**: on the `(i)`, in `data-i18n-title`. A sentence next to a
 button is allowed only when it says what the button will do *right now*
-(a count, a date, a warning that applies).
+(a count, a date, a warning that applies). **An `(i)` or a sentence,
+never both**: a heading that carries an `(i)` has no explaining sub line,
+and a sub line that explains has no `(i)` beside it – the same thing said
+twice reads as noise, and the `(i)` is the one place where an explanation
+lives. Where both exist today, the sentence goes.
 
 **A workflow explanation** (how to click through something): a chapter of
 the tour, never text on the doors. A step is one entry in `TOUR` — its
@@ -566,9 +682,20 @@ These tests encode the guide; adapt them consciously, never delete them:
 - `test_die_dritte_tuer_und_ihre_teile_stehen_im_markup` /
   `test_die_seite_fuehrt_faelle_durch` (tests/test_app_faelle.py) — Cases
   is a door with one primary action, the history and saved windows sit in
-  the search row, the case filter counts but does not search, a hit
-  without a key cannot be ticked, the choice window lists open cases
-  only, a closed case draws no changing button, the export opens the run
+  the search row, the case filter counts but does not search and lists
+  the folders under their case, a hit without a key cannot be ticked,
+  the choice window lists open cases only and asks for the folder, the
+  overview carries no count and narrows when a case opens, every group
+  is a fold closed at open, the filter narrows the rows and opens the
+  folds, ticked rows move through the bar, folders are made and renamed
+  in a window, *via MCP* sits on the item and the note only, the three
+  views sit in one strip under the head and swap only the middle, the
+  timeline is oldest first with the notes in between and follows the
+  filter, the people are counted from the items and lead to the timeline
+  or the search, the remark stands under the item and is edited in a
+  window, the conversation switch counts what the case lacks and *Thread
+  +n* fetches it, a closed case draws no changing button, the export
+  window is an overview with one button and no switch and opens the run
   window; the HTTP tests there and in `test_mcp_faelle.py` hold the
   routes and the MCP tools to the same rules.
 
