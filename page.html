@@ -304,6 +304,24 @@ input.fehler{border-color:var(--err)!important}
 #personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
 /* The four views onto the same inventory. */
 .sichten{display:flex;align-items:center;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+/* The door's strip (11.3): the four ways, with icons, first under the header */
+#sichten{margin:0 0 16px;gap:2px}
+#sichten .sicht{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;padding:10px 16px 10px 14px}
+#sichten .sicht.on{font-weight:650}
+#sichten .sicht [data-ikon] svg{width:15px;height:15px}
+#sichten .sicht.on [data-ikon] svg{color:var(--accent)}
+/* Before the first search: the last searches and the saved ones as rows */
+.leer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:16px}
+@media (max-width:900px){.leer{grid-template-columns:minmax(0,1fr)}}
+.leer .card{margin:0}
+.leer .anfang{grid-column:1/-1;font-size:13px;color:var(--muted);margin:-4px 0 0 2px}
+.leer .gruppe-kopf{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:12px;font-weight:650;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.leer .gruppe-kopf a{margin-left:auto;font-weight:500;letter-spacing:0;text-transform:none;font-size:12.5px}
+.leer .hist{padding:10px 14px;cursor:pointer;grid-template-columns:minmax(0,1fr) auto}
+.leer .hist:hover{background:var(--code)}
+.leer .hist:first-child{border-top:0}
+.leer .hist .tagleiste{grid-column:1/3}
+.leer .hint{padding:14px;margin:0}
 .sicht{border:0;background:transparent;font:inherit;padding:8px 14px;font-size:13.5px;color:var(--muted);
   border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .sicht.on{color:var(--ink);font-weight:600;border-bottom-color:var(--accent)}
@@ -311,6 +329,7 @@ input.fehler{border-color:var(--err)!important}
 .sicht .zahl:empty{display:none}
 /* Hits on the left, the chosen hit on the right. */
 .treffer-split{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
+#sicht-treffer .treffer-split{margin-top:16px}
 .treffer-split:has(#detail.hide){grid-template-columns:1fr}
 .treffer-split .liste{padding:0}
 #results>.hint,#results>.banner{margin:14px}
@@ -414,9 +433,30 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
 .calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 .calbar .chip{padding:5px 12px}
 .calbar .ghost{padding:5px 10px}
-#kalTitle{font-weight:650;margin-left:4px}
+#kalNav{display:inline-flex;align-items:center;gap:6px}
+.monat-nav{position:relative}
+.monat-nav .name{border:0;background:transparent;font:inherit;font-weight:650;padding:4px 8px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:232px;color:var(--ink);cursor:pointer;white-space:nowrap;font-variant-numeric:tabular-nums}
+.monat-nav .name:hover,.monat-nav .name.offen{background:var(--code)}
+.monat-nav .name svg{width:12px;height:12px;color:var(--muted)}
+/* the month and year picker: one year, twelve months, a dot where the archive holds appointments */
+.popover.picker{left:50%;transform:translateX(-50%);width:300px}
+.picker .jahr{display:flex;align-items:center;justify-content:center;gap:12px;font-weight:650;margin-bottom:8px}
+.calbar .picker .jahr button{border:1px solid var(--line);background:var(--card);border-radius:8px;width:28px;height:28px;min-height:0;padding:0;margin:0;color:var(--muted);font:inherit;cursor:pointer}
+.picker .jahr button:disabled{opacity:.35;cursor:not-allowed}
+.picker .monate{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:2px}
+.calbar .picker .monate button{border:1px solid transparent;background:transparent;border-radius:8px;padding:6px 0 5px;margin:0;height:auto;min-height:0;font:inherit;font-size:13px;line-height:1.2;color:var(--ink);display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer}
+.picker .monate button:hover:not(:disabled){background:var(--code)}
+.picker .monate button.on{background:var(--accent-weich);border-color:var(--accent);font-weight:600}
+.picker .monate button.jetzt{text-decoration:underline dotted}
+.picker .monate button:disabled{color:var(--muted);opacity:.45;cursor:not-allowed}
+.picker .monate .punkt{width:5px;height:5px;border-radius:50%;background:var(--accent)}
+.picker .monate .punkt.ohne{background:transparent}
+.picker .satz{font-size:12.5px;color:var(--muted);margin:10px 0 0;text-align:center}
+.calbar #kalSuchen{margin-left:8px}
+.calbar .rechts{margin-left:auto}
 .legend{display:flex;gap:12px;margin-left:auto;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
 .legend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.legend i.rek{border:1px dashed var(--ev-gone);background:transparent}
 .grid{display:grid;gap:8px}
 .wk,.mo{grid-template-columns:repeat(7,minmax(0,1fr))}
 .mo{gap:6px}
@@ -439,19 +479,6 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
 .mo .day{min-height:96px}
 @media(max-width:820px){.wk,.mo{grid-template-columns:minmax(0,1fr)}.dowrow{display:none}
   .day{min-height:0}.dnum .wd{display:inline}}
-.rbnote{color:var(--muted);font-size:12.5px;margin:0 0 10px}
-.rbcount{color:var(--muted);font-size:12px;margin-left:auto}
-.rbmonth{margin:16px 0 6px;font-size:13px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:3px}
-.rbrow{display:flex;gap:10px;align-items:baseline;background:var(--card);border:1px solid var(--line);
-  border-radius:9px;padding:8px 11px;margin:5px 0;text-decoration:none;color:var(--ink)}
-.rbrow:hover{border-color:var(--accent);text-decoration:none}
-.rbrow.deleted{border-left:3px solid var(--ev-bad)}
-.rbrow.gone{border-left:3px solid var(--ev-gone)}
-.rbdate{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap;min-width:158px}
-.rbstate{font-size:11px;padding:2px 8px;border-radius:6px;font-weight:600;white-space:nowrap}
-.rbrow.deleted .rbstate{background:var(--ev-bad-bg);color:var(--ev-bad)}
-.rbrow.gone .rbstate{background:var(--ev-gone-bg);color:var(--muted)}
-.rbtitle{font-weight:600;overflow-wrap:anywhere;min-width:0;flex:1}
 .rbrow.deleted .rbtitle{text-decoration:line-through}
 .rbwho{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:220px}
 @media(max-width:820px){.rbrow{flex-wrap:wrap;gap:4px 9px}.rbwho{max-width:none}}
@@ -993,6 +1020,17 @@ details.rechte p{margin:6px 0}
 </section>
 
 <section id="tab-suche" class="hide">
+  <!-- The four ways into the archive – one strip, the first thing under
+       the header. Search owns the search row; the other three keep their
+       own controls and hand over to Search with a button. -->
+  <div class="sichten wege" id="sichten">
+    <button class="sicht on" data-sicht="treffer" onclick="sicht('treffer')"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="view.hits">Suche</span></button>
+    <button class="sicht" data-sicht="kalender" onclick="sicht('kalender')"><span data-ikon="kalender" data-ikon-klasse="klein"></span><span data-i18n="nav.calendar">Kalender</span></button>
+    <button class="sicht" data-sicht="adressbuch" onclick="sicht('adressbuch')"><span data-ikon="kontakt" data-ikon-klasse="klein"></span><span data-i18n="nav.book">Adressbuch</span></button>
+    <button class="sicht" data-sicht="dateien" onclick="sicht('dateien')"><span data-ikon="ordner" data-ikon-klasse="klein"></span><span data-i18n="view.files">Dateien</span></button>
+  </div>
+
+  <div id="sicht-treffer">
   <div class="suchzeile">
     <div class="suchfeld">
       <span data-ikon="lupe"></span>
@@ -1053,6 +1091,7 @@ details.rechte p{margin:6px 0}
           <option value="kontakte" data-i18n="search.source.kontakte">Kontakte</option>
           <option value="onedrive" data-i18n="search.source.onedrive">OneDrive</option>
           <option value="sharepoint" data-i18n="search.source.sharepoint">SharePoint</option>
+          <option value="datei" data-i18n="search.source.datei">Alle Dateien</option>
           <option value="pages" data-i18n="search.source.pages">Site-Seiten</option>
           <option value="planner" data-i18n="search.source.planner">Planner</option>
           <option value="todo" data-i18n="search.source.todo">To Do</option>
@@ -1140,14 +1179,16 @@ details.rechte p{margin:6px 0}
     <span class="stand num" id="filter-stand"></span>
   </div>
 
-  <div class="sichten" id="sichten">
-    <button class="sicht on" data-sicht="treffer" onclick="sicht('treffer')"><span data-i18n="view.hits">Treffer</span><span class="zahl num" id="treffer-zahl"></span></button>
-    <button class="sicht" data-sicht="kalender" onclick="sicht('kalender')" data-i18n="nav.calendar">Kalender</button>
-    <button class="sicht" data-sicht="adressbuch" onclick="sicht('adressbuch')" data-i18n="nav.book">Adressbuch</button>
-    <button class="sicht" data-sicht="dateien" onclick="sicht('dateien')" data-i18n="view.files">Dateien</button>
-  </div>
 
-  <div id="sicht-treffer">
+    <!-- Before the first search: the last searches and the saved ones as
+         rows, one click runs them – the windows hold the rest. -->
+    <div class="leer hide" id="suche-anfang">
+      <p class="anfang" data-i18n="search.start.hint">Oben tippen – oder da weitermachen, wo du aufgehört hast.</p>
+      <div class="card liste"><div class="gruppe-kopf"><span data-ikon="uhr" data-ikon-klasse="klein"></span><span data-i18n="search.start.recent">Letzte Suchen</span>
+        <a href="javascript:void(0)" onclick="historieFenster()" data-i18n="search.start.all.history">Ganzer Verlauf…</a></div><div id="anfang-historie"></div></div>
+      <div class="card liste"><div class="gruppe-kopf"><span data-ikon="marke" data-ikon-klasse="klein"></span><span data-i18n="search.start.saved">Gespeicherte Suchen</span>
+        <a href="javascript:void(0)" onclick="gespeicherteFenster()" data-i18n="search.start.all.saved">Alle gespeicherten…</a></div><div id="anfang-gespeichert"></div></div>
+    </div>
     <div class="answer hide" id="ai-box"></div>
     <!-- In the AI variant the answer sits on top; the hits it rests on are
          one click away instead of gone. -->
@@ -1178,8 +1219,7 @@ details.rechte p{margin:6px 0}
     <div class="card" style="padding:0">
       <div class="dateien-kopf">
         <p class="small muted" id="dateien-pfad"></p>
-        <button class="mini hide" id="dateien-suchen" onclick="dateienSuchen()"
-                data-i18n="files.search.here">Hier suchen</button>
+        <button class="ghost" id="dateien-suchen" onclick="dateienSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span id="dateien-suchen-text" data-i18n="files.search.here">In diesen Dateien suchen</span></button>
       </div>
       <div id="dateien-liste"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
     </div>
@@ -1190,19 +1230,24 @@ details.rechte p{margin:6px 0}
     <div class="calbar">
       <span class="chip on" data-mode="week" data-i18n="cal.week">Woche</span>
       <span class="chip" data-mode="month" data-i18n="cal.month">Monat</span>
-      <span class="chip" data-mode="rebuilt" data-i18n="cal.rebuilt">Rekonstruiert</span>
+      <!-- ‹ month › Today – the month's name opens a picker: one year,
+           twelve months, a dot where the archive holds appointments. -->
       <span id="kalNav">
         <button class="ghost" id="kalPrev" data-ikon="links"></button>
-        <button class="ghost" id="kalToday" data-i18n="cal.today">Heute</button>
+        <span class="monat-nav" id="kalMonat">
+          <button class="name" id="kalTitle" onclick="kalWahlAuf()"></button>
+          <div class="popover picker hide" id="kalWahl" onclick="event.stopPropagation()"></div>
+        </span>
         <button class="ghost" id="kalNext" data-ikon="rechts"></button>
+        <button class="ghost" id="kalToday" data-i18n="cal.today">Heute</button>
       </span>
-      <span id="kalTitle"></span>
       <span class="legend" id="kalLegend">
         <span><i style="background:var(--ev-ok)"></i><span data-i18n="cal.legend.confirmed">Bestätigt</span></span>
         <span><i style="background:var(--ev-warn)"></i><span data-i18n="cal.legend.tentative">Vorläufig</span></span>
         <span><i style="background:var(--ev-bad)"></i><span data-i18n="cal.legend.cancelled">Abgesagt</span></span>
-        <span><i style="background:var(--ev-gone)"></i><span data-i18n="cal.legend.rebuilt">Rekonstruiert</span></span>
+        <span><i class="rek"></i><span data-i18n="cal.legend.rebuilt">Rekonstruiert</span></span>
       </span>
+      <button class="ghost" id="kalSuchen" onclick="kalenderSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="cal.search">Im Kalender suchen</span></button>
     </div>
     <p class="small muted" id="kalStats"></p>
     <div id="kalBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div>
@@ -1215,8 +1260,8 @@ details.rechte p{margin:6px 0}
       <span class="chip on" data-book="all" data-i18n="book.f.all">Alle</span>
       <span class="chip" data-book="contacts" data-i18n="book.f.contacts">Aus Kontakten</span>
       <span class="chip" data-book="comm" data-i18n="book.f.comm">Aus Kommunikation</span>
-      <input type="text" id="kbQ" data-i18n-ph="book.search.ph" placeholder="Name, Firma, Mail oder Telefon…" style="flex:1;min-width:220px">
       <span class="small muted" id="kbStats"></span>
+      <button class="ghost rechts" id="kbSuchen" onclick="kontakteSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="book.search">Alle Kontakte durchsuchen</span></button>
     </div>
     <p class="small muted" style="margin:8px 0 0" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
   </div>
@@ -2141,9 +2186,50 @@ function sicht(name){
   document.querySelectorAll('#sichten [data-sicht]').forEach(function(c){
     c.classList.toggle('on', c.dataset.sicht === name);
   });
+  if(name === 'treffer') zeigeAnfang();
   // The calendar data is a few megabytes – fetch it only when someone looks.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
   if(name === 'dateien') ladeDateien();
+}
+
+/* ---------- Before the first search (11.3) ----------
+   Not a blank list saying "no search yet": the last searches and the
+   saved ones as rows, one click runs them. Nothing new is stored – the
+   history and the saved searches hold all of it; the rows only show it
+   where the eye lands first. Once a search has run, the list and the
+   detail take the place for the rest of the page's life. */
+var SUCHE_LIEF = false;
+function zeigeAnfang(){
+  el('suche-anfang').classList.toggle('hide', SUCHE_LIEF);
+  el('treffer-split').classList.toggle('hide', !SUCHE_LIEF || !TREFFER_OFFEN);
+  if(!SUCHE_LIEF) ladeAnfang();
+}
+function ladeAnfang(){
+  Promise.all([api('/api/suche/historie'), api('/api/suche/gespeichert')]).then(function(r){
+    if(SUCHE_LIEF) return;
+    HISTORIE = (r[0] && r[0].searches) || [];
+    GESPEICHERT = (r[1] && r[1].searches) || [];
+    zeichneAnfang();
+  }).catch(function(){});
+}
+function zeichneAnfang(){
+  var h = HISTORIE.slice(0, 3).map(function(x, i){
+    return '<div class="hist" onclick="historieLauf(' + i + ')"><div><span class="q">' + esc(kriterienTitel(x.kriterien)) + '</span>' +
+      (x.treffer !== null && x.treffer !== undefined
+        ? ' <span class="small muted num">' + esc(t('search.history.hits', {n: zahl(x.treffer)})) + '</span>' : '') +
+      '</div><span class="wann">' + esc(wannKurz(x.wann)) + '</span>' +
+      '<div class="tagleiste">' + kriterienTags(x.kriterien) + '</div></div>';
+  }).join('');
+  el('anfang-historie').innerHTML = h || '<p class="hint">' + esc(t('search.start.none')) + '</p>';
+  var g = GESPEICHERT.slice(0, 3).map(function(x, i){
+    var lauf = x.zuletzt ? t('search.saved.lastrun', {when: wannKurz(x.zuletzt), n: zahl(x.treffer)}) : t('search.saved.never');
+    var wo = (x.fall_name || fallName(x.fall)) + (x.ordner_name ? ' › ' + x.ordner_name : '');
+    return '<div class="hist" onclick="gespeichertLauf(' + i + ')"><div><span class="q">' + esc(x.name) + '</span>' +
+      (x.fall ? ' <span class="im-fall">' + ikon('fall', 'klein') + esc(wo) + '</span>' : '') +
+      '</div><span class="wann">' + esc(lauf) + '</span>' +
+      '<div class="tagleiste">' + kriterienTags(x.kriterien) + '</div></div>';
+  }).join('');
+  el('anfang-gespeichert').innerHTML = g || '<p class="hint">' + esc(t('search.saved.empty')) + '</p>';
 }
 
 /* ---------- File browser: the mirrors as a tree, all from the index --- */
@@ -2174,7 +2260,8 @@ function dateiHoch(n){
 function zeichneDateien(r){
   dateiDaten = r;
   var box = el('dateien-liste'), pfad = el('dateien-pfad');
-  el('dateien-suchen').classList.toggle('hide', !!r.roots);
+  // At the sources the button means every mirror at once (source "datei")
+  el('dateien-suchen-text').textContent = t(r.roots ? 'files.search.all' : 'files.search.here');
   if(r.error){ box.innerHTML = '<p class="hint">' + esc(mtext(r.error)) + '</p>'; return; }
   if(r.roots){
     pfad.textContent = t('files.roots');
@@ -2222,7 +2309,7 @@ function zeichneDateien(r){
 
 function dateienSuchen(){
   // The browser's spot becomes the search's filter: source and folder.
-  el('f-source').value = dateiSicht.root || 'all';
+  el('f-source').value = dateiSicht.root || 'datei';
   var sel = el('f-folder'), pfad = dateiSicht.path || '';
   if(pfad && !Array.prototype.some.call(sel.options,
       function(o){ return o.value === pfad; })){
@@ -2929,9 +3016,9 @@ var TOUR = {
     {ziel: '#btn-run', tab: 'export', titel: 'tour.archiv.lauf', text: 'tour.archiv.lauf.t'},
     {ziel: '#lauf-fenster', tab: 'export', titel: 'tour.archiv.fenster', text: 'tour.archiv.fenster.t', optional: true}],
   suche: [
+    {ziel: '#sichten', tab: 'suche', titel: 'tour.suche.sichten', text: 'tour.suche.sichten.t'},
     {ziel: '#q', rahmen: '.suchzeile', tab: 'suche', titel: 'tour.suche.feld', text: 'tour.suche.feld.t'},
     {ziel: '#filter', tab: 'suche', titel: 'tour.suche.filter', text: 'tour.suche.filter.t'},
-    {ziel: '#sichten', tab: 'suche', titel: 'tour.suche.sichten', text: 'tour.suche.sichten.t'},
     {ziel: '#treffer-split', tab: 'suche', titel: 'tour.suche.treffer', text: 'tour.suche.treffer.t', abzweig: 'faelle'},
     {ziel: '#suche-historie', tab: 'suche', titel: 'tour.suche.verlauf', text: 'tour.suche.verlauf.t'},
     {ziel: '#sched-karte', tab: 'einstellungen', karte: 'sched-karte', titel: 'tour.suche.zeitplan', text: 'tour.suche.zeitplan.t'},
@@ -3463,7 +3550,7 @@ function zeichneOrdner(liste){
    into the void. */
 var KANN_TYP = false;
 function typenMoeglich(quelle){
-  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' ||
+  return KANN_TYP && (quelle === 'all' || quelle === 'outlook' || quelle === 'datei' ||
                       quelle === 'onedrive' || quelle === 'sharepoint' ||
                       quelle === 'teams' || quelle === 'planner' ||
                       quelle === 'todo');
@@ -3563,6 +3650,8 @@ function sofortSuchen(){
 }
 
 function doSearch(off, gespeichert){
+  SUCHE_LIEF = true;
+  zeigeAnfang();
   var fehler = datumPruefen();
   if(fehler){
     el('results').innerHTML = '<div class="banner err">' + esc(fehler) + '</div>';
@@ -3796,7 +3885,8 @@ function renderHits(r){
   TREFFER = hits;
   el('detail').classList.add('hide');
   TREFFER_GEWAEHLT = -1;
-  el('treffer-zahl').textContent = hits.length ? zahl(r.count || hits.length) : '';
+  SUCHE_LIEF = true;
+  zeigeAnfang();
   zeigeTrefferKopf();
   if(!hits.length){ el('results').innerHTML = '<p class="hint">' + esc(t('search.nohits')) + '</p>';
                     el('pager').innerHTML = ''; abbrechenKI(); return; }
@@ -5653,7 +5743,7 @@ function exportOrdner(id){
    /api/calendar instead of embedded data. The evaluation itself (including
    the events reconstructed from mails) is done by combined_search.py.
    ======================================================================= */
-var KAL = null, kalGeladen = false, kTimer = null, kalStand = null;
+var KAL = null, kalGeladen = false, kalStand = null;
 var DAYMS = 86400000;
 /* Weekday and month names come from the browser for the chosen language –
    they do not belong in the language files. */
@@ -5668,8 +5758,8 @@ function monatsnamen(){
   return [0,1,2,3,4,5,6,7,8,9,10,11].map(function(i){ return f.format(new Date(Date.UTC(2024, i, 15))); });
 }
 function stl(st){ return t('cal.st.' + (STATI.indexOf(st) >= 0 ? st : 'confirmed')); }
-var events = [], byDay = new Map(), REBUILT = [], contacts = [];
-var calMode = 'week', cursor = new Date(), rbSt = 'all';
+var events = [], byDay = new Map(), contacts = [];
+var calMode = 'week', cursor = new Date();
 
 function toks(q){ return q.toLowerCase().split(/\s+/).filter(Boolean); }
 function allIn(hay, worte){ hay = (hay||'').toLowerCase();
@@ -5699,7 +5789,6 @@ function ladeKalender(ziel){
     ladePersonen();
     contacts = recs.filter(function(r){ return r.src === 'kontakte'; })
       .sort(function(a,b){ return (a.title||'').localeCompare(b.title||'',LOC,{sensitivity:'base'}); });
-    REBUILT = events.filter(function(r){ return r.st === 'deleted' || r.st === 'gone'; });
     verteileAufTage();
     setzeStartwoche();
     var c = d.counts || {};
@@ -5768,8 +5857,9 @@ function evHtml(r){
              r.who ? t('cal.tip.organizer', {v: r.who}) : '',
              (r.att && r.att.length) ? t('cal.tip.attendees', {v: r.att.join(', ')}) : '',
              r.ctx].filter(Boolean).join('\n');
+  var rek = st === 'deleted' || st === 'gone';       // recovered from a mail, not in the calendar export
   return '<a class="ev ' + st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
-         esc(tip) + '"><span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
+         esc(tip) + '">' + (rek ? ikon('mail', 'klein') + ' ' : '') + '<span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
 }
 function dayCell(d, extraCls){
   var k = dkey(d), list = byDay.get(k) || [];
@@ -5779,62 +5869,9 @@ function dayCell(d, extraCls){
          (list.length ? list.map(evHtml).join('') : '') + '</div>';
 }
 
-/* Events reconstructed from mails only – their own list instead of the calendar grid */
-function rbRow(r){
-  var d = new Date(r.ts*1000);
-  return '<a class="rbrow ' + r.st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
-         esc(r.ctx) + '"><span class="rbdate">' + WD[(d.getDay()+6)%7] + ' ' + esc(r.d) + '</span>' +
-         '<span class="rbstate">' + esc(t(r.st === 'deleted' ? 'cal.rb.state.deleted' : 'cal.rb.state.gone')) + '</span>' +
-         '<span class="rbtitle">' + esc(r.title) + '</span>' +
-         '<span class="rbwho">' + esc(r.who) + '</span></a>';
-}
-function rbFrame(){
-  var nDel = REBUILT.filter(function(r){ return r.st === 'deleted'; }).length;
-  el('kalBox').innerHTML =
-      '<p class="rbnote">' + esc(t('cal.rb.note')) + '</p><div class="calbar">' +
-      '<span class="chip" data-rb="all">' + esc(t('cal.rb.all', {n: REBUILT.length})) + '</span>' +
-      '<span class="chip" data-rb="deleted">' + esc(t('cal.rb.deleted', {n: nDel})) + '</span>' +
-      '<span class="chip" data-rb="gone">' + esc(t('cal.rb.gone', {n: REBUILT.length - nDel})) + '</span>' +
-      '<input type="text" id="rbQ" placeholder="' + esc(t('cal.rb.search.ph')) + '" style="min-width:240px">' +
-      '<span class="rbcount"></span></div><div id="rblist"></div>';
-  el('rbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(rbList, 160); });
-  document.querySelectorAll('#kalBox [data-rb]').forEach(function(ch){
-    ch.addEventListener('click', function(){ rbSt = ch.dataset.rb; rbList(); });
-  });
-}
-function rbList(){
-  var worte = toks(el('rbQ').value.trim());
-  var hits = REBUILT.filter(function(r){
-    return (rbSt === 'all' || r.st === rbSt) &&
-           (!worte.length || allIn(r.title + ' ' + (r.ppl||'') + ' ' + (r.x||''), worte));
-  });
-  document.querySelectorAll('#kalBox [data-rb]').forEach(function(c){
-    c.classList.toggle('on', c.dataset.rb === rbSt);
-  });
-  document.querySelector('#kalBox .rbcount').textContent = t('cal.rb.hits', {n: hits.length});
-  var h = '', monat = null;
-  hits.forEach(function(r){
-    var d = new Date(r.ts*1000), m = MON[d.getMonth()] + ' ' + d.getFullYear();
-    if(m !== monat){ h += '<div class="rbmonth">' + m + '</div>'; monat = m; }
-    h += rbRow(r);
-  });
-  // Empty does not always mean the same: "nothing found" would be a lie
-  // when nothing was searched because reconstruction is switched off.
-  var leer = (KAL && KAL.reconstruct === false) ? 'cal.rb.off' : 'cal.rb.empty';
-  el('rblist').innerHTML = h || '<p class="hint">' +
-    esc(t(REBUILT.length ? 'cal.rb.nohits' : leer)) + '</p>';
-}
-
 function drawCal(){
-  el('kalNav').classList.toggle('hide', calMode === 'rebuilt');
-  el('kalLegend').classList.toggle('hide', calMode === 'rebuilt');   // the rows carry their own labels
-  if(calMode === 'rebuilt'){
-    el('kalTitle').textContent = '';
-    if(!document.querySelector('#kalBox [data-rb]')) rbFrame();
-    return rbList();
-  }
   if(!events.length){
-    el('kalTitle').textContent = '';
+    kalTitel('');
     el('kalBox').innerHTML = '<p class="hint">' + esc(t('cal.empty')) + '</p>';
     return;
   }
@@ -5844,9 +5881,9 @@ function drawCal(){
   if(calMode === 'week'){
     var mon = startOfWeek(cursor), sun = addDays(mon, 6);
     for(var i = 0; i < 7; i++) cells += dayCell(addDays(mon, i));
-    el('kalTitle').textContent = t('cal.kw', {week: isoWeek(mon),
-      from: mon.getDate() + '. ' + MON[mon.getMonth()],
-      to: sun.getDate() + '. ' + MON[sun.getMonth()] + ' ' + sun.getFullYear()});
+    var tagMonat = new Intl.DateTimeFormat(LOC, {day: 'numeric', month: 'short'});
+    kalTitel(tagMonat.format(mon) + ' – ' + tagMonat.format(sun) + ' ' + sun.getFullYear(),
+             t('cal.kw', {week: isoWeek(mon)}));
   } else {
     var first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
     var start = startOfWeek(first);
@@ -5856,7 +5893,7 @@ function drawCal(){
       var d = addDays(start, j);
       cells += dayCell(d, d.getMonth() !== cursor.getMonth() ? ' out' : '');
     }
-    el('kalTitle').textContent = MON[cursor.getMonth()] + ' ' + cursor.getFullYear();
+    kalTitel(MON[cursor.getMonth()] + ' ' + cursor.getFullYear(), '');
   }
   el('kalBox').innerHTML = head + '<div class="grid ' + (calMode === 'week' ? 'wk' : 'mo') + '">' + cells + '</div>';
 }
@@ -5871,12 +5908,113 @@ el('kalNext').addEventListener('click', function(){
   drawCal();
 });
 el('kalToday').addEventListener('click', function(){ cursor = new Date(); drawCal(); });
+
+/* ---------- The month and year picker (11.3) ----------
+   The month's name opens it: one year with its arrows, the twelve months,
+   a dot where the archive holds appointments, months outside the
+   archive's span greyed. A click on a month goes there and closes it. */
+var kalWahlJahr = null, kalWahlOffen = false;
+function kalMonate(){
+  // year -> the months with an appointment, from what is loaded
+  var m = {}, von = null, bis = null;
+  events.forEach(function(r){
+    var d = new Date(r.ts * 1000), j = d.getFullYear();
+    (m[j] = m[j] || {})[d.getMonth()] = true;
+    if(von === null || d < von) von = d;
+    if(bis === null || d > bis) bis = d;
+  });
+  var heute = new Date();
+  if(bis === null || bis < heute) bis = heute;
+  return {monate: m, von: von, bis: bis};
+}
+function kalTitel(text, zusatz){
+  el('kalTitle').innerHTML = esc(text) + ikon('runter', 'klein');
+  el('kalTitle').title = (zusatz ? zusatz + ' · ' : '') + t('cal.pick');
+  el('kalMonat').classList.toggle('hide', !text);
+}
+function kalWahlAuf(){
+  if(kalWahlOffen){ kalWahlZu(); return; }
+  kalWahlOffen = true;
+  kalWahlJahr = cursor.getFullYear();
+  zeichneKalWahl();
+  el('kalWahl').classList.remove('hide');
+  el('kalTitle').classList.add('offen');
+}
+function kalWahlZu(){
+  kalWahlOffen = false;
+  el('kalWahl').classList.add('hide');
+  el('kalTitle').classList.remove('offen');
+}
+function kalWahlJahrSchritt(d){
+  var s = kalMonate();
+  kalWahlJahr = Math.max(s.von ? s.von.getFullYear() : kalWahlJahr, Math.min(s.bis.getFullYear(), kalWahlJahr + d));
+  zeichneKalWahl();
+}
+function kalWaehle(j, m){
+  cursor = new Date(j, m, 1);
+  kalWahlZu();
+  drawCal();
+}
+function zeichneKalWahl(){
+  var s = kalMonate(), j = kalWahlJahr, heute = new Date();
+  var erstes = s.von ? s.von.getFullYear() : j, letztes = s.bis.getFullYear();
+  function drin(jahr, monat){
+    if(jahr < erstes || jahr > letztes) return false;
+    if(s.von && jahr === s.von.getFullYear() && monat < s.von.getMonth()) return false;
+    if(jahr === letztes && monat > s.bis.getMonth()) return false;
+    return true;
+  }
+  var kurz = new Intl.DateTimeFormat(LOC, {month: 'short'});
+  el('kalWahl').innerHTML =
+    '<div class="jahr"><button onclick="kalWahlJahrSchritt(-1)"' + (j <= erstes ? ' disabled' : '') + '>‹</button><span>' + j + '</span>' +
+    '<button onclick="kalWahlJahrSchritt(1)"' + (j >= letztes ? ' disabled' : '') + '>›</button></div>' +
+    '<div class="monate">' + [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(function(m){
+      var da = drin(j, m), belegt = !!(s.monate[j] && s.monate[j][m]);
+      var klasse = (j === cursor.getFullYear() && m === cursor.getMonth() ? 'on' : '') +
+                   (j === heute.getFullYear() && m === heute.getMonth() ? ' jetzt' : '');
+      return '<button' + (da ? ' onclick="kalWaehle(' + j + ', ' + m + ')"' : ' disabled') + ' class="' + klasse.trim() + '">' +
+        '<span>' + esc(kurz.format(new Date(Date.UTC(2024, m, 15)))) + '</span><span class="punkt' + (belegt ? '' : ' ohne') + '"></span></button>';
+    }).join('') + '</div>' +
+    '<p class="satz">' + esc(t('cal.pick.note', {from: s.von ? MON[s.von.getMonth()] + ' ' + s.von.getFullYear() : '–',
+                                                  to: MON[s.bis.getMonth()] + ' ' + s.bis.getFullYear()})) + '</p>';
+}
+document.addEventListener('click', function(ev){
+  var k = ev.target;
+  while(k){ if(k.id === 'kalMonat') return; k = k.parentElement; }
+  if(kalWahlOffen) kalWahlZu();
+});
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape' && kalWahlOffen) kalWahlZu(); });
+
+/* ---------- Hand over to Search (11.3) ----------
+   The calendar and the address book search nothing themselves: one
+   button opens the Search way with their source set – the calendar with
+   the shown month or week as the date range – and everything Search can
+   do applies: cases, saved searches, the history. */
+function kalenderSuchen(){
+  filterLeeren();
+  el('q').value = '';
+  el('f-source').value = 'kalender';
+  if(events.length){
+    var von, bis;
+    if(calMode === 'week'){ von = startOfWeek(cursor); bis = addDays(von, 6); }
+    else { von = new Date(cursor.getFullYear(), cursor.getMonth(), 1); bis = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0); }
+    el('f-from').value = isoTag(von); el('f-to').value = isoTag(bis);
+  }
+  ladeOrdner();
+  sicht('treffer'); zeigeFilterstand(); doSearch(0);
+}
+function kontakteSuchen(){
+  filterLeeren();
+  el('q').value = '';
+  el('f-source').value = 'kontakte';
+  ladeOrdner();
+  sicht('treffer'); zeigeFilterstand(); doSearch(0);
+}
 document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]').forEach(function(ch){
   ch.addEventListener('click', function(){
     document.querySelectorAll('#sicht-kalender .calbar .chip[data-mode]')
       .forEach(function(x){ x.classList.remove('on'); });
     ch.classList.add('on'); calMode = ch.dataset.mode;
-    if(calMode !== 'rebuilt') el('kalBox').innerHTML = '';   // discard the list's frame
     drawCal();
   });
 });
@@ -6607,12 +6745,7 @@ function drawBook(){
     if(bookF === 'comm') return e.quelle !== 'contacts';
     return true;
   });
-  var worte = toks(el('kbQ').value.trim());
-  var hits = imFilter.filter(function(e){
-    var r = e.c || {};
-    return !worte.length || allIn([e.name, r.org, r.role, (r.em||[]).join(' '),
-                                   (r.tel||[]).join(' ')].join(' '), worte);
-  });
+  var hits = imFilter.slice();
   hits.sort(function(a, b){
     return (a.name || '').localeCompare(b.name || '', LOC, {sensitivity: 'base'});
   });
@@ -6630,7 +6763,6 @@ function drawBook(){
   });
   el('kbBox').innerHTML = h + '</div>';
 }
-el('kbQ').addEventListener('input', function(){ clearTimeout(kTimer); kTimer = setTimeout(drawBook, 120); });
 document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]').forEach(function(ch){
   ch.addEventListener('click', function(){ bookF = ch.dataset.book; drawBook(); });
 });

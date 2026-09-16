@@ -2976,7 +2976,9 @@ renderStatus(status);
 ladeKalender('kalender');
 setTimeout(function(){
   pruefe(geholt === 1, 'Kalenderdaten nicht geholt');
-  pruefe(REBUILT.length === 1, 'Rekonstruierter Termin fehlt');
+  // A reconstructed appointment sits in the grid, marked – no list of its own
+  calMode = 'week'; cursor = new Date(1750000000 * 1000); drawCal();
+  pruefe(document.getElementById('kalBox').innerHTML.indexOf('ev deleted') >= 0, 'Rekonstruierter Termin fehlt im Raster');
   pruefe(contacts.length === 1, 'Kontakt fehlt');
 
   // Unveraenderter Stand: nicht erneut holen.
@@ -3033,33 +3035,33 @@ setTimeout(function(){
     pruefe(buch.indexOf('alice@example.com') >= 0, 'Mailadresse fehlt');
     pruefe(document.getElementById('kbStats').textContent.indexOf('2') >= 0, 'Zaehlung fehlt');
 
-    // Suche im Adressbuch: derselbe Pfad, der die Uebersetzung verdeckt hatte
-    document.getElementById('kbQ').value = 'Bau';
-    drawBook();
-    var gefiltert = document.getElementById('kbBox').innerHTML;
-    pruefe(gefiltert.indexOf('Bob Builder') >= 0, 'Filter fand Bob nicht');
-    pruefe(gefiltert.indexOf('Alice Example') < 0, 'Filter liess Alice stehen');
+    // The book searches nothing itself (11.3): its button hands over to
+    // Search with the address book as source.
+    global.gesucht = [];
+    var echteSuche = doSearch;
+    doSearch = function(){ gesucht.push(document.getElementById('f-source').value); };
+    kontakteSuchen();
+    pruefe(gesucht.length === 1 && gesucht[0] === 'kontakte', 'Kontakte nicht an die Suche uebergeben: ' + JSON.stringify(gesucht));
+    pruefe(offeneSicht === 'treffer', 'Nicht zur Suche gewechselt');
+    doSearch = echteSuche;
 
-    // Rekonstruierte Termine: eigene Liste, ebenfalls mit Suche
-    calMode = 'rebuilt';
-    drawCal();
-    var rahmen = document.getElementById('kalBox').innerHTML;
-    pruefe(rahmen.indexOf('data-rb') >= 0, 'Rahmen der Liste fehlt');
-    var liste = document.getElementById('rblist').innerHTML;
-    pruefe(liste.indexOf('Jour Fixe') >= 0, 'Rekonstruierter Termin fehlt: ' +
-           JSON.stringify(liste.slice(0, 90)));
-    pruefe(liste.indexOf('Gelöscht') >= 0, 'Zustand fehlt');
-    document.getElementById('rbQ').value = 'gibtsnicht';
-    rbList();
-    pruefe(document.getElementById('rblist').innerHTML.indexOf('Keine Treffer') >= 0,
-           'Leermeldung fehlt');
-
-    // Wochenansicht zeichnet den normalen Termin
+    // The week view draws the ordinary appointment and the reconstructed
+    // one alike – the latter marked, with the mail it came from
     calMode = 'week';
     cursor = new Date(1750000000 * 1000);
     drawCal();
-    pruefe(document.getElementById('kalBox').innerHTML.indexOf('Regelrunde') >= 0,
-           'Wochenansicht leer');
+    var woche = document.getElementById('kalBox').innerHTML;
+    pruefe(woche.indexOf('Regelrunde') >= 0, 'Wochenansicht leer');
+    // the reconstructed one falls on the Monday after: the month shows both
+    calMode = 'month'; drawCal();
+    var monat = document.getElementById('kalBox').innerHTML;
+    pruefe(monat.indexOf('ev deleted') >= 0 && monat.indexOf('Jour Fixe') >= 0, 'Rekonstruierter Termin fehlt im Raster');
+    pruefe(monat.indexOf('Gelöscht') >= 0, 'Zustand fehlt im Tooltip');
+    calMode = 'week'; drawCal();
+    // the week's title stays short: no week number in it, the number in the tooltip
+    var titel = document.getElementById('kalTitle').innerHTML;
+    pruefe(titel.indexOf('Woche') < 0 && titel.indexOf('2025') >= 0, 'Wochentitel: ' + titel);
+    pruefe(String(document.getElementById('kalTitle').title).indexOf('Woche 2') >= 0, 'Wochennummer fehlt im Tooltip');
     console.log('OK');
   }, 20);
 }, 0);
@@ -4248,6 +4250,89 @@ def test_jede_art_hat_ihr_eigenes_detail():
     _in_node(PRUEFUNG_DETAIL_ARTEN)
 
 
+PRUEFUNG_TUER = GRUNDZUSTAND + """
+// The door (11.3): Search opens with the last searches and the saved ones
+// as rows; a search run takes their place; the calendar hands over with
+// the shown month or week as the date range; its month name is a picker.
+var geholt = [];
+global.fetch = function(pfad){
+  geholt.push(String(pfad));
+  return Promise.resolve({json: function(){
+    if(String(pfad).indexOf('/api/suche/historie') === 0) return Promise.resolve({retention: '90', searches: [
+      {wann: '2026-09-16T09:12:00', treffer: 3, kriterien: {q: '"budget frame" 2026', mode: 'text', source: 'outlook'}},
+      {wann: '2026-09-15T17:40:00', treffer: 42, kriterien: {q: 'Nordwind', mode: 'text', source: 'all'}},
+      {wann: '2026-09-14T10:00:00', treffer: 4, kriterien: {q: '', mode: 'text', source: 'kalender'}},
+      {wann: '2026-09-13T10:00:00', treffer: 1, kriterien: {q: 'vier', mode: 'text', source: 'all'}}]});
+    if(String(pfad).indexOf('/api/suche/gespeichert') === 0) return Promise.resolve({searches: [
+      {id: 1, name: 'Invoices 2026', kriterien: {q: 'Rechnung', mode: 'text', source: 'outlook'}, zuletzt: '2026-09-14T10:00:00', treffer: 61, fall: null}]});
+    return Promise.resolve(statusGeruest());
+  }});
+};
+aktiverTab = 'suche';
+sicht('treffer');
+pruefe(!document.getElementById('suche-anfang').classList.contains('hide'), 'Leerzustand fehlt vor der ersten Suche');
+pruefe(document.getElementById('treffer-split').classList.contains('hide'), 'Trefferliste steht neben dem Leerzustand');
+setTimeout(function(){
+  var h = document.getElementById('anfang-historie').innerHTML, g = document.getElementById('anfang-gespeichert').innerHTML;
+  pruefe(h.split('class="hist"').length - 1 === 3, 'Nicht die letzten drei Suchen: ' + (h.split('class="hist"').length - 1));
+  pruefe(h.indexOf('historieLauf(0)') >= 0 && h.indexOf('budget frame') >= 0 && h.indexOf('42') >= 0, 'Zeile ohne Lauf oder Zahl: ' + h.slice(0, 300));
+  pruefe(h.indexOf(t('search.criteria.browse')) >= 0, 'Suche ohne Woerter nicht benannt');
+  pruefe(g.indexOf('gespeichertLauf(0)') >= 0 && g.indexOf('Invoices 2026') >= 0 && g.indexOf('61') >= 0, 'Gespeicherte Zeile fehlt: ' + g.slice(0, 300));
+  // a search ran: the list takes the place, for good
+  doSearch(0);
+  pruefe(document.getElementById('suche-anfang').classList.contains('hide'), 'Leerzustand bleibt nach der Suche');
+  pruefe(!document.getElementById('treffer-split').classList.contains('hide'), 'Trefferliste fehlt nach der Suche');
+  sicht('kalender'); sicht('treffer');
+  pruefe(document.getElementById('suche-anfang').classList.contains('hide'), 'Leerzustand kommt zurueck');
+  // the calendar hands over with the shown month as the date range
+  events = [{ts: 1750000000, te: 1750003600, st: 'confirmed', title: 'x'}];
+  calMode = 'month'; cursor = new Date(2026, 8, 16);
+  kalenderSuchen();
+  pruefe(document.getElementById('f-source').value === 'kalender', 'Quelle nicht gesetzt');
+  pruefe(document.getElementById('f-from').value === '2026-09-01' && document.getElementById('f-to').value === '2026-09-30',
+         'Monat nicht als Datum gesetzt: ' + document.getElementById('f-from').value + ' ' + document.getElementById('f-to').value);
+  pruefe(geholt.some(function(p){ return p.indexOf('/api/search') === 0 && p.indexOf('source=kalender') > 0; }), 'Suche nicht gestartet');
+  calMode = 'week'; cursor = new Date(2026, 8, 16);   // a Wednesday
+  kalenderSuchen();
+  pruefe(document.getElementById('f-from').value === '2026-09-14' && document.getElementById('f-to').value === '2026-09-20', 'Woche nicht als Datum gesetzt');
+  // the picker: a dot on months with appointments, months outside the archive greyed
+  events = [{ts: Date.UTC(2025, 5, 15) / 1000, st: 'confirmed', title: 'a'}, {ts: Date.UTC(2026, 8, 16) / 1000, st: 'confirmed', title: 'b'}];
+  cursor = new Date(2026, 8, 1);
+  kalWahlAuf();
+  var w = document.getElementById('kalWahl').innerHTML;
+  pruefe(!document.getElementById('kalWahl').classList.contains('hide'), 'Picker geht nicht auf');
+  pruefe(w.split('<button').length - 1 === 14, 'Nicht zwoelf Monate und zwei Pfeile: ' + (w.split('<button').length - 1));
+  pruefe(w.indexOf('kalWaehle(2026, 8)') >= 0 && w.indexOf('class="on') >= 0, 'Der gezeigte Monat ist nicht markiert');
+  pruefe((w.match(/class="punkt"/g) || []).length === 1, 'Nicht genau ein Monat mit Termin in 2026: ' + (w.match(/class="punkt"/g) || []).length);
+  pruefe(w.indexOf('kalWaehle(2026, 11)') < 0, 'Ein Monat nach dem Archivende ist waehlbar');
+  kalWahlJahrSchritt(-1);
+  w = document.getElementById('kalWahl').innerHTML;
+  pruefe(w.indexOf('2025') >= 0 && w.indexOf('kalWaehle(2025, 5)') >= 0 && w.indexOf('kalWaehle(2025, 4)') < 0, 'Jahr 2025: Juni fehlt oder Mai waehlbar');
+  kalWaehle(2025, 5);
+  pruefe(cursor.getFullYear() === 2025 && cursor.getMonth() === 5, 'Monat nicht gewaehlt');
+  pruefe(document.getElementById('kalWahl').classList.contains('hide'), 'Picker bleibt offen');
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_die_tuer_beginnt_mit_dem_letzten_und_der_kalender_uebergibt():
+    _in_node(PRUEFUNG_TUER)
+
+
+def test_die_tuer_hat_vier_wege_und_eine_suche():
+    """Explore archive (11.3): the strip of ways first, the search row inside
+    the Search way, and the three views without a search of their own – one
+    hand-over button each."""
+    seite = app_mod.seite()
+    block = seite[seite.index('<section id="tab-suche"'):seite.index('<section id="tab-faelle"')]
+    assert block.index('id="sichten"') < block.index('id="sicht-treffer"') < block.index('class="suchzeile"')
+    assert block.count('data-sicht=') == 4 and 'treffer-zahl' not in block
+    for kennung in ('kalSuchen', 'kbSuchen', 'dateien-suchen', 'kalWahl', 'kalMonat', 'suche-anfang'):
+        assert f'id="{kennung}"' in block, kennung
+    assert 'id="kbQ"' not in block, "the address book grew a search of its own again"
+
+
 PRUEFUNG_GELOESCHT = GRUNDZUSTAND + """
 // Gelöschtes ist am Treffer erkennbar, ohne die Liste zu erschlagen.
 renderHits({results: [
@@ -5303,7 +5388,7 @@ def test_http_run_full_sync(server, monkeypatch):
 
 
 def test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert():
-    """DESIGN.md §5: one *Force full sync* per source, a `.mini` in the
+    """DESIGN.md §6: one *Force full sync* per source, a `.mini` in the
     `.aktionen` row of its *Advanced* group with an (i) of its own – never
     in the open part, never twice, and every source that tracks changes
     has one."""
