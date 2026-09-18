@@ -59,6 +59,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit, parse_qs, quote, unquote
 import socketserver
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
@@ -71,6 +72,7 @@ import export_util
 import faelle
 import folders
 import i18n
+import rest
 import notify
 import ollama_client
 import analytics_db
@@ -1459,7 +1461,7 @@ def einstellungs_abweichungen(cfg):
     return aus
 
 
-def systemangaben(status, lang=None):
+def systemangaben(status, lang=None, cfg=None, datenordner=None, vorgabe=None):
     """The facts of a report as [{"k": text key, "v": value}, …].
 
     Translation happens only in the interface – as with the log lines.
@@ -1468,7 +1470,7 @@ def systemangaben(status, lang=None):
     """
     store = status.get("store") or {}
     oll = status.get("ollama") or {}
-    cfg = status.get("config") or {}
+    cfg = cfg or status.get("config") or {}
     letzter = (status.get("jobs") or {}).get("last") or {}
 
     def zeile(k, v):
@@ -1477,7 +1479,7 @@ def systemangaben(status, lang=None):
         # named here.
         return {"k": k, "v": str(v)}
 
-    art = "Bündel" if status.get("frozen") else "Skript"
+    art = "Bündel" if FROZEN else "Skript"
     kerne = os.cpu_count() or "?"
     kats = sorted((cfg.get("outlook_categories") or [])
                   + (cfg.get("teams_categories") or []))
@@ -1506,16 +1508,17 @@ def systemangaben(status, lang=None):
                                         f'{"ok" if letzter.get("ok") else "Fehler"}'))
     # The data folder only when it is NOT the default: otherwise it says
     # nothing the lines above do not, and merely carries a user name along.
-    if status.get("data_dir") != status.get("data_dir_default"):
-        angaben.append(zeile("datadir", anonymisiere(str(status.get("data_dir")))))
+    ordner = str(BASE if datenordner is None else datenordner)
+    if ordner != str(HEIM / DATEN_UNTERORDNER if vorgabe is None else vorgabe):
+        angaben.append(zeile("datadir", anonymisiere(ordner)))
     return angaben
 
 
-def fehlerbericht(status, log_text="", hint="", lang=None):
+def fehlerbericht(status, log_text="", hint="", lang=None, cfg=None):
     """Everything the interface needs for the GitHub form."""
     titel = anonymisiere(str(hint or "").strip()).strip()
     return {
-        "system": systemangaben(status, lang),
+        "system": systemangaben(status, lang, cfg),
         "log": anonymisiere(gekuerzt(log_text)),
         "title": titel[:120],
         "url": f"https://github.com/{version.REPO}/issues/new",
@@ -2085,22 +2088,51 @@ class App:
             wizard = "token"
         elif not oll.get("disabled") and (not oll["running"] or not oll["has_model"]):
             wizard = "ollama"
+        # What changes on its own, and nothing else. Everything that only
+        # ever changes when someone acts – the folders the archive holds,
+        # the paths, the constants of the interface – has its own route and
+        # is asked for once: this one is polled, and a polled answer should
+        # not keep repeating the names of someone's mail folders.
+        auth = self.auth_status()
         return {
-            "token": tok,
-            "ollama": oll,
-            "ollama_hint": ollama_hint(),
-            "store": store,
-            "calendar": {"exists": calendar_file(self.cfg).exists(),
-                         "built_at": _mtime_iso(calendar_file(self.cfg))},
-            "exports": export_status(self.cfg),
+            # Per node only what the interface acts on. What the settings
+            # already say (the models by name, the port, the mode, the own
+            # registration's id) is not repeated here, what nobody reads is
+            # gone, and what can be decided here is decided here: `wizard`
+            # is such a decision, and so is `ollama.has_model`.
+            "token": {k: tok.get(k) for k in
+                      ("present", "valid", "expired", "account", "name",
+                       "expires_in_minutes", "missing")},
+            "ollama": {k: oll.get(k) for k in
+                       ("running", "has_model", "has_chat_model", "disabled")},
+            "store": {k: store.get(k) for k in
+                      ("exists", "features", "semantic", "built_at")},
+            "calendar": {"built_at": _mtime_iso(calendar_file(self.cfg))},
             "jobs": jobs,
-            "mcp": self.mcp.status(self.cfg),
+            "mcp": {k: v for k, v in self.mcp.status(self.cfg).items()
+                    if k in ("running", "url", "error")},
             "profile": profil_zustand(),
-            "config": self.cfg,
             "schedule_next": (datetime.fromtimestamp(nxt).isoformat(timespec="seconds")
-                              if nxt else None),
-            "schedule_enabled": bool(plan.get("enabled")),
+                              if nxt and plan.get("enabled") else None),
             "wizard": wizard,
+            "update": {k: self._update.get(k) for k in
+                       ("status", "latest", "url", "newer", "ahead", "error")},
+            "auth": {k: auth.get(k) for k in
+                     ("signed_in", "account", "own_registration", "device")},
+        }
+
+    def umgebung(self):
+        """What the interface needs once: where things lie, what the app
+        is, the defaults behind two settings and the snippet for a Claude
+        client. None of it changes while the app runs – except after a
+        save, and the page asks again then."""
+        return {
+            "version": version.VERSION,
+            "api_version": API_VERSION,
+            "build": version.build(),
+            "releases_url": version.RELEASES_URL,
+            "default_client_id": auth.STANDARD_CLIENT_ID,
+            "ollama_hint": ollama_hint(),
             "data_dir": str(BASE),
             "home_dir": str(HEIM),
             "app_location": (sys.executable if FROZEN
@@ -2109,15 +2141,22 @@ class App:
             "index_dir": str(STORE_PFAD),
             "index_dir_default": str(HEIM / STORE_DIR),
             "frozen": FROZEN,
-            "update": dict(self._update, releases_url=version.RELEASES_URL,
-                           build=version.build()),
             "skip_folders_default": sorted(SKIP_FOLDERS_DEFAULT),
             "filetype_hidden_default": sorted(FILETYPE_HIDDEN_DEFAULT),
             "graph_explorer": GRAPH_EXPLORER,
             "scopes_needed": sorted({SCOPE_FOR[c] for c in self.selected_categories()
                                      if c in SCOPE_FOR} | {"User.Read"}),
             "scope_queries": SCOPE_QUERY,
-            "auth": self.auth_status(),
+            "mcp_client": (self.mcp.status(self.cfg) or {}).get("config"),
+        }
+
+    def bestand(self):
+        """What the archive holds per source – how many folders, chats,
+        calendars, lists and notebooks there are and which of them come
+        along, with their names. It changes with a run, not with a poll,
+        so the page asks after a run and when it shows the sources."""
+        return {
+            "exports": export_status(self.cfg),
             "folders": folders.zusammenfassung(
                 folders.lade(BASE / OUTLOOK_DIR),
                 auswahlregeln(self.cfg)),
@@ -2423,14 +2462,180 @@ class App:
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
+FEHLERSPRACHE = "en"        # the language of error texts – see Handler._fehler
+
+# The versioned surface. The app's own routes name actions and are German
+# where the data is (the page and the app share one vocabulary); /api/v1 is
+# for everyone else: resources, real methods, English names (rest.py). It
+# grows per release – cases and the search so far, and the page's search
+# already runs through it. The page moves over one resource at a time; the
+# action routes go in 13.0, when none of them is left in use.
+API_VERSION = "v1"          # the contract's version, not the program's
+API_V1 = "/api/" + API_VERSION
+ROUTEN_V1 = (
+    ("GET", "/api/v1/cases", "_v1_faelle"),
+    ("POST", "/api/v1/cases", "_v1_anlegen"),
+    ("GET", "/api/v1/cases/{id}", "_v1_fall"),
+    ("PATCH", "/api/v1/cases/{id}", "_v1_aendern"),
+    ("DELETE", "/api/v1/cases/{id}", "_v1_loeschen"),
+    ("GET", "/api/v1/search", "_v1_suche"),
+    # The rest of the Explore door's reads. They answer English already –
+    # they were built for the index and for Claude – so they move over as
+    # they are; only a list is called `items` here, whatever the engine
+    # names it.
+    ("GET", "/api/v1/files", "_v1_dateien"),
+    ("GET", "/api/v1/folders", "_v1_ordner"),
+    ("GET", "/api/v1/filetypes", "_v1_dateitypen"),
+    ("GET", "/api/v1/people", "_v1_personen"),
+    ("GET", "/api/v1/threads", "_v1_gespraech"),
+    ("GET", "/api/v1/documents", "_v1_dokument"),
+    ("GET", "/api/v1/documents/facts", "_v1_fakten"),
+    ("GET", "/api/v1/calendar", "_v1_kalender"),
+    # The settings are their own thing: they change when someone saves
+    # them, not every other second, and the status is polled. Until 12.0
+    # they travelled with every poll – a third of its weight.
+    ("GET", "/api/v1/app", "_v1_umgebung"),
+    ("GET", "/api/v1/inventory", "_v1_bestand"),
+    ("GET", "/api/v1/config", "_v1_konfig"),
+    ("PATCH", "/api/v1/config", "_v1_konfig_aendern"),
+)
+
+
+def antwort_version():
+    """`11.4.0 (a1b2c3d)` – the program and, where it is known, the commit
+    it was built from."""
+    bau = version.build()
+    return f"{version.VERSION} ({bau})" if bau else version.VERSION
+
+
+def muster_passt(muster, pfad):
+    """A route pattern with {name} placeholders against a path: the values
+    it captured, or None when the shape differs."""
+    # No slashes stripped: a trailing one makes a different path, as it
+    # does everywhere else in this API. One resource, one spelling – that
+    # is what `Location` hands out.
+    erwartet, hat = muster.split("/"), pfad.split("/")
+    if len(erwartet) != len(hat):
+        return None
+    werte = {}
+    for e, h in zip(erwartet, hat, strict=True):
+        if e.startswith("{") and e.endswith("}"):
+            werte[e[1:-1]] = unquote(h)
+        elif e != h:
+            return None
+    return werte
+
+
+class Ablehnung(Exception):
+    """A refusal raised inside a route; the handler turns it into the one
+    error body (Handler._fehler). `grund` is a text key, an i18n message
+    or a plain sentence from the search module; `extra` are the fields
+    the answer keeps beside it (an empty list, the token's state)."""
+
+    def __init__(self, code, grund, v=None, **extra):
+        super().__init__(grund)
+        self.code, self.grund, self.v, self.extra = code, grund, v, extra
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "munimentum-app"
+    sys_version = ""           # the Python version is nobody's business
     protocol_version = "HTTP/1.1"
     app = None                 # set by serve()
     allowed_hosts = ()
+    ZUSATZ = {}                # headers every answer of this handler carries
+
+    # Which methods each route of the app's own surface serves. The
+    # dispatchers below are the truth; this table only decides whether a
+    # request that found no route is a wrong method (405, with Allow) or
+    # no route at all (404) – and answers OPTIONS. A test derives it from
+    # the dispatchers again and compares.
+    ROUTEN = {
+        "/": ("GET",),
+        "/index.html": ("GET",),
+        "/source": ("GET",),
+        "/api/analytics": ("GET",),
+        "/api/analytics-refresh": ("POST",),
+        "/api/answer": ("POST",),
+        "/api/archiv/beiseitelegen": ("POST",),
+        "/api/archiv/nachholen": ("POST",),
+        "/api/archiv/neu-aufbauen": ("POST",),
+        "/api/archiv/ordner": ("POST",),
+        "/api/archiv/vermerken": ("POST",),
+        "/api/archiv/zurueckholen": ("POST",),
+        "/api/bilanz/holen": ("POST",),
+        "/api/calendar": ("GET",),
+        "/api/cancel": ("POST",),
+        "/api/config": ("POST",),
+        "/api/data-dir": ("POST",),
+        "/api/detail": ("GET",),
+        "/api/document": ("GET",),
+        "/api/faelle": ("GET",),
+        "/api/faelle/aendern": ("POST",),
+        "/api/faelle/anlegen": ("POST",),
+        "/api/faelle/bemerkung": ("POST",),
+        "/api/faelle/entfernen": ("POST",),
+        "/api/faelle/export": ("POST",),
+        "/api/faelle/export-ordner": ("POST",),
+        "/api/faelle/fall": ("GET",),
+        "/api/faelle/hinzufuegen": ("POST",),
+        "/api/faelle/liste": ("POST",),
+        "/api/faelle/liste-loeschen": ("POST",),
+        "/api/faelle/loeschen": ("POST",),
+        "/api/faelle/neu": ("GET",),
+        "/api/faelle/notiz": ("POST",),
+        "/api/faelle/notiz-aendern": ("POST",),
+        "/api/faelle/notiz-loeschen": ("POST",),
+        "/api/faelle/oeffnen": ("POST",),
+        "/api/faelle/ordner-anlegen": ("POST",),
+        "/api/faelle/ordner-loeschen": ("POST",),
+        "/api/faelle/ordner-umbenennen": ("POST",),
+        "/api/faelle/schliessen": ("POST",),
+        "/api/faelle/thread": ("POST",),
+        "/api/faelle/verschieben": ("POST",),
+        "/api/files": ("GET",),
+        "/api/filetypes": ("GET",),
+        "/api/folder-plan": ("POST",),
+        "/api/folders": ("GET",),
+        "/api/log": ("GET",),
+        "/api/login": ("POST",),
+        "/api/logout": ("POST",),
+        "/api/mcp": ("POST",),
+        "/api/ollama-recheck": ("POST",),
+        "/api/openapi": ("GET",),
+        "/api/people": ("GET",),
+        "/api/profile-prefs": ("POST",),
+        "/api/profile-rename": ("POST",),
+        "/api/profile-switch": ("POST",),
+        "/api/profiles": ("GET", "POST"),
+        "/api/quit": ("POST",),
+        "/api/report": ("POST",),
+        "/api/run": ("POST",),
+        "/api/run-log": ("GET",),
+        "/api/runs": ("GET",),
+        "/api/schedule": ("POST",),
+        "/api/search": ("GET",),
+        "/api/sharepoint-report": ("GET",),
+        "/api/similar": ("GET",),
+        "/api/status": ("GET",),
+        "/api/suche/anhaengen": ("POST",),
+        "/api/suche/gespeichert": ("GET",),
+        "/api/suche/historie": ("GET",),
+        "/api/suche/historie-leeren": ("POST",),
+        "/api/suche/loeschen": ("POST",),
+        "/api/suche/speichern": ("POST",),
+        "/api/suche/umbenennen": ("POST",),
+        "/api/thread": ("GET",),
+        "/api/token": ("POST",),
+        "/api/update-check": ("POST",),
+        "/api/wizard-seen": ("POST",),
+    }
 
     def log_message(self, fmt, *args):
         pass                    # no access log on stdout
+
+    def version_string(self):
+        return self.server_version          # without the empty sys_version
 
     # -- Helpers -----------------------------------------------------------
     def _host_ok(self):
@@ -2443,45 +2648,256 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").lower()
         return host in self.allowed_hosts
 
+    def _rumpf_weg(self):
+        """Read away a body no route asked for.
+
+        Every answer that comes before `_body()` – the Host check, a wrong
+        method, a GET that carried a body anyway – would otherwise leave it
+        on the connection, and the next request would be parsed out of it:
+        the server would answer something nobody sent. Where the body
+        cannot be read away, the connection ends instead.
+        """
+        if getattr(self, "_gelesen", False):
+            return
+        self._gelesen = True
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except (AttributeError, ValueError):
+            self.close_connection = True
+            return
+        if n <= 0:
+            return
+        if n > 4 * 1024 * 1024:
+            self.close_connection = True
+            return
+        try:
+            self.rfile.read(n)
+        except OSError:
+            self.close_connection = True
+
     def _send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
+        self._rumpf_weg()
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
+        if code != 204:
+            # A 204 says there is no body; a Content-Length on it is a
+            # framing error to a strict client (RFC 9110 §8.6).
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
+        # Which program answered, and which contract it answered under.
+        # The path says v1 and stays there for as long as the shape holds;
+        # a script that wants to know exactly which build it is talking to
+        # reads it here instead of guessing from the version in the path.
+        self.send_header("X-Munimentum-Version", antwort_version())
+        self.send_header("X-Munimentum-Api", API_VERSION)
+        for k, v in {**self.ZUSATZ, **(extra or {})}.items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj, ensure_ascii=False, default=str))
+    def _json(self, obj, code=200, ctype="application/json; charset=utf-8",
+              extra=None):
+        self._send(code, json.dumps(obj, ensure_ascii=False, default=str),
+                   ctype, extra)
+
+    # -- Methods -----------------------------------------------------------
+    def _zahl(self, q, name, vorgabe=0, kleinste=None, groesste=None):
+        """A number out of a query or a body, clamped where the route has
+        bounds. Something that is not a number is the caller's mistake and
+        answers 400 – not the 500 an uncaught ValueError would be."""
+        roh = q.get(name, vorgabe)
+        try:
+            wert = int(roh if roh not in (None, "") else vorgabe)
+        except (TypeError, ValueError):
+            raise Ablehnung(400, "srv.badparam", {"name": name}) from None
+        if kleinste is not None:
+            wert = max(kleinste, wert)
+        if groesste is not None:
+            wert = min(wert, groesste)
+        return wert
+
+    def _erlaubt(self, pfad):
+        """Every method this path answers – both surfaces, plus the two the
+        server adds itself. Empty means: no such route."""
+        methoden = set(self.ROUTEN.get(pfad, ()))
+        for m, muster, _ in ROUTEN_V1:
+            if muster_passt(muster, pfad) is not None:
+                methoden.add(m)
+        if "GET" in methoden:
+            methoden.add("HEAD")
+        if methoden:
+            methoden.add("OPTIONS")
+        return methoden
+
+    def _methode_fehlt(self, pfad, methode):
+        """A request that found no route: 405 when the path exists under
+        another method – with `Allow`, as the specification wants – and
+        404 when it does not exist at all."""
+        erlaubt = self._erlaubt(pfad)
+        if not erlaubt:
+            return self._fehler(404, "srv.notfound", {"path": pfad})
+        liste = ", ".join(sorted(erlaubt))
+        return self._fehler(405, "srv.method", {"method": methode, "allowed": liste},
+                            kopf={"Allow": liste})
+
+    def do_PUT(self):
+        self._nur_v1("PUT")
+
+    def do_PATCH(self):
+        self._nur_v1("PATCH")
+
+    def do_DELETE(self):
+        self._nur_v1("DELETE")
+
+    def _nur_v1(self, methode):
+        """The methods that change or remove a resource exist on the
+        versioned surface only; everywhere else they are a wrong method."""
+        if not self._host_ok():
+            return self._verboten()
+        u = urlsplit(self.path)
+        pfad = u.path
+        try:
+            # Read first, route second: a body left on the connection would
+            # be taken for the next request, wrong method or not.
+            data = self._body()
+            if pfad.startswith(API_V1 + "/"):
+                return self._v1(methode, pfad,
+                                {k: v[0] for k, v in parse_qs(u.query).items()}, data)
+        except Ablehnung as a:
+            return self._fehler(a.code, a.grund, a.v, **a.extra)
+        except Exception as e:                       # noqa: BLE001
+            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+        return self._methode_fehlt(pfad, methode)
+
+    def do_OPTIONS(self):
+        """What may be done here. No CORS headers: the server answers one
+        origin, its own page, and a cross-origin caller is exactly what the
+        Host check is there to stop."""
+        if not self._host_ok():
+            return self._verboten()
+        pfad = urlsplit(self.path).path
+        erlaubt = self._erlaubt(pfad)
+        if not erlaubt:
+            return self._fehler(404, "srv.notfound", {"path": pfad})
+        return self._send(204, b"", extra={"Allow": ", ".join(sorted(erlaubt))})
+
+    def send_error(self, code, message=None, explain=None):
+        """Whatever the base class refuses – an unknown verb, a request line
+        it cannot parse – answers the one error body as well, never its own
+        HTML page."""
+        try:
+            code = int(code)
+            pfad = urlsplit(getattr(self, "path", "") or "").path
+            # What the base class refuses, it refuses before reading a body –
+            # and it closed the connection for exactly that reason. Keeping
+            # it open would make the unread body the next request.
+            self.close_connection = True
+            zu = {"Connection": "close"}
+            if code == 501 and getattr(self, "command", None):
+                erlaubt = sorted(self._erlaubt(pfad)) or ["GET", "POST"]
+                return self._fehler(code, "srv.method",
+                                    {"method": self.command, "allowed": ", ".join(erlaubt)},
+                                    kopf={"Allow": ", ".join(erlaubt), **zu})
+            return self._fehler(code, message or HTTPStatus(code).phrase, kopf=zu)
+        except Exception:                            # noqa: BLE001
+            super().send_error(code, message, explain)
+
+    def _fehler(self, code, grund, v=None, kopf=None, **extra):
+        """The one shape of a refusal, whatever the route and the status:
+        a problem detail as RFC 9457 describes it – `type`, `title`,
+        `status`, `detail`, `instance` – plus two members of our own. `ok`
+        is there so the page can ask one question of every answer, and
+        `error` carries the text key with its placeholders, which the page
+        renders in the user's language. `detail` is always English: it ends
+        up in scripts, logs and bug reports, and one language there beats a
+        sentence that changes with a setting.
+
+        `grund` is a text key (with `v` its placeholders), an i18n message
+        or a plain sentence from the search module; `extra` are the fields
+        the route's answer keeps beside it, `kopf` the headers the status
+        calls for. `message` repeats the reason the way 11.3 sent it and
+        goes with 13.0 – the versioned surface is already without it."""
+        if isinstance(grund, str) and (
+                v is not None or i18n.satz(FEHLERSPRACHE, grund, RES) is not None):
+            grund = {"k": grund, "v": v or {}}
+        if isinstance(grund, dict):
+            key = str(grund.get("k") or "")
+            detail = i18n.satz(FEHLERSPRACHE, key, RES, grund.get("v")) or key
+            eigenes = {"error": {"k": key, "v": grund.get("v") or {}}} if key else {}
+        else:
+            key, detail, eigenes = "", str(grund), {}
+        koerper = {"ok": False,
+                   "type": f"urn:munimentum:error:{key}" if key else "about:blank",
+                   "title": HTTPStatus(code).phrase, "status": code,
+                   "detail": detail,
+                   "instance": urlsplit(getattr(self, "path", "") or "").path,
+                   **eigenes, **extra}
+        if not self._versioniert():
+            koerper["message"] = grund
+        kopf = dict(kopf or {})
+        if code == 503:
+            # Nothing here waits on a remote service: what is missing is an
+            # index, and that takes a run. Half a minute is a polite guess
+            # for "ask again", not a promise.
+            kopf.setdefault("Retry-After", "30")
+        return self._json(koerper, code, "application/problem+json; charset=utf-8", kopf)
+
+    def _versioniert(self):
+        return urlsplit(getattr(self, "path", "") or "").path.startswith(API_V1 + "/")
+
+    def _verboten(self):
+        """The DNS-rebinding guard's answer: a Host that is not ours."""
+        return self._fehler(403, "srv.forbidden",
+                            {"host": (self.allowed_hosts or ("127.0.0.1",))[0]})
 
     def _body(self):
+        """The request body as a dict. An absent or empty one is no error –
+        every route falls back to its defaults – but a body that is there
+        has to be JSON, and has to say so.
+        """
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
+            # Without a length there is no way to know where the body ends,
+            # so what follows on this connection cannot be a request.
+            self._gelesen, self.close_connection = True, True
+            raise Ablehnung(400, "srv.badlength") from None
+        if n <= 0:
+            self._gelesen = True
             return {}
-        if n <= 0 or n > 4 * 1024 * 1024:
-            return {}
+        if n > 4 * 1024 * 1024:
+            # Reading it away would mean reading it; the connection ends
+            # instead, and with it the body.
+            self._gelesen, self.close_connection = True, True
+            raise Ablehnung(413, "srv.toobig")
+        art = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if art and art != "application/json":
+            raise Ablehnung(415, "srv.mediatype", {"type": art})   # _rumpf_weg drains it
+        roh = self.rfile.read(n)
+        self._gelesen = True
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
-        except (ValueError, UnicodeDecodeError):
-            return {}
+            daten = json.loads(roh.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as e:
+            raise Ablehnung(400, "srv.badjson", {"error": str(e)}) from None
+        if not isinstance(daten, dict):
+            raise Ablehnung(400, "srv.badjson", {"error": "the body must be an object"})
+        return daten
 
     # -- Routes ------------------------------------------------------------
     def do_GET(self):
         if not self._host_ok():
-            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
-                              "text/plain; charset=utf-8")
+            return self._verboten()
         u = urlsplit(self.path)
         q = parse_qs(u.query)
         one = {k: v[0] for k, v in q.items()}
         app = self.app
         try:
+            if u.path.startswith(API_V1 + "/"):
+                return self._v1("GET", u.path, one, {})
             if u.path in ("/", "/index.html"):
                 return self._send(200, self._page(), "text/html; charset=utf-8")
             if u.path == "/api/status":
@@ -2489,7 +2905,7 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/profiles":
                 return self._json(profil_status())
             if u.path == "/api/log":
-                lines, seq = app.jobs.log_since(int(one.get("since", 0) or 0))
+                lines, seq = app.jobs.log_since(self._zahl(one, "since", 0, 0))
                 return self._json({"lines": lines, "seq": seq})
             if u.path == "/api/search":
                 return self._json(self._search(one))
@@ -2520,19 +2936,13 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/detail":
                 return self._json(self._detail(one))
             if u.path == "/api/run-log":
-                try:
-                    kennung = int(one.get("id") or 0)
-                except ValueError:
-                    kennung = 0
-                return self._json({"lines": app.history.run_log(kennung)})
+                return self._json({"lines": app.history.run_log(
+                    self._zahl(one, "id", 0, 0))})
             if u.path == "/api/analytics":
                 return self._json(analytics_daten(app.cfg))
             if u.path == "/api/runs":
-                try:
-                    grenze = int(one.get("limit", 50))
-                except ValueError:
-                    grenze = 50
-                return self._json({"runs": app.history.list_runs(grenze)})
+                return self._json({"runs": app.history.list_runs(
+                    self._zahl(one, "limit", 50, 1, 200))})
             if u.path == "/api/calendar":
                 return self._calendar()
             if u.path == "/api/openapi":
@@ -2542,21 +2952,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, text, "text/yaml; charset=utf-8")
             if u.path == "/source":
                 return self._source(one)
+        except Ablehnung as a:
+            return self._fehler(a.code, a.grund, a.v, **a.extra)
         except Exception as e:
-            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
-        self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
+            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+        return self._methode_fehlt(u.path, "GET")
 
     def do_HEAD(self):
         self.do_GET()
 
     def do_POST(self):
         if not self._host_ok():
-            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
-                              "text/plain; charset=utf-8")
+            return self._verboten()
         u = urlsplit(self.path)
         app = self.app
-        data = self._body()
         try:
+            data = self._body()
+            if u.path.startswith(API_V1 + "/"):
+                return self._v1("POST", u.path, {}, data)
             if u.path == "/api/token":
                 return self._json(self._save_token(data))
             if u.path == "/api/analytics-refresh":
@@ -2593,10 +3006,15 @@ class Handler(BaseHTTPRequestHandler):
                     resync=bool(data.get("resync")),
                     resync_ordner=(data.get("resync_folders")
                                    if isinstance(data.get("resync_folders"), list) else None))
-                return self._json({"ok": ok, "message": why}, 200 if ok else 409)
+                if not ok:
+                    return self._fehler(409, why)
+                return self._json({"ok": True, "message": why})
             if u.path == "/api/login":
                 ok, daten = app.login_starten()
-                return self._json({"ok": ok, "device": daten}, 200 if ok else 500)
+                if not ok:
+                    return self._fehler(500, "srv.login.failed",
+                                        {"detail": daten.get("error") or ""}, device=daten)
+                return self._json({"ok": True, "device": daten})
             if u.path == "/api/data-dir":
                 # Both paths are keys in app_config.json – which sits fixed
                 # in the home folder, so there is no chicken-and-egg. Empty
@@ -2616,8 +3034,7 @@ class Handler(BaseHTTPRequestHandler):
                             # this along with everything else, and a
                             # refusal must not hide in one small field.
                             app.jobs.log(fehler, "err")
-                            return self._json({"ok": False,
-                                               "message": fehler}, 400)
+                            return self._fehler(400, fehler)
                     else:
                         ziel = vorgabe
                     neu[key] = "" if ziel == vorgabe else str(ziel)
@@ -2631,7 +3048,7 @@ class Handler(BaseHTTPRequestHandler):
                 if anderes:
                     fehler = {"k": "srv.datadir.shared", "v": {"profile": anderes}}
                     app.jobs.log(fehler, "err")
-                    return self._json({"ok": False, "message": fehler}, 400)
+                    return self._fehler(400, fehler)
                 vorher = {key: app.cfg.get(key) or "" for key in neu}
                 app.konfiguriere(lambda cfg: cfg.update(neu))
                 # One line per path that really changed, each naming its
@@ -2655,18 +3072,16 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/profiles":
                 info, fehler = profil_anlegen(data.get("name"))
                 if fehler:
-                    return self._json({"ok": False, "message": fehler}, 400)
+                    return self._fehler(400, fehler)
                 app.jobs.logk("srv.profile.created", "info", name=info["name"])
                 return self._json({"ok": True, "profile": info,
                                    "profiles": profil_status()})
             if u.path == "/api/profile-switch":
                 name = str(data.get("name") or "").strip().lower()
                 if not profile_moeglich():
-                    return self._json({"ok": False, "message": {
-                        "k": "srv.profile.impossible", "v": {}}}, 400)
+                    return self._fehler(400, "srv.profile.impossible")
                 if name not in profil_namen():
-                    return self._json({"ok": False, "message": {
-                        "k": "srv.profile.unknown", "v": {"name": name}}}, 400)
+                    return self._fehler(400, "srv.profile.unknown", {"name": name})
                 port = self.server.server_address[1]
                 if name == PROFIL:
                     return self._json({"ok": True, "name": name, "url": "/"})
@@ -2676,7 +3091,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json({"ok": True, "name": name,
                                        "url": f"http://127.0.0.1:{lauft}/"})
                 if app.jobs.busy:
-                    return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+                    return self._fehler(409, "srv.busy")
                 profil_register_schreiben(zuletzt=name)
                 # The answer first, then the server stops (serve() restarts).
                 self._json({"ok": True, "name": name})
@@ -2690,12 +3105,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._archiv(u.path.rsplit("/", 1)[1], data)
             if u.path == "/api/profile-rename":
                 if app.jobs.busy:
-                    return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+                    return self._fehler(409, "srv.busy")
                 alt = str(data.get("name") or "").strip().lower()
                 neu, fehler = profil_umbenennen(alt, data.get("neu"),
                                                 port=self.server.server_address[1])
                 if fehler:
-                    return self._json({"ok": False, "message": fehler}, 400)
+                    return self._fehler(400, fehler)
                 app.jobs.logk("srv.profile.renamed", "info", old=alt, name=neu)
                 return self._json({"ok": True, "name": neu, "profiles": profil_status()})
             if u.path == "/api/profile-prefs":
@@ -2736,7 +3151,8 @@ class Handler(BaseHTTPRequestHandler):
                     app.status(), str(data.get("log") or ""),
                     str(data.get("hint") or ""),
                     i18n.negotiate(app.cfg.get("language"),
-                                   self.headers.get("Accept-Language"), RES)))
+                                   self.headers.get("Accept-Language"), RES),
+                    cfg=app.cfg))
             if u.path == "/api/ollama-recheck":
                 return self._json(app.ollama(force=True))
             if u.path == "/api/answer":
@@ -2746,9 +3162,166 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/quit":
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return self._json({"ok": True})
+        except Ablehnung as a:
+            return self._fehler(a.code, a.grund, a.v, **a.extra)
         except Exception as e:
-            return self._json({"error": f"{type(e).__name__}: {e}"}, 500)
-        self._send(404, json.dumps({"error": "Unbekannter Pfad"}))
+            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+        return self._methode_fehlt(u.path, self.command or "POST")
+
+    # -- The versioned surface (rest.py) -----------------------------------
+    def _v1(self, methode, pfad, q, data):
+        """Hand a request to the route whose pattern it fits. The table is
+        small enough to walk; when a pattern fits but the method does not,
+        `_methode_fehlt` answers with `Allow`. The body is read once, by
+        the dispatcher, and travels as an argument – reading it again here
+        would wait for bytes that are already gone."""
+        for m, muster, name in ROUTEN_V1:
+            werte = muster_passt(muster, pfad)
+            if m == methode and werte is not None:
+                return getattr(self, name)(werte, q, data)
+        return self._methode_fehlt(pfad, methode)
+
+    def _v1_kennung(self, p):
+        """The {id} of a resource path as a number – a path that names
+        something else names nothing that exists."""
+        try:
+            return int(p["id"])
+        except (KeyError, TypeError, ValueError):
+            raise Ablehnung(404, "srv.case.unknown") from None
+
+
+    def _v1_faelle(self, _p, _q, _data):
+        return self._json({"items": [rest.fall(f) for f in self.app.faelle.faelle()]})
+
+    def _v1_anlegen(self, _p, _q, data):
+        try:
+            neu = self.app.faelle.fall_anlegen(data.get("name"), data.get("description"))
+        except ValueError:
+            raise Ablehnung(400, "srv.case.noname") from None
+        return self._json({"case": rest.fall(self._fall_voll(neu))}, 201,
+                          extra={"Location": f"{API_V1}/cases/{neu}"})
+
+    def _v1_fall(self, p, _q, _data):
+        fall = self.app.faelle.fall(self._v1_kennung(p))
+        if fall is None:
+            raise Ablehnung(404, "srv.case.unknown")
+        self._index_stand(fall)
+        return self._json({"case": rest.fall(fall)})
+
+    def _v1_aendern(self, p, _q, data):
+        """PATCH: the fields the body names, nothing else. `status` opens
+        and closes the case – the action routes of the app's own surface
+        do the same thing under their own names.
+
+        Everything that can be judged is judged before anything changes:
+        a PATCH takes hold whole, or leaves the case as it was. The case
+        book has no transaction across two calls, so the order does the
+        work – opening first, because the fields need the case open,
+        closing last, because nothing follows it.
+        """
+        kennung, buch = self._v1_kennung(p), self.app.faelle
+        fall = buch.fall(kennung)
+        if fall is None:
+            raise Ablehnung(404, "srv.case.unknown")
+        ziel = None
+        if "status" in data:
+            ziel = rest.STATUS_ZURUECK.get(str(data.get("status") or ""))
+            if ziel is None:
+                raise Ablehnung(400, "srv.case.badstatus",
+                                {"status": str(data.get("status") or "")})
+            if ziel == fall["status"]:
+                ziel = None                  # already there: nothing to do
+        felder = "name" in data or "description" in data
+        if "name" in data and not str(data.get("name") or "").strip():
+            raise Ablehnung(400, "srv.case.noname")
+        if felder and fall["status"] != faelle.OFFEN and ziel != faelle.OFFEN:
+            raise Ablehnung(409, "srv.case.closed")
+        try:
+            if ziel == faelle.OFFEN:
+                buch.oeffnen(kennung)
+            if felder:
+                buch.fall_aendern(kennung, data.get("name") if "name" in data else None,
+                                  data.get("description") if "description" in data else None)
+            if ziel is not None and ziel != faelle.OFFEN:
+                buch.schliessen(kennung)
+        except ValueError:
+            raise Ablehnung(400, "srv.case.noname") from None
+        except faelle.FallGeschlossen:
+            raise Ablehnung(409, "srv.case.closed") from None
+        return self._json({"case": rest.fall(self._fall_voll(kennung))})
+
+    def _v1_loeschen(self, p, _q, _data):
+        kennung = self._v1_kennung(p)
+        if self.app.faelle.fall(kennung) is None:
+            raise Ablehnung(404, "srv.case.unknown")
+        self.app.faelle.fall_loeschen(kennung)
+        return self._send(204, b"")
+
+    def _v1_suche(self, _p, q, _data):
+        """The same engine as the page's search, paged the usual way:
+        `limit` and `offset`, and `has_more` instead of a total – the
+        ranking would have to run to the end for a total, and a search
+        across the whole archive is not worth that."""
+        grenze = self._zahl(q, "limit", 20, 1, 100)
+        versatz = self._zahl(q, "offset", 0, 0)
+        # The search history is the page's. A caller says whether this
+        # search belongs in it – `remember`, off unless asked for, because
+        # a script paging through the archive would otherwise fill the
+        # rows the page offers a human. `saved` only counts along with it.
+        merken = str(q.get("remember") or "").strip().lower() in ("1", "true", "yes", "ja")
+        kriterien = dict(q) if merken else {k: v for k, v in q.items() if k != "saved"}
+        res = self._search({**kriterien, "k": str(grenze + 1),
+                            "offset": str(versatz)}, merken=merken)
+        treffer = res.get("results") or []
+        return self._json({"items": treffer[:grenze], "limit": grenze,
+                           "offset": versatz, "has_more": len(treffer) > grenze,
+                           "backend": res.get("backend"),
+                           "semantic": res.get("semantic")})
+
+    def _v1_liste(self, res, schluessel):
+        """A collection answers `items` – one name for every list on this
+        surface, whatever the engine calls its own."""
+        daten = dict(res)
+        daten["items"] = daten.pop(schluessel, [])
+        return self._json(daten)
+
+    def _v1_dateien(self, _p, q, _data):
+        return self._json(self._files(q))
+
+    def _v1_ordner(self, _p, q, _data):
+        return self._v1_liste(self._folders(q), "folders")
+
+    def _v1_dateitypen(self, _p, q, _data):
+        return self._v1_liste(self._filetypes(q), "filetypes")
+
+    def _v1_personen(self, _p, q, _data):
+        return self._v1_liste(self._people(q), "people")
+
+    def _v1_gespraech(self, _p, q, _data):
+        return self._v1_liste(self._thread(q), "messages")
+
+    def _v1_dokument(self, _p, q, _data):
+        return self._json(self._document(q))
+
+    def _v1_fakten(self, _p, q, _data):
+        return self._json(self._detail(q))
+
+    def _v1_kalender(self, _p, _q, _data):
+        return self._calendar()
+
+    def _v1_umgebung(self, _p, _q, _data):
+        return self._json(self.app.umgebung())
+
+    def _v1_bestand(self, _p, _q, _data):
+        return self._json(self.app.bestand())
+
+    def _v1_konfig(self, _p, _q, _data):
+        return self._json({"config": self.app.cfg})
+
+    def _v1_konfig_aendern(self, _p, _q, data):
+        """PATCH: the keys the body names, the rest stays – the same merge
+        the app's own route does, under the method that says so."""
+        return self._json({"config": self._save_config(data)["config"]})
 
     # -- Route implementations --------------------------------------------
     def _bilanz_holen(self, data):
@@ -2763,9 +3336,9 @@ class Handler(BaseHTTPRequestHandler):
         quelle = str(data.get("quelle") or "").strip()
         eintrag = next((e for e in steps_mod.PRUEFUNGEN if e["quelle"] == quelle), None)
         if eintrag is None:
-            return self._json({"ok": False, "message": {"k": "srv.archiv.unknown", "v": {}}}, 400)
+            return self._fehler(400, "srv.archiv.unknown")
         if app.jobs.busy:
-            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+            return self._fehler(409, "srv.busy")
         ordner = eintrag["ordner"]
         bericht = completeness.lesen(state_db.StateDb(BASE / EXPORT_ORDNER[ordner]), quelle) or {}
         anfrage = {**eintrag["lauf"], "index": True, eintrag["anfrage"]: True}
@@ -2785,7 +3358,9 @@ class Handler(BaseHTTPRequestHandler):
             ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True)
         else:
             ok, why = app.launch(anfrage, label='job.holen', sync_now=True)
-        return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+        if not ok:
+            return self._fehler(409, why)
+        return self._json({"ok": True})
 
     def _archiv(self, aktion, data):
         """The archive check's actions (archive_check.py): one source at a
@@ -2799,16 +3374,17 @@ class Handler(BaseHTTPRequestHandler):
         quelle = str(data.get("quelle") or "").strip()
         unterordner = EXPORT_ORDNER.get(quelle)
         if unterordner is None or quelle not in archive_check.PRUEFER:
-            return self._json({"ok": False, "message": {"k": "srv.archiv.unknown", "v": {}}}, 400)
+            return self._fehler(400, "srv.archiv.unknown")
         ordner = BASE / unterordner
         if aktion == "ordner":
             ok = archive_check.ordner_oeffnen(ordner if ordner.is_dir() else BASE)
-            return self._json({"ok": ok, "message": None if ok else
-                               {"k": "srv.archiv.open.fail", "v": {}}}, 200 if ok else 500)
+            if not ok:
+                return self._fehler(500, "srv.archiv.open.fail")
+            return self._json({"ok": True})
         if aktion not in archive_check.AKTIONEN and aktion != "nachholen":
-            return self._json({"error": "Unbekannter Pfad"}, 404)
+            return self._fehler(404, "srv.notfound", {"path": "/api/archiv/" + aktion})
         if app.jobs.busy:
-            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+            return self._fehler(409, "srv.busy")
         if not ordner.is_dir() or (aktion == "neu-aufbauen"
                                    and not archive_check.beschaedigte(ordner)):
             return self._json({"ok": True, "message": {"k": "srv.archiv.nothing", "v": {}}})
@@ -2828,7 +3404,9 @@ class Handler(BaseHTTPRequestHandler):
                                  label='job.archiv.nachholen', sync_now=True,
                                  archiv={"quelle": quelle},
                                  nachholen={"quelle": quelle, "liste": str(liste)})
-            return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+            if not ok:
+                return self._fehler(409, why)
+            return self._json({"ok": True})
         anfrage = {"archiv_" + aktion.replace("-", "_"): True}
         if aktion == "neu-aufbauen":
             anfrage.update({quelle: True, "index": True})
@@ -2837,7 +3415,9 @@ class Handler(BaseHTTPRequestHandler):
         ok, why = app.launch(anfrage, label='job.archiv.' + aktion,
                              sync_now=aktion == "neu-aufbauen",
                              archiv={"quelle": quelle, "arten": arten})
-        return self._json({"ok": ok, "message": None if ok else why}, 200 if ok else 409)
+        if not ok:
+            return self._fehler(409, why)
+        return self._json({"ok": True})
 
     def _page(self):
         """Serve the interface together with its strings.
@@ -2862,15 +3442,14 @@ class Handler(BaseHTTPRequestHandler):
     def _save_token(self, data):
         token = normalize_token(data.get("token"))
         if not token:
-            return {"ok": False, "message": {"k": "srv.token.empty", "v": {}}}
+            raise Ablehnung(400, "srv.token.empty")
         if len(token) < 40:
-            return {"ok": False, "message": {"k": "srv.token.short", "v": {}}}
+            raise Ablehnung(400, "srv.token.short")
         write_token(token)
         self.app.jobs.token_expired = False
         st = token_status(token, needed=self.app.selected_categories())
         if st["expired"]:
-            return {"ok": False, "token": st,
-                    "message": {"k": "srv.token.stale", "v": {}}}
+            raise Ablehnung(400, "srv.token.stale", token=st)
         msg = ({"k": "srv.token.saved.scopes", "v": {"list": ", ".join(st["missing"])}}
                if st["missing"] else {"k": "srv.token.saved", "v": {}})
         self.app.jobs.log(msg, "warn" if st["missing"] else "ok")
@@ -2905,6 +3484,9 @@ class Handler(BaseHTTPRequestHandler):
                                    # 0 = never re-read the chat comments.
                                    ("planner_sweep_hours", 0, 8760),
                                    ("search_results", 5, 100),
+                                   # Below five seconds the page would ask
+                                   # more often than anything can change.
+                                   ("status_poll_seconds", 5, 600),
                                    # 0 means: userflow recording off.
                                    ("userflow_actions", 0, 50),
                                    ("runs_retention_months", 1, 120),
@@ -3044,11 +3626,14 @@ class Handler(BaseHTTPRequestHandler):
         action = str(data.get("action") or "").lower()
         if action == "start":
             ok, why = self.app.mcp.start(self.app.cfg)
-            return {"ok": ok, "message": why, "mcp": self.app.mcp.status(self.app.cfg)}
+            stand = self.app.mcp.status(self.app.cfg)
+            if not ok:
+                raise Ablehnung(409, why, mcp=stand)
+            return {"ok": True, "message": why, "mcp": stand}
         if action == "stop":
             self.app.mcp.stop()
             return {"ok": True, "mcp": self.app.mcp.status(self.app.cfg)}
-        return {"ok": False, "message": {"k": "srv.mcp.badaction", "v": {}}}
+        raise Ablehnung(400, "srv.mcp.badaction")
 
     def _answer(self, data):
         """Have an answer worded from the hits of a search.
@@ -3063,15 +3648,15 @@ class Handler(BaseHTTPRequestHandler):
         """
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return self._json({"error": self.app.search.error}, 503)
+            return self._fehler(503, self.app.search.error)
         oll = self.app.ollama()
         if not (oll["running"] and oll["has_chat_model"]):
-            return self._json({"error": {"k": "srv.answer.nomodel",
-                                         "v": {"model": self.app.cfg["chat_model"]}}}, 503)
+            return self._fehler(503, "srv.answer.nomodel",
+                                {"model": self.app.cfg["chat_model"]})
 
         query = str(data.get("q") or "").strip()
         if not query:
-            return self._json({"error": {"k": "srv.answer.noquery", "v": {}}}, 400)
+            return self._fehler(400, "srv.answer.noquery")
         k = max(1, min(int(self.app.cfg.get("answer_sources", 8)), 20))
         res = mod.search_messages(
             query=query, person=str(data.get("person") or ""),
@@ -3079,7 +3664,7 @@ class Handler(BaseHTTPRequestHandler):
             source=str(data.get("source") or "all"), k=k, preview_chars=0)
         treffer = res.get("results") or []
         if not treffer:
-            return self._json({"error": {"k": "srv.answer.nohits", "v": {}}}, 200)
+            return self._fehler(404, "srv.answer.nohits")
 
         # Full text per hit: the preview in the list is too short to answer
         # anything from.
@@ -3115,16 +3700,19 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass          # window closed or aborted – no reason for noise
 
-    def _search(self, q):
+    def _search(self, q, merken=True):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "hits": [], "count": 0}
+            raise Ablehnung(503, self.app.search.error, hits=[], count=0)
         k = faelle.kriterien(q)
         mod.STATE["internal_domains"] = self._interne_domains()
         kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                   source=k["source"],
-                  k=min(int(q.get("k", 20) or 20), 100),
-                  offset=max(int(q.get("offset", 0) or 0), 0),
+                  # `limit` is the name everywhere else in the API; `k` is
+                  # the search's own and stays. One above the largest page
+                  # is allowed: that is how /api/v1/search sees has_more.
+                  k=self._zahl(q, "k", q.get("limit") or 20, 1, 101),
+                  offset=self._zahl(q, "offset", 0, 0),
                   only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
                   party=k["party"],
                   # The "Cases" filter: only what one case – or one of its
@@ -3135,15 +3723,19 @@ class Handler(BaseHTTPRequestHandler):
             res = mod.search_messages(query=k["q"], mode=q.get("mode", "auto"), **kw)
         else:
             res = mod.browse_messages(**kw)
+        if res.get("error"):
+            # The engine's own refusals: a filter naming an unknown case or
+            # folder, a mode this index cannot rank, the embedder failing.
+            raise Ablehnung(409, res["error"], hits=[], count=0)
         res["semantic"] = bool(mod.STATE.get("semantic"))
-        if kw["offset"] == 0 and not res.get("error"):
+        if kw["offset"] == 0 and merken:
             # The first page of a search is the search: the history keeps
             # its criteria (never its hits) when the setting allows, and a
             # saved search that was run remembers when and how many.
             if historie_tage(self.app.cfg) != 0:
                 self.app.faelle.suche_merken(k, res.get("count", 0))
             try:
-                gespeichert = int(q.get("saved") or 0)
+                gespeichert = self._zahl(q, "saved", 0, 0)
             except ValueError:
                 gespeichert = 0
             if gespeichert:
@@ -3165,7 +3757,7 @@ class Handler(BaseHTTPRequestHandler):
         page had them, paged through the same engine up to `grenze`."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return None, self.app.search.error
+            raise Ablehnung(503, self.app.search.error)
         mod.STATE["internal_domains"] = self._interne_domains()
         kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                   source=k["source"], only_gone=k["gone"], folder=k["folder"],
@@ -3218,13 +3810,13 @@ class Handler(BaseHTTPRequestHandler):
                 fall = data.get("fall")
                 fall_id = int(fall) if fall not in (None, "", 0) else None
                 if fall_id is not None and buch.fall(fall_id) is None:
-                    return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+                    return self._fehler(404, "srv.case.unknown")
                 neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("kriterien")), fall_id,
                                      self._ordner_aus(data))
                 return self._json({"ok": True, "id": neu, "search": buch.gespeichert(neu)})
             if was == "umbenennen":
                 if not buch.umbenennen(kennung, data.get("name")):
-                    return self._json({"ok": False, "message": {"k": "srv.search.unknown", "v": {}}}, 404)
+                    return self._fehler(404, "srv.search.unknown")
                 return self._json({"ok": True})
             if was == "loeschen":
                 return self._json({"ok": buch.loeschen(kennung)})
@@ -3232,30 +3824,27 @@ class Handler(BaseHTTPRequestHandler):
                 fall = data.get("fall")
                 fall_id = int(fall) if fall not in (None, "", 0) else None
                 if fall_id is not None and buch.fall(fall_id) is None:
-                    return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+                    return self._fehler(404, "srv.case.unknown")
                 if not buch.anhaengen(kennung, fall_id, self._ordner_aus(data)):
-                    return self._json({"ok": False, "message": {"k": "srv.search.unknown", "v": {}}}, 404)
+                    return self._fehler(404, "srv.search.unknown")
                 return self._json({"ok": True})
         except ValueError:
-            return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
+            return self._fehler(400, "srv.case.noname")
         except faelle.FallGeschlossen:
-            return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
+            return self._fehler(409, "srv.case.closed")
         except faelle.KeinOrdner:
-            return self._json({"ok": False, "message": {"k": "srv.case.nofolder", "v": {}}}, 404)
-        return self._json({"error": "Unbekannter Pfad"}, 404)
+            return self._fehler(404, "srv.case.nofolder")
+        return self._fehler(404, "srv.notfound", {"path": "/api/suche/" + was})
 
     # -- cases -------------------------------------------------------------
     def _faelle_lesen(self, was, q):
         buch = self.app.faelle
         if was == "faelle":
             return {"cases": buch.faelle(), "export_dir": str(fall_export_basis(self.app.cfg))}
-        try:
-            kennung = int(q.get("id") or 0)
-        except ValueError:
-            kennung = 0
+        kennung = self._zahl(q, "id", 0)
         fall = buch.fall(kennung)
         if fall is None:
-            return {"error": {"k": "srv.case.unknown", "v": {}}}
+            raise Ablehnung(404, "srv.case.unknown")
         if was == "fall":
             self._index_stand(fall)
             return {"case": fall}
@@ -3338,7 +3927,7 @@ class Handler(BaseHTTPRequestHandler):
         buch = self.app.faelle
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return 0, {"k": "srv.case.nothread", "v": {}}
+            raise Ablehnung(503, self.app.search.error)
         fall = buch.fall(kennung)
         con = mod._db()
         try:
@@ -3379,7 +3968,7 @@ class Handler(BaseHTTPRequestHandler):
                 neu = buch.fall_anlegen(data.get("name"), data.get("beschreibung"))
                 return self._json({"ok": True, "id": neu, "case": self._fall_voll(neu)})
             if buch.fall(kennung) is None:
-                return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+                return self._fehler(404, "srv.case.unknown")
             if was == "aendern":
                 buch.fall_aendern(kennung, data.get("name") if "name" in data else None,
                                   data.get("beschreibung") if "beschreibung" in data else None)
@@ -3406,14 +3995,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "ordner": ordner, "case": self._fall_voll(kennung)})
             elif was == "bemerkung":
                 if not buch.bemerkung_setzen(kennung, data.get("key"), data.get("text")):
-                    return self._json({"ok": False, "message": {"k": "srv.case.noitem", "v": {}}}, 404)
+                    return self._fehler(404, "srv.case.noitem")
             elif was == "thread":
                 if buch.fall(kennung)["status"] != faelle.OFFEN:
                     raise faelle.FallGeschlossen()
                 keys = [str(k) for k in (data.get("keys") or []) if isinstance(k, str)]
                 neu, fehler = self._thread_holen(kennung, keys)
                 if fehler:
-                    return self._json({"ok": False, "message": fehler}, 409)
+                    return self._fehler(409, fehler)
                 return self._json({"ok": True, "added": neu, "case": self._fall_voll(kennung)})
             elif was == "ordner-umbenennen":
                 buch.ordner_umbenennen(kennung, self._ordner_aus(data), data.get("name"))
@@ -3423,7 +4012,7 @@ class Handler(BaseHTTPRequestHandler):
                 k = faelle.kriterien(data.get("kriterien"))
                 treffer, fehler = self._alle_treffer(k)
                 if fehler:
-                    return self._json({"ok": False, "message": fehler}, 409)
+                    return self._fehler(409, fehler)
                 liste_id, neu = buch.liste_anlegen(kennung, k, treffer, ordner_id=self._ordner_aus(data))
                 return self._json({"ok": True, "liste": liste_id, "hits": len(treffer), "added": neu})
             elif was == "liste-loeschen":
@@ -3445,23 +4034,24 @@ class Handler(BaseHTTPRequestHandler):
                 if pfad is None or not pfad.is_dir():
                     pfad = fall_export_basis(app.cfg)
                     if not pfad.is_dir():
-                        return self._json({"ok": False, "message": {"k": "srv.case.noexport", "v": {}}}, 404)
+                        return self._fehler(404, "srv.case.noexport")
                 ok = archive_check.ordner_oeffnen(pfad)
-                return self._json({"ok": ok, "path": str(pfad), "message": None if ok else
-                                   {"k": "srv.archiv.open.fail", "v": {}}}, 200 if ok else 500)
+                if not ok:
+                    return self._fehler(500, "srv.archiv.open.fail", path=str(pfad))
+                return self._json({"ok": True, "path": str(pfad)})
             else:
-                return self._json({"error": "Unbekannter Pfad"}, 404)
+                return self._fehler(404, "srv.notfound", {"path": "/api/faelle/" + was})
             return self._json({"ok": True, "case": self._fall_voll(kennung)})
         except ValueError as e:
             if str(e) == "exists":
-                return self._json({"ok": False, "message": {"k": "srv.case.folder.exists", "v": {}}}, 409)
-            return self._json({"ok": False, "message": {"k": "srv.case.noname", "v": {}}}, 400)
+                return self._fehler(409, "srv.case.folder.exists")
+            return self._fehler(400, "srv.case.noname")
         except faelle.FallGeschlossen:
-            return self._json({"ok": False, "message": {"k": "srv.case.closed", "v": {}}}, 409)
+            return self._fehler(409, "srv.case.closed")
         except faelle.KeinFall:
-            return self._json({"ok": False, "message": {"k": "srv.case.unknown", "v": {}}}, 404)
+            return self._fehler(404, "srv.case.unknown")
         except faelle.KeinOrdner:
-            return self._json({"ok": False, "message": {"k": "srv.case.nofolder", "v": {}}}, 404)
+            return self._fehler(404, "srv.case.nofolder")
 
     def _fall_export(self, kennung):
         """The export as a run of its own (case_export.py): one ZIP, named
@@ -3470,41 +4060,45 @@ class Handler(BaseHTTPRequestHandler):
         app = self.app
         fall = app.faelle.fall(kennung)
         if app.jobs.busy:
-            return self._json({"ok": False, "message": {"k": "srv.busy", "v": {}}}, 409)
+            return self._fehler(409, "srv.busy")
         basis = fall_export_basis(app.cfg)
         try:
             basis.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            return self._json({"ok": False, "message": {"k": "srv.case.exportdir", "v": {"error": str(e)}}}, 400)
+            return self._fehler(400, "srv.case.exportdir", {"error": str(e)})
         ziel = case_export.zielordner(basis, fall["name"])
         ok, why = app.launch({"fall_export": True}, label="job.case_export",
                              fall_export={"faelle": str(HEIM / faelle.DB_NAME), "fall": kennung,
                                           "ziel": str(ziel),
                                           "lang": app.ui_lang or i18n.negotiate(app.cfg.get("language"), None, RES),
                                           "res": str(RES)})
-        return self._json({"ok": ok, "message": None if ok else why,
-                           "path": str(ziel.with_suffix(".zip"))}, 200 if ok else 409)
+        if not ok:
+            return self._fehler(409, why)
+        return self._json({"ok": True, "path": str(ziel.with_suffix(".zip"))})
 
     def _similar(self, q):
         """Similar to one hit – needs no Ollama (see mcp_server)."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "results": [], "count": 0}
-        try:
-            cid = int(q.get("cid", 0))
-        except (TypeError, ValueError):
-            return {"error": {"k": "srv.badindex", "v": {"error": "cid"}},
-                    "results": [], "count": 0}
-        return mod.similar_messages(cid=cid,
-                                    k=min(int(q.get("k", 20) or 20), 100))
+            raise Ablehnung(503, self.app.search.error, results=[], count=0)
+        # The numbers first: an unusable one is the caller's mistake, and
+        # saying so must not depend on the engine being there.
+        cid = self._zahl(q, "cid", 0)
+        wieviele = self._zahl(q, "k", q.get("limit") or 20, 1, 100)
+        res = mod.similar_messages(cid=cid, k=wieviele)
+        if res.get("error"):
+            raise Ablehnung(409, res["error"], results=[], count=0)
+        return res
 
     def _thread(self, q):
         """All messages of one conversation – the same evaluation as in MCP."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "messages": [], "count": 0}
+            raise Ablehnung(503, self.app.search.error, messages=[], count=0)
         res = mod.get_thread(thread=q.get("key", ""),
-                             limit=min(int(q.get("limit", 50) or 50), 200))
+                             limit=self._zahl(q, "limit", 50, 1, 200))
+        if res.get("error"):
+            raise Ablehnung(409, res["error"], messages=[], count=0)
         # Every message says which cases it sits in – the add-to-case
         # window counts from that how much of the conversation is there.
         marken = getattr(mod, "_mit_faellen", None)
@@ -3516,9 +4110,9 @@ class Handler(BaseHTTPRequestHandler):
         """Which mailbox folders are in the archive – for the filter."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "folders": []}
+            raise Ablehnung(503, self.app.search.error, folders=[])
         return mod.list_folders(contains=q.get("contains", ""),
-                                limit=min(int(q.get("limit", 300) or 300), 1000),
+                                limit=self._zahl(q, "limit", 300, 1, 1000),
                                 source=q.get("source", ""))
 
     def _ordnerplan(self, data):
@@ -3550,7 +4144,7 @@ class Handler(BaseHTTPRequestHandler):
                 ".ics" if quelle == "calendar" else ".eml")
         daten = folders.lade(ordner, datei)
         if not daten:
-            return {"ok": False, "leer": True}
+            raise Ablehnung(404, "srv.plan.nolist", leer=True)
         if quelle == "onedrive":
             regeln = folders.lies_regeln(
                 data.get("onedrive_rules")
@@ -3573,7 +4167,7 @@ class Handler(BaseHTTPRequestHandler):
         wurzel = BASE / ONENOTE_DIR
         daten = folders.lade(wurzel, folders.NOTIZBUECHER)
         if not daten:
-            return {"ok": False, "leer": True}
+            raise Ablehnung(404, "srv.plan.nolist", leer=True)
         regeln = notizbuchregeln(self.app.cfg, roh)
         wurzeln = {e["pfad"].split("/")[0] for e in daten.get("ordner", [])}
         if wurzel.is_dir():
@@ -3595,7 +4189,7 @@ class Handler(BaseHTTPRequestHandler):
         wurzel = BASE / TEAMS_DIR
         daten = folders.lade(wurzel, folders.DATEI)
         if not daten:
-            return {"ok": False, "leer": True}
+            raise Ablehnung(404, "srv.plan.nolist", leer=True)
         regeln = teamsregeln(self.app.cfg, roh)
         archiv = {}
         if wurzel.is_dir():
@@ -3616,7 +4210,7 @@ class Handler(BaseHTTPRequestHandler):
         wurzel = BASE / TODO_DIR
         daten = folders.lade(wurzel, folders.DATEI)
         if not daten:
-            return {"ok": False, "leer": True}
+            raise Ablehnung(404, "srv.plan.nolist", leer=True)
         regeln = todoregeln(self.app.cfg, roh)
         archiv = {}
         if wurzel.is_dir():
@@ -3657,7 +4251,7 @@ class Handler(BaseHTTPRequestHandler):
                     eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}",
                                       **({"urls": urls} if urls else {})})
         if not eintraege:
-            return {"ok": False, "leer": True}
+            raise Ablehnung(404, "srv.plan.nolist", leer=True)
         daten = {"ordner": eintraege, "abgeglichen": stand}
         regeln = sharepointregeln(self.app.cfg, roh)
         plan = folders.plan(wurzel, regeln, daten, None)
@@ -3672,7 +4266,7 @@ class Handler(BaseHTTPRequestHandler):
         """One level of the mirrored file tree, sizes taken from disk."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "roots": []}
+            raise Ablehnung(503, self.app.search.error, roots=[])
         r = mod.list_files(root=q.get("root", ""), path=q.get("path", ""))
         # The root->directory knowledge lives in one place: the resolver's
         # STATE, which /source uses too – no second hand-copied map here.
@@ -3688,12 +4282,12 @@ class Handler(BaseHTTPRequestHandler):
     def _filetypes(self, q):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "filetypes": []}
+            raise Ablehnung(503, self.app.search.error, filetypes=[])
         # Hiding happens here and not in the tool: list_filetypes is meant
         # to say what is in the archive – to Claude as well. The trimming is
         # a question of the interface, not of the corpus. Hence fetch
         # everything first, then hide, then cut to the requested number.
-        wieviele = min(int(q.get("limit", 40) or 40), 200)
+        wieviele = self._zahl(q, "limit", 40, 1, 200)
         aus = set(self.app.cfg.get("filetype_hidden") or [])
         r = mod.list_filetypes(limit=200, source=q.get("source", ""))
         liste = [e for e in r.get("filetypes", []) if e["type"] not in aus]
@@ -3705,18 +4299,21 @@ class Handler(BaseHTTPRequestHandler):
     def _people(self, q):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error, "people": []}
+            raise Ablehnung(503, self.app.search.error, people=[])
         return mod.list_people(source=q.get("source", "all"),
                                contains=q.get("contains", ""),
-                               limit=min(int(q.get("limit", 50) or 50), 200))
+                               limit=self._zahl(q, "limit", 50, 1, 200))
 
     def _document(self, q):
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error}
-        return mod.get_document(uid=q.get("uid", ""),
-                                context_before=int(q.get("before", 0) or 0),
-                                context_after=int(q.get("after", 0) or 0))
+            raise Ablehnung(503, self.app.search.error)
+        res = mod.get_document(uid=q.get("uid", ""),
+                               context_before=self._zahl(q, "before", 0, 0, 20),
+                               context_after=self._zahl(q, "after", 0, 0, 20))
+        if res.get("error"):
+            raise Ablehnung(404, res["error"])
+        return res
 
     def _detail(self, q):
         """The facts the hit's detail shows beyond the hit – per kind of
@@ -3724,14 +4321,14 @@ class Handler(BaseHTTPRequestHandler):
         page draws only the keys that come back."""
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return {"error": self.app.search.error}
+            raise Ablehnung(503, self.app.search.error)
         con = mod._db()
         try:
             row, text = mod._message_text(con, q.get("uid", ""))
         finally:
             con.close()
         if row is None:
-            return {"error": {"k": "srv.detail.none", "v": {}}}
+            raise Ablehnung(404, "srv.detail.none")
         ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
         return detail.fakten(row, text, ziel, mod.STATE)
 
@@ -3744,8 +4341,7 @@ class Handler(BaseHTTPRequestHandler):
         """
         roh, gz = self.app.calendar_payload()
         if roh is None:
-            return self._json({"error": {"k": "cal.missing", "v": {}},
-                               "recs": []}, 404)
+            return self._fehler(404, "cal.missing", recs=[])
         akzeptiert = "gzip" in (self.headers.get("Accept-Encoding") or "").lower()
         if akzeptiert:
             return self._send(200, gz, "application/json; charset=utf-8",
@@ -3761,10 +4357,10 @@ class Handler(BaseHTTPRequestHandler):
         """
         mod = self.app.search.ensure(self.app.cfg)
         if mod is None:
-            return self._send(503, "no index loaded", "text/plain; charset=utf-8")
+            return self._fehler(503, self.app.search.error)
         target, err = mod._resolve_source(q.get("root", ""), q.get("path", ""))
         if err:
-            return self._send(404, err, "text/plain; charset=utf-8")
+            return self._fehler(404, err)
         # Teams exports are made for reading and stay in the browser. All
         # the rest belongs to the program that knows it: an .eml as raw text
         # in a browser window is of use to nobody, in the mail client it is
@@ -3867,14 +4463,19 @@ def laeuft_bereits(port, host="127.0.0.1", timeout=1.5, profil=None):
     try:
         with urllib.request.urlopen(f"http://{host}:{port}/api/status",
                                     timeout=timeout) as r:
+            # The header says whose answer this is – every one of ours
+            # carries it, and no other server on a free port will.
+            unser = r.headers.get("X-Munimentum-Api")
             daten = json.loads(r.read().decode("utf-8"))
     except Exception:
+        return False
+    if not unser:
         return False
     # Something entirely different could be listening on the port; only
     # our own answer counts as "already running" – and only with the same
     # profile: another profile's instance keeps its port, this one takes
     # the next free one.
-    if not (isinstance(daten, dict) and "data_dir" in daten and "token" in daten):
+    if not (isinstance(daten, dict) and "token" in daten and "jobs" in daten):
         return False
     if profil is not None:
         laufend = (daten.get("profile") or {}).get("name") or settings.STANDARD_PROFIL
@@ -3972,15 +4573,20 @@ class Wahl(Handler):
     outlive shutdown() and keep answering from the old server while the
     app already holds the port, and the page polling on it would wait
     forever."""
-    ZU = {"Connection": "close"}
+    ZUSATZ = {"Connection": "close"}
+    ROUTEN = {
+        "/api/profiles": ("GET",),
+        "/api/status": ("GET",),
+        "/api/profile-open": ("POST",),
+    }
 
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj, ensure_ascii=False), extra=self.ZU)
+    def _erlaubt(self, pfad):
+        """Every other path is the chooser's own page – it has no 404."""
+        return set(self.ROUTEN.get(pfad, ())) | {"GET", "HEAD", "OPTIONS"}
 
     def do_GET(self):
         if not self._host_ok():
-            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
-                              "text/plain; charset=utf-8", extra=self.ZU)
+            return self._verboten()
         u = urlsplit(self.path)
         if u.path == "/api/profiles":
             return self._json(profil_status())
@@ -3988,22 +4594,20 @@ class Wahl(Handler):
             # Not the app yet: the page polls this until the app answers.
             return self._json({"chooser": True})
         code = i18n.negotiate(None, self.headers.get("Accept-Language"), RES)
-        return self._send(200, profil_seite(code), "text/html; charset=utf-8",
-                          extra=self.ZU)
+        return self._send(200, profil_seite(code), "text/html; charset=utf-8")
 
     def do_POST(self):
         if not self._host_ok():
-            return self._send(403, "Nur über http://127.0.0.1 erreichbar.",
-                              "text/plain; charset=utf-8", extra=self.ZU)
+            return self._verboten()
         u = urlsplit(self.path)
-        data = self._body()
-        if not isinstance(data, dict):
-            data = {}
+        try:
+            data = self._body()
+        except Ablehnung as a:
+            return self._fehler(a.code, a.grund, a.v, **a.extra)
         if u.path == "/api/profile-open":
             name = str(data.get("name") or "").strip().lower()
             if name not in profil_namen():
-                return self._json({"ok": False, "message": {
-                    "k": "srv.profile.unknown", "v": {"name": name}}}, 400)
+                return self._fehler(400, "srv.profile.unknown", {"name": name})
             profil_register_schreiben(zuletzt=name,
                                       ohne_nachfrage=bool(data.get("ohne_nachfrage")))
             antwort = {"ok": True}
@@ -4016,7 +4620,7 @@ class Wahl(Handler):
             self._json(antwort)
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return None
-        return self._json({"error": "Unbekannter Pfad"}, 404)
+        return self._methode_fehlt(u.path, self.command or "POST")
 
 
 def chooser_server(port, host="127.0.0.1"):

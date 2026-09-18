@@ -1,36 +1,117 @@
 openapi: 3.1.0
 info:
   title: Munimentum HTTP API
-  version: 11.3.0
+  version: 12.0.0
+  license: { name: Apache-2.0, identifier: Apache-2.0 }
+  contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
     The API between the Munimentum page and its backend, served on
     `127.0.0.1` only. There is **no authentication**: anything on this
     machine that sends a correct `Host` header can read the whole archive.
     The `Host` header must name the bound address (DNS-rebinding guard);
-    otherwise every request is answered with `403` and a plain-text body.
+    otherwise every request is answered with `403`.
+
+    Two surfaces live here. **`/api/...`** is the app's own: its routes
+    name actions (`/api/faelle/anlegen`), everything that changes anything
+    is a POST, and where the data is German the keys are – the page and
+    the app share one vocabulary, which inside the app is worth more than
+    conformity. **`/api/v1/...`** is for everyone else: resources, the
+    method says what happens, English names throughout, no deprecated
+    fields. It carries cases and the search so far and grows per release;
+    the page moves over resource by resource – its search already has –
+    and the action routes go in 13.0.
 
     Conventions used throughout:
     * Responses are JSON (`application/json; charset=utf-8`) unless a route
       says otherwise; every response carries `Cache-Control: no-store` and
       `X-Content-Type-Options: nosniff` (exceptions: `/api/answer`, `/source`).
-    * Many `message`/`error` values are i18n objects `{"k": key, "v": vars}`
-      that the page translates; some are plain strings — schemas use `oneOf`.
+    * **Every refusal has one shape** (`Error`), whatever the route and the
+      status: `"ok": false` and an `error` with `k` and `v` – the text key
+      and its placeholders, which the page renders in the user's language –
+      and `text`, the finished sentence for everyone who has no strings of
+      their own. **`text` is always English**, whatever the app is set to:
+      it ends up in scripts, logs and bug reports, where one language beats
+      a text that changes with a setting. A refusal keeps the fields its
+      route's answer would carry (an empty list, the token's state), so a
+      caller can read the body either way. `message` repeats the reason the
+      way 11.3 sent it and goes away with 13.0.
+    * The status says what happened: `400` the request, `403` the `Host`,
+      `404` a thing that is not there, `409` a state that says no (a run,
+      a closed case, an index that cannot answer this), `503` no index
+      loaded at all, `500` an uncaught error.
+    * A successful answer never carries `error`; the action routes answer
+      `{"ok": true, …}`, read routes their data. On `/api/v1` a collection
+      is always `items`, whatever the thing is called.
+    * A refusal is a **problem detail** (RFC 9457): `type` (a URN naming
+      the text key, or `about:blank`), `title` (the status's phrase),
+      `status`, `detail` – the English sentence – and `instance`, the path
+      asked for. `application/problem+json` says so. `ok` and `error` are
+      members of our own, for the page.
+    * Every route answers **`OPTIONS`** with `Allow`, and a request whose
+      method the path does not serve gets **`405`** with `Allow` – not a
+      404. No CORS headers: the server serves one origin, its own page.
+    * A body has to be JSON and has to say so: `415` otherwise, `400` when
+      it is not valid JSON or not an object, `413` above 4 MB. An absent
+      or empty body stays fine – every route falls back to its defaults.
+      A number in the query that is not one is `400` too (`srv.badparam`).
     * Every POST route tolerates an absent or empty body and falls back to
       its defaults; body fields act on **presence**, not truthiness.
-    * Unknown paths return `404` with `{"error": "Unbekannter Pfad"}`; an
-      uncaught error inside a route returns `500` with
-      `{"error": "<Type>: <message>"}`.
     * `HEAD` is answered for every GET route (headers only).
+
+    Reading the file:
+    * Every operation carries a tag naming its door – **Archive**,
+      **Explore**, **Cases** – or **App**, and an `operationId`.
+    * `x-needs-index: true` marks a route that answers `503` with
+      `srv.noindex` while no index is loaded; `x-starts-run: true` marks a
+      route that starts a run – it shows in the run window and in
+      `/api/runs`, and is refused with `409` while another run is on.
+    * Keys and values in German (`faelle`, `ordner`, `offen`/`zu`) are the
+      data's own names; the descriptions say what they mean.
+    * `403` (wrong `Host`), `405` (wrong method) and `500` (uncaught
+      error) can answer every route, `415` every route with a body; they
+      are listed once under `components/responses` and referenced
+      everywhere.
+    * Every answer carries two headers: `X-Munimentum-Version`, the
+      program and the commit it was built from (`11.4.0 (a1b2c3d)`), and
+      `X-Munimentum-Api`, the contract it answered under (`v1`). They
+      version different things and move at different speeds – the path
+      changes only when the shape breaks, the program with every release –
+      which is why the program's version is not in the path. `/api/status`
+      reports both as well (`update.current`, `update.build`,
+      `api_version`), and `info.version` above names the release this
+      description belongs to.
+    * `503` carries `Retry-After`; nothing here waits on a remote service,
+      what is missing is an index, and that takes a run.
+    * The interface speaks `de`, `en` and `fr` – the setting `language`,
+      else `Accept-Language`. That is the page's language and the log's,
+      never the error texts': those are English throughout.
 
     This file is served by `GET /api/openapi` and lives in the repository as
     `openapi.yaml`; it is updated in the same commit as any API change.
+externalDocs:
+  description: The README – what the app does, and where the data goes.
+  url: https://github.com/n-schilling/munimentum#readme
 servers:
-  - url: http://127.0.0.1:8700
-    description: Default port; the app tries the next twelve if it is taken.
+  - url: http://127.0.0.1:{port}
+    description: The app's port – 8700 by default; it tries the next twelve when that one is taken, and a second profile started alongside takes the next free one.
+    variables:
+      port: { default: "8700" }
+security: []
+tags:
+  - name: Archive
+    description: Building the archive and judging it – runs, the schedule, the completeness balance, the archive check, Insights.
+  - name: Explore
+    description: Getting data out – the search, a hit's detail, calendar, contacts, files, the history and the saved searches.
+  - name: Cases
+    description: What someone keeps around one matter – cases, folders, items, notes, stored lists, exports.
+  - name: App
+    description: State, access, settings, profiles and the app itself.
 
 paths:
   /:
     get:
+      tags: [App]
+      operationId: page
       summary: The single-page interface
       description: |
         The whole UI as one HTML page, with the language strings and the
@@ -42,17 +123,29 @@ paths:
           description: The page.
           content:
             text/html: {}
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/status:
     get:
+      tags: [App]
+      operationId: getStatus
       summary: Complete application state
       description: |
         Polled by the page. Carries token state, Ollama state, index and
         export inventories, the job runner snapshot (`jobs.seq` is the log
-        cursor), MCP state, the full configuration, storage paths, update
-        info, auth state and folder summaries. While the chooser holds the
-        port (more than one profile, none named at start) the answer is
-        `{"chooser": true}` instead – the page polls until the app answers.
+        cursor), MCP state, update info and auth state.
+
+        **Only what changes on its own.** Since 12.0 three things that do
+        not are gone from here, because this answer is polled every few
+        seconds and a poll should not keep repeating them: the settings
+        (`/api/v1/config`), the paths, defaults and client snippet
+        (`/api/v1/app`) and what the sources hold, folder names and all
+        (`/api/v1/inventory`). That took the answer from about 8 KB to
+        under 2.5. While the chooser holds the port (more than one
+        profile, none named at start) the answer is `{"chooser": true}`
+        instead – the page polls until the app answers.
       responses:
         "200":
           description: The state object.
@@ -61,57 +154,53 @@ paths:
               schema:
                 type: object
                 properties:
-                  token: { $ref: "#/components/schemas/TokenStatus" }
-                  ollama: { $ref: "#/components/schemas/OllamaStatus" }
-                  ollama_hint: { type: object }
+                  token: { $ref: "#/components/schemas/TokenState" }
+                  ollama: { $ref: "#/components/schemas/OllamaState" }
                   store:
                     type: object
-                    description: Index state (dir, exists, chunks, messages, features, semantic, built_at, model).
+                    description: |
+                      What the search can do right now: `exists`, `semantic`,
+                      `features` and `built_at`. How much the index holds is
+                      in /api/analytics, where the rest of the inventory is.
+                    properties:
+                      exists: { type: boolean }
+                      semantic: { type: boolean }
+                      features: { type: array, items: { type: string } }
+                      built_at: { type: [string, "null"] }
                   calendar:
                     type: object
                     properties:
-                      exists: { type: boolean }
-                      built_at: { type: [string, "null"] }
-                  exports:
-                    type: object
-                    description: Per source (teams, outlook, onedrive, sharepoint, pages, planner, todo, onenote) dir/exists/last_run.
+                      built_at: { type: [string, "null"], description: "Null means the calendar step has not run." }
                   jobs: { $ref: "#/components/schemas/JobsState" }
-                  mcp: { $ref: "#/components/schemas/McpState" }
-                  config:
+                  mcp:
                     type: object
-                    description: The complete app_config.json as held in memory.
-                  schedule_next: { type: [string, "null"] }
-                  schedule_enabled: { type: boolean }
+                    description: "Whether the endpoint runs, its address, and why it does not. The client snippet is in /api/v1/app, the port in the settings."
+                    properties:
+                      running: { type: boolean }
+                      url: { type: string }
+                      error: { $ref: "#/components/schemas/MessageOrKey" }
+                  schedule_next:
+                    type: [string, "null"]
+                    description: When the schedule runs next – null when it is off or nothing is due. Whether it is on at all is a setting.
                   wizard:
                     type: [string, "null"]
                     enum: [token, ollama, null]
-                  data_dir: { type: string }
-                  data_dir_default: { type: string }
-                  index_dir: { type: string }
-                  index_dir_default: { type: string }
-                  home_dir: { type: string }
-                  app_location: { type: string }
-                  frozen: { type: boolean }
-                  update: { type: object }
-                  skip_folders_default: { type: array, items: { type: string } }
-                  filetype_hidden_default: { type: array, items: { type: string } }
-                  graph_explorer: { type: string }
-                  scopes_needed: { type: array, items: { type: string } }
-                  scope_queries: { type: object }
+                    description: Which assistant the app would open – decided here, not in the page.
+                  update:
+                    type: object
+                    description: "What the check found: status, latest, url, newer, ahead, error. Which version runs is in /api/v1/app."
                   auth:
                     type: object
-                    description: mode (token|login), signed_in, account, own_registration, client_id, default_client_id, tenant, device.
-                  folders:
-                    type: object
-                    description: Mailbox folder summary (abgeglichen, ordner_gesamt, ordner_gewaehlt, mails_gesamt, mails_gewaehlt, neu, verschwunden).
-                  calendars: { type: object }
-                  folders_onedrive: { type: object }
-                  conversations: { type: object, description: "Teams conversation list summary (same shape as folders)." }
-                  lists: { type: object, description: "To Do list summary (same shape as folders)." }
+                    description: "What follows from the settings: `signed_in`, `account`, `own_registration` and, while a device login runs, `device`. The mode and the ids themselves are settings."
                   profile: { $ref: "#/components/schemas/ProfileState" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/log:
     get:
+      tags: [App]
+      operationId: getLog
       summary: Log lines after a cursor
       description: |
         The runner keeps a bounded ring buffer of log lines, each with a
@@ -135,14 +224,24 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/LogLine" }
                   seq: { type: integer }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/search:
     get:
+      tags: [Explore]
+      operationId: search
+      x-needs-index: true
       summary: Search or browse the archive
       description: |
         With `q`: ranked search (mode auto/hybrid/semantic/lexical). Without
-        `q`: filter-only browsing, newest first. Errors (no index, stale
-        index) come back in-band with HTTP 200.
+        `q`: filter-only browsing, newest first.
       parameters:
         - { name: q, in: query, schema: { type: string }, description: "Query text; empty switches to browse mode." }
         - { name: person, in: query, schema: { type: string }, description: "Sender / author filter (substring)." }
@@ -162,7 +261,7 @@ paths:
       responses:
         "200":
           description: |
-            Hits, or an in-band error. The first page (offset 0) of a
+            The hits. The first page (offset 0) of a
             non-empty search is recorded in the search history – criteria
             only, never hits – unless the setting `search_history` is off.
           content:
@@ -175,12 +274,58 @@ paths:
                     items: { $ref: "#/components/schemas/Hit" }
                   count: { type: integer }
                   offset: { type: integer }
-                  backend: { type: string }
-                  semantic: { type: boolean }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+                  backend: { type: string, description: "bm25, semantic or hybrid – what actually ranked." }
+                  semantic: { type: boolean, description: "Whether the index carries vectors at all." }
+              example:
+                count: 2
+                offset: 0
+                backend: bm25
+                semantic: false
+                results:
+                  - uid: "outlook:E-Mail/Inbox/2026-09-15_offer.eml:0"
+                    cid: 4711
+                    source: outlook
+                    source_label: Mail
+                    root: outlook
+                    who: Dana Dienstleister
+                    who_mail: dana@nordwind.example
+                    domains: [example.com, nordwind.example]
+                    date: "2026-09-15 09:40"
+                    title: "Re: Offer 2026 – budget frame and options"
+                    context: E-Mail/Inbox
+                    path: E-Mail/Inbox/2026-09-15_offer.eml
+                    uri: "o365://outlook/E-Mail%2FInbox%2F2026-09-15_offer.eml"
+                    score: 0.8123
+                    thread: "mail:<m1@example.com>"
+                    attachments: [Options_v3.xlsx]
+                    gone: null
+                    key: "mail:<m2@example.com>"
+                    cases: [{ id: 3, name: Nordwind offer 2026, ordner: Belege, status: offen }]
+                    preview: "…the two options are on the second sheet, the budget frame stays…"
+        "409":
+          description: "The index cannot answer this search: an unknown case or case folder in the filter, a mode this index was not built for, or the embedder refusing."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex); `hits` and `count` come along empty.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/similar:
     get:
+      tags: [Explore]
+      operationId: findSimilar
+      x-needs-index: true
       summary: Messages similar to one hit
       description: Needs an index with embeddings; works without Ollama.
       parameters:
@@ -188,7 +333,7 @@ paths:
         - { name: k, in: query, schema: { type: integer, default: 20, maximum: 100 } }
       responses:
         "200":
-          description: Similar hits, or an in-band error.
+          description: The similar hits.
           content:
             application/json:
               schema:
@@ -197,10 +342,30 @@ paths:
                   results: { type: array, items: { $ref: "#/components/schemas/Hit" } }
                   count: { type: integer }
                   backend: { type: string }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+        "400":
+          description: "`cid` is not a number (srv.badparam)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The index has no embeddings, or it predates deletion tracking.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/thread:
     get:
+      tags: [Explore]
+      operationId: getThread
+      x-needs-index: true
       summary: A whole conversation
       parameters:
         - { name: key, in: query, required: true, schema: { type: string }, description: "The thread id from a hit." }
@@ -216,10 +381,29 @@ paths:
                   thread: { type: string }
                   count: { type: integer }
                   messages: { type: array, items: { $ref: "#/components/schemas/Hit" } }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+        "409":
+          description: This index predates conversation grouping – rebuild it once.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/sharepoint-report:
     get:
+      tags: [Archive]
+      operationId: getSharepointReport
       summary: Last balance of the SharePoint libraries
       description: |
         The stored balance of the libraries' check step – the size preview
@@ -234,9 +418,15 @@ paths:
                 type: object
                 properties:
                   bericht: { anyOf: [{ $ref: "#/components/schemas/Bilanz" }, { type: "null" }] }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/files:
     get:
+      tags: [Explore]
+      operationId: browseFiles
+      x-needs-index: true
       summary: Browse the mirrored drives and the files next to conversations
       parameters:
         - { name: root, in: query, schema: { type: string, enum: ["", onedrive, sharepoint, teams, planner] }, description: "Empty lists the entry points; teams browses the files shared in chats and the mirrored channel folders, planner a board's downloaded attachments." }
@@ -249,12 +439,30 @@ paths:
               schema:
                 type: object
                 properties:
-                  roots: { type: array, items: { type: object } }
+                  roots:
+                    type: array
+                    description: The entry points, only at the top (no root given).
+                    items:
+                      type: object
+                      required: [root, path, label, files]
+                      properties:
+                        root: { $ref: "#/components/schemas/Root" }
+                        path: { type: string, description: "The folder to browse next – a library, a chat kind or team, a board." }
+                        label: { type: string }
+                        files: { type: integer }
                   root: { type: string }
                   path: { type: string }
                   base: { type: integer, description: "Fixed prefix depth for breadcrumbs (2 for sharepoint)." }
                   label: { type: string }
-                  dirs: { type: array, items: { type: object } }
+                  dirs:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, path, files]
+                      properties:
+                        name: { type: string }
+                        path: { type: string }
+                        files: { type: integer, description: "Files below, all levels." }
                   files:
                     type: array
                     items:
@@ -265,14 +473,24 @@ paths:
                         date: { type: string }
                         gone: { type: [string, "null"] }
                         size: { type: [integer, "null"] }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+        "503":
+          description: No index loaded (srv.noindex); `roots` comes along empty.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/filetypes:
     get:
+      tags: [Explore]
+      operationId: listFiletypes
+      x-needs-index: true
       summary: File types in the archive
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 40, maximum: 200 } }
-        - { name: source, in: query, schema: { type: string }, description: "Empty = every source; one key or several comma-separated." }
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Types after applying the configured hide list.
@@ -284,16 +502,39 @@ paths:
                   count: { type: integer }
                   total_distinct: { type: integer }
                   hidden: { type: array, items: { type: string } }
-                  filetypes: { type: array, items: { type: object } }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+                  filetypes:
+                    type: array
+                    description: Most frequent first.
+                    items:
+                      type: object
+                      required: [type, messages]
+                      properties:
+                        type: { type: string, description: "The extension without dot, lower-case." }
+                        messages: { type: integer, description: "Items carrying one – mails by attachment, files by name." }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/folders:
     get:
+      tags: [Explore]
+      operationId: listFolders
+      x-needs-index: true
       summary: Folder units for the filter dropdown
       parameters:
         - { name: contains, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, default: 300, maximum: 1000 } }
-        - { name: source, in: query, schema: { type: string }, description: "One key or several comma-separated." }
+        - $ref: "#/components/parameters/Source"
       responses:
         "200":
           description: Folders (whole units per source), by message count.
@@ -303,11 +544,34 @@ paths:
                 type: object
                 properties:
                   count: { type: integer }
-                  folders: { type: array, items: { type: object } }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+                  folders:
+                    type: array
+                    description: Largest first.
+                    items:
+                      type: object
+                      required: [path, messages]
+                      properties:
+                        path: { type: string, description: "The value the `folder` filter takes; a folder always means its subfolders too." }
+                        messages: { type: integer }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/people:
     get:
+      tags: [Explore]
+      operationId: listPeople
+      x-needs-index: true
       summary: People occurring in the archive
       parameters:
         - { name: source, in: query, schema: { type: string, default: all }, description: "One key or several comma-separated; files and pages record no person." }
@@ -324,19 +588,42 @@ paths:
                   count: { type: integer }
                   total_distinct: { type: integer }
                   total_messages: { type: integer }
-                  people: { type: array, items: { type: object } }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+                  people:
+                    type: array
+                    description: Most messages first.
+                    items:
+                      type: object
+                      required: [name, messages]
+                      properties:
+                        name: { type: string, description: "The spelling the archive uses – the value the `person` filter takes." }
+                        messages: { type: integer }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/document:
     get:
+      tags: [Explore]
+      operationId: getDocument
+      x-needs-index: true
       summary: One message with its full text
       parameters:
-        - { name: uid, in: query, required: true, schema: { type: string } }
+        - $ref: "#/components/parameters/Uid"
         - { name: before, in: query, schema: { type: integer, default: 0, maximum: 20 }, description: "Conversation context before." }
         - { name: after, in: query, schema: { type: integer, default: 0, maximum: 20 } }
       responses:
         "200":
-          description: The document, or an in-band error.
+          description: The document.
           content:
             application/json:
               schema:
@@ -359,10 +646,30 @@ paths:
                     description: Only for mirrored files – name, path, size_bytes, modified, gone, binary, content_indexed (always false).
                   context_before: { type: array, items: { type: object } }
                   context_after: { type: array, items: { type: object } }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+        "404":
+          description: No item with this uid.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/detail:
     get:
+      tags: [Explore]
+      operationId: getDetail
+      x-needs-index: true
       summary: The facts the hit's detail shows
       description: |
         Per kind of item, from the index row and the source file: a mail's
@@ -374,10 +681,10 @@ paths:
         linked resources. `text` is the content the detail shows. A key
         that is missing means the item has none of it.
       parameters:
-        - { name: uid, in: query, required: true, schema: { type: string }, description: "The item's uid from a hit." }
+        - $ref: "#/components/parameters/Uid"
       responses:
         "200":
-          description: The facts, or an in-band error.
+          description: The facts.
           content:
             application/json:
               schema:
@@ -387,10 +694,24 @@ paths:
                   uid: { type: string }
                   kind: { type: string, description: "The source: outlook, teams, kalender, kontakte, datei, pages, onenote, planner, todo." }
                   text: { type: string }
-                  error: { $ref: "#/components/schemas/MessageOrKey" }
+        "404":
+          description: No item with this uid (srv.detail.none).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/run-log:
     get:
+      tags: [Archive]
+      operationId: getRunLog
       summary: The stored log of one run
       parameters:
         - { name: id, in: query, required: true, schema: { type: integer }, description: "Run id from /api/runs." }
@@ -405,9 +726,19 @@ paths:
                   lines:
                     type: array
                     items: { $ref: "#/components/schemas/StoredLogLine" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/analytics:
     get:
+      tags: [Archive]
+      operationId: getAnalytics
       summary: What the archive holds
       description: |
         The block materialized at the end of each index run: sources,
@@ -420,9 +751,14 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Analytics" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/runs:
     get:
+      tags: [Archive]
+      operationId: listRuns
       summary: Run history
       parameters:
         - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
@@ -435,9 +771,19 @@ paths:
                 type: object
                 properties:
                   runs: { type: array, items: { $ref: "#/components/schemas/Run" } }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/calendar:
     get:
+      tags: [Explore]
+      operationId: getCalendar
       summary: The combined calendar/contacts file
       description: |
         Raw bytes of calendar.json (can be several MB); gzip-encoded when
@@ -449,26 +795,33 @@ paths:
           content:
             application/json: {}
         "404":
-          description: Not built yet.
+          description: Not built yet (cal.missing); `recs` comes along empty.
           content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error: { $ref: "#/components/schemas/I18nMessage" }
-                  recs: { type: array }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/openapi:
     get:
+      tags: [App]
+      operationId: getOpenapi
       summary: This document
       responses:
         "200":
           description: The API description as YAML.
           content:
             text/yaml: {}
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /source:
     get:
+      tags: [Explore]
+      operationId: getSource
+      x-needs-index: true
       summary: An original file from the archive
       description: |
         Serves a file out of an export folder. `path` is relative to the
@@ -485,12 +838,23 @@ paths:
         "200":
           description: The file (content type by extension).
         "404":
-          description: Unknown root, path outside the export, or missing file (plain text).
+          description: Unknown root, path outside the export, or missing file – JSON, like every other refusal.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: No index loaded (plain text).
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/token:
     post:
+      tags: [App]
+      operationId: saveToken
       summary: Store a pasted Graph access token
       requestBody:
         content:
@@ -501,18 +865,30 @@ paths:
                 token: { type: string, description: "Graph token; 'Bearer ' prefix and whitespace are stripped." }
       responses:
         "200":
-          description: Always 200; ok says whether the token was usable.
+          description: The token is stored and usable; `message` says whether scopes are missing.
           content:
             application/json:
               schema:
                 type: object
+                required: [ok, token]
                 properties:
                   ok: { type: boolean }
                   message: { $ref: "#/components/schemas/I18nMessage" }
                   token: { $ref: "#/components/schemas/TokenStatus" }
+        "400":
+          description: Empty, too short, or already expired (srv.token.empty / .short / .stale) – a stale one comes with `token`, its state.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/analytics-refresh:
     post:
+      tags: [Archive]
+      operationId: refreshAnalytics
       summary: Recompute the analytics block
       responses:
         "200":
@@ -520,9 +896,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Analytics" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/wizard-seen:
     post:
+      tags: [App]
+      operationId: dismissWizard
       summary: Dismiss the token wizard
       responses:
         "200":
@@ -530,9 +912,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/run:
     post:
+      tags: [Archive]
+      operationId: startRun
+      x-starts-run: true
       summary: Start an export/index run
       description: |
         Step flags are the registry's request keys; absent means off. A
@@ -590,6 +979,13 @@ paths:
                 legacy_comments: { type: boolean, description: "Planner: list the legacy comment threads again, ignoring the boards' cadence (skipped after a board's first sync otherwise)." }
                 embeddings: { type: [boolean, "null"], description: "null = decide automatically." }
                 label: { type: string, default: job.export, description: "Run label (i18n key)." }
+            examples:
+              index:
+                summary: Index only
+                value: { index: true, label: job.index }
+              nightly:
+                summary: The three big sources and the index
+                value: { outlook: true, teams: true, onedrive: true, index: true }
       responses:
         "200":
           description: The run thread started.
@@ -597,13 +993,19 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
         "409":
-          description: Busy, no token, or nothing to do (message.k names it).
+          description: Busy, no token, or nothing to do (error.k names it).
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/ordner:
     post:
+      tags: [Archive]
+      operationId: openExportFolder
       summary: Show an export folder in the system's file manager
       requestBody:
         content:
@@ -613,12 +1015,27 @@ paths:
               properties:
                 quelle: { type: string, description: "outlook | teams | onedrive | sharepoint | sharepoint_pages | planner | todo | onenote" }
       responses:
-        "200": { description: Opened. }
-        "400": { description: Unknown source. }
-        "500": { description: No way to open a folder on this system. }
+        "200":
+          description: Opened.
+        "400":
+          description: Unknown source.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: No way to open a folder on this system.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/bilanz/holen:
     post:
+      tags: [Archive]
+      operationId: fetchOpen
+      x-starts-run: true
       summary: Fetch what a balance row found open (a run)
       description: |
         "Fetch now" on a row of the completeness balance: one run that
@@ -642,15 +1059,30 @@ paths:
                 quelle: { type: string }
       responses:
         "200":
-          description: The run started (message null).
+          description: The run started.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "400": { description: Unknown row. }
-        "409": { description: A run is on, or the run could not start (the source is not ticked, srv.inactive). }
+        "400":
+          description: Unknown row.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A run is on, or the run could not start (the source is not ticked, srv.inactive).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/nachholen:
     post:
+      tags: [Archive]
+      operationId: fetchMissing
+      x-starts-run: true
       summary: Fetch the source's missing files again (a run)
       description: |
         "Fetch again" on a row of the archive card: exactly the files the
@@ -673,14 +1105,30 @@ paths:
                 quelle: { type: string }
       responses:
         "200":
-          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          description: The run started, or nothing to do (message srv.archiv.nothing, no run).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "409": { description: A run is on, or the run could not start. }
+        "409":
+          description: A run is on, or the run could not start.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Unknown source (srv.archiv.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/vermerken:
     post:
+      tags: [Archive]
+      operationId: noteLost
+      x-starts-run: true
       summary: Note the source's lost files as lost (a run)
       description: |
         An action of the archive check (archive_check.py), started as a
@@ -704,14 +1152,30 @@ paths:
                   description: "The kinds to note; default [verloren]. The page adds fehlt only when the report says a resync ran since the files went missing (nachgeholt > fehlt_seit)."
       responses:
         "200":
-          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          description: The run started, or nothing to do (message srv.archiv.nothing, no run).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "409": { description: A run is on. }
+        "409":
+          description: A run is on.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Unknown source (srv.archiv.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/beiseitelegen:
     post:
+      tags: [Archive]
+      operationId: setAside
+      x-starts-run: true
       summary: Set the source's foreign files aside (a run)
       description: |
         Started as a run of its own: moves every file no bookkeeping knows
@@ -728,14 +1192,30 @@ paths:
                 quelle: { type: string }
       responses:
         "200":
-          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          description: The run started, or nothing to do (message srv.archiv.nothing, no run).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "409": { description: A run is on. }
+        "409":
+          description: A run is on.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Unknown source (srv.archiv.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/zurueckholen:
     post:
+      tags: [Archive]
+      operationId: putBack
+      x-starts-run: true
       summary: Put the newest set-aside batch back (a run)
       description: |
         Started as a run of its own: moves the files of the newest
@@ -751,14 +1231,30 @@ paths:
                 quelle: { type: string }
       responses:
         "200":
-          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          description: The run started, or nothing to do (message srv.archiv.nothing, no run).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "409": { description: A run is on. }
+        "409":
+          description: A run is on.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Unknown source (srv.archiv.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/archiv/neu-aufbauen:
     post:
+      tags: [Archive]
+      operationId: rebuildBookkeeping
+      x-starts-run: true
       summary: Set a damaged bookkeeping aside and rebuild it (a run)
       description: |
         One run of three steps: the archive step sets every damaged
@@ -777,14 +1273,29 @@ paths:
                 quelle: { type: string }
       responses:
         "200":
-          description: The run started (message null), or nothing to do (message srv.archiv.nothing, no run).
+          description: The run started, or nothing to do (message srv.archiv.nothing, no run).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkMessage" }
-        "409": { description: A run is on, or the run could not start. }
+        "409":
+          description: A run is on, or the run could not start.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Unknown source (srv.archiv.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/login:
     post:
+      tags: [App]
+      operationId: login
       summary: Start the device-code sign-in
       responses:
         "200":
@@ -805,10 +1316,18 @@ paths:
                       ok: { type: boolean }
                       error: { type: [string, "null"] }
         "500":
-          description: The flow could not be started.
+          description: The flow could not be started (srv.login.failed); `device` carries what the library reported.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/data-dir:
     post:
+      tags: [App]
+      operationId: setDataDir
       summary: Point the data and index folders elsewhere
       description: |
         Each field acts only when present; an empty string resets to the
@@ -837,11 +1356,17 @@ paths:
         "400":
           description: Target not writable, or already used by another profile (`srv.datadir.shared`).
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/profiles:
     get:
+      tags: [App]
+      operationId: listProfiles
       summary: Every profile, with account, folder and last run
       description: |
         Fetched when the storage card or the switch window shows the list;
@@ -853,7 +1378,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileStatus" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
     post:
+      tags: [App]
+      operationId: createProfile
       summary: Create a profile
       description: |
         A profile is an archive of its own – configuration, key, run
@@ -884,11 +1414,17 @@ paths:
         "400":
           description: Bad name, name taken, or profiles impossible (--data-dir).
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/profile-switch:
     post:
+      tags: [App]
+      operationId: switchProfile
       summary: Restart with another profile
       description: |
         Answers first, then the process starts over with `--profile NAME`
@@ -919,16 +1455,22 @@ paths:
         "400":
           description: Unknown profile, or no profiles at all.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: A job is running.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/profile-open:
     post:
+      tags: [App]
+      operationId: openProfile
       summary: Choose the profile to start (chooser only)
       description: |
         Served only by the chooser page before the app. Records the choice
@@ -958,11 +1500,17 @@ paths:
         "400":
           description: Unknown profile.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/profile-rename:
     post:
+      tags: [App]
+      operationId: renameProfile
       summary: Rename a profile that is not open
       description: |
         Renames `profiles/<name>/` to `profiles/<neu>/`; data or index
@@ -992,16 +1540,22 @@ paths:
         "400":
           description: Unknown, open, bad name, name taken, or the rename failed.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: A job is running.
           content:
-            application/json:
-              schema: { $ref: "#/components/schemas/OkMessage" }
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/profile-prefs:
     post:
+      tags: [App]
+      operationId: setProfilePrefs
       summary: Open the last profile without asking
       description: |
         With more than one profile the app asks on start which one to open;
@@ -1024,9 +1578,15 @@ paths:
                 properties:
                   ok: { type: boolean }
                   ohne_nachfrage: { type: boolean }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/folder-plan:
     post:
+      tags: [Archive]
+      operationId: planFolders
       summary: What the current rules would export
       requestBody:
         content:
@@ -1044,7 +1604,7 @@ paths:
                 skip_folders: { description: "Legacy name list (array or comma/newline string)." }
       responses:
         "200":
-          description: Included/excluded/gone folders with counts, or leer=true when no tree is synced.
+          description: Included, excluded and gone folders with counts.
           content:
             application/json:
               schema:
@@ -1060,9 +1620,20 @@ paths:
                   mails_an: { type: integer }
                   mails_aus: { type: integer }
                   mails_weg: { type: integer }
+        "404":
+          description: No folder list yet (srv.plan.nolist) – the first run fetches one; `leer` is true.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/logout:
     post:
+      tags: [App]
+      operationId: logout
       summary: Sign out (clear the token cache)
       responses:
         "200":
@@ -1070,9 +1641,15 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/cancel:
     post:
+      tags: [Archive]
+      operationId: cancelRun
       summary: Cancel the running job
       responses:
         "200":
@@ -1080,45 +1657,26 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/config:
     post:
+      tags: [App]
+      operationId: saveConfig
       summary: Save settings
       description: |
-        Every field is optional and keyed on presence. Numbers are clamped
-        to their documented ranges; invalid values are ignored rather than
-        rejected. Returns the complete normalized configuration.
-        Fields (see /api/status → config for the full shape):
-        outlook_categories, teams_categories, embed_model, chat_model,
-        ollama, workers, mirror_workers, mcp_port, index_batch,
-        answer_sources, semantic_min, onedrive_max_mb, sharepoint_max_mb,
-        sharepoint_pages_image_max_mb, search_results, userflow_actions,
-        runs_retention_months, log_retention_days, mcp_enabled,
-        mcp_autostart, update_check, keep_awake, embed_images, cache_images,
-        refresh_channels, skip_empty_chats, include_hidden,
-        calendar_reconstruct, ollama_enabled, index_semantic,
-        onedrive_enabled, sharepoint_enabled, sharepoint_pages_enabled,
-        planner_enabled, planner_attachments, todo_enabled, onenote_enabled,
-        onenote_rules, onenote_image_max_mb, teams_attachments,
-        teams_channel_files,
-        teams_files_max_mb, calendar_rules, folder_rules,
-        onedrive_rules, teams_rules, sharepoint_rules, todo_rules,
-        calendar_months_back, planner_sweep_hours, outlook_since,
-        teams_since, sharepoint_urls, sharepoint_pages_urls,
-        planner_urls, sharepoint_types_include, sharepoint_types_exclude,
-        analytics_skip, filetype_hidden, skip_folders, auth_mode,
-        client_id, tenant, sync_cadence, notifications, language,
-        tour_seen (object: archiv | suche | quelle -> boolean).
-        sync_cadence maps keys to always|daily|weekly|monthly: a source
-        (onedrive, todo), a category (outlook:mail, teams:1on1), a unit
-        (sharepoint-url:<url>, planner-url:<url>, pages-url:<url>,
-        onenote:<id>) or a departure below a category
-        (outlook:mail:<folder path>, teams:<conversation path>) – the
-        deepest key on a unit's path wins.
+        Any subset of `Config`; every field is optional and keyed on
+        presence. Numbers are clamped to their documented ranges; invalid
+        values are ignored rather than rejected. Rule and URL texts are
+        one entry per line. Returns the complete normalized configuration.
       requestBody:
         content:
           application/json:
-            schema: { type: object }
+            schema: { $ref: "#/components/schemas/Config" }
+            example: { search_results: 50, internal_domains: "example.com, nordwind.example", sync_cadence: { "outlook:mail": daily, "outlook:mail:E-Mail/Archive": monthly } }
       responses:
         "200":
           description: Saved.
@@ -1128,10 +1686,16 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  config: { type: object }
+                  config: { $ref: "#/components/schemas/Config" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/schedule:
     post:
+      tags: [Archive]
+      operationId: saveSchedule
       summary: Save the schedule
       requestBody:
         content:
@@ -1160,11 +1724,17 @@ paths:
                 type: object
                 properties:
                   ok: { type: boolean }
-                  schedule: { type: object }
+                  schedule: { $ref: "#/components/schemas/Schedule" }
                   next: { type: [number, "null"], description: "Unix epoch seconds." }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/mcp:
     post:
+      tags: [App]
+      operationId: controlMcp
       summary: Start or stop the MCP server
       requestBody:
         content:
@@ -1184,9 +1754,25 @@ paths:
                   ok: { type: boolean }
                   message: { $ref: "#/components/schemas/I18nMessage" }
                   mcp: { $ref: "#/components/schemas/McpState" }
+        "400":
+          description: "`action` is neither start nor stop (srv.mcp.badaction)."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: "The server did not start: MCP switched off, no index, or the process failed – `mcp` carries the state."
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/report:
     post:
+      tags: [App]
+      operationId: prefillReport
       summary: Prefill a bug report
       description: |
         Purely local: anonymizes and shortens the supplied log, collects
@@ -1212,9 +1798,15 @@ paths:
                   log: { type: string }
                   title: { type: string }
                   url: { type: string }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/ollama-recheck:
     post:
+      tags: [App]
+      operationId: recheckOllama
       summary: Re-probe Ollama, bypassing the cache
       responses:
         "200":
@@ -1222,9 +1814,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OllamaStatus" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/answer:
     post:
+      tags: [Explore]
+      operationId: answer
+      x-needs-index: true
       summary: AI summary over the archive (streaming)
       description: |
         The only streaming route: NDJSON, one object per line — first the
@@ -1246,17 +1845,33 @@ paths:
                 source: { type: string, default: all }
       responses:
         "200":
-          description: NDJSON stream, or a plain JSON error object when the search found nothing.
+          description: The NDJSON stream; an error inside the stream arrives as one more line, not as a status.
           content:
             application/x-ndjson: {}
-            application/json: {}
         "400":
-          description: Empty question.
+          description: Empty question (srv.answer.noquery).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
         "503":
-          description: No usable index, or the chat model is not available.
+          description: No index loaded, or the chat model is not available (srv.answer.nomodel).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: The search found nothing to answer from (srv.answer.nohits).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/update-check:
     post:
+      tags: [App]
+      operationId: checkUpdate
       summary: Check GitHub for a newer release (blocking)
       responses:
         "200":
@@ -1273,9 +1888,15 @@ paths:
                   newer: { type: boolean }
                   ahead: { type: boolean }
                   error: { type: [string, "null"] }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/quit:
     post:
+      tags: [App]
+      operationId: quit
       summary: Shut the app down
       responses:
         "200":
@@ -1283,10 +1904,16 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   # ---- search history, saved searches, cases (11.0) ------------------------
   /api/suche/historie:
     get:
+      tags: [Explore]
+      operationId: listHistory
       summary: The search history
       description: |
         Every search by its criteria, newest first – never its hits.
@@ -1309,22 +1936,35 @@ paths:
                         wann: { type: string, format: date-time }
                         kriterien: { $ref: "#/components/schemas/Kriterien" }
                         treffer: { type: [integer, "null"] }
-                  retention: { type: string, enum: [off, "30", "90", "365", forever] }
+                  retention: { type: string, enum: ["off", "30", "90", "365", forever] }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/historie-leeren:
     post:
+      tags: [Explore]
+      operationId: clearHistory
       summary: Empty the search history
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/gespeichert:
     get:
+      tags: [Explore]
+      operationId: listSavedSearches
       summary: The saved searches
       responses:
         "200":
+          description: The saved searches, newest first.
           content:
             application/json:
               schema:
@@ -1333,9 +1973,14 @@ paths:
                   searches:
                     type: array
                     items: { $ref: "#/components/schemas/GespeicherteSuche" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/speichern:
     post:
+      tags: [Explore]
+      operationId: saveSearch
       summary: Save a search under a name
       requestBody:
         content:
@@ -1347,8 +1992,14 @@ paths:
                 kriterien: { $ref: "#/components/schemas/Kriterien" }
                 fall: { type: [integer, "null"], description: "Attach to this case (must be open)." }
                 ordner: { type: [integer, "null"], description: "The folder of that case the search files into; its new hits land there. Null: unsorted." }
+            example:
+              name: "Nordwind – everything external"
+              kriterien: { q: "Nordwind", mode: text, source: outlook, party: external }
+              fall: 3
+              ordner: null
       responses:
         "200":
+          description: The new id.
           content:
             application/json:
               schema:
@@ -1357,12 +2008,30 @@ paths:
                   ok: { type: boolean }
                   id: { type: integer }
                   search: { $ref: "#/components/schemas/GespeicherteSuche" }
-        "400": { description: No name (srv.case.noname). }
-        "404": { description: No such case (srv.case.unknown). }
-        "409": { description: The case is closed (srv.case.closed). }
+        "400":
+          description: No name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed (srv.case.closed).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/umbenennen:
     post:
+      tags: [Explore]
+      operationId: renameSavedSearch
       summary: Rename a saved search
       requestBody:
         content:
@@ -1374,13 +2043,29 @@ paths:
                 name: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
-        "404": { description: No such search (srv.search.unknown). }
+        "404":
+          description: No such search (srv.search.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "400":
+          description: Empty name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/loeschen:
     post:
+      tags: [Explore]
+      operationId: deleteSavedSearch
       summary: Delete a saved search
       requestBody:
         content:
@@ -1391,12 +2076,19 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/suche/anhaengen:
     post:
+      tags: [Explore]
+      operationId: attachSavedSearch
       summary: Attach a saved search to a case, or detach it
       requestBody:
         content:
@@ -1409,18 +2101,34 @@ paths:
                 ordner: { type: [integer, "null"], description: "The folder of that case the search files into. Null: unsorted." }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
-        "404": { description: No such search or case. }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such search or case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle:
     get:
+      tags: [Cases]
+      operationId: listCases
       summary: The cases
       description: Open cases first, most recently changed first; closed ones after.
       responses:
         "200":
+          description: Every case, open ones first.
           content:
             application/json:
               schema:
@@ -1430,34 +2138,55 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/FallKurz" }
                   export_dir: { type: string, description: "Where exports land (setting case_export_dir, else Documents/Munimentum cases)." }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/fall:
     get:
+      tags: [Cases]
+      operationId: getCase
       summary: One case in full
       parameters:
-        - { name: id, in: query, required: true, schema: { type: integer } }
+        - $ref: "#/components/parameters/CaseId"
       responses:
         "200":
-          description: The case, or an in-band error (srv.case.unknown).
+          description: The case, in full.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   case: { $ref: "#/components/schemas/Fall" }
-                  error: { $ref: "#/components/schemas/I18nMessage" }
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/neu:
     get:
+      tags: [Cases]
+      operationId: getCaseNewHits
+      x-needs-index: true
       summary: New hits for a case
       description: |
         Runs every saved search attached to the case (up to 500 hits each)
         and returns what the case does not hold yet – "new since". Nothing
         is added; the page offers that.
       parameters:
-        - { name: id, in: query, required: true, schema: { type: integer } }
+        - $ref: "#/components/parameters/CaseId"
       responses:
         "200":
+          description: The saved searches, newest first.
           content:
             application/json:
               schema:
@@ -1480,10 +2209,29 @@ paths:
                         ordner: { type: [integer, "null"], description: "The folder the search files into – where the page adds the new ones." }
                         ordner_name: { type: [string, "null"] }
                         error: { $ref: "#/components/schemas/MessageOrKey" }
-                  error: { $ref: "#/components/schemas/I18nMessage" }
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/anlegen:
     post:
+      tags: [Cases]
+      operationId: createCase
       summary: Create a case
       requestBody:
         content:
@@ -1495,6 +2243,7 @@ paths:
                 beschreibung: { type: string }
       responses:
         "200":
+          description: The new id.
           content:
             application/json:
               schema:
@@ -1503,10 +2252,20 @@ paths:
                   ok: { type: boolean }
                   id: { type: integer }
                   case: { $ref: "#/components/schemas/Fall" }
-        "400": { description: No name (srv.case.noname). }
+        "400":
+          description: No name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/aendern:
     post:
+      tags: [Cases]
+      operationId: updateCase
       summary: Rename a case or change its description
       description: Fields act on presence; an open case only.
       requestBody:
@@ -1520,15 +2279,34 @@ paths:
                 beschreibung: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "400": { description: Empty name. }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "400":
+          description: Empty name.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/schliessen:
     post:
+      tags: [Cases]
+      operationId: closeCase
       summary: Close a case
       description: A closed case is read-only – it can still be searched in and exported; reopen it to change it.
       requestBody:
@@ -1540,14 +2318,29 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case. }
-        "409": { description: Already closed. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: Already closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/oeffnen:
     post:
+      tags: [Cases]
+      operationId: reopenCase
       summary: Reopen a case
       requestBody:
         content:
@@ -1558,13 +2351,24 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/loeschen:
     post:
+      tags: [Cases]
+      operationId: deleteCase
       summary: Delete a case
       description: The case, its items, lists and notes; attached searches are detached, not deleted. Nothing in the archive is touched.
       requestBody:
@@ -1576,13 +2380,24 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Ok" }
-        "404": { description: No such case. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/hinzufuegen:
     post:
+      tags: [Cases]
+      operationId: addCaseItems
       summary: Add items to a case
       description: |
         Hits as the page has them (key, source, root, path, title, date,
@@ -1611,8 +2426,14 @@ paths:
                       datum: { type: string }
                       wer: { type: string }
                       bemerkung: { type: string, description: "A remark on why the item is in the case; kept only for items new to the case." }
+            example:
+              id: 3
+              ordner: 7
+              eintraege:
+                - { key: "mail:<m1@example.com>", src: outlook, root: outlook, rel: "E-Mail/Inbox/2026-09-15_offer.eml", titel: "Re: Offer 2026 – budget frame", datum: "2026-09-15 09:40", wer: "Dana Dienstleister", bemerkung: "The revised prices." }
       responses:
         "200":
+          description: How many were added.
           content:
             application/json:
               schema:
@@ -1621,11 +2442,25 @@ paths:
                   ok: { type: boolean }
                   added: { type: integer }
                   already: { type: integer }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/verschieben:
     post:
+      tags: [Cases]
+      operationId: moveCaseItems
       summary: Move items of a case into a folder
       description: "The items named by key go into the folder (null: unsorted); keys the case does not hold are ignored."
       requestBody:
@@ -1639,6 +2474,7 @@ paths:
                 ordner: { type: [integer, "null"] }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema:
@@ -1647,11 +2483,25 @@ paths:
                   - type: object
                     properties:
                       moved: { type: integer }
-        "404": { description: No such case or folder (srv.case.nofolder). }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case or folder (srv.case.nofolder).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/ordner-anlegen:
     post:
+      tags: [Cases]
+      operationId: createCaseFolder
       summary: Make a folder in a case
       description: Folders are one level deep. The same name again answers the existing folder.
       requestBody:
@@ -1664,6 +2514,7 @@ paths:
                 name: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema:
@@ -1672,12 +2523,30 @@ paths:
                   - type: object
                     properties:
                       ordner: { type: integer, description: "The folder's id." }
-        "400": { description: No name (srv.case.noname). }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "400":
+          description: No name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/ordner-umbenennen:
     post:
+      tags: [Cases]
+      operationId: renameCaseFolder
       summary: Rename a folder
       requestBody:
         content:
@@ -1690,15 +2559,34 @@ paths:
                 name: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "400": { description: No name (srv.case.noname). }
-        "404": { description: No such case or folder (srv.case.nofolder). }
-        "409": { description: The case is closed, or the name is taken (srv.case.folder.exists). }
+        "400":
+          description: No name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case or folder (srv.case.nofolder).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed, or the name is taken (srv.case.folder.exists).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/ordner-loeschen:
     post:
+      tags: [Cases]
+      operationId: deleteCaseFolder
       summary: Remove a folder
       description: Its items, lists and searches stay in the case and become unsorted.
       requestBody:
@@ -1711,14 +2599,29 @@ paths:
                 ordner: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case or folder (srv.case.nofolder). }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case or folder (srv.case.nofolder).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/bemerkung:
     post:
+      tags: [Cases]
+      operationId: setCaseRemark
       summary: The remark on one item
       description: One or two sentences on why the item is in the case; empty text removes it. Shown under the item and exported with it.
       requestBody:
@@ -1732,14 +2635,30 @@ paths:
                 text: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case, or the case does not hold the item (srv.case.noitem). }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case, or the case does not hold the item (srv.case.noitem).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/thread:
     post:
+      tags: [Cases]
+      operationId: addCaseThreads
+      x-needs-index: true
       summary: The rest of the items' conversations into the case
       description: |
         For every key named: the other messages of its conversation (mail:
@@ -1756,6 +2675,7 @@ paths:
                 keys: { type: array, items: { type: string } }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema:
@@ -1764,11 +2684,30 @@ paths:
                   - type: object
                     properties:
                       added: { type: integer }
-        "404": { description: No such case. }
-        "409": { description: The case is closed, or the index knows no conversations (srv.case.nothread). }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed, or the index knows no conversations (srv.case.nothread).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/entfernen:
     post:
+      tags: [Cases]
+      operationId: removeCaseItem
       summary: Remove one item from a case
       requestBody:
         content:
@@ -1780,14 +2719,30 @@ paths:
                 key: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/liste:
     post:
+      tags: [Cases]
+      operationId: storeCaseList
+      x-needs-index: true
       summary: Store a result list in a case
       description: |
         Runs the search with the given criteria on the server – every
@@ -1806,6 +2761,7 @@ paths:
                 ordner: { type: [integer, "null"], description: "The folder the list and its hits file into. Null or absent: unsorted." }
       responses:
         "200":
+          description: How many were added.
           content:
             application/json:
               schema:
@@ -1815,11 +2771,30 @@ paths:
                   liste: { type: integer }
                   hits: { type: integer }
                   added: { type: integer, description: "Hits new to the case." }
-        "404": { description: No such case. }
-        "409": { description: The case is closed, or the search failed (message says why). }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed, or the search failed (the error says why).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/liste-loeschen:
     post:
+      tags: [Cases]
+      operationId: deleteCaseList
       summary: Drop a stored result list
       description: The list goes, and with it the items it brought into the case – not those added by hand or by another list before it.
       requestBody:
@@ -1832,14 +2807,29 @@ paths:
                 liste: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/notiz:
     post:
+      tags: [Cases]
+      operationId: addCaseNote
       summary: Add a casebook note
       requestBody:
         content:
@@ -1851,6 +2841,7 @@ paths:
                 text: { type: string }
       responses:
         "200":
+          description: The new id.
           content:
             application/json:
               schema:
@@ -1858,12 +2849,30 @@ paths:
                 properties:
                   ok: { type: boolean }
                   id: { type: integer, description: "The note's id." }
-        "400": { description: Empty note. }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "400":
+          description: Empty note.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/notiz-aendern:
     post:
+      tags: [Cases]
+      operationId: updateCaseNote
       summary: Change a casebook note
       requestBody:
         content:
@@ -1876,15 +2885,34 @@ paths:
                 text: { type: string }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "400": { description: Empty note. }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "400":
+          description: Empty note.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/notiz-loeschen:
     post:
+      tags: [Cases]
+      operationId: deleteCaseNote
       summary: Delete a casebook note
       requestBody:
         content:
@@ -1896,14 +2924,30 @@ paths:
                 notiz: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/OkFall" }
-        "404": { description: No such case. }
-        "409": { description: The case is closed. }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/export:
     post:
+      tags: [Cases]
+      operationId: exportCase
+      x-starts-run: true
       summary: Export a case (a run)
       description: |
         Started as a run of its own (case_export.py): one ZIP named
@@ -1925,6 +2969,7 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema:
@@ -1933,12 +2978,30 @@ paths:
                   ok: { type: boolean }
                   message: { $ref: "#/components/schemas/MessageOrKey" }
                   path: { type: string, description: "The ZIP the run writes." }
-        "400": { description: The export folder cannot be created (srv.case.exportdir). }
-        "404": { description: No such case. }
-        "409": { description: A run is on. }
+        "400":
+          description: The export folder cannot be created (srv.case.exportdir).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: A run is on.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/faelle/export-ordner:
     post:
+      tags: [Cases]
+      operationId: openCaseExportFolder
       summary: Show the case's last export in the file manager
       description: The folder holding the last export's ZIP, else the export folder itself. No process, answers at once.
       requestBody:
@@ -1950,6 +3013,7 @@ paths:
                 id: { type: integer }
       responses:
         "200":
+          description: It worked.
           content:
             application/json:
               schema:
@@ -1958,17 +3022,930 @@ paths:
                   ok: { type: boolean }
                   path: { type: string }
                   message: { $ref: "#/components/schemas/MessageOrKey" }
-        "404": { description: No export folder exists yet (srv.case.noexport). }
-        "500": { description: The file manager could not be opened. }
+        "404":
+          description: No export folder exists yet (srv.case.noexport).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: The file manager could not be opened.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # -- The versioned surface: resources, real methods, English names -------
+  # Everything under /api/v1 answers `X-Munimentum-Api: v1`; a second
+  # contract would live beside it, not replace it.
+  /api/v1/cases:
+    get:
+      tags: [Cases]
+      operationId: v1ListCases
+      summary: Every case
+      description: The same cases as `/api/faelle`, as resources and in English (rest.py).
+      responses:
+        "200":
+          description: The cases, open ones first, the most recently changed at the top.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Case" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    post:
+      tags: [Cases]
+      operationId: v1CreateCase
+      summary: Open a case
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string }
+            example: { name: Nordwind, description: Everything about the offer }
+      responses:
+        "201":
+          description: The case; `Location` names where it lives.
+          headers:
+            Location: { description: The new case's path., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [case]
+                properties:
+                  case: { $ref: "#/components/schemas/Case" }
+        "400":
+          description: No name (srv.case.noname).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/cases/{id}:
+    get:
+      tags: [Cases]
+      operationId: v1GetCase
+      summary: One case in full
+      parameters:
+        - $ref: "#/components/parameters/CaseIdPfad"
+      responses:
+        "200":
+          description: The case with its items, folders, notes and attached searches.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [case]
+                properties:
+                  case: { $ref: "#/components/schemas/Case" }
+        "404":
+          description: No such case (srv.case.unknown) – as is an id that is not a number.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    patch:
+      tags: [Cases]
+      operationId: v1UpdateCase
+      summary: Change a case
+      description: |
+        The fields the body names, nothing else. `status` opens and closes
+        the case – what `/api/faelle/schliessen` and `/api/faelle/oeffnen`
+        do under their own names.
+      parameters:
+        - $ref: "#/components/parameters/CaseIdPfad"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                status: { type: string, enum: [open, closed] }
+            example: { status: closed }
+      responses:
+        "200":
+          description: The case as it is now.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [case]
+                properties:
+                  case: { $ref: "#/components/schemas/Case" }
+        "400":
+          description: Empty name (srv.case.noname), or a status that is neither (srv.case.badstatus).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The case is closed – reopen it first (srv.case.closed).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    delete:
+      tags: [Cases]
+      operationId: v1DeleteCase
+      summary: Drop a case
+      description: The case and what it remembers; nothing in the archive is touched.
+      parameters:
+        - $ref: "#/components/parameters/CaseIdPfad"
+      responses:
+        "204":
+          description: Gone.
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/search:
+    get:
+      tags: [Explore]
+      operationId: v1Search
+      x-needs-index: true
+      summary: Search the archive
+      description: |
+        The same engine and the same filters as `/api/search`, paged the
+        way the rest of the API pages: `limit` and `offset`. There is no
+        total – it would mean ranking the whole archive – so `has_more`
+        says whether another page follows.
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: "Query text; empty browses by filter alone." }
+        - { name: limit, in: query, schema: { type: integer, default: 20, minimum: 1, maximum: 100 } }
+        - { name: offset, in: query, schema: { type: integer, default: 0, minimum: 0 } }
+        - { name: person, in: query, schema: { type: string } }
+        - { name: source, in: query, schema: { $ref: "#/components/schemas/SourceFilter" } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: folder, in: query, schema: { type: string } }
+        - { name: filetype, in: query, schema: { type: string } }
+        - { name: case, in: query, schema: { type: integer } }
+        - { name: case_folder, in: query, schema: { type: integer } }
+        - { name: party, in: query, schema: { type: string, enum: [all, internal, external] } }
+        - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
+        - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical] } }
+        - { name: remember, in: query, schema: { type: string }, description: "1/true/yes/ja: file this search in the search history (criteria only, never hits) and, with `saved`, stamp that saved search as run. Off unless asked for – the history is the page's, and a script paging through the archive has no business filling it. The page asks for it." }
+        - { name: saved, in: query, schema: { type: integer }, description: "Id of the saved search being run; counts only together with `remember`." }
+      responses:
+        "200":
+          description: One page of hits.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, limit, offset, has_more]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Hit" } }
+                  limit: { type: integer }
+                  offset: { type: integer }
+                  has_more: { type: boolean, description: "Whether a page follows – the engine is asked for one hit more than the page holds." }
+                  backend: { type: string, description: "bm25, semantic or hybrid – what actually ranked." }
+                  semantic: { type: boolean }
+        "400":
+          description: A limit or offset that is not a number (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: The index cannot answer this search.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+
+  /api/v1/files:
+    get:
+      tags: [Explore]
+      operationId: v1BrowseFiles
+      x-needs-index: true
+      summary: Browse the mirrored drives
+      description: One level of the tree; without `root` the sources themselves. Sizes come from disk.
+      parameters:
+        - { name: root, in: query, schema: { $ref: "#/components/schemas/Root" }, description: "Empty: the list of mirrors." }
+        - { name: path, in: query, schema: { type: string }, description: "Folder inside that mirror, as this route returns it." }
+      responses:
+        "200":
+          description: The mirrors, or one folder with its subfolders and files.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  roots: { type: array, items: { type: object }, description: "Only without `root`." }
+                  root: { $ref: "#/components/schemas/Root" }
+                  path: { type: string }
+                  dirs: { type: array, items: { type: string } }
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        rel: { type: string }
+                        date: { type: string }
+                        gone: { type: [string, "null"] }
+                        size: { type: [integer, "null"] }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/folders:
+    get:
+      tags: [Explore]
+      operationId: v1ListFolders
+      x-needs-index: true
+      summary: The folders the archive holds
+      parameters:
+        - { name: source, in: query, schema: { $ref: "#/components/schemas/SourceFilter" } }
+        - { name: contains, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 300, maximum: 1000 } }
+      responses:
+        "200":
+          description: Folders with their message counts, most first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, messages]
+                      properties:
+                        path: { type: string, description: "The value the `folder` filter takes; a folder always means its subfolders too." }
+                        messages: { type: integer }
+                  count: { type: integer }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/filetypes:
+    get:
+      tags: [Explore]
+      operationId: v1ListFiletypes
+      x-needs-index: true
+      summary: The file types the archive holds
+      description: What the setting `filetype_hidden` hides is left out here and named in `hidden`.
+      parameters:
+        - { name: source, in: query, schema: { $ref: "#/components/schemas/SourceFilter" } }
+        - { name: limit, in: query, schema: { type: integer, default: 40, maximum: 200 } }
+      responses:
+        "200":
+          description: Types with their counts, most frequent first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [type, messages]
+                      properties:
+                        type: { type: string, description: "The extension without dot, lower-case." }
+                        messages: { type: integer }
+                  count: { type: integer }
+                  total_distinct: { type: integer }
+                  hidden: { type: array, items: { type: string } }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/people:
+    get:
+      tags: [Explore]
+      operationId: v1ListPeople
+      x-needs-index: true
+      summary: Who the archive knows
+      parameters:
+        - { name: source, in: query, schema: { $ref: "#/components/schemas/SourceFilter" } }
+        - { name: contains, in: query, schema: { type: string }, description: "Substring of the name." }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: Names with their message counts, most first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [name, messages]
+                      properties:
+                        name: { type: string, description: "The spelling the archive uses – the value the `person` filter takes." }
+                        messages: { type: integer }
+                  count: { type: integer }
+                  total_distinct: { type: integer }
+                  total_messages: { type: integer }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/threads:
+    get:
+      tags: [Explore]
+      operationId: v1GetThread
+      x-needs-index: true
+      summary: A whole conversation
+      description: |
+        The conversation a hit belongs to, oldest first, each message with
+        `cases`, the cases it already sits in. The key is not a path
+        segment – it carries colons and angle brackets – so it is a query.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string }, description: "The `thread` of a hit." }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: The messages of the conversation.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  thread: { type: string }
+                  count: { type: integer }
+                  items: { type: array, items: { $ref: "#/components/schemas/Hit" } }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: This index predates conversation grouping – rebuild it once.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents:
+    get:
+      tags: [Explore]
+      operationId: v1GetDocument
+      x-needs-index: true
+      summary: One item with its full text
+      description: |
+        The uid is not a path segment – it carries the source's path and a
+        chunk number – so it is a query. `facts` is what the kind of item
+        is known by, the same block `/api/v1/documents/facts` returns.
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+        - { name: before, in: query, schema: { type: integer, default: 0, maximum: 20 }, description: "Conversation context before." }
+        - { name: after, in: query, schema: { type: integer, default: 0, maximum: 20 } }
+      responses:
+        "200":
+          description: The item.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uid: { type: string }
+                  source: { $ref: "#/components/schemas/SourceKey" }
+                  who: { type: string }
+                  date: { type: string }
+                  title: { type: string }
+                  path: { type: string }
+                  uri: { type: string }
+                  text: { type: string }
+                  facts: { type: object, additionalProperties: true }
+                  file: { type: object, description: "Only for mirrored files." }
+                  context_before: { type: array, items: { type: object } }
+                  context_after: { type: array, items: { type: object } }
+        "400":
+          description: A number in the query that is not one (srv.badparam).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No item with this uid.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents/facts:
+    get:
+      tags: [Explore]
+      operationId: v1GetFacts
+      x-needs-index: true
+      summary: What one item is known by
+      description: |
+        Per kind of item, from the index row and the source file: a mail's
+        from, to, cc, date, folder and attachments; a chat message's from,
+        when and chat; an appointment's start, end, location, organiser and
+        attendees; a contact's org, role, emails and phones; a file's ext,
+        size and modified; a task's plan or list, assigned, due, state,
+        checklist or steps. A key that is missing means the item has none
+        of it. This is what the app's detail pane shows.
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      responses:
+        "200":
+          description: The facts, plus `uid`, `kind` and the item's `text`.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  uid: { type: string }
+                  kind: { type: string, description: "outlook, teams, kalender, kontakte, datei, pages, onenote, planner, todo." }
+                  text: { type: string }
+        "404":
+          description: No item with this uid (srv.detail.none).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/calendar:
+    get:
+      tags: [Explore]
+      operationId: v1GetCalendar
+      summary: Appointments, reconstructions and contacts in one file
+      description: |
+        The result of the calendar step, served as it lies – gzipped when
+        the request accepts it. Appointments recovered from invitation and
+        cancellation mails travel with it.
+      responses:
+        "200":
+          description: The file as the calendar step built it.
+          content:
+            application/json: {}
+        "404":
+          description: Not built yet (cal.missing); `recs` comes along empty.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/config:
+    get:
+      tags: [App]
+      operationId: v1GetConfig
+      summary: Every setting
+      description: |
+        The settings as they are on disk, defaults filled in. They used to
+        travel with `/api/status`; that one is polled, this one is asked
+        once and after a save.
+      responses:
+        "200":
+          description: The settings.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config]
+                properties:
+                  config: { $ref: "#/components/schemas/Config" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    patch:
+      tags: [App]
+      operationId: v1UpdateConfig
+      summary: Change settings
+      description: |
+        The keys the body names, the rest stays – which is what PATCH says,
+        and what `POST /api/config` has always done under a name that did
+        not. Numbers outside their bounds are clamped rather than refused;
+        the answer carries the settings as they now are.
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Config" }
+            example: { workers: 4, search_results: 50 }
+      responses:
+        "200":
+          description: The settings after the change.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config]
+                properties:
+                  config: { $ref: "#/components/schemas/Config" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+
+  /api/v1/app:
+    get:
+      tags: [App]
+      operationId: v1GetEnvironment
+      summary: Where things lie and what the app is
+      description: |
+        What does not change while the app runs: the folders it uses and
+        their defaults, whether it is a bundle or a script, the two
+        defaults behind settings, the Graph Explorer's address, the scopes
+        the chosen sources need with one example query each, and the
+        ready-made snippet for a Claude client. It used to travel with
+        every `/api/status` – paths and all – which is nothing a polled
+        answer should repeat. The page asks once, and again after a save.
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string, description: "The program's version." }
+                  build: { type: string, description: "The commit it was built from, where that is known." }
+                  api_version: { type: string, description: "The contract this API answers under – the same value as the `X-Munimentum-Api` header on every answer and as the path segment. Here, not in the polled status: it does not change." }
+                  releases_url: { type: string }
+                  default_client_id: { type: string, description: "The app registration used unless someone enters their own." }
+                  data_dir: { type: string }
+                  data_dir_default: { type: string }
+                  index_dir: { type: string }
+                  index_dir_default: { type: string }
+                  home_dir: { type: string, description: "The app folder – settings, token, run history." }
+                  app_location: { type: string }
+                  frozen: { type: boolean, description: "A bundle, not a source checkout." }
+                  skip_folders_default: { type: array, items: { type: string } }
+                  filetype_hidden_default: { type: array, items: { type: string } }
+                  graph_explorer: { type: string }
+                  scopes_needed: { type: array, items: { type: string } }
+                  scope_queries: { type: object, additionalProperties: { type: string }, description: "One example query per scope – the assistant shows them." }
+                  ollama_hint: { type: object, description: "How to install Ollama on this system." }
+                  mcp_client: { type: object, description: "The client configuration for Claude, http and stdio." }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/inventory:
+    get:
+      tags: [Archive]
+      operationId: v1GetInventory
+      summary: What the sources hold
+      description: |
+        Per source: where its export lies, when it last ran, and the
+        summary of its folders, chats, calendars, lists and notebooks –
+        how many there are, how many the rules take along, and which ones
+        are new or gone. This changes with a run, not with a poll, so it
+        left `/api/status`: names of mail folders are not something to
+        repeat every few seconds. The page asks when it shows the sources
+        and after a run.
+      responses:
+        "200":
+          description: The inventory.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exports:
+                    type: object
+                    description: Per source dir/exists/last_run.
+                  folders: { $ref: "#/components/schemas/Bestand" }
+                  folders_onedrive: { $ref: "#/components/schemas/Bestand" }
+                  conversations: { $ref: "#/components/schemas/Bestand" }
+                  lists: { $ref: "#/components/schemas/Bestand" }
+                  calendars:
+                    type: object
+                    description: abgeglichen, gesamt, gewaehlt, namen, neu.
+                  notebooks:
+                    type: object
+                    description: abgeglichen, gesamt, gewaehlt, namen, neu, eintraege.
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
 
 components:
   schemas:
+    SourceKey:
+      type: string
+      description: A kind of item as the index names it – `datei` is every mirrored file, whichever drive it came from (see `root`).
+      enum: [outlook, teams, kalender, kontakte, datei, pages, planner, todo, onenote]
+    SourceFilter:
+      type: string
+      description: |
+        The source filter: one key or several comma-separated. `outlook`,
+        `kalender`, `kontakte`, `pages`, `planner`, `todo` and `onenote`
+        name one kind each; `onedrive` and `sharepoint` one file mirror
+        each, `datei` every file mirror at once; `teams` the conversations
+        and the files shared in them; `all` or empty means everything.
+      example: "onedrive,sharepoint"
+    Root:
+      type: string
+      description: The export folder an item's file lives in – input for /source.
+      enum: [teams, outlook, onedrive, sharepoint, pages, planner, todo, onenote]
+    Config:
+      type: object
+      description: The configuration as app_config.json holds it – every key with its default. A write through /api/config takes any subset.
+      properties:
+        ollama_enabled: { type: boolean, default: true, description: "The AI switch: off, the app stops looking for Ollama and the index is built as full text only." }
+        index_semantic: { type: boolean, default: true, description: "Whether the index run computes vectors (needs Ollama and the embedding model)." }
+        onedrive_enabled: { type: boolean, default: false, description: "Master switch of the OneDrive mirror for the interface and the schedule." }
+        onedrive_rules: { type: string, default: "", description: "Include/exclude rules over the OneDrive folder tree, one per line; empty = everything." }
+        onedrive_max_mb: { type: integer, default: 0, description: "Size cap per file in MB; 0 = no cap." }
+        sharepoint_enabled: { type: boolean, default: false, description: "Master switch of the SharePoint library mirror." }
+        sharepoint_urls: { type: string, default: "", description: "Site or folder URLs, one per line; a folder URL mirrors that subtree." }
+        sharepoint_types_include: { type: string, default: "", description: "Comma-separated extensions that alone come along; empty = every type." }
+        sharepoint_types_exclude: { type: string, default: "", description: "Comma-separated extensions that never come along." }
+        sharepoint_max_mb: { type: integer, default: 0, description: "Size cap per file in MB; 0 = no cap." }
+        sharepoint_pages_enabled: { type: boolean, default: false, description: "Master switch of the SharePoint pages export." }
+        sharepoint_pages_urls: { type: string, default: "", description: "Site URLs whose modern pages (subsites included) are exported, one per line." }
+        sharepoint_pages_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones are linked." }
+        sync_cadence: { type: object, description: "Key -> always|daily|weekly|monthly: a source (onedrive, todo), a category (outlook:mail, teams:1on1), a unit (sharepoint-url:<url>, planner-url:<url>, pages-url:<url>, onenote:<id>) or a departure below a category (ou…" }
+        outlook_categories: { type: array, items: { type: string }, description: "The ticked mailbox categories: mail, calendar, contacts." }
+        teams_categories: { type: array, items: { type: string }, description: "The ticked Teams kinds: 1on1, group, meeting, channels." }
+        workers: { type: integer, default: 4, description: "How many requests go to Microsoft Graph at once. Graph allows no more than four per mailbox." }
+        mirror_workers: { type: integer, default: 8, description: "Applies to OneDrive and SharePoint. Unlike the mailbox, Microsoft documents no fixed limit here – throttling is budget-based, and the run then waits visibly (HTTP 429 in the log)." }
+        embed_images: { type: boolean, default: true, description: "Images end up inside the HTML file rather than as a link. Off: much smaller files, but the images are gone later." }
+        cache_images: { type: boolean, default: true, description: "Images already fetched are kept, so a repeat export does not download them again." }
+        refresh_channels: { type: boolean, default: true, description: "Channels are checked for changes every run: new posts via change tracking, replies on posts of the last two weeks every time, older posts once a week. Off: channels come once only, which is faster." }
+        skip_empty_chats: { type: boolean, default: true, description: "Chats consisting only of joins, calls and system messages are not created." }
+        include_hidden: { type: boolean, default: false, description: "Folders such as “Conversation History” that Outlook creates itself and normally hides." }
+        calendar_reconstruct: { type: boolean, default: true, description: "Reads every mail for invitations and cancellations and rebuilds appointments that are no longer in the calendar. The slowest step of a run." }
+        skip_folders: { type: array, items: { type: string }, description: "Folder names the default selection leaves out — trash, drafts, junk. Applies only while there are no rules above." }
+        filetype_hidden: { type: array, items: { type: string }, description: "Comma-separated, e.g. “p7s, asc”. These types do not appear in the file type filter — otherwise the list fills up with what mail programs attach by themselves: signature blocks, encryption envelopes." }
+        analytics_skip: { type: array, items: { type: string }, description: "One per line, spelled as it appears in the overview — usually your own name." }
+        folder_rules: { type: string, default: "", description: "Include/exclude rules over the mailbox folders, one per line; empty = every folder but skip_folders." }
+        calendar_rules: { type: string, default: "", description: "Include/exclude rules over the calendars; empty = the own calendar only." }
+        calendar_months_back: { type: integer, default: 1, description: "After the first export a run reads only this window: that many months back plus everything ahead. What was archived before stays. 0 = every appointment, every run." }
+        outlook_since: { type: string, default: "", description: "First export of a folder only: no mail older than this day. Empty = the whole history. Folders already exported are not affected." }
+        teams_since: { type: string, default: "", description: "First export of a conversation only: no message older than this day. Empty = the whole history. Conversations already exported are not affected." }
+        teams_rules: { type: string, default: "", description: "Rules over 1on1/<title>, group/<title>, meeting/<title>, channels/<team>/<channel>." }
+        sharepoint_rules: { type: string, default: "", description: "Path rules on top of the URL list and the type filters." }
+        todo_rules: { type: string, default: "", description: "Rules over the To Do list titles; empty = every list." }
+        planner_sweep_hours: { type: integer, default: 24, description: "Chat comments carry no change signal, so the export re-reads them for every task at this interval (one request per task). 0 = never; “Sync now” no longer forces it." }
+        index_batch: { type: integer, default: 128, description: "Chunks embedded per request to Ollama." }
+        ollama: { type: string, default: "http://localhost:11434", description: "Meaning-based search and the summary need language models on this machine. They are currently run by Ollama — hence the name of the switch below." }
+        embed_model: { type: string, default: "bge-m3", description: "Turns text into vectors. bge-m3 understands German and English. Changing it invalidates the existing index." }
+        chat_model: { type: string, default: "qwen3.6:27b", description: "The language model that writes the summary. Larger models phrase better and need more memory." }
+        answer_sources: { type: integer, default: 8, description: "How many hits the summary takes into account. More means more complete, but slower." }
+        semantic_min: { type: integer, default: 45, description: "Meaning-based search also finds what does not contain your words — “applied for leave” finds the mail about the time-off request. That needs a floor: without one it always returns its best hits, even when nothing fits." }
+        search_results: { type: integer, default: 20, description: "How many hits one page of search results shows. More means less paging." }
+        search_history: { type: string, enum: ["off", "30", "90", "365", "forever"], default: "90", description: "How long the search history is kept: off, 30, 90 or 365 days, or forever." }
+        case_export_dir: { type: string, default: "", description: "One ZIP per exported case below this path: the originals, an index page, the timeline, the list as CSV and the casebook. Empty means “Munimentum cases” in the Documents folder. Nothing is moved out of the archive." }
+        internal_domains: { type: string, default: "", description: "Comma-separated, like example.com, example.org. A person in a case whose address lies outside them is marked external. Empty means the domain of the account you signed in with." }
+        own_name: { type: string, default: "", description: "Your name as the archive writes it – left out of a case's People view, together with the address you signed in with. Empty means the name your sign-in carries." }
+        notifications: { type: string, enum: ["off", "errors", "all"], default: "errors", description: "System notifications at the end of a run: off, errors only, or all runs." }
+        keep_awake: { type: boolean, default: true, description: "Holds the machine off idle sleep while a run is on – on macOS through caffeinate, on Windows through a power request, on Linux through systemd-inhibit." }
+        userflow_actions: { type: integer, default: 20, description: "Remembers the last steps taken in the interface – only their kind (tab, search, run), never content such as search text or names. Kept only in the memory of the open page and gone when it closes; the app sends nothing." }
+        planner_enabled: { type: boolean, default: false, description: "Master switch of the Planner export." }
+        planner_urls: { type: string, default: "", description: "Board URLs, one per line." }
+        planner_attachments: { type: boolean, default: false, description: "Download the files a task references next to the board." }
+        todo_enabled: { type: boolean, default: false, description: "Master switch of the To Do export." }
+        onenote_enabled: { type: boolean, default: false, description: "Master switch of the OneNote export." }
+        onenote_rules: { type: string, default: "", description: "Include/exclude rules over the notebooks; empty = every notebook." }
+        onenote_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones land in the page's files folder." }
+        teams_attachments: { type: boolean, default: false, description: "Download the files a chat or channel post references next to the conversation." }
+        teams_channel_files: { type: boolean, default: false, description: "Mirror the Files tab of every exported channel like a SharePoint library." }
+        teams_files_max_mb: { type: integer, default: 0, description: "Size cap for both Teams file switches; 0 = no cap." }
+        runs_retention_months: { type: integer, default: 24, description: "How far back the run overview (Insights → Runs) reaches. Only counts, durations and switches are stored per run – locally in runs.db in the data folder. Older entries are removed on start and after every run." }
+        data_dir: { type: string, default: "", description: "The data folder; empty = the profile's default (data/)." }
+        index_dir: { type: string, default: "", description: "The index folder; empty = the profile's default (rag_store/)." }
+        log_retention_days: { type: integer, default: 14, description: "Every run's log is stored in the run history (runs.db) and shown inline under Insights → Runs. Lines older than this are dropped; the run rows themselves have their own retention above." }
+        status_poll_seconds: { type: integer, default: 30, minimum: 5, maximum: 600, description: "How often the page asks /api/status while nothing runs, in seconds. During a run it follows the run's own rhythm; this only decides how quickly something changed elsewhere shows up. Out-of-range values are clamped." }
+        mcp_port: { type: integer, default: 8365, description: "Which port the MCP server listens on. A changed port takes effect after restarting the server." }
+        mcp_enabled: { type: boolean, default: true, description: "The hard switch. Off means the server refuses to serve, no matter who starts it — the HTTP endpoint here as well as a client that launches it as a subprocess (stdio, which is how Claude Desktop does it)." }
+        mcp_cases_write: { type: boolean, default: false, description: "Off: Claude reads cases and saved searches but changes nothing. On: Claude can put items and notes into open cases through the MCP tools add_to_case and add_case_note – never delete, never close." }
+        mcp_autostart: { type: boolean, default: true, description: "The HTTP endpoint then runs as soon as the app runs. It covers that one route only: clients that launch the server themselves as a subprocess (stdio) do not need it and run independently." }
+        update_check: { type: boolean, default: true, description: "One request to api.github.com at start for a newer release." }
+        auth_mode: { type: string, enum: ["token", "login"], default: "token", description: "How access is obtained: a pasted token, or the device-code sign-in." }
+        client_id: { type: string, default: "", description: "Own app registration for the sign-in; empty = Microsoft's Graph Command Line Tools." }
+        tenant: { type: string, default: "", description: "Tenant for the sign-in; empty = common." }
+        device_code: { type: boolean, default: false, description: "Whether a device-code sign-in is in progress." }
+        language: { type: string, enum: ["auto", "de", "en", "fr"], default: "auto", description: "Interface language; auto follows the browser." }
+        tour_seen: { type: object, description: "Chapter key (archiv, quelle, suche, faelle, insights, claude) -> true once seen." }
+        schedule: { $ref: "#/components/schemas/Schedule" }
+    Schedule:
+      type: object
+      description: Repeats the run while the app is open – one switch per part, and the interval.
+      properties:
+        enabled: { type: boolean, default: false }
+        interval_minutes: { type: integer, default: 60, minimum: 5 }
+        outlook: { type: boolean, default: true }
+        teams: { type: boolean, default: true }
+        onedrive: { type: boolean, default: true }
+        sharepoint: { type: boolean, default: true }
+        sharepoint_pages: { type: boolean, default: true }
+        planner: { type: boolean, default: true }
+        todo: { type: boolean, default: true }
+        onenote: { type: boolean, default: true }
+        index: { type: boolean, default: true }
+        calendar: { type: boolean, default: true }
     I18nMessage:
       type: object
+      required: [k]
       description: A translatable message; the page renders lang[k] with v substituted.
       properties:
-        k: { type: string }
-        v: { type: object }
+        k: { type: string, description: "A key of lang/*.json." }
+        v: { type: object, description: "The placeholders the text takes." }
+      example: { k: "srv.busy", v: {} }
+    Bestand:
+      type: object
+      description: |
+        What one source holds and what comes along – the summary behind a
+        source card. `neu` are folders the last sync found and the rules
+        have not judged yet; `verschwunden` are ones that are gone at
+        Microsoft. German keys: they are the data's own names.
+      properties:
+        abgeglichen: { type: [string, "null"], format: date-time }
+        ordner_gesamt: { type: integer }
+        ordner_gewaehlt: { type: integer }
+        mails_gesamt: { type: integer }
+        mails_gewaehlt: { type: integer }
+        neu: { type: array, items: { type: string } }
+        verschwunden: { type: array, items: { type: string } }
+    Case:
+      type: object
+      required: [id, name, status]
+      description: |
+        A case on the versioned surface: the same thing `Fall` describes,
+        with English names (rest.py maps them). The four lists come with
+        one case, not with the list of them.
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [open, closed] }
+        created: { type: string, format: date-time }
+        changed: { type: string, format: date-time }
+        closed_at: { type: [string, "null"], format: date-time }
+        exported: { type: [string, "null"], description: "Path of the last export." }
+        exported_at: { type: [string, "null"], format: date-time }
+        items: { type: integer, description: "How many items the case holds." }
+        items_by_source: { type: object, additionalProperties: { type: integer } }
+        lists: { type: integer }
+        notes: { type: integer }
+        searches: { type: integer }
+        folders: { type: integer }
+        folder_list:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: integer }
+              name: { type: string }
+              created: { type: string, format: date-time }
+              items: { type: integer }
+        item_list:
+          type: array
+          description: With one case only – the items, English throughout (title, date, who, added, list, folder, via, remark).
+          items: { type: object, additionalProperties: true }
+        list_list:
+          type: array
+          description: Stored result lists (when, criteria, hits, folder).
+          items: { type: object, additionalProperties: true }
+        note_list:
+          type: array
+          description: The casebook, newest first (when, text, via).
+          items: { type: object, additionalProperties: true }
+        search_list:
+          type: array
+          description: The saved searches attached to the case (criteria, created, last_run, hits, case, folder).
+          items: { type: object, additionalProperties: true }
+    Error:
+      type: object
+      required: [ok, type, title, status, detail]
+      description: |
+        Every refusal, whatever the route and the status: a problem detail
+        as RFC 9457 describes it, served as `application/problem+json`.
+        `detail` is always English – it ends up in scripts, logs and bug
+        reports, and one language there beats a sentence that changes with
+        a setting. Two members are our own: `ok`, so the page can ask one
+        question of every answer, and `error` with the text key and its
+        placeholders, which the page renders in the user's language. A
+        reason that comes from the search engine rather than the app has
+        no key, and thus no `error`. The fields the route's own answer
+        would have (an empty list, the token's state) are kept beside it.
+        `message` repeats the reason as 11.3 sent it and goes away with
+        13.0; `/api/v1` is already without it.
+      properties:
+        ok: { const: false }
+        type: { type: string, description: "`urn:munimentum:error:<key>`, or `about:blank` when there is no key." }
+        title: { type: string, description: "The status code's phrase." }
+        status: { type: integer }
+        detail: { type: string, description: "The finished sentence, always English." }
+        instance: { type: string, description: "The path that was asked for." }
+        error:
+          type: object
+          required: [k]
+          properties:
+            k: { type: string, description: "A key of lang/*.json." }
+            v: { type: object, description: "The placeholders the text takes." }
+        message:
+          deprecated: true
+          $ref: "#/components/schemas/MessageOrKey"
+      example:
+        ok: false
+        type: "urn:munimentum:error:srv.busy"
+        title: Conflict
+        status: 409
+        detail: A job is already running.
+        instance: /api/run
+        error: { k: "srv.busy", v: {} }
+        message: { k: "srv.busy", v: {} }
     MessageOrKey:
       description: Either a plain sentence or an i18n message object.
       oneOf:
@@ -1976,21 +3953,25 @@ components:
         - { $ref: "#/components/schemas/I18nMessage" }
     Ok:
       type: object
+      required: [ok]
       properties:
         ok: { type: boolean }
     OkMessage:
       type: object
+      required: [ok]
       properties:
         ok: { type: boolean }
         message: { $ref: "#/components/schemas/MessageOrKey" }
     OkFall:
       type: object
+      required: [ok, case]
       description: The changed case, in full.
       properties:
         ok: { type: boolean }
         case: { $ref: "#/components/schemas/Fall" }
     Bilanz:
       type: object
+      required: [quelle, geprueft, stand]
       description: |
         One source's completeness balance (completeness.py). The question
         it answers: would a run with today's settings fetch anything now
@@ -2030,6 +4011,7 @@ components:
         typen: { type: array, description: "Mirrors only: files per extension (ext, n, bytes) inside the path scope, before type and size filters." }
     ProfileInfo:
       type: object
+      required: [name, aktiv]
       properties:
         name: { type: string }
         aktiv: { type: boolean, description: "The profile this instance runs." }
@@ -2039,6 +4021,7 @@ components:
         index: { type: boolean, description: "Whether an index exists." }
     ProfileState:
       type: object
+      required: [name, moeglich, mehrere]
       description: What every status poll carries about profiles.
       properties:
         name: { type: string }
@@ -2053,8 +4036,35 @@ components:
         ohne_nachfrage: { type: boolean }
         zuletzt: { type: [string, "null"], description: "The profile opened last, if it still exists." }
         alle: { type: array, items: { $ref: "#/components/schemas/ProfileInfo" } }
+    TokenState:
+      type: object
+      description: |
+        What the interface acts on: whether there is a usable key, whose it
+        is, how long it holds and which scopes it lacks. `/api/token`
+        answers the full `TokenStatus` when one is pasted.
+      properties:
+        present: { type: boolean }
+        valid: { type: boolean }
+        expired: { type: boolean }
+        account: { type: [string, "null"] }
+        name: { type: [string, "null"] }
+        expires_in_minutes: { type: [integer, "null"] }
+        missing: { type: array, items: { type: string }, description: "Scopes the chosen sources need and the key does not carry." }
+    OllamaState:
+      type: object
+      description: |
+        Four answers, no inventory: is it there, are the two models it
+        needs there, and is the whole thing switched off. Which models
+        those are is a setting; what else is installed is nobody's
+        business. `/api/ollama-recheck` answers the full probe.
+      properties:
+        running: { type: boolean }
+        has_model: { type: boolean, description: "The embedding model named in the settings is loaded." }
+        has_chat_model: { type: boolean }
+        disabled: { type: boolean }
     TokenStatus:
       type: object
+      required: [present, valid, expired]
       properties:
         present: { type: boolean }
         valid: { type: boolean }
@@ -2106,6 +4116,7 @@ components:
         config: { type: object, description: "Ready-made client snippets (http and stdio)." }
     LogLine:
       type: object
+      required: [n, level, text]
       properties:
         n: { type: integer }
         level: { type: string, enum: [info, ok, warn, err, head] }
@@ -2119,12 +4130,13 @@ components:
         text: { $ref: "#/components/schemas/MessageOrKey" }
     Hit:
       type: object
+      required: [uid, source, root, who, date, title, path, uri]
       properties:
-        uid: { type: string }
+        uid: { type: string, description: "`<source>:<path>:<n>` – input for /api/document and /api/detail." }
         cid: { type: integer, description: "Index row id; input for /api/similar." }
-        source: { type: string }
-        source_label: { type: string }
-        root: { type: string, description: "Input for /source." }
+        source: { $ref: "#/components/schemas/SourceKey" }
+        source_label: { type: string, description: "The source as the interface names it – for files the mirror (OneDrive, SharePoint, Teams)." }
+        root: { $ref: "#/components/schemas/Root" }
         who: { type: string }
         date: { type: string }
         title: { type: string }
@@ -2167,8 +4179,10 @@ components:
         fall: { type: [integer, "null"], description: "The \"Cases\" filter: a case id." }
         ordner: { type: [integer, "null"], description: "With `fall`: one folder of that case." }
         party: { type: string, enum: [all, internal, external], description: "The parties filter, see /api/search." }
+      example: { q: "\"budget frame\" 2026", mode: text, source: outlook, from: "2026-08-14", party: external }
     GespeicherteSuche:
       type: object
+      required: [id, name, kriterien]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -2182,6 +4196,7 @@ components:
         ordner_name: { type: [string, "null"] }
     FallKurz:
       type: object
+      required: [id, name, status, eintraege]
       description: One case as the list shows it – counts, no contents.
       properties:
         id: { type: integer }
@@ -2205,6 +4220,7 @@ components:
           items: { $ref: "#/components/schemas/Ordner" }
     Ordner:
       type: object
+      required: [id, name]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -2243,6 +4259,7 @@ components:
               items: { $ref: "#/components/schemas/GespeicherteSuche" }
     Eintrag:
       type: object
+      required: [id, key, src, root, rel]
       description: One item of a case – a pointer into the archive, with what the hit said at the time.
       properties:
         id: { type: integer }
@@ -2262,6 +4279,7 @@ components:
         wer_mail: { type: string, description: "The address behind `wer` where the index has one (mail: the sender, appointments: the organiser); empty otherwise. Set like thread_offen." }
     Run:
       type: object
+      required: [id, started_at]
       properties:
         id: { type: integer }
         started_at: { type: number }
@@ -2338,3 +4356,51 @@ components:
             source entry also carries `befunde` (kind -> the files behind
             the numbers, capped at 5000 per kind – `gekappt` says so) and
             `beiseite`, how many files an earlier "set aside" holds.
+  parameters:
+    CaseIdPfad:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+      description: The case's id, as /api/v1/cases lists them.
+    Source:
+      name: source
+      in: query
+      schema: { $ref: "#/components/schemas/SourceFilter" }
+      description: One source key or several comma-separated; empty or `all` means every source.
+    Uid:
+      name: uid
+      in: query
+      required: true
+      schema: { type: string }
+      description: The item's uid from a hit (`<source>:<path>:<n>`).
+      example: "outlook:E-Mail/Inbox/2026-09-15_offer.eml:0"
+    CaseId:
+      name: id
+      in: query
+      required: true
+      schema: { type: integer }
+      description: The case's id, see /api/faelle.
+  responses:
+    Forbidden:
+      description: The `Host` header does not name the bound loopback address (the DNS-rebinding guard, srv.forbidden) – every route answers this way.
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ServerError:
+      description: "An uncaught error inside the route (srv.internal); `error.v.error` carries the exception as `<Type>: <message>`."
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Error" }
+    MethodNotAllowed:
+      description: The path exists, the method does not serve it (srv.method). `Allow` names the ones that do.
+      headers:
+        Allow: { description: The methods this path serves., schema: { type: string } }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UnsupportedMediaType:
+      description: The body is not declared `application/json` (srv.mediatype); a body that is not valid JSON or not an object is a 400 (srv.badjson), one above 4 MB a 413 (srv.toobig).
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Error" }

@@ -218,6 +218,10 @@ VORGABEN = {
     "data_dir": "",
     "index_dir": "",
     "log_retention_days": 14,
+    # How often the page asks the app how it is, while nothing runs. During
+    # a run it follows closely regardless; this is the idle rhythm, and it
+    # only decides how fast something someone else changed shows up.
+    "status_poll_seconds": 30,
     "mcp_port": 8365,
     # The hard switch: off means mcp_server refuses service – over HTTP as
     # over stdio. Start/stop next to it only concerns the HTTP endpoint

@@ -99,7 +99,7 @@ function oeffnen(name){
   el('warten').hidden = false; el('warten').textContent = t('profile.opening', {name: name});
   post('/api/profile-open', {name: name, ohne_nachfrage: el('ohne').checked}).then(function(r){
     if(!r || !r.ok){
-      var m = (r && r.message) || {};
+      var m = (r && (r.error || r.message)) || {};
       fehlschlag(m.k ? t(m.k, m.v || {name: name}) : t('profile.notback', {url: location.origin + '/'}));
       return;
     }

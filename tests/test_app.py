@@ -250,9 +250,9 @@ def test_jede_noetige_berechtigung_hat_eine_beispielabfrage():
 
 
 def test_status_liefert_die_beispielabfragen(sandbox, with_ollama):
-    s = app_mod.App(app_mod.load_config()).status()
-    assert all(s["scope_queries"].get(x, "").startswith("https://graph.microsoft.com/")
-               for x in s["scopes_needed"])
+    u = app_mod.App(app_mod.load_config()).umgebung()
+    assert all(u["scope_queries"].get(x, "").startswith("https://graph.microsoft.com/")
+               for x in u["scopes_needed"])
 
 
 def test_token_status_ohne_token():
@@ -502,9 +502,10 @@ def test_vorgabe_waehlt_nichts_aus(sandbox):
 def test_api_files_ohne_index_meldet_den_grund(sandbox, server):
     _, port = server
     code, r = call(port, "GET", "/api/files")
-    assert code == 200 and (r.get("roots") == [] or r.get("roots"))
-    if r.get("error"):
-        assert r["error"]["k"] == "srv.noindex"
+    if code == 503:                                   # no index in this sandbox
+        assert r["roots"] == [] and r["error"]["k"] == "srv.noindex"
+    else:
+        assert code == 200 and "roots" in r
 
 
 def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
@@ -1286,12 +1287,14 @@ def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeyp
 
 def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
     """The first status poll arrives before the background check finishes."""
-    s = app_mod.App(app_mod.load_config()).status()
-    assert s["update"]["current"] == app_mod.version.VERSION
-    assert s["update"]["newer"] is False
-    assert s["update"]["releases_url"].startswith("https://github.com/")
-    # the build id travels with it – from git in a checkout
-    assert s["update"]["build"] == app_mod.version.build() and s["update"]["build"]
+    a = app_mod.App(app_mod.load_config())
+    assert a.status()["update"]["newer"] is False
+    # Which version runs is no state: it stands with the rest of what does
+    # not change while the app runs.
+    u = a.umgebung()
+    assert u["version"] == app_mod.version.VERSION
+    assert u["releases_url"].startswith("https://github.com/")
+    assert u["build"] == app_mod.version.build() and u["build"]
 
 
 def test_update_check_laeuft_im_hintergrund(sandbox, with_ollama, monkeypatch):
@@ -1424,8 +1427,8 @@ def test_status_nennt_die_noetigen_berechtigungen(sandbox, with_ollama):
     cfg = app_mod.load_config()
     cfg["outlook_categories"] = ["mail"]
     cfg["teams_categories"] = ["channels"]
-    s = app_mod.App(cfg).status()
-    assert s["scopes_needed"] == ["ChannelMessage.Read.All", "Mail.Read", "User.Read"]
+    u = app_mod.App(cfg).umgebung()
+    assert u["scopes_needed"] == ["ChannelMessage.Read.All", "Mail.Read", "User.Read"]
 
 
 # --------------------------------------------------------------------------
@@ -1488,7 +1491,9 @@ def test_api_run_log_liefert_das_gespeicherte_protokoll(server):
     a.history.log_lines([(lauf, 1.0, "info", '"zeile"')])
     code, r = call(port, "GET", "/api/run-log?id=" + str(lauf))
     assert code == 200 and r["lines"][0]["text"] == "zeile"
-    assert call(port, "GET", "/api/run-log?id=abc")[1]["lines"] == []
+    # An id that is not a number is the caller's mistake, not an empty run.
+    code, r = call(port, "GET", "/api/run-log?id=abc")
+    assert code == 400 and r["error"]["k"] == "srv.badparam"
 
 
 def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
@@ -2128,7 +2133,7 @@ def test_antwort_ohne_suchbegriff_und_ohne_treffer(sandbox, with_ollama, store):
         code, d = _antwort(port, {"q": "   "})
         assert code == 400 and schluessel(d["error"]) == "srv.answer.noquery"
         code, d = _antwort(port, {"q": "xyzzyplugh"})
-        assert code == 200 and schluessel(d["error"]) == "srv.answer.nohits"
+        assert code == 404 and schluessel(d["error"]) == "srv.answer.nohits"
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -2207,10 +2212,16 @@ def test_http_liefert_die_oberflaeche(server):
 
 
 def test_http_status(server):
+    """What is polled, and what is not: the settings have their own route
+    since 12.0 – they change when someone saves them, the status every few
+    seconds, and together they made every poll a third heavier."""
     _, port = server
     code, s = call(port, "GET", "/api/status")
     assert code == 200
-    assert set(["token", "ollama", "store", "jobs", "mcp", "config"]) <= set(s)
+    assert set(["token", "ollama", "store", "jobs", "mcp"]) <= set(s)
+    assert "config" not in s
+    code, r = call(port, "GET", "/api/v1/config")
+    assert code == 200 and r["config"]["workers"] == app_mod.DEFAULT_CONFIG["workers"]
 
 
 def test_http_fremder_host_wird_abgewiesen(server):
@@ -2227,6 +2238,63 @@ def test_http_unbekannter_pfad(server):
     _, port = server
     assert call(port, "GET", "/api/gibtsnicht")[0] == 404
     assert call(port, "POST", "/api/gibtsnicht", {})[0] == 404
+
+
+def test_jede_ablehnung_traegt_dieselbe_huelle(server, monkeypatch):
+    """One shape for every refusal (11.4), whatever the route and the
+    status: ok false, `error` with the key, its placeholders and the
+    sentence in the request's language, `message` as 11.3 sent it – a
+    script reads one field, the page one more."""
+    a, port = server
+    monkeypatch.setitem(a.cfg, "language", "de")   # the page's language, not the error's
+    code, r = call(port, "GET", "/api/gibtsnicht")
+    assert code == 404 and r["ok"] is False
+    assert r["error"] == {"k": "srv.notfound", "v": {"path": "/api/gibtsnicht"}}
+    assert r["type"] == "urn:munimentum:error:srv.notfound"
+    assert r["title"] == "Not Found" and r["status"] == 404
+    assert r["detail"] == "No such route: /api/gibtsnicht"
+    assert r["instance"] == "/api/gibtsnicht"
+    assert r["message"] == {"k": "srv.notfound", "v": {"path": "/api/gibtsnicht"}}
+    code, r = call(port, "GET", "/api/status", host="angreifer.example.com")
+    assert code == 403 and r["error"]["k"] == "srv.forbidden" and "127.0.0.1" in r["detail"]
+    code, r = call(port, "POST", "/api/token", {"token": ""})
+    assert code == 400 and r["error"]["k"] == "srv.token.empty" and r["message"]["k"] == "srv.token.empty"
+    code, r = call(port, "POST", "/api/folder-plan", {})
+    assert code == 404 and r["error"]["k"] == "srv.plan.nolist" and r["leer"] is True
+    monkeypatch.setattr(a, "status", lambda: 1 / 0)
+    code, r = call(port, "GET", "/api/status")
+    assert code == 500 and r["error"]["k"] == "srv.internal"
+    assert r["error"]["v"]["error"].startswith("ZeroDivisionError")
+    assert "ZeroDivisionError" in r["detail"]
+
+
+def test_die_ablehnung_spricht_immer_englisch(server, monkeypatch):
+    """`error.text` is for whoever has no strings – a script, a log, a bug
+    report – and is therefore always English, whatever the page speaks.
+    The page reads `k` and `v` and renders the user's language itself."""
+    a, port = server
+    monkeypatch.setitem(a.cfg, "language", "de")
+    code, r = call(port, "GET", "/api/gibtsnicht")
+    assert code == 404 and r["detail"] == "No such route: /api/gibtsnicht"
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", "/api/gibtsnicht", headers={"Accept-Language": "de-CH, fr;q=0.5"})
+    r = json.loads(con.getresponse().read())
+    con.close()
+    assert r["detail"] == "No such route: /api/gibtsnicht"
+    assert r["error"]["k"] == "srv.notfound"          # the page translates this
+
+
+def test_kein_fehler_wird_von_hand_gebaut():
+    """Every refusal goes through Handler._fehler: no route builds an
+    `{"ok": False, …}` or `{"error": …}` answer of its own – that is what
+    keeps the shape one."""
+    quelle = Path(app_mod.__file__).read_text(encoding="utf-8")
+    handler = quelle[quelle.index("class Handler("):]
+    ohne_helfer = re.sub(r"    def _fehler\(.*?\n(?=    def )", "", handler, flags=re.S)
+    assert '"ok": False' not in ohne_helfer
+    assert not re.search(r'_json\(\{"error"', ohne_helfer)
+    assert not re.search(r'return \{"error"', ohne_helfer)
+    assert "Unbekannter Pfad" not in quelle
 
 
 def test_http_token_speichern(server, sandbox):
@@ -2388,14 +2456,14 @@ def test_http_config_begrenzt_zahlen(server, key, eingabe, erwartet):
 
 
 def test_http_config_ignoriert_unsinnige_zahlen(server):
-    vorher = call(server[1], "GET", "/api/status")[1]["config"]["workers"]
+    vorher = call(server[1], "GET", "/api/v1/config")[1]["config"]["workers"]
     r = call(server[1], "POST", "/api/config", {"workers": "vier"})[1]
     assert r["config"]["workers"] == vorher
 
 
 def test_status_nennt_die_ordner_vorgabe(server):
     """The reset button in the UI fills itself from this."""
-    s = call(server[1], "GET", "/api/status")[1]
+    s = call(server[1], "GET", "/api/v1/app")[1]
     assert s["skip_folders_default"] == sorted(app_mod.SKIP_FOLDERS_DEFAULT)
 
 
@@ -2475,7 +2543,7 @@ def test_kalender_puffer_erkennt_neue_daten(sandbox, with_ollama):
 def test_http_suche_ohne_index_meldet_das(server):
     _, port = server
     code, r = call(port, "GET", "/api/search?q=test")
-    assert code == 200 and r["hits"] == [] and schluessel(r["error"]) == "srv.noindex"
+    assert code == 503 and r["hits"] == [] and schluessel(r["error"]) == "srv.noindex"
 
 
 def test_http_ollama_recheck(server):
@@ -2484,15 +2552,24 @@ def test_http_ollama_recheck(server):
     assert code == 200 and r["running"] is True
 
 
-def test_http_kaputter_body_wird_toleriert(server):
+def test_http_kaputter_body_wird_abgelehnt(server):
+    """A body that is there has to be JSON, and has to say so – an absent
+    one stays fine, every route falls back to its defaults."""
     _, port = server
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     con.request("POST", "/api/config", "{kein json",
                 {"Content-Type": "application/json"})
     r = con.getresponse()
-    r.read()
+    koerper = json.loads(r.read())
     con.close()
-    assert r.status == 200          # empty body -> nothing changed, no crash
+    assert r.status == 400 and koerper["error"]["k"] == "srv.badjson"
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("POST", "/api/config", "name=x", {"Content-Type": "text/plain"})
+    r = con.getresponse()
+    koerper = json.loads(r.read())
+    con.close()
+    assert r.status == 415 and koerper["error"]["k"] == "srv.mediatype"
+    assert call(port, "POST", "/api/wizard-seen")[0] == 200      # no body at all
 
 
 def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
@@ -2788,6 +2865,18 @@ var modal = {
 };
 knoten['modal'] = modal;
 
+// Dieselbe Buchfuehrung fuer die Zugangskarte: sie zeichnet ihr Inneres
+// genauso als Zeichenkette, und auch dort muss ein halb eingetippter
+// Schluessel einen Statusabruf ueberleben.
+global.zaehlerZugang = 0;
+var zugangRoh = mk('zugang-inhalt');
+knoten['zugang-inhalt'] = {
+  get innerHTML(){ return zugangRoh.innerHTML; },
+  set innerHTML(v){ zugangRoh.innerHTML = v; global.zaehlerZugang++;
+                    delete knoten['tok']; },
+  classList: zugangRoh.classList,
+};
+
 // Der Assistent baut sein Inneres als HTML-Zeichenkette. Fuer Tastatur und
 // Fokus braucht es daraus echte Knoten - sonst koennte kein Test zeigen, dass
 // ESC schliesst oder Tab im Fenster bleibt. Gemerkt je Zeichenkette, damit
@@ -2827,6 +2916,16 @@ modal.querySelectorAll = function(sel){
   });
 };
 modal.querySelector = function(sel){ return modal.querySelectorAll(sel)[0] || null; };
+// Die Zugangskarte wird genauso befragt wie das Fenster.
+knoten['zugang-inhalt'].querySelectorAll = function(sel){
+  var teile = String(sel).split(',');
+  return ausHtml(zugangRoh.innerHTML).filter(function(n){
+    return teile.some(function(s){ return passt(n, s); });
+  });
+};
+knoten['zugang-inhalt'].querySelector = function(sel){
+  return knoten['zugang-inhalt'].querySelectorAll(sel)[0] || null;
+};
 
 global.document = {
   documentElement: {},
@@ -2840,9 +2939,11 @@ global.document = {
     if(id === 'i18n') return {textContent: global.I18N_ROH};
     if(id === 'schritte') return {textContent: global.SCHRITTE_ROH};
     if(id === 'pruefungen') return {textContent: global.PRUEFUNGEN_ROH};
-    // Kindknoten des Assistenten gibt es nur, solange sie in dessen HTML stehen.
+    // Kindknoten des Assistenten und der Zugangskarte gibt es nur, solange
+    // sie in deren HTML stehen.
     if(id === 'tok' && !knoten['tok']){
-      if(modalRoh.innerHTML.indexOf('id="tok"') < 0) return null;
+      if(modalRoh.innerHTML.indexOf('id="tok"') < 0 &&
+         zugangRoh.innerHTML.indexOf('id="tok"') < 0) return null;
       knoten['tok'] = mk('tok');
     }
     return knoten[id] || (knoten[id] = mk(id));
@@ -2893,36 +2994,51 @@ S = {token: {present: true, valid: true, expired: false, missing: [],
      graph_explorer: 'https://example.invalid'};
 var modal = document.getElementById('modal');
 function pruefe(bedingung, text){ if(!bedingung) throw new Error(text); }
+// Die drei Antworten, die nicht gepollt werden: einmal geholt, in
+// renderStatus untergemischt. Die Tests fuellen sie wie die Seite.
+UMGEBUNG = {version: '1.0.1', build: 'abc1234', api_version: 'v1',
+            releases_url: 'https://x',
+            default_client_id: 'std', data_dir: '/tmp/daten', frozen: false,
+            ollama_hint: S.ollama_hint, scopes_needed: S.scopes_needed,
+            scope_queries: S.scope_queries, graph_explorer: S.graph_explorer,
+            mcp_client: {http: {}, stdio: {}},
+            skip_folders_default: [], filetype_hidden_default: []};
+BESTAND = {exports: {teams: {last_run: null}, outlook: {last_run: null}}};
+KONFIG = {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
+          language: 'auto', auth_mode: 'token', client_id: 'std',
+          tenant: 'organizations', embed_model: 'bge-m3', chat_model: 'qwen2.5:7b',
+          schedule: {enabled: false, interval_minutes: 60,
+                     outlook: true, teams: true, index: true}};
 """
 
 # The token wizard must not throw away a half-finished input.
 PRUEFUNG_EINGABE = GRUNDZUSTAND + """
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Assistent nicht gezeichnet');
-pruefe(modal.innerHTML.indexOf('me/messages') >= 0, 'Beispielabfrage fehlt');
-pruefe(zaehlerNeuzeichnen === 1, 'Erwartet: einmal gezeichnet');
+var karte = document.getElementById('zugang-inhalt');
+zeichneZugang();
+pruefe(karte.innerHTML.indexOf('id="tok"') >= 0, 'Zugangskarte nicht gezeichnet');
+pruefe(karte.innerHTML.indexOf('me/messages') >= 0, 'Beispielabfrage fehlt');
+pruefe(zaehlerZugang === 1, 'Erwartet: einmal gezeichnet');
 
-// Jemand fuegt den Token ein. Der Statusabruf alle 2,5 Sekunden ruft
-// openWizard erneut auf - ohne Zustandsaenderung darf dabei nichts passieren.
+// Jemand fuegt den Token ein. Jeder Statusabruf zeichnet die Karte neu -
+// ohne Zustandsaenderung darf dabei nichts passieren.
 document.getElementById('tok').value = 'EINGEFUEGTER-TOKEN';
-openWizard('token');
-pruefe(zaehlerNeuzeichnen === 1, 'Ohne Aenderung neu gezeichnet');
+zeichneZugang();
+pruefe(zaehlerZugang === 1, 'Ohne Aenderung neu gezeichnet');
 pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
        'Eingabe wurde beim Statusabruf geloescht');
 
 // Aendert sich der Zustand, MUSS neu gezeichnet werden - die Eingabe darf
 // trotzdem nicht verloren gehen.
 S.token.missing = ['Mail.Read'];
-openWizard('token');
-pruefe(zaehlerNeuzeichnen === 2, 'Zustandswechsel loeste kein Neuzeichnen aus');
-pruefe(modal.innerHTML.indexOf('fehlen noch Berechtigungen') >= 0,
+zeichneZugang();
+pruefe(zaehlerZugang === 2, 'Zustandswechsel loeste kein Neuzeichnen aus');
+pruefe(karte.innerHTML.indexOf('fehlen noch Berechtigungen') >= 0,
        'Zustandswechsel kam im Text nicht an');
 pruefe(document.getElementById('tok').value === 'EINGEFUEGTER-TOKEN',
        'Eingabe ging beim Neuzeichnen verloren');
 
-closeWizard('token');
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('id="tok"') >= 0, 'Nach Schliessen nicht gezeichnet');
+// Und die Karte ist kein Fenster mehr: nichts oeffnet sich von selbst.
+pruefe(wizardOffen === null, 'Zugang oeffnet immer noch ein Fenster');
 console.log('OK');
 """
 
@@ -2952,7 +3068,7 @@ console.log('OK');
 PRUEFUNG_KALENDER = GRUNDZUSTAND + """
 var geholt = 0;
 global.fetch = function(pfad){
-  if(String(pfad).indexOf('/api/calendar') >= 0){
+  if(String(pfad).indexOf('/api/v1/calendar') >= 0){
     geholt++;
     return Promise.resolve({json: function(){ return Promise.resolve(
       {generated: '2020-01-01T00:00:00', counts: {kalender: 1, rekonstruiert: 1},
@@ -3003,7 +3119,7 @@ setTimeout(function(){
 # silently stayed at "Loading…" because the promise swallowed the error.
 PRUEFUNG_ANSICHTEN = GRUNDZUSTAND + """
 global.fetch = function(pfad){
-  if(String(pfad).indexOf('/api/calendar') >= 0){
+  if(String(pfad).indexOf('/api/v1/calendar') >= 0){
     return Promise.resolve({json: function(){ return Promise.resolve(
       {generated: '2026-08-07T09:00:00', counts: {kalender: 2, rekonstruiert: 1},
        recs: [
@@ -3071,7 +3187,7 @@ setTimeout(function(){
 # stays at "Loading…" – and nobody knows why.
 PRUEFUNG_LADEFEHLER = GRUNDZUSTAND + """
 global.fetch = function(pfad){
-  if(String(pfad).indexOf('/api/calendar') >= 0)
+  if(String(pfad).indexOf('/api/v1/calendar') >= 0)
     return Promise.reject(new Error('Netz weg'));
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
@@ -3221,27 +3337,22 @@ console.log('OK');
 # renderStatus reads far more from the status than the wizards do – a
 # complete scaffold so the call above goes through.
 STATUS_GERUEST = """
+/* Genau die Felder, die /api/status seit 12.0 liefert - nicht mehr. Ein
+   grosszuegigerer Stummel haette den Fehler verdeckt, dass die Seite den
+   MCP-Schnipsel noch im Status suchte, obwohl er in der Umgebung liegt. */
 function statusGeruest(){
-  return {token: S.token, ollama: S.ollama, ollama_hint: S.ollama_hint,
-          scopes_needed: S.scopes_needed, scope_queries: S.scope_queries,
-          graph_explorer: S.graph_explorer, data_dir: '/tmp/daten', frozen: false,
-          store: {exists: true, chunks: 5, messages: 2, semantic: false,
-                  built_at: null, model: null, features: ['thread', 'gone']},
-          auth: {mode: 'token', signed_in: false, account: null, device: null,
-                 own_registration: false, client_id: 'std', tenant: 'organizations',
-                 default_client_id: 'std'},
-          update: {status: 'off', current: '1.0.1', latest: null, url: null,
-                   newer: false, error: null, releases_url: 'https://x'},
-          exports: {teams: {last_run: null}, outlook: {last_run: null}},
+  return {token: S.token, ollama: S.ollama,
+          store: {exists: true, semantic: false, built_at: null,
+                  features: ['thread', 'gone']},
+          auth: {signed_in: false, account: null, device: null,
+                 own_registration: false},
+          update: {status: 'off', latest: null, url: null, newer: false,
+                   ahead: false, error: null},
           jobs: {busy: false, job: null, last: null, token_expired: false, seq: 0},
-          mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null,
-                config: {http: {}, stdio: {}}},
-          config: {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
-                   language: 'auto',
-                   schedule: {enabled: false, interval_minutes: 60,
-                              outlook: true, teams: true, index: true}},
-          calendar: {exists: false, built_at: null},
-          schedule_enabled: false, schedule_next: null, wizard: null};
+          mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null},
+          calendar: {built_at: null},
+          profile: {name: 'standard', moeglich: false, mehrere: false},
+          schedule_next: null, wizard: null};
 }
 """
 
@@ -3391,7 +3502,7 @@ renderStatus(st);
 pruefe(kachel('mcp').indexOf('HTTP') >= 0, 'Der abgeschaltete Transport wird nicht benannt');
 pruefe(hinweis('mcp').indexOf('stdio') >= 0, 'Tooltip verschweigt den anderen Weg');
 
-st.config.mcp_enabled = false;
+KONFIG = Object.assign({}, KONFIG, {mcp_enabled: false});
 renderStatus(st);
 pruefe(kachel('mcp').indexOf('HTTP') < 0, 'Ganz aus, aber der Transport steht da');
 pruefe(document.getElementById('p-mcp').className.indexOf('ok') < 0,
@@ -3578,8 +3689,8 @@ def test_assistent_merkt_wenn_das_modell_nachgeladen_wurde():
 # only in the way; but when a permission really is missing, it is the topic.
 PRUEFUNG_RECHTE = GRUNDZUSTAND + """
 S.token.missing = [];
-openWizard('token');
-var html = modal.innerHTML;
+zugangNeu();
+var html = document.getElementById('zugang-inhalt').innerHTML;
 pruefe(html.indexOf('<details class="rechte">') >= 0,
        'Berechtigungen stehen nicht in einem einklappbaren Block');
 pruefe(html.indexOf('Mail.Read') >= 0, 'Berechtigungen fehlen ganz');
@@ -3592,17 +3703,17 @@ pruefe(liste.indexOf('Mail.Read') < 0, 'Berechtigungen stehen noch in den Schrit
 
 // Fehlt wirklich etwas, muss der Block von selbst offen stehen.
 S.token.missing = ['Mail.Read'];
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('<details class="rechte" open>') >= 0,
+zugangNeu();
+pruefe(document.getElementById('zugang-inhalt').innerHTML.indexOf('<details class="rechte" open>') >= 0,
        'Fehlende Berechtigung, Block aber zugeklappt');
 
 // Und der Dialog spricht nicht mehr von Graph oder Tenant - ausser im Link
 // auf die Seite, die tatsaechlich so heisst.
 S.token.missing = [];
-openWizard('token');
-var ohneLink = modal.innerHTML.replace(/<a [^>]*>.*?<\\/a>/g, '');
+zugangNeu();
+var ohneLink = document.getElementById('zugang-inhalt').innerHTML.replace(/<a [^>]*>.*?<\\/a>/g, '');
 ['Tenant', 'Microsoft Graph', 'Access Token holen'].forEach(function(w){
-  pruefe(ohneLink.indexOf(w) < 0, 'Dialog sagt noch "' + w + '"');
+  pruefe(ohneLink.indexOf(w) < 0, 'Die Karte sagt noch "' + w + '"');
 });
 console.log('OK');
 """
@@ -3622,9 +3733,9 @@ function handelt(knopf){
   return knopf.onclickCode.replace(/closeWizard\\([^)]*\\);?\\s*/g, '').length > 0;
 }
 
-// Alle drei Zustaende, die es gibt.
+// Die beiden Zustaende, die es noch als Fenster gibt - der Zugang ist
+// seit 12.0 eine Karte in den Einstellungen und kein Assistent mehr.
 var faelle = [
-  ['token',  function(){ S.token.present = false; }],
   ['ollama', function(){ S.ollama.running = true; S.ollama.has_model = false; }],
   ['ollama', function(){ S.ollama.running = true; S.ollama.has_model = true; }]
 ];
@@ -3665,21 +3776,23 @@ PRUEFUNG_TASTATUR = GRUNDZUSTAND + """
 var ausloeser = {focus: function(){ document.activeElement = this; }, name: 'Kachel'};
 document.activeElement = ausloeser;
 
-S.token.present = false;
-openWizard('token');
+// Der Zugang ist seit 12.0 eine Karte; Fenster gibt es nur noch fuer
+// Ollama - an ihm haengt also die Tastaturbedienung.
+S.ollama.has_model = false;
+openWizard('ollama');
 pruefe(document.activeElement !== ausloeser, 'Fokus blieb ausserhalb des Dialogs');
-pruefe(document.activeElement.id === 'tok', 'Fokus nicht im Textfeld');
+pruefe(document.activeElement.className.indexOf('act') >= 0, 'Fokus nicht auf der Handlung');
 
-// Neuzeichnen darf den Fokus nicht aus dem Textfeld reissen.
+// Neuzeichnen darf den Fokus nicht wegreissen.
 var drin = document.activeElement;
-S.token.missing = ['Mail.Read'];
-openWizard('token');
+S.ollama.running = true;
+openWizard('ollama');
 pruefe(document.activeElement === drin, 'Neuzeichnen riss den Fokus weg');
 
 // Tab am Ende springt an den Anfang, Shift+Tab am Anfang ans Ende.
 var liste = modal.querySelectorAll(
   'button, [href], textarea, input, select, summary, [tabindex]:not([tabindex="-1"])');
-pruefe(liste.length >= 4, 'Zu wenige fokussierbare Elemente: ' + liste.length);
+pruefe(liste.length >= 3, 'Zu wenige fokussierbare Elemente: ' + liste.length);
 liste[liste.length - 1].focus();
 pruefe(taste('Tab').verhindert, 'Tab am Ende nicht abgefangen');
 pruefe(document.activeElement === liste[0], 'Tab am Ende verliess den Dialog');
@@ -3688,9 +3801,9 @@ pruefe(document.activeElement === liste[liste.length - 1], 'Shift+Tab verliess d
 
 // Strg+Enter loest die primaere Handlung aus, ohne dorthin tabben zu muessen.
 global.gespeichert = false;
-global.saveToken = function(){ global.gespeichert = true; };
+global.recheckOllama = function(){ global.gespeichert = true; };
 taste('Enter', {ctrlKey: true});
-pruefe(global.gespeichert === true, 'Strg+Enter speicherte nicht');
+pruefe(global.gespeichert === true, 'Strg+Enter loeste die Handlung nicht aus');
 
 // ESC schliesst - und gibt den Fokus zurueck, wo er herkam.
 pruefe(taste('Escape').verhindert, 'ESC nicht abgefangen');
@@ -3712,42 +3825,48 @@ def test_assistent_ist_mit_der_tastatur_bedienbar():
 # The wizard offers both paths – the key stays preselected because it
 # works without having to ask IT first.
 PRUEFUNG_ANMELDEWAHL = GRUNDZUSTAND + """
-S.auth = {mode: 'token', signed_in: false, account: null, own_registration: false,
-          client_id: 'std', tenant: 'organizations', default_client_id: 'std',
-          device: null};
+// Der Status sagt, was folgt; der Weg und die eigenen Kennungen stehen in
+// den Einstellungen, die Vorgabe-Kennung in der Umgebung.
+S.auth = {signed_in: false, account: null, own_registration: false, device: null};
+S.default_client_id = 'std';
+KONFIG = Object.assign({}, KONFIG, {auth_mode: 'token', client_id: 'std',
+                                    tenant: 'organizations'});
 S.token.present = false;
-closeWizard('token'); openWizard('token');
-var html = modal.innerHTML;
+zugangNeu();
+var karte = document.getElementById('zugang-inhalt');
+var html = karte.innerHTML;
 pruefe(html.indexOf('name="authmode"') >= 0, 'Keine Auswahl der Anmeldewege');
 pruefe(html.indexOf('value="token" checked') >= 0, 'Schluessel ist nicht vorausgewaehlt');
 pruefe(html.indexOf('id="tok"') >= 0, 'Textfeld fuer den Schluessel fehlt');
 pruefe(html.indexOf('Graph Explorer') >= 0, 'Der Schluesselweg wird nicht erklaert');
 
-// Umschalten: derselbe Assistent, anderer Inhalt.
-S.auth.mode = 'login';
-openWizard('token');
-html = modal.innerHTML;
+// Umschalten: dieselbe Karte, anderer Inhalt. Der Weg steht in den
+// Einstellungen, nicht im Status - der sagt nur, was daraus folgt.
+KONFIG = Object.assign({}, KONFIG, {auth_mode: 'login'});
+zugangNeu();
+html = karte.innerHTML;
 pruefe(html.indexOf('value="login" checked') >= 0, 'Login nicht vorausgewaehlt');
 pruefe(html.indexOf('id="tok"') < 0, 'Textfeld steht noch da');
 pruefe(html.indexOf('id="au-client"') >= 0, 'Eigene Registrierung nicht erreichbar');
 
 // Ein laufender Gerätecode ist das Einzige, was dann zaehlt.
 S.auth.device = {code: 'ABCD-1234', url: 'https://ms.example/dev', done: false};
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('ABCD-1234') >= 0, 'Der Code wird nicht angezeigt');
+zugangNeu();
+pruefe(karte.innerHTML.indexOf('ABCD-1234') >= 0, 'Der Code wird nicht angezeigt');
 
 // Angemeldet: die Abmeldung ist der sekundaere Knopf, nicht der primaere.
 S.auth.device = null; S.auth.signed_in = true; S.auth.account = 'a@b.c';
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('a@b.c') >= 0, 'Konto wird nicht genannt');
-var act = modal.querySelector('button.act'), ghost = modal.querySelector('button.ghost');
+zugangNeu();
+pruefe(karte.innerHTML.indexOf('a@b.c') >= 0, 'Konto wird nicht genannt');
+var act = karte.querySelector('button.act'), ghost = karte.querySelector('button.ghost');
 pruefe(act.onclickCode.indexOf('starteLogin') >= 0, 'Primaer ist nicht das Anmelden');
 pruefe(ghost && ghost.onclickCode.indexOf('abmelden') >= 0, 'Abmelden fehlt');
 
 // Eigene Registrierung: der Block steht offen, wenn eine eingetragen ist.
-S.auth.own_registration = true; S.auth.client_id = 'eigene-id';
-openWizard('token');
-pruefe(modal.innerHTML.indexOf('value="eigene-id"') >= 0, 'Eigene Client-ID fehlt');
+S.auth.own_registration = true;
+KONFIG = Object.assign({}, KONFIG, {client_id: 'eigene-id'});
+zugangNeu();
+pruefe(karte.innerHTML.indexOf('value="eigene-id"') >= 0, 'Eigene Client-ID fehlt');
 console.log('OK');
 """
 
@@ -3906,16 +4025,19 @@ def test_http_status_nennt_den_anmeldemodus(server):
     code, r = call(port, "GET", "/api/status")
     assert code == 200
     au = r["auth"]
-    assert au["mode"] == "token"                     # the key remains the default
     assert au["own_registration"] is False
-    assert au["client_id"] == app_mod.auth.STANDARD_CLIENT_ID
+    # The mode and the ids are settings, not state – the status says only
+    # what follows from them.
+    assert "mode" not in au and "client_id" not in au
+    assert call(port, "GET", "/api/v1/config")[1]["config"]["auth_mode"] == "token"
+    assert call(port, "GET", "/api/v1/app")[1]["default_client_id"] == app_mod.auth.STANDARD_CLIENT_ID
 
 
 def test_http_modus_umschalten(server):
     a, port = server
     code, r = call(port, "POST", "/api/config", {"auth_mode": "login"})
     assert code == 200 and r["config"]["auth_mode"] == "login"
-    assert call(port, "GET", "/api/status")[1]["auth"]["mode"] == "login"
+    assert call(port, "GET", "/api/v1/config")[1]["config"]["auth_mode"] == "login"
 
     # Unknown values fall back to the path that always works.
     call(port, "POST", "/api/config", {"auth_mode": "quatsch"})
@@ -3928,7 +4050,8 @@ def test_http_eigene_registrierung_speichern(server):
                    {"client_id": " eigene-id ", "tenant": "contoso.example"})
     assert code == 200 and r["config"]["client_id"] == "eigene-id"
     st = call(port, "GET", "/api/status")[1]["auth"]
-    assert st["own_registration"] is True and st["tenant"] == "contoso.example"
+    assert st["own_registration"] is True
+    assert call(port, "GET", "/api/v1/config")[1]["config"]["tenant"] == "contoso.example"
     assert a.cfg["tenant"] == "contoso.example"
 
 
@@ -4058,7 +4181,7 @@ def test_http_thread_ohne_index(server, monkeypatch):
     monkeypatch.setattr(a.search, "ensure", lambda cfg: None)
     a.search.error = {"k": "cal.missing", "v": {}}
     code, r = call(port, "GET", "/api/thread?key=x")
-    assert code == 200 and r["messages"] == [] and r["error"]
+    assert code == 503 and r["messages"] == [] and r["error"]
 
 
 PRUEFUNG_VERLAUF = GRUNDZUSTAND + """
@@ -4066,7 +4189,7 @@ KANN_VERLAUF = true;      // otherwise set from store.features
 // The conversation comes with one fetch and stands as one fold under the
 // content; the facts beyond the hit come with another and are drawn on
 // arrival. A page can never have a conversation – nothing is fetched.
-global.ANTWORT = {count: 3, messages: [
+global.ANTWORT = {count: 3, items: [
   {uid: 'a', date: '2025-06-01', who: 'Alice', title: 'Frage', uri: 'o365://outlook/a.eml'},
   {uid: 'b', date: '2025-06-02', who: 'Bob', title: 'RE: Frage', uri: 'o365://outlook/b.eml'},
   {uid: 'c', date: '2025-06-03', who: 'Alice', title: 'AW: Frage', uri: 'o365://outlook/c.eml'}]};
@@ -4074,8 +4197,8 @@ var geholt = [];
 global.fetch = function(pfad){
   geholt.push(String(pfad));
   return Promise.resolve({json: function(){
-    if(String(pfad).indexOf('/api/thread') === 0) return Promise.resolve(global.ANTWORT);
-    if(String(pfad).indexOf('/api/detail') === 0) return Promise.resolve({kind: 'outlook', text: 'Voller Text',
+    if(String(pfad).indexOf('/api/v1/threads') === 0) return Promise.resolve(global.ANTWORT);
+    if(String(pfad).indexOf('/api/v1/documents/facts') === 0) return Promise.resolve({kind: 'outlook', text: 'Voller Text',
       from: {name: 'Alice', mail: 'alice@example.com'}, to: [{name: 'Bob', mail: 'bob@example.com'}], cc: [],
       attachments: [{name: 'Rechnung.pdf', size: 2048}]});
     return Promise.resolve(statusGeruest());
@@ -4113,7 +4236,7 @@ setTimeout(function(){
   waehleTreffer(2);
   setTimeout(function(){
     pruefe(document.getElementById('detail-verlauf').innerHTML === '', 'Gespraech an einer Seite');
-    pruefe(!geholt.slice(vorher).some(function(p){ return p.indexOf('/api/thread') === 0; }), 'Die Seite fragt nach dem Gespraech');
+    pruefe(!geholt.slice(vorher).some(function(p){ return p.indexOf('/api/v1/threads') === 0; }), 'Die Seite fragt nach dem Gespraech');
     console.log('OK');
   }, 20);
 }, 20);
@@ -4170,7 +4293,7 @@ zeigeFilterstand();
 pruefe(!document.getElementById('p-party').classList.contains('hide') && document.getElementById('pw-party').textContent === t('search.party.external'), 'Beteiligtenpille');
 // choosing in the popover sets the control and searches nothing
 var gesucht = 0;
-global.fetch = function(pfad){ if(String(pfad).indexOf('/api/search') >= 0) gesucht++; return Promise.resolve({json: function(){ return Promise.resolve({}); }}); };
+global.fetch = function(pfad){ if(String(pfad).indexOf('/search?') >= 0) gesucht++; return Promise.resolve({json: function(){ return Promise.resolve({}); }}); };
 pillSetzen('party', 'internal');
 pruefe(document.getElementById('f-party').value === 'internal' && gesucht === 0, 'Pille sucht von selbst');
 pruefe(document.getElementById('po-party').classList.contains('hide'), 'Popover bleibt nach der Wahl offen');
@@ -4200,7 +4323,7 @@ function geruest(){ var st = statusGeruest(); st.store.features = ['ext', 'key']
 global.fetch = function(pfad){
   var m = /uid=([^&]+)/.exec(String(pfad));
   return Promise.resolve({json: function(){
-    return Promise.resolve(String(pfad).indexOf('/api/detail') === 0 ? (FAKTEN[decodeURIComponent(m[1])] || {}) : geruest()); }});
+    return Promise.resolve(String(pfad).indexOf('/api/v1/documents/facts') === 0 ? (FAKTEN[decodeURIComponent(m[1])] || {}) : geruest()); }});
 };
 renderHits({results: [
   {uid: 'k:1', title: 'Budget', who: 'Alice Beispiel', who_mail: 'alice@example.com', date: '2026-09-16 14:00', source: 'kalender', context: 'kalender/Arbeit', preview: 'x', uri: 'o365://outlook/kalender/Arbeit/a.ics'},
@@ -4291,7 +4414,7 @@ setTimeout(function(){
   pruefe(document.getElementById('f-source').value === 'kalender', 'Quelle nicht gesetzt');
   pruefe(document.getElementById('f-from').value === '2026-09-01' && document.getElementById('f-to').value === '2026-09-30',
          'Monat nicht als Datum gesetzt: ' + document.getElementById('f-from').value + ' ' + document.getElementById('f-to').value);
-  pruefe(geholt.some(function(p){ return p.indexOf('/api/search') === 0 && p.indexOf('source=kalender') > 0; }), 'Suche nicht gestartet');
+  pruefe(geholt.some(function(p){ return p.indexOf('/api/v1/search') === 0 && p.indexOf('source=kalender') > 0; }), 'Suche nicht gestartet');
   calMode = 'week'; cursor = new Date(2026, 8, 16);   // a Wednesday
   kalenderSuchen();
   pruefe(document.getElementById('f-from').value === '2026-09-14' && document.getElementById('f-to').value === '2026-09-20', 'Woche nicht als Datum gesetzt');
@@ -4484,7 +4607,9 @@ def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
     call(port, "GET", "/api/search?k=50")
     assert gesehen["k"] == 50
     call(port, "GET", "/api/search?k=99999")     # not half the database
-    assert gesehen["k"] == 100
+    assert gesehen["k"] == 101        # one above the largest page: has_more
+    call(port, "GET", "/api/search?limit=7")     # the name the rest of the API uses
+    assert gesehen["k"] == 7
 
 
 @pytest.mark.parametrize("wert,erwartet", [
@@ -4504,13 +4629,13 @@ var gefragt = [];
 global.fetch = function(pfad){
   gefragt.push(String(pfad));
   return Promise.resolve({json: function(){
-    return Promise.resolve(String(pfad).indexOf('/api/search') === 0
+    return Promise.resolve(String(pfad).indexOf('/api/v1/search') === 0
       ? {results: [], count: 0, backend: 'bm25'} : statusGeruest());
   }});
 };
 S.config = {search_results: 50};
 doSearch(0);
-pruefe(gefragt[0].indexOf('k=50') >= 0, 'Einstellung wirkt nicht: ' + gefragt[0]);
+pruefe(gefragt[0].indexOf('limit=50') >= 0, 'Einstellung wirkt nicht: ' + gefragt[0]);
 
 // Und das Blaettern springt genauso weit – sonst uebersprungen oder doppelt.
 var treffer = [];
@@ -4681,7 +4806,7 @@ def test_http_datenordner_setzen(server, standardort, tmp_path):
     assert a.cfg["data_dir"] == str(ziel.resolve())
     # The app does NOT switch over while running – BASE goes to every
     # subprocess as its working directory, possibly mid-export.
-    assert call(port, "GET", "/api/status")[1]["data_dir"] != str(ziel)
+    assert call(port, "GET", "/api/v1/app")[1]["data_dir"] != str(ziel)
 
     # The index has its own path; empty means back to the default.
     code, r = call(port, "POST", "/api/data-dir",
@@ -5513,7 +5638,7 @@ def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
 def test_exportliste_ohne_abgeglichenen_baum(server):
     a, port = server
     code, r = call(port, "POST", "/api/folder-plan", {})
-    assert code == 200 and r == {"ok": False, "leer": True}
+    assert code == 404 and r["leer"] is True and r["error"]["k"] == "srv.plan.nolist"
 
 
 # --------------------------------------------------------------------------
@@ -5562,13 +5687,13 @@ def test_kalenderliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
 def test_kalenderstand_nennt_die_gewaehlten_namen(server, sandbox):
     a, port = server
     _kalenderliste(sandbox, KALENDER)
-    c = call(port, "GET", "/api/status")[1]["calendars"]
+    c = call(port, "GET", "/api/v1/inventory")[1]["calendars"]
     assert (c["gesamt"], c["gewaehlt"], c["namen"]) == (2, 1, ["Arbeit"])
     assert c["abgeglichen"]
 
 
 def test_kalenderstand_ohne_liste(server):
-    c = call(server[1], "GET", "/api/status")[1]["calendars"]
+    c = call(server[1], "GET", "/api/v1/inventory")[1]["calendars"]
     assert c == {"abgeglichen": None, "gesamt": 0, "gewaehlt": 0, "namen": [], "neu": []}
 
 
@@ -5614,9 +5739,10 @@ def test_ausgeblendete_dateitypen_nur_in_der_liste(server, sandbox, monkeypatch)
 
 def test_dateitypen_vorgabe_ist_sichtbar(server):
     """The default is visible in the field, not a silent rule in the code."""
-    s = call(server[1], "GET", "/api/status")[1]
+    s = call(server[1], "GET", "/api/v1/app")[1]
+    cfg = call(server[1], "GET", "/api/v1/config")[1]["config"]
     assert s["filetype_hidden_default"] == sorted(app_mod.FILETYPE_HIDDEN_DEFAULT)
-    assert s["config"]["filetype_hidden"] == s["filetype_hidden_default"]
+    assert cfg["filetype_hidden"] == s["filetype_hidden_default"]
     assert 'id="c-filetype_hidden"' in app_mod.seite()
 
 
@@ -5797,7 +5923,7 @@ global.fetch = function(pfad){
   gefragt.push(String(pfad));
   var m = String(pfad).match(/source=(\w+)/);
   return Promise.resolve({json: function(){
-    return Promise.resolve({folders: ORDNER[m ? m[1] : 'all'] || []}); }});
+    return Promise.resolve({items: ORDNER[m ? m[1] : 'all'] || []}); }});
 };
 
 var feld = document.getElementById('f-folder');
@@ -5875,21 +6001,21 @@ def test_ordnerauswahl_folgt_der_quelle():
 # a name that does not exist should learn that before the search.
 PRUEFUNG_PERSONENVORSCHLAG = GRUNDZUSTAND + r"""
 var LEUTE = {
-  bei: {people: [{name:'Alice Beispiel', messages:1240},
+  bei: {items: [{name:'Alice Beispiel', messages:1240},
                  {name:'Bob Beispiel', messages:87}],
         total_distinct: 2, total_messages: 1327},
-  viele: {people: [{name:'A', messages:9}, {name:'B', messages:8},
+  viele: {items: [{name:'A', messages:9}, {name:'B', messages:8},
                    {name:'C', messages:7}, {name:'D', messages:6},
                    {name:'E', messages:5}], total_distinct: 31, total_messages: 900},
-  einer: {people: [{name:'Nur Eine', messages:4}], total_distinct: 1, total_messages: 4},
-  xyz: {people: [], total_distinct: 0}
+  einer: {items: [{name:'Nur Eine', messages:4}], total_distinct: 1, total_messages: 4},
+  xyz: {items: [], total_distinct: 0}
 };
 var gefragt = [];
 global.fetch = function(pfad){
   gefragt.push(String(pfad));
   var m = String(pfad).match(/contains=([^&]*)/);
   return Promise.resolve({json: function(){
-    return Promise.resolve(LEUTE[m ? decodeURIComponent(m[1]) : ''] || {people: []}); }});
+    return Promise.resolve(LEUTE[m ? decodeURIComponent(m[1]) : ''] || {items: []}); }});
 };
 
 var feld = document.getElementById('f-person'), kasten = document.getElementById('personliste');
@@ -5903,7 +6029,7 @@ function tippe(wort, dann){
 feld.value = 'b';
 personVorschlagen();
 setTimeout(function(){
-  pruefe(gefragt.length === 0, 'Bei einem Zeichen schon gefragt');
+  pruefe(gefragt.length === 0, 'Bei einem Zeichen schon gefragt: ' + gefragt.join(' | '));
 
   tippe('bei', function(){
     pruefe(gefragt[0].indexOf('limit=5') >= 0, 'Nicht auf fuenf begrenzt: ' + gefragt[0]);
@@ -5970,13 +6096,13 @@ var gefragt = [];
 global.fetch = function(pfad){
   gefragt.push(String(pfad));
   var m = String(pfad).match(/source=(\w+)/), quelle = m ? m[1] : 'all';
-  if(String(pfad).indexOf('/api/filetypes') >= 0){
+  if(String(pfad).indexOf('/api/v1/filetypes') >= 0){
     return Promise.resolve({json: function(){
-      return Promise.resolve({filetypes: TYPEN[quelle] || []}); }});
+      return Promise.resolve({items: TYPEN[quelle] || []}); }});
   }
   return Promise.resolve({json: function(){
-    return Promise.resolve({folders: [{path:'E-Mail/A', messages:2},
-                                      {path:'E-Mail/B', messages:1}]}); }});
+    return Promise.resolve({items: [{path:'E-Mail/A', messages:2},
+                                    {path:'E-Mail/B', messages:1}]}); }});
 };
 
 var feld = document.getElementById('f-typ');
@@ -5991,7 +6117,7 @@ function waehle(quelle, dann){
 }
 
 waehle('outlook', function(){
-  pruefe(gefragt.some(function(p){ return p.indexOf('/api/filetypes') >= 0; }),
+  pruefe(gefragt.some(function(p){ return p.indexOf('/api/v1/filetypes') >= 0; }),
          'Dateitypen nicht geholt');
   pruefe(feld.innerHTML.indexOf('PDF') >= 0, 'Typ fehlt: ' + feld.innerHTML);
   pruefe(feld.innerHTML.indexOf('4.120') >= 0, 'Zahl fehlt');
@@ -6016,7 +6142,7 @@ waehle('outlook', function(){
       waehle('outlook', function(){
         pruefe(feld.classList.contains('hide'), 'Feld ohne Spalte im Index');
         pruefe(!gefragt.slice(vorher).some(function(p){
-                 return p.indexOf('/api/filetypes') >= 0; }),
+                 return p.indexOf('/api/v1/filetypes') >= 0; }),
                'Ohne Spalte trotzdem gefragt');
         console.log('OK');
       });
@@ -6134,9 +6260,8 @@ global.fetch = function(pfad, opt){
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
 var status = statusGeruest();
-status.config.outlook_categories = ['mail'];
-status.config.teams_categories = [];
-status.config.onedrive_enabled = true;
+KONFIG = Object.assign({}, KONFIG, {outlook_categories: ['mail'], teams_categories: [],
+                                    onedrive_enabled: true});
 // Die Auswahl wird NUR beim ersten Aufbau gesetzt - danach wuerde der Status
 // alle 2,5 Sekunden ein gerade gesetztes Haekchen wieder wegnehmen.
 S = null;
@@ -6161,10 +6286,12 @@ pruefe(JSON.parse(lauf.body).onedrive === true, 'OneDrive fehlt im Lauf: ' + lau
 // Nur OneDrive, ohne Outlook und Teams: muss trotzdem starten.
 gesendet = [];
 document.querySelectorAll = function(){ return []; };   // keine Outlook-Haken mehr
-var gemeckert = false;
-global.alert = function(){ gemeckert = true; };
+// Die Seite warnt nicht mehr mit alert, sondern mit ihrer einen Meldung
+// (DESIGN.md §8) – die steht im DOM und laesst sich dort ablesen.
+function gemeckert(){ return document.getElementById('meldung').textContent.length > 0; }
+document.getElementById('meldung').textContent = '';
 runExport();
-pruefe(!gemeckert, 'Nur OneDrive wurde als "nichts gewaehlt" abgelehnt');
+pruefe(!gemeckert(), 'Nur OneDrive wurde als "nichts gewaehlt" abgelehnt');
 var nur = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
 pruefe(JSON.parse(nur.body).onedrive === true && JSON.parse(nur.body).outlook === false,
        'Falscher Lauf: ' + nur.body);
@@ -6172,9 +6299,11 @@ pruefe(JSON.parse(nur.body).onedrive === true && JSON.parse(nur.body).outlook ==
 // Gar nichts gewaehlt: kein Lauf.
 gesendet = [];
 document.getElementById('c-onedrive_enabled').checked = false;
-gemeckert = false;
+document.getElementById('meldung').textContent = '';
 runExport();
-pruefe(gemeckert, 'Ohne Auswahl wurde nicht gewarnt');
+pruefe(gemeckert(), 'Ohne Auswahl wurde nicht gewarnt');
+pruefe(document.getElementById('meldung').textContent === t('export.nothing'),
+       'Die Warnung sagt etwas anderes: ' + document.getElementById('meldung').textContent);
 pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; }).length === 0,
        'Ohne Auswahl trotzdem gestartet');
 console.log('OK');
@@ -6300,13 +6429,13 @@ def test_onedrive_ordnerknoepfe_wirken_auf_die_eigene_quelle():
 
 
 PRUEFUNG_VORABVERSION = GRUNDZUSTAND + """
-function lage(u){
+function lage(u, api){
   // Beide Felder zuruecksetzen: der Browser ersetzt beim Setzen von innerHTML
   // auch den Text, die Attrappe hier nicht - sonst schleppte ein Fall den
   // Inhalt des vorigen mit.
   var b = document.getElementById('update-banner');
   b.textContent = ''; b.innerHTML = '';
-  zeigeUpdate(Object.assign({current: '4.0.0', releases_url: 'https://r'}, u));
+  zeigeUpdate(Object.assign({current: '4.0.0', releases_url: 'https://r'}, u), api);
   return {text: document.getElementById('update-state').textContent, banner: b,
           text_inhalt: b.textContent, html_inhalt: b.innerHTML};
 }
@@ -6327,6 +6456,13 @@ pruefe(zeile.indexOf('4.0.0') >= 0 && zeile.indexOf('e727567') >= 0, 'Build fehl
 lage({status: 'ok', latest: '4.0.0', newer: false, ahead: false, build: ''});
 zeile = document.getElementById('update-current').textContent;
 pruefe(zeile.indexOf('4.0.0') >= 0 && zeile.toLowerCase().indexOf('build') < 0, 'Leere Build-Kennung wird gezeigt: ' + zeile);
+
+// Drei Angaben in einer Zeile: Programm, Build und der Vertrag, unter dem
+// die API antwortet – der ist fuer eigene Skripte die wichtigste.
+lage({status: 'ok', latest: '4.0.0', newer: false, ahead: false, build: 'e727567'}, 'v1');
+zeile = document.getElementById('update-current').textContent;
+pruefe(zeile.indexOf('4.0.0') >= 0 && zeile.indexOf('e727567') >= 0
+       && zeile.indexOf('API v1') >= 0, 'API-Version fehlt in der Zeile: ' + zeile);
 
 // 2) Normales Update: unveraendert, und KEINE Warnfarbe.
 var b = lage({status: 'ok', latest: '5.0.0', newer: true, ahead: false});
@@ -6600,7 +6736,7 @@ def test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie(server, sandb
 
     def schritt(aktion, koerper):
         code, r = call(port, "POST", "/api/archiv/" + aktion, koerper)
-        assert code == 200 and r["ok"] and r["message"] is None, r
+        assert code == 200 and r["ok"] and "error" not in r, r
         (s,) = gesehen["steps"]
         assert s["key"] == "archiv_" + aktion.replace("-", "_")
         assert gesehen["label"] == "job.archiv." + aktion
@@ -6649,7 +6785,7 @@ def test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten(server, sandbox, monk
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
     code, r = call(port, "POST", "/api/archiv/neu-aufbauen", {"quelle": "outlook"})
-    assert code == 200 and r["ok"] and r["message"] is None
+    assert code == 200 and r["ok"] and "error" not in r
     keys = [s["key"] for s in gesehen["steps"]]
     assert keys == ["archiv_neu_aufbauen", "outlook", "index"], keys
     assert gesehen["steps"][1]["env"]["SYNC_NOW"] == "1"
@@ -6717,7 +6853,7 @@ def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox,
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
     code, r = call(port, "POST", "/api/archiv/nachholen", {"quelle": "outlook"})
-    assert code == 200 and r["ok"] and r["message"] is None
+    assert code == 200 and r["ok"] and "error" not in r
     assert [s["key"] for s in gesehen["steps"]] == ["outlook", "index", "archiv_pruefen"]
     assert gesehen["label"] == "job.archiv.nachholen"
     liste = sandbox / "nachholen-outlook.json"
@@ -7125,7 +7261,7 @@ var gesucht = [];
 global.fetch = function(pfad){
   gesucht.push(String(pfad));
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/search') >= 0 ? {results: [], total: 0}
+    String(pfad).indexOf('/search?') >= 0 ? {results: [], total: 0}
                                              : statusGeruest()); }});
 };
 
@@ -7271,7 +7407,7 @@ var gesucht = [];
 global.fetch = function(pfad){
   gesucht.push(String(pfad));
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/search') >= 0 ? {results: [], total: 0}
+    String(pfad).indexOf('/search?') >= 0 ? {results: [], total: 0}
                                              : statusGeruest()); }});
 };
 // Filter setzen und tippen loest KEINE Suche aus - man soll in Ruhe alles
@@ -7280,13 +7416,13 @@ document.getElementById('f-from').value = '2026-08-10';
 document.getElementById('f-person').value = 'Alice';
 zeigeFilterstand();
 document.getElementById('q').value = 'Betriebsrat';
-pruefe(gesucht.filter(function(u){ return u.indexOf('/api/search') >= 0; }).length === 0,
+pruefe(gesucht.filter(function(u){ return u.indexOf('/search?') >= 0; }).length === 0,
        'Es wurde beim Ausfuellen schon gesucht: ' + gesucht.join(' '));
 
 // Erst der Knopf sucht - und zwar mit allem, was im Formular steht.
 gesucht = [];
 sofortSuchen();
-var u = gesucht.filter(function(x){ return x.indexOf('/api/search') >= 0; });
+var u = gesucht.filter(function(x){ return x.indexOf('/search?') >= 0; });
 pruefe(u.length === 1, 'Knopf sucht nicht');
 pruefe(u[0].indexOf('Betriebsrat') >= 0 && u[0].indexOf('Alice') >= 0 &&
        u[0].indexOf('2026-08-10') >= 0, 'Formular nicht vollstaendig uebernommen: ' + u[0]);
@@ -7294,7 +7430,7 @@ pruefe(u[0].indexOf('Betriebsrat') >= 0 && u[0].indexOf('Alice') >= 0 &&
 // "Zuruecksetzen" leert nur - gesucht wird auch dann erst auf Wunsch.
 gesucht = [];
 filterLeeren();
-pruefe(gesucht.filter(function(x){ return x.indexOf('/api/search') >= 0; }).length === 0,
+pruefe(gesucht.filter(function(x){ return x.indexOf('/search?') >= 0; }).length === 0,
        'Zuruecksetzen hat gesucht');
 
 // Der Begriff wird in der Vorschau markiert - sonst sieht man nicht, warum
@@ -7445,11 +7581,11 @@ def test_systemangaben_nennen_den_datenordner_nur_wenn_er_abweicht(sandbox, with
     along – the deviating one, though, explains a whole class of errors."""
     a = app_mod.App(app_mod.load_config())
     st = a.status()
-    st["data_dir"] = st["data_dir_default"]
-    assert "datadir" not in {z["k"] for z in app_mod.systemangaben(st)}
+    assert "datadir" not in {z["k"] for z in app_mod.systemangaben(
+        st, datenordner="/irgendwo", vorgabe="/irgendwo")}
 
-    st["data_dir"] = r"C:\Users\pmustermann\Woanders"
-    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(st)}
+    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(
+        st, datenordner=r"C:\Users\pmustermann\Woanders", vorgabe="/irgendwo")}
     assert "Woanders" in zeilen["datadir"]
     assert "pmustermann" not in zeilen["datadir"], "auch hier wird ersetzt"
 
@@ -7491,7 +7627,7 @@ def test_einstellungs_abweichungen_stehen_im_bericht(sandbox, with_ollama):
     cfg = app_mod.load_config()
     cfg["workers"] = 2
     a = app_mod.App(cfg)
-    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(a.status())}
+    zeilen = {z["k"]: z["v"] for z in app_mod.systemangaben(a.status(), cfg=a.cfg)}
     assert "workers=2" in zeilen["settings"]
 
 
@@ -7845,11 +7981,11 @@ PRUEFUNG_MODI = GRUNDZUSTAND + """
 var gesucht = [], gefragt = 0;
 global.fetch = function(pfad, opt){
   var s = String(pfad);
-  if(s.indexOf('/api/search') >= 0){ gesucht.push(s); }
+  if(s.indexOf('/search?') >= 0){ gesucht.push(s); }
   if(s.indexOf('/api/answer') >= 0){ gefragt++; return Promise.resolve({ok: false,
     json: function(){ return Promise.resolve({error: 'x'}); }}); }
   return Promise.resolve({json: function(){ return Promise.resolve(
-    s.indexOf('/api/search') >= 0
+    s.indexOf('/search?') >= 0
       ? {count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'Alice',
                               date: '2026-03-04', source_label: 'Mail',
                               preview: 'p', uri: 'o365://outlook/a.eml'}]}
@@ -7892,7 +8028,7 @@ global.fetch = function(pfad){
     return Promise.resolve({ok: false, json: function(){
       return Promise.resolve({error: 'x'}); }}); }
   return Promise.resolve({json: function(){ return Promise.resolve(
-    s.indexOf('/api/search') >= 0
+    s.indexOf('/search?') >= 0
       ? {count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'A',
                               date: '2026-03-04', source_label: 'Mail', preview: 'p'}]}
       : statusGeruest()); }});
@@ -7914,6 +8050,135 @@ setTimeout(function(){
 
 def test_die_ki_laeuft_nur_in_ihrer_eigenen_variante():
     _in_node(PRUEFUNG_KI_NUR_AUF_WUNSCH)
+
+
+PRUEFUNG_TAKT = GRUNDZUSTAND + """
+// Der Takt: waehrend eines Laufs eng, sonst weit, und bei verborgenem
+// Tab gar nicht. Jede eigene Aktion holt den Status ohnehin selbst.
+var geholt = [];
+global.fetch = function(pfad){
+  geholt.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/log') === 0 ? {lines: [], seq: 0} : statusGeruest()); }});
+};
+function schlaege(n, versatz){
+  for(var i = 0; i < n; i++){
+    TAKT_STATUS.status -= versatz; TAKT_STATUS.log -= versatz;
+    // Eine Antwort ist in Wirklichkeit laengst da, bevor der naechste
+    // Schlag kommt; die Sperre gegen zwei gleichzeitige Abrufe faellt.
+    LOG_LAEUFT = false;
+    takt();
+  }
+}
+// Die Einstellungen sind schon geholt; dieser Test geht um den Takt.
+KONFIG = {};
+// Leerlauf: in neun Schlaegen zu je einer Sekunde kein Status (Vorgabe
+// sind 30 s) und gar kein Protokoll - das steht nur im Lauf-Fenster.
+S.jobs = {busy: false};
+LAUF_OFFEN = false;
+TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
+geholt = [];
+schlaege(9, 1000);
+var status = geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length;
+var prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+pruefe(status === 0 && prot === 0, 'Leerlauf fragt zu oft: ' + status + ' Status, ' + prot + ' Protokoll');
+
+// Waehrend eines Laufs mit geschlossenem Fenster: Status ja, Protokoll
+// nein - das Protokoll steht nur im Lauf-Fenster.
+S.jobs = {busy: true};
+LAUF_OFFEN = false;
+TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
+geholt = [];
+schlaege(9, 1000);
+status = geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length;
+prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+pruefe(status >= 3, 'Lauf wird zu selten verfolgt: ' + status);
+pruefe(prot === 0, 'Protokoll geholt, obwohl es niemand sieht: ' + prot);
+
+// Mit offenem Fenster: jede Sekunde.
+LAUF_OFFEN = true;
+TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
+geholt = [];
+schlaege(9, 1000);
+prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+pruefe(prot >= 8, 'Offenes Fenster sieht dem Lauf nicht zu: ' + prot);
+LAUF_OFFEN = false;
+
+// Der Leerlauftakt ist eine Einstellung (Expertenmodus) - und gilt nur
+// im Leerlauf, also ohne Lauf.
+S.jobs = {busy: false};
+KONFIG = Object.assign({}, KONFIG, {status_poll_seconds: 5});
+TAKT_STATUS.status = Date.now();
+geholt = [];
+schlaege(9, 1000);
+pruefe(geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length === 1,
+       'Eingestellter Takt wirkt nicht');
+KONFIG = Object.assign({}, KONFIG, {status_poll_seconds: 600});
+TAKT_STATUS.status = Date.now();
+geholt = [];
+schlaege(9, 1000);
+pruefe(geholt.length === 0, 'Langer Takt fragt trotzdem');
+delete KONFIG.status_poll_seconds;
+
+// Verborgener Tab: nichts.
+document.visibilityState = 'hidden';
+geholt = [];
+schlaege(9, 1000);
+pruefe(geholt.length === 0, 'Verborgener Tab fragt trotzdem: ' + geholt.length);
+document.visibilityState = 'visible';
+console.log('OK');
+"""
+
+
+PRUEFUNG_FEHLERMELDUNG = GRUNDZUSTAND + """
+// Jede Ablehnung der API landet an einer Stelle: der einen Meldung der
+// Seite, in der Fehlerfarbe und laenger stehend als eine gute Nachricht.
+// Kein alert mehr – DESIGN.md §8 verbietet ihn, wo die Seite einen Platz hat.
+var m = document.getElementById('meldung');
+pruefe(apiFehler({ok: false, status: 409, detail: 'A job is already running.',
+                  error: {k: 'srv.busy', v: {}}}) === true, 'Ablehnung nicht erkannt');
+pruefe(m.textContent === t('srv.busy'), 'Grund fehlt: ' + m.textContent);
+pruefe(m.classList.contains('err'), 'Nicht als Fehler gezeichnet');
+
+// Ohne Schluessel bleibt der englische Satz des Servers.
+apiFehler({ok: false, status: 409, detail: 'This index predates deletion tracking.'});
+pruefe(m.textContent.indexOf('predates') >= 0, 'Klartextgrund fehlt: ' + m.textContent);
+
+// Eine gelungene Antwort meldet nichts.
+m.textContent = '';
+pruefe(apiFehler({ok: true, case: {}}) === false, 'Erfolg als Fehler gemeldet');
+pruefe(apiFehler({cases: []}) === false, 'Leseantwort als Fehler gemeldet');
+pruefe(m.textContent === '', 'Erfolg hat gemeldet: ' + m.textContent);
+
+// Und die gute Nachricht nutzt dieselbe Stelle, nur ohne Fehlerfarbe.
+meldung('fertig');
+pruefe(m.textContent === 'fertig' && !m.classList.contains('err'), 'Gute Nachricht in Fehlerfarbe');
+console.log('OK');
+"""
+
+
+PRUEFUNG_ABLEHNUNG = GRUNDZUSTAND + """
+// Eine Ablehnung ohne Textschluessel – die Suchmaschine sagt ihren Grund
+// selbst – traegt ihn nur in `detail`. Die Trefferliste muss ihn zeigen,
+// nicht „keine Treffer".
+renderHits({ok: false, status: 409, detail: 'This index predates deletion tracking.',
+            hits: [], count: 0});
+var h = document.getElementById('results').innerHTML;
+pruefe(h.indexOf('predates deletion tracking') >= 0, 'Grund der Absage fehlt: ' + h);
+pruefe(h.indexOf(t('search.nohits')) < 0, 'zeigt „keine Treffer" statt des Grundes');
+
+// Mit Schluessel uebersetzt die Seite weiter selbst.
+renderHits({ok: false, status: 503, detail: 'No index available.',
+            error: {k: 'srv.noindex', v: {}}, hits: [], count: 0});
+h = document.getElementById('results').innerHTML;
+pruefe(h.indexOf(t('srv.noindex')) >= 0, 'uebersetzter Grund fehlt: ' + h);
+
+// Und eine Antwort ohne alles bleibt eine Trefferliste.
+renderHits({count: 0, results: []});
+pruefe(document.getElementById('results').innerHTML.indexOf(t('search.nohits')) >= 0,
+       'Leerzustand der Suche fehlt');
+console.log('OK');
+"""
 
 
 PRUEFUNG_TREFFERZEILE = GRUNDZUSTAND + """
@@ -7954,6 +8219,32 @@ console.log('OK');
 
 def test_trefferzeile_ist_kompakt_und_die_aktionen_stehen_im_detail():
     _in_node(PRUEFUNG_TREFFERZEILE)
+
+
+def test_die_trefferliste_zeigt_den_grund_einer_absage():
+    """A refusal whose reason has no text key carries it in `detail` –
+    before 11.4 the same reason came back in `error` at HTTP 200, and the
+    list must not silently turn either into „no hits"."""
+    _in_node(PRUEFUNG_ABLEHNUNG)
+
+
+def test_jede_absage_landet_in_der_einen_meldung():
+    """One place for every refusal the API sends – the page's own message,
+    in the error colour. `alert` is gone from the page (DESIGN.md §8)."""
+    _in_node(PRUEFUNG_FEHLERMELDUNG)
+
+
+def test_der_takt_folgt_dem_lauf_und_schweigt_im_hintergrund():
+    """Polling costs someone's machine something. During a run the page
+    follows closely; idle it asks rarely, because every action of its own
+    refreshes anyway; hidden it asks nothing."""
+    _in_node(PRUEFUNG_TAKT)
+
+
+def test_die_seite_meldet_ohne_alert():
+    """A guard, not a taste: the browser dialog stops everything and looks
+    like nothing else in the interface."""
+    assert "alert(" not in app_mod.seite()
 
 
 PRUEFUNG_MARKIERUNG = GRUNDZUSTAND + """
@@ -8044,9 +8335,10 @@ def test_schalter_werden_gespeichert(server):
     code, r = call(port, "POST", "/api/config",
                    {"ollama_enabled": False, "index_semantic": False})
     assert code == 200
-    code, s = call(port, "GET", "/api/status")
-    assert s["config"]["ollama_enabled"] is False
-    assert s["config"]["index_semantic"] is False
+    code, cfg = call(port, "GET", "/api/v1/config")
+    assert cfg["config"]["ollama_enabled"] is False
+    assert cfg["config"]["index_semantic"] is False
+    s = call(port, "GET", "/api/status")[1]
     assert s["ollama"]["disabled"] is True, "die Prüfung von vorher wirkt nach"
 
 
@@ -8282,7 +8574,7 @@ def test_jedes_gelistete_feld_wird_auch_serverseitig_angenommen(sandbox, server)
         body[k] = 7 if k != "mcp_port" else 8400
     code, _ = call(port, "POST", "/api/config", body)
     assert code == 200
-    cfg = call(port, "GET", "/api/status")[1]["config"]
+    cfg = call(port, "GET", "/api/v1/config")[1]["config"]
     nicht_uebernommen = [k for k in listen["SCHALTER"] if cfg.get(k) is not False]
     assert not nicht_uebernommen, f"Schalter ignoriert: {nicht_uebernommen}"
     nicht_uebernommen = [k for k in listen["ZAHLEN"]
@@ -8455,7 +8747,7 @@ def test_kacheln_springen_an_eine_stelle_die_es_gibt():
 PRUEFUNG_RUNDREISE = GRUNDZUSTAND + """
 // Eine Konfiguration hineingeben und wieder herausholen: was die Oberfléche
 // nicht zurueckgibt, kann der Nutzer nicht speichern.
-var cfg = statusGeruest().config;
+var cfg = Object.assign({}, KONFIG);
 cfg.ollama_enabled = true; cfg.index_semantic = false;
 cfg.workers = 6; cfg.embed_model = 'bge-m3'; cfg.chat_model = 'qwen3.6:27b';
 cfg.ollama = 'http://x:1'; cfg.search_results = 25; cfg.semantic_min = 55;
@@ -8471,9 +8763,11 @@ pruefe(INDEX_SEMANTISCH === false, 'Indexart nicht uebernommen: ' + INDEX_SEMANT
 pruefe(document.getElementById('c-index_kind').value === 'text',
        'Auswahl zeigt die falsche Indexart');
 
-// Und zurueck: speichern muss jeden Wert mitschicken.
-var geschickt = null;
-post = function(pfad, body){ geschickt = body; return Promise.resolve({ok: true}); };
+// Und zurueck: speichern muss jeden Wert mitschicken – als PATCH auf die
+// Einstellungen, die seit 12.0 ihre eigene Ressource sind.
+var geschickt = null, gepatcht = '';
+patch = function(pfad, body){ gepatcht = pfad; geschickt = body;
+                              return Promise.resolve({config: body}); };
 S = statusGeruest();
 speichereEinstellungen();
 ['workers','embed_model','ollama_enabled','index_semantic','mcp_port','semantic_min']
@@ -8481,6 +8775,7 @@ speichereEinstellungen();
     pruefe(geschickt[k] !== undefined, 'nicht mitgeschickt: ' + k);
   });
 pruefe(geschickt.index_semantic === false, 'Indexart falsch gespeichert');
+pruefe(gepatcht === '/api/v1/config', 'Einstellungen gehen woanders hin: ' + gepatcht);
 console.log('OK');
 """
 
@@ -8593,14 +8888,14 @@ def test_notizbuchstand_nennt_die_eintraege_mit_auswahl(server, sandbox):
     _notizbuchliste(sandbox, NOTIZBUECHER)
     call(port, "POST", "/api/config", {"onenote_rules": "- **\n+ Privat"})
     assert a.cfg["onenote_rules"] == "- **\n+ Privat"
-    c = call(port, "GET", "/api/status")[1]["notebooks"]
+    c = call(port, "GET", "/api/v1/inventory")[1]["notebooks"]
     assert (c["gesamt"], c["gewaehlt"], c["namen"]) == (2, 1, ["Privat"])
     assert c["abgeglichen"]
     assert [(e["id"], e["an"]) for e in c["eintraege"]] == [("n1", False), ("n2", True)]
 
 
 def test_notizbuchstand_ohne_liste(server):
-    c = call(server[1], "GET", "/api/status")[1]["notebooks"]
+    c = call(server[1], "GET", "/api/v1/inventory")[1]["notebooks"]
     assert c == {"abgeglichen": None, "gesamt": 0, "gewaehlt": 0, "namen": [],
                  "neu": [], "eintraege": []}
 
@@ -8790,7 +9085,7 @@ tourZurueck();
 pruefe(TOURSTAND.i === 7, 'Zurück');
 tourWeiter(); tourWeiter();
 pruefe(TOURSTAND.kap === null && el('tour').classList.contains('hide'), 'Kapitel nicht beendet');
-var speicherung = gesendet.filter(function(g){ return g.pfad.indexOf('/api/config') >= 0; }).pop();
+var speicherung = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/config') >= 0; }).pop();
 pruefe(speicherung && JSON.parse(speicherung.body).tour_seen.quelle === true, 'Kapitel nicht als gesehen gemerkt');
 pruefe(S.config.tour_seen.quelle === true, 'Stand nicht übernommen');
 // Skipping marks the chapter seen as well – it never comes back on its own.

@@ -298,9 +298,10 @@ def test_profilwahl_im_browser(wurzel, monkeypatch):
     assert st == {"chooser": True}                    # not the app – yet
     code, pr = call(port, "GET", "/api/profiles")
     assert [p["name"] for p in pr["alle"]] == ["nordwind", "standard"]
-    # The chooser chooses; creating lives in the app's settings.
+    # The chooser chooses; creating lives in the app's settings – the path
+    # is there, the method is not (405 with Allow).
     code, r = call(port, "POST", "/api/profiles", {"name": "beratung"})
-    assert code == 404 and not (wurzel / "profiles" / "beratung").exists()
+    assert code == 405 and not (wurzel / "profiles" / "beratung").exists()
     code, r = call(port, "POST", "/api/profile-open", {"name": "fremd"})
     assert code == 400 and r["message"]["k"] == "srv.profile.unknown"
     assert faden.is_alive()

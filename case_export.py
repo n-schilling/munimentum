@@ -74,14 +74,14 @@ def _texte(lang, res):
 
 
 class Texte:
+    """The export's texts, filled the one way everything outside the
+    browser fills them (i18n.fuelle)."""
+
     def __init__(self, strings):
         self.s = strings or {}
 
     def __call__(self, key, **v):
-        text = self.s.get(key) or key
-        for name, wert in v.items():
-            text = text.replace("{" + name + "}", str(wert))
-        return text
+        return i18n.fuelle(self.s.get(key) or key, v)
 
 
 # --------------------------------------------------------------------------

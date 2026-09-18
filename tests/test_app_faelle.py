@@ -234,7 +234,7 @@ def test_fall_anlegen_aendern_schliessen_oeffnen_loeschen(welt):
     code, r = call(port, "POST", "/api/faelle/oeffnen", {"id": fid})
     assert code == 200 and r["case"]["status"] == "offen" and r["case"]["geschlossen"] is None
     code, r = call(port, "GET", "/api/faelle/fall?id=999")
-    assert code == 200 and r["error"]["k"] == "srv.case.unknown"
+    assert code == 404 and r["error"]["k"] == "srv.case.unknown" and r["detail"]
     code, r = call(port, "POST", "/api/faelle/aendern", {"id": 999, "name": "x"})
     assert code == 404
     code, r = call(port, "POST", "/api/faelle/loeschen", {"id": fid})
@@ -280,8 +280,8 @@ def test_der_fallfilter_sucht_nur_im_fall(welt):
     assert [h["path"] for h in im_fall] == ["inbox/mail1.eml"]
     assert [h["uid"] for h in _treffer(welt, "Rechnung", case=str(fid))["results"]] == [mail["uid"]]
     assert _treffer(welt, "Urlaub", case=str(fid))["results"] == []
-    r = _treffer(welt, "Rechnung", case="999")
-    assert r["results"] == [] and "No case named" in r["error"]
+    code, r = call(port, "GET", "/api/search?q=Rechnung&case=999")
+    assert code == 409 and r["hits"] == [] and "No case named" in r["detail"]
     # the history keeps the case as a criterion
     h = call(port, "GET", "/api/suche/historie")[1]["searches"]
     assert h[0]["kriterien"]["fall"] == fid
@@ -393,7 +393,7 @@ def test_export_ist_ein_lauf_und_schreibt_den_ordner(welt, monkeypatch):
     call(port, "POST", "/api/faelle/hinzufuegen", {"id": fid, "eintraege": [_eintrag(h) for h in hits]})
     call(port, "POST", "/api/faelle/notiz", {"id": fid, "text": "Notiz"})
     code, r = call(port, "POST", "/api/faelle/export", {"id": fid})
-    assert code == 200 and r["ok"] and r["message"] is None, r
+    assert code == 200 and r["ok"] and "error" not in r, r
     ziel = r["path"]
     assert ziel.startswith(str(welt["sandbox"] / "exporte")) and "Nordwind" in ziel and ziel.endswith(".zip")
     assert a.jobs.busy
@@ -485,7 +485,8 @@ def test_ordner_im_fall(welt):
     im_ordner = _treffer(welt, "", case=str(fid), case_folder=str(belege))["results"]
     assert [h["path"] for h in im_ordner] == ["inbox/mail1.eml"]
     assert im_ordner[0]["cases"] == [{"id": fid, "name": "Nordwind", "status": "offen", "ordner": "Belege"}]
-    assert "no folder" in _treffer(welt, "", case=str(fid), case_folder="999")["error"]
+    code, r = call(port, "GET", f"/api/search?q=&case={fid}&case_folder=999")
+    assert code == 409 and "no folder" in r["detail"]
     h = call(port, "GET", "/api/suche/historie")[1]["searches"][0]["kriterien"]
     assert h["fall"] == fid and h["ordner"] == belege
     # a list and a saved search file into a folder
@@ -667,14 +668,14 @@ global.fetch = function(pfad, opt){
     suchen_liste: [{id: 5, name: 'Rechnungen', kriterien: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null, ordner: null}, zuletzt: null, treffer: null, fall: 1, fall_name: 'Nordwind', ordner: 3, ordner_name: 'Belege'}]},
     FAELLE_ANTWORT.cases[String(pfad).indexOf('id=2') > 0 ? 1 : 0])};
   else if(String(pfad) === '/api/faelle') antwort = FAELLE_ANTWORT;
-  else if(String(pfad).indexOf('/api/search?') === 0) antwort = TREFFER_ANTWORT;
+  else if(String(pfad).indexOf('/api/v1/search?') === 0) antwort = TREFFER_ANTWORT;
   else if(String(pfad) === '/api/suche/historie') antwort = {retention: '90', searches: [
       {id: 1, wann: new Date().toISOString(), treffer: 4, kriterien: {q: 'Rechnung', mode: 'ki', person: 'Alice', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}},
       {id: 2, wann: '2026-01-05T10:00:00+00:00', treffer: 0, kriterien: {q: '', mode: 'text', person: '', source: 'all', from: '2025-01-01', to: '', folder: '', filetype: 'pdf', gone: true, fall: 1}}]};
   else if(String(pfad) === '/api/suche/gespeichert') antwort = {searches: [
       {id: 5, name: 'Rechnungen', kriterien: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}, zuletzt: '2026-09-14T10:00:00+00:00', treffer: 4, fall: 1, fall_name: 'Nordwind'},
       {id: 6, name: 'Lose', kriterien: {q: 'x', mode: 'text', person: '', source: 'all', from: '', to: '', folder: '', filetype: '', gone: false, fall: null}, zuletzt: null, treffer: null, fall: null, fall_name: null}]};
-  else if(String(pfad).indexOf('/api/thread?') === 0) antwort = {thread: 'tix:1', count: 3, messages: [
+  else if(String(pfad).indexOf('/api/v1/threads?') === 0) antwort = {thread: 'tix:1', count: 3, items: [
       {key: 'mail:<m1@example.com>', path: 'inbox/mail1.eml', cases: [{id: 1, name: 'Nordwind', status: 'offen'}]},
       {key: 'mail:<m3@example.com>', path: 'inbox/mail3.eml', cases: []},
       {key: 'mail:<m4@example.com>', path: 'inbox/mail4.eml', cases: []}]};
@@ -709,7 +710,7 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   pruefe(kriterienTags({party: 'internal'}).indexOf('Beteiligte') >= 0, 'Kriterien-Tag der Beteiligten fehlt');
   doSearch(0);
   await warte(10);
-  pruefe(letzte('/api/search?').pfad.indexOf('party=external') > 0, 'party fehlt in der Anfrage');
+  pruefe(letzte('/api/v1/search?').pfad.indexOf('party=external') > 0, 'party fehlt in der Anfrage');
   filterLeeren();
   pruefe(el('f-party').value === 'all' && kriterienAusForm().party === 'all', 'Zuruecksetzen laesst den Beteiligtenfilter stehen');
 
@@ -721,14 +722,14 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   pruefe(!el('filter-weg').classList.contains('hide'), 'Zuruecksetzen fehlt');
   el('q').value = 'Rechnung';
   doSearch(0, 5);
-  var such = letzte('/api/search?');
+  var such = letzte('/api/v1/search?');
   pruefe(such && such.pfad.indexOf('case=1') > 0, 'case fehlt in der Anfrage: ' + (such && such.pfad));
   pruefe(such.pfad.indexOf('saved=5') > 0, 'saved fehlt in der Anfrage');
   await warte(5);
   filterLeeren();
   pruefe(el('f-fall').value === '', 'Zuruecksetzen leert den Fallfilter nicht');
   doSearch(20);
-  pruefe(letzte('/api/search?').pfad.indexOf('saved=') < 0 || letzte('/api/search?').pfad.indexOf('saved=&') > 0, 'saved auf Seite 2');
+  pruefe(letzte('/api/v1/search?').pfad.indexOf('saved=') < 0 || letzte('/api/v1/search?').pfad.indexOf('saved=&') > 0, 'saved auf Seite 2');
   await warte(5);
 
   // --- hits: tick, mark, head
@@ -809,7 +810,7 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   historieLauf(1);
   await warte(5);
   pruefe(el('f-typ').value === 'pdf' && el('f-fall').value === '1' && el('f-gone').checked, 'Verlaufseintrag nicht angewandt');
-  pruefe(letzte('/api/search?').pfad.indexOf('case=1') > 0, 'Verlaufssuche ohne Fall');
+  pruefe(letzte('/api/v1/search?').pfad.indexOf('case=1') > 0, 'Verlaufssuche ohne Fall');
   historieFenster();
   await warte(10);
   historieLeeren();
@@ -825,7 +826,7 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   pruefe(html.indexOf('Nordwind') >= 0, 'Fallname fehlt');
   gespeichertLauf(0);
   await warte(5);
-  pruefe(letzte('/api/search?').pfad.indexOf('saved=5') > 0, 'gespeicherte Suche laeuft ohne ihre Nummer');
+  pruefe(letzte('/api/v1/search?').pfad.indexOf('saved=5') > 0, 'gespeicherte Suche laeuft ohne ihre Nummer');
   gespeicherteFenster();
   await warte(10);
   gespeichertUmbenennen(1);
@@ -971,7 +972,7 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   fallSicht('ordner');
   sucheImFall(1, null, 'Carla Chef');
   await warte(10);
-  pruefe(el('f-person').value === 'Carla Chef' && letzte('/api/search?').pfad.indexOf('person=Carla+Chef') > 0, 'Suche nach Person im Fall fehlt');
+  pruefe(el('f-person').value === 'Carla Chef' && letzte('/api/v1/search?').pfad.indexOf('person=Carla+Chef') > 0, 'Suche nach Person im Fall fehlt');
   tab('faelle');
   await fallOeffnen(1);
   html = el('fall-inhalt').innerHTML;
@@ -1046,10 +1047,10 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   // search in this case, and in one folder: the filter is set, the search fired
   sucheImFall(1);
   await warte(10);
-  pruefe(el('f-fall').value === '1' && letzte('/api/search?').pfad.indexOf('case=1') > 0, 'Suche im Fall setzt den Filter nicht');
+  pruefe(el('f-fall').value === '1' && letzte('/api/v1/search?').pfad.indexOf('case=1') > 0, 'Suche im Fall setzt den Filter nicht');
   sucheImFall(1, 3);
   await warte(10);
-  pruefe(el('f-fall').value === '1/3' && letzte('/api/search?').pfad.indexOf('case=1&case_folder=3') > 0, 'Suche im Ordner ohne Ordner: ' + letzte('/api/search?').pfad);
+  pruefe(el('f-fall').value === '1/3' && letzte('/api/v1/search?').pfad.indexOf('case=1&case_folder=3') > 0, 'Suche im Ordner ohne Ordner: ' + letzte('/api/v1/search?').pfad);
   // export window: the overview, one primary button – always a ZIP, no switch
   await fallOeffnen(1);
   exportFenster();
@@ -1106,7 +1107,7 @@ function letzte(pfad){ return anfragen.filter(function(a){ return a.pfad.indexOf
   pruefe(el('c-search_history').value === '365' && el('c-case_export_dir').value === '/x' && el('c-mcp_cases_write').checked === true, 'Einstellungen nicht gefuellt');
   speichereEinstellungen();
   await warte(10);
-  var cfg = letzte('/api/config').body;
+  var cfg = letzte('/api/v1/config').body;
   pruefe(cfg.search_history === '365' && cfg.case_export_dir === '/x' && cfg.mcp_cases_write === true, 'Einstellungen nicht gespeichert: ' + JSON.stringify(cfg));
   console.log('OK');
 })().catch(function(e){ console.log('FEHLER ' + (e.stack || e)); process.exit(1); });
@@ -1191,6 +1192,6 @@ def test_http_detail_liefert_die_fakten_je_art(welt):
     h = _treffer(welt, "Rechnung", source="teams")["results"][0]
     code, d = call(port, "GET", "/api/detail?uid=" + quote(h["uid"], safe=""))
     assert code == 200 and d["kind"] == "teams" and d["from"]["name"] and d["chat"]
-    # an unknown uid is an in-band error, never a 500
+    # an unknown uid is a 404 with the reason, never a 500
     code, d = call(port, "GET", "/api/detail?uid=nix")
-    assert code == 200 and d["error"]["k"] == "srv.detail.none"
+    assert code == 404 and d["error"]["k"] == "srv.detail.none"

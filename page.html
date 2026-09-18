@@ -851,6 +851,11 @@ button.mini.nur-ikon{padding:3px 6px}
 /* A toast for what just happened somewhere else on the page */
 .meldung{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:9px 16px;border-radius:999px;font-size:13.5px;box-shadow:var(--schatten);opacity:0;transition:opacity .2s;pointer-events:none;z-index:60;max-width:min(90vw,560px);text-align:center}
 .meldung.an{opacity:1}
+/* The same one message, in the error colour and waiting to be read away:
+   what the server refused is not gone in three seconds. */
+.meldung.err{background:var(--card);color:var(--ink);border:1px solid var(--err);
+  border-left:4px solid var(--err);border-radius:10px;pointer-events:auto;cursor:pointer;
+  text-align:left;padding:10px 14px}
 .notiz{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 10px;align-items:start;padding:8px 0 8px 22px;border-top:1px solid var(--line);font-size:13.5px}
 .notiz .wann{grid-column:1/3;color:var(--muted);font-size:12px;display:flex;gap:8px;align-items:center}
 .notiz .wann .tag.mcp{margin:0}
@@ -922,7 +927,7 @@ details.rechte p{margin:6px 0}
     <div class="zustaende" id="zustaende">
       <button class="zustand lauf-pille hide" id="lauf-pille" onclick="laufOeffnen()"><span data-ikon="uhr" data-ikon-klasse="klein akzent"></span><span id="lauf-pille-t"></span><span class="mini-balken"><span id="lauf-pille-balken"></span></span></button>
       <button class="zustand hide" id="pill-profil" onclick="profilWechselnFenster()" data-i18n-title="profile.pill.tip"><span data-ikon="person" data-ikon-klasse="klein"></span><span id="p-profil-t"></span></button>
-      <button class="zustand" id="pill-token" onclick="openWizard('token')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
+      <button class="zustand" id="pill-token" onclick="zeigeEinstellung('zugang-karte')"><span class="dot" id="p-token"></span><span id="p-token-t">Zugang</span></button>
     </div>
     <button class="ikonknopf quit" onclick="beenden()" id="btn-quit" data-i18n-title="app.quit.tip" data-ikon="aus"></button>
   </div>
@@ -946,7 +951,7 @@ details.rechte p{margin:6px 0}
       <div class="schrittkarte"><span class="nr" id="nr-zugang">1</span>
         <div><b data-i18n="stand.step1">Zugang einrichten</b>
           <span class="muted small" data-i18n="stand.step1.sub"></span>
-          <button class="act" id="btn-zugang" onclick="openWizard('token')" data-i18n="stand.step1">Zugang einrichten</button></div></div>
+          <button class="act" id="btn-zugang" onclick="zeigeEinstellung('zugang-karte')" data-i18n="stand.step1">Zugang einrichten</button></div></div>
       <div class="schrittkarte"><span class="nr">2</span>
         <div><b data-i18n="stand.step2">Quellen wählen</b>
           <span class="muted small" data-i18n="stand.step2.sub"></span></div></div>
@@ -1382,7 +1387,7 @@ details.rechte p{margin:6px 0}
     <!-- The sub-navigation carries the states the header used to: access,
          AI, MCP – each as a dot next to the place where it is fixed. -->
     <div class="snav" id="einst-nav">
-      <button class="snav-punkt" onclick="openWizard('token')"><span data-i18n="settings.nav.account">Zugang &amp; Konto</span><span class="dot" id="p-konto"></span></button>
+      <button class="snav-punkt" data-ziel="zugang-karte" onclick="zeigeEinstellung('zugang-karte')"><span data-i18n="settings.nav.account">Microsoft-Zugang</span><span class="dot" id="p-konto"></span></button>
       <button class="snav-punkt on" data-ziel="quellen-karte" onclick="zeigeEinstellung('quellen-karte')" data-i18n="settings.nav.sources">Quellen</button>
       <button class="snav-punkt" data-ziel="sched-karte" onclick="zeigeEinstellung('sched-karte')"><span data-i18n="sched.nav">Zeitplan</span><span class="nebenwert muted small" id="snav-plan"></span></button>
       <button class="snav-punkt" id="pill-ollama" data-ziel="ki-karte" onclick="ollamaKachel()"><span data-i18n="settings.nav.ki">KI (Ollama)</span><span class="stand"><span class="dot" id="p-ollama"></span><span id="p-ollama-t"></span></span></button>
@@ -1393,6 +1398,14 @@ details.rechte p{margin:6px 0}
     </div>
 
     <div class="einst-inhalt">
+  <!-- Access is a setting like every other: a card in the running page,
+       reached from the navigation beside it. It used to be the only entry
+       that opened a window instead. -->
+  <div class="card" id="zugang-karte">
+    <h2 class="mit-info"><span data-i18n="wizard.token.title">Zugang zu deinem Microsoft-365-Konto</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="wizard.token.i">i</span></h2>
+    <div id="zugang-inhalt"></div>
+  </div>
   <div class="card" id="quellen-karte">
     <h2 class="mit-info"><span data-i18n="settings.export.title">Quellen</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.export.i">i</span></h2>
@@ -1830,6 +1843,7 @@ details.rechte p{margin:6px 0}
     <div class="gruppe"><h3 data-i18n="settings.speed.title">Geschwindigkeit</h3>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.workers.i">i</span></span><input type="number" id="c-workers" min="1" max="8"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.mirror_workers"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mirror_workers.i">i</span></span><input type="number" id="c-mirror_workers" min="1" max="16"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.status_poll_seconds"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.status_poll_seconds.i">i</span></span><input type="number" id="c-status_poll_seconds" min="5" max="600" step="5"></div>
     </div>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="export.index.only"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="export.index.only.when">i</span></span><button class="mini" onclick="run({index:true}, t('job.index'))" data-i18n="expert.run">Ausführen</button></div>
@@ -2115,9 +2129,17 @@ function altKopieren(text, fertig){
     fertig(ok);
   } catch(e){ fertig(false); }
 }
-function post(p, body){
-  return fetch(p, {method:'POST', headers:{'Content-Type':'application/json'},
+function post(p, body){ return schicke('POST', p, body); }
+function patch(p, body){ return schicke('PATCH', p, body); }
+function schicke(methode, p, body){
+  return fetch(p, {method: methode, headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
+}
+/* What an answer has to say: a refusal's `error` (11.4: the text key and
+   its placeholders, on every route and status alike), else its English
+   `detail`, else the `message` a successful answer may carry. */
+function rtext(r){
+  return r ? (mtext(r.error) || r.detail || mtext(r.message) || '') : '';
 }
 function esc(s){ return String(s == null ? '' : s)
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
@@ -2238,7 +2260,7 @@ var dateiDaten = null;
 
 function ladeDateien(root, path){
   if(root !== undefined) dateiSicht = {root: root, path: path || ''};
-  api('/api/files?root=' + encodeURIComponent(dateiSicht.root) +
+  api('/api/v1/files?root=' + encodeURIComponent(dateiSicht.root) +
       '&path=' + encodeURIComponent(dateiSicht.path))
     .then(zeichneDateien).catch(function(){});
 }
@@ -2262,7 +2284,7 @@ function zeichneDateien(r){
   var box = el('dateien-liste'), pfad = el('dateien-pfad');
   // At the sources the button means every mirror at once (source "datei")
   el('dateien-suchen-text').textContent = t(r.roots ? 'files.search.all' : 'files.search.here');
-  if(r.error){ box.innerHTML = '<p class="hint">' + esc(mtext(r.error)) + '</p>'; return; }
+  if(rtext(r)){ box.innerHTML = '<p class="hint">' + esc(rtext(r)) + '</p>'; return; }
   if(r.roots){
     pfad.textContent = t('files.roots');
     box.innerHTML = r.roots.length ? r.roots.map(function(w, i){
@@ -2604,6 +2626,12 @@ function setPill(id, cls, text, tip){
 
 function renderStatus(s){
   var first = S === null;
+  // Three things travel separately now, each on its own rhythm: the
+  // settings (saved), the environment (fixed while the app runs) and the
+  // inventory of the sources (changes with a run). They are merged in
+  // here, so everything below reads `s.…` exactly as it always did.
+  s = Object.assign({}, UMGEBUNG, BESTAND, s);
+  if(s.config) KONFIG = s.config; else s.config = KONFIG || {};
   S = s;
 
   var tok = s.token, tokTip = t('pill.token.tip');
@@ -2691,7 +2719,9 @@ function renderStatus(s){
   el('home-dir').textContent = s.home_dir || '';
   zeigeProfile(s.profile || {});
   el('app-ort').textContent = s.app_location || '';
-  zeigeUpdate(s.update || {});
+  zeigeUpdate(Object.assign({current: s.version, build: s.build,
+                            releases_url: s.releases_url}, s.update || {}),
+              s.api_version);
   fuelleEinstellungen(s.config);
 
   var busy = s.jobs.busy;
@@ -2703,9 +2733,10 @@ function renderStatus(s){
 
   /* Schedule / MCP */
   var takt = (s.config.schedule || {}).interval_minutes || 60;
-  el('s-next').textContent = s.schedule_enabled && s.schedule_next
+  var planAn = !!((s.config.schedule || {}).enabled);
+  el('s-next').textContent = planAn && s.schedule_next
     ? t('sched.next', {when: fmt(s.schedule_next)}) : t('sched.none');
-  el('snav-plan').textContent = s.schedule_enabled
+  el('snav-plan').textContent = planAn
     ? t('stand.plan.kurz', {n: takt}) : t('stand.plan.aus.kurz');
   el('mcp-toggle').textContent = t(s.mcp.running ? 'mcp.stop' : 'mcp.start');
   el('mcp-toggle').disabled = mcpAus;
@@ -2713,8 +2744,11 @@ function renderStatus(s){
     : s.mcp.running
     ? t('mcp.running', {url: s.mcp.url, mode: t(st.semantic ? 'mcp.mode.hybrid' : 'mcp.mode.lexical')})
     : (mtext(s.mcp.error) || t('mcp.stopped'));
-  el('mcp-json').textContent = JSON.stringify(s.mcp.config.http, null, 2);
-  el('mcp-stdio').textContent = JSON.stringify(s.mcp.config.stdio, null, 2);
+  // The client snippet does not change while the app runs; it comes with
+  // the environment, not with every status poll.
+  var schnipsel = s.mcp_client || {};
+  el('mcp-json').textContent = JSON.stringify(schnipsel.http || {}, null, 2);
+  el('mcp-stdio').textContent = JSON.stringify(schnipsel.stdio || {}, null, 2);
   // The answer exists only if a model can phrase it.
   // The two rear variants hang on Ollama: "similar search" must embed the
   // query, the summary additionally needs a chat model.
@@ -2732,8 +2766,12 @@ function renderStatus(s){
       ladeKalender(offeneSicht);
   }
 
+  zeichneZugang();
+  // Access no longer opens a window – it is a card in the settings, and the
+  // dot beside it says when it wants attention. Ollama still asks, because
+  // its answer is one click and not a form.
   if(wizardOffen && !WIZARDS[wizardOffen]){ /* self-opened window – leave it alone */ }
-  else if(s.wizard && !dismissed[s.wizard]) openWizard(s.wizard);
+  else if(s.wizard === 'ollama' && !dismissed.ollama) openWizard('ollama');
   else if(wizardOffen) openWizard(wizardOffen);   // keep the open wizard current
   // The second branch is not optional: once the model is loaded the server
   // no longer demands a wizard (s.wizard === null). Without it the open
@@ -2849,7 +2887,7 @@ function checked(pre){
 }
 function saveCats(){
   merke('flow.save', 'export');
-  post('/api/config', {outlook_categories: checked('o'), teams_categories: checked('t'),
+  konfig({outlook_categories: checked('o'), teams_categories: checked('t'),
                        onedrive_enabled: el('c-onedrive_enabled').checked,
                        sharepoint_enabled: el('c-sharepoint_enabled').checked,
                        sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked,
@@ -2871,7 +2909,7 @@ function run(what, label, flow){
     // Even a 500 says something: better the raw error line than an empty
     // alert nobody can dig into.
     if(!r.ok){ LAUF.eigener = false;
-               alert(mtext(r.message) || String(r.error || r.message || '')); }
+               apiFehler(r); }
     refresh();
   });
 }
@@ -2883,7 +2921,7 @@ function runExport(){
   var pl = el('c-planner_enabled').checked;
   var td = el('c-todo_enabled').checked;
   var on = el('c-onenote_enabled').checked;
-  if(!o && !tm && !od && !sp && !sps && !pl && !td && !on){ alert(t('export.nothing')); return; }
+  if(!o && !tm && !od && !sp && !sps && !pl && !td && !on){ meldung(t('export.nothing'), 'err'); return; }
   // Calendar only with Outlook: events, contacts and the reconstruction of
   // deleted events come exclusively from the mailbox.
   run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
@@ -2943,6 +2981,7 @@ function zeigeFortschritt(jobs){
    scheduled run that starts while someone works here appears as the pill
    first and does not jump over a search. */
 var LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null};
+var LAUF_OFFEN = false;     // the run window – the only place the log shows
 
 /* Only this run's lines in the console: the runner names the log cursor
    before the run's first line, everything at or below it goes. */
@@ -2977,6 +3016,8 @@ function laufVerfolgen(jobs, first){
                                                when: fmt(j.started)});
   } else if(LAUF.gesehen && !LAUF.ergebnis){
     LAUF.ergebnis = jobs.last || {};
+    // A run changes what the sources hold – the numbers on their cards.
+    ladeBestand().then(function(){ if(S) renderStatus(S); });
     laufErgebnisZeigen(LAUF.ergebnis);
     // The overview's numbers are stale after any run: reload them while
     // it is on screen, or on the next visit.
@@ -2984,16 +3025,20 @@ function laufVerfolgen(jobs, first){
   }
 }
 function laufOeffnen(){
+  LAUF_OFFEN = true;
+  TAKT_STATUS.log = 0;                  // catch up on the next beat
   el('lauf-overlay').classList.remove('hide');
   el('lauf-pille').classList.add('hide');
   var box = el('log'); box.scrollTop = box.scrollHeight;
 }
 function laufMinimieren(){
+  LAUF_OFFEN = false;
   el('lauf-overlay').classList.add('hide');
   el('lauf-pille').classList.remove('hide');
 }
 function laufSchliessen(){
   LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null};
+  LAUF_OFFEN = false;
   el('lauf-overlay').classList.add('hide');
   el('lauf-pille').classList.add('hide');
 }
@@ -3217,7 +3262,7 @@ function tourMerken(kap){
   if(seen[kap]) return;
   seen[kap] = true;
   if(S && S.config) S.config.tour_seen = seen;
-  post('/api/config', {tour_seen: seen});
+  konfig({tour_seen: seen});
 }
 function tourEnde(fertig){
   var kap = TOURSTAND.kap, dann = fertig ? TOURSTAND.dann : null, fokus = TOURSTAND.fokus;
@@ -3330,9 +3375,12 @@ function stelleProtokollHer(){
   } catch(e){}
 }
 
+var LOG_LAEUFT = false;     // one fetch at a time, or lines arrive twice
 function pullLog(){
-  if(beendet) return;
+  if(beendet || LOG_LAEUFT) return;
+  LOG_LAEUFT = true;
   api('/api/log?since=' + seen).then(function(r){
+    LOG_LAEUFT = false;
     if(!r.lines || !r.lines.length){ seen = r.seq; return; }
     var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
     r.lines.forEach(function(l){
@@ -3352,7 +3400,7 @@ function pullLog(){
     }
     seen = r.seq;
     if(atEnd) box.scrollTop = box.scrollHeight;
-  });
+  }).catch(function(){ LOG_LAEUFT = false; });
 }
 
 /* ---------- Error reporting ----------
@@ -3568,9 +3616,9 @@ function ladeOrdner(){
   if(stand !== ordnerStand){ ordnerJeQuelle = {}; typenJeQuelle = {}; ordnerStand = stand; }
   ladeTypen(quelle);
   if(ordnerJeQuelle[quelle]){ zeichneOrdner(ordnerJeQuelle[quelle]); return; }
-  api('/api/folders?limit=300&source=' + encodeURIComponent(quelle))
+  api('/api/v1/folders?limit=300&source=' + encodeURIComponent(quelle))
     .then(function(r){
-      ordnerJeQuelle[quelle] = r.folders || [];
+      ordnerJeQuelle[quelle] = r.items || [];
       if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
     }).catch(function(){});
 }
@@ -3578,9 +3626,9 @@ function ladeOrdner(){
 function ladeTypen(quelle){
   if(!typenMoeglich(quelle)){ zeichneTypen([]); return; }
   if(typenJeQuelle[quelle]){ zeichneTypen(typenJeQuelle[quelle]); return; }
-  api('/api/filetypes?limit=40&source=' + encodeURIComponent(quelle))
+  api('/api/v1/filetypes?limit=40&source=' + encodeURIComponent(quelle))
     .then(function(r){
-      typenJeQuelle[quelle] = r.filetypes || [];
+      typenJeQuelle[quelle] = r.items || [];
       if((el('f-source').value || 'all') === quelle) zeichneTypen(typenJeQuelle[quelle]);
     }).catch(function(){});
 }
@@ -3676,10 +3724,16 @@ function doSearch(off, gespeichert){
     party: el('f-party').value || 'all',
     // A saved search that is run says so – the server notes when and how many.
     saved: gespeichert ? String(gespeichert) : '',
-    mode: MODUS_ZU_SERVER[SUCHMODUS], k: proSeite, offset: offset});
+    // This search belongs in the history; a script's does not unless it
+    // says so (see /api/v1/search).
+    remember: '1',
+    mode: MODUS_ZU_SERVER[SUCHMODUS], limit: proSeite, offset: offset});
   zeigeFilterstand();
   el('results').innerHTML = '<p class="hint">' + esc(t('search.running')) + '</p>';
-  api('/api/search?' + p.toString()).then(function(r){
+  // The page searches through the versioned surface – the same engine,
+  // the names the rest of the API uses, and the first thing of ours to
+  // speak it.
+  api('/api/v1/search?' + p.toString()).then(function(r){
     renderHits(r);
     // Only the AI variant asks the model – and only after the hits are in.
     // The search is instant, the model takes a minute; whoever looks up an
@@ -3736,12 +3790,12 @@ function personVorschlagen(){
   // Do not query on every keystroke: the query runs over all people in the
   // archive, and whoever types a name does so in one go.
   personTimer = setTimeout(function(){
-    api('/api/people?limit=' + VORSCHLAG_MAX +
+    api('/api/v1/people?limit=' + VORSCHLAG_MAX +
         '&source=' + encodeURIComponent(el('f-source').value) +
         '&contains=' + encodeURIComponent(wort)).then(function(r){
       // Typed on in the meantime: this answer is stale.
       if(el('f-person').value.trim() !== wort) return;
-      personZeichnen(r.people || [], r.total_distinct || 0, r.total_messages || 0);
+      personZeichnen(r.items || [], r.total_distinct || 0, r.total_messages || 0);
     }).catch(personZu);
   }, 150);
 }
@@ -3879,9 +3933,12 @@ function trefferLink(h){
 var TREFFER = [];
 
 function renderHits(r){
-  if(r.error){ el('results').innerHTML = '<p class="hint err">' + esc(mtext(r.error)) + '</p>';
-               el('treffer-kopf').classList.add('hide'); return; }
-  var hits = r.results || [];
+  var fehler = rtext(r);
+  if(fehler){ el('results').innerHTML = '<p class="hint err">' + esc(fehler) + '</p>';
+              el('treffer-kopf').classList.add('hide'); return; }
+  // The versioned search answers `items` and says whether a page follows;
+  // /api/similar still answers `results`.
+  var hits = r.items || r.results || [];
   TREFFER = hits;
   el('detail').classList.add('hide');
   TREFFER_GEWAEHLT = -1;
@@ -3894,9 +3951,10 @@ function renderHits(r){
   // Paging follows the setting too – otherwise "next" would skip hits or
   // show the same ones again.
   var proSeite = trefferProSeite();
+  var mehr = r.has_more === undefined ? hits.length >= proSeite : r.has_more;
   el('pager').innerHTML =
     (offset > 0 ? '<button class="ghost" onclick="doSearch(' + Math.max(0, offset - proSeite) + ')">' + esc(t('search.back')) + '</button>' : '') +
-    (hits.length >= proSeite ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '');
+    (mehr ? '<button class="ghost" onclick="doSearch(' + (offset + proSeite) + ')">' + esc(t('search.next')) + '</button>' : '');
   // No ranking line here: a search without a term has no ranking at all,
   // and "hybrid" is a word for developers. Which mode runs is stated by the
   // toggle at the top.
@@ -3975,8 +4033,8 @@ function zeigeDetail(h, nr){
     '<div class="dinhalt' + (seite ? ' rahmenlos' : '') + '" id="detail-text">' + (seite
       ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
       : hervor(h.preview || '') + '…') + '</div>';
-  api('/api/detail?uid=' + encodeURIComponent(h.uid || '')).then(function(r){
-    if(kennung !== DETAIL_STAND || !r || r.error) return;
+  api('/api/v1/documents/facts?uid=' + encodeURIComponent(h.uid || '')).then(function(r){
+    if(kennung !== DETAIL_STAND || !r || r.ok === false || r.error) return;
     var fakten = dyn('detail-fakten'), text = dyn('detail-text');
     if(fakten) fakten.innerHTML = detailFakten(h, r);
     if(text && !seite) text.innerHTML = detailInhalt(h, r);
@@ -4527,7 +4585,7 @@ function speichernAusfuehren(){
   var sel = dyn('speichern-fall');
   var fall = sel && sel.value ? parseInt(sel.value, 10) : null;
   post('/api/suche/speichern', {name: name, kriterien: FALL_WAHL.kriterien, fall: fall}).then(function(r){
-    if(!r.ok){ alert(mtext(r.message) || String(r.error || '')); return; }
+    if(apiFehler(r)) return;
     var zurueck = FALL_WAHL.zurueck;
     closeWizard('speichern');
     if(zurueck === 'gespeichert') gespeicherteFenster();
@@ -4731,7 +4789,7 @@ function fallWahlAusfuehren(){
   var fallId = wahl.id
     ? Promise.resolve(wahl.id)
     : post('/api/faelle/anlegen', {name: wahl.neu}).then(function(r){
-        if(!r.ok) throw new Error(mtext(r.message) || String(r.error || ''));
+        if(!r.ok) throw new Error(rtext(r));
         return r.id;
       });
   var ordnerId = null;
@@ -4739,7 +4797,7 @@ function fallWahlAusfuehren(){
     // The folder: an existing one, a new one made first, or none.
     if(ordnerWahl === 'neu'){
       return post('/api/faelle/ordner-anlegen', {id: id, name: ordnerNeu}).then(function(r){
-        if(!r.ok) throw new Error(mtext(r.message) || String(r.error || ''));
+        if(!r.ok) throw new Error(rtext(r));
         ordnerId = r.ordner;
         return id;
       });
@@ -4756,7 +4814,7 @@ function fallWahlAusfuehren(){
       var kasten = dyn('fall-wahl-thread');
       var mitThread = !!(w.threads && w.threads.length && w.threadAn !== false && kasten && !kasten.classList.contains('hide'));
       tun = post('/api/faelle/hinzufuegen', {id: id, eintraege: hits.filter(Boolean).map(eintragAus), ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(mtext(r.message) || String(r.error || ''));
+        if(!r.ok) throw new Error(rtext(r));
         hits.forEach(function(h){ if(h) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
         var text = t('cases.added', {n: r.added, name: name});
         if(!mitThread) return text;
@@ -4769,7 +4827,7 @@ function fallWahlAusfuehren(){
       });
     } else if(w.art === 'liste'){
       tun = post('/api/faelle/liste', {id: id, kriterien: w.kriterien, ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(mtext(r.message) || String(r.error || ''));
+        if(!r.ok) throw new Error(rtext(r));
         TREFFER.forEach(function(h){ if(h.key) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
         var danach = anhaengen
           ? post('/api/suche/speichern', {name: kriterienTitel(w.kriterien), kriterien: w.kriterien, fall: id, ordner: ordnerId})
@@ -4778,7 +4836,7 @@ function fallWahlAusfuehren(){
       });
     } else {
       tun = post('/api/suche/anhaengen', {id: w.daten.id, fall: id, ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(mtext(r.message) || String(r.error || ''));
+        if(!r.ok) throw new Error(rtext(r));
         return t('cases.attached', {search: w.daten.name, name: name});
       });
     }
@@ -4791,7 +4849,7 @@ function fallWahlAusfuehren(){
     if(w.art === 'suche') gespeicherteFenster();
     ladeFaelle();
     if(FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
-  }).catch(function(e){ alert(String(e.message || e)); });
+  }).catch(function(e){ meldung(String(e.message || e), 'err'); });
 }
 /* The mark on a hit changes at once, before the next search would fetch it. */
 function markiereImFall(h, id, name, ordner){
@@ -4859,7 +4917,7 @@ function fallWaehlen(id){
 }
 function fallOeffnen(id){
   return api('/api/faelle/fall?id=' + id).then(function(r){
-    if(r.error){ el('fall-inhalt').innerHTML = '<p class="hint err">' + esc(mtext(r.error)) + '</p>'; return; }
+    if(rtext(r)){ el('fall-inhalt').innerHTML = '<p class="hint err">' + esc(rtext(r)) + '</p>'; return; }
     if(!FALL_OFFEN || FALL_OFFEN.id !== id){ FALL_ALLE = {}; FALL_NEU = null; FALL_AUF = {}; FALL_FILTER = ''; FALL_AUSWAHL = {};
                                              FALL_ZEIT_EIMER = null; FALL_PERSON = null; el('fall-filter').value = ''; }
     FALL_OFFEN = r.case;
@@ -5430,12 +5488,25 @@ function bemerkungSenden(weg){
 }
 
 /* ---------- The rest of a conversation into the case ---------- */
-function meldung(text){
+/* The page has exactly one fixed message (DESIGN.md §8). `art` is '' for
+   what just happened and 'err' for what the server refused – that one
+   stays twice as long and goes away on a click, because a sentence one
+   has to act on must not vanish mid-read. */
+function meldung(text, art){
   var m = el('meldung');
   m.textContent = text;
+  m.classList.toggle('err', art === 'err');
   m.classList.add('an');
+  m.onclick = art ? function(){ m.classList.remove('an'); } : null;
   clearTimeout(meldung.timer);
-  meldung.timer = setTimeout(function(){ m.classList.remove('an'); }, 3500);
+  meldung.timer = setTimeout(function(){ m.classList.remove('an'); }, art ? 8000 : 3500);
+}
+/* Every refusal of the API ends up here: one place, one shape, whatever
+   route said no. Returns true when there was one, so a caller can stop. */
+function apiFehler(r){
+  if(r && r.ok !== false && !r.error) return false;
+  meldung(rtext(r) || t('srv.unknown'), 'err');
+  return true;
 }
 function threadHolen(key){
   var e = ((FALL_OFFEN && FALL_OFFEN.eintraege_liste) || []).filter(function(x){ return x.key === key; })[0];
@@ -5448,7 +5519,11 @@ function threadHolen(key){
 /* One fetch per conversation, kept for the page's life – the detail line
    and the add-to-case window both count from it. */
 function ladeThread(id){
-  if(!THREADS[id]) THREADS[id] = api('/api/thread?key=' + encodeURIComponent(id) + '&limit=200').catch(function(){ return {messages: [], count: 0}; });
+  // The versioned surface calls every list `items`; the whole page below
+  // works with `messages`, so the name is put right here, once.
+  if(!THREADS[id]) THREADS[id] = api('/api/v1/threads?key=' + encodeURIComponent(id) + '&limit=200')
+    .then(function(r){ return {thread: r.thread, count: r.count, messages: r.items || []}; })
+    .catch(function(){ return {messages: [], count: 0}; });
   return THREADS[id];
 }
 /* A filter opens every fold as it is typed, so the matches are in view;
@@ -5547,9 +5622,7 @@ function ordnerLoeschen(id){
 
 /* ---------- The case's writes ---------- */
 function fallFehler(r){
-  if(r && r.ok === false){ alert(mtext(r.message) || String(r.error || '')); return true; }
-  if(r && r.error){ alert(mtext(r.error)); return true; }
-  return false;
+  return apiFehler(r);
 }
 /* Every change goes through the server and comes back as the whole case –
    the page never guesses what a write did. */
@@ -5614,7 +5687,7 @@ function fallNeuPruefen(){
   knopf.disabled = true;
   dyn('fall-neu-stand').textContent = t('cal.loading');
   api('/api/faelle/neu?id=' + FALL_OFFEN.id).then(function(r){
-    if(r.error){ dyn('fall-neu-stand').textContent = mtext(r.error); knopf.disabled = false; return; }
+    if(rtext(r)){ dyn('fall-neu-stand').textContent = rtext(r); knopf.disabled = false; return; }
     FALL_NEU = {};
     (r.searches || []).forEach(function(b){ FALL_NEU[b.id] = b; });
     FALL_AUF['suchen'] = true;
@@ -5729,7 +5802,7 @@ function fallExportStarten(schliessen){
   LAUF.eigener = true;
   merke('flow.run', 'case_export');
   return post('/api/faelle/export', {id: FALL_OFFEN.id}).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; alert(mtext(r.message) || String(r.error || '')); return false; }
+    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return false; }
     refresh();
     return true;
   });
@@ -5770,9 +5843,9 @@ function quelle(r){ return '/source?root=' + encodeURIComponent(r.root||'outlook
 function ladeKalender(ziel){
   if(kalGeladen) return zeichneKalenderTeil(ziel);
   kalGeladen = true;
-  api('/api/calendar').then(function(d){
-    if(d.error){
-      var h = '<p class="hint">' + esc(mtext(d.error)) + '</p>' +
+  api('/api/v1/calendar').then(function(d){
+    if(rtext(d)){
+      var h = '<p class="hint">' + esc(rtext(d)) + '</p>' +
         '<button class="act" onclick="run({calendar:true}, t(&quot;job.calendar&quot;))">' +
         esc(t('cal.build.now')) + '</button>';
       el('kalBox').innerHTML = h; el('kbBox').innerHTML = h;
@@ -6596,7 +6669,7 @@ function archivAktion(aktion, quelle){
   var z = archivQuelle(quelle) || {};
   var titel = t(ARCHIV_TITEL[quelle] || quelle);
   if(aktion === 'ordner'){
-    post('/api/archiv/ordner', {quelle: quelle}).then(function(r){ if(!r.ok) alert(mtext(r.message)); });
+    post('/api/archiv/ordner', {quelle: quelle}).then(apiFehler);
     return;
   }
   var koerper = {quelle: quelle};
@@ -6612,8 +6685,8 @@ function archivAktion(aktion, quelle){
   merke('flow.run', 'archiv.' + aktion);
   LAUF.eigener = true;
   post('/api/archiv/' + aktion, koerper).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; alert(mtext(r.message)); return; }
-    if(r.message){ LAUF.eigener = false; alert(mtext(r.message)); return; }   // nothing to do
+    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return; }
+    if(r.message){ LAUF.eigener = false; meldung(mtext(r.message)); return; }  // nothing to do
     refresh();
   });
 }
@@ -6648,7 +6721,7 @@ function holeQuelle(quelle){
   merke('flow.run', 'holen');
   LAUF.eigener = true;
   post('/api/bilanz/holen', {quelle: quelle}).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; alert(mtext(r.message)); return; }
+    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return; }
     refresh();
   });
 }
@@ -6708,8 +6781,8 @@ var personen = [], personenGeladen = false, bookF = 'all';
 function ladePersonen(){
   if(personenGeladen) return;
   personenGeladen = true;
-  api('/api/people?limit=2000').then(function(r){
-    personen = r.people || [];
+  api('/api/v1/people?limit=2000').then(function(r){
+    personen = r.items || [];
     if(offeneSicht === 'adressbuch') drawBook();
   }).catch(function(){ personen = []; });
 }
@@ -6823,7 +6896,7 @@ function frageKI(){
                           from: el('f-from').value, to: el('f-to').value})
   }).then(function(r){
     if(!r.ok || !r.body){
-      return r.json().then(function(d){ throw new Error(mtext(d.error)); });
+      return r.json().then(function(d){ throw new Error(rtext(d)); });
     }
     var leser = r.body.getReader(), dekoder = new TextDecoder(), rest = '';
     function weiter(){
@@ -6912,7 +6985,7 @@ function saveSchedule(){
 function toggleMcp(){
   merke('flow.mcp', S.mcp.running ? 'stop' : 'start');
   post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
-    if(!r.ok && r.message) alert(mtext(r.message));
+    apiFehler(r);
     refresh();
   });
 }
@@ -6924,7 +6997,9 @@ function toggleMcp(){
 /* Three states, not two. "You are up to date" is wrong when the own version
    is HIGHER than anything published – then a self-built version runs here,
    and that deserves saying, not concealing. */
-function zeigeUpdate(u){
+var LETZTE_API = '';        // what the last status said the API answers under
+function zeigeUpdate(u, api){
+  if(api) LETZTE_API = api;
   var banner = el('update-banner');
   var vorab = u.status === 'ok' && u.ahead;
   banner.classList.toggle('hide', !u.newer && !vorab);
@@ -6939,8 +7014,11 @@ function zeigeUpdate(u){
   } else if(vorab){
     banner.textContent = t('update.ahead.banner', {v: u.current, latest: u.latest});
   }
+  // Three things, one line: which program, which build, which API
+  // contract – the last one is what a script of one's own talks to.
   el('update-current').textContent = t('update.current', {v: u.current || '?'}) +
-    (u.build ? ' · ' + t('update.build', {b: u.build}) : '');
+    (u.build ? ' · ' + t('update.build', {b: u.build}) : '') +
+    (api ? ' · ' + t('update.api', {v: api}) : '');
   el('update-state').textContent =
       u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest})
                          : u.ahead ? t('update.ahead', {v: u.latest})
@@ -6952,7 +7030,7 @@ function zeigeUpdate(u){
 }
 function pruefeUpdate(){
   el('update-state').textContent = t('update.checking');
-  post('/api/update-check').then(function(u){ zeigeUpdate(u); refresh(); });
+  post('/api/update-check').then(function(u){ zeigeUpdate(u, LETZTE_API); refresh(); });
 }
 
 /* ---------- Settings ---------- */
@@ -6964,6 +7042,7 @@ var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sour
                 'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
                 'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months','log_retention_days',
+                'status_poll_seconds',
                 'calendar_months_back','planner_sweep_hours'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
@@ -7064,7 +7143,7 @@ function zeigeProfilliste(pr){
 }
 function profilNachfrage(an){
   post('/api/profile-prefs', {ohne_nachfrage: !!an}).then(function(r){
-    el('profil-msg').textContent = r.ok ? '' : mtext(r.message);
+    el('profil-msg').textContent = r.ok ? '' : rtext(r);
   });
 }
 /* The header state opens this window: the whole row of another profile
@@ -7108,7 +7187,7 @@ function profilWechseln(name){
   var hinweis = document.getElementById('profil-warten');
   if(hinweis){ hinweis.textContent = t('profile.opening', {name: name}); hinweis.classList.remove('hide'); }
   post('/api/profile-switch', {name: name}).then(function(r){
-    if(!r.ok){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = mtext(r.message); return; }
+    if(!r.ok){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = rtext(r); return; }
     if(r.url){ location.replace(r.url); return; }      // already open next door
     beendet = true;                                    // this instance is going; stop the polls
     setTimeout(profilWarten, 1000);
@@ -7144,7 +7223,7 @@ function profilAnlegen(){
   var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
   var name = ((feld && feld.value) || '').trim().toLowerCase();
   post('/api/profiles', {name: name}).then(function(r){
-    if(!r.ok){ if(fehler) fehler.textContent = mtext(r.message); return; }
+    if(!r.ok){ if(fehler) fehler.textContent = rtext(r); return; }
     zeigeProfilliste(r.profiles);
     closeWizard('profil');
     profilWechselnFenster();
@@ -7163,7 +7242,7 @@ function profilUmbenennen(alt){
   var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
   var neu = ((feld && feld.value) || '').trim().toLowerCase();
   post('/api/profile-rename', {name: alt, neu: neu}).then(function(r){
-    if(!r.ok){ if(fehler) fehler.textContent = mtext(r.message); return; }
+    if(!r.ok){ if(fehler) fehler.textContent = rtext(r); return; }
     zeigeProfilliste(r.profiles);
     closeWizard('profil');
   });
@@ -7560,7 +7639,7 @@ function speichereEinstellungen(){
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
   TEXTE.forEach(function(k){ body[k] = el('c-'+k).value.trim(); });
   body.index_semantic = INDEX_SEMANTISCH;
-  post('/api/config', body).then(function(r){
+  konfig(body).then(function(r){
     var cfg = r.config || {};
     // The language is baked into the delivered page – switching needs a
     // rebuild, everything else takes effect immediately.
@@ -7759,7 +7838,7 @@ function speichereSharepointFelder(){
   // The buttons must act on what the form shows, not on the last save –
   // otherwise an edited URL list feels ignored until someone hits Save.
   var kad = leseKadenzen();
-  return post('/api/config', {
+  return konfig({
     sharepoint_urls: liesUrlTabelle('sp-urls', kad, 'sharepoint-url'),
     sharepoint_pages_urls: liesUrlTabelle('pg-urls', kad, 'pages-url'),
     sync_cadence: kad,
@@ -7774,7 +7853,7 @@ function sharepointVorschau(){
   speichereSharepointFelder().then(function(){
     return post('/api/run', {check_sharepoint: true, label: 'job.preview'});
   }).then(function(r){
-    if(!r.ok){ el('sp-msg').textContent = mtext(r.message); return; }
+    if(!r.ok){ el('sp-msg').textContent = rtext(r); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
         clearInterval(timer);
@@ -7828,7 +7907,7 @@ function speichereAblage(){
                  index: el('c-index-dir').value.trim()};
   return post('/api/data-dir', koerper).then(function(r){
     var text = r.ok ? t(r.restart ? 'settings.datadir.restart'
-                                  : 'settings.datadir.same') : mtext(r.message);
+                                  : 'settings.datadir.same') : rtext(r);
     ['datadir-msg', 'indexdir-msg'].forEach(function(id){
       var kasten = el(id);
       kasten.className = 'small ' + (r.ok ? 'muted' : 'err');
@@ -7990,15 +8069,18 @@ function planAbgleichen(quelle){
    claims things that are long done. The token's remaining lifetime is
    deliberately not part of it: it changes every minute without anything
    essential changing in the text. */
-function wizardKennung(kind){
+/* What a state amounts to, as one string: the wizard and the access card
+   redraw only when it changes – otherwise the status poll would tear the
+   focus out of a dialog, or wipe a half-pasted key every thirty seconds. */
+function zustandsKennung(kind){
   if(kind === 'ollama'){
     var o = S.ollama || {};
-    return ['ollama', o.running, o.has_model, o.model].join('|');
+    return ['ollama', o.running, o.has_model, KONFIG && KONFIG.embed_model].join('|');
   }
   var tk = S.token || {}, au = S.auth || {}, dev = au.device || {};
   return ['token', tk.present, tk.valid, tk.expired, tk.account,
           (tk.missing || []).join(','), (S.scopes_needed || []).join(','),
-          au.mode, au.signed_in, au.account, au.own_registration,
+          (KONFIG && KONFIG.auth_mode), au.signed_in, au.account, au.own_registration,
           dev.code, dev.done, dev.ok].join('|');
 }
 /* ---------- Keyboard in the wizard ----------
@@ -8033,7 +8115,7 @@ document.addEventListener('keydown', modalTaste);
 /* A window the server never opens on its own: it has no fingerprint the
    status could compare every 2.5 seconds, and must not be wiped away when
    the wizard redraws (see refresh). */
-var WIZARDS = {token: 1, ollama: 1};
+var WIZARDS = {ollama: 1};
 
 function oeffneEigenes(kind, html, schmal){
   var warOffen = !!wizardOffen;
@@ -8049,25 +8131,23 @@ function oeffneEigenes(kind, html, schmal){
   }
 }
 
+/* One wizard is left, Ollama's: a window because its answer is one click
+   ("check again"), not a form. Access became a settings card in 12.0. */
 function openWizard(kind, neuZeichnen){
   if(!neuZeichnen) merke('flow.wizard', kind);
-  var kennung = wizardKennung(kind);
+  var kennung = zustandsKennung(kind);
   if(wizardOffen === kind && wizardStand === kennung && !neuZeichnen) return;
-  var feld = document.getElementById('tok');       // rescue what was already pasted
-  var eingabe = feld ? feld.value : '';
   var warOffen = !!wizardOffen;
   if(!warOffen) fokusVorher = document.activeElement;
   el('modal').className = 'modal';
-  el('modal').innerHTML = kind === 'ollama' ? ollamaWizard() : tokenWizard();
-  var neu = document.getElementById('tok');
-  if(neu && eingabe) neu.value = eingabe;
+  el('modal').innerHTML = ollamaWizard();
   el('overlay').classList.add('on');
   wizardOffen = kind;
   wizardStand = kennung;
   // Jump into the dialog on open – but not on every redraw, or it would
-  // tear the focus right out of the text field.
+  // tear the focus out of whatever has it.
   if(!warOffen){
-    var ziel = document.getElementById('tok') || el('modal').querySelector('button.act');
+    var ziel = el('modal').querySelector('button.act');
     if(ziel && ziel.focus) ziel.focus();
   }
 }
@@ -8105,6 +8185,15 @@ function modalFuss(primaer, sekundaer, anhang){
     (anhang || '') + '</div>';
 }
 
+/* The same row of buttons as a window's foot, without the window. */
+function kartenFuss(primaer, sekundaer, anhang){
+  return '<div class="row" style="margin-top:16px;align-items:center">' +
+    '<button class="act" onclick="' + primaer.tun + '">' + esc(primaer.text) + '</button>' +
+    (sekundaer ? '<button class="ghost" onclick="' + sekundaer.tun + '">' +
+                 esc(sekundaer.text) + '</button>' : '') +
+    (anhang || '') + '</div>';
+}
+
 function scopeListe(){
   var q = S.scope_queries || {};
   return '<ul style="margin:6px 0 0;padding-left:18px">' + (S.scopes_needed || []).map(function(x){
@@ -8129,7 +8218,7 @@ function rechteBlock(offen){
 function modusWahl(){
   /* Two paths, one of them the default. The difference that matters stands
      right next to it – not in a help page nobody opens. */
-  var jetzt = (S.auth && S.auth.mode) || 'token';
+  var jetzt = (KONFIG && KONFIG.auth_mode) || 'token';
   function karte(wert, titel, hinweis){
     return '<label class="wahl' + (jetzt === wert ? ' on' : '') + '">' +
       '<input type="radio" name="authmode" value="' + wert + '"' +
@@ -8149,11 +8238,11 @@ function eigeneRegistrierung(){
     '<p class="small muted">' + t('wizard.login.own.intro') + '</p>' +
     '<div class="row"><label class="small">' + esc(t('wizard.login.own.client')) +
     ' <input type="text" id="au-client" style="width:320px" value="' +
-    esc(au.own_registration ? (au.client_id || '') : '') + '" placeholder="' +
-    esc(au.default_client_id || '') + '"></label>' +
+    esc(au.own_registration ? ((KONFIG && KONFIG.client_id) || '') : '') + '" placeholder="' +
+    esc((S && S.default_client_id) || '') + '"></label>' +
     '<label class="small">' + esc(t('wizard.login.own.tenant')) +
     ' <input type="text" id="au-tenant" style="width:220px" value="' +
-    esc(au.own_registration ? (au.tenant || '') : '') + '" placeholder="organizations"></label>' +
+    esc(au.own_registration ? ((KONFIG && KONFIG.tenant) || '') : '') + '" placeholder="organizations"></label>' +
     '<button class="mini" onclick="speichereRegistrierung()">' +
     esc(t('wizard.login.own.save')) + '</button></div></details>';
 }
@@ -8185,7 +8274,7 @@ function loginTeil(){
   var sekundaer = au.signed_in
     ? {text: t('wizard.login.logout'), tun: 'abmelden()'} : null;
 
-  return kopf + mitte + eigeneRegistrierung() + modalFuss(primaer, sekundaer);
+  return kopf + mitte + eigeneRegistrierung() + kartenFuss(primaer, sekundaer);
 }
 
 function schluesselTeil(){
@@ -8208,39 +8297,52 @@ function schluesselTeil(){
     '<li>' + t('wizard.token.step2') + '</li>' +
     '<li>' + esc(t('wizard.token.step3')) + '</li></ol>' +
     '<textarea id="tok" placeholder="eyJ0eXAiOiJKV1QiLCJub25jZSI6…"></textarea>' +
-    modalFuss({text: t('wizard.token.save'), tun: 'saveToken()'}, null,
-              '<span class="small muted" id="tok-msg"></span>');
+    kartenFuss({text: t('wizard.token.save'), tun: 'saveToken()'}, null,
+               '<span class="small muted" id="tok-msg"></span>');
 }
 
-/* What the window is for and where the key stays sits in the (i) next to
-   the title – the window itself shows the choice, the state and the steps. */
-function tokenWizard(){
-  var login = (S.auth && S.auth.mode) === 'login';
-  return modalKopf(t('wizard.token.title'), 'token',
-                   t(login ? 'wizard.login.intro' : 'wizard.token.intro')) +
-    modusWahl() +
-    (login ? loginTeil() : schluesselTeil());
+/* Access is a card in the settings, not a window: the choice of the two
+   paths, the state and the steps, drawn afresh whenever the state behind
+   them changes – and only then, or a half-typed key would be wiped by the
+   next status poll. What it is for and where the key stays sits in the (i)
+   next to the card's title. */
+var zugangStand = null;
+function zugangNeu(){ zugangStand = null; zeichneZugang(); }
+function zeichneZugang(){
+  var kasten = document.getElementById('zugang-inhalt');
+  if(!kasten || !S) return;
+  var kennung = zustandsKennung('token');
+  if(zugangStand === kennung) return;
+  var feld = document.getElementById('tok');       // rescue what was already pasted
+  var eingabe = feld ? feld.value : '';
+  var login = (KONFIG && KONFIG.auth_mode) === 'login';
+  kasten.innerHTML = '<p class="sub">' +
+    t(login ? 'wizard.login.intro' : 'wizard.token.intro') + '</p>' +
+    modusWahl() + (login ? loginTeil() : schluesselTeil());
+  var neu = document.getElementById('tok');
+  if(neu && eingabe) neu.value = eingabe;
+  zugangStand = kennung;
 }
 
 function setzeModus(wert){
-  post('/api/config', {auth_mode: wert}).then(function(){
-    refresh().then(function(){ openWizard('token', true); });
+  konfig({auth_mode: wert}).then(function(){
+    refresh().then(zugangNeu);
   });
 }
 function starteLogin(){
   post('/api/login').then(function(){
-    refresh().then(function(){ openWizard('token', true); });
+    refresh().then(zugangNeu);
   });
 }
 function abmelden(){
   post('/api/logout').then(function(){
-    refresh().then(function(){ openWizard('token', true); });
+    refresh().then(zugangNeu);
   });
 }
 function speichereRegistrierung(){
-  post('/api/config', {client_id: el('au-client').value.trim(),
-                       tenant: el('au-tenant').value.trim()}).then(function(){
-    refresh().then(function(){ openWizard('token', true); });
+  konfig({client_id: el('au-client').value.trim(),
+          tenant: el('au-tenant').value.trim()}).then(function(){
+    refresh().then(zugangNeu);
   });
 }
 
@@ -8249,11 +8351,9 @@ function banner(art, html){
 }
 function saveToken(){
   post('/api/token', {token: el('tok').value}).then(function(r){
-    el('tok-msg').textContent = mtext(r.message);
+    el('tok-msg').textContent = rtext(r);
     el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
-    if(r.ok){ dismissed = {};
-              setTimeout(function(){ el('overlay').classList.remove('on');
-                                     wizardOffen = null; wizardStand = null; }, 1200); }
+    if(r.ok) zugangNeu();
     refresh();
   });
 }
@@ -8267,16 +8367,16 @@ function ollamaWizard(){
     // Re-indexing is the action this window opens for in the first place –
     // so it leads, rather than sitting pale next to "close".
     return modalKopf(t('wizard.ollama.ready.title'), 'ollama') +
-      banner('', '<span class="dot ok"></span>' + t('wizard.ollama.ready', {model: esc(o.model)})) +
+      banner('', '<span class="dot ok"></span>' + t('wizard.ollama.ready', {model: esc((KONFIG && KONFIG.embed_model) || '')})) +
       modalFuss({text: t('wizard.ollama.reindex'),
                  tun: 'closeWizard(&quot;ollama&quot;); run({index:true}, t(&quot;job.index&quot;))'},
                 null);
   }
 
-  var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc(o.model)})
+  var head = banner('warn', o.running ? t('wizard.ollama.nomodel', {model: esc((KONFIG && KONFIG.embed_model) || '')})
                                       : esc(t('wizard.ollama.off')));
   var steps = o.running
-    ? [t('wizard.ollama.pull', {model: esc(o.model)}), esc(t('wizard.ollama.wait'))]
+    ? [t('wizard.ollama.pull', {model: esc((KONFIG && KONFIG.embed_model) || '')}), esc(t('wizard.ollama.wait'))]
     : (h.steps || []).map(function(k){ return t(k, {url: esc(h.url || '')}); });
   return modalKopf(t('wizard.ollama.title'), 'ollama') +
     '<p class="muted small">' + esc(t('wizard.ollama.intro')) + '</p>' + head +
@@ -8315,16 +8415,94 @@ function beenden(){
   el('lauf-overlay').classList.add('hide');
 }
 
-/* ---------- Loop ---------- */
+/* ---------- Loop ----------
+   Two rhythms, and none at all while nobody is looking. During a run the
+   page follows closely: the progress, the steps and the log are what one
+   watches. Idle, almost nothing changes that the page does not cause
+   itself – every action refreshes on its own – so asking every couple of
+   seconds only fills the network panel. A hidden tab asks nothing and
+   catches up the moment it comes back. */
+var TAKT_STATUS = {status: 0, log: 0};
+var TAKT = {an: 2500, log_an: 1000};
+/* How long the page waits between two questions while nothing runs. A
+   setting, because how fast something someone else changed has to show up
+   is nobody's business but the owner's (Settings › Expert mode). During a
+   run the rhythm is the run's, not this one. */
+function taktAus(){
+  var n = KONFIG && Number(KONFIG.status_poll_seconds);
+  return (n > 0 ? Math.min(Math.max(n, 5), 600) : 30) * 1000;
+}
+function sichtbar(){
+  try { return document.visibilityState !== 'hidden'; } catch(e){ return true; }
+}
+function laeuftGerade(){ return !!(S && S.jobs && S.jobs.busy); }
+var KONFIG = null;          // the settings, fetched once and after a save
+var UMGEBUNG = {};          // paths, defaults, the client snippet – fixed
+var BESTAND = {};           // what the sources hold – changes with a run
+function ladeUmgebung(){
+  return api('/api/v1/app').then(function(r){
+    if(r && !r.error) UMGEBUNG = r;
+    return UMGEBUNG;
+  }).catch(function(){ return UMGEBUNG; });
+}
+function ladeBestand(){
+  return api('/api/v1/inventory').then(function(r){
+    if(r && !r.error) BESTAND = r;
+    return BESTAND;
+  }).catch(function(){ return BESTAND; });
+}
+/* Saving means: change the keys named here, leave the rest – which is
+   what PATCH says. The answer carries the settings as they now are,
+   clamped values and all, so the page keeps that. */
+function konfig(body){
+  return patch('/api/v1/config', body).then(function(r){
+    if(r && r.config) KONFIG = r.config;
+    // A saved port or a changed rule reaches the environment and the
+    // inventory – both are otherwise only fetched at the start.
+    return Promise.all([ladeUmgebung(), ladeBestand()]).then(function(){ return r; });
+  });
+}
+function ladeKonfig(){
+  return api('/api/v1/config').then(function(r){
+    KONFIG = (r && r.config) || {};
+    return KONFIG;
+  }).catch(function(){ KONFIG = KONFIG || {}; return KONFIG; });
+}
 function refresh(){
   if(beendet) return Promise.resolve();
-  return api('/api/status').then(renderStatus);
+  TAKT_STATUS.status = Date.now();
+  // On the very first round everything else comes along – the requests go
+  // out together and the page draws when all of them are in. After that
+  // only the status, which is what the polling is for.
+  var vorab = KONFIG ? [Promise.resolve(), Promise.resolve(), Promise.resolve()]
+                     : [ladeKonfig(), ladeUmgebung(), ladeBestand()];
+  var stand = api('/api/status');
+  return Promise.all(vorab.concat([stand]))
+    .then(function(alles){ return renderStatus(alles[alles.length - 1]); });
+}
+function takt(){
+  if(beendet || !sichtbar()) return;
+  var jetzt = Date.now(), lauft = laeuftGerade();
+  if(jetzt - TAKT_STATUS.status >= (lauft ? TAKT.an : taktAus())) refresh();
+  // The log lives in the run window and nowhere else. With that window
+  // shut there is nobody to read it, so it is not fetched – opening the
+  // window catches up in one request (the runner keeps 4000 lines).
+  if(LAUF_OFFEN && jetzt - TAKT_STATUS.log >= TAKT.log_an){
+    TAKT_STATUS.log = jetzt;
+    pullLog();
+  }
 }
 stelleProtokollHer();
 refresh();
 ladeFaelle();
-setInterval(refresh, 2500);
-setInterval(pullLog, 1000);
+setInterval(takt, 500);
+try {
+  document.addEventListener('visibilitychange', function(){
+    if(!sichtbar()) return;
+    TAKT_STATUS.status = TAKT_STATUS.log = 0;      // was versäumt wurde, jetzt
+    takt();
+  });
+} catch(e){}
 </script>
 </body>
 </html>

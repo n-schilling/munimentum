@@ -40,7 +40,8 @@ just reopens that page.
 
 ## Signing in
 
-Two ways, chosen in the assistant on the first start.
+Two ways, chosen under *Settings › Microsoft Access*; the first start
+points there.
 
 | | Needs | Lasts |
 |---|---|---|
@@ -165,14 +166,20 @@ keeps every run with its log.
 
 ### Settings
 
-Sources, Schedule, AI (Ollama), Claude (MCP), Profiles, App, Expert mode —
-one card each, every setting with an **(i)** that says what changes. The
+Microsoft Access, Sources, Schedule, AI (Ollama), Claude (MCP), Profiles,
+App, Expert mode — one card each on one running page, the list beside it
+jumps to the one you want, and every setting carries an **(i)** that says
+what changes. The
 App card holds system notifications, how long the search history is kept,
 where case exports land, your organisation's mail domains (what *external*
 means) and your name, and *Report a problem*, which fills in a GitHub
 issue with the log — addresses and user names replaced, shown for you to
 edit, sent by nobody but you. *Keep awake during a run* holds the machine
-off idle sleep while an export runs.
+off idle sleep while an export runs. *Expert mode* collects what almost
+nobody needs day to day, among it the complete HTTP API of the interface
+as an OpenAPI description (`openapi.yaml`, served at `/api/openapi`) —
+including `/api/v1`, the versioned part meant for scripts of your own,
+whose version the App card shows beside the program's.
 
 ---
 

@@ -114,10 +114,12 @@ opens. Anything that puts items into a case goes through the one choice
 window.
 
 **Insights** has the shape of **Settings**: a side navigation, one card
-per entry, the two checks with a dot on their entry. Settings: Sources,
-Schedule, AI, Claude, Profiles, App, Expert mode; each source a block
-with the essentials open and the rest under *Advanced*; the save bar
-appears only with unsaved changes.
+per entry, the two checks with a dot on their entry. Settings: Microsoft
+Access, Sources, Schedule, AI, Claude, Profiles, App, Expert mode; each
+source a block with the essentials open and the rest under *Advanced*;
+the save bar appears only with unsaved changes. Access saves on its own
+button, like the MCP card: a key is pasted and applied, not collected
+with the rest.
 
 **The run window** is the one place for a running process: headline,
 progress, the steps, the log with *Copy* and *Report a problem*,
@@ -167,7 +169,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Status dot / state line | `.dot.ok/.warn/.err` / `.stand` | always next to a word |
 | Info | `.info` | 17 px circle; text in `data-i18n-title` |
 | Setting row | `.feldzeile` | label with `(i)` left, control right; `.kipp` for every boolean |
-| Modal | `.modal` via `modalKopf` + `modalFuss` | cross top right, primary bottom left; what it is for goes into its `(i)` |
+| Modal | `.modal` via `modalKopf` + `modalFuss` | cross top right, primary bottom left; what it is for goes into its `(i)`. A setting never lives in one: it is a card (`#zugang-karte` was the last exception, until 12.0) |
 | Fold | `details.gruppe` / `.quelle` | every heading in a case; chevron, icon, name, count |
 | Tool row | `.werkzeugzeile` / `.calbar` / `.dateien-kopf` | a view's controls left, its hand-over right |
 | Run window | `#lauf-overlay` | progress, steps, log, *Close* / *Cancel* |
@@ -181,7 +183,8 @@ Use the existing class; do not invent a sibling that looks almost the same.
   README lists the sources; `steps.REGISTRY` the steps.
 - **A new setting**: a `.feldzeile` in the matching card, essential ones
   open, the rest under *Advanced*, an `(i)` with a `settings.<key>.i`
-  text that says what changes.
+  text that says what changes. Settings are one running page: the
+  navigation beside it jumps to a card, and no setting opens a window.
 - **A new state**: a dot with a word next to the thing it describes.
 - **A new action**: a `.mini` in the `.aktionen` row of the group it acts
   on; a process starts through `run()`.
@@ -211,14 +214,17 @@ Use the existing class; do not invent a sibling that looks almost the same.
 
 - Loading: a `.hint` line, replaced in place. Empty: a sentence that says
   what would fill it. Error: the server's message in a `.banner.err` or
-  the `.err` colour, in place — never an `alert` unless the page has no
-  place for it.
+  the `.err` colour, in place. Where the page has no place for it — a
+  refusal of an action just clicked — it goes to the one message as
+  `.meldung.err`, which stays until it is read away. No `alert`: the
+  browser dialog stops everything and looks like nothing else here.
 - Progress in the run window: bar plus step list; a step without a known
   total moves striped instead of inventing a percentage.
 - Guidance: the tour, started only by the user or offered once after the
   first run; never a permanent hint.
 - Toast (`.meldung`): the one fixed message of the page, for what just
-  happened somewhere the eye is not.
+  happened somewhere the eye is not; `.err` for what was refused, and
+  every refusal of the API goes through one function (`apiFehler`).
 
 ## 9. Before you change the interface
 

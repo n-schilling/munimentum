@@ -125,3 +125,36 @@ def negotiate(configured=None, accept_language=None, base=None):
         if code.split("-", 1)[0] in codes:
             return code.split("-", 1)[0]
     return FALLBACK
+
+
+class _Platzhalter(dict):
+    """format_map's map: a placeholder nobody filled stays visible instead
+    of raising."""
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def fuelle(vorlage, werte=None):
+    """A text with its {placeholders} filled – the server-side counterpart
+    of the page's t(): plain, no plural forms, no nesting. Everything that
+    renders a text outside the browser goes through here, so one spelling
+    of the rule is enough."""
+    try:
+        return vorlage.format_map(_Platzhalter(werte or {}))
+    except (ValueError, IndexError, AttributeError):
+        return vorlage
+
+
+def satz(code, key, base=None, werte=None):
+    """One text of a language, filled – without copying the whole table.
+
+    `strings()` builds a fresh dict of every key; a single lookup does not
+    need that, and error answers do exactly one per refusal. Returns None
+    when neither the language nor the source language knows the key.
+    """
+    d = lang_dir(base)
+    text = _read(d / f"{code}.json").get(key) if code else None
+    if not text:
+        text = _read(d / f"{FALLBACK}.json").get(key)
+    return None if not text else fuelle(text, werte)
