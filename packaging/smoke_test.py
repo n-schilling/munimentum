@@ -370,7 +370,7 @@ def pruefe(exe, daten, port, proc):
             raise Fehler(f"App endete sofort (Code {proc.returncode}):\n{aus[-2000:]}")
         return hole(f"{basis}/api/status", timeout=3)
 
-    st = warte_auf(erreichbar, 90, "App antwortet auf /api/status")
+    warte_auf(erreichbar, 90, "App antwortet auf /api/status")
 
     schritt("Oberfläche ausliefern")
     with urllib.request.urlopen(f"{basis}/", timeout=10) as r:   # noqa: S310
@@ -379,10 +379,11 @@ def pruefe(exe, daten, port, proc):
         raise Fehler("Die Oberfläche kam nicht vollständig zurück.")
 
     schritt("Als Bündel erkannt, Datenordner übernommen")
-    if not st.get("frozen"):
+    umgebung = hole(f"{basis}/api/v1/app")
+    if not umgebung.get("frozen"):
         raise Fehler("Die App hält sich nicht für ein Bündel (frozen == False).")
-    if Path(st["data_dir"]).resolve() != Path(daten).resolve():
-        raise Fehler(f"Falscher Datenordner: {st['data_dir']} statt {daten}")
+    if Path(umgebung["data_dir"]).resolve() != Path(daten).resolve():
+        raise Fehler(f"Falscher Datenordner: {umgebung['data_dir']} statt {daten}")
 
     schritt("Sprachdateien (Browsersprache und Umschaltung)")
     for kopf, erwartet in (("de-DE,de;q=0.9", "de"), ("fr-CH,fr;q=0.9", "fr"),
@@ -415,8 +416,8 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Index-Lauf fehlgeschlagen: {letzter}\n{protokoll(basis)}")
 
     schritt("Eingebettete Suche")
-    treffer = hole(f"{basis}/api/search?q=Rechnung&k=5")
-    if treffer.get("count", 0) < 1:
+    treffer = hole(f"{basis}/api/v1/search?q=Rechnung&limit=5")
+    if not treffer.get("items"):
         raise Fehler(f"Die Suche fand nichts: {treffer}\n{protokoll(basis)}")
     if "4711" not in json.dumps(treffer, ensure_ascii=False):
         raise Fehler(f"Unerwartetes Suchergebnis: {treffer}")
@@ -429,7 +430,7 @@ def pruefe(exe, daten, port, proc):
     if not letzter.get("ok"):
         raise Fehler(f"Kalenderlauf fehlgeschlagen: {letzter}\n{protokoll(basis)}")
 
-    kal = hole(f"{basis}/api/calendar")
+    kal = hole(f"{basis}/api/v1/calendar")
     titel = {r.get("title") for r in kal.get("recs", [])}
     if "Rauchtest-Termin" not in titel or "Alice Example" not in titel:
         raise Fehler(f"Kalender/Adressbuch unvollständig: {sorted(titel)}\n"
