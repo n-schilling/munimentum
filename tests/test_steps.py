@@ -125,6 +125,21 @@ def test_ui_metadaten_nennen_nur_quellen():
         assert wert["quelle"]
 
 
+def test_die_quellen_stehen_einmal_in_settings():
+    """One table of sources (settings.QUELLEN): the export folders the app
+    knows, the archive check's eight and the MCP server's file roots all
+    read it – a ninth source is one line there, nowhere else."""
+    import app as app_mod
+    import archive_check
+    import mcp_server
+    import settings
+    assert list(app_mod.EXPORT_ORDNER) == list(settings.QUELLEN)
+    assert set(archive_check.PRUEFER) == set(settings.QUELLEN)
+    assert list(mcp_server.QUELLE_ORDNER) == [i for _, i in settings.QUELLEN.values()]
+    assert mcp_server.REGISTRY_QUELLE["sharepoint_pages"] == "pages"
+    assert {z["ordner"] for z in steps.PRUEFUNGEN} == set(settings.QUELLEN)
+
+
 def test_bilanzzeilen_passen_zum_register():
     """Every balance row names a check step, an export folder the app
     knows, a run the registry can start, and a title every language has."""

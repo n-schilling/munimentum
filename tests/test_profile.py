@@ -20,7 +20,7 @@ import pytest
 import app as app_mod
 import mcp_server
 import settings
-from hilfen import call
+from hilfen import call, call_kopf
 
 
 def profil_mit_config(wurzel, name, **cfg):
@@ -294,20 +294,21 @@ def test_profilwahl_im_browser(wurzel, monkeypatch):
     assert code == 200 and html.lstrip().lower().startswith("<!doctype html>")
     assert "/*__PROFIL__*/" not in html and "__TITEL__" not in html
     assert "<title>Welches Archiv?</title>" in html
-    code, st = call(port, "GET", "/api/status")
+    code, st = call(port, "GET", "/api/v1/status")
     assert st == {"chooser": True}                    # not the app – yet
-    code, pr = call(port, "GET", "/api/profiles")
+    code, pr = call(port, "GET", "/api/v1/profiles")
     assert [p["name"] for p in pr["alle"]] == ["nordwind", "standard"]
     # The chooser chooses; creating lives in the app's settings – the path
     # is there, the method is not (405 with Allow).
-    code, r = call(port, "POST", "/api/profiles", {"name": "beratung"})
+    code, r = call(port, "POST", "/api/v1/profiles", {"name": "beratung"})
     assert code == 405 and not (wurzel / "profiles" / "beratung").exists()
-    code, r = call(port, "POST", "/api/profile-open", {"name": "fremd"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.unknown"
+    code, r = call(port, "POST", "/api/v1/profiles/fremd/open", {})
+    assert code == 404 and r["error"]["k"] == "srv.profile.unknown"
     assert faden.is_alive()
-    code, r = call(port, "POST", "/api/profile-open",
-                    {"name": "nordwind", "ohne_nachfrage": True})
-    assert code == 200 and r == {"ok": True}
+    # "don't ask again" travels with the choice, as its opposite.
+    code, r = call(port, "POST", "/api/v1/profiles/nordwind/open",
+                   {"ask_at_start": False})
+    assert code == 200 and r == {"name": "nordwind"}
     faden.join(10)
     assert not faden.is_alive()
     assert ergebnis["wahl"] == ("nordwind", True)     # the browser is already open
@@ -321,13 +322,39 @@ def test_profilwahl_im_browser(wurzel, monkeypatch):
     monkeypatch.setattr(app_mod, "eigene_instanz", lambda port, host="127.0.0.1", profil=None, spanne=12: 8765)
     httpd = app_mod.chooser_server(0)
     threading.Thread(target=lambda: app_mod._wahl_abwarten(httpd, False), daemon=True).start()
-    code, r = call(httpd.server_address[1], "POST", "/api/profile-open", {"name": "standard"})
-    assert code == 200 and r == {"ok": True, "url": "http://127.0.0.1:8765/"}
+    code, r = call(httpd.server_address[1], "POST", "/api/v1/profiles/standard/open", {})
+    assert code == 200 and r == {"name": "standard", "url": "http://127.0.0.1:8765/"}
+
+
+def test_der_waehler_hat_keine_app_hinter_sich(wurzel):
+    """The chooser inherits the app's transport but not its routes: a
+    write against the versioned surface used to walk into `self.app`,
+    which is None there, and answer 500. It is a method this server does
+    not have – and OPTIONS on a real profile path names POST."""
+    profil_mit_config(wurzel, "nordwind")
+    httpd = app_mod.chooser_server(0)
+    port = httpd.server_address[1]
+    # serve_forever statt _wahl_abwarten: hier wird nichts gewaehlt, und
+    # der Warte-Faden wuerde beim Herunterfahren eine Wahl erwarten.
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        for methode, weg in (("DELETE", "/api/v1/cases/1"),
+                             ("PATCH", "/api/v1/storage"),
+                             ("QUERY", "/api/v1/reports"),
+                             ("PUT", "/api/v1/access/token")):
+            code, r = call(port, methode, weg, {})
+            assert code in (404, 405), (methode, weg, code, r)
+            assert r["status"] != 500, (methode, weg)
+        code, r, kopf = call_kopf(port, "OPTIONS", "/api/v1/profiles/standard/open")
+        assert code == 204 and "POST" in kopf["Allow"], kopf.get("Allow")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_profilwahl_beendet_jede_verbindung(wurzel, monkeypatch):
     """Regression: the browser kept its connection to the chooser alive and
-    polled /api/status on it. shutdown() only stops accepting – the handler
+    polled /api/v1/status on it. shutdown() only stops accepting – the handler
     thread on that connection answered {"chooser": true} for ever while
     the app already ran on the port, and the page never moved on."""
     import socket
@@ -350,17 +377,17 @@ def test_profilwahl_beendet_jede_verbindung(wurzel, monkeypatch):
         sock.close()
         return b"".join(teile).decode("utf-8", "replace")
 
-    antwort = roh(b"GET /api/status HTTP/1.1\r\n" + wirt + b"\r\n")
+    antwort = roh(b"GET /api/v1/status HTTP/1.1\r\n" + wirt + b"\r\n")
     assert "connection: close" in antwort.lower()
     assert '{"chooser": true}' in antwort
     # The choice itself, on a connection the client would like to keep:
     # the answer comes, then the socket is closed – nothing more is served
     # on it, so the next poll has to knock at the door again.
     body = b'{"name": "nordwind"}'
-    antwort = roh(b"POST /api/profile-open HTTP/1.1\r\n" + wirt +
+    antwort = roh(b"POST /api/v1/profiles/standard/open HTTP/1.1\r\n" + wirt +
                   b"Content-Type: application/json\r\nContent-Length: "
                   + str(len(body)).encode() + b"\r\n\r\n" + body)
-    assert '{"ok": true}' in antwort and "connection: close" in antwort.lower()
+    assert '"name": "standard"' in antwort and "connection: close" in antwort.lower()
     faden.join(5)
     assert not faden.is_alive(), "the chooser did not hand over"
     with pytest.raises(OSError):
@@ -399,7 +426,8 @@ def test_kopfzeile_fuehrt_zum_wechselfenster():
     assert 'id="pill-profil" onclick="profilWechselnFenster()"' in kopf
     assert "function profilEinstellungen()" in seite
     chooser = (Path(app_mod.RES) / "profil.html").read_text(encoding="utf-8")
-    assert "/api/profiles" not in chooser and "profile.flag" not in chooser
+    # The chooser page is served with its profiles – it fetches none.
+    assert "api(" not in chooser and "profile.flag" not in chooser
     assert "onclick=\"oeffnen(" in chooser                # the whole card
 
 
@@ -424,10 +452,10 @@ def test_status_nennt_das_profil_knapp(server):
     accounts, folders and last runs of every profile is fetched when it
     is looked at."""
     _a, port = server
-    code, st = call(port, "GET", "/api/status")
+    code, st = call(port, "GET", "/api/v1/status")
     assert code == 200
     assert st["profile"] == {"name": "standard", "moeglich": True, "mehrere": False}
-    code, pr = call(port, "GET", "/api/profiles")
+    code, pr = call(port, "GET", "/api/v1/profiles")
     assert code == 200 and [p["name"] for p in pr["alle"]] == ["standard"]
     assert pr["alle"][0]["aktiv"] is True and pr["zuletzt"] is None
 
@@ -451,16 +479,31 @@ def test_laeuft_bereits_unterscheidet_profile(server):
     assert app_mod.laeuft_bereits(port, profil="nordwind") is False
 
 
+def test_api_ein_profil_ist_dort_wo_location_es_nennt(server, wurzel):
+    """A create answers `Location` – so that address has to answer a GET.
+    It did not until 13.0: the path item had only a PATCH."""
+    _a, port = server
+    code, r, kopf = call_kopf(port, "POST", "/api/v1/profiles", {"name": "nordwind"})
+    assert code == 201 and kopf["Location"] == "/api/v1/profiles/nordwind"
+    code, r = call(port, "GET", kopf["Location"])
+    assert code == 200 and r["profile"]["name"] == "nordwind"
+    assert r["profile"]["aktiv"] is False        # läuft hier nicht
+    code, r = call(port, "GET", "/api/v1/profiles/standard")
+    assert code == 200 and r["profile"]["aktiv"] is True
+    code, r = call(port, "GET", "/api/v1/profiles/gibtsnicht")
+    assert code == 404 and r["error"]["k"] == "srv.profile.unknown"
+
+
 def test_api_profiles_legt_an(server, wurzel):
     _a, port = server
-    code, r = call(port, "POST", "/api/profiles", {"name": "nordwind"})
-    assert code == 200 and r["ok"] and r["profile"]["name"] == "nordwind"
+    code, r = call(port, "POST", "/api/v1/profiles", {"name": "nordwind"})
+    assert code == 201 and r["profile"]["name"] == "nordwind"
     assert r["profiles"]["mehrere"] is True and r["profiles"]["name"] == "standard"
     assert (wurzel / "profiles" / "nordwind").is_dir()
-    code, r = call(port, "POST", "/api/profiles", {"name": "nordwind"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.exists"
-    code, r = call(port, "POST", "/api/profiles", {"name": "Bob Baumeister"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.badname"
+    code, r = call(port, "POST", "/api/v1/profiles", {"name": "nordwind"})
+    assert code == 400 and r["error"]["k"] == "srv.profile.exists"
+    code, r = call(port, "POST", "/api/v1/profiles", {"name": "Bob Baumeister"})
+    assert code == 400 and r["error"]["k"] == "srv.profile.badname"
 
 
 def test_api_profile_switch(server, wurzel, monkeypatch):
@@ -468,20 +511,20 @@ def test_api_profile_switch(server, wurzel, monkeypatch):
     gestartet = []
     monkeypatch.setattr(app_mod, "neustart_mit_profil",
                         lambda httpd, name, p: gestartet.append((name, p)))
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "nordwind"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.unknown"
+    code, r = call(port, "POST", "/api/v1/profiles/nordwind/open", {})
+    assert code == 404 and r["error"]["k"] == "srv.profile.unknown"
     # The open one: nothing to restart, the page just reloads.
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "standard"})
-    assert code == 200 and r == {"ok": True, "name": "standard", "url": "/"}
+    code, r = call(port, "POST", "/api/v1/profiles/standard/open", {})
+    assert code == 200 and r == {"name": "standard", "url": "/"}
     profil_mit_config(wurzel, "nordwind")
     # Not while a job runs: the restart would tear it down halfway.
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "nordwind"})
-    assert code == 409 and r["message"]["k"] == "srv.busy"
+    code, r = call(port, "POST", "/api/v1/profiles/nordwind/open", {})
+    assert code == 409 and r["error"]["k"] == "srv.busy"
     assert not gestartet
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: False))
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "Nordwind"})
-    assert code == 200 and r == {"ok": True, "name": "nordwind"}
+    code, r = call(port, "POST", "/api/v1/profiles/Nordwind/open", {})
+    assert code == 200 and r["name"] == "nordwind"
     # The answer goes out before the restart is asked for (by design): on a
     # slow runner the handler thread may still be on its way there.
     ende = time.time() + 5
@@ -492,22 +535,30 @@ def test_api_profile_switch(server, wurzel, monkeypatch):
     # Open in a second instance next door: the page is sent there instead.
     monkeypatch.setattr(app_mod, "eigene_instanz",
                         lambda port, host="127.0.0.1", profil=None, spanne=12: 8765)
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "nordwind"})
+    code, r = call(port, "POST", "/api/v1/profiles/nordwind/open", {})
     assert code == 200 and r["url"] == "http://127.0.0.1:8765/"
     assert gestartet == [("nordwind", port)]
     # No profiles under the override: no restart into a different archive.
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(wurzel))
-    code, r = call(port, "POST", "/api/profile-switch", {"name": "standard"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.impossible"
+    code, r = call(port, "POST", "/api/v1/profiles/standard/open", {})
+    assert code == 400 and r["error"]["k"] == "srv.profile.impossible"
 
 
 def test_api_profile_prefs(server):
     _a, port = server
-    code, r = call(port, "POST", "/api/profile-prefs", {"ohne_nachfrage": True})
-    assert code == 200 and r == {"ok": True, "ohne_nachfrage": True}
+    code, r = call(port, "PATCH", "/api/v1/profiles", {"ask_at_start": False})
+    assert code == 200 and r["ask_at_start"] is False
     assert app_mod.profil_register_lesen()["ohne_nachfrage"] is True
-    code, r = call(port, "POST", "/api/profile-prefs", {"ohne_nachfrage": False})
-    assert r["ohne_nachfrage"] is False
+    code, r = call(port, "PATCH", "/api/v1/profiles", {"ask_at_start": True})
+    assert r["ask_at_start"] is True
+    # A boolean, as the contract says – "false" would have turned it on.
+    for wert in ("false", 0, None):
+        code, r = call(port, "PATCH", "/api/v1/profiles", {"ask_at_start": wert})
+        assert code == 400 and r["error"]["k"] == "srv.profile.badvalue", (wert, r)
+    assert app_mod.profil_register_lesen().get("ohne_nachfrage") is False   # untouched by the refusals
+    # The register is what a PATCH on the collection changes – a property
+    # of all of them, not of one.
+    assert call(port, "PATCH", "/api/v1/profiles", {})[0] == 400
 
 
 def test_api_data_dir_verweigert_den_ordner_eines_anderen_profils(server, wurzel):
@@ -516,15 +567,15 @@ def test_api_data_dir_verweigert_den_ordner_eines_anderen_profils(server, wurzel
     a, port = server
     gemeinsam = wurzel / "gemeinsam"
     profil_mit_config(wurzel, "nordwind", data_dir=str(gemeinsam))
-    code, r = call(port, "POST", "/api/data-dir", {"path": str(gemeinsam)})
+    code, r = call(port, "PATCH", "/api/v1/storage", {"data_dir": str(gemeinsam)})
     assert code == 400
-    assert r["message"] == {"k": "srv.datadir.shared", "v": {"profile": "nordwind"}}
+    assert r["error"] == {"k": "srv.datadir.shared", "v": {"profile": "nordwind"}}
     assert not a.cfg.get("data_dir")
-    code, r = call(port, "POST", "/api/data-dir", {"index": str(gemeinsam)})
-    assert code == 400 and r["message"]["k"] == "srv.datadir.shared"
+    code, r = call(port, "PATCH", "/api/v1/storage", {"index_dir": str(gemeinsam)})
+    assert code == 400 and r["error"]["k"] == "srv.datadir.shared"
     assert not a.cfg.get("index_dir")
-    code, r = call(port, "POST", "/api/data-dir", {"path": str(wurzel / "eigen")})
-    assert code == 200 and r["ok"] is True
+    code, r = call(port, "PATCH", "/api/v1/storage", {"data_dir": str(wurzel / "eigen")})
+    assert code == 200
 
 
 def test_mcp_schnipsel_heisst_nach_dem_profil(wurzel, monkeypatch):
@@ -599,12 +650,15 @@ def test_profilwechsel_startet_erst_nach_dem_stopp_neu(wurzel, monkeypatch, with
                 break
             time.sleep(0.02)
         antwort["port"] = box[0].server_address[1]
-        antwort["code"], antwort["r"] = call(antwort["port"], "POST", "/api/profile-switch",
-                                              {"name": "nordwind"})
+        antwort["code"], antwort["r"] = call(antwort["port"], "POST", "/api/v1/profiles/nordwind/open", {})
 
     threading.Thread(target=wechseln, daemon=True).start()
     app_mod.serve(a, 0, open_browser=False)          # returns once the switch stopped it
-    assert antwort["code"] == 200 and antwort["r"] == {"ok": True, "name": "nordwind"}
+    assert antwort["code"] == 200 and antwort["r"]["name"] == "nordwind"
+    # Kein `url`: das Feld heisst "laeuft schon nebenan". Auf dem
+    # Neustartweg wuerde die Seite damit in den sterbenden Server laden,
+    # statt auf den neuen zu warten.
+    assert "url" not in antwort["r"], antwort["r"]
     assert reihenfolge == ["shutdown", "exec"]       # clean-up first, then the new start
     assert aufruf["pfad"] == sys.executable
     assert aufruf["argv"][-5:] == ["--profile", "nordwind", "--port", str(antwort["port"]), "--no-browser"]
@@ -684,13 +738,13 @@ def test_profil_umbenennen(wurzel):
 def test_api_profile_rename(server, wurzel, monkeypatch):
     a, port = server
     profil_mit_config(wurzel, "nordwind")
-    code, r = call(port, "POST", "/api/profile-rename", {"name": "standard", "neu": "x"})
-    assert code == 400 and r["message"]["k"] == "srv.profile.active"
+    code, r = call(port, "PATCH", "/api/v1/profiles/standard", {"name": "x"})
+    assert code == 400 and r["error"]["k"] == "srv.profile.active"
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
-    code, r = call(port, "POST", "/api/profile-rename", {"name": "nordwind", "neu": "beratung"})
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
     assert code == 409
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: False))
-    code, r = call(port, "POST", "/api/profile-rename", {"name": "nordwind", "neu": "beratung"})
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
     assert code == 200 and r["name"] == "beratung"
     assert [p["name"] for p in r["profiles"]["alle"]] == ["beratung", "standard"]
     assert (wurzel / "profiles" / "beratung").is_dir()

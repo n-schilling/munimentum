@@ -1,75 +1,56 @@
-## New in 12.0.0
+## New in 13.0.0
 
-Nothing to do when you upgrade: no migration, no rebuild, the archive and
-the settings stay as they are. In the app itself one thing moved — access
-to your Microsoft 365 account is a settings card now instead of a window.
-Everything else happened behind it, in the local HTTP interface, and
-thoroughly enough to warrant the major number. **If you have scripts of
-your own against it, read *Upgrading* below.**
+One new thing to search with, and underneath it the local HTTP interface
+finished: the app's own routes are gone, everything runs on `/api/v1`.
+**The first run after the update rebuilds the search index once** — see
+*Upgrading*. **If you have scripts of your own against the interface, read
+*Upgrading* too**, because every path has changed.
 
-**The API answers the same way everywhere.** Every refusal now has one
-shape and a status code that says what happened. The body is a problem
-detail as RFC 9457 describes it — what went wrong, as a type, a title, the
-status and an English sentence — plus the text key the page turns into
-your language. What used to come back as “HTTP 200 plus an error field” —
-a search without an index, an unknown item, a case that is not there — now
-answers `503`, `404` or `409`, and the two answers that were plain German
-text are JSON like everything else.
+**Who stood in which line.** The search has a **mail filter**: *From*,
+*To*, *Cc* and *Bcc*, each offering the addresses the archive actually
+holds. It is one pill with four fields, and it stands there only while the
+source is *Mail* — a line only mail has would otherwise quietly turn
+every search into a mail search. A hit's detail now shows *Bcc*
+wherever it is there, so the detail and the search agree. Claude gets the
+same four filters through MCP, and can ask for the addresses behind them.
 
-**And it behaves like an API.** A method a route does not serve is
-answered `405` with `Allow` instead of “no such route”, `OPTIONS` says
-what a path allows, a body has to be JSON and has to say so, a number that
-is not one is a `400` rather than a `500`, and a `503` carries
-`Retry-After`. Every answer names the program in `X-Munimentum-Version`
-and the contract in `X-Munimentum-Api`; *Settings › App* shows both next
-to the build.
+**Claude can check whether the archive is worth concluding from.** Three
+more MCP tools: the run history with what each step brought in, the log a
+run wrote, and the completeness balance a source's last check found
+against Microsoft. A search cannot tell you that a source's last run
+failed — now Claude can ask before it answers from a gap.
 
-**A versioned surface.** Alongside the app's own routes there is now
-`/api/v1`, for everyone who is not the page: resources instead of actions,
-the method says what happens, English names throughout. It carries cases
-and the search so far and grows per release — its version is the
-contract's, not the program's, so the path changes only when the shape
-breaks. *Explore archive* already reads through it entirely — the search,
-the files, the folders, the file types, the people, a conversation, an
-item's facts and the calendar.
+**One surface.** Until now the page spoke one language and `/api/v1`
+another. The app's own action routes — `/api/run`, `/api/faelle/anlegen`,
+`/api/archiv/nachholen` and the rest of them — are gone; the page, the
+profile chooser and the packaged smoke test ask nothing outside
+`/api/v1`. Nothing about the app changes for you: the same screens, the
+same buttons. What changes is that there is one description of it all,
+`openapi.yaml`, and it is now complete — every route tagged twice, by its
+door and by its HTTP method, so a viewer can list all `GET`s as easily as
+one door's routes.
 
-**The page asks less often, and asks for less.** While a run is going it
-follows as closely as before; idle it asks every thirty seconds instead of
-every two and a half, and *Settings › Expert mode* sets that interval. A
-tab in the background asks nothing at all, and the log is fetched only
-while the run window is open — it is shown nowhere else. The polled answer
-now carries only what changes on its own.
-Three things that do not have moved out: the settings (`/api/v1/config`,
-read with `GET`, changed with `PATCH`), the paths and defaults
-(`/api/v1/app`) and what the sources hold, folder names and all
-(`/api/v1/inventory`). What is left was then gone through node by node:
-every field that nothing in the interface acts on is gone, and everything
-that the settings already say — which models Ollama should use, the MCP
-port, the sign-in mode, an own registration's id — is not repeated. What
-can be decided in the app is decided there and travels as one answer,
-such as whether the two models are available. What a header already says
-is not repeated in the body either. That is a status of 0.9 KB instead of
-8, and six requests in twenty seconds instead of twenty-eight — four of
-those six only once, at load. The app binds to `127.0.0.1`, but that is no reason for an
-answer to repeat the names of someone's mail folders, the list of their
-local models or the path to their home directory every few seconds.
+**Three reads ask with QUERY.** The AI answer, a source's folder plan and
+the problem report are reads whose question is too big for a URL. They
+used to be a `POST`, which said "this changes something" when it does not.
+They now use `QUERY` ([RFC 10008](https://www.rfc-editor.org/info/rfc10008/)):
+safe and repeatable like a `GET`, with the question in the body. Nothing
+behind them stores anything.
 
-**Access is a setting.** Getting the app to your Microsoft 365 account —
-pasting a key or signing in — used to be the one setting that opened a
-window over the page. It is now a card at the top of the settings, called
-*Microsoft Access* in the navigation beside it, and everything that led
-into that window leads to the card instead: the frame in the header, step
-one of the archive door, the entry in the navigation. Nothing pops up on
-its own any more; the dot next to the entry says when it wants attention.
-
-**One place for a refusal.** When something is refused, the app no longer
-opens a browser dialog: the reason appears in the page's own message, in
-the error colour, and stays until it is read away.
+**A refusal has one shape, and only one.** `message`, the second spelling
+of the reason that 11.3 introduced and 12.0 announced as going away, is
+gone. What is left is the problem detail: `type`, `title`, `status`,
+`detail`, `instance`, plus `ok` and `error` with the text key.
 
 ## Upgrading
 
-**Using the app:** nothing to do, from any 11.x. From 10.x the next run
-rebuilds the index once — see the notes of
+**Using the app:** the first run after the update rebuilds the search
+index once, because the index learns who stood in *To*, *Cc* and *Bcc*.
+It takes about as long as the first index run did; the exports themselves
+are untouched, and nothing is deleted. Everything else is as it was — no
+migration, no settings to redo, and the archive stays where it is.
+
+From 10.x the index is rebuilt anyway — see the notes of
 [11.0.0](https://github.com/n-schilling/munimentum/releases/tag/v11.0.0)
 and [11.1.0](https://github.com/n-schilling/munimentum/releases/tag/v11.1.0).
 From 9.x or older the first start moves the archive into
@@ -78,21 +59,69 @@ From 9.x or older the first start moves the archive into
 from 6.1 or older run the latest 6.x once first — see
 [7.0.0](https://github.com/n-schilling/munimentum/releases/tag/v7.0.0).
 
-**Scripting against the HTTP API:** four things changed for you.
+**Scripting against the HTTP API:** every unversioned `/api/...` route is
+gone. Each one has a successor under `/api/v1` where the method says what
+happens, so a `POST` that only read is now a `GET`, and one that deleted
+is a `DELETE`.
 
-| What | Before | Now |
-|---|---|---|
-| A refusal | `{"ok": false, "message": …}` or `{"error": …}` | one problem detail, `error.k` still carries the text key |
-| No index, unknown item, unknown case | `200` with an error field | `503`, `404`, `409` |
-| `POST` without `Content-Type: application/json` | accepted | `415` — `curl -d` sets a form type, so pass the header |
-| Wrong method, unparseable number | `404`, `500` | `405` with `Allow`, `400` |
-| The settings | in every `/api/status` | `GET /api/v1/config`, changed with `PATCH` |
-| Paths, defaults, the Claude snippet | in every `/api/status` | `GET /api/v1/app` |
-| Folders, calendars, lists, notebooks, export state | in every `/api/status` | `GET /api/v1/inventory` |
+| Before | Now |
+|---|---|
+| `/api/status`, `POST /api/config` | `GET /api/v1/status`, `GET`/`PATCH /api/v1/config` |
+| `/api/data-dir`, `/api/schedule` | `PATCH /api/v1/storage`, `PATCH /api/v1/schedule` |
+| `/api/search`, `/api/similar`, `/api/people`, `/api/files`, `/api/filetypes`, `/api/folders`, `/api/calendar` | the same names under `/api/v1/` |
+| `/api/detail`, `/api/document`, `/api/thread`, `/source` | `/api/v1/documents/facts`, `/api/v1/documents`, `/api/v1/threads`, `/api/v1/files/content` |
+| `/api/suche/*` | `/api/v1/searches/history` and `/api/v1/searches/saved` with real methods |
+| `/api/faelle/*` (23 routes) | `/api/v1/cases` and its collections `items`, `folders`, `notes`, `lists` |
+| `/api/run`, `/api/cancel`, `/api/log`, `/api/run-log` | `POST /api/v1/runs`, `DELETE /api/v1/runs/current`, `GET /api/v1/log`, `GET /api/v1/runs/{id}/log` |
+| `/api/archiv/*` | `/api/v1/sources/{source}/` + `findings`, `refetch`, `rebuild`, `open` |
+| `/api/bilanz/holen`, `/api/sharepoint-report` | `POST /api/v1/balance/{row}/fetch`; a row's last report is `GET /api/v1/balance/{row}` – the SharePoint report is `GET /api/v1/balance/sharepoint` |
+| `/api/token`, `/api/login`, `/api/logout`, `/api/wizard-seen` | `PUT /api/v1/access/token`, `POST`/`DELETE /api/v1/access/session`, `DELETE /api/v1/access/notice` |
+| `/api/profile-open`, `-switch`, `-prefs`, `-rename` | `POST /api/v1/profiles/{name}/open`, `PATCH /api/v1/profiles`, `PATCH /api/v1/profiles/{name}` |
+| `/api/mcp`, `/api/ollama-recheck`, `/api/update-check` | `PATCH /api/v1/mcp`, `POST /api/v1/ollama/recheck`, `POST /api/v1/updates/check` |
+| `/api/answer`, `/api/folder-plan`, `/api/report` | `QUERY /api/v1/answer`, `QUERY /api/v1/sources/{source}/folder-plan` (the calendars: `outlook` with `unit: calendar`), `QUERY /api/v1/reports` |
+| `/api/analytics`, `/api/analytics-refresh`, `/api/quit`, `/api/openapi` | the same names under `/api/v1/` (`POST /api/v1/analytics/refresh`) |
 
-Every success answer is unchanged. `message` is still sent beside the new
-fields and goes away with 13.0. The full description, including
-`/api/v1`, is `openapi.yaml`, served at `/api/openapi`.
+A few more things for a script:
+
+* A `QUERY` needs a body and a `Content-Type` — without either it is a
+  `400`, because the body is the question. `curl -X QUERY -H
+  'Content-Type: application/json' -d '{"q":"…"}'`. Those routes announce
+  themselves with `Accept-Query` in their `OPTIONS` answer.
+* `message` is gone from refusals; `error.k` still carries the text key.
+  A few successful answers keep one, where the sentence is the point.
+* Everything a `Location` names can be fetched: the run that was started
+  (`GET /api/v1/runs/current`), and each folder, note, stored list and
+  saved search a create answered with.
+* The collections that are capped rather than paged – folders, file types,
+  people, addresses, a conversation, the runs – now answer the `limit`
+  they were built with and say with `has_more` whether the cap cut
+  something off. Only `/api/v1/search` pages.
+* `store` – whether an index exists, what it can do (`features`),
+  `built_at` – left the status for `GET /api/v1/inventory`, next to the
+  sources' counts: it changes with a run, not with every poll. The
+  mail lines show there as one word, `mail_lines`.
+* Two names changed on the way: `/api/v1/log` and `/api/v1/runs/{id}/log`
+  answer `items` where `/api/log` and `/api/run-log` said `lines`, and
+  `/api/v1/similar` takes `limit` where `/api/similar` took `k`.
+* Under `/api/v1` nothing was removed, and two answers of 12.0 changed
+  their spelling – the last German words there, and one collision. The
+  case marks on a search hit (`cases`) say `folder` and `status:
+  open|closed` now, not `ordner` and `offen|zu`. And in the `criteria`
+  of a stored list, a saved search or a history entry the case's folder
+  is `case_folder`: 12.0 wrote it as `folder`, the mailbox folder's key,
+  so one overwrote the other – and a saved search's own folder is
+  `case_folder` too, the name a `POST` or `PATCH` takes, where 12.0
+  answered `folder`. A 12.0 script reading any of these must change;
+  everything else under `/api/v1` is as it was. The
+  description is `openapi.yaml`, served at
+  `GET /api/v1/openapi`, and it is an OpenAPI 3.2 file now — 3.2 is the
+  first version with a field for `QUERY` — and it uses the rest of what
+  that version brought: the AI answer's stream is typed line by line
+  (`itemSchema`), an item's facts are one schema per kind behind a
+  discriminator, every refusal points at one reusable media type, the
+  tags say whether they group (`kind: nav`) or label (`kind: badge`), so
+  a generator builds four clients rather than ten, and `source` shows
+  both the value and how it looks on the wire.
 
 ## Which file?
 

@@ -68,6 +68,39 @@ def make_chunk(uid="outlook:inbox/mail.eml:0", seq=0, **kw):
 # --------------------------------------------------------------------------
 # _chunk_row / _people_rows
 # --------------------------------------------------------------------------
+def test_adressen_zaehlen_nachrichten_nicht_vorkommen():
+    """Exchange writes `"bob@example.com" <bob@example.com>` for external
+    recipients, so the address lands in the line twice. One mail must
+    still count once – the column is named after mails, and the
+    suggestion list is ordered by it."""
+    import rag_index
+    chunks = [{"cid": "outlook:a.eml#0", "src": "outlook",
+               "to_ppl": "bob@example.com bob@example.com",
+               "cc_ppl": "", "bcc_ppl": "", "who_mail": "alice@example.com"},
+              {"cid": "outlook:b.eml#0", "src": "outlook",
+               "to_ppl": "bob@example.com", "cc_ppl": "", "bcc_ppl": "",
+               "who_mail": "alice@example.com"},
+              {"cid": "outlook:a.eml#1", "src": "outlook",      # zweites Stueck
+               "to_ppl": "bob@example.com", "cc_ppl": "", "bcc_ppl": "",
+               "who_mail": "alice@example.com"}]
+    zeilen = {(r, a): n for r, a, n in rag_index._adressen_rows(chunks)}
+    assert zeilen[("to", "bob@example.com")] == 2, zeilen
+    assert zeilen[("from", "alice@example.com")] == 2
+
+
+def test_adressen_in_klammern_sind_keine_zweite_adresse():
+    """An export writes `Bob Beispiel (bob@x) <bob@x>` at times: the
+    bracketed token used to become a suggestion of its own, one that no
+    LIKE on the line would ever match the way one expects."""
+    import rag_index
+    chunks = [{"cid": "outlook:a.eml#0", "src": "outlook",
+               "to_ppl": "Bob Beispiel (bob@example.com) <bob@example.com>, \"carla@example.com\"",
+               "cc_ppl": "", "bcc_ppl": "", "who_mail": "alice@example.com"}]
+    zeilen = {(r, a): n for r, a, n in rag_index._adressen_rows(chunks)}
+    assert zeilen == {("to", "bob@example.com"): 1, ("to", "carla@example.com"): 1,
+                      ("from", "alice@example.com"): 1}, zeilen
+
+
 def test_chunk_row_zerlegt_cid_und_uid():
     c = make_chunk(uid="teams:1on1/a.html:7", seq=2, src="teams", root="teams",
                    rel="1on1/a.html")
@@ -156,6 +189,36 @@ def test_write_db_schreibt_schema_und_inhalte(tmp_path):
         "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH 'testmail'")]
     assert hit == [3]
     con.close()
+
+
+def test_write_db_zaehlt_die_adressen_je_mailzeile(tmp_path):
+    """The Mail filter's suggestions are counted once, when the index is
+    built: address by address, line by line, mail only."""
+    chunks = [
+        make_chunk(uid="outlook:inbox/a.eml:0", who_mail="carla@example.com",
+                   to_ppl="alice beispiel alice@example.com",
+                   cc_ppl="bob@example.com", bcc_ppl=""),
+        # A second chunk of the same message must not count twice.
+        make_chunk(uid="outlook:inbox/a.eml:0", seq=1, who_mail="carla@example.com",
+                   to_ppl="alice beispiel alice@example.com",
+                   cc_ppl="bob@example.com", bcc_ppl=""),
+        make_chunk(uid="outlook:inbox/b.eml:0", who_mail="carla@example.com",
+                   to_ppl="dana@example.com", cc_ppl="", bcc_ppl="erik@example.com"),
+        # Teams has no lines at all – and no addresses in this table.
+        make_chunk(uid="teams:1on1/a.html:0", src="teams", root="teams",
+                   rel="1on1/a.html", who="Alice", ppl="alice a@example.com"),
+    ]
+    rag_index.write_db(tmp_path, chunks)
+    con = sqlite3.connect(tmp_path / "corpus.db")
+    rows = sorted(con.execute("SELECT role, addr, messages FROM adressen"))
+    con.close()
+    assert rows == [
+        ("bcc", "erik@example.com", 1),
+        ("cc", "bob@example.com", 1),
+        ("from", "carla@example.com", 2),
+        ("to", "alice@example.com", 1),
+        ("to", "dana@example.com", 1),
+    ], "Namen sind keine Adressen, und jede Nachricht zaehlt einmal"
 
 
 def test_write_db_ersetzt_vorhandene_db(tmp_path):

@@ -29,14 +29,13 @@ nowhere else. The search history, saved searches and cases sit in a
 criteria — words, kind of search, filters — never its hits, for as long as
 *Settings › App* says (or not at all), and a case keeps pointers into the
 archive plus what a hit said when it was added and the remarks you write
-on its items. The one thing the app
-writes outside its folders is a **case export**, and only when you ask
-for one: a ZIP of copied originals under the path you chose (your
-Documents folder by default) — from there on it is yours to move, share or
-delete. The app serves its
-interface on `127.0.0.1` and is not reachable from your network. System
-notifications are posted locally through the operating system. Delete those
-folders and nothing of it remains.
+on its items. The one thing the app writes outside its folders is a
+**case export**, and only when you ask for one: a ZIP of copied originals
+under the path you chose (your Documents folder by default) — from there
+on it is yours to move, share or delete. The app serves its interface on
+`127.0.0.1` and is not reachable from your network. System notifications
+are posted locally through the operating system. Delete those folders and
+nothing of it remains.
 
 ## Two places worth knowing about
 
@@ -49,9 +48,9 @@ Folder names and subject lines are beyond what a pattern can catch, so read it
 before posting.
 
 **The MCP server** hands your archive — and what the app knows about it:
-coverage, run history, the analytics figures, your cases and saved
+coverage, the run history with the logs those runs wrote, the completeness
+balance against Microsoft, the analytics figures, your cases and saved
 searches — to Claude on `127.0.0.1`. It reads; it changes a case only when
 *Claude may change cases* is on under *Settings › Claude (MCP)*, and then
-only adds. What Claude does
-with the passages it reads is governed by your agreement with Anthropic, not by
-this app.
+only adds. What Claude does with the passages it reads is governed by your
+agreement with Anthropic, not by this app.

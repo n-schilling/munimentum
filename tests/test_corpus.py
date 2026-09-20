@@ -193,6 +193,40 @@ def test_load_outlook_parses_eml(tmp_path):
     assert "hier die neue Nachricht" in r["text"]
     assert "Alter zitierter Verlauf" not in r["text"]
     assert r["ts"] is not None
+    assert r["to_ppl"] == "bob builder bob@example.com"
+    assert r["cc_ppl"] == "" and r["bcc_ppl"] == ""
+
+
+# One mail per line: who was written to, who was copied, who blindly – and
+# that each of them ends up in exactly its own column, not in all of them.
+EML_KOPIEN = b"""\
+From: Alice Beispiel <alice@nordwind.example>
+To: Bob Baumeister <bob@nordwind.example>
+Cc: Carla Chef <carla@nordwind.example>
+Bcc: Dana Dienstleister <dana@example.com>
+Subject: Rechnung
+Date: Mon, 07 Jul 2025 10:00:00 +0000
+Content-Type: text/plain; charset=utf-8
+
+Anbei.
+"""
+
+
+def test_die_vier_zeilen_stehen_je_fuer_sich(tmp_path):
+    (tmp_path / "inbox").mkdir()
+    (tmp_path / "inbox" / "kopien.eml").write_bytes(EML_KOPIEN)
+    r = corpus.load_outlook(str(tmp_path))[0]
+    assert r["who_mail"] == "alice@nordwind.example"
+    assert "bob@nordwind.example" in r["to_ppl"]
+    assert "carla" not in r["to_ppl"] and "dana" not in r["to_ppl"]
+    assert r["cc_ppl"] == "carla chef carla@nordwind.example"
+    assert r["bcc_ppl"] == "dana dienstleister dana@example.com"
+    # Everyone involved is still in `ppl` – the person filter asks that one.
+    for wer in ("alice@nordwind.example", "bob@nordwind.example",
+                "carla@nordwind.example", "dana@example.com"):
+        assert wer in r["ppl"]
+    # A blind copy outside the own domains makes the mail external, too.
+    assert r["domains"] == "example.com nordwind.example"
 
 
 # --------------------------------------------------------------------------

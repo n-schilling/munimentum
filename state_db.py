@@ -87,17 +87,24 @@ CREATE TABLE IF NOT EXISTS saetze(
 class StateDb:
     """The one state file of an export folder. Every write is a transaction."""
 
-    def __init__(self, ordner, dateiname=DB_NAME):
+    def __init__(self, ordner, dateiname=DB_NAME, readonly=False):
         # `dateiname`: a second file next to the export's own – the calendar
         # step keeps its manifest apart, so the export's file (whose mtime
         # dates the last run) stays untouched by it.
+        # `readonly`: open what is there and create nothing – the MCP
+        # server's way in, which must never write the export's file, nor
+        # wait on a step that is writing it.
         self.pfad = Path(ordner) / dateiname
+        self.readonly = readonly
         self._lokal = threading.local()
 
     # -- plumbing ----------------------------------------------------------
     def _neu_verbinden(self, threadsafe=False):
         # threadsafe: the caller serialises access itself (DbDoneLog's lock)
         # – needed because mark() runs from the export's worker threads.
+        if self.readonly:
+            return sqlite3.connect(f"file:{self.pfad}?mode=ro", uri=True, timeout=10,
+                                   check_same_thread=not threadsafe)
         self.pfad.parent.mkdir(parents=True, exist_ok=True)
         con = sqlite3.connect(self.pfad, timeout=10,
                               check_same_thread=not threadsafe)
@@ -111,11 +118,18 @@ class StateDb:
         con = getattr(self._lokal, "con", None)
         if con is not None:
             return con
-        if lesend and not self.pfad.exists():
+        if (lesend or self.readonly) and not self.pfad.exists():
             return None
         con = self._neu_verbinden()
         self._lokal.con = con
         return con
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+        return False
 
     def close(self):
         """Close this thread's connection; the next call reopens it."""
@@ -131,8 +145,11 @@ class StateDb:
         con = self._verbinden(lesend=True)
         if con is None:
             return None
-        row = con.execute("SELECT value FROM kv WHERE key = ?",
-                          (key,)).fetchone()
+        try:
+            row = con.execute("SELECT value FROM kv WHERE key = ?",
+                              (key,)).fetchone()
+        except sqlite3.OperationalError:
+            return None        # read-only, and the file predates the table
         return row[0] if row else None
 
     def _kv_schreiben(self, key, value):

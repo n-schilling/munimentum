@@ -8,7 +8,7 @@ it calls baue(), which aggregates the archive (per-month history, gaps,
 attachment and file types, top people, folder sizes with the largest files)
 and stores ONE JSON document in an `analytics` table inside the same
 corpus.db. Same lifecycle as the index: rebuilt with it, gone with it.
-/api/analytics is then a plain read – no directory walks, no aggregation in
+/api/v1/analytics is then a plain read – no directory walks, no aggregation in
 the request thread, no cache layers with their own invalidation rules.
 
 Communication and files are separate worlds here: the per-month history,

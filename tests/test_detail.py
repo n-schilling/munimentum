@@ -23,6 +23,7 @@ def zeile(**felder):
 MAIL = (
     "Message-ID: <m1@example.com>\nFrom: Carla Chef <carla@example.com>\n"
     "To: alice@example.com, Bob Baumeister <bob@example.com>\nCc: Dana <dana@nordwind.example>\n"
+    "Bcc: Erik Einkauf <erik@nordwind.example>\n"
     "Subject: Angebot\nDate: Tue, 15 Sep 2026 09:40:00 +0000\n"
     "MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"xx\"\n\n"
     "--xx\nContent-Type: text/plain; charset=utf-8\n\nHallo, anbei das Angebot.\n"
@@ -32,7 +33,7 @@ MAIL = (
     "Content-Transfer-Encoding: base64\n\nSGFsbG8=\n--xx--\n")
 
 
-def test_mail_liest_an_cc_und_anhaenge_aus_der_datei(tmp_path):
+def test_mail_liest_an_cc_bcc_und_anhaenge_aus_der_datei(tmp_path):
     ziel = tmp_path / "a.eml"
     ziel.write_text(MAIL, encoding="utf-8")
     f = detail.fakten(zeile(), "Hallo, anbei das Angebot.", ziel, {})
@@ -41,6 +42,9 @@ def test_mail_liest_an_cc_und_anhaenge_aus_der_datei(tmp_path):
     assert f["to"] == [{"name": "", "mail": "alice@example.com"},
                        {"name": "Bob Baumeister", "mail": "bob@example.com"}]
     assert f["cc"] == [{"name": "Dana", "mail": "dana@nordwind.example"}]
+    # The blind copy: the search can filter by it, so the detail must show it
+    # – otherwise the hit looks as though it had none.
+    assert f["bcc"] == [{"name": "Erik Einkauf", "mail": "erik@nordwind.example"}]
     # the real attachment with its size – the inline logo is not one
     assert f["attachments"] == [{"name": "Angebot.pdf", "size": len(b"Hallo Welt")}]
     assert f["folder"] == "inbox" and f["date"] == "2026-09-15 09:40"
@@ -57,7 +61,7 @@ def test_mail_mit_blosser_adresse_behaelt_den_namen_der_zeile(tmp_path):
 def test_mail_ohne_datei_behaelt_die_fakten_der_zeile(tmp_path):
     f = detail.fakten(zeile(att="Vertrag.pdf Anlage.xlsx"), "Text", None, {})
     assert f["from"] == {"name": "Carla Chef", "mail": "carla@example.com"}
-    assert f["to"] == [] and f["cc"] == []
+    assert f["to"] == [] and f["cc"] == [] and f["bcc"] == []
     assert [a["name"] for a in f["attachments"]] == ["Vertrag.pdf", "Anlage.xlsx"]
     assert all(a["size"] is None for a in f["attachments"])
     # a vanished file is the same case

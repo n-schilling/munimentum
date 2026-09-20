@@ -455,7 +455,7 @@ def test_build_steps_folgt_der_einstellung(sandbox):
 
 
 def test_lauf_mit_nur_kontakten_liest_keine_mails(sandbox, monkeypatch, no_ollama):
-    """The reported case, once through the whole path: /api/run -> build_steps."""
+    """The reported case, once through the whole path: /api/v1/runs -> build_steps."""
     gesehen = {}
 
     def merken(steps, label, **kw):
@@ -501,7 +501,7 @@ def test_vorgabe_waehlt_nichts_aus(sandbox):
 
 def test_api_files_ohne_index_meldet_den_grund(sandbox, server):
     _, port = server
-    code, r = call(port, "GET", "/api/files")
+    code, r = call(port, "GET", "/api/v1/files")
     if code == 503:                                   # no index in this sandbox
         assert r["roots"] == [] and r["error"]["k"] == "srv.noindex"
     else:
@@ -597,7 +597,7 @@ def test_save_config_uebernimmt_spiegel_haken_und_sharepoint(sandbox, server):
     """Regression: onedrive_enabled reached the run but never survived a
     page rebuild – the checkbox was never saved."""
     _, port = server
-    code, r = call(port, "POST", "/api/config", {
+    code, r = call(port, "PATCH", "/api/v1/config", {
         "onedrive_enabled": True, "sharepoint_enabled": True,
         "sharepoint_urls": "  https://firma.sharepoint.com/sites/TeamX  \n\n",
         "sharepoint_types_include": " .PDF, docx ,",
@@ -726,7 +726,7 @@ def test_kalender_wird_dorthin_geschrieben_wo_alle_ihn_lesen(sandbox,
                                                              monkeypatch):
     """One file, one path. Spelled relative, the step wrote it under the
     subprocess cwd (the data folder) while the skip target, the status and
-    /api/calendar looked in the index folder – with data and index apart
+    /api/v1/calendar looked in the index folder – with data and index apart
     the calendar tab then stayed empty forever."""
     monkeypatch.setattr(app_mod, "BASE", sandbox / "data")
     monkeypatch.setattr(app_mod, "STORE_PFAD", sandbox / "woanders")
@@ -804,7 +804,7 @@ def test_jobrunner_fuehrt_schritte_der_reihe_nach_aus(sandbox):
 
 def test_job_nennt_den_logstand_vor_seiner_ersten_zeile(sandbox):
     """The run window shows the run's lines only: the job carries the log
-    cursor from before its first line, and /api/log from there on yields
+    cursor from before its first line, and the run log from there on yields
     nothing of what the app logged earlier."""
     r = app_mod.JobRunner()
     r.logk("srv.token.ok")
@@ -1316,12 +1316,12 @@ def test_http_update_check(server, monkeypatch):
     monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
         "status": "ok", "current": "1.0.0", "latest": "2.0.0",
         "url": "u", "newer": True, "error": None})
-    code, r = call(server[1], "POST", "/api/update-check")
-    assert code == 200 and r["newer"] is True and r["latest"] == "2.0.0"
+    code, r = call(server[1], "POST", "/api/v1/updates/check")
+    assert code == 200 and r["update"]["newer"] is True and r["update"]["latest"] == "2.0.0"
 
 
 def test_http_config_schaltet_die_pruefung_ab(server, sandbox):
-    code, r = call(server[1], "POST", "/api/config", {"update_check": False})
+    code, r = call(server[1], "PATCH", "/api/v1/config", {"update_check": False})
     assert code == 200 and r["config"]["update_check"] is False
     assert app_mod.load_config()["update_check"] is False
 
@@ -1489,11 +1489,15 @@ def test_api_run_log_liefert_das_gespeicherte_protokoll(server):
     a, port = server
     lauf = a.history.start_run("job.export", "manual")
     a.history.log_lines([(lauf, 1.0, "info", '"zeile"')])
-    code, r = call(port, "GET", "/api/run-log?id=" + str(lauf))
-    assert code == 200 and r["lines"][0]["text"] == "zeile"
-    # An id that is not a number is the caller's mistake, not an empty run.
-    code, r = call(port, "GET", "/api/run-log?id=abc")
-    assert code == 400 and r["error"]["k"] == "srv.badparam"
+    code, r = call(port, "GET", f"/api/v1/runs/{lauf}/log")
+    assert code == 200 and r["items"][0]["text"] == "zeile"
+    # An id that is not a number names no run at all – nor does one that
+    # was never recorded; a run whose lines were pruned answers [].
+    for weg in ("abc", "999999"):
+        code, r = call(port, "GET", f"/api/v1/runs/{weg}/log")
+        assert code == 404 and r["error"]["k"] == "srv.run.unknown", weg
+    leer = a.history.start_run("job.export", "manual")
+    assert call(port, "GET", f"/api/v1/runs/{leer}/log") == (200, {"items": []})
 
 
 def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
@@ -1511,11 +1515,11 @@ def test_planner_board_anhaenge_gehen_durch_die_source_route(server, sandbox):
     (sandbox / app_mod.STORE_DIR).mkdir(parents=True, exist_ok=True)
     _index_mit_zeitpunkten(sandbox, [("2025-01", "teams")])
 
-    code, roh = call_roh(port, "/source?root=planner&path=Team_X__abc123/board.html")
+    code, roh = call_roh(port, "/api/v1/files/content?root=planner&path=Team_X__abc123/board.html")
     assert code == 200
-    assert b'href="/source?root=planner&path=Team_X__abc123%2FAnhaenge%2F' in roh
+    assert b'href="/api/v1/files/content?root=planner&path=Team_X__abc123%2FAnhaenge%2F' in roh
     code, roh = call_roh(
-        port, "/source?root=planner&path=Team_X__abc123%2FAnhaenge%2F"
+        port, "/api/v1/files/content?root=planner&path=Team_X__abc123%2FAnhaenge%2F"
               "Angebot%201__k.pdf")
     assert code == 200 and roh == b"PDF"
 
@@ -2069,9 +2073,9 @@ def test_searchbridge_laedt_nach_neuem_index_neu(sandbox, store):
 # Generated answer: uses the search hits, does not search on its own
 # --------------------------------------------------------------------------
 def _antwort(port, body, kopf=None):
-    """POST /api/answer and collect the NDJSON lines."""
+    """QUERY /api/v1/answer and collect the NDJSON lines."""
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
-    con.request("POST", "/api/answer", json.dumps(body),
+    con.request("QUERY", "/api/v1/answer", json.dumps(body),
                 {"Content-Type": "application/json", **(kopf or {})})
     r = con.getresponse()
     roh = r.read().decode("utf-8")
@@ -2216,10 +2220,15 @@ def test_http_status(server):
     since 12.0 – they change when someone saves them, the status every few
     seconds, and together they made every poll a third heavier."""
     _, port = server
-    code, s = call(port, "GET", "/api/status")
+    code, s = call(port, "GET", "/api/v1/status")
     assert code == 200
-    assert set(["token", "ollama", "store", "jobs", "mcp"]) <= set(s)
+    assert set(["token", "ollama", "jobs", "mcp"]) <= set(s)
     assert "config" not in s
+    # The index's state moved to the inventory with 13.0: it changes with a
+    # run, and a poll is for what changes on its own.
+    assert "store" not in s
+    code, r = call(port, "GET", "/api/v1/inventory")
+    assert code == 200 and r["store"]["exists"] is False
     code, r = call(port, "GET", "/api/v1/config")
     assert code == 200 and r["config"]["workers"] == app_mod.DEFAULT_CONFIG["workers"]
 
@@ -2228,9 +2237,9 @@ def test_http_fremder_host_wird_abgewiesen(server):
     """Guards against DNS rebinding: a name pointing at 127.0.0.1 would
     otherwise suffice for any website to query the whole mail archive."""
     _, port = server
-    code, _ = call(port, "GET", "/api/status", host="angreifer.example.com")
+    code, _ = call(port, "GET", "/api/v1/status", host="angreifer.example.com")
     assert code == 403
-    code, _ = call(port, "POST", "/api/run", {"index": True}, host="angreifer.example.com")
+    code, _ = call(port, "POST", "/api/v1/runs", {"index": True}, host="angreifer.example.com")
     assert code == 403
 
 
@@ -2254,15 +2263,15 @@ def test_jede_ablehnung_traegt_dieselbe_huelle(server, monkeypatch):
     assert r["title"] == "Not Found" and r["status"] == 404
     assert r["detail"] == "No such route: /api/gibtsnicht"
     assert r["instance"] == "/api/gibtsnicht"
-    assert r["message"] == {"k": "srv.notfound", "v": {"path": "/api/gibtsnicht"}}
-    code, r = call(port, "GET", "/api/status", host="angreifer.example.com")
+    assert "message" not in r          # das zweite Wort für dasselbe, seit 13.0 weg
+    code, r = call(port, "GET", "/api/v1/status", host="angreifer.example.com")
     assert code == 403 and r["error"]["k"] == "srv.forbidden" and "127.0.0.1" in r["detail"]
-    code, r = call(port, "POST", "/api/token", {"token": ""})
-    assert code == 400 and r["error"]["k"] == "srv.token.empty" and r["message"]["k"] == "srv.token.empty"
-    code, r = call(port, "POST", "/api/folder-plan", {})
+    code, r = call(port, "PUT", "/api/v1/access/token", {"token": ""})
+    assert code == 400 and r["error"]["k"] == "srv.token.empty" and r["error"]["k"] == "srv.token.empty"
+    code, r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan", {})
     assert code == 404 and r["error"]["k"] == "srv.plan.nolist" and r["leer"] is True
     monkeypatch.setattr(a, "status", lambda: 1 / 0)
-    code, r = call(port, "GET", "/api/status")
+    code, r = call(port, "GET", "/api/v1/status")
     assert code == 500 and r["error"]["k"] == "srv.internal"
     assert r["error"]["v"]["error"].startswith("ZeroDivisionError")
     assert "ZeroDivisionError" in r["detail"]
@@ -2301,30 +2310,30 @@ def test_http_token_speichern(server, sandbox):
     a, port = server
     tok = make_jwt(exp=time.time() + 3600,
                    scp="Mail.Read Calendars.Read Contacts.Read Chat.Read")
-    code, r = call(port, "POST", "/api/token", {"token": "Bearer " + tok})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "PUT", "/api/v1/access/token", {"token": "Bearer " + tok})
+    assert code == 200 and r["token"]["valid"] is True
     assert app_mod.read_token() == tok
     assert a.status()["wizard"] is None            # valid -> no wizard anymore
 
 
 def test_http_token_abgelaufen_wird_gemeldet(server):
     _, port = server
-    code, r = call(port, "POST", "/api/token", {"token": make_jwt(exp=time.time() - 10)})
-    assert not r["ok"] and schluessel(r["message"]) == "srv.token.stale"
+    code, r = call(port, "PUT", "/api/v1/access/token", {"token": make_jwt(exp=time.time() - 10)})
+    assert schluessel(r["error"]) == "srv.token.stale"
 
 
 def test_http_token_fehlende_rechte_werden_benannt(server):
     _, port = server
-    code, r = call(port, "POST", "/api/token",
+    code, r = call(port, "PUT", "/api/v1/access/token",
                    {"token": make_jwt(exp=time.time() + 3600, scp="Mail.Read")})
-    assert r["ok"] and schluessel(r["message"]) == "srv.token.saved.scopes"
+    assert schluessel(r["message"]) == "srv.token.saved.scopes"
     assert "Calendars.Read" in werte(r["message"])["list"]
 
 
 def test_http_token_muell_wird_abgelehnt(server):
     _, port = server
-    assert call(port, "POST", "/api/token", {"token": ""})[1]["ok"] is False
-    assert call(port, "POST", "/api/token", {"token": "zu-kurz"})[1]["ok"] is False
+    assert call(port, "PUT", "/api/v1/access/token", {"token": ""})[1]["ok"] is False
+    assert call(port, "PUT", "/api/v1/access/token", {"token": "zu-kurz"})[1]["ok"] is False
 
 
 def test_http_wizard_seen(server):
@@ -2332,13 +2341,13 @@ def test_http_wizard_seen(server):
     wizard would reopen immediately on the next status poll."""
     a, port = server
     a.jobs.token_expired = True
-    call(port, "POST", "/api/wizard-seen")
+    call(port, "DELETE", "/api/v1/access/notice")
     assert a.jobs.token_expired is False
 
 
 def test_http_run_ohne_token(server):
     _, port = server
-    code, r = call(port, "POST", "/api/run", {"outlook": True})
+    code, r = call(port, "POST", "/api/v1/runs", {"outlook": True})
     assert code == 409 and not r["ok"]
 
 
@@ -2360,9 +2369,9 @@ def test_http_run_stimmt_den_kalenderschritt_ab(server, monkeypatch, cats, erwar
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
 
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"outlook": True, "index": True, "calendar": True})
-    assert code == 200 and r["ok"]
+    assert code == 202 and r["run"]
     kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
     assert (bool(kal), bool(kal) and "--no-reconstruct" not in kal[0]["argv"]) == erwartet
 
@@ -2377,10 +2386,10 @@ def test_http_legacy_kommentare_neu_lesen(server, monkeypatch):
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
 
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"planner": True, "legacy_comments": True,
                     "label": "job.planner.legacy"})
-    assert code == 200 and r["ok"]
+    assert code == 202 and r["run"]
     (schritt,) = gesehen["steps"]
     assert schritt["key"] == "planner"
     assert schritt["env"]["PLANNER_LEGACY_SYNC"] == "1"
@@ -2400,15 +2409,15 @@ def test_http_kalenderknopf_bleibt_vollstaendig(server, monkeypatch):
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.setdefault("steps", steps) or True)
 
-    code, r = call(port, "POST", "/api/run", {"calendar": True})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "POST", "/api/v1/runs", {"calendar": True})
+    assert code == 202 and r["run"]
     kal = [s for s in gesehen["steps"] if s["key"] == "calendar"]
     assert kal and "--no-reconstruct" not in kal[0]["argv"]
 
 
 def test_http_config_speichern(server, sandbox):
     a, port = server
-    code, r = call(port, "POST", "/api/config",
+    code, r = call(port, "PATCH", "/api/v1/config",
                    {"outlook_categories": ["contacts", "quatsch"], "workers": 2,
                     "mcp_port": "nonsense", "unbekannt": "x"})
     assert code == 200
@@ -2422,15 +2431,15 @@ def test_http_config_speichern(server, sandbox):
 def test_http_config_userflow_grenzen(server, sandbox):
     """0 means off and stays 0; the ceiling is 50."""
     _, port = server
-    code, r = call(port, "POST", "/api/config", {"userflow_actions": 99})
+    code, r = call(port, "PATCH", "/api/v1/config", {"userflow_actions": 99})
     assert code == 200 and r["config"]["userflow_actions"] == 50
-    code, r = call(port, "POST", "/api/config", {"userflow_actions": 0})
+    code, r = call(port, "PATCH", "/api/v1/config", {"userflow_actions": 0})
     assert code == 200 and r["config"]["userflow_actions"] == 0
 
 
 def test_http_config_schalter_und_ordner(server, sandbox):
     a, port = server
-    code, r = call(port, "POST", "/api/config",
+    code, r = call(port, "PATCH", "/api/v1/config",
                    {"embed_images": False, "include_hidden": True,
                     "skip_folders": "Archiv\nDrafts", "index_batch": 16})
     assert code == 200
@@ -2451,13 +2460,13 @@ def test_http_config_schalter_und_ordner(server, sandbox):
 ])
 def test_http_config_begrenzt_zahlen(server, key, eingabe, erwartet):
     """A mistyped number must not cripple the next run."""
-    code, r = call(server[1], "POST", "/api/config", {key: eingabe})
+    code, r = call(server[1], "PATCH", "/api/v1/config", {key: eingabe})
     assert r["config"][key] == erwartet
 
 
 def test_http_config_ignoriert_unsinnige_zahlen(server):
     vorher = call(server[1], "GET", "/api/v1/config")[1]["config"]["workers"]
-    r = call(server[1], "POST", "/api/config", {"workers": "vier"})[1]
+    r = call(server[1], "PATCH", "/api/v1/config", {"workers": "vier"})[1]
     assert r["config"]["workers"] == vorher
 
 
@@ -2469,7 +2478,7 @@ def test_status_nennt_die_ordner_vorgabe(server):
 
 def test_http_zeitplan_speichern(server, sandbox):
     a, port = server
-    code, r = call(port, "POST", "/api/schedule",
+    code, r = call(port, "PATCH", "/api/v1/schedule",
                    {"enabled": True, "interval_minutes": 1, "teams": False})
     assert code == 200
     assert r["schedule"]["enabled"] is True
@@ -2481,21 +2490,25 @@ def test_http_zeitplan_speichern(server, sandbox):
 
 def test_http_mcp_ohne_index(server):
     _, port = server
-    code, r = call(port, "POST", "/api/mcp", {"action": "start"})
-    assert not r["ok"] and schluessel(r["message"]) == "srv.mcp.noindex"
-    assert call(port, "POST", "/api/mcp", {"action": "quatsch"})[1]["ok"] is False
+    code, r = call(port, "PATCH", "/api/v1/mcp", {"running": True})
+    assert schluessel(r["error"]) == "srv.mcp.noindex"
+    # `running` says what it should be; a body that says nothing, or says
+    # it in a word, is a 400 – and the sentence names the field.
+    for body in ({}, {"running": "true"}, {"running": 1}):
+        code, r = call(port, "PATCH", "/api/v1/mcp", body)
+        assert code == 400 and "running" in r["detail"], (body, r)
 
 
 def test_http_log(server):
     a, port = server
     a.jobs.log("hallo")
-    code, r = call(port, "GET", "/api/log?since=0")
-    assert code == 200 and r["lines"][-1]["text"] == "hallo"
-    assert call(port, "GET", f"/api/log?since={r['seq']}")[1]["lines"] == []
+    code, r = call(port, "GET", "/api/v1/log?since=0")
+    assert code == 200 and r["items"][-1]["text"] == "hallo"
+    assert call(port, "GET", f"/api/v1/log?since={r['seq']}")[1]["items"] == []
 
 
 def test_http_kalender_fehlt(server):
-    code, r = call(server[1], "GET", "/api/calendar")
+    code, r = call(server[1], "GET", "/api/v1/calendar")
     assert code == 404 and r["recs"] == [] and schluessel(r["error"]) == "cal.missing"
 
 
@@ -2510,7 +2523,7 @@ def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
     ziel.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
 
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.request("GET", "/api/calendar", None, {"Accept-Encoding": "gzip"})
+    con.request("GET", "/api/v1/calendar", None, {"Accept-Encoding": "gzip"})
     r = con.getresponse()
     roh = r.read()
     con.close()
@@ -2519,7 +2532,7 @@ def test_http_kalender_wird_gepackt_ausgeliefert(server, sandbox):
 
     # Without Accept-Encoding: pass through unchanged
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.request("GET", "/api/calendar", None, {"Accept-Encoding": "identity"})
+    con.request("GET", "/api/v1/calendar", None, {"Accept-Encoding": "identity"})
     r2 = con.getresponse()
     klar = r2.read()
     con.close()
@@ -2542,14 +2555,17 @@ def test_kalender_puffer_erkennt_neue_daten(sandbox, with_ollama):
 
 def test_http_suche_ohne_index_meldet_das(server):
     _, port = server
-    code, r = call(port, "GET", "/api/search?q=test")
-    assert code == 503 and r["hits"] == [] and schluessel(r["error"]) == "srv.noindex"
+    code, r = call(port, "GET", "/api/v1/search?q=test")
+    # Die Ablehnung traegt die Form der Antwort, die sie ersetzt – und die
+    # heisst auf dieser Oberflaeche `items`, nicht wie die Maschine dahinter.
+    assert code == 503 and r["items"] == [] and schluessel(r["error"]) == "srv.noindex"
+    assert "hits" not in r
 
 
 def test_http_ollama_recheck(server):
     _, port = server
-    code, r = call(port, "POST", "/api/ollama-recheck")
-    assert code == 200 and r["running"] is True
+    code, r = call(port, "POST", "/api/v1/ollama/recheck")
+    assert code == 200 and r["ollama"]["running"] is True
 
 
 def test_http_kaputter_body_wird_abgelehnt(server):
@@ -2557,19 +2573,19 @@ def test_http_kaputter_body_wird_abgelehnt(server):
     one stays fine, every route falls back to its defaults."""
     _, port = server
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.request("POST", "/api/config", "{kein json",
+    con.request("PATCH", "/api/v1/config", "{kein json",
                 {"Content-Type": "application/json"})
     r = con.getresponse()
     koerper = json.loads(r.read())
     con.close()
     assert r.status == 400 and koerper["error"]["k"] == "srv.badjson"
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.request("POST", "/api/config", "name=x", {"Content-Type": "text/plain"})
+    con.request("PATCH", "/api/v1/config", "name=x", {"Content-Type": "text/plain"})
     r = con.getresponse()
     koerper = json.loads(r.read())
     con.close()
     assert r.status == 415 and koerper["error"]["k"] == "srv.mediatype"
-    assert call(port, "POST", "/api/wizard-seen")[0] == 200      # no body at all
+    assert call(port, "DELETE", "/api/v1/access/notice")[0] == 204      # no body at all
 
 
 def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
@@ -2579,20 +2595,20 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     port = httpd.server_address[1]
     try:
-        code, r = call(port, "GET", "/api/search?q=Rechnung&k=5")
-        assert code == 200 and r["count"] >= 1
+        code, r = call(port, "GET", "/api/v1/search?q=Rechnung&limit=5")
+        assert code == 200 and len(r["items"]) >= 1
         assert r["semantic"] is False                      # without vectors.npy
-        uri = r["results"][0]["uri"]
+        uri = r["items"][0]["uri"]
         assert uri.startswith("o365://teams/")
 
-        code, r2 = call(port, "GET", "/api/people?limit=5")
-        assert "Alice Example" in [p["name"] for p in r2["people"]]
+        code, r2 = call(port, "GET", "/api/v1/people?limit=5")
+        assert "Alice Example" in [p["name"] for p in r2["items"]]
 
-        code, r3 = call(port, "GET", "/api/document?uid=" + r["results"][0]["uid"])
+        code, r3 = call(port, "GET", "/api/v1/documents?uid=" + r["items"][0]["uid"])
         assert "4711" in json.dumps(r3)
 
         con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        con.request("GET", "/source?root=teams&path=1on1/alice__abc.html")
+        con.request("GET", "/api/v1/files/content?root=teams&path=1on1/alice__abc.html")
         resp = con.getresponse()
         body = resp.read().decode("utf-8")
         assert resp.status == 200
@@ -2605,7 +2621,7 @@ def test_http_suche_und_quelldatei(sandbox, with_ollama, store):
 
         # Breaking out of the export folder is rejected
         con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        con.request("GET", "/source?root=teams&path=../../etc/passwd")
+        con.request("GET", "/api/v1/files/content?root=teams&path=../../etc/passwd")
         resp = con.getresponse()
         resp.read()
         assert resp.status == 404
@@ -2813,7 +2829,7 @@ def test_make_server_weicht_auf_den_naechsten_port_aus(sandbox, with_ollama):
 # --------------------------------------------------------------------------
 DOM_STUMMEL = """
 process.on('unhandledRejection', function(){});
-// Beim Laden ruft die Seite einmal /api/status. Kaeme dort {} zurueck, wuerde
+// Beim Laden ruft die Seite einmal /api/v1/status. Kaeme dort {} zurueck, wuerde
 // renderStatus mittendrin scheitern und ein halb gesetztes S hinterlassen -
 // ein Zustand, den es im Betrieb nicht gibt. Also ein vollstaendiger Status.
 global.fetch = function(){
@@ -3001,9 +3017,11 @@ UMGEBUNG = {version: '1.0.1', build: 'abc1234', api_version: 'v1',
             default_client_id: 'std', data_dir: '/tmp/daten', frozen: false,
             ollama_hint: S.ollama_hint, scopes_needed: S.scopes_needed,
             scope_queries: S.scope_queries, graph_explorer: S.graph_explorer,
-            mcp_client: {http: {}, stdio: {}},
+            mcp_client: {http: {}, stdio: {}}, case_export_dir: '/tmp/exporte',
             skip_folders_default: [], filetype_hidden_default: []};
-BESTAND = {exports: {teams: {last_run: null}, outlook: {last_run: null}}};
+BESTAND = {exports: {teams: {last_run: null}, outlook: {last_run: null}},
+           store: {exists: true, semantic: false, built_at: null,
+                   features: ['thread', 'gone']}};
 KONFIG = {outlook_categories: [], teams_categories: [], store_dir: 'rag_store',
           language: 'auto', auth_mode: 'token', client_id: 'std',
           tenant: 'organizations', embed_model: 'bge-m3', chat_model: 'qwen2.5:7b',
@@ -3084,7 +3102,7 @@ global.fetch = function(pfad){
 var status = statusGeruest();
 status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
 
-// Erst den Start abwarten: die Seite ruft beim Laden selbst /api/status auf.
+// Erst den Start abwarten: die Seite ruft beim Laden selbst /api/v1/status auf.
 setTimeout(function(){
 aktiverTab = 'suche';
 offeneSicht = 'kalender';
@@ -3337,13 +3355,13 @@ console.log('OK');
 # renderStatus reads far more from the status than the wizards do – a
 # complete scaffold so the call above goes through.
 STATUS_GERUEST = """
-/* Genau die Felder, die /api/status seit 12.0 liefert - nicht mehr. Ein
+/* Genau die Felder, die /api/v1/status seit 12.0 liefert - nicht mehr, plus
+   den Index-Knoten, den die Seite seit 13.0 aus dem Bestand bekommt (in
+   dieser Umgebung beantwortet der Stummel jede Anfrage). Ein
    grosszuegigerer Stummel haette den Fehler verdeckt, dass die Seite den
    MCP-Schnipsel noch im Status suchte, obwohl er in der Umgebung liegt. */
 function statusGeruest(){
   return {token: S.token, ollama: S.ollama,
-          store: {exists: true, semantic: false, built_at: null,
-                  features: ['thread', 'gone']},
           auth: {signed_in: false, account: null, device: null,
                  own_registration: false},
           update: {status: 'off', latest: null, url: null, newer: false,
@@ -3408,7 +3426,7 @@ global.confirm = function(text){ global.gefragt = text; return true; };
 renderStatus(statusGeruest());
 beenden();
 pruefe(String(global.gefragt).length > 10, 'Es wurde nicht rueckgefragt');
-pruefe(gesendet.indexOf('/api/quit') >= 0, 'Kein Beenden an den Server: ' + gesendet.join(','));
+pruefe(gesendet.indexOf('/api/v1/quit') >= 0, 'Kein Beenden an den Server: ' + gesendet.join(','));
 pruefe(beendet === true, 'Zustand nicht gesetzt');
 
 // Pillen und Protokoll verschwinden mit: sie zeigten sonst eingefrorene
@@ -4022,7 +4040,7 @@ def test_main_reicht_argumente_an_serve_weiter(sandbox, monkeypatch):
 # --------------------------------------------------------------------------
 def test_http_status_nennt_den_anmeldemodus(server):
     _, port = server
-    code, r = call(port, "GET", "/api/status")
+    code, r = call(port, "GET", "/api/v1/status")
     assert code == 200
     au = r["auth"]
     assert au["own_registration"] is False
@@ -4035,21 +4053,21 @@ def test_http_status_nennt_den_anmeldemodus(server):
 
 def test_http_modus_umschalten(server):
     a, port = server
-    code, r = call(port, "POST", "/api/config", {"auth_mode": "login"})
+    code, r = call(port, "PATCH", "/api/v1/config", {"auth_mode": "login"})
     assert code == 200 and r["config"]["auth_mode"] == "login"
     assert call(port, "GET", "/api/v1/config")[1]["config"]["auth_mode"] == "login"
 
     # Unknown values fall back to the path that always works.
-    call(port, "POST", "/api/config", {"auth_mode": "quatsch"})
+    call(port, "PATCH", "/api/v1/config", {"auth_mode": "quatsch"})
     assert a.cfg["auth_mode"] == "token"
 
 
 def test_http_eigene_registrierung_speichern(server):
     a, port = server
-    code, r = call(port, "POST", "/api/config",
+    code, r = call(port, "PATCH", "/api/v1/config",
                    {"client_id": " eigene-id ", "tenant": "contoso.example"})
     assert code == 200 and r["config"]["client_id"] == "eigene-id"
-    st = call(port, "GET", "/api/status")[1]["auth"]
+    st = call(port, "GET", "/api/v1/status")[1]["auth"]
     assert st["own_registration"] is True
     assert call(port, "GET", "/api/v1/config")[1]["config"]["tenant"] == "contoso.example"
     assert a.cfg["tenant"] == "contoso.example"
@@ -4061,8 +4079,8 @@ def test_http_abmelden_loescht_den_cache(server, sandbox, monkeypatch):
     monkeypatch.setattr(app_mod.auth, "cache_leeren",
                         lambda: geleert.append(True) or True)
     a.device_login = {"code": "X", "done": False}
-    code, r = call(port, "POST", "/api/logout")
-    assert code == 200 and r["ok"]
+    code, r = call(port, "DELETE", "/api/v1/access/session")
+    assert code == 204
     assert geleert == [True]
     assert a.device_login is None, "abgebrochene Anmeldung blieb stehen"
 
@@ -4169,19 +4187,21 @@ def test_http_thread_reicht_die_auswertung_durch(server, monkeypatch):
                     "messages": [{"uid": "u1"}, {"uid": "u2"}]}
 
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
-    code, r = call(port, "GET", "/api/thread?key=tix:abc")
+    code, r = call(port, "GET", "/api/v1/threads?key=tix:abc")
     assert code == 200 and r["count"] == 2 and r["thread"] == "tix:abc"
 
     # An excessive limit must not fetch half the database.
-    assert call(port, "GET", "/api/thread?key=x&limit=9999")[1]["limit"] == 200
+    assert call(port, "GET", "/api/v1/threads?key=x&limit=9999")[1]["limit"] == 200
 
 
 def test_http_thread_ohne_index(server, monkeypatch):
     a, port = server
     monkeypatch.setattr(a.search, "ensure", lambda cfg: None)
     a.search.error = {"k": "cal.missing", "v": {}}
-    code, r = call(port, "GET", "/api/thread?key=x")
-    assert code == 503 and r["messages"] == [] and r["error"]
+    code, r = call(port, "GET", "/api/v1/threads?key=x")
+    # Auch hier: die Sammlung heisst `items`, wie in der Antwort, die
+    # diese Ablehnung ersetzt.
+    assert code == 503 and r["items"] == [] and r["error"]
 
 
 PRUEFUNG_VERLAUF = GRUNDZUSTAND + """
@@ -4228,7 +4248,7 @@ setTimeout(function(){
   // The facts and the text are redrawn in place once the fetch is in – the
   // DOM stub keeps them under their own ids.
   var d = document.getElementById('detail-fakten').innerHTML;
-  pruefe(d.indexOf('bob@example.com') >= 0 && d.indexOf('Rechnung.pdf') >= 0, 'Fakten aus /api/detail fehlen: ' + d.slice(0, 300));
+  pruefe(d.indexOf('bob@example.com') >= 0 && d.indexOf('Rechnung.pdf') >= 0, 'Fakten aus /api/v1/documents/facts fehlen: ' + d.slice(0, 300));
   pruefe(document.getElementById('detail-text').innerHTML.indexOf('Voller Text') >= 0, 'Der volle Text fehlt');
   // no fold without a conversation, and none at a page even with a thread id
   waehleTreffer(1);
@@ -4301,6 +4321,70 @@ console.log('OK');
 """
 
 
+PRUEFUNG_MAILFILTER = GRUNDZUSTAND + """
+// The four lines of a mail are one pill – and it only stands where it can
+// be answered: with Mail or all sources, and an index that knows the lines.
+KANN_MAIL = true;
+// With every source a line only mail has would quietly turn the search
+// into a mail search – so the pill stands only with Mail.
+document.getElementById('f-source').value = 'all';
+zeigeFilterstand();
+pruefe(document.getElementById('p-mail').classList.contains('hide'), 'Mailpille steht bei allen Quellen');
+document.getElementById('f-source').value = 'outlook';
+zeigeFilterstand();
+pruefe(!document.getElementById('p-mail').classList.contains('hide'), 'Mailpille fehlt bei der Quelle Mail');
+document.getElementById('f-mail-from').value = 'alice@nordwind.example';
+document.getElementById('f-mail-cc').value = 'carla';
+zeigeFilterstand();
+pruefe(document.getElementById('p-mail').classList.contains('on'), 'Gesetzte Mailpille leuchtet nicht');
+pruefe(document.getElementById('pw-mail').textContent.indexOf('alice@nordwind.example') >= 0 &&
+       document.getElementById('pw-mail').textContent.indexOf('carla') >= 0,
+       'Mailpille nennt ihre Zeilen nicht: ' + document.getElementById('pw-mail').textContent);
+pruefe(document.getElementById('mi-from').classList.contains('on') &&
+       !document.getElementById('mi-to').classList.contains('on'), 'Die gesetzte Zeile leuchtet nicht');
+// Two lines are two filters – plus the source that makes them possible.
+pruefe(document.getElementById('filter-stand').textContent.indexOf('3') >= 0,
+       'Zahl der Filter: ' + document.getElementById('filter-stand').textContent);
+// Another source: the pill is gone, not greyed – and nothing of it is used.
+document.getElementById('f-source').value = 'onedrive';
+zeigeFilterstand();
+pruefe(document.getElementById('p-mail').classList.contains('hide'), 'Mailpille bleibt bei fremder Quelle stehen');
+pruefe(document.getElementById('f-mail-from').value === 'alice@nordwind.example', 'Die Eingabe wurde weggeworfen');
+pruefe(kriterienAusForm().mail_from === '', 'Eine unerreichbare Zeile steht in den Kriterien');
+pruefe(document.getElementById('filter-stand').textContent.indexOf('1') >= 0,
+       'Die versteckte Zeile zaehlt mit: ' + document.getElementById('filter-stand').textContent);
+// Back to Mail: what was typed is back, too.
+document.getElementById('f-source').value = 'outlook';
+zeigeFilterstand();
+pruefe(!document.getElementById('p-mail').classList.contains('hide'), 'Mailpille kommt nicht zurueck');
+pruefe(kriterienAusForm().mail_cc === 'carla', 'Kriterien ohne die Kopie-Zeile');
+// The search asks the versioned surface, with the lines as their own names.
+var gefragt = '';
+global.fetch = function(pfad){
+  gefragt = String(pfad);
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve({items: []}); }});
+};
+doSearch(0);
+pruefe(gefragt.indexOf('/api/v1/search?') >= 0, 'Die Suche geht nicht ueber v1: ' + gefragt);
+pruefe(gefragt.indexOf('mail_from=alice%40nordwind.example') >= 0 &&
+       gefragt.indexOf('mail_cc=carla') >= 0, 'Die Mailzeilen fehlen in der Anfrage: ' + gefragt);
+// The × clears all four at once, they are one filter.
+pillLeeren('mail');
+pruefe(document.getElementById('f-mail-from').value === '' && document.getElementById('f-mail-cc').value === '',
+       'Das × leert nur eine Zeile');
+pruefe(!document.getElementById('p-mail').classList.contains('on'), 'Geleerte Mailpille leuchtet weiter');
+// Stored criteria come back into the fields.
+kriterienAnwenden({source: 'outlook', mail_to: 'bob@nordwind.example', mail_bcc: 'dana'});
+pruefe(document.getElementById('f-mail-to').value === 'bob@nordwind.example' &&
+       document.getElementById('f-mail-bcc').value === 'dana', 'Kriterien kommen nicht in die Felder');
+console.log('OK');
+"""
+
+
+def test_mailfilter_steht_nur_wo_er_beissen_kann():
+    _in_node(PRUEFUNG_MAILFILTER)
+
+
 def test_filterpillen_nennen_wert_und_leeren_sich():
     _in_node(PRUEFUNG_PILLEN)
 
@@ -4316,10 +4400,17 @@ var FAKTEN = {
   'd:1': {kind: 'datei', ext: 'xlsx', size: 86016, modified: '2026-09-14 11:20'},
   'p:1': {kind: 'planner', assigned: ['Bob Baumeister'], due: '2026-09-20', state: 'inprogress', checklist: {done: 3, total: 5},
           attachments: ['Angebot.pdf'], text: 'Beschreibung', comments: [{who: 'Bob', when: '2026-09-14 09:15', text: 'Kommentar'}]},
-  't:1': {kind: 'todo', due: '2026-09-11', state: 'completed', completed: '2026-09-11', steps: {done: 2, total: 2}, linked: ['Mail: Re: Angebot'], text: 'Notiz'}
+  't:1': {kind: 'todo', due: '2026-09-11', state: 'completed', completed: '2026-09-11', steps: {done: 2, total: 2}, linked: ['Mail: Re: Angebot'], text: 'Notiz'},
+  'm:1': {kind: 'outlook', from: {name: 'Alice Beispiel', mail: 'alice@nordwind.example'},
+          to: [{name: 'Bob Baumeister', mail: 'bob@nordwind.example'}], cc: [],
+          bcc: [{name: 'Erik Einkauf', mail: 'erik@nordwind.example'}],
+          date: '2026-09-15 09:40', folder: 'E-Mail/Gesendete Elemente', attachments: [], text: 'Angebot'}
 };
 // The status poll must not take the type filter away again
-function geruest(){ var st = statusGeruest(); st.store.features = ['ext', 'key']; return st; }
+function geruest(){ var st = statusGeruest();
+  BESTAND = Object.assign({}, BESTAND, {store: {exists: true, semantic: false,
+    built_at: null, features: ['ext', 'key']}});
+  return st; }
 global.fetch = function(pfad){
   var m = /uid=([^&]+)/.exec(String(pfad));
   return Promise.resolve({json: function(){
@@ -4330,8 +4421,9 @@ renderHits({results: [
   {uid: 'c:1', title: 'Dana Dienstleister', who: 'Nordwind GmbH', date: '', source: 'kontakte', context: 'kontakte', preview: 'x', uri: 'o365://outlook/kontakte/d.vcf'},
   {uid: 'd:1', title: 'Angebot_2026.xlsx', who: '', date: '2026-09-14 11:20', source: 'datei', root: 'sharepoint', context: 'Nordwind/Dokumente', preview: 'x', uri: 'o365://sharepoint/Nordwind/Dokumente/Angebot_2026.xlsx'},
   {uid: 'p:1', title: 'Angebot vorbereiten', who: 'Bob Baumeister', date: '2026-09-14 09:15', source: 'planner', context: 'Nordwind board/Angebote', preview: 'x', uri: 'o365://planner/x/board.html'},
-  {uid: 't:1', title: 'Dana anrufen', who: '', date: '2026-09-11 16:40', source: 'todo', context: 'Aufgaben', preview: 'x', uri: 'o365://todo/x/list.html', gone: '2026-09-12T09:00:00'}
-], count: 5, backend: 'bm25'});
+  {uid: 't:1', title: 'Dana anrufen', who: '', date: '2026-09-11 16:40', source: 'todo', context: 'Aufgaben', preview: 'x', uri: 'o365://todo/x/list.html', gone: '2026-09-12T09:00:00'},
+  {uid: 'm:1', title: 'Angebot', who: 'Alice Beispiel', who_mail: 'alice@nordwind.example', date: '2026-09-15 09:40', source: 'outlook', context: 'E-Mail/Gesendete Elemente', preview: 'x', uri: 'o365://outlook/inbox/a.eml'}
+], count: 6, backend: 'bm25'});
 // Head and actions from the hit, the facts and the text redrawn in place
 // once the fetch is in – the DOM stub keeps those under their own ids.
 function detail(i){
@@ -4364,6 +4456,13 @@ detail(0).then(function(d){
   pruefe(d.indexOf(t('search.state.completed')) >= 0 && d.indexOf('Mail: Re: Angebot') >= 0, 'To-Do-Fakten: ' + d.slice(0, 400));
   pruefe(d.indexOf('tag weg') >= 0, 'Geloescht-Marke fehlt im Kopf');
   pruefe(d.indexOf('waehleTreffer(3)') >= 0 && d.indexOf(t('search.detail.next')) >= 0, 'Kopf ohne Blaettern');
+  return detail(5);
+}).then(function(d){
+  // The blind copy: the search filters by it, so the mail has to show it –
+  // and the empty Cc line stays away, as every empty fact does.
+  pruefe(d.indexOf('<dt>' + t('search.fact.bcc') + '</dt>') >= 0 && d.indexOf('erik@nordwind.example') >= 0,
+         'Blindkopie fehlt im Detail: ' + d.slice(0, 400));
+  pruefe(d.indexOf('<dt>' + t('search.fact.cc') + '</dt>') < 0, 'Leere Kopie-Zeile steht da');
   console.log('OK');
 });
 """
@@ -4381,13 +4480,13 @@ var geholt = [];
 global.fetch = function(pfad){
   geholt.push(String(pfad));
   return Promise.resolve({json: function(){
-    if(String(pfad).indexOf('/api/suche/historie') === 0) return Promise.resolve({retention: '90', searches: [
-      {wann: '2026-09-16T09:12:00', treffer: 3, kriterien: {q: '"budget frame" 2026', mode: 'text', source: 'outlook'}},
-      {wann: '2026-09-15T17:40:00', treffer: 42, kriterien: {q: 'Nordwind', mode: 'text', source: 'all'}},
-      {wann: '2026-09-14T10:00:00', treffer: 4, kriterien: {q: '', mode: 'text', source: 'kalender'}},
-      {wann: '2026-09-13T10:00:00', treffer: 1, kriterien: {q: 'vier', mode: 'text', source: 'all'}}]});
-    if(String(pfad).indexOf('/api/suche/gespeichert') === 0) return Promise.resolve({searches: [
-      {id: 1, name: 'Invoices 2026', kriterien: {q: 'Rechnung', mode: 'text', source: 'outlook'}, zuletzt: '2026-09-14T10:00:00', treffer: 61, fall: null}]});
+    if(String(pfad).indexOf('/api/v1/searches/history') === 0) return Promise.resolve({retention: '90', items: [
+      {when: '2026-09-16T09:12:00', hits: 3, criteria: {q: '"budget frame" 2026', mode: 'text', source: 'outlook'}},
+      {when: '2026-09-15T17:40:00', hits: 42, criteria: {q: 'Nordwind', mode: 'text', source: 'all'}},
+      {when: '2026-09-14T10:00:00', hits: 4, criteria: {q: '', mode: 'text', source: 'kalender'}},
+      {when: '2026-09-13T10:00:00', hits: 1, criteria: {q: 'vier', mode: 'text', source: 'all'}}]});
+    if(String(pfad).indexOf('/api/v1/searches/saved') === 0) return Promise.resolve({items: [
+      {id: 1, name: 'Invoices 2026', criteria: {q: 'Rechnung', mode: 'text', source: 'outlook'}, last_run: '2026-09-14T10:00:00', hits: 61, case: null}]});
     return Promise.resolve(statusGeruest());
   }});
 };
@@ -4489,16 +4588,16 @@ def test_http_search_reicht_den_filter_durch(server, monkeypatch):
             return {"count": 0, "results": []}
 
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
-    call(port, "GET", "/api/search?gone=1")
+    call(port, "GET", "/api/v1/search?gone=1")
     assert gesehen["only_gone"] is True
-    call(port, "GET", "/api/search")
+    call(port, "GET", "/api/v1/search")
     assert gesehen["only_gone"] is False
     # the parties filter travels too, with the internal domains the engine
     # needs – the setting, else the signed-in account's domain
     a.cfg["internal_domains"] = "nordwind.example"
-    call(port, "GET", "/api/search?party=external")
+    call(port, "GET", "/api/v1/search?party=external")
     assert gesehen["party"] == "external" and FakeSuche.STATE["internal_domains"] == "nordwind.example"
-    call(port, "GET", "/api/search?party=x")
+    call(port, "GET", "/api/v1/search?party=x")
     assert gesehen["party"] == "all"
 
 
@@ -4507,7 +4606,8 @@ PRUEFUNG_ALTER_INDEX = GRUNDZUSTAND + """
 // Dann bietet die Oberflaeche sie gar nicht erst an, statt in einen Fehler
 // laufen zu lassen.
 var st = statusGeruest();
-st.store.features = [];
+BESTAND = Object.assign({}, BESTAND, {store: Object.assign(
+  {}, BESTAND.store, {features: []})});
 renderStatus(st);
 pruefe(document.getElementById('p-weg').classList.contains('hide'),
        'Filter wird trotz altem Index angeboten');
@@ -4515,16 +4615,28 @@ pruefe(KANN_VERLAUF === false, 'Verlauf gilt trotz altem Index als moeglich');
 pruefe(document.getElementById('f-party').classList.contains('hide') && KANN_ADRESSEN === false,
        'Beteiligtenfilter oder Adressen trotz altem Index angeboten');
 
-st.store.features = ['gone', 'thread'];
+BESTAND = Object.assign({}, BESTAND, {store: Object.assign(
+  {}, BESTAND.store, {features: ['gone', 'thread']})});
 renderStatus(st);
 pruefe(!document.getElementById('p-weg').classList.contains('hide'),
        'Filter fehlt trotz passendem Index');
 pruefe(KANN_VERLAUF === true, 'Verlauf fehlt trotz passendem Index');
 // The address columns of 11.1: the parties filter and the People view's addresses hang on them.
-st.store.features = ['gone', 'thread', 'key', 'who_mail', 'domains'];
+BESTAND = Object.assign({}, BESTAND, {store: Object.assign(
+  {}, BESTAND.store, {features: ['gone', 'thread', 'key', 'who_mail', 'domains']})});
 renderStatus(st);
 pruefe(!document.getElementById('f-party').classList.contains('hide') && KANN_ADRESSEN === true,
        'Beteiligtenfilter oder Adressen fehlen trotz passendem Index');
+// The mail lines of 13.0: without them the pill is absent, not greyed.
+document.getElementById('f-source').value = 'outlook';
+zeigeFilterstand();
+pruefe(KANN_MAIL === false && document.getElementById('p-mail').classList.contains('hide'),
+       'Mailfilter trotz Index ohne Zeilen angeboten');
+BESTAND = Object.assign({}, BESTAND, {store: Object.assign(
+  {}, BESTAND.store, {features: ['gone', 'thread', 'key', 'who_mail', 'domains', 'mail_lines']})});
+renderStatus(st);
+pruefe(KANN_MAIL === true && !document.getElementById('p-mail').classList.contains('hide'),
+       'Mailfilter fehlt trotz passendem Index');
 console.log('OK');
 """
 
@@ -4562,7 +4674,7 @@ def test_quelldatei_wird_heruntergeladen(sandbox, monkeypatch, name, inhalt, cty
     t.start()
     try:
         con = http.client.HTTPConnection("127.0.0.1", httpd.server_address[1], timeout=10)
-        con.request("GET", f"/source?root=outlook&path={name}")
+        con.request("GET", f"/api/v1/files/content?root=outlook&path={name}")
         resp = con.getresponse()
         koerper = resp.read()
         assert resp.status == 200 and koerper == inhalt
@@ -4604,12 +4716,13 @@ def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
             return {"count": 0, "results": []}
 
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
-    call(port, "GET", "/api/search?k=50")
-    assert gesehen["k"] == 50
-    call(port, "GET", "/api/search?k=99999")     # not half the database
-    assert gesehen["k"] == 101        # one above the largest page: has_more
-    call(port, "GET", "/api/search?limit=7")     # the name the rest of the API uses
-    assert gesehen["k"] == 7
+    # `limit` is the name the whole API pages with; the engine's own is `k`.
+    call(port, "GET", "/api/v1/search?limit=50")
+    assert gesehen["k"] == 51         # one above the page: that is has_more
+    call(port, "GET", "/api/v1/search?limit=99999")     # not half the database
+    assert gesehen["k"] == 101
+    call(port, "GET", "/api/v1/search?limit=7")
+    assert gesehen["k"] == 8
 
 
 @pytest.mark.parametrize("wert,erwartet", [
@@ -4619,7 +4732,7 @@ def test_http_trefferzahl_wird_begrenzt(server, monkeypatch):
 ])
 def test_config_trefferzahl(server, wert, erwartet):
     a, port = server
-    call(port, "POST", "/api/config", {"search_results": wert})
+    call(port, "PATCH", "/api/v1/config", {"search_results": wert})
     assert a.cfg["search_results"] == erwartet
 
 
@@ -4801,29 +4914,29 @@ def test_ordner_wird_angelegt(tmp_path):
 def test_http_datenordner_setzen(server, standardort, tmp_path):
     a, port = server
     ziel = tmp_path / "extern"
-    code, r = call(port, "POST", "/api/data-dir", {"path": str(ziel)})
-    assert code == 200 and r["ok"] and r["restart"] is True
+    code, r = call(port, "PATCH", "/api/v1/storage", {"data_dir": str(ziel)})
+    assert code == 200 and r["restart_required"] is True
     assert a.cfg["data_dir"] == str(ziel.resolve())
     # The app does NOT switch over while running – BASE goes to every
     # subprocess as its working directory, possibly mid-export.
     assert call(port, "GET", "/api/v1/app")[1]["data_dir"] != str(ziel)
 
     # The index has its own path; empty means back to the default.
-    code, r = call(port, "POST", "/api/data-dir",
-                   {"index": str(tmp_path / "ix")})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "PATCH", "/api/v1/storage",
+                   {"index_dir": str(tmp_path / "ix")})
+    assert code == 200 and r["restart_required"] is True
     assert a.cfg["index_dir"] == str((tmp_path / "ix").resolve())
     # The log names the folder that changed – an index change was logged
     # as the data folder, which read as if the wrong one had been saved.
     zeilen = [z["text"] for z in a.jobs.lines if isinstance(z["text"], dict)]
     assert zeilen[-1]["k"] == "srv.indexdir.set"
     assert zeilen[-1]["v"]["path"] == str((tmp_path / "ix").resolve())
-    code, r = call(port, "POST", "/api/data-dir", {"index": ""})
+    code, r = call(port, "PATCH", "/api/v1/storage", {"index_dir": ""})
     assert code == 200 and a.cfg["index_dir"] == ""
     # Saving the same values again says nothing – the settings save posts
     # both paths on every click.
     n = len(a.jobs.lines)
-    call(port, "POST", "/api/data-dir", {"path": str(ziel), "index": ""})
+    call(port, "PATCH", "/api/v1/storage", {"data_dir": str(ziel), "index_dir": ""})
     assert len(a.jobs.lines) == n
 
 
@@ -4831,12 +4944,12 @@ def test_http_datenordner_ablehnen(server, standardort, tmp_path):
     a, port = server
     kaputt = tmp_path / "datei-statt-ordner"
     kaputt.write_text("x", encoding="utf-8")
-    code, r = call(port, "POST", "/api/data-dir", {"path": str(kaputt)})
-    assert code == 400 and not r["ok"]
+    code, r = call(port, "PATCH", "/api/v1/storage", {"data_dir": str(kaputt)})
+    assert code == 400 and r["error"]
     assert not a.cfg.get("data_dir"), "kaputter Wert wurde trotzdem gemerkt"
     # The refusal reaches the log too, not only the small field.
     letzte = [z for z in a.jobs.lines if isinstance(z["text"], dict)][-1]
-    assert letzte["level"] == "err" and letzte["text"]["k"] == r["message"]["k"]
+    assert letzte["level"] == "err" and letzte["text"]["k"] == r["error"]["k"]
 
 
 def test_vorhandener_ordner_ohne_schreibrecht_wird_abgelehnt(tmp_path):
@@ -4891,7 +5004,7 @@ def _antwort_sprache(server, monkeypatch, accept=None, eingestellt="auto"):
     kopf = {"Content-Type": "application/json"}
     if accept:
         kopf["Accept-Language"] = accept
-    con.request("POST", "/api/answer", json.dumps({"q": "Frage"}), kopf)
+    con.request("QUERY", "/api/v1/answer", json.dumps({"q": "Frage"}), kopf)
     con.getresponse().read()
     con.close()
     return gesehen.get("lang")
@@ -5374,9 +5487,9 @@ def test_exportliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
            {"id": "2", "pfad": "E-Mail/Archiv", "name": "A", "elemente": 14000}],
           [("E-Mail/Archiv", 3), ("E-Mail/Weg", 4)])
 
-    code, r = call(port, "POST", "/api/folder-plan",
+    code, r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan",
                    {"folder_rules": "- E-Mail/Archiv/**", "skip_folders": ""})
-    assert code == 200 and r["ok"]
+    assert code == 200 and r["regeln"]
     assert [z["pfad"] for z in r["an"]] == ["E-Mail/Posteingang"]
     assert [z["pfad"] for z in r["aus"]] == ["E-Mail/Archiv"]
     assert r["aus"][0]["regel"] == "- E-Mail/Archiv/**"
@@ -5430,9 +5543,9 @@ def test_http_run_kalender_vollstaendig(server, monkeypatch):
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, **kw) or True)
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"outlook": True, "calendar_full": True, "label": "job.calendar.full"})
-    assert code == 200 and r["ok"]
+    assert code == 202 and r["run"]
     (schritt,) = [s for s in gesehen["steps"] if s["key"] == "outlook"]
     assert schritt["env"]["CALENDAR_FULL"] == "1"
     assert gesehen["context"]["elements"]["outlook"] == ["calendar"]
@@ -5487,9 +5600,9 @@ def test_http_run_resync(server, monkeypatch):
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"outlook": True, "resync": True, "index": True, "label": "job.resync"})
-    assert code == 200 and r["ok"]
+    assert code == 202 and r["run"]
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert schritte["outlook"]["env"]["RESYNC"] == "1"
     assert "FULL_SYNC" not in schritte["outlook"]["env"]
@@ -5504,9 +5617,9 @@ def test_http_run_full_sync(server, monkeypatch):
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"todo": True, "full_sync": True, "label": "job.full"})
-    assert code == 200 and r["ok"]
+    assert code == 202 and r["run"]
     (schritt,) = gesehen["steps"]
     assert schritt["key"] == "todo" and schritt["env"]["FULL_SYNC"] == "1"
     assert gesehen["label"] == "job.full"
@@ -5539,17 +5652,17 @@ var gesendet = [];
 global.fetch = function(pfad, opt){
   gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true}); }});
+    String(pfad).indexOf('/api/v1/status') >= 0 ? statusGeruest() : {ok: true}); }});
 };
 global.confirm = function(text){ global.gefragt = text; return false; };
 S.config = {};
 vollSync('teams');
 pruefe(String(global.gefragt).indexOf('Teams') >= 0, 'Rueckfrage nennt die Quelle nicht: ' + global.gefragt);
-pruefe(!gesendet.some(function(g){ return g.pfad.indexOf('/api/run') >= 0; }),
+pruefe(!gesendet.some(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; }),
        'Abgelehnt und trotzdem gestartet');
 global.confirm = function(){ return true; };
 vollSync('sharepoint');
-var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0];
 pruefe(lauf && lauf.body.sharepoint === true && lauf.body.full_sync === true, 'Lauf nicht gestartet: ' + JSON.stringify(lauf));
 pruefe(lauf.body.index === true, 'Vollsync ohne Index-Schritt');
 pruefe(lauf.body.label === 'job.full', 'falsches Etikett: ' + lauf.body.label);
@@ -5558,7 +5671,7 @@ pruefe(!lauf.body.onedrive && !lauf.body.outlook, 'andere Quellen mitgeschickt')
 S.config = {sharepoint_pages_enabled: true,
             sharepoint_pages_urls: 'https://firma.sharepoint.com/sites/x'};
 vollSync('sharepoint');
-lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[1];
+lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[1];
 pruefe(lauf.body.sharepoint_pages === true, 'Seiten trotz URL nicht mitgeschickt');
 console.log('OK');
 """
@@ -5570,7 +5683,7 @@ def test_vollsync_fragt_zurueck_und_startet_nur_die_quelle():
 
 def test_config_nimmt_regeln_daten_und_zahlen_der_neun(server, sandbox):
     a, port = server
-    code, r = call(port, "POST", "/api/config",
+    code, r = call(port, "PATCH", "/api/v1/config",
                    {"teams_rules": "- channels/Nordwind/**\n", "todo_rules": "+ Einkauf",
                     "sharepoint_rules": "- Nordwind/Dokumente/Archiv/**",
                     "outlook_since": "2025-01-15", "teams_since": "gestern",
@@ -5598,9 +5711,9 @@ def test_exportliste_kennt_teams_und_todo(server, sandbox):
     (teams / "group").mkdir(parents=True)
     (teams / "group" / "Projekt Nordwind__k1.html").write_text("x", encoding="utf-8")
     (teams / "group" / "Alt__k2.html").write_text("x", encoding="utf-8")
-    code, r = call(port, "POST", "/api/folder-plan",
-                   {"quelle": "teams", "teams_rules": "- channels/**"})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "QUERY", "/api/v1/sources/teams/folder-plan",
+                   {"teams_rules": "- channels/**"})
+    assert code == 200 and r["regeln"]
     assert [z["pfad"] for z in r["an"]] == ["group/Projekt Nordwind"]
     assert r["an"][0]["archiv"] == 1
     assert [z["pfad"] for z in r["aus"]] == ["channels/Nordwind/Allgemein"]
@@ -5613,9 +5726,9 @@ def test_exportliste_kennt_teams_und_todo(server, sandbox):
     (todo / "Einkauf__l1").mkdir(parents=True)
     state_db.StateDb(todo / "Einkauf__l1").kv_schreiben(
         "tasks", json.dumps({"t1": {}, "t2": {}}))
-    code, r = call(port, "POST", "/api/folder-plan",
-                   {"quelle": "todo", "todo_rules": "- Aufgaben"})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "QUERY", "/api/v1/sources/todo/folder-plan",
+                   {"todo_rules": "- Aufgaben"})
+    assert code == 200 and r["regeln"]
     assert [z["pfad"] for z in r["an"]] == ["Einkauf"] and r["an"][0]["archiv"] == 2
     assert [z["pfad"] for z in r["aus"]] == ["Aufgaben"]
 
@@ -5627,7 +5740,7 @@ def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
     _baum(sandbox, a.cfg,
           [{"id": "1", "pfad": "E-Mail/Posteingang", "name": "P", "elemente": 1},
            {"id": "2", "pfad": "E-Mail/Archiv/Alt", "name": "Alt", "elemente": 2}])
-    r = call(port, "POST", "/api/folder-plan",
+    r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan",
              {"folder_rules": "", "skip_folders": "Archiv"})[1]
     assert [z["pfad"] for z in r["aus"]] == ["E-Mail/Archiv/Alt"]
     # Lowercased because the comparison is case-insensitive – the rule shown
@@ -5637,7 +5750,7 @@ def test_exportliste_faellt_auf_die_alte_namensliste_zurueck(server, sandbox):
 
 def test_exportliste_ohne_abgeglichenen_baum(server):
     a, port = server
-    code, r = call(port, "POST", "/api/folder-plan", {})
+    code, r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan", {})
     assert code == 404 and r["leer"] is True and r["error"]["k"] == "srv.plan.nolist"
 
 
@@ -5673,9 +5786,9 @@ def test_kalenderliste_rechnet_mit_den_regeln_aus_dem_formular(server, sandbox):
     a, port = server
     _kalenderliste(sandbox, KALENDER, [("kalender/Privat", 3), ("kalender/Weg", 2)])
 
-    code, r = call(port, "POST", "/api/folder-plan",
-                   {"quelle": "calendar", "calendar_rules": "- kalender/**\n+ kalender/Privat"})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan",
+                   {"unit": "calendar", "calendar_rules": "- kalender/**\n+ kalender/Privat"})
+    assert code == 200 and r["regeln"]
     assert [z["pfad"] for z in r["an"]] == ["kalender/Privat"]
     assert [z["pfad"] for z in r["aus"]] == ["kalender/Arbeit"]
     # Counted is what sits on disk: Graph does not count events when listing.
@@ -5699,7 +5812,7 @@ def test_kalenderstand_ohne_liste(server):
 
 def test_kalenderregeln_werden_gespeichert_und_weitergereicht(server, sandbox):
     a, port = server
-    call(port, "POST", "/api/config", {"calendar_rules": "kalender/Privat"})
+    call(port, "PATCH", "/api/v1/config", {"calendar_rules": "kalender/Privat"})
     # No sign means include – the spelled-out rule is what gets saved.
     assert a.cfg["calendar_rules"] == "+ kalender/Privat"
     schritt = [s for s in app_mod.build_steps(a.cfg, {"outlook": True}) if s["key"] == "outlook"][0]
@@ -5725,11 +5838,11 @@ def test_ausgeblendete_dateitypen_nur_in_der_liste(server, sandbox, monkeypatch)
     mod = types.SimpleNamespace(list_filetypes=lambda limit=40, source="": alle)
     monkeypatch.setattr(a.search, "ensure", lambda cfg: mod)
 
-    call(port, "POST", "/api/config", {"filetype_hidden": ".P7S, xlsx ,, "})
+    call(port, "PATCH", "/api/v1/config", {"filetype_hidden": ".P7S, xlsx ,, "})
     assert a.cfg["filetype_hidden"] == ["p7s", "xlsx"]      # lowercase, no dot
 
-    r = call(port, "GET", "/api/filetypes")[1]
-    assert [e["type"] for e in r["filetypes"]] == ["pdf"]
+    r = call(port, "GET", "/api/v1/filetypes")[1]
+    assert [e["type"] for e in r["items"]] == ["pdf"]
     assert r["hidden"] == ["p7s", "xlsx"]
     # The corpus is not talked down: there are still three types.
     assert r["total_distinct"] == 3
@@ -5769,7 +5882,7 @@ def test_abschalten_haelt_den_laufenden_endpunkt_an(server, monkeypatch):
     a, port = server
     angehalten = []
     monkeypatch.setattr(a.mcp, "stop", lambda: angehalten.append(True))
-    call(port, "POST", "/api/config", {"mcp_enabled": False})
+    call(port, "PATCH", "/api/v1/config", {"mcp_enabled": False})
     assert a.cfg["mcp_enabled"] is False
     assert angehalten, "Der laufende Endpunkt lief weiter"
 
@@ -5786,12 +5899,13 @@ def test_auswahlregeln_regeln_schlagen_die_namensliste():
 PRUEFUNG_EXPORTLISTE = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
-  if(String(pfad).indexOf('/api/folder-plan') < 0){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
+  if(String(pfad).indexOf('/folder-plan') < 0){
     return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
   }
   return Promise.resolve({json: function(){ return Promise.resolve({
-    ok: true, abgeglichen: '2026-08-10T09:33:51+00:00',
+    abgeglichen: '2026-08-10T09:33:51+00:00',
     an:  [{pfad: 'E-Mail/Posteingang', elemente: 1, archiv: 1, regel: null},
           {pfad: 'E-Mail/Kunden/Beispiel AG', elemente: 240, archiv: 238,
            regel: '+ E-Mail/Kunden/Beispiel AG/**'}],
@@ -5808,7 +5922,9 @@ zeigeExportliste();
 setTimeout(function(){
   // Gefragt wird mit dem, was IM FELD steht - nicht mit dem Gespeicherten.
   var frage = gesendet.filter(function(g){ return g.pfad.indexOf('folder-plan') >= 0; })[0];
-  pruefe(frage, 'Keine Anfrage an /api/folder-plan');
+  pruefe(frage, 'Keine Anfrage an folder-plan');
+  // Eine Frage, kein Schreibzugriff: QUERY (RFC 10008), nicht POST.
+  pruefe(frage.methode === 'QUERY', 'Ordnerplan nicht per QUERY geholt: ' + frage.methode);
   pruefe(JSON.parse(frage.body).folder_rules === '- E-Mail/Archiv/**',
          'Regeln aus dem Feld nicht mitgeschickt: ' + frage.body);
   pruefe(JSON.parse(frage.body).skip_folders === 'junk', 'Ordnerliste fehlt');
@@ -5859,12 +5975,13 @@ def test_exportliste_zeigt_drei_gruppen_und_ueberlebt_den_statusabruf():
 PRUEFUNG_KALENDERLISTE = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
-  if(String(pfad).indexOf('/api/folder-plan') < 0){
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
+  if(String(pfad).indexOf('/folder-plan') < 0){
     return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
   }
   return Promise.resolve({json: function(){ return Promise.resolve({
-    ok: true, abgeglichen: '2026-08-10T09:33:51+00:00',
+    abgeglichen: '2026-08-10T09:33:51+00:00',
     an:  [{pfad: 'kalender/Arbeit', elemente: 0, archiv: 1200, regel: null}],
     aus: [{pfad: 'kalender/Geburtstage', elemente: 0, archiv: 0,
            regel: '- kalender/**'}],
@@ -5885,9 +6002,10 @@ zeigeExportliste('calendar');
 
 setTimeout(function(){
   var frage = gesendet.filter(function(g){ return g.pfad.indexOf('folder-plan') >= 0; })[0];
-  pruefe(frage, 'Keine Anfrage an /api/folder-plan');
+  pruefe(frage, 'Keine Anfrage an folder-plan');
   var b = JSON.parse(frage.body);
-  pruefe(b.quelle === 'calendar', 'Quelle nicht mitgeschickt: ' + frage.body);
+  pruefe(frage.pfad.indexOf('/sources/outlook/folder-plan') >= 0 && b.unit === 'calendar',
+         'Kalender nicht als Einheit des Postfachs gefragt: ' + frage.pfad + ' ' + frage.body);
   pruefe(b.calendar_rules === '- kalender/**', 'Regeln aus dem Feld nicht mitgeschickt');
 
   var h = document.getElementById('plan-listen').innerHTML;
@@ -6223,7 +6341,7 @@ def test_onedrive_schritt_bekommt_regeln_und_grenze(sandbox):
 
 def test_onedrive_regeln_werden_beim_speichern_normalisiert(server):
     a, port = server
-    call(port, "POST", "/api/config",
+    call(port, "PATCH", "/api/v1/config",
          {"onedrive_rules": "Dateien/A\n\n# Kommentar\n- Dateien/B"})
     assert a.cfg["onedrive_rules"] == "+ Dateien/A\n- Dateien/B"
 
@@ -6256,7 +6374,8 @@ def test_index_sieht_den_onedrive_ordner(sandbox):
 PRUEFUNG_ONEDRIVE = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
 var status = statusGeruest();
@@ -6279,7 +6398,7 @@ document.getElementById('c-onedrive_enabled').checked = true;
 
 // Der Lauf muss OneDrive mitschicken.
 runExport();
-var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0];
 pruefe(lauf, 'Kein Lauf gestartet');
 pruefe(JSON.parse(lauf.body).onedrive === true, 'OneDrive fehlt im Lauf: ' + lauf.body);
 
@@ -6292,7 +6411,7 @@ function gemeckert(){ return document.getElementById('meldung').textContent.leng
 document.getElementById('meldung').textContent = '';
 runExport();
 pruefe(!gemeckert(), 'Nur OneDrive wurde als "nichts gewaehlt" abgelehnt');
-var nur = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+var nur = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0];
 pruefe(JSON.parse(nur.body).onedrive === true && JSON.parse(nur.body).outlook === false,
        'Falscher Lauf: ' + nur.body);
 
@@ -6304,7 +6423,7 @@ runExport();
 pruefe(gemeckert(), 'Ohne Auswahl wurde nicht gewarnt');
 pruefe(document.getElementById('meldung').textContent === t('export.nothing'),
        'Die Warnung sagt etwas anderes: ' + document.getElementById('meldung').textContent);
-pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; }).length === 0,
+pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; }).length === 0,
        'Ohne Auswahl trotzdem gestartet');
 console.log('OK');
 """
@@ -6344,13 +6463,13 @@ def test_exportliste_kennt_beide_quellen(server, sandbox):
     for name in ("a.pdf", "b.docx"):
         (od / "Dateien" / "Kunden" / name).write_text("x", encoding="utf-8")
 
-    r = call(port, "POST", "/api/folder-plan",
-             {"quelle": "onedrive", "onedrive_rules": ""})[1]
-    assert r["ok"] and [z["pfad"] for z in r["an"]] == ["Dateien/Kunden"]
+    r = call(port, "QUERY", "/api/v1/sources/onedrive/folder-plan",
+             {"onedrive_rules": ""})[1]
+    assert [z["pfad"] for z in r["an"]] == ["Dateien/Kunden"]
     assert r["an"][0]["archiv"] == 2, "beim Spiegel zählen alle Dateien, nicht nur .eml"
 
-    r = call(port, "POST", "/api/folder-plan",
-             {"quelle": "onedrive", "onedrive_rules": "- Dateien/Kunden/**"})[1]
+    r = call(port, "QUERY", "/api/v1/sources/onedrive/folder-plan",
+             {"onedrive_rules": "- Dateien/Kunden/**"})[1]
     assert [z["pfad"] for z in r["aus"]] == ["Dateien/Kunden"]
     assert r["aus"][0]["regel"] == "- Dateien/Kunden/**"
 
@@ -6366,9 +6485,8 @@ def test_exportliste_sharepoint_mit_regeln_und_urls(server, sandbox):
         {"id": "2", "pfad": "Dateien/Archiv", "name": "Archiv", "elemente": 3}])
     state_db.StateDb(lib).kv_schreiben(
         "urls", json.dumps(["https://nordwind.sharepoint.com/sites/x"]))
-    r = call(port, "POST", "/api/folder-plan",
-             {"quelle": "sharepoint", "sharepoint_rules": "- Nordwind/Dokumente/Dateien/Archiv/**"})[1]
-    assert r["ok"]
+    r = call(port, "QUERY", "/api/v1/sources/sharepoint/folder-plan",
+             {"sharepoint_rules": "- Nordwind/Dokumente/Dateien/Archiv/**"})[1]
     assert [z["pfad"] for z in r["an"]] == ["Nordwind/Dokumente/Dateien"]
     assert r["an"][0]["urls"] == ["https://nordwind.sharepoint.com/sites/x"]
     assert [z["pfad"] for z in r["aus"]] == ["Nordwind/Dokumente/Dateien/Archiv"]
@@ -6378,11 +6496,12 @@ def test_exportliste_sharepoint_mit_regeln_und_urls(server, sandbox):
 PRUEFUNG_OD_ORDNER = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
-  if(String(pfad).indexOf('/api/folder-plan') < 0)
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
+  if(String(pfad).indexOf('/folder-plan') < 0)
     return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
   return Promise.resolve({json: function(){ return Promise.resolve({
-    ok: true, abgeglichen: '2026-08-10T12:00:00',
+    abgeglichen: '2026-08-10T12:00:00',
     an: [{pfad: 'Dateien/Kunden', elemente: 3, archiv: 3, regel: null}],
     aus: [], weg: [], mails_an: 3, mails_aus: 0, mails_weg: 0}); }});
 };
@@ -6391,7 +6510,7 @@ document.getElementById('c-onedrive_rules').value = '- Dateien/Fotos/**';
 // Abgleich: eigener Lauf im Lauffenster – kein Zustandstext an einer Karte.
 LAUF.eigener = false;
 gleicheOrdnerAb('onedrive');
-var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0];
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0];
 pruefe(JSON.parse(lauf.body).sync_onedrive === true, 'Falscher Abgleich: ' + lauf.body);
 pruefe(JSON.parse(lauf.body).label === 'job.folders', 'Etikett fehlt: ' + lauf.body);
 pruefe(LAUF.eigener === true, 'Der Abgleich oeffnet das Lauffenster nicht');
@@ -6405,7 +6524,7 @@ zeigeExportliste('onedrive');
 setTimeout(function(){
   var frage = gesendet.filter(function(g){ return g.pfad.indexOf('folder-plan') >= 0; })[0];
   var b = JSON.parse(frage.body);
-  pruefe(b.quelle === 'onedrive', 'Quelle fehlt: ' + frage.body);
+  pruefe(frage.pfad.indexOf('/sources/onedrive/folder-plan') >= 0, 'Falsche Quelle: ' + frage.pfad);
   pruefe(b.onedrive_rules === '- Dateien/Fotos/**', 'Regeln aus dem falschen Feld');
   pruefe(b.folder_rules === undefined, 'Postfach-Regeln mitgeschickt');
   pruefe(document.getElementById('plan-listen').innerHTML.indexOf('Dateien/Kunden') >= 0,
@@ -6426,6 +6545,89 @@ setTimeout(function(){
 
 def test_onedrive_ordnerknoepfe_wirken_auf_die_eigene_quelle():
     _in_node(PRUEFUNG_OD_ORDNER)
+
+
+PRUEFUNG_LAUF_UNGESEHEN = GRUNDZUSTAND + """
+// Ein Lauf, der zwischen zwei Abfragen begann und endete – der Zeitplan
+// auf einem kleinen Archiv – war nie `busy` zu sehen. Der Bestand muss
+// trotzdem neu geholt werden: an ihm haengen Ordner, Typen und Faehigkeiten.
+// Jede Statusantwort traegt den jeweils letzten Lauf, wie beim Server.
+var geholt = [], LETZTER = null, geruestEcht = statusGeruest;
+statusGeruest = function(){ var s = geruestEcht(); s.jobs.last = LETZTER; return s; };
+global.fetch = function(pfad, opt){
+  geholt.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/v1/inventory') >= 0 ? {store: {exists: true}} : statusGeruest()); }});
+};
+function bestand(){ return geholt.filter(function(p){ return p.indexOf('/api/v1/inventory') >= 0; }).length; }
+renderStatus(statusGeruest());
+var n0 = bestand();
+LETZTER = {label: 'job.index', ok: true, finished: '2026-09-20T10:00:00', detail: ''};
+renderStatus(statusGeruest());
+setTimeout(function(){
+  pruefe(bestand() === n0 + 1, 'Bestand nach ungesehenem Lauf nicht geholt: ' + geholt.join(' '));
+  renderStatus(statusGeruest());
+  setTimeout(function(){
+    pruefe(bestand() === n0 + 1, 'Derselbe Lauf holt den Bestand noch einmal');
+    LETZTER = {label: 'job.index', ok: true, finished: '2026-09-20T11:00:00', detail: ''};
+    renderStatus(statusGeruest());
+    setTimeout(function(){
+      pruefe(bestand() === n0 + 2, 'Ein weiterer Lauf holt den Bestand nicht');
+      console.log('OK');
+    }, 20);
+  }, 20);
+}, 20);
+"""
+
+
+def test_ein_ungesehener_lauf_holt_den_bestand_neu():
+    _in_node(PRUEFUNG_LAUF_UNGESEHEN)
+
+
+PRUEFUNG_UPDATE_ABGELEHNT = GRUNDZUSTAND + """
+// Eine Ablehnung traegt kein `update`. Die Zeile nennt den Grund, statt
+// fuer immer bei "wird geprueft" zu bleiben – und nichts wirft im Stillen.
+var geschickt = [];
+global.fetch = function(pfad, opt){
+  geschickt.push(String(pfad));
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    {ok: false, status: 409, title: 'Conflict', detail: 'A run is in progress.',
+     error: {k: 'srv.busy', v: {}}}); }});
+};
+process.on('unhandledRejection', function(e){ console.log('REJECTION ' + e); process.exit(1); });
+pruefeUpdate();
+setTimeout(function(){
+  var text = document.getElementById('update-state').textContent;
+  pruefe(geschickt.length === 1 && geschickt[0].indexOf('/api/v1/updates/check') >= 0,
+         'Keine Anfrage: ' + geschickt);
+  pruefe(text.length > 0 && text !== t('update.checking'),
+         'Zeile bleibt bei "wird geprueft": ' + text);
+  console.log('OK');
+}, 20);
+"""
+
+
+def test_eine_abgelehnte_updatepruefung_bleibt_nicht_haengen():
+    _in_node(PRUEFUNG_UPDATE_ABGELEHNT)
+
+
+def test_die_mailzeilen_sind_eine_faehigkeit_nicht_eine_spalte():
+    """`mail_lines` stands for all of store_layout.MAIL_NEU – the set the
+    run gate rebuilds the index for – not for one column of them; the
+    page keys the filter on that one word."""
+    import store_layout
+    alle = {"key", "gone", *store_layout.MAIL_NEU}
+    assert app_mod._faehigkeiten(alle) == ["gone", "key", "mail_lines"]
+    assert app_mod._faehigkeiten(alle - {store_layout.MAIL_NEU[-1]}) == ["gone", "key"]
+    assert "'mail_lines'" in app_mod.seite() and "'to_ppl'" not in app_mod.seite()
+
+
+def test_die_ki_antwort_steht_so_weit_von_den_pillen_wie_die_treffer():
+    """In the AI variant the answer stands where the hits would. It used
+    to sit right under the pills while the hit list kept its 16px."""
+    css = app_mod.seite()
+    assert "#sicht-treffer .treffer-split{margin-top:16px}" in css
+    assert "#sicht-treffer .answer{margin-top:16px}" in css
 
 
 PRUEFUNG_VORABVERSION = GRUNDZUSTAND + """
@@ -6521,7 +6723,7 @@ def test_analytics_liefert_die_bilanz_je_quelle(server, sandbox):
                            completeness.bilanz("outlook_mail", "mails", da=5, offen=1))
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR),
                            completeness.bilanz("onedrive", "files", da=9))
-    r = call(port, "GET", "/api/analytics")[1]["pruefungen"]
+    r = call(port, "GET", "/api/v1/analytics")[1]["pruefungen"]
     assert list(r) == [e["quelle"] for e in app_mod.steps_mod.PRUEFUNGEN]
     assert r["outlook_mail"]["bericht"]["offen"] == 1 and r["outlook_mail"]["genutzt"]
     assert r["onedrive"]["bericht"]["da"] == 9 and not r["onedrive"]["genutzt"]
@@ -6529,14 +6731,54 @@ def test_analytics_liefert_die_bilanz_je_quelle(server, sandbox):
     assert r["todo"]["bericht"] is None and not r["todo"]["genutzt"]
 
 
+def test_die_bilanz_hat_ihren_eigenen_ort_und_ihre_zeilen(server, sandbox):
+    """`/api/v1/balance/{row}` takes the balance row, as its `/fetch` does:
+    the mailbox check writes `outlook_mail`, never `outlook`. A route
+    under /sources resolving `outlook` could only ever have answered
+    null – which is why the rows have a path of their own."""
+    _, port = server
+    import completeness
+    import state_db
+    with state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR) as db:
+        completeness.schreiben(db, completeness.bilanz("outlook_mail", "mails", da=5, offen=1))
+    code, r = call(port, "GET", "/api/v1/balance/outlook_mail")
+    assert code == 200 and r["report"]["offen"] == 1 and r["report"]["quelle"] == "outlook_mail"
+    code, r = call(port, "GET", "/api/v1/balance/outlook_calendar")
+    assert code == 200 and r["report"] is None
+    for weg in ("outlook", "nonesuch"):
+        code, r = call(port, "GET", f"/api/v1/balance/{weg}")
+        assert code == 404 and r["error"]["k"] == "srv.archiv.unknown", weg
+        assert r["error"]["v"]["source"] == weg
+    # And nothing of it is left under /sources.
+    assert call(port, "GET", "/api/v1/sources/sharepoint/completeness")[0] == 404
+    assert call(port, "POST", "/api/v1/sources/onedrive/fetch", {})[0] == 404
+
+
+def test_der_ordnerplan_kennt_die_acht_quellen_und_das_postfach_zwei_einheiten(server):
+    """`{source}` under /sources means the same eight everywhere. A source
+    without rules says so, a name that is none is unknown – and the
+    mailbox's calendars are its second unit, not a source of their own.
+    A name outside the list used to fall through to the mailbox plan."""
+    _, port = server
+    for quelle in ("planner", "sharepoint_pages"):
+        code, r = call(port, "QUERY", f"/api/v1/sources/{quelle}/folder-plan", {})
+        assert code == 404 and r["error"]["k"] == "srv.plan.nosource", (quelle, r)
+    code, r = call(port, "QUERY", "/api/v1/sources/bogus/folder-plan", {})
+    assert code == 404 and r["error"]["k"] == "srv.archiv.unknown", r
+    for quelle, unit in (("onedrive", "calendar"), ("outlook", "contacts"), ("outlook", 1)):
+        code, r = call(port, "QUERY", f"/api/v1/sources/{quelle}/folder-plan", {"unit": unit})
+        assert code == 400 and r["error"]["k"] == "srv.plan.badunit", (quelle, unit, r)
+
+
 PRUEFUNG_PRUEFKNOPF = GRUNDZUSTAND + """
 var gesendet = [];
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
 pruefeVollstaendigkeit();
-var a = JSON.parse(gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0].body);
+var a = JSON.parse(gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0].body);
 // Every check is asked for – the registry drops the unused ones.
 ['check', 'check_teams', 'check_onedrive', 'check_sharepoint', 'check_pages',
  'check_planner', 'check_todo', 'check_onenote'].forEach(function(k){
@@ -6605,12 +6847,12 @@ var gesendet = [];
 global.fetch = function(pfad, opt){
   gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
+    String(pfad).indexOf('/api/v1/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
 };
 pruefe(html.indexOf('holeQuelle(&quot;outlook_mail&quot;)') >= 0, 'Knopf nennt die Zeile nicht: ' + html);
 LAUF.eigener = false;
 holeQuelle('outlook_mail');
-pruefe(gesendet[0].pfad.indexOf('/api/bilanz/holen') >= 0 && gesendet[0].body.quelle === 'outlook_mail',
+pruefe(gesendet[0].pfad === '/api/v1/balance/outlook_mail/fetch',
        'Jetzt holen: ' + JSON.stringify(gesendet[0]));
 pruefe(LAUF.eigener === true, 'Jetzt holen oeffnet kein Fenster');
 // The navigation dot: warn while something is open, ok when all agrees.
@@ -6641,11 +6883,11 @@ def test_archivpruefung_ist_ein_schritt_ohne_zugang(sandbox):
 
 def test_analytics_traegt_die_archivpruefung(server, sandbox):
     a, port = server
-    assert call(port, "GET", "/api/analytics")[1]["archiv"] is None
+    assert call(port, "GET", "/api/v1/analytics")[1]["archiv"] is None
     app_mod.archiv_bericht_pfad().write_text('{"geprueft": "2026-09-13T10:00:00+00:00", "quellen": [], '
                                       '"index": {"stand": "nicht", "grund": "ana.archiv.reason.noindex"}}',
                                       encoding="utf-8")
-    r = call(port, "GET", "/api/analytics")[1]["archiv"]
+    r = call(port, "GET", "/api/v1/analytics")[1]["archiv"]
     assert r["index"]["grund"] == "ana.archiv.reason.noindex"
 
 
@@ -6695,7 +6937,7 @@ global.fetch = function(pfad, opt){
   return Promise.resolve({json: function(){ return Promise.resolve({ok: true}); }});
 };
 pruefeArchiv();
-var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/run') >= 0; })[0].body;
+var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0].body;
 pruefe(lauf.check_archive === true && lauf.label === 'job.archive_check' && !lauf.check, 'Archivpruefung: ' + JSON.stringify(lauf));
 console.log('OK');
 """
@@ -6734,9 +6976,12 @@ def test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie(server, sandb
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
 
-    def schritt(aktion, koerper):
-        code, r = call(port, "POST", "/api/archiv/" + aktion, koerper)
-        assert code == 200 and r["ok"] and "error" not in r, r
+    ZUSTAND = {"vermerken": "noted", "beiseitelegen": "set-aside", "zurueckholen": "open"}
+
+    def schritt(aktion, koerper=None):
+        code, r = call(port, "PATCH", "/api/v1/sources/outlook/findings",
+                       {"state": ZUSTAND[aktion], **(koerper or {})})
+        assert code == 202 and r["run"] and "error" not in r, r
         (s,) = gesehen["steps"]
         assert s["key"] == "archiv_" + aktion.replace("-", "_")
         assert gesehen["label"] == "job.archiv." + aktion
@@ -6750,25 +6995,36 @@ def test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie(server, sandb
         return [q for q in json.loads(app_mod.archiv_bericht_pfad().read_text(encoding="utf-8"))["quellen"]
                 if q["quelle"] == "outlook"][0]
 
-    zeile = schritt("vermerken", {"quelle": "outlook"})
+    zeile = schritt("vermerken")
     assert (zeile["verloren"], zeile["fremd"], zeile["vermerkt"]) == (0, 1, 0)
-    zeile = schritt("beiseitelegen", {"quelle": "outlook"})
+    zeile = schritt("beiseitelegen")
     assert not (out / "E-Mail/Posteingang/fremd.eml").exists()
     assert list((out / "_fremd").glob("*/E-Mail/Posteingang/fremd.eml"))
     assert (out / "E-Mail/Posteingang/a.eml").exists()
     assert (zeile["fremd"], zeile["beiseite"]) == (0, 1)
-    zeile = schritt("zurueckholen", {"quelle": "outlook"})
+    zeile = schritt("zurueckholen")
     assert (out / "E-Mail/Posteingang/fremd.eml").read_bytes() == b"f"
     assert not (out / "_fremd").exists() and zeile["fremd"] == 1
-    # The note takes its kinds from the request – unknown ones are dropped.
-    call(port, "POST", "/api/archiv/vermerken", {"quelle": "outlook", "arten": ["fehlt", "egal"]})
+    # The note takes its kinds from the request …
+    call(port, "PATCH", "/api/v1/sources/outlook/findings",
+         {"state": "noted", "kinds": ["missing"]})
     argv = gesehen["steps"][0]["argv"]
     assert argv[argv.index("--arten") + 1] == "fehlt"
-    assert call(port, "POST", "/api/archiv/vermerken", {"quelle": "nirgends"})[0] == 400
-    assert call(port, "POST", "/api/archiv/irgendwas", {"quelle": "outlook"})[0] == 404
+    # … und eine Art, die niemand kennt, wird abgelehnt statt verworfen:
+    # sie fiele sonst downstream auf "verloren" zurueck, und wer eine Art
+    # vermerken wollte, bekaeme einen Grabstein fuer eine andere.
+    code, r = call(port, "PATCH", "/api/v1/sources/outlook/findings",
+                   {"state": "noted", "kinds": ["missing", "egal"]})
+    assert code == 400 and r["error"]["k"] == "srv.archiv.badkind"
+    # A source that does not exist, and a state that is none.
+    assert call(port, "PATCH", "/api/v1/sources/nirgends/findings",
+                {"state": "noted"})[0] == 404
+    assert call(port, "PATCH", "/api/v1/sources/outlook/findings",
+                {"state": "irgendwas"})[0] == 400
     a.jobs.thread = __import__("threading").Thread(target=lambda: __import__("time").sleep(0.3))
     a.jobs.thread.start()
-    assert call(port, "POST", "/api/archiv/beiseitelegen", {"quelle": "outlook"})[0] == 409
+    assert call(port, "PATCH", "/api/v1/sources/outlook/findings",
+                {"state": "set-aside"})[0] == 409
     a.jobs.thread.join()
 
 
@@ -6784,8 +7040,8 @@ def test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten(server, sandbox, monk
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
-    code, r = call(port, "POST", "/api/archiv/neu-aufbauen", {"quelle": "outlook"})
-    assert code == 200 and r["ok"] and "error" not in r
+    code, r = call(port, "POST", "/api/v1/sources/outlook/rebuild", {})
+    assert code == 202 and r["run"] and "error" not in r
     keys = [s["key"] for s in gesehen["steps"]]
     assert keys == ["archiv_neu_aufbauen", "outlook", "index"], keys
     assert gesehen["steps"][1]["env"]["SYNC_NOW"] == "1"
@@ -6793,7 +7049,7 @@ def test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten(server, sandbox, monk
     assert list(out.glob("state.db")) and not list(out.glob("state.db.beschaedigt-*")), \
         "the route moves nothing – the step does, inside the run"
     (out / "state.db").unlink()
-    code, r = call(port, "POST", "/api/archiv/neu-aufbauen", {"quelle": "outlook"})
+    code, r = call(port, "POST", "/api/v1/sources/outlook/rebuild", {})
     assert code == 200 and r["message"]["k"] == "srv.archiv.nothing"
 
 
@@ -6852,8 +7108,8 @@ def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox,
     gesehen = {}
     monkeypatch.setattr(a.jobs, "start",
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
-    code, r = call(port, "POST", "/api/archiv/nachholen", {"quelle": "outlook"})
-    assert code == 200 and r["ok"] and "error" not in r
+    code, r = call(port, "POST", "/api/v1/sources/outlook/refetch", {})
+    assert code == 202 and r["run"] and "error" not in r
     assert [s["key"] for s in gesehen["steps"]] == ["outlook", "index", "archiv_pruefen"]
     assert gesehen["label"] == "job.archiv.nachholen"
     liste = sandbox / "nachholen-outlook.json"
@@ -6862,7 +7118,7 @@ def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox,
     zeile["befunde"]["fehlt"] = []
     app_mod.archiv_bericht_pfad().write_text(json.dumps(
         {"geprueft": "x", "quellen": [zeile], "index": {}}), encoding="utf-8")
-    code, r = call(port, "POST", "/api/archiv/nachholen", {"quelle": "outlook"})
+    code, r = call(port, "POST", "/api/v1/sources/outlook/refetch", {})
     assert code == 200 and r["message"]["k"] == "srv.archiv.nothing"
 
 
@@ -6884,8 +7140,8 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR), completeness.bilanz(
         "outlook_mail", "mails", da=5, offen=2,
         zeilen=[completeness.zeile("E-Mail/Posteingang", 3, 1), completeness.zeile("E-Mail/Archiv", 2, 1)]))
-    code, r = call(port, "POST", "/api/bilanz/holen", {"quelle": "outlook_mail"})
-    assert code == 200 and r["ok"] and gesehen["label"] == "job.holen"
+    code, r = call(port, "POST", "/api/v1/balance/outlook_mail/fetch", {})
+    assert code == 202 and gesehen["label"] == "job.holen"
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["outlook", "index", "check"]
     assert schritte["outlook"]["env"]["RESYNC"] == "1"
@@ -6894,8 +7150,8 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(
         "onedrive", "files", da=1, offen=1, zeilen=[completeness.zeile("Dateien", 1, 1)],
         extra={"offene": [{"id": "i1", "rel": "Dateien/a.pdf"}], "offene_gekappt": False}))
-    code, r = call(port, "POST", "/api/bilanz/holen", {"quelle": "onedrive"})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "POST", "/api/v1/balance/onedrive/fetch", {})
+    assert code == 202 and r["run"]
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["onedrive", "index"]
     liste = sandbox / "nachholen-onedrive.json"
@@ -6906,16 +7162,18 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(
         "onedrive", "files", da=1, offen=9, extra={"offene": [{"id": "i1", "rel": "Dateien/a.pdf"}],
                                                    "offene_gekappt": True}))
-    call(port, "POST", "/api/bilanz/holen", {"quelle": "onedrive"})
+    call(port, "POST", "/api/v1/balance/onedrive/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["onedrive", "index", "check_onedrive"]
     assert schritte["onedrive"]["env"]["RESYNC"] == "1" and "FETCH_LIST" not in schritte["onedrive"]["env"]
     # Teams: the regular run is the diff already.
-    call(port, "POST", "/api/bilanz/holen", {"quelle": "teams"})
+    call(port, "POST", "/api/v1/balance/teams/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["teams", "index", "check_teams"]
     assert "RESYNC" not in schritte["teams"]["env"] and schritte["teams"]["env"]["SYNC_NOW"] == "1"
-    assert call(port, "POST", "/api/bilanz/holen", {"quelle": "nirgends"})[0] == 400
+    # Eine Quelle, die es nicht gibt, ist ein Pfad ins Leere – 404 wie
+    # bei jeder anderen Route unter /sources (13.0).
+    assert call(port, "POST", "/api/v1/balance/nirgends/fetch", {})[0] == 404
 
 
 def test_http_run_lehnt_eine_nicht_angehakte_quelle_ab(server, monkeypatch):
@@ -6924,10 +7182,10 @@ def test_http_run_lehnt_eine_nicht_angehakte_quelle_ab(server, monkeypatch):
     a, port = server
     monkeypatch.setattr(app_mod, "read_token", lambda *x, **kw: "tok")
     a.cfg["outlook_categories"] = []
-    code, r = call(port, "POST", "/api/run",
+    code, r = call(port, "POST", "/api/v1/runs",
                    {"outlook": True, "resync": True, "index": True, "label": "job.resync"})
     assert code == 409 and not r["ok"]
-    assert r["message"]["k"] == "srv.inactive" and r["message"]["v"]["source"] == "Outlook"
+    assert r["error"]["k"] == "srv.inactive" and r["error"]["v"]["source"] == "Outlook"
 
 
 PRUEFUNG_ARCHIV_AKTIONEN = GRUNDZUSTAND + """
@@ -6975,7 +7233,7 @@ var gesendet = [];
 global.fetch = function(pfad, opt){
   gesendet.push({pfad: String(pfad), body: opt && opt.body ? JSON.parse(opt.body) : null});
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
+    String(pfad).indexOf('/api/v1/status') >= 0 ? statusGeruest() : {ok: true, message: null}); }});
 };
 global.confirm = function(text){ global.gefragt = text; return false; };
 archivAktion('beiseitelegen', 'outlook');
@@ -6986,10 +7244,13 @@ archivAktion('beiseitelegen', 'outlook');
 pruefe(LAUF.eigener === true, 'Die Aktion oeffnet das Lauffenster nicht');
 archivAktion('vermerken', 'outlook');
 var pfade = gesendet.map(function(g){ return g.pfad; });
-pruefe(pfade.indexOf('/api/archiv/beiseitelegen') >= 0 && pfade.indexOf('/api/archiv/vermerken') >= 0, 'Aktionen nicht gesendet: ' + pfade.join(','));
-pruefe(gesendet.every(function(g){ return g.body.quelle === 'outlook'; }), 'Quelle fehlt im Koerper');
-var vermerkt = gesendet.filter(function(g){ return g.pfad.indexOf('vermerken') >= 0; })[0].body;
-pruefe(JSON.stringify(vermerkt.arten) === '["verloren"]', 'Vermerken ohne Nachholen nimmt Fehlendes mit: ' + JSON.stringify(vermerkt));
+pruefe(pfade.filter(function(p){ return p.indexOf('/findings') >= 0; }).length === 2, 'Aktionen nicht gesendet: ' + pfade.join(','));
+// The source stands in the path, the state in the body.
+pruefe(gesendet.every(function(g){ return g.pfad.indexOf('/sources/outlook/') >= 0; }), 'Quelle fehlt im Pfad');
+pruefe(gesendet.map(function(g){ return g.body.state; }).sort().join(',') === 'noted,set-aside',
+       'Zustand fehlt: ' + JSON.stringify(gesendet.map(function(g){ return g.body; })));
+var vermerkt = gesendet.filter(function(g){ return g.body.state === 'noted'; })[0].body;
+pruefe(JSON.stringify(vermerkt.kinds) === '["lost"]', 'Vermerken ohne Nachholen nimmt Fehlendes mit: ' + JSON.stringify(vermerkt));
 
 // A file still missing after a resync that ran since the finding: the
 // sentence says so, the note offers itself and takes the missing along.
@@ -7003,7 +7264,7 @@ gesendet = []; global.gefragt = null;
 global.confirm = function(text){ global.gefragt = text; return true; };
 archivAktion('vermerken', 'outlook');
 pruefe(String(global.gefragt).indexOf('2 Dateien') >= 0, 'Rueckfrage zum Vermerken ohne Zahl: ' + global.gefragt);
-pruefe(JSON.stringify(gesendet[0].body.arten) === '["verloren","fehlt"]', 'Fehlendes nicht vermerkt: ' + JSON.stringify(gesendet[0].body));
+pruefe(JSON.stringify(gesendet[0].body.kinds) === '["lost","missing"]', 'Fehlendes nicht vermerkt: ' + JSON.stringify(gesendet[0].body));
 // Before a resync ran, a missing file is the fetch's job – no note.
 var frisch = q({fehlt: 2, fehlt_seit: '2026-09-14T09:00:00+00:00', nachgeholt: '2026-09-14T08:00:00+00:00'});
 zeigeArchiv({geprueft: 'x', quellen: [frisch], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0}});
@@ -7017,7 +7278,7 @@ pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('3 als verloren vermerkt') >= 0
 gesendet = []; LAUF.eigener = false; global.gefragt = null;
 archivAktion('nachholen', 'outlook');
 pruefe(global.gefragt === null, 'Nachholen fragt zurueck');
-pruefe(gesendet[0].pfad.indexOf('/api/archiv/nachholen') >= 0 && gesendet[0].body.quelle === 'outlook',
+pruefe(gesendet[0].pfad === '/api/v1/sources/outlook/refetch',
        'Nachholen nicht gesendet: ' + JSON.stringify(gesendet[0]));
 pruefe(LAUF.eigener === true, 'Nachholen oeffnet kein Fenster');
 
@@ -7031,7 +7292,7 @@ pruefeVollstaendigkeit();
 pruefe(LAUF.eigener === true && gesendet[0].body.label === 'job.check', 'Jetzt pruefen ohne Fenster');
 LAUF.eigener = false; gesendet = [];
 holeQuelle('outlook_mail');
-pruefe(LAUF.eigener === true && gesendet[0].pfad.indexOf('/api/bilanz/holen') >= 0, 'Jetzt holen ohne Fenster');
+pruefe(LAUF.eigener === true && gesendet[0].pfad.indexOf('/fetch') >= 0, 'Jetzt holen ohne Fenster');
 console.log('OK');
 """
 
@@ -7473,7 +7734,7 @@ def test_suchfeld_und_markierung_sind_verdrahtet():
 ])
 def test_untergrenze_ist_einstellbar(server, wert, erwartet):
     a, port = server
-    call(port, "POST", "/api/config", {"semantic_min": wert})
+    call(port, "PATCH", "/api/v1/config", {"semantic_min": wert})
     assert a.cfg["semantic_min"] == erwartet
 
 
@@ -7481,8 +7742,8 @@ def test_unbrauchbare_untergrenze_laesst_den_wert_stehen(server):
     """No falling back to the default: whoever set 60 and then mistypes
     should not silently land at 45 again."""
     a, port = server
-    call(port, "POST", "/api/config", {"semantic_min": 60})
-    call(port, "POST", "/api/config", {"semantic_min": "unsinn"})
+    call(port, "PATCH", "/api/v1/config", {"semantic_min": 60})
+    call(port, "PATCH", "/api/v1/config", {"semantic_min": "unsinn"})
     assert a.cfg["semantic_min"] == 60
 
 
@@ -7659,9 +7920,9 @@ def test_http_runs(server):
     a.history.record_step(run_id, "outlook", "job.step.outlook", 0.0, 1.0,
                           result={"new": 2})
     a.history.finish_run(run_id, "done")
-    code, r = call(port, "GET", "/api/runs?limit=10")
+    code, r = call(port, "GET", "/api/v1/runs?limit=10")
     assert code == 200
-    lauf = r["runs"][0]
+    lauf = r["items"][0]
     assert lauf["job_type"] == "job.export" and lauf["result"] == "done"
     assert lauf["steps"][0]["new"] == 2
 
@@ -7669,7 +7930,7 @@ def test_http_runs(server):
 def test_http_report(server):
     """The path the UI takes."""
     a, port = server
-    code, b = call(port, "POST", "/api/report",
+    code, b = call(port, "QUERY", "/api/v1/reports",
                    {"log": "09:00:00  Hallo welt@example.com", "hint": "Absturz"})
     assert code == 200
     assert b["title"] == "Absturz"
@@ -7680,7 +7941,7 @@ def test_http_report(server):
 def test_http_report_ohne_angaben(server):
     """The button in the settings gets pressed even with an empty log."""
     _, port = server
-    code, b = call(port, "POST", "/api/report", {})
+    code, b = call(port, "QUERY", "/api/v1/reports", {})
     assert code == 200 and b["log"] == "" and b["title"] == ""
     assert b["system"], "die Systemangaben stehen immer zur Verfügung"
 
@@ -7690,7 +7951,7 @@ def test_http_report_folgt_der_browsersprache(server):
     the reporter has seen."""
     _, port = server
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.request("POST", "/api/report", "{}",
+    con.request("QUERY", "/api/v1/reports", "{}",
                 {"Content-Type": "application/json", "Accept-Language": "fr-CH,fr;q=0.9"})
     b = json.loads(con.getresponse().read())
     con.close()
@@ -7747,11 +8008,12 @@ global.window = {open: function(u){ geoeffnet.push(u); }};
 global.gesendet = [];
 global.fetch = function(pfad, opt){
   var antwort;
-  if(String(pfad).indexOf('/api/log') === 0){
-    antwort = {seq: 3, lines: [
+  if(String(pfad).indexOf('/api/v1/log') === 0){
+    antwort = {seq: 3, items: [
       {n: 1, level: 'info', t: '09:00:00', text: 'Export gestartet'},
       {n: 2, level: 'err',  t: '09:24:36', text: 'BrokenProcessPool: abrupt beendet'}]};
-  } else if(String(pfad) === '/api/report'){
+  } else if(String(pfad) === '/api/v1/reports'){
+    global.berichtMethode = opt.method;
     gesendet.push(JSON.parse(opt.body));
     antwort = {system: [{k: 'version', v: '4.0.0 (Skript)'},
                         {k: 'cores', v: '8'}],
@@ -7780,6 +8042,8 @@ setTimeout(function(){
   // Was mitgeschickt wurde: das uebersetzte Protokoll und die letzte
   // Fehlerzeile als Betreffvorschlag.
   pruefe(gesendet.length === 1, 'Kein Bericht angefordert');
+  // Eine Frage, kein Schreibzugriff: QUERY (RFC 10008), nicht POST.
+  pruefe(berichtMethode === 'QUERY', 'Bericht nicht per QUERY geholt: ' + berichtMethode);
   pruefe(gesendet[0].log.indexOf('Export gestartet') >= 0, 'Protokoll fehlt');
   pruefe(gesendet[0].hint.indexOf('BrokenProcessPool') >= 0,
          'Betreffvorschlag kommt nicht aus der Fehlerzeile: ' + gesendet[0].hint);
@@ -7982,7 +8246,7 @@ var gesucht = [], gefragt = 0;
 global.fetch = function(pfad, opt){
   var s = String(pfad);
   if(s.indexOf('/search?') >= 0){ gesucht.push(s); }
-  if(s.indexOf('/api/answer') >= 0){ gefragt++; return Promise.resolve({ok: false,
+  if(s.indexOf('/answer') >= 0){ gefragt++; return Promise.resolve({ok: false,
     json: function(){ return Promise.resolve({error: 'x'}); }}); }
   return Promise.resolve({json: function(){ return Promise.resolve(
     s.indexOf('/search?') >= 0
@@ -8024,7 +8288,7 @@ PRUEFUNG_KI_NUR_AUF_WUNSCH = GRUNDZUSTAND + """
 var gefragt = 0;
 global.fetch = function(pfad){
   var s = String(pfad);
-  if(s.indexOf('/api/answer') >= 0){ gefragt++;
+  if(s.indexOf('/answer') >= 0){ gefragt++;
     return Promise.resolve({ok: false, json: function(){
       return Promise.resolve({error: 'x'}); }}); }
   return Promise.resolve({json: function(){ return Promise.resolve(
@@ -8059,7 +8323,7 @@ var geholt = [];
 global.fetch = function(pfad){
   geholt.push(String(pfad));
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/log') === 0 ? {lines: [], seq: 0} : statusGeruest()); }});
+    String(pfad).indexOf('/api/v1/log') === 0 ? {items: [], seq: 0} : statusGeruest()); }});
 };
 function schlaege(n, versatz){
   for(var i = 0; i < n; i++){
@@ -8079,8 +8343,8 @@ LAUF_OFFEN = false;
 TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
 geholt = [];
 schlaege(9, 1000);
-var status = geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length;
-var prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+var status = geholt.filter(function(p){ return p.indexOf('/api/v1/status') === 0; }).length;
+var prot = geholt.filter(function(p){ return p.indexOf('/api/v1/log') === 0; }).length;
 pruefe(status === 0 && prot === 0, 'Leerlauf fragt zu oft: ' + status + ' Status, ' + prot + ' Protokoll');
 
 // Waehrend eines Laufs mit geschlossenem Fenster: Status ja, Protokoll
@@ -8090,8 +8354,8 @@ LAUF_OFFEN = false;
 TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
 geholt = [];
 schlaege(9, 1000);
-status = geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length;
-prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+status = geholt.filter(function(p){ return p.indexOf('/api/v1/status') === 0; }).length;
+prot = geholt.filter(function(p){ return p.indexOf('/api/v1/log') === 0; }).length;
 pruefe(status >= 3, 'Lauf wird zu selten verfolgt: ' + status);
 pruefe(prot === 0, 'Protokoll geholt, obwohl es niemand sieht: ' + prot);
 
@@ -8100,7 +8364,7 @@ LAUF_OFFEN = true;
 TAKT_STATUS.status = TAKT_STATUS.log = Date.now();
 geholt = [];
 schlaege(9, 1000);
-prot = geholt.filter(function(p){ return p.indexOf('/api/log') === 0; }).length;
+prot = geholt.filter(function(p){ return p.indexOf('/api/v1/log') === 0; }).length;
 pruefe(prot >= 8, 'Offenes Fenster sieht dem Lauf nicht zu: ' + prot);
 LAUF_OFFEN = false;
 
@@ -8111,7 +8375,7 @@ KONFIG = Object.assign({}, KONFIG, {status_poll_seconds: 5});
 TAKT_STATUS.status = Date.now();
 geholt = [];
 schlaege(9, 1000);
-pruefe(geholt.filter(function(p){ return p.indexOf('/api/status') === 0; }).length === 1,
+pruefe(geholt.filter(function(p){ return p.indexOf('/api/v1/status') === 0; }).length === 1,
        'Eingestellter Takt wirkt nicht');
 KONFIG = Object.assign({}, KONFIG, {status_poll_seconds: 600});
 TAKT_STATUS.status = Date.now();
@@ -8184,7 +8448,8 @@ console.log('OK');
 PRUEFUNG_TREFFERZEILE = GRUNDZUSTAND + """
 // „Ähnliche finden" haengt an Vektoren im Index – ohne die waere der Eintrag
 // zu Recht gesperrt, und dieser Test prueft die Zeile, nicht die Sperre.
-S = statusGeruest(); S.store.semantic = true;
+BESTAND = Object.assign({}, BESTAND, {store: Object.assign({}, BESTAND.store, {semantic: true})});
+S = Object.assign({}, BESTAND, statusGeruest());   // wie renderStatus mischt
 KANN_VERLAUF = true;      // otherwise set from store.features on the status poll
 renderHits({count: 2, results: [
   {uid: 'u:1', cid: 7, title: 'Rechnung 4711', who: 'Alice', date: '2026-03-04',
@@ -8239,6 +8504,144 @@ def test_der_takt_folgt_dem_lauf_und_schweigt_im_hintergrund():
     follows closely; idle it asks rarely, because every action of its own
     refreshes anyway; hidden it asks nothing."""
     _in_node(PRUEFUNG_TAKT)
+
+
+PRUEFUNG_ANTWORTEN_13 = GRUNDZUSTAND + """
+// Drei Antworten, die 13.0 umgeformt hat – die Seite las noch die alten
+// Felder und tat dann nichts, ohne etwas zu sagen.
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  var s = String(pfad);
+  gesendet.push({pfad: s, methode: (opt && opt.method) || 'GET'});
+  var antwort = statusGeruest();
+  if(s.indexOf('/api/v1/storage') === 0)
+    antwort = {data_dir: '/Users/beispiel/Archiv', index_dir: '/Users/beispiel/Index',
+               restart_required: true};                    // kein ok mehr
+  else if(s.indexOf('/api/v1/runs') === 0 && opt && opt.method === 'POST')
+    antwort = {run: '/api/v1/runs/current'};               // 202 statt ok
+  else if(s.indexOf('/api/v1/inventory') === 0)
+    antwort = {error: {k: 'srv.noindex', v: {}}};          // Bestand bleibt leer
+  return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
+};
+
+function warte(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+(async function(){
+  // 1) Der Speicherort kommt aufgeloest zurueck und gehoert ins Feld.
+  document.getElementById('c-data-dir').value = '~/Archiv';
+  document.getElementById('c-index-dir').value = '';
+  await speichereAblage();
+  await warte(10);
+  pruefe(document.getElementById('c-data-dir').value === '/Users/beispiel/Archiv',
+         'Aufgeloester Datenordner nicht uebernommen: ' + document.getElementById('c-data-dir').value);
+  pruefe(document.getElementById('c-index-dir').value === '/Users/beispiel/Index',
+         'Indexordner nicht uebernommen');
+
+  // 2) Ein gestarteter Lauf nennt sich `run` – die Vorschau darf nicht
+  //    stumm abbrechen.
+  gesendet.length = 0;
+  sharepointVorschau();
+  await warte(20);
+  pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') === 0 && g.methode === 'POST'; }).length === 1,
+         'Vorschau hat keinen Lauf gestartet');
+  pruefe(document.getElementById('sp-msg').textContent !== '',
+         'Die Meldung wurde leer geschrieben – der Lauf gilt als gescheitert');
+
+  // 3) Ein leerer Bestand darf das Zeichnen nicht abbrechen.
+  BESTAND = {};
+  KANN_TYP = true;
+  var s = statusGeruest();
+  delete s.store;
+  try { renderStatus(s); } catch(e){ pruefe(false, 'renderStatus wirft: ' + e.message); }
+  // KANN_TYP wird NACH dem store-Block gesetzt: steht es hinterher auf
+  // false, ist die Zeichnung durchgelaufen statt auf halbem Weg zu enden.
+  pruefe(KANN_TYP === false, 'renderStatus ist im store-Block abgebrochen');
+  console.log('OK');
+})().catch(function(e){ console.log('FEHLER ' + (e.stack || e)); process.exit(1); });
+"""
+
+
+PRUEFUNG_FELDER_13 = GRUNDZUSTAND + """
+// Felder, die 13.0 umbenannt hat, und die Stellen, die sie lesen.
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  var s = String(pfad);
+  gesendet.push({pfad: s, methode: (opt && opt.method) || 'GET',
+                 body: opt && opt.body ? JSON.parse(opt.body) : null});
+  var antwort = statusGeruest();
+  if(s.indexOf('/api/v1/search?') === 0)
+    antwort = {items: [{uid: 'outlook:a.eml:0', key: 'mail:<a>', source: 'outlook',
+                        root: 'outlook', path: 'a.eml', title: 'Rechnung',
+                        date: '2026-03-04', who: 'Alice', preview: 'x', cases: []}],
+               limit: 20, offset: 0, has_more: false, backend: 'bm25'};
+  else if(s.indexOf('/api/v1/inventory') === 0)
+    antwort = {store: {exists: true, semantic: false, built_at: '2026-03-05T06:10:00',
+                       features: ['thread', 'gone', 'who_mail', 'mail_lines', 'domains', 'ext']},
+               exports: {outlook: {mails: 4711}}};
+  return Promise.resolve({json: function(){ return Promise.resolve(antwort); },
+                          ok: true, body: null});
+};
+
+function warte(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+(async function(){
+  // 1) Der KI-Modus fragt das Modell – er haengt an `items`, nicht an `results`.
+  document.getElementById('q').value = 'Rechnung';
+  suchmodus('ki');
+  sofortSuchen();
+  await warte(60);
+  // suchmodus() sucht selbst noch einmal – gezaehlt wird, DASS gefragt wurde.
+  pruefe(gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/answer') === 0; }).length >= 1,
+         'Der KI-Modus hat das Modell nicht gefragt. Gesendet: ' +
+         gesendet.map(function(g){ return g.pfad.split('?')[0]; }).join(', '));
+
+  // 2) Eine einzelne Einheit heisst `unit`.
+  gesendet.length = 0;
+  run({onenote: true, unit: 'abc', index: true}, 'job.export', 'sync_now');
+  await warte(10);
+  var lauf = gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') === 0 && g.methode === 'POST'; })[0];
+  pruefe(lauf && lauf.body.unit === 'abc', 'Die Einheit reist nicht als `unit`: ' + JSON.stringify(lauf && lauf.body));
+  pruefe(!(lauf && 'nur_einheit' in lauf.body), 'Der alte Schluessel reist noch mit');
+
+  // 4) Die Mail-Zeilen stehen als Marken in Verlauf und gespeicherten Suchen.
+  var marken = kriterienTags({q: '', mode: 'text', mail_to: 'bob.baumeister@nordwind.example'});
+  pruefe(marken.indexOf('bob.baumeister@nordwind.example') >= 0,
+         'Die Mail-Zeile fehlt in den Marken: ' + marken);
+
+  // 6) Nach einem Lauf gewinnt der frische Bestand, nicht die alte Kopie.
+  renderStatus(statusGeruest());
+  KANN_MAIL = false;
+  await ladeBestand();
+  renderStatus(S_ROH);
+  pruefe(KANN_MAIL === true, 'Der frische Bestand kam nicht durch');
+  console.log('OK');
+})().catch(function(e){ console.log('FEHLER ' + (e.stack || e)); process.exit(1); });
+"""
+
+
+def test_die_seite_liest_die_umbenannten_felder():
+    """Four fields changed name or shape with 13.0 and the page still read
+    the old ones: the AI mode gated on `results`, a single unit travelled
+    as `nur_einheit`, the mail lines were missing from the criteria tags,
+    and the render after a run passed the merged copy back in, so the
+    fresh inventory lost against the stale one."""
+    _in_node(PRUEFUNG_FELDER_13)
+
+
+def test_eine_gesetzte_mailzeile_leuchtet():
+    """`zeigeFilterstand` marks a set line with `on` – the stylesheet has
+    to have a rule for it, or the tour's promise ("a set filter lights up
+    where it stands") is not kept inside the popover."""
+    seite = app_mod.seite()
+    assert ".popover .zeile.on" in seite
+
+
+def test_die_seite_liest_die_neuen_antworten():
+    """Three answers changed shape with 13.0 – storage, a started run, the
+    inventory – and the page still read `ok`, `path` and `index`. Every one
+    of them failed silently: a field that stays unfilled, a message that
+    blanks out, a render that stops halfway."""
+    _in_node(PRUEFUNG_ANTWORTEN_13)
 
 
 def test_die_seite_meldet_ohne_alert():
@@ -8332,13 +8735,13 @@ def test_mcp_bekommt_den_verzicht_mitgeteilt(sandbox, monkeypatch):
 
 def test_schalter_werden_gespeichert(server):
     _, port = server
-    code, r = call(port, "POST", "/api/config",
+    code, r = call(port, "PATCH", "/api/v1/config",
                    {"ollama_enabled": False, "index_semantic": False})
     assert code == 200
     code, cfg = call(port, "GET", "/api/v1/config")
     assert cfg["config"]["ollama_enabled"] is False
     assert cfg["config"]["index_semantic"] is False
-    s = call(port, "GET", "/api/status")[1]
+    s = call(port, "GET", "/api/v1/status")[1]
     assert s["ollama"]["disabled"] is True, "die Prüfung von vorher wirkt nach"
 
 
@@ -8482,7 +8885,7 @@ def test_anhangstypen_werden_gezaehlt(sandbox):
 
 
 def test_analytics_liest_nur_und_aktualisieren_baut_neu(sandbox, monkeypatch):
-    """The tab must not cost seconds any more: /api/analytics reads the
+    """The tab must not cost seconds any more: /api/v1/analytics reads the
     materialized block; only "Refresh" (and the first call after an update)
     computes."""
     import analytics_db
@@ -8537,7 +8940,7 @@ def test_jedes_feld_ist_auch_gelistet():
                  "language",          # its own select, fuelleSprachen()
                  "notifications",     # its own select, saved by hand
                  "search_history",    # likewise: a select with fixed choices
-                 "data-dir",          # posted to /api/data-dir by the save
+                 "data-dir",          # sent to /api/v1/storage by the save
                  "index-dir",         # likewise
                  "ollama_enabled",    # toggle, see ollamaSchalter()
                  "index_kind",        # select, mirrors INDEX_SEMANTISCH via indexart()
@@ -8572,7 +8975,7 @@ def test_jedes_gelistete_feld_wird_auch_serverseitig_angenommen(sandbox, server)
         body[k] = False
     for k in listen["ZAHLEN"]:
         body[k] = 7 if k != "mcp_port" else 8400
-    code, _ = call(port, "POST", "/api/config", body)
+    code, _ = call(port, "PATCH", "/api/v1/config", body)
     assert code == 200
     cfg = call(port, "GET", "/api/v1/config")[1]["config"]
     nicht_uebernommen = [k for k in listen["SCHALTER"] if cfg.get(k) is not False]
@@ -8787,7 +9190,8 @@ def test_einstellungen_hin_und_zurueck():
 PRUEFUNG_AEHNLICHE_GESPERRT = GRUNDZUSTAND + """
 function zeichne(semantisch){
   S = statusGeruest();
-  S.store.semantic = semantisch;
+  BESTAND = Object.assign({}, BESTAND, {store: Object.assign({}, BESTAND.store, {semantic: semantisch})});
+  S = Object.assign({}, BESTAND, S);
   renderHits({count: 1, results: [{uid: 'u:1', cid: 7, title: 'T', who: 'A',
     date: '2026-03-04', source_label: 'Datei', preview: 'p'}]});
   waehleTreffer(0);
@@ -8826,14 +9230,14 @@ def test_links_umleiten_schickt_nur_relative_pfade_durch_die_route():
            b'<a href="../Dateien/Ordner/a.pdf#s">y</a>'
            b'<img src="data:image/png;base64,AAAA">'
            b'<a href="https://example.com/x">z</a>'
-           b'<a href="#oben">o</a><a href="/source?root=teams&path=q">q</a>'
+           b'<a href="#oben">o</a><a href="/api/v1/files/content?root=teams&path=q">q</a>'
            b'<a href="Besprechung__a.files/Protokoll%20A.pdf">p</a>')
     neu = app_mod._links_umleiten(roh, "todo", "Einkauf__x/list.html")
-    assert b'href="/source?root=todo&path=Einkauf__x%2FAnhaenge%2FBon__1.pdf"' in neu
-    assert b'href="/source?root=todo&path=Dateien%2FOrdner%2Fa.pdf#s"' in neu
+    assert b'href="/api/v1/files/content?root=todo&path=Einkauf__x%2FAnhaenge%2FBon__1.pdf"' in neu
+    assert b'href="/api/v1/files/content?root=todo&path=Dateien%2FOrdner%2Fa.pdf#s"' in neu
     assert b'src="data:image/png;base64,AAAA"' in neu
     assert b'href="https://example.com/x"' in neu and b'href="#oben"' in neu
-    assert b'href="/source?root=teams&path=q"' in neu
+    assert b'href="/api/v1/files/content?root=teams&path=q"' in neu
     assert b'path=Einkauf__x%2FBesprechung__a.files%2FProtokoll%20A.pdf"' in neu
     # A page at the root of its export: no folder to prepend.
     assert b'path=Anhaenge%2FBon__1.pdf' in app_mod._links_umleiten(
@@ -8873,9 +9277,9 @@ def test_notizbuchliste_zaehlt_seiten_je_notizbuch(server, sandbox):
     _notizbuchliste(sandbox, NOTIZBUECHER,
                     [("Projekte/Allgemein", 2), ("Projekte/2026/Q3", 3),
                      ("Privat/Ideen", 1), ("Weg/Alt", 4)])
-    code, r = call(port, "POST", "/api/folder-plan",
-                   {"quelle": "onenote", "onenote_rules": "- **\n+ Projekte"})
-    assert code == 200 and r["ok"]
+    code, r = call(port, "QUERY", "/api/v1/sources/onenote/folder-plan",
+                   {"onenote_rules": "- **\n+ Projekte"})
+    assert code == 200 and r["regeln"]
     assert [z["pfad"] for z in r["an"]] == ["Projekte"] and r["an"][0]["archiv"] == 5
     assert [z["pfad"] for z in r["aus"]] == ["Privat"] and r["aus"][0]["archiv"] == 1
     assert r["aus"][0]["regel"] == "- **"
@@ -8886,7 +9290,7 @@ def test_notizbuchliste_zaehlt_seiten_je_notizbuch(server, sandbox):
 def test_notizbuchstand_nennt_die_eintraege_mit_auswahl(server, sandbox):
     a, port = server
     _notizbuchliste(sandbox, NOTIZBUECHER)
-    call(port, "POST", "/api/config", {"onenote_rules": "- **\n+ Privat"})
+    call(port, "PATCH", "/api/v1/config", {"onenote_rules": "- **\n+ Privat"})
     assert a.cfg["onenote_rules"] == "- **\n+ Privat"
     c = call(port, "GET", "/api/v1/inventory")[1]["notebooks"]
     assert (c["gesamt"], c["gewaehlt"], c["namen"]) == (2, 1, ["Privat"])
@@ -8981,8 +9385,8 @@ var mitCursor = laeuft(0); mitCursor.jobs.job.log_seq = 7;
 var vorher = null;
 global.fetch = function(pfad){
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/log') >= 0
-      ? {seq: 9, lines: [{n: 7, level: 'info', t: '1', text: 'alt'},
+    String(pfad).indexOf('/api/v1/log') >= 0
+      ? {seq: 9, items: [{n: 7, level: 'info', t: '1', text: 'alt'},
                           {n: 8, level: 'head', t: '2', text: 'neu'},
                           {n: 9, level: 'info', t: '3', text: 'neu'}]}
       : statusGeruest()); }});
@@ -9068,9 +9472,10 @@ PRUEFUNG_TOUR = GRUNDZUSTAND + """
 var gesendet = [];
 var altFetch = global.fetch;
 global.fetch = function(pfad, opt){
-  gesendet.push({pfad: String(pfad), body: opt && opt.body});
+  gesendet.push({pfad: String(pfad), body: opt && opt.body,
+                 methode: (opt && opt.method) || 'GET'});
   return Promise.resolve({json: function(){ return Promise.resolve(
-    String(pfad).indexOf('/api/status') >= 0 ? statusGeruest() : {ok: true}); }});
+    String(pfad).indexOf('/api/v1/status') >= 0 ? statusGeruest() : {ok: true}); }});
 };
 S.config = S.config || {}; S.config.tour_seen = {};
 S.store = S.store || {exists: true};

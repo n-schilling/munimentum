@@ -72,10 +72,16 @@ _MONTH_S = 30.44 * 86400
 class RunHistory:
     """Run history on one small SQLite file. Writes never raise."""
 
-    def __init__(self, path):
+    def __init__(self, path, readonly=False):
+        """`readonly` opens what is there and creates nothing – the MCP
+        server's way in, which must never write the app's file. Reads on
+        a file that is not there answer empty, like every other read."""
         self.path = Path(path)
+        self.readonly = readonly
 
     def _connect(self):
+        if self.readonly:
+            return sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=5)
         con = sqlite3.connect(self.path, timeout=5)
         con.executescript(_SCHEMA)
         return con
@@ -139,6 +145,19 @@ class RunHistory:
                 con.close()
         except (sqlite3.Error, OSError):
             pass
+
+    def has_run(self, run_id):
+        """Whether a run with this id was ever recorded – what a route needs
+        before it can say "no lines left" rather than "no such run"."""
+        try:
+            con = self._connect()
+            try:
+                return con.execute("SELECT 1 FROM runs WHERE id = ?",
+                                   (int(run_id),)).fetchone() is not None
+            finally:
+                con.close()
+        except (sqlite3.Error, OSError, TypeError, ValueError):
+            return False
 
     def run_log(self, run_id, limit=4000):
         """The stored log of one run, oldest first."""
@@ -249,6 +268,7 @@ class RunHistory:
         try:
             con = self._connect()
             try:
+                grenze = max(1, min(int(limit), 1000))
                 runs = [dict(zip(("id", "started_at", "finished_at", "job_type",
                                   "origin", "result", "elements", "semantic",
                                   "workers", "app_version"), row, strict=True))
@@ -257,22 +277,28 @@ class RunHistory:
                             " origin, result, elements, semantic, workers,"
                             " app_version FROM runs"
                             " ORDER BY started_at DESC, id DESC LIMIT ?",
-                            (max(1, min(int(limit), 200)),))]
+                            (grenze,))]
+                # The steps of every run in one query, grouped here – not
+                # one round-trip per run. The runs are named by the same
+                # subquery, not by one bound id each: SQLite builds before
+                # 3.32 allow 999 variables, and the cap is above that.
+                schritte = {}
+                for row in con.execute(
+                        "SELECT run_id, key, label, started_at, duration_s,"
+                        " new_items, unchanged, excluded, errors, skipped,"
+                        " ok, detail FROM steps WHERE run_id IN"
+                        " (SELECT id FROM runs ORDER BY started_at DESC, id DESC LIMIT ?)"
+                        " ORDER BY run_id, rowid", (grenze,)):
+                    schritt = dict(zip(("key", "label", "started_at", "duration_s",
+                                        "new", "unchanged", "excluded", "errors",
+                                        "skipped", "ok", "extra"), row[1:], strict=True))
+                    schritt["extra"] = (json.loads(schritt["extra"])
+                                        if schritt["extra"] else None)
+                    schritte.setdefault(row[0], []).append(schritt)
                 for lauf in runs:
                     lauf["elements"] = (json.loads(lauf["elements"])
                                         if lauf["elements"] else None)
-                    lauf["steps"] = [
-                        dict(zip(("key", "label", "started_at", "duration_s",
-                                  "new", "unchanged", "excluded", "errors",
-                                  "skipped", "ok", "extra"), row, strict=True))
-                        for row in con.execute(
-                            "SELECT key, label, started_at, duration_s,"
-                            " new_items, unchanged, excluded, errors, skipped,"
-                            " ok, detail FROM steps WHERE run_id = ?"
-                            " ORDER BY rowid", (lauf["id"],))]
-                    for schritt in lauf["steps"]:
-                        schritt["extra"] = (json.loads(schritt["extra"])
-                                            if schritt["extra"] else None)
+                    lauf["steps"] = schritte.get(lauf["id"], [])
                 return runs
             finally:
                 con.close()

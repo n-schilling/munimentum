@@ -22,6 +22,17 @@ from pathlib import Path
 # disappeared from the source, and the completeness check's report.
 
 
+def resource_dir():
+    """Where the shipped files lie – the scripts, `lang/`, the page. In a
+    bundle that is the unpacked archive, not the folder a module happens
+    to sit in; as a script it is the project folder. One answer for the
+    app and the MCP server – the 7.0.0 config bug came from a second
+    one."""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).resolve().parent))
+    return Path(__file__).resolve().parent
+
+
 def erzwinge_utf8():
     """Set stdout/stderr to UTF-8 (a no-op on macOS/Linux).
 

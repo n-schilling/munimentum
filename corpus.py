@@ -430,7 +430,11 @@ def _outlook_file(p_str, root_str):
     except Exception:
         return None
     fn, fe = addr_people(msg, "from")
-    tn, te = addr_people(msg, "to", "cc")
+    tn, te = addr_people(msg, "to")
+    cn, ce = addr_people(msg, "cc")
+    # Bcc stands in the MIME of a mail one sent oneself; a received one
+    # never carries it – that is what a blind copy is.
+    bn, be = addr_people(msg, "bcc")
     who = (fn[0] if fn else (fe[0] if fe else "")) or "(unbekannt)"
     raw_date = hdr(msg, "date")
     ts, disp = None, raw_date
@@ -449,13 +453,19 @@ def _outlook_file(p_str, root_str):
         "key": f"mail:{kennung}" if kennung else None,
         "thread": thread_key(msg),
         "att": " ".join(anhaenge(msg)),
-        "who": who, "ppl": " ".join(fn + fe + tn + te).lower(),
+        "who": who, "ppl": " ".join(fn + fe + tn + te + cn + ce + bn + be).lower(),
         # The sender's address – what a case's People view tells internal
         # from external by, and you from everyone else.
         "who_mail": (fe[0] if fe else "").lower(),
-        # Every party's domain – sender and recipients: a mail is "external"
-        # when one of them lies outside the user's own.
-        "domains": domains(fe + te),
+        # Every party's domain – sender and recipients, the blind ones too:
+        # a mail is "external" when one of them lies outside the user's own.
+        "domains": domains(fe + te + ce + be),
+        # One line of the mail per column, names and addresses together, so
+        # a search can ask who stood in which line and not only who was
+        # involved at all (that is `ppl`).
+        "to_ppl": " ".join(tn + te).lower(),
+        "cc_ppl": " ".join(cn + ce).lower(),
+        "bcc_ppl": " ".join(bn + be).lower(),
         "ts": ts, "date": disp, "title": hdr(msg, "subject") or "(kein Betreff)",
         "ctx": folder, "text": extract_body(msg),
     }

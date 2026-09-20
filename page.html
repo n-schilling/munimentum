@@ -270,6 +270,7 @@ button.ghost.rot{color:var(--err)}
 .popover{position:absolute;top:calc(100% + 6px);left:0;z-index:20;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:12px 14px;min-width:260px;text-align:left;cursor:default;font-size:13.5px;font-weight:400;color:var(--ink);white-space:normal}
 .popover h4{margin:0 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:650}
 .popover .zeile{display:flex;gap:8px;align-items:center;margin-bottom:8px;cursor:pointer}
+.popover .zeile.on .bez{color:var(--accent);font-weight:600}
 .popover .zeile .bez{font-size:12.5px;color:var(--muted);min-width:34px}
 .popover .feld{width:100%;padding:6px 9px;font-size:13.5px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font-family:inherit}
 .popover .halter{display:none}
@@ -296,12 +297,18 @@ input.fehler{border-color:var(--err)!important}
   text-align:left;padding:7px 10px;border-radius:7px;cursor:pointer}
 .menu button:hover:not(:disabled){background:var(--code)}
 .menu hr{border:0;border-top:1px solid var(--line);margin:4px 2px}
-#personliste button{display:flex;gap:10px;align-items:baseline;justify-content:space-between;width:100%}
-#personliste button[aria-selected="true"]{background:var(--code)}
-#personliste .zahl{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
-#personliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#personliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
-#personliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
+/* Suggestions look the same wherever they are offered: the person field
+   and the four mail lines. */
+.wahlliste button{display:flex;gap:10px;align-items:baseline;justify-content:space-between;width:100%}
+.wahlliste button[aria-selected="true"]{background:var(--code)}
+.wahlliste .zahl{color:var(--muted);font-size:12.5px;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.wahlliste .wer{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wahlliste .wer.alle{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+.wahlliste .leer{padding:7px 10px;font-size:13.5px;color:var(--muted)}
+/* A line of the mail filter: label, field, and the field's own suggestions.
+   The four labels share one width, so the fields start on one edge. */
+.popover .zeile .vorschlagfeld{flex:1;min-width:0}
+#po-mail .bez{min-width:74px}
 /* The four views onto the same inventory. */
 .sichten{display:flex;align-items:center;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
 /* The door's strip (11.3): the four ways, with icons, first under the header */
@@ -330,6 +337,8 @@ input.fehler{border-color:var(--err)!important}
 /* Hits on the left, the chosen hit on the right. */
 .treffer-split{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:16px;align-items:start}
 #sicht-treffer .treffer-split{margin-top:16px}
+/* The answer stands where the hits would: the same distance from the pills. */
+#sicht-treffer .answer{margin-top:16px}
 .treffer-split:has(#detail.hide){grid-template-columns:1fr}
 .treffer-split .liste{padding:0}
 #results>.hint,#results>.banner{margin:14px}
@@ -1080,7 +1089,7 @@ details.rechte p{margin:6px 0}
                  aria-controls="personliste" autocomplete="off"
                  oninput="personVorschlagen()" onkeydown="personTaste(event)"
                  onchange="zeigeFilterstand()">
-          <div class="menu hide" id="personliste" role="listbox"></div>
+          <div class="menu wahlliste hide" id="personliste" role="listbox"></div>
         </span>
         <p class="satz" data-i18n="search.person.i">Namen, die im Archiv vorkommen; * steht für beliebige Zeichen.</p>
       </div>
@@ -1103,6 +1112,53 @@ details.rechte p{margin:6px 0}
           <option value="onenote" data-i18n="search.source.onenote">OneNote</option>
         </select></div>
         <div class="wahl" id="pl-source"></div>
+      </div>
+    </div>
+    <!-- The four lines of a mail (13.0). One pill, because they are one
+         question; and it stands here only where it can be answered – the
+         source set to Mail, and an index that knows the lines. Otherwise
+         it is absent, the way the file type is. -->
+    <div class="pill hide" id="p-mail" role="button" tabindex="0" onclick="pillAuf('mail')" onkeydown="pillTaste(event, 'mail')">
+      <span data-ikon="mail" data-ikon-klasse="klein"></span><span class="wert" id="pw-mail">Mailfilter</span><span class="pfeil" id="pf-mail" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-mail" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('mail')">×</span>
+      <div class="popover hide" id="po-mail" onclick="event.stopPropagation()" style="min-width:340px">
+        <h4 data-i18n="search.pill.mail">Mailfilter</h4>
+        <label class="zeile" id="mi-from"><span class="bez" data-i18n="search.mail.from">Von</span>
+          <span class="vorschlagfeld">
+            <input type="text" id="f-mail-from" class="feld" data-i18n-ph="search.mail.ph"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="mailliste-from" autocomplete="off"
+                   oninput="mailVorschlagen('from')" onkeydown="mailTaste(event, 'from')"
+                   onchange="zeigeFilterstand()">
+            <div class="menu wahlliste hide" id="mailliste-from" role="listbox"></div>
+          </span></label>
+        <label class="zeile" id="mi-to"><span class="bez" data-i18n="search.mail.to">An</span>
+          <span class="vorschlagfeld">
+            <input type="text" id="f-mail-to" class="feld" data-i18n-ph="search.mail.ph"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="mailliste-to" autocomplete="off"
+                   oninput="mailVorschlagen('to')" onkeydown="mailTaste(event, 'to')"
+                   onchange="zeigeFilterstand()">
+            <div class="menu wahlliste hide" id="mailliste-to" role="listbox"></div>
+          </span></label>
+        <label class="zeile" id="mi-cc"><span class="bez" data-i18n="search.mail.cc">Kopie</span>
+          <span class="vorschlagfeld">
+            <input type="text" id="f-mail-cc" class="feld" data-i18n-ph="search.mail.ph"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="mailliste-cc" autocomplete="off"
+                   oninput="mailVorschlagen('cc')" onkeydown="mailTaste(event, 'cc')"
+                   onchange="zeigeFilterstand()">
+            <div class="menu wahlliste hide" id="mailliste-cc" role="listbox"></div>
+          </span></label>
+        <label class="zeile" id="mi-bcc"><span class="bez" data-i18n="search.mail.bcc">Blindkopie</span>
+          <span class="vorschlagfeld">
+            <input type="text" id="f-mail-bcc" class="feld" data-i18n-ph="search.mail.bcc.ph"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="mailliste-bcc" autocomplete="off"
+                   oninput="mailVorschlagen('bcc')" onkeydown="mailTaste(event, 'bcc')"
+                   onchange="zeigeFilterstand()">
+            <div class="menu wahlliste hide" id="mailliste-bcc" role="listbox"></div>
+          </span></label>
+        <p class="satz" data-i18n="search.mail.i">Nur Mails haben diese Zeilen; * steht für beliebige Zeichen.</p>
       </div>
     </div>
     <div class="pill" id="p-date" role="button" tabindex="0" onclick="pillAuf('date')" onkeydown="pillTaste(event, 'date')">
@@ -1848,7 +1904,7 @@ details.rechte p{margin:6px 0}
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="export.index.only"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="export.index.only.when">i</span></span><button class="mini" onclick="run({index:true}, t('job.index'))" data-i18n="expert.run">Ausführen</button></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="export.calendar.build"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="export.calendar.build.when">i</span></span><button class="mini" onclick="run({calendar:true}, t('job.calendar'))" data-i18n="expert.run">Ausführen</button></div>
-      <div class="feldzeile "><span class="bez"><span data-i18n="expert.openapi"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="expert.openapi.i">i</span></span><a class="mini" href="/api/openapi" target="_blank" rel="noopener" data-i18n="expert.open">Öffnen</a></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="expert.openapi"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="expert.openapi.i">i</span></span><a class="mini" href="/api/v1/openapi" target="_blank" rel="noopener" data-i18n="expert.open">Öffnen</a></div>
     </div>
   </div>
     </div>
@@ -1910,7 +1966,7 @@ details.rechte p{margin:6px 0}
     <div class="row modal-fuss">
       <button class="act hide" id="lauf-fertig" onclick="laufSchliessen()" data-i18n="lauf.close">Schließen</button>
       <button class="ghost hide" id="lauf-tour" onclick="laufSchliessen();tourStart('suche')" data-i18n="tour.after_run">Zeig mir die Suche</button>
-      <button class="ghost rot" id="btn-cancel" onclick="merke('flow.cancel');post('/api/cancel')" data-i18n="export.cancel">Lauf abbrechen</button>
+      <button class="ghost rot" id="btn-cancel" onclick="merke('flow.cancel');entferne(API + '/runs/current')" data-i18n="export.cancel">Lauf abbrechen</button>
       <span class="small muted rechts" id="lauf-hinweis" data-i18n="lauf.minimize.note">Minimiert wandert der Lauf in die Kopfzeile – suchen geht dann weiter.</span>
     </div>
   </div>
@@ -1921,6 +1977,7 @@ details.rechte p{margin:6px 0}
 <script type="application/json" id="pruefungen">/*__PRUEFUNGEN__*/</script>
 <script>
 var S = null, seen = 0, dismissed = {}, offset = 0, wizardOffen = null, wizardStand = null;
+var S_ROH = null;                    // the status as it came in, unmerged
 
 /* ---------- Language ----------
    The strings arrive ready with the page (window.I18N) – no extra fetch,
@@ -2082,6 +2139,10 @@ function setzeIkons(){
 setzeIkons();
 el('btn-quit').setAttribute('aria-label', t('app.quit'));
 
+/* Everything the page asks for lives under the versioned surface (13.0:
+   the status and the whole Explore door moved there too). One constant, so
+   no route is spelled out twice. */
+var API = '/api/v1';
 function api(p){ return fetch(p).then(function(r){ return r.json(); }); }
 
 /* What a box contains, the way someone would read it. In the log every line
@@ -2131,6 +2192,16 @@ function altKopieren(text, fertig){
 }
 function post(p, body){ return schicke('POST', p, body); }
 function patch(p, body){ return schicke('PATCH', p, body); }
+/* A read whose question does not fit in a URL: QUERY (RFC 10008) is safe
+   and idempotent like GET, and carries the question in the body. Nothing
+   behind these routes writes anything. */
+function frage(p, body){ return schicke('QUERY', p, body); }
+/* 204 has no body – `del` answers {} so every caller can read it alike. */
+function entferne(p){
+  return fetch(p, {method: 'DELETE'}).then(function(r){
+    return r.status === 204 ? {ok: true} : r.json();
+  });
+}
 function schicke(methode, p, body){
   return fetch(p, {method: methode, headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
@@ -2150,6 +2221,8 @@ function el(id){ return document.getElementById(id); }
    sit one level below; schedule and MCP are settings. */
 var KANN_VERLAUF = false;   // depends on the index, see store.features
 var KANN_ADRESSEN = false;  // the index carries sender addresses (11.1)
+var KANN_MAIL = false;      // …and the To/Cc/Bcc lines (13.0)
+var MAIL_ROLLEN = ['from', 'to', 'cc', 'bcc'];
 var REITER = ['export', 'suche', 'faelle', 'analytics', 'einstellungen'];
 var SICHTEN = ['treffer', 'kalender', 'adressbuch', 'dateien'];
 var offeneSicht = 'treffer';
@@ -2227,29 +2300,29 @@ function zeigeAnfang(){
   if(!SUCHE_LIEF) ladeAnfang();
 }
 function ladeAnfang(){
-  Promise.all([api('/api/suche/historie'), api('/api/suche/gespeichert')]).then(function(r){
+  Promise.all([api(API + '/searches/history'), api(API + '/searches/saved')]).then(function(r){
     if(SUCHE_LIEF) return;
-    HISTORIE = (r[0] && r[0].searches) || [];
-    GESPEICHERT = (r[1] && r[1].searches) || [];
+    HISTORIE = (r[0] && r[0].items) || [];
+    GESPEICHERT = (r[1] && r[1].items) || [];
     zeichneAnfang();
   }).catch(function(){});
 }
 function zeichneAnfang(){
   var h = HISTORIE.slice(0, 3).map(function(x, i){
-    return '<div class="hist" onclick="historieLauf(' + i + ')"><div><span class="q">' + esc(kriterienTitel(x.kriterien)) + '</span>' +
-      (x.treffer !== null && x.treffer !== undefined
-        ? ' <span class="small muted num">' + esc(t('search.history.hits', {n: zahl(x.treffer)})) + '</span>' : '') +
-      '</div><span class="wann">' + esc(wannKurz(x.wann)) + '</span>' +
-      '<div class="tagleiste">' + kriterienTags(x.kriterien) + '</div></div>';
+    return '<div class="hist" onclick="historieLauf(' + i + ')"><div><span class="q">' + esc(kriterienTitel(x.criteria)) + '</span>' +
+      (x.hits !== null && x.hits !== undefined
+        ? ' <span class="small muted num">' + esc(t('search.history.hits', {n: zahl(x.hits)})) + '</span>' : '') +
+      '</div><span class="wann">' + esc(wannKurz(x.when)) + '</span>' +
+      '<div class="tagleiste">' + kriterienTags(x.criteria) + '</div></div>';
   }).join('');
   el('anfang-historie').innerHTML = h || '<p class="hint">' + esc(t('search.start.none')) + '</p>';
   var g = GESPEICHERT.slice(0, 3).map(function(x, i){
-    var lauf = x.zuletzt ? t('search.saved.lastrun', {when: wannKurz(x.zuletzt), n: zahl(x.treffer)}) : t('search.saved.never');
-    var wo = (x.fall_name || fallName(x.fall)) + (x.ordner_name ? ' › ' + x.ordner_name : '');
+    var lauf = x.last_run ? t('search.saved.lastrun', {when: wannKurz(x.last_run), n: zahl(x.hits)}) : t('search.saved.never');
+    var wo = (x.case_name || fallName(x.case)) + (x.case_folder_name ? ' › ' + x.case_folder_name : '');
     return '<div class="hist" onclick="gespeichertLauf(' + i + ')"><div><span class="q">' + esc(x.name) + '</span>' +
-      (x.fall ? ' <span class="im-fall">' + ikon('fall', 'klein') + esc(wo) + '</span>' : '') +
+      (x.case ? ' <span class="im-fall">' + ikon('fall', 'klein') + esc(wo) + '</span>' : '') +
       '</div><span class="wann">' + esc(lauf) + '</span>' +
-      '<div class="tagleiste">' + kriterienTags(x.kriterien) + '</div></div>';
+      '<div class="tagleiste">' + kriterienTags(x.criteria) + '</div></div>';
   }).join('');
   el('anfang-gespeichert').innerHTML = g || '<p class="hint">' + esc(t('search.saved.empty')) + '</p>';
 }
@@ -2260,7 +2333,7 @@ var dateiDaten = null;
 
 function ladeDateien(root, path){
   if(root !== undefined) dateiSicht = {root: root, path: path || ''};
-  api('/api/v1/files?root=' + encodeURIComponent(dateiSicht.root) +
+  api(API + '/files?root=' + encodeURIComponent(dateiSicht.root) +
       '&path=' + encodeURIComponent(dateiSicht.path))
     .then(zeichneDateien).catch(function(){});
 }
@@ -2315,7 +2388,7 @@ function zeichneDateien(r){
       '<span class="muted small">' + esc(zahl(d.files)) + ' ' +
       esc(t('progress.unit.files')) + '</span></div>';
   }).concat((r.files || []).map(function(f){
-    var link = '/source?root=' + encodeURIComponent(dateiSicht.root) +
+    var link = API + '/files/content?root=' + encodeURIComponent(dateiSicht.root) +
                '&path=' + encodeURIComponent(f.rel);
     return '<div class="dateizeile"' +
       (f.gone ? ' title="' + esc(t('search.gone.since', {when: fmt(f.gone)})) + '"' : '') + '>' +
@@ -2348,13 +2421,46 @@ function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
           el('f-from').value, el('f-to').value, el('f-folder').value,
           el('f-typ').value, el('f-gone').checked ? 'gone' : '',
-          el('f-fall').value, el('f-party').value !== 'all' ? el('f-party').value : ''].filter(Boolean);
+          el('f-fall').value, el('f-party').value !== 'all' ? el('f-party').value : '']
+         .filter(Boolean)
+         // Each mail line counts for itself, as the two ends of the date
+         // range do: they are separate narrowings, not one.
+         .concat(mailGesetzt());
 }
+/* The mail lines: one filter with four fields. It stands only where it is
+   honest – with the source set to Mail, and an index that knows the lines.
+   With "all sources" a line only mail has would quietly turn the whole
+   search into a mail search. Elsewhere the pill is absent and nothing of
+   it is sent. */
+function mailMoeglich(){
+  return KANN_MAIL && el('f-source').value === 'outlook';
+}
+function mailWert(rolle){
+  var feld = el('f-mail-' + rolle);
+  return feld ? feld.value.trim() : '';
+}
+function mailWerte(){
+  var out = {};
+  MAIL_ROLLEN.forEach(function(r){ out[r] = mailMoeglich() ? mailWert(r) : ''; });
+  return out;
+}
+function mailGesetzt(){
+  var w = mailWerte();
+  return MAIL_ROLLEN.filter(function(r){ return w[r]; });
+}
+function mailText(){
+  var w = mailWerte();
+  return mailGesetzt().map(function(r){
+    return t('search.mail.' + r) + ': ' + w[r];
+  }).join(' · ');
+}
+
 function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
   el('f-typ').value = ''; el('f-gone').checked = false; el('f-fall').value = '';
   el('f-party').value = 'all';
+  MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   zeigeFilterstand();
 }
 /* An impossible date ("June 31st") is accepted by the browser but comes out
@@ -2390,6 +2496,9 @@ function zeigeFilterstand(){
   el('gone-feld').classList.toggle('on', !!el('f-gone').checked);
   el('f-fall').classList.toggle('on', !!el('f-fall').value);
   el('f-party').classList.toggle('on', el('f-party').value !== 'all');
+  MAIL_ROLLEN.forEach(function(r){
+    el('mi-' + r).classList.toggle('on', !!mailWert(r));
+  });
   var n = filterFelder().length;
   el('filter-stand').textContent = n ? t('search.filters.set', {n: zahl(n)}) : '';
   zeichnePillen();
@@ -2401,7 +2510,7 @@ function zeigeFilterstand(){
    under a pill. The pill says the filter's name, or its value once set,
    and then carries a × that clears it. A filter the index or the source
    cannot offer hides together with its control. */
-var PILLEN = ['person', 'source', 'date', 'typ', 'folder', 'fall', 'party', 'weg'];
+var PILLEN = ['person', 'source', 'mail', 'date', 'typ', 'folder', 'fall', 'party', 'weg'];
 var PILL_FELD = {person: 'f-person', source: 'f-source', typ: 'f-typ', folder: 'f-folder', fall: 'f-fall', party: 'f-party'};
 function optionText(id){
   var sel = el(id), o = sel.options && sel.options[sel.selectedIndex];
@@ -2421,12 +2530,13 @@ function datumText(){
 function fallFilterText(){
   var w = fallFilterWert(), f = w.fall ? fallAus(w.fall) : null;
   if(!f) return el('f-fall').value;
-  var o = w.ordner ? (f.ordner_liste || []).filter(function(x){ return x.id === w.ordner; })[0] : null;
+  var o = w.ordner ? (f.folder_list || []).filter(function(x){ return x.id === w.ordner; })[0] : null;
   return f.name + (o ? ' › ' + o.name : '');
 }
 function pillWerte(){
   return {person: el('f-person').value.trim(),
           source: el('f-source').value && el('f-source').value !== 'all' ? optionText('f-source') : '',
+          mail: mailText(),
           date: datumText(),
           typ: el('f-typ').value ? el('f-typ').value.toUpperCase() : '',
           folder: el('f-folder').value ? ordnerName(el('f-folder').value) : '',
@@ -2446,6 +2556,9 @@ function zeichnePillen(){
   ['typ', 'folder', 'fall', 'party'].forEach(function(k){
     el('p-' + k).classList.toggle('hide', el(PILL_FELD[k]).classList.contains('hide'));
   });
+  // Mail lines: shown where they can be answered, gone where they cannot –
+  // what was typed stays in the fields and comes back with the source.
+  el('p-mail').classList.toggle('hide', !mailMoeglich());
 }
 function pillAuf(k){
   var po = el('po-' + k), war = !po.classList.contains('hide');
@@ -2458,6 +2571,7 @@ function pillAuf(k){
   if(feld && feld.focus) feld.focus();
 }
 function pillZu(){
+  mailZu();
   PILLEN.forEach(function(k){
     el('po-' + k).classList.add('hide');
     el('p-' + k).classList.remove('offen');
@@ -2493,6 +2607,7 @@ function pillSetzen(k, wert){
 function pillLeeren(k){
   if(k === 'person') el('f-person').value = '';
   else if(k === 'date'){ el('f-from').value = ''; el('f-to').value = ''; }
+  else if(k === 'mail') MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   else if(k === 'weg') el('f-gone').checked = false;
   else {
     el(PILL_FELD[k]).value = k === 'source' || k === 'party' ? 'all' : '';
@@ -2626,6 +2741,10 @@ function setPill(id, cls, text, tip){
 
 function renderStatus(s){
   var first = S === null;
+  // What came in, before anything is merged into it: a later render from
+  // the same status (after a run, once the inventory is fresh) has to
+  // start here, or the copy in S would win over what was just fetched.
+  S_ROH = s;
   // Three things travel separately now, each on its own rhythm: the
   // settings (saved), the environment (fixed while the app runs) and the
   // inventory of the sources (changes with a run). They are merged in
@@ -2659,7 +2778,7 @@ function renderStatus(s){
   // the inventory – the same number in two places helps nobody, the copies
   // only contradict each other eventually. What the header shows are things
   // that demand an action.
-  var st = s.store;
+  var st = s.store || {};
 
   // Three states, not two: the endpoint runs, it does not run, or access is
   // switched off entirely. "off" for everything would claim that a client
@@ -2700,6 +2819,10 @@ function renderStatus(s){
   if(!kannGone) el('f-gone').checked = false;
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   KANN_ADRESSEN = kann.indexOf('who_mail') >= 0;
+  // The mail lines came with 13.0 and need one index run; until it has
+  // happened the filter is not offered at all. `mail_lines` is the
+  // server's one word for all of them.
+  KANN_MAIL = kann.indexOf('mail_lines') >= 0;
   // The party filter can narrow nothing without the parties' domains
   el('f-party').classList.toggle('hide', kann.indexOf('domains') < 0);
   if(kann.indexOf('domains') < 0) el('f-party').value = 'all';
@@ -2905,10 +3028,10 @@ function run(what, label, flow){
   what.label = label;
   merke('flow.run', flow || label);
   LAUF.eigener = true;                 // started here: the window opens with it
-  post('/api/run', what).then(function(r){
+  post(API + '/runs', what).then(function(r){
     // Even a 500 says something: better the raw error line than an empty
     // alert nobody can dig into.
-    if(!r.ok){ LAUF.eigener = false;
+    if(r && r.ok === false){ LAUF.eigener = false;
                apiFehler(r); }
     refresh();
   });
@@ -2980,7 +3103,8 @@ function zeigeFortschritt(jobs){
    page while a run is on lands in the window, however the run began; a
    scheduled run that starts while someone works here appears as the pill
    first and does not jump over a search. */
-var LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null};
+var LAUF = {gesehen: false, eigener: false, ergebnis: null, abSeq: null,
+            zuletzt: null};   // the stamp of the last finished run, as last seen
 var LAUF_OFFEN = false;     // the run window – the only place the log shows
 
 /* Only this run's lines in the console: the runner names the log cursor
@@ -2995,6 +3119,7 @@ function logAbLauf(job){
 }
 
 function laufVerfolgen(jobs, first){
+  var fertig = (jobs.last && jobs.last.finished) || null;
   if(jobs.busy){
     if(!LAUF.gesehen){
       LAUF.gesehen = true;
@@ -3017,12 +3142,20 @@ function laufVerfolgen(jobs, first){
   } else if(LAUF.gesehen && !LAUF.ergebnis){
     LAUF.ergebnis = jobs.last || {};
     // A run changes what the sources hold – the numbers on their cards.
-    ladeBestand().then(function(){ if(S) renderStatus(S); });
+    ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     laufErgebnisZeigen(LAUF.ergebnis);
     // The overview's numbers are stale after any run: reload them while
     // it is on screen, or on the next visit.
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
+  } else if(!first && fertig && fertig !== LAUF.zuletzt){
+    // A run that began and ended between two polls – the schedule on a
+    // small archive – was never seen busy. Its end still shows in the
+    // stamp of the last run, and what the sources hold changed all the
+    // same; the inventory does not travel with the poll.
+    ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
+    if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
   }
+  if(!jobs.busy) LAUF.zuletzt = fertig;
 }
 function laufOeffnen(){
   LAUF_OFFEN = true;
@@ -3307,8 +3440,8 @@ function laufErgebnisZeigen(L){
   el('lauf-sub').textContent = L.finished ? fmt(L.finished) : '';
   el('lauf-pille-t').textContent = t(L.ok ? 'lauf.pill.done' : 'lauf.pill.failed');
   el('lauf-pille-balken').style.width = '100%';
-  api('/api/runs?limit=1').then(function(r){
-    var lauf = (r.runs || [])[0];
+  api(API + '/runs?limit=1').then(function(r){
+    var lauf = (r.items || [])[0];
     if(!lauf || !LAUF.ergebnis) return;
     var dauer = (lauf.finished_at && lauf.started_at) ? lauf.finished_at - lauf.started_at : null;
     var neu = null;
@@ -3379,11 +3512,11 @@ var LOG_LAEUFT = false;     // one fetch at a time, or lines arrive twice
 function pullLog(){
   if(beendet || LOG_LAEUFT) return;
   LOG_LAEUFT = true;
-  api('/api/log?since=' + seen).then(function(r){
+  api(API + '/log?since=' + seen).then(function(r){
     LOG_LAEUFT = false;
-    if(!r.lines || !r.lines.length){ seen = r.seq; return; }
+    if(!r.items || !r.items.length){ seen = r.seq; return; }
     var box = el('log'), atEnd = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
-    r.lines.forEach(function(l){
+    r.items.forEach(function(l){
       // The run window shows this run's lines only – what the app logged
       // before the run began stays out of it.
       if(LAUF.abSeq !== null && l.n <= LAUF.abSeq) return;
@@ -3395,7 +3528,7 @@ function pullLog(){
     });
     while(box.childElementCount > 1200) box.removeChild(box.firstChild);
     if(!(S && S.jobs && S.jobs.busy)){
-      var letzte = r.lines[r.lines.length - 1];
+      var letzte = r.items[r.items.length - 1];
       el('log-letzte').textContent = mtext(letzte.text);
     }
     seen = r.seq;
@@ -3419,10 +3552,10 @@ var berichtDaten = null;
 function fehlerMelden(){
   berichtDaten = null;
   berichtFenster();                       // show something immediately, then fill
-  api('/api/log?since=0').then(function(r){
-    var zeilen = r.lines || [];
+  api(API + '/log?since=0').then(function(r){
+    var zeilen = r.items || [];
     var fehler = zeilen.filter(function(l){ return l.level === 'err'; });
-    return post('/api/report', {
+    return frage(API + '/reports', {
       log: zeilen.map(function(l){ return l.t + '  ' + mtext(l.text); }).join('\n'),
       // The last error line as the suggested title: "BrokenProcessPool …"
       // says more than "error in 4.0.0", and it gets edited anyway.
@@ -3616,7 +3749,7 @@ function ladeOrdner(){
   if(stand !== ordnerStand){ ordnerJeQuelle = {}; typenJeQuelle = {}; ordnerStand = stand; }
   ladeTypen(quelle);
   if(ordnerJeQuelle[quelle]){ zeichneOrdner(ordnerJeQuelle[quelle]); return; }
-  api('/api/v1/folders?limit=300&source=' + encodeURIComponent(quelle))
+  api(API + '/folders?limit=300&source=' + encodeURIComponent(quelle))
     .then(function(r){
       ordnerJeQuelle[quelle] = r.items || [];
       if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
@@ -3626,7 +3759,7 @@ function ladeOrdner(){
 function ladeTypen(quelle){
   if(!typenMoeglich(quelle)){ zeichneTypen([]); return; }
   if(typenJeQuelle[quelle]){ zeichneTypen(typenJeQuelle[quelle]); return; }
-  api('/api/v1/filetypes?limit=40&source=' + encodeURIComponent(quelle))
+  api(API + '/filetypes?limit=40&source=' + encodeURIComponent(quelle))
     .then(function(r){
       typenJeQuelle[quelle] = r.items || [];
       if((el('f-source').value || 'all') === quelle) zeichneTypen(typenJeQuelle[quelle]);
@@ -3712,9 +3845,10 @@ function doSearch(off, gespeichert){
   // Only the kind and the number of filters – never the search text or a name.
   var filter = ['f-person', 'f-source', 'f-from', 'f-to', 'f-folder', 'f-typ', 'f-fall']
     .filter(function(id){ return el(id).value; }).length +
-    (el('f-gone').checked ? 1 : 0) + (el('f-party').value !== 'all' ? 1 : 0);
+    (el('f-gone').checked ? 1 : 0) + (el('f-party').value !== 'all' ? 1 : 0) +
+    mailGesetzt().length;
   merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
-  var proSeite = trefferProSeite(), fw = fallFilterWert();
+  var proSeite = trefferProSeite(), fw = fallFilterWert(), mw = mailWerte();
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
@@ -3722,6 +3856,10 @@ function doSearch(off, gespeichert){
     // The "Cases" filter: a case, or one folder inside it ("case/folder")
     case: fw.fall ? String(fw.fall) : '', case_folder: fw.ordner ? String(fw.ordner) : '',
     party: el('f-party').value || 'all',
+    // The four mail lines – empty unless the source can answer them.
+    // Read once: every call walks all four fields and asks again whether
+    // the source can answer them at all.
+    mail_from: mw.from, mail_to: mw.to, mail_cc: mw.cc, mail_bcc: mw.bcc,
     // A saved search that is run says so – the server notes when and how many.
     saved: gespeichert ? String(gespeichert) : '',
     // This search belongs in the history; a script's does not unless it
@@ -3733,12 +3871,12 @@ function doSearch(off, gespeichert){
   // The page searches through the versioned surface – the same engine,
   // the names the rest of the API uses, and the first thing of ours to
   // speak it.
-  api('/api/v1/search?' + p.toString()).then(function(r){
+  api(API + '/search?' + p.toString()).then(function(r){
     renderHits(r);
     // Only the AI variant asks the model – and only after the hits are in.
     // The search is instant, the model takes a minute; whoever looks up an
     // invoice number with text search never has to deal with it.
-    if(SUCHMODUS === 'ki' && (r.results || []).length) frageKI();
+    if(SUCHMODUS === 'ki' && (r.items || []).length) frageKI();
     else abbrechenKI();
   });
 }
@@ -3790,7 +3928,7 @@ function personVorschlagen(){
   // Do not query on every keystroke: the query runs over all people in the
   // archive, and whoever types a name does so in one go.
   personTimer = setTimeout(function(){
-    api('/api/v1/people?limit=' + VORSCHLAG_MAX +
+    api(API + '/people?limit=' + VORSCHLAG_MAX +
         '&source=' + encodeURIComponent(el('f-source').value) +
         '&contains=' + encodeURIComponent(wort)).then(function(r){
       // Typed on in the meantime: this answer is stale.
@@ -3879,6 +4017,95 @@ function personTaste(ev){
   }
 }
 
+/* ---------- The addresses of the mail lines (13.0) ----------
+   The same idea as the person suggestions, for four fields at once: who
+   really stood in From, To, Cc or Bcc, with the number of mails behind it.
+   The list is counted at index time, so a keystroke costs one small query
+   (/api/v1/addresses) instead of a walk through the archive. */
+var mailVorschlaege = [], mailAktiv = -1, mailRolle = '', mailTimer = null;
+
+function mailVorschlagen(rolle){
+  clearTimeout(mailTimer);
+  var wort = mailWert(rolle);
+  if(wort.length < 2){ mailZu(); return; }
+  mailTimer = setTimeout(function(){
+    api(API + '/addresses?role=' + encodeURIComponent(rolle) +
+        '&limit=' + VORSCHLAG_MAX + '&contains=' + encodeURIComponent(wort))
+      .then(function(r){
+        if(mailWert(rolle) !== wort) return;      // typed on: stale answer
+        mailZeichnen(rolle, r.items || []);
+      }).catch(mailZu);
+  }, 150);
+}
+
+function mailZeichnen(rolle, liste){
+  mailZu();
+  mailRolle = rolle;
+  mailVorschlaege = liste.map(function(a){
+    return {wert: a.address, zahl: a.messages};
+  });
+  var kasten = el('mailliste-' + rolle);
+  kasten.innerHTML = mailVorschlaege.length
+    ? mailVorschlaege.map(function(a, i){
+        return '<button type="button" role="option" aria-selected="false" ' +
+          'id="mailwahl-' + i + '" onclick="mailWaehlen(' + i + ')">' +
+          '<span class="wer">' + esc(a.wert) + '</span>' +
+          '<span class="zahl">' + a.zahl.toLocaleString(LOC) + '</span></button>';
+      }).join('')
+    : '<div class="leer">' + esc(t('search.mail.none')) + '</div>';
+  kasten.classList.remove('hide');
+  el('f-mail-' + rolle).setAttribute('aria-expanded', 'true');
+}
+
+function mailZu(){
+  clearTimeout(mailTimer);
+  mailVorschlaege = [];
+  mailAktiv = -1;
+  MAIL_ROLLEN.forEach(function(r){
+    var kasten = el('mailliste-' + r);
+    if(kasten) kasten.classList.add('hide');
+    var feld = el('f-mail-' + r);
+    if(feld) feld.setAttribute('aria-expanded', 'false');
+  });
+  mailRolle = '';
+}
+
+function mailWaehlen(i){
+  var a = mailVorschlaege[i], rolle = mailRolle;
+  if(!a || !rolle) return;
+  el('f-mail-' + rolle).value = a.wert;
+  mailZu();
+  zeigeFilterstand();
+}
+
+function mailHervor(i){
+  mailAktiv = i;
+  mailVorschlaege.forEach(function(_, j){
+    var b = el('mailwahl-' + j);
+    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
+  });
+}
+
+function mailTaste(ev, rolle){
+  var kasten = el('mailliste-' + rolle);
+  var offen = kasten && !kasten.classList.contains('hide');
+  var n = mailVorschlaege.length;
+  if(ev.key === 'Escape' && offen){ mailZu(); ev.preventDefault(); return; }
+  // Enter in a line is "search now", as it is in the search field itself –
+  // unless a suggestion is highlighted, which then wins.
+  if(ev.key === 'Enter' && !(offen && mailAktiv >= 0)){
+    pillZu(); sofortSuchen(); ev.preventDefault(); return;
+  }
+  if(!offen || !n) return;
+  if(ev.key === 'ArrowDown'){
+    mailHervor((mailAktiv + 1) % n); ev.preventDefault();
+  } else if(ev.key === 'ArrowUp'){
+    mailHervor(mailAktiv <= 0 ? n - 1 : mailAktiv - 1); ev.preventDefault();
+  } else if(ev.key === 'Enter'){
+    mailWaehlen(mailAktiv); ev.preventDefault();
+  }
+}
+
 document.addEventListener('click', function(ev){
   var feld = el('f-person');
   if(!ev.target || !feld) return personZu();
@@ -3898,8 +4125,8 @@ document.addEventListener('click', function(ev){
 function aehnlicheZu(cid){
   el('q').value = '';
   el('results').innerHTML = '<p class="hint">' + esc(t('search.running')) + '</p>';
-  api('/api/similar?cid=' + encodeURIComponent(cid) +
-      '&k=' + trefferProSeite()).then(function(r){
+  api(API + '/similar?cid=' + encodeURIComponent(cid) +
+      '&limit=' + trefferProSeite()).then(function(r){
     offset = 0;
     renderHits(r);
     abbrechenKI();
@@ -3924,7 +4151,7 @@ function quellIkon(h){
 }
 function trefferLink(h){
   var m = /^o365:\/\/([^/]+)\/(.*)$/.exec(h.uri || '');
-  return m ? '/source?root=' + m[1] + '&path=' + m[2] : null;
+  return m ? API + '/files/content?root=' + m[1] + '&path=' + m[2] : null;
 }
 
 /* The list on the left is for picking: icon, title, date, who, one line of
@@ -3937,7 +4164,7 @@ function renderHits(r){
   if(fehler){ el('results').innerHTML = '<p class="hint err">' + esc(fehler) + '</p>';
               el('treffer-kopf').classList.add('hide'); return; }
   // The versioned search answers `items` and says whether a page follows;
-  // /api/similar still answers `results`.
+  // A collection on this surface is `items`, similar hits included.
   var hits = r.items || r.results || [];
   TREFFER = hits;
   el('detail').classList.add('hide');
@@ -4012,7 +4239,8 @@ function waehleTreffer(i){
    this kind of item is known by, and a value that is also a filter is a
    link; the actions stand in one row with the original first, greyed
    with a reason where one cannot work for this hit. What the hit does
-   not carry comes with one fetch (/api/detail) and is drawn on arrival. */
+   not carry comes with one fetch (/api/v1/documents/facts) and is drawn
+   on arrival. */
 var DETAIL_STAND = 0;      // the fetch the detail is waiting for
 var OHNE_GESPRAECH = ['kalender', 'kontakte', 'datei', 'pages', 'planner', 'todo', 'onenote'];
 function zeigeDetail(h, nr){
@@ -4033,7 +4261,7 @@ function zeigeDetail(h, nr){
     '<div class="dinhalt' + (seite ? ' rahmenlos' : '') + '" id="detail-text">' + (seite
       ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
       : hervor(h.preview || '') + '…') + '</div>';
-  api('/api/v1/documents/facts?uid=' + encodeURIComponent(h.uid || '')).then(function(r){
+  api(API + '/documents/facts?uid=' + encodeURIComponent(h.uid || '')).then(function(r){
     if(kennung !== DETAIL_STAND || !r || r.ok === false || r.error) return;
     var fakten = dyn('detail-fakten'), text = dyn('detail-text');
     if(fakten) fakten.innerHTML = detailFakten(h, r);
@@ -4153,6 +4381,7 @@ function detailFakten(h, r){
     z.push(['search.fact.from', detailPerson(f.from || {name: h.who, mail: h.who_mail})]);
     z.push(['search.fact.to', leute(f.to)]);
     z.push(['search.fact.cc', leute(f.cc)]);
+    z.push(['search.fact.bcc', leute(f.bcc)]);
     z.push(['search.fact.date', esc(detailWann(h.date))]);
     z.push(['search.fact.folder', ordnerLink(h)]);
     z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
@@ -4234,7 +4463,7 @@ function zeichneGespraech(h, nr, r){
     esc(t('search.detail.thread', {n: zahl(n)})) + '</summary>' +
     msgs.map(function(m){
       var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
-      var link = g ? '/source?root=' + g[1] + '&path=' + g[2] : null;
+      var link = g ? API + '/files/content?root=' + g[1] + '&path=' + g[2] : null;
       return '<div class="vzeile' + (imFall(m) ? ' drin' : '') + (m.uid === h.uid ? ' dies' : '') + '"><span class="punkt"></span>' +
         '<span class="vdatum">' + esc(m.date || '') + '</span>' +
         '<span class="vtitel">' + (link ? '<a href="' + link + '" target="_blank" rel="noopener">' : '') +
@@ -4250,8 +4479,8 @@ function zeichneGespraech(h, nr, r){
 function gespraechInFall(fallId, i){
   var h = TREFFER[i];
   if(!h || !h.key) return;
-  post('/api/faelle/thread', {id: fallId, keys: [h.key]}).then(function(r){
-    if(!r || !r.ok) return;
+  post(API + '/cases/' + fallId + '/items', {threads: [h.key]}).then(function(r){
+    if(apiFehler(r)) return;
     delete THREADS[h.thread];
     zeigeDetail(h, i + 1);
   });
@@ -4259,16 +4488,16 @@ function gespraechInFall(fallId, i){
 
 /* =======================================================================
    Cases, search history and saved searches (11.0, folders and marks in
-   11.1) – faelle.py behind /api/suche/* and /api/faelle/*. A case points
+   11.1) – faelle.py behind /api/v1/searches and /api/v1/cases. A case points
    at items by their stable key (schluessel.py); nothing is copied before
    an export. The page keeps the case list (FAELLE, folders included) for
    the filter, the marks on hits and the choice windows, and fetches one
    case in full when it is opened.
    ======================================================================= */
-var FAELLE = [];              // every case, open first – as /api/faelle lists them
+var FAELLE = [];              // every case, open first – as /api/v1/cases lists them
 var FALL_OFFEN = null;        // the case shown in the cases tab, in full
 var FALL_ALLE = {};           // group key -> show every row of that group
-var FALL_NEU = null;          // /api/faelle/neu of the open case, once asked for
+var FALL_NEU = null;          // the open case's new-hits, once asked for
 var FALL_FILTER = '';         // the filter field over the open case
 var FALL_AUF = {};            // group key -> true while its fold is open
 var FALL_AUSWAHL = {};        // key -> true, ticked rows of the open case
@@ -4277,10 +4506,11 @@ var FALL_SICHT = 'ordner';    // the view of the open case: ordner, zeit, person
 var FALL_ZEIT_NEU = false;    // the timeline newest first
 var FALL_ZEIT_EIMER = null;   // the month (or week) the timeline is narrowed to
 var FALL_PERSON = null;       // the person chosen in the People picture
-var THREADS = {};             // thread id -> promise of /api/thread, for the counts
+var THREADS = {};             // thread id -> promise of /api/v1/threads, for the counts
 var LEISTE_ENG = false;       // the overview narrowed to names
 var AUSWAHL = {};             // key -> hit ticked in the hit list
-var EXPORT_ORDNER = '';       // where exports land (from /api/faelle)
+// Where a case export lands: a path, so it belongs to the environment.
+function exportBasis(){ return UMGEBUNG.case_export_dir || ''; }
 var HISTORIE = [], GESPEICHERT = [];   // the windows' rows, by index
 var FALL_WAHL = null;         // what the choice window is about
 /* Ids that exist only while a window is open – looked up without el(),
@@ -4288,27 +4518,26 @@ var FALL_WAHL = null;         // what the choice window is about
 function dyn(id){ return document.getElementById(id); }
 
 function ladeFaelle(){
-  return api('/api/faelle').then(function(r){
-    FAELLE = r.cases || [];
-    EXPORT_ORDNER = r.export_dir || '';
+  return api(API + '/cases').then(function(r){
+    FAELLE = r.items || [];
     fuelleFallFilter();
     zeichneFaelle();
     return FAELLE;
   }).catch(function(){ return FAELLE; });
 }
-function offeneFaelle(){ return FAELLE.filter(function(f){ return f.status === 'offen'; }); }
+function offeneFaelle(){ return FAELLE.filter(function(f){ return f.status === 'open'; }); }
 function fallAus(id){
   return FAELLE.filter(function(f){ return f.id === id; })[0] || null;
 }
 function fallName(id){ var f = fallAus(id); return f ? f.name : ''; }
 function fallOrdner(id){
   if(!FALL_OFFEN || !id) return '';
-  var o = (FALL_OFFEN.ordner_liste || []).filter(function(x){ return x.id === id; })[0];
+  var o = (FALL_OFFEN.folder_list || []).filter(function(x){ return x.id === id; })[0];
   return o ? o.name : '';
 }
 function statusTag(f){
-  return '<span class="tag ' + (f.status === 'zu' ? 'zu' : 'offen') + '">' +
-    esc(t('cases.status.' + (f.status === 'zu' ? 'zu' : 'offen'))) + '</span>';
+  return '<span class="tag ' + (f.status === 'closed' ? 'zu' : 'offen') + '">' +
+    esc(t('cases.status.' + (f.status === 'closed' ? 'zu' : 'offen'))) + '</span>';
 }
 /* "external" on a hit: one of its parties' domains lies outside the
    user's own – the rule the case's People view applies to a person. */
@@ -4335,9 +4564,9 @@ function fuelleFallFilter(){
   sel.innerHTML = '<option value="">' + esc(t('search.case.all')) + '</option>' +
     FAELLE.map(function(f){
       werte.push(String(f.id));
-      var zu = f.status === 'zu' ? ' · ' + esc(t('cases.status.zu')) : '';
+      var zu = f.status === 'closed' ? ' · ' + esc(t('cases.status.zu')) : '';
       return '<option value="' + f.id + '">' + esc(f.name) + zu + '</option>' +
-        (f.ordner_liste || []).map(function(o){
+        (f.folder_list || []).map(function(o){
           werte.push(f.id + '/' + o.id);
           return '<option value="' + f.id + '/' + o.id + '"> › ' + esc(o.name) + '</option>';
         }).join('');
@@ -4356,12 +4585,15 @@ function fallFilterWert(){
    what a saved search is, what a stored list carries. */
 var MODI = ['text', 'aehnlich', 'ki'];
 function kriterienAusForm(){
-  var fw = fallFilterWert();
+  var fw = fallFilterWert(), mw = mailWerte();
   return {q: el('q').value.trim(), mode: SUCHMODUS, person: el('f-person').value.trim(),
           source: el('f-source').value || 'all', from: el('f-from').value, to: el('f-to').value,
           folder: el('f-folder').value, filetype: el('f-typ').value,
-          gone: !!el('f-gone').checked, fall: fw.fall, ordner: fw.fall ? fw.ordner : null,
-          party: el('f-party').value || 'all'};
+          gone: !!el('f-gone').checked, case: fw.fall, case_folder: fw.fall ? fw.ordner : null,
+          party: el('f-party').value || 'all',
+          // Only what the search really used: a line typed while another
+          // source is chosen never ran, and must not come back as if it had.
+          mail_from: mw.from, mail_to: mw.to, mail_cc: mw.cc, mail_bcc: mw.bcc};
 }
 /* A stored folder or type may no longer be in today's list – it gets its
    option back, or the select would silently fall back to "all". */
@@ -4387,8 +4619,9 @@ function kriterienAnwenden(k){
   optionSicher(el('f-typ'), k.filetype);
   el('f-typ').value = k.filetype || '';
   el('f-gone').checked = !!k.gone;
-  el('f-fall').value = k.fall ? (k.ordner ? k.fall + '/' + k.ordner : String(k.fall)) : '';
+  el('f-fall').value = k.case ? (k.case_folder ? k.case + '/' + k.case_folder : String(k.case)) : '';
   el('f-party').value = k.party === 'internal' || k.party === 'external' ? k.party : 'all';
+  MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = k['mail_' + r] || ''; });
   zeigeFilterstand();
 }
 /* Run stored criteria: the search tab, the form set, the search fired –
@@ -4404,9 +4637,12 @@ function kriterienTitel(k){
 }
 function fallOrdnerName(fallId, ordnerId){
   var f = fallAus(fallId);
-  var o = f ? (f.ordner_liste || []).filter(function(x){ return x.id === ordnerId; })[0] : null;
+  var o = f ? (f.folder_list || []).filter(function(x){ return x.id === ordnerId; })[0] : null;
   return o ? o.name : '';
 }
+/* Criteria arrive in one spelling: `case` and `case_folder`, whether they
+   come from the history, a saved search or a case's stored list – rest.py
+   translates them before they leave the server (13.0). */
 /* The criteria as tags: the mode when there are words, and every filter
    that is set – the rows of the history, the saved searches, a list. */
 function kriterienTags(k){
@@ -4423,9 +4659,13 @@ function kriterienTags(k){
   if(k.filetype) tags.push('.' + k.filetype);
   if(k.gone) tags.push(t('view.gone'));
   if(k.party === 'internal' || k.party === 'external') tags.push(t('search.criteria.party', {name: t('search.party.' + k.party)}));
-  if(k.fall){
-    var name = fallName(k.fall) || ('#' + k.fall);
-    if(k.ordner) name += ' › ' + (fallOrdnerName(k.fall, k.ordner) || ('#' + k.ordner));
+  MAIL_ROLLEN.forEach(function(r){
+    if(k['mail_' + r]) tags.push(t('search.criteria.mail',
+      {line: t('search.mail.' + r), name: k['mail_' + r]}));
+  });
+  if(k.case){
+    var name = fallName(k.case) || ('#' + k.case);
+    if(k.case_folder) name += ' › ' + (fallOrdnerName(k.case, k.case_folder) || ('#' + k.case_folder));
     tags.push(t('search.criteria.case', {name: name}));
   }
   return tags.map(function(x){ return '<span class="tag">' + esc(x) + '</span>'; }).join('');
@@ -4451,30 +4691,30 @@ function historieKopf(){
 function historieFenster(){
   merke('flow.wizard', 'historie');
   oeffneEigenes('historie', historieKopf() + '<p class="hint">' + esc(t('cal.loading')) + '</p>');
-  api('/api/suche/historie').then(zeichneHistorie).catch(function(e){
+  api(API + '/searches/history').then(zeichneHistorie).catch(function(e){
     oeffneEigenes('historie', historieKopf() + '<p class="hint err">' + esc(String(e)) + '</p>');
   });
 }
 /* The whole window is drawn again once the rows are in – one string, as
    every window here is built. */
 function zeichneHistorie(r){
-  HISTORIE = r.searches || [];
+  HISTORIE = r.items || [];
   var haltung = r.retention || '90';
   var html = '', tag = null;
   if(!HISTORIE.length){
     html = '<p class="hint">' + esc(t(haltung === 'off' ? 'search.history.off' : 'search.history.empty')) + '</p>';
   }
   HISTORIE.forEach(function(h, i){
-    var label = tagLabel(h.wann);
+    var label = tagLabel(h.when);
     if(label !== tag){ html += '<div class="hist-tag">' + esc(label) + '</div>'; tag = label; }
-    var d = new Date(h.wann);
-    html += '<div class="hist"><div><span class="q">' + esc(kriterienTitel(h.kriterien)) + '</span>' +
-      (h.treffer !== null && h.treffer !== undefined
-        ? ' <span class="small muted num">' + esc(t('search.history.hits', {n: zahl(h.treffer)})) + '</span>' : '') +
+    var d = new Date(h.when);
+    html += '<div class="hist"><div><span class="q">' + esc(kriterienTitel(h.criteria)) + '</span>' +
+      (h.hits !== null && h.hits !== undefined
+        ? ' <span class="small muted num">' + esc(t('search.history.hits', {n: zahl(h.hits)})) + '</span>' : '') +
       '</div><span class="wann">' + esc(isNaN(d) ? '' : d.toLocaleTimeString(LOC, {timeStyle: 'short'})) + '</span>' +
       '<span class="knoepfe"><button class="mini" onclick="historieLauf(' + i + ')">' + esc(t('search.saved.run')) + '</button>' +
       '<button class="mini" onclick="historieSpeichern(' + i + ')">' + esc(t('search.history.save')) + '</button></span>' +
-      '<div class="tagleiste">' + kriterienTags(h.kriterien) + '</div></div>';
+      '<div class="tagleiste">' + kriterienTags(h.criteria) + '</div></div>';
   });
   html += '<div class="row modal-fuss"><span class="small muted">' +
     esc(t('search.history.kept.' + (haltung === 'off' || haltung === 'forever' ? haltung : 'days'),
@@ -4485,11 +4725,11 @@ function zeichneHistorie(r){
     '</div>';
   oeffneEigenes('historie', historieKopf() + html);
 }
-function historieLauf(i){ if(HISTORIE[i]) sucheAusfuehren(HISTORIE[i].kriterien); }
-function historieSpeichern(i){ if(HISTORIE[i]) speichernFenster(HISTORIE[i].kriterien, 'historie'); }
+function historieLauf(i){ if(HISTORIE[i]) sucheAusfuehren(HISTORIE[i].criteria); }
+function historieSpeichern(i){ if(HISTORIE[i]) speichernFenster(HISTORIE[i].criteria, 'historie'); }
 function historieLeeren(){
   if(!confirm(t('search.history.clear.ask'))) return;
-  post('/api/suche/historie-leeren').then(function(){ zeichneHistorie({searches: [], retention: ''}); });
+  entferne(API + '/searches/history').then(function(){ zeichneHistorie({items: [], retention: ''}); });
 }
 
 /* ---------- Saved searches ---------- */
@@ -4499,33 +4739,33 @@ function gespeichertKopf(){
 function gespeicherteFenster(){
   merke('flow.wizard', 'gespeichert');
   oeffneEigenes('gespeichert', gespeichertKopf() + '<p class="hint">' + esc(t('cal.loading')) + '</p>');
-  Promise.all([api('/api/suche/gespeichert'), ladeFaelle()]).then(function(rs){
+  Promise.all([api(API + '/searches/saved'), ladeFaelle()]).then(function(rs){
     zeichneGespeicherte(rs[0]);
   }).catch(function(e){
     oeffneEigenes('gespeichert', gespeichertKopf() + '<p class="hint err">' + esc(String(e)) + '</p>');
   });
 }
 function gespeicherteZeile(g, i, imFall){
-  var lauf = g.zuletzt
-    ? t('search.saved.lastrun', {when: wannKurz(g.zuletzt), n: zahl(g.treffer)})
+  var lauf = g.last_run
+    ? t('search.saved.lastrun', {when: wannKurz(g.last_run), n: zahl(g.hits)})
     : t('search.saved.never');
-  var fall = fallAus(g.fall);
-  var wo = (g.fall_name || fallName(g.fall)) + (g.ordner_name ? ' › ' + g.ordner_name : '');
+  var fall = fallAus(g.case);
+  var wo = (g.case_name || fallName(g.case)) + (g.case_folder_name ? ' › ' + g.case_folder_name : '');
   return '<div class="hist"><div><span class="q">' + esc(g.name) + '</span>' +
-    (g.fall && !imFall ? ' <span class="tag' + (fall && fall.status === 'zu' ? ' zu' : ' offen') + '">' +
+    (g.case && !imFall ? ' <span class="tag' + (fall && fall.status === 'closed' ? ' zu' : ' offen') + '">' +
       esc(t('search.saved.incase', {name: wo})) + '</span>' : '') +
     '</div><span class="wann">' + esc(lauf) + '</span>' +
     '<span class="knoepfe"><button class="mini" onclick="gespeichertLauf(' + i + ')">' + esc(t('search.saved.run')) + '</button>' +
-    (imFall ? '' : (g.fall
+    (imFall ? '' : (g.case
       ? '<button class="mini" onclick="gespeichertLoesen(' + i + ')">' + esc(t('search.saved.detach')) + '</button>'
       : '<button class="mini" onclick="gespeichertAnhaengen(' + i + ')">' + esc(t('search.saved.attach')) + '</button>') +
     '<button class="mini" onclick="gespeichertUmbenennen(' + i + ')">' + esc(t('search.saved.rename')) + '</button>' +
     '<button class="mini" onclick="gespeichertLoeschen(' + i + ')">' + esc(t('search.saved.delete')) + '</button>') +
-    '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.kriterien)) + '</span>' +
-    kriterienTags(g.kriterien) + '</div></div>';
+    '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.criteria)) + '</span>' +
+    kriterienTags(g.criteria) + '</div></div>';
 }
 function zeichneGespeicherte(r){
-  GESPEICHERT = r.searches || [];
+  GESPEICHERT = r.items || [];
   var html = GESPEICHERT.length
     ? GESPEICHERT.map(function(g, i){ return gespeicherteZeile(g, i, false); }).join('')
     : '<p class="hint">' + esc(t('search.saved.empty')) + '</p>';
@@ -4538,23 +4778,23 @@ function zeichneGespeicherte(r){
     esc(t('search.saved.current')) + '</button></div>';
   oeffneEigenes('gespeichert', gespeichertKopf() + html);
 }
-function gespeichertLauf(i){ var g = GESPEICHERT[i]; if(g) sucheAusfuehren(g.kriterien, g.id); }
+function gespeichertLauf(i){ var g = GESPEICHERT[i]; if(g) sucheAusfuehren(g.criteria, g.id); }
 function gespeichertUmbenennen(i){
   var g = GESPEICHERT[i];
   if(!g) return;
   var name = prompt(t('search.saved.rename.ask'), g.name);
   if(name === null || !name.trim()) return;
-  post('/api/suche/umbenennen', {id: g.id, name: name.trim()}).then(function(){ gespeicherteFenster(); });
+  patch(API + '/searches/saved/' + g.id, {name: name.trim()}).then(function(){ gespeicherteFenster(); });
 }
 function gespeichertLoeschen(i){
   var g = GESPEICHERT[i];
   if(!g || !confirm(t('search.saved.delete.ask', {name: g.name}))) return;
-  post('/api/suche/loeschen', {id: g.id}).then(function(){ gespeicherteFenster(); });
+  entferne(API + '/searches/saved/' + g.id).then(function(){ gespeicherteFenster(); });
 }
 function gespeichertLoesen(i){
   var g = GESPEICHERT[i];
   if(!g) return;
-  post('/api/suche/anhaengen', {id: g.id, fall: null}).then(function(){ gespeicherteFenster(); ladeFaelle(); });
+  patch(API + '/searches/saved/' + g.id, {case: null}).then(function(){ gespeicherteFenster(); ladeFaelle(); });
 }
 function gespeichertAnhaengen(i){
   var g = GESPEICHERT[i];
@@ -4584,7 +4824,7 @@ function speichernAusfuehren(){
   if(!name){ dyn('speichern-name').classList.add('fehler'); return; }
   var sel = dyn('speichern-fall');
   var fall = sel && sel.value ? parseInt(sel.value, 10) : null;
-  post('/api/suche/speichern', {name: name, kriterien: FALL_WAHL.kriterien, fall: fall}).then(function(r){
+  post(API + '/searches/saved', {name: name, criteria: FALL_WAHL.kriterien, case: fall}).then(function(r){
     if(apiFehler(r)) return;
     var zurueck = FALL_WAHL.zurueck;
     closeWizard('speichern');
@@ -4599,8 +4839,8 @@ function speichernAusfuehren(){
 function fallMarke(h){
   var faelle = (h && h.cases) || [];
   if(!faelle.length) return '';
-  var namen = faelle.map(function(f){ return f.name + (f.ordner ? ' › ' + f.ordner : ''); });
-  var zu = faelle.every(function(f){ return f.status === 'zu'; });
+  var namen = faelle.map(function(f){ return f.name + (f.folder ? ' › ' + f.folder : ''); });
+  var zu = faelle.every(function(f){ return f.status === 'closed'; });
   var titel = faelle.length === 1 ? t('cases.mark.one', {name: namen[0]})
                                   : t('cases.mark.many', {n: faelle.length, names: namen.join(', ')});
   return '<span class="im-fall' + (zu ? ' zu' : '') + '" title="' + esc(titel) + '">' + ikon('fall', 'klein') +
@@ -4647,7 +4887,7 @@ function trefferMeldung(text){
 /* A hit as the case keeps it: the key, where it lies, what it said. */
 function eintragAus(h){
   return {key: h.key, src: h.source, root: h.root, rel: h.path,
-          titel: h.title, datum: h.date, wer: h.who};
+          title: h.title, date: h.date, who: h.who};
 }
 
 /* ---------- Choosing a case, and the folder inside it ----------
@@ -4674,7 +4914,7 @@ function zeichneFallWahl(){
     '<div class="wahl-liste">' + faelle.map(function(f, i){
       return '<label><input type="radio" name="fall-wahl" value="' + f.id + '"' + (i === 0 ? ' checked' : '') +
         ' onchange="fallWahlOrdner()">' +
-        esc(f.name) + ' <span class="small muted">· ' + esc(t('cases.line.items', {n: zahl(f.eintraege)})) + '</span></label>';
+        esc(f.name) + ' <span class="small muted">· ' + esc(t('cases.line.items', {n: zahl(f.items)})) + '</span></label>';
     }).join('') +
     '<label><input type="radio" name="fall-wahl" value="neu"' + (faelle.length ? '' : ' checked') + ' onchange="fallWahlOrdner()">' +
     '<input type="text" id="fall-wahl-neu" placeholder="' + esc(t('cases.add.new.ph')) + '" ' +
@@ -4763,7 +5003,7 @@ function fallWahlOrdner(){
   var wahl = fallWahlGewaehlt();
   var f = wahl && wahl.id ? fallAus(wahl.id) : null;
   sel.innerHTML = '<option value="">' + esc(t('cases.folder.unsorted')) + '</option>' +
-    (f ? (f.ordner_liste || []).map(function(o){
+    (f ? (f.folder_list || []).map(function(o){
       return '<option value="' + o.id + '">' + esc(o.name) + '</option>';
     }).join('') : '') +
     '<option value="neu">' + esc(t('cases.folder.new.option')) + '</option>';
@@ -4788,17 +5028,17 @@ function fallWahlAusfuehren(){
   if(ordnerWahl === 'neu' && !ordnerNeu){ feldNeu.classList.add('fehler'); return; }
   var fallId = wahl.id
     ? Promise.resolve(wahl.id)
-    : post('/api/faelle/anlegen', {name: wahl.neu}).then(function(r){
-        if(!r.ok) throw new Error(rtext(r));
-        return r.id;
+    : post(API + '/cases', {name: wahl.neu}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
+        return r.case.id;
       });
   var ordnerId = null;
   fallId.then(function(id){
     // The folder: an existing one, a new one made first, or none.
     if(ordnerWahl === 'neu'){
-      return post('/api/faelle/ordner-anlegen', {id: id, name: ordnerNeu}).then(function(r){
-        if(!r.ok) throw new Error(rtext(r));
-        ordnerId = r.ordner;
+      return post(API + '/cases/' + id + '/folders', {name: ordnerNeu}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
+        ordnerId = r.folder;
         return id;
       });
     }
@@ -4813,30 +5053,32 @@ function fallWahlAusfuehren(){
       var hits = w.art === 'einer' ? [TREFFER[w.daten]] : Object.keys(AUSWAHL).map(function(k){ return AUSWAHL[k]; });
       var kasten = dyn('fall-wahl-thread');
       var mitThread = !!(w.threads && w.threads.length && w.threadAn !== false && kasten && !kasten.classList.contains('hide'));
-      tun = post('/api/faelle/hinzufuegen', {id: id, eintraege: hits.filter(Boolean).map(eintragAus), ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(rtext(r));
+      tun = post(API + '/cases/' + id + '/items',
+                 {items: hits.filter(Boolean).map(eintragAus), folder: ordnerId}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
         hits.forEach(function(h){ if(h) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
         var text = t('cases.added', {n: r.added, name: name});
         if(!mitThread) return text;
         // The rest of the conversations follow the hits into their folder
         var keys = hits.filter(function(h){ return h && h.key && h.thread; }).map(function(h){ return h.key; });
-        return post('/api/faelle/thread', {id: id, keys: keys}).then(function(r2){
+        return post(API + '/cases/' + id + '/items', {threads: keys}).then(function(r2){
           THREADS = {};
-          return r2.ok && r2.added ? text + ' · ' + t('cases.thread.plus', {n: zahl(r2.added)}) : text;
+          return r2 && r2.added ? text + ' · ' + t('cases.thread.plus', {n: zahl(r2.added)}) : text;
         });
       });
     } else if(w.art === 'liste'){
-      tun = post('/api/faelle/liste', {id: id, kriterien: w.kriterien, ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(rtext(r));
+      tun = post(API + '/cases/' + id + '/lists',
+                 {criteria: w.kriterien, folder: ordnerId}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
         TREFFER.forEach(function(h){ if(h.key) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
         var danach = anhaengen
-          ? post('/api/suche/speichern', {name: kriterienTitel(w.kriterien), kriterien: w.kriterien, fall: id, ordner: ordnerId})
+          ? post(API + '/searches/saved', {name: kriterienTitel(w.kriterien), criteria: w.kriterien, case: id, case_folder: ordnerId})
           : Promise.resolve();
         return danach.then(function(){ return t('cases.added.list', {n: r.hits, name: name}); });
       });
     } else {
-      tun = post('/api/suche/anhaengen', {id: w.daten.id, fall: id, ordner: ordnerId}).then(function(r){
-        if(!r.ok) throw new Error(rtext(r));
+      tun = patch(API + '/searches/saved/' + w.daten.id, {case: id, case_folder: ordnerId}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
         return t('cases.attached', {search: w.daten.name, name: name});
       });
     }
@@ -4854,7 +5096,7 @@ function fallWahlAusfuehren(){
 /* The mark on a hit changes at once, before the next search would fetch it. */
 function markiereImFall(h, id, name, ordner){
   h.cases = (h.cases || []).filter(function(f){ return f.id !== id; });
-  h.cases.push({id: id, name: fallName(id) || name || '', status: 'offen', ordner: ordner || null});
+  h.cases.push({id: id, name: fallName(id) || name || '', status: 'open', folder: ordner || null});
 }
 function auswahlInFall(){ if(Object.keys(AUSWAHL).length) fallWahl('auswahl'); }
 function listeInFall(){ if(TREFFER.length) fallWahl('liste'); }
@@ -4864,7 +5106,7 @@ function listeInFall(){ if(TREFFER.length) fallWahl('liste'); }
    open it narrows to the names alone, so the case takes the width. The
    head is a label and the arrow that widens or narrows it. */
 function zeichneFaelle(){
-  var liste = FAELLE.filter(function(f){ return FAELLE_ZU || f.status === 'offen'; });
+  var liste = FAELLE.filter(function(f){ return FAELLE_ZU || f.status === 'open'; });
   var geschlossene = FAELLE.length - offeneFaelle().length;
   el('faelle-liste').innerHTML = liste.length
     ? liste.map(fallZeile).join('')
@@ -4895,11 +5137,11 @@ function quellenZaehler(je){
   }).join('');
 }
 function fallKurzzeile(f){
-  var teile = [t('cases.line.items', {n: zahl(f.eintraege)})];
-  if(f.ordner) teile.push(t('cases.line.folders', {n: zahl(f.ordner)}));
-  if(f.suchen) teile.push(t('cases.line.searches', {n: zahl(f.suchen)}));
-  teile.push(f.status === 'zu' ? t('cases.line.closed', {when: wannKurz(f.geschlossen)})
-                               : t('cases.line.changed', {when: wannKurz(f.geaendert)}));
+  var teile = [t('cases.line.items', {n: zahl(f.items)})];
+  if(f.folders) teile.push(t('cases.line.folders', {n: zahl(f.folders)}));
+  if(f.searches) teile.push(t('cases.line.searches', {n: zahl(f.searches)}));
+  teile.push(f.status === 'closed' ? t('cases.line.closed', {when: wannKurz(f.closed_at)})
+                               : t('cases.line.changed', {when: wannKurz(f.changed)}));
   return teile.join(' · ');
 }
 function fallZeile(f){
@@ -4907,7 +5149,7 @@ function fallZeile(f){
   return '<div class="fall' + (on ? ' on' : '') + '" role="button" tabindex="0" onclick="fallWaehlen(' + f.id + ')" ' +
     'onkeydown="if(event.key===\'Enter\')fallWaehlen(' + f.id + ')">' +
     '<div class="name"><span class="fallname">' + esc(f.name) + '</span>' + statusTag(f) + '</div>' +
-    '<div class="zaehler">' + quellenZaehler(f.je_quelle) + '</div>' +
+    '<div class="zaehler">' + quellenZaehler(f.items_by_source) + '</div>' +
     '<div class="small muted">' + esc(fallKurzzeile(f)) + '</div></div>';
 }
 /* Picking a case in the overview opens it and narrows the overview. */
@@ -4916,7 +5158,7 @@ function fallWaehlen(id){
   return fallOeffnen(id);
 }
 function fallOeffnen(id){
-  return api('/api/faelle/fall?id=' + id).then(function(r){
+  return api(API + '/cases/' + id).then(function(r){
     if(rtext(r)){ el('fall-inhalt').innerHTML = '<p class="hint err">' + esc(rtext(r)) + '</p>'; return; }
     if(!FALL_OFFEN || FALL_OFFEN.id !== id){ FALL_ALLE = {}; FALL_NEU = null; FALL_AUF = {}; FALL_FILTER = ''; FALL_AUSWAHL = {};
                                              FALL_ZEIT_EIMER = null; FALL_PERSON = null; el('fall-filter').value = ''; }
@@ -4933,11 +5175,11 @@ function fallOeffnen(id){
 function zeichneFall(){
   var f = FALL_OFFEN;
   if(!f) return;
-  var offen = f.status === 'offen';
-  var notizen = f.notizen_liste || [], listen = f.listen_liste || [], suchen = f.suchen_liste || [];
-  var fakten = [t('cases.created', {when: wannKurz(f.angelegt)}), t('cases.line.changed', {when: wannKurz(f.geaendert)}),
-                t('cases.facts.items', {n: zahl(f.eintraege), sources: zahl(Object.keys(f.je_quelle || {}).length)})];
-  if((f.ordner_liste || []).length) fakten.push(t('cases.line.folders', {n: zahl(f.ordner_liste.length)}));
+  var offen = f.status === 'open';
+  var notizen = f.note_list || [], listen = f.list_list || [], suchen = f.search_list || [];
+  var fakten = [t('cases.created', {when: wannKurz(f.created)}), t('cases.line.changed', {when: wannKurz(f.changed)}),
+                t('cases.facts.items', {n: zahl(f.items), sources: zahl(Object.keys(f.items_by_source || {}).length)})];
+  if((f.folder_list || []).length) fakten.push(t('cases.line.folders', {n: zahl(f.folder_list.length)}));
   if(listen.length) fakten.push(t('cases.facts.lists', {n: zahl(listen.length)}));
   fakten.push(t('cases.facts.notes', {n: zahl(notizen.length)}));
   if(suchen.length) fakten.push(t('cases.line.searches', {n: zahl(suchen.length)}));
@@ -4945,16 +5187,16 @@ function zeichneFall(){
     '<div class="titelzeile"><h2>' + esc(f.name) + '</h2>' + statusTag(f) +
     (offen ? '<button class="mini rechts" onclick="fallBearbeitenFenster()">' + esc(t('cases.edit')) + '</button>' : '') + '</div>' +
     '<div class="meta small muted">' + esc(fakten.join(' · ')) + '</div>' +
-    (f.beschreibung ? '<p class="beschreibung small muted">' + esc(f.beschreibung) + '</p>' : '');
+    (f.description ? '<p class="beschreibung small muted">' + esc(f.description) + '</p>' : '');
   el('fall-ordner-neu').classList.toggle('hide', !offen);
   el('fall-suche').onclick = function(){ sucheImFall(f.id); };
-  el('fall-personen-zahl').textContent = zahl(personenAus(f.eintraege_liste).length);
+  el('fall-personen-zahl').textContent = zahl(personenAus(f.item_list).length);
   zeichneFallInhalt();
   zeichneFallAuswahl();
   // The foot: the export at the left, what happens to the case at the right
   el('fall-fuss').innerHTML =
     '<span class="gruppe-links"><button class="ghost klein" onclick="exportFenster()">' + ikon('export', 'klein') + esc(t('cases.export.do')) + '</button>' +
-    (f.exportiert ? '<span class="small muted">' + esc(t('cases.exported', {when: wannKurz(f.exportiert_wann)})) +
+    (f.exported ? '<span class="small muted">' + esc(t('cases.exported', {when: wannKurz(f.exported_at)})) +
       ' · <a href="javascript:void(0)" onclick="exportOrdner(' + f.id + ')">' + esc(t('cases.export.show')) + '</a></span>' : '') + '</span>' +
     '<span class="gruppe-rechts">' +
     (offen ? '<button class="ghost klein" onclick="schliessenFenster()">' + esc(t('cases.close')) + '</button>'
@@ -5000,15 +5242,15 @@ function fallGruppen(eintraege){
   });
 }
 function eintragLink(e){
-  return e.root && e.rel ? '/source?root=' + encodeURIComponent(e.root) + '&path=' + encodeURIComponent(e.rel) : null;
+  return e.root && e.rel ? API + '/files/content?root=' + encodeURIComponent(e.root) + '&path=' + encodeURIComponent(e.rel) : null;
 }
 /* The remark under an item – the same line in the row and the timeline. */
 function bemerkungZeile(e){
-  return e.bemerkung ? '<div class="bem">' + ikon('stift', 'klein') + '<span>' + esc(e.bemerkung) + '</span></div>' : '';
+  return e.remark ? '<div class="bem">' + ikon('stift', 'klein') + '<span>' + esc(e.remark) + '</span></div>' : '';
 }
 /* What the filter field reads of an item. */
 function eintragText(e){
-  return [e.titel, e.wer, e.datum, e.rel, e.bemerkung, fallOrdner(e.ordner)].join(' ');
+  return [e.title, e.who, e.date, e.rel, e.remark, fallOrdner(e.folder)].join(' ');
 }
 function eintragTick(e, offen){
   var key = esc(e.key).replace(/'/g, "\\'");
@@ -5021,24 +5263,24 @@ function eintragTick(e, offen){
 function eintragAktionen(e, offen){
   var link = eintragLink(e);
   var key = esc(e.key).replace(/'/g, "\\'");
-  var wo = fallOrdner(e.ordner) || t('cases.folder.unsorted');
+  var wo = fallOrdner(e.folder) || t('cases.folder.unsorted');
   return '<span class="row" style="gap:6px">' +
     (link ? '<a class="mini" href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(t('cases.item.open')) + '</a>' : '') +
-    (offen && e.thread_offen > 0
-      ? '<button class="mini" title="' + esc(t('cases.thread.more.tip', {n: zahl(e.thread_offen), folder: wo})) +
-        '" onclick="threadHolen(\'' + key + '\')">' + esc(t('cases.thread.more', {n: zahl(e.thread_offen)})) + '</button>' : '') +
-    (offen ? '<button class="mini nur-ikon" title="' + esc(t(e.bemerkung ? 'cases.remark.edit' : 'cases.remark.add')) +
+    (offen && e.thread_open > 0
+      ? '<button class="mini" title="' + esc(t('cases.thread.more.tip', {n: zahl(e.thread_open), folder: wo})) +
+        '" onclick="threadHolen(\'' + key + '\')">' + esc(t('cases.thread.more', {n: zahl(e.thread_open)})) + '</button>' : '') +
+    (offen ? '<button class="mini nur-ikon" title="' + esc(t(e.remark ? 'cases.remark.edit' : 'cases.remark.add')) +
              '" onclick="bemerkungFenster(\'' + key + '\')">' + ikon('stift', 'klein') + '</button>' +
              '<button class="mini" title="' + esc(t('cases.item.remove')) + '" onclick="fallEntfernen(\'' + key + '\')">&times;</button>' : '') +
     '</span>';
 }
 function eintragZeile(e, ikonName, offen){
-  var titel = e.titel || e.rel || e.key;
+  var titel = e.title || e.rel || e.key;
   return '<div class="eintrag">' + eintragTick(e, offen) +
     '<span class="ikon">' + ikon(ikonName, 'klein') + '</span>' +
-    '<div><span class="t">' + esc(titel) + mcpMarke(e.quelle) + '</span>' +
-    (e.wer ? '<span class="w">' + esc(e.wer) + '</span>' : '') + bemerkungZeile(e) + '</div>' +
-    '<span class="d">' + esc(e.datum || '') + '</span>' +
+    '<div><span class="t">' + esc(titel) + mcpMarke(e.via) + '</span>' +
+    (e.who ? '<span class="w">' + esc(e.who) + '</span>' : '') + bemerkungZeile(e) + '</div>' +
+    '<span class="d">' + esc(e.date || '') + '</span>' +
     eintragAktionen(e, offen) + '</div>';
 }
 /* One source's rows: capped at 30 until "show more", every row while a
@@ -5087,15 +5329,15 @@ function zeichneFallInhalt(){
 function zeichneFallOrdner(){
   var f = FALL_OFFEN;
   if(!f) return;
-  var offen = f.status === 'offen';
-  var notizen = f.notizen_liste || [], listen = f.listen_liste || [], suchen = f.suchen_liste || [];
+  var offen = f.status === 'open';
+  var notizen = f.note_list || [], listen = f.list_list || [], suchen = f.search_list || [];
   var html = '';
 
   // The casebook
   var notizenGefiltert = notizen.filter(function(n){ return passtFilter(n.text); });
   html += faltKopf('buch', ikon('notiz'), t('cases.book'), esc(t('cases.book.n', {n: zahl(notizen.length)})), t('cases.book.i')) +
     notizenGefiltert.map(function(n){
-      return '<div class="notiz"><span class="wann">' + mcpMarke(n.quelle) + esc(wannKurz(n.wann)) + '</span>' +
+      return '<div class="notiz"><span class="wann">' + mcpMarke(n.via) + esc(wannKurz(n.when)) + '</span>' +
         '<div class="text">' + esc(n.text) + '</div>' +
         (offen ? '<span class="row" style="gap:6px"><button class="mini" onclick="notizAendern(' + n.id + ')">' + esc(t('cases.note.edit')) +
                  '</button><button class="mini" title="' + esc(t('cases.note.delete')) + '" onclick="notizLoeschen(' + n.id + ')">&times;</button></span>' : '') +
@@ -5111,23 +5353,23 @@ function zeichneFallOrdner(){
   if(listen.length){
     html += faltKopf('listen', ikon('liste'), t('cases.lists'), zahl(listen.length), t('cases.lists.i')) +
       listen.map(function(li, i){
-        var wo = li.ordner ? ' · ' + t('cases.list.in', {name: fallOrdner(li.ordner)}) : '';
-        return '<div class="hist"><div><span class="q">' + esc(kriterienTitel(li.kriterien)) + '</span> ' +
-          '<span class="small muted num">' + esc(t('cases.list.taken', {n: zahl(li.anzahl), when: wannKurz(li.wann)}) + wo) + '</span></div>' +
+        var wo = li.folder ? ' · ' + t('cases.list.in', {name: fallOrdner(li.folder)}) : '';
+        return '<div class="hist"><div><span class="q">' + esc(kriterienTitel(li.criteria)) + '</span> ' +
+          '<span class="small muted num">' + esc(t('cases.list.taken', {n: zahl(li.hits), when: wannKurz(li.when)}) + wo) + '</span></div>' +
           '<span></span><span class="knoepfe"><button class="mini" onclick="listeErneut(' + i + ')">' + esc(t('cases.list.run')) + '</button>' +
           (offen ? '<button class="mini" title="' + esc(t('cases.list.drop')) + '" onclick="listeLoeschen(' + li.id + ')">&times;</button>' : '') +
-          '</span><div class="tagleiste">' + kriterienTags(li.kriterien) + '</div></div>';
+          '</span><div class="tagleiste">' + kriterienTags(li.criteria) + '</div></div>';
       }).join('') + '</details>';
   }
 
   // The items: by folder when the case has folders, else by source
-  var eintraege = f.eintraege_liste || [];
-  var ordner = f.ordner_liste || [];
+  var eintraege = f.item_list || [];
+  var ordner = f.folder_list || [];
   if(!eintraege.length){
     html += '<div class="gruppe leer"><p class="hint">' + esc(t('cases.items.none')) + '</p></div>';
   } else if(ordner.length){
-    var reihe = ordner.map(function(o){ return {id: o.id, name: o.name, eintraege: eintraege.filter(function(e){ return e.ordner === o.id; })}; });
-    var unsortiert = eintraege.filter(function(e){ return !e.ordner || !fallOrdner(e.ordner); });
+    var reihe = ordner.map(function(o){ return {id: o.id, name: o.name, eintraege: eintraege.filter(function(e){ return e.folder === o.id; })}; });
+    var unsortiert = eintraege.filter(function(e){ return !e.folder || !fallOrdner(e.folder); });
     if(unsortiert.length) reihe.push({id: 0, name: t('cases.folder.unsorted'), eintraege: unsortiert});
     reihe.forEach(function(o){
       var gruppen = fallGruppen(o.eintraege);
@@ -5158,7 +5400,7 @@ function zeichneFallOrdner(){
   html += faltKopf('suchen', ikon('marke'), t('cases.searches'), zahl(suchen.length), t('cases.searches.i')) +
     (suchen.length ? suchen.map(function(g, i){
       var neu = FALL_NEU && FALL_NEU[g.id];
-      var wohin = g.ordner_name || t('cases.folder.unsorted');
+      var wohin = g.case_folder_name || t('cases.folder.unsorted');
       var stand = !neu ? '' : neu.error
         ? '<span class="small err">' + esc(mtext(neu.error)) + '</span>'
         : neu.new_count
@@ -5166,11 +5408,11 @@ function zeichneFallOrdner(){
             (offen ? '<button class="mini" onclick="neueHinzufuegen(' + g.id + ')">' + esc(t('cases.new.add', {folder: wohin})) + '</button>' : '') + '</span>'
           : '<span class="small muted">' + esc(t('cases.new.none')) + '</span>';
       return '<div class="hist"><div><span class="q">' + esc(g.name) + '</span> ' + stand + '</div>' +
-        '<span class="wann">' + esc(g.zuletzt ? t('search.saved.lastrun', {when: wannKurz(g.zuletzt), n: zahl(g.treffer)})
+        '<span class="wann">' + esc(g.last_run ? t('search.saved.lastrun', {when: wannKurz(g.last_run), n: zahl(g.hits)})
                                               : t('search.saved.never')) + '</span>' +
         '<span class="knoepfe"><button class="mini" onclick="fallSucheLauf(' + i + ')">' + esc(t('search.saved.run')) + '</button>' +
         (offen ? '<button class="mini" onclick="fallSucheLoesen(' + g.id + ')">' + esc(t('search.saved.detach')) + '</button>' : '') +
-        '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.kriterien)) + '</span>' + kriterienTags(g.kriterien) +
+        '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.criteria)) + '</span>' + kriterienTags(g.criteria) +
         (ordner.length ? '<span class="tag">' + esc(t('cases.search.filesinto', {name: wohin})) + '</span>' : '') + '</div></div>';
     }).join('') : '<p class="hint">' + esc(t('cases.searches.none')) + '</p>') +
     (suchen.length ? '<div class="aktionen"><span class="small muted" id="fall-neu-stand"></span>' +
@@ -5208,8 +5450,8 @@ function tagKurz(schluessel){
   return schluessel.length > 10 ? tag + ' · ' + schluessel.slice(11, 16) : tag;
 }
 function zeitStellen(f){
-  var stellen = (f.eintraege_liste || []).map(function(e){ return {k: zeitSchluessel(e.datum), art: 'eintrag', e: e}; })
-    .concat((f.notizen_liste || []).map(function(n){ return {k: notizSchluessel(n.wann), art: 'notiz', n: n}; }));
+  var stellen = (f.item_list || []).map(function(e){ return {k: zeitSchluessel(e.date), art: 'eintrag', e: e}; })
+    .concat((f.note_list || []).map(function(n){ return {k: notizSchluessel(n.when), art: 'notiz', n: n}; }));
   stellen.sort(function(a, b){
     if(!a.k !== !b.k) return a.k ? -1 : 1;        // undated last, whatever the direction
     return a.k < b.k ? -1 : a.k > b.k ? 1 : 0;
@@ -5299,9 +5541,9 @@ function zeichneAktivitaet(alle, eintraege, notizen){
 function zeichneFallZeit(){
   var f = FALL_OFFEN;
   if(!f) return;
-  var offen = f.status === 'offen';
+  var offen = f.status === 'open';
   var alle = zeitStellen(f);
-  var band = zeichneAktivitaet(alle, (f.eintraege_liste || []).length, (f.notizen_liste || []).length);
+  var band = zeichneAktivitaet(alle, (f.item_list || []).length, (f.note_list || []).length);
   var passend = alle.filter(function(s){
     if(FALL_ZEIT_EIMER && (!s.k || eimerSchluessel(s.k, band && band.wochen) !== FALL_ZEIT_EIMER)) return false;
     return s.art === 'eintrag' ? passtFilter(eintragText(s.e)) : passtFilter(s.n.text);
@@ -5313,16 +5555,16 @@ function zeichneFallZeit(){
     if(kopf !== monat){ html += '<div class="zeit-monat">' + esc(monatName(kopf)) + '</div>'; monat = kopf; }
     if(s.art === 'notiz'){
       html += '<div class="zeit notiz-zeit"><span></span><span class="d">' + esc(tagKurz(s.k)) + '</span>' +
-        '<span class="ikon">' + ikon('notiz', 'klein') + '</span><div><span class="t">' + mcpMarke(s.n.quelle) +
+        '<span class="ikon">' + ikon('notiz', 'klein') + '</span><div><span class="t">' + mcpMarke(s.n.via) +
         esc(t('cases.timeline.note')) + ' · ' + esc(s.n.text) + '</span></div><span></span></div>';
       return;
     }
-    var e = s.e, wo = fallOrdner(e.ordner);
+    var e = s.e, wo = fallOrdner(e.folder);
     html += '<div class="zeit">' + eintragTick(e, offen) +
-      '<span class="d">' + esc(tagKurz(s.k) || e.datum || '') + '</span>' +
+      '<span class="d">' + esc(tagKurz(s.k) || e.date || '') + '</span>' +
       '<span class="ikon">' + ikon(quellIkon({source: e.src, root: e.root}), 'klein') + '</span>' +
-      '<div><span class="t">' + esc(e.titel || e.rel || e.key) + mcpMarke(e.quelle) + '</span>' +
-      '<span class="w">' + esc(e.wer || quellTag({source: e.src, root: e.root})) +
+      '<div><span class="t">' + esc(e.title || e.rel || e.key) + mcpMarke(e.via) + '</span>' +
+      '<span class="w">' + esc(e.who || quellTag({source: e.src, root: e.root})) +
       (wo ? '<span class="tag">' + esc(wo) + '</span>' : '') + '</span>' + bemerkungZeile(e) + '</div>' +
       eintragAktionen(e, offen) + '</div>';
   });
@@ -5332,7 +5574,7 @@ function zeichneFallZeit(){
     html += '<div class="mehr" style="margin-left:0"><button class="mini" onclick="fallAlleZeigen(\'zeit\')">' +
       esc(t('cases.items.more', {n: zahl(passend.length - sichtbar.length)})) + '</button></div>';
   el('fall-zeit').innerHTML = html;
-  var eintraege = f.eintraege_liste || [];
+  var eintraege = f.item_list || [];
   filterStand(passend.filter(function(s){ return s.art === 'eintrag'; }).length, eintraege.length);
 }
 function fallZeitRichtung(wert){
@@ -5367,15 +5609,15 @@ function istExtern(p){
 function personenAus(eintraege){
   var je = {};
   (eintraege || []).forEach(function(e){
-    var namen = String(e.wer || '').split(', ').map(function(n){ return n.trim(); }).filter(function(n){ return n && n !== '(unbekannt)'; });
+    var namen = String(e.who || '').split(', ').map(function(n){ return n.trim(); }).filter(function(n){ return n && n !== '(unbekannt)'; });
     namen.forEach(function(name){
       var p = je[name] = je[name] || {name: name, anzahl: 0, je_quelle: {}, von: '', bis: '', adressen: []};
       p.anzahl++;
       p.je_quelle[e.src] = (p.je_quelle[e.src] || 0) + 1;
       // One name, one address – an assignee list would pin it on the wrong one
-      var adresse = String(e.wer_mail || '').toLowerCase();
+      var adresse = String(e.who_mail || '').toLowerCase();
       if(adresse && namen.length === 1 && p.adressen.indexOf(adresse) < 0) p.adressen.push(adresse);
-      var k = zeitSchluessel(e.datum);
+      var k = zeitSchluessel(e.date);
       if(k){ if(!p.von || k < p.von) p.von = k; if(!p.bis || k > p.bis) p.bis = k; }
     });
   });
@@ -5413,10 +5655,10 @@ function fallPersonWaehlen(name){
 function zeichneFallPersonen(){
   var f = FALL_OFFEN;
   if(!f) return;
-  var alle = personenAus(f.eintraege_liste);
+  var alle = personenAus(f.item_list);
   var passend = alle.filter(function(p){ return passtFilter(p.name + ' ' + p.adressen.join(' ')); });
   var html = '<div class="personen-kopf"><span class="num">' +
-    esc(t('cases.people.count', {n: zahl(alle.length), m: zahl((f.eintraege_liste || []).length)})) + '</span>' +
+    esc(t('cases.people.count', {n: zahl(alle.length), m: zahl((f.item_list || []).length)})) + '</span>' +
     '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('cases.people.i')) + '">i</span></div>';
   if(!KANN_ADRESSEN && alle.length) html += '<p class="hint small">' + esc(t('cases.people.noaddr')) + '</p>';
   if(!alle.length){
@@ -5470,19 +5712,20 @@ function personZeit(name){
 
 /* ---------- The remark on an item: one window, one field ---------- */
 function bemerkungFenster(key){
-  var e = ((FALL_OFFEN && FALL_OFFEN.eintraege_liste) || []).filter(function(x){ return x.key === key; })[0];
+  var e = ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0];
   if(!e) return;
-  FALL_WAHL = {art: 'bemerkung', key: key};
-  oeffneEigenes('bemerkung', modalKopf(t(e.bemerkung ? 'cases.remark.edit' : 'cases.remark.add'), 'bemerkung', t('cases.remark.i')) +
+  // The item's own id: that is what the API names it by.
+  FALL_WAHL = {art: 'bemerkung', key: key, id: e.id};
+  oeffneEigenes('bemerkung', modalKopf(t(e.remark ? 'cases.remark.edit' : 'cases.remark.add'), 'bemerkung', t('cases.remark.i')) +
     '<textarea id="bemerkung-text" rows="3" style="width:100%;resize:vertical;font-family:inherit;font-size:14px" placeholder="' +
-    esc(t('cases.remark.ph')) + '">' + esc(e.bemerkung || '') + '</textarea>' +
+    esc(t('cases.remark.ph')) + '">' + esc(e.remark || '') + '</textarea>' +
     modalFuss({text: t('cases.remark.save'), tun: 'bemerkungSenden(false)'}, null,
-              e.bemerkung ? '<a href="javascript:void(0)" class="small" onclick="bemerkungSenden(true)">' + esc(t('cases.remark.remove')) + '</a>' : ''), true);
+              e.remark ? '<a href="javascript:void(0)" class="small" onclick="bemerkungSenden(true)">' + esc(t('cases.remark.remove')) + '</a>' : ''), true);
 }
 function bemerkungSenden(weg){
   var feld = dyn('bemerkung-text');
   var text = weg || !feld ? '' : feld.value.trim();
-  fallSchreiben('bemerkung', {key: FALL_WAHL.key, text: text}).then(function(r){
+  fallSchreiben('PATCH', 'items/' + FALL_WAHL.id, {remark: text}).then(function(r){
     if(!r || r.ok !== false) closeWizard('bemerkung');
   });
 }
@@ -5509,9 +5752,9 @@ function apiFehler(r){
   return true;
 }
 function threadHolen(key){
-  var e = ((FALL_OFFEN && FALL_OFFEN.eintraege_liste) || []).filter(function(x){ return x.key === key; })[0];
-  var wo = e ? (fallOrdner(e.ordner) || t('cases.folder.unsorted')) : '';
-  fallSchreiben('thread', {keys: [key]}).then(function(r){
+  var e = ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0];
+  var wo = e ? (fallOrdner(e.folder) || t('cases.folder.unsorted')) : '';
+  fallSchreiben('POST', 'items', {threads: [key]}).then(function(r){
     if(!r || r.ok === false) return;
     meldung(r.added ? t('cases.thread.added', {n: zahl(r.added), folder: wo}) : t('cases.thread.none'));
   });
@@ -5521,7 +5764,7 @@ function threadHolen(key){
 function ladeThread(id){
   // The versioned surface calls every list `items`; the whole page below
   // works with `messages`, so the name is put right here, once.
-  if(!THREADS[id]) THREADS[id] = api('/api/v1/threads?key=' + encodeURIComponent(id) + '&limit=200')
+  if(!THREADS[id]) THREADS[id] = api(API + '/threads?key=' + encodeURIComponent(id) + '&limit=200')
     .then(function(r){ return {thread: r.thread, count: r.count, messages: r.items || []}; })
     .catch(function(){ return {messages: [], count: 0}; });
   return THREADS[id];
@@ -5539,9 +5782,9 @@ function alleAuf(auf){
   FALL_AUF = {};
   if(!auf || !f) return;
   ['buch', 'listen', 'suchen'].forEach(function(k){ FALL_AUF[k] = true; });
-  (f.ordner_liste || []).forEach(function(o){ FALL_AUF['ordner:' + o.id] = true; });
+  (f.folder_list || []).forEach(function(o){ FALL_AUF['ordner:' + o.id] = true; });
   FALL_AUF['ordner:0'] = true;
-  fallGruppen(f.eintraege_liste).forEach(function(g){ FALL_AUF['quelle:' + g.key] = true; });
+  fallGruppen(f.item_list).forEach(function(g){ FALL_AUF['quelle:' + g.key] = true; });
 }
 function alleFalten(auf){
   if(!FALL_OFFEN || FALL_SICHT !== 'ordner') return;
@@ -5562,7 +5805,7 @@ function zeichneFallAuswahl(){
   var sel = el('fall-verschieben');
   sel.innerHTML = '<option value="">' + esc(t('cases.move.to')) + '</option>' +
     '<option value="0">' + esc(t('cases.folder.unsorted')) + '</option>' +
-    ((FALL_OFFEN && FALL_OFFEN.ordner_liste) || []).map(function(o){
+    ((FALL_OFFEN && FALL_OFFEN.folder_list) || []).map(function(o){
       return '<option value="' + o.id + '">' + esc(o.name) + '</option>';
     }).join('') +
     '<option value="neu">' + esc(t('cases.folder.new.option')) + '</option>';
@@ -5573,17 +5816,20 @@ function fallVerschieben(wert){
   var keys = Object.keys(FALL_AUSWAHL);
   if(!wert || !keys.length){ el('fall-verschieben').value = ''; return; }
   if(wert === 'neu'){ el('fall-verschieben').value = ''; ordnerFenster(null, keys); return; }
-  fallSchreiben('verschieben', {keys: keys, ordner: wert === '0' ? null : parseInt(wert, 10)}).then(function(r){
-    if(r && r.ok) fallAuswahlLeeren();
+  fallSchreiben('PATCH', 'items', {keys: keys, folder: wert === '0' ? null : parseInt(wert, 10)}).then(function(r){
+    if(r && r.ok !== false) fallAuswahlLeeren();
   });
 }
 function fallAuswahlEntfernen(){
   var keys = Object.keys(FALL_AUSWAHL);
   if(!keys.length || !confirm(t('cases.remove.ask', {n: zahl(keys.length)}))) return;
-  var rest = keys.slice();
+  // The case names every item by an id; a selection holds keys.
+  var rest = (FALL_OFFEN.item_list || [])
+    .filter(function(e){ return keys.indexOf(e.key) >= 0; })
+    .map(function(e){ return e.id; });
   function weiter(){
     if(!rest.length){ FALL_AUSWAHL = {}; return fallOeffnen(FALL_OFFEN.id).then(function(){ ladeFaelle(); }); }
-    return post('/api/faelle/entfernen', {id: FALL_OFFEN.id, key: rest.shift()}).then(weiter);
+    return entferne(API + '/cases/' + FALL_OFFEN.id + '/items/' + rest.shift()).then(weiter);
   }
   weiter().then(function(){
     TREFFER.forEach(function(h){ if(keys.indexOf(h.key) >= 0) h.cases = (h.cases || []).filter(function(c){ return c.id !== FALL_OFFEN.id; }); });
@@ -5607,17 +5853,17 @@ function ordnerSenden(){
   if(!name){ dyn('ordner-name').classList.add('fehler'); return; }
   var w = FALL_WAHL;
   var tun = w.ordner
-    ? fallSchreiben('ordner-umbenennen', {ordner: w.ordner, name: name})
-    : fallSchreiben('ordner-anlegen', {name: name}).then(function(r){
-        if(r && r.ok && w.keys && w.keys.length)
-          return fallSchreiben('verschieben', {keys: w.keys, ordner: r.ordner}).then(function(){ fallAuswahlLeeren(); return r; });
+    ? fallSchreiben('PATCH', 'folders/' + w.ordner, {name: name})
+    : fallSchreiben('POST', 'folders', {name: name}).then(function(r){
+        if(r && r.ok !== false && w.keys && w.keys.length)
+          return fallSchreiben('PATCH', 'items', {keys: w.keys, folder: r.folder}).then(function(){ fallAuswahlLeeren(); return r; });
         return r;
       });
   tun.then(function(r){ if(!r || r.ok !== false) closeWizard('ordner'); });
 }
 function ordnerLoeschen(id){
   if(!confirm(t('cases.folder.drop.ask', {name: fallOrdner(id)}))) return;
-  fallSchreiben('ordner-loeschen', {ordner: id});
+  fallSchreiben('DELETE', 'folders/' + id);
 }
 
 /* ---------- The case's writes ---------- */
@@ -5625,12 +5871,16 @@ function fallFehler(r){
   return apiFehler(r);
 }
 /* Every change goes through the server and comes back as the whole case –
-   the page never guesses what a write did. */
-function fallSchreiben(pfad, body){
+   the page never guesses what a write did. `pfad` is what hangs under the
+   open case (`items`, `folders/3`, `notes`), the method says what happens
+   to it. */
+function fallSchreiben(methode, pfad, body){
   if(!FALL_OFFEN) return Promise.resolve();
-  body = body || {};
-  body.id = FALL_OFFEN.id;
-  return post('/api/faelle/' + pfad, body).then(function(r){
+  var ziel = API + '/cases/' + FALL_OFFEN.id + (pfad ? '/' + pfad : '');
+  var los = methode === 'DELETE' ? entferne(ziel)
+          : methode === 'PATCH' ? patch(ziel, body || {})
+          : post(ziel, body || {});
+  return los.then(function(r){
     if(fallFehler(r)) return r;
     if(r.case){ FALL_OFFEN = r.case; zeichneFall(); }
     else if(FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
@@ -5642,21 +5892,24 @@ function notizHinzufuegen(){
   var feld = dyn('notiz-neu');
   var text = feld ? feld.value.trim() : '';
   if(!text) return;
-  fallSchreiben('notiz', {text: text});   // the redraw empties the field
+  fallSchreiben('POST', 'notes', {text: text});   // the redraw empties the field
 }
 function notizAendern(id){
-  var n = (FALL_OFFEN.notizen_liste || []).filter(function(x){ return x.id === id; })[0];
+  var n = (FALL_OFFEN.note_list || []).filter(function(x){ return x.id === id; })[0];
   if(!n) return;
   var text = prompt(t('cases.note.edit.ask'), n.text);
   if(text === null || !text.trim()) return;
-  fallSchreiben('notiz-aendern', {notiz: id, text: text.trim()});
+  fallSchreiben('PATCH', 'notes/' + id, {text: text.trim()});
 }
 function notizLoeschen(id){
   if(!confirm(t('cases.note.delete.ask'))) return;
-  fallSchreiben('notiz-loeschen', {notiz: id});
+  fallSchreiben('DELETE', 'notes/' + id);
 }
 function fallEntfernen(key){
-  fallSchreiben('entfernen', {key: key}).then(function(){
+  // The case names every item by an id; a hit knows only its key.
+  var e = (FALL_OFFEN.item_list || []).filter(function(x){ return x.key === key; })[0];
+  if(!e) return;
+  fallSchreiben('DELETE', 'items/' + e.id).then(function(){
     delete FALL_AUSWAHL[key];
     zeichneFallAuswahl();
     TREFFER.forEach(function(h){
@@ -5666,19 +5919,19 @@ function fallEntfernen(key){
   });
 }
 function listeErneut(i){
-  var li = (FALL_OFFEN.listen_liste || [])[i];
-  if(li) sucheAusfuehren(li.kriterien);
+  var li = (FALL_OFFEN.list_list || [])[i];
+  if(li) sucheAusfuehren(li.criteria);
 }
 function listeLoeschen(id){
   if(!confirm(t('cases.list.drop.ask'))) return;
-  fallSchreiben('liste-loeschen', {liste: id});
+  fallSchreiben('DELETE', 'lists/' + id);
 }
 function fallSucheLauf(i){
-  var g = (FALL_OFFEN.suchen_liste || [])[i];
-  if(g) sucheAusfuehren(g.kriterien, g.id);
+  var g = (FALL_OFFEN.search_list || [])[i];
+  if(g) sucheAusfuehren(g.criteria, g.id);
 }
 function fallSucheLoesen(id){
-  post('/api/suche/anhaengen', {id: id, fall: null}).then(function(r){
+  patch(API + '/searches/saved/' + id, {case: null}).then(function(r){
     if(!fallFehler(r)) fallOeffnen(FALL_OFFEN.id);
   });
 }
@@ -5686,10 +5939,10 @@ function fallNeuPruefen(){
   var knopf = dyn('fall-neu-knopf');
   knopf.disabled = true;
   dyn('fall-neu-stand').textContent = t('cal.loading');
-  api('/api/faelle/neu?id=' + FALL_OFFEN.id).then(function(r){
+  api(API + '/cases/' + FALL_OFFEN.id + '/new-hits').then(function(r){
     if(rtext(r)){ dyn('fall-neu-stand').textContent = rtext(r); knopf.disabled = false; return; }
     FALL_NEU = {};
-    (r.searches || []).forEach(function(b){ FALL_NEU[b.id] = b; });
+    (r.items || []).forEach(function(b){ FALL_NEU[b.id] = b; });
     FALL_AUF['suchen'] = true;
     zeichneFallInhalt();
   }).catch(function(e){ dyn('fall-neu-stand').textContent = String(e); knopf.disabled = false; });
@@ -5698,8 +5951,8 @@ function fallNeuPruefen(){
 function neueHinzufuegen(sucheId){
   var b = FALL_NEU && FALL_NEU[sucheId];
   if(!b || !(b.new || []).length) return;
-  fallSchreiben('hinzufuegen', {eintraege: b.new.map(eintragAus), ordner: b.ordner || null}).then(function(r){
-    if(r && r.ok){ FALL_NEU[sucheId] = {id: sucheId, name: b.name, new: [], new_count: 0}; zeichneFallInhalt(); }
+  fallSchreiben('POST', 'items', {items: b.new.map(eintragAus), folder: b.folder || null}).then(function(r){
+    if(r && r.ok !== false){ FALL_NEU[sucheId] = {id: sucheId, name: b.name, new: [], new_count: 0}; zeichneFallInhalt(); }
   });
 }
 /* "Search in this case" / "Search here" on a folder: the case filter set,
@@ -5720,7 +5973,7 @@ function fallFormular(f){
   return '<input type="text" id="fall-name" style="width:100%" value="' + esc(f ? f.name : '') + '" placeholder="' +
     esc(t('cases.form.name.ph')) + '" onkeydown="if(event.key===\'Enter\')fallFormularSenden()">' +
     '<textarea id="fall-beschreibung" style="min-height:70px;margin-top:8px;font-family:inherit;font-size:14px" placeholder="' +
-    esc(t('cases.form.about.ph')) + '">' + esc(f ? f.beschreibung : '') + '</textarea>';
+    esc(t('cases.form.about.ph')) + '">' + esc(f ? f.description : '') + '</textarea>';
 }
 function fallNeuFenster(){
   merke('flow.wizard', 'fall-neu');
@@ -5737,12 +5990,12 @@ function fallBearbeitenFenster(){
 function fallFormularSenden(){
   var name = dyn('fall-name').value.trim();
   if(!name){ dyn('fall-name').classList.add('fehler'); return; }
-  var body = {name: name, beschreibung: dyn('fall-beschreibung').value.trim()};
+  var body = {name: name, description: dyn('fall-beschreibung').value.trim()};
   var tun = FALL_WAHL.art === 'aendern'
-    ? fallSchreiben('aendern', body)
-    : post('/api/faelle/anlegen', body).then(function(r){
+    ? fallSchreiben('PATCH', '', body)
+    : post(API + '/cases', body).then(function(r){
         if(fallFehler(r)) return r;
-        return ladeFaelle().then(function(){ return fallWaehlen(r.id); }).then(function(){ return r; });
+        return ladeFaelle().then(function(){ return fallWaehlen(r.case.id); }).then(function(){ return r; });
       });
   tun.then(function(r){ if(!r || r.ok !== false) closeWizard('fall-neu'); });
 }
@@ -5757,12 +6010,12 @@ function fallSchliessen(){
   var mitExport = !!dyn('fall-zu-export').checked;
   closeWizard('fall-zu');
   var vorher = mitExport ? fallExportStarten(false) : Promise.resolve(true);
-  vorher.then(function(){ return fallSchreiben('schliessen'); });
+  vorher.then(function(){ return fallSchreiben('PATCH', '', {status: 'closed'}); });
 }
-function fallOeffnenWieder(){ fallSchreiben('oeffnen'); }
+function fallOeffnenWieder(){ fallSchreiben('PATCH', '', {status: 'open'}); }
 function fallLoeschen(){
   if(!FALL_OFFEN || !confirm(t('cases.delete.ask', {name: FALL_OFFEN.name}))) return;
-  post('/api/faelle/loeschen', {id: FALL_OFFEN.id}).then(function(r){
+  entferne(API + '/cases/' + FALL_OFFEN.id).then(function(r){
     if(fallFehler(r)) return;
     FALL_OFFEN = null;
     el('fall-detail').classList.add('hide');
@@ -5776,8 +6029,8 @@ function fallLoeschen(){
 function exportFenster(){
   if(!FALL_OFFEN) return;
   var f = FALL_OFFEN;
-  var ordner = f.ordner_liste || [];
-  var unsortiert = (f.eintraege_liste || []).filter(function(e){ return !e.ordner || !fallOrdner(e.ordner); });
+  var ordner = f.folder_list || [];
+  var unsortiert = (f.item_list || []).filter(function(e){ return !e.folder || !fallOrdner(e.folder); });
   var zeilen = [t('cases.export.line.index'), t('cases.export.line.timeline'), t('cases.export.line.csv'), t('cases.export.line.book')];
   function ordnerZeile(name, eintraege){
     var quellen = fallGruppen(eintraege).map(function(g){ return quellTag(g.hit) + ' ' + zahl(g.eintraege.length); });
@@ -5785,13 +6038,13 @@ function exportFenster(){
   }
   if(ordner.length){
     ordner.forEach(function(o){
-      zeilen.push(ordnerZeile(o.name, (f.eintraege_liste || []).filter(function(e){ return e.ordner === o.id; })));
+      zeilen.push(ordnerZeile(o.name, (f.item_list || []).filter(function(e){ return e.folder === o.id; })));
     });
     if(unsortiert.length) zeilen.push(ordnerZeile(t('cases.folder.unsorted'), unsortiert));
   } else {
-    zeilen.push(t('cases.export.line.originals', {n: zahl(f.eintraege)}));
+    zeilen.push(t('cases.export.line.originals', {n: zahl(f.items)}));
   }
-  oeffneEigenes('fall-export', modalKopf(t('cases.export.title', {name: f.name}), 'fall-export', t('cases.export.i', {path: EXPORT_ORDNER})) +
+  oeffneEigenes('fall-export', modalKopf(t('cases.export.title', {name: f.name}), 'fall-export', t('cases.export.i', {path: exportBasis()})) +
     '<pre class="export-inhalt">' + esc(f.name + '.zip') + '\n' + zeilen.map(function(z){ return '  ' + esc(z); }).join('\n') + '</pre>' +
     modalFuss({text: t('cases.export.start'), tun: 'fallExportStarten(true)'}), true);
 }
@@ -5801,19 +6054,19 @@ function fallExportStarten(schliessen){
   if(schliessen !== false) closeWizard('fall-export');
   LAUF.eigener = true;
   merke('flow.run', 'case_export');
-  return post('/api/faelle/export', {id: FALL_OFFEN.id}).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return false; }
+  return post(API + '/cases/' + FALL_OFFEN.id + '/export', {}).then(function(r){
+    if(r && r.ok === false){ LAUF.eigener = false; apiFehler(r); return false; }
     refresh();
     return true;
   });
 }
 function exportOrdner(id){
-  post('/api/faelle/export-ordner', {id: id}).then(function(r){ fallFehler(r); });
+  post(API + '/cases/' + id + '/export/open', {}).then(function(r){ fallFehler(r); });
 }
 
 /* =======================================================================
    Calendar and address book – views from combined_search.py, here against
-   /api/calendar instead of embedded data. The evaluation itself (including
+   /api/v1/calendar instead of embedded data. The evaluation itself (including
    the events reconstructed from mails) is done by combined_search.py.
    ======================================================================= */
 var KAL = null, kalGeladen = false, kalStand = null;
@@ -5837,13 +6090,13 @@ var calMode = 'week', cursor = new Date();
 function toks(q){ return q.toLowerCase().split(/\s+/).filter(Boolean); }
 function allIn(hay, worte){ hay = (hay||'').toLowerCase();
   return worte.every(function(x){ return hay.indexOf(x) >= 0; }); }
-function quelle(r){ return '/source?root=' + encodeURIComponent(r.root||'outlook') +
+function quelle(r){ return API + '/files/content?root=' + encodeURIComponent(r.root||'outlook') +
                            '&path=' + encodeURIComponent(r.rel||''); }
 
 function ladeKalender(ziel){
   if(kalGeladen) return zeichneKalenderTeil(ziel);
   kalGeladen = true;
-  api('/api/v1/calendar').then(function(d){
+  api(API + '/calendar').then(function(d){
     if(rtext(d)){
       var h = '<p class="hint">' + esc(rtext(d)) + '</p>' +
         '<button class="act" onclick="run({calendar:true}, t(&quot;job.calendar&quot;))">' +
@@ -6109,11 +6362,11 @@ function ladeAnalytics(neu){
     el('ana-kpi-dateien').innerHTML = '';
     el('ana-runs').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
   }
-  (neu ? post('/api/analytics-refresh', {}) : api('/api/analytics'))
+  (neu ? post(API + '/analytics/refresh', {}) : api(API + '/analytics'))
     .then(zeigeAnalytics).catch(function(e){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
   });
-  api('/api/runs?limit=50').then(function(r){ renderRuns(r.runs || []); })
+  api(API + '/runs?limit=50').then(function(r){ renderRuns(r.items || []); })
     .catch(function(e){
       el('ana-runs').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
     });
@@ -6240,8 +6493,8 @@ function zeigeRunLog(id, kastenId){
   if(!box.classList.contains('hide')){ box.classList.add('hide'); return; }
   box.classList.remove('hide');
   box.innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
-  api('/api/run-log?id=' + id).then(function(r){
-    var zeilen = r.lines || [];
+  api(API + '/runs/' + id + '/log').then(function(r){
+    var zeilen = r.items || [];
     if(!zeilen.length){
       box.innerHTML = '<p class="hint">' + esc(t('ana.runs.log.empty')) + '</p>';
       return;
@@ -6511,7 +6764,7 @@ function bilanzZeile(e, b){
   var satz = b ? bilanzSatz(b) : {dot: 'aus', text: t('ana.check.never')};
   var offen = b && b.offen > 0;
   // "Fetch now" hands the row to the server, which knows the cheapest
-  // way to fetch what it found open (see /api/bilanz/holen).
+  // way to fetch what it found open (see /api/v1/balance/{row}/fetch).
   var lauf = JSON.stringify(e.quelle).replace(/"/g, '&quot;');
   var html = '<div class="zeile">' + ikon(ikonName) +
     '<div class="text"><b>' + esc(t(e.titel)) + '</b>' +
@@ -6669,7 +6922,7 @@ function archivAktion(aktion, quelle){
   var z = archivQuelle(quelle) || {};
   var titel = t(ARCHIV_TITEL[quelle] || quelle);
   if(aktion === 'ordner'){
-    post('/api/archiv/ordner', {quelle: quelle}).then(apiFehler);
+    post(API + '/sources/' + quelle + '/open', {}).then(apiFehler);
     return;
   }
   var koerper = {quelle: quelle};
@@ -6684,12 +6937,30 @@ function archivAktion(aktion, quelle){
   if(aktion === 'neu-aufbauen' && !confirm(t('ana.archiv.rebuild.confirm', {source: titel}))) return;
   merke('flow.run', 'archiv.' + aktion);
   LAUF.eigener = true;
-  post('/api/archiv/' + aktion, koerper).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return; }
+  archivRuf(aktion, quelle, koerper.arten).then(function(r){
+    if(r && r.ok === false){ LAUF.eigener = false; apiFehler(r); return; }
     if(r.message){ LAUF.eigener = false; meldung(mtext(r.message)); return; }  // nothing to do
     refresh();
   });
 }
+/* The check's actions on the versioned surface: what becomes of the
+   findings is a PATCH on them, fetching again and rebuilding are runs of
+   their own. `arten` are the kinds of finding a mark applies to. */
+var ARCHIV_BEFUND = {vermerken: 'noted', beiseitelegen: 'set-aside', zurueckholen: 'open'};
+// Only the two kinds a mark applies to – the route takes no other
+// (archive_check.ARTEN_VERMERKBAR).
+var ARCHIV_ART = {verloren: 'lost', fehlt: 'missing'};
+function archivRuf(aktion, quelle, arten){
+  var ziel = API + '/sources/' + quelle;
+  if(ARCHIV_BEFUND[aktion]){
+    return patch(ziel + '/findings', {state: ARCHIV_BEFUND[aktion],
+      kinds: (arten || []).map(function(a){ return ARCHIV_ART[a] || a; })});
+  }
+  // 'nachholen' fetches what the check found missing, 'neu-aufbauen'
+  // builds the source's export and index again.
+  return post(ziel + (aktion === 'neu-aufbauen' ? '/rebuild' : '/refetch'), {});
+}
+
 /* A file still missing after a resync that ran since the finding: the
    next fetch will not bring it either – it is a dead card to note. */
 function nachholenErschoepft(z){
@@ -6720,8 +6991,8 @@ function pruefeArchiv(){
 function holeQuelle(quelle){
   merke('flow.run', 'holen');
   LAUF.eigener = true;
-  post('/api/bilanz/holen', {quelle: quelle}).then(function(r){
-    if(!r.ok){ LAUF.eigener = false; apiFehler(r); return; }
+  post(API + '/balance/' + quelle + '/fetch', {}).then(function(r){
+    if(r && r.ok === false){ LAUF.eigener = false; apiFehler(r); return; }
     refresh();
   });
 }
@@ -6781,7 +7052,7 @@ var personen = [], personenGeladen = false, bookF = 'all';
 function ladePersonen(){
   if(personenGeladen) return;
   personenGeladen = true;
-  api('/api/v1/people?limit=2000').then(function(r){
+  api(API + '/people?limit=2000').then(function(r){
     personen = r.items || [];
     if(offeneSicht === 'adressbuch') drawBook();
   }).catch(function(){ personen = []; });
@@ -6888,8 +7159,8 @@ function frageKI(){
 
   kiLauf = new AbortController();
   var text = '', modell = '';
-  fetch('/api/answer', {
-    method: 'POST', signal: kiLauf.signal,
+  fetch(API + '/answer', {
+    method: 'QUERY', signal: kiLauf.signal,
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({q: el('q').value, person: el('f-person').value,
                           source: el('f-source').value,
@@ -6980,11 +7251,11 @@ function planGeaendert(){
 
 function saveSchedule(){
   merke('flow.save', 'schedule');
-  post('/api/schedule', planAusFormular()).then(refresh);
+  patch(API + '/schedule', planAusFormular()).then(refresh);
 }
 function toggleMcp(){
   merke('flow.mcp', S.mcp.running ? 'stop' : 'start');
-  post('/api/mcp', {action: S.mcp.running ? 'stop' : 'start'}).then(function(r){
+  patch(API + '/mcp', {running: !S.mcp.running}).then(function(r){
     apiFehler(r);
     refresh();
   });
@@ -7030,7 +7301,12 @@ function zeigeUpdate(u, api){
 }
 function pruefeUpdate(){
   el('update-state').textContent = t('update.checking');
-  post('/api/update-check').then(function(u){ zeigeUpdate(u, LETZTE_API); refresh(); });
+  post(API + '/updates/check', {}).then(function(r){
+    // A refusal carries no `update`; the line says why instead of
+    // staying on "checking" for good.
+    if(!r || r.ok === false || !r.update){ el('update-state').textContent = rtext(r); return; }
+    zeigeUpdate(r.update, LETZTE_API); refresh();
+  });
 }
 
 /* ---------- Settings ---------- */
@@ -7123,7 +7399,7 @@ function zeigeProfile(pr){
   el('profil-gruppe').classList.toggle('hide', pr.moeglich === false);
 }
 function profileLaden(){
-  return api('/api/profiles').then(function(pr){ if(pr && pr.alle) zeigeProfilliste(pr); return pr; });
+  return api(API + '/profiles').then(function(pr){ if(pr && pr.alle) zeigeProfilliste(pr); return pr; });
 }
 function zeigeProfilliste(pr){
   PROFILE = pr;
@@ -7142,8 +7418,8 @@ function zeigeProfilliste(pr){
   }).join('');
 }
 function profilNachfrage(an){
-  post('/api/profile-prefs', {ohne_nachfrage: !!an}).then(function(r){
-    el('profil-msg').textContent = r.ok ? '' : rtext(r);
+  patch(API + '/profiles', {ask_at_start: !an}).then(function(r){
+    el('profil-msg').textContent = rtext(r);
   });
 }
 /* The header state opens this window: the whole row of another profile
@@ -7186,8 +7462,8 @@ function profilWechseln(name){
   PROFIL_GEWAEHLT = name;              // a second click changes nothing
   var hinweis = document.getElementById('profil-warten');
   if(hinweis){ hinweis.textContent = t('profile.opening', {name: name}); hinweis.classList.remove('hide'); }
-  post('/api/profile-switch', {name: name}).then(function(r){
-    if(!r.ok){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = rtext(r); return; }
+  post(API + '/profiles/' + encodeURIComponent(name) + '/open', {}).then(function(r){
+    if(r && r.ok === false){ PROFIL_GEWAEHLT = null; if(hinweis) hinweis.textContent = rtext(r); return; }
     if(r.url){ location.replace(r.url); return; }      // already open next door
     beendet = true;                                    // this instance is going; stop the polls
     setTimeout(profilWarten, 1000);
@@ -7207,7 +7483,7 @@ function profilWarten(){
     }
     setTimeout(profilWarten, pause);
   }
-  fetch('/api/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
+  fetch(API + '/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
     if(s && s.profile && s.profile.name === PROFIL_GEWAEHLT){ location.replace('/'); return; }
     nochmal();
   }).catch(nochmal);
@@ -7222,8 +7498,8 @@ function profilAnlegenFenster(){
 function profilAnlegen(){
   var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
   var name = ((feld && feld.value) || '').trim().toLowerCase();
-  post('/api/profiles', {name: name}).then(function(r){
-    if(!r.ok){ if(fehler) fehler.textContent = rtext(r); return; }
+  post(API + '/profiles', {name: name}).then(function(r){
+    if(r && r.ok === false){ if(fehler) fehler.textContent = rtext(r); return; }
     zeigeProfilliste(r.profiles);
     closeWizard('profil');
     profilWechselnFenster();
@@ -7241,8 +7517,8 @@ function profilUmbenennenFenster(alt){
 function profilUmbenennen(alt){
   var feld = document.getElementById('profil-neu'), fehler = document.getElementById('profil-fehler');
   var neu = ((feld && feld.value) || '').trim().toLowerCase();
-  post('/api/profile-rename', {name: alt, neu: neu}).then(function(r){
-    if(!r.ok){ if(fehler) fehler.textContent = rtext(r); return; }
+  patch(API + '/profiles/' + encodeURIComponent(alt), {name: neu}).then(function(r){
+    if(r && r.ok === false){ if(fehler) fehler.textContent = rtext(r); return; }
     zeigeProfilliste(r.profiles);
     closeWizard('profil');
   });
@@ -7388,15 +7664,16 @@ function kadenzFenster(quelle){
   KADENZ = {quelle: quelle, abw: abwLesen(quelle), offen: {}, filter: '', nurGesetzte: false, daten: null};
   kadenzFensterZeichnen();
   var koerper = quelle === 'teams'
-    ? {quelle: 'teams', teams_rules: el('c-teams_rules').value}
+    ? {teams_rules: el('c-teams_rules').value}
     : quelle === 'onedrive'
-    ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
+    ? {onedrive_rules: el('c-onedrive_rules').value}
     : quelle === 'todo'
-    ? {quelle: 'todo', todo_rules: el('c-todo_rules').value}
+    ? {todo_rules: el('c-todo_rules').value}
     : quelle === 'sharepoint'
-    ? {quelle: 'sharepoint', sharepoint_rules: el('c-sharepoint_rules').value}
+    ? {sharepoint_rules: el('c-sharepoint_rules').value}
     : {folder_rules: el('c-folder_rules').value, skip_folders: el('c-skip_folders').value};
-  post('/api/folder-plan', koerper).then(function(p){
+  // The path names the source; 'mail' is the mailbox's folders.
+  frage(API + '/sources/' + (quelle === 'mail' ? 'outlook' : quelle) + '/folder-plan', koerper).then(function(p){
     KADENZ.daten = p;
     // Which URL rows feed which library – for the library's own cadence.
     KADENZ.libs = {};
@@ -7425,7 +7702,7 @@ function kadenzFensterZeichnen(){
   var q = KADENZ.quelle, p = KADENZ.daten, koerper;
   if(!p){
     koerper = '<p class="small muted">' + esc(t('plan.loading')) + '</p>';
-  } else if(!p.ok){
+  } else if(p.ok === false){
     koerper = '<div class="banner warn">' + esc(t(q === 'teams' ? 'settings.teams.none'
                                                     : q === 'todo' ? 'settings.todo.none' : 'folders.none')) + '</div>';
   } else {
@@ -7440,7 +7717,7 @@ function kadenzFensterZeichnen(){
   oeffneEigenes('kadenz', modalKopf(t('kadenz.title.' + q), 'kadenz', t('kadenz.info.' + q)) + koerper +
     modalFuss({text: t('kadenz.apply'), tun: 'kadenzUebernehmen()'}, null,
               '<span class="kadenz-fuss" id="kadenz-zaehler">' + esc(t('kadenz.count', {n: n})) + '</span>'));
-  if(p && p.ok) kadenzBaumZeichnen();
+  if(p && p.ok !== false) kadenzBaumZeichnen();
 }
 function kadenzFiltern(wert){ KADENZ.filter = wert; kadenzBaumZeichnen(); }
 function kadenzNurGesetzte(){ KADENZ.nurGesetzte = !KADENZ.nurGesetzte; kadenzFensterZeichnen(); }
@@ -7519,7 +7796,7 @@ function kadenzZeile(k, tiefe, vor, treffer){
 }
 function kadenzBaumZeichnen(){
   var box = document.getElementById('kadenz-baum');
-  if(!box || !KADENZ.daten || !KADENZ.daten.ok) return;
+  if(!box || !KADENZ.daten || KADENZ.daten.ok === false) return;
   var q = KADENZ.quelle, w = ABW[q];
   var baum = kadenzKnoten(kadenzEintraege(), w.wurzeln);
   var zeilen = [], filter = KADENZ.filter.trim().toLowerCase();
@@ -7580,7 +7857,7 @@ function urlZeile(tabId, wert, kadenz){
     if(!url) return;
     var lauf = tabId === 'sp-urls' ? {sharepoint: true}
       : tabId === 'pl-urls' ? {planner: true} : {sharepoint_pages: true};
-    run(Object.assign({nur_einheit: url, index: true}, lauf), 'job.export', 'sync_now');
+    run(Object.assign({unit: url, index: true}, lauf), 'job.export', 'sync_now');
   };
   tab.appendChild(zeile);
   return zeile;
@@ -7617,7 +7894,7 @@ function speichereEinstellungen(){
   merke('flow.save', 'settings');
   speichernLaeuft = true;
   // One save button for the whole tab – but only really post the schedule
-  // when it changed: /api/schedule restarts the interval, and a settings
+  // when it changed: /api/v1/schedule restarts the interval, and a settings
   // save must not keep postponing a run that is nearly due.
   if(planGeaendert()) saveSchedule();
   speichereAblage();
@@ -7778,7 +8055,7 @@ function fuelleNotizbuchTabelle(nb, kad){
       zeile.querySelector('select').onchange = speichereEinstellungen;
       zeile.querySelector('button').onclick = function(ev){
         ev.stopPropagation();
-        run({onenote: true, nur_einheit: e.id, index: true}, 'job.export', 'sync_now');
+        run({onenote: true, unit: e.id, index: true}, 'job.export', 'sync_now');
       };
     }
     tab.appendChild(zeile);
@@ -7851,14 +8128,14 @@ function sharepointVorschau(){
   // Analytics, the one-line summary right here next to the button.
   el('sp-msg').textContent = t('sharepoint.preview.running');
   speichereSharepointFelder().then(function(){
-    return post('/api/run', {check_sharepoint: true, label: 'job.preview'});
+    return post(API + '/runs', {check_sharepoint: true, label: 'job.preview'});
   }).then(function(r){
-    if(!r.ok){ el('sp-msg').textContent = rtext(r); return; }
+    if(!r || !r.run){ el('sp-msg').textContent = rtext(r); return; }
     var timer = setInterval(function(){
       if(S && S.jobs && !S.jobs.busy){
         clearInterval(timer);
-        api('/api/sharepoint-report').then(function(r){
-          var b = r.bericht;
+        api(API + '/balance/sharepoint').then(function(r){
+          var b = r.report;
           var n = b ? (b.da || 0) + (b.offen || 0) + (b.wartend || 0) : 0;
           el('sp-msg').textContent = b && (n || b.ausgeschlossen)
             ? t('sharepoint.preview.result',
@@ -7872,8 +8149,8 @@ function sharepointVorschau(){
   });
 }
 function zeigeSharepointTypen(){
-  api('/api/sharepoint-report').then(function(r){
-    malSharepointTypen(r.bericht);
+  api(API + '/balance/sharepoint').then(function(r){
+    malSharepointTypen(r.report);
   }).catch(function(){});
 }
 function malSharepointTypen(b){
@@ -7903,17 +8180,19 @@ function gleicheOrdnerAb(quelle){
    the whole tab. A folder the app cannot write to is refused by the
    server, shown next to the fields and written to the log. */
 function speichereAblage(){
-  var koerper = {path: el('c-data-dir').value.trim(),
-                 index: el('c-index-dir').value.trim()};
-  return post('/api/data-dir', koerper).then(function(r){
-    var text = r.ok ? t(r.restart ? 'settings.datadir.restart'
-                                  : 'settings.datadir.same') : rtext(r);
+  var koerper = {data_dir: el('c-data-dir').value.trim(),
+                 index_dir: el('c-index-dir').value.trim()};
+  return patch(API + '/storage', koerper).then(function(r){
+    var gut = !(r && r.ok === false);
+    var text = gut ? t(r.restart_required ? 'settings.datadir.restart'
+                                          : 'settings.datadir.same') : rtext(r);
     ['datadir-msg', 'indexdir-msg'].forEach(function(id){
       var kasten = el(id);
-      kasten.className = 'small ' + (r.ok ? 'muted' : 'err');
+      kasten.className = 'small ' + (gut ? 'muted' : 'err');
       kasten.textContent = text;
     });
-    if(r.ok){ el('c-data-dir').value = r.path; el('c-index-dir').value = r.index; }
+    if(r && r.data_dir){ el('c-data-dir').value = r.data_dir;
+                         el('c-index-dir').value = r.index_dir || ''; }
   });
 }
 // "Default" only fills the field – saving is what applies it.
@@ -7941,18 +8220,21 @@ function zeigeExportliste(quelle){
   planDaten = null;
   planQuelle = quelle || 'outlook';
   planFenster();
-  post('/api/folder-plan', planQuelle === 'sharepoint'
-      ? {quelle: 'sharepoint', sharepoint_rules: el('c-sharepoint_rules').value}
+  // The path names the source; the calendars are the mailbox's second
+  // unit, not a source of their own.
+  frage(API + '/sources/' + (planQuelle === 'calendar' ? 'outlook' : planQuelle) + '/folder-plan',
+      planQuelle === 'sharepoint'
+      ? {sharepoint_rules: el('c-sharepoint_rules').value}
       : planQuelle === 'onedrive'
-      ? {quelle: 'onedrive', onedrive_rules: el('c-onedrive_rules').value}
+      ? {onedrive_rules: el('c-onedrive_rules').value}
       : planQuelle === 'calendar'
-      ? {quelle: 'calendar', calendar_rules: el('c-calendar_rules').value}
+      ? {unit: 'calendar', calendar_rules: el('c-calendar_rules').value}
       : planQuelle === 'onenote'
-      ? {quelle: 'onenote', onenote_rules: el('c-onenote_rules').value}
+      ? {onenote_rules: el('c-onenote_rules').value}
       : planQuelle === 'teams'
-      ? {quelle: 'teams', teams_rules: el('c-teams_rules').value}
+      ? {teams_rules: el('c-teams_rules').value}
       : planQuelle === 'todo'
-      ? {quelle: 'todo', todo_rules: el('c-todo_rules').value}
+      ? {todo_rules: el('c-todo_rules').value}
       : {folder_rules: el('c-folder_rules').value,
          skip_folders: el('c-skip_folders').value})
     .then(function(p){
@@ -7965,7 +8247,7 @@ function planFenster(){
   var p = planDaten, koerper;
   if(!p){
     koerper = '<p class="small muted">' + esc(t('plan.loading')) + '</p>';
-  } else if(!p.ok){
+  } else if(p.ok === false){
     koerper = '<div class="banner warn">' + esc(t('folders.none')) + '</div>';
   } else {
     koerper = '<p class="small muted">' + esc(t('plan.stand', {when: fmt(p.abgeglichen)})) + '</p>' +
@@ -7977,7 +8259,7 @@ function planFenster(){
     modalFuss({text: t(planQuelle === 'calendar' ? 'settings.calendars.sync'
                        : planQuelle === 'onenote' ? 'settings.onenote.sync' : 'folders.sync'),
                tun: 'planAbgleichen(&quot;' + planQuelle + '&quot;)'}));
-  if(p && p.ok) planListen();
+  if(p && p.ok !== false) planListen();
 }
 
 /* First the path, then the number, then the reason – in the order one asks.
@@ -8008,7 +8290,7 @@ function planZeile(e, zahl, mitArchiv){
 
 function planListen(){
   var p = planDaten;
-  if(!p || !p.ok || !document.getElementById('plan-listen')) return;
+  if(!p || p.ok === false || !document.getElementById('plan-listen')) return;
   var f = (el('plan-filter').value || '').trim().toLowerCase();
   function gruppe(schluessel, liste, zahl, mails, punkt, mitArchiv){
     var zeilen = liste.filter(function(e){
@@ -8160,7 +8442,7 @@ function closeWizard(kind){
   fokusVorher = null;
   // Only wizards are to be reported as "seen" – a self-opened window was
   // never demanded by the server and must not reset anything on it either.
-  if(WIZARDS[kind]) post('/api/wizard-seen');
+  if(WIZARDS[kind]) entferne(API + '/access/notice');
 }
 /* Frame for all wizards. The same rule everywhere: cross at the top right
    to close, the action at the bottom left, the fallback next to it – so no
@@ -8330,12 +8612,12 @@ function setzeModus(wert){
   });
 }
 function starteLogin(){
-  post('/api/login').then(function(){
+  post(API + '/access/session', {}).then(function(){
     refresh().then(zugangNeu);
   });
 }
 function abmelden(){
-  post('/api/logout').then(function(){
+  entferne(API + '/access/session').then(function(){
     refresh().then(zugangNeu);
   });
 }
@@ -8350,10 +8632,11 @@ function banner(art, html){
   return '<div class="banner' + (art ? ' ' + art : '') + '">' + html + '</div>';
 }
 function saveToken(){
-  post('/api/token', {token: el('tok').value}).then(function(r){
+  schicke('PUT', API + '/access/token', {token: el('tok').value}).then(function(r){
+    var gut = !(r && r.ok === false);
     el('tok-msg').textContent = rtext(r);
-    el('tok-msg').className = 'small ' + (r.ok ? 'ok' : 'err');
-    if(r.ok) zugangNeu();
+    el('tok-msg').className = 'small ' + (gut ? 'ok' : 'err');
+    if(gut) zugangNeu();
     refresh();
   });
 }
@@ -8392,7 +8675,7 @@ function ollamaWizard(){
     '<p class="small muted" style="margin-top:14px">' + esc(t('wizard.ollama.without.note')) + '</p>';
 }
 function recheckOllama(){
-  post('/api/ollama-recheck').then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
+  post(API + '/ollama/recheck', {}).then(function(){ refresh().then(function(){ openWizard('ollama', true); }); });
 }
 
 /* ---------- Quit ----------
@@ -8404,7 +8687,7 @@ function beenden(){
   var laeuft = S && S.jobs && S.jobs.busy;
   if(!confirm(t(laeuft ? 'quit.confirm.busy' : 'quit.confirm'))) return;
   beendet = true;
-  post('/api/quit').catch(function(){});   // the reply may never arrive
+  post(API + '/quit', {}).catch(function(){});   // the reply may never arrive
   document.querySelector('main').innerHTML =
     '<div class="card"><p>' + esc(t('quit.done')) + '</p></div>';
   document.querySelector('nav').classList.add('hide');
@@ -8440,13 +8723,13 @@ var KONFIG = null;          // the settings, fetched once and after a save
 var UMGEBUNG = {};          // paths, defaults, the client snippet – fixed
 var BESTAND = {};           // what the sources hold – changes with a run
 function ladeUmgebung(){
-  return api('/api/v1/app').then(function(r){
+  return api(API + '/app').then(function(r){
     if(r && !r.error) UMGEBUNG = r;
     return UMGEBUNG;
   }).catch(function(){ return UMGEBUNG; });
 }
 function ladeBestand(){
-  return api('/api/v1/inventory').then(function(r){
+  return api(API + '/inventory').then(function(r){
     if(r && !r.error) BESTAND = r;
     return BESTAND;
   }).catch(function(){ return BESTAND; });
@@ -8455,7 +8738,7 @@ function ladeBestand(){
    what PATCH says. The answer carries the settings as they now are,
    clamped values and all, so the page keeps that. */
 function konfig(body){
-  return patch('/api/v1/config', body).then(function(r){
+  return patch(API + '/config', body).then(function(r){
     if(r && r.config) KONFIG = r.config;
     // A saved port or a changed rule reaches the environment and the
     // inventory – both are otherwise only fetched at the start.
@@ -8463,7 +8746,7 @@ function konfig(body){
   });
 }
 function ladeKonfig(){
-  return api('/api/v1/config').then(function(r){
+  return api(API + '/config').then(function(r){
     KONFIG = (r && r.config) || {};
     return KONFIG;
   }).catch(function(){ KONFIG = KONFIG || {}; return KONFIG; });
@@ -8476,7 +8759,7 @@ function refresh(){
   // only the status, which is what the polling is for.
   var vorab = KONFIG ? [Promise.resolve(), Promise.resolve(), Promise.resolve()]
                      : [ladeKonfig(), ladeUmgebung(), ladeBestand()];
-  var stand = api('/api/status');
+  var stand = api(API + '/status');
   return Promise.all(vorab.concat([stand]))
     .then(function(alles){ return renderStatus(alles[alles.length - 1]); });
 }

@@ -79,10 +79,14 @@ from mcp.types import ToolAnnotations
 import analytics_db
 import detail
 import export_util
+import completeness
 import faelle
+import i18n
 import ollama_client
 import run_history
 import settings
+import state_db
+import steps
 import store_layout
 import version
 
@@ -293,6 +297,12 @@ def _db():
     con = sqlite3.connect(f'file:{STATE["db"]}?mode=ro', uri=True)
     con.row_factory = sqlite3.Row
     con.create_function("extern", 2, _extern_sql, deterministic=True)
+    # SQLite's LIKE folds ASCII only. Everything the indexer writes is
+    # already lower-case – `who` is the exception, it keeps the display
+    # name as it stands, so a comparison against it folds here.
+    con.create_function("py_lower", 1,
+                        lambda s: s.lower() if isinstance(s, str) else s,
+                        deterministic=True)
     return con
 
 
@@ -543,8 +553,27 @@ def _im_fall(con, case, case_folder=""):
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
-           im_fall=False, party="all"):
+           im_fall=False, party="all", mail=None):
     conds, params = [], []
+    # The mail lines (13.0): who stood in From, To, Cc, Bcc. A line only
+    # mail has means mail: an appointment or a file has no such line, and
+    # a list that let them through unnarrowed would answer "everything
+    # from her" with things that are not from her.
+    zeilen, mail_werte = [], []
+    for rolle, wert in (mail or {}).items():
+        if not str(wert or "").strip():
+            continue
+        # From is the sender's name and address together: one types either.
+        # The name is the one column the indexer leaves as it found it, so
+        # it is folded here – "Ülker" must find "Ülker Demir".
+        feld = ("(py_lower(COALESCE(who, '')) || ' ' || COALESCE(who_mail, ''))"
+                if rolle == "from"
+                else f"COALESCE({store_layout.MAIL_SPALTEN[rolle]}, '')")
+        zeilen.append(f"{feld} LIKE ? ESCAPE '\\'")
+        mail_werte.append(_wie(str(wert).strip()))
+    if zeilen:
+        conds.append("(src = 'outlook' AND (" + " AND ".join(zeilen) + "))")
+        params.extend(mail_werte)
     if party in ("internal", "external"):
         # Whose mail is it: all parties inside the user's own domains, or
         # one of them outside. Items without parties are on neither side.
@@ -601,6 +630,56 @@ def _party_pruefen(con, party):
         return ("No internal domains known – set them in Munimentum under "
                 "Settings › App, or sign in so the account's domain counts.")
     return None
+
+
+def _mail_pruefen(con, mail):
+    """Can the lines that were asked about be asked about? Only the columns
+    a filter actually reads have to be there: `from` sits in `who_mail`,
+    which every index since 11.1 carries, while to, cc and bcc came with
+    13.0. Refusing `from` on an 11.1 index would refuse a question that
+    index can answer."""
+    gefragt = [rolle for rolle, wert in (mail or {}).items()
+               if str(wert or "").strip()]
+    if not gefragt:
+        return None
+    fehlt = sorted({store_layout.MAIL_SPALTEN[r] for r in gefragt
+                    if not _hat_spalte(con, store_layout.MAIL_SPALTEN[r])})
+    if fehlt:
+        return ("This index predates the mail lines. Rebuild it (Build archive "
+                "→ “Index only”) to filter by "
+                + ", ".join(r for r in gefragt
+                            if store_layout.MAIL_SPALTEN[r] in fehlt) + ".")
+    return None
+
+
+def adressen(role="", q="", limit=12):
+    """The mail addresses of one line, most used first – what the Mail
+    filter offers while one types.
+
+    Counted at index time (rag_index builds the table), so a keystroke
+    costs one small query instead of a walk through every message."""
+    rolle = str(role or "").strip().lower()
+    if rolle not in store_layout.MAIL_SPALTEN:
+        return {"error": f'Unknown line: "{role}" (from, to, cc, bcc).',
+                "count": 0, "addresses": []}
+    con = _db()
+    try:
+        if not any(r[0] == "adressen" for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'")):
+            # An index from before the addresses: no list, and the interface
+            # does not offer the filter either.
+            return {"count": 0, "role": rolle, "addresses": []}
+        wo, params = "role = ?", [rolle]
+        if str(q or "").strip():
+            wo += " AND addr LIKE ? ESCAPE '\\'"
+            params.append(_wie(str(q).strip()))
+        rows = con.execute(f"SELECT addr, messages FROM adressen WHERE {wo} "
+                           "ORDER BY messages DESC, addr LIMIT ?",
+                           [*params, max(1, min(int(limit or 12), 200))]).fetchall()
+        return {"count": len(rows), "role": rolle,
+                "addresses": [{"address": a, "messages": n} for a, n in rows]}
+    finally:
+        con.close()
 
 
 def _to_ts(s, end):
@@ -978,19 +1057,27 @@ def _message_text(con, uid):
     return (rows[0] if rows else None), _join_chunks(rows)
 
 
+# The export folders by the index's own source names – the `root` of a
+# hit, the file tools' `source_root` – and the STATE key each lives
+# under, read off settings.QUELLEN, the one table of sources. It also
+# says what the step registry calls each of them, which differs for the
+# SharePoint pages alone.
+QUELLE_ORDNER = {index: f"{index}_dir" for _ordner, index in settings.QUELLEN.values()}
+REGISTRY_QUELLE = {quelle: index for quelle, (_ordner, index) in settings.QUELLEN.items()}
+
+
+def _exportordner():
+    """The export folders by the index's source names – the one map, for a
+    file's root and for the balance alike."""
+    return {quelle: STATE.get(schluessel) for quelle, schluessel in QUELLE_ORDNER.items()}
+
+
 def _resolve_source(source_root, rel):
     """Sandboxed path resolution for an export file. Returns (Path, error_str)."""
-    base = {"teams": STATE.get("teams_dir"),
-            "outlook": STATE.get("outlook_dir"),
-            "onedrive": STATE.get("onedrive_dir"),
-            "sharepoint": STATE.get("sharepoint_dir"),
-            "pages": STATE.get("pages_dir"),
-            "planner": STATE.get("planner_dir"),
-            "todo": STATE.get("todo_dir"),
-            "onenote": STATE.get("onenote_dir")}.get(source_root)
+    base = _exportordner().get(source_root)
     if not base:
-        return None, ("source_root must be 'teams', 'outlook', 'onedrive', "
-                      "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'.")
+        namen = [f"'{n}'" for n in QUELLE_ORDNER]
+        return None, "source_root must be " + ", ".join(namen[:-1]) + f" or {namen[-1]}."
     base = Path(base).resolve()
     target = (base / rel).resolve()
     if base != target and base not in target.parents:      # prevent path escape
@@ -1026,7 +1113,9 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     k: int = 12, offset: int = 0, mode: str = "auto",
                     preview_chars: int = 200, only_gone: bool = False,
                     folder: str = "", filetype: str = "", case: str = "",
-                    case_folder: str = "", party: str = "all") -> dict:
+                    case_folder: str = "", party: str = "all",
+                    mail_from: str = "", mail_to: str = "", mail_cc: str = "",
+                    mail_bcc: str = "") -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
     SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
     pages – or any subset of it, or only what one case holds.
@@ -1092,6 +1181,16 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             "external" – at least one party outside them. Items without
             addresses (chat, tasks, files) are on neither side. Every hit
             carries `domains`.
+        mail_from: Optional. Only mails whose From line holds this name or
+            address; `*` is the wildcard ("*@nordwind.example").
+        mail_to: Optional. The same for the To line, mail_cc for Cc.
+        mail_cc: See mail_to.
+        mail_bcc: Optional. The Bcc line – which only mails the user sent
+            themselves carry; a received mail has no blind copy to show.
+        Any of the four means mail: an appointment or a file has no such
+            line, so with one set nothing but mail answers – whatever
+            `source` says. list_addresses says which addresses stand in
+            which line.
     """
     con = _db()
     try:
@@ -1102,12 +1201,16 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         fehler = _party_pruefen(con, party)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
+        mail = {"from": mail_from, "to": mail_to, "cc": mail_cc, "bcc": mail_bcc}
+        fehler = _mail_pruefen(con, mail)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
         im_fall, fehler = _im_fall(con, case, case_folder)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party)
+                               filetype, im_fall, party, mail)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -1150,7 +1253,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     offset: int = 0, preview_chars: int = 200,
                     only_gone: bool = False, folder: str = "",
                     filetype: str = "", case: str = "", case_folder: str = "",
-                    party: str = "all") -> dict:
+                    party: str = "all", mail_from: str = "", mail_to: str = "",
+                    mail_cc: str = "", mail_bcc: str = "") -> dict:
     """List items by filter, newest first, without a search query.
 
     For "everything from <person> in <month>", "the last week in <folder>",
@@ -1185,6 +1289,13 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             in the case, newest first" is the timeline of the matter.
         case_folder: With `case`: only one of its folders (name or id).
         party: "all", "internal" or "external" – see search_messages.
+        mail_from: Optional. Only mails with this name or address in the
+            From line; mail_to, mail_cc, mail_bcc the same for the other
+            lines. Any of them means mail: nothing else has such a line,
+            so nothing else answers. See search_messages.
+        mail_to: See mail_from.
+        mail_cc: See mail_from.
+        mail_bcc: See mail_from – only in mail one sent oneself.
     """
     con = _db()
     try:
@@ -1195,12 +1306,16 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         fehler = _party_pruefen(con, party)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
+        mail = {"from": mail_from, "to": mail_to, "cc": mail_cc, "bcc": mail_bcc}
+        fehler = _mail_pruefen(con, mail)
+        if fehler:
+            return {"error": fehler, "count": 0, "results": []}
         im_fall, fehler = _im_fall(con, case, case_folder)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party)
+                               filetype, im_fall, party, mail)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.
@@ -1374,12 +1489,9 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
             conds.append(f"src IN ({','.join('?' * len(srcs))})")
             params.extend(srcs)
         if contains.strip():
-            # SQLite's LIKE/lower() are ASCII-only; register Python lower() so
-            # umlaut-cased input ("MÜLLER") still matches. ppl is stored
-            # pre-lowercased by the indexer, so only `who` needs folding.
-            con.create_function("py_lower", 1,
-                                lambda s: s.lower() if isinstance(s, str) else s,
-                                deterministic=True)
+            # py_lower comes with the connection (_db): SQLite's LIKE folds
+            # ASCII only, and `who` is the one column the indexer leaves as
+            # it found it.
             conds.append("(py_lower(who) LIKE ? ESCAPE '\\' "
                          "OR ppl LIKE ? ESCAPE '\\')")
             pat = _wie(contains)
@@ -1483,7 +1595,7 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
             f" AND ctx IS NOT NULL AND ctx != '') "
             f"WHERE 1=1 {wo} "
             f"GROUP BY ordner ORDER BY 2 DESC LIMIT ?",
-            [*params, max(1, min(int(limit), 1000))]).fetchall()
+            [*params, max(1, min(int(limit), 2000))]).fetchall()
         return {"count": len(rows),
                 "folders": [{"path": r[0], "messages": r[1]} for r in rows]}
     finally:
@@ -1524,11 +1636,28 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
                 if e:
                     zahl[e] = zahl.get(e, 0) + n
         oben = sorted(zahl.items(), key=lambda x: (-x[1], x[0]))
-        grenze = max(1, min(int(limit), 200))
+        grenze = max(1, min(int(limit), 500))
         return {"count": min(len(oben), grenze), "total_distinct": len(oben),
                 "filetypes": [{"type": e, "messages": n} for e, n in oben[:grenze]]}
     finally:
         con.close()
+
+
+@mcp.tool(annotations=_READONLY)
+def list_addresses(role: str = "from", limit: int = 20, contains: str = "") -> dict:
+    """List the mail addresses of one line, most used first, with counts.
+
+    The counterpart to the `mail_from`, `mail_to`, `mail_cc` and `mail_bcc`
+    filters: who actually wrote, who was written to, who was copied in.
+    Mail only – no other source has such lines.
+
+    Args:
+        role: Which line – "from", "to", "cc" or "bcc" (default "from").
+        limit: Max number of addresses (default 20, cap 200).
+        contains: Optional. Only addresses holding this text; `*` is the
+            wildcard, so "*@nordwind.example" lists one domain's.
+    """
+    return adressen(role, contains, limit)
 
 
 def _archiv_stand():
@@ -1652,9 +1781,6 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
     """
     con = _db()
     try:
-        con.create_function("py_lower", 1,
-                            lambda s: s.lower() if isinstance(s, str) else s,
-                            deterministic=True)
         pat = _wie(query)
         rows = con.execute(
             "SELECT uid, title, who, ctx, rel, text, ppl FROM chunks "
@@ -1760,18 +1886,166 @@ def corpus_stats() -> dict:
             "embed_model": STATE.get("embed_model") if STATE.get("semantic") else None,
             "vector_dtype": STATE.get("vector_dtype"),
             "last_semantic_error": STATE.get("last_semantic_error"),
-            "teams_dir": STATE.get("teams_dir"),
-            "outlook_dir": STATE.get("outlook_dir"),
-            "onedrive_dir": STATE.get("onedrive_dir"),
-            "sharepoint_dir": STATE.get("sharepoint_dir"),
-            "pages_dir": STATE.get("pages_dir"),
-            "planner_dir": STATE.get("planner_dir"),
-            "todo_dir": STATE.get("todo_dir"),
-            "onenote_dir": STATE.get("onenote_dir"),
+            **{schluessel: STATE.get(schluessel) for schluessel in QUELLE_ORDNER.values()},
             **_archiv_stand(),
         }
     finally:
         con.close()
+
+
+def _laeufe():
+    """The run history, read-only: it belongs to the app, which writes it
+    (run_history.py) – one reader for both, this server only renders. A
+    server started without the app's home folder, or an archive that
+    never ran, simply has none."""
+    pfad = STATE.get("runs_db")
+    if not pfad or not Path(pfad).exists():
+        return None
+    return run_history.RunHistory(pfad, readonly=True)
+
+
+def _zeit(ts):
+    try:
+        return datetime.fromtimestamp(ts).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _satz(text):
+    """A log line as a sentence. The app stores what it can translate as a
+    text key with placeholders; this renders it in English, which is the
+    language of everything this server says."""
+    if isinstance(text, dict) and text.get("k"):
+        return i18n.satz("en", text["k"], export_util.resource_dir(), text.get("v")) or text["k"]
+    return text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
+
+
+@mcp.tool(annotations=_READONLY)
+def list_runs(limit: int = 20) -> dict:
+    """What the archive's runs did, newest first – worth asking before
+    concluding from the archive that something does not exist.
+
+    An archive is only as complete as its last run: a source whose run
+    failed, was cancelled or never happened is missing from every search,
+    and nothing in a hit says so. One entry per run with `started`,
+    `finished`, `result` – `done`, `error`, `aborted` (cancelled),
+    `token_expired`, or `running` while it is still on – what it was
+    (`job`: Export, Fetch now, …), where it came from (`origin`: manual,
+    schedule) and the app version it ran under, plus one row per step
+    with its `label` and what it brought in: `new`, `unchanged`,
+    `excluded`, `errors`, `skipped`. `ok: 0` on a step is the one to
+    look at – `run_log` then says why.
+
+    Returns `{"runs": [], "note": …}` when this archive has no history –
+    a server started without the app's home folder, or an archive that
+    never ran.
+    """
+    hist = _laeufe()
+    if hist is None:
+        return {"runs": [], "count": 0, "has_more": False,
+                "note": "This archive has no run history yet."}
+    wieviele = max(1, min(int(limit or 20), 100))
+    # Asked for one more than the cap: whether it came says exactly
+    # whether something was cut off. Labels are stored as text keys;
+    # Claude reads the English sentence, like every log line.
+    laeufe = [
+        {"id": lauf["id"], "started": _zeit(lauf["started_at"]),
+         "finished": _zeit(lauf["finished_at"]), "result": lauf["result"] or "running",
+         "job": _satz({"k": lauf["job_type"], "v": {}}), "origin": lauf["origin"],
+         "app_version": lauf["app_version"],
+         "steps": [{"step": s["key"], "label": _satz({"k": s["label"], "v": {}}),
+                    "seconds": s["duration_s"], "new": s["new"], "unchanged": s["unchanged"],
+                    "excluded": s["excluded"], "errors": s["errors"],
+                    "skipped": bool(s["skipped"]), "ok": s["ok"]}
+                   for s in lauf["steps"]]}
+        for lauf in hist.list_runs(wieviele + 1)]
+    return {"runs": laeufe[:wieviele], "count": min(len(laeufe), wieviele),
+            "has_more": len(laeufe) > wieviele}
+
+
+@mcp.tool(annotations=_READONLY)
+def run_log(run: int, limit: int = 200) -> dict:
+    """The log one run wrote, oldest first – why a step failed, in words.
+
+    `run` is the `id` from `list_runs`. Lines carry `level` (`info`,
+    `warn`, `err`) and an English sentence. Old logs are pruned on the
+    schedule the app is set to, so a run from last month may have its
+    counts but no lines left.
+    """
+    hist = _laeufe()
+    if hist is None:
+        return {"lines": [], "count": 0, "has_more": False,
+                "note": "This archive has no run history yet."}
+    try:
+        nummer = int(run)
+    except (TypeError, ValueError):
+        return {"lines": [], "count": 0, "has_more": False,
+                "error": f"run must be the id from list_runs, not {run!r}."}
+    wieviele = max(1, min(int(limit or 200), 2000))
+    zeilen = [{"at": _zeit(z["ts"]), "level": z["level"], "text": _satz(z["text"])}
+              for z in hist.run_log(nummer, wieviele + 1)]
+    if not zeilen:
+        # No lines: pruned, or never such a run – two different answers.
+        return {"lines": [], "count": 0, "has_more": False,
+                "note": (f"No stored lines for run {run} – pruned, or it wrote none."
+                         if hist.has_run(nummer) else f"No run with id {run}.")}
+    return {"lines": zeilen[:wieviele], "count": min(len(zeilen), wieviele),
+            "has_more": len(zeilen) > wieviele}
+
+
+@mcp.tool(annotations=_READONLY)
+def source_completeness(source: str = "") -> dict:
+    """What a source's last check found against Microsoft: what is here,
+    what was never fetched, what the rules leave out, and what is gone at
+    Microsoft but kept here.
+
+    The counterpart to `list_runs`: that one says whether a run worked,
+    this one whether the result is complete. Without `source` every row
+    of the balance answers; the check itself runs in the app (*Insights →
+    completeness balance*), so a row that was never checked has no report
+    – which is not the same as "nothing missing".
+
+    Keys are the app's own (German): `da` here, `offen` not fetched yet,
+    `ausgeschlossen` left out by the rules, `behalten` deleted at Microsoft
+    but kept, `wartend` waiting for the next run, `einheit` what is being
+    counted (messages, files, …), `geprueft` when the check ran, `stand`
+    its verdict, `grund` why it could not be complete, `zeilen` the same
+    numbers per folder or library (`pfad`, `da`, `offen`).
+
+    Args:
+        source: One row of the balance – outlook_mail, outlook_calendar,
+            outlook_contacts, teams, onedrive, sharepoint, sharepoint_pages,
+            planner, todo or onenote – or "" for all of them. The mailbox
+            is three rows, because mail, calendar and contacts are fetched
+            and checked apart.
+    """
+    # The rows the check writes, in the registry's order: the mailbox is
+    # three of them, and each report sits under its row's name – there is
+    # no report called "outlook".
+    ordner = _exportordner()
+    zeilen = {e["quelle"]: ordner.get(REGISTRY_QUELLE[e["ordner"]]) for e in steps.PRUEFUNGEN}
+    gewuenscht = (source or "").strip().lower()
+    if gewuenscht and gewuenscht not in zeilen:
+        return {"error": f"Unknown source {source!r} – one of: " + ", ".join(zeilen)}
+    berichte, ohne = {}, []
+    for quelle, pfad in zeilen.items():
+        if gewuenscht and quelle != gewuenscht:
+            continue
+        if not pfad or not Path(pfad).exists():
+            continue
+        # Read-only: the file is the export's, and a step may be writing it.
+        db = state_db.StateDb(pfad, readonly=True)
+        try:
+            bericht = completeness.lesen(db, quelle)
+        except Exception:                  # noqa: BLE001 – a check is context
+            bericht = None
+        finally:
+            db.close()
+        if bericht:
+            berichte[quelle] = bericht
+        else:
+            ohne.append(quelle)
+    return {"reports": berichte, "never_checked": ohne}
 
 
 @mcp.tool(annotations=_READONLY)

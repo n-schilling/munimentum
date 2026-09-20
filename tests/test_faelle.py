@@ -19,7 +19,12 @@ def test_kriterien_haben_eine_form():
                           "person": "Alice", "unbekannt": "x"})
     assert k == {"q": "budget", "mode": "text", "person": "Alice", "source": "all", "from": "",
                  "to": "", "folder": "", "filetype": "", "gone": True, "fall": 3, "ordner": None,
-                 "party": "all"}
+                 "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
+    # the four mail lines (13.0) travel with the criteria like any filter
+    assert faelle.kriterien({"mail_to": " bob@nordwind.example "})["mail_to"] == "bob@nordwind.example"
+    # and a search that is nothing but one of them is not an empty search
+    assert faelle.leer({})
+    assert not faelle.leer({"mail_cc": "carla"})
     # the parties filter: one of two narrowings, anything else is "all"
     assert faelle.kriterien({"party": " External "})["party"] == "external"
     assert faelle.kriterien({"party": "x"})["party"] == "all"
@@ -47,6 +52,24 @@ def test_historie_merkt_sich_kriterien_nicht_treffer_und_faltet_wiederholungen(b
     assert "results" not in eintraege[0] and set(eintraege[0]) == {"id", "wann", "kriterien", "treffer"}
     assert buch.suchen(limit=1)[0]["kriterien"]["q"] == "invoice"
     assert buch.suchen_leeren() == 2 and buch.suchen() == []
+
+
+def test_eine_historienzeile_von_vor_13_0_wird_weitergeschoben_statt_verdoppelt(buch):
+    """13.0 added the four mail lines to the criteria; the newest row of
+    an older history lacks them. The same search must still move that row
+    forward, not pile a second one on top of it."""
+    import json
+    a = buch.suche_merken({"q": "budget"}, 1)
+    alt = json.dumps({"q": "budget", "person": "", "from": "", "to": "", "source": "all",
+                      "mode": "text", "gone": False, "folder": "", "filetype": "",
+                      "fall": None, "ordner": None, "party": "all"}, sort_keys=True)
+    con = buch._connect()
+    con.execute("UPDATE suchen SET kriterien = ? WHERE id = ?", (alt, a))
+    con.commit()
+    con.close()
+    assert buch.suche_merken({"q": "budget"}, 2) == a
+    assert [s["id"] for s in buch.suchen()] == [a]
+    assert buch.suchen()[0]["kriterien"]["mail_from"] == ""
 
 
 def test_historie_wird_nach_tagen_aufgeraeumt(buch, monkeypatch):

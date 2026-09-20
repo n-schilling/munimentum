@@ -35,6 +35,10 @@ from pathlib import Path
 DB_NAME = "faelle.db"
 OFFEN, ZU = "offen", "zu"
 MODI = ("text", "aehnlich", "ki")
+# The engine's names for the same three: the interface named them after
+# what they do for the user, the engine after how it ranks. One table for
+# both directions – the app's routes read it too.
+ENGINE_MODUS = {"text": "lexical", "aehnlich": "semantic", "ki": "hybrid"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS suchen(
@@ -116,7 +120,10 @@ UI, MCP = "ui", "mcp"                     # who wrote an item or a note
 
 _LEER = {"q": "", "mode": "text", "person": "", "source": "all", "from": "",
          "to": "", "folder": "", "filetype": "", "gone": False, "fall": None, "ordner": None,
-         "party": "all"}
+         "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
+# The four lines of a mail (13.0). `from` and `to` were taken by the date
+# range long before, hence the prefix.
+MAIL = ("mail_from", "mail_to", "mail_cc", "mail_bcc")
 PARTEIEN = ("internal", "external")       # the "party" filter's two narrowings
 
 
@@ -147,7 +154,7 @@ def kriterien(daten):
         except ValueError:
             daten = {}
     out = dict(_LEER)
-    for k in ("q", "person", "from", "to", "folder", "filetype"):
+    for k in ("q", "person", "from", "to", "folder", "filetype", *MAIL):
         out[k] = str(daten.get(k) or "").strip()
     out["source"] = str(daten.get("source") or "all").strip() or "all"
     mode = str(daten.get("mode") or "text").strip()
@@ -171,14 +178,15 @@ def kriterien(daten):
 
 
 def _modus_vom_server(mode):
-    return {"lexical": "text", "semantic": "aehnlich", "hybrid": "ki"}.get(mode, "text")
+    return {v: k for k, v in ENGINE_MODUS.items()}.get(mode, "text")
 
 
 def leer(k):
     """Nothing to remember: no words, no filter."""
     k = kriterien(k)
     return not (k["q"] or k["person"] or k["from"] or k["to"] or k["folder"]
-                or k["filetype"] or k["gone"] or k["fall"] or k["source"] != "all")
+                or k["filetype"] or k["gone"] or k["fall"] or k["source"] != "all"
+                or any(k[m] for m in MAIL))
 
 
 def _json(k):
@@ -214,9 +222,11 @@ class Fallbuch:
         con = self._connect()
         try:
             letzte = con.execute("SELECT id, kriterien FROM suchen ORDER BY wann DESC, id DESC LIMIT 1").fetchone()
-            if letzte and letzte["kriterien"] == text:
-                con.execute("UPDATE suchen SET wann = ?, treffer = ? WHERE id = ?",
-                            (jetzt(), treffer, letzte["id"]))
+            # Compared in today's shape: a row written before a criterion
+            # existed (13.0 added the mail lines) still names the same search.
+            if letzte and _json(letzte["kriterien"]) == text:
+                con.execute("UPDATE suchen SET wann = ?, treffer = ?, kriterien = ? WHERE id = ?",
+                            (jetzt(), treffer, text, letzte["id"]))
                 con.commit()
                 return letzte["id"]
             cur = con.execute("INSERT INTO suchen(wann, kriterien, treffer) VALUES(?,?,?)",

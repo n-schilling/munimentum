@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""The versioned surface (/api/v1) speaks English and REST.
+"""What /api/v1 speaks, and what the app speaks.
 
-The app's own interface grew with the app: its routes name actions
-(`/api/faelle/anlegen`), everything is a POST, and where the data is
-German the keys are too – the page and the app share one vocabulary, and
-that is worth more inside the app than conformity would be.
+Inside the app the data is German where it grew that way: the case book
+keeps `eintraege_liste`, `titel`, `wer`, `offen`. The page and the app
+share that one vocabulary, and inside the app it is worth more than
+conformity would be.
 
-For everyone else there is `/api/v1`: resources instead of actions, the
-method says what happens, the names are English. This module is the one
-place that translates between the two, so the case book keeps its own
-words and nothing in the app has to know about the outside spelling.
+Outward there is `/api/v1`: resources instead of actions, the method says
+what happens, the names are English, a collection is always `items`. This
+module is the one place that translates between the two, so nothing in
+the app has to know about the outside spelling.
 
-Only cases and the search live there so far. The page moves over one
-resource at a time – its search already has – and the action routes go
-in 13.0, when none of them is left in use.
+With 13.0 both doors that hold data live there – *Explore archive* with
+the search, its memories and the file behind a hit, and *Cases* with the
+case and everything that hangs on it. What is left on the app's own
+surface is the running of the archive.
 """
 
 # -- Cases -----------------------------------------------------------------
@@ -39,10 +40,17 @@ LISTE = {"wann": "when", "kriterien": "criteria", "anzahl": "hits", "ordner": "f
 SUCHE = {
     "kriterien": "criteria", "angelegt": "created", "zuletzt": "last_run",
     "treffer": "hits", "fall": "case", "fall_name": "case_name",
-    "ordner": "folder", "ordner_name": "folder_name",
+    # Its own folder is the case's, and `folder` is the mailbox folder in
+    # its criteria – so it is `case_folder` here, the name the body takes.
+    "ordner": "case_folder", "ordner_name": "case_folder_name",
 }
 ORDNER = {"angelegt": "created", "anzahl": "items"}
-KRITERIEN = {"fall": "case", "ordner": "folder"}
+# A search's criteria. `folder` is the mailbox folder and was there
+# first, so the case's folder is `case_folder` – the names the search's own
+# query parameters use.
+KRITERIEN = {"fall": "case", "ordner": "case_folder"}
+# One row of the search history: when it ran, what was asked, how many hits.
+VERLAUF = {"wann": "when", "kriterien": "criteria", "treffer": "hits"}
 
 # The case book's two states, spelled out.
 STATUS = {"offen": "open", "zu": "closed"}
@@ -76,6 +84,50 @@ def fall(d):
     return out
 
 
+def eintrag(d):
+    """One item of a case as /api/v1 returns it."""
+    return _um(d, EINTRAG)
+
+
 def kriterien(d):
     """A search's criteria, English."""
     return _um(d, KRITERIEN)
+
+
+def treffer(hits):
+    """Hits as /api/v1 hands them over. The engine answers English by
+    itself – only the mark that says which cases a hit sits in comes from
+    the case book, in its own words."""
+    for h in hits or ():
+        if h.get("cases"):
+            h["cases"] = [{**_um(f, {"ordner": "folder"}),
+                           "status": STATUS.get(f.get("status"), f.get("status"))}
+                          for f in h["cases"]]
+    return hits
+
+
+# The way back: what a caller sends becomes what the case book stores.
+EINTRAG_ZURUECK = {v: k for k, v in EINTRAG.items()}
+
+
+def eintrag_hinein(d):
+    """One item as a caller hands it over – English in, German where the
+    case book keeps it. Keys it does not know are dropped: a case stores
+    the pointer into the archive, not whatever a client carries along."""
+    erlaubt = {"key", "src", "root", "rel", "titel", "datum", "wer", "bemerkung"}
+    out = _um(d or {}, EINTRAG_ZURUECK)
+    return {k: v for k, v in out.items() if k in erlaubt}
+
+
+def verlauf(d):
+    """One search of the history, English – its criteria too."""
+    out = _um(d, VERLAUF)
+    out["criteria"] = kriterien(out.get("criteria") or {})
+    return out
+
+
+def gespeicherte_suche(d):
+    """A saved search, English – its criteria too."""
+    out = _um(d, SUCHE)
+    out["criteria"] = kriterien(out.get("criteria") or {})
+    return out

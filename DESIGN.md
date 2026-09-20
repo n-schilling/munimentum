@@ -57,7 +57,10 @@ Each rule is one sentence and the reason behind it.
 - **Filters count, they do not search.** Every filter is a pill with its
   control in a popover under it; a set pill carries its value and a `×`;
   *Clear filters* appears only when one is set. A filter that can narrow
-  nothing (one folder, one type, no case, no addresses) is not offered.
+  nothing (one folder, one type, no case, no addresses, a source without
+  mail lines) is not offered — absent, never greyed out. One question is
+  one pill even when it has several fields: the date range has two, the
+  mail filter four, and each pill's `×` clears all of them.
 - **Pickers are popovers under the thing they change** — the month's
   name opens the month picker, a pill opens its control — never a
   second window and never a field next to the thing.
@@ -190,9 +193,10 @@ Use the existing class; do not invent a sibling that looks almost the same.
   on; a process starts through `run()`.
 - **A new view onto the archive**: a `.sicht` in the door's strip, a
   `#sicht-<name>` block, a branch in `sicht()`, one hand-over button.
-- **Something about a case**: a fold, a `.mini` in the row it acts on, a
-  route under `/api/faelle/` that answers with the whole case; items
-  enter a case through the one choice window.
+- **Something about a case**: a fold, a `.mini` in the row it acts on,
+  and its own collection under `/api/v1/cases/{id}/` whose every write
+  answers with the whole case; items enter a case through the one choice
+  window.
 - **Something of the app, not a profile**: `profiles.json` in the app
   folder, its own route, never `app_config.json`.
 

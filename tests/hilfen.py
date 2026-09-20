@@ -20,6 +20,24 @@ def call(port, method, path, body=None, host=None):
         return r.status, raw.decode("utf-8", "replace")
 
 
+def call_kopf(port, method, path, body=None, host=None):
+    """Like `call`, plus the response headers – for the ones that say
+    something: `Location` on a create, `Allow` on a 405."""
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    headers = {"Content-Type": "application/json"}
+    if host:
+        headers["Host"] = host
+    con.request(method, path, json.dumps(body) if body is not None else None, headers)
+    r = con.getresponse()
+    raw = r.read()
+    kopf = dict(r.getheaders())
+    con.close()
+    try:
+        return r.status, json.loads(raw), kopf
+    except ValueError:
+        return r.status, raw.decode("utf-8", "replace"), kopf
+
+
 def ohne_schluesselspalte(db):
     """Turn a store into one from before 11.0: the chunks table rebuilt
     without its key column. By hand rather than ALTER TABLE … DROP COLUMN –

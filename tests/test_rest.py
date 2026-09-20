@@ -107,11 +107,11 @@ def test_der_fall_spricht_englisch(server):
     _, port = server
     code, _, r = roh(port, "POST", "/api/v1/cases", {"name": "Nordwind"})
     kennung = r["case"]["id"]
-    call(port, "POST", "/api/faelle/ordner-anlegen", {"id": kennung, "name": "Belege"})
-    call(port, "POST", "/api/faelle/notiz", {"id": kennung, "text": "Erste Notiz"})
-    call(port, "POST", "/api/faelle/hinzufuegen", {"id": kennung, "eintraege": [
+    call(port, "POST", f"/api/v1/cases/{kennung}/folders", {"name": "Belege"})
+    call(port, "POST", f"/api/v1/cases/{kennung}/notes", {"text": "Erste Notiz"})
+    call(port, "POST", f"/api/v1/cases/{kennung}/items", {"items": [
         {"key": "k1", "src": "outlook", "root": "outlook", "rel": "inbox/a.eml",
-         "titel": "Rechnung", "datum": "2026-03-04", "wer": "Alice Beispiel"}]})
+         "title": "Rechnung", "date": "2026-03-04", "who": "Alice Beispiel"}]})
     code, _, r = roh(port, "GET", f"/api/v1/cases/{kennung}")
     fall = r["case"]
     deutsch = set(rest.FALL) | set(rest.EINTRAG) | set(rest.NOTIZ) | set(rest.ORDNER)
@@ -161,10 +161,10 @@ def test_die_versionierte_suche_merkt_sich_nur_auf_ansage(server, monkeypatch):
     a, port = server
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
     roh(port, "GET", "/api/v1/search?q=budget")
-    assert call(port, "GET", "/api/suche/historie")[1]["searches"] == []
+    assert call(port, "GET", "/api/v1/searches/history")[1]["items"] == []
     roh(port, "GET", "/api/v1/search?q=budget&remember=1")
-    verlauf = call(port, "GET", "/api/suche/historie")[1]["searches"]
-    assert [h["kriterien"]["q"] for h in verlauf] == ["budget"]
+    verlauf = call(port, "GET", "/api/v1/searches/history")[1]["items"]
+    assert [h["criteria"]["q"] for h in verlauf] == ["budget"]
 
 
 def test_eine_ressource_hat_eine_schreibweise(server):
@@ -203,9 +203,13 @@ class FakeSuche:
 
     @staticmethod
     def browse_messages(**kw):
+        # Nicht jeder Aufrufer pagiert: die Antwort-Route fragt ohne
+        # `offset`, und eine Attrappe, die daran scheitert, prueft die
+        # falsche Sache.
         FakeSuche.gesehen = dict(kw)
-        return {"backend": "bm25", "count": kw["k"],
-                "results": [{"uid": f"u{kw['offset'] + i}"} for i in range(kw["k"])]}
+        k, offset = int(kw.get("k") or 1), int(kw.get("offset") or 0)
+        return {"backend": "bm25", "count": k,
+                "results": [{"uid": f"u{offset + i}"} for i in range(k)]}
 
     @staticmethod
     def search_messages(**kw):
@@ -218,6 +222,16 @@ class FakeSuche:
     @staticmethod
     def get_thread(**kw):
         return {"thread": "x", "count": 0, "messages": []}
+
+    @staticmethod
+    def adressen(**kw):
+        FakeSuche.gesehen = dict(kw)
+        if kw.get("role") not in ("from", "to", "cc", "bcc"):
+            return {"error": f'Unknown line: "{kw.get("role")}" (from, to, cc, bcc).',
+                    "count": 0, "addresses": []}
+        return {"count": 1, "role": kw["role"],
+                "addresses": [{"address": "alice.beispiel@nordwind.example",
+                               "messages": 12}]}
 
 
 def test_die_suche_paged_mit_limit_und_offset(server, monkeypatch):
@@ -240,6 +254,70 @@ def test_die_suche_paged_mit_limit_und_offset(server, monkeypatch):
     assert code == 200 and len(r["items"]) == 2 and r["has_more"] is False
 
 
+def test_die_mailzeilen_gehen_als_eigene_parameter_durch(server, monkeypatch):
+    """The four lines of a mail have their own names – `from` and `to` were
+    taken by the date range long before – and they reach the engine as they
+    were typed."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    code, _, r = roh(port, "GET", "/api/v1/search?source=outlook"
+                                  "&mail_from=alice%40nordwind.example&mail_to=bob"
+                                  "&mail_cc=carla&mail_bcc=dana&from=2026-01-01")
+    assert code == 200
+    assert FakeSuche.gesehen["mail_from"] == "alice@nordwind.example"
+    assert FakeSuche.gesehen["mail_to"] == "bob"
+    assert FakeSuche.gesehen["mail_cc"] == "carla"
+    assert FakeSuche.gesehen["mail_bcc"] == "dana"
+    assert FakeSuche.gesehen["date_from"], "der Zeitraum bleibt from/to"
+    # Nothing given, nothing sent on.
+    roh(port, "GET", "/api/v1/search?q=budget")
+    assert FakeSuche.gesehen["mail_to"] == ""
+    # An index that predates the lines refuses – the engine's own sentence,
+    # and 409, because the request is fine and the index is not.
+    monkeypatch.setattr(FakeSuche, "browse_messages",
+                        staticmethod(lambda **kw: {"error": "This index predates the mail lines.",
+                                                   "count": 0, "results": []}))
+    code, _, r = roh(port, "GET", "/api/v1/search?mail_to=bob")
+    assert code == 409 and r["detail"] == "This index predates the mail lines."
+    assert r["hits"] == [] and r["count"] == 0
+
+
+def test_die_adressen_einer_zeile_sind_eine_sammlung(server, monkeypatch):
+    """What the Mail filter offers while one types – a collection like every
+    other on this surface: `items`."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    code, _, r = roh(port, "GET", "/api/v1/addresses?role=cc&contains=carla&limit=5")
+    assert code == 200 and r["items"][0]["messages"] == 12
+    # One above the cap: that is where `has_more` comes from.
+    assert FakeSuche.gesehen == {"role": "cc", "q": "carla", "limit": 6}
+    assert "addresses" not in r, "eine Sammlung heisst hier items"
+    # The default line is the sender's.
+    roh(port, "GET", "/api/v1/addresses")
+    assert FakeSuche.gesehen["role"] == "from" and FakeSuche.gesehen["limit"] == 13
+    # A line that does not exist is a bad request, not an empty list.
+    code, _, r = roh(port, "GET", "/api/v1/addresses?role=envelope")
+    assert code == 400 and r["items"] == []
+    assert roh(port, "GET", "/api/v1/addresses?limit=viele")[0] == 400
+    # And without an index the same 503 as everywhere else.
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: None)
+    code, _, r = roh(port, "GET", "/api/v1/addresses")
+    assert code == 503 and r["items"] == []
+
+
+def test_der_gespeicherte_modus_laeuft_ohne_uebersetzung(server, monkeypatch):
+    """A saved search stores the interface's names for its three modes; the
+    engine ranks under other ones. The route takes both, so a stored
+    criteria set can be handed back unchanged."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    for gespeichert, erwartet in (("text", "lexical"), ("aehnlich", "semantic"),
+                                  ("ki", "hybrid"), ("lexical", "lexical"),
+                                  ("semantic", "semantic"), ("", "auto")):
+        roh(port, "GET", f"/api/v1/search?q=Rechnung&mode={gespeichert}")
+        assert FakeSuche.gesehen.get("mode") == erwartet, (gespeichert, FakeSuche.gesehen)
+
+
 def test_eine_unbrauchbare_seitenzahl_ist_eine_schlechte_anfrage(server, monkeypatch):
     a, port = server
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
@@ -255,13 +333,15 @@ def test_eine_unbrauchbare_seitenzahl_ist_eine_schlechte_anfrage(server, monkeyp
 def test_die_falsche_methode_ist_405_mit_allow(server):
     """A path that exists under another method is not a missing route."""
     _, port = server
-    code, kopf, r = roh(port, "GET", "/api/run")
-    assert code == 405 and kopf["Allow"] == "OPTIONS, POST"
+    code, kopf, r = roh(port, "GET", "/api/v1/searches/history")   # DELETE und GET
+    assert code == 200
+    code, kopf, r = roh(port, "POST", "/api/v1/searches/history")
+    assert code == 405 and kopf["Allow"] == "DELETE, GET, HEAD, OPTIONS"
     assert r["error"]["k"] == "srv.method" and r["status"] == 405
     code, kopf, _ = roh(port, "PUT", "/api/v1/cases/1")
     assert code == 405 and "PATCH" in kopf["Allow"] and "PUT" not in kopf["Allow"]
-    code, kopf, _ = roh(port, "DELETE", "/api/config")
-    assert code == 405 and kopf["Allow"] == "OPTIONS, POST"
+    code, kopf, _ = roh(port, "DELETE", "/api/v1/config")
+    assert code == 405 and kopf["Allow"] == "GET, HEAD, OPTIONS, PATCH"
     # Nothing of the sort: still a 404.
     assert roh(port, "DELETE", "/api/gibtsnicht")[0] == 404
     assert roh(port, "GET", "/api/gibtsnicht")[0] == 404
@@ -271,23 +351,216 @@ def test_options_sagt_was_hier_geht(server):
     _, port = server
     code, kopf, _ = roh(port, "OPTIONS", "/api/v1/cases/1")
     assert code == 204 and kopf["Allow"] == "DELETE, GET, HEAD, OPTIONS, PATCH"
-    code, kopf, _ = roh(port, "OPTIONS", "/api/status")
+    code, kopf, _ = roh(port, "OPTIONS", "/api/v1/status")
     assert code == 204 and kopf["Allow"] == "GET, HEAD, OPTIONS"
-    code, kopf, _ = roh(port, "OPTIONS", "/api/profiles")
-    assert code == 204 and kopf["Allow"] == "GET, HEAD, OPTIONS, POST"
+    code, kopf, _ = roh(port, "OPTIONS", "/api/v1/profiles")
+    assert code == 204 and kopf["Allow"] == "GET, HEAD, OPTIONS, PATCH, POST"
     assert "Access-Control-Allow-Origin" not in kopf     # one origin, ours
     assert roh(port, "OPTIONS", "/api/gibtsnicht")[0] == 404
+
+
+def test_die_frage_im_rumpf_ist_ein_query(server):
+    """Three routes are reads whose question does not fit in a URL, so they
+    answer QUERY (RFC 10008) and nothing else: OPTIONS says so, the POST
+    they used to be is a wrong method like any other, and the body still
+    has to be JSON."""
+    _, port = server
+    pfad = "/api/v1/sources/outlook/folder-plan"
+    for weg in (pfad, "/api/v1/reports", "/api/v1/answer"):
+        code, kopf, _ = roh(port, "OPTIONS", weg)
+        assert code == 204 and kopf["Allow"] == "OPTIONS, QUERY", weg
+        # RFC 10008, Section 3: the route names the format it takes a
+        # question in – beside Allow, and on the refusal as well.
+        assert kopf["Accept-Query"] == "application/json", weg
+        code, kopf, r = roh(port, "POST", weg, {})
+        assert code == 405 and kopf["Allow"] == "OPTIONS, QUERY", weg
+        assert kopf["Accept-Query"] == "application/json", weg
+        assert r["error"]["k"] == "srv.method" and "POST" in r["detail"]
+    # Nowhere else: a path that takes no question says nothing about one.
+    assert "Accept-Query" not in roh(port, "OPTIONS", "/api/v1/status")[1]
+    # The report is the one of the three that answers without an archive.
+    code, _, r = roh(port, "QUERY", "/api/v1/reports", {"hint": "Absturz"})
+    assert code == 200 and r["title"] == "Absturz"
+    code, _, r = roh(port, "QUERY", "/api/v1/reports", {},
+                     kopf={"Content-Type": "text/plain"})
+    assert code == 415 and r["error"]["k"] == "srv.mediatype"
+
+
+def test_eine_query_ohne_frage_ist_eine_schlechte_anfrage(server):
+    """RFC 10008, Section 2: the content *is* the question, and a server
+    has to fail a request whose media type is missing. So QUERY is the one
+    method here that does not fall back to the defaults when the body is
+    absent – it says 400 instead."""
+    _, port = server
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("QUERY", "/api/v1/reports", "{}")          # no Content-Type
+    antwort = con.getresponse()
+    r = json.loads(antwort.read())
+    con.close()
+    assert antwort.status == 400 and r["error"]["k"] == "srv.query.notype"
+    code, _, r = roh(port, "QUERY", "/api/v1/reports")     # no body at all
+    assert code == 400 and r["error"]["k"] == "srv.query.empty"
+    # The methods that write keep their manners: no body is no error there.
+    assert roh(port, "PATCH", "/api/v1/config")[0] == 200
+
+
+def test_der_laufmonitor_baut_nicht_den_ganzen_zustand(server, monkeypatch):
+    """`GET /api/v1/runs/current` is polled while a run is on – it must not
+    re-read the token, probe Ollama and ask the MCP subprocess for that."""
+    a, port = server
+    monkeypatch.setattr(a, "status", lambda: (_ for _ in ()).throw(
+        AssertionError("app.status() für einen Lauf gebaut")))
+    code, _, r = roh(port, "GET", "/api/v1/runs/current")
+    assert code == 404 and r["error"]["k"] == "srv.run.none"
+    # DELETE says the same thing the same way: there is no run.
+    code, _, r = roh(port, "DELETE", "/api/v1/runs/current")
+    assert code == 404 and r["error"]["k"] == "srv.run.none"
+    # While a run is on, the wish counts even between two steps – when
+    # there is no process to end, the runner still stops at the next.
+    monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
+    monkeypatch.setattr(a.jobs, "cancel", lambda: False)
+    assert roh(port, "DELETE", "/api/v1/runs/current")[0] == 204
+    monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: False))
+    monkeypatch.setattr(a.jobs, "snapshot",
+                        lambda: {"job": {"label": "job.export", "steps": ["a"],
+                                         "step": "a", "index": 0, "progress": None,
+                                         "started": "2026-03-05T06:00:02",
+                                         "log_seq": 0}})
+    code, _, r = roh(port, "GET", "/api/v1/runs/current")
+    assert code == 200 and r["run"]["label"] == "job.export"
+
+
+def test_die_routentabelle_wird_je_anfrage_einmal_gelesen(server, monkeypatch):
+    """One pass over the route table per request: the 405 decision and
+    the dispatch read the same resolved list. A PATCH used to walk it
+    twice, a miss three times."""
+    import app as app_mod
+    _, port = server
+    echt, zaehler = app_mod.muster_passt, []
+    monkeypatch.setattr(app_mod, "muster_passt",
+                        lambda muster, pfad: zaehler.append(1) or echt(muster, pfad))
+    for methode, pfad in (("PATCH", "/api/v1/mcp"), ("GET", "/api/v1/nirgends"),
+                          ("DELETE", "/api/v1/status"), ("QUERY", "/api/v1/answer")):
+        zaehler.clear()
+        roh(port, methode, pfad, {})
+        assert len(zaehler) == len(app_mod.ROUTEN_V1), (methode, pfad, len(zaehler))
+
+
+def test_ein_profil_liest_nur_seine_eigenen_dateien(server, monkeypatch):
+    """GET /profiles/{name} used to build the whole profile status – every
+    profile's files – to answer one; now it reads that one."""
+    import app as app_mod
+    _, port = server
+    monkeypatch.setattr(app_mod, "profil_status",
+                        lambda: (_ for _ in ()).throw(AssertionError("read every profile")))
+    code, _, r = roh(port, "GET", f"/api/v1/profiles/{app_mod.PROFIL}")
+    assert code == 200 and r["profile"]["name"] == app_mod.PROFIL and r["profile"]["aktiv"]
+    code, _, r = roh(port, "GET", "/api/v1/profiles/nirgends")
+    assert code == 404 and r["error"]["k"] == "srv.profile.unknown"
+
+
+def test_anmelden_startet_den_geraetecode(server, monkeypatch):
+    """The route nobody tested: it called a method the app does not have,
+    so every sign-in was a 500. Now it answers the code the user types at
+    Microsoft."""
+    a, port = server
+    monkeypatch.setattr(a, "login_starten",
+                        lambda: (True, {"code": "ABCD-EFGH",
+                                        "url": "https://microsoft.com/devicelogin",
+                                        "expires_in": 900}))
+    code, _, r = roh(port, "POST", "/api/v1/access/session", {})
+    assert code == 200 and r["device"]["code"] == "ABCD-EFGH"
+    monkeypatch.setattr(a, "login_starten", lambda: (False, {"error": "boom"}))
+    code, _, r = roh(port, "POST", "/api/v1/access/session", {})
+    assert code == 500 and r["error"]["k"] == "srv.login.failed"
+    # The reason is in the sentence, not left as a placeholder.
+    assert "boom" in r["detail"] and "{detail}" not in r["detail"], r
+
+
+def test_eine_unbekannte_quelle_ist_ueberall_ein_404(server):
+    """Every route under /sources answers the same way for a source that
+    does not exist – and the balance, whose rows are finer than the
+    eight, answers the same 404 under its own path."""
+    _, port = server
+    for weg, methode in (("refetch", "POST"), ("rebuild", "POST"), ("open", "POST")):
+        code, _, r = roh(port, methode, f"/api/v1/sources/nonesuch/{weg}", {})
+        assert code == 404, (weg, code)
+        assert r["error"]["k"] == "srv.archiv.unknown", weg
+    for pfad, methode in (("/api/v1/balance/nonesuch", "GET"),
+                          ("/api/v1/balance/nonesuch/fetch", "POST")):
+        code, _, r = roh(port, methode, pfad, {})
+        assert code == 404 and r["error"]["k"] == "srv.archiv.unknown", pfad
+    assert roh(port, "POST", "/api/v1/balance/outlook_mail/fetch", {})[0] != 404
+
+
+def test_eine_query_auf_nichts_ist_kein_kaputter_rumpf(server):
+    """First the route, then the body: a QUERY at a path that does not
+    exist is a 404, and one at a route that only reads is a 405 with
+    `Allow` – not "your question is missing"."""
+    _, port = server
+    code, _, r = roh(port, "QUERY", "/api/v1/gibtsnicht")
+    assert code == 404 and r["error"]["k"] == "srv.notfound"
+    code, kopf, r = roh(port, "QUERY", "/api/v1/status")
+    assert code == 405 and "GET" in kopf["Allow"] and r["error"]["k"] == "srv.method"
+    # Die Strenge gilt weiter, wo die Route wirklich eine Frage erwartet.
+    assert roh(port, "QUERY", "/api/v1/reports")[0] == 400
+
+
+def test_ein_fehlendes_feld_ist_kein_plattformproblem(server):
+    """`srv.profile.impossible` says profiles do not work on this system –
+    for a body that simply forgot a field that is a false trail."""
+    _, port = server
+    code, _, r = roh(port, "PATCH", "/api/v1/profiles", {})
+    assert code == 400 and r["error"]["k"] == "srv.profile.nofield"
+    assert r["error"]["v"]["name"] == "ask_at_start"
 
 
 def test_auch_eine_unbekannte_methode_bekommt_json(server):
     """What the base class refuses answers the same body – its HTML error
     page would be the one answer nobody can parse."""
     _, port = server
-    code, kopf, r = roh(port, "TRACE", "/api/status")
+    code, kopf, r = roh(port, "TRACE", "/api/v1/status")
     assert code == 501
     assert kopf["Content-Type"].startswith("application/problem+json")
     assert r["error"]["k"] == "srv.method" and "TRACE" in r["detail"]
     assert "Python" not in kopf["Server"]               # nor the version
+
+
+def test_kein_handler_name_zweimal():
+    """A second `def` of the same name in the class silently replaces the
+    first, and the route table then calls the wrong one – a 500 that no
+    signature check catches. This is how `_v1_liste` was caught."""
+    quelle = (WURZEL / "app.py").read_text(encoding="utf-8")
+    for klasse, ende in (("class Handler(", "class Server("), ("class Wahl(", None)):
+        i = quelle.index(klasse)
+        block = quelle[i:quelle.index(ende)] if ende else quelle[i:]
+        namen = re.findall(r"\n    def (\w+)\(", block)
+        doppelt = sorted({n for n in namen if namen.count(n) > 1})
+        assert not doppelt, f"{klasse}: {doppelt}"
+    import app as app_mod
+    fehlend = [n for _, _, n in app_mod.ROUTEN_V1 if not hasattr(app_mod.Handler, n)]
+    assert not fehlend, f"Routen ohne Handler: {fehlend}"
+
+
+def test_nichts_nennt_eine_route_von_vor_13_0():
+    """Since 13.0 every path is a `/api/v1` one. What is left over does not
+    fail anywhere – a link in the page renders, a comment reads plausibly,
+    the smoke test calls a route that answers 404 only when the packaging
+    CI runs. This is the sweep that catches all three: the dead link to
+    `/api/openapi` in the expert card is what it was written for."""
+    dateien = ["page.html", "profil.html", "openapi.yaml", "app.py", "rest.py",
+               "mcp_server.py", "README.md", "DESIGN.md", "PRIVACY.md",
+               "packaging/smoke_test.py", "packaging/app.spec"]
+    alt = {}
+    for name in dateien:
+        text = (WURZEL / name).read_text(encoding="utf-8")
+        # `/api/` followed by anything but the version – in code, in markup
+        # and in prose alike. Ollama's own /api/chat lives in its client.
+        treffer = {m for m in re.findall(r"/api/(?!v1\b)[A-Za-z0-9_{}.-]*", text)
+                   if m != "/api/"}          # app.py builds the prefix itself
+        if treffer:
+            alt[name] = sorted(treffer)
+    assert not alt, f"Routen von vor 13.0: {alt}"
 
 
 def test_die_routentabelle_stimmt_mit_den_verteilern(server):
@@ -328,7 +601,7 @@ def test_die_ablehnung_ist_ein_problem_detail(server):
     assert r["detail"] == "No such route: /api/gibtsnicht"
     assert r["instance"] == "/api/gibtsnicht"
     assert r["ok"] is False and r["error"]["k"] == "srv.notfound"
-    assert r["message"]["k"] == "srv.notfound"          # the app's own surface
+    assert "message" not in r      # one shape, no second spelling (13.0)
     assert "message" not in roh(port, "GET", "/api/v1/cases/9")[2]
 
 
@@ -358,7 +631,7 @@ def test_ein_riesiger_rumpf_wird_abgewiesen(server):
     connection – so the answer closes it."""
     _, port = server
     con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-    con.putrequest("POST", "/api/faelle/anlegen")
+    con.putrequest("POST", "/api/v1/cases")
     con.putheader("Content-Type", "application/json")
     con.putheader("Content-Length", str(5 * 1024 * 1024))
     con.endheaders()
@@ -402,9 +675,9 @@ def test_eine_abgelehnte_anfrage_verschluckt_ihren_rumpf(server):
     _, port = server
     antwort = _pipeline(
         port,
-        b"POST /api/config HTTP/1.1\r\nHost: __HOST__\r\n"
+        b"POST /api/v1/cases HTTP/1.1\r\nHost: __HOST__\r\n"
         b"Content-Type: text/plain\r\nContent-Length: 6\r\n\r\nname=x",
-        b"GET /api/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
+        b"GET /api/v1/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
     assert "415" in antwort and "name=x" not in antwort
     assert antwort.count("HTTP/1.") == 2 and "200 OK" in antwort
 
@@ -415,9 +688,9 @@ def test_auch_die_basisklasse_schliesst_nach_ihrer_absage(server):
     _, port = server
     antwort = _pipeline(
         port,
-        b"TRACE /api/status HTTP/1.1\r\nHost: __HOST__\r\n"
+        b"TRACE /api/v1/status HTTP/1.1\r\nHost: __HOST__\r\n"
         b"Content-Length: 6\r\n\r\nABCDEF",
-        b"GET /api/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
+        b"GET /api/v1/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
     assert "501" in antwort and "ABCDEF" not in antwort
     assert "Connection: close" in antwort and antwort.count("HTTP/1.") == 1
 
@@ -425,7 +698,7 @@ def test_auch_die_basisklasse_schliesst_nach_ihrer_absage(server):
 def test_kein_rumpf_kein_content_length(server):
     """RFC 9110 §8.6: a 204 carries neither."""
     _, port = server
-    code, kopf, _ = roh(port, "OPTIONS", "/api/status")
+    code, kopf, _ = roh(port, "OPTIONS", "/api/v1/status")
     assert code == 204 and "Content-Length" not in kopf and "Content-Type" not in kopf
     roh(port, "POST", "/api/v1/cases", {"name": "Nordwind"})
     code, kopf, _ = roh(port, "DELETE", "/api/v1/cases/1")
@@ -435,8 +708,8 @@ def test_kein_rumpf_kein_content_length(server):
 def test_head_nennt_die_methode_die_gefragt_hat(server):
     """do_HEAD goes through do_GET – the refusal must still say HEAD."""
     _, port = server
-    code, kopf, _ = roh(port, "HEAD", "/api/token")
-    assert code == 405 and kopf["Allow"] == "OPTIONS, POST"
+    code, kopf, _ = roh(port, "HEAD", "/api/v1/access/token")
+    assert code == 405 and kopf["Allow"] == "OPTIONS, PUT"
 
 
 def test_auch_die_hostpruefung_verschluckt_den_rumpf(server):
@@ -445,9 +718,9 @@ def test_auch_die_hostpruefung_verschluckt_den_rumpf(server):
     _, port = server
     antwort = _pipeline(
         port,
-        b"POST /api/config HTTP/1.1\r\nHost: angreifer.example.com\r\n"
+        b"POST /api/v1/cases HTTP/1.1\r\nHost: angreifer.example.com\r\n"
         b"Content-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"name\": \"x\"}",
-        b"GET /api/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
+        b"GET /api/v1/status HTTP/1.1\r\nHost: __HOST__\r\n\r\n")
     assert "403" in antwort and antwort.count("HTTP/1.") == 2
     assert "200 OK" in antwort and '{"name"' not in antwort.split("403")[1][:400]
 
@@ -457,10 +730,10 @@ def test_eine_unbrauchbare_zahl_ist_ueberall_eine_schlechte_anfrage(server, monk
     ValueError used to make of it."""
     a, port = server
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
-    for pfad in ("/api/search?k=abc", "/api/search?offset=abc", "/api/similar?cid=abc",
-                 "/api/thread?key=x&limit=abc", "/api/runs?limit=abc",
-                 "/api/run-log?id=abc", "/api/log?since=abc",
-                 "/api/faelle/fall?id=abc", "/api/v1/search?limit=abc"):
+    for pfad in ("/api/v1/search?limit=abc", "/api/v1/search?offset=abc", "/api/v1/similar?cid=abc",
+                 "/api/v1/threads?key=x&limit=abc", "/api/v1/runs?limit=abc",
+                 "/api/v1/runs?limit=abc", "/api/v1/log?since=abc",
+                 "/api/v1/addresses?limit=abc", "/api/v1/searches/history?limit=abc"):
         code, _, r = roh(port, "GET", pfad)
         assert code == 400, (pfad, code, r)
         assert r["error"]["k"] == "srv.badparam", pfad
@@ -474,13 +747,64 @@ def test_jede_antwort_nennt_programm_und_vertrag(server):
     _, port = server
     erwartet = version_mod.VERSION + (f" ({version_mod.build()})"
                                       if version_mod.build() else "")
-    for methode, pfad in (("GET", "/api/status"), ("GET", "/api/v1/cases"),
-                          ("GET", "/api/gibtsnicht"), ("OPTIONS", "/api/status"),
-                          ("POST", "/api/v1/cases")):
-        _, kopf, _ = roh(port, methode, pfad, {} if methode == "POST" else None)
+    for methode, pfad in (("GET", "/api/v1/status"), ("GET", "/api/v1/cases"),
+                          ("GET", "/api/gibtsnicht"), ("OPTIONS", "/api/v1/status"),
+                          ("POST", "/api/v1/cases"),
+                          # Die drei, die ihren Kopf selbst schreiben und die
+                          # beiden Zeilen bis 13.0 weggelassen haben.
+                          ("QUERY", "/api/v1/answer"),
+                          ("GET", "/api/v1/files/content?root=outlook&path=x.eml")):
+        koerper = {"q": "x"} if methode in ("POST", "QUERY") else None
+        _, kopf, _ = roh(port, methode, pfad, koerper)
         assert kopf["X-Munimentum-Version"] == erwartet, (methode, pfad)
-        assert kopf["X-Munimentum-Api"] == app_mod.API_VERSION
+        assert kopf["X-Munimentum-Api"] == app_mod.API_VERSION, (methode, pfad)
     assert app_mod.API_V1 == "/api/" + app_mod.API_VERSION
+
+
+def test_auch_der_strom_und_die_datei_nennen_sich(server, sandbox, monkeypatch):
+    """The two answers that write their own header block, on the way they
+    take when they succeed: the NDJSON stream sends its head before it
+    knows how the answer ends, and a file goes out as bytes. Both left the
+    two headers off until 13.0."""
+    import answer as answer_mod
+    a, port = server
+
+    # Eine Datei, die es wirklich gibt.
+    datei = sandbox / app_mod.OUTLOOK_DIR / "Posteingang" / "a.eml"
+    datei.parent.mkdir(parents=True, exist_ok=True)
+    datei.write_text("Subject: Rechnung\n\nText\n", encoding="utf-8")
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeSuche)
+    monkeypatch.setattr(FakeSuche, "_resolve_source",
+                        staticmethod(lambda root, rel: (datei, None)), raising=False)
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", "/api/v1/files/content?root=outlook&path=Posteingang%2Fa.eml")
+    r = con.getresponse()
+    r.read()
+    con.close()
+    assert r.status == 200, r.status
+    assert r.getheader("X-Munimentum-Api") == app_mod.API_VERSION
+    assert r.getheader("X-Munimentum-Version")
+
+    # Und der Strom, mit einem Modell, das antwortet.
+    monkeypatch.setattr(FakeSuche, "STATE", {"semantic": True}, raising=False)
+    monkeypatch.setattr(app_mod, "check_ollama",
+                        lambda url, model, chat_model=None, timeout=1.5: {
+                            "running": True, "models": [chat_model], "has_model": True,
+                            "has_chat_model": True, "error": None, "model": model,
+                            "chat_model": chat_model, "url": url})
+    monkeypatch.setattr(FakeSuche, "get_document",
+                        staticmethod(lambda **kw: {"text": "Der Rechnungstext."}),
+                        raising=False)
+    monkeypatch.setattr(answer_mod, "stream", lambda *args, **kw: iter([{"text": "Ja."}]))
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("QUERY", "/api/v1/answer", json.dumps({"q": "Rechnung"}),
+                {"Content-Type": "application/json"})
+    r = con.getresponse()
+    roh_text = r.read().decode("utf-8")
+    con.close()
+    assert r.status == 200 and "x-ndjson" in r.getheader("Content-Type", ""), roh_text[:200]
+    assert r.getheader("X-Munimentum-Api") == app_mod.API_VERSION
+    assert r.getheader("X-Munimentum-Version")
 
 
 def test_die_umgebung_nennt_die_api_version(server):
@@ -539,6 +863,55 @@ def test_die_tuer_liest_ueber_die_versionierte_oberflaeche(server, monkeypatch):
     assert code == 200 and r["dirs"] == ["Belege"] and r["files"][0]["name"] == "a.pdf"
 
 
+class FakeDrei(FakeSuche):
+    """An engine with three of everything that honours `limit` as the real
+    one does – so `has_more` can be checked to the item."""
+    @staticmethod
+    def list_folders(**kw):
+        return {"folders": [{"path": f"E-Mail/{i}", "messages": i} for i in (3, 2, 1)][:kw["limit"]]}
+
+    @staticmethod
+    def list_filetypes(**kw):
+        return {"filetypes": [{"type": t, "messages": 1} for t in ("pdf", "docx", "xlsx")][:kw["limit"]],
+                "total_distinct": 3}
+
+    @staticmethod
+    def list_people(**kw):
+        return {"people": [{"name": n, "messages": 1}
+                           for n in ("Alice Beispiel", "Bob Baumeister", "Carla Chef")][:kw["limit"]]}
+
+    @staticmethod
+    def get_thread(**kw):
+        seite = [{"uid": f"u{i}"} for i in (1, 2, 3)][:kw["limit"]]
+        return {"thread": "tix:1", "count": len(seite), "messages": seite}
+
+    STATE = {"semantic": False}
+
+
+def test_has_more_sagt_nur_ja_wenn_wirklich_etwas_fehlt(server, monkeypatch):
+    """The engine is asked for one more than the cap; whether it came says
+    whether the cap cut something off. An archive with exactly as many
+    folders as the limit used to answer `has_more: true` – and a caller
+    narrowing to fetch "the rest" found nothing."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeDrei)
+    for pfad in ("/api/v1/folders", "/api/v1/filetypes", "/api/v1/people", "/api/v1/threads?key=tix:1"):
+        trenner = "&" if "?" in pfad else "?"
+        code, _, r = roh(port, "GET", f"{pfad}{trenner}limit=3")
+        assert code == 200 and len(r["items"]) == 3 and r["has_more"] is False, (pfad, r)
+        code, _, r = roh(port, "GET", f"{pfad}{trenner}limit=2")
+        assert len(r["items"]) == 2 and r["has_more"] is True and r["limit"] == 2, (pfad, r)
+        if "count" in r:
+            assert r["count"] == 2, (pfad, r)
+    for i in range(3):
+        a.faelle.suche_merken({"q": f"wort{i}"}, 1)
+        a.history.start_run("job.export", "manual")
+    for pfad in ("/api/v1/searches/history", "/api/v1/runs"):
+        assert roh(port, "GET", f"{pfad}?limit=3")[2]["has_more"] is False, pfad
+        r = roh(port, "GET", f"{pfad}?limit=2")[2]
+        assert len(r["items"]) == 2 and r["has_more"] is True, (pfad, r)
+
+
 def test_die_tuer_sagt_ohne_index_bescheid(server):
     """Every one of them needs an index and says so with 503, not with an
     empty list at 200."""
@@ -560,7 +933,7 @@ def test_die_einstellungen_sind_eine_ressource(server):
     _, port = server
     code, _, r = roh(port, "GET", "/api/v1/config")
     assert code == 200 and r["config"]["workers"] == app_mod.DEFAULT_CONFIG["workers"]
-    assert "config" not in roh(port, "GET", "/api/status")[2]
+    assert "config" not in roh(port, "GET", "/api/v1/status")[2]
 
     code, _, r = roh(port, "PATCH", "/api/v1/config", {"workers": 6})
     assert code == 200 and r["config"]["workers"] == 6
@@ -576,7 +949,7 @@ def test_der_status_wiegt_weniger_ohne_die_einstellungen(server):
     """The number this was about: what a poll every few seconds costs."""
     import json as _json
     _, port = server
-    status = _json.dumps(roh(port, "GET", "/api/status")[2])
+    status = _json.dumps(roh(port, "GET", "/api/v1/status")[2])
     konfig = _json.dumps(roh(port, "GET", "/api/v1/config")[2])
     zusammen = len(status) + len(konfig)
     assert len(status) < 0.75 * zusammen, "die Einstellungen wogen ein Viertel und mehr"
@@ -588,14 +961,18 @@ def test_der_status_traegt_nur_was_sich_von_selbst_aendert(server):
     folder names, no settings – each of those has its own route and is
     asked for when it can have changed."""
     _, port = server
-    status = roh(port, "GET", "/api/status")[2]
+    status = roh(port, "GET", "/api/v1/status")[2]
     for weg in ("config", "exports", "folders", "calendars", "notebooks",
                 "conversations", "lists", "folders_onedrive", "data_dir",
                 "home_dir", "index_dir", "app_location", "scope_queries",
-                "ollama_hint", "skip_folders_default", "graph_explorer"):
+                "ollama_hint", "skip_folders_default", "graph_explorer",
+                # The index's own state changes with a run, not on its own:
+                # since 13.0 it travels with the inventory (its columns are
+                # a list of names that was repeated in every poll).
+                "store"):
         assert weg not in status, weg
     assert "config" not in status["mcp"], "der Client-Schnipsel nennt Pfade"
-    for da in ("token", "ollama", "store", "jobs", "mcp", "update", "auth",
+    for da in ("token", "ollama", "jobs", "mcp", "update", "auth",
                "wizard", "schedule_next", "profile", "calendar"):
         assert da in status, da
     # The contract's version is on every answer as a header; repeating it in
@@ -607,6 +984,7 @@ def test_der_status_traegt_nur_was_sich_von_selbst_aendert(server):
     assert umgebung["data_dir"] and umgebung["scope_queries"]
     bestand = roh(port, "GET", "/api/v1/inventory")[2]
     assert "exports" in bestand and "folders" in bestand
+    assert set(bestand["store"]) == {"exists", "features", "semantic", "built_at"}
 
     import json as _json
     assert len(_json.dumps(status)) < 1200, "der Status ist wieder schwer geworden"
@@ -617,11 +995,11 @@ def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
     model names, ports or ids – those are settings, and what follows from
     them is decided here."""
     _, port = server
-    s = roh(port, "GET", "/api/status")[2]
+    s = roh(port, "GET", "/api/v1/status")[2]
     assert set(s["ollama"]) == {"running", "has_model", "has_chat_model", "disabled"}
     assert set(s["token"]) == {"present", "valid", "expired", "account", "name",
                                "expires_in_minutes", "missing"}
-    assert set(s["store"]) == {"exists", "features", "semantic", "built_at"}
+    assert "store" not in s        # with the inventory since 13.0, see above
     assert set(s["mcp"]) <= {"running", "url", "error"}
     assert set(s["auth"]) == {"signed_in", "account", "own_registration", "device"}
     assert set(s["update"]) == {"status", "latest", "url", "newer", "ahead", "error"}
@@ -629,7 +1007,7 @@ def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
     assert "schedule_enabled" not in s          # a setting, and the page has it
 
     # The full probes still exist where they are the point.
-    voll = roh(port, "POST", "/api/ollama-recheck", {})[2]
-    assert "models" in voll, "die Nachprüfung darf alles sagen"
+    voll = roh(port, "POST", "/api/v1/ollama/recheck", {})[2]
+    assert "models" in voll["ollama"], "die Nachprüfung darf alles sagen"
     umgebung = roh(port, "GET", "/api/v1/app")[2]
     assert umgebung["version"] and umgebung["default_client_id"]

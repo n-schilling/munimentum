@@ -58,7 +58,7 @@ def fakten(row, text, ziel, state):
 
 
 # --------------------------------------------------------------------------
-# Mail: from, to, cc, date, folder, attachments – the body as text
+# Mail: from, to, cc, bcc, date, folder, attachments – the body as text
 # --------------------------------------------------------------------------
 def _adressen(msg, *headers):
     roh = []
@@ -96,7 +96,8 @@ def _anhaenge(msg):
 
 def _mail(row, text, ziel):
     out = {"from": {"name": row["who"] or "", "mail": row["who_mail"] or ""},
-           "to": [], "cc": [], "date": row["date"] or "", "folder": row["ctx"] or "",
+           "to": [], "cc": [], "bcc": [],
+           "date": row["date"] or "", "folder": row["ctx"] or "",
            "attachments": [{"name": a, "size": None} for a in (row["att"] or "").split() if a],
            "text": text}
     msg = None
@@ -114,6 +115,10 @@ def _mail(row, text, ziel):
                            "mail": von[0]["mail"] or out["from"]["mail"]}
         out["to"] = _adressen(msg, "to")
         out["cc"] = _adressen(msg, "cc")
+        # Blind copies stand in what one sent oneself – and nowhere else.
+        # Not showing them while the search filters by them would leave the
+        # hit looking as though it had none.
+        out["bcc"] = _adressen(msg, "bcc")
         out["attachments"] = _anhaenge(msg)
     return out
 

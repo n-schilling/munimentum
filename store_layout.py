@@ -34,6 +34,13 @@ from pathlib import Path
 INFO = "info.json"
 DB = "corpus.db"
 
+# The four lines of a mail and the column each one lives in (13.0). The
+# writer (rag_index) and the reader (mcp_server) share this one map; "from"
+# has had its column since 11.1, the other three came with the addresses.
+MAIL_SPALTEN = {"from": "who_mail", "to": "to_ppl", "cc": "cc_ppl", "bcc": "bcc_ppl"}
+# Which of them an index must have before the Mail filter can be offered.
+MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
+
 
 def db_path(store):
     """The store's database – one name, not the same literal nine times."""
@@ -41,9 +48,10 @@ def db_path(store):
 
 
 def mit_schluesseln(db):
-    """Does this index carry what cases need – the item keys of 11.0
-    (schluessel.py) and the sender addresses of 11.1? An older one – or
-    none – does not."""
+    """Does this index carry what the interface needs – the item keys of
+    11.0 (schluessel.py), the sender addresses of 11.1 and the mail lines
+    of 13.0? An older one – or none – does not, and the next index run
+    builds it afresh instead of waiting for new exports."""
     db = Path(db)
     if not db.exists():
         return False
@@ -51,7 +59,7 @@ def mit_schluesseln(db):
         con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
             spalten = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-            return {"key", "who_mail", "domains"} <= spalten
+            return {"key", "who_mail", "domains", *MAIL_NEU} <= spalten
         finally:
             con.close()
     except sqlite3.Error:
@@ -59,11 +67,12 @@ def mit_schluesseln(db):
 
 
 def veraltet(db):
-    """An index that exists but predates the item keys or the sender
-    addresses: the next index step rebuilds it whether or not the exports
-    brought anything, so cases can point at its items and name their
-    people. No index at all is not "outdated" – that case the run gate
-    handles by the missing file."""
+    """An index that exists but predates the item keys, the sender
+    addresses or the mail lines: the next index step rebuilds it whether or
+    not the exports brought anything, so cases can point at its items, name
+    their people, and the search can ask who stood in which line. No index
+    at all is not "outdated" – that case the run gate handles by the
+    missing file."""
     return Path(db).exists() and not mit_schluesseln(db)
 
 # The fixed name of stores up to 4.1.0. Such a store carries no entry in

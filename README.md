@@ -108,7 +108,13 @@ numbers. The last two need [Ollama](#optional-ollama). Filters — person,
 source, date range, folder, file type, case, internal or external parties,
 and items no longer at Microsoft — are a row of pills; a pill opens a small
 window with its control, a set pill carries its value and a × that clears
-it, and nothing searches until you press *Search*. Before the first search
+it, and nothing searches until you press *Search*. One of them is the
+**mail filter**: *From*, *To*, *Cc* and *Bcc*, each with the addresses the
+archive actually holds. It stands there only while the source is *Mail* —
+a line only mail has would otherwise quietly turn every search into a
+mail search — and only once the index knows those lines: the run after an
+update writes them. Bcc exists only in mail you sent yourself, and the
+hit's detail shows it wherever it is there. Before the first search
 your last searches and the saved ones stand as rows under the field, one
 click runs them. A chosen hit opens on the right with the facts its kind is
 known by — a mail its from, to, date, folder and attachments; a file its
@@ -177,9 +183,10 @@ issue with the log — addresses and user names replaced, shown for you to
 edit, sent by nobody but you. *Keep awake during a run* holds the machine
 off idle sleep while an export runs. *Expert mode* collects what almost
 nobody needs day to day, among it the complete HTTP API of the interface
-as an OpenAPI description (`openapi.yaml`, served at `/api/openapi`) —
-including `/api/v1`, the versioned part meant for scripts of your own,
-whose version the App card shows beside the program's.
+as an OpenAPI description (`openapi.yaml`, served at `/api/v1/openapi`).
+That is `/api/v1`, the versioned surface meant for scripts of your own —
+since 13.0 the whole app runs on it, the page included, and the App card
+shows its version beside the program's.
 
 ---
 
@@ -187,14 +194,16 @@ whose version the App card shows beside the program's.
 
 A built-in MCP server hands the archive to Claude Code, Claude Desktop or
 any other MCP client — on this machine only: it searches every source with
-the same filters the search page offers, browses the mirrored drives, reads
-the sources and answers with citations. An item it opens comes with its
-facts already extracted — a mail's from, to and attachments, an
-appointment's time and attendees, a task's due date and state. It can ask
-the archive about itself — how far it reaches, which months are empty — and
-read your cases and saved searches; it changes a case only when *Claude
-may change cases* is on under *Settings › Claude (MCP)*, and then only
-adds, marked *via MCP*. *Settings* prints the exact snippet for your
+the same filters the search page offers, the mail lines among them, browses
+the mirrored drives, reads the sources and answers with citations. An item
+it opens comes with its facts already extracted — a mail's from, to and
+attachments, an appointment's time and attendees, a task's due date and
+state. It can ask the archive about itself — how far it reaches, which
+months are empty, when each source last ran and whether that run worked,
+and what a completeness check found missing against Microsoft — and read
+your cases and saved searches; it changes a case only when *Claude may
+change cases* is on under *Settings › Claude (MCP)*, and then only adds,
+marked *via MCP*. *Settings* prints the exact snippet for your
 client; the HTTP endpoint is started from the app, the stdio route lets a
 client launch the server itself, and *Allow MCP access* switches both.
 

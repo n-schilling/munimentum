@@ -58,10 +58,12 @@ def _ts(s):
     return datetime.strptime(s, "%Y-%m-%d %H:%M").timestamp()
 
 
-def _rec(uid, src, root, rel, who, ppl, ts, date, title, ctx, text):
+def _rec(uid, src, root, rel, who, ppl, ts, date, title, ctx, text, **extra):
+    """One record; `extra` carries what only some sources have – the mail
+    lines of 13.0, for instance."""
     return {"uid": uid, "src": src, "root": root, "rel": rel, "who": who,
             "ppl": ppl, "ts": ts, "date": date, "title": title, "ctx": ctx,
-            "text": text}
+            "text": text, **extra}
 
 
 def _sample_records():
@@ -86,11 +88,16 @@ def _sample_records():
              "carla chef carla@example.com alice beispiel alice@example.com",
              _ts("2025-06-10 08:00"), "2025-06-10 08:00",
              "Rechnung 4711 freigegeben", "inbox",
-             "Hallo zusammen, die Rechnung 4711 ist freigegeben und kann verschickt werden."),
+             "Hallo zusammen, die Rechnung 4711 ist freigegeben und kann verschickt werden.",
+             who_mail="carla@example.com",
+             to_ppl="alice beispiel alice@example.com",
+             cc_ppl="bob baumeister bob@example.com", bcc_ppl=""),
         _rec(UID_M2, "outlook", "outlook", "inbox/mail2.eml", "Alice Beispiel",
              "alice beispiel alice@example.com", _ts("2025-07-01 12:00"),
              "2025-07-01 12:00", "Urlaubsantrag August", "inbox",
-             "Hiermit beantrage ich Urlaub vom 4. bis 15. August. Viele Grüße, Alice"),
+             "Hiermit beantrage ich Urlaub vom 4. bis 15. August. Viele Grüße, Alice",
+             who_mail="alice@example.com", to_ppl="carla chef carla@example.com",
+             cc_ppl="", bcc_ppl="dana dienstleister dana@example.com"),
         _rec(UID_M3, "outlook", "outlook", "sent/protokoll.eml", "Doris Docs",
              "doris docs doris@example.com", _ts("2025-05-20 16:00"),
              "2025-05-20 16:00", "Protokoll Quartalsplanung", "sent", LONG_TEXT),
@@ -446,6 +453,146 @@ def test_corpus_stats_kennt_die_raender_des_archivs(state):
     assert "teams" not in out["last_successful_runs"], "failed run counted"
 
 
+def test_mail_from_findet_auch_grossbuchstaben_mit_umlaut(state):
+    """`who` is the one name column the indexer leaves as it found it, and
+    SQLite's LIKE folds ASCII only – so the comparison folds in Python.
+    Without that, a sender named "Ülker Demir" is unreachable by name."""
+    import sqlite3
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute(
+        "INSERT INTO chunks(uid, src, root, rel, seq, msg_idx, title, who,"
+        " who_mail, ppl, ctx, ts, date, text, key, domains, to_ppl)"
+        " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ("outlook:inbox/u.eml:0", "outlook", "outlook", "inbox/u.eml", 0, 0,
+         "Angebot", "Ülker Demir", "uelker.demir@nordwind.example",
+         "ülker demir uelker.demir@nordwind.example", "Posteingang",
+         1772690402, "2026-03-04", "Text", "mail:<u>", "nordwind.example",
+         "bob@nordwind.example"))
+    con.commit()
+    con.close()
+
+    # Durchblättern statt Volltext: die Zeile steht im Index, nicht im FTS.
+    treffer = mcp_server.browse_messages(source="outlook", mail_from="Ülker")
+    assert "outlook:inbox/u.eml:0" in [h["uid"] for h in treffer["results"]], treffer
+    # Kleingeschrieben findet dasselbe, und ein anderer Name nichts.
+    assert mcp_server.browse_messages(source="outlook", mail_from="ülker")["results"]
+    assert not mcp_server.browse_messages(source="outlook", mail_from="Zzz")["results"]
+
+
+def test_list_runs_zeigt_was_ein_lauf_gebracht_hat(state):
+    """Before concluding from the archive that something is not there:
+    which runs ran, and did their steps work. The failed step is the one
+    that matters – a source whose run broke is missing from every search
+    without a hit saying so."""
+    import time
+    import run_history
+    h = run_history.RunHistory(state["tmp"] / "runs.db")
+    rid = h.start_run("job.export", "schedule")
+    h.record_step(rid, "outlook", "job.step.outlook", time.time() - 60,
+                  duration_s=2, result={"new": 7, "unchanged": 3}, ok=True)
+    h.record_step(rid, "teams", "job.step.teams", time.time() - 20,
+                  duration_s=1, result={"errors": 2}, ok=False)
+    h.log_lines([(rid, time.time(), "err", json.dumps({"k": "srv.busy", "v": {}}))])
+    h.finish_run(rid, "done")
+    mcp_server.STATE["runs_db"] = str(state["tmp"] / "runs.db")
+
+    out = mcp_server.list_runs()
+    assert out["count"] == 1
+    lauf = out["runs"][0]
+    assert lauf["origin"] == "schedule" and lauf["result"] == "done"
+    assert lauf["started"] and lauf["finished"]          # ISO, nicht epoch
+    # Claude reads words, not text keys: the run and its steps by name.
+    assert lauf["job"] == "Export" and "job_type" not in lauf
+    schritte = {s["step"]: s for s in lauf["steps"]}
+    assert schritte["outlook"]["label"] == "Outlook export"
+    assert schritte["outlook"]["new"] == 7 and schritte["outlook"]["ok"]
+    assert schritte["teams"]["errors"] == 2 and not schritte["teams"]["ok"]
+    assert [s["step"] for s in lauf["steps"]] == ["outlook", "teams"]
+    # A run that never was, and one that wrote no lines, are told apart.
+    assert "No run" in mcp_server.run_log(999)["note"]
+    ohne = h.start_run("job.holen", "manual")
+    assert "pruned" in mcp_server.run_log(ohne)["note"]
+
+    # Das Protokoll sagt, warum – als Satz, nicht als Textschlüssel.
+    zeilen = mcp_server.run_log(lauf["id"])["lines"]
+    assert zeilen and zeilen[0]["level"] == "err"
+    assert "already running" in zeilen[0]["text"].lower(), zeilen[0]["text"]
+
+    mcp_server.STATE.pop("runs_db", None)
+    assert mcp_server.list_runs()["runs"] == []
+    assert "note" in mcp_server.run_log(1)
+
+
+def test_die_laufhistorie_wird_vom_server_nur_gelesen(state, tmp_path):
+    """One reader for the app and the MCP server: run_history knows the
+    tables, the server only renders. Read-only means read-only – a file
+    that is not there is not created, and answers empty."""
+    import run_history
+    weg = tmp_path / "nie.db"
+    leer = run_history.RunHistory(weg, readonly=True)
+    assert leer.list_runs() == [] and leer.run_log(1) == [] and not leer.has_run(1)
+    assert not weg.exists()
+    mcp_server.STATE["runs_db"] = str(weg)
+    assert "note" in mcp_server.list_runs() and not weg.exists()
+    mcp_server.STATE.pop("runs_db", None)
+    # And the id must be one: a word is refused, not a crash.
+    assert "error" in mcp_server.run_log("abc") or "note" in mcp_server.run_log("abc")
+
+
+def test_source_completeness_liest_die_bilanz_der_zeile(state):
+    """What the last check found against Microsoft, per balance row – the
+    rows the check writes (`outlook_mail`, never `outlook`: the mailbox is
+    three of them). Seeded the way the exporter writes it, so the lookup
+    is the one the app can satisfy. A row that was never checked is named
+    apart – that is not the same as complete."""
+    import completeness
+    import state_db
+    with state_db.StateDb(state["outlook_dir"]) as db:
+        completeness.schreiben(db, completeness.bilanz(
+            "outlook_mail", "mails", da=120, offen=3, ausgeschlossen=40, behalten=1,
+            zeilen=[completeness.zeile("Posteingang", 120, 3)]))
+
+    out = mcp_server.source_completeness()
+    assert list(out["reports"]) == ["outlook_mail"]
+    assert out["reports"]["outlook_mail"]["offen"] == 3
+    assert "outlook_calendar" in out["never_checked"] and "teams" in out["never_checked"]
+    assert "outlook" not in out["never_checked"]
+
+    eine = mcp_server.source_completeness("outlook_mail")
+    assert set(eine["reports"]) == {"outlook_mail"} and eine["never_checked"] == []
+    # A name no check ever writes a report under is no row – `outlook` included.
+    for falsch in ("outlook", "gibtsnicht"):
+        assert "Unknown source" in mcp_server.source_completeness(falsch)["error"], falsch
+
+
+def test_die_bilanz_wird_vom_server_nur_gelesen(state, tmp_path, monkeypatch):
+    """state.db belongs to the export, and a step may be writing it: the
+    server opens it read-only and adds nothing – a file from an older
+    layout keeps its tables, a folder without one stays without one."""
+    import sqlite3
+    import state_db
+    alt, leer = tmp_path / "alt", tmp_path / "leer"
+    alt.mkdir()
+    leer.mkdir()
+    con = sqlite3.connect(alt / state_db.DB_NAME)
+    con.execute("CREATE TABLE altes(x)")
+    con.commit()
+    con.close()
+    monkeypatch.setitem(mcp_server.STATE, "todo_dir", str(alt))
+    monkeypatch.setitem(mcp_server.STATE, "planner_dir", str(leer))
+    assert mcp_server.source_completeness("todo")["never_checked"] == ["todo"]
+    assert mcp_server.source_completeness("planner")["never_checked"] == ["planner"]
+    con = sqlite3.connect(alt / state_db.DB_NAME)
+    assert [r[0] for r in con.execute("SELECT name FROM sqlite_master")] == ["altes"]
+    con.close()
+    assert not (leer / state_db.DB_NAME).exists()
+    # And a real report is read all the same.
+    import completeness
+    with state_db.StateDb(leer) as db:
+        completeness.schreiben(db, completeness.bilanz("planner", "tasks", da=2))
+    assert mcp_server.source_completeness("planner")["reports"]["planner"]["da"] == 2
+
+
 def test_corpus_stats_ohne_block_und_historie_bleibt_ruhig(state):
     mcp_server.STATE.pop("runs_db", None)
     out = mcp_server.corpus_stats()
@@ -764,7 +911,7 @@ def test_read_source_file_rejects_symlink_escape(state):
 
 def test_read_source_file_invalid_root_and_missing_file(state):
     out = mcp_server.read_source_file("kalender", "termin.ics")
-    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
+    assert out == {"error": "source_root must be 'outlook', 'teams', 'onedrive', "
            "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
     out = mcp_server.read_source_file("teams", "1on1/fehlt.html")
     assert out == {"error": "File not found: 1on1/fehlt.html"}
@@ -794,7 +941,7 @@ def test_source_resource_rejects_traversal(state):
 def test_tools_without_initialized_state(empty_state):
     # read_source_file fails in a controlled way (no export directory known) …
     out = mcp_server.read_source_file("teams", "x.html")
-    assert out == {"error": "source_root must be 'teams', 'outlook', 'onedrive', "
+    assert out == {"error": "source_root must be 'outlook', 'teams', 'onedrive', "
            "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
     # … the DB-backed tools raise a KeyError for lack of STATE["db"]
     # (current behavior – pinned down here)
@@ -911,6 +1058,9 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "list_files", "read_source_file", "corpus_stats",
               "archive_analytics", "list_sources", "list_events",
               "lookup_contact",
+              # 13.0: the addresses behind the mail lines, and whether the
+              # archive is current and complete enough to conclude from
+              "list_addresses", "list_runs", "run_log", "source_completeness",
               # 11.0: cases and saved searches (tests/test_mcp_faelle.py)
               "list_cases", "get_case", "case_timeline", "case_people",
               "case_new_hits", "list_saved_searches", "run_saved_search",
@@ -978,7 +1128,8 @@ def test_tool_schema_enthaelt_alle_parameter():
     schema = next(t for t in tools if t.name == "search_messages").input_schema
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
-        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party"}
+        "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party",
+        "mail_from", "mail_to", "mail_cc", "mail_bcc"}
     assert schema["required"] == ["query"]      # only query is required
 
 
@@ -1061,6 +1212,62 @@ def test_treffer_tragen_ihre_gespraechskennung(state):
     treffer = mcp_server.browse_messages(k=1)["results"]
     assert treffer and treffer[0]["thread"] == "tix:xyz", \
         "ohne Kennung am Treffer liesse sich der Verlauf nicht nachladen"
+
+
+def test_mailzeilen_grenzen_nur_mails_ein(state):
+    """The four lines of a mail: each asks its own column, and together they
+    are one AND. They narrow mail – an appointment or a chat has no such
+    line and must not fall out because of one."""
+    def uids(**kw):
+        return [h["uid"] for h in mcp_server.browse_messages(k=50, **kw)["results"]]
+
+    assert uids(source="outlook", mail_to="alice@example.com") == [UID_M1]
+    assert uids(source="outlook", mail_cc="bob") == [UID_M1]
+    assert uids(source="outlook", mail_bcc="dana") == [UID_M2]
+    # From matches the sender's name as well as the address.
+    assert uids(source="outlook", mail_from="Carla Chef") == [UID_M1]
+    assert uids(source="outlook", mail_from="carla@example.com") == [UID_M1]
+    # Two lines together: from her to him, not "both somewhere".
+    assert uids(source="outlook", mail_from="carla", mail_to="alice") == [UID_M1]
+    assert uids(source="outlook", mail_from="alice", mail_to="alice") == []
+    # `*` is the wildcard here too.
+    # Newest first, as browse always lists: the July mail before the June one.
+    assert uids(source="outlook", mail_to="*@example.com") == [UID_M2, UID_M1]
+    # A mail line means mail: with every source, nothing else answers – a
+    # list of chats and appointments "from dana" would be no answer.
+    assert uids(mail_bcc="dana") == [UID_M2]
+    # And the same through the ranking search.
+    treffer = mcp_server.search_messages(query="Rechnung", mode="lexical",
+                                         source="outlook", mail_cc="bob")["results"]
+    assert [h["uid"] for h in treffer] == [UID_M1]
+
+
+def test_adressen_zaehlen_je_zeile(state):
+    """What the Mail filter offers while one types: the addresses of one
+    line with the number of mails behind them."""
+    assert mcp_server.adressen("bcc")["addresses"] == [
+        {"address": "dana@example.com", "messages": 1}]
+    assert [a["address"] for a in mcp_server.adressen("to")["addresses"]] == [
+        "alice@example.com", "carla@example.com"]
+    # Sorted by weight: the sender of two mails stands above the one of one.
+    von = mcp_server.adressen("from")["addresses"]
+    assert {a["address"] for a in von} == {"carla@example.com", "alice@example.com"}
+    # `contains` narrows, `*` included.
+    assert [a["address"] for a in mcp_server.adressen("to", "*@example.com")["addresses"]] == [
+        "alice@example.com", "carla@example.com"]
+    assert mcp_server.adressen("to", "niemand")["addresses"] == []
+    # A line that does not exist is the caller's mistake, and says so.
+    assert "Unknown line" in mcp_server.adressen("quatsch")["error"]
+
+
+def test_alter_index_kennt_die_mailzeilen_nicht():
+    """An index from before 13.0 is asked for a column it has not got – it
+    refuses with a sentence instead of a SQL error."""
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE chunks(id INTEGER, who_mail TEXT)")
+    assert mcp_server._mail_pruefen(con, {"to": "alice"})
+    assert mcp_server._mail_pruefen(con, {"to": "", "cc": None}) is None
+    con.close()
 
 
 def test_party_filter_intern_und_extern(state):

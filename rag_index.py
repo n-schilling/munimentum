@@ -109,7 +109,11 @@ def _chunk_row(i, c):
             # The sender's address and every party's domain (11.1) – mails
             # and appointments carry them
             c.get("who_mail") or None,
-            c.get("domains") or None)
+            c.get("domains") or None,
+            # One mail line each (13.0): who stood in To, in Cc, in Bcc.
+            c.get("to_ppl") or None,
+            c.get("cc_ppl") or None,
+            c.get("bcc_ppl") or None)
 
 
 def _people_rows(chunks):
@@ -125,6 +129,32 @@ def _people_rows(chunks):
             toks.update((c.get("ppl") or "").split()[:PPL_TOKEN_CAP])
     return [(src, who, cnt, " ".join(sorted(toks)))
             for (src, who), (cnt, toks) in agg.items()]
+
+
+def _adressen_rows(chunks):
+    """(role, address) → in how many mails it stood in that line.
+
+    Only the addresses: a line holds names and addresses side by side, and
+    what one types into the Mail filter is an address. Mail only – no other
+    source has a To line."""
+    agg = {}
+    for c in chunks:
+        if not c["cid"].endswith("#0") or c.get("src") != "outlook":
+            continue
+        # Per message, not per occurrence: an export that writes
+        # `"bob@example.com" <bob@example.com>` puts the address into the
+        # line twice, and one mail must still count once.
+        hier = set()
+        for rolle, spalte in store_layout.MAIL_SPALTEN.items():
+            for wort in str(c.get(spalte) or "").split():
+                # `Bob Beispiel (bob@x) <bob@x>` – the brackets are not
+                # part of the address, and neither token is a second one.
+                adresse = wort.strip("<>,;()[]\"'").lower()
+                if "@" in adresse:
+                    hier.add((rolle, adresse))
+        for key in hier:
+            agg[key] = agg.get(key, 0) + 1
+    return [(rolle, addr, n) for (rolle, addr), n in agg.items()]
 
 
 def write_db(store, chunks, manifest=None):
@@ -153,7 +183,13 @@ def write_db(store, chunks, manifest=None):
             ext TEXT,                     -- deren Dateitypen, siehe corpus.endungen
             key TEXT,                     -- stable item key, siehe schluessel.py
             who_mail TEXT,                -- the sender's address, see corpus
-            domains TEXT);                -- every party's domain, see corpus.domains
+            domains TEXT,                 -- every party's domain, see corpus.domains
+            -- The recipients, one mail line per column: names and addresses
+            -- as they stood there. `ppl` says who was involved at all, these
+            -- say in which line – "from her to him", not "both somewhere".
+            to_ppl TEXT,
+            cc_ppl TEXT,
+            bcc_ppl TEXT);                -- only in mail one sent oneself
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         -- A case names its items by key: the case filter and the membership
         -- mark on every hit look it up.
@@ -178,6 +214,12 @@ def write_db(store, chunks, manifest=None):
         CREATE INDEX ix_chunks_msg_ts ON chunks(ts DESC) WHERE seq = 0;
         CREATE TABLE people(src TEXT, who TEXT, messages INTEGER, ppl TEXT);
         CREATE INDEX ix_people_who ON people(who);
+        -- The addresses of the mail archive, per line and with their weight:
+        -- what the Mail filter offers while one types. Counting them at
+        -- search time would mean reading every message for each keystroke.
+        CREATE TABLE adressen(role TEXT NOT NULL, addr TEXT NOT NULL,
+                              messages INTEGER NOT NULL);
+        CREATE INDEX ix_adressen ON adressen(role, messages DESC);
         -- Anhangnamen als eigene Spalte statt angehängt an den Text: sonst
         -- stünden sie in jeder Vorschau und im Kontext der KI-Antwort.
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
@@ -189,12 +231,13 @@ def write_db(store, chunks, manifest=None):
                              mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
                              PRIMARY KEY (root, rel));
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
     con.executemany("INSERT INTO dateien VALUES (?,?,?,?)",
                     ((root, rel, mtime, size) for (root, rel), (mtime, size)
                      in (manifest or {}).items()))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
+    con.executemany("INSERT INTO adressen VALUES (?,?,?)", _adressen_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
     con.commit()
     con.close()
@@ -336,12 +379,13 @@ def _alter_bestand(store):
                    "date", "title", "ctx", "text", "hash", "thread", "gone",
                    "att")
         vorhanden = {r[1] for r in con.execute("PRAGMA table_info(chunks)")}
-        # The sender's address came with 11.1 and lives only in the parse:
-        # an index without it is read afresh, once, rather than carried
-        # over half-empty.
-        if not {"who_mail", "domains"} <= vorhanden:
+        # The sender's address came with 11.1, the recipients' lines with
+        # 13.0, and both live only in the parse: an index without them is
+        # read afresh, once, rather than carried over half-empty.
+        gefragt = ("who_mail", "domains", *store_layout.MAIL_NEU)
+        if not set(gefragt) <= vorhanden:
             return None, None
-        spalten += ("who_mail", "domains")
+        spalten += gefragt
         # The key came with 11.0: an older index has no such column, and
         # its chunks get theirs on the way through (schluessel.zuweisen).
         if "key" in vorhanden:

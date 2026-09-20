@@ -39,6 +39,15 @@ SHAREPOINT_PAGES_DIR = "sharepoint_pages"
 PLANNER_DIR = "planner_export"
 TODO_DIR = "todo_export"
 ONENOTE_DIR = "onenote_export"
+# The eight sources, once: by the step registry's name, the export folder
+# under the data dir and the name the index gives the same source (the
+# `root` of a hit, the MCP file tools' `source_root`) – which differs for
+# the SharePoint pages alone, `pages` in the index. Everything that maps
+# a source to a folder reads this table; a ninth source is one line here.
+QUELLEN = {"outlook": (OUTLOOK_DIR, "outlook"), "teams": (TEAMS_DIR, "teams"),
+           "onedrive": (ONEDRIVE_DIR, "onedrive"), "sharepoint": (SHAREPOINT_DIR, "sharepoint"),
+           "sharepoint_pages": (SHAREPOINT_PAGES_DIR, "pages"), "planner": (PLANNER_DIR, "planner"),
+           "todo": (TODO_DIR, "todo"), "onenote": (ONENOTE_DIR, "onenote")}
 STORE_DIR = "rag_store"
 
 # Mailbox folders that the default selection of outlook_export.py skips.

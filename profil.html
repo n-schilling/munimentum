@@ -97,8 +97,9 @@ function oeffnen(name){
   GEWAEHLT = name;
   sperren(true);
   el('warten').hidden = false; el('warten').textContent = t('profile.opening', {name: name});
-  post('/api/profile-open', {name: name, ohne_nachfrage: el('ohne').checked}).then(function(r){
-    if(!r || !r.ok){
+  post('/api/v1/profiles/' + encodeURIComponent(name) + '/open',
+       {ask_at_start: !el('ohne').checked}).then(function(r){
+    if(!r || r.ok === false){
       var m = (r && (r.error || r.message)) || {};
       fehlschlag(m.k ? t(m.k, m.v || {name: name}) : t('profile.notback', {url: location.origin + '/'}));
       return;
@@ -117,7 +118,7 @@ function warten(){
     if(VERSUCHE >= 30){ el('warten').textContent = t('profile.notback', {url: location.origin + '/'}); return; }
     setTimeout(warten, pause);
   }
-  fetch('/api/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
+  fetch('/api/v1/status', {cache: 'no-store'}).then(function(r){ return r.json(); }).then(function(s){
     if(s && s.profile && s.profile.name === GEWAEHLT){ location.replace('/'); return; }
     nochmal();
   }).catch(nochmal);

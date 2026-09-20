@@ -122,12 +122,19 @@ def hole(url, timeout=10):
         return json.loads(r.read().decode("utf-8"))
 
 
-def sende(url, body, timeout=30):
+def sende(url, body, timeout=30, methode="POST"):
+    """One write against the app. Since 13.0 a refusal is a real status
+    with a problem detail in it, so it is read like any other answer –
+    the caller decides what it means. 204 has no body at all."""
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=timeout) as r:      # noqa: S310
-        return json.loads(r.read().decode("utf-8"))
+        headers={"Content-Type": "application/json"}, method=methode)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
+            roh = r.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        roh = e.read().decode("utf-8", "replace")
+    return json.loads(roh) if roh.strip() else {}
 
 
 def warte_auf(bedingung, sekunden, was):
@@ -146,7 +153,7 @@ def warte_auf(bedingung, sekunden, was):
 
 def protokoll(basis):
     return "\n".join(f"  {zeile['level']:5} {zeile['text']}"
-                     for zeile in hole(f"{basis}/api/log?since=0")["lines"])
+                     for zeile in hole(f"{basis}/api/v1/log?since=0")["items"])
 
 
 def _pe_ressourcen(exe):
@@ -368,9 +375,9 @@ def pruefe(exe, daten, port, proc):
         if proc.poll() is not None:
             aus = (proc.stdout.read() or b"").decode("utf-8", "replace")
             raise Fehler(f"App endete sofort (Code {proc.returncode}):\n{aus[-2000:]}")
-        return hole(f"{basis}/api/status", timeout=3)
+        return hole(f"{basis}/api/v1/status", timeout=3)
 
-    warte_auf(erreichbar, 90, "App antwortet auf /api/status")
+    warte_auf(erreichbar, 90, "App antwortet auf /api/v1/status")
 
     schritt("Oberfläche ausliefern")
     with urllib.request.urlopen(f"{basis}/", timeout=10) as r:   # noqa: S310
@@ -402,13 +409,13 @@ def pruefe(exe, daten, port, proc):
             raise Fehler(f"Sprache {erwartet} hat keine Texte im Bündel.")
 
     schritt("Volltextindex bauen (Unterprozess = die gebündelte Datei selbst)")
-    antwort = sende(f"{basis}/api/run",
+    antwort = sende(f"{basis}/api/v1/runs",
                     {"index": True, "embeddings": False, "label": "Rauchtest"})
-    if not antwort.get("ok"):
+    if not antwort.get("run"):        # 202 names the run it started
         raise Fehler(f"Index-Lauf nicht gestartet: {antwort}")
 
     def fertig():
-        s = hole(f"{basis}/api/status")
+        s = hole(f"{basis}/api/v1/status")
         return None if s["jobs"]["busy"] else s["jobs"]["last"]
 
     letzter = warte_auf(fertig, 240, "Index-Lauf wird fertig")
@@ -423,8 +430,8 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Unerwartetes Suchergebnis: {treffer}")
 
     schritt("Kalender & Kontakte aufbauen (Selbstaufruf von combined_search)")
-    antwort = sende(f"{basis}/api/run", {"calendar": True, "label": "Rauchtest"})
-    if not antwort.get("ok"):
+    antwort = sende(f"{basis}/api/v1/runs", {"calendar": True, "label": "Rauchtest"})
+    if not antwort.get("run"):
         raise Fehler(f"Kalenderlauf nicht gestartet: {antwort}")
     letzter = warte_auf(fertig, 240, "Kalenderlauf wird fertig")
     if not letzter.get("ok"):
@@ -437,10 +444,12 @@ def pruefe(exe, daten, port, proc):
                      f"{protokoll(basis)}")
 
     schritt("MCP-Server starten")
-    r = sende(f"{basis}/api/mcp", {"action": "start"})
-    if not r.get("ok"):
+    r = sende(f"{basis}/api/v1/mcp", {"running": True}, methode="PATCH")
+    # A refused start answers the server's state too (`mcp` beside the
+    # problem detail), so the refusal itself is what to look at.
+    if r.get("ok") is False or not r.get("mcp"):
         raise Fehler(f"MCP-Server startete nicht: {r}\n{protokoll(basis)}")
-    lebt = warte_auf(lambda: hole(f"{basis}/api/status")["mcp"]["running"],
+    lebt = warte_auf(lambda: hole(f"{basis}/api/v1/status")["mcp"]["running"],
                      60, "MCP-Server läuft")
     if not lebt:
         raise Fehler(f"MCP-Server läuft nicht:\n{protokoll(basis)}")
@@ -448,7 +457,7 @@ def pruefe(exe, daten, port, proc):
     ausgabe = protokoll(basis)   # fetch before quitting, nobody listens afterwards
     schritt("Beenden")
     try:
-        sende(f"{basis}/api/quit", {}, timeout=10)
+        sende(f"{basis}/api/v1/quit", {}, timeout=10)
     except (urllib.error.URLError, OSError):
         pass                     # server already gone while answering – fine
     return ausgabe
