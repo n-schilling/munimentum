@@ -18,6 +18,13 @@ magick /tmp/dmg1/background.svg.png -crop 720x460+0+0  +repage -strip packaging/
 magick /tmp/dmg2/background.svg.png -crop 1440x920+0+0 +repage -strip packaging/dmg/background@2x.png
 ```
 
+The version and the build id are not in the SVG: `stempel.py` draws them at
+build time – *Version 13.1.0 · build 59b24c3* – into the foot at the left,
+in the footer's grey and size, and writes both sizes into `build/dmg/`; the
+workflow hands that copy to dmgbuild (`-D background=`) and names the volume
+after the version, which is the window's title. Keep that corner of the SVG
+empty. To try it: `python packaging/dmg/stempel.py 13.1.0 abc1234 /tmp/dmg`.
+
 Icon positions in `layout.py` are the centres of the icons in points from the
 top-left corner of the window content; they must match the drawing. The
 window height in `layout.py` is the picture height plus the title bar.

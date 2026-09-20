@@ -30,7 +30,8 @@ Bundles for macOS, Windows and Linux are attached to every
 | `Munimentum-windows-x64.zip` | Windows 10/11, 64-bit |
 | `Munimentum-linux-x64.tar.gz` | Linux, 64-bit (glibc 2.35+) |
 
-On macOS drag the app to *Applications*; on Windows and Linux unpack the
+On macOS drag the app to *Applications* – the disk image's window names
+the version it carries; on Windows and Linux unpack the
 archive. Windows asks once on first launch because the build carries no
 code-signing certificate: *More info* → *Run anyway*.
 
@@ -106,7 +107,8 @@ quotes, `"budget frame"`, must occur as it stands; *Similar search* finds
 related wording; *AI answer* answers a question in a paragraph with source
 numbers. The last two need [Ollama](#optional-ollama). Filters — person,
 source, date range, folder, file type, case, internal or external parties,
-and items no longer at Microsoft — are a row of pills; a pill opens a small
+items no longer at Microsoft, and, with *Mail*, only mails with an
+attachment — are a row of pills; a pill opens a small
 window with its control, a set pill carries its value and a × that clears
 it, and nothing searches until you press *Search*. One of them is the
 **mail filter**: *From*, *To*, *Cc* and *Bcc*, each with the addresses the
@@ -116,8 +118,10 @@ mail search — and only once the index knows those lines: the run after an
 update writes them. Bcc exists only in mail you sent yourself, and the
 hit's detail shows it wherever it is there. Before the first search
 your last searches and the saved ones stand as rows under the field, one
-click runs them. A chosen hit opens on the right with the facts its kind is
-known by — a mail its from, to, date, folder and attachments; a file its
+click runs them. A paperclip on a hit marks a mail with attachments. A
+chosen hit opens on the right with the facts its kind is
+known by — a mail its from, to, date, folder and attachments, each one a
+download; a file its
 type, size and place; a task its board, due date and state — then *Open
 original*, *Add to case*, *Find similar*, and the content; a mail or chat
 message names its conversation in one fold below. **History** keeps every

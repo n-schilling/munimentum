@@ -8,6 +8,8 @@ import sys
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 import version
 
 WURZEL = Path(__file__).resolve().parent.parent
@@ -44,6 +46,27 @@ def test_stempel_schreibt_den_kurzen_hash(tmp_path):
         stamp_build.stempeln(p, "abc")
     with pytest.raises(SystemExit):
         stamp_build.stempeln(tmp_path / "version.py", "not-a-hash")
+
+
+def test_das_bild_der_dmg_traegt_version_und_build(tmp_path):
+    """The disk image's picture names the version it carries: one line in
+    the foot at the left, drawn into a copy – the committed pictures stay
+    the template, and nothing else in them changes."""
+    pytest.importorskip("PIL")
+    from PIL import Image, ImageChops
+    sys.path.insert(0, str(WURZEL / "packaging" / "dmg"))
+    import stempel
+    aus = stempel.stempeln("13.1.0", "59b24c3", tmp_path)
+    assert [p.name for p in aus] == ["background.png", "background@2x.png"]
+    for name, faktor in (('background.png', 1), ('background@2x.png', 2)):
+        vorlage = Image.open(WURZEL / "packaging" / "dmg" / name).convert("RGB")
+        neu = Image.open(tmp_path / name).convert("RGB")
+        assert neu.size == vorlage.size
+        fuss = (30 * faktor, 436 * faktor, 300 * faktor, 456 * faktor)
+        assert ImageChops.difference(vorlage.crop(fuss), neu.crop(fuss)).getbbox(), name
+        oben = (0, 0, vorlage.size[0], 430 * faktor)
+        assert ImageChops.difference(vorlage.crop(oben), neu.crop(oben)).getbbox() is None, name
+    assert stempel.zeile("13.0.1", "") == "Version 13.0.1"
 
 
 def test_stempel_als_skript(tmp_path):

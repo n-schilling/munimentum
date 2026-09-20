@@ -119,7 +119,8 @@ _ERGAENZUNGEN = (("gespeichert", "ordner_id", "INTEGER"), ("eintraege", "ordner_
 UI, MCP = "ui", "mcp"                     # who wrote an item or a note
 
 _LEER = {"q": "", "mode": "text", "person": "", "source": "all", "from": "",
-         "to": "", "folder": "", "filetype": "", "gone": False, "fall": None, "ordner": None,
+         "to": "", "folder": "", "filetype": "", "gone": False, "attachments": False,
+         "fall": None, "ordner": None,
          "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
 # The four lines of a mail (13.0). `from` and `to` were taken by the date
 # range long before, hence the prefix.
@@ -159,8 +160,9 @@ def kriterien(daten):
     out["source"] = str(daten.get("source") or "all").strip() or "all"
     mode = str(daten.get("mode") or "text").strip()
     out["mode"] = mode if mode in MODI else _modus_vom_server(mode)
-    gone = daten.get("gone")
-    out["gone"] = gone if isinstance(gone, bool) else str(gone).lower() in ("1", "true", "ja")
+    for schalter in ("gone", "attachments"):
+        wert = daten.get(schalter)
+        out[schalter] = wert if isinstance(wert, bool) else str(wert).lower() in ("1", "true", "ja")
     party = str(daten.get("party") or "all").strip().lower()
     out["party"] = party if party in PARTEIEN else "all"
     fall = daten.get("fall", daten.get("case"))
@@ -185,8 +187,8 @@ def leer(k):
     """Nothing to remember: no words, no filter."""
     k = kriterien(k)
     return not (k["q"] or k["person"] or k["from"] or k["to"] or k["folder"]
-                or k["filetype"] or k["gone"] or k["fall"] or k["source"] != "all"
-                or any(k[m] for m in MAIL))
+                or k["filetype"] or k["gone"] or k["attachments"] or k["fall"]
+                or k["source"] != "all" or any(k[m] for m in MAIL))
 
 
 def _json(k):

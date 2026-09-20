@@ -10,6 +10,18 @@ import corpus
 # --------------------------------------------------------------------------
 # HTML / text clean-up
 # --------------------------------------------------------------------------
+def test_anhangnamen_mit_leerzeichen_bleiben_ein_name():
+    """A name may carry spaces; the column joins names with `|` (13.1) and
+    reads an older, space-joined column back by the extensions – so a hit
+    counts one attachment where it used to count nine words."""
+    assert corpus.anhang_text(["Vertrag Nordwind 2026.pdf", "", "Anlage.xlsx"]) == "Vertrag Nordwind 2026.pdf|Anlage.xlsx"
+    assert corpus.anhang_namen("Vertrag Nordwind 2026.pdf|Anlage.xlsx") == ["Vertrag Nordwind 2026.pdf", "Anlage.xlsx"]
+    assert corpus.anhang_namen("Vertrag Nordwind 2026.pdf Anlage.xlsx") == ["Vertrag Nordwind 2026.pdf", "Anlage.xlsx"]
+    assert corpus.anhang_namen("README Plan.pdf") == ["README Plan.pdf"]
+    assert corpus.anhang_namen("") == [] and corpus.anhang_namen(None) == []
+    assert corpus.endungen("Vertrag Nordwind 2026.pdf|Anlage.XLSX") == "pdf xlsx"
+
+
 def test_strip_html_removes_tags_scripts_and_entities():
     s = "<p>Hallo <b>Welt</b></p><script>alert(1)</script><style>p{}</style>&amp; mehr"
     out = corpus.strip_html(s)

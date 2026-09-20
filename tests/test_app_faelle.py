@@ -34,6 +34,20 @@ MAIL2 = ("Message-ID: <m2@example.com>\nFrom: Alice Beispiel <alice@example.com>
          "Hiermit beantrage ich Urlaub.\n")
 
 
+# A mail with one real attachment and one inline image (a signature logo):
+# the filter, the facts and the download count the attachment alone.
+MAIL_ANHANG = ("Message-ID: <m4@example.com>\nFrom: Bob Baumeister <bob@example.com>\n"
+               "To: alice@example.com\nSubject: Vertrag Nordwind\nDate: Thu, 3 Jul 2025 10:00:00 +0000\n"
+               "MIME-Version: 1.0\nContent-Type: multipart/mixed; boundary=\"grenze\"\n\n"
+               "--grenze\nContent-Type: text/plain; charset=utf-8\n\nAnbei der Vertrag.\n"
+               "--grenze\nContent-Type: image/png; name=\"image001.png\"\n"
+               "Content-Disposition: inline; filename=\"image001.png\"\n"
+               "Content-Transfer-Encoding: base64\n\niVBORw0KGgo=\n"
+               "--grenze\nContent-Type: application/pdf; name=\"Vertrag Nordwind 2026.pdf\"\n"
+               "Content-Disposition: attachment; filename=\"Vertrag Nordwind 2026.pdf\"\n"
+               "Content-Transfer-Encoding: base64\n\nJVBERi0xLjQK\n"
+               "--grenze--\n")
+
 # A reply to MAIL: the two make one conversation – without a word the
 # other tests search for, so their counts stay.
 MAIL3 = ("Message-ID: <m3@example.com>\nIn-Reply-To: <m1@example.com>\nReferences: <m1@example.com>\n"
@@ -45,6 +59,12 @@ MAIL3 = ("Message-ID: <m3@example.com>\nIn-Reply-To: <m1@example.com>\nReference
 def welt(sandbox, with_ollama):  # noqa: F811
     """A store with keys, the app on a port, an empty case book."""
     yield from _welt(sandbox, {"mail1.eml": MAIL, "mail2.eml": MAIL2})
+
+
+@pytest.fixture
+def welt_anhang(sandbox, with_ollama):  # noqa: F811
+    """The same, with a mail that carries an attachment."""
+    yield from _welt(sandbox, {"mail1.eml": MAIL, "mail4.eml": MAIL_ANHANG})
 
 
 @pytest.fixture
@@ -447,6 +467,41 @@ def test_ein_unlesbarer_ordner_legt_nichts_still_ab(welt):
     code, r = call(port, "PATCH", f"/api/v1/cases/{fid}/items/{eid}", {"folder": None})
     assert code == 200
     assert call(port, "GET", f"/api/v1/cases/{fid}/items/{eid}")[1]["item"]["folder"] is None
+
+
+def test_anhaenge_filtern_zeigen_und_herunterladen(welt_anhang):
+    """13.1: `attachments=1` narrows to mails with a real attachment, the
+    hit names it, the facts size it, and the route hands it out as a
+    download – the n-th real one, an inline image never; a chat, a
+    missing n-th and an unknown uid each say so."""
+    import http.client
+    port = welt_anhang["port"]
+    alle = _treffer(welt_anhang, "", source="outlook")["results"]
+    mit = _treffer(welt_anhang, "", source="outlook", attachments="1")["results"]
+    assert len(alle) == 2 and [h["attachments"] for h in mit] == [["Vertrag Nordwind 2026.pdf"]]
+    uid = urllib.parse.quote(mit[0]["uid"], safe="")
+    fakten = call(port, "GET", f"/api/v1/documents/facts?uid={uid}")[1]
+    assert fakten["attachments"] == [{"name": "Vertrag Nordwind 2026.pdf", "size": 9}]
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", f"/api/v1/documents/attachments?uid={uid}&n=1")
+    r = con.getresponse()
+    inhalt = r.read()
+    con.close()
+    assert r.status == 200 and inhalt == b"%PDF-1.4\n"
+    assert r.getheader("Content-Type") == "application/pdf"
+    assert r.getheader("Content-Disposition") == 'attachment; filename="Vertrag Nordwind 2026.pdf"'
+    assert r.getheader("Content-Security-Policy") == "sandbox"
+    assert r.getheader("X-Content-Type-Options") == "nosniff"
+    code, r = call(port, "GET", f"/api/v1/documents/attachments?uid={uid}&n=2")
+    assert code == 404 and r["error"]["k"] == "srv.attach.none" and r["error"]["v"]["n"] == 2
+    chat = urllib.parse.quote(next(h for h in _treffer(welt_anhang, "")["results"]
+                                   if h["source"] == "teams")["uid"], safe="")
+    code, r = call(port, "GET", f"/api/v1/documents/attachments?uid={chat}")
+    assert code == 404 and r["error"]["k"] == "srv.attach.none"
+    code, r = call(port, "GET", "/api/v1/documents/attachments?uid=nirgends&n=1")
+    assert code == 404 and r["error"]["k"] == "srv.detail.none"
+    code, r = call(port, "GET", f"/api/v1/documents/attachments?uid={uid}&n=abc")
+    assert code == 400 and r["error"]["k"] == "srv.badparam"
 
 
 def test_eine_bemerkung_bleibt_aus_wenn_der_ordner_fremd_ist(welt):

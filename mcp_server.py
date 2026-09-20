@@ -80,6 +80,7 @@ import analytics_db
 import detail
 import export_util
 import completeness
+import corpus
 import faelle
 import i18n
 import ollama_client
@@ -553,8 +554,13 @@ def _im_fall(con, case, case_folder=""):
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
-           im_fall=False, party="all", mail=None):
+           im_fall=False, party="all", mail=None, with_attachments=False):
     conds, params = [], []
+    if with_attachments:
+        # Only what carries an attachment – `att` holds the names of a
+        # mail's real ones (inline images never), and of the files a
+        # card or a page refers to. The page offers it for mail.
+        conds.append("(att IS NOT NULL AND att != '')")
     # The mail lines (13.0): who stood in From, To, Cc, Bcc. A line only
     # mail has means mail: an appointment or a file has no such line, and
     # a list that let them through unnarrowed would answer "everything
@@ -783,9 +789,11 @@ def _lexical_rank(con, query, where, params, limit):
     match = _fts_match(query)
     if not match:
         return []
-    sql = (f"SELECT c.id, bm25(chunks_fts) AS r FROM chunks_fts "
-           f"JOIN chunks c ON c.id = chunks_fts.rowid "
-           f"WHERE chunks_fts MATCH ? AND {where} ORDER BY r LIMIT ?")
+    # The full-text table carries `att` as chunks does: matched in a
+    # subquery, so every column the filter names resolves to chunks alone.
+    sql = (f"SELECT c.id, f.r FROM (SELECT rowid AS fid, bm25(chunks_fts) AS r "
+           f"FROM chunks_fts WHERE chunks_fts MATCH ?) f "
+           f"JOIN chunks c ON c.id = f.fid WHERE {where} ORDER BY f.r LIMIT ?")
     # bm25(): smaller = better; negate so every backend reports higher = better
     return [(row[0], -row[1]) for row in con.execute(sql, [match, *params, limit])]
 
@@ -967,8 +975,7 @@ def _hit(row, score, preview_chars, woerter=()):
         "thread": (row["thread"] if "thread" in row.keys() else None),
         # Names of the attachments – the reason a contract in the archive
         # can now be found rather than just lying there.
-        "attachments": [a for a in (row["att"] or "").split(" ")
-                        if a] if "att" in row.keys() else [],
+        "attachments": corpus.anhang_namen(row["att"]) if "att" in row.keys() else [],
         # Since when the message has been gone from the mailbox. Empty means:
         # it is still there. The file sits in the archive either way.
         "gone": (row["gone"] if "gone" in row.keys() else None),
@@ -1115,7 +1122,7 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     folder: str = "", filetype: str = "", case: str = "",
                     case_folder: str = "", party: str = "all",
                     mail_from: str = "", mail_to: str = "", mail_cc: str = "",
-                    mail_bcc: str = "") -> dict:
+                    mail_bcc: str = "", with_attachments: bool = False) -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
     SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
     pages – or any subset of it, or only what one case holds.
@@ -1187,6 +1194,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         mail_cc: See mail_to.
         mail_bcc: Optional. The Bcc line – which only mails the user sent
             themselves carry; a received mail has no blind copy to show.
+        with_attachments: Only items that carry an attachment – a mail's
+            real ones (inline images such as signature logos do not
+            count), the files a card or a page refers to. The hit's
+            `attachments` names them.
         Any of the four means mail: an appointment or a file has no such
             line, so with one set nothing but mail answers – whatever
             `source` says. list_addresses says which addresses stand in
@@ -1210,7 +1221,7 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party, mail)
+                               filetype, im_fall, party, mail, with_attachments)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -1254,7 +1265,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     only_gone: bool = False, folder: str = "",
                     filetype: str = "", case: str = "", case_folder: str = "",
                     party: str = "all", mail_from: str = "", mail_to: str = "",
-                    mail_cc: str = "", mail_bcc: str = "") -> dict:
+                    mail_cc: str = "", mail_bcc: str = "",
+                    with_attachments: bool = False) -> dict:
     """List items by filter, newest first, without a search query.
 
     For "everything from <person> in <month>", "the last week in <folder>",
@@ -1296,6 +1308,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         mail_to: See mail_from.
         mail_cc: See mail_from.
         mail_bcc: See mail_from – only in mail one sent oneself.
+        with_attachments: Only items with an attachment – see
+            search_messages.
     """
     con = _db()
     try:
@@ -1315,7 +1329,7 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party, mail)
+                               filetype, im_fall, party, mail, with_attachments)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.

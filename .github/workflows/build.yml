@@ -132,10 +132,17 @@ jobs:
         # dmgbuild lays the window out (packaging/dmg/layout.py): background
         # picture with the instructions, the app on the left, the
         # Applications link on the right – so the window says what to do
-        # instead of showing two bare icons.
+        # instead of showing two bare icons. The version is written into
+        # the picture's foot (packaging/dmg/stempel.py, with the build id
+        # stamped above) and into the volume name, which is the window's
+        # title – so the image says which version it carries.
         run: |
+          version=$(python -c "import version; print(version.VERSION)")
+          build=$(python -c "import version; print(version.BUILD)")
+          python packaging/dmg/stempel.py "$version" "$build" build/dmg
           dmgbuild -s packaging/dmg/layout.py -D app=dist/Munimentum.app \
-            "Munimentum" "Munimentum-${{ matrix.ziel }}.dmg"
+            -D background=build/dmg/background.png \
+            "Munimentum $version" "Munimentum-${{ matrix.ziel }}.dmg"
 
       - name: Sign, notarize and staple DMG (macOS)
         if: startsWith(matrix.os, 'macos') && startsWith(github.ref, 'refs/tags/v')

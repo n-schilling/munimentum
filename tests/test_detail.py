@@ -215,3 +215,23 @@ def test_chat_und_seiten_kommen_aus_der_zeile():
     f = detail.fakten(z, "Vereinbart …", None, {})
     assert f == {"uid": z["uid"], "kind": "onenote", "folder": "Projekte/Nordwind",
                  "modified": "2026-08-19 15:30", "text": "Vereinbart …"}
+
+
+def test_anhang_holt_den_nten_echten_teil(tmp_path):
+    """The download takes the n-th real attachment as the facts count them:
+    an inline image is skipped, a second name the mail does not have is
+    None, and so is a file that cannot be read."""
+    eml = tmp_path / "a.eml"
+    eml.write_bytes(
+        b"From: a@example.com\nTo: b@example.com\nSubject: x\nMIME-Version: 1.0\n"
+        b"Content-Type: multipart/mixed; boundary=\"g\"\n\n"
+        b"--g\nContent-Type: text/plain\n\nhallo\n"
+        b"--g\nContent-Type: image/png\nContent-Disposition: inline; filename=\"logo.png\"\n"
+        b"Content-Transfer-Encoding: base64\n\niVBORw0KGgo=\n"
+        b"--g\nContent-Type: text/csv\nContent-Disposition: attachment; filename=\"../liste.csv\"\n"
+        b"Content-Transfer-Encoding: base64\n\nYTtiCg==\n"
+        b"--g--\n")
+    name, inhalt, ctype = detail.anhang(eml, 1)
+    assert (name, inhalt, ctype) == ("liste.csv", b"a;b\n", "text/csv")   # the path is gone from the name
+    assert detail.anhang(eml, 2) is None and detail.anhang(eml, 0) is None
+    assert detail.anhang(tmp_path / "fehlt.eml", 1) is None

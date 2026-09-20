@@ -20,7 +20,10 @@ symlinks = {"Applications": "/Applications"}
 
 # The volume shows the app icon badged onto the standard disk-image icon.
 badge_icon = "packaging/icon/icon.icns"
-background = "packaging/dmg/background.png"
+# The picture: in the build the copy stempel.py wrote the version and the
+# build id into (`-D background=build/dmg/background.png`), otherwise the
+# committed one. dmgbuild finds the @2x next to whichever it is given.
+background = defines.get("background", "packaging/dmg/background.png")  # noqa: F821
 
 # The bounds describe the window frame, title bar included – 32 pt on
 # macOS 26 (28 on older systems, which then show a 4 pt strip of window

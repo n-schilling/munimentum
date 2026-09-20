@@ -2549,6 +2549,7 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/threads", "_v1_gespraech"),
     ("GET", "/api/v1/documents", "_v1_dokument"),
     ("GET", "/api/v1/documents/facts", "_v1_fakten"),
+    ("GET", "/api/v1/documents/attachments", "_v1_anhang"),
     ("GET", "/api/v1/calendar", "_v1_kalender"),
     # The settings are their own thing: they change when someone saves
     # them, not every other second, and the status is polled. Until 12.0
@@ -3975,6 +3976,35 @@ class Handler(BaseHTTPRequestHandler):
     def _v1_fakten(self, _p, q, _data):
         return self._json(self._detail(q))
 
+    def _v1_anhang(self, _p, q, _data):
+        """One attachment of a mail as a download: the n-th real one
+        (1-based), in the order the facts list them – so what the detail
+        shows as a chip is what this hands out."""
+        mod = self.app.search.ensure(self.app.cfg)
+        if mod is None:
+            raise Ablehnung(503, self.app.search.error)
+        n = self._zahl(q, "n", 1, 1, 999)
+        con = mod._db()
+        try:
+            row = con.execute("SELECT src, root, rel FROM chunks WHERE uid = ? AND seq = 0",
+                              (q.get("uid", ""),)).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            raise Ablehnung(404, "srv.detail.none")
+        teil = None
+        if row["src"] == "outlook":
+            ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
+            teil = detail.anhang(ziel, n) if ziel is not None else None
+        if teil is None:
+            raise Ablehnung(404, "srv.attach.none", {"n": n})
+        name, inhalt, ctype = teil
+        # What lies in a mail was written by someone else: offered as a
+        # download under a harmless name, never shown in this origin.
+        return self._send(200, inhalt, ctype, extra={
+            "Content-Disposition": f'attachment; filename="{_sicherer_name(name)}"',
+            "Content-Security-Policy": "sandbox"})
+
     def _v1_kalender(self, _p, _q, _data):
         return self._calendar()
 
@@ -4382,7 +4412,7 @@ class Handler(BaseHTTPRequestHandler):
                   k=self._zahl(q, "k", q.get("limit") or 20, 1, 101),
                   offset=self._zahl(q, "offset", 0, 0),
                   only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
-                  party=k["party"],
+                  party=k["party"], with_attachments=k["attachments"],
                   # The four mail lines (13.0): they narrow mail, nothing else.
                   **{m: k[m] for m in faelle.MAIL},
                   # The "Cases" filter: only what one case – or one of its
@@ -4431,7 +4461,8 @@ class Handler(BaseHTTPRequestHandler):
         mod.STATE["internal_domains"] = self._interne_domains()
         kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                   source=k["source"], only_gone=k["gone"], folder=k["folder"],
-                  filetype=k["filetype"], case=str(k["fall"]) if k["fall"] else "",
+                  filetype=k["filetype"], with_attachments=k["attachments"],
+                  case=str(k["fall"]) if k["fall"] else "",
                   case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
                   party=k["party"], preview_chars=0,
                   **{m: k[m] for m in faelle.MAIL})

@@ -72,9 +72,10 @@ def _adressen(msg, *headers):
     return out
 
 
-def _anhaenge(msg):
-    """Real attachments with their size – inline images (signature logos)
-    are noise, the same rule corpus.anhaenge applies."""
+def _anhangteile(msg):
+    """The real attachments of a mail as (name, part), in order of
+    appearance and once per name – inline images (signature logos) are
+    noise, the same rule corpus.anhaenge applies."""
     out = []
     try:
         teile = list(msg.walk())
@@ -84,8 +85,16 @@ def _anhaenge(msg):
         if p.get_content_disposition() != "attachment" or not p.get_filename():
             continue
         name = corpus.sicherer_dateiname(str(p.get_filename()))
-        if any(a["name"] == name for a in out):
+        if any(n == name for n, _ in out):
             continue
+        out.append((name, p))
+    return out
+
+
+def _anhaenge(msg):
+    """Real attachments with their size."""
+    out = []
+    for name, p in _anhangteile(msg):
         try:
             groesse = len(p.get_payload(decode=True) or b"")
         except Exception:
@@ -94,11 +103,31 @@ def _anhaenge(msg):
     return out
 
 
+def anhang(ziel, n):
+    """The n-th real attachment (1-based) of the mail at `ziel`, in the
+    order `_anhaenge` lists them: (name, bytes, content type) – or None
+    when the mail cannot be read or has no n-th one."""
+    try:
+        with open(ziel, "rb") as f:
+            msg = BytesParser(policy=policy.default).parse(f)
+    except Exception:
+        return None
+    teile = _anhangteile(msg)
+    if not 1 <= n <= len(teile):
+        return None
+    name, p = teile[n - 1]
+    try:
+        inhalt = p.get_payload(decode=True) or b""
+    except Exception:
+        return None
+    return name, inhalt, p.get_content_type() or "application/octet-stream"
+
+
 def _mail(row, text, ziel):
     out = {"from": {"name": row["who"] or "", "mail": row["who_mail"] or ""},
            "to": [], "cc": [], "bcc": [],
            "date": row["date"] or "", "folder": row["ctx"] or "",
-           "attachments": [{"name": a, "size": None} for a in (row["att"] or "").split() if a],
+           "attachments": [{"name": a, "size": None} for a in corpus.anhang_namen(row["att"])],
            "text": text}
     msg = None
     if ziel is not None:
@@ -261,7 +290,7 @@ def _planner(row, text, state):
     out = {"plan": plan, "bucket": bucket, "folder": ctx,
            "assigned": [w for w in (row["who"] or "").split(", ") if w],
            "due": "", "state": "", "checklist": None,
-           "attachments": [a for a in (row["att"] or "").split() if a],
+           "attachments": corpus.anhang_namen(row["att"]),
            "text": text, "comments": []}
     e, namen = _task_eintrag(row, state, "planner_dir")
     if not e:
@@ -287,7 +316,7 @@ def _planner(row, text, state):
 def _todo(row, text, state):
     out = {"list": row["ctx"] or "", "folder": row["ctx"] or "", "due": "", "state": "",
            "completed": "", "steps": None, "linked": [],
-           "attachments": [a for a in (row["att"] or "").split() if a], "text": text}
+           "attachments": corpus.anhang_namen(row["att"]), "text": text}
     e, _namen = _task_eintrag(row, state, "todo_dir")
     if not e:
         return out

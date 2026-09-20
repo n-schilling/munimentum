@@ -377,6 +377,40 @@ def anhaenge(msg):
     return namen
 
 
+# The names in the `att` column are joined with `|` (13.1): a sanitised name
+# never carries one (sicherer_dateiname turns it into `_`), while it may
+# well carry a space – and a space between two names could not be told
+# from one inside a name. Indexes from before joined with a space.
+ANHANG_TRENNER = "|"
+_ENDUNG = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+
+
+def anhang_text(namen):
+    """The `att` column out of attachment names."""
+    return ANHANG_TRENNER.join(str(n).strip() for n in namen if str(n).strip())
+
+
+def anhang_namen(att):
+    """The names back out of an `att` column. Written with `|` since 13.1;
+    an index from before joined them with a space, so there the extension
+    says where a name ends – a word without one belongs to the next. That
+    reads every mail right whose attachments all have an extension."""
+    att = str(att or "")
+    if ANHANG_TRENNER in att:
+        return [n.strip() for n in att.split(ANHANG_TRENNER) if n.strip()]
+    namen, lauf = [], []
+    for wort in att.split(" "):
+        if not wort:
+            continue
+        lauf.append(wort)
+        if _ENDUNG.search(wort):
+            namen.append(" ".join(lauf))
+            lauf = []
+    if lauf:
+        namen.append(" ".join(lauf))
+    return namen
+
+
 def endungen(att):
     """The file types behind an attachment list – deduped, lowercase, sorted.
 
@@ -389,7 +423,7 @@ def endungen(att):
     characters. A name like "Bericht.2024-final" has none.
     """
     gefunden = set()
-    for name in (att or "").split(" "):
+    for name in anhang_namen(att):
         stueck = name.rsplit(".", 1)
         if len(stueck) == 2 and stueck[1] and stueck[1].isalnum() and len(stueck[1]) <= 8:
             gefunden.add(stueck[1].lower())
@@ -452,7 +486,7 @@ def _outlook_file(p_str, root_str):
         "uid": f"outlook:{rel}:0", "src": "outlook", "root": "outlook", "rel": rel,
         "key": f"mail:{kennung}" if kennung else None,
         "thread": thread_key(msg),
-        "att": " ".join(anhaenge(msg)),
+        "att": anhang_text(anhaenge(msg)),
         "who": who, "ppl": " ".join(fn + fe + tn + te + cn + ce + bn + be).lower(),
         # The sender's address – what a case's People view tells internal
         # from external by, and you from everyone else.
@@ -872,7 +906,7 @@ def load_planner(root_dir):
             kommentare = e.get("kommentare") or []
             # Reference aliases like mail attachments: names searchable, and
             # the file type filter (att:pdf) also hits Planner cards.
-            anhaenge = " ".join(
+            anhaenge = anhang_text(
                 str((ref or {}).get("alias") or "").replace(" ", "_")
                 for ref in (det.get("references") or {}).values()).strip()
             # Assignees AND comment authors, GUIDs resolved via the export's
@@ -944,7 +978,7 @@ def load_todo(root_dir):
                    (task.get("checklistItems") or [])]
                 + [str(r.get("displayName") or r.get("applicationName") or "")
                    for r in (task.get("linkedResources") or [])])
-            anhaenge = " ".join(
+            anhaenge = anhang_text(
                 str(a.get("name") or "").replace(" ", "_")
                 for a in (e.get("anhaenge") or [])).strip()
             ts = (export_util.graph_zeit(task.get("lastModifiedDateTime"))

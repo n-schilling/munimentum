@@ -4592,6 +4592,11 @@ def test_http_search_reicht_den_filter_durch(server, monkeypatch):
     assert gesehen["only_gone"] is True
     call(port, "GET", "/api/v1/search")
     assert gesehen["only_gone"] is False
+    # the attachment switch (13.1) travels the same way
+    call(port, "GET", "/api/v1/search?attachments=1")
+    assert gesehen["with_attachments"] is True
+    call(port, "GET", "/api/v1/search")
+    assert gesehen["with_attachments"] is False
     # the parties filter travels too, with the internal domains the engine
     # needs – the setting, else the signed-in account's domain
     a.cfg["internal_domains"] = "nordwind.example"
@@ -6582,6 +6587,65 @@ setTimeout(function(){
 
 def test_ein_ungesehener_lauf_holt_den_bestand_neu():
     _in_node(PRUEFUNG_LAUF_UNGESEHEN)
+
+
+PRUEFUNG_ANHANG = GRUNDZUSTAND + """
+// Der Anhang-Filter (13.1): eine Pille wie "Nur Geloeschtes", nur bei Quelle
+// Mail; ein Haken unter anderer Quelle zaehlt nicht und geht nicht raus.
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  gesendet.push(String(pfad));
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/v1/search') >= 0
+      ? {items: [], count: 0, limit: 20, offset: 0, has_more: false, backend: 'bm25'} : statusGeruest()); }});
+};
+function gefragt(){ return gesendet.filter(function(p){ return p.indexOf('/api/v1/search?') >= 0; }).pop() || ''; }
+document.getElementById('f-source').value = 'all';
+zeigeFilterstand();
+pruefe(document.getElementById('p-anhang').classList.contains('hide'), 'Anhang-Pille steht bei allen Quellen');
+document.getElementById('f-source').value = 'outlook';
+zeigeFilterstand();
+pruefe(!document.getElementById('p-anhang').classList.contains('hide'), 'Anhang-Pille fehlt bei Mail');
+document.getElementById('f-attach').checked = true;
+zeigeFilterstand();
+pruefe(document.getElementById('p-anhang').classList.contains('on'), 'Gesetzte Pille leuchtet nicht');
+pruefe(kriterienAusForm().attachments === true, 'Kriterium fehlt');
+pruefe(document.getElementById('filter-stand').textContent.indexOf('2') >= 0,
+       'Zahl der Filter: ' + document.getElementById('filter-stand').textContent);
+doSearch(0);
+pruefe(gefragt().indexOf('attachments=1') >= 0, 'attachments=1 nicht geschickt: ' + gefragt());
+document.getElementById('f-source').value = 'all';
+zeigeFilterstand();
+pruefe(document.getElementById('p-anhang').classList.contains('hide') && kriterienAusForm().attachments === false,
+       'Der Haken zaehlt trotz anderer Quelle');
+gesendet = [];
+doSearch(0);
+pruefe(gefragt().indexOf('attachments=1') < 0, 'attachments=1 trotz anderer Quelle geschickt: ' + gefragt());
+// Gespeicherte Kriterien: als Tag, und zurueck ins Formular.
+pruefe(kriterienTags({attachments: true}).indexOf(t('search.pill.anhang')) >= 0, 'Tag fehlt');
+kriterienAnwenden({source: 'outlook', attachments: true});
+pruefe(document.getElementById('f-attach').checked === true, 'Kriterium kommt nicht ins Formular');
+pillLeeren('anhang');
+pruefe(document.getElementById('f-attach').checked === false, 'Das x leert die Pille nicht');
+// Die Bueroklammer in der Liste – unabhaengig vom Filter, mit Namen und Zahl.
+TREFFER = [{uid: 'u1', title: 'A', source: 'outlook', attachments: ['Rechnung.pdf', 'Anlage.xlsx']},
+           {uid: 'u2', title: 'B', source: 'outlook', attachments: []},
+           {uid: 'u3', title: 'C', source: 'teams'}];
+zeichneTrefferListe();
+var h = document.getElementById('results').innerHTML;
+pruefe(h.split('tag anhang').length - 1 === 1, 'Bueroklammer nicht genau einmal: ' + h.slice(0, 400));
+pruefe(h.indexOf('Rechnung.pdf, Anlage.xlsx') >= 0, 'Namen fehlen im Tooltip');
+// Die Chips im Detail: mit uid und Groesse ein Download, sonst ein Chip.
+var c = detailChips([{name: 'Rechnung.pdf', size: 2048}, {name: 'nur-im-index.pdf', size: null}], 'mail:1');
+pruefe(c.indexOf('href="/api/v1/documents/attachments?uid=mail%3A1&n=1"') >= 0, 'Download-Link fehlt: ' + c);
+pruefe(c.split('<a ').length - 1 === 1, 'Ein Chip ohne Groesse ist ein Link: ' + c);
+pruefe(detailChips([{name: 'x.pdf'}]).indexOf('<a ') < 0, 'Ohne uid ein Link');
+console.log('OK');
+"""
+
+
+def test_der_anhangfilter_steht_nur_bei_mail_und_die_klammer_immer():
+    _in_node(PRUEFUNG_ANHANG)
 
 
 PRUEFUNG_UPDATE_ABGELEHNT = GRUNDZUSTAND + """

@@ -1129,7 +1129,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
         "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party",
-        "mail_from", "mail_to", "mail_cc", "mail_bcc"}
+        "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments"}
     assert schema["required"] == ["query"]      # only query is required
 
 
@@ -1293,6 +1293,26 @@ def test_party_filter_intern_und_extern(state):
     mcp_server.STATE["internal_domains"] = ""
     assert "No internal domains" in mcp_server.browse_messages(k=50, party="external")["error"]
     assert "No internal domains" in mcp_server.search_messages("Rechnung", party="internal")["error"]
+
+
+def test_with_attachments_zeigt_nur_was_einen_anhang_traegt(state):
+    """The attachment filter (13.1): only rows whose `att` names one – a
+    mail's real attachments, a card's files – and the hit says which."""
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET att = 'Rechnung.pdf' "
+                "WHERE uid = (SELECT uid FROM chunks WHERE seq = 0 LIMIT 1)")
+    con.commit()
+    con.close()
+    alle = mcp_server.browse_messages(k=50)["count"]
+    mit = mcp_server.browse_messages(k=50, with_attachments=True)
+    assert 0 < mit["count"] < alle
+    assert all(m["attachments"] == ["Rechnung.pdf"] for m in mit["results"])
+    # And through the ranking search, where the same filter narrows the same way.
+    uids = {m["uid"] for m in mit["results"]}
+    antwort = mcp_server.search_messages(query=mit["results"][0]["title"], mode="lexical", k=50,
+                                         with_attachments=True)
+    assert antwort.get("results"), antwort
+    assert {h["uid"] for h in antwort["results"]} <= uids
 
 
 def test_only_gone_zeigt_nur_verschwundenes(state):

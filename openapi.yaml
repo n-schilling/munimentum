@@ -1076,6 +1076,7 @@ paths:
         - { name: mail_cc, in: query, schema: { type: string }, description: "The same for Cc." }
         - { name: mail_bcc, in: query, schema: { type: string }, description: "The same for Bcc – which only mail the user sent themselves carries." }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
+        - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment – a mail's real ones (inline images do not count), the files a card or a page refers to; the hit's `attachments` names them. The page offers it for mail." }
         - name: mode
           in: query
           description: |
@@ -1919,6 +1920,62 @@ paths:
                 attachments: [{ name: Rechnung-0042.pdf, size: 84213 }]
         "404":
           description: No item with this uid (srv.detail.none).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents/attachments:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetAttachment
+      x-needs-index: true
+      summary: One attachment of a mail, as a download
+      description: |
+        The n-th real attachment of a mail (1-based), in the order the
+        facts list them – so the chip the detail shows is what this hands
+        out. Real ones only, as the facts count them: an inline image is
+        not one. Only mail has attachments this way; a card's or a page's
+        referenced files are files of the archive, served by
+        `/api/v1/files/content`.
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+        - { name: n, in: query, schema: { type: integer, default: 1, minimum: 1 }, description: "Which one, counted from 1 as the facts list them." }
+      responses:
+        "200":
+          description: |
+            The attachment itself, under the content type the mail gave it
+            (`application/octet-stream` where it gave none), offered as a
+            download and answered with `Content-Security-Policy: sandbox`
+            and `X-Content-Type-Options: nosniff` – what lies in a mail was
+            written by someone else.
+          headers:
+            Content-Disposition:
+              description: "`attachment; filename=\"…\"` – the attachment's name, stripped of anything a header or a download folder should not carry."
+              schema: { type: string }
+            Content-Length:
+              description: The attachment's size in bytes.
+              schema: { type: integer }
+            Content-Security-Policy:
+              description: Always `sandbox`.
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "400":
+          description: "`n` is not a number (srv.badparam)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No item with this uid (srv.detail.none), or no n-th attachment on it – a chat, a file, a mail with fewer (srv.attach.none).
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -4176,6 +4233,7 @@ components:
         folder: { type: string }
         filetype: { type: string }
         gone: { type: boolean }
+        attachments: { type: boolean, description: "Only items with an attachment (13.1)." }
         party: { type: string, enum: [all, internal, external] }
         mail_from: { type: string, description: "The mail lines (13.0); they narrow mail only." }
         mail_to: { type: string }

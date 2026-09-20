@@ -132,6 +132,9 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 7px;
   font-size:11.5px;color:var(--muted);margin-right:6px}
 .tag.weg{border:1px solid var(--warn);color:var(--warn);background:transparent}
+.tag.anhang{display:inline-flex;align-items:center;gap:3px;background:transparent;border:1px solid var(--line);color:var(--muted);margin-right:6px}
+a.chip{color:inherit;text-decoration:none}
+a.chip:hover,a.chip:focus-visible{border-color:var(--accent);color:var(--accent)}
 .tag.herkunft{margin-left:8px;font-weight:400}
 mark{background:var(--code);color:var(--ink);font-weight:600;border-radius:3px;padding:0 3px}
 /* Small status next to a field: the dot carries the colour, the word the fact. */
@@ -1233,6 +1236,19 @@ details.rechte p{margin:6px 0}
           <span class="bez" data-i18n="view.gone">Nur nicht mehr bei Microsoft</span>
         </label>
         <p class="satz" data-i18n="search.gone.note">Zeigt nur, was nicht mehr im Postfach ist.</p>
+      </div>
+    </div>
+    <!-- Only while the source is Mail: nothing else has an attachment the
+         way a mail has one, and a pill that can narrow nothing is absent. -->
+    <div class="pill hide" id="p-anhang" role="button" tabindex="0" onclick="pillAuf('anhang')" onkeydown="pillTaste(event, 'anhang')">
+      <span data-ikon="klammer" data-ikon-klasse="klein"></span><span class="wert" id="pw-anhang">Mit Anhang</span><span class="pfeil" id="pf-anhang" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-anhang" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('anhang')">×</span>
+      <div class="popover hide" id="po-anhang" onclick="event.stopPropagation()" style="min-width:320px">
+        <h4 data-i18n="search.pill.anhang">Mit Anhang</h4>
+        <label class="zeile" id="attach-feld" for="f-attach">
+          <input type="checkbox" class="kipp" id="f-attach" onchange="zeigeFilterstand()">
+          <span class="bez" data-i18n="search.attach.label">Nur Mails mit Anhang</span>
+        </label>
+        <p class="satz" data-i18n="search.attach.note">Zählt nur echte Anhänge.</p>
       </div>
     </div>
     <button class="hide" id="filter-weg" onclick="filterLeeren()"
@@ -2420,7 +2436,7 @@ function dateienSuchen(){
 function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
           el('f-from').value, el('f-to').value, el('f-folder').value,
-          el('f-typ').value, el('f-gone').checked ? 'gone' : '',
+          el('f-typ').value, el('f-gone').checked ? 'gone' : '', anhangGesetzt() ? 'attach' : '',
           el('f-fall').value, el('f-party').value !== 'all' ? el('f-party').value : '']
          .filter(Boolean)
          // Each mail line counts for itself, as the two ends of the date
@@ -2434,6 +2450,15 @@ function filterFelder(){
    it is sent. */
 function mailMoeglich(){
   return KANN_MAIL && el('f-source').value === 'outlook';
+}
+/* The attachment filter: only with Mail, like the mail lines – nothing
+   else has an attachment the way a mail has one. A tick left behind
+   under another source counts for nothing and is sent nowhere. */
+function anhangMoeglich(){
+  return el('f-source').value === 'outlook';
+}
+function anhangGesetzt(){
+  return anhangMoeglich() && !!el('f-attach').checked;
 }
 function mailWert(rolle){
   var feld = el('f-mail-' + rolle);
@@ -2458,8 +2483,8 @@ function mailText(){
 function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
-  el('f-typ').value = ''; el('f-gone').checked = false; el('f-fall').value = '';
-  el('f-party').value = 'all';
+  el('f-typ').value = ''; el('f-gone').checked = false; el('f-attach').checked = false;
+  el('f-fall').value = ''; el('f-party').value = 'all';
   MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   zeigeFilterstand();
 }
@@ -2494,6 +2519,7 @@ function zeigeFilterstand(){
   el('f-folder').classList.toggle('on', !!el('f-folder').value);
   el('f-typ').classList.toggle('on', !!el('f-typ').value);
   el('gone-feld').classList.toggle('on', !!el('f-gone').checked);
+  el('attach-feld').classList.toggle('on', !!el('f-attach').checked);
   el('f-fall').classList.toggle('on', !!el('f-fall').value);
   el('f-party').classList.toggle('on', el('f-party').value !== 'all');
   MAIL_ROLLEN.forEach(function(r){
@@ -2510,7 +2536,7 @@ function zeigeFilterstand(){
    under a pill. The pill says the filter's name, or its value once set,
    and then carries a × that clears it. A filter the index or the source
    cannot offer hides together with its control. */
-var PILLEN = ['person', 'source', 'mail', 'date', 'typ', 'folder', 'fall', 'party', 'weg'];
+var PILLEN = ['person', 'source', 'mail', 'date', 'typ', 'folder', 'fall', 'party', 'weg', 'anhang'];
 var PILL_FELD = {person: 'f-person', source: 'f-source', typ: 'f-typ', folder: 'f-folder', fall: 'f-fall', party: 'f-party'};
 function optionText(id){
   var sel = el(id), o = sel.options && sel.options[sel.selectedIndex];
@@ -2542,7 +2568,8 @@ function pillWerte(){
           folder: el('f-folder').value ? ordnerName(el('f-folder').value) : '',
           fall: el('f-fall').value ? fallFilterText() : '',
           party: el('f-party').value && el('f-party').value !== 'all' ? t('search.party.' + el('f-party').value) : '',
-          weg: el('f-gone').checked ? t('search.pill.weg') : ''};
+          weg: el('f-gone').checked ? t('search.pill.weg') : '',
+          anhang: anhangGesetzt() ? t('search.pill.anhang') : ''};
 }
 function zeichnePillen(){
   var werte = pillWerte();
@@ -2559,6 +2586,7 @@ function zeichnePillen(){
   // Mail lines: shown where they can be answered, gone where they cannot –
   // what was typed stays in the fields and comes back with the source.
   el('p-mail').classList.toggle('hide', !mailMoeglich());
+  el('p-anhang').classList.toggle('hide', !anhangMoeglich());
 }
 function pillAuf(k){
   var po = el('po-' + k), war = !po.classList.contains('hide');
@@ -2609,6 +2637,7 @@ function pillLeeren(k){
   else if(k === 'date'){ el('f-from').value = ''; el('f-to').value = ''; }
   else if(k === 'mail') MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   else if(k === 'weg') el('f-gone').checked = false;
+  else if(k === 'anhang') el('f-attach').checked = false;
   else {
     el(PILL_FELD[k]).value = k === 'source' || k === 'party' ? 'all' : '';
     if(k === 'source') ladeOrdner();
@@ -3845,13 +3874,14 @@ function doSearch(off, gespeichert){
   // Only the kind and the number of filters – never the search text or a name.
   var filter = ['f-person', 'f-source', 'f-from', 'f-to', 'f-folder', 'f-typ', 'f-fall']
     .filter(function(id){ return el(id).value; }).length +
-    (el('f-gone').checked ? 1 : 0) + (el('f-party').value !== 'all' ? 1 : 0) +
-    mailGesetzt().length;
+    (el('f-gone').checked ? 1 : 0) + (anhangGesetzt() ? 1 : 0) +
+    (el('f-party').value !== 'all' ? 1 : 0) + mailGesetzt().length;
   merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
   var proSeite = trefferProSeite(), fw = fallFilterWert(), mw = mailWerte();
   var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
-    gone: el('f-gone').checked ? '1' : '', folder: el('f-folder').value,
+    gone: el('f-gone').checked ? '1' : '', attachments: anhangGesetzt() ? '1' : '',
+    folder: el('f-folder').value,
     filetype: el('f-typ').value,
     // The "Cases" filter: a case, or one folder inside it ("case/folder")
     case: fw.fall ? String(fw.fall) : '', case_folder: fw.ordner ? String(fw.ordner) : '',
@@ -4205,7 +4235,13 @@ function zeichneTrefferListe(){
       '<span class="wer"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
       (h.gone ? '<span class="tag weg" title="' +
         esc(t('search.gone.since', {when: fmt(h.gone)})) + '">' +
-        esc(t('search.gone.tag')) + '</span>' : '') + esc(h.who || '') + '</span>' +
+        esc(t('search.gone.tag')) + '</span>' : '') +
+      // The paperclip: a mail with attachments says so in the list, whatever
+      // the filter – the names are the tooltip, the count where it is not one.
+      (h.attachments && h.attachments.length ? '<span class="tag anhang" title="' +
+        esc(t('search.attach.title', {names: h.attachments.join(', ')})) + '">' +
+        ikon('klammer', 'klein') + (h.attachments.length > 1 ? ' ' + h.attachments.length : '') +
+        '</span>' : '') + esc(h.who || '') + '</span>' +
       '<span class="prev">' + hervor(h.preview || '') + '…</span>' +
       '</div>';
   }).join('');
@@ -4365,10 +4401,17 @@ function detailZeitraum(von, bis){
   if(gleicherTag && /\d:\d/.test(String(bis))) return detailWann(von) + ' – ' + String(bis).slice(11, 16);
   return detailWann(von) + ' – ' + detailWann(bis);
 }
-function detailChips(liste){
-  return '<span class="chips">' + liste.map(function(a){
-    return '<span class="chip">' + ikon('klammer', 'klein') + esc(a.name || a) +
-      (a.size != null ? ' · ' + esc(bytes(a.size)) : '') + '</span>';
+/* The attachments as chips. With `uid`, a mail's real ones – the ones the
+   file was read for, hence a size – are downloads; a name known only
+   from the index, or a file a card refers to, stays a plain chip. */
+function detailChips(liste, uid){
+  return '<span class="chips">' + liste.map(function(a, i){
+    var inhalt = ikon('klammer', 'klein') + esc(a.name || a) +
+      (a.size != null ? ' · ' + esc(bytes(a.size)) : '');
+    return uid && a.size != null
+      ? '<a class="chip" href="' + API + '/documents/attachments?uid=' + encodeURIComponent(uid) +
+        '&n=' + (i + 1) + '" download title="' + esc(t('search.attach.download')) + '">' + inhalt + '</a>'
+      : '<span class="chip">' + inhalt + '</span>';
   }).join('') + '</span>';
 }
 function detailFakten(h, r){
@@ -4384,7 +4427,7 @@ function detailFakten(h, r){
     z.push(['search.fact.bcc', leute(f.bcc)]);
     z.push(['search.fact.date', esc(detailWann(h.date))]);
     z.push(['search.fact.folder', ordnerLink(h)]);
-    z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
+    z.push(['search.fact.attachments', att.length ? detailChips(att, h.uid) : '']);
   } else if(src === 'teams'){
     z.push(['search.fact.from', detailPerson({name: h.who})]);
     z.push(['search.fact.when', esc(detailWann(h.date))]);
@@ -4589,7 +4632,8 @@ function kriterienAusForm(){
   return {q: el('q').value.trim(), mode: SUCHMODUS, person: el('f-person').value.trim(),
           source: el('f-source').value || 'all', from: el('f-from').value, to: el('f-to').value,
           folder: el('f-folder').value, filetype: el('f-typ').value,
-          gone: !!el('f-gone').checked, case: fw.fall, case_folder: fw.fall ? fw.ordner : null,
+          gone: !!el('f-gone').checked, attachments: anhangGesetzt(),
+          case: fw.fall, case_folder: fw.fall ? fw.ordner : null,
           party: el('f-party').value || 'all',
           // Only what the search really used: a line typed while another
           // source is chosen never ran, and must not come back as if it had.
@@ -4619,6 +4663,7 @@ function kriterienAnwenden(k){
   optionSicher(el('f-typ'), k.filetype);
   el('f-typ').value = k.filetype || '';
   el('f-gone').checked = !!k.gone;
+  el('f-attach').checked = !!k.attachments;
   el('f-fall').value = k.case ? (k.case_folder ? k.case + '/' + k.case_folder : String(k.case)) : '';
   el('f-party').value = k.party === 'internal' || k.party === 'external' ? k.party : 'all';
   MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = k['mail_' + r] || ''; });
@@ -4658,6 +4703,7 @@ function kriterienTags(k){
   if(k.folder) tags.push(t('search.criteria.folder', {name: ordnerName(k.folder) || k.folder}));
   if(k.filetype) tags.push('.' + k.filetype);
   if(k.gone) tags.push(t('view.gone'));
+  if(k.attachments) tags.push(t('search.pill.anhang'));
   if(k.party === 'internal' || k.party === 'external') tags.push(t('search.criteria.party', {name: t('search.party.' + k.party)}));
   MAIL_ROLLEN.forEach(function(r){
     if(k['mail_' + r]) tags.push(t('search.criteria.mail',

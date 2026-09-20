@@ -18,8 +18,13 @@ def test_kriterien_haben_eine_form():
     k = faelle.kriterien({"q": " budget ", "mode": "lexical", "gone": "1", "case": "3",
                           "person": "Alice", "unbekannt": "x"})
     assert k == {"q": "budget", "mode": "text", "person": "Alice", "source": "all", "from": "",
-                 "to": "", "folder": "", "filetype": "", "gone": True, "fall": 3, "ordner": None,
+                 "to": "", "folder": "", "filetype": "", "gone": True, "attachments": False,
+                 "fall": 3, "ordner": None,
                  "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
+    # the attachment switch (13.1) is a boolean like `gone`, and a filter on its own
+    assert faelle.kriterien({"attachments": "1"})["attachments"] is True
+    assert faelle.kriterien({"attachments": "no"})["attachments"] is False
+    assert not faelle.leer({"attachments": True})
     # the four mail lines (13.0) travel with the criteria like any filter
     assert faelle.kriterien({"mail_to": " bob@nordwind.example "})["mail_to"] == "bob@nordwind.example"
     # and a search that is nothing but one of them is not an empty search
