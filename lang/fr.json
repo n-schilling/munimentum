@@ -1766,8 +1766,7 @@
   "job.step.check.onenote": "Complétude : OneNote",
   "ana.check.pick.all": "Toutes",
   "ana.check.pick.none": "Aucune",
-  "ana.check.pick.i": "Les sources que la vérification interroge, parmi celles que l’export récupère – une source hors service ou sans adresses est prête une fois cochée ou saisie dans les réglages.",
+  "ana.check.pick.i": "Les sources que la vérification interroge – cochées sous « Construire l’archive » ou non ; à l’intérieur d’une source s’appliquent les règles, filtres et calendriers, listes et blocs-notes choisis de l’export. Une source qui a besoin d’adresses est prête une fois celles-ci saisies dans les réglages.",
   "ana.check.needs.urls": "Saisissez d’abord des adresses dans les réglages.",
-  "ana.check.needs.use": "Pas en service – cochez d’abord la source sous « Construire l’archive ».",
   "ana.check.pick.empty": "Aucune source choisie."
 }

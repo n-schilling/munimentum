@@ -172,8 +172,8 @@ the case and touches nothing in the archive.
 What the archive holds, computed once per index run: messages, people and
 period, the mirrored files, disk usage, and the **gaps** — months with no
 message at all. On request a **completeness balance** against Microsoft
-for the sources you tick on that card, among those the export fetches:
-per source, what is here, not
+for the sources you tick on that card, whether or not they are ticked
+under Build archive: per source, what is here, not
 fetched yet, deliberately excluded by the same rules and filters the
 export uses, deleted at Microsoft but kept, and what Microsoft refuses
 or no longer had when asked — recorded once by the export, never asked

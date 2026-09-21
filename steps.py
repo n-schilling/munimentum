@@ -122,15 +122,15 @@ def _check_rows(ctx):
 
 
 def _check_cats_outlook(cfg, ctx):
-    """The mailbox categories a check runs through: the ticked ones, and
-    with rows only those among them the card asked for. A category the
-    export does not fetch is no gap – the balance asks "would a run
-    bring something?", and a run would not."""
+    """The mailbox categories a check runs through: the rows the card
+    asked for (mail, calendar, contacts are rows of their own), else the
+    ticked ones. The card chooses on its own – a row is checked whether
+    or not the export fetches it; within it the export's rules, start
+    days and chosen calendars apply."""
     rows = _check_rows(ctx)
-    cats = list(ctx["cats_outlook"])
     if rows is None:
-        return cats
-    return [c for c in cats if f"outlook_{c}" in rows]
+        return list(ctx["cats_outlook"])
+    return [c for c in ("mail", "calendar", "contacts") if f"outlook_{c}" in rows]
 
 
 def _check_outlook_env(cfg, ctx):
@@ -138,24 +138,25 @@ def _check_outlook_env(cfg, ctx):
 
 
 def _check_teams_env(cfg, ctx):
-    # The ticked kinds, as the export takes them – the card chooses the
-    # source, not what the export fetches of it.
-    return {**_teams_env(cfg, ctx), "EXPORT_CATEGORIES": ",".join(ctx["cats_teams"])}
+    # The kinds the export takes; a Teams row chosen on the card without
+    # any kind ticked is asked for every kind.
+    cats = ctx["cats_teams"] if ctx["cats_teams"] or _check_rows(ctx) is None \
+        else list(TEAMS_KATEGORIEN)
+    return {**_teams_env(cfg, ctx), "EXPORT_CATEGORIES": ",".join(cats)}
 
 
-def _checkable(source, otherwise, in_use=None):
-    """The gate of a check step. Without rows, `otherwise` decides – the
-    export's own switch, or for the URL sources the address list alone,
-    which is what the size preview needs before a mirror is switched
-    on. With rows, the card must have asked for the source, and the
-    source must be in use (`in_use`, the same word the card greys rows
-    by; `otherwise` when not given): a source the export does not fetch
-    is never checked, since nothing would come, so nothing is open."""
+def _checkable(source, otherwise, needs=None):
+    """The gate of a check step. With rows, the card alone decides –
+    the source need not be ticked under Build archive; only what a
+    source cannot run without (`needs`: the address list of the URL
+    sources) is still required. Without rows, `otherwise` – the
+    export's own switch, or the address list alone for the size
+    preview – as before."""
     def gate(cfg, ctx):
         rows = _check_rows(ctx)
         if rows is None:
             return bool(otherwise(cfg, ctx))
-        return source in rows and bool((in_use or otherwise)(cfg, ctx))
+        return source in rows and (needs is None or bool(needs(cfg, ctx)))
     return gate
 
 
@@ -495,9 +496,9 @@ REGISTRY = (
      # Gated on the URL list, never on the mirror's switch: the size
      # preview in the settings asks for this step before anyone ticks
      # the mirror on; a row asked for on the Insights card needs the
-     # mirror in use, as the card greys the row otherwise.
+     # addresses and nothing else.
      "aktiv": _checkable("sharepoint", _has_urls("sharepoint_urls"),
-                         in_use=lambda cfg, ctx: nutzt_sharepoint(cfg)),
+                         needs=_has_urls("sharepoint_urls")),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["sharepoint"]],
      "env": _sharepoint_env},
 
@@ -507,7 +508,7 @@ REGISTRY = (
      "label": "job.step.check.pages", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
      "aktiv": _checkable("sharepoint_pages", _has_urls("sharepoint_pages_urls"),
-                         in_use=lambda cfg, ctx: nutzt_pages(cfg)),
+                         needs=_has_urls("sharepoint_pages_urls")),
      "argv": lambda cfg, ctx, pfade: ["--check-pages",
                                       pfade["sharepoint_pages"]],
      "env": _pages_env},
@@ -518,7 +519,7 @@ REGISTRY = (
      "label": "job.step.check.planner", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
      "aktiv": _checkable("planner", _has_urls("planner_urls"),
-                         in_use=lambda cfg, ctx: nutzt_planner(cfg)),
+                         needs=_has_urls("planner_urls")),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["planner"]],
      "env": _planner_env},
 

@@ -1,13 +1,5 @@
 ## New in 13.4.1
 
-**The completeness check asks only what the export fetches.** A row
-ticked on the card is checked among the sources in use: a source that
-is not ticked under *Build archive*, or has no addresses yet, is greyed
-on the card with the reason and never asked – nothing would come of a
-run, so nothing is open. For Teams the check takes the ticked kinds
-(chats, meetings, channels), as the export does. 13.4.0 asked every
-kind of a chosen source, ticked or not.
-
 **The calendar check asks the view plainly.** It selected the change
 stamp, which `calendarView` refuses to select; the calendar then stood
 as *unreachable* with nothing counted. The view is now asked without

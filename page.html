@@ -6942,8 +6942,6 @@ var PRUEFUNGEN = JSON.parse(document.getElementById('pruefungen').textContent ||
 
 function zeigeBerichte(a){
   var alle = a.pruefungen || {};
-  PRUEF_GENUTZT = {};
-  PRUEFUNGEN.forEach(function(e){ if(alle[e.quelle]) PRUEF_GENUTZT[e.quelle] = alle[e.quelle].genutzt; });
   drawCheckSources();
   var zeilen = PRUEFUNGEN.filter(function(e){
     var p = alle[e.quelle] || {};
@@ -7257,14 +7255,11 @@ function nutztPages(){
    setting `check_sources`. A row whose source needs addresses is greyed
    with the reason until they are entered; the button asks exactly the
    chosen rows, ticked for the export or not. */
-/* A row the check can ask: the source is in use (the export fetches
-   it – nothing would come of one it does not) and, where it needs
-   addresses, they are entered. `PRUEF_GENUTZT` is the server's word from
-   the last balance answer; unknown counts as possible. */
-var PRUEF_GENUTZT = {};
+/* A row the check can ask: the card chooses on its own, ticked under
+   Build archive or not – only a source that needs addresses waits for
+   them. */
 function checkSourceReason(e){
   if(e.urls && !String((KONFIG || {})[e.urls] || '').trim()) return 'ana.check.needs.urls';
-  if(PRUEF_GENUTZT[e.quelle] === false) return 'ana.check.needs.use';
   return null;
 }
 function checkSourcePossible(e){ return !checkSourceReason(e); }

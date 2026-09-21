@@ -1766,8 +1766,7 @@
   "job.step.check.onenote": "Vollständigkeit: OneNote",
   "ana.check.pick.all": "Alle",
   "ana.check.pick.none": "Keine",
-  "ana.check.pick.i": "Welche Quellen die Prüfung fragt – unter denen, die der Export holt. Eine Quelle, die nicht in Gebrauch ist oder Adressen braucht, steht bereit, sobald sie angehakt oder eingetragen ist.",
+  "ana.check.pick.i": "Welche Quellen die Prüfung fragt – unter „Archiv aufbauen“ angehakt oder nicht; innerhalb einer Quelle gelten die Regeln, Filter und gewählten Kalender, Listen und Notizbücher des Exports. Eine Quelle, die Adressen braucht, steht bereit, sobald sie in den Einstellungen eingetragen sind.",
   "ana.check.needs.urls": "Erst in den Einstellungen Adressen eintragen.",
-  "ana.check.needs.use": "Nicht in Gebrauch – erst unter „Archiv aufbauen“ anhaken.",
   "ana.check.pick.empty": "Keine Quelle gewählt."
 }
