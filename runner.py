@@ -191,7 +191,10 @@ class JobRunner:
             hist.prune_log(self._context.get("log_retention_days") or 14)
         self._notify_user(art, label)
         self.last = {"label": label, "ok": ok, "detail": detail,
-                     "finished": datetime.now().isoformat(timespec="seconds")}
+                     "finished": datetime.now().isoformat(timespec="seconds"),
+                     # The steps by key: the page reloads an open case
+                     # after a run that collected for the cases.
+                     "steps": [s["key"] for s in steps]}
         self.job = None
         self.proc = None
 

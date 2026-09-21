@@ -347,8 +347,13 @@ def test_ein_fallbuch_aus_11_0_bekommt_seine_spalten(tmp_path):
     o = buch.ordner_anlegen(1, "Neu")
     assert buch.verschieben(1, ["mail:<a@x>"], o) == 1
     spalten = {r[1] for r in sqlite3.connect(pfad).execute("PRAGMA table_info(eintraege)")}
-    assert {"ordner_id", "quelle", "bemerkung"} <= spalten
+    assert {"ordner_id", "quelle", "bemerkung", "suche_id"} <= spalten
     assert fall["eintraege_liste"][0]["bemerkung"] == ""
+    # 13.3: the automatic search and the removed-by-hand marks
+    assert fall["suchen_liste"][0]["automatisch"] is False and fall["eintraege_liste"][0]["suche"] is None
+    assert buch.entfernte(1) == set()
+    assert buch.automatisch(fall["suchen_liste"][0]["id"], True)
+    assert buch.gespeichert(fall["suchen_liste"][0]["id"])["automatisch"] is True
 
 
 def test_bemerkung_am_eintrag(buch):
@@ -367,3 +372,67 @@ def test_bemerkung_am_eintrag(buch):
     buch.schliessen(fid)
     with pytest.raises(faelle.FallGeschlossen):
         buch.bemerkung_setzen(fid, "b", "x")
+
+
+# --------------------------------------------------------------------------
+# Automatic searches (13.3)
+# --------------------------------------------------------------------------
+def test_automatische_suche_braucht_fall_und_textsuche(buch):
+    """The switch holds only on a search attached to a case, and only on a
+    text search; detaching switches it off, switching off forgets the
+    last collecting run; a closed case's search rests, a deleted case's
+    is detached."""
+    fid = buch.fall_anlegen("Nordwind")
+    k = faelle.kriterien({"q": "Rechnung"})
+    with pytest.raises(ValueError, match="auto_case"):
+        buch.speichern("S", k, automatisch=True)
+    with pytest.raises(ValueError, match="auto_mode"):
+        buch.speichern("S", faelle.kriterien({"q": "x", "mode": "aehnlich"}), fid, automatisch=True)
+    sid = buch.speichern("S", k, fid, automatisch=True)
+    g = buch.gespeichert(sid)
+    assert g["automatisch"] is True and g["auto_zuletzt"] is None and g["auto_neu"] is None
+    assert [x["id"] for x in buch.automatische()] == [sid] and buch.automatische(fid + 1) == []
+    buch.eingesammelt(sid, 3, 1)
+    g = buch.gespeichert(sid)
+    assert g["auto_zuletzt"] and g["auto_neu"] == 3 and g["auto_uebersprungen"] == 1
+    assert buch.automatisch(sid, False) and buch.gespeichert(sid)["auto_neu"] is None
+    assert buch.automatisch(sid, True) and buch.automatische(fid)
+    buch.anhaengen(sid, None)
+    assert buch.gespeichert(sid)["automatisch"] is False
+    with pytest.raises(ValueError, match="auto_case"):
+        buch.automatisch(sid, True)
+    assert buch.automatisch(999, True) is False
+    buch.anhaengen(sid, fid)
+    assert buch.automatisch(sid, True)
+    buch.schliessen(fid)
+    assert buch.automatische() == []
+    buch.oeffnen(fid)
+    assert len(buch.automatische()) == 1
+    buch.fall_loeschen(fid)
+    g = buch.gespeichert(sid)
+    assert g["automatisch"] is False and g["fall"] is None
+
+
+def test_entferntes_kommt_nicht_von_selbst_zurueck(buch):
+    """What was taken out of a case by hand is marked: an automatic search
+    leaves it out, a hand that puts it back clears the mark. A dropped
+    result list marks its items too; a deleted case forgets everything."""
+    fid = buch.fall_anlegen("Nordwind")
+    ordner = buch.ordner_anlegen(fid, "Belege")
+    sid = buch.speichern("S", faelle.kriterien({"q": "x"}), fid, ordner, automatisch=True)
+    a, b, c = ({"key": f"mail:<{n}@example.com>", "src": "outlook", "titel": n} for n in "abc")
+    buch.hinzufuegen(fid, [a, b])
+    assert buch.entfernen(fid, a["key"]) and buch.entfernte(fid) == {a["key"]}
+    neu, weg = buch.einsammeln(fid, [a, b, c], ordner, sid)
+    assert (neu, weg) == (1, 1)
+    e = {x["key"]: x for x in buch.eintraege(fid)}
+    assert set(e) == {b["key"], c["key"]}
+    assert e[c["key"]]["quelle"] == "auto" and e[c["key"]]["suche"] == sid and e[c["key"]]["ordner"] == ordner
+    assert e[b["key"]]["quelle"] == "ui" and e[b["key"]]["suche"] is None
+    assert buch.hinzufuegen(fid, [a]) == 1 and buch.entfernte(fid) == set()
+    assert buch.einsammeln(fid, [a], None, sid) == (0, 0)
+    lid, _ = buch.liste_anlegen(fid, faelle.kriterien({"q": "y"}), [{"key": "mail:<d@example.com>"}])
+    buch.liste_loeschen(fid, lid)
+    assert "mail:<d@example.com>" in buch.entfernte(fid)
+    buch.fall_loeschen(fid)
+    assert buch.entfernte(fid) == set()

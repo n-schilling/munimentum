@@ -1295,19 +1295,30 @@ function letzte(pfad, methode, feld){
   gespeicherteFenster();
   await warte(10);
   html = modal.innerHTML;
-  pruefe(html.indexOf('Rechnungen') >= 0 && html.indexOf('gespeichertLauf(0)') >= 0, 'gespeicherte nicht gezeichnet');
-  pruefe(html.indexOf('gespeichertLoesen(0)') >= 0 && html.indexOf('gespeichertAnhaengen(1)') >= 0, 'Anhaengen/Loesen fehlen');
+  pruefe(html.indexOf('Rechnungen') >= 0 && html.indexOf('sucheLauf(5)') >= 0, 'gespeicherte nicht gezeichnet');
+  pruefe(html.indexOf("sucheFenster(5, 'gespeichert')") >= 0 && html.indexOf("sucheFenster(6, 'gespeichert')") >= 0, 'Bearbeiten fehlt');
+  pruefe(html.indexOf('gespeichertLoesen(') < 0 && html.indexOf('gespeichertUmbenennen(') < 0, 'alte Knoepfe stehen noch in der Zeile');
   pruefe(html.indexOf('Nordwind') >= 0, 'Fallname fehlt');
-  gespeichertLauf(0);
+  sucheLauf(5);
   await warte(5);
   pruefe(letzte('/api/v1/search?').pfad.indexOf('saved=5') > 0, 'gespeicherte Suche laeuft ohne ihre Nummer');
   gespeicherteFenster();
   await warte(10);
-  gespeichertUmbenennen(1);
-  await warte(5);
+  // the one dialog: a rename sends the name and nothing else
+  sucheFenster(6, 'gespeichert');
+  pruefe(modal.innerHTML.indexOf(t('search.edit.title')) >= 0 && modal.innerHTML.indexOf('sucheLoeschen()') >= 0, 'Bearbeiten-Dialog unvollstaendig');
+  pruefe(document.getElementById('speichern-name').value === 'Lose', 'Name nicht vorbelegt');
+  document.getElementById('speichern-name').value = 'Neu benannt';
+  anfragen.length = 0;
+  sucheSpeichern();
+  await warte(10);
   var umbenannt = letzte('/api/v1/searches/saved/6', 'PATCH');
-  pruefe(umbenannt && umbenannt.body.name === 'Neu benannt', 'Umbenennen nicht geschickt');
-  gespeichertLoeschen(1);
+  pruefe(umbenannt && umbenannt.body.name === 'Neu benannt' && !('case' in umbenannt.body) && !('auto' in umbenannt.body),
+         'Umbenennen schickt mehr als den Namen: ' + JSON.stringify(umbenannt && umbenannt.body));
+  gespeicherteFenster();
+  await warte(10);
+  sucheFenster(6, 'gespeichert');
+  sucheLoeschen();
   await warte(5);
   pruefe(letzte('/api/v1/searches/saved/6', 'DELETE'), 'Loeschen nicht geschickt');
   // save the current search, attached to a case
@@ -1317,7 +1328,7 @@ function letzte(pfad, methode, feld){
   pruefe(html.indexOf('id="speichern-name"') >= 0 && html.indexOf('id="speichern-fall"') >= 0, 'Speicherfenster unvollstaendig');
   pruefe(html.indexOf('value="2"') < 0, 'geschlossener Fall im Speicherfenster');
   document.getElementById('speichern-name').value = 'Meine';
-  speichernAusfuehren();
+  sucheSpeichern();
   await warte(10);
   var sp = letzte('/api/v1/searches/saved', 'POST');
   pruefe(sp && sp.body.name === 'Meine' && sp.body.criteria.q === 'Neu', 'Speichern nicht geschickt: ' + JSON.stringify(sp && sp.body));
@@ -1643,6 +1654,116 @@ function letzte(pfad, methode, feld){
   // Der Zielordner steht in der Marke "legt ab in X" – nur wenn es ihn gibt.
   pruefe(sh.indexOf(t('cases.search.filesinto', {name: 'Belege'})) >= 0,
          'Zielordner der Suche fehlt');
+
+  // --- automatic searches (13.3): the switch and "Collect now" in the row,
+  //     the mark on a collected item, the chip that shows only those
+  var g5 = FALL_OFFEN.search_list[0];
+  g5.auto = true; g5.auto_last_run = '2026-09-15T06:00:00+00:00'; g5.auto_added = 2; g5.auto_skipped = 1;
+  FALL_OFFEN.item_list.push({id: 13, key: 'mail:<m4@example.com>', src: 'outlook', root: 'outlook', rel: 'inbox/mail4.eml',
+    title: 'Vertrag Nordwind', date: '2025-09-15 05:41', who: 'Carla Chef', list: null, folder: 3, via: 'auto', search: 5,
+    remark: '', added: '2026-09-15T06:00:00+00:00', thread_open: 0, who_mail: 'carla@example.com'});
+  zeichneFall();
+  sh = el('fall-inhalt').innerHTML;
+  pruefe(sh.indexOf("sucheFenster(5, 'fall')") >= 0 && sh.indexOf('fallEinsammeln(5)') >= 0 && sh.indexOf('sucheLauf(5)') >= 0, 'Bearbeiten, Ausfuehren oder "Jetzt einsammeln" fehlen an der Suche');
+  pruefe(sh.indexOf('fallSucheAuto') < 0 && sh.indexOf('class="kipp"') < 0, 'ein Schalter steht in der Zeile');
+  pruefe(sh.indexOf(t('cases.search.auto.collected', {n: '2'})) >= 0, 'Stand des letzten Einsammelns fehlt');
+  pruefe(sh.indexOf(t('cases.search.auto.skipped', {n: '1'})) >= 0, 'Uebersprungene fehlen');
+  pruefe(sh.indexOf(t('cases.origin.auto.title', {when: wannKurz('2026-09-15T06:00:00+00:00'), search: 'Rechnungen'})) >= 0, 'Marke "automatisch" am Eintrag fehlt');
+  pruefe(!el('fall-nur-auto').classList.contains('hide') && el('fall-auto-zahl').textContent === '1', 'Chip "Automatisch" fehlt oder zaehlt falsch');
+  fallNurAuto(true);
+  sh = el('fall-inhalt').innerHTML;
+  pruefe(sh.indexOf('Vertrag Nordwind') >= 0 && sh.indexOf('Rechnung 4711') < 0 && sh.indexOf('Projekt Alpha') < 0, 'Chip filtert nicht auf die automatischen Eintraege');
+  fallSicht('zeit');
+  pruefe(el('fall-zeit').innerHTML.indexOf('Vertrag Nordwind') >= 0 && el('fall-zeit').innerHTML.indexOf('Erste Notiz') < 0, 'Zeitleiste ignoriert den Chip');
+  fallSicht('ordner');
+  fallNurAuto(false);
+  pruefe(el('fall-inhalt').innerHTML.indexOf('Rechnung 4711') >= 0, 'Chip aus zeigt nicht wieder alles');
+  // the switch lives in the dialog: prefilled with folder and switch, only the change travels
+  // (the reload above fetched the stub's search afresh – mark it automatic again)
+  FALL_OFFEN.search_list[0].auto = true;
+  anfragen.length = 0;
+  sucheFenster(5, 'fall');
+  pruefe(document.getElementById('speichern-auto').checked === true && document.getElementById('speichern-ordner').value === '3', 'Dialog nicht mit Schalter und Ordner vorbelegt');
+  pruefe(document.getElementById('speichern-fall').value === '1', 'Dialog nicht mit dem Fall vorbelegt');
+  document.getElementById('speichern-auto').checked = false;
+  sucheSpeichern();
+  await warte(10);
+  var sw = letzte('/api/v1/searches/saved/5', 'PATCH');
+  pruefe(sw && sw.body.auto === false && !('name' in sw.body) && !('case_folder' in sw.body), 'Schalter nicht allein geschickt: ' + JSON.stringify(sw && sw.body));
+  pruefe(letzte('/api/v1/cases/1', 'GET'), 'Fall nach dem Schalter nicht neu geladen');
+  // a changed folder travels alone; a changed case takes the folder with it
+  sucheFenster(5, 'fall');
+  document.getElementById('speichern-ordner').value = '';
+  anfragen.length = 0;
+  sucheSpeichern();
+  await warte(10);
+  sw = letzte('/api/v1/searches/saved/5', 'PATCH');
+  pruefe(sw && sw.body.case_folder === null && !('case' in sw.body), 'Ordnerwechsel nicht allein geschickt: ' + JSON.stringify(sw && sw.body));
+  sucheFenster(5, 'fall');
+  document.getElementById('speichern-fall').value = '';
+  speichernFall();
+  anfragen.length = 0;
+  sucheSpeichern();
+  await warte(10);
+  sw = letzte('/api/v1/searches/saved/5', 'PATCH');
+  pruefe(sw && sw.body.case === null, 'Loesen vom Fall nicht geschickt: ' + JSON.stringify(sw && sw.body));
+  // "Collect now": a run of one step for this search; the window opens with it
+  fallEinsammeln(5);
+  await warte(10);
+  var ein = letzte('/api/v1/cases/1/collect', 'POST');
+  pruefe(ein && ein.body.search === 5 && LAUF.eigener === true, 'Jetzt einsammeln nicht als Lauf geschickt');
+  // a finished run that collected: case and overview afresh – any other run: nothing
+  anfragen.length = 0;
+  nachEinsammeln({steps: ['index', 'case_collect']});
+  await warte(10);
+  pruefe(letzte('/api/v1/cases/1', 'GET') && letzte('/api/v1/cases', 'GET'), 'Fall und Uebersicht nach dem Einsammeln nicht neu geladen');
+  anfragen.length = 0;
+  nachEinsammeln({steps: ['index']});
+  await warte(10);
+  pruefe(!letzte('/api/v1/cases/1', 'GET'), 'Fall ohne Einsammel-Schritt neu geladen');
+  // the chip goes when no automatic item is left
+  FALL_OFFEN.item_list.pop();
+  zeichneFall();
+  pruefe(el('fall-nur-auto').classList.contains('hide'), 'Chip ohne automatische Eintraege sichtbar');
+
+  // --- the save window: the folder row follows the chosen case, the switch
+  var kk = kriterienAusForm(); kk.q = 'Vertrag'; kk.mode = 'text';
+  speichernFenster(kk, 'gespeichert');
+  await warte(5);
+  pruefe(document.getElementById('speichern-ordner-zeile').classList.contains('hide') && document.getElementById('speichern-auto-zeile').classList.contains('hide'), 'Ordner- oder Automatikzeile ohne gewaehlten Fall sichtbar');
+  document.getElementById('speichern-fall').value = '1';
+  speichernFall();
+  pruefe(!document.getElementById('speichern-ordner-zeile').classList.contains('hide') && !document.getElementById('speichern-auto-zeile').classList.contains('hide'), 'Ordner- und Automatikzeile fehlen beim Fall mit Ordnern');
+  var ol = document.getElementById('speichern-ordner').innerHTML;
+  pruefe(ol.indexOf('Belege') >= 0 && ol.indexOf('value="neu"') >= 0 && ol.indexOf(t('cases.folder.unsorted')) >= 0, 'Ordnerliste unvollstaendig: ' + ol);
+  document.getElementById('speichern-auto').checked = true;
+  document.getElementById('speichern-ordner').value = 'neu';
+  speichernOrdnerNeu();
+  pruefe(!document.getElementById('speichern-ordner-neu').classList.contains('hide'), 'Feld fuer den neuen Ordner fehlt');
+  document.getElementById('speichern-ordner-neu').value = 'Verträge';
+  speichernAutoSatz();
+  pruefe(document.getElementById('speichern-auto-satz').textContent.indexOf('Verträge') >= 0, 'Der Satz nennt den Ordner nicht');
+  document.getElementById('speichern-name').value = 'Vertrag Nordwind';
+  anfragen.length = 0;
+  sucheSpeichern();
+  await warte(20);
+  var nf = letzte('/api/v1/cases/1/folders', 'POST');
+  var ns = letzte('/api/v1/searches/saved', 'POST');
+  pruefe(nf && nf.body.name === 'Verträge' && nf.knapp === true, 'Neuer Ordner nicht knapp angelegt: ' + JSON.stringify(nf));
+  pruefe(ns && ns.body.case === 1 && ns.body.case_folder === 4 && ns.body.auto === true, 'Suche nicht mit Ordner und Schalter gespeichert: ' + JSON.stringify(ns && ns.body));
+  // a case without folders: no folder row, the switch all the same; no text search: the switch greyed
+  FAELLE.push({id: 3, name: 'Leer', status: 'open', items: 0, folders: 0, folder_list: []});
+  speichernFenster(kk, 'gespeichert');
+  document.getElementById('speichern-fall').value = '3';
+  speichernFall();
+  pruefe(document.getElementById('speichern-ordner-zeile').classList.contains('hide') && !document.getElementById('speichern-auto-zeile').classList.contains('hide'), 'Fall ohne Ordner zeigt eine Ordnerzeile');
+  document.getElementById('speichern-auto').checked = true;
+  speichernAutoSatz();
+  pruefe(document.getElementById('speichern-auto-satz').textContent.indexOf(t('cases.folder.unsorted')) >= 0, 'Ohne Ordner nennt der Satz nicht "Unsortiert"');
+  FAELLE.pop();
+  speichernFenster(Object.assign({}, kk, {mode: 'aehnlich'}), 'gespeichert');
+  pruefe(modal.innerHTML.indexOf('id="speichern-auto" disabled') >= 0, 'Schalter bei der Aehnlichen Suche nicht gegraut');
+  closeWizard('speichern');
   console.log('OK');
 })().catch(function(e){ console.log('FEHLER ' + (e.stack || e)); process.exit(1); });
 """
@@ -1736,3 +1857,143 @@ def test_http_detail_liefert_die_fakten_je_art(welt):
     # an unknown uid is a 404 with the reason, never a 500
     code, d = call(port, "GET", "/api/v1/documents/facts?uid=nix")
     assert code == 404 and d["error"]["k"] == "srv.detail.none"
+
+
+# --------------------------------------------------------------------------
+# Automatic searches (13.3): the switch, what a collecting run does, what
+# it leaves alone
+# --------------------------------------------------------------------------
+def test_der_schalter_auto_braucht_fall_und_textsuche(welt):
+    port = welt["port"]
+    fid = _fall(welt)
+    code, r = call(port, "POST", "/api/v1/searches/saved",
+                   {"name": "Alle", "criteria": {"q": "", "source": "outlook"}, "auto": True})
+    assert code == 400 and r["error"]["k"] == "srv.search.auto.nocase"
+    code, r = call(port, "POST", "/api/v1/searches/saved",
+                   {"name": "Alle", "criteria": {"q": "x", "mode": "aehnlich"}, "case": fid, "auto": True})
+    assert code == 400 and r["error"]["k"] == "srv.search.auto.text"
+    code, r = call(port, "POST", "/api/v1/searches/saved",
+                   {"name": "Alle", "criteria": {"q": "x"}, "case": fid, "auto": "yes"})
+    assert code == 400 and r["error"]["k"] == "srv.search.badauto"
+    code, r = call(port, "POST", "/api/v1/searches/saved",
+                   {"name": "Alle Mails", "criteria": {"q": "", "source": "outlook"}, "case": fid, "auto": True})
+    assert code == 201 and r["search"]["auto"] is True and r["search"]["auto_last_run"] is None
+    sid = r["search"]["id"]
+    fall = call(port, "GET", f"/api/v1/cases/{fid}")[1]["case"]
+    assert fall["search_list"][0]["auto"] is True
+    assert call(port, "GET", "/api/v1/searches/saved")[1]["items"][0]["auto"] is True
+    # off and on through PATCH; detaching switches it off; on again needs the case
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"auto": False})
+    assert code == 200 and r["search"]["auto"] is False
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"auto": True})
+    assert code == 200 and r["search"]["auto"] is True
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"case": None})
+    assert code == 200 and r["search"]["auto"] is False and r["search"]["case"] is None
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"auto": True})
+    assert code == 400 and r["error"]["k"] == "srv.search.auto.nocase"
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"case": fid, "auto": True})
+    assert code == 200 and r["search"]["auto"] is True and r["search"]["case"] == fid
+    code, r = call(port, "PATCH", f"/api/v1/searches/saved/{sid}", {"auto": 1})
+    assert code == 400 and r["error"]["k"] == "srv.search.badauto"
+
+
+def test_ein_einsammelnder_lauf_legt_neue_treffer_in_den_fall(welt):
+    """"Collect now" is a run of one step: what the automatic search finds
+    lands in its folder, marked, with the search that found it; what was
+    taken out by hand stays out – for the look and for the run; the run's
+    record says it collected."""
+    a, port = welt["app"], welt["port"]
+    fid = _fall(welt)
+    ordner = call(port, "POST", f"/api/v1/cases/{fid}/folders", {"name": "Belege"})[1]["folder"]
+    hits = _treffer(welt, "")["results"]
+    mail1 = next(h for h in hits if h["path"] == "inbox/mail1.eml")
+    mail2 = next(h for h in hits if h["path"] == "inbox/mail2.eml")
+    call(port, "POST", f"/api/v1/cases/{fid}/items", {"items": [_eintrag(mail2)]})
+    eid = _eid(port, fid, mail2["key"])
+    assert call(port, "DELETE", f"/api/v1/cases/{fid}/items/{eid}")[0] == 200   # the whole case, as every write
+    sid = call(port, "POST", "/api/v1/searches/saved",
+               {"name": "Alle Mails", "criteria": {"q": "", "source": "outlook"}, "case": fid,
+                "case_folder": ordner, "auto": True})[1]["search"]["id"]
+    neu = call(port, "GET", f"/api/v1/cases/{fid}/new-hits")[1]["items"][0]
+    assert [h["path"] for h in neu["new"]] == ["inbox/mail1.eml"]
+    code, r, kopf = call_kopf(port, "POST", f"/api/v1/cases/{fid}/collect")
+    assert code == 202 and r["run"] == "/api/v1/runs/current" and kopf["Location"] == "/api/v1/runs/current"
+    _warte(a.jobs, 60)
+    assert a.jobs.last["ok"], "\n".join(str(z.get("text")) for z in a.jobs.lines)
+    assert a.jobs.last["steps"] == ["case_collect"]
+    log = "\n".join(json.dumps(z, ensure_ascii=False) for z in a.jobs.lines)
+    assert "run.collect.start" in log and "run.collect.search" in log and "run.collect.done" in log
+    fall = call(port, "GET", f"/api/v1/cases/{fid}")[1]["case"]
+    e = {x["key"]: x for x in fall["item_list"]}
+    assert set(e) == {mail1["key"]}
+    assert e[mail1["key"]]["via"] == "auto" and e[mail1["key"]]["search"] == sid and e[mail1["key"]]["folder"] == ordner
+    g = fall["search_list"][0]
+    assert g["auto_last_run"] and g["auto_added"] == 1 and g["auto_skipped"] == 1
+    # a second run: nothing new, nothing doubled
+    call(port, "POST", f"/api/v1/cases/{fid}/collect")
+    _warte(a.jobs, 60)
+    fall = call(port, "GET", f"/api/v1/cases/{fid}")[1]["case"]
+    assert len(fall["item_list"]) == 1 and fall["search_list"][0]["auto_added"] == 0
+    # put back by hand: the mark goes
+    call(port, "POST", f"/api/v1/cases/{fid}/items", {"items": [_eintrag(mail2)]})
+    assert {x["via"] for x in call(port, "GET", f"/api/v1/cases/{fid}")[1]["case"]["item_list"]} == {"auto", "ui"}
+    assert [h["path"] for h in call(port, "GET", f"/api/v1/cases/{fid}/new-hits")[1]["items"][0]["new"]] == []
+
+
+def test_jeder_indexlauf_nimmt_die_automatischen_suchen_mit(welt, monkeypatch):
+    a, port = welt["app"], welt["port"]
+    fid = _fall(welt)
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label) or True)
+    ok, _ = a.launch({"index": True}, label="job.export")
+    assert ok and [s["key"] for s in gesehen["steps"]] == ["index"]
+    call(port, "POST", "/api/v1/searches/saved",
+         {"name": "Alle", "criteria": {"q": "", "source": "outlook"}, "case": fid, "auto": True})
+    ok, _ = a.launch({"index": True}, label="job.export")
+    assert ok and [s["key"] for s in gesehen["steps"]] == ["index", "case_collect"]
+    argv = gesehen["steps"][1]["argv"]
+    assert argv[1].endswith("case_collect.py")
+    assert argv[argv.index("--faelle") + 1] == str(welt["sandbox"] / faelle.DB_NAME)
+    assert argv[argv.index("--store") + 1] == str(welt["sandbox"] / "rag_store")
+    assert "--case" not in argv and "--search" not in argv
+    # a run without the index carries nothing; a closed case's search does not count
+    ok, _ = a.launch({"calendar": True}, label="job.export")
+    assert ok and [s["key"] for s in gesehen["steps"]] == ["calendar"]
+    call(port, "PATCH", f"/api/v1/cases/{fid}", {"status": "closed"})
+    ok, _ = a.launch({"index": True}, label="job.export")
+    assert ok and [s["key"] for s in gesehen["steps"]] == ["index"]
+
+
+def test_jetzt_einsammeln_lehnt_ab_was_es_nicht_kann(welt, monkeypatch):
+    a, port = welt["app"], welt["port"]
+    fid = _fall(welt)
+    assert call(port, "POST", f"/api/v1/cases/{999}/collect")[1]["error"]["k"] == "srv.case.unknown"
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect")
+    assert code == 409 and r["error"]["k"] == "srv.case.noauto"
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": "x"})
+    assert code == 400 and r["error"]["k"] == "srv.search.badsearch"
+    fremd = call(port, "POST", "/api/v1/searches/saved", {"name": "Fremd", "criteria": {"q": "x"}})[1]["search"]["id"]
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": fremd})
+    assert code == 404 and r["error"]["k"] == "srv.search.notincase"
+    sem = call(port, "POST", "/api/v1/searches/saved",
+               {"name": "Aehnlich", "criteria": {"q": "x", "mode": "aehnlich"}, "case": fid})[1]["search"]["id"]
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": sem})
+    assert code == 400 and r["error"]["k"] == "srv.search.auto.text"
+    gesehen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: gesehen.update(steps=steps, label=label) or True)
+    text = call(port, "POST", "/api/v1/searches/saved",
+                {"name": "Text", "criteria": {"q": "x"}, "case": fid})[1]["search"]["id"]
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": text})   # switched off: a one-off
+    assert code == 202 and gesehen["label"] == "job.case_collect"
+    (schritt,) = gesehen["steps"]
+    argv = schritt["argv"]
+    assert schritt["key"] == "case_collect"
+    assert argv[argv.index("--search") + 1] == str(text) and argv[argv.index("--case") + 1] == str(fid)
+    call(port, "PATCH", f"/api/v1/cases/{fid}", {"status": "closed"})
+    code, r = call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": text})
+    assert code == 409 and r["error"]["k"] == "srv.case.closed"
+    call(port, "PATCH", f"/api/v1/cases/{fid}", {"status": "open"})
+    monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
+    assert call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": text})[1]["error"]["k"] == "srv.busy"

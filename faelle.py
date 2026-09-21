@@ -10,7 +10,8 @@ never the hits:
                     count; kept for as long as the setting says and
                     cleared on request, never sent anywhere
     saved searches  criteria under a name; run again any time, or attached
-                    to a case so the case knows what is new
+                    to a case so the case knows what is new – and, switched
+                    to automatic, so a run files what is new into the case
     cases           a matter someone works on: items from every source
                     (by their stable key, see schluessel.py), whole result
                     lists as they stood at one moment, saved searches, and
@@ -56,7 +57,11 @@ CREATE TABLE IF NOT EXISTS gespeichert(
     zuletzt   TEXT,                      -- last run
     treffer   INTEGER,                   -- hits then
     fall_id   INTEGER,                   -- attached to this case, or NULL
-    ordner_id INTEGER                    -- its new hits go into this folder
+    ordner_id INTEGER,                   -- its new hits go into this folder
+    automatisch INTEGER NOT NULL DEFAULT 0,  -- a run files its new hits by itself
+    auto_zuletzt TEXT,                   -- when a run last did, and what it found:
+    auto_neu INTEGER,                    --   filed into the case
+    auto_uebersprungen INTEGER           --   left out, because removed by hand before
 );
 CREATE TABLE IF NOT EXISTS faelle(
     id           INTEGER PRIMARY KEY,
@@ -89,10 +94,17 @@ CREATE TABLE IF NOT EXISTS eintraege(
     hinzugefuegt TEXT NOT NULL,
     liste_id     INTEGER,                -- came with this result list, or NULL
     ordner_id    INTEGER,                -- the folder inside the case, NULL = unsorted
-    quelle       TEXT,                   -- who wrote it: 'ui' (the page) or 'mcp'
+    quelle       TEXT,                   -- who wrote it: 'ui' (the page), 'mcp' or 'auto'
+    suche_id     INTEGER,                -- collected by this saved search ('auto')
     UNIQUE(fall_id, key)
 );
 CREATE INDEX IF NOT EXISTS ix_eintraege_key ON eintraege(key);
+CREATE TABLE IF NOT EXISTS entfernt(
+    fall_id INTEGER NOT NULL,            -- taken out of this case by hand:
+    key     TEXT NOT NULL,               --   an automatic search leaves it out
+    wann    TEXT NOT NULL,
+    PRIMARY KEY(fall_id, key)
+);
 CREATE TABLE IF NOT EXISTS listen(
     id        INTEGER PRIMARY KEY,
     fall_id   INTEGER NOT NULL,
@@ -114,9 +126,14 @@ CREATE TABLE IF NOT EXISTS notizen(
 # the file is opened – a column, not a move of data; rows keep everything.
 _ERGAENZUNGEN = (("gespeichert", "ordner_id", "INTEGER"), ("eintraege", "ordner_id", "INTEGER"),
                  ("eintraege", "quelle", "TEXT"), ("listen", "ordner_id", "INTEGER"),
-                 ("notizen", "quelle", "TEXT"), ("eintraege", "bemerkung", "TEXT"))
+                 ("notizen", "quelle", "TEXT"), ("eintraege", "bemerkung", "TEXT"),
+                 # 13.3: the automatic search, and the search that filed an item
+                 ("gespeichert", "automatisch", "INTEGER NOT NULL DEFAULT 0"),
+                 ("gespeichert", "auto_zuletzt", "TEXT"), ("gespeichert", "auto_neu", "INTEGER"),
+                 ("gespeichert", "auto_uebersprungen", "INTEGER"), ("eintraege", "suche_id", "INTEGER"))
 
-UI, MCP = "ui", "mcp"                     # who wrote an item or a note
+UI, MCP, AUTO = "ui", "mcp", "auto"       # who wrote an item or a note: the page,
+                                          # Claude, or an automatic search (case_collect)
 
 _LEER = {"q": "", "mode": "text", "person": "", "source": "all", "from": "",
          "to": "", "folder": "", "filetype": "", "gone": False, "attachments": False,
@@ -189,6 +206,21 @@ def leer(k):
     return not (k["q"] or k["person"] or k["from"] or k["to"] or k["folder"]
                 or k["filetype"] or k["gone"] or k["attachments"] or k["fall"]
                 or k["source"] != "all" or any(k[m] for m in MAIL))
+
+
+def auto_pruefen(k, fall_id, an):
+    """May this search collect by itself? Only attached to a case (else
+    there is nothing to file into) and only a text search – the two
+    other kinds rank by likeness and would file noise unasked. Returns
+    the flag as a bool; raises ValueError("auto_case") / ("auto_mode")."""
+    an = bool(an)
+    if not an:
+        return False
+    if fall_id is None:
+        raise ValueError("auto_case")
+    if (k or {}).get("mode", "text") != "text":
+        raise ValueError("auto_mode")
+    return True
 
 
 def _json(k):
@@ -275,10 +307,11 @@ class Fallbuch:
             con.close()
 
     # -- saved searches ----------------------------------------------------
-    def speichern(self, name, k, fall_id=None, ordner_id=None):
+    def speichern(self, name, k, fall_id=None, ordner_id=None, automatisch=False):
         name = str(name or "").strip()
         if not name:
             raise ValueError("name")
+        automatisch = auto_pruefen(k, fall_id, automatisch)
         con = self._connect()
         try:
             if fall_id is not None:
@@ -287,8 +320,8 @@ class Fallbuch:
             else:
                 ordner_id = None
             cur = con.execute(
-                "INSERT INTO gespeichert(name, kriterien, angelegt, fall_id, ordner_id) VALUES(?,?,?,?,?)",
-                (name, _json(k), jetzt(), fall_id, ordner_id))
+                "INSERT INTO gespeichert(name, kriterien, angelegt, fall_id, ordner_id, automatisch) "
+                "VALUES(?,?,?,?,?,?)", (name, _json(k), jetzt(), fall_id, ordner_id, int(automatisch)))
             con.commit()
             return cur.lastrowid
         finally:
@@ -323,7 +356,11 @@ class Fallbuch:
         return {"id": r["id"], "name": r["name"], "kriterien": kriterien(r["kriterien"]),
                 "angelegt": r["angelegt"], "zuletzt": r["zuletzt"], "treffer": r["treffer"],
                 "fall": r["fall_id"], "fall_name": r["fall_name"],
-                "ordner": r["ordner_id"], "ordner_name": r["ordner_name"]}
+                "ordner": r["ordner_id"], "ordner_name": r["ordner_name"],
+                # The automatic search (13.3): on or off, and what its last
+                # collecting run did – None until one ran.
+                "automatisch": bool(r["automatisch"]), "auto_zuletzt": r["auto_zuletzt"],
+                "auto_neu": r["auto_neu"], "auto_uebersprungen": r["auto_uebersprungen"]}
 
     def umbenennen(self, kennung, name):
         name = str(name or "").strip()
@@ -357,7 +394,8 @@ class Fallbuch:
 
     def anhaengen(self, kennung, fall_id, ordner_id=None):
         """Attach a saved search to a case (None detaches), filing its new
-        hits into the folder."""
+        hits into the folder. Detached, it stops collecting: automatic
+        is a thing between a search and its case."""
         con = self._connect()
         try:
             if fall_id is not None:
@@ -365,10 +403,58 @@ class Fallbuch:
                 ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
             else:
                 ordner_id = None
-            n = con.execute("UPDATE gespeichert SET fall_id = ?, ordner_id = ? WHERE id = ?",
-                            (fall_id, ordner_id, kennung)).rowcount
+            n = con.execute("UPDATE gespeichert SET fall_id = ?, ordner_id = ?, "
+                            "automatisch = CASE WHEN ? IS NULL THEN 0 ELSE automatisch END WHERE id = ?",
+                            (fall_id, ordner_id, fall_id, kennung)).rowcount
             con.commit()
             return n > 0
+        finally:
+            con.close()
+
+    def automatisch(self, kennung, an):
+        """Switch a saved search's collecting on or off. On needs a case
+        to file into and a text search (auto_pruefen); the search's last
+        collecting run is forgotten with the switch-off. Returns whether
+        the search exists."""
+        con = self._connect()
+        try:
+            r = con.execute("SELECT kriterien, fall_id FROM gespeichert WHERE id = ?", (kennung,)).fetchone()
+            if r is None:
+                return False
+            an = auto_pruefen(kriterien(r["kriterien"]), r["fall_id"], an)
+            if an:
+                con.execute("UPDATE gespeichert SET automatisch = 1 WHERE id = ?", (kennung,))
+            else:
+                con.execute("UPDATE gespeichert SET automatisch = 0, auto_zuletzt = NULL, "
+                            "auto_neu = NULL, auto_uebersprungen = NULL WHERE id = ?", (kennung,))
+            con.commit()
+            return True
+        finally:
+            con.close()
+
+    def automatische(self, fall_id=None):
+        """The searches a collecting run works through: switched on and
+        attached to an open case – all of them, or one case's."""
+        con = self._connect()
+        try:
+            sql = ("SELECT g.*, f.name AS fall_name, o.name AS ordner_name FROM gespeichert g "
+                   "JOIN faelle f ON f.id = g.fall_id LEFT JOIN ordner o ON o.id = g.ordner_id "
+                   "WHERE g.automatisch = 1 AND f.status = 'offen'")
+            params = ()
+            if fall_id is not None:
+                sql += " AND g.fall_id = ?"
+                params = (fall_id,)
+            return [self._gespeichert(r) for r in con.execute(sql + " ORDER BY f.id, lower(g.name), g.id", params)]
+        finally:
+            con.close()
+
+    def eingesammelt(self, kennung, neu, uebersprungen):
+        """A collecting run went through this search: when, and what it did."""
+        con = self._connect()
+        try:
+            con.execute("UPDATE gespeichert SET auto_zuletzt = ?, auto_neu = ?, auto_uebersprungen = ? "
+                        "WHERE id = ?", (jetzt(), int(neu), int(uebersprungen), kennung))
+            con.commit()
         finally:
             con.close()
 
@@ -509,9 +595,9 @@ class Fallbuch:
         con = self._connect()
         try:
             n = con.execute("DELETE FROM faelle WHERE id = ?", (fall_id,)).rowcount
-            for tabelle in ("eintraege", "listen", "notizen", "ordner"):
+            for tabelle in ("eintraege", "listen", "notizen", "ordner", "entfernt"):
                 con.execute(f"DELETE FROM {tabelle} WHERE fall_id = ?", (fall_id,))
-            con.execute("UPDATE gespeichert SET fall_id = NULL WHERE fall_id = ?", (fall_id,))
+            con.execute("UPDATE gespeichert SET fall_id = NULL, automatisch = 0 WHERE fall_id = ?", (fall_id,))
             con.commit()
             return n > 0
         finally:
@@ -634,7 +720,9 @@ class Fallbuch:
                 "hinzugefuegt": e["hinzugefuegt"], "liste": e["liste_id"],
                 "ordner": e["ordner_id"], "quelle": e["quelle"] or UI,
                 # The remark: one or two sentences on why the item is here
-                "bemerkung": e["bemerkung"] or ""}
+                "bemerkung": e["bemerkung"] or "",
+                # The saved search that collected it ('auto'), else None
+                "suche": e["suche_id"]}
 
     @staticmethod
     def _liste(row):
@@ -645,33 +733,76 @@ class Fallbuch:
     def _notiz(n):
         return {"id": n["id"], "wann": n["wann"], "text": n["text"], "quelle": n["quelle"] or UI}
 
-    def hinzufuegen(self, fall_id, eintraege, liste_id=None, ordner_id=None, quelle=UI):
+    def hinzufuegen(self, fall_id, eintraege, liste_id=None, ordner_id=None, quelle=UI,
+                    suche_id=None):
         """Add items to a case: dicts with key (required), src, root, rel,
         titel, datum, wer and optionally a bemerkung – into the folder,
         marked with who wrote them. An item already in the case is left as
-        it is, folder, remark and all. Returns how many were new."""
+        it is, folder, remark and all. Returns how many were new.
+
+        Someone adding an item by hand (the page, Claude) means it: a mark
+        that it was removed before goes. An automatic search (AUTO, with
+        the `suche_id` that found it) is the other way round – it leaves
+        out what was removed by hand, see `einsammeln`."""
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
             ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
-            neu = 0
+            wer = quelle if quelle in (MCP, AUTO) else UI
+            neu, keys = 0, []
             for e in eintraege:
                 key = str((e or {}).get("key") or "").strip()
                 if not key:
                     continue
+                keys.append(key)
                 cur = con.execute(
                     "INSERT OR IGNORE INTO eintraege(fall_id, key, src, root, rel, titel, datum, "
-                    "wer, hinzugefuegt, liste_id, ordner_id, quelle, bemerkung) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "wer, hinzugefuegt, liste_id, ordner_id, quelle, bemerkung, suche_id) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (fall_id, key, e.get("src"), e.get("root"), e.get("rel"),
                      e.get("titel") or e.get("title"), e.get("datum") or e.get("date"),
                      e.get("wer") or e.get("who"), jetzt(), liste_id, ordner_id,
-                     MCP if quelle == MCP else UI, str(e.get("bemerkung") or "").strip()))
+                     wer, str(e.get("bemerkung") or "").strip(),
+                     suche_id if wer == AUTO else None))
                 neu += cur.rowcount
+            if wer != AUTO and keys:
+                self._marken_loeschen(con, fall_id, keys)
             if neu:
                 self._beruehrt(con, fall_id)
             con.commit()
             return neu
+        finally:
+            con.close()
+
+    def einsammeln(self, fall_id, eintraege, ordner_id, suche_id):
+        """What an automatic search found, into the case – all but what
+        was taken out of this case by hand (entfernt). Returns (new,
+        left out)."""
+        weg = self.entfernte(fall_id)
+        dazu = [e for e in eintraege if str((e or {}).get("key") or "").strip() not in weg]
+        neu = self.hinzufuegen(fall_id, dazu, ordner_id=ordner_id, quelle=AUTO, suche_id=suche_id)
+        return neu, len(eintraege) - len(dazu)
+
+    @staticmethod
+    def _marken_setzen(con, fall_id, keys):
+        """Removed by hand: an automatic search must not bring it back."""
+        wann = jetzt()
+        con.executemany("INSERT OR REPLACE INTO entfernt(fall_id, key, wann) VALUES(?,?,?)",
+                        [(fall_id, k, wann) for k in keys])
+
+    @staticmethod
+    def _marken_loeschen(con, fall_id, keys):
+        for s in range(0, len(keys), 500):
+            teil = keys[s:s + 500]
+            q = ",".join("?" * len(teil))
+            con.execute(f"DELETE FROM entfernt WHERE fall_id = ? AND key IN ({q})", (fall_id, *teil))
+
+    def entfernte(self, fall_id):
+        """The keys taken out of a case by hand – what no automatic
+        search puts back."""
+        con = self._connect()
+        try:
+            return {r[0] for r in con.execute("SELECT key FROM entfernt WHERE fall_id = ?", (fall_id,))}
         finally:
             con.close()
 
@@ -691,12 +822,15 @@ class Fallbuch:
             con.close()
 
     def entfernen(self, fall_id, key):
+        """An item out of the case – and marked, so that no automatic
+        search files it again."""
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
             n = con.execute("DELETE FROM eintraege WHERE fall_id = ? AND key = ?",
                             (fall_id, key)).rowcount
             if n:
+                self._marken_setzen(con, fall_id, [str(key)])
                 self._beruehrt(con, fall_id)
             con.commit()
             return n > 0
@@ -777,14 +911,19 @@ class Fallbuch:
             con.close()
 
     def liste_loeschen(self, fall_id, liste_id):
-        """The list and the entries that came with it and only with it."""
+        """The list and the entries that came with it and only with it –
+        removed by hand like any other, so they stay out of the case."""
         con = self._connect()
         try:
             self._fall_offen(con, fall_id)
             n = con.execute("DELETE FROM listen WHERE id = ? AND fall_id = ?",
                             (liste_id, fall_id)).rowcount
+            keys = [r[0] for r in con.execute("SELECT key FROM eintraege WHERE liste_id = ? AND fall_id = ?",
+                                              (liste_id, fall_id))]
             con.execute("DELETE FROM eintraege WHERE liste_id = ? AND fall_id = ?",
                         (liste_id, fall_id))
+            if keys:
+                self._marken_setzen(con, fall_id, keys)
             if n:
                 self._beruehrt(con, fall_id)
             con.commit()

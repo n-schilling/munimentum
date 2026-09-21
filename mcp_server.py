@@ -2238,8 +2238,9 @@ def _eintrag_aussen(e):
 
 
 def _herkunft(quelle):
-    """Who wrote an item or a note: the page, or Claude through MCP."""
-    return "mcp" if quelle == faelle.MCP else "page"
+    """Who wrote an item or a note: the page, Claude through MCP, or an
+    automatic search of the case (case_collect)."""
+    return "mcp" if quelle == faelle.MCP else "auto" if quelle == faelle.AUTO else "page"
 
 
 def _kriterien_aussen(k):
@@ -2252,7 +2253,11 @@ def _kriterien_aussen(k):
 def _suche_aussen(g):
     return {"id": g["id"], "name": g["name"], "criteria": _kriterien_aussen(g["kriterien"]),
             "created": g["angelegt"], "last_run": g["zuletzt"], "hits_then": g["treffer"],
-            "case": g["fall_name"], "folder": g.get("ordner_name")}
+            "case": g["fall_name"], "folder": g.get("ordner_name"),
+            # Switched to automatic: a run files its new hits into the case
+            # by itself; what the last such run did.
+            "auto": bool(g.get("automatisch")), "auto_last_run": g.get("auto_zuletzt"),
+            "auto_added": g.get("auto_neu"), "auto_skipped": g.get("auto_uebersprungen")}
 
 
 def _mit_kriterien(k, kk, offset=0, preview_chars=200):
@@ -2404,7 +2409,10 @@ def case_people(case: str, limit: int = 50) -> dict:
 def case_new_hits(case: str, k: int = 50) -> dict:
     """What the case's attached saved searches find today that the case
     does not hold yet – one block per search. The way to keep a case
-    current: run this, read the new hits, and (if allowed) add_to_case.
+    current by hand: run this, read the new hits, and (if allowed)
+    add_to_case; a search marked `auto` in get_case does that by itself
+    with every run (collect_case runs it now). What the user took out
+    of the case is not offered again.
 
     Args:
         case: The case's name or id.
@@ -2416,7 +2424,7 @@ def case_new_hits(case: str, k: int = 50) -> dict:
     fall, fehler = _fall_finden(buch, case)
     if fehler:
         return {"error": fehler}
-    keys = buch.keys(fall["id"])
+    keys = buch.keys(fall["id"]) | buch.entfernte(fall["id"])
     bloecke = []
     for g in fall["suchen_liste"]:
         res = _mit_kriterien(g["kriterien"], min(max(1, k) * 4, 200))
@@ -2540,6 +2548,53 @@ def add_to_case(case: str, uids: list[str] | None = None,
     return {"case": fall["name"], "folder": ordner["name"] if ordner else None,
             "added": neu, "already_there": len(eintraege) - neu,
             "not_found": len(list(uids or ())) + len(list(keys or ())) - len(eintraege)}
+
+
+@mcp.tool(annotations=_WRITE)
+def collect_case(case: str, search: str = "") -> dict:
+    """Run the case's automatic searches now and file what they find into
+    the case – the same thing every indexing run does by itself for a
+    search marked `auto` (get_case, `saved_searches`). With `search`, that
+    one attached search runs, marked automatic or not: a one-off. Only a
+    text search collects; what the user took out of the case stays out;
+    the items carry the origin "auto" and the search that found them.
+    Only when the user allowed changes through MCP; a closed case refuses.
+
+    Args:
+        case: The case's name or id.
+        search: Optional – the id or name of one of the case's attached
+            searches (get_case lists them). Empty: every automatic one.
+    """
+    gesperrt = _schreiben_erlaubt()
+    if gesperrt:
+        return {"error": gesperrt}
+    buch = _fallbuch()
+    if buch is None:
+        return {"error": _KEIN_FALLBUCH}
+    fall, fehler = _fall_finden(buch, case)
+    if fehler:
+        return {"error": fehler}
+    if fall["status"] != faelle.OFFEN:
+        return {"error": f"The case {fall['name']!r} is closed – reopen it in Munimentum first."}
+    wunsch = str(search or "").strip()
+    if wunsch:
+        g = next((g for g in fall["suchen_liste"]
+                  if str(g["id"]) == wunsch or g["name"].lower() == wunsch.lower()), None)
+        if g is None:
+            return {"error": f"No saved search {wunsch!r} is attached to the case {fall['name']!r}."}
+        if g["kriterien"].get("mode") != "text":
+            return {"error": "Only a text search collects – the other kinds rank by likeness."}
+        suchen = [g]
+    else:
+        suchen = buch.automatische(fall["id"])
+        if not suchen:
+            return {"case": fall["name"], "searches": [], "added": 0,
+                    "note": "No automatic search on this case – switch one on in Munimentum, or name one."}
+    import case_collect
+    bericht, summe = case_collect.einsammeln(
+        buch, suchen, lambda k, n: _mit_kriterien(k, n, preview_chars=0))
+    return {"case": fall["name"], "added": summe["new"], "skipped_removed": summe["skipped"],
+            "searches": [{k: v for k, v in z.items() if k not in ("case", "case_id")} for z in bericht]}
 
 
 @mcp.tool(annotations=_WRITE)

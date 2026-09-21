@@ -218,6 +218,19 @@ def _fall_export_argv(cfg, ctx, pfade):
     return out
 
 
+def _case_collect_argv(cfg, ctx, pfade):
+    """case_collect.py: the case book, the index, the user's own domains
+    – and, for "Collect now", the one case or the one search."""
+    s = ctx.get("case_collect") or {}
+    out = ["--faelle", str(s.get("faelle") or ""), "--store", pfade["store"],
+           "--domains", str(s.get("domains") or "")]
+    if s.get("case"):
+        out += ["--case", str(s["case"])]
+    if s.get("search"):
+        out += ["--search", str(s["search"])]
+    return out
+
+
 def _archiv_eintrag(aktion):
     """One archive step: an action, or "pruefen" – the row of one source
     judged afresh after a fetch (the last step of a "Fetch again" run)."""
@@ -489,6 +502,15 @@ REGISTRY = (
      "start": "job.start.case_export", "label": "job.step.case_export",
      "corpus": False, "zugang": False, "schedule": None, "master": None,
      "quelle": None, "argv": _fall_export_argv, "env": lambda cfg, ctx: {}},
+
+    # The automatic searches of the cases (case_collect.py): after the
+    # index, so what a run fetched is already searchable – the app asks
+    # for it with every indexing run while an automatic search exists,
+    # and alone for "Collect now". Reads the index, writes the case book.
+    {"key": "case_collect", "anfrage": "case_collect", "script": "case_collect",
+     "start": "job.start.case_collect", "label": "job.step.case_collect",
+     "corpus": False, "zugang": False, "schedule": None, "master": None,
+     "quelle": None, "argv": _case_collect_argv, "env": lambda cfg, ctx: {}},
 )
 
 

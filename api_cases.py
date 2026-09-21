@@ -401,7 +401,9 @@ def neue_treffer(h, p, _q, _data):
     does not hold yet – per search, never stored."""
     fall = fall_buch(h, p)
     buch = h.app.faelle
-    keys = buch.keys(fall["id"])
+    # What the case holds, and what was taken out of it by hand: neither
+    # is new – the second would only be offered again and again.
+    keys = buch.keys(fall["id"]) | buch.entfernte(fall["id"])
     bloecke = []
     for g in fall["suchen_liste"]:
         treffer, fehler = api_explore.alle_treffer(h, g["kriterien"], grenze=500)
@@ -418,6 +420,35 @@ def neue_treffer(h, p, _q, _data):
 
 def fall_export(h, p, _q, _data):
     return fall_exportieren(h, fall_id(h, p))
+
+
+def fall_einsammeln(h, p, _q, data):
+    """"Collect now": a run of the one step that files what the case's
+    automatic searches find (case_collect.py) – or, with `search`, what
+    one of its searches finds, switched on or not. A text search only,
+    like the switch itself."""
+    fall = fall_buch(h, p)
+    fall_offen(fall)
+    suche = None
+    if data.get("search") not in (None, ""):
+        try:
+            suche = int(data.get("search"))
+        except (TypeError, ValueError):
+            raise Ablehnung(400, "srv.search.badsearch", {"value": str(data.get("search"))[:40]}) from None
+        g = next((g for g in fall["suchen_liste"] if g["id"] == suche), None)
+        if g is None:
+            raise Ablehnung(404, "srv.search.notincase")
+        if g["kriterien"].get("mode") != "text":
+            raise Ablehnung(400, "srv.search.auto.text")
+    elif not h.app.faelle.automatische(fall["id"]):
+        raise Ablehnung(409, "srv.case.noauto")
+    if h.app.jobs.busy:
+        raise Ablehnung(409, "srv.busy")
+    ok, why = h.app.launch({"case_collect": True}, label="job.case_collect",
+                           case_collect={"case": fall["id"], "search": suche})
+    if not ok:
+        raise Ablehnung(409, why)
+    return api_archive.lauf_antwort(h)
 
 
 def fall_export_oeffnen(h, p, _q, _data):
@@ -479,20 +510,36 @@ def speichern(h, _p, _q, data):
         # A folder is a case's: named without one, the request is
         # malformed – not accepted and dropped, as the case book would.
         raise Ablehnung(400, "srv.case.folder.nocase")
+    k = faelle.kriterien(data.get("criteria"))
+    automatisch = auto_aus(data, k, fall_id)
     try:
-        neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("criteria")),
-                             fall_id, ordner)
+        neu = buch.speichern(data.get("name"), k, fall_id, ordner, automatisch)
     except ValueError:
         raise Ablehnung(400, "srv.case.noname") from None
     return api.json({"search": rest.gespeicherte_suche(buch.gespeichert(neu))}, 201,
                       extra={"Location": f"{api.API_V1}/searches/saved/{neu}"})
 
 
+def auto_aus(data, k, fall_id):
+    """The `auto` switch of a body – strictly a boolean, and only where it
+    can hold: a search attached to a case, a text search. Absent: off."""
+    wert = data.get("auto", False)
+    if not isinstance(wert, bool):
+        raise Ablehnung(400, "srv.search.badauto", {"value": str(wert)[:40]})
+    try:
+        return faelle.auto_pruefen(k, fall_id, wert)
+    except ValueError as e:
+        raise Ablehnung(400, "srv.search.auto.nocase" if str(e) == "auto_case"
+                        else "srv.search.auto.text") from None
+
+
 def suche_aendern(h, p, _q, data):
     """PATCH: the fields the body names. `name` renames, `case` attaches
     the search to a case (`null` detaches it) and `case_folder` says
     into which of its folders new hits go – on its own, for the case
-    the search is attached to; with `case`, for the new one."""
+    the search is attached to; with `case`, for the new one. `auto`
+    switches the collecting on or off – on needs the case and a text
+    search; detaching switches it off."""
     buch, kennung = h.app.faelle, suche_kennung(h, p)
     aktuell = buch.gespeichert(kennung)
     if aktuell is None:
@@ -500,6 +547,7 @@ def suche_aendern(h, p, _q, data):
     if "name" in data and not str(data.get("name") or "").strip():
         raise Ablehnung(400, "srv.case.noname")
     fall_id = fall_aus(h, data) if "case" in data else aktuell["fall"]
+    automatisch = auto_aus(data, aktuell["kriterien"], fall_id) if "auto" in data else None
     if "case_folder" in data:
         ordner = api.ordner_aus(data, "case_folder")
     else:
@@ -522,6 +570,8 @@ def suche_aendern(h, p, _q, data):
         buch.umbenennen(kennung, data.get("name"))
     if "case" in data or "case_folder" in data:
         buch.anhaengen(kennung, fall_id, ordner)
+    if automatisch is not None:
+        buch.automatisch(kennung, automatisch)
     return api.json({"search": rest.gespeicherte_suche(buch.gespeichert(kennung))})
 
 
@@ -719,6 +769,7 @@ ROUTEN = (
     ("GET", "/api/v1/cases/{id}/lists/{list}", liste_eine),
     ("DELETE", "/api/v1/cases/{id}/lists/{list}", liste_loeschen),
     ("GET", "/api/v1/cases/{id}/new-hits", neue_treffer),
+    ("POST", "/api/v1/cases/{id}/collect", fall_einsammeln),
     ("POST", "/api/v1/cases/{id}/export", fall_export),
     ("POST", "/api/v1/cases/{id}/export/open", fall_export_oeffnen),
     ("GET", "/api/v1/searches/history", verlauf),

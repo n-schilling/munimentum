@@ -64,6 +64,11 @@ Each rule is one sentence and the reason behind it.
 - **Pickers are popovers under the thing they change** — the month's
   name opens the month picker, a pill opens its control — never a
   second window and never a field next to the thing.
+- **One thing, one dialog.** What has several settings is edited in one
+  window from wherever it appears: a saved search (name, case, folder,
+  automatic) opens the same dialog under *Explore* and in the case, and
+  its rows carry only *Run*, *Edit* and what acts now. No rename
+  prompt, no switch in a row.
 - **Facts, not prose.** A detail shows only what its kind of item is
   known by; an empty fact is no row, never "none"; a value that is also
   a filter is a link. Nothing about the archive itself in a detail.

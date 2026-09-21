@@ -126,7 +126,8 @@ type, size and place; a task its board, due date and state — then *Open
 original*, *Add to case*, *Find similar*, and the content; a mail or chat
 message names its conversation in one fold below. **History** keeps every
 search by its criteria, never its hits; **Saved** keeps searches under a
-name and can attach one to a case.
+name, and *Edit* on one sets its name, the case and folder it files into,
+and whether it collects by itself.
 
 **Calendar** shows the exported appointments by week or month — the
 month's name opens a picker over the years the archive spans, *Today* leads
@@ -153,7 +154,12 @@ and note in the order they happened with the case's activity as a band
 above, and *People* — everyone the items name, by their last contact, with
 *external* marked for addresses outside your organisation. Every item can
 carry a **remark** on why it is there. A saved search attached to the case
-can say what it finds today that the case lacks.
+can say what it finds today that the case lacks — or, switched to
+**automatic**, file it by itself: every run that updates the index runs
+the search and puts its new hits into the folder you chose, marked
+*automatic* with the search that found them; *Collect now* does the same
+right away. Only a text search collects, and what you removed from the
+case stays out.
 
 **Export case…** writes one ZIP with the originals of every item sorted by
 folder and source, an `index.html`, a `timeline.html`, `items.csv` and the

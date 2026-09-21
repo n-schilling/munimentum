@@ -1,18 +1,28 @@
-## New in 13.2.0
+## New in 13.3.0
 
-**Two courtesies for scripts.** A case now carries an `ETag`; hand it
-back as `If-None-Match` and an unchanged case answers `304` without a
-body. And every write under `/api/v1/cases` – which answers the whole
-case, as the page wants it – can be asked for the status alone:
-`Prefer: return=minimal` (RFC 7240) gets a `204`, or a `201` with the
-new thing's `Location`, plus the new `ETag` and `Preference-Applied`. Nothing
-changes for a caller that does not ask. The page itself asks that way
-where it wants no more than a new id – a new case, a new folder, the
-rest of a conversation into a case – so the path is walked every day.
+**A case that fills itself.** A saved search attached to a case can
+now be switched to *automatic* – when you save it, or later in the
+case. From then on every run that updates the index runs the search
+and files what the case does not hold yet into the folder you chose,
+marked *automatic* with the search that found it; *Collect now* on a
+search does the same right away, as a run of its own. Only a text
+search collects, and what you removed from the case stays out – the
+look that *Check for new hits* gives leaves it out as well. A chip
+above the case shows only what was collected.
 
-**Under the hood** the routes of `/api/v1` moved out of `app.py` into
-four modules, one per door (`api_cases`, `api_explore`, `api_archive`,
-`api_app`); the surface, the spec and the answers are the same.
+**One dialog for a saved search.** Saving asks for name, case, the
+folder it files into (when the case has folders – an existing one, or a
+new one made on the spot) and the switch; *Edit* on a saved search opens
+the same dialog later, under *Explore archive* and in the case alike.
+Rename, attach and detach went into it; a row keeps *Run*, *Edit* and,
+in the case, *Collect now*. *Check for new hits* is now *Show new hits*,
+which is what it does.
+
+**Scripts and Claude:** `auto` on a saved search (`POST` and `PATCH
+/api/v1/searches/saved`), `POST /api/v1/cases/{id}/collect`, and the
+MCP tool `collect_case` behind *Claude may change cases*; an item says
+`via: auto` and which `search` filed it. The spec now says `202` for
+the case export, which is what the server answered all along.
 
 ## Upgrading
 

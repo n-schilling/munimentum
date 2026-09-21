@@ -165,14 +165,8 @@ def search(h, q, merken=True):
 
 
 def interne_domains(h):
-    """Which mail domains are "us": the setting, else the domain of the
-    signed-in account – handed to the search engine with every search,
-    so a changed setting counts at once."""
-    roh = str(h.app.cfg.get("internal_domains") or "").strip()
-    if roh:
-        return roh
-    konto = str(h.M.token_status(h.M.read_token()).get("account") or "")
-    return konto.rsplit("@", 1)[1].lower() if "@" in konto else ""
+    """Which mail domains are "us" – the app's one rule (app.interne_domains)."""
+    return h.M.interne_domains(h.app.cfg)
 
 
 def alle_treffer(h, k, grenze=5000):

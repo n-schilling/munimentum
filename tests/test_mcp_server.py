@@ -1064,9 +1064,11 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               # 11.0: cases and saved searches (tests/test_mcp_faelle.py)
               "list_cases", "get_case", "case_timeline", "case_people",
               "case_new_hits", "list_saved_searches", "run_saved_search",
-              "add_to_case", "add_case_note"}
+              "add_to_case", "add_case_note",
+              # 13.3: the automatic searches, run now
+              "collect_case"}
 # The two that write – behind the "Claude may change cases" switch.
-SCHREIBEND = {"add_to_case", "add_case_note"}
+SCHREIBEND = {"add_to_case", "add_case_note", "collect_case"}
 
 
 def _via_client(fn):

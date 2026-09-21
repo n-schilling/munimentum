@@ -9567,14 +9567,16 @@ tourStart('suche');
 pruefe(TOURSTAND.kap === 'suche' && !el('tour').classList.contains('hide'), 'Hinweis vor dem ersten Lauf');
 tourEnde(false);
 pruefe(!S.config.tour_seen.suche, 'ohne Index darf die Suche nicht als gesehen gelten');
-// The case chapter: eleven steps from the search into the case and on to
-// the settings; without a case it still runs through, cards centred.
+// The case chapter: fourteen steps from the search into the case, the
+// searches that work for it, and on to the settings; without a case it
+// still runs through, cards centred.
 S.store = {exists: true};
 tourStart('faelle');
-pruefe(TOURSTAND.kap === 'faelle' && TOUR.faelle.length === 11, 'Fallkapitel nicht gestartet');
+pruefe(TOURSTAND.kap === 'faelle' && TOUR.faelle.length === 14, 'Fallkapitel nicht gestartet');
 pruefe(el('tour-karte').innerHTML.indexOf('Mit Fällen arbeiten') >= 0, 'Kapitelname fehlt auf der Karte');
-for(var j = 0; j < 10; j++) tourWeiter();
-pruefe(TOURSTAND.i === 10, 'nicht beim letzten Schritt des Fallkapitels: ' + TOURSTAND.i);
+// The chip step is optional – skipped where nothing was collected yet
+for(var j = 0; j < 13 && TOURSTAND.i < 13; j++) tourWeiter();
+pruefe(TOURSTAND.i === 13, 'nicht beim letzten Schritt des Fallkapitels: ' + TOURSTAND.i);
 tourWeiter();
 pruefe(TOURSTAND.kap === null && S.config.tour_seen.faelle === true, 'Fallkapitel nicht beendet oder nicht gemerkt');
 // Insights and Claude: five and four steps, all with an element.

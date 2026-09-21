@@ -32,6 +32,8 @@ FALL = {
 EINTRAG = {
     "titel": "title", "datum": "date", "wer": "who", "hinzugefuegt": "added",
     "liste": "list", "ordner": "folder", "quelle": "via", "bemerkung": "remark",
+    # The saved search that collected it (via: auto), else null.
+    "suche": "search",
     # What the index knows on top of the case (app.py, _index_stand).
     "thread_offen": "thread_open", "wer_mail": "who_mail",
 }
@@ -43,6 +45,9 @@ SUCHE = {
     # Its own folder is the case's, and `folder` is the mailbox folder in
     # its criteria – so it is `case_folder` here, the name the body takes.
     "ordner": "case_folder", "ordner_name": "case_folder_name",
+    # The automatic search (13.3) and what its last collecting run did.
+    "automatisch": "auto", "auto_zuletzt": "auto_last_run",
+    "auto_neu": "auto_added", "auto_uebersprungen": "auto_skipped",
 }
 ORDNER = {"angelegt": "created", "anzahl": "items"}
 # A search's criteria. `folder` is the mailbox folder and was there

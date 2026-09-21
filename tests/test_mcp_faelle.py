@@ -399,6 +399,45 @@ def test_add_to_case_und_notiz_an_geschlossenem_fall(welt):
     assert "closed" in mcp_server.add_case_note("Nordwind", "spät")["error"]
 
 
+def test_collect_case_sammelt_ein_wenn_erlaubt(welt):
+    """collect_case does now what a run does by itself for an automatic
+    search: behind the write switch, marked, the search named; a named
+    search is a one-off; what the user took out stays out – for the look
+    (case_new_hits) as for the run."""
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    sid = buch.speichern("Rechnungen", faelle.kriterien({"q": "Rechnung 4711"}), fid, automatisch=True)
+    assert "switched off" in mcp_server.collect_case("Nordwind")["error"]
+    mcp_server.STATE["cases_write"] = True
+    res = mcp_server.collect_case("Nordwind")
+    assert res["case"] == "Nordwind" and res["added"] >= 1 and res["searches"][0]["search"] == "Rechnungen"
+    assert "case" not in res["searches"][0] and res["searches"][0]["new"] == res["added"]
+    assert _key(welt, UID_T0) in buch.keys(fid)
+    e = next(e for e in buch.eintraege(fid) if e["key"] == _key(welt, UID_T0))
+    assert e["quelle"] == "auto" and e["suche"] == sid
+    voll = mcp_server.get_case("Nordwind")
+    g = voll["saved_searches"][0]
+    assert g["auto"] is True and g["auto_added"] == res["added"] and g["auto_last_run"]
+    assert next(i for i in voll["items"] if i["key"] == _key(welt, UID_T0))["origin"] == "auto"
+    # one named search, switched off: a one-off; not a text search, or not attached: refused
+    buch.speichern("Mails", faelle.kriterien({"source": "outlook"}), fid)
+    assert mcp_server.collect_case("Nordwind", search="Mails")["added"] >= 1
+    sem = buch.speichern("Aehnlich", faelle.kriterien({"q": "x", "mode": "aehnlich"}), fid)
+    assert "text search" in mcp_server.collect_case("Nordwind", search=str(sem))["error"]
+    assert "attached" in mcp_server.collect_case("Nordwind", search="Nix")["error"]
+    # nothing automatic on a case: says so, adds nothing; a closed case refuses
+    leer = buch.fall_anlegen("Leer")
+    assert mcp_server.collect_case("Leer")["added"] == 0 and "note" in mcp_server.collect_case("Leer")
+    buch.schliessen(leer)
+    assert "closed" in mcp_server.collect_case("Leer")["error"]
+    # removed by hand stays out – for the look and for the run
+    buch.entfernen(fid, _key(welt, UID_T0))
+    neu = next(b for b in mcp_server.case_new_hits("Nordwind")["searches"] if b["search"] == "Rechnungen")
+    assert UID_T0 not in {h["uid"] for h in neu["new"]}
+    assert mcp_server.collect_case("Nordwind", search="Rechnungen")["skipped_removed"] >= 1
+    assert _key(welt, UID_T0) not in buch.keys(fid)
+
+
 def test_add_case_note(welt):
     mcp_server.STATE["cases_write"] = True
     fid = _nordwind(welt)

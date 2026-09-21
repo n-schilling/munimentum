@@ -744,6 +744,9 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .tag.offen{color:var(--ok);border:1px solid var(--ok);background:transparent;font-weight:500}
 .tag.zu{color:var(--muted);border:1px solid var(--line);background:transparent;font-weight:500}
 .tag.mcp{color:var(--accent);background:var(--accent-weich);font-size:11px;font-weight:500;margin:0 0 0 8px;vertical-align:1px}
+/* "automatic": the same mark, outlined – an automatic search filed it */
+.tag.mcp.auto{background:transparent;border:1px solid var(--accent);display:inline-flex;align-items:center;gap:4px}
+.werkzeugzeile .chip input{min-width:0;flex:none}
 /* The case head: the name, the facts, the description – then the tools */
 .fallkopf .titelzeile{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .fallkopf .titelzeile h2{font-size:18px;margin:0}
@@ -1372,6 +1375,7 @@ details.rechte p{margin:6px 0}
       <div class="werkzeugzeile">
         <input type="text" id="fall-filter" oninput="fallFiltern(this.value)" data-i18n-ph="cases.filter.ph" autocomplete="off">
         <span class="stand num" id="fall-filter-stand"></span>
+        <label class="chip hide" id="fall-nur-auto" data-i18n-title="cases.filter.auto.title"><input type="checkbox" id="fall-nur-auto-kipp" onchange="fallNurAuto(this.checked)"><span data-ikon="auto" data-ikon-klasse="klein"></span><span data-i18n="cases.filter.auto">Automatisch</span><span class="n num" id="fall-auto-zahl"></span></label>
         <button class="ghost klein" id="fall-suche"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="cases.search.in">Im Fall suchen</span></button>
         <span class="falten" id="fall-werkzeug-ordner">
           <button class="ikonknopf" onclick="alleFalten(true)" data-i18n-title="cases.fold.open"><span data-ikon="auffalten"></span></button>
@@ -2124,6 +2128,7 @@ var IKON = {
   runter: '<path d="M6 9l6 6 6-6"/>',
   hoch: '<path d="M6 15l6-6 6 6"/>',
   klammer: '<path d="M21 12l-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"/>',
+  auto: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
   weg: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
   fertig: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
   uhr: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
@@ -3187,6 +3192,7 @@ function laufVerfolgen(jobs, first){
     // A run changes what the sources hold – the numbers on their cards.
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     laufErgebnisZeigen(LAUF.ergebnis);
+    nachEinsammeln(LAUF.ergebnis);
     // The overview's numbers are stale after any run: reload them while
     // it is on screen, or on the next visit.
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
@@ -3197,8 +3203,16 @@ function laufVerfolgen(jobs, first){
     // same; the inventory does not travel with the poll.
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
+    nachEinsammeln(jobs.last || {});
   }
   if(!jobs.busy) LAUF.zuletzt = fertig;
+}
+/* A run that collected for the cases changed the open case and the
+   counts in the overview – both afresh, nothing else. */
+function nachEinsammeln(letzter){
+  if(((letzter || {}).steps || []).indexOf('case_collect') < 0) return;
+  ladeFaelle();
+  if(FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
 }
 function laufOeffnen(){
   LAUF_OFFEN = true;
@@ -3265,6 +3279,11 @@ var TOUR = {
     {ziel: '#fall-sichten', tab: 'faelle', titel: 'tour.faelle.sichten', text: 'tour.faelle.sichten.t'},
     {ziel: '#fall-filter', rahmen: '.werkzeugzeile', tab: 'faelle', titel: 'tour.faelle.werkzeuge', text: 'tour.faelle.werkzeuge.t'},
     {ziel: '#fall-inhalt', tab: 'faelle', titel: 'tour.faelle.ordner', text: 'tour.faelle.ordner.t'},
+    // The searches fold is the last fold of the case, drawn even when empty;
+    // the chip stands only once an automatic search filed something.
+    {ziel: '#fall-inhalt > details.gruppe:last-of-type', tab: 'faelle', titel: 'tour.faelle.automatik', text: 'tour.faelle.automatik.t'},
+    {ziel: '#fall-nur-auto', tab: 'faelle', titel: 'tour.faelle.marke', text: 'tour.faelle.marke.t', optional: true},
+    {ziel: '#ana-runs-karte', tab: 'analytics', titel: 'tour.faelle.lauf', text: 'tour.faelle.lauf.t'},
     {ziel: '#fall-fuss', tab: 'faelle', titel: 'tour.faelle.export', text: 'tour.faelle.export.t'},
     {ziel: '#c-internal_domains', rahmen: '.feldzeile', tab: 'einstellungen', karte: 'app-karte', titel: 'tour.faelle.extern', text: 'tour.faelle.extern.t'},
     {ziel: '#mcp-karte', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.faelle.claude', text: 'tour.faelle.claude.t'}],
@@ -3359,6 +3378,8 @@ function tourZeige(richtung){
   if(schritt.tab) tab(schritt.tab);
   if(schritt.block){ var b = el(schritt.block); if(b) b.open = true; markiereEinstellungsnav('quellen-karte'); }
   if(schritt.karte) markiereEinstellungsnav(schritt.karte);
+  // An Insights card: its entry in the side navigation lights up with it
+  if(schritt.tab === 'analytics' && schritt.ziel && schritt.ziel.indexOf('#ana-') === 0) markiereInsightnav(schritt.ziel.slice(1));
   if(schritt.erweitert){ var e = el(schritt.erweitert); if(e) e.open = true; }
   var ziel = tourZiel(schritt);
   if(schritt.optional && !ziel){
@@ -3392,6 +3413,14 @@ function tourKarte(ziel, schritt){
   tourPositionieren();
   var knopf = karte.querySelector('button.act');
   if(knopf && knopf.focus) knopf.focus();
+}
+/* A late layout – Insights drawing its cards after the tour pointed at
+   one – moves the target: scroll to it again and redraw the cut-out. */
+function tourNachziehen(){
+  var ziel = TOURSTAND.ziel;
+  if(!TOURSTAND.kap || !ziel || el('tour').classList.contains('hide')) return;
+  if(ziel.scrollIntoView) ziel.scrollIntoView({block: 'center'});
+  tourPositionieren();
 }
 function tourPositionieren(){
   if(!TOURSTAND.kap || el('tour').classList.contains('hide')) return;
@@ -4556,6 +4585,7 @@ var FALL_OFFEN = null;        // the case shown in the cases tab, in full
 var FALL_ALLE = {};           // group key -> show every row of that group
 var FALL_NEU = null;          // the open case's new-hits, once asked for
 var FALL_FILTER = '';         // the filter field over the open case
+var FALL_NUR_AUTO = false;    // the "Automatic" chip: only what an automatic search collected
 var FALL_AUF = {};            // group key -> true while its fold is open
 var FALL_AUSWAHL = {};        // key -> true, ticked rows of the open case
 var FAELLE_ZU = false;        // closed cases shown in the overview
@@ -4608,6 +4638,14 @@ function externMarke(h){
    itself, nowhere else. */
 function mcpMarke(quelle){
   return quelle === 'mcp' ? '<span class="tag mcp">' + esc(t('cases.origin.mcp')) + '</span>' : '';
+}
+/* Who put an item into the case: Claude (via MCP), or an automatic
+   search – then the mark names the search and the day, in its title. */
+function herkunftMarke(e){
+  if(e.via !== 'auto') return mcpMarke(e.via);
+  var g = ((FALL_OFFEN && FALL_OFFEN.search_list) || []).filter(function(s){ return s.id === e.search; })[0];
+  return '<span class="tag mcp auto" title="' + esc(t('cases.origin.auto.title', {when: wannKurz(e.added), search: g ? g.name : '?'})) + '">' +
+    esc(t('cases.origin.auto')) + '</span>';
 }
 
 /* ---------- The "Cases" filter: one option per case and per folder ----------
@@ -4805,29 +4843,41 @@ function gespeicherteFenster(){
     oeffneEigenes('gespeichert', gespeichertKopf() + '<p class="hint err">' + esc(String(e)) + '</p>');
   });
 }
-function gespeicherteZeile(g, i, imFall){
-  var lauf = g.last_run
-    ? t('search.saved.lastrun', {when: wannKurz(g.last_run), n: zahl(g.hits)})
-    : t('search.saved.never');
+/* One row for a saved search – in the "Saved" window and in the case's
+   fold alike: the name, its marks (the case it hangs on, outside the
+   case; "automatic"), when it last ran and what the last collecting run
+   did, the criteria as tags; at the right "Run", "Edit" and, in an open
+   case, "Collect now" for a text search. `extra` is what the case adds
+   after the marks (the new hits it found). Everything about the search
+   is changed in one place: sucheDialog(). */
+function sucheZeile(g, wo, offen, extra){
+  var imFall = wo === 'fall';
   var fall = fallAus(g.case);
-  var wo = (g.case_name || fallName(g.case)) + (g.case_folder_name ? ' › ' + g.case_folder_name : '');
-  return '<div class="hist"><div><span class="q">' + esc(g.name) + '</span>' +
-    (g.case && !imFall ? ' <span class="tag' + (fall && fall.status === 'closed' ? ' zu' : ' offen') + '">' +
-      esc(t('search.saved.incase', {name: wo})) + '</span>' : '') +
-    '</div><span class="wann">' + esc(lauf) + '</span>' +
-    '<span class="knoepfe"><button class="mini" onclick="gespeichertLauf(' + i + ')">' + esc(t('search.saved.run')) + '</button>' +
-    (imFall ? '' : (g.case
-      ? '<button class="mini" onclick="gespeichertLoesen(' + i + ')">' + esc(t('search.saved.detach')) + '</button>'
-      : '<button class="mini" onclick="gespeichertAnhaengen(' + i + ')">' + esc(t('search.saved.attach')) + '</button>') +
-    '<button class="mini" onclick="gespeichertUmbenennen(' + i + ')">' + esc(t('search.saved.rename')) + '</button>' +
-    '<button class="mini" onclick="gespeichertLoeschen(' + i + ')">' + esc(t('search.saved.delete')) + '</button>') +
-    '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.criteria)) + '</span>' +
-    kriterienTags(g.criteria) + '</div></div>';
+  var marken = (!imFall && g.case ? ' <span class="tag' + (fall && fall.status === 'closed' ? ' zu' : ' offen') + '">' +
+      esc(t('search.saved.incase', {name: (g.case_name || fallName(g.case)) + (g.case_folder_name ? ' › ' + g.case_folder_name : '')})) + '</span>' : '') +
+    (g.auto ? ' <span class="tag mcp auto" title="' + esc(t('cases.search.auto.i')) + '">' + ikon('auto', 'klein') + esc(t('cases.search.auto')) + '</span>' : '');
+  var stand = g.last_run ? t('search.saved.lastrun', {when: wannKurz(g.last_run), n: zahl(g.hits)}) : t('search.saved.never');
+  if(g.auto) stand += ' · ' + (g.auto_last_run
+    ? t('cases.search.auto.collected', {n: zahl(g.auto_added || 0)}) +
+      (g.auto_skipped ? ' · ' + t('cases.search.auto.skipped', {n: zahl(g.auto_skipped)}) : '')
+    : t('cases.search.auto.never'));
+  var textsuche = (g.criteria || {}).mode === 'text';
+  var knoepfe = '<button class="mini" onclick="sucheLauf(' + g.id + ')">' + esc(t('search.saved.run')) + '</button>' +
+    (imFall && !offen ? '' : '<button class="mini" onclick="sucheFenster(' + g.id + ', \'' + wo + '\')">' + esc(t('search.saved.edit')) + '</button>') +
+    (imFall && offen ? '<button class="mini"' + (textsuche ? '' : ' disabled') + ' title="' +
+      esc(textsuche ? t('cases.search.collect.i') : t('search.save.auto.text')) + '" onclick="fallEinsammeln(' + g.id + ')">' +
+      esc(t('cases.search.collect')) + '</button>' : '');
+  var wohin = g.case_folder_name || t('cases.folder.unsorted');
+  return '<div class="hist"><div><span class="q">' + esc(g.name) + '</span>' + marken + (extra ? ' ' + extra : '') + '</div>' +
+    '<span class="wann">' + esc(stand) + '</span><span class="knoepfe">' + knoepfe + '</span>' +
+    '<div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.criteria)) + '</span>' + kriterienTags(g.criteria) +
+    (imFall && ((FALL_OFFEN && FALL_OFFEN.folder_list) || []).length ? '<span class="tag">' + esc(t('cases.search.filesinto', {name: wohin})) + '</span>' : '') +
+    '</div></div>';
 }
 function zeichneGespeicherte(r){
   GESPEICHERT = r.items || [];
   var html = GESPEICHERT.length
-    ? GESPEICHERT.map(function(g, i){ return gespeicherteZeile(g, i, false); }).join('')
+    ? GESPEICHERT.map(function(g){ return sucheZeile(g, 'gespeichert'); }).join('')
     : '<p class="hint">' + esc(t('search.saved.empty')) + '</p>';
   var aktuell = kriterienAusForm();
   var kann = !!(aktuell.q || filterFelder().length);
@@ -4839,59 +4889,162 @@ function zeichneGespeicherte(r){
   oeffneEigenes('gespeichert', gespeichertKopf() + html);
 }
 function gespeichertLauf(i){ var g = GESPEICHERT[i]; if(g) sucheAusfuehren(g.criteria, g.id); }
-function gespeichertUmbenennen(i){
-  var g = GESPEICHERT[i];
-  if(!g) return;
-  var name = prompt(t('search.saved.rename.ask'), g.name);
-  if(name === null || !name.trim()) return;
-  patch(API + '/searches/saved/' + g.id, {name: name.trim()}).then(function(){ gespeicherteFenster(); });
+/* A saved search by its id – from the window's list or the open case's,
+   the one the row was drawn from first: the case's copy knows its folder
+   and switch as the case last loaded them. */
+function sucheAus(id, wo){
+  var listen = [GESPEICHERT || [], (FALL_OFFEN && FALL_OFFEN.search_list) || []];
+  if(wo === 'fall') listen.reverse();
+  return listen[0].concat(listen[1]).filter(function(g){ return g.id === id; })[0] || null;
 }
-function gespeichertLoeschen(i){
-  var g = GESPEICHERT[i];
-  if(!g || !confirm(t('search.saved.delete.ask', {name: g.name}))) return;
-  entferne(API + '/searches/saved/' + g.id).then(function(){ gespeicherteFenster(); });
-}
-function gespeichertLoesen(i){
-  var g = GESPEICHERT[i];
-  if(!g) return;
-  patch(API + '/searches/saved/' + g.id, {case: null}).then(function(){ gespeicherteFenster(); ladeFaelle(); });
-}
-function gespeichertAnhaengen(i){
-  var g = GESPEICHERT[i];
-  if(g) fallWahl('suche', g);
-}
+function sucheLauf(id){ var g = sucheAus(id); if(g) sucheAusfuehren(g.criteria, g.id); }
+function sucheFenster(id, zurueck){ var g = sucheAus(id, zurueck); if(g) sucheDialog(g, null, zurueck); }
 
-/* Save the current criteria (or a history row's) under a name, optionally
-   straight into a case. */
-function speichernFenster(k, zurueck, fallVorgabe){
-  var faelle = offeneFaelle();
-  var html = modalKopf(t('search.save.title'), 'speichern', t('search.saved.i')) +
+/* An (i) in generated markup – the text resolved now, in the page's language. */
+function infoZeichen(key){
+  return '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t(key)) + '">i</span>';
+}
+/* Save the current criteria (or a history row's) under a name – the same
+   dialog that edits a saved search later. */
+function speichernFenster(k, zurueck, fallVorgabe){ sucheDialog(null, k, zurueck, fallVorgabe); }
+/* The one dialog of a saved search: name, the criteria as tags, the case
+   it hangs on, the folder of that case (only while it has folders) and
+   the switch that lets it collect by itself. Saving sends what changed;
+   editing offers "Delete" at the right. `zurueck` says where to go
+   after: the saved-searches window, the history, the open case. */
+function sucheDialog(g, k, zurueck, fallVorgabe){
+  k = g ? g.criteria : k;
+  var faelle = offeneFaelle().slice();
+  // A search on a closed case shows that case, so the dialog tells the truth
+  if(g && g.case && !faelle.some(function(f){ return f.id === g.case; })){
+    var zu = fallAus(g.case);
+    if(zu) faelle.push(zu);
+  }
+  var vorgabe = g ? g.case : fallVorgabe;
+  var html = modalKopf(t(g ? 'search.edit.title' : 'search.save.title'), 'speichern', t('search.saved.i')) +
     '<div class="tagleiste" style="margin-bottom:10px"><span class="tag">' + esc(kriterienTitel(k)) + '</span>' +
     kriterienTags(k) + '</div>' +
-    '<input type="text" id="speichern-name" style="width:100%" value="' + esc(k.q || '') + '" placeholder="' +
-    esc(t('search.save.name.ph')) + '" onkeydown="if(event.key===\'Enter\')speichernAusfuehren()">' +
+    '<input type="text" id="speichern-name" style="width:100%" placeholder="' +
+    esc(t('search.save.name.ph')) + '" onkeydown="if(event.key===\'Enter\')sucheSpeichern()">' +
     (faelle.length ? '<div class="feldzeile" style="border:0;padding:12px 0 0"><span class="bez">' +
-      esc(t('search.save.attach')) + '</span><select id="speichern-fall"><option value="">' +
+      esc(t('search.save.attach')) + '</span><select id="speichern-fall" onchange="speichernFall()"><option value="">' +
       esc(t('search.save.attach.none')) + '</option>' + faelle.map(function(f){
-        return '<option value="' + f.id + '"' + (fallVorgabe === f.id ? ' selected' : '') + '>' + esc(f.name) + '</option>';
-      }).join('') + '</select></div>' : '') +
-    modalFuss({text: t('search.save.do'), tun: 'speichernAusfuehren()'});
-  FALL_WAHL = {art: 'speichern', kriterien: k, zurueck: zurueck || null};
+        return '<option value="' + f.id + '">' + esc(f.name) +
+          (f.status === 'closed' ? ' · ' + esc(t('cases.status.zu')) : '') + '</option>';
+      }).join('') + '</select></div>' +
+      // The folder of the chosen case – only while it has folders (speichernFall)
+      '<div class="feldzeile hide" id="speichern-ordner-zeile"><span class="bez">' + esc(t('search.save.folder')) +
+      infoZeichen('search.save.folder.i') + '</span><span class="row" style="gap:8px"><select id="speichern-ordner" onchange="speichernOrdnerNeu()"></select>' +
+      '<input type="text" id="speichern-ordner-neu" class="hide" placeholder="' + esc(t('search.save.folder.new.ph')) +
+      '" style="width:160px" oninput="speichernAutoSatz()"></span></div>' +
+      // Collect automatically: a text search attached to a case
+      '<div class="feldzeile hide" id="speichern-auto-zeile"><span class="bez"><label for="speichern-auto">' + esc(t('search.save.auto')) + '</label>' +
+      infoZeichen('search.save.auto.i') + '</span><input type="checkbox" class="kipp" id="speichern-auto"' +
+      (k.mode === 'text' ? '' : ' disabled title="' + esc(t('search.save.auto.text')) + '"') + ' onchange="speichernAutoSatz()"></div>' +
+      '<p class="satz small muted hide" id="speichern-auto-satz"></p>' : '') +
+    '<div class="row modal-fuss"><button class="act" onclick="sucheSpeichern()">' + esc(t('search.save.do')) + '</button>' +
+    (g ? '<button class="ghost rechts rot" onclick="sucheLoeschen()">' + esc(t('search.saved.delete')) + '</button>' : '') + '</div>';
+  FALL_WAHL = {art: 'speichern', kriterien: k, zurueck: zurueck || null, ordnerZeile: false, ordnerNamen: {}, suche: g || null};
   oeffneEigenes('speichern', html, true);
+  // The values by script, not by attribute: what the page sets it can read back
+  dyn('speichern-name').value = g ? g.name : (k.q || '');
+  if(dyn('speichern-fall')) dyn('speichern-fall').value = vorgabe ? String(vorgabe) : '';
+  speichernFall(g ? g.case_folder : null, g ? !!g.auto : false);
 }
-function speichernAusfuehren(){
+/* The folder row follows the chosen case: shown only while the case has
+   folders – its folders, "Unsorted" and "New folder…", the choice
+   window's row. The switch stands as soon as a case is chosen. Called
+   with the search's own folder and switch when the dialog opens, bare
+   when the case is changed. */
+function speichernFall(ordnerVor, autoVor){
+  var sel = dyn('speichern-fall');
+  if(!sel) return;
+  var f = sel.value ? fallAus(parseInt(sel.value, 10)) : null;
+  var ordner = f ? (f.folder_list || []) : [];
+  FALL_WAHL.ordnerZeile = !!ordner.length;
+  FALL_WAHL.ordnerNamen = {};
+  ordner.forEach(function(o){ FALL_WAHL.ordnerNamen[String(o.id)] = o.name; });
+  dyn('speichern-ordner-zeile').classList.toggle('hide', !ordner.length);
+  var osel = dyn('speichern-ordner');
+  osel.innerHTML = '<option value="">' + esc(t('cases.folder.unsorted')) + '</option>' +
+    ordner.map(function(o){ return '<option value="' + o.id + '">' + esc(o.name) + '</option>'; }).join('') +
+    '<option value="neu">' + esc(t('cases.folder.new.option')) + '</option>';
+  osel.value = ordnerVor && FALL_WAHL.ordnerNamen[String(ordnerVor)] ? String(ordnerVor) : '';
+  dyn('speichern-auto-zeile').classList.toggle('hide', !f);
+  if(!f) dyn('speichern-auto').checked = false;
+  else if(autoVor !== undefined) dyn('speichern-auto').checked = !!autoVor;
+  speichernOrdnerNeu();
+}
+function speichernOrdnerNeu(){
+  var sel = dyn('speichern-ordner'), feld = dyn('speichern-ordner-neu');
+  if(!sel || !feld) return;
+  var neu = sel.value === 'neu';
+  feld.classList.toggle('hide', !neu);
+  if(neu && feld.focus) feld.focus();
+  speichernAutoSatz();
+}
+/* One sentence under the switch says where the hits will go. */
+function speichernAutoSatz(){
+  var kipp = dyn('speichern-auto'), satz = dyn('speichern-auto-satz');
+  if(!kipp || !satz) return;
+  var an = !!(kipp.checked && !kipp.disabled);
+  satz.classList.toggle('hide', !an);
+  if(!an) return;
+  var sel = dyn('speichern-ordner'), feld = dyn('speichern-ordner-neu');
+  var wahl = FALL_WAHL.ordnerZeile && sel ? sel.value : '';
+  var name = !wahl ? t('cases.folder.unsorted')
+           : wahl === 'neu' ? (feld.value.trim() || t('cases.folder.new.option'))
+           : FALL_WAHL.ordnerNamen[wahl] || wahl;
+  satz.textContent = t('search.save.auto.note', {folder: name});
+}
+/* Save: a new search as a whole; an edited one only in what changed, so
+   a search on a closed case can be renamed without touching the case.
+   A new folder is made first, then the search with it. */
+function sucheSpeichern(){
   var name = dyn('speichern-name').value.trim();
   if(!name){ dyn('speichern-name').classList.add('fehler'); return; }
   var sel = dyn('speichern-fall');
   var fall = sel && sel.value ? parseInt(sel.value, 10) : null;
-  post(API + '/searches/saved', {name: name, criteria: FALL_WAHL.kriterien, case: fall}).then(function(r){
+  var osel = dyn('speichern-ordner'), feld = dyn('speichern-ordner-neu'), kipp = dyn('speichern-auto');
+  var wahl = fall && FALL_WAHL.ordnerZeile && osel ? osel.value : '';
+  var neuName = wahl === 'neu' ? feld.value.trim() : '';
+  if(wahl === 'neu' && !neuName){ feld.classList.add('fehler'); return; }
+  var auto = !!(fall && kipp && kipp.checked && !kipp.disabled);
+  var k = FALL_WAHL.kriterien, zurueck = FALL_WAHL.zurueck, g = FALL_WAHL.suche;
+  var ordner = wahl === 'neu'
+    ? postKnapp(API + '/cases/' + fall + '/folders', {name: neuName}).then(function(r){
+        if(r && r.ok === false) throw new Error(rtext(r));
+        return r.id;
+      })
+    : Promise.resolve(wahl ? parseInt(wahl, 10) : null);
+  ordner.then(function(ordnerId){
+    if(!g) return post(API + '/searches/saved', {name: name, criteria: k, case: fall, case_folder: ordnerId, auto: auto});
+    var body = {};
+    if(name !== g.name) body.name = name;
+    if(fall !== (g.case || null)){ body.case = fall; body.case_folder = ordnerId; }
+    else if(fall && ordnerId !== (g.case_folder || null)) body.case_folder = ordnerId;
+    if(auto !== !!g.auto) body.auto = auto;
+    if(!Object.keys(body).length) return {ok: true};
+    return patch(API + '/searches/saved/' + g.id, body);
+  }).then(function(r){
     if(apiFehler(r)) return;
-    var zurueck = FALL_WAHL.zurueck;
     closeWizard('speichern');
-    if(zurueck === 'gespeichert') gespeicherteFenster();
-    else if(zurueck === 'historie') historieFenster();
-    else if(zurueck === 'fall' && FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
-    if(fall) ladeFaelle();
+    sucheZurueck(zurueck, !!fall || !!(g && g.case));
+  }).catch(function(e){ meldung(String(e.message || e), 'err'); });
+}
+function sucheZurueck(zurueck, mitFall){
+  if(zurueck === 'gespeichert') gespeicherteFenster();
+  else if(zurueck === 'historie') historieFenster();
+  else if(zurueck === 'fall' && FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
+  if(mitFall) ladeFaelle();
+}
+function sucheLoeschen(){
+  var g = FALL_WAHL.suche, zurueck = FALL_WAHL.zurueck;
+  if(!g || !confirm(t('search.saved.delete.ask', {name: g.name}))) return;
+  entferne(API + '/searches/saved/' + g.id).then(function(r){
+    if(apiFehler(r)) return;
+    closeWizard('speichern');
+    sucheZurueck(zurueck, !!g.case);
   });
 }
 
@@ -4952,9 +5105,10 @@ function eintragAus(h){
 
 /* ---------- Choosing a case, and the folder inside it ----------
    One window for every way in: one hit ('einer', index into TREFFER), the
-   ticked hits ('auswahl'), the whole result ('liste', criteria), a saved
-   search to attach ('suche'). Open cases to pick from, or a new one; then
-   the folder of the chosen case, or a new folder. */
+   ticked hits ('auswahl'), the whole result ('liste', criteria). Open
+   cases to pick from, or a new one; then the folder of the chosen case,
+   or a new folder. A saved search is attached in its own dialog
+   (sucheDialog). */
 function fallWahl(art, daten){
   merke('flow.wizard', 'fall-wahl');
   var k = art === 'liste' ? kriterienAusForm() : null;
@@ -4965,8 +5119,7 @@ function fallWahlTitel(){
   var w = FALL_WAHL;
   if(w.art === 'einer') return t('cases.add.title.one', {title: (TREFFER[w.daten] || {}).title || t('search.nosubject')});
   if(w.art === 'auswahl') return t('cases.add.title.many', {n: Object.keys(AUSWAHL).length});
-  if(w.art === 'liste') return t('cases.add.title.list');
-  return t('cases.add.title.search', {name: w.daten.name});
+  return t('cases.add.title.list');
 }
 function zeichneFallWahl(){
   var faelle = offeneFaelle();
@@ -5136,11 +5289,6 @@ function fallWahlAusfuehren(){
           : Promise.resolve();
         return danach.then(function(){ return t('cases.added.list', {n: r.hits, name: name}); });
       });
-    } else {
-      tun = patch(API + '/searches/saved/' + w.daten.id, {case: id, case_folder: ordnerId}).then(function(r){
-        if(r && r.ok === false) throw new Error(rtext(r));
-        return t('cases.attached', {search: w.daten.name, name: name});
-      });
     }
     return tun;
   }).then(function(meldung){
@@ -5148,7 +5296,6 @@ function fallWahlAusfuehren(){
     if(w.art === 'auswahl') auswahlLeeren(false);
     zeichneTrefferListe();
     trefferMeldung(meldung);
-    if(w.art === 'suche') gespeicherteFenster();
     ladeFaelle();
     if(FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
   }).catch(function(e){ meldung(String(e.message || e), 'err'); });
@@ -5221,7 +5368,8 @@ function fallOeffnen(id){
   return api(API + '/cases/' + id).then(function(r){
     if(rtext(r)){ el('fall-inhalt').innerHTML = '<p class="hint err">' + esc(rtext(r)) + '</p>'; return; }
     if(!FALL_OFFEN || FALL_OFFEN.id !== id){ FALL_ALLE = {}; FALL_NEU = null; FALL_AUF = {}; FALL_FILTER = ''; FALL_AUSWAHL = {};
-                                             FALL_ZEIT_EIMER = null; FALL_PERSON = null; el('fall-filter').value = ''; }
+                                             FALL_ZEIT_EIMER = null; FALL_PERSON = null; FALL_NUR_AUTO = false;
+                                             el('fall-filter').value = ''; el('fall-nur-auto-kipp').checked = false; }
     FALL_OFFEN = r.case;
     el('fall-detail').classList.remove('hide');
     zeichneFall();
@@ -5249,6 +5397,11 @@ function zeichneFall(){
     '<div class="meta small muted">' + esc(fakten.join(' · ')) + '</div>' +
     (f.description ? '<p class="beschreibung small muted">' + esc(f.description) + '</p>' : '');
   el('fall-ordner-neu').classList.toggle('hide', !offen);
+  // The "Automatic" chip is offered only while an automatic search filed something
+  var autoN = (f.item_list || []).filter(function(e){ return e.via === 'auto'; }).length;
+  if(!autoN && FALL_NUR_AUTO){ FALL_NUR_AUTO = false; el('fall-nur-auto-kipp').checked = false; }
+  el('fall-nur-auto').classList.toggle('hide', !autoN);
+  el('fall-auto-zahl').textContent = autoN ? zahl(autoN) : '';
   el('fall-suche').onclick = function(){ sucheImFall(f.id); };
   el('fall-personen-zahl').textContent = zahl(personenAus(f.item_list).length);
   zeichneFallInhalt();
@@ -5268,6 +5421,15 @@ function zeichneFall(){
 function passtFilter(text){
   if(!FALL_FILTER) return true;
   return String(text || '').toLowerCase().indexOf(FALL_FILTER.toLowerCase()) >= 0;
+}
+/* The "Automatic" chip: only what an automatic search collected. */
+function passtHerkunft(e){
+  return !FALL_NUR_AUTO || !!(e && e.via === 'auto');
+}
+function fallNurAuto(an){
+  FALL_NUR_AUTO = !!an;
+  if(FALL_NUR_AUTO) alleAuf(true);
+  zeichneFallInhalt();
 }
 function faltAuf(key){
   return FALL_AUF[key] ? ' open' : '';
@@ -5338,7 +5500,7 @@ function eintragZeile(e, ikonName, offen){
   var titel = e.title || e.rel || e.key;
   return '<div class="eintrag">' + eintragTick(e, offen) +
     '<span class="ikon">' + ikon(ikonName, 'klein') + '</span>' +
-    '<div><span class="t">' + esc(titel) + mcpMarke(e.via) + '</span>' +
+    '<div><span class="t">' + esc(titel) + herkunftMarke(e) + '</span>' +
     (e.who ? '<span class="w">' + esc(e.who) + '</span>' : '') + bemerkungZeile(e) + '</div>' +
     '<span class="d">' + esc(e.date || '') + '</span>' +
     eintragAktionen(e, offen) + '</div>';
@@ -5346,7 +5508,7 @@ function eintragZeile(e, ikonName, offen){
 /* One source's rows: capped at 30 until "show more", every row while a
    filter is on. */
 function quellenRows(key, eintraege, hit, offen){
-  var zeilen = eintraege.filter(function(e){ return passtFilter(eintragText(e)); });
+  var zeilen = eintraege.filter(function(e){ return passtFilter(eintragText(e)) && passtHerkunft(e); });
   if(!zeilen.length) return '';
   var alle = !!FALL_ALLE[key] || !!FALL_FILTER, grenze = 30;
   var sichtbar = alle ? zeilen : zeilen.slice(0, grenze);
@@ -5439,11 +5601,11 @@ function zeichneFallOrdner(){
         (offen && o.id ? '<button class="mini" onclick="event.preventDefault();event.stopPropagation();ordnerFenster(' + o.id + ')">' + esc(t('cases.folder.rename')) + '</button>' +
           '<button class="mini" title="' + esc(t('cases.folder.drop')) + '" onclick="event.preventDefault();event.stopPropagation();ordnerLoeschen(' + o.id + ')">&times;</button>' : '');
       var inhalt = gruppen.map(function(g, i){ return quellenFold('ordner:' + o.id + '/' + g.key, g, offen, i === 0); }).join('');
-      if(FALL_FILTER && !inhalt) return;
+      if((FALL_FILTER || FALL_NUR_AUTO) && !inhalt) return;
       html += faltKopf('ordner:' + o.id, ikon('fall'), o.name, n, '', werkzeuge) +
         (inhalt || '<p class="hint">' + esc(t('cases.folder.empty')) + '</p>') + '</details>';
     });
-    if(FALL_FILTER && !reihe.some(function(o){ return o.eintraege.some(function(e){ return passtFilter(eintragText(e)); }); }))
+    if((FALL_FILTER || FALL_NUR_AUTO) && !reihe.some(function(o){ return o.eintraege.some(function(e){ return passtFilter(eintragText(e)) && passtHerkunft(e); }); }))
       html += '<div class="gruppe leer"><p class="hint">' + esc(t('cases.filter.none')) + '</p></div>';
   } else {
     var gruppenAlle = fallGruppen(eintraege), treffer = 0;
@@ -5453,12 +5615,12 @@ function zeichneFallOrdner(){
       treffer++;
       html += faltKopf('quelle:' + g.key, ikon(quellIkon(g.hit)), quellTag(g.hit), zahl(g.eintraege.length), '') + rows + '</details>';
     });
-    if(FALL_FILTER && !treffer) html += '<div class="gruppe leer"><p class="hint">' + esc(t('cases.filter.none')) + '</p></div>';
+    if((FALL_FILTER || FALL_NUR_AUTO) && !treffer) html += '<div class="gruppe leer"><p class="hint">' + esc(t('cases.filter.none')) + '</p></div>';
   }
 
   // Attached searches – and what they find today that the case lacks
   html += faltKopf('suchen', ikon('marke'), t('cases.searches'), zahl(suchen.length), t('cases.searches.i')) +
-    (suchen.length ? suchen.map(function(g, i){
+    (suchen.length ? suchen.map(function(g){
       var neu = FALL_NEU && FALL_NEU[g.id];
       var wohin = g.case_folder_name || t('cases.folder.unsorted');
       var stand = !neu ? '' : neu.error
@@ -5467,19 +5629,13 @@ function zeichneFallOrdner(){
           ? '<span class="small"><b>' + esc(t('cases.new.count', {n: zahl(neu.new_count)})) + '</b> ' +
             (offen ? '<button class="mini" onclick="neueHinzufuegen(' + g.id + ')">' + esc(t('cases.new.add', {folder: wohin})) + '</button>' : '') + '</span>'
           : '<span class="small muted">' + esc(t('cases.new.none')) + '</span>';
-      return '<div class="hist"><div><span class="q">' + esc(g.name) + '</span> ' + stand + '</div>' +
-        '<span class="wann">' + esc(g.last_run ? t('search.saved.lastrun', {when: wannKurz(g.last_run), n: zahl(g.hits)})
-                                              : t('search.saved.never')) + '</span>' +
-        '<span class="knoepfe"><button class="mini" onclick="fallSucheLauf(' + i + ')">' + esc(t('search.saved.run')) + '</button>' +
-        (offen ? '<button class="mini" onclick="fallSucheLoesen(' + g.id + ')">' + esc(t('search.saved.detach')) + '</button>' : '') +
-        '</span><div class="tagleiste"><span class="tag">' + esc(kriterienTitel(g.criteria)) + '</span>' + kriterienTags(g.criteria) +
-        (ordner.length ? '<span class="tag">' + esc(t('cases.search.filesinto', {name: wohin})) + '</span>' : '') + '</div></div>';
+      return sucheZeile(g, 'fall', offen, stand);
     }).join('') : '<p class="hint">' + esc(t('cases.searches.none')) + '</p>') +
     (suchen.length ? '<div class="aktionen"><span class="small muted" id="fall-neu-stand"></span>' +
       '<button class="mini" id="fall-neu-knopf" onclick="fallNeuPruefen()">' + esc(t('cases.new.check')) + '</button></div>' : '') +
     '</details>';
   el('fall-inhalt').innerHTML = html;
-  filterStand(eintraege.filter(function(e){ return passtFilter(eintragText(e)); }).length, eintraege.length);
+  filterStand(eintraege.filter(function(e){ return passtFilter(eintragText(e)) && passtHerkunft(e); }).length, eintraege.length);
 }
 function filterStand(n, m){
   el('fall-filter-stand').textContent = FALL_FILTER ? t('cases.filter.shown', {n: zahl(n), m: zahl(m)}) : '';
@@ -5606,7 +5762,7 @@ function zeichneFallZeit(){
   var band = zeichneAktivitaet(alle, (f.item_list || []).length, (f.note_list || []).length);
   var passend = alle.filter(function(s){
     if(FALL_ZEIT_EIMER && (!s.k || eimerSchluessel(s.k, band && band.wochen) !== FALL_ZEIT_EIMER)) return false;
-    return s.art === 'eintrag' ? passtFilter(eintragText(s.e)) : passtFilter(s.n.text);
+    return s.art === 'eintrag' ? passtFilter(eintragText(s.e)) && passtHerkunft(s.e) : !FALL_NUR_AUTO && passtFilter(s.n.text);
   });
   var grenze = 50, sichtbar = FALL_ALLE['zeit'] || FALL_FILTER || FALL_ZEIT_EIMER ? passend : passend.slice(0, grenze);
   var html = '', monat = null;
@@ -5623,7 +5779,7 @@ function zeichneFallZeit(){
     html += '<div class="zeit">' + eintragTick(e, offen) +
       '<span class="d">' + esc(tagKurz(s.k) || e.date || '') + '</span>' +
       '<span class="ikon">' + ikon(quellIkon({source: e.src, root: e.root}), 'klein') + '</span>' +
-      '<div><span class="t">' + esc(e.title || e.rel || e.key) + mcpMarke(e.via) + '</span>' +
+      '<div><span class="t">' + esc(e.title || e.rel || e.key) + herkunftMarke(e) + '</span>' +
       '<span class="w">' + esc(e.who || quellTag({source: e.src, root: e.root})) +
       (wo ? '<span class="tag">' + esc(wo) + '</span>' : '') + '</span>' + bemerkungZeile(e) + '</div>' +
       eintragAktionen(e, offen) + '</div>';
@@ -5715,7 +5871,7 @@ function fallPersonWaehlen(name){
 function zeichneFallPersonen(){
   var f = FALL_OFFEN;
   if(!f) return;
-  var alle = personenAus(f.item_list);
+  var alle = personenAus((f.item_list || []).filter(passtHerkunft));
   var passend = alle.filter(function(p){ return passtFilter(p.name + ' ' + p.adressen.join(' ')); });
   var html = '<div class="personen-kopf"><span class="num">' +
     esc(t('cases.people.count', {n: zahl(alle.length), m: zahl((f.item_list || []).length)})) + '</span>' +
@@ -5987,13 +6143,15 @@ function listeLoeschen(id){
   if(!confirm(t('cases.list.drop.ask'))) return;
   fallSchreiben('DELETE', 'lists/' + id);
 }
-function fallSucheLauf(i){
-  var g = (FALL_OFFEN.search_list || [])[i];
-  if(g) sucheAusfuehren(g.criteria, g.id);
-}
-function fallSucheLoesen(id){
-  patch(API + '/searches/saved/' + id, {case: null}).then(function(r){
-    if(!fallFehler(r)) fallOeffnen(FALL_OFFEN.id);
+/* "Collect now": a run of the one step, for one search of the open case –
+   switched on or not. The run window opens with it. */
+function fallEinsammeln(sucheId){
+  if(!FALL_OFFEN) return;
+  merke('flow.run', 'case_collect');
+  LAUF.eigener = true;
+  post(API + '/cases/' + FALL_OFFEN.id + '/collect', sucheId ? {search: sucheId} : {}).then(function(r){
+    if(r && r.ok === false){ LAUF.eigener = false; apiFehler(r); return; }
+    refresh();
   });
 }
 function fallNeuPruefen(){
@@ -6424,10 +6582,10 @@ function ladeAnalytics(neu){
     el('ana-runs').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
   }
   (neu ? post(API + '/analytics/refresh', {}) : api(API + '/analytics'))
-    .then(zeigeAnalytics).catch(function(e){
+    .then(zeigeAnalytics).then(tourNachziehen).catch(function(e){
     el('ana-kpi').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
   });
-  api(API + '/runs?limit=50').then(function(r){ renderRuns(r.items || []); })
+  api(API + '/runs?limit=50').then(function(r){ renderRuns(r.items || []); tourNachziehen(); })
     .catch(function(e){
       el('ana-runs').innerHTML = '<p class="hint">' + esc(String(e)) + '</p>';
     });

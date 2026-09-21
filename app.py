@@ -100,7 +100,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 # Subprograms the bundled file can start itself via "--run <name>". As
 # scripts they lie side by side, in the bundle as modules inside it.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
-            "mcp_server", "case_export",
+            "mcp_server", "case_export", "case_collect",
             # auth is not an export step but a self-report: which sign-in
             # path applies, is a key present, is there a cache. In the
             # bundle this is the only way to check that without network –
@@ -1584,6 +1584,17 @@ def calendar_plan(cfg):
 HISTORIE_WAHL = ("off", "30", "90", "365", "forever")
 
 
+def interne_domains(cfg):
+    """Which mail domains are "us": the setting, else the domain of the
+    signed-in account – handed to the search engine with every search
+    and to the collecting step, so a changed setting counts at once."""
+    roh = str(cfg.get("internal_domains") or "").strip()
+    if roh:
+        return roh
+    konto = str(token_status(read_token()).get("account") or "")
+    return konto.rsplit("@", 1)[1].lower() if "@" in konto else ""
+
+
 def historie_tage(cfg):
     """The search history's retention as Fallbuch.aufraeumen takes it:
     None keeps everything, 0 keeps nothing, else days."""
@@ -1640,7 +1651,7 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 reconstruct=None, nur_einheit=None, legacy_comments=False,
                 sync_now=False, calendar_full=False, full_sync=False,
                 resync=False, archiv=None, nachgeholt=None, nachholen=None,
-                resync_ordner=None, fall_export=None):
+                resync_ordner=None, fall_export=None, case_collect=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1681,6 +1692,9 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # A case export: {faelle, fall, ziel, lang, res} for case_export.py
         # – the ZIP is named before the run starts.
         "fall_export": dict(fall_export or {}),
+        # The automatic searches: {faelle, domains, case, search} for
+        # case_collect.py – all of them, one case's, or one search.
+        "case_collect": dict(case_collect or {}),
         # Source -> when its last resync completed, for the archive
         # check's "still missing after a fetch" verdict.
         "nachgeholt": dict(nachgeholt or {}),
@@ -2293,7 +2307,7 @@ class App:
                reconstruct=None, nur_einheit=None, legacy_comments=False,
                sync_now=False, calendar_full=False, full_sync=False,
                resync=False, archiv=None, nachholen=None, resync_ordner=None,
-               fall_export=None, origin="manual"):
+               fall_export=None, case_collect=None, origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
         shape; unknown keys are ignored, missing ones are off."""
@@ -2315,6 +2329,14 @@ class App:
         # behind a new entry.
         angefragt = {e["anfrage"]: bool(anfrage.get(e["anfrage"]))
                      for e in steps_mod.REGISTRY}
+        # The automatic searches ride with every run that indexes, as
+        # long as one exists – what the run fetched is searchable then,
+        # and the case that waits for it gets it the same night.
+        if angefragt.get("index") and not angefragt.get("case_collect") and self.faelle.automatische():
+            angefragt["case_collect"] = True
+        if angefragt.get("case_collect"):
+            case_collect = {"faelle": str(HEIM / faelle.DB_NAME),
+                            "domains": interne_domains(self.cfg), **(case_collect or {})}
         export_gewollt = any(angefragt.get(e["anfrage"])
                              for e in steps_mod.REGISTRY if e.get("corpus"))
         # The cadences narrow EVERY run, scheduled and manual alike – but
@@ -2338,7 +2360,8 @@ class App:
                             sync_now=sync_now, calendar_full=calendar_full,
                             full_sync=full_sync, resync=resync, archiv=archiv,
                             nachgeholt=self.nachgeholt(), nachholen=nachholen,
-                            resync_ordner=resync_ordner, fall_export=fall_export)
+                            resync_ordner=resync_ordner, fall_export=fall_export,
+                            case_collect=case_collect)
         # A button of one source – sync now, fetch again, full sync, a
         # single URL – on a source the settings do not tick: say so, rather
         # than starting a run that carries nothing but the index step.
@@ -2522,6 +2545,7 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/cases/{id}/lists/{list}", api_cases.liste_eine),
     ("DELETE", "/api/v1/cases/{id}/lists/{list}", api_cases.liste_loeschen),
     ("GET", "/api/v1/cases/{id}/new-hits", api_cases.neue_treffer),
+    ("POST", "/api/v1/cases/{id}/collect", api_cases.fall_einsammeln),
     ("POST", "/api/v1/cases/{id}/export", api_cases.fall_export),
     ("POST", "/api/v1/cases/{id}/export/open", api_cases.fall_export_oeffnen),
     ("GET", "/api/v1/search", api_explore.suche),

@@ -32,6 +32,8 @@ app.log
 profiles/
 profiles.json
 
+AGENTS.md
+
 # Tool and system residue
 __pycache__/
 .pytest_cache/
