@@ -1766,7 +1766,8 @@
   "job.step.check.onenote": "Completeness: OneNote",
   "ana.check.pick.all": "All",
   "ana.check.pick.none": "None",
-  "ana.check.pick.i": "Which sources the check asks – whatever the export fetches. A source that needs addresses is ready once they are entered in the settings.",
+  "ana.check.pick.i": "Which sources the check asks, among those the export fetches – a source that is not in use, or needs addresses, is ready once it is ticked or entered in the settings.",
   "ana.check.needs.urls": "Enter addresses in the settings first.",
+  "ana.check.needs.use": "Not in use – tick the source under Build archive first.",
   "ana.check.pick.empty": "No source chosen."
 }

@@ -415,11 +415,12 @@ def select_teams(graph, fehler=None):
     that fails is said and noted in `fehler`: the category was not
     finished cleanly, its cadence mark must not move."""
     try:
-        teams = list(graph.paged(f"{GRAPH}/me/joinedTeams", {"$top": PAGE}))
+        # No query options here: joinedTeams answers 400 to any of them.
+        teams = list(graph.paged(f"{GRAPH}/me/joinedTeams"))
     except TokenExpired:
         raise
     except Exception as e:
-        progress.event("run.teams.list_failed", "warn", error=str(e))
+        progress.event("run.teams.list_failed", "warn", error=export_util.fehlertext(e))
         if fehler is not None:
             fehler.add("channels")
         return []
@@ -1592,7 +1593,7 @@ def _spiegelwurzel(out, rel):
 def _kanaele(graph, cache, team):
     if team["id"] not in cache.setdefault("kanaele", {}):
         cache["kanaele"][team["id"]] = list(graph.paged(
-            f"{GRAPH}/teams/{team['id']}/channels", {"$top": PAGE}))
+            f"{GRAPH}/teams/{team['id']}/channels"))
     return cache["kanaele"][team["id"]]
 
 
@@ -1807,7 +1808,7 @@ def build_channel_jobs(graph, out, state, stats, selected_teams, regeln=None, fe
     for team in selected_teams:
         tname = team.get("displayName", "Team")
         try:
-            channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels", {"$top": PAGE}))
+            channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels"))
         except TokenExpired:
             raise
         except Exception as e:
@@ -1919,7 +1920,7 @@ def liste_eintraege(graph, my_id):
     for team in select_teams(graph):
         tname = team.get("displayName", "Team")
         try:
-            channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels", {"$top": PAGE}))
+            channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels"))
         except TokenExpired:
             raise
         except Exception as e:
@@ -2010,8 +2011,7 @@ def nur_pruefen(out):
             tname = team.get("displayName", "Team")
             pfad = f"channels/{safe(tname)}"
             try:
-                channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels",
-                                            {"$top": PAGE}))
+                channels = list(graph.paged(f"{GRAPH}/teams/{team['id']}/channels"))
             except TokenExpired:
                 raise
             except Exception as e:

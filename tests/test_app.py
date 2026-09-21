@@ -6910,6 +6910,14 @@ c = lastCall('/api/v1/config', 'PATCH').body;
 // eight: SharePoint's files and pages have no addresses here, Planner has
 pruefe(c.check_sources.length === 8 && c.check_sources.indexOf('sharepoint') < 0 && c.check_sources.indexOf('sharepoint_pages') < 0 && c.check_sources.indexOf('planner') >= 0, '"Alle" nimmt Unmoegliches mit: ' + JSON.stringify(c.check_sources));
 pruefe(el('ana-check').disabled === false, 'Knopf nach "Alle" noch aus');
+// a source the export does not fetch: greyed with its reason, never asked, not in "All"
+zeigeBerichte({pruefungen: {todo: {genutzt: false, bericht: null}, onedrive: {genutzt: true, bericht: null}}});
+html = el('ana-check-quellen').innerHTML;
+pruefe(html.indexOf(t('ana.check.needs.use')) >= 0, 'To-Do ausser Gebrauch nicht gegraut: ' + html);
+pruefe(checkRowsChosen().indexOf('todo') < 0 && checkRowsChosen().indexOf('onedrive') >= 0, 'gewaehlt trotz ausser Gebrauch: ' + JSON.stringify(checkRowsChosen()));
+checkSourcesAll(true);
+c = lastCall('/api/v1/config', 'PATCH').body;
+pruefe(c.check_sources.length === 7 && c.check_sources.indexOf('todo') < 0, '"Alle" nimmt Unbenutztes mit: ' + JSON.stringify(c.check_sources));
 console.log('OK');
 """
 
@@ -6919,33 +6927,39 @@ def test_the_check_has_its_own_source_choice():
 
 
 def test_the_check_follows_the_rows_of_the_card(sandbox):
-    """Asked for by row, a check runs whether or not its source is ticked
-    for the export – only a source that needs addresses waits for them –
-    and the mailbox check takes exactly the rows' categories. Without
-    rows the checks follow the export's switches, as the size preview
-    expects. Every step names its source."""
-    cfg = app_mod.load_config()          # nothing ticked at all
+    """The card chooses which rows a check asks – among the sources the
+    export fetches: a source that is not in use, or needs addresses,
+    is never checked, since no run would bring anything of it. The
+    mailbox check takes the ticked categories the rows name, the Teams
+    check the ticked kinds. Without rows the export's switches decide
+    alone, as the size preview expects. Every step names its source."""
     every = {k: True for k in ("check", "check_teams", "check_onedrive", "check_sharepoint",
                               "check_pages", "check_planner", "check_todo", "check_onenote")}
     rows = ["outlook_calendar", "outlook_contacts", "teams", "onedrive", "sharepoint", "todo"]
+    cfg = app_mod.load_config()          # nothing ticked at all
+    assert app_mod.build_steps(cfg, every, check_rows=rows) == [], "a source not in use was checked"
+    cfg = _cfg_mit_kategorien(todo_enabled=True)   # mailbox, three Teams kinds, To Do
     steps = app_mod.build_steps(cfg, every, check_rows=rows)
-    assert [s["key"] for s in steps] == ["check", "check_teams", "check_onedrive", "check_todo"]
+    assert [s["key"] for s in steps] == ["check", "check_teams", "check_todo"]
     assert steps[0]["env"]["EXPORT_CATEGORIES"] == "calendar,contacts"
-    assert steps[1]["env"]["EXPORT_CATEGORIES"] == "1on1,group,meeting,channels"
+    assert steps[1]["env"]["EXPORT_CATEGORIES"] == "1on1,group,meeting", "kinds the export does not fetch"
     assert [s["label"] for s in steps] == ["job.step.check.outlook", "job.step.check.teams",
-                                           "job.step.check.onedrive", "job.step.check.todo"]
+                                           "job.step.check.todo"]
+    # a URL source asked for by row needs its mirror in use, as the card greys it
     cfg["sharepoint_urls"] = "https://firma.sharepoint.com/sites/x"
     steps = app_mod.build_steps(cfg, every, check_rows=rows)
+    assert "check_sharepoint" not in [s["key"] for s in steps], "addresses alone are not use"
+    cfg["sharepoint_enabled"] = True
+    steps = app_mod.build_steps(cfg, every, check_rows=rows)
     assert "check_sharepoint" in [s["key"] for s in steps]
-    # rows that name no mailbox category: no mailbox step
-    steps = app_mod.build_steps(cfg, every, check_rows=["onedrive"])
-    assert [s["key"] for s in steps] == ["check_onedrive"]
-    # without rows: the export's switches decide, as before
-    assert app_mod.build_steps(cfg, every) == [] or all(
-        s["key"] == "check_sharepoint" for s in app_mod.build_steps(cfg, every))
-    cfg = _cfg_mit_kategorien(todo_enabled=True)
+    # rows that name no ticked mailbox category: no mailbox step
+    steps = app_mod.build_steps(cfg, every, check_rows=["todo"])
+    assert [s["key"] for s in steps] == ["check_todo"]
+    # without rows: the export's switches decide, as before – and the
+    # addresses alone, which is what the size preview needs
+    cfg["sharepoint_enabled"] = False
     steps = app_mod.build_steps(cfg, every)
-    assert [s["key"] for s in steps] == ["check", "check_teams", "check_todo"]
+    assert [s["key"] for s in steps] == ["check", "check_teams", "check_sharepoint", "check_todo"]
     assert steps[0]["env"]["EXPORT_CATEGORIES"] == "mail,calendar,contacts"
     assert steps[1]["env"]["EXPORT_CATEGORIES"] == "1on1,group,meeting"
 
@@ -6954,7 +6968,9 @@ def test_check_rows_over_the_api(server, sandbox, monkeypatch):
     """The setting keeps only known rows, in the registry's order; a run
     request hands the rows to the steps."""
     a, port = server
-    code, r = call(port, "PATCH", "/api/v1/config", {"check_sources": ["nix", "onedrive", "outlook_mail"]})
+    code, r = call(port, "PATCH", "/api/v1/config",
+                   {"check_sources": ["nix", "onedrive", "outlook_mail"],
+                    "onedrive_enabled": True, "todo_enabled": True})   # in use, so a check may ask
     assert code == 200 and r["config"]["check_sources"] == ["outlook_mail", "onedrive"]
     seen = {}
     monkeypatch.setattr(a.jobs, "start",

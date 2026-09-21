@@ -1609,10 +1609,10 @@ def pruefe_kalender(graph, out, done, db):
     alle = len((folders.lade(out, folders.KALENDER) or {}).get("ordner", []))
     stempel = Stempel(db, "events")
     von, bis = kalender_fenster(calendar_months_back())
+    # No $select: the view refuses one that names lastModifiedDateTime,
+    # and that stamp is what the balance is judged by.
     params = {"startDateTime": _graph_zeit(von) if von else EPOCH,
-              "endDateTime": _graph_zeit(bis),
-              "$select": "id,seriesMasterId,type,lastModifiedDateTime",
-              "$top": 100}
+              "endDateTime": _graph_zeit(bis), "$top": 100}
     gesehen = set()
     da = offen = 0
     zeilen, fehler = [], []
@@ -1625,7 +1625,9 @@ def pruefe_kalender(graph, out, done, db):
             eintraege = list(graph.paged(url, params, {"Prefer": UTC_PREF}))
         except TokenExpired:
             raise
-        except Exception:
+        except Exception as e:
+            progress.event("run.folder_incomplete", "err", name=pfad,
+                           error=export_util.fehlertext(e))
             fehler.append(completeness.fehler(pfad, "run.folder_incomplete"))
             continue
         familien = {}
@@ -1672,7 +1674,9 @@ def pruefe_kontakte(graph, out, done, db):
         ordner = list(graph.paged(f"{GRAPH}/me/contactFolders", {"$top": PAGE}))
     except TokenExpired:
         raise
-    except Exception:
+    except Exception as e:
+        progress.event("run.unreadable", "warn", name="kontakte",
+                       error=export_util.fehlertext(e))
         fehler.append(completeness.fehler("kontakte", "run.unreadable"))
         ordner = []
     for f in ordner:
@@ -1687,7 +1691,9 @@ def pruefe_kontakte(graph, out, done, db):
                                                "$select": "id,lastModifiedDateTime"}))
         except TokenExpired:
             raise
-        except Exception:
+        except Exception as e:
+            progress.event("run.unreadable", "warn", name=pfad,
+                           error=export_util.fehlertext(e))
             fehler.append(completeness.fehler(pfad, "run.unreadable"))
             continue
         z_da = z_offen = 0

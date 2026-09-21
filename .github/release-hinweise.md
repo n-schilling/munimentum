@@ -1,40 +1,23 @@
-## New in 13.4.0
+## New in 13.4.1
 
-**The completeness check chooses its own sources.** The card under
-*Insights › Completeness* carries the ten balance rows as chips, with
-*All* and *None*; the check asks exactly those, ticked for the export
-or not – a source that needs addresses waits until they are entered.
-Until now the check followed the export's switches, and SharePoint
-ran whenever its addresses were set. Every step of the run names its
-source (*Completeness: OneDrive*), and the run window names the run.
+**The completeness check asks only what the export fetches.** A row
+ticked on the card is checked among the sources in use: a source that
+is not ticked under *Build archive*, or has no addresses yet, is greyed
+on the card with the reason and never asked – nothing would come of a
+run, so nothing is open. For Teams the check takes the ticked kinds
+(chats, meetings, channels), as the export does. 13.4.0 asked every
+kind of a chosen source, ticked or not.
 
-**The access card no longer raises *Unsaved changes*.** A key pasted
-under *Settings › Microsoft Access* is saved by *Save access* alone, with
-its own answer; the settings bar used to appear beside it although
-*Save settings* never touched the key.
+**The calendar check asks the view plainly.** It selected the change
+stamp, which `calendarView` refuses to select; the calendar then stood
+as *unreachable* with nothing counted. The view is now asked without
+`$select`, and a mailbox listing the check cannot read says why in the
+run log instead of only *unreachable* on the card.
 
-**What Microsoft refuses or no longer has is recorded, not retried.**
-A `403` or a `404` on a mail, a file, a task, a page, an attachment or
-an inline image used to be an error on every run – and one such file
-froze a drive's delta pointer, one mail its folder's link, one task its
-list's cadence. Now every export records the verdict in its
-bookkeeping, says it once, and moves on with pointers and cadences
-intact; it asks again only when the item changes or you force a full
-sync of the source. The completeness balance and *Archive and
-bookkeeping* count these items as *refused* and *gone before fetched* –
-their own numbers, never *missing* or *open*, listed by name under
-*Findings*. A copy fetched before the verdict keeps its place. A file
-that fails for a passing reason (a `502`, a lock) is asked again next
-run – To Do and Planner attachments, OneNote images and SharePoint page
-images used to be forgotten after one failure.
-
-**Fewer false *incomplete* on Teams files.** The bookkeeping now
-records the size of the copy as written, not the size Graph announced
-– the two differ for some files behind a sharing link – and corrects
-older records the next time the conversation is read.
-
-**The API description** had one response key twice in the sign-in
-operation, which strict viewers refused; a test now forbids it.
+**Teams and channel listings are asked without query options.** The
+list of joined teams answers `400` to any OData option; the channel
+export and the Teams check sent one and failed with *Teams could not be
+loaded* on every run since 3.5.0. The listings are now plain.
 
 ## Upgrading
 

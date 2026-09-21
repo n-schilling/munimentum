@@ -922,9 +922,11 @@ class _PruefGraph:
         self.alt = alt_je_ordner or {}
         self.gefragt = []
         self.gelistet = []
+        self.params = []
 
     def paged(self, url, params=None, extra_headers=None):
         self.gelistet.append(url)
+        self.params.append(params)
         for muster, liste in self.listen.items():
             if muster in url:
                 yield from liste
@@ -1135,7 +1137,7 @@ def test_pruefe_kalender_zaehlt_termine_serien_und_kalender(tmp_path, monkeypatc
     assert b["stand"] == "ganz" and b["fehler"] == []
 
 
-def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monkeypatch):
+def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(outlook_export, "waehle_kalender",
                         lambda g, o: [{"id": "c1", "name": "Arbeit"}])
     monkeypatch.setenv("CALENDAR_MONTHS_BACK", "1")
@@ -1145,9 +1147,29 @@ def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monk
             raise RuntimeError("HTTP 503")
             yield
     done = _donelog(tmp_path)
+    capsys.readouterr()
     b = outlook_export.pruefe_kalender(Kaputt(), tmp_path, done, state_db.StateDb(tmp_path))
     done.close()
     assert b["stand"] == "teilweise" and b["fehler"][0]["pfad"] == "kalender/Arbeit"
+    # the log says why – a row that only says "unreachable" leaves everyone guessing
+    (e,) = [e for e in _events(capsys) if e and e["k"] == "run.folder_incomplete"]
+    assert e["v"] == {"name": "kalender/Arbeit", "error": "RuntimeError: HTTP 503"}
+
+
+def test_pruefe_kalender_asks_the_view_without_select(tmp_path, monkeypatch):
+    """calendarView refuses a $select that names lastModifiedDateTime, and
+    that stamp is what the balance is judged by – so the view is asked
+    plain, a hundred a page, in the window."""
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "0")
+    monkeypatch.setattr(outlook_export, "waehle_kalender",
+                        lambda g, o: [{"id": "c1", "name": "Arbeit"}])
+    g = _PruefGraph(listen={"/calendars/c1/calendarView": []})
+    done = _donelog(tmp_path)
+    outlook_export.pruefe_kalender(g, tmp_path, done, state_db.StateDb(tmp_path))
+    done.close()
+    (params,) = g.params
+    assert "$select" not in params and params["$top"] == 100
+    assert params["startDateTime"] == outlook_export.EPOCH and params["endDateTime"] > "2030"
 
 
 def test_pruefe_kontakte_je_ordner(tmp_path):

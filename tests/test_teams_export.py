@@ -64,10 +64,12 @@ class FakeGraph:
         self.pages = pages or {}
         self.gets = gets or {}
         self.paged_calls = []
+        self.paged_params = []     # (url, params) of every listing
         self.get_calls = []        # (url, params) of every single get
 
     def paged(self, url, params=None):
         self.paged_calls.append(url)
+        self.paged_params.append((url, params))
         val = self.pages[url]
         if isinstance(val, Exception):
             raise val
@@ -2265,3 +2267,16 @@ def test_the_record_keeps_the_size_of_the_copy(tmp_path):
         _l, geladen, _a, _f = te.anhaenge_laden(_DateiGraph(size=99), tmp_path, "c1", rel, msgs,
                                                 unveraendert=unveraendert)
         assert geladen == 0 and _record(tmp_path)[DATEI_URL]["size"] == 3, unveraendert
+
+
+def test_team_and_channel_listings_carry_no_query_options():
+    """joinedTeams answers 400 to any OData option, channels take only
+    $filter and $select: both are listed plain, paged by nextLink."""
+    graph = FakeGraph(pages={f"{GRAPH}/me/joinedTeams": [{"id": "t1", "displayName": "Team Rakete"}],
+                             f"{GRAPH}/teams/t1/channels": [{"id": "k1", "displayName": "Allgemein",
+                                                             "membershipType": "standard"}]},
+                      gets={f"{GRAPH}/teams/t1/channels/k1/filesFolder": {"id": "f1", "parentReference": {"driveId": "d9"}}})
+    assert [t["id"] for t in te.select_teams(graph)] == ["t1"]
+    te._kanal_finden(graph, "k1", {})
+    assert {u for u, _p in graph.paged_params} == {f"{GRAPH}/me/joinedTeams", f"{GRAPH}/teams/t1/channels"}
+    assert all(p is None for _u, p in graph.paged_params), graph.paged_params
