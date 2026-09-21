@@ -57,3 +57,8 @@ them on Python 3.12 and 3.13, and every bundle goes through
 
 Code, comments and documentation are English throughout; the interface texts
 live in `lang/`, one JSON file per language.
+
+Where things are: `app.py` is the server, the page and the three routes that
+stream; the rest of `/api/v1` lives in `api_cases.py`, `api_explore.py`,
+`api_archive.py` and `api_app.py`, one module per door, with what they share
+in `api.py`; `openapi.yaml` describes it all and changes in the same commit.

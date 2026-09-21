@@ -17,7 +17,10 @@ import urllib.parse
 
 import pytest
 
+import api_cases
+import api_explore
 import app as app_mod
+import archive_check
 import corpus
 import faelle
 import rag_index
@@ -421,9 +424,9 @@ def test_alle_treffer_blaettert_durch_die_seiten(welt, monkeypatch):
     monkeypatch.setattr(welt["app"].search, "ensure", lambda cfg: FakeSuche)
     handler = app_mod.Handler.__new__(app_mod.Handler)
     handler.app = welt["app"]
-    treffer, fehler = handler._alle_treffer(faelle.kriterien({"q": "x"}))
+    treffer, fehler = api_explore.alle_treffer(handler, faelle.kriterien({"q": "x"}))
     assert fehler is None and len(treffer) == 250 and seiten == [0, 100, 200]
-    treffer, fehler = handler._alle_treffer(faelle.kriterien({"q": "x"}), grenze=150)
+    treffer, fehler = api_explore.alle_treffer(handler, faelle.kriterien({"q": "x"}), grenze=150)
     assert len(treffer) == 150
 
 
@@ -502,6 +505,49 @@ def test_anhaenge_filtern_zeigen_und_herunterladen(welt_anhang):
     assert code == 404 and r["error"]["k"] == "srv.detail.none"
     code, r = call(port, "GET", f"/api/v1/documents/attachments?uid={uid}&n=abc")
     assert code == 400 and r["error"]["k"] == "srv.badparam"
+
+
+def _anfrage(port, methode, pfad, body=None, kopf=None):
+    """One request with headers of one's own: (status, headers, raw body)."""
+    import http.client
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request(methode, pfad, json.dumps(body) if body is not None else None,
+                {"Content-Type": "application/json", **(kopf or {})})
+    r = con.getresponse()
+    roh = r.read()
+    con.close()
+    return r.status, dict(r.getheaders()), roh
+
+
+def test_prefer_minimal_und_etag_fuer_skripte(welt):
+    """RFC 7240 and RFC 9110 for scripts: a write with `Prefer:
+    return=minimal` answers the status, `Location` and `ETag` alone and
+    says so; a case with a matching `If-None-Match` is a 304 without a
+    body; the tag moves with every change. Without the header nothing
+    changed – the page still gets the whole case."""
+    port = welt["port"]
+    fid = _fall(welt)
+    code, kopf, roh = _anfrage(port, "GET", f"/api/v1/cases/{fid}")
+    etag = kopf["ETag"]
+    assert code == 200 and etag.startswith('W/"') and json.loads(roh)["case"]["id"] == fid
+    code, kopf, roh = _anfrage(port, "GET", f"/api/v1/cases/{fid}", kopf={"If-None-Match": etag})
+    assert (code, roh, kopf.get("ETag")) == (304, b"", etag) and "Content-Type" not in kopf
+    assert _anfrage(port, "GET", f"/api/v1/cases/{fid}", kopf={"If-None-Match": '"anderes"'})[0] == 200
+    # A write with the preference: 201, Location, a new tag, no body.
+    code, kopf, roh = _anfrage(port, "POST", f"/api/v1/cases/{fid}/folders", {"name": "Belege"},
+                               kopf={"Prefer": "return=minimal, wait=5"})
+    assert code == 201 and roh == b"" and kopf["Preference-Applied"] == "return=minimal", kopf
+    assert kopf["Location"].endswith("/folders/1") and kopf["ETag"] != etag
+    ordner = int(kopf["Location"].rsplit("/", 1)[1])
+    # An update: 204. And the old tag no longer matches.
+    code, kopf, roh = _anfrage(port, "PATCH", f"/api/v1/cases/{fid}/folders/{ordner}", {"name": "Belege 2026"},
+                               kopf={"Prefer": "return=minimal"})
+    assert (code, roh) == (204, b"") and kopf["ETag"] != etag
+    assert _anfrage(port, "GET", f"/api/v1/cases/{fid}", kopf={"If-None-Match": etag})[0] == 200
+    # Without the header: the whole case, as the page reads it, tag included.
+    code, kopf, roh = _anfrage(port, "PATCH", f"/api/v1/cases/{fid}", {"name": "Nordwind 2026"})
+    assert code == 200 and json.loads(roh)["case"]["name"] == "Nordwind 2026" and kopf["ETag"]
+    assert "Preference-Applied" not in kopf
 
 
 def test_eine_bemerkung_bleibt_aus_wenn_der_ordner_fremd_ist(welt):
@@ -598,13 +644,12 @@ def test_eine_liste_auf_einem_geschlossenen_fall_sucht_nicht_erst(welt, monkeypa
     """The search is the expensive part of a stored list; a closed case,
     or a folder the case does not have, used to be refused only after
     it had run to the end."""
-    import app as app_mod
     port = welt["port"]
     fid = _fall(welt)
 
     def nicht(*_a, **_k):
         raise AssertionError("searched before the refusal")
-    monkeypatch.setattr(app_mod.Handler, "_alle_treffer", nicht)
+    monkeypatch.setattr(api_explore, "alle_treffer", nicht)
     code, r = call(port, "POST", f"/api/v1/cases/{fid}/lists",
                    {"criteria": {"q": "x"}, "folder": 999})
     assert code == 404 and r["error"]["k"] == "srv.case.nofolder", r
@@ -617,7 +662,6 @@ def test_ein_schreibzugriff_auf_einen_eintrag_geht_einmal_durch_den_index(welt, 
     """Resolving the item needs the case book alone; the answer walks the
     index once. It used to be twice per write – and once to read a note,
     which needs it not at all."""
-    import app as app_mod
     port = welt["port"]
     fid = _fall(welt)
     treffer = _treffer(welt, "")["results"]
@@ -627,10 +671,10 @@ def test_ein_schreibzugriff_auf_einen_eintrag_geht_einmal_durch_den_index(welt, 
                 {"items": [_eintrag(mail), _eintrag(andere)]})[0] == 201
     eid = _eid(port, fid, mail["key"])
     nid = call(port, "POST", f"/api/v1/cases/{fid}/notes", {"text": "n"})[1]["note"]
-    echt = app_mod.Handler._index_stand
+    echt = api_cases.index_stand
     laeufe = []          # how many items each walk was asked about
-    monkeypatch.setattr(app_mod.Handler, "_index_stand",
-                        lambda self, fall: laeufe.append(len(fall["eintraege_liste"])) or echt(self, fall))
+    monkeypatch.setattr(api_cases, "index_stand",
+                        lambda h, fall: laeufe.append(len(fall["eintraege_liste"])) or echt(h, fall))
     assert call(port, "PATCH", f"/api/v1/cases/{fid}/items/{eid}", {"remark": "r"})[0] == 200
     assert laeufe == [2]                  # the answer is the whole case
     laeufe.clear()
@@ -652,13 +696,12 @@ def test_eintraege_und_gespraeche_greifen_zusammen_oder_gar_nicht(welt, monkeypa
     conversations in the same POST either takes hold whole or leaves the
     case as it was. The items used to be written first and the refusal to
     arrive afterwards – with the case already changed."""
-    import app as app_mod
     port = welt["port"]
     fid = _fall(welt)
     mail = next(h for h in _treffer(welt, "")["results"] if h["path"] == "inbox/mail1.eml")
     # Ein Index, der keine Gespraeche kennt – wie einer von vor 11.0.
-    monkeypatch.setattr(app_mod.Handler, "_gespraeche_moeglich",
-                        lambda self: {"k": "srv.case.nothread", "v": {}})
+    monkeypatch.setattr(api_cases, "gespraeche_moeglich",
+                        lambda h: {"k": "srv.case.nothread", "v": {}})
     code, r = call(port, "POST", f"/api/v1/cases/{fid}/items",
                    {"items": [_eintrag(mail)], "threads": ["mail:<m1@example.com>"]})
     assert code == 409 and r["error"]["k"] == "srv.case.nothread"
@@ -811,7 +854,7 @@ def test_export_ist_ein_lauf_und_schreibt_den_ordner(welt, monkeypatch):
     assert fall["exported"].endswith(".zip") and fall["exported_at"]
     # "Show folder": the zip's folder, through the file manager
     geoeffnet = []
-    monkeypatch.setattr(app_mod.archive_check, "ordner_oeffnen", lambda p: geoeffnet.append(str(p)) or True)
+    monkeypatch.setattr(archive_check, "ordner_oeffnen", lambda p: geoeffnet.append(str(p)) or True)
     code, r = call(port, "POST", f"/api/v1/cases/{fid}/export/open")
     assert code == 200 and geoeffnet == [str(ordner)]
     # a closed case can be exported as well
@@ -974,7 +1017,7 @@ def test_export_ordner_ohne_export(welt, monkeypatch):
     assert code == 404 and r["error"]["k"] == "srv.case.noexport"
     (welt["sandbox"] / "exporte").mkdir()
     geoeffnet = []
-    monkeypatch.setattr(app_mod.archive_check, "ordner_oeffnen", lambda p: geoeffnet.append(str(p)) or True)
+    monkeypatch.setattr(archive_check, "ordner_oeffnen", lambda p: geoeffnet.append(str(p)) or True)
     code, r = call(port, "POST", f"/api/v1/cases/{fid}/export/open")
     assert code == 200 and geoeffnet == [str(welt["sandbox"] / "exporte")]
 
@@ -1068,8 +1111,9 @@ var TREFFER_ANTWORT = {count: 2, results: [
 global.fetch = function(pfad, opt){
   // The method belongs in the record since 13.0: the same path answers
   // GET, PATCH and DELETE, and which one was used is the point.
+  var knapp = !!(opt && opt.headers && opt.headers.Prefer === 'return=minimal');
   anfragen.push({pfad: String(pfad), methode: (opt && opt.method) || 'GET',
-                 body: opt && opt.body ? JSON.parse(opt.body) : null});
+                 body: opt && opt.body ? JSON.parse(opt.body) : null, knapp: knapp});
   var antwort = statusGeruest();
   if((/[/]api[/]v1[/]cases[/][0-9]+$/).test(String(pfad))) antwort = {case: Object.assign({item_list: [
       {id: 11, key: 'mail:<m1@example.com>', src: 'outlook', root: 'outlook', rel: 'inbox/mail1.eml', title: 'Rechnung 4711', date: '2025-06-10 08:00', who: 'Carla Chef', list: null, folder: 3, via: 'ui', remark: 'Der Beleg', thread_open: 2, who_mail: 'carla@example.com'},
@@ -1093,6 +1137,15 @@ global.fetch = function(pfad, opt){
       {key: 'mail:<m3@example.com>', path: 'inbox/mail3.eml', cases: []},
       {key: 'mail:<m4@example.com>', path: 'inbox/mail4.eml', cases: []}]};
   else if(opt && opt.method === 'POST') antwort = {ok: true, id: 9, added: 2, already: 0, hits: 2, case: FAELLE_ANTWORT.items[0]};
+  // Asked for the status alone, a write answers without a body: 201 with
+  // the new thing's Location, 204 otherwise – json() must not be called
+  if(knapp){
+    var ort = (/[/]cases$/).test(String(pfad)) ? '/api/v1/cases/9'
+            : (/[/]folders$/).test(String(pfad)) ? String(pfad) + '/4' : '';
+    return Promise.resolve({status: ort ? 201 : 204,
+                            headers: {get: function(n){ return n === 'Location' ? ort || null : null; }},
+                            json: function(){ throw new Error('json() on a bodiless answer'); }});
+  }
   return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
 };
 global.confirm = function(){ return true; };
@@ -1505,6 +1558,9 @@ function letzte(pfad, methode, feld){
   fallFormularSenden();
   await warte(20);
   pruefe(letzte('/api/v1/cases', 'POST').body.name === 'Berlin', 'Anlegen nicht geschickt');
+  // asked for the status alone: the id comes from Location, the case is fetched by it
+  pruefe(letzte('/api/v1/cases', 'POST').knapp === true, 'Anlegen ohne Prefer: return=minimal');
+  pruefe(letzte('/api/v1/cases/9', 'GET'), 'Der neue Fall wird nicht ueber seine Location geholt');
   // the add-to-case window: the folder row follows the chosen case, the
   // conversation switch counts what the case lacks
   KANN_VERLAUF = true;
@@ -1522,6 +1578,31 @@ function letzte(pfad, methode, feld){
   pruefe(hz && hz.body.folder === 3, 'Ordner nicht mitgeschickt: ' + JSON.stringify(hz && hz.body));
   var th = letzte('/api/v1/cases/1/items', 'POST', 'threads');
   pruefe(th && th.body.threads[0] === 'mail:<m1@example.com>', 'Gespraech nach dem Hinzufuegen nicht geholt');
+  pruefe(th.knapp === false && hz.knapp === false, 'Eintraege knapp geschickt, obwohl die Antwort die Zahl traegt');
+  // a new case and a new folder from the choice window: both asked for the
+  // status alone, both ids read from Location, the items then go with them
+  anfragen.length = 0;
+  fallWahl('einer', 0);
+  await warte(20);
+  var neuRadio = modal.querySelector('input[name=fall-wahl][value="neu"]');
+  if(neuRadio) neuRadio.checked = true;
+  document.getElementById('fall-wahl-neu').value = 'Hamburg';
+  document.getElementById('fall-wahl-ordner').value = 'neu';
+  fallWahlOrdnerNeu();
+  document.getElementById('fall-wahl-ordner-neu').value = 'Belege';
+  fallWahlAusfuehren();
+  await warte(30);
+  var neuFall = anfragen.filter(function(a){ return a.pfad === '/api/v1/cases' && a.methode === 'POST'; }).pop();
+  pruefe(neuFall && neuFall.body.name === 'Hamburg' && neuFall.knapp === true, 'Neuer Fall aus dem Wahlfenster nicht knapp: ' + JSON.stringify(neuFall));
+  var neuOrdner = letzte('/api/v1/cases/9/folders', 'POST');
+  pruefe(neuOrdner && neuOrdner.body.name === 'Belege' && neuOrdner.knapp === true, 'Neuer Ordner nicht knapp: ' + JSON.stringify(neuOrdner));
+  var hinein = letzte('/api/v1/cases/9/items', 'POST', 'items');
+  pruefe(hinein && hinein.body.folder === 4 && hinein.knapp === false, 'Eintraege nicht mit der Ordner-Id aus Location: ' + JSON.stringify(hinein && hinein.body));
+  // the rest of a conversation from the detail wants no answer at all
+  gespraechInFall(1, 0);
+  await warte(10);
+  var faden = letzte('/api/v1/cases/1/items', 'POST', 'threads');
+  pruefe(faden && faden.knapp === true, 'Gespraech aus dem Detail nicht knapp');
   fallLoeschen();
   await warte(10);
   pruefe(letzte('/api/v1/cases/1', 'DELETE'), 'Loeschen nicht geschickt');

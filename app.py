@@ -63,22 +63,23 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import answer
-import archive_check
 import auth
-import case_export
 import completeness
-import detail
 import export_util
 import faelle
 import folders
 import i18n
-import rest
 import notify
 import ollama_client
 import analytics_db
 import run_history
 from runner import JobRunner, McpProcess, _stream_lines  # noqa: F401
 import steps as steps_mod
+import api_app
+import api_archive
+import api_cases
+import api_explore
+from api import Ablehnung, Antwort, API_V1, API_VERSION, MODUS, PLAN_QUELLEN, PLAN_EINHEITEN, TEIL_FEHLT  # noqa: F401
 import settings
 import state_db
 import store_layout
@@ -2477,133 +2478,111 @@ FEHLERSPRACHE = "en"        # the language of error texts – see Handler._fehle
 
 # The versioned surface, and since 13.0 the only one: resources, real
 # methods, English names (rest.py). The page asks nothing outside it.
+# The routes live in four modules, one per door (api_cases, api_explore,
+# api_archive, api_app); each brings its ROUTEN, and this table is their
+# sum plus the three streams the handler keeps. What they share – the
+# refusal, the answer, the parsers, the version – is api.py.
 #
 # Three of these routes are reads whose question is too big for a URL – the
 # model's answer, the folder plan, the report. They use QUERY (RFC 10008):
 # safe and idempotent like GET, with the question in the body. None of them
 # stores anything, and a caller may repeat them at will.
-API_VERSION = "v1"          # the contract's version, not the program's
-# It moves when an operation goes away, changes its method or its answer
-# loses a field – never for an addition. 13.0 moved the rest of the
-# surface in here and removed none; what it did remove never carried a
-# version. Two
-# 12.0 answers changed spelling (rest.py): the case marks on a hit, and
-# the criteria's case folder, which 12.0 wrote under the mailbox
-# folder's key. Corrected under v1 and named in the release notes.
-API_V1 = "/api/" + API_VERSION
+#
+# The version (api.API_VERSION) moves when an operation goes away, changes
+# its method or its answer loses a field – never for an addition. 13.0
+# moved the rest of the surface in here and removed none; what it did
+# remove never carried a version. Two 12.0 answers changed spelling
+# (rest.py): the case marks on a hit, and the criteria's case folder,
+# which 12.0 wrote under the mailbox folder's key. Corrected under v1 and
+# named in the release notes.
 ROUTEN_V1 = (
-    ("GET", "/api/v1/cases", "_v1_faelle"),
-    ("POST", "/api/v1/cases", "_v1_anlegen"),
-    ("GET", "/api/v1/cases/{id}", "_v1_fall"),
-    ("PATCH", "/api/v1/cases/{id}", "_v1_aendern"),
-    ("DELETE", "/api/v1/cases/{id}", "_v1_loeschen"),
-    # What hangs on a case, each its own collection under it.
-    ("GET", "/api/v1/cases/{id}/items", "_v1_eintraege"),
-    ("POST", "/api/v1/cases/{id}/items", "_v1_eintraege_hinzu"),
-    ("PATCH", "/api/v1/cases/{id}/items", "_v1_eintraege_verschieben"),
-    ("GET", "/api/v1/cases/{id}/items/{item}", "_v1_eintrag"),
-    ("PATCH", "/api/v1/cases/{id}/items/{item}", "_v1_eintrag_aendern"),
-    ("DELETE", "/api/v1/cases/{id}/items/{item}", "_v1_eintrag_loeschen"),
-    ("GET", "/api/v1/cases/{id}/folders", "_v1_fallordner"),
-    ("POST", "/api/v1/cases/{id}/folders", "_v1_fallordner_anlegen"),
-    ("GET", "/api/v1/cases/{id}/folders/{folder}", "_v1_fallordner_eins"),
-    ("PATCH", "/api/v1/cases/{id}/folders/{folder}", "_v1_fallordner_aendern"),
-    ("DELETE", "/api/v1/cases/{id}/folders/{folder}", "_v1_fallordner_loeschen"),
-    ("GET", "/api/v1/cases/{id}/notes", "_v1_notizen"),
-    ("POST", "/api/v1/cases/{id}/notes", "_v1_notiz_anlegen"),
-    ("GET", "/api/v1/cases/{id}/notes/{note}", "_v1_notiz"),
-    ("PATCH", "/api/v1/cases/{id}/notes/{note}", "_v1_notiz_aendern"),
-    ("DELETE", "/api/v1/cases/{id}/notes/{note}", "_v1_notiz_loeschen"),
-    ("GET", "/api/v1/cases/{id}/lists", "_v1_listen"),
-    ("POST", "/api/v1/cases/{id}/lists", "_v1_liste_anlegen"),
-    ("GET", "/api/v1/cases/{id}/lists/{list}", "_v1_liste_eine"),
-    ("DELETE", "/api/v1/cases/{id}/lists/{list}", "_v1_liste_loeschen"),
-    # Two reads that are not stored anywhere: what the case's searches find
-    # today, and the export it can start.
-    ("GET", "/api/v1/cases/{id}/new-hits", "_v1_neue_treffer"),
-    ("POST", "/api/v1/cases/{id}/export", "_v1_fall_export"),
-    ("POST", "/api/v1/cases/{id}/export/open", "_v1_fall_export_oeffnen"),
-    ("GET", "/api/v1/search", "_v1_suche"),
-    ("GET", "/api/v1/similar", "_v1_aehnlich"),
+    ("GET", "/api/v1/cases", api_cases.faelle_liste),
+    ("POST", "/api/v1/cases", api_cases.anlegen),
+    ("GET", "/api/v1/cases/{id}", api_cases.fall),
+    ("PATCH", "/api/v1/cases/{id}", api_cases.aendern),
+    ("DELETE", "/api/v1/cases/{id}", api_cases.loeschen),
+    ("GET", "/api/v1/cases/{id}/items", api_cases.eintraege),
+    ("POST", "/api/v1/cases/{id}/items", api_cases.eintraege_hinzu),
+    ("PATCH", "/api/v1/cases/{id}/items", api_cases.eintraege_verschieben),
+    ("GET", "/api/v1/cases/{id}/items/{item}", api_cases.eintrag),
+    ("PATCH", "/api/v1/cases/{id}/items/{item}", api_cases.eintrag_aendern),
+    ("DELETE", "/api/v1/cases/{id}/items/{item}", api_cases.eintrag_loeschen),
+    ("GET", "/api/v1/cases/{id}/folders", api_cases.fallordner),
+    ("POST", "/api/v1/cases/{id}/folders", api_cases.fallordner_anlegen),
+    ("GET", "/api/v1/cases/{id}/folders/{folder}", api_cases.fallordner_eins),
+    ("PATCH", "/api/v1/cases/{id}/folders/{folder}", api_cases.fallordner_aendern),
+    ("DELETE", "/api/v1/cases/{id}/folders/{folder}", api_cases.fallordner_loeschen),
+    ("GET", "/api/v1/cases/{id}/notes", api_cases.notizen),
+    ("POST", "/api/v1/cases/{id}/notes", api_cases.notiz_anlegen),
+    ("GET", "/api/v1/cases/{id}/notes/{note}", api_cases.notiz),
+    ("PATCH", "/api/v1/cases/{id}/notes/{note}", api_cases.notiz_aendern),
+    ("DELETE", "/api/v1/cases/{id}/notes/{note}", api_cases.notiz_loeschen),
+    ("GET", "/api/v1/cases/{id}/lists", api_cases.listen),
+    ("POST", "/api/v1/cases/{id}/lists", api_cases.liste_anlegen),
+    ("GET", "/api/v1/cases/{id}/lists/{list}", api_cases.liste_eine),
+    ("DELETE", "/api/v1/cases/{id}/lists/{list}", api_cases.liste_loeschen),
+    ("GET", "/api/v1/cases/{id}/new-hits", api_cases.neue_treffer),
+    ("POST", "/api/v1/cases/{id}/export", api_cases.fall_export),
+    ("POST", "/api/v1/cases/{id}/export/open", api_cases.fall_export_oeffnen),
+    ("GET", "/api/v1/search", api_explore.suche),
+    ("GET", "/api/v1/similar", api_explore.aehnlich),
     ("QUERY", "/api/v1/answer", "_v1_antwort"),
-    # The search's two memories: what ran, and what is kept under a name.
-    ("GET", "/api/v1/searches/history", "_v1_verlauf"),
-    ("DELETE", "/api/v1/searches/history", "_v1_verlauf_leeren"),
-    ("GET", "/api/v1/searches/saved", "_v1_gespeicherte"),
-    ("POST", "/api/v1/searches/saved", "_v1_speichern"),
-    ("GET", "/api/v1/searches/saved/{id}", "_v1_suche_eine"),
-    ("PATCH", "/api/v1/searches/saved/{id}", "_v1_suche_aendern"),
-    ("DELETE", "/api/v1/searches/saved/{id}", "_v1_suche_loeschen"),
-    # The rest of the Explore door's reads. They answer English already –
-    # they were built for the index and for Claude – so they move over as
-    # they are; only a list is called `items` here, whatever the engine
-    # names it.
-    ("GET", "/api/v1/files", "_v1_dateien"),
-    # The exported file itself – what "Open original" opens and what an
-    # archived HTML page links to.
+    ("GET", "/api/v1/searches/history", api_cases.verlauf),
+    ("DELETE", "/api/v1/searches/history", api_cases.verlauf_leeren),
+    ("GET", "/api/v1/searches/saved", api_cases.gespeicherte),
+    ("POST", "/api/v1/searches/saved", api_cases.speichern),
+    ("GET", "/api/v1/searches/saved/{id}", api_cases.suche_eine),
+    ("PATCH", "/api/v1/searches/saved/{id}", api_cases.suche_aendern),
+    ("DELETE", "/api/v1/searches/saved/{id}", api_cases.suche_loeschen),
+    ("GET", "/api/v1/files", api_explore.dateien),
     ("GET", "/api/v1/files/content", "_v1_inhalt"),
-    ("GET", "/api/v1/folders", "_v1_ordner"),
-    ("GET", "/api/v1/filetypes", "_v1_dateitypen"),
-    ("GET", "/api/v1/people", "_v1_personen"),
-    ("GET", "/api/v1/addresses", "_v1_adressen"),
-    ("GET", "/api/v1/threads", "_v1_gespraech"),
-    ("GET", "/api/v1/documents", "_v1_dokument"),
-    ("GET", "/api/v1/documents/facts", "_v1_fakten"),
-    ("GET", "/api/v1/documents/attachments", "_v1_anhang"),
+    ("GET", "/api/v1/folders", api_explore.ordner),
+    ("GET", "/api/v1/filetypes", api_explore.dateitypen),
+    ("GET", "/api/v1/people", api_explore.personen),
+    ("GET", "/api/v1/addresses", api_explore.adressen),
+    ("GET", "/api/v1/threads", api_explore.gespraech),
+    ("GET", "/api/v1/documents", api_explore.dokument),
+    ("GET", "/api/v1/documents/facts", api_explore.fakten),
+    ("GET", "/api/v1/documents/attachments", api_explore.anhang),
     ("GET", "/api/v1/calendar", "_v1_kalender"),
-    # The settings are their own thing: they change when someone saves
-    # them, not every other second, and the status is polled. Until 12.0
-    # they travelled with every poll – a third of its weight.
-    # What changes on its own: the one answer the page polls.
-    ("GET", "/api/v1/status", "_v1_status"),
-    ("GET", "/api/v1/app", "_v1_umgebung"),
-    ("GET", "/api/v1/inventory", "_v1_bestand"),
-    ("GET", "/api/v1/config", "_v1_konfig"),
-    ("PATCH", "/api/v1/config", "_v1_konfig_aendern"),
-    # Building the archive: a run is a thing that happened, and one of them
-    # may be going on – that one is `current`.
-    ("GET", "/api/v1/runs", "_v1_laeufe"),
-    ("POST", "/api/v1/runs", "_v1_lauf_starten"),
-    ("GET", "/api/v1/runs/current", "_v1_lauf_jetzt"),
-    ("DELETE", "/api/v1/runs/current", "_v1_lauf_abbrechen"),
-    ("GET", "/api/v1/log", "_v1_log"),
-    ("GET", "/api/v1/runs/{id}/log", "_v1_lauf_protokoll"),
-    # What a run works on. Everything here but `open` and `folder-plan`
-    # starts a run of its own; the answer names it.
-    # The completeness balance: its rows are finer than the sources – the
-    # mailbox is three of them – so they have a path of their own.
-    ("GET", "/api/v1/balance/{row}", "_v1_bilanz"),
-    ("POST", "/api/v1/balance/{row}/fetch", "_v1_bilanz_holen"),
-    ("POST", "/api/v1/sources/{source}/refetch", "_v1_quelle_nachholen"),
-    ("POST", "/api/v1/sources/{source}/rebuild", "_v1_quelle_neu"),
-    ("PATCH", "/api/v1/sources/{source}/findings", "_v1_quelle_befunde"),
-    ("POST", "/api/v1/sources/{source}/open", "_v1_quelle_oeffnen"),
-    ("QUERY", "/api/v1/sources/{source}/folder-plan", "_v1_quelle_ordnerplan"),
-    # Insights
-    ("GET", "/api/v1/analytics", "_v1_analytics"),
-    ("POST", "/api/v1/analytics/refresh", "_v1_analytics_neu"),
-    # The settings that are more than a key in the config file
-    ("PATCH", "/api/v1/schedule", "_v1_zeitplan"),
-    ("PATCH", "/api/v1/storage", "_v1_speicherorte"),
-    ("PATCH", "/api/v1/mcp", "_v1_mcp"),
-    ("POST", "/api/v1/ollama/recheck", "_v1_ollama"),
-    ("POST", "/api/v1/updates/check", "_v1_update"),
-    # Access to the Microsoft account
-    ("PUT", "/api/v1/access/token", "_v1_token"),
-    ("POST", "/api/v1/access/session", "_v1_anmelden"),
-    ("DELETE", "/api/v1/access/session", "_v1_abmelden"),
-    ("DELETE", "/api/v1/access/notice", "_v1_hinweis_weg"),
-    # One archive per profile
-    ("GET", "/api/v1/profiles", "_v1_profile"),
-    ("POST", "/api/v1/profiles", "_v1_profil_anlegen"),
-    ("PATCH", "/api/v1/profiles", "_v1_profile_einstellen"),
-    ("GET", "/api/v1/profiles/{name}", "_v1_profil"),
-    ("PATCH", "/api/v1/profiles/{name}", "_v1_profil_umbenennen"),
-    ("POST", "/api/v1/profiles/{name}/open", "_v1_profil_oeffnen"),
-    # The app itself
-    ("QUERY", "/api/v1/reports", "_v1_bericht"),
-    ("POST", "/api/v1/quit", "_v1_beenden"),
-    ("GET", "/api/v1/openapi", "_v1_openapi"),
+    ("GET", "/api/v1/status", api_app.status),
+    ("GET", "/api/v1/app", api_app.umgebung),
+    ("GET", "/api/v1/inventory", api_app.bestand),
+    ("GET", "/api/v1/config", api_app.konfig),
+    ("PATCH", "/api/v1/config", api_app.konfig_aendern),
+    ("GET", "/api/v1/runs", api_archive.laeufe),
+    ("POST", "/api/v1/runs", api_archive.lauf_starten),
+    ("GET", "/api/v1/runs/current", api_archive.lauf_jetzt),
+    ("DELETE", "/api/v1/runs/current", api_archive.lauf_abbrechen),
+    ("GET", "/api/v1/log", api_archive.log),
+    ("GET", "/api/v1/runs/{id}/log", api_archive.lauf_protokoll),
+    ("GET", "/api/v1/balance/{row}", api_archive.bilanz),
+    ("POST", "/api/v1/balance/{row}/fetch", api_archive.bilanz_holen),
+    ("POST", "/api/v1/sources/{source}/refetch", api_archive.quelle_nachholen),
+    ("POST", "/api/v1/sources/{source}/rebuild", api_archive.quelle_neu),
+    ("PATCH", "/api/v1/sources/{source}/findings", api_archive.quelle_befunde),
+    ("POST", "/api/v1/sources/{source}/open", api_archive.quelle_oeffnen),
+    ("QUERY", "/api/v1/sources/{source}/folder-plan", api_archive.quelle_ordnerplan),
+    ("GET", "/api/v1/analytics", api_archive.analytics),
+    ("POST", "/api/v1/analytics/refresh", api_archive.analytics_neu),
+    ("PATCH", "/api/v1/schedule", api_archive.zeitplan),
+    ("PATCH", "/api/v1/storage", api_archive.speicherorte),
+    ("PATCH", "/api/v1/mcp", api_app.mcp),
+    ("POST", "/api/v1/ollama/recheck", api_app.ollama),
+    ("POST", "/api/v1/updates/check", api_app.update),
+    ("PUT", "/api/v1/access/token", api_app.token),
+    ("POST", "/api/v1/access/session", api_app.anmelden),
+    ("DELETE", "/api/v1/access/session", api_app.abmelden),
+    ("DELETE", "/api/v1/access/notice", api_app.hinweis_weg),
+    ("GET", "/api/v1/profiles", api_app.profile),
+    ("POST", "/api/v1/profiles", api_app.profil_anlegen),
+    ("PATCH", "/api/v1/profiles", api_app.profile_einstellen),
+    ("GET", "/api/v1/profiles/{name}", api_app.profil),
+    ("PATCH", "/api/v1/profiles/{name}", api_app.profil_umbenennen),
+    ("POST", "/api/v1/profiles/{name}/open", api_app.profil_oeffnen),
+    ("QUERY", "/api/v1/reports", api_archive.bericht),
+    ("POST", "/api/v1/quit", api_app.beenden),
+    ("GET", "/api/v1/openapi", api_app.openapi),
 )
 
 
@@ -2630,41 +2609,6 @@ def muster_passt(muster, pfad):
         elif e != h:
             return None
     return werte
-
-
-class Ablehnung(Exception):
-    """A refusal raised inside a route; the handler turns it into the one
-    error body (Handler._fehler). `grund` is a text key, an i18n message
-    or a plain sentence from the search module; `extra` are the fields
-    the answer keeps beside it (an empty list, the token's state)."""
-
-    def __init__(self, code, grund, v=None, **extra):
-        super().__init__(grund)
-        self.code, self.grund, self.v, self.extra = code, grund, v, extra
-
-
-# What a saved search stores and what the engine is asked for are two
-# vocabularies for one thing: the interface named its three modes after
-# what they do for the user, the engine after how it ranks. A stored
-# criteria set is handed back to /api/v1/search unchanged, so the route
-# understands both spellings.
-MODUS = faelle.ENGINE_MODUS
-
-# The six of the eight sources with folder rules to preview. The mailbox
-# has two rule sets – its folders and its calendars – told apart by
-# `unit`, not by a source of their own. A name outside the eight is
-# unknown; one of the eight without rules says so.
-PLAN_QUELLEN = ("outlook", "onedrive", "sharepoint", "teams", "todo", "onenote")
-PLAN_EINHEITEN = ("mail", "calendar")
-
-# What a sub-resource of a case says when its id names nothing there.
-TEIL_FEHLT = {"folder": "srv.case.nofolder", "note": "srv.case.nonote",
-              "list": "srv.case.nolist", "item": "srv.case.noitem"}
-
-
-def _modus(wert):
-    wert = str(wert or "auto").strip().lower()
-    return MODUS.get(wert, wert)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2746,9 +2690,9 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(body, str):
             body = body.encode("utf-8")
         self.send_response(code)
-        if code != 204:
-            # A 204 says there is no body; a Content-Length on it is a
-            # framing error to a strict client (RFC 9110 §8.6).
+        if code not in (204, 304):
+            # A 204 or 304 says there is no body; a Content-Length on it
+            # is a framing error to a strict client (RFC 9110 §8.6).
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -2765,22 +2709,20 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str),
                    ctype, extra)
 
-    # -- Methods -----------------------------------------------------------
-    def _zahl(self, q, name, vorgabe=0, kleinste=None, groesste=None):
-        """A number out of a query or a body, clamped where the route has
-        bounds. Something that is not a number is the caller's mistake and
-        answers 400 – not the 500 an uncaught ValueError would be."""
-        roh = q.get(name, vorgabe)
-        try:
-            wert = int(roh if roh not in (None, "") else vorgabe)
-        except (TypeError, ValueError):
-            raise Ablehnung(400, "srv.badparam", {"name": name}) from None
-        if kleinste is not None:
-            wert = max(kleinste, wert)
-        if groesste is not None:
-            wert = min(wert, groesste)
-        return wert
+    def _antworten(self, a):
+        """Send what a route answered (api.Antwort): JSON, bytes, or a 204."""
+        if a.body is None:
+            # No body under its own status: a 204, the 304 a matching
+            # If-None-Match earns, or a 201 asked for with return=minimal.
+            self._send(a.code, b"", extra=a.headers)
+        elif isinstance(a.body, (bytes, bytearray)):
+            self._send(a.code, bytes(a.body), a.ctype, extra=a.headers)
+        else:
+            self._json(a.body, a.code, extra=a.headers)
+        if a.nachher is not None:
+            a.nachher()
 
+    # -- Methods -----------------------------------------------------------
     @staticmethod
     def _routen(pfad):
         """Every versioned route this path fits, resolved once per request:
@@ -3029,7 +2971,11 @@ class Handler(BaseHTTPRequestHandler):
         for m, name, werte in routen:
             if m == methode:
                 try:
-                    return getattr(self, name)(werte, q, data)
+                    if isinstance(name, str):
+                        # The three that write to the socket themselves:
+                        # the answer's stream, a file, the calendar.
+                        return getattr(self, name)(werte, q, data)
+                    return self._antworten(name(self, werte, q, data))
                 # What the case book raises, wherever it is called from: a
                 # closed case, a case or a folder that is not there.
                 except faelle.FallGeschlossen:
@@ -3040,1082 +2986,21 @@ class Handler(BaseHTTPRequestHandler):
                     raise Ablehnung(404, "srv.case.nofolder") from None
         return self._methode_fehlt(pfad, methode, routen)
 
-    @staticmethod
-    def _v1_id(p, name, fehlt):
-        """The {name} of a path as a number. A value that is not one names
-        nothing that exists – `fehlt` says what: the case, the search,
-        the run, the row of a case's collection."""
-        try:
-            return int(p[name])
-        except (KeyError, TypeError, ValueError):
-            raise Ablehnung(404, fehlt) from None
-
-    @staticmethod
-    def _v1_zeile(zeilen, kennung, fehlt):
-        """The row with this id, or the 404 that names its collection."""
-        for zeile in zeilen:
-            if zeile.get("id") == kennung:
-                return zeile
-        raise Ablehnung(404, fehlt)
-
-    def _v1_kennung(self, p):
-        """The {id} of a case path."""
-        return self._v1_id(p, "id", "srv.case.unknown")
-
-
-    def _v1_faelle(self, _p, _q, _data):
-        return self._json({"items": [rest.fall(f) for f in self.app.faelle.faelle()]})
-
-    def _v1_anlegen(self, _p, _q, data):
-        try:
-            neu = self.app.faelle.fall_anlegen(data.get("name"), data.get("description"))
-        except ValueError:
-            raise Ablehnung(400, "srv.case.noname") from None
-        return self._json({"case": rest.fall(self._fall_voll(neu))}, 201,
-                          extra={"Location": f"{API_V1}/cases/{neu}"})
-
-    def _v1_fall(self, p, _q, _data):
-        fall = self.app.faelle.fall(self._v1_kennung(p))
-        if fall is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        self._index_stand(fall)
-        return self._json({"case": rest.fall(fall)})
-
-    def _v1_aendern(self, p, _q, data):
-        """PATCH: the fields the body names, nothing else. `status` opens
-        and closes the case – the action routes of the app's own surface
-        do the same thing under their own names.
-
-        Everything that can be judged is judged before anything changes:
-        a PATCH takes hold whole, or leaves the case as it was. The case
-        book has no transaction across two calls, so the order does the
-        work – opening first, because the fields need the case open,
-        closing last, because nothing follows it.
-        """
-        kennung, buch = self._v1_kennung(p), self.app.faelle
-        fall = buch.fall(kennung)
-        if fall is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        ziel = None
-        if "status" in data:
-            ziel = rest.STATUS_ZURUECK.get(str(data.get("status") or ""))
-            if ziel is None:
-                raise Ablehnung(400, "srv.case.badstatus",
-                                {"status": str(data.get("status") or "")})
-            if ziel == fall["status"]:
-                ziel = None                  # already there: nothing to do
-        felder = "name" in data or "description" in data
-        if "name" in data and not str(data.get("name") or "").strip():
-            raise Ablehnung(400, "srv.case.noname")
-        if felder and fall["status"] != faelle.OFFEN and ziel != faelle.OFFEN:
-            raise Ablehnung(409, "srv.case.closed")
-        try:
-            if ziel == faelle.OFFEN:
-                buch.oeffnen(kennung)
-            if felder:
-                buch.fall_aendern(kennung, data.get("name") if "name" in data else None,
-                                  data.get("description") if "description" in data else None)
-            if ziel is not None and ziel != faelle.OFFEN:
-                buch.schliessen(kennung)
-        except ValueError:
-            raise Ablehnung(400, "srv.case.noname") from None
-        return self._json({"case": rest.fall(self._fall_voll(kennung))})
-
-    def _v1_loeschen(self, p, _q, _data):
-        kennung = self._v1_kennung(p)
-        if self.app.faelle.fall(kennung) is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        self.app.faelle.fall_loeschen(kennung)
-        return self._send(204, b"")
-
-    # -- where the archive lies, and which one is open ----------------------
-    def _speicherorte(self, data):
-        """`data_dir` and `index_dir`: both are keys in app_config.json,
-        which sits fixed in the home folder, so there is no chicken-and-egg.
-        Empty means the default under the home folder. NOTHING is moved –
-        relocating folders is the user's business. Both paths are fixed
-        since startup and go to every subprocess as its working directory,
-        so a change takes effect on the next start; the answer says so."""
-        app = self.app
-        felder = (("data_dir", HEIM / DATEN_UNTERORDNER, BASE),
-                  ("index_dir", HEIM / STORE_DIR, STORE_PFAD))
-        antwort, neustart, neu = {}, False, {}
-        for key, vorgabe, aktuell in felder:
-            if key not in data:
-                continue
-            roh = str(data.get(key) or "").strip()
-            if roh:
-                ziel, fehler = pruefe_datenordner(roh)
-                if fehler:
-                    # Into the log as well: the settings save sends this
-                    # along with everything else, and a refusal must not
-                    # hide in one small field.
-                    app.jobs.log(fehler, "err")
-                    raise Ablehnung(400, fehler)
-            else:
-                ziel = vorgabe
-            neu[key] = "" if ziel == vorgabe else str(ziel)
-            antwort[key] = str(ziel)
-            neustart = neustart or str(ziel) != str(aktuell)
-        # Two profiles must never share an export or index folder: their
-        # archives would run into each other.
-        anderes = profil_geteilt(PROFIL, antwort.get("data_dir", str(BASE)),
-                                 antwort.get("index_dir", str(STORE_PFAD)))
-        if anderes:
-            fehler = {"k": "srv.datadir.shared", "v": {"profile": anderes}}
-            app.jobs.log(fehler, "err")
-            raise Ablehnung(400, fehler)
-        vorher = {key: app.cfg.get(key) or "" for key in neu}
-        app.konfiguriere(lambda cfg: cfg.update(neu))
-        # One line per path that really changed, each naming its own folder.
-        for key, _vorgabe, _aktuell in felder:
-            if key in neu and neu[key] != vorher[key]:
-                app.jobs.logk("srv.datadir.set" if key == "data_dir" else "srv.indexdir.set",
-                              "warn", path=antwort[key])
-        return self._json({"data_dir": antwort.get("data_dir", str(BASE)),
-                           "index_dir": antwort.get("index_dir", str(STORE_PFAD)),
-                           "restart_required": neustart})
-
-    def _profil_oeffnen(self, name):
-        """Open this archive: the one that is already open answers at once,
-        one open next door hands over its address, and otherwise this
-        server restarts with it (serve() brings it back up)."""
-        name = name.strip().lower()
-        if not profile_moeglich():
-            raise Ablehnung(400, "srv.profile.impossible")
-        if name not in profil_namen():
-            raise Ablehnung(404, "srv.profile.unknown", {"name": name})
-        port = self.server.server_address[1]
-        if name == PROFIL:
-            return self._json({"name": name, "url": "/"})
-        lauft = eigene_instanz(port, profil=name)
-        if lauft:
-            return self._json({"name": name, "url": f"http://127.0.0.1:{lauft}/"})
-        if self.app.jobs.busy:
-            raise Ablehnung(409, "srv.busy")
-        profil_register_schreiben(zuletzt=name)
-        # The answer first, then the server stops (serve() restarts). No
-        # `url` here: that field means "it is already open elsewhere, go
-        # there" – the page would reload at once, against a port that is
-        # just shutting down, instead of waiting for it to come back.
-        self._json({"name": name})
-        neustart_mit_profil(self.server, name, port)
-        return None
-
-    # -- building the archive ----------------------------------------------
-    def _v1_laeufe(self, _p, q, _data):
-        grenze = self._zahl(q, "limit", 50, 1, 200)
-        return self._v1_liste({"runs": self.app.history.list_runs(grenze + 1)}, "runs", grenze)
-
-    def _v1_lauf_starten(self, _p, _q, data):
-        """A run: which steps, and how. The body names the steps by the
-        keys the step registry uses (`outlook`, `index`, …); everything
-        else steers how they work. One run at a time – while one is on,
-        this is a 409."""
-        app = self.app
-        mit_outlook = bool(data.get("outlook"))
-        kalender = bool(data.get("calendar"))
-        rekonstruktion = None            # None: as configured
-        if kalender and mit_outlook:
-            # Part of an export run: the step follows what is actually
-            # fetched. The "build calendar & contacts" button comes without
-            # outlook and stays untouched.
-            kalender, mit_mails = calendar_plan(app.cfg)
-            if not mit_mails:
-                rekonstruktion = False
-        anfrage = steps_mod.anfrage_aus_request(data)
-        anfrage.update(outlook=mit_outlook, calendar=kalender)
-        ok, why = app.launch(
-            anfrage,
-            nur_einheit=(str(data.get("unit") or "").strip() or None),
-            embeddings=data.get("embeddings"),
-            label=str(data.get("label") or "job.export"),
-            reconstruct=rekonstruktion,
-            legacy_comments=bool(data.get("legacy_comments")),
-            sync_now=bool(data.get("sync_now")),
-            calendar_full=bool(data.get("calendar_full")),
-            full_sync=bool(data.get("full_sync")),
-            resync=bool(data.get("resync")),
-            resync_ordner=(data.get("resync_folders")
-                           if isinstance(data.get("resync_folders"), list) else None))
-        if not ok:
-            raise Ablehnung(409, why)
-        return self._lauf_antwort(why)
-
-    def _lauf_antwort(self, warum=None, extra=None):
-        """Every start answers the same way: the run is on, and where to
-        watch it. What it is doing travels with the status."""
-        daten = {"run": f"{API_V1}/runs/current", **(extra or {})}
-        if warum:
-            daten["message"] = warum
-        return self._json(daten, 202, extra={"Location": f"{API_V1}/runs/current"})
-
-    def _v1_lauf_jetzt(self, _p, _q, _data):
-        """The run that is on – what the `Location` of a started run names.
-        Nothing running is a 404: the monitor exists while the run does."""
-        # The run alone: app.status() would re-read the token, probe
-        # Ollama and ask the MCP subprocess, all to throw it away – and
-        # this is the route a caller polls.
-        job = self.app.jobs.snapshot().get("job")
-        if not job:
-            raise Ablehnung(404, "srv.run.none")
-        return self._json({"run": job})
-
-    def _v1_lauf_abbrechen(self, _p, _q, _data):
-        """Nothing running is a 404 here as on GET: the resource is the
-        run, and there is none – not a conflict to retry. While one is
-        on, the wish is recorded whatever the runner does at that moment:
-        between two steps there is no process to end, and the run stops
-        at the next step all the same."""
-        if not self.app.jobs.busy:
-            raise Ablehnung(404, "srv.run.none")
-        self.app.jobs.cancel()
-        return self._send(204, b"")
-
-    def _v1_log(self, _p, q, _data):
-        """The app's live log from a cursor on – not one run's: the lines
-        of a run are a window into this, which `log_seq` marks. That is
-        why it is not `/runs/current/log`, and why it answers when nothing
-        is running."""
-        lines, seq = self.app.jobs.log_since(self._zahl(q, "since", 0, 0))
-        return self._json({"items": lines, "seq": seq})
-
-    def _v1_lauf_protokoll(self, p, _q, _data):
-        """The stored log of one run. A run that never was is a 404; one
-        whose lines were pruned answers an empty list."""
-        kennung = self._v1_id(p, "id", "srv.run.unknown")
-        if not self.app.history.has_run(kennung):
-            raise Ablehnung(404, "srv.run.unknown")
-        return self._json({"items": self.app.history.run_log(kennung)})
-
-    # -- the sources a run works on -----------------------------------------
-    def _v1_quelle(self, p):
-        """The source a path names – one of the eight the archive knows."""
-        quelle = str(p.get("source") or "").strip()
-        if EXPORT_ORDNER.get(quelle) is None or quelle not in archive_check.PRUEFER:
-            raise Ablehnung(404, "srv.archiv.unknown", {"source": quelle})
-        return quelle
-
-    def _v1_bilanz_holen(self, p, _q, _data):
-        """Fetch what the balance found open – the cheapest way the row's
-        source allows. The rows are the step registry's (`outlook_mail`,
-        `outlook_calendar`, …), finer than the eight sources under
-        /sources: the mailbox is three of them."""
-        return self._bilanz_holen(self._v1_bilanzzeile(p))
-
-    def _v1_quelle_nachholen(self, p, _q, _data):
-        return self._archiv("nachholen", {"quelle": self._v1_quelle(p)})
-
-    def _v1_quelle_neu(self, p, _q, _data):
-        return self._archiv("neu-aufbauen", {"quelle": self._v1_quelle(p)})
-
-    def _v1_quelle_befunde(self, p, _q, data):
-        """What the archive check found, and what should become of it:
-        `noted` writes a tombstone, `set-aside` puts it away, `open` brings
-        it back. `kinds` narrows it to a kind of finding."""
-        aktion = {"noted": "vermerken", "set-aside": "beiseitelegen",
-                  "open": "zurueckholen"}.get(str(data.get("state") or ""))
-        if aktion is None:
-            raise Ablehnung(400, "srv.archiv.badstate",
-                            {"state": str(data.get("state") or "")})
-        # The two kinds a mark can apply to (archive_check.ARTEN_VERMERKBAR).
-        # A kind nobody knows is refused rather than dropped: it would fall
-        # back to "lost" downstream, and a caller who asked to mark one
-        # thing would get a tombstone for another.
-        arten = {"lost": "verloren", "missing": "fehlt"}
-        roh = []
-        for a in (data.get("kinds") or []):
-            if str(a) not in arten:
-                raise Ablehnung(400, "srv.archiv.badkind", {"kind": str(a)[:40]})
-            roh.append(arten[str(a)])
-        return self._archiv(aktion, {"quelle": self._v1_quelle(p), "arten": roh})
-
-    def _v1_quelle_oeffnen(self, p, _q, _data):
-        return self._archiv("ordner", {"quelle": self._v1_quelle(p)})
-
-    @staticmethod
-    def _v1_bilanzzeile(p):
-        """The balance row a path names – one of the step registry's
-        (`outlook_mail`, `outlook_calendar`, …). The mailbox check writes
-        three reports, one per row, and none of them under `outlook`;
-        that is why the rows live under /balance, not /sources."""
-        quelle = str(p.get("row") or "").strip()
-        eintrag = next((e for e in steps_mod.PRUEFUNGEN if e["quelle"] == quelle), None)
-        if eintrag is None:
-            raise Ablehnung(404, "srv.archiv.unknown", {"source": quelle})
-        return eintrag
-
-    def _v1_bilanz(self, p, _q, _data):
-        """The report a balance row's last check wrote – null before the
-        first."""
-        eintrag = self._v1_bilanzzeile(p)
-        # The connection lives in the object's thread-local; on a threaded
-        # server nothing else would ever close it.
-        with state_db.StateDb(BASE / EXPORT_ORDNER[eintrag["ordner"]]) as db:
-            return self._json({"report": completeness.lesen(db, eintrag["quelle"])})
-
-    def _v1_quelle_ordnerplan(self, p, _q, data):
-        """What the next run would do with these rules – without starting
-        it. The rules come from the body, not from the settings: otherwise
-        the preview would show the state before the change. The mailbox
-        has two rule sets; `unit: calendar` asks for the calendars' plan
-        instead of the folders' (`mail`, the default)."""
-        quelle = self._v1_quelle(p)
-        if quelle not in PLAN_QUELLEN:
-            raise Ablehnung(404, "srv.plan.nosource", {"source": quelle})
-        einheit = data.get("unit")
-        if einheit is not None and (quelle != "outlook" or einheit not in PLAN_EINHEITEN):
-            raise Ablehnung(400, "srv.plan.badunit", {"unit": str(einheit)[:40]})
-        ziel = "calendar" if einheit == "calendar" else quelle
-        return self._json(self._ordnerplan({**data, "quelle": ziel}))
-
-    # -- Insights -----------------------------------------------------------
-    def _v1_analytics(self, _p, _q, _data):
-        return self._json(analytics_daten(self.app.cfg))
-
-    def _v1_analytics_neu(self, _p, _q, _data):
-        """The numbers again, computed afresh – the one way to invalidate
-        everything at once."""
-        return self._json(analytics_daten(self.app.cfg, neu=True))
-
-    # -- settings that are more than a key ----------------------------------
-    def _v1_zeitplan(self, _p, _q, data):
-        return self._json(self._save_schedule(data))
-
-    def _v1_speicherorte(self, _p, _q, data):
-        """Where the archive and the index lie. Nothing is moved: relocating
-        folders is the user's business, and the app never does it."""
-        return self._speicherorte(data)
-
-    def _v1_mcp(self, _p, _q, data):
-        """The endpoint Claude talks to: `running` says whether it should
-        be on – a boolean, nothing that merely reads like one."""
-        if not isinstance(data.get("running"), bool):
-            raise Ablehnung(400, "srv.mcp.badaction")
-        return self._json(self._mcp(data["running"]))
-
-    def _v1_ollama(self, _p, _q, _data):
-        return self._json({"ollama": self.app.ollama(force=True)})
-
-    def _v1_update(self, _p, _q, _data):
-        return self._json({"update": self.app.check_updates(blockierend=True)})
-
-    # -- access to the Microsoft account ------------------------------------
-    def _v1_token(self, _p, _q, data):
-        return self._json(self._save_token(data))
-
-    def _v1_anmelden(self, _p, _q, _data):
-        ok, daten = self.app.login_starten()
-        if not ok:
-            raise Ablehnung(500, "srv.login.failed",
-                            {"detail": str(daten.get("error") or "")})
-        return self._json({"device": daten})
-
-    def _v1_abmelden(self, _p, _q, _data):
-        self.app.abmelden()
-        return self._send(204, b"")
-
-    def _v1_hinweis_weg(self, _p, _q, _data):
-        """"Later": the note about a key that died mid-run goes, or the
-        wizard would reopen on every poll."""
-        self.app.jobs.token_expired = False
-        return self._send(204, b"")
-
-    # -- one archive per profile --------------------------------------------
-    def _v1_profile(self, _p, _q, _data):
-        return self._json(profil_status())
-
-    def _v1_profil(self, p, _q, _data):
-        """One profile – what `Location` names when one is created: its
-        account, its folder, whether it is the one this instance runs."""
-        name = str(p.get("name") or "").strip().lower()
-        # One profile's files, not every profile's: profil_status reads
-        # them all, which is why it is kept out of anything frequent.
-        treffer = next((n for n in profil_namen() if n.lower() == name), None)
-        if treffer is None:
-            raise Ablehnung(404, "srv.profile.unknown", {"name": name})
-        return self._json({"profile": profil_info(treffer)})
-
-    def _v1_profil_anlegen(self, _p, _q, data):
-        info, fehler = profil_anlegen(data.get("name"))
-        if fehler:
-            raise Ablehnung(400, fehler)
-        self.app.jobs.logk("srv.profile.created", "info", name=info["name"])
-        return self._json({"profile": info, "profiles": profil_status()}, 201,
-                          extra={"Location": f"{API_V1}/profiles/{quote(info['name'])}"})
-
-    def _v1_profile_einstellen(self, _p, _q, data):
-        """A property of the register, not of one profile: whether the app
-        asks which archive to open at start."""
-        if "ask_at_start" not in data:
-            raise Ablehnung(400, "srv.profile.nofield", {"name": "ask_at_start"})
-        if not isinstance(data["ask_at_start"], bool):
-            raise Ablehnung(400, "srv.profile.badvalue", {"name": "ask_at_start"})
-        reg = profil_register_schreiben(ohne_nachfrage=not data["ask_at_start"])
-        return self._json({"ask_at_start": not reg.get("ohne_nachfrage"),
-                           "profiles": profil_status()})
-
-    def _v1_profil_umbenennen(self, p, _q, data):
-        if self.app.jobs.busy:
-            raise Ablehnung(409, "srv.busy")
-        alt = str(p.get("name") or "").strip().lower()
-        neu, fehler = profil_umbenennen(alt, data.get("name"),
-                                        port=self.server.server_address[1])
-        if fehler:
-            raise Ablehnung(400, fehler)
-        self.app.jobs.logk("srv.profile.renamed", "info", old=alt, name=neu)
-        return self._json({"name": neu, "profiles": profil_status()})
-
-    def _v1_profil_oeffnen(self, p, _q, _data):
-        return self._profil_oeffnen(str(p.get("name") or ""))
-
-    # -- the app itself -----------------------------------------------------
-    def _v1_bericht(self, _p, _q, data):
-        """A report someone can paste into an issue: the state, the log the
-        page shows, and what they typed – addresses and user names replaced
-        before it leaves the machine."""
-        return self._json(fehlerbericht(
-            {**self.app.status(), "store": store_status(self.app.cfg)},
-            str(data.get("log") or ""), str(data.get("hint") or ""),
-            i18n.negotiate(self.app.cfg.get("language"),
-                           self.headers.get("Accept-Language"), RES),
-            cfg=self.app.cfg))
-
-    def _v1_beenden(self, _p, _q, _data):
-        threading.Thread(target=self.server.shutdown, daemon=True).start()
-        return self._send(204, b"")
-
-    def _v1_openapi(self, _p, _q, _data):
-        """The contract itself: this file, as it is shipped."""
-        text = (RES / "openapi.yaml").read_text(encoding="utf-8")
-        return self._send(200, text, "text/yaml; charset=utf-8")
-
-    # -- what hangs on a case ----------------------------------------------
-    def _v1_fall_da(self, p):
-        """The case a path names, in full – or a 404. Only where its items
-        are read with the index's word on them (`thread_open`,
-        `who_mail`): everything else takes `_v1_fall_buch`, which does
-        not walk the index for a case it is about to answer with anyway."""
-        fall = self._fall_voll(self._v1_kennung(p))
-        if fall is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        return fall
-
-    def _v1_fall_buch(self, p):
-        """The case as the case book keeps it – items, folders, notes,
-        lists, searches – or a 404. No index: enough to resolve a
-        sub-resource before a write, and to read anything but an item."""
-        fall = self.app.faelle.fall(self._v1_kennung(p))
-        if fall is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        return fall
-
-    def _v1_fall_id(self, p):
-        """The id of the case a path names – or a 404."""
-        return self._v1_fall_buch(p)["id"]
-
-    @staticmethod
-    def _v1_fall_offen(fall, ordner=None):
-        """What the case book would refuse on the first write, refused
-        before anything expensive runs and with the same answer: the case
-        is open, and the folder – where one is named – is its own."""
-        if fall["status"] != faelle.OFFEN:
-            raise Ablehnung(409, "srv.case.closed")
-        if ordner is not None and all(o["id"] != ordner for o in fall["ordner_liste"]):
-            raise Ablehnung(404, "srv.case.nofolder")
-
-    def _v1_fall_antwort(self, kennung, extra=None, code=200, ort=None):
-        """Every write answers the case it changed: the page never has to
-        guess what a change did, and a script gets the new state in the
-        same call."""
-        daten = {**(extra or {}), "case": rest.fall(self._fall_voll(kennung))}
-        return self._json(daten, code, extra={"Location": ort} if ort else None)
-
-    def _v1_teilkennung(self, p, name):
-        """The id of a sub-resource in the path – the folder, the note, the
-        list, the item. A value that is not a number names nothing in that
-        collection, and says so: the case it sits in is there."""
-        return self._v1_id(p, name, TEIL_FEHLT[name])
-
-    def _v1_eintraege(self, p, _q, _data):
-        return self._json({"items": rest.fall(self._v1_fall_da(p))["item_list"]})
-
-    def _v1_teil(self, p, liste, feld):
-        """One row of a case's collection on its own – the object the
-        collection answers, and what `Location` named when it was created.
-        Read from the translated case, so one row says exactly what the
-        list says about it; a note, a folder or a list is the case book's
-        alone."""
-        fall = rest.fall(self._v1_fall_buch(p))
-        zeile = self._v1_zeile(fall[liste], self._v1_teilkennung(p, feld), TEIL_FEHLT[feld])
-        return self._json({feld: zeile})
-
-    def _v1_eintrag(self, p, _q, _data):
-        """One item with the index's word on it (`thread_open`, `who_mail`)
-        – asked for this item alone, not for the whole case's worth, which
-        is what the list does."""
-        e = self._v1_eintrag_da(self._v1_fall_buch(p), p)
-        self._index_stand({"eintraege_liste": [e]})
-        return self._json({"item": rest.eintrag(e)})
-
-    def _v1_fallordner_eins(self, p, _q, _data):
-        return self._v1_teil(p, "folder_list", "folder")
-
-    def _v1_notiz(self, p, _q, _data):
-        return self._v1_teil(p, "note_list", "note")
-
-    def _v1_liste_eine(self, p, _q, _data):
-        return self._v1_teil(p, "list_list", "list")
-
-    def _v1_eintraege_hinzu(self, p, _q, data):
-        """Items into the case. `items` are the rows themselves – what a
-        hit carries; `threads` names items already in the case whose
-        conversations should be completed. Both may stand in one body."""
-        fall = self._v1_fall_buch(p)
-        kennung = fall["id"]
-        # A row without a key names nothing in the archive and is no item:
-        # dropped here, as the case book would drop it – but a body that
-        # carries nothing else is refused, not answered with `added: 0`.
-        eintraege = [e for e in (rest.eintrag_hinein(e) for e in (data.get("items") or [])
-                                 if isinstance(e, dict))
-                     if str(e.get("key") or "").strip()]
-        schluessel = [str(k) for k in (data.get("threads") or []) if isinstance(k, str)]
-        if not eintraege and not schluessel:
-            raise Ablehnung(400, "srv.case.noitems")
-        ordner = self._ordner_aus(data, "folder")
-        # Everything that can refuse happens before the first write: a
-        # request that adds its items and then fails on the conversations
-        # would have changed the case and reported failure, and a caller
-        # who retries adds nothing twice but is told so.
-        self._v1_fall_offen(fall, ordner)
-        if schluessel:
-            fehler = self._gespraeche_moeglich()
-            if fehler:
-                raise Ablehnung(409, fehler)
-        neu = 0
-        if eintraege:
-            neu = self.app.faelle.hinzufuegen(kennung, eintraege, ordner_id=ordner)
-        dazu = 0
-        if schluessel:
-            dazu, fehler = self._thread_holen(kennung, schluessel)
-            if fehler:
-                raise Ablehnung(409, fehler)
-        gab_es = len(eintraege) - neu
-        return self._v1_fall_antwort(kennung, {"added": neu + dazu, "already": gab_es},
-                                     201 if neu + dazu else 200)
-
-    def _v1_eintraege_verschieben(self, p, _q, data):
-        """Several items into one folder at once – what a selection in the
-        case does. `folder: null` means unsorted."""
-        kennung = self._v1_fall_id(p)
-        keys = [str(k) for k in (data.get("keys") or []) if isinstance(k, str)]
-        if not keys:
-            raise Ablehnung(400, "srv.case.noitems")
-        n = self.app.faelle.verschieben(kennung, keys, self._ordner_aus(data, "folder"))
-        return self._v1_fall_antwort(kennung, {"moved": n})
-
-    def _v1_eintrag_aendern(self, p, _q, data):
-        """One item: its remark, its folder, or both."""
-        fall = self._v1_fall_buch(p)
-        kennung, eintrag = fall["id"], self._v1_eintrag_da(fall, p)
-        buch = self.app.faelle
-        # The whole body is judged before the first write: a folder the
-        # case does not have, or a closed case, would otherwise leave the
-        # remark behind and refuse.
-        ordner = self._ordner_aus(data, "folder") if "folder" in data else None
-        self._v1_fall_offen(fall, ordner)
-        if "remark" in data:
-            buch.bemerkung_setzen(kennung, eintrag["key"], data.get("remark"))
-        if "folder" in data:
-            buch.verschieben(kennung, [eintrag["key"]], ordner)
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_eintrag_loeschen(self, p, _q, _data):
-        fall = self._v1_fall_buch(p)
-        self.app.faelle.entfernen(fall["id"], self._v1_eintrag_da(fall, p)["key"])
-        return self._v1_fall_antwort(fall["id"])
-
-    def _v1_eintrag_da(self, fall, p):
-        """The item a path names – by the id the case gave it."""
-        return self._v1_zeile(fall["eintraege_liste"], self._v1_teilkennung(p, "item"),
-                              TEIL_FEHLT["item"])
-
-    def _v1_fallordner(self, p, _q, _data):
-        return self._json({"items": rest.fall(self._v1_fall_buch(p))["folder_list"]})
-
-    def _v1_fallordner_anlegen(self, p, _q, data):
-        """A new folder. The case book hands back an existing one of that
-        name; on this surface 201 means created, so a name that is there
-        already is a 409 – as a rename onto it is."""
-        fall = self._v1_fall_buch(p)
-        kennung, name = fall["id"], str(data.get("name") or "").strip()
-        if name and any(o["name"] == name for o in fall["ordner_liste"]):
-            raise Ablehnung(409, "srv.case.folder.exists")
-        try:
-            ordner = self.app.faelle.ordner_anlegen(kennung, name)
-        except ValueError as e:
-            raise Ablehnung(*self._fall_wert_fehler(e)) from None
-        return self._v1_fall_antwort(kennung, {"folder": ordner}, 201,
-                                     f"{API_V1}/cases/{kennung}/folders/{ordner}")
-
-    def _v1_fallordner_aendern(self, p, _q, data):
-        kennung = self._v1_fall_id(p)
-        try:
-            self.app.faelle.ordner_umbenennen(kennung, self._v1_teilkennung(p, "folder"),
-                                              data.get("name"))
-        except ValueError as e:
-            raise Ablehnung(*self._fall_wert_fehler(e)) from None
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_fallordner_loeschen(self, p, _q, _data):
-        """The folder goes, its items stay – unsorted, in the case."""
-        kennung = self._v1_fall_id(p)
-        self.app.faelle.ordner_loeschen(kennung, self._v1_teilkennung(p, "folder"))
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_notizen(self, p, _q, _data):
-        return self._json({"items": rest.fall(self._v1_fall_buch(p))["note_list"]})
-
-    def _v1_notiz_anlegen(self, p, _q, data):
-        kennung = self._v1_fall_id(p)
-        try:
-            notiz = self.app.faelle.notiz(kennung, data.get("text"))
-        except ValueError:
-            raise Ablehnung(400, "srv.case.noname") from None
-        return self._v1_fall_antwort(kennung, {"note": notiz}, 201,
-                                     f"{API_V1}/cases/{kennung}/notes/{notiz}")
-
-    def _v1_notiz_aendern(self, p, _q, data):
-        """The case book answers whether the note was there; one that is
-        not is a 404, not a quiet 200 with the case unchanged."""
-        kennung = self._v1_fall_id(p)
-        try:
-            da = self.app.faelle.notiz_aendern(kennung, self._v1_teilkennung(p, "note"),
-                                               data.get("text"))
-        except ValueError:
-            raise Ablehnung(400, "srv.case.noname") from None
-        if not da:
-            raise Ablehnung(404, "srv.case.nonote")
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_notiz_loeschen(self, p, _q, _data):
-        kennung = self._v1_fall_id(p)
-        if not self.app.faelle.notiz_loeschen(kennung, self._v1_teilkennung(p, "note")):
-            raise Ablehnung(404, "srv.case.nonote")
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_listen(self, p, _q, _data):
-        return self._json({"items": rest.fall(self._v1_fall_buch(p))["list_list"]})
-
-    def _v1_liste_anlegen(self, p, _q, data):
-        """A whole result as it stood at this moment: the criteria are run
-        once more here, every hit goes into the case, and the list keeps
-        what it was."""
-        fall = self._v1_fall_buch(p)
-        kennung = fall["id"]
-        ordner = self._ordner_aus(data, "folder")
-        k = faelle.kriterien(data.get("criteria"))
-        # The search is the expensive part: what the case book would
-        # refuse after it – a closed case, a folder it does not have – is
-        # refused before it.
-        self._v1_fall_offen(fall, ordner)
-        treffer, fehler = self._alle_treffer(k)
-        if fehler:
-            raise Ablehnung(409, fehler)
-        liste, neu = self.app.faelle.liste_anlegen(kennung, k, treffer, ordner_id=ordner)
-        return self._v1_fall_antwort(kennung, {"list": liste, "hits": len(treffer), "added": neu},
-                                     201, f"{API_V1}/cases/{kennung}/lists/{liste}")
-
-    def _v1_liste_loeschen(self, p, _q, _data):
-        """The list goes, and with it the items it brought; what was added
-        another way stays, folder and remark included."""
-        kennung = self._v1_fall_id(p)
-        if not self.app.faelle.liste_loeschen(kennung, self._v1_teilkennung(p, "list")):
-            raise Ablehnung(404, "srv.case.nolist")
-        return self._v1_fall_antwort(kennung)
-
-    def _v1_neue_treffer(self, p, _q, _data):
-        """What the searches attached to this case find today that the case
-        does not hold yet – per search, never stored."""
-        fall = self._v1_fall_buch(p)
-        buch = self.app.faelle
-        keys = buch.keys(fall["id"])
-        bloecke = []
-        for g in fall["suchen_liste"]:
-            treffer, fehler = self._alle_treffer(g["kriterien"], grenze=500)
-            if fehler:
-                bloecke.append({"id": g["id"], "name": g["name"], "error": fehler, "new": []})
-                continue
-            neu = rest.treffer([h for h in treffer
-                                if h.get("key") and h["key"] not in keys])
-            bloecke.append({"id": g["id"], "name": g["name"], "new": neu[:200],
-                            "new_count": len(neu), "folder": g.get("ordner"),
-                            "folder_name": g.get("ordner_name")})
-        return self._json({"case": {"id": fall["id"], "name": fall["name"]}, "items": bloecke})
-
-    def _v1_fall_export(self, p, _q, _data):
-        return self._fall_export(self._v1_fall_id(p))
-
-    def _v1_fall_export_oeffnen(self, p, _q, _data):
-        """Show the export in the file manager – a side effect on this
-        machine, not a change to anything here."""
-        fall = self._v1_fall_buch(p)
-        pfad = Path(fall["exportiert"]) if fall.get("exportiert") else None
-        if pfad is not None and pfad.suffix == ".zip":
-            pfad = pfad.parent
-        if pfad is None or not pfad.is_dir():
-            pfad = fall_export_basis(self.app.cfg)
-            if not pfad.is_dir():
-                raise Ablehnung(404, "srv.case.noexport")
-        if not archive_check.ordner_oeffnen(pfad):
-            raise Ablehnung(500, "srv.archiv.open.fail", path=str(pfad))
-        return self._json({"path": str(pfad)})
-
-    @staticmethod
-    def _fall_wert_fehler(e):
-        """What the case book means by a ValueError: a folder that is there
-        already, or a name that is none."""
-        return (409, "srv.case.folder.exists") if str(e) == "exists" else (400, "srv.case.noname")
-
-    def _v1_suche(self, _p, q, _data):
-        """The same engine as the page's search, paged the usual way:
-        `limit` and `offset`, and `has_more` instead of a total – the
-        ranking would have to run to the end for a total, and a search
-        across the whole archive is not worth that."""
-        grenze = self._zahl(q, "limit", 20, 1, 100)
-        versatz = self._zahl(q, "offset", 0, 0)
-        # The search history is the page's. A caller says whether this
-        # search belongs in it – `remember`, off unless asked for, because
-        # a script paging through the archive would otherwise fill the
-        # rows the page offers a human. `saved` only counts along with it.
-        merken = str(q.get("remember") or "").strip().lower() in ("1", "true", "yes", "ja")
-        kriterien = dict(q) if merken else {k: v for k, v in q.items() if k != "saved"}
-        res = self._search({**kriterien, "k": str(grenze + 1),
-                            "offset": str(versatz)}, merken=merken)
-        treffer = rest.treffer(res.get("results") or [])
-        return self._json({"items": treffer[:grenze], "limit": grenze,
-                           "offset": versatz, "has_more": len(treffer) > grenze,
-                           "backend": res.get("backend"),
-                           "semantic": res.get("semantic")})
-
-    def _v1_liste(self, res, schluessel, grenze=None):
-        """A collection answers `items` – one name for every list on this
-        surface, whatever the engine calls its own.
-
-        These lists are capped, not paged: the engine orders them by what
-        makes them useful (count, then name) and stops at `limit`. Whether
-        the cap cut something off is `has_more` – a caller that needs the
-        rest narrows with `contains` or `source` rather than paging."""
-        daten = dict(res)
-        roh = daten.pop(schluessel, [])
-        if grenze:
-            # The engine was asked for one more than the cap: whether it
-            # came says exactly whether the cap cut something off.
-            daten["items"] = roh[:grenze]
-            daten["limit"] = grenze
-            daten["has_more"] = len(roh) > grenze
-            if "count" in daten:
-                daten["count"] = len(daten["items"])
-        else:
-            daten["items"] = roh
-        return self._json(daten)
-
-    def _v1_dateien(self, _p, q, _data):
-        return self._json(self._files(q))
-
-    def _v1_ordner(self, _p, q, _data):
-        grenze = self._zahl(q, "limit", 300, 1, 1000)
-        return self._v1_liste(self._folders(q, grenze + 1), "folders", grenze)
-
-    def _v1_dateitypen(self, _p, q, _data):
-        return self._v1_liste(self._filetypes(q), "filetypes", self._zahl(q, "limit", 40, 1, 200))
-
-    def _v1_status(self, _p, _q, _data):
-        return self._json(self.app.status())
-
-    def _v1_aehnlich(self, _p, q, _data):
-        """More like this one hit – the index answers it without Ollama."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[], count=0)
-        # The numbers first: an unusable one is the caller's mistake, and
-        # saying so must not depend on the engine being there.
-        cid = self._zahl(q, "cid", 0)
-        grenze = self._zahl(q, "limit", 20, 1, 100)
-        res = mod.similar_messages(cid=cid, k=grenze + 1)
-        if res.get("error"):
-            raise Ablehnung(409, res["error"], items=[], count=0)
-        res["results"] = rest.treffer(res.get("results") or [])
-        return self._v1_liste(res, "results", grenze)
-
+    # -- the three routes that write to the socket themselves ---------------
+    # Everything else on /api/v1 lives in the route modules (api_cases,
+    # api_explore, api_archive, api_app) and answers an api.Antwort; these
+    # stream – the model's answer line by line, a file of the archive, the
+    # calendar compressed – and so keep the handler.
     def _v1_antwort(self, _p, _q, data):
         return self._answer(data)
 
     def _v1_inhalt(self, _p, q, _data):
         return self._source(q)
 
-    # -- the search's two memories -----------------------------------------
-    def _v1_verlauf(self, _p, q, _data):
-        """Every search that ran, newest first – criteria only, never hits.
-        `retention` is what the setting keeps them for, in days."""
-        buch = self.app.faelle
-        grenze = self._zahl(q, "limit", 200, 1, 500)
-        return self._v1_liste(
-            {"verlauf": [rest.verlauf(x) for x in buch.suchen(grenze + 1)],
-             "retention": str(self.app.cfg.get("search_history") or "90")},
-            "verlauf", grenze)
-
-    def _v1_verlauf_leeren(self, _p, _q, _data):
-        self.app.faelle.suchen_leeren()
-        return self._send(204, b"")
-
-    def _v1_gespeicherte(self, _p, _q, _data):
-        return self._json({"items": [rest.gespeicherte_suche(g)
-                                     for g in self.app.faelle.gespeicherte()]})
-
-    def _v1_suche_eine(self, p, _q, _data):
-        """One saved search – what `Location` named when it was saved."""
-        g = self.app.faelle.gespeichert(self._v1_suche_kennung(p))
-        if g is None:
-            raise Ablehnung(404, "srv.search.unknown")
-        return self._json({"search": rest.gespeicherte_suche(g)})
-
-    def _v1_speichern(self, _p, _q, data):
-        buch = self.app.faelle
-        fall_id = self._v1_fall_aus(data)
-        ordner = self._ordner_aus(data, "case_folder")
-        if ordner is not None and fall_id is None:
-            # A folder is a case's: named without one, the request is
-            # malformed – not accepted and dropped, as the case book would.
-            raise Ablehnung(400, "srv.case.folder.nocase")
-        try:
-            neu = buch.speichern(data.get("name"), faelle.kriterien(data.get("criteria")),
-                                 fall_id, ordner)
-        except ValueError:
-            raise Ablehnung(400, "srv.case.noname") from None
-        return self._json({"search": rest.gespeicherte_suche(buch.gespeichert(neu))}, 201,
-                          extra={"Location": f"{API_V1}/searches/saved/{neu}"})
-
-    def _v1_suche_aendern(self, p, _q, data):
-        """PATCH: the fields the body names. `name` renames, `case` attaches
-        the search to a case (`null` detaches it) and `case_folder` says
-        into which of its folders new hits go – on its own, for the case
-        the search is attached to; with `case`, for the new one."""
-        buch, kennung = self.app.faelle, self._v1_suche_kennung(p)
-        aktuell = buch.gespeichert(kennung)
-        if aktuell is None:
-            raise Ablehnung(404, "srv.search.unknown")
-        if "name" in data and not str(data.get("name") or "").strip():
-            raise Ablehnung(400, "srv.case.noname")
-        fall_id = self._v1_fall_aus(data) if "case" in data else aktuell["fall"]
-        if "case_folder" in data:
-            ordner = self._ordner_aus(data, "case_folder")
-        else:
-            # Only the named fields change: the folder stays with its case
-            # and goes only when the case does – a folder is one case's.
-            ordner = aktuell["ordner"] if fall_id == aktuell["fall"] else None
-        if ordner is not None and fall_id is None:
-            # A folder is a case's; a search attached to none has nothing
-            # it could file into – the same 400 the POST gives.
-            raise Ablehnung(400, "srv.case.folder.nocase")
-        if fall_id is not None and ("case" in data or "case_folder" in data):
-            # Judged before the rename: a closed case or a folder it lacks
-            # must not leave the new name behind. The case book raises,
-            # the dispatcher answers – the one mapping for every route.
-            fall = self.app.faelle.fall(fall_id)
-            if fall is None:
-                raise Ablehnung(404, "srv.case.unknown")
-            self._v1_fall_offen(fall, ordner)
-        if "name" in data:
-            buch.umbenennen(kennung, data.get("name"))
-        if "case" in data or "case_folder" in data:
-            buch.anhaengen(kennung, fall_id, ordner)
-        return self._json({"search": rest.gespeicherte_suche(buch.gespeichert(kennung))})
-
-    def _v1_suche_loeschen(self, p, _q, _data):
-        if not self.app.faelle.loeschen(self._v1_suche_kennung(p)):
-            raise Ablehnung(404, "srv.search.unknown")
-        return self._send(204, b"")
-
-    def _v1_suche_kennung(self, p):
-        return self._v1_id(p, "id", "srv.search.unknown")
-
-    def _v1_fall_aus(self, data, feld="case"):
-        """The case a body names: a number, or None for "no case". A case
-        that does not exist is a 404, not a silent detach."""
-        wert = data.get(feld)
-        if wert in (None, "", 0, "0"):
-            return None
-        try:
-            kennung = int(wert)
-        except (TypeError, ValueError):
-            # Not a missing case but a malformed request – like a folder
-            # that is no id (`_ordner_aus`).
-            raise Ablehnung(400, "srv.case.badcase", {"value": str(wert)[:40]}) from None
-        if self.app.faelle.fall(kennung) is None:
-            raise Ablehnung(404, "srv.case.unknown")
-        return kennung
-
-    def _v1_personen(self, _p, q, _data):
-        grenze = self._zahl(q, "limit", 50, 1, 200)
-        return self._v1_liste(self._people(q, grenze + 1), "people", grenze)
-
-    def _v1_adressen(self, _p, q, _data):
-        grenze = self._zahl(q, "limit", 12, 1, 100)
-        return self._v1_liste(self._addresses(q, grenze + 1), "addresses", grenze)
-
-    def _v1_gespraech(self, _p, q, _data):
-        grenze = self._zahl(q, "limit", 50, 1, 200)
-        res = self._thread(q, grenze + 1)
-        res["messages"] = rest.treffer(res.get("messages") or [])
-        return self._v1_liste(res, "messages", grenze)
-
-    def _v1_dokument(self, _p, q, _data):
-        return self._json(self._document(q))
-
-    def _v1_fakten(self, _p, q, _data):
-        return self._json(self._detail(q))
-
-    def _v1_anhang(self, _p, q, _data):
-        """One attachment of a mail as a download: the n-th real one
-        (1-based), in the order the facts list them – so what the detail
-        shows as a chip is what this hands out."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        n = self._zahl(q, "n", 1, 1, 999)
-        con = mod._db()
-        try:
-            row = con.execute("SELECT src, root, rel FROM chunks WHERE uid = ? AND seq = 0",
-                              (q.get("uid", ""),)).fetchone()
-        finally:
-            con.close()
-        if row is None:
-            raise Ablehnung(404, "srv.detail.none")
-        teil = None
-        if row["src"] == "outlook":
-            ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
-            teil = detail.anhang(ziel, n) if ziel is not None else None
-        if teil is None:
-            raise Ablehnung(404, "srv.attach.none", {"n": n})
-        name, inhalt, ctype = teil
-        # What lies in a mail was written by someone else: offered as a
-        # download under a harmless name, never shown in this origin.
-        return self._send(200, inhalt, ctype, extra={
-            "Content-Disposition": f'attachment; filename="{_sicherer_name(name)}"',
-            "Content-Security-Policy": "sandbox"})
-
     def _v1_kalender(self, _p, _q, _data):
         return self._calendar()
 
-    def _v1_umgebung(self, _p, _q, _data):
-        return self._json(self.app.umgebung())
-
-    def _v1_bestand(self, _p, _q, _data):
-        return self._json(self.app.bestand())
-
-    def _v1_konfig(self, _p, _q, _data):
-        return self._json({"config": self.app.cfg})
-
-    def _v1_konfig_aendern(self, _p, _q, data):
-        """PATCH: the keys the body names, the rest stays – the same merge
-        the app's own route does, under the method that says so."""
-        return self._json({"config": self._save_config(data)["config"]})
-
-    # -- Route implementations --------------------------------------------
-    def _bilanz_holen(self, eintrag):
-        """"Fetch now" on a balance row: only what the row found open, the
-        cheapest way each source allows. The mailbox: a resync limited to
-        the folders with something open. The mirrors: the open files by
-        id, straight from the stored report – no walk – unless the report
-        had to cap them, then a resync. Every other source: its regular
-        run, which fetches what changed anyway. The row is judged afresh
-        at the end of the same run (the mirrors adjust it themselves)."""
-        app = self.app
-        quelle = eintrag["quelle"]
-        if app.jobs.busy:
-            raise Ablehnung(409, "srv.busy")
-        ordner = eintrag["ordner"]
-        with state_db.StateDb(BASE / EXPORT_ORDNER[ordner]) as db:
-            bericht = completeness.lesen(db, quelle) or {}
-        anfrage = {**eintrag["lauf"], "index": True, eintrag["anfrage"]: True}
-        (key,) = [k for k, an in eintrag["lauf"].items() if an]
-        if ordner == "outlook":
-            ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
-                                 resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []])
-        elif ordner in ("onedrive", "sharepoint") and bericht.get("offene") \
-                and not bericht.get("offene_gekappt"):
-            liste = HEIM / f"nachholen-{key}.json"
-            export_util.schreibe_atomar(liste, json.dumps(
-                {"quelle": key, "dateien": bericht["offene"]}, ensure_ascii=False))
-            anfrage.pop(eintrag["anfrage"])          # the fetch adjusts the row itself
-            ok, why = app.launch(anfrage, label='job.holen', sync_now=True,
-                                 nachholen={"quelle": key, "liste": str(liste)})
-        elif ordner in ("onedrive", "sharepoint"):
-            ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True)
-        else:
-            ok, why = app.launch(anfrage, label='job.holen', sync_now=True)
-        if not ok:
-            raise Ablehnung(409, why)
-        return self._lauf_antwort()
-
-    def _archiv(self, aktion, data):
-        """The archive check's actions (archive_check.py): one source at a
-        time, explicit, each a run of its own – the run window shows what
-        happens, the run history keeps it, and nothing runs while another
-        run writes into the folders. The step judges the source afresh
-        afterwards and updates its row in the stored report; the rebuild's
-        run carries the source's export and the index behind it. Opening
-        the folder is no process and answers at once."""
-        app = self.app
-        quelle = str(data.get("quelle") or "").strip()
-        unterordner = EXPORT_ORDNER.get(quelle)
-        if unterordner is None or quelle not in archive_check.PRUEFER:
-            # Unreachable from /sources, whose routes resolve the source
-            # first – but when it answers, it answers like them: a name
-            # that is none of the eight is a 404.
-            raise Ablehnung(404, "srv.archiv.unknown", {"source": quelle})
-        ordner = BASE / unterordner
-        if aktion == "ordner":
-            if not archive_check.ordner_oeffnen(ordner if ordner.is_dir() else BASE):
-                raise Ablehnung(500, "srv.archiv.open.fail")
-            return self._json({"path": str(ordner if ordner.is_dir() else BASE)})
-        if app.jobs.busy:
-            raise Ablehnung(409, "srv.busy")
-        if not ordner.is_dir() or (aktion == "neu-aufbauen"
-                                   and not archive_check.beschaedigte(ordner)):
-            return self._json({"message": {"k": "srv.archiv.nothing", "v": {}}})
-        if aktion == "nachholen":
-            # "Fetch again": exactly the files the stored report found
-            # missing or short, written to a list the source's step reads;
-            # the row is judged afresh at the end of the same run.
-            zeile = archive_check.zeile_lesen(archiv_bericht_pfad(), quelle)
-            befunde = (zeile or {}).get("befunde") or {}
-            dateien = list(befunde.get("fehlt") or []) + list(befunde.get("unvollstaendig") or [])
-            if not dateien:
-                return self._json({"message": {"k": "srv.archiv.nothing", "v": {}}})
-            liste = HEIM / f"nachholen-{quelle}.json"
-            export_util.schreibe_atomar(liste, json.dumps(
-                {"quelle": quelle, "dateien": dateien}, ensure_ascii=False))
-            ok, why = app.launch({quelle: True, "index": True, "archiv_pruefen": True},
-                                 label='job.archiv.nachholen', sync_now=True,
-                                 archiv={"quelle": quelle},
-                                 nachholen={"quelle": quelle, "liste": str(liste)})
-            if not ok:
-                raise Ablehnung(409, why)
-            return self._lauf_antwort()
-        anfrage = {"archiv_" + aktion.replace("-", "_"): True}
-        if aktion == "neu-aufbauen":
-            anfrage.update({quelle: True, "index": True})
-        arten = [str(a) for a in (data.get("arten") or ["verloren"])
-                 if str(a) in archive_check.ARTEN_VERMERKBAR] or ["verloren"]
-        ok, why = app.launch(anfrage, label='job.archiv.' + aktion,
-                             sync_now=aktion == "neu-aufbauen",
-                             archiv={"quelle": quelle, "arten": arten})
-        if not ok:
-            raise Ablehnung(409, why)
-        return self._lauf_antwort()
-
+    # -- the page and the three streams ------------------------------------
     def _page(self):
         """Serve the interface together with its strings.
 
@@ -4135,202 +3020,6 @@ class Handler(BaseHTTPRequestHandler):
         return (seite().replace("/*__I18N__*/", nutzlast)
                     .replace("/*__STEPS__*/", schritte)
                     .replace("/*__PRUEFUNGEN__*/", pruefungen_meta))
-
-    def _save_token(self, data):
-        token = normalize_token(data.get("token"))
-        if not token:
-            raise Ablehnung(400, "srv.token.empty")
-        if len(token) < 40:
-            raise Ablehnung(400, "srv.token.short")
-        write_token(token)
-        self.app.jobs.token_expired = False
-        st = token_status(token, needed=self.app.selected_categories())
-        if st["expired"]:
-            raise Ablehnung(400, "srv.token.stale", token=st)
-        msg = ({"k": "srv.token.saved.scopes", "v": {"list": ", ".join(st["missing"])}}
-               if st["missing"] else {"k": "srv.token.saved", "v": {}})
-        self.app.jobs.log(msg, "warn" if st["missing"] else "ok")
-        return {"message": msg, "token": st}
-
-    def _save_config(self, data):
-        def uebernehmen(cfg):
-            if "outlook_categories" in data:
-                cfg["outlook_categories"] = _clean_categories(
-                    data["outlook_categories"], ["mail", "calendar", "contacts"])
-            if "teams_categories" in data:
-                cfg["teams_categories"] = _clean_categories(
-                    data["teams_categories"], ["1on1", "group", "meeting", "channels"])
-            for key in ("embed_model",
-                        "chat_model", "ollama"):
-                if key in data and str(data[key]).strip():
-                    cfg[key] = str(data[key]).strip()
-            # Bounds so a mistyped number cannot cripple the next run: Graph
-            # allows 4 concurrent requests per mailbox, anything above mostly
-            # produces throttling; ports beyond 65535 do not exist.
-            for key, low, high in (("workers", 1, 8), ("mirror_workers", 1, 16),
-                                   ("mcp_port", 1024, 65535),
-                                   ("index_batch", 1, 512), ("answer_sources", 1, 20),
-                                   ("semantic_min", 0, 95),
-                                   ("onedrive_max_mb", 0, 100000),
-                                   ("sharepoint_max_mb", 0, 100000),
-                                   ("sharepoint_pages_image_max_mb", 0, 100),
-                                   ("onenote_image_max_mb", 0, 100),
-                                   ("teams_files_max_mb", 0, 100000),
-                                   # 0 = the whole calendar, every run.
-                                   ("calendar_months_back", 0, 240),
-                                   # 0 = never re-read the chat comments.
-                                   ("planner_sweep_hours", 0, 8760),
-                                   ("search_results", 5, 100),
-                                   # Below five seconds the page would ask
-                                   # more often than anything can change.
-                                   ("status_poll_seconds", 5, 600),
-                                   # 0 means: userflow recording off.
-                                   ("userflow_actions", 0, 50),
-                                   ("runs_retention_months", 1, 120),
-                                   ("log_retention_days", 1, 365)):
-                if key in data:
-                    try:
-                        cfg[key] = max(low, min(high, int(data[key])))
-                    except (TypeError, ValueError):
-                        pass
-            for key in ("mcp_enabled", "mcp_autostart", "update_check", "embed_images", "cache_images",
-                        "refresh_channels", "skip_empty_chats", "include_hidden",
-                        "calendar_reconstruct", "ollama_enabled", "index_semantic",
-                        # Missing since the checkbox exists: the state reached
-                        # the run but never survived a page rebuild.
-                        "onedrive_enabled", "sharepoint_enabled",
-                        "sharepoint_pages_enabled", "planner_enabled",
-                        "planner_attachments", "todo_enabled",
-                        "onenote_enabled", "teams_attachments",
-                        "teams_channel_files", "keep_awake", "mcp_cases_write"):
-                if key in data:
-                    cfg[key] = bool(data[key])
-            if "search_history" in data:
-                wahl = str(data["search_history"] or "").strip().lower()
-                if wahl in HISTORIE_WAHL:
-                    cfg["search_history"] = wahl
-                    # The new rule applies at once – "off" empties the list.
-                    self.app.faelle.aufraeumen(historie_tage(cfg))
-            if "case_export_dir" in data:
-                cfg["case_export_dir"] = str(data["case_export_dir"] or "").strip()
-            # Who counts as internal, and who you are – both plain text
-            for k in ("internal_domains", "own_name"):
-                if k in data:
-                    cfg[k] = str(data[k] or "").strip()
-            # Whoever switches Ollama off no longer means the check from just now.
-            if "ollama_enabled" in data:
-                self.app._ollama_cache = (0, None)
-            if "calendar_rules" in data:
-                cfg["calendar_rules"] = folders.schreibe_regeln(
-                    folders.lies_regeln(str(data["calendar_rules"] or "")))
-            if "folder_rules" in data:
-                cfg["folder_rules"] = folders.schreibe_regeln(
-                    folders.lies_regeln(str(data["folder_rules"] or "")))
-            for key in ("sharepoint_urls", "sharepoint_pages_urls",
-                        "planner_urls"):
-                if key in data:
-                    cfg[key] = "\n".join(
-                        z.strip() for z in str(data[key] or "").splitlines()
-                        if z.strip())
-            for key in ("sharepoint_types_include", "sharepoint_types_exclude"):
-                if key in data:
-                    cfg[key] = ", ".join(
-                        e for e in (s.strip().lstrip(".").lower()
-                                    for s in str(data[key] or "").split(","))
-                        if e)
-            if "onedrive_rules" in data:
-                cfg["onedrive_rules"] = folders.schreibe_regeln(
-                    folders.lies_regeln(str(data["onedrive_rules"] or "")))
-            for key in ("onenote_rules", "teams_rules", "sharepoint_rules",
-                        "todo_rules"):
-                if key in data:
-                    cfg[key] = folders.schreibe_regeln(
-                        folders.lies_regeln(str(data[key] or "")))
-            # A day or nothing: anything else would silently mean "nothing
-            # older than never".
-            for key in ("outlook_since", "teams_since"):
-                if key in data:
-                    cfg[key] = _clean_datum(data[key])
-            if "analytics_skip" in data:
-                cfg["analytics_skip"] = _clean_zeilen(data["analytics_skip"])
-            if "mcp_enabled" in data and not cfg.get("mcp_enabled", True):
-                self.app.mcp.stop()
-            if "filetype_hidden" in data:
-                cfg["filetype_hidden"] = _clean_endungen(data["filetype_hidden"])
-            if "skip_folders" in data:
-                cfg["skip_folders"] = _clean_folders(data["skip_folders"])
-            if "auth_mode" in data:
-                # Anything unknown becomes token mode – the path that works
-                # without asking IT.
-                cfg["auth_mode"] = ("login" if str(data["auth_mode"]).strip().lower()
-                                    == "login" else "token")
-            for key in ("client_id", "tenant"):
-                if key in data:
-                    cfg[key] = str(data[key] or "").strip()
-            if "sync_cadence" in data and isinstance(data["sync_cadence"], dict):
-                cfg["sync_cadence"] = {
-                    str(k): v for k, v in data["sync_cadence"].items()
-                    if v in ("always", "daily", "weekly", "monthly")}
-            if "notifications" in data:
-                wert = str(data["notifications"] or "").strip().lower()
-                if wert in ("off", "errors", "all"):
-                    cfg["notifications"] = wert
-            if "tour_seen" in data and isinstance(data["tour_seen"], dict):
-                cfg["tour_seen"] = {k: bool(v) for k, v in data["tour_seen"].items()
-                                    if k in ("archiv", "suche", "quelle")}
-            if "language" in data:
-                # Only known codes – one typo otherwise and the interface would
-                # speak the fallback language forever.
-                gewuenscht = str(data["language"] or "auto").strip().lower()
-                erlaubt = {e["code"] for e in i18n.available(RES)} | {"auto"}
-                if gewuenscht in erlaubt:
-                    cfg["language"] = gewuenscht
-        self.app.konfiguriere(uebernehmen)
-        return {"config": self.app.cfg}
-
-    def _save_schedule(self, data):
-        vorher = dict(self.app.cfg["schedule"])
-
-        def uebernehmen(cfg):
-            plan = cfg["schedule"]
-            for key in ("enabled", "outlook", "teams", "onedrive",
-                        "sharepoint", "sharepoint_pages", "planner", "todo",
-                        "onenote", "index", "calendar"):
-                if key in data:
-                    plan[key] = bool(data[key])
-            if "interval_minutes" in data:
-                try:
-                    plan["interval_minutes"] = max(
-                        5, int(data["interval_minutes"]))
-                except (TypeError, ValueError):
-                    pass
-        self.app.konfiguriere(uebernehmen)
-        plan = self.app.cfg["schedule"]
-        # Unchanged plan, unchanged clock. The page already asks before it
-        # posts; this covers everyone else on the documented API, for whom
-        # a no-op save would otherwise push a nearly due run back by a
-        # whole interval.
-        if plan != vorher:
-            self.app.scheduler.reset()
-            self.app.jobs.logk("srv.sched.state", "info",
-                               min=plan["interval_minutes"],
-                               state={"k": "srv.sched.on" if plan["enabled"]
-                                      else "srv.sched.off", "v": {}})
-        return {"schedule": plan,
-                "next": self.app.scheduler.next_due()}
-
-    def _mcp(self, an):
-        """Start or stop the MCP server – what `running` on PATCH /mcp
-        asks for. A refused start still answers the server's state, so
-        the page can draw it."""
-        if an:
-            ok, why = self.app.mcp.start(self.app.cfg)
-            stand = self.app.mcp.status(self.app.cfg)
-            if not ok:
-                raise Ablehnung(409, why, mcp=stand)
-            return {"message": why, "mcp": stand}
-        self.app.mcp.stop()
-        return {"mcp": self.app.mcp.status(self.app.cfg)}
 
     def _answer(self, data):
         """Have an answer worded from the hits of a search.
@@ -4397,499 +3086,6 @@ class Handler(BaseHTTPRequestHandler):
             schicke({"done": True})
         except (BrokenPipeError, ConnectionResetError):
             pass          # window closed or aborted – no reason for noise
-
-    def _search(self, q, merken=True):
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[], count=0)
-        k = faelle.kriterien(q)
-        mod.STATE["internal_domains"] = self._interne_domains()
-        kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
-                  source=k["source"],
-                  # `limit` is the name everywhere else in the API; `k` is
-                  # the search's own and stays. One above the largest page
-                  # is allowed: that is how /api/v1/search sees has_more.
-                  k=self._zahl(q, "k", q.get("limit") or 20, 1, 101),
-                  offset=self._zahl(q, "offset", 0, 0),
-                  only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
-                  party=k["party"], with_attachments=k["attachments"],
-                  # The four mail lines (13.0): they narrow mail, nothing else.
-                  **{m: k[m] for m in faelle.MAIL},
-                  # The "Cases" filter: only what one case – or one of its
-                  # folders – holds.
-                  case=str(k["fall"]) if k["fall"] else "",
-                  case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "")
-        if k["q"]:
-            res = mod.search_messages(query=k["q"], mode=_modus(q.get("mode")), **kw)
-        else:
-            res = mod.browse_messages(**kw)
-        if res.get("error"):
-            # The engine's own refusals: a filter naming an unknown case or
-            # folder, a mode this index cannot rank, the embedder failing.
-            raise Ablehnung(409, res["error"], hits=[], count=0)
-        res["semantic"] = bool(mod.STATE.get("semantic"))
-        if kw["offset"] == 0 and merken:
-            # The first page of a search is the search: the history keeps
-            # its criteria (never its hits) when the setting allows, and a
-            # saved search that was run remembers when and how many.
-            if historie_tage(self.app.cfg) != 0:
-                self.app.faelle.suche_merken(k, res.get("count", 0))
-            try:
-                gespeichert = self._zahl(q, "saved", 0, 0)
-            except ValueError:
-                gespeichert = 0
-            if gespeichert:
-                self.app.faelle.gelaufen(gespeichert, res.get("count", 0))
-        return res
-
-    def _interne_domains(self):
-        """Which mail domains are "us": the setting, else the domain of the
-        signed-in account – handed to the search engine with every search,
-        so a changed setting counts at once."""
-        roh = str(self.app.cfg.get("internal_domains") or "").strip()
-        if roh:
-            return roh
-        konto = str(token_status(read_token()).get("account") or "")
-        return konto.rsplit("@", 1)[1].lower() if "@" in konto else ""
-
-    def _alle_treffer(self, k, grenze=5000):
-        """Every hit of a search, for a result list: the criteria as the
-        page had them, paged through the same engine up to `grenze`."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        mod.STATE["internal_domains"] = self._interne_domains()
-        kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
-                  source=k["source"], only_gone=k["gone"], folder=k["folder"],
-                  filetype=k["filetype"], with_attachments=k["attachments"],
-                  case=str(k["fall"]) if k["fall"] else "",
-                  case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
-                  party=k["party"], preview_chars=0,
-                  **{m: k[m] for m in faelle.MAIL})
-        modus = MODUS[k["mode"]]
-        treffer, offset, schritt = [], 0, 100
-        while offset < grenze:
-            if k["q"]:
-                res = mod.search_messages(query=k["q"], mode=modus, k=schritt, offset=offset, **kw)
-            else:
-                res = mod.browse_messages(k=schritt, offset=offset, **kw)
-            if res.get("error"):
-                return None, res["error"]
-            seite = res.get("results") or []
-            treffer += seite
-            if len(seite) < schritt:
-                break
-            offset += schritt
-        return treffer[:grenze], None
-
-    # -- what a body names ---------------------------------------------------
-    @staticmethod
-    def _ordner_aus(data, feld="ordner"):
-        """A folder id from a request body: an integer, or None for
-        "unsorted". Anything else is the caller's mistake – silently
-        unfiling an item on a value nobody could read looks exactly like
-        the documented way to say "out of its folder"."""
-        wert = data.get(feld)
-        if wert in (None, "", 0, "0"):
-            return None
-        try:
-            return int(wert)
-        except (TypeError, ValueError):
-            raise Ablehnung(400, "srv.case.badfolder",
-                            {"value": str(wert)[:40]}) from None
-
-    # -- what a case is, beyond what the case book keeps ---------------------
-    def _fall_voll(self, kennung):
-        """The case as every write answers it – with the conversations'
-        state on its items."""
-        fall = self.app.faelle.fall(kennung)
-        if fall is not None:
-            self._index_stand(fall)
-        return fall
-
-    def _index_stand(self, fall):
-        """What the index knows about the case's items beyond what the case
-        remembers: `thread_offen` – how many messages of the item's
-        conversation the case lacks, 0 where there is none – and
-        `wer_mail`, the address behind `wer` where the index has one. Two
-        queries, whatever the case's size; an index without the columns
-        leaves the zeros and the empty strings."""
-        for e in fall["eintraege_liste"]:
-            e["thread_offen"] = 0
-            e["wer_mail"] = ""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None or not fall["eintraege_liste"]:
-            return
-        try:
-            con = mod._db()
-        except Exception:
-            return
-        try:
-            if not mod._hat_spalte(con, "key"):
-                return
-            mit_thread = mod._hat_spalte(con, "thread")
-            mit_adresse = mod._hat_spalte(con, "who_mail")
-            if not (mit_thread or mit_adresse):
-                return
-            mod._keys_tabelle(con, {e["key"] for e in fall["eintraege_liste"]})
-            felder = "key, " + ("thread" if mit_thread else "NULL") + ", " + ("who_mail" if mit_adresse else "NULL")
-            je_key, im_fall, adressen = {}, {}, {}
-            for key, thread, who_mail in con.execute(
-                    f"SELECT {felder} FROM chunks WHERE seq = 0 AND key IN (SELECT key FROM fallkeys)"):
-                if thread:
-                    je_key[key] = thread
-                    im_fall[thread] = im_fall.get(thread, 0) + 1
-                if who_mail:
-                    adressen[key] = who_mail
-            for e in fall["eintraege_liste"]:
-                e["wer_mail"] = adressen.get(e["key"], "")
-            if not je_key:
-                return
-            con.execute("CREATE TEMP TABLE IF NOT EXISTS fallthreads(thread TEXT PRIMARY KEY)")
-            con.execute("DELETE FROM fallthreads")
-            con.executemany("INSERT OR IGNORE INTO fallthreads(thread) VALUES(?)",
-                            ((t,) for t in im_fall))
-            gesamt = dict(con.execute(
-                "SELECT thread, COUNT(*) FROM chunks WHERE seq = 0 AND key IS NOT NULL AND key != '' "
-                "AND thread IN (SELECT thread FROM fallthreads) GROUP BY thread"))
-            for e in fall["eintraege_liste"]:
-                t = je_key.get(e["key"])
-                if t:
-                    e["thread_offen"] = max(0, gesamt.get(t, 0) - im_fall.get(t, 0))
-        finally:
-            con.close()
-
-    def _gespraeche_moeglich(self):
-        """Can this index answer for conversations at all? The columns came
-        with 11.0/11.1; an older index cannot, and that has to be known
-        before anything is written."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        con = mod._db()
-        try:
-            if not (mod._hat_spalte(con, "thread") and mod._hat_spalte(con, "key")):
-                return {"k": "srv.case.nothread", "v": {}}
-        finally:
-            con.close()
-        return None
-
-    def _thread_holen(self, kennung, keys):
-        """The rest of these items' conversations into the case – each
-        message into the folder its item sits in. Returns (added, error)."""
-        buch = self.app.faelle
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        fall = buch.fall(kennung)
-        con = mod._db()
-        try:
-            if not (mod._hat_spalte(con, "thread") and mod._hat_spalte(con, "key")):
-                return 0, {"k": "srv.case.nothread", "v": {}}
-            im_fall = {e["key"]: e for e in fall["eintraege_liste"]}
-            neu = 0
-            for key in keys:
-                e = im_fall.get(key)
-                if e is None:
-                    continue
-                r = con.execute("SELECT thread FROM chunks WHERE key = ? AND seq = 0 LIMIT 1",
-                                (key,)).fetchone()
-                if r is None or not r[0]:
-                    continue
-                rows = con.execute(
-                    "SELECT * FROM chunks WHERE thread = ? AND seq = 0 AND key IS NOT NULL AND key != '' "
-                    "ORDER BY ts IS NULL, ts LIMIT 500", (r[0],)).fetchall()
-                eintraege = [{"key": m["key"], "src": m["src"], "root": m["root"], "rel": m["rel"],
-                              "titel": m["title"], "datum": m["date"], "wer": m["who"]}
-                             for m in rows if m["key"] not in im_fall]
-                if eintraege:
-                    neu += buch.hinzufuegen(kennung, eintraege, ordner_id=e.get("ordner"))
-                    for x in eintraege:
-                        im_fall[x["key"]] = x
-            return neu, None
-        finally:
-            con.close()
-
-
-    def _fall_export(self, kennung):
-        """The export as a run of its own (case_export.py): one ZIP, named
-        here before the run, so the answer can already say where it will
-        lie."""
-        app = self.app
-        fall = app.faelle.fall(kennung)
-        if app.jobs.busy:
-            raise Ablehnung(409, "srv.busy")
-        basis = fall_export_basis(app.cfg)
-        try:
-            basis.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise Ablehnung(400, "srv.case.exportdir", {"error": str(e)}) from None
-        ziel = case_export.zielordner(basis, fall["name"])
-        ok, why = app.launch({"fall_export": True}, label="job.case_export",
-                             fall_export={"faelle": str(HEIM / faelle.DB_NAME), "fall": kennung,
-                                          "ziel": str(ziel),
-                                          "lang": app.ui_lang or i18n.negotiate(app.cfg.get("language"), None, RES),
-                                          "res": str(RES)})
-        if not ok:
-            raise Ablehnung(409, why)
-        return self._lauf_antwort(extra={"path": str(ziel.with_suffix(".zip"))})
-
-
-    def _thread(self, q, grenze):
-        """All messages of one conversation – the same evaluation as in MCP."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[], count=0)
-        res = mod.get_thread(thread=q.get("key", ""),
-                             limit=grenze)
-        if res.get("error"):
-            raise Ablehnung(409, res["error"], items=[], count=0)
-        # Every message says which cases it sits in – the add-to-case
-        # window counts from that how much of the conversation is there.
-        marken = getattr(mod, "_mit_faellen", None)
-        if res.get("messages") and marken:
-            marken(res["messages"])
-        return res
-
-    def _folders(self, q, grenze):
-        """Which mailbox folders are in the archive – for the filter."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[])
-        return mod.list_folders(contains=q.get("contains", ""),
-                                limit=grenze,
-                                source=q.get("source", ""))
-
-    def _ordnerplan(self, data):
-        """What the next run would do – without starting it.
-
-        Takes the rules from the form, not the saved ones: otherwise the
-        preview would show the previous state while the new rule already
-        sits next to it.
-
-        Three sources, one evaluation. The difference is small enough that
-        further copies do not pay: for the mailbox the `.eml` files count,
-        for the calendars the `.ics`, for the mirror all files.
-        """
-        cfg = self.app.cfg
-        quelle = str(data.get("quelle") or "")
-        if quelle == "sharepoint":
-            return self._sharepoint_plan(data.get("sharepoint_rules"))
-        if quelle == "onenote":
-            return self._notizbuch_plan(data.get("onenote_rules"))
-        if quelle == "teams":
-            return self._teams_plan(data.get("teams_rules"))
-        if quelle == "todo":
-            return self._todo_plan(data.get("todo_rules"))
-        datei = folders.KALENDER if quelle == "calendar" else folders.DATEI
-        if quelle == "onedrive":
-            ordner, endung = BASE / ONEDRIVE_DIR, None
-        else:
-            ordner, endung = BASE / OUTLOOK_DIR, (
-                ".ics" if quelle == "calendar" else ".eml")
-        daten = folders.lade(ordner, datei)
-        if not daten:
-            raise Ablehnung(404, "srv.plan.nolist", leer=True)
-        if quelle == "onedrive":
-            regeln = folders.lies_regeln(
-                data.get("onedrive_rules")
-                if data.get("onedrive_rules") is not None
-                else cfg.get("onedrive_rules") or "")
-        elif quelle == "calendar":
-            regeln = kalenderregeln(cfg, daten, data.get("calendar_rules"))
-        else:
-            regeln = auswahlregeln(cfg, data.get("folder_rules"),
-                                   data.get("skip_folders"))
-        return {"regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(ordner, regeln, daten, endung, datei)}
-
-    def _notizbuch_plan(self, roh):
-        """The export list for the notebooks: the stored list against the
-        rules from the form, pages counted per notebook. A notebook keeps
-        its pages in section folders, so the count on disk is summed up
-        to the notebook – and every folder in the export root is walked,
-        so a notebook that left the list still shows as "only here"."""
-        wurzel = BASE / ONENOTE_DIR
-        daten = folders.lade(wurzel, folders.NOTIZBUECHER)
-        if not daten:
-            raise Ablehnung(404, "srv.plan.nolist", leer=True)
-        regeln = notizbuchregeln(self.app.cfg, roh)
-        wurzeln = {e["pfad"].split("/")[0] for e in daten.get("ordner", [])}
-        if wurzel.is_dir():
-            wurzeln |= {p.name for p in wurzel.iterdir() if p.is_dir()}
-        je_buch = {}
-        for pfad, n in folders.auf_platte(wurzel, sorted(wurzeln), ".html").items():
-            buch = pfad.split("/")[0]
-            je_buch[buch] = je_buch.get(buch, 0) + n
-        return {"regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(wurzel, regeln, daten, ".html",
-                               folders.NOTIZBUECHER, archiv=je_buch)}
-
-    def _teams_plan(self, roh):
-        """The export list for Teams: the stored conversation list against
-        the rules from the form. A conversation is one file, named after
-        its title with the id as suffix – so "in the archive" is counted
-        per title, and a file whose title left the list shows as "only
-        here"."""
-        wurzel = BASE / TEAMS_DIR
-        daten = folders.lade(wurzel, folders.DATEI)
-        if not daten:
-            raise Ablehnung(404, "srv.plan.nolist", leer=True)
-        regeln = teamsregeln(self.app.cfg, roh)
-        archiv = {}
-        if wurzel.is_dir():
-            for datei in wurzel.glob("*/*.html"):
-                archiv[f"{datei.parent.name}/{_ohne_kennung(datei.stem)}"] = \
-                    archiv.get(f"{datei.parent.name}/{_ohne_kennung(datei.stem)}", 0) + 1
-            for datei in wurzel.glob("channels/*/*.html"):
-                pfad = f"channels/{datei.parent.name}/{_ohne_kennung(datei.stem)}"
-                archiv[pfad] = archiv.get(pfad, 0) + 1
-        return {"regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(wurzel, regeln, daten, ".html",
-                               folders.DATEI, archiv=archiv)}
-
-    def _todo_plan(self, roh):
-        """The export list for To Do: the stored list of lists against the
-        rules from the form; a list's folder carries the id as suffix, its
-        tasks are counted from the folder's state."""
-        wurzel = BASE / TODO_DIR
-        daten = folders.lade(wurzel, folders.DATEI)
-        if not daten:
-            raise Ablehnung(404, "srv.plan.nolist", leer=True)
-        regeln = todoregeln(self.app.cfg, roh)
-        archiv = {}
-        if wurzel.is_dir():
-            for ordner in wurzel.iterdir():
-                if not ordner.is_dir() or ordner.name.startswith("."):
-                    continue
-                try:
-                    with state_db.StateDb(ordner) as db:
-                        n = len(json.loads(db.kv_lesen("tasks") or "{}"))
-                except ValueError:
-                    n = 0
-                pfad = _ohne_kennung(ordner.name)
-                archiv[pfad] = archiv.get(pfad, 0) + n
-        return {"regeln": folders.schreibe_regeln(regeln),
-                **folders.plan(wurzel, regeln, daten, ".html",
-                               folders.DATEI, archiv=archiv)}
-
-    def _sharepoint_plan(self, roh=None):
-        """The export list for the SharePoint mirror: every library's tree,
-        paths prefixed with site/library, judged by the path rules on top
-        of the URL list. Each entry names the URLs its library came from,
-        so the page can tell which cadence row paces it."""
-        wurzel = BASE / SHAREPOINT_DIR
-        eintraege, stand = [], None
-        if wurzel.is_dir():
-            for lib in sorted(p for p in wurzel.glob("*/*") if p.is_dir()):
-                with state_db.StateDb(lib) as db:
-                    d = db.baum_lesen()
-                    if not d:
-                        continue
-                    try:
-                        urls = json.loads(db.kv_lesen("urls") or "[]")
-                    except ValueError:
-                        urls = []
-                praefix = lib.relative_to(wurzel).as_posix()
-                stand = max(stand or "", d.get("abgeglichen") or "") or None
-                for e in d.get("ordner", []):
-                    eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}",
-                                      **({"urls": urls} if urls else {})})
-        if not eintraege:
-            raise Ablehnung(404, "srv.plan.nolist", leer=True)
-        daten = {"ordner": eintraege, "abgeglichen": stand}
-        regeln = sharepointregeln(self.app.cfg, roh)
-        plan = folders.plan(wurzel, regeln, daten, None)
-        # The walk under the site roots also sees each library's bookkeeping
-        # (state.db and other leftovers) – real content lives below Dateien/.
-        plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
-                       if "/Dateien/" in z["pfad"] + "/"]
-        plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
-        return {"regeln": folders.schreibe_regeln(regeln), **plan}
-
-    def _files(self, q):
-        """One level of the mirrored file tree, sizes taken from disk."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, roots=[], dirs=[], files=[])
-        r = mod.list_files(root=q.get("root", ""), path=q.get("path", ""))
-        # The root->directory knowledge lives in one place: the resolver's
-        # STATE, which /source uses too – no second hand-copied map here.
-        ordner = mod.STATE.get(f'{r.get("root")}_dir')
-        basis = Path(ordner) if ordner else None
-        for e in r.get("files") or ():
-            try:
-                e["size"] = (basis / e["rel"]).stat().st_size if basis else None
-            except OSError:
-                e["size"] = None
-        return r
-
-    def _filetypes(self, q):
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[])
-        # Hiding happens here and not in the tool: list_filetypes is meant
-        # to say what is in the archive – to Claude as well. The trimming is
-        # a question of the interface, not of the corpus. Hence fetch
-        # everything first, then hide; the route cuts to the requested
-        # number and knows from what is left whether it cut anything.
-        aus = set(self.app.cfg.get("filetype_hidden") or [])
-        r = mod.list_filetypes(limit=500, source=q.get("source", ""))
-        liste = [e for e in r.get("filetypes", []) if e["type"] not in aus]
-        return {"count": len(liste),
-                "total_distinct": r.get("total_distinct", len(liste)),
-                "hidden": sorted(aus),
-                "filetypes": liste}
-
-    def _people(self, q, grenze):
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[])
-        return mod.list_people(source=q.get("source", "all"),
-                               contains=q.get("contains", ""),
-                               limit=grenze)
-
-    def _addresses(self, q, grenze):
-        """The addresses of one mail line, for the Mail filter's suggestions
-        (13.0). An unknown line is the caller's mistake, not ours."""
-        mod = self.app.search.ensure(self.app.cfg)
-        # A refusal keeps the shape of the answer it replaces: on this
-        # surface a collection is `items`, empty or not.
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error, items=[])
-        res = mod.adressen(role=q.get("role", "from"), q=q.get("contains", ""),
-                           limit=grenze)
-        if res.get("error"):
-            raise Ablehnung(400, res["error"], items=[])
-        return res
-
-    def _document(self, q):
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        res = mod.get_document(uid=q.get("uid", ""),
-                               context_before=self._zahl(q, "before", 0, 0, 20),
-                               context_after=self._zahl(q, "after", 0, 0, 20))
-        if res.get("error"):
-            raise Ablehnung(404, res["error"])
-        return res
-
-    def _detail(self, q):
-        """The facts the hit's detail shows beyond the hit – per kind of
-        item, from the index row and the source file (detail.py). The
-        page draws only the keys that come back."""
-        mod = self.app.search.ensure(self.app.cfg)
-        if mod is None:
-            raise Ablehnung(503, self.app.search.error)
-        con = mod._db()
-        try:
-            row, text = mod._message_text(con, q.get("uid", ""))
-        finally:
-            con.close()
-        if row is None:
-            raise Ablehnung(404, "srv.detail.none")
-        ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
-        return detail.fakten(row, text, ziel, mod.STATE)
 
     def _calendar(self):
         """Serve calendars, reconstructed appointments and contacts in one go.
@@ -5125,6 +3321,11 @@ def eigene_instanz(port, host="127.0.0.1", profil=None, spanne=PORT_VERSUCHE):
         if laeuft_bereits(p, host, timeout=0.5, profil=profil):
             return p
     return None
+
+
+# The running app module – `__main__` when started as a script, `app` when
+# imported: the route modules read the paths and helpers through it.
+Handler.M = sys.modules[__name__]
 
 
 class Wahl(Handler):

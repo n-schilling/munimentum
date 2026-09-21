@@ -188,7 +188,9 @@ edit, sent by nobody but you. *Keep awake during a run* holds the machine
 off idle sleep while an export runs. *Expert mode* collects what almost
 nobody needs day to day, among it the complete HTTP API of the interface
 as an OpenAPI description (`openapi.yaml`, served at `/api/v1/openapi`).
-That is `/api/v1`, the versioned surface meant for scripts of your own —
+That is `/api/v1`, the versioned surface meant for scripts of your own,
+with the usual courtesies — a case carries an `ETag`, a write can be
+asked for the status alone (`Prefer: return=minimal`) —
 since 13.0 the whole app runs on it, the page included, and the App card
 shows its version beside the program's.
 

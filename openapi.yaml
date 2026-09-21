@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.0.0
+  version: 13.2.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -31,8 +31,11 @@ info:
 
     * JSON in, JSON out: not `application/json` is `415`, not an object
       `400`, above 4 MB `413`; an absent body is fine except on `QUERY`.
-    * `PATCH` merges the fields a body names and leaves the rest; there is
-      no `ETag`, so the same field written twice is last-writer-wins.
+    * `PATCH` merges the fields a body names and leaves the rest; the same
+      field written twice is last-writer-wins. A case answers an `ETag`
+      (weak, RFC 9110) that `If-None-Match` turns into a `304`; every
+      write under `/cases` answers the whole case, or with `Prefer:
+      return=minimal` (RFC 7240) the status, `Location` and `ETag` alone.
     * `OPTIONS` answers `Allow` everywhere, a wrong method `405` with it,
       `HEAD` every `GET`. No CORS – one origin, the app's own page.
     * **Capped lists, not pages**: only `/api/v1/search` pages (`limit`,
@@ -147,6 +150,8 @@ paths:
         A case is a name and, if you like, a description – nothing else is
         needed to start one. What it collects comes later, and nothing is
         copied: a case points into the archive.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         content:
           application/json:
@@ -161,6 +166,8 @@ paths:
         "201":
           description: The case; `Location` names where it lives.
           headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
             Location: { description: The new case's path., schema: { type: string } }
           content:
             application/json:
@@ -201,9 +208,12 @@ paths:
         whether a conversation is complete, who wrote.
       parameters:
         - $ref: "#/components/parameters/CaseIdPath"
+        - { $ref: "#/components/parameters/IfNoneMatch" }
       responses:
         "200":
           description: The case with its items, folders, notes and attached searches.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
           content:
             application/json:
               schema:
@@ -211,6 +221,7 @@ paths:
                 required: [case]
                 properties:
                   case: { $ref: "#/components/schemas/Case" }
+        "304": { $ref: "#/components/responses/NotModified" }
         "404":
           description: No such case (srv.case.unknown) – as is an id that is not a number.
           content:
@@ -228,6 +239,7 @@ paths:
         the case: `closed` closes it, `open` opens it again. A status that
         is already the case's changes nothing and is no error.
       parameters:
+        - { $ref: "#/components/parameters/Prefer" }
         - $ref: "#/components/parameters/CaseIdPath"
       requestBody:
         content:
@@ -242,6 +254,9 @@ paths:
       responses:
         "200":
           description: The case as it is now.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema:
@@ -325,6 +340,8 @@ paths:
         should be completed: every message of them that is missing follows,
         into the folder its item sits in. Both may stand in one body.
         `201` when something was added, `200` when everything was there.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -341,11 +358,17 @@ paths:
       responses:
         "201":
           description: What was added, and the case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
         "200":
           description: Nothing new – every item was already there.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -369,6 +392,8 @@ paths:
       operationId: v1MoveCaseItems
       summary: Move several items into one folder
       description: The bulk form of the single item's `folder` – what a selection in the case does.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -382,6 +407,9 @@ paths:
       responses:
         "200":
           description: How many moved, and the case.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -440,6 +468,8 @@ paths:
         folder). The body is read whole before anything is written, so a
         `folder` that is neither an id nor `null` changes nothing at all.
         The whole case comes back.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -452,6 +482,9 @@ paths:
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -479,9 +512,14 @@ paths:
       operationId: v1RemoveCaseItem
       summary: Take an item out of the case
       description: Out of the case only – the archive keeps it.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -530,6 +568,8 @@ paths:
       description: |
         One level deep, and the name has to be free in this case. Items go
         into it when they are added, or with a PATCH afterwards.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -543,6 +583,8 @@ paths:
         "201":
           description: The new folder's id, and the case.
           headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
             Location: { schema: { type: string } }
           content:
             application/json:
@@ -598,6 +640,8 @@ paths:
       summary: Rename a folder
       description: |
         The name has to be free in this case; the items stay where they are.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -610,6 +654,9 @@ paths:
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -637,9 +684,14 @@ paths:
       operationId: v1DeleteCaseFolder
       summary: Drop a folder
       description: The folder goes, its items stay in the case – unsorted.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -688,6 +740,8 @@ paths:
       description: |
         A dated line in the casebook. Empty text is refused – a note that
         says nothing is not a note.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -701,6 +755,8 @@ paths:
         "201":
           description: The new note's id, and the case.
           headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
             Location: { schema: { type: string } }
           content:
             application/json:
@@ -755,6 +811,8 @@ paths:
       summary: Change a note
       description: |
         The text, in place; the date it was written stays.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -767,6 +825,9 @@ paths:
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -791,9 +852,14 @@ paths:
       summary: Delete a note
       description: |
         The note goes, the case stays as it was.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -841,6 +907,8 @@ paths:
         and the list keeps what it was: when it was taken and how many hits
         it had. Dropping the list later takes its items with it.
       x-needs-index: true
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       requestBody:
         required: true
         content:
@@ -855,6 +923,8 @@ paths:
         "201":
           description: The list's id, how many hits it had, how many were new – and the case.
           headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
             Location: { schema: { type: string } }
           content:
             application/json:
@@ -909,9 +979,14 @@ paths:
       operationId: v1DeleteCaseList
       summary: Drop a stored result
       description: The items it brought go with it; what was added another way stays.
+      parameters:
+        - { $ref: "#/components/parameters/Prefer" }
       responses:
         "200":
           description: The case as it now is.
+          headers:
+            ETag: { $ref: "#/components/headers/ETag" }
+            Preference-Applied: { $ref: "#/components/headers/PreferenceApplied" }
           content:
             application/json:
               schema: { $ref: "#/components/schemas/CaseWrite" }
@@ -4345,7 +4420,39 @@ components:
             source entry also carries `befunde` (kind -> the files behind
             the numbers, capped at 5000 per kind – `gekappt` says so) and
             `beiseite`, how many files an earlier "set aside" holds.
+  headers:
+    ETag:
+      description: |
+        The case's entity tag (RFC 9110), weak: a digest of the case as
+        the case book keeps it, and the index's build, since an item's
+        `thread_open` and `who_mail` come from the index. Hand it back as
+        `If-None-Match` to be told with a `304` that nothing changed.
+      schema: { type: string, example: 'W/"9f2c41ab77d0e34b.2026-09-20T18:00:00"' }
+    PreferenceApplied:
+      description: Says the `Prefer` was honoured (RFC 7240) – only on an answer without a body.
+      schema: { type: string, enum: [return=minimal] }
   parameters:
+    Prefer:
+      name: Prefer
+      in: header
+      required: false
+      description: |
+        RFC 7240. Every write under `/cases` answers the whole case it
+        changed – what the page wants, one truth to draw from. A script
+        that only wants to know it worked says `return=minimal` and gets
+        the status (`204`, or `201` – with the new thing's `Location`
+        where one thing was made), the `ETag` and `Preference-Applied` –
+        no body, and none of the counts a full answer carries beside the
+        case. `return=representation` is the default and needs no saying.
+        The page asks this way itself where it wants no more than a new
+        id.
+      schema: { type: string, enum: [return=minimal, return=representation] }
+    IfNoneMatch:
+      name: If-None-Match
+      in: header
+      required: false
+      description: The `ETag` of the last answer (or `*`); a case that still matches is a `304` without a body.
+      schema: { type: string }
     SourcePath:
       name: source
       in: path
@@ -4404,6 +4511,10 @@ components:
       description: The item's uid from a hit (`<source>:<path>:<n>`).
       example: "outlook:E-Mail/Inbox/2026-09-15_offer.eml:0"
   responses:
+    NotModified:
+      description: Nothing changed since the `ETag` given as `If-None-Match` – no body; the tag comes back.
+      headers:
+        ETag: { $ref: "#/components/headers/ETag" }
     NoCase:
       description: No case with this id (srv.case.unknown).
       content:

@@ -195,6 +195,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
 SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py split
+           "api.py", "api_cases.py", "api_explore.py", "api_archive.py", "api_app.py",
            "outlook_export.py", "teams_export.py", "onedrive_export.py",
            "rag_index.py", "combined_search.py", "auth.py",
            "graph_client.py", "drive_mirror.py",

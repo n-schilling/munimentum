@@ -537,8 +537,20 @@ def test_kein_handler_name_zweimal():
         namen = re.findall(r"\n    def (\w+)\(", block)
         doppelt = sorted({n for n in namen if namen.count(n) > 1})
         assert not doppelt, f"{klasse}: {doppelt}"
+    # The same for the route modules: a second `def` of a name would
+    # replace the first – and the table would call the wrong one.
+    for modul in ("api.py", "api_cases.py", "api_explore.py", "api_archive.py", "api_app.py"):
+        namen = re.findall(r"\ndef (\w+)\(", (WURZEL / modul).read_text(encoding="utf-8"))
+        doppelt = sorted({n for n in namen if namen.count(n) > 1})
+        assert not doppelt, f"{modul}: {doppelt}"
+    import sys
     import app as app_mod
-    fehlend = [n for _, _, n in app_mod.ROUTEN_V1 if not hasattr(app_mod.Handler, n)]
+    # Every route names a function its module still holds under that name
+    # (a rename that forgot the table would call a stale object), or one
+    # of the handler's own – the three that write to the socket.
+    fehlend = [n for _, _, n in app_mod.ROUTEN_V1
+               if (not hasattr(app_mod.Handler, n) if isinstance(n, str)
+                   else getattr(sys.modules[n.__module__], n.__name__, None) is not n)]
     assert not fehlend, f"Routen ohne Handler: {fehlend}"
 
 
@@ -549,6 +561,7 @@ def test_nichts_nennt_eine_route_von_vor_13_0():
     CI runs. This is the sweep that catches all three: the dead link to
     `/api/openapi` in the expert card is what it was written for."""
     dateien = ["page.html", "profil.html", "openapi.yaml", "app.py", "rest.py",
+               "api.py", "api_cases.py", "api_explore.py", "api_archive.py", "api_app.py",
                "mcp_server.py", "README.md", "DESIGN.md", "PRIVACY.md",
                "packaging/smoke_test.py", "packaging/app.spec"]
     alt = {}

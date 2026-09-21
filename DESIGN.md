@@ -195,8 +195,10 @@ Use the existing class; do not invent a sibling that looks almost the same.
   `#sicht-<name>` block, a branch in `sicht()`, one hand-over button.
 - **Something about a case**: a fold, a `.mini` in the row it acts on,
   and its own collection under `/api/v1/cases/{id}/` whose every write
-  answers with the whole case; items enter a case through the one choice
-  window.
+  answers with the whole case – or, asked with `Prefer: return=minimal`,
+  with the status and `ETag` alone, which the page does only where it
+  wants no more than a new id; items enter a case through the one
+  choice window.
 - **Something of the app, not a profile**: `profiles.json` in the app
   folder, its own route, never `app_config.json`.
 

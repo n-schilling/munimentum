@@ -2222,6 +2222,20 @@ function schicke(methode, p, body){
   return fetch(p, {method: methode, headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body || {})}).then(function(r){ return r.json(); });
 }
+/* A write asked for the status alone – `Prefer: return=minimal`, RFC 7240:
+   201 and 204 come without a body, and a new thing's id is the last step
+   of `Location`. For the places that want only that id, or nothing at all
+   – a new case, a new folder, a conversation into a case – and would
+   throw the whole case away otherwise. A refusal is the usual JSON. */
+function schickeKnapp(methode, p, body){
+  return fetch(p, {method: methode, headers: {'Content-Type': 'application/json', 'Prefer': 'return=minimal'},
+    body: JSON.stringify(body || {})}).then(function(r){
+    if(r.status !== 201 && r.status !== 204) return r.json();
+    var ort = (r.headers && r.headers.get('Location')) || '';
+    return {ok: true, id: ort ? parseInt(ort.slice(ort.lastIndexOf('/') + 1), 10) : null};
+  });
+}
+function postKnapp(p, body){ return schickeKnapp('POST', p, body); }
 /* What an answer has to say: a refusal's `error` (11.4: the text key and
    its placeholders, on every route and status alike), else its English
    `detail`, else the `message` a successful answer may carry. */
@@ -4522,7 +4536,7 @@ function zeichneGespraech(h, nr, r){
 function gespraechInFall(fallId, i){
   var h = TREFFER[i];
   if(!h || !h.key) return;
-  post(API + '/cases/' + fallId + '/items', {threads: [h.key]}).then(function(r){
+  postKnapp(API + '/cases/' + fallId + '/items', {threads: [h.key]}).then(function(r){
     if(apiFehler(r)) return;
     delete THREADS[h.thread];
     zeigeDetail(h, i + 1);
@@ -5074,17 +5088,17 @@ function fallWahlAusfuehren(){
   if(ordnerWahl === 'neu' && !ordnerNeu){ feldNeu.classList.add('fehler'); return; }
   var fallId = wahl.id
     ? Promise.resolve(wahl.id)
-    : post(API + '/cases', {name: wahl.neu}).then(function(r){
+    : postKnapp(API + '/cases', {name: wahl.neu}).then(function(r){
         if(r && r.ok === false) throw new Error(rtext(r));
-        return r.case.id;
+        return r.id;
       });
   var ordnerId = null;
   fallId.then(function(id){
     // The folder: an existing one, a new one made first, or none.
     if(ordnerWahl === 'neu'){
-      return post(API + '/cases/' + id + '/folders', {name: ordnerNeu}).then(function(r){
+      return postKnapp(API + '/cases/' + id + '/folders', {name: ordnerNeu}).then(function(r){
         if(r && r.ok === false) throw new Error(rtext(r));
-        ordnerId = r.folder;
+        ordnerId = r.id;
         return id;
       });
     }
@@ -5919,7 +5933,8 @@ function fallFehler(r){
 /* Every change goes through the server and comes back as the whole case –
    the page never guesses what a write did. `pfad` is what hangs under the
    open case (`items`, `folders/3`, `notes`), the method says what happens
-   to it. */
+   to it. Only where the page wants no more than a new id does it ask for
+   the status alone (`postKnapp`). */
 function fallSchreiben(methode, pfad, body){
   if(!FALL_OFFEN) return Promise.resolve();
   var ziel = API + '/cases/' + FALL_OFFEN.id + (pfad ? '/' + pfad : '');
@@ -6039,9 +6054,9 @@ function fallFormularSenden(){
   var body = {name: name, description: dyn('fall-beschreibung').value.trim()};
   var tun = FALL_WAHL.art === 'aendern'
     ? fallSchreiben('PATCH', '', body)
-    : post(API + '/cases', body).then(function(r){
+    : postKnapp(API + '/cases', body).then(function(r){
         if(fallFehler(r)) return r;
-        return ladeFaelle().then(function(){ return fallWaehlen(r.case.id); }).then(function(){ return r; });
+        return ladeFaelle().then(function(){ return fallWaehlen(r.id); }).then(function(){ return r; });
       });
   tun.then(function(r){ if(!r || r.ok !== false) closeWizard('fall-neu'); });
 }

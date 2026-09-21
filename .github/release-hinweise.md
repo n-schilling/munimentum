@@ -1,25 +1,22 @@
-## New in 13.1.0
+## New in 13.2.0
 
-**Attachments, three ways.** A paperclip on a hit says a mail carries
-attachments – their names on hover, the count where it is more than
-one – whatever the filters are. With the source set to *Mail*, a new
-pill, **With attachment**, narrows the search to mails that have one;
-real ones only, an inline signature logo does not count. And the chips
-in a mail's detail are downloads now: each attachment comes out of the
-archived `.eml` on its own, under its own name. Claude gets the same
-filter (`with_attachments`) and sees the names on every hit as before –
-whole now: a name with spaces used to come apart at every space, on the
-hit and for Claude alike.
+**Two courtesies for scripts.** A case now carries an `ETag`; hand it
+back as `If-None-Match` and an unchanged case answers `304` without a
+body. And every write under `/api/v1/cases` – which answers the whole
+case, as the page wants it – can be asked for the status alone:
+`Prefer: return=minimal` (RFC 7240) gets a `204`, or a `201` with the
+new thing's `Location`, plus the new `ETag` and `Preference-Applied`. Nothing
+changes for a caller that does not ask. The page itself asks that way
+where it wants no more than a new id – a new case, a new folder, the
+rest of a conversation into a case – so the path is walked every day.
 
-**The disk image says which version it is.** The macOS download's window
-is titled *Munimentum 13.1.0*, and the foot of its picture carries the
-version and the build id – the same pair *Settings › App* shows.
+**Under the hood** the routes of `/api/v1` moved out of `app.py` into
+four modules, one per door (`api_cases`, `api_explore`, `api_archive`,
+`api_app`); the surface, the spec and the answers are the same.
 
 ## Upgrading
 
-**From 13.0.0:** nothing to do. Scripts: `/api/v1/search` takes
-`attachments=1`, and `GET /api/v1/documents/attachments?uid=…&n=1`
-serves a mail's n-th attachment; nothing that was there changed.
+**From 13.x:** nothing to do.
 
 **From 12.x or older:** the first run after the update rebuilds the
 search index once, and every script against the HTTP interface has to
