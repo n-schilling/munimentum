@@ -298,12 +298,17 @@ def bilanz_lauf(h, eintrag):
         ok, why = app.launch(anfrage, label='job.holen', sync_now=True,
                              nachholen={"quelle": key, "liste": str(liste)})
     elif ordner == "outlook":
+        # The row's category runs, ticked for the export or not, and
+        # the check afterwards judges that row (check_rows) – not
+        # whatever the export happens to tick.
         ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
-                             resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []])
+                             resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []],
+                             check_rows=[quelle])
     elif ordner in ("onedrive", "sharepoint"):
-        ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True)
+        ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
+                             check_rows=[quelle])
     else:
-        ok, why = app.launch(anfrage, label='job.holen', sync_now=True)
+        ok, why = app.launch(anfrage, label='job.holen', sync_now=True, check_rows=[quelle])
     if not ok:
         raise Ablehnung(409, why)
     return lauf_antwort(h)

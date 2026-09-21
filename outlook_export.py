@@ -57,7 +57,7 @@ from collections import Counter
 import time
 import threading
 from calendar import monthrange
-from datetime import datetime, UTC
+from datetime import datetime, timedelta, UTC
 from itertools import chain
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
@@ -1602,17 +1602,35 @@ def _aktuell(out, done, stempel, key, lm):
     return alt is None or alt == (lm or "")
 
 
+VIEW_TAGE = 1800            # calendarView allows 1825 days per request
+
+
+def _fenster_teile(von, bis, tage=VIEW_TAGE):
+    """The window in pieces the view accepts: [start, end) pairs of at
+    most `tage` days, back to back, from `von` (the epoch when the
+    window has no start) to `bis`."""
+    a = von or datetime(1970, 1, 1, tzinfo=UTC)
+    teile = []
+    while a < bis:
+        b = min(a + timedelta(days=tage), bis)
+        teile.append((a, b))
+        a = b
+    return teile
+
+
 def pruefe_kalender(graph, out, done, db):
     """The calendar balance: the events of the window per chosen calendar,
-    a series counted once by its master. Excluded are whole calendars."""
+    a series counted once by its master. Excluded are whole calendars.
+    The view takes at most five years a request, so the window is asked
+    in pieces; an event that straddles a cut is counted once."""
     cals = waehle_kalender(graph, out)
     alle = len((folders.lade(out, folders.KALENDER) or {}).get("ordner", []))
     stempel = Stempel(db, "events")
     von, bis = kalender_fenster(calendar_months_back())
     # No $select: the view refuses one that names lastModifiedDateTime,
     # and that stamp is what the balance is judged by.
-    params = {"startDateTime": _graph_zeit(von) if von else EPOCH,
-              "endDateTime": _graph_zeit(bis), "$top": 100}
+    fenster = [{"startDateTime": _graph_zeit(a), "endDateTime": _graph_zeit(b), "$top": 100}
+               for a, b in _fenster_teile(von, bis)]
     gesehen = set()
     da = offen = 0
     zeilen, fehler = [], []
@@ -1623,7 +1641,8 @@ def pruefe_kalender(graph, out, done, db):
         url = (f"{GRAPH}/me/calendars/{cal['id']}/calendarView" if cal.get("id")
                else f"{GRAPH}/me/calendarView")
         try:
-            eintraege = list(graph.paged(url, params, {"Prefer": UTC_PREF}))
+            eintraege = [ev for params in fenster
+                         for ev in graph.paged(url, params, {"Prefer": UTC_PREF})]
         except TokenExpired:
             raise
         except Exception as e:
@@ -1633,6 +1652,7 @@ def pruefe_kalender(graph, out, done, db):
             continue
         familien = {}
         z_da = z_offen = 0
+        im_kalender = set()
         for ev in eintraege:
             master = ev.get("seriesMasterId")
             lm = ev.get("lastModifiedDateTime") or ""
@@ -1641,8 +1661,9 @@ def pruefe_kalender(graph, out, done, db):
                     familien[master] = lm
                 continue
             key = ev.get("id")
-            if not key:
-                continue
+            if not key or key in im_kalender:
+                continue                    # straddles a cut: counted once
+            im_kalender.add(key)
             gesehen.add(key)
             if _aktuell(out, done, stempel, key, lm):
                 z_da += 1

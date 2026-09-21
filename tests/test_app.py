@@ -7358,6 +7358,17 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     assert list(schritte) == ["outlook", "index", "check"]
     assert schritte["outlook"]["env"]["RESYNC"] == "1"
     assert sorted(json.loads(schritte["outlook"]["env"]["RESYNC_FOLDERS"])) == ["E-Mail/Archiv", "E-Mail/Posteingang"]
+    assert schritte["outlook"]["env"]["EXPORT_CATEGORIES"] == "mail"
+    assert schritte["check"]["env"]["EXPORT_CATEGORIES"] == "mail", "the check must judge the row fetched"
+    # The row's category runs even when the export ticks another one –
+    # the row was checked, so the row is fetched, and judged afterwards.
+    a.cfg["outlook_categories"] = ["contacts"]
+    call(port, "POST", "/api/v1/balance/outlook_mail/fetch", {})
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["outlook", "index", "check"]
+    assert schritte["outlook"]["env"]["EXPORT_CATEGORIES"] == "contacts,mail"
+    assert schritte["check"]["env"]["EXPORT_CATEGORIES"] == "mail"
+    a.cfg["outlook_categories"] = ["mail"]
     # A mirror with the open files by id: the list, no walk, no check step.
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(
         "onedrive", "files", da=1, offen=1, zeilen=[completeness.zeile("Dateien", 1, 1)],

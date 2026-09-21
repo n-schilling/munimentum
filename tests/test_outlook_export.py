@@ -1162,20 +1162,37 @@ def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monk
     assert e["v"] == {"name": "kalender/Arbeit", "error": "RuntimeError: HTTP 503"}
 
 
-def test_pruefe_kalender_asks_the_view_without_select(tmp_path, monkeypatch):
+def test_pruefe_kalender_asks_the_view_without_select_in_pieces(tmp_path, monkeypatch):
     """calendarView refuses a $select that names lastModifiedDateTime, and
     that stamp is what the balance is judged by – so the view is asked
-    plain, a hundred a page, in the window."""
+    plain, a hundred a page. It takes at most 1825 days a request, so
+    the window comes in pieces back to back; an event listed in two of
+    them (it straddles a cut) is counted once."""
+    from datetime import datetime, UTC
     monkeypatch.setenv("CALENDAR_MONTHS_BACK", "0")
     monkeypatch.setattr(outlook_export, "waehle_kalender",
                         lambda g, o: [{"id": "c1", "name": "Arbeit"}])
+    g = _PruefGraph(listen={"/calendars/c1/calendarView": [_termin("e1", "2026-01-01T10:00:00Z")]})
+    done = _donelog(tmp_path)
+    b = outlook_export.pruefe_kalender(g, tmp_path, done, state_db.StateDb(tmp_path))
+    done.close()
+    assert len(g.params) > 10 and all("$select" not in p and p["$top"] == 100 for p in g.params)
+    assert g.params[0]["startDateTime"] == outlook_export.EPOCH
+    assert g.params[-1]["endDateTime"] > "2035"
+    for p in g.params:
+        a, e = (datetime.strptime(p[k], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+                for k in ("startDateTime", "endDateTime"))
+        assert 0 < (e - a).days <= 1825, p
+    for vor, nach in zip(g.params, g.params[1:], strict=False):
+        assert vor["endDateTime"] == nach["startDateTime"], "a gap between two pieces"
+    assert (b["da"], b["offen"]) == (0, 1), "an event in every piece counted more than once"
+    # a month back, ten years ahead: three pieces
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "1")
     g = _PruefGraph(listen={"/calendars/c1/calendarView": []})
     done = _donelog(tmp_path)
     outlook_export.pruefe_kalender(g, tmp_path, done, state_db.StateDb(tmp_path))
     done.close()
-    (params,) = g.params
-    assert "$select" not in params and params["$top"] == 100
-    assert params["startDateTime"] == outlook_export.EPOCH and params["endDateTime"] > "2030"
+    assert len(g.params) == 3
 
 
 def test_pruefe_kontakte_je_ordner(tmp_path):

@@ -164,9 +164,26 @@ def _has_urls(key):
     return lambda cfg, ctx: bool(str(cfg.get(key) or "").strip())
 
 
+def _resync_cats_outlook(ctx):
+    """The mailbox categories a resync was asked for by balance row
+    ("Fetch now" on the mail, calendar or contacts row): the row's
+    category runs whether or not the export ticks it – the row was
+    checked, so the row is fetched."""
+    if not ctx.get("resync"):
+        return []
+    rows = ctx.get("check_rows") or []
+    return [c for c in ("mail", "calendar", "contacts") if f"outlook_{c}" in rows]
+
+
+def _outlook_cats(ctx):
+    """The ticked categories, plus the one a resync by row asks for."""
+    cats = list(ctx["cats_outlook"])
+    return cats + [c for c in _resync_cats_outlook(ctx) if c not in cats]
+
+
 def _outlook_env(cfg, ctx):
     return {**_kadenz_env(cfg, ctx),
-            "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
+            "EXPORT_CATEGORIES": ",".join(_outlook_cats(ctx)),
             "INCLUDE_HIDDEN": _flag(cfg.get("include_hidden")),
             # Always set, even empty: empty means "skip nothing", unset would
             # mean "the script's default".
@@ -305,7 +322,7 @@ REGISTRY = (
      "start": "job.start.outlook",
      "label": "job.step.outlook", "corpus": True, "zugang": True,
      "schedule": "outlook", "master": None, "quelle": "Outlook",
-     "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
+     "aktiv": lambda cfg, ctx: bool(_outlook_cats(ctx)),
      "argv": lambda cfg, ctx, pfade: [pfade["outlook"]],
      "env": _outlook_env},
 

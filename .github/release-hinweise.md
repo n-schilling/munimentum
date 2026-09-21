@@ -1,25 +1,17 @@
-## New in 13.4.1
+## New in 13.4.2
 
-**Fetch now fetches only what the check named.** The Teams check names
-the open conversations by key, the calendar and contacts checks their
-open events and contacts by id; *Fetch now* takes exactly those – no
-chat list, no calendar or folder read again – and takes them off the
-balance, so the row is right without a second check. Seconds instead of
-minutes for one conversation with newer messages. The mirrors did this
-already; mail is counted, not listed, by its check, so its *Fetch now*
-stays a read of the folders with something open, fetching only the
-mails not here.
+**Fetch now on a mailbox row fetches that row.** The fetch ran the
+mailbox export with the categories ticked under *Build archive* – with
+only contacts ticked, *Fetch now* on the mail row read nothing and the
+check afterwards judged the contacts. Now the row's category runs,
+ticked or not, and the check afterwards judges that row.
 
-**The calendar check asks the view plainly.** It selected the change
-stamp, which `calendarView` refuses to select; the calendar then stood
-as *unreachable* with nothing counted. The view is now asked without
-`$select`, and a mailbox listing the check cannot read says why in the
-run log instead of only *unreachable* on the card.
-
-**Teams and channel listings are asked without query options.** The
-list of joined teams answers `400` to any OData option; the channel
-export and the Teams check sent one and failed with *Teams could not be
-loaded* on every run since 3.5.0. The listings are now plain.
+**The calendar check asks the view in pieces.** `calendarView` takes at
+most 1825 days a request; the check's window – from the start day, or
+from the beginning, to ten years ahead – is wider, and the calendar
+stood as *unreachable* with nothing counted (13.4.1 made the reason
+visible in the run log). The window now comes in pieces of five years,
+back to back, and an event listed in two of them is counted once.
 
 ## Upgrading
 
