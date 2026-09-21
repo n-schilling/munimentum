@@ -715,7 +715,7 @@ def bild_max():
 
 
 def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
-                     lock=None):
+                     lock=None, marks=None, verdicts=None):
     """Embed the page's images as data URIs so the file stands alone.
 
     Failures keep the original URL: signed in, the browser may still show
@@ -725,6 +725,8 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
     import html as html_lib
     cache = {} if cache is None else cache
     lock = lock or threading.Lock()
+    marks = marks or {}
+    verdicts = {} if verdicts is None else verdicts
 
     def ersetze(m):
         roh = html_lib.unescape(m.group(2))
@@ -734,6 +736,8 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
                 else f"https://{host}{roh}" if roh.startswith("/") else None)
         if not voll:
             return m.group(0)
+        if f"image:{voll}" in marks:
+            return m.group(0)       # refused or gone on an earlier run: stays a link
         with lock:
             if voll in cache:
                 ersatz = cache[voll]
@@ -744,10 +748,21 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
             inhalt, ctype = _lade_bild(graph, voll, grenze)
         except auth.TokenExpired:
             raise
-        except Exception:
+        except Exception as e:
+            # A verdict is recorded (quietly: an image is part of a page,
+            # not an item of the archive); anything else counts as a
+            # failure that leaves the page due for the next run.
+            kind = export_util.verdict(e)
             with lock:
-                zaehler["fehl"] += 1
                 cache[voll] = None
+                if kind:
+                    verdicts[f"image:{voll}"] = export_util.permanent_mark(
+                        kind, f"{type(e).__name__}: {e}", name=voll.rsplit("/", 1)[-1][:80],
+                        quiet=True)
+                else:
+                    zaehler["fehl"] += 1
+            if kind:
+                export_util.permanent_event(kind, voll.rsplit("/", 1)[-1], e)
             return m.group(0)
         if inhalt is None or (grenze and len(inhalt) > grenze):
             with lock:
@@ -763,19 +778,30 @@ def bilder_einbetten(graph, html, host, zaehler, grenze=0, cache=None,
     return _IMG_SRC.sub(ersetze, html)
 
 
+def _marked(marks, sid, etag):
+    """Is this version of the page one no run asks for again?"""
+    mark = (marks or {}).get(f"page:{sid}")
+    return bool(mark) and mark.get("version") == (etag or "")
+
+
 def seiten_lauf(graph, out, sites, fehl=0):
     out = Path(out)
     db = state_db.StateDb(out)
+    marks = db.permanent_lesen()         # pages and images no run asks for again
     if export_util.voll_neu():
-        # "Force full sync": every page's version is forgotten first, so
-        # each one is fetched and rendered again – and a run cut short
-        # leaves the rest due for the next one.
+        # "Force full sync": every page's version and every mark is
+        # forgotten first, so each one is fetched and rendered again – and
+        # a run cut short leaves the rest due for the next one.
         progress.event("run.full_sync")
         db.seiten_versionen_loeschen()
+        db.permanent_leeren()
+        marks = {}
     elif export_util.abgleich():
         # A resync needs nothing more: every run lists all pages and
         # fetches a page whose file is gone.
         progress.event("run.resync")
+    marks_before = dict(marks)
+    verdicts = {}                         # the marks this run's images earned
     eintraege_bestand = db.seiten_lesen()
     neu = unveraendert = fehler = 0
     zaehler = {"bilder": 0, "fehl": 0}
@@ -789,16 +815,24 @@ def seiten_lauf(graph, out, sites, fehl=0):
         # The listing carries no canvasLayout today, so the changed page is
         # fetched once more with it – only the changed one. Should the
         # listing ever bring the layout along, that second call goes.
+        # Returns the page's own count of images that did not come (and
+        # earned no verdict): such a page is written but not recorded, so
+        # the next run renders it once more.
         voll = seite
         if not seite.get("canvasLayout"):
             voll = graph.get(f"{GRAPH}/sites/{site['id']}/pages/{seite['id']}"
                              "/microsoft.graph.sitePage?$expand=canvasLayout")
         html = render_page(voll, voll.get("canvasLayout"))
-        html = bilder_einbetten(graph, html, site.get("host") or "", zaehler,
-                                grenze, cache=cache, lock=lock)
+        own = {"bilder": 0, "fehl": 0}
+        html = bilder_einbetten(graph, html, site.get("host") or "", own,
+                                grenze, cache=cache, lock=lock, marks=marks, verdicts=verdicts)
+        with lock:
+            for k, n in own.items():
+                zaehler[k] += n
         ziel = out / rel
         ziel.parent.mkdir(parents=True, exist_ok=True)
         export_util.schreibe_atomar(ziel, html)
+        return own["fehl"]
 
     uebersprungen = 0
     for s in sites:
@@ -841,6 +875,9 @@ def seiten_lauf(graph, out, sites, fehl=0):
             if alt and alt["etag"] == etag and (out / alt["rel"]).is_file():
                 unveraendert += 1
                 continue
+            if _marked(marks, sid, etag):
+                unveraendert += 1        # refused or gone in this version: not asked again
+                continue
             auftraege.append((seite, rel, etag, alt))
         # Pages fetch and render side by side – the same worker budget the
         # file mirrors use; the inventory is written by this thread only,
@@ -852,20 +889,32 @@ def seiten_lauf(graph, out, sites, fehl=0):
             for f in as_completed(offen):
                 sid, rel, etag, alt = offen[f]
                 try:
-                    f.result()
+                    owed_images = f.result()
                 except auth.TokenExpired:
                     raise
                 except Exception as e:
+                    kind = export_util.verdict(e)
+                    if kind:
+                        # A verdict on the page: recorded for this version,
+                        # no error – the site's tombstones go on.
+                        marks[f"page:{sid}"] = export_util.permanent_mark(
+                            kind, f"{type(e).__name__}: {e}", name=rel.rsplit("/", 1)[-1],
+                            rel=rel, unit="/".join(s["pfad"]), version=etag)
+                        export_util.permanent_event(kind, rel, e)
+                        continue
                     fehler += 1
                     progress.event("run.pages.page_failed", "err", name=rel,
                                    error=f"{type(e).__name__}: {e}")
                     continue
+                marks.pop(f"page:{sid}", None)      # a new version came after all
+                neu += 1
+                if owed_images:
+                    continue         # written, not recorded: rendered again next run
                 if alt and alt["rel"] != rel:
                     # Renamed, not deleted: the old file would otherwise
                     # linger untracked as a stale duplicate in the index.
                     (out / alt["rel"]).unlink(missing_ok=True)
                 eintraege_bestand[sid] = geaendert[sid] = {"rel": rel, "etag": etag}
-                neu += 1
         if geaendert:
             db.seiten_aktualisieren(geaendert)
         db._kv_schreiben(f'last_sync:{s["id"]}',
@@ -884,6 +933,8 @@ def seiten_lauf(graph, out, sites, fehl=0):
         jetzt = datetime.now(UTC).isoformat(timespec="seconds")
         db.verschwunden_ergaenzen(weg, jetzt)
         db.seiten_aktualisieren({}, weg_ids)
+    marks.update(verdicts)
+    db.permanent_abgleichen(marks_before, marks)
     if zaehler["fehl"]:
         progress.event("run.pages.images_failed", "warn", n=zaehler["fehl"])
     extras = {"sites": len(sites), "gone": len(weg),
@@ -902,7 +953,9 @@ def seiten_pruefen(graph, out, sites, fehl=0):
     db = state_db.StateDb(out)
     bestand = db.seiten_lesen()
     weg = db.verschwunden_lesen()
+    marks = db.permanent_lesen()
     zeilen, fehler = [], []
+    verdicts = {"verweigert": 0, "weg": 0}
     for s in sites:
         pfad = "/".join(s["pfad"])
         try:
@@ -915,14 +968,23 @@ def seiten_pruefen(graph, out, sites, fehl=0):
                            error=f"{type(e).__name__}: {e}")
             fehler.append(completeness.fehler(pfad, "run.pages.site_failed"))
             continue
-        da = sum(1 for seite in seiten
-                 if (e := bestand.get(seite.get("id") or ""))
-                 and (out / e["rel"]).is_file())
-        zeilen.append(completeness.zeile(pfad, da, len(seiten) - da))
+        da = offen = 0
+        for seite in seiten:
+            sid = seite.get("id") or ""
+            e = bestand.get(sid)
+            if e and (out / e["rel"]).is_file():
+                da += 1
+            elif _marked(marks, sid, seite.get("eTag") or seite.get("lastModifiedDateTime") or ""):
+                # refused or gone in this version: neither here nor open
+                verdicts["verweigert" if marks[f"page:{sid}"].get("kind") == export_util.REFUSED
+                        else "weg"] += 1
+            else:
+                offen += 1
+        zeilen.append(completeness.zeile(pfad, da, offen))
     bericht = completeness.bilanz(
         "sharepoint_pages", "pages",
         da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
-        behalten=len(weg), zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl})
+        behalten=len(weg), zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl}, **verdicts)
     completeness.schreiben(db, bericht)
     completeness.melden(bericht)
     return bericht

@@ -13,6 +13,7 @@ import pytest
 import requests
 
 import progress
+import state_db
 import teams_export as te
 
 GRAPH = te.GRAPH
@@ -488,6 +489,39 @@ def test_embed_hosted_images_failure_yields_placeholder(monkeypatch):
     out = te.embed_hosted_images(f'<img src="{HOSTED_URL}">', counter)
     assert te.IMG_PLACEHOLDER in out
     assert counter == [0]   # failed images do not count
+
+
+def test_embed_hosted_images_records_a_verdict_and_asks_no_more(monkeypatch, tmp_path):
+    """A 404 on an inline image is a verdict: the placeholder, a quiet
+    mark in the run's state.db, and no request on the next render. A
+    502 stays a passing failure – asked again."""
+    import requests
+    import state_db
+
+    class _Antwort:
+        status_code, text = 404, '{"error": {"code": "itemNotFound"}}'
+    client = FakeImgClient(error=requests.HTTPError("404", response=_Antwort()))
+    db = state_db.StateDb(tmp_path)
+    monkeypatch.setattr(te, "_client", client)
+    monkeypatch.setattr(te, "IMGCACHE_DIR", None)
+    monkeypatch.setattr(te, "_MARKS_DB", db)
+    monkeypatch.setattr(te, "_IMAGE_MARKS", {})
+    html = f'<img src="{HOSTED_URL}">'
+    assert te.IMG_PLACEHOLDER in te.embed_hosted_images(html)
+    marks = db.permanent_lesen()
+    assert list(marks) == [f"image:{HOSTED_URL}"]
+    assert marks[f"image:{HOSTED_URL}"]["kind"] == "gone" and marks[f"image:{HOSTED_URL}"]["quiet"] is True
+    assert te.IMG_PLACEHOLDER in te.embed_hosted_images(html) and client.calls == 1
+    # a passing failure records nothing
+    monkeypatch.setattr(te, "_client", FakeImgClient(error=te.ImageUnavailable("502")))
+    monkeypatch.setattr(te, "_IMAGE_MARKS", {})
+    te.embed_hosted_images(f'<img src="{HOSTED_URL}2">')
+    assert len(db.permanent_lesen()) == 1
+    # and without a state (a check) a verdict is a placeholder, nothing more
+    monkeypatch.setattr(te, "_client", client)
+    monkeypatch.setattr(te, "_IMAGE_MARKS", None)
+    assert te.IMG_PLACEHOLDER in te.embed_hosted_images(f'<img src="{HOSTED_URL}3">')
+    assert len(db.permanent_lesen()) == 1
 
 
 def test_embed_hosted_images_token_expired_propagates(monkeypatch):
@@ -971,11 +1005,13 @@ def test_anhang_der_nicht_kommt_meldet_sich_einmal(tmp_path, monkeypatch, capsys
     chat, graph = _chat_mit_datei(kaputt=True)
     state = te.load_state(tmp_path)
     _s, _f, _t, _n, _d, zahlen = te.export_one_chat(graph, tmp_path, state, "me", chat)
-    assert zahlen["file_errors"] == 1
+    assert zahlen["file_errors"] == 0, "a refusal is a verdict, not an error"
     html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
     assert f'href="{DATEI_URL}"' in html
     ereignisse = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
-    assert any(e and e["k"] == "run.teams.file_failed" for e in ereignisse)
+    # a 403 is a refusal since 13.4.0 – said once, recorded, not retried
+    assert any(e and e["k"] == "run.item.refused" for e in ereignisse)
+    assert not any(e and e["k"] == "run.teams.file_failed" for e in ereignisse)
 
 
 def test_umbenannter_chat_nimmt_seine_dateien_mit(tmp_path, monkeypatch):
@@ -2119,3 +2155,113 @@ def test_load_state_liest_den_alten_blob_ohne_ihn_zu_bewegen(tmp_path):
     assert db.saetze_lesen("conversations") == {} and db.kv_lesen("state"), "the check moved the blob"
     te.load_state(tmp_path)
     assert list(db.saetze_lesen("conversations")) == ["c1"]
+
+
+# --------------------------------------------------------------------------
+# A file Microsoft refuses, and the size of the copy (13.3.1)
+# --------------------------------------------------------------------------
+def _one_file():
+    return [_msg("Alice Example", "eins", "2025-06-02T08:00:00Z",
+                 attachments=[{"id": "a1", "contentType": "reference",
+                               "contentUrl": DATEI_URL, "name": "Angebot.pdf"}])]
+
+
+def _record(tmp_path):
+    return json.loads(state_db.StateDb(tmp_path).kv_lesen("files:c1"))
+
+
+def _marks(tmp_path):
+    return state_db.StateDb(tmp_path).permanent_lesen()
+
+
+def test_a_403_is_recorded_and_not_retried(tmp_path, capsys, monkeypatch):
+    """A 403 is a verdict, not a hiccup: recorded with its reason, said
+    once, counted as no error, and not asked for again – a full sync
+    (which forgets the marks first) asks once more and takes the file
+    when it comes."""
+    msgs, rel = _one_file(), "1on1/Alice Example__x.html"
+    graph = _DateiGraph(kaputt=True)
+    lokal, geladen, _a, fehler = te.anhaenge_laden(graph, tmp_path, "c1", rel, msgs)
+    assert lokal == {} and geladen == 0 and fehler == 0, "a verdict is no error"
+    assert [e["k"] for e in _events(capsys)] == ["run.item.refused"]
+    assert DATEI_URL not in _record(tmp_path)
+    m = _marks(tmp_path)[DATEI_URL]
+    assert m["kind"] == "refused" and m["error"] == "HTTP 403 accessDenied"
+    assert m["name"] == "Angebot.pdf" and m["unit"] == rel and m["rel"] is None and m["when"]
+    graph2 = _DateiGraph(kaputt=True)
+    lokal2, _g, _a, fehler2 = te.anhaenge_laden(graph2, tmp_path, "c1", rel, msgs)
+    assert graph2.gefragt == [] and fehler2 == 0 and lokal2 == {} and _events(capsys) == []
+    monkeypatch.setattr(te.export_util, "voll_neu", lambda: True)
+    state_db.StateDb(tmp_path).permanent_leeren()      # what main() does on a full sync
+    graph3 = _DateiGraph()
+    lokal3, geladen3, _a, fehler3 = te.anhaenge_laden(graph3, tmp_path, "c1", rel, msgs)
+    assert len(graph3.gefragt) == 1 and geladen3 == 1 and fehler3 == 0 and DATEI_URL in lokal3
+    e = _record(tmp_path)[DATEI_URL]
+    assert e["rel"] and e["size"] == 3 and _marks(tmp_path) == {}
+
+
+def test_a_404_is_gone_and_a_lock_is_asked_again(tmp_path, capsys):
+    """A 404 on the sharing lookup is the other verdict: gone, recorded,
+    not asked again. A 423 (locked) is a passing condition: an error,
+    asked again next run."""
+    msgs, rel = _one_file(), "1on1/Alice Example__x.html"
+
+    class _Answering(_DateiGraph):
+        def __init__(self, status, code):
+            super().__init__()
+            self.status, self.code = status, code
+
+        def batch_get(self, urls, extra_headers=None):
+            self.gefragt.append(list(urls))
+            return {u: (self.status, {"error": {"code": self.code}}) for u in urls}
+    lokal, _g, _a, fehler = te.anhaenge_laden(_Answering(404, "itemNotFound"), tmp_path, "c1", rel, msgs)
+    assert fehler == 0 and lokal == {}
+    assert [e["k"] for e in _events(capsys)] == ["run.item.gone"]
+    m = _marks(tmp_path)[DATEI_URL]
+    assert m["kind"] == "gone" and m["error"] == "HTTP 404 itemNotFound"
+    graph2 = _Answering(404, "itemNotFound")
+    te.anhaenge_laden(graph2, tmp_path, "c1", rel, msgs)
+    assert graph2.gefragt == [], "asked again although gone"
+    state_db.StateDb(tmp_path).permanent_leeren()
+    lokal, _g, _a, fehler = te.anhaenge_laden(_Answering(423, "resourceLocked"), tmp_path, "c1", rel, msgs)
+    assert fehler == 1 and _marks(tmp_path) == {}
+    assert [e["k"] for e in _events(capsys)] == ["run.teams.file_failed"]
+
+
+def test_a_copy_from_before_the_refusal_stays_linked(tmp_path, capsys):
+    """The file changed at Microsoft and the new version is refused: the
+    old copy stays, linked, with its own record – plus the refusal."""
+    msgs, rel = _one_file(), "1on1/Alice Example__x.html"
+    lokal, geladen, _a, _f = te.anhaenge_laden(_DateiGraph(), tmp_path, "c1", rel, msgs)
+    assert geladen == 1
+
+    class _Refusing(_DateiGraph):
+        def stream(self, url, timeout=None, label=""):
+            raise RuntimeError("HTTP 403 accessDenied")
+    lokal2, geladen2, _a, fehler2 = te.anhaenge_laden(_Refusing(ctag="c-2"), tmp_path, "c1", rel, msgs)
+    assert fehler2 == 0 and geladen2 == 0 and lokal2 == lokal
+    e = _record(tmp_path)[DATEI_URL]
+    assert e["rel"] and e["size"] == 3 and e["ctag"] == "c-1", "the old copy's record changed"
+    m = _marks(tmp_path)[DATEI_URL]
+    assert m["error"].endswith("HTTP 403 accessDenied") and m["rel"] == e["rel"] and m["version"] == "c-2"
+    assert [ev["k"] for ev in _events(capsys)] == ["run.item.refused"]
+    # and the next run links the copy without asking
+    graph3 = _DateiGraph(ctag="c-2")
+    lokal3, _g, _a, fehler3 = te.anhaenge_laden(graph3, tmp_path, "c1", rel, msgs)
+    assert graph3.gefragt == [] and fehler3 == 0 and lokal3 == lokal
+
+
+def test_the_record_keeps_the_size_of_the_copy(tmp_path):
+    """Graph announces one size and delivers another for some files: the
+    record keeps what lies here, and an older record is corrected on the
+    next read of the conversation, with or without a metadata question."""
+    msgs, rel = _one_file(), "1on1/Alice Example__x.html"
+    te.anhaenge_laden(_DateiGraph(size=99), tmp_path, "c1", rel, msgs)
+    assert _record(tmp_path)[DATEI_URL]["size"] == 3
+    for unveraendert in (True, False):
+        record = _record(tmp_path)
+        record[DATEI_URL]["size"] = 99
+        state_db.StateDb(tmp_path).kv_schreiben("files:c1", json.dumps(record))
+        _l, geladen, _a, _f = te.anhaenge_laden(_DateiGraph(size=99), tmp_path, "c1", rel, msgs,
+                                                unveraendert=unveraendert)
+        assert geladen == 0 and _record(tmp_path)[DATEI_URL]["size"] == 3, unveraendert

@@ -133,3 +133,50 @@ def test_fehlertext_traegt_graphs_meldung():
         == "Fehler: HTTP 400 – BadRequest: Nope"
     assert export_util.fehlertext(Fehler('{"error": {"code": "ErrorX"}}')) == "Fehler: HTTP 400 – ErrorX"
     assert export_util.fehlertext(Fehler('{"error": "text"}')) == "Fehler: HTTP 400"
+
+
+# --------------------------------------------------------------------------
+# Permanent failures: the verdict a refused request carries
+# --------------------------------------------------------------------------
+class _Antwort:
+    def __init__(self, status, text=""):
+        self.status_code, self.text = status, text
+
+
+def _http(status, text=""):
+    import requests
+    return requests.HTTPError(f"{status} Client Error", response=_Antwort(status, text))
+
+
+def test_verdict_names_refused_and_gone_and_nothing_else():
+    assert export_util.verdict(_http(403)) == export_util.REFUSED
+    assert export_util.verdict(_http(404)) == export_util.GONE
+    assert export_util.verdict(_http(410)) == export_util.GONE
+    # a malware verdict, whatever the status
+    assert export_util.verdict(_http(400, '{"error": {"code": "malwareDetected"}}')) == export_util.REFUSED
+    # passing conditions: a lock, a bad request, a server error, no status at all
+    assert export_util.verdict(_http(423)) is None
+    assert export_util.verdict(_http(400, '{"error": {"code": "invalidRequest"}}')) is None
+    assert export_util.verdict(_http(503)) is None
+    assert export_util.verdict(RuntimeError("Zu viele Fehlversuche: x")) is None
+    assert export_util.verdict(OSError(63, "File name too long")) is None
+
+
+def test_verdict_reads_the_status_a_message_names():
+    """A batch part comes back as a status and a body, not an exception –
+    what a caller turns into a message is still read."""
+    assert export_util.verdict(RuntimeError("HTTP 403 accessDenied")) == export_util.REFUSED
+    assert export_util.verdict(RuntimeError("HTTP 404 itemNotFound")) == export_util.GONE
+    assert export_util.verdict(RuntimeError("HTTP 500")) is None
+    assert export_util.verdict_status(403, None) == export_util.REFUSED
+    assert export_util.verdict_status(200, {"error": {"code": "malwareDetected"}}) == export_util.REFUSED
+    assert export_util.verdict_status(0, None) is None
+
+
+def test_permanent_mark_carries_what_the_checks_need():
+    m = export_util.permanent_mark(export_util.GONE, "x" * 300, name="a.pdf", rel="Dateien/a.pdf",
+                                   unit="1on1/Alice__x.html", version="c-2")
+    assert m["kind"] == "gone" and len(m["error"]) == 200 and m["name"] == "a.pdf"
+    assert m["rel"] == "Dateien/a.pdf" and m["unit"] == "1on1/Alice__x.html" and m["version"] == "c-2"
+    assert m["when"][:2] == "20"
+    assert export_util.permanent_mark(export_util.REFUSED, "e")["version"] == ""

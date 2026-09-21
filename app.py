@@ -1651,7 +1651,8 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 reconstruct=None, nur_einheit=None, legacy_comments=False,
                 sync_now=False, calendar_full=False, full_sync=False,
                 resync=False, archiv=None, nachgeholt=None, nachholen=None,
-                resync_ordner=None, fall_export=None, case_collect=None):
+                resync_ordner=None, fall_export=None, case_collect=None,
+                check_rows=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1695,6 +1696,9 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # The automatic searches: {faelle, domains, case, search} for
         # case_collect.py – all of them, one case's, or one search.
         "case_collect": dict(case_collect or {}),
+        # The completeness checks: the balance rows the Insights card
+        # asked for, or None – then a check follows the export's switches.
+        "check_rows": list(check_rows) if check_rows is not None else None,
         # Source -> when its last resync completed, for the archive
         # check's "still missing after a fetch" verdict.
         "nachgeholt": dict(nachgeholt or {}),
@@ -2307,7 +2311,7 @@ class App:
                reconstruct=None, nur_einheit=None, legacy_comments=False,
                sync_now=False, calendar_full=False, full_sync=False,
                resync=False, archiv=None, nachholen=None, resync_ordner=None,
-               fall_export=None, case_collect=None, origin="manual"):
+               fall_export=None, case_collect=None, check_rows=None, origin="manual"):
         """Start a run. `anfrage` maps registry request keys to booleans –
         the API body, the schedule plan and the tests all speak this one
         shape; unknown keys are ignored, missing ones are off."""
@@ -2361,7 +2365,7 @@ class App:
                             full_sync=full_sync, resync=resync, archiv=archiv,
                             nachgeholt=self.nachgeholt(), nachholen=nachholen,
                             resync_ordner=resync_ordner, fall_export=fall_export,
-                            case_collect=case_collect)
+                            case_collect=case_collect, check_rows=check_rows)
         # A button of one source – sync now, fetch again, full sync, a
         # single URL – on a source the settings do not tick: say so, rather
         # than starting a run that carries nothing but the index step.

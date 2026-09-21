@@ -6841,13 +6841,19 @@ global.fetch = function(pfad, opt){
                  methode: (opt && opt.method) || 'GET'});
   return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }});
 };
+// The card's own selection: every row chosen, every source with its
+// addresses set – the button asks every check, and names the rows.
+var ALLE = ['outlook_mail', 'outlook_calendar', 'outlook_contacts', 'teams', 'onedrive',
+            'sharepoint', 'sharepoint_pages', 'planner', 'todo', 'onenote'];
+KONFIG = Object.assign({}, KONFIG, {check_sources: ALLE.slice(), sharepoint_urls: 'https://firma.sharepoint.com/sites/x',
+                                    sharepoint_pages_urls: 'https://firma.sharepoint.com/sites/x', planner_urls: 'https://tasks.example/plan'});
 pruefeVollstaendigkeit();
 var a = JSON.parse(gesendet.filter(function(g){ return g.pfad.indexOf('/api/v1/runs') >= 0; })[0].body);
-// Every check is asked for – the registry drops the unused ones.
 ['check', 'check_teams', 'check_onedrive', 'check_sharepoint', 'check_pages',
  'check_planner', 'check_todo', 'check_onenote'].forEach(function(k){
   pruefe(a[k] === true, 'Pruefung nicht angefragt: ' + k + ' ' + JSON.stringify(a));
 });
+pruefe(JSON.stringify(a.check_rows) === JSON.stringify(ALLE), 'Zeilen nicht genannt: ' + JSON.stringify(a.check_rows));
 pruefe(a.label === 'job.check', 'falsches Etikett');
 pruefe(!a.outlook && !a.index, 'Export oder Index mitgestartet');
 console.log('OK');
@@ -6856,6 +6862,131 @@ console.log('OK');
 
 def test_ein_pruefknopf_fragt_jede_pruefung_an():
     _in_node(PRUEFUNG_PRUEFKNOPF)
+
+
+CHECK_SOURCE_CHOICE = GRUNDZUSTAND + """
+var gesendet = [];
+global.fetch = function(pfad, opt){
+  var body = opt && opt.body ? JSON.parse(opt.body) : null;
+  gesendet.push({pfad: String(pfad), body: body, methode: (opt && opt.method) || 'GET'});
+  // The configuration answers as the server does: the whole configuration, as saved
+  var antwort = String(pfad).indexOf('/api/v1/config') >= 0 && body
+    ? {config: Object.assign({}, KONFIG, body)} : statusGeruest();
+  return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
+};
+function lastCall(path, method){
+  return gesendet.filter(function(g){ return g.pfad.indexOf(path) >= 0 && g.methode === method; }).pop();
+}
+// Only mail, calendar and OneDrive chosen; SharePoint has no addresses yet
+KONFIG = Object.assign({}, KONFIG, {check_sources: ['outlook_mail', 'outlook_calendar', 'onedrive', 'sharepoint'],
+                                    sharepoint_urls: '', planner_urls: 'https://tasks.example/plan'});
+zeigeBerichte({pruefungen: {}});
+var html = el('ana-check-quellen').innerHTML;
+pruefe(html.split('class="chip').length - 1 === 10, 'nicht zehn Chips: ' + html);
+pruefe(html.indexOf("checkSourceToggle('onedrive', this.checked)") >= 0, 'Chip ohne Schalter');
+// a source without addresses is greyed with the reason, and never asked
+pruefe(html.indexOf('class="chip aus"') >= 0 && html.indexOf(t('ana.check.needs.urls')) >= 0, 'SharePoint ohne Adressen nicht gegraut');
+pruefe(JSON.stringify(checkRowsChosen()) === JSON.stringify(['outlook_mail', 'outlook_calendar', 'onedrive']), 'gewaehlte Zeilen: ' + JSON.stringify(checkRowsChosen()));
+pruefeVollstaendigkeit();
+var a = lastCall('/api/v1/runs', 'POST').body;
+pruefe(a.check === true && a.check_onedrive === true && !a.check_teams && !a.check_sharepoint && !a.check_todo, 'nur die gewaehlten Pruefungen: ' + JSON.stringify(a));
+pruefe(JSON.stringify(a.check_rows) === JSON.stringify(['outlook_mail', 'outlook_calendar', 'onedrive']), 'Zeilen: ' + JSON.stringify(a.check_rows));
+// a chip off: the setting travels, the button follows
+checkSourceToggle('onedrive', false);
+var c = lastCall('/api/v1/config', 'PATCH').body;
+pruefe(JSON.stringify(c.check_sources) === JSON.stringify(['outlook_mail', 'outlook_calendar', 'sharepoint']), 'Einstellung nicht geschickt: ' + JSON.stringify(c));
+gesendet.length = 0;
+pruefeVollstaendigkeit();
+a = lastCall('/api/v1/runs', 'POST').body;
+pruefe(a.check === true && !a.check_onedrive, 'OneDrive trotz Abwahl geprueft: ' + JSON.stringify(a));
+// none: the button is off and asks nothing; all: every possible row
+checkSourcesAll(false);
+pruefe(el('ana-check').disabled === true, 'Knopf ohne Auswahl nicht aus');
+gesendet.length = 0;
+pruefeVollstaendigkeit();
+pruefe(!lastCall('/api/v1/runs', 'POST'), 'Lauf ohne Auswahl gestartet');
+checkSourcesAll(true);
+c = lastCall('/api/v1/config', 'PATCH').body;
+// eight: SharePoint's files and pages have no addresses here, Planner has
+pruefe(c.check_sources.length === 8 && c.check_sources.indexOf('sharepoint') < 0 && c.check_sources.indexOf('sharepoint_pages') < 0 && c.check_sources.indexOf('planner') >= 0, '"Alle" nimmt Unmoegliches mit: ' + JSON.stringify(c.check_sources));
+pruefe(el('ana-check').disabled === false, 'Knopf nach "Alle" noch aus');
+console.log('OK');
+"""
+
+
+def test_the_check_has_its_own_source_choice():
+    _in_node(CHECK_SOURCE_CHOICE)
+
+
+def test_the_check_follows_the_rows_of_the_card(sandbox):
+    """Asked for by row, a check runs whether or not its source is ticked
+    for the export – only a source that needs addresses waits for them –
+    and the mailbox check takes exactly the rows' categories. Without
+    rows the checks follow the export's switches, as the size preview
+    expects. Every step names its source."""
+    cfg = app_mod.load_config()          # nothing ticked at all
+    every = {k: True for k in ("check", "check_teams", "check_onedrive", "check_sharepoint",
+                              "check_pages", "check_planner", "check_todo", "check_onenote")}
+    rows = ["outlook_calendar", "outlook_contacts", "teams", "onedrive", "sharepoint", "todo"]
+    steps = app_mod.build_steps(cfg, every, check_rows=rows)
+    assert [s["key"] for s in steps] == ["check", "check_teams", "check_onedrive", "check_todo"]
+    assert steps[0]["env"]["EXPORT_CATEGORIES"] == "calendar,contacts"
+    assert steps[1]["env"]["EXPORT_CATEGORIES"] == "1on1,group,meeting,channels"
+    assert [s["label"] for s in steps] == ["job.step.check.outlook", "job.step.check.teams",
+                                           "job.step.check.onedrive", "job.step.check.todo"]
+    cfg["sharepoint_urls"] = "https://firma.sharepoint.com/sites/x"
+    steps = app_mod.build_steps(cfg, every, check_rows=rows)
+    assert "check_sharepoint" in [s["key"] for s in steps]
+    # rows that name no mailbox category: no mailbox step
+    steps = app_mod.build_steps(cfg, every, check_rows=["onedrive"])
+    assert [s["key"] for s in steps] == ["check_onedrive"]
+    # without rows: the export's switches decide, as before
+    assert app_mod.build_steps(cfg, every) == [] or all(
+        s["key"] == "check_sharepoint" for s in app_mod.build_steps(cfg, every))
+    cfg = _cfg_mit_kategorien(todo_enabled=True)
+    steps = app_mod.build_steps(cfg, every)
+    assert [s["key"] for s in steps] == ["check", "check_teams", "check_todo"]
+    assert steps[0]["env"]["EXPORT_CATEGORIES"] == "mail,calendar,contacts"
+    assert steps[1]["env"]["EXPORT_CATEGORIES"] == "1on1,group,meeting"
+
+
+def test_check_rows_over_the_api(server, sandbox, monkeypatch):
+    """The setting keeps only known rows, in the registry's order; a run
+    request hands the rows to the steps."""
+    a, port = server
+    code, r = call(port, "PATCH", "/api/v1/config", {"check_sources": ["nix", "onedrive", "outlook_mail"]})
+    assert code == 200 and r["config"]["check_sources"] == ["outlook_mail", "onedrive"]
+    seen = {}
+    monkeypatch.setattr(a.jobs, "start",
+                        lambda steps, label, **kw: seen.update(steps=steps, label=label) or True)
+    monkeypatch.setattr(app_mod, "read_token", lambda path=None: "tok")   # a check talks to Graph
+    code, r = call(port, "POST", "/api/v1/runs",
+                   {"check": True, "check_onedrive": True, "check_todo": True,
+                    "check_rows": ["outlook_mail", "onedrive", "todo"], "label": "job.check"})
+    assert code == 202, r
+    assert [s["key"] for s in seen["steps"]] == ["check", "check_onedrive", "check_todo"]
+    assert seen["steps"][0]["env"]["EXPORT_CATEGORIES"] == "mail"
+    assert seen["label"] == "job.check"
+
+
+SETTINGS_BAR_ACCESS = GRUNDZUSTAND + """
+// The access card saves itself: a key, the mode or the registration typed
+// there is never an unsaved setting, so the settings bar stays down.
+cfgGefuellt = true;
+el('speichern').classList.add('hide');
+markiereGeaendert({target: {id: 'tok', parentNode: {id: 'zugang-inhalt', parentNode: null}}});
+pruefe(el('speichern').classList.contains('hide'), 'the key raises the settings bar');
+markiereGeaendert({target: {id: 'au-client', parentNode: {id: 'au-form',
+                   parentNode: {id: 'zugang-inhalt', parentNode: null}}}});
+pruefe(el('speichern').classList.contains('hide'), 'the registration raises the settings bar');
+markiereGeaendert({target: {id: 'c-port', parentNode: {id: 'tab-einstellungen', parentNode: null}}});
+pruefe(!el('speichern').classList.contains('hide'), 'a setting does not raise the bar');
+console.log('OK');
+"""
+
+
+def test_the_access_card_never_raises_the_settings_bar():
+    _in_node(SETTINGS_BAR_ACCESS)
 
 
 PRUEFUNG_BILANZ = GRUNDZUSTAND + """
@@ -6868,6 +6999,10 @@ function b(extra){
 var s = bilanzSatz(b());
 pruefe(s.dot === 'ok' && s.text.indexOf('420') >= 0 && s.text.indexOf('Dateien') >= 0, 'Alles-da-Satz: ' + s.text);
 pruefe(s.text.indexOf('ausgeschlossen') < 0 && s.text.indexOf('behalten') < 0, 'Nullen genannt: ' + s.text);
+// Refused or gone: named, never open, nothing to warn about.
+s = bilanzSatz(b({verweigert: 2, weg: 1}));
+pruefe(s.dot === 'ok' && s.text.indexOf('2 von Microsoft verweigert') >= 0 && s.text.indexOf('1 vor dem Holen verschwunden') >= 0,
+       'Urteile fehlen im Satz: ' + s.text);
 // Open, excluded, kept, waiting – a number each, no names.
 s = bilanzSatz(b({offen: 12, ausgeschlossen: 208, behalten: 3, wartend: 40}));
 pruefe(s.dot === 'warn', 'offen ohne Warnpunkt');
@@ -6978,6 +7113,10 @@ pruefe(s.dot === 'warn', 'Befund ohne Warnpunkt');
 });
 s = archivSatz(q({stand: 'nicht', grund: 'ana.archiv.reason.db'}));
 pruefe(s.dot === 'aus' && s.text.indexOf('beschädigt') >= 0, 'nicht geprüft: ' + s.text);
+// refused by Microsoft, or gone before fetched: their own numbers, nothing to warn about
+s = archivSatz(q({verweigert: 2, weg: 3}));
+pruefe(s.dot === 'ok' && s.text.indexOf('2 Zugriff verweigert') >= 0 && s.text.indexOf('stimmen') >= 0, 'Verweigerte fehlen im Satz oder warnen: ' + s.text);
+pruefe(s.text.indexOf('3 vor dem Holen verschwunden') >= 0, 'Verschwundene fehlen im Satz: ' + s.text);
 
 zeigeArchiv({geprueft: '2026-09-13T10:00:00+00:00',
   quellen: [q({quelle: 'outlook', fehlt: 1, zeilen: [{pfad: 'E-Mail/Posteingang', fehlt: 1, fremd: 0, unvollstaendig: 0, verloren: 0}]}),
@@ -7352,6 +7491,7 @@ pruefeArchiv();
 pruefe(LAUF.eigener === true && gesendet[0].body.check_archive === true && gesendet[0].body.label === 'job.archive_check',
        'Archiv pruefen oeffnet kein Fenster oder schickt nichts: ' + JSON.stringify(gesendet[0]));
 LAUF.eigener = false; gesendet = [];
+KONFIG = Object.assign({}, KONFIG, {check_sources: ['outlook_mail']});   // the card's own choice
 pruefeVollstaendigkeit();
 pruefe(LAUF.eigener === true && gesendet[0].body.label === 'job.check', 'Jetzt pruefen ohne Fenster');
 LAUF.eigener = false; gesendet = [];

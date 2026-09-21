@@ -141,3 +141,25 @@ def test_versionen_vergessen_behaelt_die_orte(tmp_path):
     bestand.versionen_vergessen()
     assert bestand.eintraege["b"]["ctag"] == "" and bestand.eintraege["a"]["ctag"] == ""
     assert db.bestand_lesen()["b"]["ctag"] == ""
+
+
+def test_permanent_marks_are_rows_of_their_own_area(tmp_path):
+    db = state_db.StateDb(tmp_path)
+    assert db.permanent_lesen() == {}
+    assert not (tmp_path / state_db.DB_NAME).exists(), "a read created the file"
+    a = {"kind": "refused", "error": "HTTP 403", "name": "a.pdf", "rel": None,
+         "unit": "u", "version": "", "when": "2026-09-21T10:00:00+00:00"}
+    b = {**a, "kind": "gone", "name": "b.pdf"}
+    db.permanent_schreiben({"x": a, "y": b})
+    assert db.permanent_lesen() == {"x": a, "y": b}
+    # the difference of two states: a change written, a healed item deleted
+    db.permanent_abgleichen({"x": a, "y": b}, {"x": {**a, "version": "2"}})
+    assert db.permanent_lesen() == {"x": {**a, "version": "2"}}
+    db.permanent_loeschen(["x", "nie-da"])
+    assert db.permanent_lesen() == {}
+    db.permanent_schreiben({"x": a})
+    db.permanent_leeren()
+    assert db.permanent_lesen() == {}
+    # a row that is not JSON, or not a record, is skipped, not raised
+    db.saetze_schreiben(state_db.PERMANENT_BEREICH, {"kaputt": "{", "liste": "[1]"})
+    assert db.permanent_lesen() == {}

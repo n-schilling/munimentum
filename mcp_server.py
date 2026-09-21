@@ -2021,7 +2021,9 @@ def source_completeness(source: str = "") -> dict:
 
     Keys are the app's own (German): `da` here, `offen` not fetched yet,
     `ausgeschlossen` left out by the rules, `behalten` deleted at Microsoft
-    but kept, `wartend` waiting for the next run, `einheit` what is being
+    but kept, `wartend` waiting for the next run, `verweigert` refused by
+    Microsoft and `weg` gone before a copy came (both recorded by the
+    export, never open), `einheit` what is being
     counted (messages, files, …), `geprueft` when the check ran, `stand`
     its verdict, `grund` why it could not be complete, `zeilen` the same
     numbers per folder or library (`pfad`, `da`, `offen`).

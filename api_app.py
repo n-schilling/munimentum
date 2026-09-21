@@ -42,6 +42,9 @@ def konfig_speichern(h, data):
         if "teams_categories" in data:
             cfg["teams_categories"] = h.M._clean_categories(
                 data["teams_categories"], ["1on1", "group", "meeting", "channels"])
+        if "check_sources" in data:
+            cfg["check_sources"] = h.M._clean_categories(
+                data["check_sources"], [e["quelle"] for e in h.M.steps_mod.PRUEFUNGEN])
         for key in ("embed_model",
                     "chat_model", "ollama"):
             if key in data and str(data[key]).strip():

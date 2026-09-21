@@ -213,6 +213,12 @@ PRINT_LOCK = threading.Lock()                 # clean, non-interleaved progress 
 
 _client = None       # set in main() (for image embedding)
 IMGCACHE_DIR = None  # set in main() when CACHE_IMAGES is active
+# Inline images Microsoft refuses or no longer has: url -> mark, read from
+# the run's state.db in main() and written back as they come – a run
+# without a state (a check) records nothing.
+_IMAGE_MARKS = None
+_MARKS_DB = None
+_MARKS_LOCK = threading.Lock()
 SEIT = None          # set in main(): the TEAMS_SINCE day, an aware datetime
 
 
@@ -500,12 +506,24 @@ IMG_PLACEHOLDER = ("data:image/svg+xml;base64,"
                    + base64.b64encode(_PLACEHOLDER_SVG.encode("utf-8")).decode())
 
 
+def _mark_image(url, kind, e):
+    """An inline image with a verdict: recorded, quietly – it is part of a
+    message's rendering, not an item of the archive."""
+    mark = export_util.permanent_mark(kind, f"{type(e).__name__}: {e}",
+                                      name=url.rsplit("/", 2)[-2][:40], quiet=True)
+    with _MARKS_LOCK:
+        _IMAGE_MARKS[url] = mark
+        _MARKS_DB.permanent_schreiben({f"image:{url}": mark})
+
+
 def embed_hosted_images(html_content, counter=None):
     if not _client:
         return html_content
 
     def repl(m):
         url = m.group(0)
+        if _IMAGE_MARKS is not None and url in _IMAGE_MARKS:
+            return IMG_PLACEHOLDER   # refused or gone on an earlier run: not asked again
         cf = None
         if IMGCACHE_DIR is not None:
             cf = IMGCACHE_DIR / hashlib.sha1(url.encode()).hexdigest()
@@ -527,8 +545,13 @@ def embed_hosted_images(html_content, counter=None):
             return data_uri
         except TokenExpired:
             raise   # token dead -> don't half-write the conversation
-        except Exception:
-            return IMG_PLACEHOLDER   # 502 or similar -> visible placeholder, carry on
+        except Exception as e:
+            # 502 or similar -> visible placeholder, asked again next run;
+            # a 403 or 404 is a verdict -> the same placeholder, recorded.
+            kind = export_util.verdict(e)
+            if kind and _IMAGE_MARKS is not None:
+                _mark_image(url, kind, e)
+            return IMG_PLACEHOLDER
 
     return HOSTED_RE.sub(repl, html_content)
 
@@ -860,6 +883,31 @@ def _batch_fehler(status, meta):
     return f"HTTP {status}" + (f" {code}" if code else "")
 
 
+class _Permanent(RuntimeError):
+    """A verdict, not a hiccup: Microsoft refuses the file, or no longer
+    has it – asking again on every run changes nothing."""
+
+    def __init__(self, kind, text):
+        super().__init__(text)
+        self.kind = kind
+
+
+def _record_size(out, alt):
+    """The size as it lies here, into the record. Graph's `size` and the
+    bytes it delivers differ for some files behind a sharing link, and
+    the inward check compares the copy against the record – so the record
+    says what was written, not what was announced. Returns whether it
+    changed."""
+    try:
+        ist = (out / alt["rel"]).stat().st_size
+    except (OSError, KeyError, TypeError):
+        return False
+    if alt.get("size") == ist:
+        return False
+    alt["size"] = ist
+    return True
+
+
 def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     """The files the messages reference, fetched next to the conversation.
 
@@ -869,9 +917,14 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     from the last run is not fetched again. With `unveraendert` – the
     conversation's messages did not change – a file already on disk with a
     known cTag skips even the metadata question. A file that will not come
-    keeps its cloud link and says so once in the log. `ausser` names URLs
-    the channel mirror already holds – linked, never fetched twice."""
+    keeps its cloud link and says so once in the log; one Microsoft refuses
+    (403) or no longer has (404) is recorded as such (export_util.permanent_mark)
+    and not asked for again until a full sync – and it counts as no error,
+    so the category's cadence and the run's outcome stay untouched.
+    `ausser` names URLs the channel mirror already holds – linked, never
+    fetched twice."""
     db = state_db.StateDb(out)
+    marks = db.permanent_lesen()
     kv = f"files:{key}"
     try:
         stand = json.loads(db.kv_lesen(kv) or "{}")
@@ -882,6 +935,7 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     grenze = files_max_bytes()
     lokal, geladen, ausgelassen, fehler = {}, 0, 0, 0
     offen = {}
+    corrected = False          # a record corrected without a fetch
     # A full sync fetches every file again, known cTag or not.
     alles = export_util.voll_neu()
     for url, name in _referenzen(msgs):
@@ -891,13 +945,23 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             lokal[url] = ausser[url]
             continue
         alt = stand.get(url) or {}
+        # Refused or gone on an earlier run: asking every night changes
+        # nothing – only a full sync asks again (it forgets the marks
+        # first). A copy from before the verdict stays linked.
+        if url in marks and not alles:
+            if alt.get("rel") and (out / alt["rel"]).exists():
+                lokal[url] = f"{href_basis}/{alt['rel'].rsplit('/', 1)[-1]}"
+            continue
         if unveraendert and not alles and alt.get("ctag") and alt.get("rel"):
             dateiname = alt["rel"].rsplit("/", 1)[-1]
             if (out / ordner_rel / dateiname).exists():
+                corrected = _record_size(out, alt) or corrected
                 lokal[url] = f"{href_basis}/{dateiname}"
                 continue
         offen[url] = name
     if not offen:
+        if corrected:
+            db.kv_schreiben(kv, json.dumps(stand, ensure_ascii=False))
         return lokal, geladen, ausgelassen, fehler
 
     meta_urls = {f"{GRAPH}/shares/u!{_freigabe(url)}/driveItem?$select=name,cTag,size": url
@@ -909,12 +973,16 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     except Exception as e:
         grund = {"error": {"code": f"{type(e).__name__}: {e}"}}
         antworten = {u: (0, grund) for u in meta_urls}
+    new_marks = {}
     for meta_url, url in meta_urls.items():
         name = offen[url]
         status, meta = antworten.get(meta_url, (0, None))
         alt = stand.get(url) or {}
         try:
             if status != 200 or not isinstance(meta, dict):
+                kind = export_util.verdict_status(status, meta)
+                if kind:
+                    raise _Permanent(kind, _batch_fehler(status, meta))
                 raise RuntimeError(_batch_fehler(status, meta))
             groesse = int(meta.get("size") or 0)
             if grenze and groesse > grenze:
@@ -925,21 +993,44 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             href = f"{href_basis}/{dateiname}"
             if (not alles and alt.get("ctag") == (meta.get("cTag") or "")
                     and (out / ziel_rel).exists()):
+                _record_size(out, alt)
                 lokal[url] = href
                 continue
-            _lade_datei(graph, f"{GRAPH}/shares/u!{_freigabe(url)}/driveItem/content",
-                        out / ziel_rel)
+            try:
+                _lade_datei(graph, f"{GRAPH}/shares/u!{_freigabe(url)}/driveItem/content",
+                            out / ziel_rel)
+            except TokenExpired:
+                raise
+            except Exception as e:
+                kind = export_util.verdict(e)
+                if kind:
+                    raise _Permanent(kind, f"{type(e).__name__}: {e}") from e
+                raise
+            # The size of the copy, not Graph's announcement: the inward
+            # check compares the two, and they differ for some files.
             stand[url] = {"rel": ziel_rel, "ctag": meta.get("cTag") or "",
-                          "size": groesse}
+                          "size": (out / ziel_rel).stat().st_size}
             lokal[url] = href
             geladen += 1
         except TokenExpired:
             raise
+        except _Permanent as e:
+            # Recorded, so the next runs leave it alone – and no error
+            # counted, so the pointers advance. A copy from before the
+            # verdict keeps its place and its link.
+            new_marks[url] = export_util.permanent_mark(
+                e.kind, e, name=name[:80], rel=alt.get("rel"), unit=rel,
+                version=(meta or {}).get("cTag") if isinstance(meta, dict) else "")
+            if alt.get("rel") and (out / alt["rel"]).exists():
+                lokal[url] = f"{href_basis}/{alt['rel'].rsplit('/', 1)[-1]}"
+            export_util.permanent_event(e.kind, name, e)
         except Exception as e:
             fehler += 1
             progress.event("run.teams.file_failed", "warn", name=name[:60],
                            error=f"{type(e).__name__}: {e}")
     db.kv_schreiben(kv, json.dumps(stand, ensure_ascii=False))
+    if new_marks:
+        db.permanent_schreiben(new_marks)
     return lokal, geladen, ausgelassen, fehler
 
 
@@ -1963,7 +2054,7 @@ def main():
         print(__doc__.strip())
         return
 
-    global _client, IMGCACHE_DIR, SEIT
+    global _client, IMGCACHE_DIR, SEIT, _IMAGE_MARKS, _MARKS_DB
     argv = [a for a in sys.argv[1:] if not a.startswith("--")]
     workers = settings.number("EXPORT_WORKERS", "workers")
     graph_client.konfiguriere(workers)
@@ -2017,6 +2108,7 @@ def main():
         return
     if export_util.voll_neu():
         progress.event("run.full_sync")
+        root_db.permanent_leeren()      # every refused or gone file is asked once more
     elif export_util.abgleich():
         progress.event("run.resync")
     want_channels = "channels" in categories
@@ -2024,6 +2116,9 @@ def main():
     # 2) Login or token mode
     graph = _zugang(want_channels)
     _client = graph
+    _MARKS_DB = root_db
+    _IMAGE_MARKS = {k[len("image:"):]: v for k, v in root_db.permanent_lesen().items()
+                    if k.startswith("image:")}
     if want_channels and not graph.channels_enabled:
         progress.event("run.teams.channels_denied", "warn", error="")
         categories.discard("channels")

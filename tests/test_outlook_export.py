@@ -982,6 +982,23 @@ def test_pruefe_mails_rechnet_behaltenes_heraus(tmp_path, monkeypatch, _ohne_aus
     assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("E-Mail/Posteingang", 5, 5)]
 
 
+def test_pruefe_mails_counts_a_refused_mail_as_its_own_number(tmp_path, monkeypatch, _ohne_auswahl):
+    """The folder lists it, no run will bring it: neither here nor open.
+    A mail gone before it came is no longer listed – its mark counts
+    nothing here."""
+    import export_util
+    _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10))
+    done = _donelog(tmp_path)
+    _mails_da(tmp_path, done, "E-Mail/Posteingang", 8)
+    state_db.StateDb(tmp_path).permanent_schreiben({
+        "r1": export_util.permanent_mark("refused", "HTTP 403", rel="E-Mail/Posteingang/r.eml"),
+        "g1": export_util.permanent_mark("gone", "HTTP 404", rel="E-Mail/Posteingang/g.eml")})
+    b = outlook_export.pruefe_mails(_PruefGraph(), tmp_path, done, {})
+    done.close()
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (8, 1, 1, 0)
+    assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("E-Mail/Posteingang", 8, 1)]
+
+
 def test_pruefe_mails_ohne_luecke_hat_keine_zeilen(tmp_path, monkeypatch, _ohne_auswahl):
     _baum(monkeypatch, ("Posteingang", "E-Mail/Posteingang", 10))
     done = _donelog(tmp_path)
@@ -1581,6 +1598,70 @@ def test_delta_erste_runde_ohne_link_mit_stichtag(tmp_path, monkeypatch):
     # The link waits for a clean finish – nothing is stored yet.
     assert bestand.links == {"E-Mail/Posteingang": ("f1", _DELTA_F1 + "?$deltatoken=t1")}
     assert state_db.StateDb(tmp_path).kv_lesen("delta:f1") is None
+
+
+def test_a_refused_mail_is_recorded_and_the_folder_moves_on(tmp_path, capsys, monkeypatch):
+    """A 403 on one mail's MIME is a verdict: recorded, said once, no
+    error – the folder's link is stored, the mail is not listed as
+    fetchable again, and a full sync that brings it takes the mark back."""
+    import requests
+
+    class _Antwort:
+        status_code, text = 403, '{"error": {"code": "ErrorAccessDenied"}}'
+
+    class Refusing(DeltaMailGraph):
+        def get_bytes(self, url, timeout=None, label=""):
+            if "/m2/" in url:
+                raise requests.HTTPError("403 Client Error", response=_Antwort())
+            return super().get_bytes(url, timeout, label)
+
+    mails = [{"id": "m1", "subject": "a"}, {"id": "m2", "subject": "b"}]
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    bestand = outlook_export.Bestand()
+    assert outlook_export.run_export(Refusing(mails), tmp_path, done, stats,
+                                     _POST, 2, bestand) == "done"
+    assert stats == {"new": 1, "skipped": 0, "refused": 1}, "a verdict is no mail error"
+    bestand.links_sichern(db)
+    assert db.kv_lesen("delta:f1") == _DELTA_F1 + "?$deltatoken=t1", "the folder froze"
+    m = db.permanent_lesen()["m2"]
+    assert m["kind"] == "refused" and m["rel"].startswith("E-Mail/Posteingang/") and m["rel"].endswith(".eml")
+    assert m["error"].startswith("HTTPError: 403")
+    keys = [e["k"] for e in _events(capsys) if e]
+    assert keys.count("run.item.refused") == 1 and "run.mail_skipped" not in keys
+    # the next round names the mail again (changed): the mark keeps it out
+    g = Refusing(mails, aenderungen=[{"id": "m2", "subject": "b2"}])
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.run_export(g, tmp_path, done, stats, _POST, 2, outlook_export.Bestand())
+    assert stats == {"new": 0, "skipped": 1} and not any(e and e["k"].startswith("run.item") for e in _events(capsys))
+    # a full sync asks once more; when the mail comes, the mark goes
+    monkeypatch.setattr(outlook_export.export_util, "voll_neu", lambda: True)
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.run_export(DeltaMailGraph(mails), tmp_path, done, stats, _POST, 2,
+                              outlook_export.Bestand())
+    done.close()
+    assert stats["new"] == 2 and db.permanent_lesen() == {}
+
+
+def test_a_gone_mail_is_the_other_verdict(tmp_path, capsys):
+    import requests
+
+    class _Antwort:
+        status_code, text = 404, ""
+
+    class Gone(DeltaMailGraph):
+        def get_bytes(self, url, timeout=None, label=""):
+            raise requests.HTTPError("404", response=_Antwort())
+
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    outlook_export.run_export(Gone([{"id": "m1", "subject": "a"}]), tmp_path, done, stats,
+                              _POST, 1, outlook_export.Bestand())
+    done.close()
+    assert stats == {"new": 0, "skipped": 0, "gone": 1}
+    assert state_db.StateDb(tmp_path).permanent_lesen()["m1"]["kind"] == "gone"
+    assert [e["k"] for e in _events(capsys) if e and e["k"].startswith("run.item")] == ["run.item.gone"]
 
 
 def test_delta_link_nur_nach_sauberem_ordner(tmp_path):

@@ -219,6 +219,7 @@ button.ghost.rot{color:var(--err)}
   border:1px solid var(--line);font-size:13px;color:var(--muted);background:var(--card);
   cursor:pointer;position:relative;user-select:none}
 .chip input{position:absolute;opacity:0;width:0;height:0;margin:0}
+.chip.aus{opacity:.5;cursor:default}
 .chip .haken,.chip [data-ikon="haken"]{display:none;color:var(--accent)}
 .chip.on,.chip:has(input:checked){background:var(--accent-weich);border-color:var(--accent);color:var(--ink)}
 .chip:has(input:checked) .haken,.chip:has(input:checked) [data-ikon="haken"]{display:inline-flex}
@@ -1433,6 +1434,14 @@ details.rechte p{margin:6px 0}
     <h2 class="mit-info"><span data-i18n="ana.check.title">Vollständigkeit</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="ana.check.i">i</span></h2>
     <p class="sub" data-i18n="ana.check.sub">Würde ein Lauf mit den heutigen Einstellungen jetzt etwas holen, das hier noch nicht liegt?</p>
+    <div class="row" style="align-items:flex-start;gap:10px">
+      <div class="chips" id="ana-check-quellen"></div>
+      <span class="row" style="gap:4px;margin-left:auto;white-space:nowrap">
+        <button class="mini" onclick="checkSourcesAll(true)" data-i18n="ana.check.pick.all">Alle</button>
+        <button class="mini" onclick="checkSourcesAll(false)" data-i18n="ana.check.pick.none">Keine</button>
+        <span class="info" tabindex="0" aria-label="i" data-i18n-title="ana.check.pick.i">i</span>
+      </span>
+    </div>
     <div class="row">
       <button class="act" id="ana-check" onclick="pruefeVollstaendigkeit()" data-i18n="ana.check.run">Jetzt prüfen</button>
     </div>
@@ -3133,7 +3142,7 @@ function zeigeFortschritt(jobs){
   // run's label was translated by the browser before it started the run.
   // mtext passes strings through unchanged – so for the step, the key
   // itself would otherwise end up in the line.
-  var zeile = t('log.job.running', {label: mtext(j.label), step: t(j.step),
+  var zeile = t('log.job.running', {label: t(j.label), step: t(j.step),
                                     i: i + 1, n: n});
   if(p) zeile += ' · ' + (p.total
     ? t('progress.of', {done: p.done.toLocaleString(LOC),
@@ -3184,7 +3193,8 @@ function laufVerfolgen(jobs, first){
       LAUF.eigener = false;
     }
     var j = jobs.job || {}, n = (j.steps || []).length || 1;
-    el('lauf-titel').textContent = t('lauf.title');
+    // The run's own name – "Updating the archive" only for the export
+    el('lauf-titel').textContent = t(j.label && j.label !== 'job.export' ? j.label : 'lauf.title');
     el('lauf-sub').textContent = t('lauf.sub', {i: (j.index || 0) + 1, n: n,
                                                when: fmt(j.started)});
   } else if(LAUF.gesehen && !LAUF.ergebnis){
@@ -6931,6 +6941,7 @@ function zeigeAnalytics(a){
 var PRUEFUNGEN = JSON.parse(document.getElementById('pruefungen').textContent || '[]');
 
 function zeigeBerichte(a){
+  drawCheckSources();
   var alle = a.pruefungen || {};
   var zeilen = PRUEFUNGEN.filter(function(e){
     var p = alle[e.quelle] || {};
@@ -6958,6 +6969,9 @@ function bilanzSatz(b){
     teile.push(t('ana.check.all', {n: zahl(b.da), unit: einheit}));
   }
   if(b.wartend > 0) teile.push(t('ana.check.waiting', {n: zahl(b.wartend)}));
+  // What no run will bring: recorded by the export, neither here nor open.
+  if(b.verweigert > 0) teile.push(t('ana.check.refused', {n: zahl(b.verweigert)}));
+  if(b.weg > 0) teile.push(t('ana.check.gone', {n: zahl(b.weg)}));
   if(b.ausgeschlossen > 0){
     var andere = b.ausgeschlossen_einheit && b.ausgeschlossen_einheit !== b.einheit;
     teile.push(andere
@@ -7027,6 +7041,8 @@ function archivSatz(z){
   var text = teile.length ? teile.join(' · ') : t('ana.archiv.ok', {n: zahl(z.stimmig)});
   if(z.beiseite > 0) text += ' · ' + t('ana.archiv.aside.state', {n: zahl(z.beiseite)});
   if(z.vermerkt > 0) text += ' · ' + t('ana.archiv.noted.state', {n: zahl(z.vermerkt)});
+  if(z.verweigert > 0) text += ' · ' + t('ana.archiv.denied.state', {n: zahl(z.verweigert)});
+  if(z.weg > 0) text += ' · ' + t('ana.archiv.gone.state', {n: zahl(z.weg)});
   if(z.stand === 'teilweise'){
     text = t('ana.check.partial', {n: zahl((z.fehler || []).length)}) + ' · ' + text;
   }
@@ -7119,7 +7135,7 @@ function befundeFenster(quelle){
       (liste.length > 500 ? '<p class="small muted">' + esc(t('ana.archiv.findings.more', {n: zahl(liste.length - 500)})) + '</p>' : '') +
       '</details>';
   }
-  BEFUNDE_TEXT = ['fehlt', 'unvollstaendig', 'fremd', 'verloren'].map(function(k){
+  BEFUNDE_TEXT = ['fehlt', 'unvollstaendig', 'fremd', 'verloren', 'verweigert', 'weg'].map(function(k){
     return (b[k] || []).join('\n'); }).filter(Boolean).join('\n');
   oeffneEigenes('befunde',
     modalKopf(t('ana.archiv.findings.title', {source: titel}), 'befunde', t('ana.archiv.findings.i')) +
@@ -7128,6 +7144,8 @@ function befundeFenster(quelle){
     gruppe('ana.archiv.findings.partial', b.unvollstaendig || []) +
     gruppe('ana.archiv.findings.foreign', b.fremd || []) +
     gruppe('ana.archiv.findings.lost', b.verloren || []) +
+    gruppe('ana.archiv.findings.denied', b.verweigert || []) +
+    gruppe('ana.archiv.findings.gone', b.weg || []) +
     '<div class="row modal-fuss">' +
     '<button class="ghost" onclick="inZwischenablage(BEFUNDE_TEXT, this)">' + esc(t('ana.archiv.findings.copy')) + '</button>' +
     '<button class="ghost" onclick="archivAktion(&quot;ordner&quot;, ' + q + ')">' + esc(t('ana.archiv.open')) + '</button>' +
@@ -7233,10 +7251,55 @@ function nutztPages(){
   return !!(S.config && S.config.sharepoint_pages_enabled &&
             (S.config.sharepoint_pages_urls || '').trim());
 }
+/* The card's own selection: the balance rows as chips, kept as the
+   setting `check_sources`. A row whose source needs addresses is greyed
+   with the reason until they are entered; the button asks exactly the
+   chosen rows, ticked for the export or not. */
+function checkSourcePossible(e){
+  return !e.urls || !!String((KONFIG || {})[e.urls] || '').trim();
+}
+function checkRowsChosen(){
+  var chosen = (KONFIG || {}).check_sources || [];
+  return PRUEFUNGEN.filter(function(e){ return chosen.indexOf(e.quelle) >= 0 && checkSourcePossible(e); })
+    .map(function(e){ return e.quelle; });
+}
+function drawCheckSources(){
+  var box = el('ana-check-quellen');
+  if(!box) return;
+  var chosen = (KONFIG || {}).check_sources || [];
+  box.innerHTML = PRUEFUNGEN.map(function(e){
+    var possible = checkSourcePossible(e), on = possible && chosen.indexOf(e.quelle) >= 0;
+    return '<label class="chip' + (possible ? '' : ' aus') + '"' + (possible ? '' : ' title="' + esc(t('ana.check.needs.urls')) + '"') + '>' +
+      '<input type="checkbox"' + (on ? ' checked' : '') + (possible ? '' : ' disabled') +
+      ' onchange="checkSourceToggle(\'' + e.quelle + '\', this.checked)">' + ikon('haken', 'haken klein') +
+      esc(t(e.titel)) + '</label>';
+  }).join('');
+  var button = el('ana-check');
+  if(button){
+    var none = !checkRowsChosen().length;
+    button.disabled = none;
+    button.title = none ? t('ana.check.pick.empty') : '';
+  }
+}
+function checkSourceToggle(source, on){
+  var chosen = ((KONFIG || {}).check_sources || []).filter(function(q){ return q !== source; });
+  if(on) chosen.push(source);
+  KONFIG = Object.assign({}, KONFIG, {check_sources: chosen});
+  drawCheckSources();
+  konfig({check_sources: chosen}).then(drawCheckSources);
+}
+function checkSourcesAll(on){
+  var chosen = on ? PRUEFUNGEN.filter(checkSourcePossible).map(function(e){ return e.quelle; }) : [];
+  KONFIG = Object.assign({}, KONFIG, {check_sources: chosen});
+  drawCheckSources();
+  konfig({check_sources: chosen}).then(drawCheckSources);
+}
 function pruefeVollstaendigkeit(){
-  var lauf = {};
-  PRUEFUNGEN.forEach(function(e){ lauf[e.anfrage] = true; });
-  run(lauf, 'job.check');
+  var rows = checkRowsChosen();
+  if(!rows.length) return;
+  var body = {check_rows: rows};
+  PRUEFUNGEN.forEach(function(e){ if(rows.indexOf(e.quelle) >= 0) body[e.anfrage] = true; });
+  run(body, 'job.check');
 }
 
 /* ---------- Address book ---------- */
@@ -8161,10 +8224,18 @@ function speichereEinstellungen(){
 /* The save bar appears with the first change and goes with the save – a
    button that is always there is a button nobody knows the state of. Fields
    that save themselves (the URL tables, the MCP switch) pass through here
-   too and are cleared again by their own save. */
+   too and are cleared again by their own save. The access card is not a
+   setting at all: the key goes through its own route with its own answer,
+   the mode and the registration through konfig() – nothing typed there is
+   ever "unsaved settings", so it never raises the bar. */
 var einstGeaendert = false, speichernLaeuft = false;
-function markiereGeaendert(){
+function insideAccessCard(node){
+  for(; node; node = node.parentNode) if(node.id === 'zugang-inhalt') return true;
+  return false;
+}
+function markiereGeaendert(ev){
   if(speichernLaeuft || !cfgGefuellt) return;
+  if(ev && insideAccessCard(ev.target)) return;
   einstGeaendert = true;
   el('speichern').classList.remove('hide');
 }

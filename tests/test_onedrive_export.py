@@ -20,6 +20,7 @@ import pytest
 import folders
 import onedrive_export as od
 import progress
+import export_util
 import state_db
 
 
@@ -945,3 +946,86 @@ def test_offene_liste_ist_gekappt(tmp_path, monkeypatch):
     b = od.pruefe_vollstaendigkeit([_datei(str(i), f"f{i}.pdf") for i in range(3)],
                                    tmp_path, od.Selection())
     assert b["offen"] == 3 and len(b["offene"]) == 2 and b["offene_gekappt"]
+
+
+# --------------------------------------------------------------------------
+# A verdict on one file: refused or gone, recorded, the drive moves on
+# --------------------------------------------------------------------------
+class _Verdict(FakeGraph):
+    """FakeGraph whose download answers one item with an HTTP status."""
+
+    def __init__(self, seiten, status, kennung="2"):
+        super().__init__(seiten)
+        self.status, self.kennung = status, kennung
+
+    def lade(self, item_id, ziel, geaendert=None):
+        if item_id == self.kennung:
+            import requests
+            raise requests.HTTPError(f"{self.status}", response=_Antwort(self.status))
+        return super().lade(item_id, ziel, geaendert)
+
+
+def test_a_refused_file_is_recorded_and_the_pointer_advances(tmp_path, capsys):
+    """A 403 on one file is no reason to freeze the whole drive: the file
+    is recorded as refused, said once, the delta pointer advances, the
+    run counts no error – and the next run does not ask for it until
+    its content changes."""
+    g = _Verdict([_datei("1", "a.pdf"), _datei("2", "b.pdf")], 403)
+    zahlen = od.lauf(g, tmp_path)
+    assert (zahlen["new"], zahlen["errors"]) == (1, 0)
+    assert state_db.DbZustand(tmp_path).delta_lesen() == "https://delta/neu", "the pointer froze"
+    db = state_db.StateDb(tmp_path)
+    m = db.permanent_lesen()["2"]
+    assert m["kind"] == "refused" and m["rel"] == "Dateien/Ordner/b.pdf" and m["version"] == "c1"
+    assert "2" not in db.bestand_lesen()
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.refused") == 1
+    assert "run.file_failed" not in keys and "run.drive.retry" not in keys
+    # the same version again (a replayed delta): not asked
+    g2 = _Verdict([_datei("2", "b.pdf")], 403)
+    zahlen = od.lauf(g2, tmp_path)
+    assert zahlen["errors"] == 0 and not any(e["k"].startswith("run.item") for e in _events(capsys))
+    # changed content: asked once more – and when it comes, the mark goes
+    g3 = FakeGraph([_datei("2", "b.pdf", ctag="c2")])
+    assert od.lauf(g3, tmp_path)["new"] == 1 and g3.geladen == ["2"]
+    assert db.permanent_lesen() == {} and db.bestand_lesen()["2"]["ctag"] == "c2"
+
+
+def test_a_gone_file_and_a_full_sync(tmp_path, capsys, monkeypatch):
+    """A 404 is the other verdict, and a passing failure stays a failure
+    that holds the pointer. A full sync forgets every mark."""
+    g = _Verdict([_datei("1", "a.pdf"), _datei("2", "b.pdf"), _datei("3", "c.pdf")], 404)
+    g.fehlerhaft = {"3"}
+    zahlen = od.lauf(g, tmp_path)
+    assert (zahlen["new"], zahlen["errors"]) == (1, 1)
+    assert state_db.DbZustand(tmp_path).delta_lesen() is None, "a passing failure must hold the pointer"
+    db = state_db.StateDb(tmp_path)
+    assert db.permanent_lesen()["2"]["kind"] == "gone"
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.gone") == 1 and keys.count("run.file_failed") == 1
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = FakeGraph([_datei("1", "a.pdf"), _datei("2", "b.pdf"), _datei("3", "c.pdf")])
+    assert od.lauf(g2, tmp_path)["new"] == 3 and sorted(g2.geladen) == ["1", "2", "3"]
+    assert db.permanent_lesen() == {}
+
+
+def test_the_check_counts_a_marked_version_as_its_own_number(tmp_path):
+    """Refused or gone is neither here nor open – and never among the
+    open files "Fetch now" would ask for. A file that lies here after
+    all counts as here, mark or not."""
+    db = state_db.StateDb(tmp_path)
+    marks = {"2": export_util.permanent_mark("refused", "HTTP 403", rel="Dateien/Ordner/b.pdf", version="c1"),
+             "3": export_util.permanent_mark("gone", "HTTP 404", rel="Dateien/Ordner/c.pdf", version="c1"),
+             "4": export_util.permanent_mark("refused", "HTTP 403", rel="Dateien/Ordner/d.pdf", version="c0")}
+    db.permanent_schreiben(marks)
+    da = tmp_path / "Dateien/Ordner/a.pdf"
+    da.parent.mkdir(parents=True)
+    da.write_bytes(b"x" * 10)
+    eintraege = [_datei("1", "a.pdf"), _datei("2", "b.pdf"), _datei("3", "c.pdf"), _datei("4", "d.pdf")]
+    b = od.pruefe_vollstaendigkeit(eintraege, tmp_path, od.Selection(), marks=db.permanent_lesen())
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 1, 1, 1)
+    assert [o["id"] for o in b["offene"]] == ["4"], "an older mark does not hold for a new version"
+    assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("Dateien/Ordner", 1)]
+    # without marks: all three open, as before
+    b = od.pruefe_vollstaendigkeit(eintraege, tmp_path, od.Selection())
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 3, 0, 0)

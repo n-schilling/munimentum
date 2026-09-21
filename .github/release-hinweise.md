@@ -1,28 +1,40 @@
-## New in 13.3.0
+## New in 13.4.0
 
-**A case that fills itself.** A saved search attached to a case can
-now be switched to *automatic* – when you save it, or later in the
-case. From then on every run that updates the index runs the search
-and files what the case does not hold yet into the folder you chose,
-marked *automatic* with the search that found it; *Collect now* on a
-search does the same right away, as a run of its own. Only a text
-search collects, and what you removed from the case stays out – the
-look that *Check for new hits* gives leaves it out as well. A chip
-above the case shows only what was collected.
+**The completeness check chooses its own sources.** The card under
+*Insights › Completeness* carries the ten balance rows as chips, with
+*All* and *None*; the check asks exactly those, ticked for the export
+or not – a source that needs addresses waits until they are entered.
+Until now the check followed the export's switches, and SharePoint
+ran whenever its addresses were set. Every step of the run names its
+source (*Completeness: OneDrive*), and the run window names the run.
 
-**One dialog for a saved search.** Saving asks for name, case, the
-folder it files into (when the case has folders – an existing one, or a
-new one made on the spot) and the switch; *Edit* on a saved search opens
-the same dialog later, under *Explore archive* and in the case alike.
-Rename, attach and detach went into it; a row keeps *Run*, *Edit* and,
-in the case, *Collect now*. *Check for new hits* is now *Show new hits*,
-which is what it does.
+**The access card no longer raises *Unsaved changes*.** A key pasted
+under *Settings › Microsoft Access* is saved by *Save access* alone, with
+its own answer; the settings bar used to appear beside it although
+*Save settings* never touched the key.
 
-**Scripts and Claude:** `auto` on a saved search (`POST` and `PATCH
-/api/v1/searches/saved`), `POST /api/v1/cases/{id}/collect`, and the
-MCP tool `collect_case` behind *Claude may change cases*; an item says
-`via: auto` and which `search` filed it. The spec now says `202` for
-the case export, which is what the server answered all along.
+**What Microsoft refuses or no longer has is recorded, not retried.**
+A `403` or a `404` on a mail, a file, a task, a page, an attachment or
+an inline image used to be an error on every run – and one such file
+froze a drive's delta pointer, one mail its folder's link, one task its
+list's cadence. Now every export records the verdict in its
+bookkeeping, says it once, and moves on with pointers and cadences
+intact; it asks again only when the item changes or you force a full
+sync of the source. The completeness balance and *Archive and
+bookkeeping* count these items as *refused* and *gone before fetched* –
+their own numbers, never *missing* or *open*, listed by name under
+*Findings*. A copy fetched before the verdict keeps its place. A file
+that fails for a passing reason (a `502`, a lock) is asked again next
+run – To Do and Planner attachments, OneNote images and SharePoint page
+images used to be forgotten after one failure.
+
+**Fewer false *incomplete* on Teams files.** The bookkeeping now
+records the size of the copy as written, not the size Graph announced
+– the two differ for some files behind a sharing link – and corrects
+older records the next time the conversation is read.
+
+**The API description** had one response key twice in the sign-in
+operation, which strict viewers refused; a test now forbids it.
 
 ## Upgrading
 

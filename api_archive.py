@@ -51,7 +51,12 @@ def lauf_starten(h, _p, _q, data):
         full_sync=bool(data.get("full_sync")),
         resync=bool(data.get("resync")),
         resync_ordner=(data.get("resync_folders")
-                       if isinstance(data.get("resync_folders"), list) else None))
+                       if isinstance(data.get("resync_folders"), list) else None),
+        # The Insights card's own selection: the balance rows to check,
+        # ticked for the export or not. Absent: the checks follow the
+        # export's switches, as the size preview expects.
+        check_rows=([str(r) for r in data["check_rows"]]
+                    if isinstance(data.get("check_rows"), list) else None))
     if not ok:
         raise Ablehnung(409, why)
     return lauf_antwort(h, why)

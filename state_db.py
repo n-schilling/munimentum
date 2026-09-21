@@ -19,7 +19,9 @@ What the file holds, by export:
                   report, small JSON blobs
     saetze        records by area, (area, key) -> JSON – one row per
                   conversation, page, task or resource, so an export updates
-                  the rows it touched instead of rewriting one big blob
+                  the rows it touched instead of rewriting one big blob;
+                  the area "permanent" holds the items no run asks for
+                  again (export_util.permanent_mark)
 
 The win over the loose files is the transaction: inventory and delta pointer
 advance atomically instead of by documented write order. Locality stays –
@@ -42,6 +44,7 @@ import drive_mirror
 import folders
 
 DB_NAME = "state.db"
+PERMANENT_BEREICH = "permanent"      # items no run asks for again
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS bestand(
@@ -213,6 +216,37 @@ class StateDb:
             return
         with con:
             con.execute("DELETE FROM saetze WHERE bereich = ?", (bereich,))
+
+    # -- what no run asks for again (export_util.permanent_mark) ----------
+    def permanent_lesen(self):
+        """key -> mark of every item Microsoft refuses or no longer has."""
+        out = {}
+        for key, roh in self.saetze_lesen(PERMANENT_BEREICH).items():
+            try:
+                satz = json.loads(roh)
+            except ValueError:
+                continue
+            if isinstance(satz, dict):
+                out[key] = satz
+        return out
+
+    def permanent_schreiben(self, marks):
+        self.saetze_schreiben(PERMANENT_BEREICH, {
+            k: json.dumps(v, ensure_ascii=False) for k, v in marks.items()})
+
+    def permanent_loeschen(self, keys):
+        self.saetze_loeschen(PERMANENT_BEREICH, keys)
+
+    def permanent_leeren(self):
+        """A full sync asks for everything once more."""
+        self.saetze_leeren(PERMANENT_BEREICH)
+
+    def permanent_abgleichen(self, vorher, nachher):
+        """Persist what a run changed about the marks: new or changed
+        rows written, rows the run took back (a fetch that came through
+        after all) deleted."""
+        self.permanent_schreiben({k: v for k, v in nachher.items() if vorher.get(k) != v})
+        self.permanent_loeschen([k for k in vorher if k not in nachher])
 
     # Public names for the exports that store whole JSON blobs (Teams state,
     # folder trees) – the underscore pair stays for compatibility.

@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.3.0
+  version: 13.4.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2331,6 +2331,10 @@ paths:
                 resync: { type: boolean }
                 resync_folders: { type: array, items: { type: string } }
                 calendar_full: { type: boolean }
+                check_rows:
+                  type: array
+                  items: { type: string, enum: [outlook_mail, outlook_calendar, outlook_contacts, teams, onedrive, sharepoint, sharepoint_pages, planner, todo, onenote] }
+                  description: "For the completeness checks (`check`, `check_teams`, …): the balance rows to judge, whether or not their source is ticked for the export – the Insights card's own selection. Absent, a check follows the export's switches. A row whose source needs a URL list runs only when that list is set."
                 legacy_comments: { type: boolean }
             example: { outlook: true, index: true, label: "job.export" }
       responses:
@@ -2535,6 +2539,8 @@ paths:
                   ausgeschlossen: 4120
                   behalten: 12
                   wartend: 0
+                  verweigert: 0
+                  weg: 0
                   zeilen:
                   - pfad: Posteingang
                     da: 241
@@ -3107,14 +3113,13 @@ paths:
                 properties:
                   device: { $ref: "#/components/schemas/DeviceCode" }
         "500":
-          description: Microsoft refused the sign-in (srv.login.failed).
+          description: Microsoft refused the sign-in (srv.login.failed), or the server itself failed (srv.internal).
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "500": { $ref: "#/components/responses/ServerError" }
     delete:
       tags: [App, DELETE]
       operationId: v1SignOut
@@ -3671,6 +3676,7 @@ components:
         sync_cadence: { type: object, description: "Key -> always|daily|weekly|monthly: a source (onedrive, todo), a category (outlook:mail, teams:1on1), a unit (sharepoint-url:<url>, planner-url:<url>, pages-url:<url>, onenote:<id>) or a departure below a category (ou…" }
         outlook_categories: { type: array, items: { type: string }, description: "The ticked mailbox categories: mail, calendar, contacts." }
         teams_categories: { type: array, items: { type: string }, description: "The ticked Teams kinds: 1on1, group, meeting, channels." }
+        check_sources: { type: array, items: { type: string }, description: "The balance rows the completeness check asks – the Insights card's own selection, all ten to begin with: outlook_mail, outlook_calendar, outlook_contacts, teams, onedrive, sharepoint, sharepoint_pages, planner, todo, onenote." }
         workers: { type: integer, default: 4, description: "How many requests go to Microsoft Graph at once. Graph allows no more than four per mailbox." }
         mirror_workers: { type: integer, default: 8, description: "Applies to OneDrive and SharePoint. Unlike the mailbox, Microsoft documents no fixed limit here – throttling is budget-based, and the run then waits visibly (HTTP 429 in the log)." }
         embed_images: { type: boolean, default: true, description: "Images end up inside the HTML file rather than as a link. Off: much smaller files, but the images are gone later." }
@@ -4003,6 +4009,8 @@ components:
         ausgeschlossen_einheit: { type: string, description: "Unit of `ausgeschlossen` where it differs (calendars, lists, notebooks)." }
         behalten: { type: integer, description: "Gone at Microsoft, kept here." }
         wartend: { type: integer, description: "Mirrors only: files waiting for their folder cadence." }
+        verweigert: { type: integer, description: "Listed by Microsoft but refused (a 403, a malware verdict): recorded by the export, never open – no fetch will bring it until a full sync." }
+        weg: { type: integer, description: "Listed by Microsoft but no longer there when asked (404): recorded by the export, never open." }
         zeilen:
           type: array
           description: Only units with something open – a folder, calendar, board, list, notebook, site.
@@ -4487,11 +4495,15 @@ components:
             The last inward check, null before the first: `geprueft`,
             `quellen` (one entry per export folder: quelle, stand, grund,
             stimmig, fehlt, fremd, unvollstaendig, verloren – all files –,
-            `zeilen` with the units that have findings, `fehler`) and
-            `index` (stand, grund, geaendert, neu, weg, gebaut – files
-            changed, new or gone since the index last read them). Each
-            source entry also carries `befunde` (kind -> the files behind
-            the numbers, capped at 5000 per kind – `gekappt` says so) and
+            `vermerkt`, `verweigert` (items Microsoft refuses to hand out,
+            a 403 or a malware verdict: no copy here, and no fetch will
+            bring one) and `weg` (items that were gone at Microsoft, a
+            404, before a copy came), `zeilen` with the units that have
+            findings, `fehler`) and `index` (stand, grund, geaendert, neu,
+            weg, gebaut – files changed, new or gone since the index last
+            read them). Each source entry also carries `befunde` (kind ->
+            the files behind the numbers, `verweigert` and `weg` among the
+            kinds, capped at 5000 per kind – `gekappt` says so) and
             `beiseite`, how many files an earlier "set aside" holds.
   headers:
     ETag:

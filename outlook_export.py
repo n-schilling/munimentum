@@ -676,14 +676,16 @@ def _alte_datei_weg(out, alt, rel):
 MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
 
 
-def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
+def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, marks=None):
     """Mirrors the folders onto the filesystem and yields (mid, rel) for
     every mail not yet exported. Listing runs in the main thread (lazily).
 
     Every folder is a delta round of its own: the first one lists it in
     full, later ones only what changed since the stored link. A round that
     breaks off counts as a folder error; its link is never stored, so the
-    next run reads the folder from the same start again.
+    next run reads the folder from the same start again. A mail Microsoft
+    refused or no longer had (`marks`, export_util.permanent_mark) is not
+    yielded – the delta names it again only when it changes.
     """
     db = state_db.StateDb(out)
     seit = outlook_since()
@@ -720,7 +722,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None):
                             bestand.gesehen.add(mid)
                             if msg.get("internetMessageId"):
                                 bestand.briefe.add(msg["internetMessageId"].strip())
-                        if not alles and done.is_done(out, mid):
+                        if not alles and (done.is_done(out, mid) or (marks and mid in marks)):
                             stats["skipped"] += 1
                             continue
                         empfangen = (msg.get("receivedDateTime") or "")[:10]
@@ -769,6 +771,9 @@ def download_one(graph, out, done, mid, rel):
     except TokenExpired:
         return ("expired", mid)
     except Exception as e:
+        kind = export_util.verdict(e)
+        if kind:
+            return ("verdict", (kind, mid, rel, f"{type(e).__name__}: {e}"))
         return ("error", f"{mid[:16]}…: {e}")
     try:
         (out / rel).write_bytes(content)
@@ -779,10 +784,13 @@ def download_one(graph, out, done, mid, rel):
 
 
 def run_export(graph, out, done, stats, selected, workers, bestand=None):
-    gen = iter_messages_to_export(graph, out, done, stats, selected, bestand)
+    db = state_db.StateDb(out)
+    marks = db.permanent_lesen()         # mails no run asks for again
+    marks_before = dict(marks)
+    gen = iter_messages_to_export(graph, out, done, stats, selected, bestand, marks)
     cap = max(workers * 8, workers)      # this many tasks in the pipeline at once
     pending = set()
-    ziele = {}                           # future -> rel: which folder a failure hits
+    ziele = {}                           # future -> (mid, rel): which folder a failure hits
     expired = False
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -799,26 +807,35 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
                     return
                 fut = ex.submit(download_one, graph, out, done, mid, rel)
                 pending.add(fut)
-                ziele[fut] = rel
+                ziele[fut] = (mid, rel)
 
         fill()
         while pending:
             finished, rest = wait(pending, return_when=FIRST_COMPLETED)
             pending = set(rest)
             for fut in finished:
-                rel = ziele.pop(fut, "")
+                mid, rel = ziele.pop(fut, ("", ""))
                 try:
                     status, info = fut.result()
                 except Exception as e:
                     status, info = "error", str(e)
                 if status == "ok":
                     stats["new"] += 1
+                    marks.pop(mid, None)          # a full sync brought it after all
                     # No total: the generator only discovers the mails as it
                     # goes. So only the running count is reported.
                     progress.melde(stats["new"], what="mails")
                 elif status == "expired":
                     expired = True
                     STOP.set()
+                elif status == "verdict":
+                    # Refused or gone: recorded, said once, no error – the
+                    # folder's link advances past it.
+                    kind, mid, rel, text = info
+                    marks[mid] = export_util.permanent_mark(
+                        kind, text, name=rel.rsplit("/", 1)[-1], rel=rel)
+                    stats[kind] = stats.get(kind, 0) + 1
+                    export_util.permanent_event(kind, rel, text)
                 elif status == "error":
                     # The folder's link must not advance past this mail.
                     stats["mail_errors"] = stats.get("mail_errors", 0) + 1
@@ -829,6 +846,7 @@ def run_export(graph, out, done, stats, selected, workers, bestand=None):
             if not expired:
                 fill()
 
+    db.permanent_abgleichen(marks_before, marks)
     return "expired" if expired else "done"
 
 
@@ -1529,17 +1547,22 @@ def _alt_auf_platte(out, rel_path, seit):
 
 
 def pruefe_mails(graph, out, done, weg=None):
-    """The mail balance, per folder the rules take."""
+    """The mail balance, per folder the rules take. A mail Microsoft
+    refuses is listed by the folder but will never come: its own number,
+    not open. One that was gone before it came is no longer listed."""
     weg = weg or {}
     regeln = aktuelle_regeln()
     seit = outlook_since()
-    da_je, weg_je = Counter(), Counter()
+    da_je, weg_je, verweigert_je = Counter(), Counter(), Counter()
     for rel in done.done.values():
         if (Path(out) / rel).exists():
             da_je[_ordner_von(rel)] += 1
     for rel in weg:
         weg_je[_ordner_von(rel)] += 1
-    da = offen = ausgeschlossen = 0
+    for mark in state_db.StateDb(out).permanent_lesen().values():
+        if mark.get("kind") == export_util.REFUSED and mark.get("rel"):
+            verweigert_je[_ordner_von(mark["rel"])] += 1
+    da = offen = ausgeschlossen = verweigert = 0
     zeilen = []
     for top in build_tree(graph):
         for folder, rel_path in top["subtree"]:
@@ -1553,6 +1576,9 @@ def pruefe_mails(graph, out, done, weg=None):
             # Tombstoned mails still lie here; what counts against the
             # folder's items is the rest.
             lebend = max(0, da_je[rel_path] - weg_je[rel_path])
+            z_verweigert = min(verweigert_je[rel_path], max(0, erwartet - lebend))
+            erwartet -= z_verweigert
+            verweigert += z_verweigert
             if seit and erwartet > lebend:
                 alt = _vor_stichtag(graph, folder, seit) - _alt_auf_platte(out, rel_path, seit)
                 alt = max(0, min(erwartet - lebend, alt))
@@ -1564,7 +1590,7 @@ def pruefe_mails(graph, out, done, weg=None):
             offen += erwartet - z_da
     return completeness.bilanz("outlook_mail", "mails", da=da, offen=offen,
                                ausgeschlossen=ausgeschlossen, behalten=len(weg),
-                               zeilen=zeilen)
+                               verweigert=verweigert, zeilen=zeilen)
 
 
 def _aktuell(out, done, stempel, key, lm):
@@ -1792,6 +1818,7 @@ def exportiere(graph, out, done, stats, workers):
     categories = selected_categories()
     if export_util.voll_neu():
         progress.event("run.full_sync")
+        db_root.permanent_leeren()      # every refused or gone mail is asked once more
     elif export_util.abgleich():
         progress.event("run.resync")
     selected_mail, ausgelassen, sel_cals = [], [], []

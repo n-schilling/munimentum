@@ -1231,3 +1231,89 @@ def test_bilanz_fuehrt_die_offenen_dateien_unter_ihrer_bibliothek(tmp_path, monk
     assert b["offene"] == [{"id": "i-A", "rel": "S/A/Dateien/x.pdf"},
                            {"id": "i-B", "rel": "S/B/Dateien/x.pdf"}]
     assert b["offene_gekappt"]
+
+
+# --------------------------------------------------------------------------
+# Verdicts on pages and images: refused or gone, recorded – a passing
+# failure leaves the page due
+# --------------------------------------------------------------------------
+class _Text:
+    def __init__(self, status):
+        self.status_code, self.text = status, ""
+
+
+def _http(status):
+    return requests.HTTPError(f"{status} Client Error", response=_Text(status))
+
+
+def _image_page():
+    g = _SeitenGraph()
+    g.layout = {"horizontalSections": [{"columns": [{"webparts": [
+        {"@odata.type": "#microsoft.graph.textWebPart",
+         "innerHtml": '<p><img src="/sites/T/SiteAssets/logo.png"></p>'}]}]}]}
+    return g
+
+
+SITES = [{"id": "s1", "pfad": ["Team X"], "host": "firma.sharepoint.com"}]
+LOGO = "https://firma.sharepoint.com/sites/T/SiteAssets/logo.png"
+
+
+def test_a_refused_page_is_recorded_for_its_version(tmp_path, capsys):
+    """A 403 on the page's layout: a mark for this eTag, no error, and
+    the next run does not ask; the check counts it as refused, not
+    open; a new eTag is asked once more, and when it comes the mark goes."""
+    g = _SeitenGraph()
+    g.get = lambda url: (_ for _ in ()).throw(_http(403))
+    assert sp.seiten_lauf(g, tmp_path, SITES) == 0
+    db = sp.state_db.StateDb(tmp_path)
+    m = db.permanent_lesen()["page:p1"]
+    assert m["kind"] == "refused" and m["version"] == "e1" and m["unit"] == "Team X"
+    assert m["rel"] == "Team X/Home.html"
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    keys = [e["k"] for e in events if e]
+    assert keys.count("run.item.refused") == 1 and "run.pages.page_failed" not in keys
+    g2 = _SeitenGraph()
+    assert sp.seiten_lauf(g2, tmp_path, SITES) == 0 and g2.detailabrufe == 0, "the marked version was asked"
+    b = sp.seiten_pruefen(_SeitenGraph(), tmp_path, SITES)
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (0, 0, 1, 0)
+    g3 = _SeitenGraph()
+    g3.seiten[0]["eTag"] = "e2"
+    assert sp.seiten_lauf(g3, tmp_path, SITES) == 1 and g3.detailabrufe == 1
+    assert db.permanent_lesen() == {} and db.seiten_lesen()["p1"]["etag"] == "e2"
+
+
+def test_an_image_verdict_is_quiet_and_a_passing_failure_keeps_the_page_due(tmp_path, capsys):
+    """A 404 on an image: the link stays, a quiet mark, no request next
+    time – the page is recorded. A 502: the page is written but not
+    recorded, so the next run renders it once more."""
+    g = _image_page()
+    g.get_bytes = lambda url, label="": (_ for _ in ()).throw(_http(404))
+    assert sp.seiten_lauf(g, tmp_path, SITES) == 1
+    db = sp.state_db.StateDb(tmp_path)
+    m = db.permanent_lesen()[f"image:{LOGO}"]
+    assert m["kind"] == "gone" and m["quiet"] is True and m["name"] == "logo.png"
+    assert db.seiten_lesen()["p1"]["etag"] == "e1", "the page with a verdict is recorded"
+    events = [progress.lies_event(z) for z in capsys.readouterr().out.splitlines()]
+    keys = [e["k"] for e in events if e]
+    assert keys.count("run.item.gone") == 1 and "run.pages.images_failed" not in keys
+    assert 'src="/sites/T/SiteAssets/logo.png"' in next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")
+    g2 = _image_page()
+    g2.seiten[0]["eTag"] = "e2"
+    asked = []
+    g2.get_bytes = lambda url, label="": asked.append(url) or (b"BILD", "image/png")
+    assert sp.seiten_lauf(g2, tmp_path, SITES) == 1 and asked == [], "the marked image was asked"
+    # a passing failure: written, not recorded, rendered again next run
+    g3 = _image_page()
+    g3.seiten[0]["eTag"] = "e3"
+    g3.get_bytes = lambda url, label="": (_ for _ in ()).throw(RuntimeError("HTTP 502"))
+    db.permanent_leeren()
+    assert sp.seiten_lauf(g3, tmp_path, SITES) == 1
+    assert db.seiten_lesen()["p1"]["etag"] == "e2", "a page with an image still owed was recorded"
+    keys = [e["k"] for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
+    assert "run.pages.images_failed" in keys
+    g4 = _image_page()
+    g4.seiten[0]["eTag"] = "e3"
+    g4.get_bytes = lambda url, label="": (b"BILD", "image/png")
+    assert sp.seiten_lauf(g4, tmp_path, SITES) == 1 and g4.detailabrufe >= 1
+    assert db.seiten_lesen()["p1"]["etag"] == "e3"
+    assert "data:image/png;base64," in next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")

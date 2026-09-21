@@ -678,3 +678,98 @@ def test_nachholen_liest_die_listen_der_fehlenden_dateien(tmp_path, capsys):
     assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.unit"] == ["Einkauf"]
     (fazit,) = [e for e in events if e["k"] == "run.nachholen.done"]
     assert fazit["v"] == {"n": 1, "gone": 0, "failed": 0, "unknown": 1}
+
+
+# --------------------------------------------------------------------------
+# Verdicts: refused or gone, recorded – a passing failure is asked again
+# --------------------------------------------------------------------------
+class _Verdict(_Graph):
+    """_Graph whose downloads answer with one exception."""
+
+    def __init__(self, antworten, error):
+        super().__init__(antworten)
+        self.error = error
+
+    def get_bytes(self, url, label=""):
+        self.geladen.append(url)
+        raise self.error
+
+
+def _with_attachment(error=None):
+    antworten = {"/me/todo/lists/l1/tasks/t1/attachments": {"value": [{"id": "a1", "name": "Bon.pdf", "size": 3}]},
+                 "/me/todo/lists/l1/tasks": {"value": [_task("t1", "Milch kaufen", hasAttachments=True)]}}
+    return _Verdict(antworten, error) if error else _Graph(antworten)
+
+
+def test_a_refused_attachment_is_recorded_and_the_task_stands(tmp_path, capsys):
+    """A 403 on the file: recorded with the task as its unit, said once,
+    no error – the next run leaves the task alone and asks nothing."""
+    g = _with_attachment(_HttpFehler(403, '{"error": {"code": "accessDenied"}}'))
+    assert td.list_lauf(g, tmp_path, LISTE) == (1, 0, 0)
+    db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
+    m = db.permanent_lesen()["attachment:a1"]
+    assert m["kind"] == "refused" and m["name"] == "Bon.pdf" and m["unit"] == "Milch kaufen"
+    assert "accessDenied" in m["error"]
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.refused") == 1 and "run.todo.attachment_failed" not in keys
+    (eintrag,) = _json_tasks(db)["t1"]["anhaenge"]
+    assert eintrag["rel"] is None and eintrag["name"] == "Bon.pdf"
+    g2 = _with_attachment(_HttpFehler(403))
+    assert td.list_lauf(g2, tmp_path, LISTE) == (0, 1, 0) and g2.geladen == []
+    assert not any(u.endswith("/attachments") for u in g2.aufrufe), "the task was refreshed"
+
+
+def test_a_passing_failure_makes_the_task_due_again(tmp_path, capsys):
+    """A 500 on the file records nothing: the card keeps its name, and
+    the next run fetches the task's files once more – then the file is
+    here."""
+    g = _with_attachment(RuntimeError("HTTP 500 Internal Server Error"))
+    assert td.list_lauf(g, tmp_path, LISTE) == (1, 0, 0)
+    db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
+    assert db.permanent_lesen() == {}
+    assert [e["k"] for e in _events(capsys)].count("run.todo.attachment_failed") == 1
+    g2 = _with_attachment()
+    assert td.list_lauf(g2, tmp_path, LISTE) == (1, 0, 0) and len(g2.geladen) == 1
+    (eintrag,) = _json_tasks(db)["t1"]["anhaenge"]
+    assert eintrag["rel"] and (td.list_ziel(tmp_path, LISTE) / eintrag["rel"]).is_file()
+
+
+def test_a_refused_task_is_recorded_for_its_version(tmp_path, capsys):
+    """The task's own request refused: a mark for this etag, no error,
+    the list's pointer advances; a new etag is asked once more, and the
+    check counts the marked version as refused, not open."""
+    antworten = {"/me/todo/lists/l1/tasks/t1/attachments": _HttpFehler(403),
+                 "/me/todo/lists/l1/tasks": {"value": [_task("t1", "Milch kaufen", hasAttachments=True)],
+                                             "@odata.deltaLink": "https://delta/l1"},
+                 "/me/todo/lists": {"value": [{"id": "l1", "displayName": "Einkauf"}]}}
+    g = _Graph(antworten)
+    assert td.list_lauf(g, tmp_path, LISTE) == (0, 0, 0)
+    db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
+    m = db.permanent_lesen()["task:t1"]
+    assert m["kind"] == "refused" and m["version"] == "e1" and m["unit"] == "Einkauf"
+    assert db.kv_lesen("delta:l1") == "https://delta/l1", "the pointer held"
+    assert "run.todo.task_failed" not in [e["k"] for e in _events(capsys)]
+    b = td.nur_pruefen(_Graph(antworten), tmp_path)
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (0, 0, 1, 0)
+    antworten["/me/todo/lists/l1/tasks"] = {"value": [_task("t1", "Milch kaufen", etag="e2", hasAttachments=True)]}
+    b = td.nur_pruefen(_Graph(antworten), tmp_path)
+    assert (b["offen"], b["verweigert"]) == (1, 0), "an old mark held for a new version"
+    antworten["https://delta/l1"] = antworten["/me/todo/lists/l1/tasks"]   # the stored link
+    g3 = _Graph(antworten)
+    td.list_lauf(g3, tmp_path, LISTE)
+    assert any(u.endswith("/attachments") for u in g3.aufrufe), "the new version was not asked"
+
+
+def test_a_full_sync_forgets_the_marks(tmp_path, monkeypatch):
+    g = _with_attachment(_HttpFehler(404))
+    td.list_lauf(g, tmp_path, LISTE)
+    db = state_db.StateDb(td.list_ziel(tmp_path, LISTE))
+    assert db.permanent_lesen()["attachment:a1"]["kind"] == "gone"
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _with_attachment()
+    assert td.list_lauf(g2, tmp_path, LISTE) == (1, 0, 0) and len(g2.geladen) == 1
+    assert db.permanent_lesen() == {}
+
+
+def _json_tasks(db):
+    return json.loads(db.kv_lesen("tasks"))

@@ -681,3 +681,109 @@ def test_nachholen_liest_die_boards_der_fehlenden_dateien(tmp_path, monkeypatch,
     assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.unit"] == ["Team X Board"]
     (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
     assert ergebnis["new"] == 1 and ergebnis["extra"]["unknown"] == 1
+
+
+# --------------------------------------------------------------------------
+# Verdicts: refused or gone, recorded – a passing failure is asked again
+# --------------------------------------------------------------------------
+class _Antwort:
+    def __init__(self, status, text=""):
+        self.status_code, self.text = status, text
+
+
+def _http(status, text=""):
+    import requests
+    return requests.HTTPError(f"{status} Client Error", response=_Antwort(status, text))
+
+
+def _reference_verdict(tasks, error):
+    """_graph_mit_referenz whose file download raises `error`."""
+    g = _graph_mit_referenz(tasks)
+
+    def broken(url, label=""):
+        g.geladen.append(url)
+        raise error
+    g.get_bytes = broken
+    return g
+
+
+REF_URL = "https://firma.sharepoint.com/x/Angebot.pdf"
+
+
+def test_a_refused_reference_is_recorded_and_the_card_stands(tmp_path, monkeypatch, capsys):
+    """A 403 on the referenced file: recorded with the card as its unit,
+    said once, no error – the card keeps the cloud link, and the next
+    run leaves it alone."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    g = _reference_verdict([_task("t1", "Aufgabe A")], _http(403, '{"error": {"code": "accessDenied"}}'))
+    assert pl.plan_lauf(g, tmp_path, PLAN, {}) == (1, 0, 0)
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    db = state_db.StateDb(ziel)
+    m = db.permanent_lesen()[REF_URL]
+    assert m["kind"] == "refused" and m["name"] == "Angebot.pdf" and m["unit"] == "Aufgabe A"
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.refused") == 1 and "run.planner.ref_failed" not in keys
+    tasks = json.loads(db.kv_lesen("tasks"))
+    assert tasks["t1"]["anhaenge"] == {REF_URL: None}
+    html = (ziel / "board.html").read_text(encoding="utf-8")
+    assert f'href="{REF_URL}"' in html and 'href="None"' not in html
+    g2 = _reference_verdict([_task("t1", "Aufgabe A")], _http(403))
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 1, 0) and g2.geladen == []
+
+
+def test_a_passing_failure_on_a_reference_makes_the_card_due_again(tmp_path, monkeypatch, capsys):
+    """A 502 on the file records nothing: said as before, and the next
+    run fetches the card's files once more – then the file is here and
+    the link local."""
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    g = _reference_verdict([_task("t1", "Aufgabe A")], RuntimeError("HTTP 502 Bad Gateway"))
+    assert pl.plan_lauf(g, tmp_path, PLAN, {}) == (1, 0, 0)
+    ziel = pl.plan_ziel(tmp_path, PLAN)
+    db = state_db.StateDb(ziel)
+    assert db.permanent_lesen() == {}
+    assert [e["k"] for e in _events(capsys)].count("run.planner.ref_failed") == 1
+    g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (1, 0, 0) and len(g2.geladen) == 1
+    rel = json.loads(db.kv_lesen("tasks"))["t1"]["anhaenge"][REF_URL]
+    assert rel and (ziel / rel).is_file()
+    assert f'href="{rel}"' in (ziel / "board.html").read_text(encoding="utf-8")
+
+
+def test_a_refused_card_is_recorded_for_its_version(tmp_path, capsys):
+    """The card's own details refused: a mark for this etag, no error;
+    a new etag is asked once more; the check counts the marked version
+    as refused, not open."""
+    pid = "p1planid001"
+    url = f"https://planner.cloud.microsoft/webui/v1/plan/{pid}/view/board"
+    plan = {"title": "Team X Board", "container": {"type": "group", "containerId": "g1"}}
+    g = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")], pid=pid)
+    g.antworten[f"/planner/plans/{pid}"] = plan
+    g.antworten["/planner/tasks/t1/details"] = _http(403)
+    plaene, _fehl = pl.resolve_plans(g, [url], out=tmp_path)
+    assert pl.plan_lauf(g, tmp_path, plaene[0], {}) == (1, 0, 0), "a verdict is no error"
+    db = state_db.StateDb(pl.plan_ziel(tmp_path, plaene[0]))
+    m = db.permanent_lesen()["task:t1"]
+    assert m["kind"] == "refused" and m["version"] == "e1" and m["unit"] == "Team X Board"
+    assert "run.planner.task_failed" not in [e["k"] for e in _events(capsys)]
+    g2 = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")], pid=pid)
+    g2.antworten[f"/planner/plans/{pid}"] = plan
+    b = pl.nur_pruefen(g2, tmp_path, [url])
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 0, 1, 0)
+    assert pl.plan_lauf(g2, tmp_path, plaene[0], {}) == (0, 2, 0)
+    assert not any("/tasks/t1/details" in u for u in g2.aufrufe), "the marked version was asked"
+    g3 = _graph_fuer_plan([_task("t1", "Aufgabe A", etag="e2"), _task("t2", "Aufgabe B")], pid=pid)
+    g3.antworten[f"/planner/plans/{pid}"] = plan
+    assert pl.plan_lauf(g3, tmp_path, plaene[0], {}) == (1, 1, 0)
+    assert db.permanent_lesen() == {}, "the new version came – the mark goes"
+
+
+def test_a_full_sync_forgets_the_marks(tmp_path, monkeypatch):
+    monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
+    g = _reference_verdict([_task("t1", "Aufgabe A")], _http(404))
+    pl.plan_lauf(g, tmp_path, PLAN, {})
+    db = state_db.StateDb(pl.plan_ziel(tmp_path, PLAN))
+    assert db.permanent_lesen()[REF_URL]["kind"] == "gone"
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (1, 0, 0) and len(g2.geladen) == 1
+    assert db.permanent_lesen() == {}

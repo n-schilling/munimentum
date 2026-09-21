@@ -291,20 +291,29 @@ def _namen(graph, wurzel, ids, bekannt=None):
 ANHANG_DIR = "Anhaenge"
 
 
-def _referenzen_laden(graph, stand, ziel, task, det):
+def _referenzen_laden(graph, stand, ziel, task, det, marks=None):
     """The task's referenced files, downloaded next to the board.
 
-    Returns ({url: rel}, {url: state}) – the local links for the card and
-    the state entries the caller merges and stores once per run; `stand` is
-    the stored state, read only (this runs in a worker). Refreshed by the
-    driveItem cTag whenever the task itself is refreshed; a file that will
-    not come (gone, no permission, not a drive item) keeps its cloud link
-    and says so once in the log."""
-    lokal, neu = {}, {}
+    Returns ({url: rel}, {url: state}, {url: mark}) – the local links for
+    the card (None for a file that did not come), the state entries the
+    caller merges and stores once per run, and the verdicts: a mark
+    (export_util.permanent_mark) for a file Microsoft refuses or no
+    longer has, None for a marked file that came after all. `stand` and
+    `marks` are the stored state, read only (this runs in a worker).
+    Refreshed by the driveItem cTag whenever the task itself is
+    refreshed; a file that does not come keeps its cloud link, says so
+    once in the log and makes the card due again – a marked one is not
+    asked for again."""
+    lokal, neu, verdicts = {}, {}, {}
+    marks = marks or {}
+    alles = export_util.voll_neu()
     for roh in (det.get("references") or {}):
         url = unquote(roh)
         token = base64.urlsafe_b64encode(url.encode("utf-8")).decode().rstrip("=")
         alt = stand.get(url) or {}
+        if url in marks and not alles:
+            lokal[url] = None
+            continue
         try:
             meta = graph.get(f"{GRAPH}/shares/u!{token}/driveItem"
                              "?$select=name,cTag")
@@ -335,13 +344,24 @@ def _referenzen_laden(graph, stand, ziel, task, det):
             tmp.replace(ziel / rel)
             neu[url] = {"rel": rel, "ctag": meta.get("cTag") or ""}
             lokal[url] = rel
+            if url in marks:
+                verdicts[url] = None
         except auth.TokenExpired:
             raise
         except Exception as e:
-            _event("run.planner.ref_failed", "warn",
-                   name=str(task.get("title") or "?")[:60],
-                   error=f"{type(e).__name__}: {e}")
-    return lokal, neu
+            lokal[url] = None
+            kind = export_util.verdict(e)
+            if kind:
+                name = url.rsplit("/", 1)[-1][:80] or url[:80]
+                verdicts[url] = export_util.permanent_mark(
+                    kind, f"{type(e).__name__}: {e}", name=name,
+                    unit=str(task.get("title") or "")[:80])
+                export_util.permanent_event(kind, name, e)
+            else:
+                _event("run.planner.ref_failed", "warn",
+                       name=str(task.get("title") or "?")[:60],
+                       error=f"{type(e).__name__}: {e}")
+    return lokal, neu, verdicts
 
 
 def _saeubere(html):
@@ -488,7 +508,7 @@ def _task_html(eintrag, labels, namen, weg=False):
         glieder = []
         for roh, ref in refs.items():
             url = unquote(roh)                  # Graph encodes the keys
-            ziel_url = lokal.get(url, url)
+            ziel_url = lokal.get(url) or url    # no copy: the cloud link
             glieder.append(
                 f'<a href="{html_lib.escape(ziel_url)}">'
                 f'{html_lib.escape(str((ref or {}).get("alias") or "Link"))}'
@@ -560,18 +580,34 @@ def render_board(plan, buckets, eintraege, labels, namen, stand=None):
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
-def _anhaenge_da(ziel, alt):
+def _anhaenge_da(ziel, alt, marks=None):
     """The stored etag counts only while the card's referenced files lie
-    here: a missing one makes the task due again."""
-    return all((ziel / rel).exists() for rel in (alt.get("anhaenge") or {}).values() if rel)
+    here: a missing one makes the task due again – so does one that
+    never came, unless Microsoft refused it or no longer had it (a
+    mark)."""
+    marks = marks or {}
+    for url, rel in (alt.get("anhaenge") or {}).items():
+        if rel:
+            if not (ziel / rel).exists():
+                return False
+        elif url not in marks:
+            return False
+    return True
+
+
+def _marked(marks, tid, etag):
+    """Is this version of the task one no run asks for again?"""
+    mark = (marks or {}).get(f"task:{tid}")
+    return bool(mark) and mark.get("version") == (etag or "")
 
 
 def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
-                      threads, sweep, anhang_stand):
+                      threads, sweep, anhang_stand, marks=None):
     """One task's refresh – runs in a worker and touches no shared state.
-    Returns (record, thread mark, attachment state): the new record, the
-    legacy thread's (id, delivered-at) or None, and the attachment state
-    entries the caller merges."""
+    Returns (record, thread mark, attachment state, verdicts): the new
+    record, the legacy thread's (id, delivered-at) or None, the
+    attachment state entries the caller merges, and the marks its files
+    earned or shed."""
     tid = t["id"]
     thread = t.get("conversationThreadId")
     # Same etag, same task: the stored copy stays, so a sweep that finds
@@ -582,12 +618,12 @@ def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
                "details": alt.get("details"),
                "anhaenge": alt.get("anhaenge") or {},
                "kommentare": alt.get("kommentare") or []}
-    anhang_neu = {}
+    anhang_neu, verdicts = {}, {}
     if geaendert or not eintrag["details"]:
         eintrag["details"] = graph.get(f"{GRAPH}/planner/tasks/{tid}/details")
         if anhaenge_laden():
-            eintrag["anhaenge"], anhang_neu = _referenzen_laden(
-                graph, anhang_stand, ziel, t, eintrag["details"])
+            eintrag["anhaenge"], anhang_neu, verdicts = _referenzen_laden(
+                graph, anhang_stand, ziel, t, eintrag["details"], marks)
         else:
             eintrag["anhaenge"] = alt.get("anhaenge") or {}
     kommentare, faden = [], None
@@ -604,7 +640,7 @@ def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
     kommentare += (neue if neue is not None else
                    [k for k in eintrag["kommentare"] if k["art"] == "neu"])
     eintrag["kommentare"] = kommentare
-    return eintrag, faden, anhang_neu
+    return eintrag, faden, anhang_neu, verdicts
 
 
 def plan_lauf(graph, out, plan, threads_cache, workers=1):
@@ -615,12 +651,16 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     vorher = {k: db.kv_lesen(k) or ""
               for k in ("plan", "tasks", "threads", "namen", "anhaenge")}
     eintraege = _json(vorher["tasks"])
+    marks = db.permanent_lesen()         # cards and files no run asks for again
     alles = export_util.voll_neu()
     if alles:
         # "Force full sync": no task's etag counts – every card is fetched
-        # again, its referenced files with it.
+        # again, its referenced files with it, and every mark is forgotten.
         for e in eintraege.values():
             e["etag"] = ""
+        db.permanent_leeren()
+        marks = {}
+    marks_before = dict(marks)
 
     details = graph.get(f"{GRAPH}/planner/plans/{plan['id']}/details")
     labels = {k: v for k, v in
@@ -680,8 +720,11 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
         gesehen.add(tid)
         alt = eintraege.get(tid) or {}
         etag_neu = t.get("@odata.etag") or ""
+        if _marked(marks, tid, etag_neu):
+            unveraendert += 1            # refused or gone in this version: not asked again
+            continue
         geaendert = (alt.get("etag") != etag_neu or alt.get("deleted")
-                     or not _anhaenge_da(ziel, alt))
+                     or not _anhaenge_da(ziel, alt, marks))
         thread = t.get("conversationThreadId")
         legacy_neu = bool(thread and (thread not in stand_threads or (
             threads is not None and threads.get(thread, "") !=
@@ -702,7 +745,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     with ThreadPoolExecutor(max_workers=max(1, int(workers or 1))) as pool:
         offen = {pool.submit(_task_auffrischen, graph, ziel, plan, t, alt,
                              geaendert, legacy_holen, threads, sweep,
-                             anhang_stand): t
+                             anhang_stand, marks): t
                  for t, alt, geaendert, legacy_holen in faellig}
         for lfd, fut in enumerate(as_completed(offen), 1):
             t = offen[fut]
@@ -712,10 +755,20 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
                 pool.shutdown(cancel_futures=True)
                 raise
             except Exception as e:
-                fehler += 1
-                _event("run.planner.task_failed", "err",
-                       name=str(t.get("title") or t["id"])[:60],
-                       error=f"{type(e).__name__}: {e}")
+                kind = export_util.verdict(e)
+                if kind:
+                    # A verdict on the card itself: recorded for this
+                    # version, no error – the board's cadence advances.
+                    marks[f"task:{t['id']}"] = export_util.permanent_mark(
+                        kind, f"{type(e).__name__}: {e}",
+                        name=str(t.get("title") or t["id"])[:80], unit=plan["titel"],
+                        version=t.get("@odata.etag") or "")
+                    export_util.permanent_event(kind, t.get("title") or t["id"], e)
+                else:
+                    fehler += 1
+                    _event("run.planner.task_failed", "err",
+                           name=str(t.get("title") or t["id"])[:60],
+                           error=f"{type(e).__name__}: {e}")
             progress.melde(lfd, len(faellig), "tasks")
     # Merged in listing order, whatever order the workers finished in: the
     # board (cards of one bucket with equal order hints) and the stored
@@ -724,11 +777,17 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     for t, _alt, _geaendert, _legacy in faellig:
         if t["id"] not in ergebnisse:
             continue
-        eintrag, faden, anhang = ergebnisse[t["id"]]
+        eintrag, faden, anhang, verdicts = ergebnisse[t["id"]]
         eintraege[t["id"]] = eintrag
+        marks.pop(f"task:{t['id']}", None)     # a new version came after all
         if faden:
             stand_threads[faden[0]] = faden[1]
         anhang_neu.update(anhang)
+        for url, mark in verdicts.items():
+            if mark is None:
+                marks.pop(url, None)
+            else:
+                marks[url] = mark
         neu += 1
     # Absence in a complete, error-free listing is the deletion signal –
     # the record stays, the card moves to the greyed section.
@@ -740,6 +799,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     if sweep and not fehler:
         db.kv_schreiben("sweep", str(time.time()))
     anhang_stand.update(anhang_neu)
+    db.permanent_abgleichen(marks_before, marks)
 
     kennungen = set()
     for e in eintraege.values():
@@ -859,9 +919,12 @@ def nur_pruefen(graph, out, urls):
     plaene, fehl = resolve_plans(graph, urls, out)
     zeilen, fehler = [], []
     behalten = 0
+    verdicts = {"verweigert": 0, "weg": 0}
     for plan in plaene:
         ziel = plan_ziel(out, plan)
-        eintraege = _json(state_db.StateDb(ziel).kv_lesen("tasks") or "")
+        db = state_db.StateDb(ziel)
+        eintraege = _json(db.kv_lesen("tasks") or "")
+        marks = db.permanent_lesen()
         try:
             tasks = _alle(graph, f"{GRAPH}/planner/plans/{plan['id']}/tasks")
         except auth.TokenExpired:
@@ -874,10 +937,14 @@ def nur_pruefen(graph, out, urls):
         datei_da = (ziel / "board.html").exists()
         z_da = z_offen = 0
         for t in tasks:
-            alt = eintraege.get(t.get("id") or "") or {}
-            if datei_da and alt.get("etag") and alt["etag"] == (t.get("@odata.etag") or "") \
-                    and not alt.get("deleted"):
+            tid, etag = t.get("id") or "", t.get("@odata.etag") or ""
+            alt = eintraege.get(tid) or {}
+            if datei_da and alt.get("etag") and alt["etag"] == etag and not alt.get("deleted"):
                 z_da += 1
+            elif _marked(marks, tid, etag):
+                # refused or gone in this version: neither here nor open
+                verdicts["verweigert" if marks[f"task:{tid}"].get("kind") == export_util.REFUSED
+                        else "weg"] += 1
             else:
                 z_offen += 1
         behalten += sum(1 for e in eintraege.values() if e.get("deleted"))
@@ -885,7 +952,7 @@ def nur_pruefen(graph, out, urls):
     bericht = completeness.bilanz(
         "planner", "tasks",
         da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
-        behalten=behalten, zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl})
+        behalten=behalten, zeilen=zeilen, fehler=fehler, extra={"kaputt": fehl}, **verdicts)
     completeness.schreiben(state_db.StateDb(out), bericht)
     completeness.melden(bericht)
     return bericht

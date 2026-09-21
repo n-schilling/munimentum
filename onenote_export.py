@@ -437,18 +437,36 @@ class _Ressourcen:
     back from disk and go through the same decision as fresh ones, so a
     changed size limit or a moved page still lands right."""
 
-    def __init__(self, graph, ziel, seite_rel, grenze, stand=None):
+    def __init__(self, graph, ziel, seite_rel, grenze, stand=None, marks=None):
         self.graph, self.ziel, self.grenze = graph, ziel, grenze
         self.seite_rel = seite_rel
         self.rel_dir = seite_rel[:-5] + DATEI_SUFFIX
         self.stand = stand if stand is not None else {}   # id -> record, from the db
+        self.marks = marks if marks is not None else {}   # resources no run asks for again
+        self.verdicts = {}            # the marks this page's resources earned
         self.neu = {}                # id -> record, this page's outcome
         self.cache = {}
         self._seiten = {}            # old page file -> {id: data URI}, read once
         self._herkunft = {}          # id -> the file the reused bytes came from
-        self.fehler = 0
+        self.fehler = 0              # passing failures: the page is due again
         self.dateien = 0
         self.wiederverwendet = 0
+
+    def marked(self, kennung):
+        return f"resource:{kennung}" in self.marks and not export_util.voll_neu()
+
+    def verdict(self, e, kennung, name):
+        """A failed resource: a verdict is recorded (export_util.permanent_mark)
+        and said once; anything else counts as a failure that makes the
+        page due again. Returns whether it was a verdict."""
+        kind = export_util.verdict(e)
+        if not kind:
+            self.fehler += 1
+            return False
+        self.verdicts[f"resource:{kennung}"] = export_util.permanent_mark(
+            kind, f"{type(e).__name__}: {e}", name=name, unit=self.seite_rel)
+        export_util.permanent_event(kind, name, e)
+        return True
 
     def _aus_seite(self, pfad, kennung):
         if pfad not in self._seiten:
@@ -558,14 +576,14 @@ def ressourcen_offline(html, res):
         tag = m.group(0)
         src = _attr(tag, "src")
         treffer = RESOURCE_RE.search(src or "")
-        if not treffer:
+        if not treffer or res.marked(treffer.group(1)):
             return tag
         try:
             neu = res.bild(src, treffer.group(1))
         except auth.TokenExpired:
             raise
-        except Exception:
-            res.fehler += 1
+        except Exception as e:
+            res.verdict(e, treffer.group(1), "image " + treffer.group(1)[:24])
             return tag
         tag = _ohne_attr(tag, "data-fullres-src")
         tag = _ohne_attr(tag, "data-fullres-src-type")
@@ -585,12 +603,15 @@ def ressourcen_offline(html, res):
         if not treffer:
             return m.group(0)
         name = _attr(tag, "data-attachment") or "Anhang"
+        if res.marked(treffer.group(1)):
+            return (f'<span class="mn-anhang">📎 {html_lib.escape(name)}'
+                    " (nicht geladen)</span>")
         try:
             rel = res.anhang(data, treffer.group(1), name)
         except auth.TokenExpired:
             raise
-        except Exception:
-            res.fehler += 1
+        except Exception as e:
+            res.verdict(e, treffer.group(1), name)
             return (f'<span class="mn-anhang">📎 {html_lib.escape(name)}'
                     " (nicht geladen)</span>")
         return (f'<a class="mn-anhang" href="{html_lib.escape(rel, quote=True)}">'
@@ -684,13 +705,14 @@ def _entferne(ziel, rel):
             pass
 
 
-def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze, ressourcen=None):
+def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze, ressourcen=None, marks=None):
     """Fetch one page and write it; returns (rel, resources that did not
-    come, the resource records this page leaves behind)."""
+    come, the resource records this page leaves behind, the marks its
+    resources earned)."""
     rel = seiten_rel(section, gruppen, page)
     roh, _typ = graph.get_bytes(f'{GRAPH}/me/onenote/pages/{page["id"]}/content',
                                 label=" (Seite)")
-    res = _Ressourcen(graph, ziel, rel, grenze, stand=ressourcen)
+    res = _Ressourcen(graph, ziel, rel, grenze, stand=ressourcen, marks=marks)
     html = ressourcen_offline(roh.decode("utf-8", "replace"), res)
     datei = export_util.schreibe_atomar(
         ziel / rel, seite_html(html, _kopfzeile(nb, gruppen, section, page)))
@@ -703,7 +725,13 @@ def seite_lauf(graph, ziel, nb, gruppen, section, page, grenze, ressourcen=None)
             os.utime(datei, (dt.timestamp(), dt.timestamp()))
         except OSError:
             pass
-    return rel, res.fehler, res.neu
+    return rel, res.fehler, res.neu, res.verdicts
+
+
+def _marked(marks, pid, lm):
+    """Is this version of the page one no run asks for again?"""
+    mark = (marks or {}).get(f"page:{pid}")
+    return bool(mark) and mark.get("version") == (lm or "")
 
 
 def _saetze(db, bereich):
@@ -755,15 +783,19 @@ def notebook_lauf(graph, out, nb, grenze):
     db = state_db.StateDb(ziel)
     stand = seitenstand(db)
     ressourcen = _saetze(db, RESSOURCEN_BEREICH)
+    marks = db.permanent_lesen()         # pages and resources no run asks for again
     if export_util.voll_neu():
-        # "Force full sync": every page's stamp and every resource record
-        # is forgotten first – written at once, so a run the hour's budget
-        # cuts short leaves the rest due for the next regular one.
+        # "Force full sync": every page's stamp, every resource record and
+        # every mark is forgotten first – written at once, so a run the
+        # hour's budget cuts short leaves the rest due for the next
+        # regular one.
         for e in stand.values():
             e["lm"] = ""
         _saetze_schreiben(db, SEITEN_BEREICH, stand)
         db.saetze_leeren(RESSOURCEN_BEREICH)
-        ressourcen = {}
+        db.permanent_leeren()
+        ressourcen, marks = {}, {}
+    marks_before = dict(marks)
     db.kv_schreiben("notebook", json.dumps(
         {"id": nb["id"], "titel": nb["titel"]}, ensure_ascii=False))
 
@@ -800,6 +832,9 @@ def notebook_lauf(graph, out, nb, grenze):
                     and (ziel / rel).exists()):
                 unveraendert += 1
                 continue
+            if _marked(marks, p["id"], p.get("lastModifiedDateTime")):
+                unveraendert += 1        # refused or gone in this version: not asked again
+                continue
             faellig.append((section, gruppen, p, alt))
     progress.event("run.onenote.start", name=nb["titel"],
                    n=len(gesehen), m=len(faellig))
@@ -810,16 +845,22 @@ def notebook_lauf(graph, out, nb, grenze):
     for lfd, (section, gruppen, p, alt) in enumerate(faellig):
         try:
             budget_pruefen()
-            rel, res_fehler, res_neu = seite_lauf(graph, ziel, nb, gruppen,
-                                                  section, p, grenze, ressourcen)
+            rel, res_fehler, res_neu, verdicts = seite_lauf(graph, ziel, nb, gruppen,
+                                                           section, p, grenze,
+                                                           ressourcen, marks)
             ressourcen.update(res_neu)
+            marks.update(verdicts)
+            marks.pop(f"page:{p['id']}", None)      # a new version came after all
             if alt.get("rel") and alt["rel"] != rel:
                 _entferne(ziel, alt["rel"])
             if res_fehler:
                 progress.event("run.onenote.resources_failed", "warn",
                                name=str(p.get("title") or "?")[:60],
                                n=res_fehler)
-            stand[p["id"]] = {"rel": rel, "lm": p.get("lastModifiedDateTime") or "",
+            # A resource that did not come (no verdict) leaves the page
+            # without its stamp: the next run fetches it once more.
+            stand[p["id"]] = {"rel": rel,
+                              "lm": "" if res_fehler else (p.get("lastModifiedDateTime") or ""),
                               "titel": str(p.get("title") or ""),
                               "section": section["titel"],
                               "notebook": nb["titel"], "deleted": None}
@@ -840,10 +881,21 @@ def notebook_lauf(graph, out, nb, grenze):
                            name=nb["titel"], n=offen)
             break
         except Exception as e:
+            kind = export_util.verdict(e)
+            if kind:
+                # A verdict on the page: recorded for this version, no
+                # error – tombstones and the notebook's cadence go on.
+                marks[f"page:{p['id']}"] = export_util.permanent_mark(
+                    kind, f"{type(e).__name__}: {e}",
+                    name=str(p.get("title") or p["id"])[:80], unit=section["titel"],
+                    version=p.get("lastModifiedDateTime") or "")
+                export_util.permanent_event(kind, p.get("title") or p["id"], e)
+                continue
             fehler += 1
             progress.event("run.onenote.page_failed", "err",
                            name=str(p.get("title") or p["id"])[:60],
                            error=f"{type(e).__name__}: {e}")
+    db.permanent_abgleichen(marks_before, marks)
     # Absence in a complete, error-free walk is the deletion signal – the
     # file stays and gets its marker. A run cut short by the budget saw
     # the complete listing all the same: what is missing from it is gone.
@@ -964,6 +1016,7 @@ def nur_pruefen(graph, out):
         return bericht
     alle = len((folders.lade(out, folders.NOTIZBUECHER) or {}).get("ordner", []))
     zeilen, fehler = [], []
+    verdicts = {"verweigert": 0, "weg": 0}
     behalten = 0
     for i, nb in enumerate(buecher):
         try:
@@ -986,14 +1039,20 @@ def nur_pruefen(graph, out):
             fehler.append(completeness.fehler(nb["titel"], "run.onenote.notebook_failed"))
             continue
         ziel = notebook_ziel(out, nb)
-        stand = seitenstand(state_db.StateDb(ziel), nur_lesen=True)   # a check moves nothing
+        db = state_db.StateDb(ziel)
+        stand = seitenstand(db, nur_lesen=True)   # a check moves nothing
+        marks = db.permanent_lesen()
         z_da = z_offen = 0
         for p in seiten:
             alt = stand.get(p["id"]) or {}
-            if alt.get("lm") and alt["lm"] == (p.get("lastModifiedDateTime") or "") \
-                    and not alt.get("deleted") and alt.get("rel") \
-                    and (ziel / alt["rel"]).exists():
+            lm = p.get("lastModifiedDateTime") or ""
+            if alt.get("lm") and alt["lm"] == lm and not alt.get("deleted") \
+                    and alt.get("rel") and (ziel / alt["rel"]).exists():
                 z_da += 1
+            elif _marked(marks, p["id"], lm):
+                # refused or gone in this version: neither here nor open
+                verdicts["verweigert" if marks[f"page:{p['id']}"].get("kind") == export_util.REFUSED
+                        else "weg"] += 1
             else:
                 z_offen += 1
         behalten += sum(1 for e in stand.values() if e.get("deleted"))
@@ -1006,7 +1065,7 @@ def nur_pruefen(graph, out):
             da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
             ausgeschlossen=max(0, alle - len(buecher)),
             ausgeschlossen_einheit="notebooks",
-            behalten=behalten, zeilen=zeilen, fehler=fehler)
+            behalten=behalten, zeilen=zeilen, fehler=fehler, **verdicts)
     completeness.schreiben(state_db.StateDb(out), bericht)
     completeness.melden(bericht)
     return bericht

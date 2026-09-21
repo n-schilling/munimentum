@@ -20,9 +20,13 @@ Four numbers per source, no more:
     behalten        gone at Microsoft, kept here (tombstones, markers)
 
 The mirrors add a fifth, `wartend`: files whose folder cadence is not due
-yet. The balance always adds up – erwartet = da + offen + wartend – and
-nothing is capped at zero. A source that is not ticked is not checked and
-not counted, not even as excluded.
+yet. Two more stand outside the balance: `verweigert`, what Microsoft
+lists but refuses to hand out, and `weg`, what it lists but no longer
+has when asked – both recorded by the export (export_util.permanent_mark),
+neither open, because no run will bring them. The balance always adds
+up – erwartet = da + offen + wartend + verweigert + weg – and nothing is
+capped at zero. A source that is not ticked is not checked and not
+counted, not even as excluded.
 
 Rows (`zeilen`) name only the units with something open – a folder, a
 calendar, a board, a list, a notebook, a site – with their `da` and
@@ -45,6 +49,9 @@ GANZ, TEILWEISE, NICHT = "ganz", "teilweise", "nicht"
 KEY = "pruefung:"
 
 
+BEFUND_ARTEN = ("fehlt", "fremd", "unvollstaendig", "verloren", "verweigert", "weg")
+
+
 def zeile(pfad, da, offen):
     """One unit's line – kept only while something is open."""
     return {"pfad": str(pfad), "da": int(da), "offen": int(offen)}
@@ -56,8 +63,8 @@ def fehler(pfad, grund):
 
 
 def bilanz(quelle, einheit, *, da=0, offen=0, ausgeschlossen=0, behalten=0,
-           wartend=0, ausgeschlossen_einheit=None, zeilen=(), fehler=(),
-           stand=None, grund=None, extra=None):
+           wartend=0, verweigert=0, weg=0, ausgeschlossen_einheit=None,
+           zeilen=(), fehler=(), stand=None, grund=None, extra=None):
     """Build one report. `zeilen` may carry every unit – only those with
     something open survive, sorted by what is open, then by path."""
     offene = sorted((z for z in zeilen if z.get("offen")),
@@ -75,6 +82,7 @@ def bilanz(quelle, einheit, *, da=0, offen=0, ausgeschlossen=0, behalten=0,
         "ausgeschlossen": int(ausgeschlossen),
         "ausgeschlossen_einheit": ausgeschlossen_einheit or einheit,
         "behalten": int(behalten), "wartend": int(wartend),
+        "verweigert": int(verweigert), "weg": int(weg),
         "zeilen": offene, "fehler": fehlende,
     }
     bericht.update(extra or {})
@@ -129,16 +137,19 @@ def abgeholt(db, quelle, rels):
 def melden(*berichte):
     """The step's one result event: nothing new, the excluded count, and
     the balance in `extra` – summed over the reports of one step."""
-    summe = {"present": 0, "open": 0, "kept": 0, "waiting": 0}
+    summe = {"present": 0, "open": 0, "kept": 0, "waiting": 0, "refused": 0, "gone": 0}
     ausgeschlossen = 0
     for b in berichte:
         summe["present"] += b["da"]
         summe["open"] += b["offen"]
         summe["kept"] += b["behalten"]
         summe["waiting"] += b["wartend"]
+        summe["refused"] += b.get("verweigert") or 0
+        summe["gone"] += b.get("weg") or 0
         ausgeschlossen += b["ausgeschlossen"]
-    if not summe["waiting"]:
-        summe.pop("waiting")
+    for k in ("waiting", "refused", "gone"):
+        if not summe[k]:
+            summe.pop(k)
     progress.ergebnis(0, excluded=ausgeschlossen, extra=summe)
 
 
@@ -153,25 +164,32 @@ def melden(*berichte):
 #                     next run fetches it again
 #     fremd           a file lies here that no bookkeeping knows – it stays
 #     unvollstaendig  a mirrored file with a size other than recorded
+#     verweigert      Microsoft refuses the item – no copy here, and no
+#                     fetch will bring one (export_util.permanent_mark)
+#     weg             the item was gone at Microsoft before a copy came
 #     verloren        a tombstone says the file was kept, and it is gone
 #     vermerkt        the user noted the loss (state.db table verloren): the
 #                     record stays, the file is not expected back
 
 def zustandszeile(pfad, **zahlen):
     """One unit's line of the inward check – kept while anything is off."""
-    z = {"pfad": str(pfad), "fehlt": 0, "fremd": 0, "unvollstaendig": 0, "verloren": 0}
+    z = {"pfad": str(pfad), "fehlt": 0, "fremd": 0, "unvollstaendig": 0, "verloren": 0,
+         "verweigert": 0, "weg": 0}
     z.update({k: int(v) for k, v in zahlen.items()})
     return z
 
 
 def zustand(quelle, *, stimmig=0, fehlt=0, fremd=0, unvollstaendig=0, verloren=0,
-            vermerkt=0, zeilen=(), fehler=(), stand=None, grund=None, befunde=None,
-            gekappt=False, beiseite=0, fehlt_seit=None, nachgeholt=None):
+            vermerkt=0, verweigert=0, weg=0, zeilen=(), fehler=(), stand=None, grund=None,
+            befunde=None, gekappt=False, beiseite=0, fehlt_seit=None, nachgeholt=None):
     """Build one source's inward report. Rows survive only with something
     off, sorted by how much is off, then by path. `befunde` names the
-    files behind the four numbers (kind -> rels, capped – `gekappt` says
+    files behind the numbers (kind -> rels, capped – `gekappt` says
     so), `beiseite` counts what an earlier "set aside" moved out,
-    `vermerkt` what the user noted as lost. `fehlt_seit` dates the first
+    `vermerkt` what the user noted as lost, `verweigert` what Microsoft
+    refuses to hand out and `weg` what it no longer had when asked (no
+    copy, and no fetch will bring one – nothing to do, so neither weighs
+    anything). `fehlt_seit` dates the first
     report that found the missing files, `nachgeholt` the last resync of
     the source – together they say whether a fetch was tried since."""
     def gewicht(z):
@@ -184,9 +202,9 @@ def zustand(quelle, *, stimmig=0, fehlt=0, fremd=0, unvollstaendig=0, verloren=0
     return {"quelle": quelle, "einheit": "files", "stand": stand, "grund": grund,
             "stimmig": int(stimmig), "fehlt": int(fehlt), "fremd": int(fremd),
             "unvollstaendig": int(unvollstaendig), "verloren": int(verloren),
-            "vermerkt": int(vermerkt), "fehlt_seit": fehlt_seit, "nachgeholt": nachgeholt,
+            "vermerkt": int(vermerkt), "verweigert": int(verweigert), "weg": int(weg),
+            "fehlt_seit": fehlt_seit, "nachgeholt": nachgeholt,
             "zeilen": auffaellig, "fehler": fehlende,
-            "befunde": {k: list((befunde or {}).get(k) or ())
-                        for k in ("fehlt", "fremd", "unvollstaendig", "verloren")},
+            "befunde": {k: list((befunde or {}).get(k) or ()) for k in BEFUND_ARTEN},
             "gekappt": bool(gekappt), "beiseite": int(beiseite)}
 

@@ -63,6 +63,32 @@ def test_jede_methode_steht_in_der_spec():
     assert not zuviel, f"in openapi.yaml, aber nicht in app.py: {sorted(zuviel)}"
 
 
+def test_no_key_appears_twice_in_a_mapping():
+    """PyYAML keeps the last of two equal keys and says nothing; every
+    JavaScript viewer refuses the file ("Map keys must be unique"). The
+    sign-in operation carried "500" twice until 13.3.0 – found by a
+    viewer, not by a test."""
+    import yaml
+
+    class Strict(yaml.SafeLoader):
+        pass
+
+    duplicates = []
+
+    def mapping(loader, node, deep=False):
+        seen = set()
+        for k, _ in node.value:
+            key = loader.construct_object(k, deep=deep)
+            if key in seen:
+                duplicates.append((node.start_mark.line + 1, key))
+            seen.add(key)
+        return yaml.SafeLoader.construct_mapping(loader, node, deep)
+
+    Strict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, mapping)
+    yaml.load(SPEC.read_text(encoding="utf-8"), Loader=Strict)
+    assert not duplicates, f"duplicate keys (line, key): {duplicates}"
+
+
 def test_spec_ist_gueltiges_yaml():
     yaml = pytest.importorskip("yaml")
     daten = yaml.safe_load(SPEC.read_text(encoding="utf-8"))

@@ -207,17 +207,26 @@ def _dateiname(task_id, name):
     return f"{export_util.kuerzel(task_id)}_{roh}"
 
 
-def _anhaenge_laden(graph, liste, ziel, task):
+def _anhaenge_laden(graph, liste, ziel, task, marks=None):
     """The task's attachments, downloaded next to the list.
 
-    Called only when the task itself changed; a file that will not come
-    says so once in the log and the card keeps its name without a link."""
+    Called only when the task itself changed or a file of its is still
+    owed. A file that does not come keeps its name without a link and
+    makes the task due again; one Microsoft refuses or no longer has is
+    recorded in `marks` (export_util.permanent_mark) and not asked for
+    again – the card keeps its name, the task stands."""
     basis = f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks/{task["id"]}/attachments'
+    marks = {} if marks is None else marks
+    alles = export_util.voll_neu()
     out = []
     for a in _alle(graph, basis):
         name = str(a.get("name") or "datei")
         eintrag = {"id": a.get("id"), "name": name,
                    "size": int(a.get("size") or 0), "rel": None}
+        key = f"attachment:{a.get('id')}"
+        if key in marks and not alles:
+            out.append(eintrag)
+            continue
         try:
             daten, _typ = graph.get_bytes(f'{basis}/{a["id"]}/$value',
                                           label=" (Anhang)")
@@ -225,12 +234,20 @@ def _anhaenge_laden(graph, liste, ziel, task):
             (ziel / ANHANG_DIR).mkdir(parents=True, exist_ok=True)
             (ziel / rel).write_bytes(daten)
             eintrag["rel"] = rel
+            marks.pop(key, None)
         except auth.TokenExpired:
             raise
         except Exception as e:
-            _event("run.todo.attachment_failed", "warn",
-                   name=str(task.get("title") or "?")[:60],
-                   error=export_util.fehlertext(e))
+            kind = export_util.verdict(e)
+            if kind:
+                marks[key] = export_util.permanent_mark(
+                    kind, export_util.fehlertext(e), name=name,
+                    unit=str(task.get("title") or "")[:80], version=str(a.get("id") or ""))
+                export_util.permanent_event(kind, name, export_util.fehlertext(e))
+            else:
+                _event("run.todo.attachment_failed", "warn",
+                       name=str(task.get("title") or "?")[:60],
+                       error=export_util.fehlertext(e))
         out.append(eintrag)
     return out
 
@@ -461,11 +478,26 @@ def _delta_verfallen(e):
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
-def _anhaenge_da(ziel, alt):
+def _anhaenge_da(ziel, alt, marks=None):
     """The stored etag counts only while the card's files lie here: a
-    missing attachment makes the task due again."""
-    return all((ziel / a["rel"]).exists()
-               for a in alt.get("anhaenge") or () if isinstance(a, dict) and a.get("rel"))
+    missing attachment makes the task due again – so does one that never
+    came, unless Microsoft refused it or no longer had it (a mark)."""
+    marks = marks or {}
+    for a in alt.get("anhaenge") or ():
+        if not isinstance(a, dict):
+            continue
+        if a.get("rel"):
+            if not (ziel / a["rel"]).exists():
+                return False
+        elif f"attachment:{a.get('id')}" not in marks:
+            return False
+    return True
+
+
+def _marked(marks, tid, etag):
+    """Is this version of the task one no run asks for again?"""
+    mark = (marks or {}).get(f"task:{tid}")
+    return bool(mark) and mark.get("version") == (etag or "")
 
 
 def list_lauf(graph, out, liste):
@@ -475,18 +507,22 @@ def list_lauf(graph, out, liste):
     db = state_db.StateDb(ziel)
     vorher = {k: db.kv_lesen(k) or "" for k in ("list", "tasks")}
     eintraege = _json(vorher["tasks"])
+    marks = db.permanent_lesen()         # tasks and files no run asks for again
     delta_key = f'delta:{liste["id"]}'
     token = db.kv_lesen(delta_key) or ""
     if export_util.abgleich():
         # "Fetch again": the link goes, the list is read in full – a card
         # with the stored etag whose files lie here stays as it is. "Force
         # full sync": no task's etag counts either, every card is fetched
-        # again, attachments included.
+        # again, attachments included – and every mark is forgotten.
         db.kv_schreiben(delta_key, "")
         token = ""
         if export_util.voll_neu():
             for e in eintraege.values():
                 e["etag"] = ""
+            db.permanent_leeren()
+            marks = {}
+    marks_before = dict(marks)
     anfang = (f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks/delta'
               "?$expand=checklistItems,linkedResources")
     voll = not token
@@ -512,8 +548,11 @@ def list_lauf(graph, out, liste):
         alt = eintraege.get(tid) or {}
         etag_neu = t.get("@odata.etag") or ""
         if alt.get("etag") == etag_neu and not alt.get("deleted") \
-                and _anhaenge_da(ziel, alt):
+                and _anhaenge_da(ziel, alt, marks):
             unveraendert += 1
+            continue
+        if _marked(marks, tid, etag_neu):
+            unveraendert += 1            # refused or gone in this version: not asked again
             continue
         faellig.append((t, alt, etag_neu))
     if not voll:
@@ -529,14 +568,24 @@ def list_lauf(graph, out, liste):
                    "anhaenge": alt.get("anhaenge") or []}
         try:
             if t.get("hasAttachments"):
-                eintrag["anhaenge"] = _anhaenge_laden(graph, liste, ziel, t)
+                eintrag["anhaenge"] = _anhaenge_laden(graph, liste, ziel, t, marks)
             else:
                 eintrag["anhaenge"] = []
             eintraege[tid] = eintrag
+            marks.pop(f"task:{tid}", None)       # a new version came after all
             neu += 1
         except auth.TokenExpired:
             raise
         except Exception as e:
+            kind = export_util.verdict(e)
+            if kind:
+                # A verdict on the task itself: recorded for this version,
+                # no error – the list's link and cadence advance.
+                marks[f"task:{tid}"] = export_util.permanent_mark(
+                    kind, export_util.fehlertext(e), name=str(t.get("title") or tid)[:80],
+                    unit=liste["titel"], version=etag_neu)
+                export_util.permanent_event(kind, t.get("title") or tid, export_util.fehlertext(e))
+                continue
             fehler += 1
             _event("run.todo.task_failed", "err",
                    name=str(t.get("title") or tid)[:60],
@@ -577,6 +626,7 @@ def list_lauf(graph, out, liste):
     # are on disk: a pointer ahead of its payload would lose changes.
     if not fehler and link:
         db.kv_schreiben(delta_key, link)
+    db.permanent_abgleichen(marks_before, marks)
     _event("run.todo.list", name=liste["titel"], n=gesamt)
     db.close()
     return neu, unveraendert, fehler
@@ -700,12 +750,15 @@ def nur_pruefen(graph, out):
     regeln = todo_regeln()
     zeilen, fehler = [], []
     ausgeschlossen = behalten = 0
+    verdicts = {"verweigert": 0, "weg": 0}
     for liste in list_lists(graph):
         if not folders.gilt(list_pfad(liste), regeln):
             ausgeschlossen += 1
             continue
         ziel = list_ziel(out, liste)
-        eintraege = _json(state_db.StateDb(ziel).kv_lesen("tasks") or "")
+        db = state_db.StateDb(ziel)
+        eintraege = _json(db.kv_lesen("tasks") or "")
+        marks = db.permanent_lesen()
         try:
             tasks = _alle(graph, f'{GRAPH}/me/todo/lists/{liste["id"]}/tasks?$top=100')
         except auth.TokenExpired:
@@ -718,10 +771,14 @@ def nur_pruefen(graph, out):
         datei_da = (ziel / "list.html").exists()
         z_da = z_offen = 0
         for t in tasks:
-            alt = eintraege.get(t.get("id") or "") or {}
-            if datei_da and alt.get("etag") and alt["etag"] == (t.get("@odata.etag") or "") \
-                    and not alt.get("deleted"):
+            tid, etag = t.get("id") or "", t.get("@odata.etag") or ""
+            alt = eintraege.get(tid) or {}
+            if datei_da and alt.get("etag") and alt["etag"] == etag and not alt.get("deleted"):
                 z_da += 1
+            elif _marked(marks, tid, etag):
+                # refused or gone in this version: neither here nor open
+                verdicts["verweigert" if marks[f"task:{tid}"].get("kind") == export_util.REFUSED
+                        else "weg"] += 1
             else:
                 z_offen += 1
         behalten += sum(1 for e in eintraege.values() if e.get("deleted"))
@@ -730,7 +787,7 @@ def nur_pruefen(graph, out):
         "todo", "tasks",
         da=sum(z["da"] for z in zeilen), offen=sum(z["offen"] for z in zeilen),
         ausgeschlossen=ausgeschlossen, ausgeschlossen_einheit="lists",
-        behalten=behalten, zeilen=zeilen, fehler=fehler)
+        behalten=behalten, zeilen=zeilen, fehler=fehler, **verdicts)
     completeness.schreiben(state_db.StateDb(out), bericht)
     completeness.melden(bericht)
     return bericht

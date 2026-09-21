@@ -663,9 +663,20 @@ def verschiebe(wurzel, paare):
     return bewegt
 
 
-def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
+def marked(marks, kennung, ctag):
+    """Is this version of the item one no run asks for again? A mark
+    (export_util.permanent_mark) holds for the version it was given for:
+    changed content is asked once more."""
+    mark = (marks or {}).get(kennung)
+    return bool(mark) and mark.get("version") == (ctag or "")
+
+
+def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter, marks=None):
     """The planned downloads – in parallel, with progress. Returns
-    (done, failed, the failed tasks)."""
+    (done, failed, the failed tasks). A refusal or a 404 is no failure
+    but a verdict: recorded in `marks` (the caller persists them), said
+    once, and out of the way – a fetch that comes through takes an older
+    mark back."""
     fertig = 0
     fehlgeschlagen = []
     gesamt = len(aufgaben)
@@ -681,7 +692,16 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter):
                 geladen = f.result()
                 bestand.merke(a["id"], a["rel"], a["ctag"], geladen)
                 fertig += 1
+                if marks is not None:
+                    marks.pop(a["id"], None)
             except Exception as e:
+                kind = export_util.verdict(e)
+                if kind and marks is not None:
+                    marks[a["id"]] = export_util.permanent_mark(
+                        kind, f"{type(e).__name__}: {e}", name=a["rel"].rsplit("/", 1)[-1],
+                        rel=a["rel"], unit=a.get("einheit") or None, version=a["ctag"])
+                    export_util.permanent_event(kind, a["rel"], e)
+                    continue
                 fehlgeschlagen.append(a)
                 progress.event("run.file_failed", "err", name=a["rel"],
                                error=f"{type(e).__name__}: {e}")
@@ -737,7 +757,12 @@ def nachholen(graph, wurzel, rels, arbeiter, zustand=None, still=False):
                              "ctag": meta.get("cTag") or e.get("ctag") or "",
                              "size": int(meta.get("size") or e.get("size") or 0),
                              "mtime": geaendert_am(meta)})
-    geholt, fehlgeschlagen, rest = hole_alle(graph, wurzel, bestand, aufgaben, arbeiter)
+    db = getattr(zustand, "db", None)
+    marks = db.permanent_lesen() if db is not None else None
+    vorher = dict(marks or {})
+    geholt, fehlgeschlagen, rest = hole_alle(graph, wurzel, bestand, aufgaben, arbeiter, marks)
+    if db is not None:
+        db.permanent_abgleichen(vorher, marks)
     misslungen = {a["rel"] for a in rest}
     zahlen = {"new": geholt, "errors": fehler + fehlgeschlagen, "gone": weg,
               "unknown": unbekannt,
@@ -820,8 +845,13 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None, name=None,
         zustand.walk_leeren()
         if export_util.voll_neu():
             bestand.versionen_vergessen()
+            if getattr(zustand, "db", None) is not None:
+                zustand.db.permanent_leeren()   # every refused or gone file is asked once more
         if warteliste is not None:
             warteliste.vergiss(list(warteliste.eintraege))
+    db = getattr(zustand, "db", None)
+    marks = db.permanent_lesen() if db is not None else None
+    marks_before = dict(marks or {})
     vorab, gestoert = [], set()
     if warteliste is not None:
         vorab, gestoert = wartende_pruefen(graph, warteliste, einheiten,
@@ -859,18 +889,24 @@ def lauf(graph, out, auswahl, arbeiter, still=False, zustand=None, name=None,
         laden = nach_faelligkeit(einheiten, warteliste, vorab, laden,
                                  plan["entfernt"])
 
+    # A version Microsoft refused or no longer had is not asked again –
+    # a replayed walk or the waiting list may still name it.
+    set_aside = [a for a in laden if marked(marks, a["id"], a["ctag"])]
+    laden = [a for a in laden if not marked(marks, a["id"], a["ctag"])]
     bewegt = verschiebe(wurzel, plan["verschoben"])
     fertig, fehler, fehlgeschlagen = hole_alle(graph, wurzel, bestand, laden,
-                                               arbeiter)
+                                               arbeiter, marks)
     # Always, not only after downloads: a deletion or a move changes the
     # inventory too. Without this write a deleted file would still be listed
     # on the next run and its tombstone would be set a second time.
     bestand.schreibe()
+    if db is not None:
+        db.permanent_abgleichen(marks_before, marks)
     if warteliste is not None:
         # What arrived leaves the list; a failed waiting download stays on
         # it – the walk store does not know it, the list is its only memory.
         misslungen = {a["id"] for a in fehlgeschlagen}
-        warteliste.vergiss(a["id"] for a in laden if a["id"] not in misslungen)
+        warteliste.vergiss(a["id"] for a in laden + set_aside if a["id"] not in misslungen)
         gestoert |= {a.get("einheit", "") for a in fehlgeschlagen}
         einheiten.stempeln(gestoert)
 
@@ -907,15 +943,17 @@ def _db_zustand(out):
 
 
 def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None, wartend=(),
-                            quelle="onedrive"):
+                            quelle="onedrive", marks=None):
     """The drive's balance against what lies here – per folder.
 
     The delta knows every single file, so the check is exact and knows a
     half-arrived file too (present means same size). Files the rules, the
     size cap or the type filters leave out are counted as excluded, never
     named; files on the waiting list of a folder cadence are neither here
-    nor open – they wait. Tombstones are kept, not missing. The byte sums
-    and the type table come along for the size preview.
+    nor open – they wait. Tombstones are kept, not missing. A version
+    Microsoft refuses or no longer has (`marks`) is neither here nor open:
+    its own number, and never among the open ones "Fetch now" asks for.
+    The byte sums and the type table come along for the size preview.
     """
     if weg is None:
         weg = _db_zustand(out).verschwunden_lesen()
@@ -945,7 +983,7 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None, wartend=(),
             ausgeschlossen += 1
             ausgeschlossen_bytes += groesse
             continue
-        z = je.setdefault(ordner, {"da": 0, "offen": 0, "bytes": 0})
+        z = je.setdefault(ordner, {"da": 0, "offen": 0, "bytes": 0, "verweigert": 0, "weg": 0})
         z["bytes"] += groesse
         if e.get("id") in wartend:
             n_wartend += 1
@@ -955,6 +993,9 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None, wartend=(),
             da = datei.stat().st_size == groesse
         except OSError:
             da = False
+        if not da and marked(marks, e.get("id"), e.get("cTag")):
+            z["verweigert" if marks[e["id"]].get("kind") == export_util.REFUSED else "weg"] += 1
+            continue
         z["da" if da else "offen"] += 1
         if not da:
             # The open files by id: what "Fetch now" then fetches without a
@@ -969,6 +1010,8 @@ def pruefe_vollstaendigkeit(eintraege, out, auswahl, weg=None, wartend=(),
         da=sum(z["da"] for z in je.values()),
         offen=sum(z["offen"] for z in je.values()),
         ausgeschlossen=ausgeschlossen, behalten=len(weg), wartend=n_wartend,
+        verweigert=sum(z["verweigert"] for z in je.values()),
+        weg=sum(z["weg"] for z in je.values()),
         zeilen=zeilen,
         extra={"bytes": sum(z["bytes"] for z in je.values()),
                "bytes_ausgeschlossen": ausgeschlossen_bytes,
@@ -983,10 +1026,12 @@ def nur_pruefen(graph, out, auswahl, still=False, zustand=None, quelle="onedrive
     out = Path(out)
     zustand = zustand or _db_zustand(out)
     eintraege, _ = sammle(graph, None)
-    wartend = Warteliste(zustand.db).eintraege if getattr(zustand, "db", None) else ()
+    db = getattr(zustand, "db", None)
+    wartend = Warteliste(db).eintraege if db is not None else ()
     bericht = pruefe_vollstaendigkeit(eintraege, out, auswahl,
                                       weg=zustand.verschwunden_lesen(),
-                                      wartend=wartend, quelle=quelle)
+                                      wartend=wartend, quelle=quelle,
+                                      marks=db.permanent_lesen() if db is not None else None)
     if not still:
         completeness.schreiben(zustand.db, bericht)
         completeness.melden(bericht)

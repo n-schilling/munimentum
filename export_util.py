@@ -15,7 +15,7 @@ import os
 import re
 import sys
 import hashlib
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 
 # File names that the Outlook and OneDrive exports use alike: what has
@@ -273,6 +273,82 @@ def nachholen_melden(geholt, weg=0, fehler=0, unbekannt=0):
 def http_status(e):
     """The HTTP status an exception carries (requests.HTTPError), or None."""
     return getattr(getattr(e, "response", None), "status_code", None)
+
+
+# ---------------------------------------------------------------------------
+# Permanent failures: what a refused request says about the item
+# ---------------------------------------------------------------------------
+# The client retries what passes (401, 429, 5xx) and raises the rest. Of
+# the rest, two answers are verdicts, not hiccups: Microsoft refuses the
+# item (403 – a permission that is not there, a file flagged as malware),
+# or the item is no longer there (404, 410). Asking again every night
+# changes nothing about either, so every export records such an item
+# (permanent_mark) in its state.db and leaves it alone until a full sync
+# – and the pointers and cadences advance as if the item had come.
+REFUSED, GONE = "refused", "gone"
+PERMANENT_EVENTS = {REFUSED: "run.item.refused", GONE: "run.item.gone"}
+_REFUSED_CODES = {"malwaredetected"}
+_STATUS_IM_TEXT = re.compile(r"\bHTTP (\d{3})\b")
+
+
+def graph_code(body):
+    """The service's error code inside a Graph error body, lower-cased."""
+    if isinstance(body, dict) and isinstance(body.get("error"), dict):
+        return str(body["error"].get("code") or "").lower()
+    return ""
+
+
+def verdict_status(status, body=None):
+    """What an answer says about the item asked for: REFUSED (403, or a
+    malware verdict whatever the status), GONE (404, 410), or None – a
+    passing condition, worth another try next run."""
+    if graph_code(body) in _REFUSED_CODES:
+        return REFUSED
+    if status == 403:
+        return REFUSED
+    if status in (404, 410):
+        return GONE
+    return None
+
+
+def verdict(e):
+    """verdict_status for an exception: the status and body of a
+    requests.HTTPError, else the "HTTP nnn" the message names."""
+    status = http_status(e)
+    body = None
+    roh = getattr(getattr(e, "response", None), "text", "") or ""
+    if roh:
+        try:
+            body = json.loads(roh)
+        except ValueError:
+            body = None
+    if status is None:
+        m = _STATUS_IM_TEXT.search(str(e))
+        status = int(m.group(1)) if m else None
+    return verdict_status(status, body)
+
+
+def permanent_mark(kind, error, name=None, rel=None, unit=None, version=None, quiet=False):
+    """The record of an item no run asks for again: the kind (REFUSED or
+    GONE), the error in one line, the name the log used, the path its
+    copy has or would have had, the unit it belongs to (a conversation,
+    a task, a list), and the version the verdict was given for – a
+    changed version is asked once more. A `quiet` mark keeps a run from
+    asking but is no item of the archive (an inline image in a message):
+    the inward check does not count it."""
+    mark = {"kind": kind, "error": str(error)[:200], "name": name, "rel": rel,
+            "unit": unit, "version": version or "",
+            "when": datetime.now(UTC).isoformat(timespec="seconds")}
+    if quiet:
+        mark["quiet"] = True
+    return mark
+
+
+def permanent_event(kind, name, error):
+    """The one log line a verdict gets."""
+    import progress
+    progress.event(PERMANENT_EVENTS[kind], "warn", name=str(name or "?")[:60],
+                   error=str(error)[:120])
 
 
 def voll_neu():

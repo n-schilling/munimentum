@@ -110,6 +110,12 @@ VORGABEN = {
     # decision, not whatever happened to be ticked on first launch.
     "outlook_categories": [],
     "teams_categories": [],
+    # The completeness check's own selection (Insights): the balance rows
+    # it asks, ticked for the export or not. All of them to begin with;
+    # the page keeps this in step with steps.PRUEFUNGEN.
+    "check_sources": ["outlook_mail", "outlook_calendar", "outlook_contacts", "teams",
+                      "onedrive", "sharepoint", "sharepoint_pages", "planner", "todo",
+                      "onenote"],
     "workers": 4,
     # Drive mirrors (OneDrive/SharePoint) take their own concurrency: Graph
     # documents no fixed limit for drives – throttling is budget-based and

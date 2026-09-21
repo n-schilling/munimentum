@@ -113,6 +113,50 @@ def _todo_env(cfg, ctx):
             "TODO_RULES": str(cfg.get("todo_rules") or "")}
 
 
+def _check_rows(ctx):
+    """The balance rows a check was asked for (the page's own selection
+    on the Insights card), or None when the request named none – then
+    the check follows what the archive fetches, as before."""
+    rows = ctx.get("check_rows")
+    return set(rows) if rows is not None else None
+
+
+def _check_cats_outlook(cfg, ctx):
+    """The mailbox categories a check runs through: the rows asked for
+    (mail, calendar, contacts), else the ticked ones. A check may look
+    at a category the archive does not fetch yet – that is what the
+    question "would a run bring something?" is for."""
+    rows = _check_rows(ctx)
+    if rows is None:
+        return list(ctx["cats_outlook"])
+    return [c for c in ("mail", "calendar", "contacts") if f"outlook_{c}" in rows]
+
+
+def _check_outlook_env(cfg, ctx):
+    return {**_outlook_env(cfg, ctx), "EXPORT_CATEGORIES": ",".join(_check_cats_outlook(cfg, ctx))}
+
+
+def _check_teams_env(cfg, ctx):
+    # Asked for by row: every kind, ticked or not; asked for without
+    # rows: the ticked kinds, as the export would take them.
+    cats = ctx["cats_teams"] if _check_rows(ctx) is None else list(TEAMS_KATEGORIEN)
+    return {**_teams_env(cfg, ctx), "EXPORT_CATEGORIES": ",".join(cats)}
+
+
+def _checkable(source, otherwise):
+    """The gate of a check step: with rows, the row alone decides (and
+    for the sources that need a URL list, that list); without rows,
+    `otherwise` – the export's own switch – as before."""
+    def gate(cfg, ctx):
+        rows = _check_rows(ctx)
+        return (source in rows) if rows is not None else bool(otherwise(cfg, ctx))
+    return gate
+
+
+def _has_urls(key):
+    return lambda cfg, ctx: bool(str(cfg.get(key) or "").strip())
+
+
 def _outlook_env(cfg, ctx):
     return {**_kadenz_env(cfg, ctx),
             "EXPORT_CATEGORIES": ",".join(ctx["cats_outlook"]),
@@ -407,50 +451,57 @@ REGISTRY = (
 
     # The completeness checks (completeness.py): one per source, with the
     # export's own environment – so "excluded" means exactly what the
-    # export would leave out – and gated on whether the source is in use.
+    # export would leave out. Asked for by balance row (the Insights
+    # card's own selection, ctx["check_rows"]) a check runs whether or not
+    # the source is ticked for the export; asked for without rows (the
+    # size preview) it is gated on the source being in use, as before.
     {"key": "check", "anfrage": "check", "script": "outlook_export",
      "start": "job.start.check",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.outlook", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(ctx["cats_outlook"]),
+     "aktiv": lambda cfg, ctx: bool(_check_cats_outlook(cfg, ctx)),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["outlook"]],
-     "env": _outlook_env},
+     "env": _check_outlook_env},
 
     {"key": "check_teams", "anfrage": "check_teams",
      "start": "job.start.check_teams",
      "script": "teams_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.teams", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
+     "aktiv": _checkable("teams", lambda cfg, ctx: ctx["cats_teams"]),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["teams"]],
-     "env": _teams_env},
+     "env": _check_teams_env},
 
     {"key": "check_onedrive", "anfrage": "check_onedrive",
      "start": "job.start.check_onedrive",
      "script": "onedrive_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.onedrive", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: nutzt_onedrive(cfg),
+     "aktiv": _checkable("onedrive", lambda cfg, ctx: nutzt_onedrive(cfg)),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["onedrive"]],
      "env": _onedrive_env},
 
     {"key": "check_sharepoint", "anfrage": "check_sharepoint",
      "start": "job.start.check_sharepoint",
      "script": "sharepoint_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.sharepoint", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     # Gated on the URL list alone: the size preview in the settings asks
-     # for this step before anyone ticks the mirror on.
-     "aktiv": lambda cfg, ctx: bool(str(cfg.get("sharepoint_urls") or "").strip()),
+     # Gated on the URL list, never on the mirror's switch: the size
+     # preview in the settings asks for this step before anyone ticks
+     # the mirror on, and a row asked for on the Insights card needs
+     # the URLs and nothing else.
+     "aktiv": lambda cfg, ctx: _has_urls("sharepoint_urls")(cfg, ctx)
+                               and _checkable("sharepoint", lambda c, x: True)(cfg, ctx),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["sharepoint"]],
      "env": _sharepoint_env},
 
     {"key": "check_pages", "anfrage": "check_pages",
      "start": "job.start.check_pages",
      "script": "sharepoint_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.pages", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(str(cfg.get("sharepoint_pages_urls") or "").strip()),
+     "aktiv": lambda cfg, ctx: _has_urls("sharepoint_pages_urls")(cfg, ctx)
+                               and _checkable("sharepoint_pages", lambda c, x: True)(cfg, ctx),
      "argv": lambda cfg, ctx, pfade: ["--check-pages",
                                       pfade["sharepoint_pages"]],
      "env": _pages_env},
@@ -458,27 +509,28 @@ REGISTRY = (
     {"key": "check_planner", "anfrage": "check_planner",
      "start": "job.start.check_planner",
      "script": "planner_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.planner", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(str(cfg.get("planner_urls") or "").strip()),
+     "aktiv": lambda cfg, ctx: _has_urls("planner_urls")(cfg, ctx)
+                               and _checkable("planner", lambda c, x: True)(cfg, ctx),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["planner"]],
      "env": _planner_env},
 
     {"key": "check_todo", "anfrage": "check_todo",
      "start": "job.start.check_todo",
      "script": "todo_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.todo", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(cfg.get("todo_enabled")),
+     "aktiv": _checkable("todo", lambda cfg, ctx: cfg.get("todo_enabled")),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["todo"]],
      "env": _todo_env},
 
     {"key": "check_onenote", "anfrage": "check_onenote",
      "start": "job.start.check_onenote",
      "script": "onenote_export",
-     "label": "job.step.check", "corpus": False, "zugang": True,
+     "label": "job.step.check.onenote", "corpus": False, "zugang": True,
      "schedule": None, "master": None, "quelle": None,
-     "aktiv": lambda cfg, ctx: bool(cfg.get("onenote_enabled")),
+     "aktiv": _checkable("onenote", lambda cfg, ctx: cfg.get("onenote_enabled")),
      "argv": lambda cfg, ctx, pfade: ["--check", pfade["onenote"]],
      "env": _onenote_env},
 
@@ -558,13 +610,13 @@ PRUEFUNGEN = (
     {"quelle": "onedrive", "anfrage": "check_onedrive", "ordner": "onedrive",
      "titel": "ana.check.title.onedrive", "lauf": {"onedrive": True},
      "nutzt": nutzt_onedrive},
-    {"quelle": "sharepoint", "anfrage": "check_sharepoint", "ordner": "sharepoint",
+    {"quelle": "sharepoint", "anfrage": "check_sharepoint", "ordner": "sharepoint", "urls": "sharepoint_urls",
      "titel": "ana.check.title.sharepoint", "lauf": {"sharepoint": True},
      "nutzt": nutzt_sharepoint},
-    {"quelle": "sharepoint_pages", "anfrage": "check_pages", "ordner": "sharepoint_pages",
+    {"quelle": "sharepoint_pages", "anfrage": "check_pages", "ordner": "sharepoint_pages", "urls": "sharepoint_pages_urls",
      "titel": "ana.check.title.pages", "lauf": {"sharepoint_pages": True},
      "nutzt": nutzt_pages},
-    {"quelle": "planner", "anfrage": "check_planner", "ordner": "planner",
+    {"quelle": "planner", "anfrage": "check_planner", "ordner": "planner", "urls": "planner_urls",
      "titel": "ana.check.title.planner", "lauf": {"planner": True},
      "nutzt": nutzt_planner},
     {"quelle": "todo", "anfrage": "check_todo", "ordner": "todo",
@@ -577,10 +629,12 @@ PRUEFUNGEN = (
 
 
 def pruef_metadaten():
-    """What the page needs to draw the balance rows: order, title key and
-    the run "fetch now" starts – injected into /*__PRUEFUNGEN__*/."""
+    """What the page needs to draw the balance rows: order, title key, the
+    run "fetch now" starts and, for the card's own selection, which
+    setting has to hold a URL list before the row can run – injected into
+    /*__PRUEFUNGEN__*/."""
     return [{"quelle": e["quelle"], "titel": e["titel"], "lauf": e["lauf"],
-             "anfrage": e["anfrage"]} for e in PRUEFUNGEN]
+             "anfrage": e["anfrage"], "urls": e.get("urls")} for e in PRUEFUNGEN]
 
 ANFRAGEN = tuple(e["anfrage"] for e in REGISTRY)
 

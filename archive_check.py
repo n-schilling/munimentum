@@ -14,6 +14,12 @@ files (completeness.zustand):
                     a run neither fetches nor removes it
     unvollstaendig  a mirrored file with a size other than recorded – half
                     arrived; the next run fetches it again
+    verweigert      Microsoft refuses the item (a 403, a malware verdict):
+                    no copy here, and no fetch will bring one – its own
+                    number, outside the four above, because there is
+                    nothing to do about it (export_util.permanent_mark)
+    weg             the item was gone at Microsoft (404) before a copy
+                    came – the same kind of number
     verloren        a tombstone says the file was kept, and it is gone: the
                     item is gone at Microsoft and here alike
     vermerkt        the user noted a loss (table verloren): the record
@@ -181,7 +187,7 @@ class _Zaehler:
     def __init__(self):
         self.summe = Counter()
         self.je = {}
-        self.befunde = {k: [] for k in ("fehlt", "fremd", "unvollstaendig", "verloren")}
+        self.befunde = {k: [] for k in completeness.BEFUND_ARTEN}
         self.gekappt = False
 
     def zaehle(self, pfad, was, rel=None):
@@ -205,7 +211,7 @@ class _Zaehler:
                                     beiseite=beiseite,
                                     **{k: self.summe[k] for k in
                                        ("stimmig", "fehlt", "fremd", "unvollstaendig",
-                                        "verloren", "vermerkt")})
+                                        "verloren", "vermerkt", "verweigert", "weg")})
 
 
 def _bestand_pruefen(z, wurzel, bekannt, gemessen=False, zeile=None, praefix="",
@@ -243,6 +249,25 @@ def _verlorene(z, wurzel, db, zeile=None, praefix=""):
             z.zaehle(zeile or _ordner(rel), "verloren", praefix + rel)
 
 
+def _permanent(z, wurzel, db, zeile=None, praefix="", zeile_fuer=None):
+    """The items no run asks for again (export_util.permanent_mark): one
+    Microsoft refuses, one that was gone before a copy came – each its
+    own number, outside the four, because nothing here can do anything
+    about it. A mark whose copy lies here (an older version, fetched
+    before the verdict) counts nothing: the copy is what the record
+    knows, and the record is judged with the others."""
+    zeile_fuer = zeile_fuer or _ordner
+    for mark in db.permanent_lesen().values():
+        rel = mark.get("rel")
+        if mark.get("quiet") or (rel and _groesse(wurzel, rel) is not None):
+            continue
+        art = "verweigert" if mark.get("kind") == export_util.REFUSED else "weg"
+        einheit = str(mark.get("unit") or "")
+        name = rel or (f"{einheit}: {mark.get('name') or '?'}" if einheit
+                       else str(mark.get("name") or "?"))
+        z.zaehle(zeile or zeile_fuer(rel or einheit), art, praefix + name)
+
+
 # ---------------------------------------------------------------------------
 # One check per source
 # ---------------------------------------------------------------------------
@@ -260,6 +285,7 @@ def pruefe_outlook(out):
     _bestand_pruefen(z, out, bekannt, vermerkt=db.verloren_lesen())
     _fremde(z, _dateien(out, endungen={".eml", ".ics", ".vcf"}), bekannt, weg)
     _verlorene(z, out, db)
+    _permanent(z, out, db)
     return z.zustand("outlook", beiseite=_beiseite(out))
 
 
@@ -279,6 +305,7 @@ def pruefe_spiegel(wurzel, z=None, zeile=None, praefix=""):
     _fremde(z, _dateien(wurzel, unter=drive_mirror.DATEI_DIR), bekannt, weg,
             zeile=zeile, praefix=praefix)
     _verlorene(z, wurzel, db, zeile=zeile, praefix=praefix)
+    _permanent(z, wurzel, db, zeile=zeile, praefix=praefix)
     return z, "ok"
 
 
@@ -314,6 +341,7 @@ def pruefe_seiten(out):
     _bestand_pruefen(z, out, bekannt, vermerkt=db.verloren_lesen())
     _fremde(z, _dateien(out, endungen={".html"}), bekannt, weg)
     _verlorene(z, out, db)
+    _permanent(z, out, db)
     return z.zustand("sharepoint_pages", beiseite=_beiseite(out))
 
 
@@ -362,7 +390,8 @@ def pruefe_teams(out):
 
     vermerkt = db.verloren_lesen()
     bekannt = {}
-    for rec in _teams_records(db).values():
+    conversations = _teams_records(db)
+    for rec in conversations.values():
         if rec.get("done") and rec.get("rel") and not rec.get("empty"):
             bekannt[rec["rel"]] = None
     for rel in bekannt:
@@ -395,6 +424,9 @@ def pruefe_teams(out):
                     z.zaehle(pfad, "unvollstaendig", rel)
                 else:
                     z.zaehle(pfad, "stimmig")
+    # A file Microsoft refuses or no longer has: recorded under its URL,
+    # with the conversation as its unit – by name, since no path exists.
+    _permanent(z, out, db, zeile_fuer=zeile_fuer)
     for wurzel in spiegel:
         name = wurzel.relative_to(out).as_posix()
         _z, urteil = pruefe_spiegel(wurzel, z=z, zeile=zeile_fuer(name), praefix=name + "/")
@@ -433,6 +465,7 @@ def pruefe_planner(out):
         _bestand_pruefen(z, ordner, bekannt, zeile=name, praefix=name + "/",
                          vermerkt=db.verloren_lesen())
         _fremde(z, _dateien(ordner, unter="Anhaenge"), bekannt, zeile=name, praefix=name + "/")
+        _permanent(z, ordner, db, zeile=name, praefix=name + "/")
     return z.zustand("planner", fehler=fehler, beiseite=_beiseite(out))
 
 
@@ -458,6 +491,7 @@ def pruefe_todo(out):
         _bestand_pruefen(z, ordner, bekannt, zeile=name, praefix=name + "/",
                          vermerkt=db.verloren_lesen())
         _fremde(z, _dateien(ordner, unter="Anhaenge"), bekannt, zeile=name, praefix=name + "/")
+        _permanent(z, ordner, db, zeile=name, praefix=name + "/")
     return z.zustand("todo", fehler=fehler, beiseite=_beiseite(out))
 
 
@@ -492,6 +526,7 @@ def pruefe_onenote(out):
                    if _ordner(rel) not in eigene and not any(
                        _ordner(rel).startswith(o + "/") for o in eigene)}
         _fremde(z, dateien, bekannt, zeile=name, praefix=name + "/")
+        _permanent(z, ordner, db, zeile=name, praefix=name + "/")
     return z.zustand("onenote", fehler=fehler, beiseite=_beiseite(out))
 
 

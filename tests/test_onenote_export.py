@@ -710,3 +710,83 @@ def test_seitenstand_liest_den_alten_blob_ohne_ihn_zu_bewegen(tmp_path):
     assert db.saetze_lesen(on.SEITEN_BEREICH) == {} and db.kv_lesen("pages"), "the check moved the blob"
     assert list(on.seitenstand(db)) == ["p1"]
     assert list(db.saetze_lesen(on.SEITEN_BEREICH)) == ["p1"] and not db.kv_lesen("pages")
+
+
+# --------------------------------------------------------------------------
+# Verdicts: refused or gone, recorded – a passing failure is asked again
+# --------------------------------------------------------------------------
+class _Antwort:
+    def __init__(self, status, text=""):
+        self.status_code, self.text = status, text
+
+
+def _http(status):
+    import requests
+    return requests.HTTPError(f"{status} Client Error", response=_Antwort(status))
+
+
+def _marks(tmp_path):
+    return state_db.StateDb(on.notebook_ziel(tmp_path, NB)).permanent_lesen()
+
+
+def test_a_refused_page_is_recorded_for_its_version(tmp_path, capsys):
+    """A 403 on the page content: a mark for this change date, no error
+    – tombstones and the cadence go on – and the next run does not ask;
+    a changed page is asked once more, and when it comes the mark goes."""
+    g = _graph([_page("p1", "A"), _page("p2", "B")])
+    g.bytes_map = {"/pages/p1/": _http(403), "/pages/": (SEITE_HTML.encode("utf-8"), "text/html"),
+                   "resources/img-1": (b"PNG", "image/png"),
+                   "resources/file-1": (b"PDF", "application/pdf")}
+    assert on.notebook_lauf(g, tmp_path, NB, 0) == (1, 0, 0)
+    m = _marks(tmp_path)["page:p1"]
+    assert m["kind"] == "refused" and m["version"] == "2026-07-01T10:00:00Z" and m["unit"] == "Allgemein"
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.refused") == 1 and "run.onenote.page_failed" not in keys
+    g2 = _graph([_page("p1", "A"), _page("p2", "B")])
+    g2.bytes_map = dict(g.bytes_map)
+    assert on.notebook_lauf(g2, tmp_path, NB, 0) == (0, 2, 0)
+    assert not any("/pages/p1/" in u for u in g2.geladen), "the marked version was asked"
+    g3 = _graph([_page("p1", "A", lm="2026-08-01T10:00:00Z"), _page("p2", "B")])
+    assert on.notebook_lauf(g3, tmp_path, NB, 0) == (1, 1, 0)
+    assert _marks(tmp_path) == {}
+
+
+def test_a_gone_resource_is_recorded_and_a_passing_one_keeps_the_page_due(tmp_path, capsys):
+    """A 404 on an image: recorded, the tag keeps its address, the page
+    keeps its stamp – no request for the image on the next fetch. A 502
+    on the attachment: the page is written but without its stamp, so the
+    next run fetches it once more – and then the file is here."""
+    g = _graph([_page("p1", "Besprechung")])
+    g.bytes_map["resources/img-1"] = _http(404)
+    g.bytes_map["resources/file-1"] = RuntimeError("HTTP 502 Bad Gateway")
+    assert on.notebook_lauf(g, tmp_path, NB, 0) == (1, 0, 0)
+    ziel = on.notebook_ziel(tmp_path, NB)
+    m = _marks(tmp_path)["resource:img-1"]
+    assert m["kind"] == "gone" and m["unit"].endswith(".html")
+    assert _stand(ziel)["p1"]["lm"] == "", "a passing failure must leave the page due"
+    keys = [e["k"] for e in _events(capsys)]
+    assert keys.count("run.item.gone") == 1 and keys.count("run.onenote.resources_failed") == 1
+    (seite,) = ziel.rglob("*.html")
+    assert "(nicht geladen)" in seite.read_text(encoding="utf-8")
+    g2 = _graph([_page("p1", "Besprechung")])
+    g2.bytes_map["resources/img-1"] = _http(404)
+    assert on.notebook_lauf(g2, tmp_path, NB, 0) == (1, 0, 0)
+    assert not any("img-1" in u for u in g2.geladen), "the marked image was asked"
+    assert any("file-1" in u for u in g2.geladen), "the owed attachment was not asked"
+    assert _stand(ziel)["p1"]["lm"] == "2026-07-01T10:00:00Z"
+    assert "Protokoll.pdf</a>" in seite.read_text(encoding="utf-8")
+
+
+def test_the_check_counts_a_marked_page_and_a_full_sync_forgets(tmp_path, monkeypatch):
+    monkeypatch.delenv("ONENOTE_ONLY", raising=False)
+    monkeypatch.setenv("ONENOTE_RULES", "- Privat")
+    g = _mit_notizbuechern(_graph([_page("p1", "A"), _page("p2", "B")]))
+    g.bytes_map = {"/pages/p1/": _http(403), **g.bytes_map}     # the first match counts
+    (buch,) = on.waehle_notizbuecher(g, tmp_path)
+    on.notebook_lauf(g, tmp_path, buch, 0)
+    b = on.nur_pruefen(_mit_notizbuechern(_graph([_page("p1", "A"), _page("p2", "B")])), tmp_path)
+    assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 0, 1, 0)
+    monkeypatch.setenv("FULL_SYNC", "1")
+    g2 = _mit_notizbuechern(_graph([_page("p1", "A"), _page("p2", "B")]))
+    assert on.notebook_lauf(g2, tmp_path, buch, 0) == (2, 0, 0)
+    assert state_db.StateDb(on.notebook_ziel(tmp_path, buch)).permanent_lesen() == {}

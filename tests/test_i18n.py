@@ -201,10 +201,13 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py",
            "todo_export.py", "onenote_export.py", "archive_check.py",
-           "case_export.py", "case_collect.py")
+           "case_export.py", "case_collect.py", "export_util.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
+# Step labels that run records written by earlier versions still carry.
+GESPEICHERTE_ETIKETTEN = ("job.step.check",)     # every check step until 13.4.0
+
 DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
@@ -279,6 +282,9 @@ def benutzte_schluessel():
         if treffer.startswith(PREFIXE) and not treffer.endswith("."):
             keys.add(treffer)
     keys.discard("app.log")          # log file, not a text key
+    # Labels older run records still carry – Insights › Runs renders them
+    # through t(), so the text must stay although no code names it.
+    keys |= set(GESPEICHERTE_ETIKETTEN)
     for rumpf, enden in DYNAMISCH:
         assert f"'{rumpf}'" in quelle, f"{rumpf} wird nicht mehr zusammengesetzt"
         keys |= {rumpf + e for e in enden}

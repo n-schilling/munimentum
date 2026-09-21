@@ -171,10 +171,13 @@ the case and touches nothing in the archive.
 
 What the archive holds, computed once per index run: messages, people and
 period, the mirrored files, disk usage, and the **gaps** — months with no
-message at all. On request a **completeness balance** against Microsoft:
-per source, what is here, not fetched yet, deliberately excluded, and
-deleted at Microsoft but kept; *Fetch now* fetches only what a row found
-open. **Archive and bookkeeping** checks each export against the files on
+message at all. On request a **completeness balance** against Microsoft
+for the sources you tick on that card: per source, what is here, not
+fetched yet, deliberately excluded by the same rules and filters the
+export uses, deleted at Microsoft but kept, and what Microsoft refuses
+or no longer had when asked — recorded once by the export, never asked
+again until you force a full sync; *Fetch now* fetches only what a row
+found open. **Archive and bookkeeping** checks each export against the files on
 disk and the index against the archive without asking anyone, and offers
 one explicit action per finding — fetch again, note as lost, set aside,
 rebuild bookkeeping; every action asks first and none deletes. **Runs**

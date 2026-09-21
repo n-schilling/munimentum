@@ -8,6 +8,7 @@ import sqlite3
 
 import archive_check as ac
 import completeness
+import export_util
 import progress
 import state_db
 
@@ -112,7 +113,20 @@ def test_teams_prueft_konversationen_dateien_und_spiegel(tmp_path):
     _datei(tmp_path / "channels/Nordwind/Allgemein__x.html")
     db.kv_schreiben("files:c1", json.dumps({
         "https://x/a.pdf": {"rel": "1on1/Anhaenge/Alice__x/a.pdf", "size": 3},
-        "https://x/b.pdf": {"rel": "1on1/Anhaenge/Alice__x/b.pdf", "size": 3}}))
+        "https://x/b.pdf": {"rel": "1on1/Anhaenge/Alice__x/b.pdf", "size": 3},
+        "https://x/d.pdf": {"rel": "1on1/Anhaenge/Alice__x/d.pdf", "size": 3}}))
+    db.permanent_schreiben({
+        # refused by Microsoft, never fetched: its own number, by name
+        "https://x/c.pptx": export_util.permanent_mark("refused", "HTTP 403 accessDenied", name="Plan.pptx",
+                                                       unit="1on1/Alice__x.html"),
+        # refused after a copy was fetched: the copy counts, the refusal not
+        "https://x/d.pdf": export_util.permanent_mark("refused", "HTTP 403", name="d.pdf",
+                                                      rel="1on1/Anhaenge/Alice__x/d.pdf",
+                                                      unit="1on1/Alice__x.html"),
+        # gone at Microsoft before a copy came: the other number
+        "https://x/e.pdf": export_util.permanent_mark("gone", "HTTP 404 itemNotFound", name="e.pdf",
+                                                      unit="group/Weg__x.html")})
+    _datei(tmp_path / "1on1/Anhaenge/Alice__x/d.pdf", b"xxx")
     _datei(tmp_path / "1on1/Anhaenge/Alice__x/a.pdf", b"xxx")
     _datei(tmp_path / "1on1/Anhaenge/Alice__x/b.pdf", b"x")     # half
     # A team's mirrored channel folders: their own state.db, their own rows.
@@ -121,9 +135,12 @@ def test_teams_prueft_konversationen_dateien_und_spiegel(tmp_path):
     _datei(tmp_path / "channels/Nordwind/Dateien/Dateien/Allgemein/plan.pdf", b"x")
     _datei(tmp_path / "channels/Nordwind/Dateien/Dateien/Allgemein/seite.html", b"x")  # mirrored, not a chat
     z = ac.pruefe_teams(tmp_path)
-    assert _zahlen(z) == (4, 1, 2, 1, 0)
-    je = {r["pfad"]: (r["fehlt"], r["fremd"], r["unvollstaendig"]) for r in z["zeilen"]}
-    assert je == {"1on1": (0, 1, 1), "group": (1, 0, 0), "channels/Nordwind": (0, 1, 0)}
+    assert _zahlen(z) == (5, 1, 2, 1, 0)
+    assert z["verweigert"] == 1 and z["befunde"]["verweigert"] == ["1on1/Alice__x.html: Plan.pptx"]
+    assert z["weg"] == 1 and z["befunde"]["weg"] == ["group/Weg__x.html: e.pdf"]
+    je = {r["pfad"]: (r["fehlt"], r["fremd"], r["unvollstaendig"], r["verweigert"], r["weg"])
+          for r in z["zeilen"]}
+    assert je == {"1on1": (0, 1, 1, 1, 0), "group": (1, 0, 0, 0, 1), "channels/Nordwind": (0, 1, 0, 0, 0)}
 
 
 # --------------------------------------------------------------------------
@@ -586,3 +603,47 @@ def test_abgeholt_nimmt_die_dateien_aus_der_bilanz(tmp_path):
     assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("S/A", 2, 1)]
     assert b["offene"] == [{"id": "2", "rel": "S/A/Dateien/b.pdf"}]
     assert completeness.abgeholt(db, "onedrive", ["x"]) is None, "no report, nothing to adjust"
+
+
+# --------------------------------------------------------------------------
+# What no run asks for again: refused and gone, in every source
+# --------------------------------------------------------------------------
+def test_marks_count_as_refused_or_gone_unless_their_copy_lies_here(tmp_path):
+    """A mail Microsoft refuses, a file that was gone before it came: each
+    its own number, listed by path or by name, never missing – and a mark
+    whose older copy lies here counts nothing, the copy does."""
+    db = state_db.StateDb(tmp_path)
+    done = state_db.DbDoneLog(db)
+    _datei(tmp_path / "E-Mail/Posteingang/a.eml")
+    done.mark("m1", "E-Mail/Posteingang/a.eml")
+    done.close()
+    db.permanent_schreiben({
+        "m2": export_util.permanent_mark("refused", "HTTP 403", name="Angebot",
+                                         rel="E-Mail/Posteingang/2026-01-01_b.eml"),
+        "m3": export_util.permanent_mark("gone", "HTTP 404", name="Weg", rel="E-Mail/Alt/c.eml")})
+    z = ac.pruefe_outlook(tmp_path)
+    assert _zahlen(z) == (1, 0, 0, 0, 0)
+    assert (z["verweigert"], z["weg"]) == (1, 1)
+    assert z["befunde"]["verweigert"] == ["E-Mail/Posteingang/2026-01-01_b.eml"]
+    assert z["befunde"]["weg"] == ["E-Mail/Alt/c.eml"]
+    assert z["zeilen"] == [], "a refusal weighs nothing – no row of its own"
+    # a mirror: the older copy of a refused newer version counts as here
+    spiegel = state_db.StateDb(tmp_path / "od")
+    spiegel.bestand_schreiben({"f1": {"rel": "Dateien/plan.pdf", "ctag": "c1", "size": 1}})
+    _datei(tmp_path / "od/Dateien/plan.pdf", b"x")
+    spiegel.permanent_schreiben({
+        "f1": export_util.permanent_mark("refused", "HTTP 403", name="plan.pdf",
+                                         rel="Dateien/plan.pdf", version="c2"),
+        "f2": export_util.permanent_mark("gone", "HTTP 404", name="alt.pdf", rel="Dateien/alt.pdf")})
+    z = ac.pruefe_onedrive(tmp_path / "od")
+    assert _zahlen(z) == (1, 0, 0, 0, 0) and (z["verweigert"], z["weg"]) == (0, 1)
+    assert z["befunde"]["weg"] == ["Dateien/alt.pdf"] and z["zeilen"] == []
+    # a unit source: the unit names the row, the mark names the item
+    liste = state_db.StateDb(tmp_path / "todo/Einkauf")
+    liste.kv_schreiben("tasks", json.dumps({"t1": {"etag": "e", "anhaenge": []}}))
+    _datei(tmp_path / "todo/Einkauf/list.html")
+    liste.permanent_schreiben({"attachment:a1": export_util.permanent_mark(
+        "refused", "HTTP 403", name="Rechnung.pdf", unit="Milch kaufen")})
+    z = ac.pruefe_todo(tmp_path / "todo")
+    assert z["verweigert"] == 1 and z["befunde"]["verweigert"] == ["Einkauf/Milch kaufen: Rechnung.pdf"]
+    assert z["stand"] == "ganz" and z["zeilen"] == []
