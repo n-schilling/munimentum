@@ -1636,11 +1636,14 @@ def _spiegel_drive(graph, wurzel, cache):
 
 
 def nachholen(graph, out, rels):
-    """"Fetch again": the conversations the listed files belong to – a
-    conversation's page, a file it fetched – are exported again, messages
-    from the watermark, files only where missing; files below a channel
-    mirror come by their inventory ids. Nothing is listed beyond what the
-    ids need. A conversation no team or chat list has any more is gone."""
+    """"Fetch again" and "Fetch now": the conversations the listed files
+    belong to – a conversation's page, a file it fetched – or the
+    conversations named by key ({id, rel} entries, the balance's open
+    ones) are exported again, messages from the watermark, files only
+    where missing; files below a channel mirror come by their inventory
+    ids. Nothing is listed beyond what the ids need. A conversation no
+    team or chat list has any more is gone. What came is taken off the
+    stored balance, so the row is right without a second listing."""
     state = load_state(out)
     db = state_db.StateDb(out)
     je_rel = {rec["rel"]: key for key, rec in state["conversations"].items()
@@ -1658,6 +1661,10 @@ def nachholen(graph, out, rels):
     progress.event("run.nachholen.start", n=len(rels))
     keys, spiegel, unbekannt = [], {}, 0
     for rel in rels:
+        if isinstance(rel, dict):
+            if rel["id"] not in keys:
+                keys.append(rel["id"])
+            continue
         key = je_rel.get(rel)
         if key:
             if key not in keys:
@@ -1671,6 +1678,7 @@ def nachholen(graph, out, rels):
     my_id = graph.get(f"{GRAPH}/me").get("id") if keys else None
     cache = {}
     geholt = weg = fehler = 0
+    gekommen = []                    # the keys that came, for the balance
     for key in keys:
         try:
             if key.startswith("ch:"):
@@ -1684,6 +1692,7 @@ def nachholen(graph, out, rels):
                 chat = graph.get(f"{GRAPH}/me/chats/{key}")
                 export_one_chat(graph, out, state, my_id, chat)
             geholt += 1
+            gekommen.append(key)
         except TokenExpired:
             raise
         except Exception as e:
@@ -1707,6 +1716,8 @@ def nachholen(graph, out, rels):
         weg += zahlen["gone"]
         fehler += zahlen["errors"]
         unbekannt += zahlen["unknown"]
+    if gekommen:
+        completeness.abgeholt(db, "teams", ids=gekommen)
     export_util.nachholen_melden(geholt, weg, fehler, unbekannt)
 
 
@@ -1981,6 +1992,16 @@ def nur_pruefen(out):
     je = {}                       # row path -> [da, offen]
     gesehen = set()
     ausgeschlossen = 0
+    # The open conversations by key: what "Fetch now" then fetches one by
+    # one, without listing the chats again – capped, and the cap is said.
+    offene, offene_gekappt = [], False
+
+    def offen_merken(key, rel, pfad):
+        nonlocal offene_gekappt
+        if len(offene) < completeness.OFFENE_GRENZE:
+            offene.append({"id": key, "rel": rel or "", "pfad": pfad})
+        else:
+            offene_gekappt = True
     chat_cats = kategorien & {"1on1", "group", "meeting"}
     if chat_cats:
         for chat in graph.paged(f"{GRAPH}/me/chats",
@@ -2002,9 +2023,13 @@ def nur_pruefen(out):
             z = je.setdefault(folder, [0, 0])
             if rec is None:
                 z[1] += 1
+                offen_merken(chat["id"], None, folder)
             else:
                 ps = parse_ts(rec.get("last_activity"))
-                z[1 if cur is not None and (ps is None or cur > ps) else 0] += 1
+                neuer = cur is not None and (ps is None or cur > ps)
+                z[1 if neuer else 0] += 1
+                if neuer:
+                    offen_merken(chat["id"], rec.get("rel"), folder)
     if want_channels:
         fehl_teams = set()
         for team in select_teams(graph, fehler=fehl_teams):
@@ -2026,7 +2051,11 @@ def nur_pruefen(out):
                     continue
                 key = f"ch:{ch['id']}"
                 gesehen.add(key)
-                z[0 if get_record(out, state, key) is not None else 1] += 1
+                if get_record(out, state, key) is not None:
+                    z[0] += 1
+                else:
+                    z[1] += 1
+                    offen_merken(key, None, pfad)
         if fehl_teams:
             fehler.append(completeness.fehler("channels", "run.teams.channels_failed"))
     behalten = sum(1 for key, rec in state["conversations"].items()
@@ -2037,7 +2066,7 @@ def nur_pruefen(out):
         da=sum(z[0] for z in je.values()), offen=sum(z[1] for z in je.values()),
         ausgeschlossen=ausgeschlossen, behalten=behalten,
         zeilen=[completeness.zeile(pfad, z[0], z[1]) for pfad, z in je.items()],
-        fehler=fehler)
+        fehler=fehler, extra={"offene": offene, "offene_gekappt": offene_gekappt})
     completeness.schreiben(state_db.StateDb(out), bericht)
     completeness.melden(bericht)
     return bericht
@@ -2078,11 +2107,14 @@ def main():
             sys.exit(1)
         return
 
-    nachzuholen = export_util.nachhol_liste()
+    nachzuholen = export_util.nachhol_eintraege()
     if nachzuholen is not None:
-        # "Fetch again": no categories, no cadences – the listed files by
-        # the conversations and mirrors that own them.
-        graph = _zugang(want_channels=any(r.startswith("channels/") for r in nachzuholen))
+        # "Fetch again" and "Fetch now": no categories, no cadences – the
+        # listed files by the conversations and mirrors that own them, or
+        # the conversations named by key.
+        graph = _zugang(want_channels=any(
+            (r["id"].startswith("ch:") if isinstance(r, dict) else r.startswith("channels/"))
+            for r in nachzuholen))
         _client = graph
         if EMBED_IMAGES and CACHE_IMAGES:
             IMGCACHE_DIR = out / ".imgcache"

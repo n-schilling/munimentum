@@ -1,5 +1,15 @@
 ## New in 13.4.1
 
+**Fetch now fetches only what the check named.** The Teams check names
+the open conversations by key, the calendar and contacts checks their
+open events and contacts by id; *Fetch now* takes exactly those – no
+chat list, no calendar or folder read again – and takes them off the
+balance, so the row is right without a second check. Seconds instead of
+minutes for one conversation with newer messages. The mirrors did this
+already; mail is counted, not listed, by its check, so its *Fetch now*
+stays a read of the folders with something open, fetching only the
+mails not here.
+
 **The calendar check asks the view plainly.** It selected the change
 stamp, which `calendarView` refuses to select; the calendar then stood
 as *unreachable* with nothing counted. The view is now asked without

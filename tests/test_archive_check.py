@@ -603,6 +603,15 @@ def test_abgeholt_nimmt_die_dateien_aus_der_bilanz(tmp_path):
     assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("S/A", 2, 1)]
     assert b["offene"] == [{"id": "2", "rel": "S/A/Dateien/b.pdf"}]
     assert completeness.abgeholt(db, "onedrive", ["x"]) is None, "no report, nothing to adjust"
+    # by id: the report's own open entry knows the row
+    completeness.schreiben(db, completeness.bilanz(
+        "teams", "conversations", da=2, offen=2,
+        zeilen=[completeness.zeile("1on1", 1, 1), completeness.zeile("group", 1, 1)],
+        extra={"offene": [{"id": "a", "rel": "", "pfad": "1on1"},
+                          {"id": "b", "rel": "group/B__b.html", "pfad": "group"}]}))
+    b = completeness.abgeholt(db, "teams", ids=["a", "nie"])
+    assert (b["da"], b["offen"]) == (3, 1) and b["zeilen"] == [{"pfad": "group", "da": 1, "offen": 1}]
+    assert b["offene"] == [{"id": "b", "rel": "group/B__b.html", "pfad": "group"}]
 
 
 # --------------------------------------------------------------------------

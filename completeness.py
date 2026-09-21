@@ -105,21 +105,29 @@ def lesen(db, quelle):
 OFFENE_GRENZE = 2000        # open items a mirror's report names by id
 
 
-def abgeholt(db, quelle, rels):
-    """After a targeted fetch: take the fetched files out of the stored
+def abgeholt(db, quelle, rels=(), ids=()):
+    """After a targeted fetch: take the fetched items out of the stored
     report – off the open count of their row and the source, onto the
     "here" side, out of the named open items – so the row is right again
-    without a second walk. Rows are matched by the longest path prefix
-    (a folder row, or a library row above it). Nothing happens without
-    a stored report."""
+    without a second walk. A file is named by its rel and matched to
+    the row with the longest path prefix (a folder row, or a library
+    row above it); an item named by its id (a Teams conversation) is
+    matched through the report's own open entry, which knows its row
+    (`pfad`). Nothing happens without a stored report."""
     bericht = lesen(db, quelle)
-    if not bericht or not rels:
+    if not bericht or not (rels or ids):
         return None
     zeilen = {z["pfad"]: z for z in bericht.get("zeilen") or []}
-    weg = set(rels)
+    offene = bericht.get("offene") or []
+    weg_rels, weg_ids = set(rels), set(ids)
+    pfade = []
     for rel in rels:
-        pfad = max((p for p in zeilen if rel.startswith(p + "/") or rel == p),
-                   key=len, default=None)
+        pfade.append(max((p for p in zeilen if rel.startswith(p + "/") or rel == p),
+                         key=len, default=None))
+    for e in offene:
+        if e.get("id") in weg_ids and e.get("rel") not in weg_rels:
+            pfade.append(e.get("pfad") if e.get("pfad") in zeilen else None)
+    for pfad in pfade:
         if pfad is None or zeilen[pfad]["offen"] <= 0:
             continue                    # nothing the report called open
         zeilen[pfad]["offen"] -= 1
@@ -129,7 +137,8 @@ def abgeholt(db, quelle, rels):
     bericht["zeilen"] = sorted((z for z in zeilen.values() if z["offen"] > 0),
                                key=lambda z: (-z["offen"], z["pfad"]))
     if "offene" in bericht:
-        bericht["offene"] = [e for e in bericht["offene"] if e.get("rel") not in weg]
+        bericht["offene"] = [e for e in offene
+                             if e.get("rel") not in weg_rels and e.get("id") not in weg_ids]
     schreiben(db, bericht)
     return bericht
 

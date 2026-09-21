@@ -4011,6 +4011,17 @@ components:
         wartend: { type: integer, description: "Mirrors only: files waiting for their folder cadence." }
         verweigert: { type: integer, description: "Listed by Microsoft but refused (a 403, a malware verdict): recorded by the export, never open – no fetch will bring it until a full sync." }
         weg: { type: integer, description: "Listed by Microsoft but no longer there when asked (404): recorded by the export, never open." }
+        offene:
+          type: array
+          description: "Mirrors, Teams, calendar and contacts: the open items by id – what Fetch now fetches one by one, without a second walk or listing. Mirrors name drive items (`id`, `rel`); Teams names conversations (`id` the chat id or `ch:` and the channel id, `rel` the conversation's file when one exists, `pfad` its row); the calendar and the contacts name events and contacts (`id`, `rel` the file when one exists, `pfad` the calendar or folder, `art` event or contact). Mail is counted, not listed, by its check and has none. Capped at 2000; `offene_gekappt` says so, and Fetch now then runs the source's wider way."
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              rel: { type: string }
+              pfad: { type: string }
+              art: { type: string, enum: [event, contact] }
+        offene_gekappt: { type: boolean, description: "Whether `offene` was capped." }
         zeilen:
           type: array
           description: Only units with something open – a folder, calendar, board, list, notebook, site.

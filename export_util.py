@@ -242,8 +242,10 @@ def nachhol_liste():
 
 def nachhol_eintraege():
     """The list as written: rels, or {id, rel} pairs where the caller knows
-    the drive item (the balance's open files) – the mirrors fetch those by
-    id without asking the inventory. None on a regular run."""
+    the item (the balance's open files, or its open Teams conversations –
+    there `rel` may be empty, a conversation never exported has no file
+    yet). The exports fetch those by id without asking the inventory.
+    None on a regular run."""
     pfad = (os.environ.get("FETCH_LIST") or "").strip()
     if not pfad:
         return None
@@ -256,8 +258,12 @@ def nachhol_eintraege():
     for d in dateien or []:
         if isinstance(d, str):
             out.append(d)
-        elif isinstance(d, dict) and d.get("id") and d.get("rel"):
-            out.append({"id": str(d["id"]), "rel": str(d["rel"])})
+        elif isinstance(d, dict) and d.get("id"):
+            e = {"id": str(d["id"]), "rel": str(d.get("rel") or "")}
+            for k in ("pfad", "art"):       # the balance's row and kind, where it names them
+                if d.get(k):
+                    e[k] = str(d[k])
+            out.append(e)
     return out
 
 

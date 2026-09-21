@@ -7378,11 +7378,33 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["onedrive", "index", "check_onedrive"]
     assert schritte["onedrive"]["env"]["RESYNC"] == "1" and "FETCH_LIST" not in schritte["onedrive"]["env"]
-    # Teams: the regular run is the diff already.
+    # The calendar with the open events by id: the list, no calendar read, no check step.
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR), completeness.bilanz(
+        "outlook_calendar", "events", da=3, offen=1, zeilen=[completeness.zeile("kalender/Arbeit", 3, 1)],
+        extra={"offene": [{"id": "e7", "rel": "", "pfad": "kalender/Arbeit", "art": "event"}],
+               "offene_gekappt": False}))
+    call(port, "POST", "/api/v1/balance/outlook_calendar/fetch", {})
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["outlook", "index"]
+    assert schritte["outlook"]["env"]["FETCH_LIST"] == str(sandbox / "nachholen-outlook.json")
+    assert "RESYNC" not in schritte["outlook"]["env"]
+    assert json.loads((sandbox / "nachholen-outlook.json").read_text(encoding="utf-8"))["dateien"] == \
+        [{"id": "e7", "rel": "", "pfad": "kalender/Arbeit", "art": "event"}]
+    # Teams without a stored list: the regular run is the diff already.
     call(port, "POST", "/api/v1/balance/teams/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
     assert list(schritte) == ["teams", "index", "check_teams"]
     assert "RESYNC" not in schritte["teams"]["env"] and schritte["teams"]["env"]["SYNC_NOW"] == "1"
+    # Teams with the open conversations by key: the list, no chat listing, no check step.
+    completeness.schreiben(state_db.StateDb(sandbox / app_mod.TEAMS_DIR), completeness.bilanz(
+        "teams", "conversations", da=3, offen=1, zeilen=[completeness.zeile("1on1", 3, 1)],
+        extra={"offene": [{"id": "c7", "rel": "", "pfad": "1on1"}], "offene_gekappt": False}))
+    call(port, "POST", "/api/v1/balance/teams/fetch", {})
+    schritte = {s["key"]: s for s in gesehen["steps"]}
+    assert list(schritte) == ["teams", "index"]
+    liste = sandbox / "nachholen-teams.json"
+    assert schritte["teams"]["env"]["FETCH_LIST"] == str(liste)
+    assert json.loads(liste.read_text(encoding="utf-8"))["dateien"] == [{"id": "c7", "rel": "", "pfad": "1on1"}]
     # Eine Quelle, die es nicht gibt, ist ein Pfad ins Leere – 404 wie
     # bei jeder anderen Route unter /sources (13.0).
     assert call(port, "POST", "/api/v1/balance/nirgends/fetch", {})[0] == 404

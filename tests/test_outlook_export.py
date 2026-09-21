@@ -2,6 +2,7 @@
 tree building. All without network: the Graph objects are replaced by fakes;
 the HTTP layer itself is covered in test_graph_client.py."""
 
+import json
 import re
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -1135,6 +1136,11 @@ def test_pruefe_kalender_zaehlt_termine_serien_und_kalender(tmp_path, monkeypatc
     assert (b["da"], b["offen"], b["ausgeschlossen"], b["behalten"]) == (1, 2, 1, 1)
     assert [(z["pfad"], z["da"], z["offen"]) for z in b["zeilen"]] == [("kalender/Arbeit", 1, 2)]
     assert b["stand"] == "ganz" and b["fehler"] == []
+    # the open events by id: what "Fetch now" takes without reading the calendar again
+    assert b["offene"] == [
+        {"id": "e2", "rel": "", "pfad": "kalender/Arbeit", "art": "event"},
+        {"id": "s1", "rel": "kalender/Arbeit/s1.ics", "pfad": "kalender/Arbeit", "art": "event"}]
+    assert b["offene_gekappt"] is False
 
 
 def test_pruefe_kalender_nennt_einen_kalender_der_nicht_antwortet(tmp_path, monkeypatch, capsys):
@@ -1196,6 +1202,62 @@ def test_pruefe_kontakte_je_ordner(tmp_path):
     assert (b["quelle"], b["einheit"]) == ("outlook_contacts", "contacts")
     assert (b["da"], b["offen"], b["ausgeschlossen"], b["behalten"]) == (1, 2, 0, 1)
     assert [(z["pfad"], z["offen"]) for z in b["zeilen"]] == [("kontakte", 1), ("kontakte/Kunden", 1)]
+    assert b["offene"] == [
+        {"id": "k2", "rel": "", "pfad": "kontakte", "art": "contact"},
+        {"id": "k3", "rel": "kontakte/Kunden/k3.vcf", "pfad": "kontakte/Kunden", "art": "contact"}]
+
+
+def test_fetch_now_takes_the_open_events_and_contacts_by_id(tmp_path, monkeypatch, capsys):
+    """"Fetch now" on the calendar or contacts row: the items the balance
+    named come by id – a never exported one gets its file and name here,
+    a changed one its file again – nothing is listed, the stamps are
+    kept, and the stored balances follow."""
+    import completeness
+    import export_util
+    db = state_db.StateDb(tmp_path)
+    done = _donelog(tmp_path)
+    (tmp_path / "kontakte/Kunden").mkdir(parents=True)
+    (tmp_path / "kontakte/Kunden/k3.vcf").write_text("alt", encoding="utf-8")
+    done.mark("k3", "kontakte/Kunden/k3.vcf")
+    completeness.schreiben(db, completeness.bilanz(
+        "outlook_calendar", "events", da=1, offen=1, zeilen=[completeness.zeile("kalender/Arbeit", 1, 1)],
+        extra={"offene": [{"id": "e9", "rel": "", "pfad": "kalender/Arbeit", "art": "event"}],
+               "offene_gekappt": False}))
+    completeness.schreiben(db, completeness.bilanz(
+        "outlook_contacts", "contacts", da=1, offen=2,
+        zeilen=[completeness.zeile("kontakte", 0, 1), completeness.zeile("kontakte/Kunden", 1, 1)],
+        extra={"offene": [{"id": "k2", "rel": "", "pfad": "kontakte", "art": "contact"},
+                          {"id": "k3", "rel": "kontakte/Kunden/k3.vcf", "pfad": "kontakte/Kunden",
+                           "art": "contact"}],
+               "offene_gekappt": False}))
+    # the list as the app writes it – rows and kinds travel along
+    liste = tmp_path / "nachholen-outlook.json"
+    liste.write_text(json.dumps({"quelle": "outlook", "dateien": [
+        {"id": "e9", "rel": "", "pfad": "kalender/Arbeit", "art": "event"},
+        {"id": "k2", "rel": "", "pfad": "kontakte", "art": "contact"},
+        {"id": "k3", "rel": "kontakte/Kunden/k3.vcf", "pfad": "kontakte/Kunden", "art": "contact"}]}),
+        encoding="utf-8")
+    monkeypatch.setenv("FETCH_LIST", str(liste))
+    eintraege = export_util.nachhol_eintraege()
+    assert eintraege[0] == {"id": "e9", "rel": "", "pfad": "kalender/Arbeit", "art": "event"}
+    g = _NachholGraph()
+    capsys.readouterr()
+    assert outlook_export.nachholen(g, tmp_path, done, eintraege) == "done"
+    assert not any(u.endswith("calendarView") or u.endswith("/contacts") for u in g.urls), "a listing"
+    assert (tmp_path / "kalender/Arbeit").is_dir() and list((tmp_path / "kalender/Arbeit").glob("*.ics"))
+    assert done.done["e9"].startswith("kalender/Arbeit/")
+    assert done.done["k2"].startswith("kontakte/") and (tmp_path / done.done["k2"]).is_file()
+    assert (tmp_path / "kontakte/Kunden/k3.vcf").read_text(encoding="utf-8") != "alt"
+    done.close()
+    assert json.loads(db.saetze_lesen("events")["e9"])["lm"] == "2026-02-01T00:00:00Z", "stamps not kept"
+    assert "k2" in db.saetze_lesen("contacts")
+    kal = completeness.lesen(db, "outlook_calendar")
+    assert (kal["da"], kal["offen"], kal["zeilen"], kal["offene"]) == (2, 0, [], [])
+    kon = completeness.lesen(db, "outlook_contacts")
+    assert (kon["da"], kon["offen"], kon["zeilen"], kon["offene"]) == (3, 0, [], [])
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()
+                   if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 3
 
 
 # --------------------------------------------------------------------------

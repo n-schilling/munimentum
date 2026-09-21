@@ -2036,6 +2036,11 @@ def test_nur_pruefen_zaehlt_konversationen_ohne_eine_nachricht_zu_lesen(monkeypa
     assert sorted((z["pfad"], z["offen"]) for z in b["zeilen"]) == \
         [("1on1", 1), ("channels/Nordwind", 1), ("group", 1)]
     assert completeness.lesen(state_db.StateDb(tmp_path), "teams")["offen"] == 3
+    # the open conversations by key: what "Fetch now" takes without a listing
+    assert b["offene"] == [{"id": "neu", "rel": "", "pfad": "1on1"},
+                           {"id": "bewegt", "rel": "group/Rakete__x.html", "pfad": "group"},
+                           {"id": "ch:k2", "rel": "", "pfad": "channels/Nordwind"}]
+    assert b["offene_gekappt"] is False
     assert not any("/messages" in u for u in graph.paged_calls), "a message was read"
     e = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()]
     (ergebnis,) = [x for x in e if x]
@@ -2120,6 +2125,36 @@ def test_nachholen_exportiert_die_konversationen_der_fehlenden_dateien(tmp_path,
     assert [e["v"]["name"] for e in events if e["k"] == "run.nachholen.gone"] == ["weg"]
     (ergebnis,) = [progress.lies_ergebnis(z) for z in zeilen if progress.lies_ergebnis(z)]
     assert ergebnis["new"] == 1 and ergebnis["extra"] == {"gone": 1, "unknown": 1}
+
+
+def test_fetch_now_takes_the_open_conversations_by_key(tmp_path, capsys):
+    """"Fetch now" on the Teams row: the conversations the balance named
+    come by key – no chat list – and leave the stored balance, so the
+    row is right without a second listing."""
+    import completeness
+    import state_db
+    chat, graph = _chat_fixture()
+    graph.gets[f"{GRAPH}/me"] = {"id": "me"}
+    graph.gets[f"{GRAPH}/me/chats/c1"] = chat
+    db = state_db.StateDb(tmp_path)
+    completeness.schreiben(db, completeness.bilanz(
+        "teams", "conversations", da=4, offen=2,
+        zeilen=[completeness.zeile("1on1", 1, 1), completeness.zeile("group", 3, 1)],
+        extra={"offene": [{"id": "c1", "rel": "", "pfad": "1on1"},
+                          {"id": "g9", "rel": "group/Neun__g9.html", "pfad": "group"}],
+               "offene_gekappt": False}))
+    capsys.readouterr()
+    te.nachholen(graph, tmp_path, [{"id": "c1", "rel": ""}])
+    state = te.load_state(tmp_path)
+    assert (tmp_path / state["conversations"]["c1"]["rel"]).is_file()
+    assert not any(u.endswith("/me/chats") for u in graph.paged_calls), "the chat list was read"
+    b = completeness.lesen(db, "teams")
+    assert (b["da"], b["offen"]) == (5, 1)
+    assert b["zeilen"] == [{"pfad": "group", "da": 3, "offen": 1}]
+    assert b["offene"] == [{"id": "g9", "rel": "group/Neun__g9.html", "pfad": "group"}]
+    (ergebnis,) = [progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines()
+                   if progress.lies_ergebnis(z)]
+    assert ergebnis["new"] == 1
 
 
 def test_spiegelwurzel_und_kanalsuche(tmp_path):

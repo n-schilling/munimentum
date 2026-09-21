@@ -1616,6 +1616,7 @@ def pruefe_kalender(graph, out, done, db):
     gesehen = set()
     da = offen = 0
     zeilen, fehler = [], []
+    offene = _Offene(done, "event")
     for cal in cals:
         cname = safe(cal.get("name") or "Kalender")
         pfad = f"kalender/{cname}"
@@ -1647,12 +1648,14 @@ def pruefe_kalender(graph, out, done, db):
                 z_da += 1
             else:
                 z_offen += 1
+                offene.merke(key, pfad)
         for master, lm in familien.items():
             gesehen.add(master)
             if _aktuell(out, done, stempel, master, lm):
                 z_da += 1
             else:
                 z_offen += 1
+                offene.merke(master, pfad)
         zeilen.append(completeness.zeile(pfad, z_da, z_offen))
         da += z_da
         offen += z_offen
@@ -1661,7 +1664,29 @@ def pruefe_kalender(graph, out, done, db):
     return completeness.bilanz("outlook_calendar", "events", da=da, offen=offen,
                                ausgeschlossen=max(0, alle - len(cals)),
                                ausgeschlossen_einheit="calendars",
-                               behalten=behalten, zeilen=zeilen, fehler=fehler)
+                               behalten=behalten, zeilen=zeilen, fehler=fehler,
+                               extra=offene.extra())
+
+
+class _Offene:
+    """The open items of a balance by id – what "Fetch now" then fetches
+    one by one, without a listing: the id, the file the resume log knows
+    (empty for an item never exported), the row, and the kind the fetch
+    tells the endpoint by. Capped, and the cap is said."""
+
+    def __init__(self, done, art):
+        self.done, self.art = done, art
+        self.liste, self.gekappt = [], False
+
+    def merke(self, key, pfad):
+        if len(self.liste) < completeness.OFFENE_GRENZE:
+            self.liste.append({"id": key, "rel": self.done.done.get(key) or "",
+                               "pfad": pfad, "art": self.art})
+        else:
+            self.gekappt = True
+
+    def extra(self):
+        return {"offene": self.liste, "offene_gekappt": self.gekappt}
 
 
 def pruefe_kontakte(graph, out, done, db):
@@ -1685,6 +1710,7 @@ def pruefe_kontakte(graph, out, done, db):
     gesehen = set()
     da = offen = 0
     zeilen = []
+    offene = _Offene(done, "contact")
     for pfad, url in quellen:
         try:
             eintraege = list(graph.paged(url, {"$top": PAGE,
@@ -1706,13 +1732,15 @@ def pruefe_kontakte(graph, out, done, db):
                 z_da += 1
             else:
                 z_offen += 1
+                offene.merke(key, pfad)
         zeilen.append(completeness.zeile(pfad, z_da, z_offen))
         da += z_da
         offen += z_offen
     behalten = sum(1 for key in stempel.alt
                    if key not in gesehen and done.is_done(out, key))
     return completeness.bilanz("outlook_contacts", "contacts", da=da, offen=offen,
-                               behalten=behalten, zeilen=zeilen, fehler=fehler)
+                               behalten=behalten, zeilen=zeilen, fehler=fehler,
+                               extra=offene.extra())
 
 
 def kategorie_faellig(db, kategorie):
@@ -1764,55 +1792,79 @@ def faellige_ordner(db, auswahl):
 
 
 def nachholen(graph, out, done, rels):
-    """"Fetch again": exactly the files the archive check found missing,
-    each by the id the resume log keeps – mails as MIME, events and
-    contacts rendered anew – written to the path the log knows, so the
-    bookkeeping and the disk agree again. Nothing is listed. A 404 says
-    the item is gone at Microsoft: the entry stays, the log says so, and
-    the check's row calls it a card to note. Returns the run's outcome."""
+    """"Fetch again" and "Fetch now": exactly the items named – the files
+    the archive check found missing, each by the id the resume log keeps,
+    or the events and contacts the balance found open, by id ({id, rel,
+    pfad, art} entries; a never exported one has no file yet and gets
+    its name here) – mails as MIME, events and contacts rendered anew.
+    Nothing is listed. A 404 says the item is gone at Microsoft: the
+    entry stays, the log says so, and the check's row calls it a card to
+    note. What came is taken off the stored balance. Returns the run's
+    outcome."""
     kennung = {rel: key for key, rel in done.done.items()}
     progress.event("run.nachholen.start", n=len(rels))
     db = state_db.StateDb(out)
     stempel = {"events": Stempel(db, "events"), "contacts": Stempel(db, "contacts")}
     stats = {"new": 0, "updated": 0, "skipped": 0}
     geholt = weg = fehler = unbekannt = 0
-    for rel in rels:
-        key = kennung.get(rel)
+    gekommen = {"event": [], "contact": []}   # by kind, for the balance
+    for eintrag in rels:
+        if isinstance(eintrag, dict):
+            key, art, pfad = eintrag["id"], eintrag.get("art") or "", eintrag.get("pfad") or ""
+            rel = eintrag.get("rel") or done.done.get(key) or ""
+        else:
+            rel, key, art, pfad = eintrag, kennung.get(eintrag), "", ""
         if not key:
             unbekannt += 1
             continue
+        if not art:
+            art = ("event" if rel.endswith(".ics") else
+                   "contact" if rel.endswith(".vcf") else "mail")
+        name = rel or key
         try:
-            (out / rel).parent.mkdir(parents=True, exist_ok=True)
-            if rel.endswith(".ics"):
+            if art == "event":
                 ev = graph.get(f"{GRAPH}/me/events/{key}?$select={EVENT_SELECT}",
                                extra_headers={"Prefer": UTC_PREF})
-                teile = rel.split("/")
-                cname = teile[1] if len(teile) >= 3 else "Kalender"
+                teile = (pfad or rel).split("/")
+                cname = teile[1] if len(teile) >= 2 and teile[0] == "kalender" else "Kalender"
                 if schreibe_termin(out, done, stats, stempel["events"], cname, ev,
                                    ev.get("lastModifiedDateTime") or ""):
                     fehler += 1
                     continue
-            elif rel.endswith(".vcf"):
+            elif art == "contact":
                 c = graph.get(f"{GRAPH}/me/contacts/{key}")
+                rel = rel or f"{pfad or 'kontakte'}/{contact_filename(c)}"
+                (out / rel).parent.mkdir(parents=True, exist_ok=True)
                 (out / rel).write_text(build_vcf(c), encoding="utf-8")
                 done.mark(key, rel)
                 stempel["contacts"].merke(key, c.get("lastModifiedDateTime") or "")
             else:
+                if not rel:
+                    unbekannt += 1         # a mail has no name without its file
+                    continue
                 content, _ = graph.get_bytes(f"{GRAPH}/me/messages/{key}/$value",
                                              label=" (MIME)")
+                (out / rel).parent.mkdir(parents=True, exist_ok=True)
                 (out / rel).write_bytes(content)
                 done.mark(key, rel)
             geholt += 1
+            if art in gekommen:
+                gekommen[art].append(key)
         except TokenExpired:
             raise
         except Exception as e:
             if export_util.http_status(e) == 404:
                 weg += 1
-                progress.event("run.nachholen.gone", "warn", name=rel)
+                progress.event("run.nachholen.gone", "warn", name=name)
             else:
                 fehler += 1
-                progress.event("run.nachholen.failed", "warn", name=rel,
+                progress.event("run.nachholen.failed", "warn", name=name,
                                error=f"{type(e).__name__}: {e}")
+    for s in stempel.values():
+        s.schreibe()
+    for art, quelle in (("event", "outlook_calendar"), ("contact", "outlook_contacts")):
+        if gekommen[art]:
+            completeness.abgeholt(db, quelle, ids=gekommen[art])
     export_util.nachholen_melden(geholt, weg, fehler, unbekannt)
     return "done"
 
@@ -1912,7 +1964,7 @@ def main():
     stats = {"new": 0, "updated": 0, "skipped": 0, "folder_errors": 0}
     result = "done"
 
-    nachzuholen = export_util.nachhol_liste()
+    nachzuholen = export_util.nachhol_eintraege()
     try:
         result = (nachholen(graph, out, done, nachzuholen) if nachzuholen is not None
                   else exportiere(graph, out, done, stats, workers))

@@ -271,12 +271,16 @@ def speicherorte_setzen(h, data):
 
 def bilanz_lauf(h, eintrag):
     """"Fetch now" on a balance row: only what the row found open, the
-    cheapest way each source allows. The mailbox: a resync limited to
-    the folders with something open. The mirrors: the open files by
-    id, straight from the stored report – no walk – unless the report
-    had to cap them, then a resync. Every other source: its regular
-    run, which fetches what changed anyway. The row is judged afresh
-    at the end of the same run (the mirrors adjust it themselves)."""
+    cheapest way each source allows. A row whose check named the open
+    items by id (the mirrors' files, Teams' conversations, the calendar's
+    events, the contacts) gets exactly those, straight from the stored
+    report – no walk, no listing – and the fetch adjusts the row itself;
+    when the report had to cap them, the source's wider way follows. The
+    mailbox otherwise: a resync limited to the folders with something
+    open (mail is counted, not listed, by its check). The mirrors
+    otherwise: a resync. Every other source: its regular run, which
+    fetches what changed anyway. The row is then judged afresh at the
+    end of the same run."""
     app = h.app
     quelle = eintrag["quelle"]
     if app.jobs.busy:
@@ -286,17 +290,16 @@ def bilanz_lauf(h, eintrag):
         bericht = completeness.lesen(db, quelle) or {}
     anfrage = {**eintrag["lauf"], "index": True, eintrag["anfrage"]: True}
     (key,) = [k for k, an in eintrag["lauf"].items() if an]
-    if ordner == "outlook":
-        ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
-                             resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []])
-    elif ordner in ("onedrive", "sharepoint") and bericht.get("offene") \
-            and not bericht.get("offene_gekappt"):
+    if bericht.get("offene") and not bericht.get("offene_gekappt"):
         liste = h.M.HEIM / f"nachholen-{key}.json"
         export_util.schreibe_atomar(liste, json.dumps(
             {"quelle": key, "dateien": bericht["offene"]}, ensure_ascii=False))
         anfrage.pop(eintrag["anfrage"])          # the fetch adjusts the row itself
         ok, why = app.launch(anfrage, label='job.holen', sync_now=True,
                              nachholen={"quelle": key, "liste": str(liste)})
+    elif ordner == "outlook":
+        ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True,
+                             resync_ordner=[z["pfad"] for z in bericht.get("zeilen") or []])
     elif ordner in ("onedrive", "sharepoint"):
         ok, why = app.launch(anfrage, label='job.holen', sync_now=True, resync=True)
     else:
