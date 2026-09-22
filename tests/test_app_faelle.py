@@ -1129,6 +1129,7 @@ global.fetch = function(pfad, opt){
   else if(String(pfad).indexOf('/api/v1/searches/history') === 0) antwort = {retention: '90', items: [
       {id: 1, when: new Date().toISOString(), hits: 4, criteria: {q: 'Rechnung', mode: 'ki', person: 'Alice', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, case: null}},
       {id: 2, when: '2026-01-05T10:00:00+00:00', hits: 0, criteria: {q: '', mode: 'text', person: '', source: 'all', from: '2025-01-01', to: '', folder: '', filetype: 'pdf', gone: true, case: 1}}]};
+  else if(String(pfad).indexOf('/api/v1/searches/saved/title') === 0) antwort = {title: 'Vorschlag vom Modell'};
   else if(String(pfad).indexOf('/api/v1/searches/saved') === 0) antwort = {items: [
       {id: 5, name: 'Rechnungen', criteria: {q: 'Rechnung', mode: 'text', person: '', source: 'outlook', from: '', to: '', folder: '', filetype: '', gone: false, case: null}, last_run: '2026-09-14T10:00:00+00:00', hits: 4, case: 1, case_name: 'Nordwind'},
       {id: 6, name: 'Lose', criteria: {q: 'x', mode: 'text', person: '', source: 'all', from: '', to: '', folder: '', filetype: '', gone: false, case: null}, last_run: null, hits: null, case: null, case_name: null}]};
@@ -1214,6 +1215,15 @@ function letzte(pfad, methode, feld){
   pruefe(liste.indexOf('disabled title="') >= 0, 'Treffer ohne Schluessel nicht ausgegraut');
   pruefe(!el('treffer-kopf').classList.contains('hide'), 'Listenkopf fehlt');
   pruefe(el('alle-in-fall').textContent.length > 3 && el('treffer-stand').textContent.indexOf('2') >= 0, 'Listenkopf unvollstaendig: ' + el('treffer-stand').textContent);
+  // the search itself, saved from here – not while a saved search runs (this result is page 2 of saved search 5)
+  pruefe(el('suche-speichern').classList.contains('hide'), 'Speichern trotz gespeicherter Suche angeboten');
+  doSearch(0);
+  await warte(5);
+  pruefe(!el('suche-speichern').classList.contains('hide') && el('suche-speichern').textContent === t('search.saved.current'), 'Speichern der eigenen Suche fehlt im Listenkopf');
+  el('suche-speichern').onclick ? null : null;
+  speichernFenster(kriterienAusForm(), null);
+  pruefe(modal.innerHTML.indexOf('id="speichern-name"') >= 0 && document.getElementById('speichern-name').value === 'Rechnung', 'Speicherfenster aus dem Listenkopf fehlt');
+  closeWizard('speichern');
   pruefe(el('auswahl-leiste').classList.contains('hide'), 'Auswahlleiste ohne Auswahl sichtbar');
   trefferWahl(0, true);
   pruefe(!el('auswahl-leiste').classList.contains('hide') && el('auswahl-zahl').textContent.indexOf('1') >= 0, 'Auswahl nicht gezaehlt');
@@ -1321,12 +1331,42 @@ function letzte(pfad, methode, feld){
   sucheLoeschen();
   await warte(5);
   pruefe(letzte('/api/v1/searches/saved/6', 'DELETE'), 'Loeschen nicht geschickt');
-  // save the current search, attached to a case
+  // save the current search, attached to a case – with Ollama there, the
+  // model's title fills the name in as a suggestion
   el('q').value = 'Neu';
+  S.ollama = {running: true, has_model: true, has_chat_model: true};
   speichernFenster(kriterienAusForm(), 'gespeichert');
   html = modal.innerHTML;
   pruefe(html.indexOf('id="speichern-name"') >= 0 && html.indexOf('id="speichern-fall"') >= 0, 'Speicherfenster unvollstaendig');
   pruefe(html.indexOf('value="2"') < 0, 'geschlossener Fall im Speicherfenster');
+  pruefe(document.getElementById('speichern-name').value === 'Neu', 'Name nicht mit den Worten vorbelegt');
+  await warte(10);
+  var titel = letzte('/api/v1/searches/saved/title', 'QUERY');
+  pruefe(titel && titel.body.criteria.q === 'Neu' && 'case' in titel.body, 'Titel nicht erfragt: ' + JSON.stringify(titel && titel.body));
+  pruefe(document.getElementById('speichern-name').value === 'Vorschlag vom Modell', 'Vorschlag nicht eingetragen');
+  // the note says the model wrote it – a click on it asks once more, and
+  // it goes with the first keystroke
+  pruefe(document.getElementById('speichern-name-ki').textContent === t('search.save.name.ai'), 'Hinweis zum Vorschlag fehlt');
+  titelNochmal();
+  await warte(10);
+  pruefe(anfragen.filter(function(a){ return a.pfad.indexOf('/searches/saved/title') >= 0; }).length === 2, 'Klick auf den Hinweis fragt nicht neu');
+  pruefe(document.getElementById('speichern-name').value === 'Vorschlag vom Modell' && document.getElementById('speichern-name-ki').textContent === t('search.save.name.ai'), 'nach dem Klick fehlt Vorschlag oder Hinweis');
+  document.getElementById('speichern-name').value = 'Vorschlag vom Modell x';
+  speichernNameGeaendert();
+  pruefe(document.getElementById('speichern-name-ki').textContent === '', 'Hinweis bleibt nach dem Tippen');
+  // what the user typed meanwhile stays; without Ollama nothing is asked
+  closeWizard('speichern');
+  speichernFenster(kriterienAusForm(), 'gespeichert');
+  document.getElementById('speichern-name').value = 'Eigener Name';
+  await warte(10);
+  pruefe(document.getElementById('speichern-name').value === 'Eigener Name', 'Vorschlag ueber den eigenen Namen');
+  closeWizard('speichern');
+  S.ollama = {running: false, has_model: false, has_chat_model: false};
+  anfragen.length = 0;
+  speichernFenster(kriterienAusForm(), 'gespeichert');
+  await warte(10);
+  pruefe(!letzte('/api/v1/searches/saved/title', 'QUERY'), 'Titel ohne Ollama erfragt');
+  pruefe(document.getElementById('speichern-name').value === 'Neu', 'Name ohne Ollama veraendert');
   document.getElementById('speichern-name').value = 'Meine';
   sucheSpeichern();
   await warte(10);

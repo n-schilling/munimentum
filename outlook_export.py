@@ -1915,11 +1915,18 @@ def exportiere(graph, out, done, stats, workers):
                                          ("contacts", nur_kon)) if not da}
     if "mail" in categories:
         auswahl = waehle_ordner(graph, out)
+        weggelassen = []
         if nur is not None:
+            # The folders the list leaves out are not listed – and, like
+            # the ones a cadence leaves out, excluded by name: a full round
+            # of a parent must not turn their unlisted mails into suspects.
+            weggelassen = [rel for top in auswahl for _f, rel in top["subtree"]
+                           if rel not in nur_mail]
             auswahl = [{**top, "subtree": [(f, rel) for f, rel in top["subtree"] if rel in nur_mail]}
                        for top in auswahl]
             auswahl = [top for top in auswahl if top["subtree"]]
         selected_mail, ausgelassen = faellige_ordner(db_root, auswahl)
+        ausgelassen = [*ausgelassen, *weggelassen]
     if "calendar" in categories and kategorie_faellig(db_root, "calendar"):
         sel_cals = waehle_kalender(graph, out)
         if nur is not None:

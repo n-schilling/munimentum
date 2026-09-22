@@ -143,3 +143,66 @@ def stream(query, quellen, model, ollama, lang="de", chars=CHARS_PER_SOURCE,
         yield {"error": "model", "detail": model}
     except Exception as e:                    # noqa: BLE001 – never hit the caller
         yield {"error": "ollama", "detail": f"{type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------------------
+# A title for a saved search
+# ---------------------------------------------------------------------------
+# Every criterion the model may read, with the words it reads it by: the
+# search's own fields, the two flags, and – resolved by the route, since
+# the criteria carry ids – the case the search looks into, its folder,
+# and the case the search is being saved into.
+_KRITERIEN_ZEILEN = (("q", "words"), ("mode", "mode"), ("person", "person"), ("source", "source"),
+                     ("from", "from"), ("to", "to"), ("folder", "mailbox folder"),
+                     ("filetype", "file type"), ("party", "party"), ("mail_from", "mail from"),
+                     ("mail_to", "mail to"), ("mail_cc", "mail cc"), ("mail_bcc", "mail bcc"),
+                     ("case_name", "searched within case"), ("case_folder_name", "within its folder"),
+                     ("attach_case", "saved into case"))
+_KRITERIEN_FLAGS = (("gone", "only items no longer at Microsoft"),
+                    ("attachments", "only items with an attachment"))
+_SPRACHEN = {"de": "German", "en": "English", "fr": "French"}
+
+
+def kriterien_zeilen(k):
+    """The criteria of a search as lines the model reads – every filter
+    that is set, nothing that is not."""
+    k = k or {}
+    out = [f"{label}: {k[key]}" for key, label in _KRITERIEN_ZEILEN
+           if k.get(key) and str(k[key]) != "all"]
+    out += [label for key, label in _KRITERIEN_FLAGS if k.get(key)]
+    return out
+
+
+def titel_saeubern(text):
+    """The model's answer as a title: the first line, without quotes or a
+    full stop, at most a hundred characters."""
+    zeile = next((z.strip() for z in str(text or "").splitlines() if z.strip()), "")
+    return zeile.strip('"\'„“”«» ').rstrip(".").strip()[:100]
+
+
+def suchtitel(kriterien, model, ollama, lang="de", timeout=30):
+    """A title for a saved search, worded by the local model from its
+    criteria – a few words in the page's language, which the save dialog
+    fills in as a suggestion. Empty when there are no criteria, when the
+    model gives nothing, or when Ollama fails: a suggestion is never
+    worth an error."""
+    zeilen = kriterien_zeilen(kriterien)
+    if not zeilen:
+        return ""
+    messages = [
+        {"role": "system",
+         "content": ("You name saved searches in a personal archive of mails, chats, files "
+                     "and notes. Answer with the title only: one line of five to ten words, "
+                     "descriptive – say what is searched and, where the criteria say so, "
+                     f"where, when and whose; in {_SPRACHEN.get(lang, 'English')}, no quotes, "
+                     "no full stop, no explanation.")},
+        {"role": "user", "content": "Search criteria:\n" + "\n".join(zeilen) + "\n\nTitle:"},
+    ]
+    try:
+        text = "".join((d.get("message") or {}).get("content") or ""
+                       for d in ollama_client.chat_stream(
+                           messages, model, ollama, think=False,
+                           options={"temperature": 0.3, "num_predict": 48}, timeout=timeout))
+    except Exception:                         # noqa: BLE001 – a suggestion never raises
+        return ""
+    return titel_saeubern(text)

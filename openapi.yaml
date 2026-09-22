@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.4.2
+  version: 13.5.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1831,6 +1831,63 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/searches/saved/title:
+    query:
+      tags: [Explore, QUERY]
+      operationId: v1SavedSearchTitle
+      summary: A title for a search, worded by the local model
+      description: |
+        A few words in the page's language, from the criteria alone: what
+        the save dialog fills in as a suggestion while Ollama runs with
+        its chat model – the user's to keep or overwrite. The case and
+        folder the criteria name by id reach the model by name, as does
+        the case the search is being saved into. Nothing is stored. A
+        question, so QUERY (RFC 10008): the criteria travel in the body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [criteria]
+              properties:
+                criteria: { $ref: "#/components/schemas/Criteria" }
+                case: { type: [integer, "null"], description: "The case the search is about to be saved into, if one is chosen." }
+      responses:
+        "200":
+          description: The suggestion.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [title]
+                properties:
+                  title: { type: string, description: "One line, at most a hundred characters." }
+              example: { title: "Rechnungen von extern 2026" }
+        "400":
+          description: No criteria, or none set – nothing to name (srv.title.nocriteria); `case` that is no id (srv.case.badcase).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No such case (srv.case.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "502":
+          description: Ollama gave no title (srv.title.failed) – the dialog then keeps what it had.
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: Ollama is not running, or has no chat model (srv.title.nomodel).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
   /api/v1/searches/saved/{id}:
     parameters:
       - { name: id, in: path, required: true, schema: { type: integer } }

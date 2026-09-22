@@ -7334,6 +7334,59 @@ def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox,
     assert code == 200 and r["message"]["k"] == "srv.archiv.nothing"
 
 
+def test_http_saved_search_title_comes_from_the_model(server, monkeypatch):
+    """QUERY /searches/saved/title: the criteria in, a title out – asked of
+    the local model in the page's language; refused without criteria
+    (400), without Ollama's chat model (503), and when the model gives
+    nothing (502)."""
+    import answer
+    a, port = server
+    gesehen = {}
+
+    def fake(kriterien, model, ollama, lang="de", timeout=30):
+        gesehen.update(kriterien=kriterien, model=model, ollama=ollama, lang=lang)
+        return gesehen.get("titel", "Rechnungen Nordwind")
+    monkeypatch.setattr(answer, "suchtitel", fake)
+    monkeypatch.setattr(app_mod, "check_ollama",
+                        lambda url, model, chat_model=None, timeout=1.5: {
+                            "running": True, "models": [model], "has_model": True,
+                            "has_chat_model": True, "error": None, "model": model,
+                            "chat_model": chat_model, "url": url})
+    a._ollama_cache = (0, None)
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title",
+                   {"criteria": {"q": "Rechnung", "source": "outlook", "mode": "text"}})
+    assert code == 200 and r == {"title": "Rechnungen Nordwind"}
+    assert gesehen["kriterien"]["q"] == "Rechnung" and gesehen["model"] == a.cfg["chat_model"]
+    assert gesehen["ollama"] == a.cfg["ollama"] and gesehen["lang"] in ("de", "en", "fr")
+    assert (gesehen["kriterien"]["case_name"], gesehen["kriterien"]["attach_case"]) == ("", "")
+    # the case and folder the criteria name, and the case the search goes into – by name
+    fall = a.faelle.fall_anlegen("Nordwind")
+    ordner = a.faelle.ordner_anlegen(fall, "Belege")
+    ziel = a.faelle.fall_anlegen("Rakete")
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title",
+                   {"criteria": {"q": "Rechnung", "case": fall, "case_folder": ordner}, "case": ziel})
+    assert code == 200
+    k = gesehen["kriterien"]
+    assert (k["case_name"], k["case_folder_name"], k["attach_case"]) == ("Nordwind", "Belege", "Rakete")
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title", {"criteria": {"q": "x"}, "case": 999})
+    assert code == 404 and r["error"]["k"] == "srv.case.unknown"
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title", {"criteria": {"source": "all"}})
+    assert code == 400 and r["error"]["k"] == "srv.title.nocriteria"
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title", {})
+    assert code == 400
+    gesehen["titel"] = ""
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title", {"criteria": {"q": "x"}})
+    assert code == 502 and r["error"]["k"] == "srv.title.failed"
+    monkeypatch.setattr(app_mod, "check_ollama",
+                        lambda url, model, chat_model=None, timeout=1.5: {
+                            "running": False, "models": [], "has_model": False,
+                            "has_chat_model": False, "error": "x", "model": model,
+                            "chat_model": chat_model, "url": url})
+    a._ollama_cache = (0, None)
+    code, r = call(port, "QUERY", "/api/v1/searches/saved/title", {"criteria": {"q": "x"}})
+    assert code == 503 and r["error"]["k"] == "srv.title.nomodel"
+
+
 def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkeypatch):
     """"Fetch now" on a balance row: the mailbox as a resync of the open
     folders with its check behind the index; a mirror by the open files'
@@ -7368,6 +7421,8 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     assert list(schritte) == ["outlook", "index", "check"]
     assert schritte["outlook"]["env"]["EXPORT_CATEGORIES"] == "contacts,mail"
     assert schritte["check"]["env"]["EXPORT_CATEGORIES"] == "mail"
+    # and the run says what it runs, not what the settings tick
+    assert gesehen["context"]["elements"]["outlook"] == ["mail", "contacts"]
     a.cfg["outlook_categories"] = ["mail"]
     # A mirror with the open files by id: the list, no walk, no check step.
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.ONEDRIVE_DIR), completeness.bilanz(

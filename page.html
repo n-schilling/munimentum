@@ -1281,7 +1281,9 @@ details.rechte p{margin:6px 0}
         <!-- The whole result into a case – every page of it, taken on the
              server – and the ticked hits; the line below says what happened. -->
         <div class="liste-kopf hide" id="treffer-kopf"><span id="treffer-stand"></span>
-          <button class="mini rechts" id="alle-in-fall" onclick="listeInFall()"></button></div>
+          <button class="mini rechts" id="alle-in-fall" onclick="listeInFall()"></button>
+          <!-- The search itself, kept under a name – not while a saved search runs, it is kept already -->
+          <button class="mini hide" id="suche-speichern" style="margin-left:6px" onclick="speichernFenster(kriterienAusForm(), null)"></button></div>
         <div class="auswahl-leiste hide" id="auswahl-leiste"><b id="auswahl-zahl"></b>
           <button class="mini" onclick="auswahlInFall()" data-i18n="cases.add.selected">In einen Fall…</button>
           <a href="javascript:void(0)" class="small" onclick="auswahlLeeren()" data-i18n="cases.selection.clear">Auswahl aufheben</a></div>
@@ -3912,8 +3914,10 @@ function sofortSuchen(){
   doSearch(0);
 }
 
+var SUCHE_GESPEICHERT = null;   // the saved search the current result came from, if any
 function doSearch(off, gespeichert){
   SUCHE_LIEF = true;
+  if(!off) SUCHE_GESPEICHERT = gespeichert || null;
   zeigeAnfang();
   var fehler = datumPruefen();
   if(fehler){
@@ -4935,7 +4939,10 @@ function sucheDialog(g, k, zurueck, fallVorgabe){
     '<div class="tagleiste" style="margin-bottom:10px"><span class="tag">' + esc(kriterienTitel(k)) + '</span>' +
     kriterienTags(k) + '</div>' +
     '<input type="text" id="speichern-name" style="width:100%" placeholder="' +
-    esc(t('search.save.name.ph')) + '" onkeydown="if(event.key===\'Enter\')sucheSpeichern()">' +
+    esc(t('search.save.name.ph')) + '" onkeydown="if(event.key===\'Enter\')sucheSpeichern()" oninput="speichernNameGeaendert()">' +
+    // Says so while the model's suggestion stands in the field – gone with the first
+    // keystroke; a click on it asks the model once more
+    '<p class="muted hide" id="speichern-name-ki" style="margin:2px 0 0;font-size:10px;text-align:right;cursor:pointer" onclick="titelNochmal()"></p>' +
     (faelle.length ? '<div class="feldzeile" style="border:0;padding:12px 0 0"><span class="bez">' +
       esc(t('search.save.attach')) + '</span><select id="speichern-fall" onchange="speichernFall()"><option value="">' +
       esc(t('search.save.attach.none')) + '</option>' + faelle.map(function(f){
@@ -4960,6 +4967,33 @@ function sucheDialog(g, k, zurueck, fallVorgabe){
   dyn('speichern-name').value = g ? g.name : (k.q || '');
   if(dyn('speichern-fall')) dyn('speichern-fall').value = vorgabe ? String(vorgabe) : '';
   speichernFall(g ? g.case_folder : null, g ? !!g.auto : false);
+  if(!g) titelVorschlag(k, dyn('speichern-name').value, vorgabe || null);
+}
+/* A title from the local model, filled in as a suggestion while the
+   dialog is fresh: only for a new search, only while Ollama runs with its
+   chat model, and never over what the user typed meanwhile – nor into a
+   dialog that closed or reopened before the answer came. The note under
+   the field says so; a click on it asks once more (the easter egg). */
+function titelVorschlag(k, vorher, fall){
+  var o = S && S.ollama, wahl = FALL_WAHL;
+  if(!(o && o.running && o.has_chat_model)) return;
+  frage(API + '/searches/saved/title', {criteria: k, case: fall}).then(function(r){
+    var feld = dyn('speichern-name');
+    if(!r || r.ok === false || !r.title || !feld) return;
+    if(FALL_WAHL !== wahl || feld.value !== vorher) return;
+    feld.value = r.title;
+    var hinweis = dyn('speichern-name-ki');
+    if(hinweis){ hinweis.textContent = t('search.save.name.ai'); hinweis.classList.remove('hide'); }
+  }).catch(function(){});
+}
+function titelNochmal(){
+  var feld = dyn('speichern-name'), sel = dyn('speichern-fall');
+  if(!feld || !FALL_WAHL || FALL_WAHL.art !== 'speichern') return;
+  titelVorschlag(FALL_WAHL.kriterien, feld.value, sel && sel.value ? parseInt(sel.value, 10) : null);
+}
+function speichernNameGeaendert(){
+  var hinweis = dyn('speichern-name-ki');
+  if(hinweis){ hinweis.textContent = ''; hinweis.classList.add('hide'); }
 }
 /* The folder row follows the chosen case: shown only while the case has
    folders – its folders, "Unsorted" and "New folder…", the choice
@@ -5099,6 +5133,11 @@ function zeigeTrefferKopf(){
   knopf.textContent = t('cases.add.all');
   knopf.disabled = !moeglich;
   knopf.title = moeglich ? '' : t('cases.add.nokey');
+  // The search itself, kept under a name – from here, without the way
+  // through the saved list; not while a saved search runs, it is kept.
+  var speichern = el('suche-speichern'), k = kriterienAusForm();
+  speichern.textContent = t('search.saved.current');
+  speichern.classList.toggle('hide', !!SUCHE_GESPEICHERT || !(k.q || filterFelder().length));
 }
 function trefferMeldung(text){
   var m = el('treffer-meldung');

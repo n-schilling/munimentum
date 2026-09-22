@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import answer
 import api
 import api_archive
 import api_explore
@@ -502,6 +503,50 @@ def suche_eine(h, p, _q, _data):
     return api.json({"search": rest.gespeicherte_suche(g)})
 
 
+def _fall_name(h, kennung):
+    """A case's name and its folders by id – for the words the model
+    reads; nothing for a case that is not there."""
+    if kennung in (None, "", 0):
+        return "", {}
+    try:
+        fall = h.app.faelle.fall(int(kennung))
+    except (TypeError, ValueError):
+        return "", {}
+    if not fall:
+        return "", {}
+    return str(fall.get("name") or ""), {o.get("id"): str(o.get("name") or "")
+                                          for o in fall.get("ordner_liste") or []}
+
+
+def suchtitel(h, _p, _q, data):
+    """A title for the criteria of a search, worded by the local model:
+    the save dialog fills it in as a suggestion, the user's to keep or
+    overwrite. The criteria name a case and a folder by id; the model
+    reads their names – as it reads the case the search is being saved
+    into (`case` in the body). Asked only while Ollama runs with its
+    chat model; a model that gives nothing is a 502, never an empty
+    title."""
+    kriterien = data.get("criteria")
+    if not isinstance(kriterien, dict):
+        raise Ablehnung(400, "srv.title.nocriteria")
+    kriterien = dict(kriterien)
+    name, ordner = _fall_name(h, kriterien.get("case"))
+    kriterien["case_name"] = name
+    kriterien["case_folder_name"] = ordner.get(kriterien.get("case_folder"), "") if name else ""
+    kriterien["attach_case"] = _fall_name(h, fall_aus(h, data))[0]
+    if not answer.kriterien_zeilen(kriterien):
+        raise Ablehnung(400, "srv.title.nocriteria")
+    oll = h.app.ollama()
+    if not (oll["running"] and oll["has_chat_model"]):
+        raise Ablehnung(503, "srv.title.nomodel", {"model": h.app.cfg.get("chat_model") or ""})
+    kopf = h.headers.get("Accept-Language") if getattr(h, "headers", None) else ""
+    lang = i18n.negotiate(h.app.cfg.get("language"), kopf, h.M.RES)
+    titel = answer.suchtitel(kriterien, h.app.cfg.get("chat_model"), h.app.cfg["ollama"], lang)
+    if not titel:
+        raise Ablehnung(502, "srv.title.failed", {"model": h.app.cfg.get("chat_model") or ""})
+    return api.json({"title": titel})
+
+
 def speichern(h, _p, _q, data):
     buch = h.app.faelle
     fall_id = fall_aus(h, data)
@@ -776,6 +821,7 @@ ROUTEN = (
     ("DELETE", "/api/v1/searches/history", verlauf_leeren),
     ("GET", "/api/v1/searches/saved", gespeicherte),
     ("POST", "/api/v1/searches/saved", speichern),
+    ("QUERY", "/api/v1/searches/saved/title", suchtitel),
     ("GET", "/api/v1/searches/saved/{id}", suche_eine),
     ("PATCH", "/api/v1/searches/saved/{id}", suche_aendern),
     ("DELETE", "/api/v1/searches/saved/{id}", suche_loeschen),

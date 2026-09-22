@@ -224,3 +224,41 @@ def test_der_kontext_passt_ins_fenster():
     assert zeichen / 4 < fenster * 0.9, (
         f"{zeichen} Zeichen passen nicht mit Reserve in {fenster} Token")
     assert fenster <= answer.NUM_CTX_MAX
+
+
+# --------------------------------------------------------------------------
+# A title for a saved search
+# --------------------------------------------------------------------------
+def test_suchtitel_asks_the_model_once_and_cleans_the_answer(ollama):
+    """The criteria go as lines, the answer comes back as one line: the
+    first line, without quotes or a full stop, cut at eighty characters;
+    the model is told the language and to answer with the title alone."""
+    gesehen = ollama(Strom(['"Rechnungen ', 'von extern 2026."\nMore words']))
+    k = {"q": "Rechnung", "mode": "text", "source": "outlook", "party": "external",
+         "from": "2026-01-01", "gone": False, "attachments": True, "person": ""}
+    assert answer.suchtitel(k, "qwen3:8b", "http://ollama.example", lang="de") == "Rechnungen von extern 2026"
+    (anfrage,) = gesehen
+    assert anfrage["url"].endswith("/api/chat") and anfrage["json"]["model"] == "qwen3:8b"
+    system, user = anfrage["json"]["messages"]
+    assert "German" in system["content"] and "title only" in system["content"]
+    assert "five to ten words" in system["content"] and "descriptive" in system["content"]
+    assert "words: Rechnung" in user["content"] and "party: external" in user["content"]
+    assert "only items with an attachment" in user["content"]
+    assert "person" not in user["content"] and "gone" not in user["content"], "an unset filter named"
+    assert anfrage["json"].get("think") is False
+    # the case lines the route resolves by name, and both flags
+    zeilen = answer.kriterien_zeilen({"q": "x", "gone": True, "case_name": "Nordwind",
+                                      "case_folder_name": "Belege", "attach_case": "Rakete"})
+    assert zeilen == ["words: x", "searched within case: Nordwind", "within its folder: Belege",
+                      "saved into case: Rakete", "only items no longer at Microsoft"]
+
+
+def test_suchtitel_is_empty_when_there_is_nothing_to_name_or_ollama_fails(ollama):
+    assert answer.suchtitel({}, "m", "http://x") == ""
+    assert answer.suchtitel({"source": "all", "person": ""}, "m", "http://x") == ""
+    ollama(ConnectionError("weg"))
+    assert answer.suchtitel({"q": "x"}, "m", "http://x") == ""
+    ollama(Strom(["   \n  "]))
+    assert answer.suchtitel({"q": "x"}, "m", "http://x") == ""
+    assert answer.titel_saeubern("„Ein Titel.“") == "Ein Titel"
+    assert len(answer.titel_saeubern("x" * 200)) == 100

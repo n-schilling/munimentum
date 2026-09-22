@@ -126,8 +126,10 @@ type, size and place; a task its board, due date and state — then *Open
 original*, *Add to case*, *Find similar*, and the content; a mail or chat
 message names its conversation in one fold below. **History** keeps every
 search by its criteria, never its hits; **Saved** keeps searches under a
-name, and *Edit* on one sets its name, the case and folder it files into,
-and whether it collects by itself.
+name — saved from the result's header or from that list; with Ollama
+running, the save dialog proposes a name from the criteria, yours to
+overwrite — and *Edit* on one sets its name, the case and folder it
+files into, and whether it collects by itself.
 
 **Calendar** shows the exported appointments by week or month — the
 month's name opens a picker over the years the archive spans, *Today* leads
@@ -230,8 +232,9 @@ client launch the server itself, and *Allow MCP access* switches both.
 ## Optional: Ollama
 
 Without [Ollama](https://ollama.com) the app exports, indexes and searches
-by text — everything but two features. With it, *Similar search* and the
-*AI answer* become available, both running on your machine. The app offers
+by text — everything but three touches. With it, *Similar search* and the
+*AI answer* become available, and the save dialog proposes a name for a
+search, all running on your machine. The app offers
 to help you install it, and the switch under *Settings › AI* turns it off
 for good if you would rather not.
 

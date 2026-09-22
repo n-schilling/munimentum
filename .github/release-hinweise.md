@@ -1,17 +1,29 @@
-## New in 13.4.2
+## New in 13.5.0
 
-**Fetch now on a mailbox row fetches that row.** The fetch ran the
-mailbox export with the categories ticked under *Build archive* – with
-only contacts ticked, *Fetch now* on the mail row read nothing and the
-check afterwards judged the contacts. Now the row's category runs,
-ticked or not, and the check afterwards judges that row.
+**Save a search from its result.** The result's header carries *Save
+the current search…* beside *Add all to a case* – the same dialog as
+under *Saved*, without the way there. It stays away while a saved search
+runs: that one is kept already.
 
-**The calendar check asks the view in pieces.** `calendarView` takes at
-most 1825 days a request; the check's window – from the start day, or
-from the beginning, to ten years ahead – is wider, and the calendar
-stood as *unreachable* with nothing counted (13.4.1 made the reason
-visible in the run log). The window now comes in pieces of five years,
-back to back, and an event listed in two of them is counted once.
+**The save dialog proposes a title.** With Ollama running and its chat
+model there, *Save search* fills the name in from the criteria – a few
+words in the page's language, worded by the local model, yours to
+overwrite; a faint line under the field says so until you type, and a
+click on it asks once more. Nothing leaves the machine. Without Ollama
+the field stays as it was.
+
+**A fetch of a few folders no longer questions the rest.** *Fetch now*
+on the mail row reads the folders with something open; the mails of
+their subfolders, which were not read, then counted as suspects for
+deletion and were checked with Microsoft one by one (*Checking n mails
+that were no longer in the mailbox*) – a wasted round of requests,
+never a wrong tombstone. Folders the fetch leaves out are now excluded
+by name, as folders a cadence leaves out always were.
+
+**The run says what it runs.** *Selected: Outlook (…)* under the run's
+heading named the categories ticked under *Build archive*; a fetch of
+the mail row with only contacts ticked said *Contacts* while reading
+mail. It now names the categories the step actually runs.
 
 ## Upgrading
 

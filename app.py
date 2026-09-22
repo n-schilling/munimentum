@@ -1584,6 +1584,16 @@ def calendar_plan(cfg):
 HISTORIE_WAHL = ("off", "30", "90", "365", "forever")
 
 
+def _outlook_kategorien_des_laufs(steps):
+    """The mailbox categories the run's Outlook step carries – in the
+    registry's order, whatever order the environment lists them in."""
+    schritt = next((s for s in steps if s["key"] == "outlook"), None)
+    if schritt is None:
+        return []
+    cats = set(str(schritt["env"].get("EXPORT_CATEGORIES") or "").split(","))
+    return [c for c in ("mail", "calendar", "contacts") if c in cats]
+
+
 def interne_domains(cfg):
     """Which mail domains are "us": the setting, else the domain of the
     signed-in account – handed to the search engine with every search
@@ -2391,13 +2401,14 @@ class App:
         # only, nothing personal.
         kontext = {
             "nichts_neues": nichts_neues,
-            # Outlook and Teams record WHICH categories ran; every other
-            # source is a yes/no, taken straight from the registry so the
-            # runs table cannot miss a newly added one.
+            # Outlook and Teams record WHICH categories ran – Outlook's as
+            # its step runs them, since "Fetch now" on a balance row adds
+            # the row's category to the ticked ones; every other source is
+            # a yes/no, taken straight from the registry so the runs table
+            # cannot miss a newly added one.
             "elements": {
                 "outlook": (["calendar"] if calendar_full else
-                            _clean_categories(self.cfg["outlook_categories"],
-                                              ["mail", "calendar", "contacts"])
+                            _outlook_kategorien_des_laufs(steps)
                             if angefragt["outlook"] else []),
                 "teams": (_clean_categories(self.cfg["teams_categories"],
                                             ["1on1", "group", "meeting",
@@ -2559,6 +2570,7 @@ ROUTEN_V1 = (
     ("DELETE", "/api/v1/searches/history", api_cases.verlauf_leeren),
     ("GET", "/api/v1/searches/saved", api_cases.gespeicherte),
     ("POST", "/api/v1/searches/saved", api_cases.speichern),
+    ("QUERY", "/api/v1/searches/saved/title", api_cases.suchtitel),
     ("GET", "/api/v1/searches/saved/{id}", api_cases.suche_eine),
     ("PATCH", "/api/v1/searches/saved/{id}", api_cases.suche_aendern),
     ("DELETE", "/api/v1/searches/saved/{id}", api_cases.suche_loeschen),

@@ -2359,6 +2359,7 @@ def test_resync_mit_ordnerliste_liest_nur_diese_ordner(tmp_path, monkeypatch, ca
 
     def fake_run(graph, out, done, stats, selected, workers, bestand=None):
         gesehen["ordner"] = [rel for top in selected for _f, rel in top["subtree"]]
+        gesehen["ausgelassen"] = set(bestand.ausgelassen) if bestand else set()
         return "done"
     monkeypatch.setattr(outlook_export, "run_export", fake_run)
     monkeypatch.setattr(outlook_export, "pruefe_verschwundene", lambda *a, **kw: {})
@@ -2371,6 +2372,9 @@ def test_resync_mit_ordnerliste_liest_nur_diese_ordner(tmp_path, monkeypatch, ca
     assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
     done.close()
     assert gesehen["ordner"] == ["E-Mail/Posteingang/Archiv"]
+    # the folders the list leaves out are excluded by name: their mails
+    # are no suspects for a full round of the parent
+    assert gesehen["ausgelassen"] == {"E-Mail/Posteingang", "E-Mail/Gesendet"}
     assert gesehen["kalender"] == ["Arbeit"]
     assert "kontakte" not in gesehen, "contacts listed without a row of theirs"
     events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
