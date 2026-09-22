@@ -1,0 +1,60 @@
+name: UI
+
+# The browser tests (tests/ui/): the real page in Chromium against two
+# running apps – one on an empty data folder, which is what a new user
+# sees and where the help tour is walked, and one on the synthetic archive
+# from testdata/, which has something in every source. Separate from CI
+# because it needs a browser and a running server, and so CI stays the
+# fast gate for the code. A release waits for CI, Build and this one.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser:
+    name: browser (chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        # requirements-ui.txt pins Playwright on top of requirements-dev.txt.
+        run: pip install -r requirements-ui.txt
+
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Browser tests
+        # This one line starts both apps: the fixtures in
+        # tests/ui/conftest.py do it, not this workflow. `server` starts one
+        # on an empty temp folder, `archive` writes the synthetic archive
+        # into a temp folder of its own (testdata/build.py: all eight
+        # sources plus a real index run) and starts an app on that. No
+        # profile is involved – a profile lives in the app folder, which is
+        # this checkout, and no test may write there.
+        #
+        # Strict: a missing browser fails here instead of skipping. Every
+        # test skipping would end in exit code 0 – a green run that tested
+        # nothing, which is exactly what this workflow exists to prevent.
+        env:
+          MUNIMENTUM_UI_STRICT: "1"
+        run: pytest -v tests/ui
+
+      - name: Screenshots of failed tests
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-screenshots
+          path: tests/ui/output/
+          if-no-files-found: ignore

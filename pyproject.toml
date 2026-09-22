@@ -10,13 +10,18 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "ui: browser tests against the running app (tests/ui, need Playwright)",
+]
 
 [tool.coverage.run]
 source = ["."]
 # packaging/ is build tooling, not shipped code: smoke_test.py tests a finished
 # bundle and therefore only runs in the build pipeline, never under pytest.
-# Counting it would drag the ratio down with dead weight.
-omit = ["tests/*", "packaging/*"]
+# Counting it would drag the ratio down with dead weight. testdata/ is the
+# same kind of thing: it writes the synthetic archive for the browser tests,
+# which do not run in this pipeline at all.
+omit = ["tests/*", "packaging/*", "testdata/*"]
 
 [tool.coverage.report]
 skip_empty = true

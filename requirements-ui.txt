@@ -1,0 +1,12 @@
+# The browser tests (tests/ui/), installed on top of the dev tools:
+#
+#     pip install -r requirements-ui.txt
+#     python -m playwright install chromium     # once; an installed Google Chrome serves as well
+#
+# .github/workflows/ui.yml installs exactly this. The unit CI never does:
+# without Playwright the browser tests skip themselves, so `pytest -q`
+# stays what it is.
+
+-r requirements-dev.txt
+
+playwright==1.63.0

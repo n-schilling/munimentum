@@ -55,6 +55,36 @@ Both the tests and the lint have to pass before anything is released; CI runs
 them on Python 3.12 and 3.13, and every bundle goes through
 `packaging/smoke_test.py` before it becomes a download.
 
+A second, smaller set drives the real page in a browser – the app with an
+empty data folder, walked through as a new user sees it, the help tour
+included – and it needs a browser:
+
+```
+pip3 install -r requirements-ui.txt        # Playwright, on top of the dev tools
+python3 -m playwright install chromium     # once; an installed Google Chrome serves as well
+pytest -q tests/ui                         # the browser tests alone
+```
+
+Without Playwright these tests skip themselves, so `pytest -q` stays as it
+is; with it, they ride along. The *UI* workflow runs them on every push. A
+failed one leaves a screenshot in `tests/ui/output/`.
+
+Half of them need an archive with something in it, and that archive is
+generated – `testdata/` writes a whole profile with all eight sources,
+every name and file in it invented. You can open it yourself:
+
+```
+python3 -m testdata.build --profile testdaten   # writes profiles/testdaten/
+python3 app.py --profile testdaten              # and look at it
+```
+
+It is the quickest way to see the interface with data in it without
+touching a Microsoft account. The browser tests use the same archive, and
+that is what lets them go deeper than "every page renders": they set the
+search filters one by one and count what comes back, and they fill a case
+from the search, order it into folders, write a note and a remark, remove
+an item and close the case.
+
 Code, comments and documentation are English throughout; the interface texts
 live in `lang/`, one JSON file per language.
 
