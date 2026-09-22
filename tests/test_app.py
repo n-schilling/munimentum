@@ -5304,7 +5304,7 @@ def test_ausgelassene_personen_fehlen_in_der_auswertung(sandbox):
 def test_namensliste_je_zeile(sandbox):
     """Comma-separated would be wrong: "Beispiel, Alice" is not two people."""
     assert app_mod._clean_zeilen("Beispiel, Alice\nBob\n\n  Bob  ") \
-        == ["bob", "schilling, nico"]
+        == ["beispiel, alice", "bob"]
     assert app_mod._clean_zeilen(["A", "a", ""]) == ["a"]
     assert app_mod._clean_zeilen("") == []
 
