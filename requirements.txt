@@ -10,7 +10,7 @@
 
 mcp==2.0.0              # MCP SDK, 2.x API (MCPServer) – see mcp_server.py
 msal==1.37.0            # Graph login (device code flow)
-numpy==2.5.2            # embedding matrix for semantic/hybrid search
+numpy==2.5.3            # embedding matrix for semantic/hybrid search
 requests==2.34.2        # Graph REST calls and Ollama
 
 
