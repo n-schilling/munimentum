@@ -140,7 +140,7 @@ VORGABEN = {
     # People not counted in the analytics – usually oneself: one's own
     # messages otherwise top the list by a wide margin and say nothing about
     # the exchange with others. One per line, because names contain commas
-    # ("Schilling, Nico").
+    # ("Beispiel, Alice").
     "analytics_skip": [],
     # Folder selection as ordered rules, last match wins.
     # Empty means: the old name list above still applies (see folders.py).

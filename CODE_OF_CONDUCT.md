@@ -59,8 +59,9 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the community leaders responsible for enforcement at
-<mail@nschilling.de>.
+reported to the community leaders responsible for enforcement through a
+[private report on the repository](https://github.com/n-schilling/munimentum/security/advisories/new)
+— the same channel as for security issues, read by the maintainer alone.
 
 All complaints will be reviewed and investigated promptly and fairly.
 

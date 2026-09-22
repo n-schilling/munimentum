@@ -6,8 +6,8 @@ Please report security issues **privately**, not as a public issue.
 
 Use GitHub's private reporting — [**Report a
 vulnerability**](https://github.com/n-schilling/munimentum/security/advisories/new).
-It is enabled on this repository and goes straight to me. If you would rather
-not use it, write to <mail@nschilling.de>.
+It is enabled on this repository and goes straight to me, and it is the one
+channel: a report there stays private until it is fixed.
 
 This is a spare-time project with one maintainer, so please expect a first reply
 within about a week rather than within a day. If the report holds up, I will

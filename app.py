@@ -939,7 +939,7 @@ def _clean_zeilen(values):
     """One entry per line: lowercased, no duplicates, no blank lines.
 
     Not comma-separated like the folder list – names contain commas, and
-    "Schilling, Nico" would otherwise be two entries, neither of which
+    "Beispiel, Alice" would otherwise be two entries, neither of which
     matches.
     """
     if isinstance(values, str):
