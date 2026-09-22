@@ -428,6 +428,13 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Die Suche fand nichts: {treffer}\n{protokoll(basis)}")
     if "4711" not in json.dumps(treffer, ensure_ascii=False):
         raise Fehler(f"Unerwartetes Suchergebnis: {treffer}")
+    # The whole result behind the timeline and the people view (13.6).
+    ganz = hole(f"{basis}/api/v1/search/timeline?q=Rechnung")
+    if not ganz.get("items") or "capped" not in ganz:
+        raise Fehler(f"Die Zeitleiste fand nichts: {ganz}")
+    leute = hole(f"{basis}/api/v1/search/people")
+    if "items" not in leute or "hits" not in leute:
+        raise Fehler(f"Die Personen fehlen: {leute}")
 
     schritt("Kalender & Kontakte aufbauen (Selbstaufruf von combined_search)")
     antwort = sende(f"{basis}/api/v1/runs", {"calendar": True, "label": "Rauchtest"})

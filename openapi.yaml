@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.5.1
+  version: 13.6.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1269,6 +1269,152 @@ paths:
               $ref: "#/components/mediaTypes/Problem"
         "409":
           description: The index cannot answer this search.
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+
+  /api/v1/search/timeline:
+    get:
+      tags: [Explore, GET]
+      operationId: v1SearchTimeline
+      x-needs-index: true
+      summary: The whole result, in date order
+      description: |
+        Every hit the criteria find, oldest first and the undated at the
+        end – what the interface draws as the timeline over a search. The
+        same engine and the same cap as a case's result list (5 000 hits),
+        collected on the server and handed over without previews; `capped`
+        says when the cap cut. A hit has the shape of `/api/v1/search`.
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: "Query text; empty takes the filters alone." }
+        - { name: person, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Source" }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: folder, in: query, schema: { type: string } }
+        - { name: filetype, in: query, schema: { type: string } }
+        - { name: case, in: query, schema: { type: integer } }
+        - { name: case_folder, in: query, schema: { type: integer } }
+        - { name: party, in: query, schema: { type: string, enum: [all, internal, external] } }
+        - { name: mail_from, in: query, schema: { type: string }, description: "The four mail lines, as on /api/v1/search." }
+        - { name: mail_to, in: query, schema: { type: string } }
+        - { name: mail_cc, in: query, schema: { type: string } }
+        - { name: mail_bcc, in: query, schema: { type: string } }
+        - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
+        - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment." }
+        - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical, text, aehnlich, ki] }, description: "How the hits are ranked when there is a query – as on /api/v1/search. A ranking has no natural end, so with `semantic` or `hybrid` the whole result is the best hits up to the cap." }
+      responses:
+        "200":
+          description: The whole result in date order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, capped, limit]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Hit" } }
+                  count: { type: integer }
+                  capped: { type: boolean, description: "The result reached the cap, so something may be missing – narrow with a filter." }
+                  limit: { type: integer, description: "The cap this answer was built with." }
+              example:
+                items:
+                - uid: outlook:Posteingang/2026-03-04-rechnung.eml:0
+                  cid: 4711
+                  source: outlook
+                  source_label: Mail
+                  root: outlook
+                  who: Alice Beispiel
+                  date: '2026-03-04 09:12'
+                  title: Rechnung 2026-0042
+                  path: Posteingang/2026-03-04-rechnung.eml
+                  uri: o365://outlook/Posteingang/2026-03-04-rechnung.eml
+                  preview: ''
+                count: 1
+                capped: false
+                limit: 5000
+        "409":
+          description: The index cannot answer these criteria (an unknown case, a mode this index cannot rank, mail lines it does not carry).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/search/people:
+    get:
+      tags: [Explore, GET]
+      operationId: v1SearchPeople
+      x-needs-index: true
+      summary: Who a result names
+      description: |
+        Everyone the hits of a search name – senders, chat authors,
+        organisers, assignees – with how many hits name them, per source,
+        the first and last date, and the address where the item names
+        exactly one person. With a query the people are counted over the
+        collected hits, up to the cap of `/api/v1/search/timeline`;
+        without one every item the filters admit is counted, with no cap.
+        Sorted by last contact, newest first. `hits` is how many items were
+        counted. The interface's people view over a result and the picture
+        in the address book read this.
+      parameters:
+        - { name: q, in: query, schema: { type: string }, description: "Query text; empty takes the filters alone." }
+        - { name: person, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Source" }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { name: folder, in: query, schema: { type: string } }
+        - { name: filetype, in: query, schema: { type: string } }
+        - { name: case, in: query, schema: { type: integer } }
+        - { name: case_folder, in: query, schema: { type: integer } }
+        - { name: party, in: query, schema: { type: string, enum: [all, internal, external] } }
+        - { name: mail_from, in: query, schema: { type: string }, description: "The four mail lines, as on /api/v1/search." }
+        - { name: mail_to, in: query, schema: { type: string } }
+        - { name: mail_cc, in: query, schema: { type: string } }
+        - { name: mail_bcc, in: query, schema: { type: string } }
+        - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
+        - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment." }
+        - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical, text, aehnlich, ki] }, description: "How the hits are ranked when there is a query – as on /api/v1/search. A ranking has no natural end, so with `semantic` or `hybrid` the whole result is the best hits up to the cap." }
+      responses:
+        "200":
+          description: The people of the result, newest contact first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hits, capped]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/ResultPerson" } }
+                  count: { type: integer, description: "How many people." }
+                  hits: { type: integer, description: "How many items were counted." }
+                  capped: { type: boolean, description: "The hits reached the cap, so the counts may be short – narrow with a filter." }
+              example:
+                items:
+                - name: Bob Baumeister
+                  address: bob.baumeister@nordwind.example
+                  items: 121
+                  by_source: { outlook: 88, teams: 30, planner: 3 }
+                  first: '2026-04-03 08:15'
+                  last: '2026-09-17 16:40'
+                count: 1
+                hits: 312
+                capped: false
+        "409":
+          description: The index cannot answer these criteria (an unknown case, a mode this index cannot rank, mail lines it does not carry).
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -4435,6 +4581,16 @@ components:
               ordner: { type: [string, "null"], description: "The name of the folder it sits in, if any." }
               status: { type: string, enum: [offen, zu] }
         preview: { type: string }
+    ResultPerson:
+      type: object
+      required: [name, items, by_source, first, last]
+      properties:
+        name: { type: string, description: "The spelling the archive uses – the value the `person` filter takes." }
+        address: { type: string, description: "The person's mail address where an item named them alone; empty when none is known or the index predates 11.1." }
+        items: { type: integer, description: "How many of the counted items name them." }
+        by_source: { type: object, additionalProperties: { type: integer }, description: "The same count per source key." }
+        first: { type: string, description: "'YYYY-MM-DD HH:MM' of the oldest item; empty when none is dated." }
+        last: { type: string, description: "The same for the newest." }
     Criteria:
       type: object
       description: |

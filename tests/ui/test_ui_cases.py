@@ -214,7 +214,7 @@ def test_the_case_shows_the_same_items_as_a_timeline_and_by_people(archive_page,
     expect(personen).to_be_visible()
     expect(personen).to_contain_text(people.EXTERNALS[0][0])
     expect(personen.locator(".tag.extern").first).to_have_text(
-        EN["cases.people.external"])
+        EN["people.external"])
 
 
 def test_the_filter_narrows_what_the_case_shows(archive_page, archive):

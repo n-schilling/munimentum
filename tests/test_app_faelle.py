@@ -1472,7 +1472,7 @@ function letzte(pfad, methode, feld){
   fallFiltern('');
   html = el('fall-personen').innerHTML;
   pruefe(html.split('tag extern').length - 1 === 1 && html.indexOf('Alice<span class="tag extern"') >= 0, 'extern-Marke falsch: ' + html);
-  pruefe(html.indexOf('cases.people.noaddr') < 0 && html.indexOf('Indexlauf') < 0, 'Hinweis trotz Adressen');
+  pruefe(html.indexOf('people.noaddr') < 0 && html.indexOf('Indexlauf') < 0, 'Hinweis trotz Adressen');
   // the setting overrides the domain; the name setting leaves you out
   S.config.internal_domains = 'nordwind.example';
   fallSicht('personen');

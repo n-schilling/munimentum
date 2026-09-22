@@ -47,12 +47,14 @@ import state_db
 import teams_export
 import todo_export
 
-from testdata import people
+from testdata import bulk, people
 from testdata.people import day
 
 ME, ME_MAIL = people.ME
-BOB, CARLA = people.COLLEAGUES
-DANA, ERIK, GRETA = people.EXTERNALS
+# The story's cast by name – the rest of the people are the volume's, and
+# only testdata/bulk.py reaches for them.
+BOB, CARLA = people.COLLEAGUES[:2]
+DANA, ERIK, GRETA = people.EXTERNALS[:3]
 PROJECT, OFFER = people.PROJECT, people.OFFER
 
 # One 8×8 pixel PNG, so the mirrors hold something that is not text and the
@@ -330,10 +332,21 @@ def mail_rel(entry):
     return f"{outlook_export.MAIL_DIR}/{entry['folder']}/{name}"
 
 
+def _done_log(root):
+    """Outlook's resume log – the app's own writer, because the archive
+    check holds every .eml, .ics and .vcf against it (a file no record
+    knows is a finding, and rightly so)."""
+    return state_db.DbDoneLog(state_db.StateDb(root))
+
+
 def write_mail(root):
     written = []
+    log = _done_log(root)
     for entry in MAILS:
-        written.append(write(root / mail_rel(entry), _mime(entry)))
+        rel = mail_rel(entry)
+        written.append(write(root / rel, _mime(entry)))
+        log.mark(_message_id(entry["key"]), rel)
+    log.close()
     # The folder tree, as a sync would have left it: the settings show the
     # rules against it, and "Show export list" has something to list.
     tree, seen = [], {}
@@ -420,10 +433,13 @@ EVENTS = [
 
 def write_calendar(root):
     written, inventory = [], []
+    log = _done_log(root)
     for calendar, ev in EVENTS:
         rel = (f"{outlook_export.KALENDER_DIR}/{export_util.safe(calendar)}/"
                f"{outlook_export.event_filename(ev)}")
         written.append(write(root / rel, outlook_export.build_ics(ev)))
+        log.mark(ev["id"], rel)
+    log.close()
     for i, name in enumerate(dict.fromkeys(c for c, _ in EVENTS)):
         inventory.append({"id": f"calendar-{i:02d}",
                           "pfad": f"{outlook_export.KALENDER_DIR}/{export_util.safe(name)}",
@@ -475,9 +491,12 @@ CONTACTS = [
 
 def write_contacts(root):
     written = []
+    log = _done_log(root)
     for c in CONTACTS:
         rel = f"kontakte/{outlook_export.contact_filename(c)}"
         written.append(write(root / rel, outlook_export.build_vcf(c)))
+        log.mark(c["id"], rel)
+    log.close()
     return written
 
 
@@ -583,7 +602,8 @@ def _conversation_rel(conv):
 
 
 def write_teams(root):
-    written, records = [], {}
+    written, records, spiegel_bestand = [], {}, {}
+    db = state_db.StateDb(root)
     for conv in CONVERSATIONS:
         rel = _conversation_rel(conv)
         zeiten = [m["createdDateTime"][:10] for m in conv["messages"]]
@@ -595,28 +615,38 @@ def write_teams(root):
         key = f"ch:{conv['id']}" if conv["kind"] == "channels" else conv["id"]
         records[key] = json.dumps({"rel": rel, "done": True,
                                    "titel": conv["title"]}, ensure_ascii=False)
-        # Files shared in a chat sit beside the conversation; a channel's
-        # file tab is a mirror of its own below the team.
+        # Files shared in a chat sit beside the conversation, recorded
+        # under the link they came from (kv files:<key>) – that is what
+        # the archive check holds them against.
+        dateien = {}
         for name, when, text in conv.get("attachments") or []:
-            stem = Path(rel).stem
-            ziel = (f"{conv['kind']}/Anhaenge/{stem}/"
-                    f"{Path(name).stem}__{export_util.kuerzel(name)}{Path(name).suffix}")
+            ziel = (f"{teams_export.anhang_ordner(rel)}/{Path(name).stem}"
+                    f"__{export_util.kuerzel(name)}{Path(name).suffix}")
             written.append(write(root / ziel, text, when))
+            dateien[f"{people.SHAREPOINT_SITE}/Freigegeben/{name}"] = {
+                "rel": ziel, "ctag": f"ctag-{export_util.kuerzel(name)}",
+                "size": len(text.encode("utf-8"))}
+        if dateien:
+            db.kv_schreiben(f"files:{key}", json.dumps(dateien, ensure_ascii=False))
         if conv.get("files"):
             # A standard channel's file tab is a mirror of the team's
             # library: its root is the team folder, the files sit below
             # Dateien/<channel>, and the bookkeeping lies at the root – not
-            # inside Dateien, or the index would read it as a file.
+            # inside Dateien, or the index would read it as a file. Several
+            # channels share one team, so the inventory is collected and
+            # written once per mirror; writing it per channel would leave
+            # the earlier channels' files without a record.
             spiegel = root / "channels" / export_util.safe(conv["team"])
-            bestand = {}
-            for i, (name, when, text) in enumerate(conv["files"]):
-                rel = f"Dateien/{conv['title']}/{name}"
-                written.append(write(spiegel / rel, text, when))
-                bestand[f"teamsfile-{i:02d}"] = {
-                    "rel": rel, "ctag": f"ctag-{i:02d}",
+            bestand = spiegel_bestand.setdefault(spiegel, {})
+            for name, when, text in conv["files"]:
+                datei_rel = f"Dateien/{conv['title']}/{name}"
+                written.append(write(spiegel / datei_rel, text, when))
+                bestand[f"teamsfile-{export_util.kuerzel(datei_rel)}"] = {
+                    "rel": datei_rel, "ctag": f"ctag-{export_util.kuerzel(datei_rel)}",
                     "size": len(text.encode("utf-8"))}
-            state_db.StateDb(spiegel).bestand_schreiben(bestand)
-    state_db.StateDb(root).saetze_schreiben("conversations", records)
+    for spiegel, bestand in spiegel_bestand.items():
+        state_db.StateDb(spiegel).bestand_schreiben(bestand)
+    db.saetze_schreiben("conversations", records)
     return written
 
 
@@ -712,7 +742,8 @@ def write_sharepoint(root):
         written.append(write(library / "Dateien" / rel, content, when))
         bestand[f"sp-item-{i:02d}"] = {
             "rel": f"Dateien/{rel}", "ctag": f"ctag-{i:02d}",
-            "size": len(content.encode("utf-8"))}
+            "size": len(content if isinstance(content, bytes)
+                        else content.encode("utf-8"))}
     state_db.StateDb(library).bestand_schreiben(bestand)
     return written
 
@@ -761,7 +792,10 @@ def write_pages(root):
 # ---------------------------------------------------------------------------
 # The ids the tasks are assigned to: Graph hands out user ids, the export
 # keeps a name for each so a board does not read as a list of ids.
-PLANNER_NAMES = {"user-alice": ME, "user-bob": BOB[0], "user-carla": CARLA[0]}
+# One id per person, the way Graph hands them out – the whole cast, so a
+# card of any board can be assigned to whoever is on it.
+PLANNER_NAMES = {f"user-{name.split()[0].lower()}": name
+                 for name, _mail in people.EVERYONE}
 
 PLAN = {"id": "plan-ostwind", "titel": f"{PROJECT} board"}
 BUCKETS = [
@@ -811,14 +845,14 @@ PLANNER_TASKS = [
 ]
 
 
-def _planner_entries():
+def _planner_entries(plan_id, tasks):
     eintraege = {}
     for (tid, bucket, title, assignees, created, description,
-         checklist, references, comments) in PLANNER_TASKS:
+         checklist, references, comments) in tasks:
         eintraege[tid] = {
             "etag": f'W/"{tid}"',
             "task": {"id": tid, "title": title, "bucketId": bucket,
-                     "planId": PLAN["id"], "orderHint": tid,
+                     "planId": plan_id, "orderHint": tid,
                      "createdDateTime": graph_time(created),
                      "percentComplete": 100 if bucket == "bucket-done" else 0,
                      "assignments": {a: {"orderHint": a} for a in assignees}},
@@ -852,25 +886,51 @@ Mail profile           passed
 ]
 
 
+# Every board the archive holds: the story's, and the ones the volume
+# adds. A board is its plan, its buckets, its labels, its tasks and what
+# its cards refer to – one folder each, as the export writes them.
+PLANS = [{"plan": PLAN, "buckets": BUCKETS, "labels": PLANNER_LABELS,
+          "tasks": PLANNER_TASKS, "attachments": PLANNER_ATTACHMENTS}]
+
+
 def write_planner(root):
-    ordner = root / f"{export_util.safe(PLAN['titel'])}__{export_util.kuerzel(PLAN['id'])}"
-    eintraege = _planner_entries()
-    buckets = {b["id"]: b for b in BUCKETS}
-    stand = graph_time(day(6, 12, 9, 0))
-    html = planner_export.render_board(PLAN, buckets, eintraege, PLANNER_LABELS,
-                                       PLANNER_NAMES, stand)
-    written = [write(ordner / "board.html", html, day(6, 12, 9, 0))]
-    db = state_db.StateDb(ordner)
-    db.kv_schreiben("plan", json.dumps(
-        {"id": PLAN["id"], "titel": PLAN["titel"], "labels": PLANNER_LABELS,
-         "buckets": {b["id"]: b["name"] for b in BUCKETS}}, ensure_ascii=False))
-    db.kv_schreiben("tasks", json.dumps(eintraege, ensure_ascii=False))
-    db.kv_schreiben("namen", json.dumps(PLANNER_NAMES, ensure_ascii=False, sort_keys=True))
-    db.kv_schreiben("stand", stand)
-    for name, when, text in PLANNER_ATTACHMENTS:
-        ziel = (f"{Path(name).stem}__"
-                f"{export_util.kuerzel(name)}{Path(name).suffix}")
-        written.append(write(ordner / planner_export.ANHANG_DIR / ziel, text, when))
+    written = []
+    for board in PLANS:
+        plan, buckets_list = board["plan"], board["buckets"]
+        ordner = root / f"{export_util.safe(plan['titel'])}__{export_util.kuerzel(plan['id'])}"
+        eintraege = _planner_entries(plan["id"], board["tasks"])
+        buckets = {b["id"]: b for b in buckets_list}
+        stand = graph_time(day(6, 12, 9, 0))
+        html = planner_export.render_board(plan, buckets, eintraege,
+                                           board["labels"], PLANNER_NAMES, stand)
+        written.append(write(ordner / "board.html", html, day(6, 12, 9, 0)))
+        db = state_db.StateDb(ordner)
+        db.kv_schreiben("plan", json.dumps(
+            {"id": plan["id"], "titel": plan["titel"], "labels": board["labels"],
+             "buckets": {b["id"]: b["name"] for b in buckets_list}},
+            ensure_ascii=False))
+        db.kv_schreiben("namen", json.dumps(PLANNER_NAMES, ensure_ascii=False,
+                                            sort_keys=True))
+        db.kv_schreiben("stand", stand)
+        # What a card refers to and the export fetched: the file, the
+        # record the archive check reads (kv "anhaenge"), and the link on
+        # the card itself – without the last one a board would send the
+        # reader back into the cloud for a file that lies beside it.
+        anhaenge = {}
+        for name, when, text in board["attachments"]:
+            url = f"{people.SHAREPOINT_SITE}/Documents/{name}"
+            ziel = (f"{Path(name).stem}__"
+                    f"{export_util.kuerzel(url)}{Path(name).suffix}")
+            rel = f"{planner_export.ANHANG_DIR}/{ziel}"
+            written.append(write(ordner / rel, text, when))
+            anhaenge[url] = {"rel": rel, "ctag": f"ctag-{export_util.kuerzel(url)}"}
+        for eintrag in eintraege.values():
+            lokal = {url: anhaenge[url]["rel"]
+                     for url in eintrag["details"]["references"] if url in anhaenge}
+            if lokal:
+                eintrag["anhaenge"] = lokal
+        db.kv_schreiben("tasks", json.dumps(eintraege, ensure_ascii=False))
+        db.kv_schreiben("anhaenge", json.dumps(anhaenge, ensure_ascii=False))
     state_db.StateDb(root).saetze_schreiben("namen", dict(PLANNER_NAMES))
     return written
 
@@ -1001,6 +1061,36 @@ def write_onenote(root):
                               "anzahl": len(ONENOTE_PAGES)}],
                       datei=folders.NOTIZBUECHER)
     return written
+
+
+# ---------------------------------------------------------------------------
+# The volume
+# ---------------------------------------------------------------------------
+# Everything above is the story the archive is about: small enough to read
+# in one go, and what the browser tests hold their numbers against. What a
+# real archive has beside its story – a year of other traffic, other
+# projects, other people – is generated: testdata/bulk.py says how, keeps
+# away from the words the story owns, and derives every value from the
+# position of its item, so this stays the same archive on every machine.
+#
+# A list grows to FACTOR times its length; where a container carries the
+# items (a board, a task list), the containers grow more slowly than what
+# is in them – fifty boards of seven cards would be a filing cabinet, not
+# an archive.
+MAILS += bulk.mails(bulk.more(MAILS))
+EVENTS += bulk.events(_event, bulk.more(EVENTS))
+CONTACTS += bulk.contacts(bulk.more(CONTACTS))
+CONVERSATIONS += bulk.conversations(_msg, bulk.more(CONVERSATIONS))
+# A picture comes back without content: the one PNG stands for all of them,
+# so the archive holds a binary and not three hundred.
+ONEDRIVE_FILES += [(rel, when, PNG_8x8 if text is None else text)
+                   for rel, when, text in bulk.onedrive_files(bulk.more(ONEDRIVE_FILES))]
+SHAREPOINT_FILES += [(rel, when, PNG_8x8 if text is None else text)
+                     for rel, when, text in bulk.sharepoint_files(bulk.more(SHAREPOINT_FILES))]
+PAGES += bulk.pages(bulk.more(PAGES))
+PLANS += bulk.plans(9, 38)
+TODO_LISTS += bulk.todo_lists(18, 22)
+ONENOTE_PAGES += bulk.onenote_pages(bulk.more(ONENOTE_PAGES))
 
 
 # ---------------------------------------------------------------------------

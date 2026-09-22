@@ -2578,6 +2578,8 @@ ROUTEN_V1 = (
     ("POST", "/api/v1/cases/{id}/export", api_cases.fall_export),
     ("POST", "/api/v1/cases/{id}/export/open", api_cases.fall_export_oeffnen),
     ("GET", "/api/v1/search", api_explore.suche),
+    ("GET", "/api/v1/search/timeline", api_explore.suche_zeitleiste),
+    ("GET", "/api/v1/search/people", api_explore.suche_personen),
     ("GET", "/api/v1/similar", api_explore.aehnlich),
     ("QUERY", "/api/v1/answer", "_v1_antwort"),
     ("GET", "/api/v1/searches/history", api_cases.verlauf),

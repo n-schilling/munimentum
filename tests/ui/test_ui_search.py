@@ -7,8 +7,13 @@ These tests set a filter the way a user does – open the pill, choose the
 value – and check what comes back.
 
 The expected counts come from testdata/sources.py, so the data and the
-test cannot drift apart.
+test cannot drift apart. The archive holds a year of traffic, so most of
+those counts are larger than a page: the list shows twenty hits at a
+time, and an exact total is read where the interface offers one – in the
+timeline over the whole result.
 """
+
+import re
 
 import pytest
 
@@ -22,6 +27,9 @@ pytestmark = pytest.mark.ui
 EN = texts("en")
 PROJECT = people.PROJECT
 DANA = people.EXTERNALS[0]
+
+PAGE = 20     # hits the list shows at a time
+ROWS = 200    # rows the timeline draws before it offers the rest
 
 MAILS_IN = {folder: sum(1 for m in sources.MAILS if m["folder"] == folder)
             for folder in {m["folder"] for m in sources.MAILS}}
@@ -80,6 +88,33 @@ def shown(page):
     return page.locator("#treffer-stand").inner_text()
 
 
+def figure(n):
+    """A number the way the page writes it – toLocaleString on an English
+    page puts a comma every three digits."""
+    return f"{n:,}"
+
+
+def switch_view(page, strip, name, route):
+    """Click a view of the strip and wait for the whole result it fetches."""
+    with page.expect_response(lambda r: f"/api/v1/search/{route}" in r.url):
+        strip.locator(f'[data-result-view="{name}"]').click()
+    expect(strip.locator(f'[data-result-view="{name}"]')).to_have_class("sicht on")
+    page.wait_for_function(
+        "t => !document.getElementById('results').textContent.includes(t)",
+        arg=EN["search.whole.loading"])
+
+
+def whole(page):
+    """How many hits the search really has, not how many are drawn.
+
+    The list is a page of twenty, and the timeline stops drawing at two
+    hundred – but its header counts the whole result, which is the number
+    the archive can be held to.
+    """
+    switch_view(page, page.locator("#result-views"), "timeline", "timeline")
+    return int(re.sub(r"[^0-9]", "", shown(page)))
+
+
 # --------------------------------------------------------------------------
 # The search line
 # --------------------------------------------------------------------------
@@ -106,9 +141,12 @@ def test_a_search_without_words_is_the_filter_alone(archive_page, archive):
     choose(archive_page, "source", EN["search.source.outlook"])
     search(archive_page)
     hits = archive_page.locator("#results .hit")
-    expect(hits).to_have_count(len(sources.MAILS))
+    expect(hits).to_have_count(PAGE)
     for i in range(hits.count()):
         assert EN["search.source.outlook"] in tags_of(hits.nth(i))
+    # The page is a page: without a word the filter admits every mail the
+    # export wrote, and the whole result says so.
+    assert whole(archive_page) == len(sources.MAILS)
 
 
 # --------------------------------------------------------------------------
@@ -121,8 +159,10 @@ def test_the_folder_filter_narrows_to_one_mail_folder(archive_page, archive):
     archive_page.fill("#folder-filter", "Sent")
     archive_page.locator("#pl-folder button", has_text="Sent").first.click()
     search(archive_page)
-    expect(archive_page.locator("#results .hit")).to_have_count(MAILS_IN["Sent"])
+    expect(archive_page.locator("#results .hit")).to_have_count(
+        min(PAGE, MAILS_IN["Sent"]))
     expect(archive_page.locator("#pw-folder")).to_contain_text("Sent")
+    assert whole(archive_page) == MAILS_IN["Sent"]
 
 
 def test_the_date_filter_narrows_to_a_range(archive_page, archive):
@@ -158,10 +198,11 @@ def test_only_mails_with_an_attachment(archive_page, archive):
     archive_page.check("#f-attach")
     archive_page.keyboard.press("Escape")
     hits = search(archive_page)
-    expect(hits).to_have_count(MAILS_WITH_ATTACHMENT)
+    expect(hits).to_have_count(min(PAGE, MAILS_WITH_ATTACHMENT))
     # Each of them says so in the list, with the paperclip.
     expect(archive_page.locator("#results .hit .tag.anhang")).to_have_count(
-        MAILS_WITH_ATTACHMENT)
+        min(PAGE, MAILS_WITH_ATTACHMENT))
+    assert whole(archive_page) == MAILS_WITH_ATTACHMENT
 
 
 def test_the_mail_filter_stands_only_for_mail_and_narrows_by_line(archive_page, archive):
@@ -173,8 +214,9 @@ def test_the_mail_filter_stands_only_for_mail_and_narrows_by_line(archive_page, 
     archive_page.fill("#f-mail-from", DANA[1])
     with archive_page.expect_response(lambda r: "/api/v1/search" in r.url):
         archive_page.keyboard.press("Enter")      # searches straight away
-    expect(results(archive_page)).to_have_count(MAILS_FROM_DANA)
+    expect(results(archive_page)).to_have_count(min(PAGE, MAILS_FROM_DANA))
     expect(archive_page.locator("#pw-mail")).to_contain_text(EN["search.mail.from"])
+    assert whole(archive_page) == MAILS_FROM_DANA
 
 
 def test_deleted_only_shows_what_microsoft_no_longer_has(archive_page, archive):
@@ -192,9 +234,11 @@ def test_the_parties_filter_separates_inside_from_outside(archive_page, archive)
     open_app(archive_page, archive, tab="suche")
     choose(archive_page, "source", EN["search.source.outlook"])
     choose(archive_page, "party", EN["search.party.external"])
-    aussen = search(archive_page).count()
+    search(archive_page)
+    aussen = whole(archive_page)
     choose(archive_page, "party", EN["search.party.internal"])
-    innen = search(archive_page).count()
+    search(archive_page)
+    innen = whole(archive_page)
     assert aussen and innen, (aussen, innen)
     assert aussen + innen >= len(sources.MAILS)
 
@@ -257,6 +301,12 @@ def test_a_mail_knows_the_conversation_it_belongs_to(archive_page, archive):
                                                     .format(n=3))
     fold.locator("summary").click()
     expect(fold.locator(".vzeile")).to_have_count(3)
+    # A row opens its message as the detail – no download, no new tab.
+    second = fold.locator(".vzeile").nth(1)
+    title = second.locator(".vtitel").inner_text()
+    second.click()
+    expect(archive_page.locator("#detail .dtitel")).to_have_text(title)
+    expect(archive_page.locator("#detail-verlauf .vzeile.dies")).to_contain_text(title)
 
 
 # --------------------------------------------------------------------------
@@ -305,3 +355,97 @@ def test_the_calendar_hands_its_month_over_to_the_search(archive_page, archive):
     # The source comes over set, and the date range with it.
     expect(archive_page.locator("#pw-source")).to_have_text(EN["search.source.kalender"])
     expect(archive_page.locator("#p-date")).to_have_class("pill on")
+
+
+# --------------------------------------------------------------------------
+# The result in three views (13.6): list, timeline, people
+# --------------------------------------------------------------------------
+MAIL_SENDERS = {m["frm"][0] for m in sources.MAILS}
+# The person filter finds everyone a mail names – sender or recipient.
+MAILS_NAMING_DANA = sum(1 for m in sources.MAILS
+                        if m["frm"] is DANA or DANA in m.get("to", ()) or DANA in m.get("cc", ()))
+
+
+def mail_search(page, archive):
+    """Every mail, as the source filter alone lists it – the whole result
+    is known from testdata, so the views can be held to the item."""
+    open_app(page, archive, tab="suche")
+    choose(page, "source", EN["search.source.outlook"])
+    search(page)
+    strip = page.locator("#result-views")
+    expect(strip).to_be_visible()
+    return strip
+
+
+def test_the_timeline_puts_the_whole_result_in_date_order(archive_page, archive):
+    strip = mail_search(archive_page, archive)
+    # The list is the page; the strip stands above it, the list is on.
+    expect(strip.locator('[data-result-view="list"]')).to_have_class("sicht on")
+    switch_view(archive_page, strip, "timeline", "timeline")
+    rows = archive_page.locator("#results .zeit")
+    expect(rows).to_have_count(min(ROWS, len(sources.MAILS)))
+    assert shown(archive_page) == EN["search.whole.count"].format(
+        n=figure(len(sources.MAILS)))
+    expect(archive_page.locator("#pager")).to_be_hidden()
+    # Two hundred rows are drawn, the rest waits behind one button.
+    if len(sources.MAILS) > ROWS:
+        archive_page.locator("#results .mehr button").click()
+    expect(rows).to_have_count(len(sources.MAILS))
+    # Oldest first: the first row is the oldest mail, the newest comes last.
+    oldest = min(sources.MAILS, key=lambda m: m["when"])
+    newest = max(sources.MAILS, key=lambda m: m["when"])
+    expect(rows.first).to_contain_text(oldest["subject"])
+    expect(rows.last).to_contain_text(newest["subject"])
+    # The band above: a bar per month (per week under a quarter), the
+    # newest month's bar narrows the rows to that month.
+    weeks = (newest["when"] - oldest["when"]).days < 92
+    if not weeks:
+        months = ((newest["when"].year - oldest["when"].year) * 12
+                  + newest["when"].month - oldest["when"].month + 1)
+        expect(archive_page.locator("#result-activity .monat")).to_have_count(months)
+        key = newest["when"].strftime("%Y-%m")
+        in_month = sum(1 for m in sources.MAILS if m["when"].strftime("%Y-%m") == key)
+        archive_page.locator(f'#result-activity .monat[onclick*="{key}"]').click()
+        expect(archive_page.locator("#results .zeit")).to_have_count(in_month)
+        expect(archive_page.locator("#result-activity")).to_contain_text(
+            EN["timeline.showall"])
+        archive_page.locator("#result-activity").get_by_text(EN["timeline.showall"]).click()
+        expect(archive_page.locator("#results .zeit")).to_have_count(len(sources.MAILS))
+    # A row opens the detail at the right, as a hit of the list does.
+    archive_page.locator("#results .zeit").first.click()
+    detail = archive_page.locator("#detail")
+    expect(detail).to_be_visible()
+    expect(detail).to_contain_text(oldest["subject"])
+    # Back to the list: the page and its pager.
+    strip.locator('[data-result-view="list"]').click()
+    expect(archive_page.locator("#results .hit")).not_to_have_count(0)
+
+
+def test_the_people_of_a_result_stand_by_their_last_contact(archive_page, archive):
+    strip = mail_search(archive_page, archive)
+    switch_view(archive_page, strip, "people", "people")
+    picture = archive_page.locator("#results .bild")
+    expect(picture).to_be_visible()
+    nodes = picture.locator(".knoten")
+    # Everyone who sent a mail – except me, the circle at the left.
+    expect(nodes).to_have_count(len(MAIL_SENDERS - {people.ME[0]}))
+    for name in MAIL_SENDERS - {people.ME[0]}:
+        expect(picture).to_contain_text(name)
+    expect(picture.locator(".ich")).to_contain_text(people.ME[0])
+    expect(strip.locator("#result-people-count")).to_have_text(
+        str(len(MAIL_SENDERS - {people.ME[0]})))
+    expect(archive_page.locator("#detail")).to_be_hidden()
+    # The outside ones are marked.
+    dana = nodes.filter(has_text=DANA[0])
+    expect(dana.locator(".tag.extern")).to_have_text(EN["people.external"])
+    # The card of a person carries the address and leads on: the person
+    # pill set, the search run again as the timeline.
+    dana.click()
+    card = archive_page.locator("#results .person-karte")
+    expect(card).to_contain_text(DANA[1])
+    with archive_page.expect_response(lambda r: "/api/v1/search/timeline" in r.url):
+        card.get_by_role("button", name=EN["people.timeline"]).click()
+    expect(archive_page.locator("#p-person")).to_have_class("pill on")
+    expect(archive_page.locator("#pw-person")).to_contain_text(DANA[0])
+    expect(strip.locator('[data-result-view="timeline"]')).to_have_class("sicht on")
+    expect(archive_page.locator("#results .zeit")).to_have_count(MAILS_NAMING_DANA)

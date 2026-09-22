@@ -190,7 +190,9 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
-           "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.")
+           "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.",
+           # What the case, a search result and the address book share (13.6)
+           "people.", "timeline.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -256,7 +258,7 @@ DYNAMISCH = (
     # export's status word – composed from the value.
     ("cases.status.", ("offen", "zu")),
     ("search.party.", ("all", "internal", "external")),
-    ("cases.people.period.", ("week", "month", "quarter", "older")),
+    ("people.period.", ("week", "month", "quarter", "older")),
     ("cases.export.party.", ("internal", "external")),
     ("search.history.kept.", ("off", "forever", "days")),
     ("cases.export.status.", ("open", "closed")),
@@ -282,6 +284,7 @@ def benutzte_schluessel():
         if treffer.startswith(PREFIXE) and not treffer.endswith("."):
             keys.add(treffer)
     keys.discard("app.log")          # log file, not a text key
+    keys.discard("timeline.html")    # a case export's file, not a text key
     # Labels older run records still carry – Insights › Runs renders them
     # through t(), so the text must stay although no code names it.
     keys |= set(GESPEICHERTE_ETIKETTEN)

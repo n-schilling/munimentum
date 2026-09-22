@@ -2173,3 +2173,27 @@ def test_list_files_kennt_die_teams_dateien(state_alle):
     unten = mcp_server.list_files("teams", "channels/Team Rakete/Dateien/Allgemein")
     assert [f["name"] for f in unten["files"]] == ["Plan.xlsx"]
     assert unten["files"][0]["rel"] == "channels/Team Rakete/Dateien/Allgemein/Plan.xlsx"
+
+
+# --------------------------------------------------------------------------
+# facet_rows: the rows a people count reads (13.6)
+# --------------------------------------------------------------------------
+def test_facet_rows_liefert_wer_adresse_datum_und_quelle_ohne_grenze(state):
+    r = mcp_server.facet_rows(source="outlook")
+    assert "error" not in r
+    rows = sorted(r["rows"], key=lambda x: x[2])
+    assert [x[0] for x in rows] == ["Doris Docs", "Carla Chef", "Alice Beispiel"]
+    assert rows[1] == ("Carla Chef", "carla@example.com", "2025-06-10 08:00", "outlook")
+    # The filters are the search's own.
+    assert [x[0] for x in mcp_server.facet_rows(person="Carla")["rows"]] == ["Carla Chef"]
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    try:
+        nachrichten = con.execute("SELECT COUNT(*) FROM chunks WHERE seq = 0").fetchone()[0]
+    finally:
+        con.close()
+    assert len(mcp_server.facet_rows(source="all")["rows"]) == nachrichten
+
+
+def test_facet_rows_gibt_die_absagen_der_filter_weiter(state):
+    r = mcp_server.facet_rows(party="external")
+    assert r["rows"] == [] and "domains" in r["error"] or "internal domains" in r["error"]

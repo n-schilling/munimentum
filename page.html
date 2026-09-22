@@ -398,7 +398,10 @@ details.verlauf summary::-webkit-details-marker{display:none}
 details.verlauf summary .pfeil{display:inline-flex}
 details.verlauf summary .pfeil svg{transition:transform .15s}
 details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
-.vzeile{display:grid;grid-template-columns:10px 110px minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 0;font-size:13px;border-top:1px solid var(--line)}
+.vzeile{display:grid;grid-template-columns:10px auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:5px 4px;font-size:13px;border-top:1px solid var(--line)}
+.vzeile[role=button]{cursor:pointer}
+.vzeile[role=button]:hover,.vzeile[role=button]:focus-visible{background:var(--code);outline:none}
+.vzeile .vtitel{color:var(--accent)}
 .vzeile .punkt{width:8px;height:8px;border-radius:50%;background:var(--line)}
 .vzeile.drin .punkt{background:var(--accent)}
 .vzeile.dies{font-weight:600}
@@ -754,7 +757,21 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .fallkopf .meta{margin-top:2px}
 .fallkopf .beschreibung{margin:8px 0 0;max-width:70ch}
 .fall-sichten{margin:14px 0 0}
-.fall-sichten .sicht .n{margin-left:2px;font-weight:400;color:var(--muted);font-size:12.5px}
+.fall-sichten .sicht .n,.result-views .sicht .n{margin-left:2px;font-weight:400;color:var(--muted);font-size:12.5px}
+/* The result's three views (13.6): the strip above the split, its tool at the right */
+.result-views{margin:0 0 12px}
+.liste .aktivitaet{margin:8px 14px 6px}
+.liste .zeit-monat{margin:14px 14px 2px}
+.liste .zeit{padding:8px 14px}
+.liste .zeit[role=button]{cursor:pointer}
+.liste .zeit[role=button]:hover{background:var(--code)}
+.liste .zeit.on{background:var(--accent-weich)}
+.liste .personen-kopf{padding:10px 14px 4px}
+.liste .bild{margin:6px 14px 14px}
+.liste .person-karte{margin:0 14px 14px}
+.liste>.hint.small{padding:8px 14px 0;margin:0}
+.periode .mehr-knoten{margin:6px auto 0}
+.calbar-trenner{width:1px;height:20px;background:var(--line);margin:0 2px}
 .werkzeugzeile{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 4px;padding-top:14px}
 .werkzeugzeile select.klein{padding:4px 8px;font-size:13px}
 .werkzeugzeile input{flex:1;min-width:200px}
@@ -839,7 +856,7 @@ button.mini.nur-ikon{padding:3px 6px}
 .person-karte{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:12px;padding:12px 14px;border:1px solid var(--accent);border-radius:12px;background:var(--accent-weich);font-size:13.5px}
 .person-karte .kreis{width:36px;height:36px;border-radius:50%;background:var(--card);border:2px solid var(--accent);display:flex;align-items:center;justify-content:center;font-weight:650;font-size:12px;flex:0 0 auto}
 .person-karte .wer b{display:block}
-.person-karte .wer span{color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
+.person-karte .wer>span{display:block;color:var(--muted);font-size:12.5px;overflow-wrap:anywhere}
 .person-karte .zaehler{display:flex;gap:10px;color:var(--muted);font-size:12.5px}
 .person-karte .zaehler span{display:inline-flex;align-items:center;gap:4px}
 .person-karte .knoepfe{margin-left:auto;display:flex;gap:6px}
@@ -1276,6 +1293,15 @@ details.rechte p{margin:6px 0}
     <div class="row hide" id="ki-klappe" style="margin-bottom:12px">
       <button class="mini" id="ki-klappknopf" onclick="klappeTreffer()"></button>
     </div>
+    <!-- The result in three views (13.6): the list is the page the search
+         answered, timeline and people are drawn from the whole result. The
+         strip is the case's. No tool beside it: the band narrows the
+         timeline, the person pill the people. -->
+    <div class="sichten result-views hide" id="result-views">
+      <button class="sicht on" data-result-view="list" onclick="resultView('list')"><span data-ikon="liste" data-ikon-klasse="klein"></span><span data-i18n="search.view.list">Liste</span></button>
+      <button class="sicht" data-result-view="timeline" onclick="resultView('timeline')"><span data-ikon="uhr" data-ikon-klasse="klein"></span><span data-i18n="search.view.timeline">Zeitleiste</span></button>
+      <button class="sicht" data-result-view="people" onclick="resultView('people')"><span data-ikon="person" data-ikon-klasse="klein"></span><span data-i18n="search.view.people">Personen</span><span class="n num" id="result-people-count"></span></button>
+    </div>
     <div class="treffer-split" id="treffer-split">
       <div class="card liste">
         <!-- The whole result into a case – every page of it, taken on the
@@ -1288,6 +1314,7 @@ details.rechte p{margin:6px 0}
           <button class="mini" onclick="auswahlInFall()" data-i18n="cases.add.selected">In einen Fall…</button>
           <a href="javascript:void(0)" class="small" onclick="auswahlLeeren()" data-i18n="cases.selection.clear">Auswahl aufheben</a></div>
         <p class="small ok hide" id="treffer-meldung" style="padding:8px 14px 0;margin:0"></p>
+        <div class="aktivitaet hide" id="result-activity"></div>
         <div id="results"><p class="hint" data-i18n="search.none.yet">Noch keine Suche.</p></div>
         <div id="pager"></div>
       </div>
@@ -1340,13 +1367,18 @@ details.rechte p{margin:6px 0}
   <div id="sicht-adressbuch" class="hide">
   <div class="card">
     <div class="calbar">
+      <!-- Two presentations of the same people, like the calendar's week and
+           month: the list, and the picture the case has (13.6) -->
+      <span class="chip on" data-book-mode="list" data-i18n="book.mode.list">Liste</span>
+      <span class="chip" data-book-mode="picture" data-i18n="book.mode.picture">Bild</span>
+      <span class="calbar-trenner" id="book-origin"></span>
       <span class="chip on" data-book="all" data-i18n="book.f.all">Alle</span>
       <span class="chip" data-book="contacts" data-i18n="book.f.contacts">Aus Kontakten</span>
       <span class="chip" data-book="comm" data-i18n="book.f.comm">Aus Kommunikation</span>
       <span class="small muted" id="kbStats"></span>
       <button class="ghost rechts" id="kbSuchen" onclick="kontakteSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="book.search">Alle Kontakte durchsuchen</span></button>
     </div>
-    <p class="small muted" style="margin:8px 0 0" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
+    <p class="small muted" style="margin:8px 0 0" id="book-note" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
   </div>
   <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
   </div>
@@ -1386,7 +1418,7 @@ details.rechte p{margin:6px 0}
           <button class="mini" id="fall-ordner-neu" onclick="ordnerFenster(null)"><span data-ikon="ordnerneu" data-ikon-klasse="klein"></span><span data-i18n="cases.folder.new">Neuer Ordner…</span></button>
         </span>
         <span class="falten hide" id="fall-werkzeug-zeit">
-          <select id="fall-zeit-richtung" class="klein" onchange="fallZeitRichtung(this.value)"><option value="alt" data-i18n="cases.timeline.oldest">Älteste zuerst</option><option value="neu" data-i18n="cases.timeline.newest">Neueste zuerst</option></select>
+          <select id="fall-zeit-richtung" class="klein" onchange="fallZeitRichtung(this.value)"><option value="alt" data-i18n="timeline.oldest">Älteste zuerst</option><option value="neu" data-i18n="timeline.newest">Neueste zuerst</option></select>
         </span>
       </div>
       <div class="auswahl-fall hide" id="fall-auswahl"><b id="fall-auswahl-zahl"></b>
@@ -2343,6 +2375,7 @@ var SUCHE_LIEF = false;
 function zeigeAnfang(){
   el('suche-anfang').classList.toggle('hide', SUCHE_LIEF);
   el('treffer-split').classList.toggle('hide', !SUCHE_LIEF || !TREFFER_OFFEN);
+  updateResultStrip();
   if(!SUCHE_LIEF) ladeAnfang();
 }
 function ladeAnfang(){
@@ -3271,6 +3304,7 @@ var TOUR = {
     {ziel: '#q', rahmen: '.suchzeile', tab: 'suche', titel: 'tour.suche.feld', text: 'tour.suche.feld.t'},
     {ziel: '#filter', tab: 'suche', titel: 'tour.suche.filter', text: 'tour.suche.filter.t'},
     {ziel: '#treffer-split', tab: 'suche', titel: 'tour.suche.treffer', text: 'tour.suche.treffer.t', abzweig: 'faelle'},
+    {ziel: '#result-views', tab: 'suche', titel: 'tour.suche.ergebnis', text: 'tour.suche.ergebnis.t'},
     {ziel: '#suche-historie', tab: 'suche', titel: 'tour.suche.verlauf', text: 'tour.suche.verlauf.t'},
     {ziel: '#sched-karte', tab: 'einstellungen', karte: 'sched-karte', titel: 'tour.suche.zeitplan', text: 'tour.suche.zeitplan.t'},
     {ziel: '#mcp-karte', tab: 'einstellungen', karte: 'mcp-karte', titel: 'tour.suche.claude', text: 'tour.suche.claude.t'}],
@@ -3883,6 +3917,7 @@ function suchmodusSetzen(art){
   TREFFER_OFFEN = art !== 'ki';
   el('ki-klappe').classList.toggle('hide', art !== 'ki');
   el('treffer-split').classList.toggle('hide', !TREFFER_OFFEN);
+  updateResultStrip();
 }
 function suchmodus(art){
   suchmodusSetzen(art);
@@ -3906,6 +3941,7 @@ function modiPruefen(moeglich, abgeschaltet){
 function klappeTreffer(){
   TREFFER_OFFEN = !TREFFER_OFFEN;
   el('treffer-split').classList.toggle('hide', !TREFFER_OFFEN);
+  updateResultStrip();
   zeigeKlappknopf();
 }
 function zeigeKlappknopf(n){
@@ -3938,25 +3974,16 @@ function doSearch(off, gespeichert){
     (el('f-gone').checked ? 1 : 0) + (anhangGesetzt() ? 1 : 0) +
     (el('f-party').value !== 'all' ? 1 : 0) + mailGesetzt().length;
   merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
-  var proSeite = trefferProSeite(), fw = fallFilterWert(), mw = mailWerte();
-  var p = new URLSearchParams({q: el('q').value, person: el('f-person').value,
-    source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
-    gone: el('f-gone').checked ? '1' : '', attachments: anhangGesetzt() ? '1' : '',
-    folder: el('f-folder').value,
-    filetype: el('f-typ').value,
-    // The "Cases" filter: a case, or one folder inside it ("case/folder")
-    case: fw.fall ? String(fw.fall) : '', case_folder: fw.ordner ? String(fw.ordner) : '',
-    party: el('f-party').value || 'all',
-    // The four mail lines – empty unless the source can answer them.
-    // Read once: every call walks all four fields and asks again whether
-    // the source can answer them at all.
-    mail_from: mw.from, mail_to: mw.to, mail_cc: mw.cc, mail_bcc: mw.bcc,
-    // A saved search that is run says so – the server notes when and how many.
-    saved: gespeichert ? String(gespeichert) : '',
-    // This search belongs in the history; a script's does not unless it
-    // says so (see /api/v1/search).
-    remember: '1',
-    mode: MODUS_ZU_SERVER[SUCHMODUS], limit: proSeite, offset: offset});
+  var proSeite = trefferProSeite();
+  var p = searchParams();
+  // A saved search that is run says so – the server notes when and how many.
+  p.set('saved', gespeichert ? String(gespeichert) : '');
+  // This search belongs in the history; a script's does not unless it
+  // says so (see /api/v1/search).
+  p.set('remember', '1');
+  p.set('limit', proSeite);
+  p.set('offset', offset);
+  WHOLE_FROM_FORM = true;
   zeigeFilterstand();
   el('results').innerHTML = '<p class="hint">' + esc(t('search.running')) + '</p>';
   // The page searches through the versioned surface – the same engine,
@@ -3970,6 +3997,25 @@ function doSearch(off, gespeichert){
     if(SUCHMODUS === 'ki' && (r.items || []).length) frageKI();
     else abbrechenKI();
   });
+}
+/* The criteria of the form as the versioned search takes them – what the
+   search itself and the whole result behind the timeline and the people
+   view (13.6) share, and what tells one result from the next. */
+function searchParams(){
+  var fw = fallFilterWert(), mw = mailWerte();
+  return new URLSearchParams({q: el('q').value, person: el('f-person').value,
+    source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
+    gone: el('f-gone').checked ? '1' : '', attachments: anhangGesetzt() ? '1' : '',
+    folder: el('f-folder').value,
+    filetype: el('f-typ').value,
+    // The "Cases" filter: a case, or one folder inside it ("case/folder")
+    case: fw.fall ? String(fw.fall) : '', case_folder: fw.ordner ? String(fw.ordner) : '',
+    party: el('f-party').value || 'all',
+    // The four mail lines – empty unless the source can answer them.
+    // Read once: every call walks all four fields and asks again whether
+    // the source can answer them at all.
+    mail_from: mw.from, mail_to: mw.to, mail_cc: mw.cc, mail_bcc: mw.bcc,
+    mode: MODUS_ZU_SERVER[SUCHMODUS]});
 }
 /* Why a hit is a hit must be visible. The preview shows the excerpt around
    the match; here the term inside it also gets highlighted. Escape first,
@@ -4219,6 +4265,8 @@ function aehnlicheZu(cid){
   api(API + '/similar?cid=' + encodeURIComponent(cid) +
       '&limit=' + trefferProSeite()).then(function(r){
     offset = 0;
+    // Similar hits have no criteria a whole result could be built from.
+    WHOLE_FROM_FORM = false;
     renderHits(r);
     abbrechenKI();
   });
@@ -4257,15 +4305,18 @@ function renderHits(r){
   // The versioned search answers `items` and says whether a page follows;
   // A collection on this surface is `items`, similar hits included.
   var hits = r.items || r.results || [];
+  PAGE_HITS = hits;
   TREFFER = hits;
   el('detail').classList.add('hide');
   TREFFER_GEWAEHLT = -1;
   SUCHE_LIEF = true;
+  wholeReset();
   zeigeAnfang();
   zeigeTrefferKopf();
   if(!hits.length){ el('results').innerHTML = '<p class="hint">' + esc(t('search.nohits')) + '</p>';
+                    el('result-activity').classList.add('hide');
                     el('pager').innerHTML = ''; abbrechenKI(); return; }
-  zeichneTrefferListe();
+  drawResult();
   // Paging follows the setting too – otherwise "next" would skip hits or
   // show the same ones again.
   var proSeite = trefferProSeite();
@@ -4281,6 +4332,7 @@ function renderHits(r){
 /* One row per hit: the tick for a case (greyed with its reason on an index
    without keys), the icon, title with the case mark, date, who, preview. */
 function zeichneTrefferListe(){
+  el('result-activity').classList.add('hide');
   el('results').innerHTML = TREFFER.map(function(h, i){
     return '<div class="hit' + (TREFFER_GEWAEHLT === i ? ' on' : '') + '" id="treffer-' + (i + 1) +
       '" tabindex="0" role="button" onclick="waehleTreffer(' + i + ')" ' +
@@ -4324,10 +4376,198 @@ function waehleTreffer(i){
   var h = TREFFER[i];
   if(!h) return;
   TREFFER_GEWAEHLT = i;
-  document.querySelectorAll('#results .hit').forEach(function(z, k){
-    z.classList.toggle('on', k === i);
+  ['#results .hit', '#results .zeit'].forEach(function(sel){
+    document.querySelectorAll(sel).forEach(function(z, k){
+      z.classList.toggle('on', k === i);
+    });
   });
   zeigeDetail(h, i + 1);
+}
+
+/* ---------- The result in three views (13.6) ----------
+   List, timeline, people – the strip the case has, over a search. The
+   list is the page the search answered and pages as before; the two
+   others are drawn from the whole result, fetched once per set of
+   criteria when first asked for (/api/v1/search/timeline, /people) and
+   kept until the criteria change. TREFFER holds the rows of the active
+   view, so the detail, its arrows, the ticks and "add to case" work on
+   whichever is open; PAGE_HITS keeps the page. */
+var RESULT_VIEW = 'list';
+var PAGE_HITS = [];
+var WHOLE = {key: null, timeline: null, people: null};
+var WHOLE_FROM_FORM = false;   // the result came from the form, so a whole result exists
+var RESULT_BUCKET = null, RESULT_ALL = false;
+var RESULT_PERSON = null, RESULT_EXPANDED = {};
+var RESULT_ROWS = 200;          // timeline rows drawn before "show n more"
+
+/* A new result: the whole one is forgotten when the criteria changed. */
+function wholeReset(){
+  var key = WHOLE_FROM_FORM ? searchParams().toString() : null;
+  if(WHOLE.key === key && key !== null) return;
+  WHOLE = {key: key, timeline: null, people: null};
+  RESULT_BUCKET = null; RESULT_PERSON = null; RESULT_EXPANDED = {}; RESULT_ALL = false;
+  el('result-people-count').textContent = '';
+  if(!key) RESULT_VIEW = 'list';
+}
+function updateResultStrip(){
+  el('result-views').classList.toggle('hide', !SUCHE_LIEF || !TREFFER_OFFEN || !PAGE_HITS.length || !WHOLE.key);
+}
+/* Every hit the page holds – the page and the whole result – for the
+   case marks, which must reach both. */
+function knownHits(){
+  var alle = PAGE_HITS.slice();
+  if(WHOLE.timeline && WHOLE.timeline.items) alle = alle.concat(WHOLE.timeline.items);
+  return alle;
+}
+function resultView(name){
+  if(name !== RESULT_VIEW) merke('flow.result_view', name);
+  RESULT_VIEW = name;
+  drawResult();
+}
+function drawResult(){
+  if(!PAGE_HITS.length) return;
+  var s = RESULT_VIEW;
+  document.querySelectorAll('#result-views [data-result-view]').forEach(function(b){
+    b.classList.toggle('on', b.dataset.resultView === s);
+  });
+  el('pager').classList.toggle('hide', s !== 'list');
+  updateResultStrip();
+  if(s === 'list'){ TREFFER = PAGE_HITS; zeichneTrefferListe(); zeigeTrefferKopf(); return; }
+  el('detail').classList.add('hide');
+  el('result-activity').classList.add('hide');
+  TREFFER_GEWAEHLT = -1;
+  if(s === 'timeline') drawResultTimeline(); else drawResultPeople();
+  zeigeTrefferKopf();
+}
+/* The whole result of one kind, fetched once; null when a new search ran meanwhile. */
+function loadWholeResult(kind){
+  var key = WHOLE.key;
+  if(WHOLE[kind]) return Promise.resolve(WHOLE[kind]);
+  return api(API + '/search/' + kind + '?' + searchParams().toString()).then(function(r){
+    if(WHOLE.key !== key) return null;
+    WHOLE[kind] = r || {};
+    return WHOLE[kind];
+  }).catch(function(e){
+    if(WHOLE.key !== key) return null;
+    WHOLE[kind] = {error: {k: 'srv.internal'}, text: String(e && e.message || e)};
+    return WHOLE[kind];
+  });
+}
+/* What the head counts: the page in the list, the whole result elsewhere. */
+function wholeCount(){
+  var w = RESULT_VIEW === 'timeline' ? WHOLE.timeline : RESULT_VIEW === 'people' ? WHOLE.people : null;
+  if(!w || rtext(w)) return null;
+  return RESULT_VIEW === 'timeline' ? (w.count || 0) : (w.hits || 0);
+}
+function wholeError(w){
+  return w && (w.text || rtext(w)) ? '<p class="hint err">' + esc(w.text || rtext(w)) + '</p>' : '';
+}
+function drawResultTimeline(){
+  var w = WHOLE.timeline;
+  el('result-activity').classList.add('hide');
+  if(!w){
+    el('results').innerHTML = '<p class="hint">' + esc(t('search.whole.loading')) + '</p>';
+    loadWholeResult('timeline').then(function(r){ if(r && RESULT_VIEW === 'timeline') drawResult(); });
+    return;
+  }
+  if(wholeError(w)){ el('results').innerHTML = wholeError(w); return; }
+  var hits = w.items || [];
+  // Oldest first, as the server hands them – the band narrows to a month,
+  // the last bar is the newest; no direction to choose.
+  var stellen = hits.map(function(h){ return {k: zeitSchluessel(h.date), art: 'eintrag', e: h}; });
+  var state = {bucket: RESULT_BUCKET, pick: 'resultBucket', summary: function(band){
+    return t(band.wochen ? 'search.timeline.summary.weeks' : 'search.timeline.summary',
+             {n: zahl(hits.length), from: band.eimer[0].lang, to: band.eimer[band.eimer.length - 1].lang}); }};
+  var band = activityBand('result-activity', stellen, state);
+  RESULT_BUCKET = state.bucket;
+  el('result-activity').classList.toggle('hide', !band);
+  var passend = stellen.filter(function(x){
+    return !RESULT_BUCKET || (x.k && eimerSchluessel(x.k, band && band.wochen) === RESULT_BUCKET);
+  });
+  TREFFER = passend.map(function(x){ return x.e; });
+  var sichtbar = RESULT_ALL || RESULT_BUCKET ? TREFFER : TREFFER.slice(0, RESULT_ROWS);
+  var html = '', monat = null;
+  sichtbar.forEach(function(h, i){
+    var k = zeitSchluessel(h.date), kopf = k ? k.slice(0, 7) : '';
+    if(kopf !== monat){ html += '<div class="zeit-monat">' + esc(monatName(kopf)) + '</div>'; monat = kopf; }
+    html += resultTimelineRow(h, i, k);
+  });
+  if(!hits.length) html = '<p class="hint">' + esc(t('search.nohits')) + '</p>';
+  else if(!passend.length) html = '<p class="hint">' + esc(t('timeline.nomatch')) + '</p>';
+  if(TREFFER.length > sichtbar.length)
+    html += '<div class="mehr"><button class="mini" onclick="resultAllRows()">' +
+      esc(t('timeline.more', {n: zahl(TREFFER.length - sichtbar.length)})) + '</button></div>';
+  if(w.capped) html = '<p class="hint small">' + esc(t('search.whole.capped', {n: zahl(w.limit)})) + '</p>' + html;
+  el('results').innerHTML = html;
+}
+/* One row of the timeline: the tick for a case, date, icon, title with the
+   case mark, who with the marks – a click opens the detail at the right. */
+function resultTimelineRow(h, i, k){
+  return '<div class="zeit' + (TREFFER_GEWAEHLT === i ? ' on' : '') + '" id="treffer-' + (i + 1) +
+    '" tabindex="0" role="button" onclick="waehleTreffer(' + i + ')" onkeydown="trefferTaste(event, ' + i + ')">' +
+    '<input type="checkbox" class="wahl"' + (h.key && AUSWAHL[h.key] ? ' checked' : '') +
+    (h.key ? '' : ' disabled title="' + esc(t('cases.add.nokey')) + '"') +
+    ' aria-label="' + esc(t('cases.pick')) + '" onclick="event.stopPropagation()" ' +
+    'onchange="trefferWahl(' + i + ', this.checked)">' +
+    '<span class="d">' + esc(tagKurz(k) || h.date || '') + '</span>' +
+    '<span class="ikon">' + ikon(quellIkon(h), 'klein') + '</span>' +
+    '<div><span class="t">' + esc(h.title || t('search.nosubject')) + fallMarke(h) + '</span>' +
+    '<span class="w"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
+    (h.gone ? '<span class="tag weg">' + esc(t('search.gone.tag')) + '</span>' : '') +
+    esc(h.who || '') + '</span></div><span></span></div>';
+}
+function resultBucket(k){
+  RESULT_BUCKET = RESULT_BUCKET === k ? null : k;
+  drawResult();
+}
+function resultAllRows(){
+  RESULT_ALL = true;
+  drawResult();
+}
+/* A person as the picture wants it – the case's shape, from the API's. */
+function personFromApi(p){
+  return {name: p.name, anzahl: p.items || 0, je_quelle: p.by_source || {},
+          von: p.first || '', bis: p.last || '', adressen: p.address ? [p.address] : []};
+}
+function drawResultPeople(){
+  var w = WHOLE.people;
+  if(!w){
+    el('results').innerHTML = '<p class="hint">' + esc(t('search.whole.loading')) + '</p>';
+    loadWholeResult('people').then(function(r){ if(r && RESULT_VIEW === 'people') drawResult(); });
+    return;
+  }
+  if(wholeError(w)){ el('results').innerHTML = wholeError(w); return; }
+  var alle = (w.items || []).map(personFromApi).filter(function(p){ return !istIch(p); });
+  el('result-people-count').textContent = zahl(alle.length);
+  var head = '<div class="personen-kopf"><span class="num">' +
+    esc(t('search.people.count', {n: zahl(alle.length), m: zahl(w.hits || 0)})) + '</span>' +
+    '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('search.people.i')) + '">i</span></div>';
+  if(!KANN_ADRESSEN && alle.length) head += '<p class="hint small">' + esc(t('people.noaddr')) + '</p>';
+  if(w.capped) head += '<p class="hint small">' + esc(t('search.whole.capped', {n: zahl(5000)})) + '</p>';
+  // No filter field here: the person pill is the one way to narrow a result to a name.
+  peoplePicture('results', alle, {chosen: RESULT_PERSON, filter: '', pick: 'resultPerson',
+    expand: 'resultExpand', expanded: RESULT_EXPANDED, cap: 24, none: t('search.people.none'),
+    ways: function(p){
+      var name = esc(p.name).replace(/'/g, "\\'");
+      return '<button class="mini" onclick="resultPersonSearch(\'' + name + '\', \'timeline\')">' + esc(t('people.timeline')) + '</button>' +
+        '<button class="mini" onclick="resultPersonSearch(\'' + name + '\', \'list\')">' + esc(t('people.search')) + '</button>';
+    }}, head);
+}
+function resultPerson(name){
+  RESULT_PERSON = RESULT_PERSON === name ? null : name;
+  drawResult();
+}
+function resultExpand(key){
+  RESULT_EXPANDED[key] = true;
+  drawResult();
+}
+/* From a person of the result to their items: the person pill set, the
+   search run again in the view asked for. */
+function resultPersonSearch(name, view){
+  el('f-person').value = name;
+  RESULT_VIEW = view || 'list';
+  zeigeFilterstand();
+  doSearch(0);
 }
 
 /* The chosen hit (11.2): head, title, facts, actions, content – and for
@@ -4339,8 +4579,10 @@ function waehleTreffer(i){
    not carry comes with one fetch (/api/v1/documents/facts) and is drawn
    on arrival. */
 var DETAIL_STAND = 0;      // the fetch the detail is waiting for
+var DETAIL_HIT = null;     // the hit the detail shows – a hit of the list, or a message of a conversation
 var OHNE_GESPRAECH = ['kalender', 'kontakte', 'datei', 'pages', 'planner', 'todo', 'onenote'];
 function zeigeDetail(h, nr){
+  DETAIL_HIT = h;
   var link = trefferLink(h);
   // The archive's own HTML in a frame only where the page IS the item: a
   // SharePoint or OneNote page. A chat message, a Planner or To Do task
@@ -4377,11 +4619,21 @@ function detailKopf(h, nr){
   return '<div class="dkopf"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
     (h.gone ? '<span class="tag weg">' + esc(t('search.gone.since', {when: fmt(h.gone)})) + '</span>' : '') +
     fallMarke(h) +
-    '<span class="zaehler"><span>' + esc(t('search.detail.of', {i: zahl(nr), n: zahl(n)})) + '</span>' +
+    // A message opened from its conversation is no hit of the list: no
+    // position in it, no arrows through it.
+    (nr ? '<span class="zaehler"><span>' + esc(t('search.detail.of', {i: zahl(nr), n: zahl(n)})) + '</span>' +
     '<button class="ikonknopf" title="' + esc(t('search.detail.prev')) + '" aria-label="' + esc(t('search.detail.prev')) + '"' +
       (nr > 1 ? ' onclick="waehleTreffer(' + (nr - 2) + ')"' : ' disabled') + '>' + ikon('hoch', 'klein') + '</button>' +
     '<button class="ikonknopf" title="' + esc(t('search.detail.next')) + '" aria-label="' + esc(t('search.detail.next')) + '"' +
-      (nr < n ? ' onclick="waehleTreffer(' + nr + ')"' : ' disabled') + '>' + ikon('runter', 'klein') + '</button></span></div>';
+      (nr < n ? ' onclick="waehleTreffer(' + nr + ')"' : ' disabled') + '>' + ikon('runter', 'klein') + '</button></span>' : '') + '</div>';
+}
+/* The hit a choice window or a conversation action means: a position in
+   the list, or 'detail' for what the detail shows right now. */
+function chosenHit(i){
+  return i === 'detail' ? DETAIL_HIT : TREFFER[i];
+}
+function chosenIndex(nr){
+  return nr ? String(nr - 1) : "'detail'";
 }
 function detailAktionen(h, nr, link){
   // "Find similar" hangs on the VECTORS in the index, not on Ollama: the
@@ -4390,7 +4642,7 @@ function detailAktionen(h, nr, link){
   return '<div class="daktionen">' +
     (link ? '<a class="ghost" href="' + esc(link) + '" target="_blank" rel="noopener">' + ikon('export', 'klein') + esc(t('search.menu.source')) + '</a>'
           : '<button class="ghost" disabled>' + ikon('export', 'klein') + esc(t('search.menu.source')) + '</button>') +
-    '<button class="ghost"' + (h.key ? ' onclick="fallWahl(\'einer\', ' + (nr - 1) + ')"'
+    '<button class="ghost"' + (h.key ? ' onclick="fallWahl(\'einer\', ' + chosenIndex(nr) + ')"'
                                      : ' disabled title="' + esc(t('cases.add.nokey')) + '"') +
       '>' + ikon('fall', 'klein') + esc(t('cases.add.one')) + '</button>' +
     '<button class="ghost"' + (h.cid && aehnlichMoeglich
@@ -4417,7 +4669,7 @@ function detailPerson(p){
   var name = p.name || p.mail || '';
   if(!name) return '';
   return personLink(name) + (p.mail && p.name ? ' <span class="muted small">' + esc(p.mail) + '</span>' : '') +
-    (adresseExtern(p.mail) ? ' <span class="tag extern">' + esc(t('cases.people.external')) + '</span>' : '');
+    (adresseExtern(p.mail) ? ' <span class="tag extern">' + esc(t('people.external')) + '</span>' : '');
 }
 function ordnerLink(h){
   var pfad = h.context || '';
@@ -4559,19 +4811,22 @@ function zeichneGespraech(h, nr, r){
   function imFall(m){ return !!fall && (m.cases || []).some(function(c){ return c.id === fall.id; }); }
   var drin = msgs.filter(imFall).length, rest = Math.max(0, n - drin);
   var knopf = '';
-  if(h.key && fall && rest) knopf = '<button class="mini" onclick="gespraechInFall(' + fall.id + ', ' + (nr - 1) + ')">' +
+  if(h.key && fall && rest) knopf = '<button class="mini" onclick="gespraechInFall(' + fall.id + ', ' + chosenIndex(nr) + ')">' +
     esc(t('search.detail.thread.addrest', {n: zahl(rest)})) + '</button>';
-  else if(h.key && !fall) knopf = '<button class="mini" onclick="fallWahl(\'einer\', ' + (nr - 1) + ')">' +
+  else if(h.key && !fall) knopf = '<button class="mini" onclick="fallWahl(\'einer\', ' + chosenIndex(nr) + ')">' +
     esc(t('search.detail.thread.addall')) + '</button>';
+  // A row opens its message as the detail – the original stays one click
+  // away there, under "Open original".
+  var faden = JSON.stringify(String(h.thread || '')).replace(/"/g, '&quot;');
   el('detail-verlauf').innerHTML = '<details class="verlauf"><summary><span class="pfeil">' + ikon('rechts', 'klein') + '</span>' +
     esc(t('search.detail.thread', {n: zahl(n)})) + '</summary>' +
-    msgs.map(function(m){
-      var g = /^o365:\/\/([^/]+)\/(.*)$/.exec(m.uri || '');
-      var link = g ? API + '/files/content?root=' + g[1] + '&path=' + g[2] : null;
-      return '<div class="vzeile' + (imFall(m) ? ' drin' : '') + (m.uid === h.uid ? ' dies' : '') + '"><span class="punkt"></span>' +
+    msgs.map(function(m, i){
+      var auf = 'openThreadMessage(' + faden + ', ' + i + ')';
+      return '<div class="vzeile' + (imFall(m) ? ' drin' : '') + (m.uid === h.uid ? ' dies' : '') +
+        '" role="button" tabindex="0" title="' + esc(t('search.detail.thread.open')) + '" onclick="' + auf +
+        '" onkeydown="if(event.key === \'Enter\'){ ' + auf + '; }"><span class="punkt"></span>' +
         '<span class="vdatum">' + esc(m.date || '') + '</span>' +
-        '<span class="vtitel">' + (link ? '<a href="' + link + '" target="_blank" rel="noopener">' : '') +
-        esc(m.title || t('search.nosubject')) + (link ? '</a>' : '') + '</span>' +
+        '<span class="vtitel">' + esc(m.title || t('search.nosubject')) + '</span>' +
         '<span class="vwer">' + esc(m.who || '') + '</span></div>';
     }).join('') +
     '<div class="fuss"><span>' + esc(fall
@@ -4581,12 +4836,23 @@ function zeichneGespraech(h, nr, r){
 /* The rest of the conversation into the case the hit already sits in –
    the route the choice window uses – then the fold drawn afresh. */
 function gespraechInFall(fallId, i){
-  var h = TREFFER[i];
+  var h = chosenHit(i);
   if(!h || !h.key) return;
   postKnapp(API + '/cases/' + fallId + '/items', {threads: [h.key]}).then(function(r){
     if(apiFehler(r)) return;
     delete THREADS[h.thread];
-    zeigeDetail(h, i + 1);
+    zeigeDetail(h, i === 'detail' ? null : i + 1);
+  });
+}
+/* A message of the conversation as the detail: through the list when it
+   is a hit there, so the selection follows; on its own otherwise. */
+function openThreadMessage(threadId, i){
+  ladeThread(threadId).then(function(r){
+    var m = (r.messages || [])[i];
+    if(!m) return;
+    var j = -1;
+    TREFFER.forEach(function(h, k){ if(j < 0 && h.uid === m.uid) j = k; });
+    if(j >= 0) waehleTreffer(j); else zeigeDetail(m, null);
   });
 }
 
@@ -4650,7 +4916,7 @@ function externMarke(h){
   var intern = internDomains(), domains = (h && h.domains) || [];
   if(!intern.length || !domains.length) return '';
   return domains.some(function(d){ return intern.indexOf(d) < 0; })
-    ? '<span class="tag extern">' + esc(t('cases.people.external')) + '</span>' : '';
+    ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '';
 }
 /* The mark of what Claude wrote through MCP – on the note or the item
    itself, nowhere else. */
@@ -5121,19 +5387,22 @@ function zeigeAuswahl(){
 function auswahlLeeren(neuZeichnen){
   AUSWAHL = {};
   zeigeAuswahl();
-  if(neuZeichnen !== false) zeichneTrefferListe();
+  if(neuZeichnen !== false) drawResult();
 }
 /* The head of the hit list: the count, and "add all" for the whole result
    – a list as it stands now, every page of it, taken on the server. */
 function zeigeTrefferKopf(){
   var kopf = el('treffer-kopf');
-  kopf.classList.toggle('hide', !TREFFER.length);
-  if(!TREFFER.length) return;
+  kopf.classList.toggle('hide', !PAGE_HITS.length);
+  if(!PAGE_HITS.length) return;
   // The engine counts the page, not the whole result – the list is
-  // taken on the server, which then says how many it was.
-  el('treffer-stand').textContent = t('cases.hits.count', {n: zahl(TREFFER.length)});
+  // taken on the server, which then says how many it was. The timeline
+  // and the people view know the whole result and say so.
+  var ganz = wholeCount();
+  el('treffer-stand').textContent = ganz === null
+    ? t('cases.hits.count', {n: zahl(PAGE_HITS.length)}) : t('search.whole.count', {n: zahl(ganz)});
   var knopf = el('alle-in-fall');
-  var moeglich = TREFFER.some(function(h){ return h.key; });
+  var moeglich = PAGE_HITS.some(function(h){ return h.key; });
   knopf.textContent = t('cases.add.all');
   knopf.disabled = !moeglich;
   knopf.title = moeglich ? '' : t('cases.add.nokey');
@@ -5170,7 +5439,7 @@ function fallWahl(art, daten){
 }
 function fallWahlTitel(){
   var w = FALL_WAHL;
-  if(w.art === 'einer') return t('cases.add.title.one', {title: (TREFFER[w.daten] || {}).title || t('search.nosubject')});
+  if(w.art === 'einer') return t('cases.add.title.one', {title: (chosenHit(w.daten) || {}).title || t('search.nosubject')});
   if(w.art === 'auswahl') return t('cases.add.title.many', {n: Object.keys(AUSWAHL).length});
   return t('cases.add.title.list');
 }
@@ -5204,7 +5473,7 @@ function zeichneFallWahl(){
 function fallWahlThreads(){
   var w = FALL_WAHL;
   if(!w || (w.art !== 'einer' && w.art !== 'auswahl') || !KANN_VERLAUF) return;
-  var hits = (w.art === 'einer' ? [TREFFER[w.daten]] : Object.keys(AUSWAHL).map(function(k){ return AUSWAHL[k]; })).filter(Boolean);
+  var hits = (w.art === 'einer' ? [chosenHit(w.daten)] : Object.keys(AUSWAHL).map(function(k){ return AUSWAHL[k]; })).filter(Boolean);
   var faeden = [];
   hits.forEach(function(h){ if(h.thread && faeden.indexOf(h.thread) < 0) faeden.push(h.thread); });
   if(!faeden.length || faeden.length > 25) return;
@@ -5316,7 +5585,7 @@ function fallWahlAusfuehren(){
     var name = fallName(id) || wahl.neu;
     var tun;
     if(w.art === 'einer' || w.art === 'auswahl'){
-      var hits = w.art === 'einer' ? [TREFFER[w.daten]] : Object.keys(AUSWAHL).map(function(k){ return AUSWAHL[k]; });
+      var hits = w.art === 'einer' ? [chosenHit(w.daten)] : Object.keys(AUSWAHL).map(function(k){ return AUSWAHL[k]; });
       var kasten = dyn('fall-wahl-thread');
       var mitThread = !!(w.threads && w.threads.length && w.threadAn !== false && kasten && !kasten.classList.contains('hide'));
       tun = post(API + '/cases/' + id + '/items',
@@ -5336,7 +5605,7 @@ function fallWahlAusfuehren(){
       tun = post(API + '/cases/' + id + '/lists',
                  {criteria: w.kriterien, folder: ordnerId}).then(function(r){
         if(r && r.ok === false) throw new Error(rtext(r));
-        TREFFER.forEach(function(h){ if(h.key) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
+        knownHits().forEach(function(h){ if(h.key) markiereImFall(h, id, name, ordnerId ? ordnerNeu || fallOrdnerName(id, ordnerId) : ''); });
         var danach = anhaengen
           ? post(API + '/searches/saved', {name: kriterienTitel(w.kriterien), criteria: w.kriterien, case: id, case_folder: ordnerId})
           : Promise.resolve();
@@ -5347,7 +5616,7 @@ function fallWahlAusfuehren(){
   }).then(function(meldung){
     closeWizard('fall-wahl');
     if(w.art === 'auswahl') auswahlLeeren(false);
-    zeichneTrefferListe();
+    drawResult();
     trefferMeldung(meldung);
     ladeFaelle();
     if(FALL_OFFEN) fallOeffnen(FALL_OFFEN.id);
@@ -5359,7 +5628,7 @@ function markiereImFall(h, id, name, ordner){
   h.cases.push({id: id, name: fallName(id) || name || '', status: 'open', folder: ordner || null});
 }
 function auswahlInFall(){ if(Object.keys(AUSWAHL).length) fallWahl('auswahl'); }
-function listeInFall(){ if(TREFFER.length) fallWahl('liste'); }
+function listeInFall(){ if(PAGE_HITS.length) fallWahl('liste'); }
 
 /* ---------- The cases tab: the overview ----------
    A list with names, status, sources and the last change; while a case is
@@ -5708,7 +5977,7 @@ function notizSchluessel(iso){
   return d.getFullYear() + '-' + zwei(d.getMonth() + 1) + '-' + zwei(d.getDate()) + ' ' + zwei(d.getHours()) + ':' + zwei(d.getMinutes());
 }
 function monatName(schluessel){
-  if(!schluessel) return t('cases.timeline.undated');
+  if(!schluessel) return t('timeline.undated');
   var d = new Date(parseInt(schluessel.slice(0, 4), 10), parseInt(schluessel.slice(5, 7), 10) - 1, 1);
   return isNaN(d) ? schluessel.slice(0, 7) : d.toLocaleDateString(LOC, {month: 'long', year: 'numeric'});
 }
@@ -5746,7 +6015,7 @@ function eimerSchluessel(k, wochen){
 function eimerName(k, wochen, lang, jahre){
   var d = wochen ? new Date(k + 'T00:00:00') : new Date(parseInt(k.slice(0, 4), 10), parseInt(k.slice(5, 7), 10) - 1, 1);
   if(isNaN(d)) return k;
-  if(wochen) return lang ? t('cases.timeline.week', {date: d.toLocaleDateString(LOC, {dateStyle: 'medium'})})
+  if(wochen) return lang ? t('timeline.week', {date: d.toLocaleDateString(LOC, {dateStyle: 'medium'})})
                          : d.toLocaleDateString(LOC, {day: 'numeric', month: 'short'});
   return lang ? d.toLocaleDateString(LOC, {month: 'long', year: 'numeric'})
               : d.toLocaleDateString(LOC, jahre ? {month: 'short', year: '2-digit'} : {month: 'short'});
@@ -5781,30 +6050,41 @@ function zeitEimerWaehlen(k){
   FALL_ZEIT_EIMER = FALL_ZEIT_EIMER === k ? null : k;
   zeichneFallInhalt();
 }
-function zeichneAktivitaet(alle, eintraege, notizen){
-  var band = zeitEimer(alle);
-  if(!band){ el('fall-aktivitaet').innerHTML = ''; return null; }
-  if(FALL_ZEIT_EIMER && !band.eimer.some(function(e){ return e.k === FALL_ZEIT_EIMER; })) FALL_ZEIT_EIMER = null;
+/* The band itself, for the case and for a search result (13.6): `state`
+   carries the chosen bucket, the name of the click handler and the
+   sentence under the band; the chosen bucket comes back in `state.bucket`
+   (null when it left the span). Returns the band, or null without dates. */
+function activityBand(targetId, entries, state){
+  var band = zeitEimer(entries), ziel = el(targetId);
+  if(!band){ ziel.innerHTML = ''; return null; }
+  if(state.bucket && !band.eimer.some(function(e){ return e.k === state.bucket; })) state.bucket = null;
   var max = Math.max.apply(null, band.eimer.map(function(e){ return e.n; })) || 1;
   var balken = '', achse = '';
   band.eimer.forEach(function(e, i){
     var h = e.n ? Math.max(8, Math.round(96 * e.n / max)) : 4, punkte = '';
     for(var j = 0; j < Math.min(e.notizen, 6); j++) punkte += '<i></i>';
-    var titel = t('cases.timeline.bar', {name: e.lang, n: zahl(e.n)}) + (e.notizen ? ' · ' + t('cases.timeline.bar.notes', {n: zahl(e.notizen)}) : '');
-    balken += '<button class="monat' + (e.n ? '' : ' leer') + (FALL_ZEIT_EIMER === e.k ? ' on' : '') + '" title="' + esc(titel) +
-      '" aria-label="' + esc(titel) + '" onclick="zeitEimerWaehlen(\'' + e.k + '\')">' +
+    var titel = t('timeline.bar', {name: e.lang, n: zahl(e.n)}) + (e.notizen ? ' · ' + t('cases.timeline.bar.notes', {n: zahl(e.notizen)}) : '');
+    balken += '<button class="monat' + (e.n ? '' : ' leer') + (state.bucket === e.k ? ' on' : '') + '" title="' + esc(titel) +
+      '" aria-label="' + esc(titel) + '" onclick="' + state.pick + '(\'' + e.k + '\')">' +
       '<span class="zahl num">' + zahl(e.n) + '</span><span class="balken" style="height:' + h + 'px;animation-delay:' + (i * 40) + 'ms"></span>' +
       '<span class="punkte">' + punkte + '</span></button>';
-    achse += '<span' + (FALL_ZEIT_EIMER === e.k ? ' class="on"' : '') + '>' + esc(e.name) + '</span>';
+    achse += '<span' + (state.bucket === e.k ? ' class="on"' : '') + '>' + esc(e.name) + '</span>';
   });
-  var gewaehlt = band.eimer.filter(function(e){ return e.k === FALL_ZEIT_EIMER; })[0];
+  var gewaehlt = band.eimer.filter(function(e){ return e.k === state.bucket; })[0];
   var zeile = gewaehlt
-    ? '<span>' + esc(t('cases.timeline.showing', {name: gewaehlt.lang, n: zahl(gewaehlt.n)})) + '</span>' +
-      '<a href="javascript:void(0)" onclick="zeitEimerWaehlen(null)">' + esc(t('cases.timeline.showall')) + '</a>'
-    : '<span>' + esc(t(band.wochen ? 'cases.timeline.summary.weeks' : 'cases.timeline.summary',
-                     {n: zahl(eintraege), m: zahl(notizen), from: band.eimer[0].lang, to: band.eimer[band.eimer.length - 1].lang})) + '</span>';
-  el('fall-aktivitaet').innerHTML = '<div class="balken-reihe">' + balken + '</div><div class="achse">' + achse + '</div>' +
+    ? '<span>' + esc(t('timeline.showing', {name: gewaehlt.lang, n: zahl(gewaehlt.n)})) + '</span>' +
+      '<a href="javascript:void(0)" onclick="' + state.pick + '(null)">' + esc(t('timeline.showall')) + '</a>'
+    : '<span>' + esc(state.summary(band)) + '</span>';
+  ziel.innerHTML = '<div class="balken-reihe">' + balken + '</div><div class="achse">' + achse + '</div>' +
     '<div class="auswahl-zeile">' + zeile + '</div>';
+  return band;
+}
+function zeichneAktivitaet(alle, eintraege, notizen){
+  var state = {bucket: FALL_ZEIT_EIMER, pick: 'zeitEimerWaehlen', summary: function(band){
+    return t(band.wochen ? 'cases.timeline.summary.weeks' : 'cases.timeline.summary',
+             {n: zahl(eintraege), m: zahl(notizen), from: band.eimer[0].lang, to: band.eimer[band.eimer.length - 1].lang}); }};
+  var band = activityBand('fall-aktivitaet', alle, state);
+  FALL_ZEIT_EIMER = state.bucket;
   return band;
 }
 function zeichneFallZeit(){
@@ -5838,7 +6118,7 @@ function zeichneFallZeit(){
       eintragAktionen(e, offen) + '</div>';
   });
   if(!alle.length) html = '<p class="hint">' + esc(t('cases.items.none')) + '</p>';
-  else if(!passend.length) html = '<p class="hint">' + esc(t(FALL_ZEIT_EIMER ? 'cases.timeline.nomatch' : 'cases.filter.none')) + '</p>';
+  else if(!passend.length) html = '<p class="hint">' + esc(t(FALL_ZEIT_EIMER ? 'timeline.nomatch' : 'cases.filter.none')) + '</p>';
   if(passend.length > sichtbar.length)
     html += '<div class="mehr" style="margin-left:0"><button class="mini" onclick="fallAlleZeigen(\'zeit\')">' +
       esc(t('cases.items.more', {n: zahl(passend.length - sichtbar.length)})) + '</button></div>';
@@ -5914,26 +6194,32 @@ function ichKreis(){
   var cfg = (S && S.config) || {}, token = (S && S.token) || {};
   var name = String(cfg.own_name || token.name || '').trim(), konto = String(token.account || '');
   var kuerzel = initialen(name) || (konto ? konto.charAt(0).toUpperCase() : '?');
-  return '<div class="ich"><div class="kreis" aria-hidden="true">' + esc(kuerzel) + '</div><div class="text"><b>' + esc(t('cases.people.you')) + '</b>' +
+  return '<div class="ich"><div class="kreis" aria-hidden="true">' + esc(kuerzel) + '</div><div class="text"><b>' + esc(t('people.you')) + '</b>' +
     esc(name || konto) + (name && konto ? '<br>' + esc(konto) : '') + '</div></div>';
 }
 function fallPersonWaehlen(name){
   FALL_PERSON = FALL_PERSON === name ? null : name;
   zeichneFallInhalt();
 }
-function zeichneFallPersonen(){
-  var f = FALL_OFFEN;
-  if(!f) return;
-  var alle = personenAus((f.item_list || []).filter(passtHerkunft));
-  var passend = alle.filter(function(p){ return passtFilter(p.name + ' ' + p.adressen.join(' ')); });
-  var html = '<div class="personen-kopf"><span class="num">' +
-    esc(t('cases.people.count', {n: zahl(alle.length), m: zahl((f.item_list || []).length)})) + '</span>' +
-    '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('cases.people.i')) + '">i</span></div>';
-  if(!KANN_ADRESSEN && alle.length) html += '<p class="hint small">' + esc(t('cases.people.noaddr')) + '</p>';
+/* The picture of some people – the case's, a result's, the archive's
+   (13.6): you at the left, everyone else in four columns by their last
+   contact, the circle sized by how many items name them, external
+   dashed; the chosen one gets a card under the picture with the ways on.
+   `state`: chosen (a name), filter (text the nodes must match), pick and
+   expand (the names of the click handlers), expanded (the periods opened
+   past `cap`), cap (nodes per column before "… and n more"), none (the
+   sentence for nobody), ways(p) (the card's buttons), extra(p) (one more
+   line on the card). Draws `head` and the picture into `targetId`;
+   answers how many matched of how many there are. */
+function peoplePicture(targetId, alle, state, head){
+  var filter = String(state.filter || '').toLowerCase();
+  var passend = alle.filter(function(p){
+    return !filter || (p.name + ' ' + p.adressen.join(' ')).toLowerCase().indexOf(filter) >= 0;
+  });
+  var html = head || '';
   if(!alle.length){
-    el('fall-personen').innerHTML = html + '<p class="hint">' + esc(t('cases.people.none')) + '</p>';
-    filterStand(0, 0);
-    return;
+    el(targetId).innerHTML = html + '<p class="hint">' + esc(state.none) + '</p>';
+    return {shown: 0, all: 0};
   }
   var max = Math.max.apply(null, alle.map(function(p){ return p.anzahl; })) || 1, lauf = 0;
   html += '<div class="bild">' + ichKreis();
@@ -5941,35 +6227,55 @@ function zeichneFallPersonen(){
     var liste = passend.filter(function(p){ return personPeriode(p) === i; }).sort(function(a, b){
       return (b.bis > a.bis ? 1 : b.bis < a.bis ? -1 : 0) || b.anzahl - a.anzahl || a.name.localeCompare(b.name);
     });
-    html += '<div class="periode"><div class="kopf">' + esc(t('cases.people.period.' + per.key)) + '<span class="n">' + zahl(liste.length) + '</span></div>' +
-      (liste.length ? '' : '<span class="leer">' + esc(t(FALL_FILTER ? 'cases.people.period.nomatch' : 'cases.people.period.none')) + '</span>');
-    liste.forEach(function(p){
+    var grenze = state.cap && !(state.expanded || {})[per.key] ? state.cap : liste.length;
+    html += '<div class="periode"><div class="kopf">' + esc(t('people.period.' + per.key)) + '<span class="n">' + zahl(liste.length) + '</span></div>' +
+      (liste.length ? '' : '<span class="leer">' + esc(t(filter ? 'people.period.nomatch' : 'people.period.none')) + '</span>');
+    liste.slice(0, grenze).forEach(function(p){
       var name = esc(p.name).replace(/'/g, "\\'"), r = Math.round(14 + 14 * Math.sqrt(p.anzahl / max));
-      html += '<button class="knoten' + (istExtern(p) ? ' extern' : '') + (FALL_PERSON === p.name ? ' on' : '') +
-        '" style="animation-delay:' + (lauf++ * 40) + 'ms" onclick="fallPersonWaehlen(\'' + name + '\')">' +
+      html += '<button class="knoten' + (istExtern(p) ? ' extern' : '') + (state.chosen === p.name ? ' on' : '') +
+        '" style="animation-delay:' + (lauf++ * 40) + 'ms" onclick="' + state.pick + '(\'' + name + '\')">' +
         '<span class="kreis" aria-hidden="true" style="width:' + (2 * r) + 'px;height:' + (2 * r) + 'px;font-size:' + Math.round(r * 0.58) + 'px">' + esc(initialen(p.name)) + '</span>' +
         '<span class="text"><span class="name">' + esc(p.name) +
-        (istExtern(p) ? '<span class="tag extern">' + esc(t('cases.people.external')) + '</span>' : '') + '</span>' +
-        '<span class="sub num">' + esc(t('cases.people.items.last', {n: zahl(p.anzahl), when: p.bis ? tagKurz(p.bis.slice(0, 10)) : '–'})) + '</span></span></button>';
+        (istExtern(p) ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '') + '</span>' +
+        '<span class="sub num">' + esc(t('people.items.last', {n: zahl(p.anzahl), when: p.bis ? tagKurz(p.bis.slice(0, 10)) : '–'})) + '</span></span></button>';
     });
+    if(liste.length > grenze)
+      html += '<button class="mini mehr-knoten" onclick="' + state.expand + '(\'' + per.key + '\')">' +
+        esc(t('people.period.more', {n: zahl(liste.length - grenze)})) + '</button>';
     html += '</div>';
   });
   html += '</div>';
-  // The chosen person: one card under the picture, with the two ways on
-  var p = alle.filter(function(x){ return x.name === FALL_PERSON; })[0];
-  if(p){
-    var name = esc(p.name).replace(/'/g, "\\'");
-    var spanne = p.von ? (p.von.slice(0, 10) === p.bis.slice(0, 10) ? tagKurz(p.von.slice(0, 10)) : tagKurz(p.von.slice(0, 10)) + ' – ' + tagKurz(p.bis.slice(0, 10))) : '';
-    html += '<div class="person-karte"><span class="kreis" aria-hidden="true">' + esc(initialen(p.name)) + '</span>' +
-      '<span class="wer"><b>' + esc(p.name) + (istExtern(p) ? '<span class="tag extern">' + esc(t('cases.people.external')) + '</span>' : '') + '</b>' +
-      '<span>' + esc(p.adressen.length ? p.adressen.join(', ') : t('cases.people.noaddress')) + '</span></span>' +
-      '<span class="zaehler">' + quellenZaehler(p.je_quelle) + '</span>' +
-      '<span class="small muted num">' + esc(spanne) + '</span>' +
-      '<span class="knoepfe"><button class="mini" onclick="personZeit(\'' + name + '\')">' + esc(t('cases.people.timeline')) + '</button>' +
-      '<button class="mini" onclick="sucheImFall(' + f.id + ', null, \'' + name + '\')">' + esc(t('cases.people.search')) + '</button></span></div>';
-  }
-  el('fall-personen').innerHTML = html;
-  filterStand(passend.length, alle.length);
+  // The chosen person: one card under the picture, with the ways on
+  var p = alle.filter(function(x){ return x.name === state.chosen; })[0];
+  if(p) html += personCard(p, state.ways(p), state.extra ? state.extra(p) : '');
+  el(targetId).innerHTML = html;
+  return {shown: passend.length, all: alle.length};
+}
+function personCard(p, ways, extra){
+  var spanne = p.von ? (p.von.slice(0, 10) === p.bis.slice(0, 10) ? tagKurz(p.von.slice(0, 10)) : tagKurz(p.von.slice(0, 10)) + ' – ' + tagKurz(p.bis.slice(0, 10))) : '';
+  return '<div class="person-karte"><span class="kreis" aria-hidden="true">' + esc(initialen(p.name)) + '</span>' +
+    '<span class="wer"><b>' + esc(p.name) + (istExtern(p) ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '') + '</b>' +
+    '<span>' + esc(p.adressen.length ? p.adressen.join(', ') : t('people.noaddress')) + '</span>' + (extra || '') + '</span>' +
+    '<span class="zaehler">' + quellenZaehler(p.je_quelle) + '</span>' +
+    '<span class="small muted num">' + esc(spanne) + '</span>' +
+    '<span class="knoepfe">' + ways + '</span></div>';
+}
+function zeichneFallPersonen(){
+  var f = FALL_OFFEN;
+  if(!f) return;
+  var alle = personenAus((f.item_list || []).filter(passtHerkunft));
+  var head = '<div class="personen-kopf"><span class="num">' +
+    esc(t('cases.people.count', {n: zahl(alle.length), m: zahl((f.item_list || []).length)})) + '</span>' +
+    '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('cases.people.i')) + '">i</span></div>';
+  if(!KANN_ADRESSEN && alle.length) head += '<p class="hint small">' + esc(t('people.noaddr')) + '</p>';
+  var stand = peoplePicture('fall-personen', alle, {chosen: FALL_PERSON, filter: FALL_FILTER, pick: 'fallPersonWaehlen',
+    none: t('cases.people.none'),
+    ways: function(p){
+      var name = esc(p.name).replace(/'/g, "\\'");
+      return '<button class="mini" onclick="personZeit(\'' + name + '\')">' + esc(t('people.timeline')) + '</button>' +
+        '<button class="mini" onclick="sucheImFall(' + f.id + ', null, \'' + name + '\')">' + esc(t('people.search')) + '</button>';
+    }}, head);
+  filterStand(stand.shown, stand.all);
 }
 /* A person's items in order: the timeline with the filter set to the name. */
 function personZeit(name){
@@ -6101,8 +6407,8 @@ function fallAuswahlEntfernen(){
     return entferne(API + '/cases/' + FALL_OFFEN.id + '/items/' + rest.shift()).then(weiter);
   }
   weiter().then(function(){
-    TREFFER.forEach(function(h){ if(keys.indexOf(h.key) >= 0) h.cases = (h.cases || []).filter(function(c){ return c.id !== FALL_OFFEN.id; }); });
-    zeichneTrefferListe();
+    knownHits().forEach(function(h){ if(keys.indexOf(h.key) >= 0) h.cases = (h.cases || []).filter(function(c){ return c.id !== FALL_OFFEN.id; }); });
+    drawResult();
   });
 }
 
@@ -6182,10 +6488,10 @@ function fallEntfernen(key){
   fallSchreiben('DELETE', 'items/' + e.id).then(function(){
     delete FALL_AUSWAHL[key];
     zeichneFallAuswahl();
-    TREFFER.forEach(function(h){
+    knownHits().forEach(function(h){
       if(h.key === key) h.cases = (h.cases || []).filter(function(c){ return c.id !== FALL_OFFEN.id; });
     });
-    zeichneTrefferListe();
+    drawResult();
   });
 }
 function listeErneut(i){
@@ -6292,7 +6598,7 @@ function fallLoeschen(){
     FALL_OFFEN = null;
     el('fall-detail').classList.add('hide');
     leiste(true);
-    TREFFER.forEach(function(h){ h.cases = []; });
+    knownHits().forEach(function(h){ h.cases = []; });
     ladeFaelle();
   });
 }
@@ -7407,7 +7713,74 @@ function buchEintraege(){
   return Object.keys(nachName).map(function(k){ return nachName[k]; });
 }
 
+var BOOK_MODE = 'list', BOOK_PERSON = null, BOOK_EXPANDED = {};
+var ARCHIVE_PEOPLE = null, ARCHIVE_PEOPLE_STAND = null;
+function bookMode(mode){
+  if(mode !== BOOK_MODE) merke('flow.book', mode);
+  BOOK_MODE = mode;
+  drawBook();
+}
+/* The picture over the whole archive (13.6): the same picture the case
+   has, over everyone the communication names, from the index – asked once
+   and again after the next index run. The origin chips are absent here:
+   the picture knows only communication, an entry from the address book
+   alone has no date. What the address book knows of a person – company,
+   role, number – stands on the card. */
+function drawBookPicture(){
+  el('kbStats').textContent = '';
+  var stand = (S && S.store) ? S.store.built_at : null;
+  if(!ARCHIVE_PEOPLE || ARCHIVE_PEOPLE_STAND !== stand){
+    el('kbBox').innerHTML = '<p class="hint">' + esc(t('cal.loading')) + '</p>';
+    ARCHIVE_PEOPLE_STAND = stand;
+    api(API + '/search/people').then(function(r){
+      ARCHIVE_PEOPLE = r || {};
+      if(offeneSicht === 'adressbuch' && BOOK_MODE === 'picture') drawBookPicture();
+    }).catch(function(e){
+      ARCHIVE_PEOPLE_STAND = null;
+      el('kbBox').innerHTML = '<p class="hint err">' + esc(String(e && e.message || e)) + '</p>';
+    });
+    return;
+  }
+  var w = ARCHIVE_PEOPLE;
+  if(rtext(w)){ el('kbBox').innerHTML = '<p class="hint">' + esc(rtext(w)) + '</p>'; return; }
+  var alle = (w.items || []).map(personFromApi).filter(function(p){ return !istIch(p); });
+  var head = '<div class="personen-kopf"><span class="num">' +
+    esc(t('book.picture.count', {n: zahl(alle.length), m: zahl(w.hits || 0)})) + '</span>' +
+    '<span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('book.picture.i')) + '">i</span></div>';
+  if(!KANN_ADRESSEN && alle.length) head += '<p class="hint small">' + esc(t('people.noaddr')) + '</p>';
+  peoplePicture('kbBox', alle, {chosen: BOOK_PERSON, filter: '', pick: 'bookPerson', expand: 'bookExpand',
+    expanded: BOOK_EXPANDED, cap: 24, none: t('book.picture.none'),
+    ways: function(p){
+      var name = JSON.stringify(p.name).replace(/"/g, '&quot;');
+      return '<button class="mini" onclick="zeigeKommunikation(' + name + ', \'timeline\')">' + esc(t('people.timeline')) + '</button>' +
+        '<button class="mini" onclick="zeigeKommunikation(' + name + ', \'list\')">' + esc(t('people.search')) + '</button>';
+    },
+    extra: function(p){ return contactLine(p.name); }}, head);
+}
+function bookPerson(name){
+  BOOK_PERSON = BOOK_PERSON === name ? null : name;
+  drawBook();
+}
+function bookExpand(key){
+  BOOK_EXPANDED[key] = true;
+  drawBook();
+}
+/* What the address book adds to a person of the picture: company, role, numbers. */
+function contactLine(name){
+  var c = contacts.filter(function(x){ return normName(x.title) === normName(name); })[0];
+  if(!c) return '';
+  var teile = [c.role, c.org].filter(Boolean).concat(c.tel || []);
+  return teile.length ? '<span>' + esc(teile.join(' · ')) + '</span>' : '';
+}
 function drawBook(){
+  var bild = BOOK_MODE === 'picture';
+  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]')
+    .forEach(function(c){ c.classList.toggle('on', c.dataset.bookMode === BOOK_MODE); });
+  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
+    .forEach(function(c){ c.classList.toggle('hide', bild); });
+  el('book-origin').classList.toggle('hide', bild);
+  el('book-note').classList.toggle('hide', bild);
+  if(bild){ drawBookPicture(); return; }
   var alle = buchEintraege();
   if(!alle.length){
     el('kbStats').textContent = '';
@@ -7440,14 +7813,19 @@ function drawBook(){
 document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]').forEach(function(ch){
   ch.addEventListener('click', function(){ bookF = ch.dataset.book; drawBook(); });
 });
+document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]').forEach(function(ch){
+  ch.addEventListener('click', function(){ bookMode(ch.dataset.bookMode); });
+});
 
 /* From a person to everything that happened with them. The search's person
    filter can do that already – this merely wires it to the address book. */
-function zeigeKommunikation(name){
+function zeigeKommunikation(name, view){
   el('f-person').value = name;
   el('q').value = '';
   el('f-source').value = 'all';
   el('f-gone').checked = false;
+  // A person's communication is a story: the timeline, unless asked for the list.
+  RESULT_VIEW = view || 'timeline';
   sicht('treffer');
   doSearch(0);
 }

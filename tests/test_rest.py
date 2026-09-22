@@ -931,6 +931,7 @@ def test_die_tuer_sagt_ohne_index_bescheid(server):
     _, port = server
     for pfad in ("/api/v1/files", "/api/v1/folders", "/api/v1/filetypes",
                  "/api/v1/people", "/api/v1/threads?key=x",
+                 "/api/v1/search/timeline", "/api/v1/search/people",
                  "/api/v1/documents?uid=x", "/api/v1/documents/facts?uid=x"):
         code, kopf, r = roh(port, "GET", pfad)
         assert code == 503, (pfad, code)
@@ -1024,3 +1025,114 @@ def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
     assert "models" in voll["ollama"], "die Nachprüfung darf alles sagen"
     umgebung = roh(port, "GET", "/api/v1/app")[2]
     assert umgebung["version"] and umgebung["default_client_id"]
+
+
+# --------------------------------------------------------------------------
+# The whole result: the timeline and the people of a search (13.6)
+# --------------------------------------------------------------------------
+class FakeGanz(FakeSuche):
+    """An engine with a finite, dated result that honours `k` and `offset`
+    – so the whole-result routes can be checked hit by hit."""
+    HITS = [
+        {"uid": "u1", "source": "outlook", "root": "outlook", "path": "a.eml", "key": "k1",
+         "who": "Carla Chef", "who_mail": "carla@example.com", "date": "2026-06-10 08:00",
+         "title": "Rechnung 4711", "cases": [{"id": 1, "name": "Nordwind", "ordner": None, "status": "offen"}]},
+        {"uid": "u2", "source": "teams", "root": "teams", "path": "b.html", "key": "k2",
+         "who": "Bob Baumeister", "who_mail": None, "date": "2026-06-01 09:35", "title": "Projekt Alpha"},
+        {"uid": "u3", "source": "planner", "root": "planner", "path": "c.html", "key": "k3",
+         "who": "Bob Baumeister, Carla Chef", "who_mail": "bob@example.com", "date": "2026-07-01 12:00",
+         "title": "Aufgabe"},
+        {"uid": "u4", "source": "kontakte", "root": "outlook", "path": "d.vcf", "key": "k4",
+         "who": "", "who_mail": None, "date": "", "title": "Alice Beispiel"},
+        {"uid": "u5", "source": "teams", "root": "teams", "path": "e.html", "key": "k5",
+         "who": "(unbekannt)", "who_mail": None, "date": "2026-05-02 10:00", "title": "Notiz"},
+    ]
+
+    @staticmethod
+    def browse_messages(**kw):
+        FakeGanz.gesehen = dict(kw)
+        k, offset = int(kw.get("k") or 1), int(kw.get("offset") or 0)
+        seite = [dict(h) for h in FakeGanz.HITS[offset:offset + k]]
+        return {"backend": "bm25", "count": len(seite), "results": seite}
+
+    @staticmethod
+    def search_messages(**kw):
+        return FakeGanz.browse_messages(**kw)
+
+    @staticmethod
+    def facet_rows(**kw):
+        FakeGanz.gesehen = dict(kw, facet=True)
+        return {"rows": [(h["who"], h["who_mail"], h["date"], h["source"]) for h in FakeGanz.HITS]}
+
+
+def test_die_zeitleiste_traegt_das_ganze_ergebnis_nach_datum(server, monkeypatch):
+    """Every hit, oldest first, the undated at the end, without previews –
+    and the case marks in the words of /api/v1."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeGanz)
+    code, _, r = roh(port, "GET", "/api/v1/search/timeline?q=Rechnung&source=all&party=all")
+    assert code == 200, r
+    assert [h["uid"] for h in r["items"]] == ["u5", "u2", "u1", "u3", "u4"]
+    assert r["count"] == 5 and r["capped"] is False and r["limit"] == 5000
+    assert FakeGanz.gesehen["preview_chars"] == 0
+    assert r["items"][2]["cases"] == [{"id": 1, "name": "Nordwind", "folder": None, "status": "open"}]
+
+
+def test_die_zeitleiste_sagt_wenn_die_grenze_schnitt(server, monkeypatch):
+    import api_explore
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeGanz)
+    monkeypatch.setattr(api_explore, "WHOLE_LIMIT", 3)
+    code, _, r = roh(port, "GET", "/api/v1/search/timeline?q=x")
+    assert code == 200 and r["count"] == 3 and r["capped"] is True and r["limit"] == 3
+
+
+def test_die_personen_eines_ergebnisses_werden_ueber_die_treffer_gezaehlt(server, monkeypatch):
+    """With a query the people come from the collected hits: split at the
+    comma, the unknown sender skipped, an address only from an item that
+    names one person, newest contact first."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeGanz)
+    code, _, r = roh(port, "GET", "/api/v1/search/people?q=Rechnung")
+    assert code == 200, r
+    assert [p["name"] for p in r["items"]] == ["Bob Baumeister", "Carla Chef"]
+    bob, carla = r["items"]
+    assert bob == {"name": "Bob Baumeister", "address": "", "items": 2,
+                   "by_source": {"teams": 1, "planner": 1},
+                   "first": "2026-06-01 09:35", "last": "2026-07-01 12:00"}
+    assert carla["address"] == "carla@example.com" and carla["items"] == 2
+    assert r["count"] == 2 and r["hits"] == 5 and r["capped"] is False
+    assert "facet" not in FakeGanz.gesehen
+
+
+def test_ohne_suchbegriff_zaehlt_die_engine_das_ganze_archiv(server, monkeypatch):
+    """No query: the engine hands over every row the filters admit – no
+    cap, the filters passed on as they stand."""
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeGanz)
+    code, _, r = roh(port, "GET", "/api/v1/search/people?source=teams&from=2026-01-01&party=all")
+    assert code == 200 and r["count"] == 2 and r["hits"] == 5 and r["capped"] is False
+    assert FakeGanz.gesehen["facet"] is True
+    assert FakeGanz.gesehen["source"] == "teams" and FakeGanz.gesehen["date_from"] == "2026-01-01"
+    assert "k" not in FakeGanz.gesehen and "preview_chars" not in FakeGanz.gesehen
+
+
+def test_die_beiden_sichten_geben_absagen_der_engine_als_409_weiter(server, monkeypatch):
+    class Nein(FakeGanz):
+        @staticmethod
+        def browse_messages(**kw):
+            return {"error": "No internal domains known", "count": 0, "results": []}
+
+        @staticmethod
+        def search_messages(**kw):
+            return Nein.browse_messages(**kw)
+
+        @staticmethod
+        def facet_rows(**kw):
+            return {"error": "No internal domains known", "rows": []}
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: Nein)
+    for pfad in ("/api/v1/search/timeline?q=x", "/api/v1/search/people?q=x",
+                 "/api/v1/search/people?party=external"):
+        code, _, r = roh(port, "GET", pfad)
+        assert code == 409 and r["items"] == [] and r["count"] == 0, (pfad, code, r)

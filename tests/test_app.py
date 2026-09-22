@@ -9946,3 +9946,282 @@ def test_rundgang_kapitel_laufen_durch():
     """Next, back, done and skip: the chapter ends, is marked seen once,
     and the search chapter waits for an index."""
     _in_node(PRUEFUNG_TOUR)
+
+
+# --------------------------------------------------------------------------
+# The result in three views (13.6): list, timeline, people
+# --------------------------------------------------------------------------
+PRUEFUNG_ERGEBNIS_SICHTEN = GRUNDZUSTAND + """
+process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
+var HITS = [
+  {uid: 'u1', key: 'k1', cid: 1, source: 'outlook', root: 'outlook', path: 'a.eml', who: 'Carla Chef', who_mail: 'carla@example.com',
+   date: '2026-06-10 08:00', title: 'Rechnung 4711', preview: 'x', cases: []},
+  {uid: 'u2', key: 'k2', cid: 2, source: 'teams', root: 'teams', path: 'b.html', who: 'Bob Baumeister', who_mail: null,
+   date: '2026-06-01 09:35', title: 'Projekt Alpha', preview: 'y', cases: []}
+];
+// The whole result: older than the page, and one item without a date.
+var GANZ = [
+  {uid: 'u3', key: 'k3', cid: 3, source: 'teams', root: 'teams', path: 'c.html', who: 'Bob Baumeister', who_mail: null,
+   date: '2025-06-01 09:35', title: 'Alte Nachricht', preview: '', cases: []},
+  HITS[1], HITS[0],
+  {uid: 'u4', key: 'k4', cid: 4, source: 'kontakte', root: 'outlook', path: 'd.vcf', who: '', who_mail: null,
+   date: '', title: 'Ohne Datum', preview: '', cases: []}
+];
+var LEUTE = [
+  {name: 'Carla Chef', address: 'carla@example.com', items: 1, by_source: {outlook: 1}, first: '2026-06-10 08:00', last: '2026-06-10 08:00'},
+  {name: 'Bob Baumeister', address: '', items: 2, by_source: {teams: 2}, first: '2025-06-01 09:35', last: '2026-06-01 09:35'},
+  // The account of GRUNDZUSTAND: that is me, and I am not a node.
+  {name: 'A B', address: 'a@example.com', items: 1, by_source: {outlook: 1}, first: '2026-01-01 08:00', last: '2026-01-01 08:00'}
+];
+var gefragt = [];
+function kopie(liste){ return liste.map(function(h){ return Object.assign({}, h); }); }
+global.fetch = function(pfad){
+  pfad = String(pfad); gefragt.push(pfad);
+  var antwort;
+  if(pfad.indexOf('/api/v1/search/timeline?') >= 0) antwort = {items: kopie(GANZ), count: 4, capped: false, limit: 5000};
+  else if(pfad.indexOf('/api/v1/search/people?') >= 0) antwort = {items: LEUTE, count: 3, hits: 4, capped: false};
+  else if(pfad.indexOf('/api/v1/search?') >= 0) antwort = {items: kopie(HITS), limit: 20, offset: 0, has_more: false};
+  else if(pfad.indexOf('/api/v1/similar?') >= 0) antwort = {items: kopie(HITS).slice(0, 1), limit: 20, offset: 0, has_more: false};
+  else if(pfad.indexOf('/api/v1/documents/facts') >= 0) antwort = {};
+  else antwort = statusGeruest();
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(antwort); }});
+};
+function zahlDer(muster){ return gefragt.filter(function(p){ return p.indexOf(muster) >= 0; }).length; }
+
+setTimeout(function(){
+  aktiverTab = 'suche';
+  pruefe(!SUCHE_LIEF && RESULT_VIEW === 'list', 'Vor der ersten Suche schon ein Ergebnis');
+  el('q').value = 'Rechnung';
+  doSearch(0);
+  setTimeout(function(){
+    pruefe(!el('result-views').classList.contains('hide'), 'Streifen fehlt nach der Suche');
+    pruefe(el('results').innerHTML.indexOf('class="hit') >= 0, 'Liste nicht gezeichnet');
+    pruefe(el('treffer-stand').textContent.indexOf('2') >= 0, 'Kopf zaehlt nicht die Seite: ' + el('treffer-stand').textContent);
+    pruefe(zahlDer('/search/timeline?') === 0 && zahlDer('/search/people?') === 0, 'Das ganze Ergebnis wurde ungefragt geholt');
+
+    // The timeline: the whole result, fetched once, in date order
+    resultView('timeline');
+    pruefe(zahlDer('/search/timeline?q=Rechnung') === 1, 'Zeitleiste fragt nicht das ganze Ergebnis: ' + gefragt.join(' '));
+    setTimeout(function(){
+      var html = el('results').innerHTML;
+      pruefe(html.indexOf('class="zeit') >= 0 && html.indexOf('class="hit') < 0, 'Zeitleiste zeichnet keine Zeilen: ' + html.slice(0, 200));
+      pruefe(html.indexOf('Alte Nachricht') < html.indexOf('Projekt Alpha') && html.indexOf('Projekt Alpha') < html.indexOf('Rechnung 4711'), 'Reihenfolge nicht nach Datum');
+      pruefe(html.indexOf('Ohne Datum') > html.indexOf('Rechnung 4711'), 'Undatiertes nicht zuletzt');
+      pruefe(!el('result-activity').classList.contains('hide') && el('result-activity').innerHTML.indexOf("resultBucket('2026-06')") >= 0, 'Band fehlt: ' + el('result-activity').innerHTML.slice(0, 200));
+      pruefe(el('treffer-stand').textContent.indexOf('4') >= 0, 'Kopf nennt nicht das ganze Ergebnis: ' + el('treffer-stand').textContent);
+      pruefe(el('pager').classList.contains('hide'), 'Der Pager bleibt in der Zeitleiste');
+      resultBucket('2026-06');
+      pruefe(el('results').innerHTML.indexOf('Alte Nachricht') < 0 && el('results').innerHTML.indexOf('Rechnung 4711') >= 0, 'Monatswahl grenzt nicht ein');
+      pruefe(el('result-activity').innerHTML.indexOf("resultBucket(null)") >= 0, 'gewaehlter Monat ohne Rueckweg');
+      resultBucket('2026-06');
+      pruefe(RESULT_BUCKET === null && el('results').innerHTML.indexOf('Alte Nachricht') >= 0, 'zweiter Klick laesst nicht los');
+      pruefe(zahlDer('/search/timeline?') === 1, 'Das ganze Ergebnis wurde erneut geholt');
+      // A row opens the detail; its counter and its arrows count the timeline
+      waehleTreffer(0);
+      pruefe(!el('detail').classList.contains('hide') && el('detail-inhalt').innerHTML.indexOf('Alte Nachricht') >= 0, 'Zeile oeffnet das Detail nicht');
+      pruefe(el('detail-inhalt').innerHTML.indexOf('1 von 4') >= 0, 'Zaehler zaehlt nicht die Zeitleiste: ' + el('detail-inhalt').innerHTML.slice(0, 300));
+      // The tick works on the timeline's rows, and clearing keeps the view
+      trefferWahl(0, true);
+      pruefe(AUSWAHL['k3'], 'Haekchen greift nicht');
+      auswahlLeeren(true);
+      pruefe(el('results').innerHTML.indexOf('class="zeit') >= 0, 'Auswahl leeren zeichnet die Liste statt der Zeitleiste');
+
+      // The people: the picture over the whole result, me left out
+      resultView('people');
+      pruefe(zahlDer('/search/people?q=Rechnung') === 1, 'Personen fragen nicht das ganze Ergebnis');
+      setTimeout(function(){
+        var html = el('results').innerHTML;
+        pruefe(html.split('class="knoten').length - 1 === 2 && html.indexOf('resultPerson(') >= 0, 'Personenbild fehlt: ' + html.slice(0, 200));
+        pruefe(html.indexOf('A B') < 0, 'ich selbst nicht ausgenommen');
+        pruefe(el('result-people-count').textContent === '2', 'Zahl im Streifen: ' + el('result-people-count').textContent);
+        pruefe(html.indexOf('2 Personen in 4') >= 0, 'Kopf: ' + html.slice(0, 200));
+        pruefe(el('detail').classList.contains('hide') && el('result-activity').classList.contains('hide'), 'Detail oder Band bleiben neben dem Bild');
+        resultPerson('Bob Baumeister');
+        html = el('results').innerHTML;
+        pruefe(html.indexOf('person-karte') >= 0 && html.indexOf("resultPersonSearch('Bob Baumeister', 'timeline')") >= 0 &&
+               html.indexOf("resultPersonSearch('Bob Baumeister', 'list')") >= 0, 'Karte oder Wege fehlen');
+        // The way on: the person pill set, the search run again in the timeline
+        resultPersonSearch('Bob Baumeister', 'timeline');
+        pruefe(el('f-person').value === 'Bob Baumeister' && gefragt[gefragt.length - 1].indexOf('person=Bob+Baumeister') >= 0, 'Person nicht in der Suche: ' + gefragt[gefragt.length - 1]);
+        setTimeout(function(){
+          pruefe(RESULT_VIEW === 'timeline' && zahlDer('/search/timeline?') === 2 && gefragt[gefragt.length - 1].indexOf('/search/timeline?') >= 0 &&
+                 gefragt[gefragt.length - 1].indexOf('person=Bob+Baumeister') >= 0, 'Neue Kriterien holen die Zeitleiste nicht neu: ' + gefragt.slice(-3).join(' '));
+          setTimeout(function(){
+            pruefe(el('results').innerHTML.indexOf('class="zeit') >= 0, 'Zeitleiste der Person nicht gezeichnet');
+            pruefe(el('result-people-count').textContent === '', 'Alte Personenzahl bleibt stehen');
+            // Back to the list: the page, its pager, its count
+            resultView('list');
+            pruefe(el('results').innerHTML.indexOf('class="hit') >= 0 && !el('pager').classList.contains('hide') &&
+                   el('treffer-stand').textContent.indexOf('2') >= 0, 'Liste kommt nicht zurueck');
+            // Similar hits have no whole result: no strip
+            aehnlicheZu('1');
+            setTimeout(function(){
+              pruefe(el('result-views').classList.contains('hide') && RESULT_VIEW === 'list', 'Streifen bei aehnlichen Treffern');
+              console.log('OK');
+            }, 20);
+          }, 20);
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 20);
+}, 0);
+"""
+
+
+def test_das_ergebnis_hat_drei_sichten_ueber_das_ganze_ergebnis():
+    """List, timeline and people over a search (13.6): the strip appears
+    after a search, the whole result is fetched once per view and only
+    when asked for, the timeline orders by date and narrows by month, the
+    detail counts its rows, the people leave me out and hand over with the
+    person pill set."""
+    _in_node(PRUEFUNG_ERGEBNIS_SICHTEN)
+
+
+PRUEFUNG_GESPRAECH_OEFFNEN = GRUNDZUSTAND + """
+process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
+KANN_VERLAUF = true;
+function nachricht(uid, date, who, title, preview){
+  return {uid: uid, key: 'mail:' + uid, cid: 1, date: date, who: who, title: title, source: 'outlook', root: 'outlook',
+          path: uid + '.eml', uri: 'o365://outlook/' + uid + '.eml', thread: 'tix:abc', preview: preview, cases: []};
+}
+var FADEN = {count: 3, items: [nachricht('a', '2025-06-01 09:00', 'Alice', 'Frage', 'Erste'),
+                               nachricht('x', '2025-06-02 10:00', 'Bob', 'RE: Frage', 'Zweite'),
+                               nachricht('y', '2025-06-03 11:00', 'Alice', 'AW: Frage', 'Dritte')]};
+global.fetch = function(pfad){
+  return Promise.resolve({json: function(){
+    if(String(pfad).indexOf('/api/v1/threads') === 0) return Promise.resolve(FADEN);
+    if(String(pfad).indexOf('/api/v1/documents/facts') === 0) return Promise.resolve({});
+    // The poll's inventory must keep the index's features, or the fold vanishes
+    if(String(pfad).indexOf('/api/v1/inventory') === 0) return Promise.resolve(BESTAND);
+    return Promise.resolve(statusGeruest());
+  }});
+};
+renderHits({results: [nachricht('a', '2025-06-01 09:00', 'Alice', 'Frage', 'Erste'),
+                      Object.assign(nachricht('z', '2025-07-01 09:00', 'Carla', 'Anderes', 'Vierte'), {thread: null})], count: 2});
+waehleTreffer(0);
+setTimeout(function(){
+  var falte = el('detail-verlauf').innerHTML;
+  pruefe(falte.indexOf('files/content') < 0, 'Eine Zeile des Gespraechs laedt noch das Original');
+  pruefe(falte.indexOf('openThreadMessage(&quot;tix:abc&quot;, 1)') >= 0 && falte.indexOf('role="button"') >= 0, 'Zeile fuehrt nicht ins Detail: ' + falte.slice(0, 300));
+  // A message that is no hit of the list: the detail on its own, without the list's counter
+  KANN_VERLAUF = true;      // the stub's poll carries no index – set as the head does
+  openThreadMessage('tix:abc', 1);
+  setTimeout(function(){
+    var html = el('detail-inhalt').innerHTML;
+    pruefe(html.indexOf('RE: Frage') >= 0 && html.indexOf('Zweite') >= 0, 'Nachricht aus dem Gespraech nicht im Detail: ' + html.slice(0, 300));
+    pruefe(html.indexOf('class="zaehler"') < 0, 'Zaehler der Liste an einer Nachricht, die nicht in der Liste ist');
+    pruefe(html.indexOf("fallWahl('einer', 'detail')") >= 0, 'In einen Fall geht von hier nicht');
+    pruefe(TREFFER_GEWAEHLT === 0, 'Die Listenwahl sprang');
+    setTimeout(function(){
+      var falte2 = el('detail-verlauf').innerHTML;
+      pruefe(falte2.indexOf('vzeile dies') >= 0 && falte2.indexOf('RE: Frage') >= 0, 'Die Falte folgt der Nachricht nicht: ' + falte2.slice(0, 400));
+      pruefe(falte2.indexOf("fallWahl('einer', 'detail')") >= 0, 'Das Gespraech laesst sich von hier nicht hinzufuegen');
+      FALL_WAHL = {art: 'einer', daten: 'detail'};
+      pruefe(fallWahlTitel().indexOf('RE: Frage') >= 0, 'Das Fallfenster nennt nicht die gezeigte Nachricht: ' + fallWahlTitel());
+      // A message that is a hit of the list opens through the list, the selection follows
+      openThreadMessage('tix:abc', 0);
+      setTimeout(function(){
+        pruefe(TREFFER_GEWAEHLT === 0 && el('detail-inhalt').innerHTML.indexOf('class="zaehler"') >= 0 &&
+               el('detail-inhalt').innerHTML.indexOf('Erste') >= 0, 'Treffer der Liste ohne Zaehler');
+        console.log('OK');
+      }, 20);
+    }, 20);
+  }, 20);
+}, 20);
+"""
+
+
+def test_eine_nachricht_des_gespraechs_oeffnet_sich_als_detail():
+    """A row of the conversation fold opens its message as the detail
+    (13.6) instead of the original: through the list when the message is
+    a hit there, on its own – without the list's counter, with "add to
+    case" still working – when it is not."""
+    _in_node(PRUEFUNG_GESPRAECH_OEFFNEN)
+
+
+def test_das_ergebnis_traegt_seinen_streifen_im_markup():
+    seite = app_mod.seite()
+    block = seite[seite.index('<section id="tab-suche"'):seite.index('<section id="tab-faelle"')]
+    assert block.count('data-result-view=') == 3
+    assert block.index('id="ki-klappe"') < block.index('id="result-views"') < block.index('id="treffer-split"')
+    assert block.index('id="result-activity"') < block.index('id="results"')
+    assert 'id="result-people-count"' in block
+    # No tool in the strip: the band narrows the timeline, the person pill the people.
+    for kennung in ("result-people-filter", "result-direction"):
+        assert kennung not in block, kennung
+    # The address book: list or picture, before the origin chips
+    assert block.count('data-book-mode=') == 2
+    assert block.index('data-book-mode="list"') < block.index('data-book="all"')
+    assert block.index('id="book-origin"') < block.index('id="kbBox"')
+
+
+PRUEFUNG_ADRESSBUCH_BILD = GRUNDZUSTAND + """
+process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
+var LEUTE = [
+  {name: 'Dana Dienstleister', address: 'dana@example.org', items: 30, by_source: {outlook: 30}, first: '2026-02-01 08:00', last: '2026-06-10 08:00'},
+  {name: 'Bob Baumeister', address: '', items: 12, by_source: {teams: 12}, first: '2026-03-01 08:00', last: '2026-06-01 09:35'},
+  {name: 'A B', address: 'a@example.com', items: 4, by_source: {outlook: 4}, first: '2026-01-01 08:00', last: '2026-01-01 08:00'}
+];
+var gefragt = [];
+global.fetch = function(pfad){
+  pfad = String(pfad); gefragt.push(pfad);
+  var antwort;
+  if(pfad.indexOf('/api/v1/calendar') >= 0)
+    antwort = {generated: '2026-08-07T09:00:00', counts: {kalender: 0, rekonstruiert: 0},
+               recs: [{src: 'kontakte', title: 'Dana Dienstleister', em: ['dana@example.org'], tel: ['+49 40 000 000'],
+                       org: 'Dienstleister GmbH', role: 'Projektleitung', root: 'outlook', rel: 'kontakte/d.vcf'}]};
+  else if(pfad.indexOf('/api/v1/search/people') >= 0) antwort = {items: LEUTE, count: 3, hits: 46, capped: false};
+  else antwort = statusGeruest();
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(antwort); }});
+};
+function zahlDer(muster){ return gefragt.filter(function(p){ return p.indexOf(muster) >= 0; }).length; }
+
+setTimeout(function(){
+  var status = statusGeruest();
+  status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
+  renderStatus(status);
+  aktiverTab = 'suche';
+  offeneSicht = 'adressbuch';
+  ladeKalender('adressbuch');
+  setTimeout(function(){
+    pruefe(el('kbBox').innerHTML.indexOf('Dana Dienstleister') >= 0 && el('kbBox').innerHTML.indexOf('card2') >= 0, 'Liste leer');
+    pruefe(zahlDer('/search/people') === 0, 'Das Archiv-Bild wurde ungefragt geholt');
+    bookMode('picture');
+    pruefe(zahlDer('/search/people') === 1, 'Bild fragt nicht das Archiv: ' + gefragt.join(' '));
+    setTimeout(function(){
+      var html = el('kbBox').innerHTML;
+      pruefe(html.split('class="knoten').length - 1 === 2 && html.indexOf('bookPerson(') >= 0, 'Bild ohne Knoten: ' + html.slice(0, 200));
+      pruefe(html.indexOf('A B') < 0, 'ich selbst nicht ausgenommen');
+      pruefe(html.indexOf('2 Personen in 46') >= 0, 'Kopf: ' + html.slice(0, 200));
+      pruefe(el('book-origin').classList.contains('hide') && el('book-note').classList.contains('hide'), 'Herkunfts-Chips bleiben im Bild');
+      pruefe(el('kbStats').textContent === '', 'Zaehlzeile der Liste bleibt stehen');
+      bookPerson('Dana Dienstleister');
+      html = el('kbBox').innerHTML;
+      pruefe(html.indexOf('person-karte') >= 0 && html.indexOf('+49 40 000 000') >= 0 && html.indexOf('Dienstleister GmbH') >= 0, 'Karte ohne die Fakten des Adressbuchs: ' + html.slice(html.indexOf('person-karte'), html.indexOf('person-karte') + 400));
+      pruefe(html.indexOf('zeigeKommunikation(&quot;Dana Dienstleister&quot;, \\'timeline\\')') >= 0, 'Wege fehlen');
+      pruefe(zahlDer('/search/people') === 1, 'Das Bild wurde fuer die Karte erneut geholt');
+      // The way over lands in the timeline, with the person pill set
+      var echteSuche = doSearch, gesucht = null;
+      doSearch = function(){ gesucht = {person: el('f-person').value, view: RESULT_VIEW}; };
+      zeigeKommunikation('Dana Dienstleister', 'timeline');
+      pruefe(gesucht && gesucht.person === 'Dana Dienstleister' && gesucht.view === 'timeline' && offeneSicht === 'treffer', 'Uebergabe landet nicht in der Zeitleiste: ' + JSON.stringify(gesucht));
+      zeigeKommunikation('Dana Dienstleister');
+      pruefe(gesucht.view === 'timeline', 'Kommunikation anzeigen landet nicht in der Zeitleiste');
+      doSearch = echteSuche;
+      // Back to the list: the chips are back
+      offeneSicht = 'adressbuch';
+      bookMode('list');
+      pruefe(!el('book-origin').classList.contains('hide') && el('kbBox').innerHTML.indexOf('card2') >= 0, 'Liste kommt nicht zurueck');
+      console.log('OK');
+    }, 20);
+  }, 20);
+}, 0);
+"""
+
+
+def test_das_adressbuch_zeigt_das_bild_ueber_das_archiv():
+    """Contacts as list or picture (13.6): the picture is the case's, over
+    everyone the index names, fetched once when first asked for; the origin
+    chips are absent there; the card carries what the address book knows;
+    the way over lands in the timeline of the search."""
+    _in_node(PRUEFUNG_ADRESSBUCH_BILD)

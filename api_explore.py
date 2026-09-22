@@ -169,20 +169,33 @@ def interne_domains(h):
     return h.M.interne_domains(h.app.cfg)
 
 
-def alle_treffer(h, k, grenze=5000):
+# How many hits "the whole result" holds at most – for a case's list and
+# for the two views over a result. Measured at 2 000 items a full case
+# answer costs ~10 ms and 625 KB; five thousand hits without previews stay
+# in that order.
+WHOLE_LIMIT = 5000
+
+
+def engine_filters(k):
+    """The criteria of a search as the engine's keyword arguments – the
+    filters alone, without the query, the mode or the paging."""
+    return dict(person=k["person"], date_from=k["from"], date_to=k["to"],
+                source=k["source"], only_gone=k["gone"], folder=k["folder"],
+                filetype=k["filetype"], with_attachments=k["attachments"],
+                case=str(k["fall"]) if k["fall"] else "",
+                case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
+                party=k["party"],
+                **{m: k[m] for m in faelle.MAIL})
+
+
+def alle_treffer(h, k, grenze=WHOLE_LIMIT):
     """Every hit of a search, for a result list: the criteria as the
     page had them, paged through the same engine up to `grenze`."""
     mod = h.app.search.ensure(h.app.cfg)
     if mod is None:
         raise Ablehnung(503, h.app.search.error)
     mod.STATE["internal_domains"] = interne_domains(h)
-    kw = dict(person=k["person"], date_from=k["from"], date_to=k["to"],
-              source=k["source"], only_gone=k["gone"], folder=k["folder"],
-              filetype=k["filetype"], with_attachments=k["attachments"],
-              case=str(k["fall"]) if k["fall"] else "",
-              case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
-              party=k["party"], preview_chars=0,
-              **{m: k[m] for m in faelle.MAIL})
+    kw = dict(engine_filters(k), preview_chars=0)
     modus = api.MODUS[k["mode"]]
     treffer, offset, schritt = [], 0, 100
     while offset < grenze:
@@ -198,6 +211,92 @@ def alle_treffer(h, k, grenze=5000):
             break
         offset += schritt
     return treffer[:grenze], None
+
+
+def suche_zeitleiste(h, _p, q, _data):
+    """The whole result in date order – the timeline over a search. Paged
+    through the same engine as a case's list add, up to the same cap and
+    without previews; `capped` says when the cap cut. A hit keeps the
+    shape of `/search`, so the page's detail and case marks work on it
+    unchanged."""
+    k = faelle.kriterien(q)
+    treffer, fehler = alle_treffer(h, k, WHOLE_LIMIT)
+    if fehler:
+        raise Ablehnung(409, fehler, items=[], count=0)
+    # Oldest first, the undated at the end – the page turns it around
+    # itself when asked for newest first.
+    treffer.sort(key=lambda t: (not t.get("date"), t.get("date") or ""))
+    return api.json({"items": rest.treffer(treffer), "count": len(treffer),
+                     "capped": len(treffer) >= WHOLE_LIMIT, "limit": WHOLE_LIMIT})
+
+
+def suche_personen(h, _p, q, _data):
+    """Who a result names – the people view over a search. With a search
+    term the people are counted over the collected hits (up to the cap);
+    without one the engine hands over every item the filters admit, so
+    the whole archive is counted honestly, with no cap."""
+    k = faelle.kriterien(q)
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error, items=[], count=0)
+    if k["q"]:
+        treffer, fehler = alle_treffer(h, k, WHOLE_LIMIT)
+        rows = [(t.get("who"), t.get("who_mail"), t.get("date"), t.get("source"))
+                for t in treffer or ()]
+        capped = len(rows) >= WHOLE_LIMIT
+    else:
+        mod.STATE["internal_domains"] = interne_domains(h)
+        res = mod.facet_rows(**engine_filters(k))
+        fehler, rows, capped = res.get("error"), res.get("rows") or [], False
+    if fehler:
+        raise Ablehnung(409, fehler, items=[], count=0)
+    leute = people_of(rows)
+    return api.json({"items": leute, "count": len(leute), "hits": len(rows),
+                     "capped": capped})
+
+
+UNKNOWN = "(unbekannt)"
+
+
+def _date_key(text):
+    """'YYYY-MM-DD HH:MM' of an index date, '' when it is none."""
+    text = str(text or "").strip()
+    return text[:16] if len(text) >= 10 and text[4] == "-" else ""
+
+
+def people_of(rows):
+    """Who the rows name, counted the way the page counts a case's people
+    (personenAus in page.html): `who` split at ", " – an assignee list
+    names several –, the unknown sender skipped, one address only when the
+    row names exactly one person (a list would pin it on the wrong one),
+    first and last date, a count per source. An address book entry
+    names its company, not a person, so the `kontakte` rows stay out –
+    the address book lists them itself. Sorted by last contact, newest
+    first, then by count, then by name; the undated at the end."""
+    je = {}
+    for who, who_mail, date, src in rows:
+        if src == "kontakte":
+            continue
+        names = [n.strip() for n in str(who or "").split(", ")
+                 if n.strip() and n.strip() != UNKNOWN]
+        adresse = str(who_mail or "").strip().lower()
+        k = _date_key(date)
+        for name in names:
+            p = je.setdefault(name, {"name": name, "address": "", "items": 0,
+                                     "by_source": {}, "first": "", "last": ""})
+            p["items"] += 1
+            p["by_source"][src] = p["by_source"].get(src, 0) + 1
+            if adresse and len(names) == 1 and not p["address"]:
+                p["address"] = adresse
+            if k:
+                if not p["first"] or k < p["first"]:
+                    p["first"] = k
+                if not p["last"] or k > p["last"]:
+                    p["last"] = k
+    leute = sorted(je.values(), key=lambda p: p["name"].lower())
+    leute.sort(key=lambda p: -p["items"])
+    leute.sort(key=lambda p: p["last"], reverse=True)
+    return leute
 
 
 def thread(h, q, grenze):
@@ -320,6 +419,8 @@ def fakten_lesen(h, q):
 # The routes of this door, in the order the table in app.py lists them.
 ROUTEN = (
     ("GET", "/api/v1/search", suche),
+    ("GET", "/api/v1/search/timeline", suche_zeitleiste),
+    ("GET", "/api/v1/search/people", suche_personen),
     ("GET", "/api/v1/similar", aehnlich),
     ("GET", "/api/v1/files", dateien),
     ("GET", "/api/v1/folders", ordner),

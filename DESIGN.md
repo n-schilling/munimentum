@@ -106,12 +106,15 @@ nothing below the chips but an actionable warning.
 icons). *Search* owns the search row — one field with the mode switch
 inside it, one button, two icons for history and saved searches — the
 pill row, the empty state before the first search (`#suche-anfang`), and
-the hits: list at the left, the chosen hit at the right with head, title,
-facts, one action row, content and the conversation fold. *Calendar*
+the result in three views — the case's strip, *List · Timeline · People*
+(`#result-views`), nothing beside it: the list at the left, the chosen hit at the right with head, title, facts, one
+action row, content and the conversation fold; the timeline and the
+people over the whole result, up to the cap a case's list has. *Calendar*
 (week, month, reconstructed appointments marked in the grid; the month
-name as picker, *Today*), *Contacts* (all, from contacts, from
-communication as chips) and *Files* (the mirrors as a tree) keep their own
-controls and hand over with one button.
+name as picker, *Today*), *Contacts* (list or picture as a segment — the
+picture is the case's, over the archive — then all, from contacts, from
+communication as chips, absent in the picture) and *Files* (the mirrors
+as a tree) keep their own controls and hand over with one button.
 
 **Cases**: the overview at the left (name, status, counts, closed cases
 behind a link; narrowed to names while a case is open) and the case at
@@ -182,6 +185,9 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Setting row | `.feldzeile` | label with `(i)` left, control right; `.kipp` for every boolean |
 | Modal | `.modal` via `modalKopf` + `modalFuss` | cross top right, primary bottom left; what it is for goes into its `(i)`. A setting never lives in one: it is a card (`#zugang-karte` was the last exception, until 12.0) |
 | Fold | `details.gruppe` / `.quelle` | every heading in a case; chevron, icon, name, count |
+| Activity band | `.aktivitaet` | one bar per month or week, a click narrows the rows; `activityBand()` draws it for a case and for a result |
+| Timeline row | `.zeit` | tick, date, icon, title, who; with its actions in a case, opening the detail in a result |
+| People picture | `.bild` | you at the left, four `.periode` columns of `.knoten` by last contact, the chosen one's `.person-karte`; `peoplePicture()` draws it for a case, a result and the address book |
 | Tool row | `.werkzeugzeile` / `.calbar` / `.dateien-kopf` | a view's controls left, its hand-over right |
 | Run window | `#lauf-overlay` | progress, steps, log, *Close* / *Cancel* |
 | Balance / archive row | `.bilanz .zeile` | icon, name, one sentence with numbers, one `.mini` per kind of finding |

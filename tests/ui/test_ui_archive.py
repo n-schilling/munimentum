@@ -24,6 +24,13 @@ PROJECT = people.PROJECT
 EN = texts("en")
 
 
+def figure(n):
+    """A number the way the page writes it: toLocaleString on an English
+    page puts a comma every three digits, and the archive counts in
+    thousands since it holds a year of traffic."""
+    return f"{n:,}"
+
+
 def search_for(page, archive, term):
     """Type a search and press the button, as a user would."""
     open_app(page, archive, tab="suche")
@@ -94,9 +101,9 @@ def test_the_key_figures_count_what_was_written(archive_page, archive):
     karte = archive_page.locator("#ana-zahlen-karte")
     expect(karte).to_be_visible()
     messages = len(sources.MAILS) + sum(len(c["messages"]) for c in sources.CONVERSATIONS)
-    expect(karte).to_contain_text(str(messages))
-    expect(karte).to_contain_text(str(len(sources.PAGES)))
-    expect(karte).to_contain_text(str(len(sources.ONENOTE_PAGES)))
+    expect(karte).to_contain_text(figure(messages))
+    expect(karte).to_contain_text(figure(len(sources.PAGES)))
+    expect(karte).to_contain_text(figure(len(sources.ONENOTE_PAGES)))
     expect(karte).to_contain_text("2026")
 
 
@@ -121,3 +128,43 @@ def test_a_hit_goes_into_a_new_case(archive_page, archive):
     expect(archive_page.locator("#fall-kopf")).to_contain_text(name)
     # The item is in there by its own title, filed under its source.
     expect(archive_page.locator("#fall-inhalt")).to_contain_text(titel)
+
+
+def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
+    """The address book as the case's picture (13.6): everyone the
+    communication names, the origin chips absent, the card with what the
+    address book knows, the way over into the timeline of the search."""
+    open_app(archive_page, archive, tab="suche")
+    archive_page.click('#sichten [data-sicht="adressbuch"]')
+    expect(archive_page.locator("#kbBox")).to_contain_text(people.COLLEAGUES[0][0])
+    with archive_page.expect_response(lambda r: "/api/v1/search/people" in r.url):
+        archive_page.locator('#sicht-adressbuch [data-book-mode="picture"]').click()
+    picture = archive_page.locator("#kbBox .bild")
+    expect(picture).to_be_visible()
+    for name, _mail in [*people.COLLEAGUES, *people.EXTERNALS]:
+        expect(picture).to_contain_text(name)
+    # Me: the circle at the left, no node; the address book's own
+    # entries are no nodes either – a card names a company, not a person.
+    expect(picture.locator(".knoten")).to_have_count(len(people.COLLEAGUES) + len(people.EXTERNALS))
+    expect(picture.locator(".ich")).to_contain_text(people.ME[0])
+    expect(archive_page.locator('#sicht-adressbuch [data-book="comm"]')).to_be_hidden()
+    # The card: address, and company, role and number from the address book.
+    dana = people.EXTERNALS[0]
+    contact = [c for c in sources.CONTACTS if c["displayName"] == dana[0]][0]
+    picture.locator(".knoten", has_text=dana[0]).click()
+    card = archive_page.locator("#kbBox .person-karte")
+    expect(card).to_contain_text(dana[1])
+    expect(card).to_contain_text(contact["companyName"])
+    expect(card).to_contain_text(contact["businessPhones"][0])
+    # The way over: the timeline of the person in Search, the pill set.
+    with archive_page.expect_response(lambda r: "/api/v1/search/timeline" in r.url):
+        card.get_by_role("button", name=EN["people.timeline"]).click()
+    expect(archive_page.locator("#sicht-treffer")).to_be_visible()
+    expect(archive_page.locator('#result-views [data-result-view="timeline"]')).to_have_class("sicht on")
+    expect(archive_page.locator("#pw-person")).to_contain_text(dana[0])
+    expect(archive_page.locator("#results .zeit")).not_to_have_count(0)
+    # Back in the book, the list and its chips are back.
+    archive_page.click('#sichten [data-sicht="adressbuch"]')
+    archive_page.locator('#sicht-adressbuch [data-book-mode="list"]').click()
+    expect(archive_page.locator('#sicht-adressbuch [data-book="comm"]')).to_be_visible()
+    expect(archive_page.locator("#kbBox .card2").first).to_be_visible()

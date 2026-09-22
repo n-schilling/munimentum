@@ -1,31 +1,40 @@
-## New in 13.5.1
+## New in 13.6.0
 
-**A chat keeps its own name.** Whatever someone pastes into a Teams
-message arrives with its markup, headings included – and the index took
-such a heading for the name of the conversation. Every message of that
-chat then stood in the result under the chat's name with the pasted
-heading glued to it, and the heading was missing from the text it
-belongs to. The name is the file's own heading again, and a heading in a
-message is part of that message.
+**A search result in three views.** Above the hits stands the strip a
+case has: *List*, *Timeline* and *People*. The list is the page as
+before. The timeline puts every hit the search finds in the order it
+happened, with the band of months above it – a click on a bar narrows
+the rows to that month, a row opens the hit at the right as the list
+does. People places everyone the hits name by their last contact, the
+circle sized by how many hits name them, *external* marked; a person's
+card leads on to their timeline or their list. Both views take the
+whole result, up to 5 000 hits, and say so when that cap cut.
 
-**The update check no longer stumbles over GitHub's limit.** An address
-may ask GitHub sixty times an hour without an account, and every start
-of the app shares that with everything else on the same connection. The
-check now sends the mark of the last answer, so an unchanged answer
-costs nothing of it. When the limit refuses anyway, *Settings › App*
-says *Update check not possible* instead of *HTTP 403* and names the
-code, the limit and the time it opens again on the mouseover.
+**Contacts as a picture.** The address book shows its people as a list
+or as the same picture, over the whole archive; a person's card carries
+company, role and number from the address book, and *Show communication*
+opens their timeline.
 
-**The tour remembers every chapter.** *Help* offers six of them, and
-only the first three were kept as seen: Cases, Insights and Claude stood
-as unseen again after every start.
+**A conversation's messages open in place.** A message in the fold
+under a mail or a chat message opens as the detail; the original stays
+one click away under *Open original*.
+
+**Two routes for scripts.** `/api/v1/search/timeline` answers the whole
+result of a search in date order, `/api/v1/search/people` who it names
+with counts, addresses and dates – the criteria of `/api/v1/search`, no
+paging.
+
+**An archive to look at, without an account.** Running from source,
+`python3 -m testdata.build --profile testdaten` writes an invented
+archive – all eight sources, a year of traffic, some 2 400 files – and
+`python3 app.py --profile testdaten` opens it. Nothing in it comes from
+Microsoft, and it is the archive the browser tests run against.
 
 ## Upgrading
 
-**From 13.x:** the first run that updates the index reads every file
-once more – that is how the corrected chat names reach what is already
-indexed. It costs one pass over the archive; nothing is fetched from
-Microsoft, and the embeddings of everything that did not change are kept.
+**From 13.5.0 or older:** the first run that updates the index reads
+every file once more – described in the notes of
+[13.5.1](https://github.com/n-schilling/munimentum/releases/tag/v13.5.1).
 
 **From 12.x or older:** the first run after the update rebuilds the
 search index once, and every script against the HTTP interface has to

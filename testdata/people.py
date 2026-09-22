@@ -24,19 +24,46 @@ YEAR = TODAY.year
 ME = ("Alice Beispiel", "alice.beispiel@nordwind.example")
 
 # Colleagues: inside the organisation, so the interface counts them as
-# internal (the setting internal_domains names nordwind.example).
+# internal (the setting internal_domains names nordwind.example). The
+# first two carry the story the browser tests read; the rest are the
+# volume behind it – everyone of them writes, so the people view shows
+# the whole cast and no node stands for someone the archive never heard.
 COLLEAGUES = [
     ("Bob Baumeister", "bob.baumeister@nordwind.example"),
     ("Carla Chef", "carla.chef@nordwind.example"),
+    ("Frida Finanz", "frida.finanz@nordwind.example"),
+    ("Hanno Helpdesk", "hanno.helpdesk@nordwind.example"),
+    ("Ines Innendienst", "ines.innendienst@nordwind.example"),
+    ("Kai Kalkulation", "kai.kalkulation@nordwind.example"),
+    ("Lena Lager", "lena.lager@nordwind.example"),
+    ("Malte Marketing", "malte.marketing@nordwind.example"),
+    ("Nina Netzwerk", "nina.netzwerk@nordwind.example"),
+    ("Olaf Organisation", "olaf.organisation@nordwind.example"),
 ]
 
-# Outside it: a service provider, a buyer, a guest. They are what makes
-# "external" visible in the people view and in a case.
+# Outside it: a service provider, a buyer, a guest, and the partners the
+# bulk of the archive is written with. They are what makes "external"
+# visible in the people view and in a case.
 EXTERNALS = [
     ("Dana Dienstleister", "dana.dienstleister@example.com"),
     ("Erik Einkauf", "erik.einkauf@example.com"),
     ("Greta Gast", "greta.gast@example.com"),
+    ("Hanna Handel", "hanna.handel@example.com"),
+    ("Ingo Import", "ingo.import@example.com"),
+    ("Lars Logistik", "lars.logistik@example.com"),
+    ("Mona Montage", "mona.montage@example.com"),
+    ("Nils Notar", "nils.notar@example.com"),
+    ("Petra Planung", "petra.planung@example.com"),
+    ("Rita Revision", "rita.revision@example.com"),
+    ("Sven Schulung", "sven.schulung@example.com"),
+    ("Tina Technik", "tina.technik@example.com"),
+    ("Vera Vertrieb", "vera.vertrieb@example.com"),
 ]
+
+# The interface draws 24 people per period of the picture before it
+# offers "and n more": a cast that stays under that shows itself whole,
+# which is what the browser tests hold it to.
+assert len(COLLEAGUES) + len(EXTERNALS) <= 24
 
 EVERYONE = [ME, *COLLEAGUES, *EXTERNALS]
 ADDRESS = {name: mail for name, mail in EVERYONE}

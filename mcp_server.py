@@ -1258,6 +1258,61 @@ def similar_messages(cid: int, k: int = 12, preview_chars: int = 200):
         con.close()
 
 
+def _browse_where(con, person, date_from, date_to, days, source, only_gone,
+                  folder, filetype, case, case_folder, party, mail_from,
+                  mail_to, mail_cc, mail_bcc, with_attachments):
+    """The WHERE of a listing without a query – browse_messages and the
+    people count share it: the checks that refuse what this index cannot
+    answer, then _where. (where, params, error)."""
+    if only_gone and not _hat_spalte(con, "gone"):
+        return "", [], ("This index predates deletion tracking. Rebuild it "
+                        "(Export tab → “Index only”) to use only_gone.")
+    fehler = _party_pruefen(con, party)
+    if fehler:
+        return "", [], fehler
+    mail = {"from": mail_from, "to": mail_to, "cc": mail_cc, "bcc": mail_bcc}
+    fehler = _mail_pruefen(con, mail)
+    if fehler:
+        return "", [], fehler
+    im_fall, fehler = _im_fall(con, case, case_folder)
+    if fehler:
+        return "", [], fehler
+    von, bis = _zeitraum(date_from, date_to, days)
+    where, params = _where(person.strip(), von, bis, source, only_gone, folder,
+                           filetype, im_fall, party, mail, with_attachments)
+    return where, params, None
+
+
+def facet_rows(person: str = "", date_from: str = "", date_to: str = "",
+               source: str = "all", only_gone: bool = False, folder: str = "",
+               filetype: str = "", case: str = "", case_folder: str = "",
+               party: str = "all", mail_from: str = "", mail_to: str = "",
+               mail_cc: str = "", mail_bcc: str = "",
+               with_attachments: bool = False) -> dict:
+    """What a people count needs of every item the filters admit – who,
+    the sender's address, the date, the source – with no query and no
+    cap. `/api/v1/search/people` reads it when there is no search term:
+    the whole archive counted honestly, where paging through hits would
+    stop at the result cap. Not a tool: Claude has list_people."""
+    con = _db()
+    try:
+        where, params, fehler = _browse_where(
+            con, person, date_from, date_to, 0, source, only_gone, folder,
+            filetype, case, case_folder, party, mail_from, mail_to, mail_cc,
+            mail_bcc, with_attachments)
+        if fehler:
+            return {"error": fehler, "rows": []}
+        # An index from before 11.1 carries no addresses – the count
+        # still works, only the external mark stays away (as on the page).
+        adresse = "who_mail" if _hat_spalte(con, "who_mail") else "NULL"
+        rows = con.execute(
+            f"SELECT who, {adresse}, date, src FROM chunks WHERE seq = 0 AND {where}",
+            params).fetchall()
+        return {"rows": [(r[0], r[1], r[2], r[3]) for r in rows]}
+    finally:
+        con.close()
+
+
 @mcp.tool(annotations=_READONLY)
 def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     days: int = 0, source: str = "all", k: int = 30,
@@ -1313,23 +1368,12 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
     """
     con = _db()
     try:
-        if only_gone and not _hat_spalte(con, "gone"):
-            return {"error": "This index predates deletion tracking. Rebuild it "
-                             "(Export tab → “Index only”) to use only_gone.",
-                    "count": 0, "results": []}
-        fehler = _party_pruefen(con, party)
+        where, params, fehler = _browse_where(
+            con, person, date_from, date_to, days, source, only_gone, folder,
+            filetype, case, case_folder, party, mail_from, mail_to, mail_cc,
+            mail_bcc, with_attachments)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
-        mail = {"from": mail_from, "to": mail_to, "cc": mail_cc, "bcc": mail_bcc}
-        fehler = _mail_pruefen(con, mail)
-        if fehler:
-            return {"error": fehler, "count": 0, "results": []}
-        im_fall, fehler = _im_fall(con, case, case_folder)
-        if fehler:
-            return {"error": fehler, "count": 0, "results": []}
-        von, bis = _zeitraum(date_from, date_to, days)
-        where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party, mail, with_attachments)
         # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
         # order, but ix_chunks_msg_ts can serve it without a temp sort.
