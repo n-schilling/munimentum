@@ -16,7 +16,7 @@ import pytest
 from playwright.sync_api import expect
 
 from testdata import people, sources
-from tests.ui.helpers import hit_title, open_app, texts
+from tests.ui.helpers import hit_title, open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
 
@@ -58,7 +58,7 @@ def test_a_chosen_hit_shows_the_facts_of_its_kind(archive_page, archive):
 
 def test_the_calendar_shows_what_the_export_holds(archive_page, archive):
     open_app(archive_page, archive, tab="suche")
-    archive_page.click('#sichten [data-sicht="kalender"]')
+    open_calendar(archive_page)
     sicht = archive_page.locator("#sicht-kalender")
     expect(sicht).to_be_visible()
     # The line above the grid counts the appointments in the export.

@@ -18,6 +18,20 @@ def open_app(page, server, tab=None):
     return page
 
 
+def open_calendar(page):
+    """Switch to the calendar and wait until its data is there.
+
+    The view draws before the answer arrives, and what it shows is what
+    the hand-over into the search takes its date range from – so a click
+    that is faster than the load would hand over nothing. Waiting for the
+    response alone is not enough either: the page fills `events` in the
+    handler that follows it.
+    """
+    with page.expect_response(lambda r: "/api/v1/calendar" in r.url):
+        page.click('#sichten [data-sicht="kalender"]')
+    page.wait_for_function("() => Array.isArray(window.events) && window.events.length")
+
+
 def hit_title(hit):
     """The title of a hit row, without the marks that sit beside it – a
     hit that is already in a case carries the case's name in the same

@@ -15,7 +15,7 @@ import pytest
 from playwright.sync_api import expect
 
 from testdata import people, sources
-from tests.ui.helpers import open_app, texts
+from tests.ui.helpers import open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
 
@@ -283,7 +283,7 @@ def test_the_current_search_is_saved_and_comes_back_on_the_next_visit(archive_pa
 
 def test_the_calendar_hands_its_month_over_to_the_search(archive_page, archive):
     open_app(archive_page, archive, tab="suche")
-    archive_page.click('#sichten [data-sicht="kalender"]')
+    open_calendar(archive_page)
     with archive_page.expect_response(lambda r: "/api/v1/search" in r.url):
         archive_page.click("#kalSuchen")
     results(archive_page)
