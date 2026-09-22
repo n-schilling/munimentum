@@ -146,7 +146,7 @@ A case collects what belongs to one matter — hits, whole result lists and
 saved searches, from every source — without copying anything: it points at
 items in the archive by a key that survives a rename or a move. Every hit
 carries a tick; the chosen one offers *Add to case*, the ticked ones a bar
-above the list, and *Add all … to a case* takes the whole result. The
+above the list, and *Whole result into a case…* takes all of them. The
 window that adds anything asks for a folder in the case and offers the
 rest of a mail's or chat's conversation.
 

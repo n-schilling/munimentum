@@ -41,6 +41,26 @@ MAIL_SPALTEN = {"from": "who_mail", "to": "to_ppl", "cc": "cc_ppl", "bcc": "bcc_
 # Which of them an index must have before the Mail filter can be offered.
 MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 
+# What the parsers in corpus.py make of a file. An incremental run takes
+# the chunks of every unchanged file straight from the old index, so a
+# correction in a parser would never reach a file nobody touches again.
+# Raising this number is how such a correction is made to count: the next
+# index run reads every file once more (the embeddings are matched by the
+# text's hash, so only what really changed is computed again).
+#
+#   2  the name of a Teams conversation is its own heading, not the
+#      headings a message pasted in brought with it
+PARSER = 2
+
+
+def parser_stand(store):
+    """The reader's generation this index was built with; an index from
+    before the number knows none and counts as the first."""
+    try:
+        return int(info(store).get("parser") or 1)
+    except (TypeError, ValueError):
+        return 1
+
 
 def db_path(store):
     """The store's database – one name, not the same literal nine times."""

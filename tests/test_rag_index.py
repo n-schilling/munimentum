@@ -260,7 +260,32 @@ def test_write_info(tmp_path):
     info = json.loads((tmp_path / "info.json").read_text(encoding="utf-8"))
     assert info == {"model": "bge-m3", "dim": 1024, "chunks": 7,
                     "dtype": "float16", "format": rag_index.FORMAT,
-                    "vectors": "vectors-3.npy"}
+                    "vectors": "vectors-3.npy",
+                    "parser": store_layout.PARSER}
+
+
+def test_a_corrected_reader_makes_the_next_run_read_everything(tmp_path):
+    """The incremental run takes an unchanged file's chunks from the old
+    index – so a parser correction would never reach a file nobody writes
+    to again. The reader's generation in info.json is what makes it."""
+    store = tmp_path / "store"
+    store.mkdir()
+    # An index built by the readers of today: it is taken over.
+    chunks = [make_chunk(uid="teams:1on1/a.html:0", src="teams", root="teams",
+                         rel="1on1/a.html", title="Bob Baumeister")]
+    rag_index.write_db(store, chunks, {("teams", "1on1/a.html"): (1, 2)})
+    rag_index.write_info(store, "bge-m3", 8, len(chunks))
+    manifest, alt = rag_index._alter_bestand(store)
+    assert manifest == {("teams", "1on1/a.html"): (1, 2)} and alt
+    # One built before a correction: everything is read once more.
+    info = json.loads((store / "info.json").read_text(encoding="utf-8"))
+    info["parser"] = store_layout.PARSER - 1
+    (store / "info.json").write_text(json.dumps(info), encoding="utf-8")
+    assert rag_index._alter_bestand(store) == (None, None)
+    # And an index from before the number counts as the oldest.
+    del info["parser"]
+    (store / "info.json").write_text(json.dumps(info), encoding="utf-8")
+    assert store_layout.parser_stand(store) == 1
 
 
 def test_write_info_ohne_vektoren_sagt_es_ausdruecklich(tmp_path):

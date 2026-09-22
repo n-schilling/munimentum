@@ -21,23 +21,23 @@ profile; exports and the search index live below it by default and can each
 point elsewhere — all paths are shown in *Settings*. Every archive is a
 profile folder of its own below that one, with its own token, exports and
 index; nothing crosses between profiles, and the only things outside them
-are a small file naming the one opened last and the start-up log. Each export's
-bookkeeping — change tokens, inventories, for Teams the message texts the
-pages are rendered from — sits in a `state.db` inside its export folder,
-nowhere else. The search history, saved searches and cases sit in a
-`faelle.db` next to the profile's settings: the history keeps a search's
-criteria — words, kind of search, filters — never its hits, for as long as
-*Settings › App* says (or not at all), and a case keeps pointers into the
-archive plus what a hit said when it was added, the remarks you write
-on its items, and the keys of items you removed by hand, so that a search
-set to collect automatically does not put them back. The one thing the
-app writes outside its folders is a
-**case export**, and only when you ask for one: a ZIP of copied originals
-under the path you chose (your Documents folder by default) — from there
-on it is yours to move, share or delete. The app serves its interface on
-`127.0.0.1` and is not reachable from your network. System notifications
-are posted locally through the operating system. Delete those folders and
-nothing of it remains.
+are a small file naming the one opened last, the start-up log, and what the
+update check remembers of GitHub's last answer so it need not ask again.
+Each export's bookkeeping — change tokens, inventories, for Teams the
+message texts the pages are rendered from — sits in a `state.db` inside its
+export folder, nowhere else. The search history, saved searches and cases
+sit in a `faelle.db` next to the profile's settings: the history keeps a
+search's criteria — words, kind of search, filters — never its hits, for as
+long as *Settings › App* says (or not at all), and a case keeps pointers
+into the archive plus what a hit said when it was added, the remarks you
+write on its items, and the keys of items you removed by hand, so that a
+search set to collect automatically does not put them back. The one thing
+the app writes outside its folders is a **case export**, and only when you
+ask for one: a ZIP of copied originals under the path you chose (your
+Documents folder by default) — from there on it is yours to move, share or
+delete. The app serves its interface on `127.0.0.1` and is not reachable
+from your network. System notifications are posted locally through the
+operating system. Delete those folders and nothing of it remains.
 
 ## Two places worth knowing about
 

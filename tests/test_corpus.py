@@ -148,6 +148,27 @@ def test_conv_parser_extracts_title_and_messages():
     assert pr.msgs[1] == {"n": "Bob", "t": "2025-06-01 09:35", "x": "Danke!", "id": None}
 
 
+TEAMS_HTML_MIT_UEBERSCHRIFT = """<html><body>
+<h1>Bob Baumeister</h1>
+<div class="msg">
+  <span class="name">Bob Baumeister</span>
+  <span class="time">2026-06-01 09:30</span>
+  <div class="body"><h1>Executive Summary</h1><p>The numbers for Q4.</p></div>
+</div>
+</body></html>"""
+
+
+def test_a_heading_in_a_message_is_its_text_and_not_the_chats_name():
+    """Teams passes on what someone pasted, headings included. They belong
+    to the message; as the title they would hang on every message of the
+    file and be missing from the text they were written in."""
+    pr = corpus.ConvParser()
+    pr.feed(TEAMS_HTML_MIT_UEBERSCHRIFT)
+    pr.finish()
+    assert pr.title == "Bob Baumeister"
+    assert pr.msgs[0]["x"] == "Executive Summary The numbers for Q4."
+
+
 def test_load_teams_builds_records(tmp_path):
     d = tmp_path / "1on1"
     d.mkdir()

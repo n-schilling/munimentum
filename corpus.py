@@ -28,7 +28,10 @@ from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
 import export_util
 
 CATS = {"1on1", "group", "meeting", "channels"}
-_BLOCK = {"br", "p", "div", "li", "tr"}
+# Where text is separated by markup rather than by a space. Headings
+# belong in it: a message body may carry them, and without the separator
+# a heading and the sentence after it would run into one word.
+_BLOCK = {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"}
 SAFETY_CAP = 500_000   # cap absurdly long individual texts (before chunking)
 
 # From how many files onward the process pool pays off (amortizes the spawn
@@ -124,7 +127,13 @@ class ConvParser(HTMLParser):
                     self._capture = "time"
         elif tag in _BLOCK and self._in_body:
             self._bb.append(" ")
-        elif tag == "h1":
+        elif tag == "h1" and self._cur is None and not self._h1:
+            # The file's own heading names the conversation – it stands
+            # before the first message. A message body may carry headings
+            # of its own (anything pasted into Teams does), and those are
+            # its text: taken as the title they would be glued to the
+            # chat's name on every message of the file and be missing from
+            # the text they belong to.
             self._in_h1 = True
 
     def handle_endtag(self, tag):

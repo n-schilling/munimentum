@@ -277,6 +277,8 @@ def write_info(store, model, dim, n, vectors=None):
         "model": model, "dim": int(dim), "chunks": int(n),
         "dtype": "float16", "format": FORMAT,
         "vectors": Path(vectors).name if vectors else None,
+        # Which readers made these chunks – see store_layout.PARSER.
+        "parser": store_layout.PARSER,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -366,6 +368,12 @@ def _alter_bestand(store):
     one from before the manifest existed – then everything is read."""
     dbp = store_layout.db_path(Path(store))
     if not dbp.exists():
+        return None, None
+    # A reader has been corrected since this index was written: what it
+    # holds for an unchanged file is what the old reader made of it, and
+    # no run would ever touch that file again. Read everything once more.
+    if store_layout.parser_stand(store) != store_layout.PARSER:
+        progress.event("run.index.reread", "info")
         return None, None
     con = sqlite3.connect(f"file:{dbp}?mode=ro", uri=True)
     try:

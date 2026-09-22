@@ -136,6 +136,9 @@ def test_index_schreibt_und_liest_den_schluessel(tmp_path):
     for c in chunks:
         c["hash"] = corpus.chunk_hash(c)
     rag_index.write_db(store, chunks, {("outlook", "E-Mail/a.eml"): (1, 2)})
+    # The closing act of a real run, and the reason an index is taken over
+    # at all: it says which readers made it (store_layout.PARSER).
+    rag_index.write_info(store, "bge-m3", 8, len(chunks))
     con = sqlite3.connect(store / "corpus.db")
     assert con.execute("SELECT key FROM chunks").fetchone()[0] == "mail:<abc@x>"
     assert any(r[1] == "ix_chunks_key" for r in con.execute("PRAGMA index_list(chunks)"))

@@ -15,7 +15,7 @@ import pytest
 from playwright.sync_api import expect
 
 from testdata import people, sources
-from tests.ui.helpers import open_app, open_calendar, texts
+from tests.ui.helpers import hit_title, open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
 
@@ -230,6 +230,21 @@ def test_a_mails_detail_names_its_lines_and_its_attachment(archive_page, archive
     assert "/api/v1/documents/attachments" in chip.get_attribute("href")
     expect(archive_page.locator("#detail .daktionen").get_by_text(
         EN["search.menu.source"])).to_be_visible()
+
+
+def test_a_heading_inside_a_chat_message_is_not_the_name_of_the_chat(archive_page, archive):
+    """Anything pasted into Teams arrives with its markup. A heading in a
+    message once ended up glued to the chat's name on every message of
+    that file, and missing from the text it was written in."""
+    chat = next(c for c in sources.CONVERSATIONS if c["id"] == "chat-group")
+    hits = search(archive_page, archive, "executive summary")
+    treffer = hits.first
+    expect(treffer).to_be_visible()
+    assert hit_title(treffer) == chat["title"]
+    expect(treffer).to_contain_text("Executive summary")
+    # And the detail shows it as the message it is.
+    treffer.click()
+    expect(archive_page.locator("#detail-text")).to_contain_text("Executive summary")
 
 
 def test_a_mail_knows_the_conversation_it_belongs_to(archive_page, archive):

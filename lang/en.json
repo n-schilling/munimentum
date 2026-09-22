@@ -622,6 +622,7 @@
   "run.index.read": "{reused} files unchanged and re-used, {read} read – {chunks} chunks ({s} s).",
   "run.index.plan": "{chunks} chunks: {reused} reused, {new} new ({short} too short to carry meaning).",
   "run.index.saved_stale": "{n} existing embeddings saved – a later run with Ollama reuses them.",
+  "run.index.reread": "The readers have changed – every file is read once more so the correction reaches the index.",
   "run.index.rebuild": "Old index unreadable – rebuilding from scratch.",
   "run.index.stale_unreadable": "Saved embeddings unreadable – ignored.",
   "run.index.no_pool": "Reading without a process pool, one core only ({error}).",

@@ -66,10 +66,10 @@ pytest -q tests/ui                         # the browser tests alone
 ```
 
 Without Playwright these tests skip themselves, so `pytest -q` stays as it
-is; with it, they ride along. The *UI* workflow runs them on every push. A
-failed one leaves a screenshot in `tests/ui/output/`.
+is; with it, they ride along. The *UI* workflow runs them on `main` and on
+every pull request. A failed one leaves a screenshot in `tests/ui/output/`.
 
-Half of them need an archive with something in it, and that archive is
+Most of them need an archive with something in it, and that archive is
 generated – `testdata/` writes a whole profile with all eight sources,
 every name and file in it invented. You can open it yourself:
 

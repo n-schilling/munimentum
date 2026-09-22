@@ -159,7 +159,7 @@ In `packaging/app.spec` the two switches are already in place:
 exe = EXE(
     …
     codesign_identity=os.environ.get("MACOS_SIGN_IDENTITY") or None,
-    entitlements_file=str(ROOT / "packaging" / "entitlements.plist"),
+    entitlements_file=str(ENTITLEMENTS),
 )
 ```
 

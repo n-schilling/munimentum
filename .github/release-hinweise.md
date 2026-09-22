@@ -1,33 +1,31 @@
-## New in 13.5.0
+## New in 13.5.1
 
-**Save a search from its result.** The result's header carries *Save
-the current search…* beside *Add all to a case* – the same dialog as
-under *Saved*, without the way there. It stays away while a saved search
-runs: that one is kept already.
+**A chat keeps its own name.** Whatever someone pastes into a Teams
+message arrives with its markup, headings included – and the index took
+such a heading for the name of the conversation. Every message of that
+chat then stood in the result under the chat's name with the pasted
+heading glued to it, and the heading was missing from the text it
+belongs to. The name is the file's own heading again, and a heading in a
+message is part of that message.
 
-**The save dialog proposes a title.** With Ollama running and its chat
-model there, *Save search* fills the name in from the criteria – a few
-words in the page's language, worded by the local model, yours to
-overwrite; a faint line under the field says so until you type, and a
-click on it asks once more. Nothing leaves the machine. Without Ollama
-the field stays as it was.
+**The update check no longer stumbles over GitHub's limit.** An address
+may ask GitHub sixty times an hour without an account, and every start
+of the app shares that with everything else on the same connection. The
+check now sends the mark of the last answer, so an unchanged answer
+costs nothing of it. When the limit refuses anyway, *Settings › App*
+says *Update check not possible* instead of *HTTP 403* and names the
+code, the limit and the time it opens again on the mouseover.
 
-**A fetch of a few folders no longer questions the rest.** *Fetch now*
-on the mail row reads the folders with something open; the mails of
-their subfolders, which were not read, then counted as suspects for
-deletion and were checked with Microsoft one by one (*Checking n mails
-that were no longer in the mailbox*) – a wasted round of requests,
-never a wrong tombstone. Folders the fetch leaves out are now excluded
-by name, as folders a cadence leaves out always were.
-
-**The run says what it runs.** *Selected: Outlook (…)* under the run's
-heading named the categories ticked under *Build archive*; a fetch of
-the mail row with only contacts ticked said *Contacts* while reading
-mail. It now names the categories the step actually runs.
+**The tour remembers every chapter.** *Help* offers six of them, and
+only the first three were kept as seen: Cases, Insights and Claude stood
+as unseen again after every start.
 
 ## Upgrading
 
-**From 13.x:** nothing to do.
+**From 13.x:** the first run that updates the index reads every file
+once more – that is how the corrected chat names reach what is already
+indexed. It costs one pass over the archive; nothing is fetched from
+Microsoft, and the embeddings of everything that did not change are kept.
 
 **From 12.x or older:** the first run after the update rebuilds the
 search index once, and every script against the HTTP interface has to

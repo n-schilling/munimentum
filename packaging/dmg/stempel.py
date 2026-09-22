@@ -5,7 +5,7 @@ background picture: `python packaging/dmg/stempel.py <version> <build> <out dir>
 
 The committed pictures (background.png, background@2x.png) are the template,
 rendered once from background.svg by hand (see the README here). This draws
-one grey line into their foot – "Version 13.1.0 · build 59b24c3" at the
+one grey line into their foot – "Version 13.5.1 · build 59b24c3" at the
 left, where the SVG leaves room, in the colour and size of the footer at
 the right – and writes both sizes into <out dir>. dmgbuild takes the copy
 (layout.py, `-D background=`), so the repository stays as it is.

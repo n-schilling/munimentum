@@ -484,11 +484,13 @@ def write_contacts(root):
 # ---------------------------------------------------------------------------
 # Teams
 # ---------------------------------------------------------------------------
-def _msg(key, who, when, text):
+def _msg(key, who, when, text, html=False):
+    """One chat message. `html` is what Teams passes on when someone pastes
+    something in – markup and all, headings included."""
     return {"id": f"msg-{key}", "messageType": "message",
             "createdDateTime": graph_time(when),
             "from": {"user": {"displayName": who[0]}},
-            "body": {"contentType": "text", "content": text}}
+            "body": {"contentType": "html" if html else "text", "content": text}}
 
 
 CONVERSATIONS = [
@@ -532,6 +534,13 @@ Mail profile           passed
          _msg("g5", people.ME, day(6, 10, 8, 0),
               "Steering meeting on Thursday at three, agenda is status and "
               "the network change."),
+         # Pasted in from a document, heading and all: the archive keeps it
+         # as Teams passed it on, and the heading belongs to this message –
+         # not to the name of the chat.
+         _msg("g6", CARLA, day(6, 11, 9, 15),
+              f"<h1>Executive summary</h1><p>{PROJECT} is on plan: site 1 "
+              "is done, site 2 waits for the network change. The budget "
+              "holds.</p>", html=True),
      ]},
 
     {"id": "chat-meeting", "kind": "meeting", "title": f"{PROJECT} kickoff",

@@ -5,8 +5,9 @@ goes so that the page still looks like one piece afterwards. Read this
 before touching markup, CSS or the strings in `lang/`. What the app does
 is in the README, how a piece is built is in the code, and every rule
 here has a test that fails when it is broken (`tests/test_app.py`,
-`tests/test_app_faelle.py`, `tests/test_i18n.py`) — adapt those tests
-consciously, never delete them.
+`tests/test_app_faelle.py`, `tests/test_i18n.py`, and the browser tests in
+`tests/ui/`, which drive the real page) — adapt those tests consciously,
+never delete them.
 
 ## 1. Three doors
 
@@ -108,9 +109,9 @@ pill row, the empty state before the first search (`#suche-anfang`), and
 the hits: list at the left, the chosen hit at the right with head, title,
 facts, one action row, content and the conversation fold. *Calendar*
 (week, month, reconstructed appointments marked in the grid; the month
-name as picker, *Today*),
-*Contacts* (the two sources as chips) and *Files* (the mirrors as a tree)
-keep their own controls and hand over with one button.
+name as picker, *Today*), *Contacts* (all, from contacts, from
+communication as chips) and *Files* (the mirrors as a tree) keep their own
+controls and hand over with one button.
 
 **Cases**: the overview at the left (name, status, counts, closed cases
 behind a link; narrowed to names while a case is open) and the case at
@@ -136,7 +137,9 @@ progress, the steps, the log with *Copy* and *Report a problem*,
 ## 4. Tokens
 
 Colours are CSS variables on `:root`, with a dark set under
-`prefers-color-scheme: dark`; never a literal colour in markup or JS.
+`prefers-color-scheme: dark`; never a literal colour in markup or JS. The
+one exception is the brand mark in the header, which carries its own two
+colours in the SVG.
 
 | Variable | Light | Use |
 |---|---|---|
@@ -246,4 +249,5 @@ Use the existing class; do not invent a sibling that looks almost the same.
 5. Is the explanation on an `(i)` or one sentence in a popover?
 6. Are the three language files updated?
 7. One primary action per screen still?
-8. `pytest tests/test_app.py tests/test_i18n.py -q` and `ruff check .`.
+8. `pytest tests/test_app.py tests/test_i18n.py -q` and `ruff check .`;
+   `pytest -q tests/ui` where the change is one a browser would show.
