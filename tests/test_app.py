@@ -8171,7 +8171,7 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
     cfg = app_mod.load_config()
     cfg.update(workers=8, embed_images=False,
                folder_rules="+ E-Mail/Kunden/**\n- E-Mail/Privat/**",
-               analytics_skip=["schilling, nico"],
+               analytics_skip=["beispiel, alice"],
                tenant="contoso.example",
                schedule={**cfg["schedule"], "enabled": True, "interval_minutes": 30})
     aus = "; ".join(app_mod.einstellungs_abweichungen(cfg))
@@ -8181,7 +8181,7 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
     assert "tenant: gesetzt" in aus
     assert "enabled=true" in aus and "interval_minutes=30" in aus
     # the contents themselves appear nowhere
-    for privat in ("Kunden", "Privat", "schilling", "contoso"):
+    for privat in ("Kunden", "Privat", "beispiel", "contoso"):
         assert privat not in aus
 
 
