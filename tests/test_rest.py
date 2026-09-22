@@ -1040,7 +1040,7 @@ class FakeGanz(FakeSuche):
         {"uid": "u2", "source": "teams", "root": "teams", "path": "b.html", "key": "k2",
          "who": "Bob Baumeister", "who_mail": None, "date": "2026-06-01 09:35", "title": "Projekt Alpha"},
         {"uid": "u3", "source": "planner", "root": "planner", "path": "c.html", "key": "k3",
-         "who": "Bob Baumeister, Carla Chef", "who_mail": "bob@example.com", "date": "2026-07-01 12:00",
+         "who": "Bob Baumeister · Carla Chef", "who_mail": "bob@example.com", "date": "2026-07-01 12:00",
          "title": "Aufgabe"},
         {"uid": "u4", "source": "kontakte", "root": "outlook", "path": "d.vcf", "key": "k4",
          "who": "", "who_mail": None, "date": "", "title": "Alice Beispiel"},

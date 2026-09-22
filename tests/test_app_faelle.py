@@ -2037,3 +2037,24 @@ def test_jetzt_einsammeln_lehnt_ab_was_es_nicht_kann(welt, monkeypatch):
     call(port, "PATCH", f"/api/v1/cases/{fid}", {"status": "open"})
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
     assert call(port, "POST", f"/api/v1/cases/{fid}/collect", {"search": text})[1]["error"]["k"] == "srv.busy"
+
+
+# A name with a comma is one person: the people count splits at the middle
+# dot the index joins assignees with, never at the comma of "Surname, Given".
+PRUEFUNG_PERSONEN_NAMEN = GRUNDZUSTAND + """
+var leute = personenAus([
+  {who: 'Chef, Carla', who_mail: 'carla@example.com', src: 'outlook', date: '2026-06-10 08:00'},
+  {who: 'Chef, Carla', who_mail: 'carla@example.com', src: 'outlook', date: '2026-06-11 08:00'},
+  {who: 'Bob Baumeister · Carla Chef', who_mail: 'bob@example.com', src: 'planner', date: '2026-07-01 12:00'},
+  {who: '(unbekannt)', src: 'teams', date: '2026-05-02 10:00'}
+]);
+var namen = leute.map(function(p){ return p.name; });
+pruefe(JSON.stringify(namen) === JSON.stringify(['Chef, Carla', 'Bob Baumeister', 'Carla Chef']), 'Namen falsch geteilt: ' + JSON.stringify(namen));
+pruefe(leute[0].anzahl === 2 && leute[0].adressen[0] === 'carla@example.com', 'Der Absender mit Komma wurde nicht als eine Person gezaehlt');
+pruefe(leute[1].adressen.length === 0 && leute[2].adressen.length === 0, 'Eine Liste haengt ihre Adresse an jemanden');
+console.log('OK');
+"""
+
+
+def test_ein_name_mit_komma_ist_eine_person():
+    _in_node(PRUEFUNG_PERSONEN_NAMEN)

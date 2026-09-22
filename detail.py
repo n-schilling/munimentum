@@ -288,7 +288,7 @@ def _planner(row, text, state):
     ctx = row["ctx"] or ""
     plan, _, bucket = ctx.partition("/")
     out = {"plan": plan, "bucket": bucket, "folder": ctx,
-           "assigned": [w for w in (row["who"] or "").split(", ") if w],
+           "assigned": [w for w in (row["who"] or "").split(" · ") if w],
            "due": "", "state": "", "checklist": None,
            "attachments": corpus.anhang_namen(row["att"]),
            "text": text, "comments": []}

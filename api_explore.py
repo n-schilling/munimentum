@@ -266,8 +266,9 @@ def _date_key(text):
 
 def people_of(rows):
     """Who the rows name, counted the way the page counts a case's people
-    (personenAus in page.html): `who` split at ", " – an assignee list
-    names several –, the unknown sender skipped, one address only when the
+    (personenAus in page.html): `who` split at " · " – an assignee list
+    names several, a sender written "Surname, Given" is one –, the
+    unknown sender skipped, one address only when the
     row names exactly one person (a list would pin it on the wrong one),
     first and last date, a count per source. An address book entry
     names its company, not a person, so the `kontakte` rows stay out –
@@ -277,7 +278,7 @@ def people_of(rows):
     for who, who_mail, date, src in rows:
         if src == "kontakte":
             continue
-        names = [n.strip() for n in str(who or "").split(", ")
+        names = [n.strip() for n in str(who or "").split(" · ")
                  if n.strip() and n.strip() != UNKNOWN]
         adresse = str(who_mail or "").strip().lower()
         k = _date_key(date)

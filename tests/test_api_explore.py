@@ -8,7 +8,9 @@ def test_people_of_zaehlt_wie_die_seite():
     rows = [
         ("Carla Chef", "carla@example.com", "2026-06-10 08:00", "outlook"),
         ("Carla Chef", "carla@example.com", "2026-05-01 08:00", "outlook"),
-        ("Bob Baumeister, Carla Chef", "bob@example.com", "2026-07-01 12:00", "planner"),
+        ("Bob Baumeister · Carla Chef", "bob@example.com", "2026-07-01 12:00", "planner"),
+        # A sender written "Surname, Given" is one person, not two
+        ("Chef, Carla", "carla@example.com", "2026-06-20 08:00", "outlook"),
         ("(unbekannt)", None, "2026-05-02 10:00", "teams"),
         ("", None, "", "kontakte"),
         # A contact card names its company – no person, the book has it
@@ -17,8 +19,8 @@ def test_people_of_zaehlt_wie_die_seite():
     ]
     leute = api_explore.people_of(rows)
     # Both were last named on the same day – the one named more often first.
-    assert [p["name"] for p in leute] == ["Carla Chef", "Bob Baumeister"]
-    carla, bob = leute
+    assert [p["name"] for p in leute] == ["Carla Chef", "Bob Baumeister", "Chef, Carla"]
+    carla, bob, _ = leute
     # An assignee list pins no address on anyone; a row without a date
     # counts but sets no span.
     assert bob["address"] == "" and bob["items"] == 2

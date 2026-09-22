@@ -4768,7 +4768,7 @@ function detailFakten(h, r){
     z.push(['search.fact.modified', esc(detailWann(h.date))]);
   } else if(src === 'planner'){
     z.push(['search.fact.plan', ordnerLink(h)]);
-    z.push(['search.fact.assigned', (f.assigned || (h.who ? h.who.split(', ') : [])).map(personLink).join(', ')]);
+    z.push(['search.fact.assigned', (f.assigned || (h.who ? h.who.split(' · ') : [])).map(personLink).join(', ')]);
     z.push(['search.fact.due', esc(detailWann(f.due))]);
     z.push(['search.fact.state', zustand(f.state, schritte(f.checklist))]);
     z.push(['search.fact.attachments', att.length ? detailChips(att) : '']);
@@ -6158,7 +6158,9 @@ function istExtern(p){
 function personenAus(eintraege){
   var je = {};
   (eintraege || []).forEach(function(e){
-    var namen = String(e.who || '').split(', ').map(function(n){ return n.trim(); }).filter(function(n){ return n && n !== '(unbekannt)'; });
+    // Split at the middle dot the index joins assignees with – never at a
+    // comma: a sender written "Surname, Given" is one person.
+    var namen = String(e.who || '').split(' · ').map(function(n){ return n.trim(); }).filter(function(n){ return n && n !== '(unbekannt)'; });
     namen.forEach(function(name){
       var p = je[name] = je[name] || {name: name, anzahl: 0, je_quelle: {}, von: '', bis: '', adressen: []};
       p.anzahl++;

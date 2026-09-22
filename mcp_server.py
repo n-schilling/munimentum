@@ -2436,7 +2436,7 @@ def case_people(case: str, limit: int = 50) -> dict:
         felder = "who, who_mail" if _hat_spalte(con, "who_mail") else "who, NULL"
         for who, who_mail in con.execute(f"SELECT {felder} FROM chunks WHERE seq = 0 AND who IS NOT NULL "
                                          "AND who != '' AND key IN (SELECT key FROM fallkeys)"):
-            namen = [n.strip() for n in str(who).split(", ")]
+            namen = [n.strip() for n in str(who).split(" · ")]
             for name in namen:
                 if name and name != "(unbekannt)":
                     zaehler[name] = zaehler.get(name, 0) + 1

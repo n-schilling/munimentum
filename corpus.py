@@ -939,7 +939,10 @@ def load_planner(root_dir):
                 "uid": f"planner:{ordner.name}/{tid}:0", "src": "planner",
                 "key": f"planner:{tid}",
                 "root": "planner", "rel": rel,
-                "who": ", ".join((zustaendig or leute)[:3]),
+                # Joined with a middle dot, never a comma: a name written
+                # "Surname, Given" is one person, and whoever splits this
+                # list (the people views, the facts) must be able to tell.
+                "who": " · ".join((zustaendig or leute)[:3]),
                 "ppl": " ".join(zustaendig + leute).lower(),
                 "ts": ts.timestamp() if ts else None,
                 "date": ts.strftime("%Y-%m-%d %H:%M") if ts else "",

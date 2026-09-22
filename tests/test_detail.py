@@ -160,7 +160,7 @@ def test_planner_aufgabe_aus_dem_eigenen_datensatz(tmp_path):
                "kommentare": [{"wer": "u2", "wann": "2026-09-14T09:15:00Z", "html": "<p>Optionen sind drin.</p>"}]}},
         {"namen": {"u1": "Alice Beispiel", "u2": "Bob Baumeister"}})
     z = zeile(uid="planner:board-1/t1:0", src="planner", root="planner", rel="board-1/board.html",
-              who="Alice Beispiel, Bob Baumeister", who_mail="", ctx="Nordwind board/Angebote",
+              who="Alice Beispiel · Bob Baumeister", who_mail="", ctx="Nordwind board/Angebote",
               att="Angebot_2026.pdf", title="Angebot vorbereiten")
     f = detail.fakten(z, "Rahmen, Optionen, MSA.\nOptionen sind drin.", None, state)
     assert f["kind"] == "planner"

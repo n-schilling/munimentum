@@ -50,7 +50,9 @@ MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 #
 #   2  the name of a Teams conversation is its own heading, not the
 #      headings a message pasted in brought with it
-PARSER = 2
+#   3  a Planner card's assignees are joined with " · ", not ", " – a
+#      sender written "Surname, Given" is one person, not two
+PARSER = 3
 
 
 def parser_stand(store):

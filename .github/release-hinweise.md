@@ -1,40 +1,20 @@
-## New in 13.6.0
+## New in 13.6.1
 
-**A search result in three views.** Above the hits stands the strip a
-case has: *List*, *Timeline* and *People*. The list is the page as
-before. The timeline puts every hit the search finds in the order it
-happened, with the band of months above it – a click on a bar narrows
-the rows to that month, a row opens the hit at the right as the list
-does. People places everyone the hits name by their last contact, the
-circle sized by how many hits name them, *external* marked; a person's
-card leads on to their timeline or their list. Both views take the
-whole result, up to 5 000 hits, and say so when that cap cut.
-
-**Contacts as a picture.** The address book shows its people as a list
-or as the same picture, over the whole archive; a person's card carries
-company, role and number from the address book, and *Show communication*
-opens their timeline.
-
-**A conversation's messages open in place.** A message in the fold
-under a mail or a chat message opens as the detail; the original stays
-one click away under *Open original*.
-
-**Two routes for scripts.** `/api/v1/search/timeline` answers the whole
-result of a search in date order, `/api/v1/search/people` who it names
-with counts, addresses and dates – the criteria of `/api/v1/search`, no
-paging.
-
-**An archive to look at, without an account.** Running from source,
-`python3 -m testdata.build --profile testdaten` writes an invented
-archive – all eight sources, a year of traffic, some 2 400 files – and
-`python3 app.py --profile testdaten` opens it. Nothing in it comes from
-Microsoft, and it is the archive the browser tests run against.
+**A name with a comma is one person.** The people views – of a result,
+of a case, of the address book – split a Planner card's assignees at the
+comma the index joined them with, and so read a sender written
+"Surname, Given" as two people, each with half the items. The index now
+joins assignees with a middle dot, and the views split there alone.
 
 ## Upgrading
 
-**From 13.5.0 or older:** the first run that updates the index reads
-every file once more – described in the notes of
-[13.5.1](https://github.com/n-schilling/munimentum/releases/tag/v13.5.1).
+**From 13.6.0 or older:** the first run that updates the index reads
+every file once more – that is how the assignees reach what is already
+indexed. It costs one pass over the archive; nothing is fetched from
+Microsoft, and the embeddings of everything that did not change are kept.
+The same pass brings what the notes of
+[13.5.1](https://github.com/n-schilling/munimentum/releases/tag/v13.5.1)
+describe.
 
 **From 12.x or older:** the first run after the update rebuilds the
 search index once, and every script against the HTTP interface has to
