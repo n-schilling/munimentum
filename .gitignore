@@ -27,12 +27,18 @@ planner_export/
 app_config.json
 runs.db
 app.log
+# The ETag of the last update check – the one file the app keeps outside
+# the profiles besides the register.
+update_cache.json
 # Further profiles of a source run – each one a whole archive – and the
 # register saying which was opened last.
 profiles/
 profiles.json
 
 AGENTS.md
+
+# Screenshots the browser tests leave behind (tests/ui/conftest.py)
+tests/ui/output/
 
 # Tool and system residue
 __pycache__/

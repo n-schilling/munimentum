@@ -1015,7 +1015,7 @@ def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
     assert "store" not in s        # with the inventory since 13.0, see above
     assert set(s["mcp"]) <= {"running", "url", "error"}
     assert set(s["auth"]) == {"signed_in", "account", "own_registration", "device"}
-    assert set(s["update"]) == {"status", "latest", "url", "newer", "ahead", "error"}
+    assert set(s["update"]) == {"status", "latest", "url", "newer", "ahead", "error", "retry_at"}
     assert set(s["calendar"]) == {"built_at"}
     assert "schedule_enabled" not in s          # a setting, and the page has it
 

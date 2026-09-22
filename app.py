@@ -38,6 +38,7 @@ does not belong on 0.0.0.0.
 import os
 import re
 import sys
+import traceback
 import copy
 import json
 import time
@@ -186,6 +187,7 @@ HEIM = data_dir()
 WURZEL = HEIM
 PROFIL = settings.STANDARD_PROFIL
 PROFIL_REGISTER = "profiles.json"            # last opened, "open without asking"
+UPDATE_CACHE = "update_cache.json"           # ETag and answer of the last update check
 _UMZUG = {}                                  # what layout_umzug() did this start
 _NEUSTART = None                             # argv to start over with, once the server stopped
 CONFIG_FILE = HEIM / settings.CONFIG_NAME   # the same file the scripts read
@@ -1996,7 +1998,7 @@ class App:
         self.device_login = None         # device-code sign-in in progress
         self._update = {"status": "off", "current": version.VERSION,
                         "latest": None, "url": None, "newer": False,
-                        "ahead": False, "error": None}
+                        "ahead": False, "error": None, "retry_at": None}
 
     # -- derived state ----------------------------------------------------
     def konfiguriere(self, aendern):
@@ -2065,8 +2067,20 @@ class App:
         reply – whoever is offline still wants to see the app immediately.
         """
         def lauf():
+            # The ETag of the last answer lives in the app folder, not the
+            # profile: every start sends it, and GitHub's 304 does not
+            # count against the hourly limit an address shares.
+            ort = WURZEL / UPDATE_CACHE
+            cache = _config_lesen(ort)
+            vorher = dict(cache)
             self._update = updates.check(version.VERSION, version.REPO,
-                                         enabled=bool(self.cfg.get("update_check", True)))
+                                         enabled=bool(self.cfg.get("update_check", True)),
+                                         cache=cache)
+            if cache != vorher:
+                try:
+                    save_config(cache, ort)
+                except OSError:
+                    pass                     # a lost cache costs one request
             if self._update["newer"]:
                 self.jobs.logk("srv.update.available", "info",
                                version=self._update["latest"],
@@ -2147,7 +2161,7 @@ class App:
                               if nxt and plan.get("enabled") else None),
             "wizard": wizard,
             "update": {k: self._update.get(k) for k in
-                       ("status", "latest", "url", "newer", "ahead", "error")},
+                       ("status", "latest", "url", "newer", "ahead", "error", "retry_at")},
             "auth": {k: auth.get(k) for k in
                      ("signed_in", "account", "own_registration", "device")},
         }
@@ -2833,7 +2847,7 @@ class Handler(BaseHTTPRequestHandler):
         except Ablehnung as a:
             return self._fehler(a.code, a.grund, a.v, **a.extra)
         except Exception as e:                       # noqa: BLE001
-            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+            return self._unerwartet(e)
         return self._methode_fehlt(pfad, methode, routen)
 
     def do_OPTIONS(self):
@@ -2876,6 +2890,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._fehler(code, message or HTTPStatus(code).phrase, kopf=zu)
         except Exception:                            # noqa: BLE001
             super().send_error(code, message, explain)
+
+    def _unerwartet(self, e):
+        """A 500: the one answer shape, and the traceback on stderr –
+        which is the console of a source start and app.log in a bundle.
+        The answer names the exception in one line; the frame it came
+        from is what a bug report needs, and nothing else keeps it."""
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] internal error on "
+              f"{self.command} {self.path.split('?')[0]}:", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
 
     def _fehler(self, code, grund, v=None, kopf=None, **extra):
         """The one shape of a refusal, whatever the route and the status:
@@ -2979,7 +3003,7 @@ class Handler(BaseHTTPRequestHandler):
         except Ablehnung as a:
             return self._fehler(a.code, a.grund, a.v, **a.extra)
         except Exception as e:
-            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+            return self._unerwartet(e)
         return self._methode_fehlt(u.path, "GET")
 
     def do_HEAD(self):
@@ -2996,7 +3020,7 @@ class Handler(BaseHTTPRequestHandler):
         except Ablehnung as a:
             return self._fehler(a.code, a.grund, a.v, **a.extra)
         except Exception as e:
-            return self._fehler(500, "srv.internal", {"error": f"{type(e).__name__}: {e}"})
+            return self._unerwartet(e)
         return self._methode_fehlt(u.path, self.command or "POST")
 
     # -- The versioned surface (rest.py) -----------------------------------

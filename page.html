@@ -2966,6 +2966,10 @@ function fmt(iso){
   var d = new Date(iso);
   return isNaN(d) ? iso : d.toLocaleString(LOC, {dateStyle:'short', timeStyle:'short'});
 }
+function uhrzeit(iso){
+  var d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleTimeString(LOC, {timeStyle:'short'});
+}
 
 /* ---------- The state of the archive ----------
    One headline with the archive's date and – while nothing has ever been
@@ -7616,13 +7620,20 @@ function zeigeUpdate(u, api){
   el('update-current').textContent = t('update.current', {v: u.current || '?'}) +
     (u.build ? ' · ' + t('update.build', {b: u.build}) : '') +
     (api ? ' · ' + t('update.api', {v: api}) : '');
-  el('update-state').textContent =
+  var zustand = el('update-state');
+  zustand.textContent =
       u.status === 'ok' ? (u.newer ? t('update.available', {v: u.latest})
                          : u.ahead ? t('update.ahead', {v: u.latest})
                                    : t('update.uptodate'))
     : u.status === 'none' ? t('update.none')
-    : u.status === 'error' ? t('update.error', {error: u.error || ''})
+    : u.status === 'error' ? t('update.error')
     : t('update.off');
+  // The line only says that the check failed; what GitHub answered
+  // stands on the mouseover – with the time its hourly limit opens
+  // again when that was the reason.
+  zustand.title = u.status !== 'error' ? ''
+    : u.retry_at ? t('update.error.limit', {error: u.error || '', at: uhrzeit(u.retry_at)})
+    : (u.error || '');
   el('update-link').href = u.url || u.releases_url || '#';
 }
 function pruefeUpdate(){

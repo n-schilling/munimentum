@@ -3096,7 +3096,10 @@ paths:
       summary: Look for a newer version
       description: |
         Asks GitHub's releases – the only request this app makes that is
-        not Microsoft Graph, and only when asked or once a day.
+        not Microsoft Graph, and only when asked or once at startup. The
+        ETag of the last answer goes along, so an unchanged answer costs
+        nothing against GitHub's hourly limit for anonymous requests; when
+        that limit refuses the check, `retry_at` says when it opens again.
       responses:
         "200":
           description: What the check found.
@@ -3579,6 +3582,7 @@ paths:
                   ahead: false
                   url: null
                   error: null
+                  retry_at: null
                 auth:
                   signed_in: true
                   account: alice.beispiel@nordwind.example
@@ -3698,7 +3702,8 @@ components:
         url: { type: [string, "null"], format: uri, description: "That release's page." }
         newer: { type: boolean, description: "There is something newer than what runs here." }
         ahead: { type: boolean, description: "What runs here is newer than the newest release – a build from source." }
-        error: { type: [string, "null"] }
+        error: { type: [string, "null"], description: "Why the check failed – `HTTP 403` and the like, or the exception." }
+        retry_at: { type: [string, "null"], format: date-time, description: "When GitHub answers again, when its hourly limit for anonymous requests refused the check; local time without zone." }
     DeviceCode:
       type: object
       description: |

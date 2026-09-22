@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import app as app_mod
+import settings
 import runner as runner_mod
 from hilfen import call
 import i18n
@@ -1273,7 +1274,7 @@ def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeyp
     itself against this switch."""
     gesehen = {}
     monkeypatch.setattr(app_mod.updates, "check",
-                        lambda current, repo, enabled=True: gesehen.update(
+                        lambda current, repo, enabled=True, cache=None: gesehen.update(
                             current=current, repo=repo, enabled=enabled) or
                         {"status": "off", "current": current, "latest": None,
                          "url": None, "newer": False, "error": None})
@@ -1283,6 +1284,44 @@ def test_update_check_reicht_die_einstellung_durch(sandbox, with_ollama, monkeyp
     assert gesehen["enabled"] is False
     assert gesehen["current"] == app_mod.version.VERSION
     assert gesehen["repo"] == app_mod.version.REPO
+
+
+def test_update_check_keeps_the_etag_in_the_app_folder(sandbox, with_ollama, monkeypatch):
+    """What updates.check notes in its cache survives a restart: it lies
+    in the app folder, beside the profiles, and goes back on the next look."""
+    gesehen = []
+
+    def fake(current, repo, enabled=True, cache=None):
+        gesehen.append(dict(cache))
+        if not cache:
+            cache.update(etag='W/"abc"', tag="v9.9.9", url="https://example.invalid/v9.9.9")
+        return {"status": "ok", "current": current, "latest": "9.9.9",
+                "url": "https://example.invalid/v9.9.9", "newer": True,
+                "ahead": False, "error": None, "retry_at": None}
+
+    monkeypatch.setattr(app_mod.updates, "check", fake)
+    app_mod.App(app_mod.load_config()).check_updates(blockierend=True)
+    ort = app_mod.WURZEL / app_mod.UPDATE_CACHE
+    gemerkt = {"etag": 'W/"abc"', "tag": "v9.9.9", "url": "https://example.invalid/v9.9.9"}
+    assert json.loads(ort.read_text(encoding="utf-8")) == gemerkt
+    stand = ort.stat().st_mtime_ns
+    app_mod.App(app_mod.load_config()).check_updates(blockierend=True)
+    assert gesehen == [{}, gemerkt]
+    assert ort.stat().st_mtime_ns == stand           # unchanged: not written again
+
+
+def test_update_check_carries_when_github_answers_again(server, monkeypatch):
+    """A refusal by GitHub's hourly limit travels with the time it opens
+    again – on the check's answer and in the status alike."""
+    monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
+        "status": "error", "current": "1.0.0", "latest": None, "url": None,
+        "newer": False, "ahead": False, "error": "HTTP 403",
+        "retry_at": "2026-09-22T10:53:29"})
+    code, r = call(server[1], "POST", "/api/v1/updates/check")
+    assert code == 200 and r["update"]["error"] == "HTTP 403"
+    assert r["update"]["retry_at"] == "2026-09-22T10:53:29"
+    code, r = call(server[1], "GET", "/api/v1/status")
+    assert code == 200 and r["update"]["retry_at"] == "2026-09-22T10:53:29"
 
 
 def test_status_kennt_die_version_vor_der_pruefung(sandbox, with_ollama):
@@ -1318,6 +1357,26 @@ def test_http_update_check(server, monkeypatch):
         "url": "u", "newer": True, "error": None})
     code, r = call(server[1], "POST", "/api/v1/updates/check")
     assert code == 200 and r["update"]["newer"] is True and r["update"]["latest"] == "2.0.0"
+
+
+def test_http_config_keeps_every_chapter_of_the_tour_seen(server, sandbox):
+    """Every chapter the help window lists can be marked seen. The server's
+    list once stopped at the first three, so Cases, Insights and Claude came
+    back as unseen forever – the browser tests found it."""
+    chapters = list(settings.TOUR_CHAPTERS)
+    assert len(chapters) == 6
+    code, r = call(server[1], "PATCH", "/api/v1/config",
+                   {"tour_seen": dict.fromkeys(chapters, True)})
+    assert code == 200 and r["config"]["tour_seen"] == dict.fromkeys(chapters, True)
+    code, r = call(server[1], "PATCH", "/api/v1/config",
+                   {"tour_seen": {"insights": True, "nonsense": True}})
+    assert code == 200 and r["config"]["tour_seen"] == {"insights": True}
+
+
+def test_the_page_and_the_server_name_the_same_chapters():
+    seite = app_mod.seite()
+    reihe = re.search(r"var TOUR_REIHE = \[(.*?)\];", seite).group(1)
+    assert [x.strip("' ") for x in reihe.split(",")] == list(settings.TOUR_CHAPTERS)
 
 
 def test_http_config_schaltet_die_pruefung_ab(server, sandbox):
@@ -2249,7 +2308,7 @@ def test_http_unbekannter_pfad(server):
     assert call(port, "POST", "/api/gibtsnicht", {})[0] == 404
 
 
-def test_jede_ablehnung_traegt_dieselbe_huelle(server, monkeypatch):
+def test_jede_ablehnung_traegt_dieselbe_huelle(server, monkeypatch, capsys):
     """One shape for every refusal (11.4), whatever the route and the
     status: ok false, `error` with the key, its placeholders and the
     sentence in the request's language, `message` as 11.3 sent it – a
@@ -2271,10 +2330,15 @@ def test_jede_ablehnung_traegt_dieselbe_huelle(server, monkeypatch):
     code, r = call(port, "QUERY", "/api/v1/sources/outlook/folder-plan", {})
     assert code == 404 and r["error"]["k"] == "srv.plan.nolist" and r["leer"] is True
     monkeypatch.setattr(a, "status", lambda: 1 / 0)
+    capsys.readouterr()
     code, r = call(port, "GET", "/api/v1/status")
     assert code == 500 and r["error"]["k"] == "srv.internal"
     assert r["error"]["v"]["error"].startswith("ZeroDivisionError")
     assert "ZeroDivisionError" in r["detail"]
+    # the frame it came from goes to stderr – the console, or app.log in a bundle
+    err = capsys.readouterr().err
+    assert "internal error on GET /api/v1/status" in err and "Traceback" in err
+    assert "ZeroDivisionError" in err and 'lambda: 1 / 0' in err
 
 
 def test_die_ablehnung_spricht_immer_englisch(server, monkeypatch):
@@ -3365,7 +3429,7 @@ function statusGeruest(){
           auth: {signed_in: false, account: null, device: null,
                  own_registration: false},
           update: {status: 'off', latest: null, url: null, newer: false,
-                   ahead: false, error: null},
+                   ahead: false, error: null, retry_at: null},
           jobs: {busy: false, job: null, last: null, token_expired: false, seq: 0},
           mcp: {running: false, url: 'http://127.0.0.1:8365/mcp', error: null},
           calendar: {built_at: null},
@@ -6673,6 +6737,32 @@ setTimeout(function(){
 
 def test_eine_abgelehnte_updatepruefung_bleibt_nicht_haengen():
     _in_node(PRUEFUNG_UPDATE_ABGELEHNT)
+
+
+PRUEFUNG_UPDATE_LIMIT = GRUNDZUSTAND + """
+// A failed check says only that it failed; what GitHub answered – and when
+// its hourly limit opens again – stands on the mouseover of that line.
+var voll = {current: '13.5.0', latest: null, url: null, newer: false, ahead: false};
+zeigeUpdate(Object.assign({}, voll, {status: 'error', error: 'HTTP 403',
+                                     retry_at: '2026-09-22T10:53:29'}), 'v1');
+var zeile = document.getElementById('update-state');
+pruefe(zeile.textContent === t('update.error'), 'Zeile: ' + zeile.textContent);
+pruefe(zeile.textContent.indexOf('403') < 0, 'Der Code steht in der Zeile: ' + zeile.textContent);
+pruefe(zeile.title.indexOf('HTTP 403') >= 0 && zeile.title.indexOf('GitHub') >= 0 &&
+       zeile.title.indexOf('10:53') >= 0, 'Mouseover: ' + zeile.title);
+zeigeUpdate(Object.assign({}, voll, {status: 'error', error: 'ConnectionError: kein Netz',
+                                     retry_at: null}), 'v1');
+pruefe(zeile.textContent === t('update.error'), 'Zeile: ' + zeile.textContent);
+pruefe(zeile.title === 'ConnectionError: kein Netz', 'Mouseover ohne Limit: ' + zeile.title);
+zeigeUpdate(Object.assign({}, voll, {status: 'ok', latest: '13.5.0'}), 'v1');
+pruefe(zeile.textContent === t('update.uptodate'), 'Zeile: ' + zeile.textContent);
+pruefe(zeile.title === '', 'Der Mouseover bleibt stehen: ' + zeile.title);
+console.log('OK');
+"""
+
+
+def test_a_failed_update_check_keeps_its_reason_on_the_mouseover():
+    _in_node(PRUEFUNG_UPDATE_LIMIT)
 
 
 def test_die_mailzeilen_sind_eine_faehigkeit_nicht_eine_spalte():

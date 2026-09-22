@@ -10,6 +10,7 @@ import api
 import folders
 import i18n
 from api import Ablehnung
+import settings
 
 
 def status(h, _p, _q, _data):
@@ -162,7 +163,7 @@ def konfig_speichern(h, data):
                 cfg["notifications"] = wert
         if "tour_seen" in data and isinstance(data["tour_seen"], dict):
             cfg["tour_seen"] = {k: bool(v) for k, v in data["tour_seen"].items()
-                                if k in ("archiv", "suche", "quelle")}
+                                if k in settings.TOUR_CHAPTERS}
         if "language" in data:
             # Only known codes – one typo otherwise and the interface would
             # speak the fallback language forever.

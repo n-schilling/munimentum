@@ -70,6 +70,11 @@ FILETYPE_HIDDEN_STANDARD = {"p7s", "p7m", "asc", "pgp", "sig"}
 # app.py shows exactly these values in the settings; the individual scripts
 # fetch them via flag()/number()/value() below – each call site used to carry
 # its own copy of the default, and nothing kept the copies in sync.
+# The tour's chapters, in the order the full tour walks them – the keys a
+# write to `tour_seen` may set. page.html's TOUR_REIHE is the same list;
+# tests/test_app.py holds the two together.
+TOUR_CHAPTERS = ("archiv", "quelle", "suche", "faelle", "insights", "claude")
+
 VORGABEN = {
     # Ollama is optional. Off means: it is no longer even looked for (a
     # connection attempt used to run into the void every ten seconds),
@@ -255,8 +260,8 @@ VORGABEN = {
     "tenant": "",           # empty = organizations
     "device_code": False,   # scripts in the terminal: code instead of browser window
     "language": "auto",   # "auto" = browser language, otherwise a code from lang/
-    # The tour's chapters someone has finished or skipped – it never comes
-    # back on its own; Settings › App can start it again.
+    # The tour's chapters (TOUR_CHAPTERS) someone has finished or skipped –
+    # it never comes back on its own; Help can start it again.
     "tour_seen": {},
     "schedule": {
         "enabled": False,

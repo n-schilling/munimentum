@@ -24,9 +24,20 @@ Two cases are worth reporting: newer=True ("something newer exists") and
 ahead=True ("you are ahead"). The second is no error, but "you are up to
 date" would simply be untrue there – and whoever runs an unpublished
 version should know it.
+
+GitHub allows an address 60 anonymous requests an hour, shared by every
+start of this app and by everything else on the same connection that
+talks to api.github.com without a token. Two things keep the check out of
+that limit: the ETag of the last answer goes back as If-None-Match, and a
+304 costs nothing (once the limit IS used up, even that request is
+refused – the ETag keeps the check from reaching it, it does not get past
+it); and when the limit refuses the check anyway, the refusal's headers
+say when it opens again – `retry_at` carries that time so the page can
+say it instead of a bare "HTTP 403".
 """
 
 import re
+from datetime import datetime, timedelta
 
 API = "https://api.github.com/repos/{repo}/releases/latest"
 
@@ -55,37 +66,78 @@ def is_newer(latest, current):
     return a > b
 
 
-def check(current, repo, timeout=4.0, enabled=True):
+def _headers(r):
+    """The headers of an answer – {} when the object has none."""
+    return getattr(r, "headers", None) or {}
+
+
+def retry_at(r):
+    """When GitHub answers again, read from the headers of its refusal:
+    the reset of the hourly window when that is used up, otherwise a
+    Retry-After. None when the answer names no time – then the refusal
+    is something else than a limit. Local time, seconds, no zone – like
+    every other timestamp the page gets."""
+    h = _headers(r)
+    try:
+        if h.get("X-RateLimit-Remaining") == "0" and h.get("X-RateLimit-Reset"):
+            when = datetime.fromtimestamp(int(h["X-RateLimit-Reset"]))
+        elif h.get("Retry-After"):
+            when = datetime.now() + timedelta(seconds=int(h["Retry-After"]))
+        else:
+            return None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+    return when.isoformat(timespec="seconds")
+
+
+def check(current, repo, timeout=4.0, enabled=True, cache=None):
     """Look once. Never raises – a failure here must not hold anything up.
 
     Hence a single catch branch around everything: not just around the
     request. An unexpectedly shaped answer is as little a reason to fail the
     app's startup as a missing network.
+
+    `cache` is a dict the caller keeps between checks – the ETag of the
+    last answer and what it said (`etag`, `tag`, `url`). It is sent as
+    If-None-Match, a 304 is answered from it, a 200 replaces it in place.
     """
     out = {"status": "off", "current": current, "latest": None,
-           "url": None, "newer": False, "ahead": False, "error": None}
+           "url": None, "newer": False, "ahead": False, "error": None,
+           "retry_at": None}
     if not enabled:
         return out
+    cache = cache if cache is not None else {}
     try:
         import requests
-        r = requests.get(API.format(repo=repo), timeout=timeout,
-                         headers={"Accept": "application/vnd.github+json"})
+        headers = {"Accept": "application/vnd.github+json"}
+        if cache.get("etag") and cache.get("tag"):
+            headers["If-None-Match"] = cache["etag"]
+        r = requests.get(API.format(repo=repo), timeout=timeout, headers=headers)
         if r.status_code == 404:
             # No release published yet – or only drafts and pre-releases,
             # which this endpoint does not count. Not an error case.
             out["status"] = "none"
             return out
-        if r.status_code != 200:
+        if r.status_code == 304:
+            # Unchanged since the cached answer – and not counted by GitHub.
+            tag, url = str(cache.get("tag") or ""), cache.get("url")
+        elif r.status_code != 200:
             out["status"], out["error"] = "error", f"HTTP {r.status_code}"
+            out["retry_at"] = retry_at(r)
             return out
-        daten = r.json()
-        tag = (daten.get("tag_name") or daten.get("name") or "").strip()
+        else:
+            daten = r.json()
+            tag = (daten.get("tag_name") or daten.get("name") or "").strip()
+            url = daten.get("html_url")
+            etag = _headers(r).get("ETag")
+            if tag and etag:
+                cache.update(etag=etag, tag=tag, url=url)
         if not tag:
             out["status"] = "none"
             return out
         out["status"] = "ok"
         out["latest"] = tag.lstrip("vV")
-        out["url"] = daten.get("html_url")
+        out["url"] = url
         out["newer"] = is_newer(tag, current)
         # Asked the other way round – and deliberately not derived as "not
         # newer": with equal versions and with incomparable numbers both are

@@ -5,6 +5,8 @@ the one that actually exists today – nothing has been published yet.
 GitHub then answers with 404, and that is not an error but the normal state.
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 
 import updates
@@ -12,10 +14,11 @@ import version
 
 
 class Antwort:
-    def __init__(self, status=200, payload=None, roh=None):
+    def __init__(self, status=200, payload=None, roh=None, headers=None):
         self.status_code = status
         self._payload = payload
         self._roh = roh
+        self.headers = headers or {}
 
     def json(self):
         if self._roh is not None:
@@ -159,6 +162,103 @@ def test_check_wirft_niemals(github):
     with pytest.raises(RuntimeError):
         Boese().json()                       # the error is real …
     assert updates.check("1.0.0", "x/y")["status"] in ("error", "none")   # … but is caught
+
+
+# --------------------------------------------------------------------------
+# GitHub's hourly limit, and the ETag that keeps the check out of it
+# --------------------------------------------------------------------------
+def test_a_used_up_limit_names_the_time_it_opens_again(github):
+    """GitHub refuses with 403 once an address has made its 60 anonymous
+    requests of the hour; the headers say when the window resets."""
+    reset = int(datetime.now().timestamp()) + 1800
+    github(Antwort(403, {"message": "API rate limit exceeded"},
+                   headers={"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": str(reset)}))
+    out = updates.check("1.0.0", "x/y")
+    assert out["status"] == "error" and out["error"] == "HTTP 403"
+    assert out["retry_at"] == datetime.fromtimestamp(reset).isoformat(timespec="seconds")
+
+
+def test_a_retry_after_counts_from_now(github):
+    github(Antwort(429, {}, headers={"Retry-After": "120"}))
+    out = updates.check("1.0.0", "x/y")
+    assert out["status"] == "error" and out["error"] == "HTTP 429"
+    bis = datetime.fromisoformat(out["retry_at"])
+    assert timedelta(seconds=100) < bis - datetime.now() <= timedelta(seconds=120)
+
+
+@pytest.mark.parametrize("headers", [
+    {},                                                   # a 403 for another reason
+    {"X-RateLimit-Remaining": "7", "X-RateLimit-Reset": "1790000000"},
+    {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "bald"},
+    {"Retry-After": "Thu, 01 Jan 2026 00:00:00 GMT"},     # the date form – not read
+])
+def test_no_time_when_the_refusal_names_none(github, headers):
+    github(Antwort(403, {}, headers=headers))
+    out = updates.check("1.0.0", "x/y")
+    assert out["status"] == "error" and out["retry_at"] is None
+
+
+def test_an_answer_without_headers_is_still_read(github):
+    """The test doubles elsewhere carry no headers; the real answer always
+    does. Neither may trip the check."""
+    antwort = Antwort(200, {"tag_name": "v1.4.0", "html_url": "u"})
+    del antwort.headers
+    github(antwort)
+    out = updates.check("1.0.0", "x/y")
+    assert out["status"] == "ok" and out["latest"] == "1.4.0"
+
+
+def test_the_etag_is_kept_and_sent_back(github):
+    cache = {}
+    aufrufe = github(Antwort(200, {"tag_name": "v1.4.0", "html_url": "u"},
+                             headers={"ETag": 'W/"abc"'}))
+    out = updates.check("1.2.0", "x/y", cache=cache)
+    assert out["status"] == "ok" and out["newer"] is True
+    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u"}
+    assert "If-None-Match" not in aufrufe[0]["headers"]     # nothing to send yet
+
+    github(Antwort(304))
+    out = updates.check("1.2.0", "x/y", cache=cache)
+    assert aufrufe[-1]["headers"]["If-None-Match"] == 'W/"abc"'
+    assert out["status"] == "ok" and out["latest"] == "1.4.0" and out["url"] == "u"
+    assert out["newer"] is True and out["error"] is None
+    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u"}   # untouched
+
+
+def test_a_new_release_replaces_the_cached_one(github):
+    cache = {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u"}
+    github(Antwort(200, {"tag_name": "v1.5.0", "html_url": "u5"},
+                   headers={"ETag": 'W/"def"'}))
+    out = updates.check("1.4.0", "x/y", cache=cache)
+    assert out["latest"] == "1.5.0" and out["newer"] is True
+    assert cache == {"etag": 'W/"def"', "tag": "v1.5.0", "url": "u5"}
+
+
+def test_no_etag_in_the_answer_leaves_the_cache_alone(github):
+    cache = {}
+    github(Antwort(200, {"tag_name": "v1.4.0", "html_url": "u"}))
+    assert updates.check("1.2.0", "x/y", cache=cache)["status"] == "ok"
+    assert cache == {}
+
+
+def test_a_cache_without_its_answer_sends_nothing(github):
+    """An ETag alone is useless: a 304 could not be answered from it."""
+    aufrufe = github(Antwort(200, {"tag_name": "v1.4.0", "html_url": "u"},
+                             headers={"ETag": 'W/"abc"'}))
+    updates.check("1.2.0", "x/y", cache={"etag": 'W/"abc"'})
+    assert "If-None-Match" not in aufrufe[0]["headers"]
+
+
+def test_a_304_without_a_cache_is_no_release(github):
+    github(Antwort(304))
+    assert updates.check("1.2.0", "x/y")["status"] == "none"
+
+
+def test_a_switched_off_check_touches_no_cache(github):
+    aufrufe = github(Antwort(200, {"tag_name": "v1.4.0"}, headers={"ETag": "e"}))
+    cache = {}
+    assert updates.check("1.0.0", "x/y", enabled=False, cache=cache)["retry_at"] is None
+    assert aufrufe == [] and cache == {}
 
 
 # --------------------------------------------------------------------------
