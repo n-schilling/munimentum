@@ -52,6 +52,7 @@ import sys
 from datetime import datetime, UTC
 from pathlib import Path
 
+import folders
 import versions
 
 EVIDENCE_DIRNAME = versions.EVIDENCE_DIRNAME
@@ -106,8 +107,34 @@ def _mtime_iso(ns):
     return datetime.fromtimestamp(ns / 1e9, UTC).isoformat(timespec="seconds")
 
 
+# The app's own files beside an export's bookkeeping (the folder that
+# holds its state.db, or the export folder itself): the calendar's
+# manifest (combined_search.MANIFEST_DB) and what older layouts kept as
+# loose files (app.ALT_STATE). They change with every run and are no item
+# of the archive – chained, every run would read as changed outside the
+# app. The same names below a mirror's Dateien are a user's files and count.
+BOOKKEEPING = frozenset({
+    "kalender.db",
+    "exported.tsv", "verschwunden.tsv", "vollstaendigkeit.json", "export_state.json",
+    folders.DATEI, folders.KALENDER, folders.NOTIZBUECHER,
+    "dateien.tsv", "delta.txt", "walk.jsonl", "walk_cursor.txt", "walk_fertig.txt",
+})
+_DB_SIDECARS = ("-wal", "-shm", "-journal")
+
+
 def is_archive_file(name):
     return not (name.startswith(_NOT_ARCHIVE_PREFIX) or name.endswith(_NOT_ARCHIVE_SUFFIX))
+
+
+def is_bookkeeping(path):
+    """Is the file at `path` one of the app's own beside an export's
+    bookkeeping (see BOOKKEEPING)?"""
+    path = Path(path)
+    name = path.name
+    for suffix in _DB_SIDECARS:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+    return name in BOOKKEEPING and (path.parent / "state.db").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +448,8 @@ def walk(data, roots):
                 if not is_archive_file(name):
                     continue
                 p = Path(folder) / name
+                if is_bookkeeping(p):
+                    continue
                 try:
                     st = p.stat()
                 except OSError:
@@ -485,6 +514,11 @@ def sweep(data, roots, tsa=None, events=None):
         ev.append(entry)
         counts[kind] += 1
     for rel in sorted(set(known) - set(on_disk)):
+        if is_bookkeeping(data / rel):
+            # chained before it was known as the app's own: out of the
+            # index, no line – it was never an item of the archive
+            ev.db().execute("DELETE FROM files WHERE rel = ?", (rel,))
+            continue
         g = gone.get(rel)
         if g and g.get("op") == "moved":
             ev.append({"kind": "removed", "rel": rel, "sha256": known[rel]["sha256"],
@@ -554,6 +588,8 @@ def verify(data, roots=None, events=None):
     unchanged, changed, missing = 0, [], []
     for row in ev.db().execute("SELECT * FROM files ORDER BY rel"):
         path = ev.data / row["rel"]
+        if is_bookkeeping(path):
+            continue
         if not path.is_file():
             missing.append({"rel": row["rel"], "sha256": row["sha256"], "captured": row["at"]})
             continue
@@ -569,7 +605,7 @@ def verify(data, roots=None, events=None):
                         "captured": row["at"], "modified": _mtime_iso(st.st_mtime_ns)})
     outside = [dict(r) for r in ev.db().execute(
         "SELECT n, rel, sha256, at FROM history WHERE kind IN ('outside', 'missing') "
-        "ORDER BY n DESC LIMIT ?", (LIMIT,))]
+        "ORDER BY n DESC LIMIT ?", (LIMIT,)) if not is_bookkeeping(ev.data / (r["rel"] or ""))]
     # Files whose bytes, as they lie today, differ from the quickXorHash
     # Microsoft gave for them when they were fetched – and how many agree.
     against = ("SELECT h.rel, h.sha256, h.quickxor, h.ms_quickxor, h.at FROM history h "

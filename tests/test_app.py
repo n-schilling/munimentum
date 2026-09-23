@@ -10314,3 +10314,16 @@ def test_das_adressbuch_zeigt_das_bild_ueber_das_archiv():
     chips are absent there; the card carries what the address book knows;
     the way over lands in the timeline of the search."""
     _in_node(PRUEFUNG_ADRESSBUCH_BILD)
+
+
+def test_teams_exclude_list_is_preset_normalised_and_reaches_the_step(sandbox, server):
+    """"aspx" is the preset; the list is stored like SharePoint's and an
+    emptied one travels as empty, not as the preset."""
+    assert app_mod.load_config()["teams_files_exclude"] == "aspx"
+    _, port = server
+    code, r = call(port, "PATCH", "/api/v1/config", {"teams_files_exclude": " .ASPX, mp4 ,"})
+    assert code == 200 and r["config"]["teams_files_exclude"] == "aspx, mp4"
+    cfg = app_mod.load_config()
+    assert app_mod.build_steps(cfg, {"teams": True})[0]["env"]["TEAMS_FILES_EXCLUDE"] == "aspx, mp4"
+    cfg["teams_files_exclude"] = ""
+    assert app_mod.build_steps(cfg, {"teams": True})[0]["env"]["TEAMS_FILES_EXCLUDE"] == ""

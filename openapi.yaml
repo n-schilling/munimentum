@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.7.0
+  version: 13.7.1
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -4108,6 +4108,7 @@ components:
         evidence_timestamp: { type: boolean, default: false, description: "After every run that adds to the evidence chain, its checksum goes to the time-stamp service (RFC 3161) – 32 bytes, no names, no contents." }
         evidence_tsa_url: { type: string, default: "", description: "The time-stamp service's address (http or https); anything else keeps the one there was." }
         teams_files_max_mb: { type: integer, default: 0, description: "Size cap for both Teams file switches; 0 = no cap." }
+        teams_files_exclude: { type: string, default: "aspx", description: "Comma-separated extensions neither Teams file switch fetches." }
         runs_retention_months: { type: integer, default: 24, description: "How far back the run overview (Insights → Runs) reaches. Only counts, durations and switches are stored per run – locally in runs.db in the data folder. Older entries are removed on start and after every run." }
         data_dir: { type: string, default: "", description: "The data folder; empty = the profile's default (data/)." }
         index_dir: { type: string, default: "", description: "The index folder; empty = the profile's default (rag_store/)." }

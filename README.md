@@ -55,7 +55,7 @@ because any one source can mean tens of thousands of items.
 | Source | What comes along |
 |---|---|
 | **Mail, calendar, contacts** | every folder you choose as `.eml`, `.ics`, `.vcf`; the calendar as a window of months back plus everything ahead |
-| **Teams** | 1:1, group, meeting and channel chats as readable HTML; on request the files shared in them and the channels' file folders |
+| **Teams** | 1:1, group, meeting and channel chats as readable HTML; on request the files shared in them and the channels' file folders, minus the extensions you exclude (links to SharePoint pages from the start) |
 | **OneDrive** | a mirror of your files, each held against Microsoft's own checksum, earlier versions kept |
 | **SharePoint** | libraries behind the URLs you list, with type filters, a size cap and a size preview; the sites' pages as standalone HTML |
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |

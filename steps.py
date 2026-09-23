@@ -104,7 +104,9 @@ def _teams_env(cfg, ctx):
             "SKIP_EMPTY_CHATS": _flag(cfg.get("skip_empty_chats")),
             "TEAMS_ATTACHMENTS": _flag(cfg.get("teams_attachments")),
             "TEAMS_CHANNEL_FILES": _flag(cfg.get("teams_channel_files")),
-            "TEAMS_FILES_MAX_MB": str(int(cfg.get("teams_files_max_mb") or 0))}
+            "TEAMS_FILES_MAX_MB": str(int(cfg.get("teams_files_max_mb") or 0)),
+            # Always set, even empty: empty means "every type".
+            "TEAMS_FILES_EXCLUDE": str(cfg.get("teams_files_exclude") or "")}
 
 
 def _todo_env(cfg, ctx):

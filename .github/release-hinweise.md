@@ -1,34 +1,20 @@
-## New in 13.7.0
+## New in 13.7.1
 
-**An archive that can prove itself.** A file a run replaces keeps its
-**earlier version**, and every file's SHA-256 goes into a **chain of
-checksums** that says what lay in the archive when – each line names the
-line before it, so nothing can be swapped afterwards unnoticed. Mirrored
-files are held against Microsoft's own checksum as they come.
-
-- **Versions** – a hit with more than one opens them in a fold below its
-  content, each with its changes to today's; a Teams message keeps what
-  it said before an edit, and a deleted one keeps its text.
-- **Checksums** – a quiet fold at the bottom of a file's detail holds its
-  SHA-256, and for a mirrored one whether Microsoft's checksum confirms
-  it; only a disagreement shows on the closed fold.
-- **Cases** – an item changed since it came in is marked, and *Compare*
-  shows the version it came with. *Close case* records every original's
-  checksum; **Export case…** adds `SHA256SUMS.txt` and an `evidence/`
-  folder anyone can check without the app, and the earlier versions of
-  changed items.
-- **Insights** – *Archive and bookkeeping* reads the chain end to end and
-  hashes every file afresh; what changed outside the app is named there,
-  each file one click from its detail.
-- **Settings › Evidence** – how far earlier versions are kept, and, off by
-  default, a time stamp for every run from a service you name (RFC 3161).
+- **Teams files** – a link to a SharePoint page is no file and is no
+  longer fetched: the Teams card has *Never these extensions*, preset to
+  `aspx`, for both file switches; what it leaves out keeps its online
+  link. A file Microsoft will not hand out is noted once and asked for
+  again only by a full sync, instead of failing on every run.
+- **Archive and bookkeeping** – the app's own bookkeeping next to an
+  export (the calendar's `kalender.db` among it) is no longer reported
+  as changed outside the app.
 
 ## Upgrading
 
-**From 13.6.x:** the first run that exports reads every file of the
-archive once to begin the chain – with large mirrors that takes a while;
-nothing is fetched from Microsoft for it. What was in the archive before
-is recorded as found on that day.
+**From 13.6.x or older:** the first run that exports begins the chain of
+checksums and reads every file once, as the notes of
+[13.7.0](https://github.com/n-schilling/munimentum/releases/tag/v13.7.0)
+describe.
 
 **From 13.5.x or older:** the first run that updates the index reads
 every file once more, as the notes of

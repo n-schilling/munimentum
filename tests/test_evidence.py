@@ -380,3 +380,41 @@ def test_microsofts_checksum_travels_into_the_chain_and_the_check(data, monkeypa
     con.commit()
     con.close()
     assert evidence.verify(data)["ms_mismatch_n"] == 1
+
+
+def test_the_apps_own_files_beside_the_bookkeeping_are_no_items(data):
+    out = data / "onedrive_export"
+    (out / "state.db").write_bytes(b"bookkeeping")
+    (out / "kalender.db").write_bytes(b"manifest")
+    (out / "kalender.db-wal").write_bytes(b"wal")
+    mirrored = out / "Dateien" / "kalender.db"      # a user's file of that name counts
+    mirrored.parent.mkdir()
+    mirrored.write_bytes(b"theirs")
+    evidence.sweep(data, roots(data))
+    rels = {d.get("rel") for d in lines(data)}
+    assert "onedrive_export/Dateien/kalender.db" in rels
+    assert not {"onedrive_export/kalender.db", "onedrive_export/kalender.db-wal"} & rels
+    (out / "kalender.db").write_bytes(b"manifest, next run")
+    assert not evidence.sweep(data, roots(data))["outside"]
+
+
+def test_a_bookkeeping_file_chained_before_is_dropped_quietly(data):
+    out = data / "onedrive_export"
+    (out / "kalender.db").write_bytes(b"manifest")
+    evidence.sweep(data, roots(data))              # no state.db yet: chained as a file
+    (out / "state.db").write_bytes(b"bookkeeping")
+    (out / "kalender.db").write_bytes(b"manifest, changed")
+    c = evidence.sweep(data, roots(data))
+    assert (c["outside"], c["missing"], c["removed"]) == (0, 0, 0)
+    found = evidence.verify(data)
+    assert found["changed_n"] == 0 and found["missing_n"] == 0
+    assert not [o for o in found["outside"] if o["rel"] == "onedrive_export/kalender.db"]
+
+
+def test_the_bookkeeping_names_follow_the_app():
+    import app
+    import combined_search
+    import folders
+    assert combined_search.MANIFEST_DB in evidence.BOOKKEEPING
+    assert {folders.DATEI, folders.KALENDER, folders.NOTIZBUECHER} <= evidence.BOOKKEEPING
+    assert {n for names in app.ALT_STATE.values() for n in names} <= evidence.BOOKKEEPING

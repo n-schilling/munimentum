@@ -127,7 +127,8 @@ def konfig_speichern(h, data):
                 cfg[key] = "\n".join(
                     z.strip() for z in str(data[key] or "").splitlines()
                     if z.strip())
-        for key in ("sharepoint_types_include", "sharepoint_types_exclude"):
+        for key in ("sharepoint_types_include", "sharepoint_types_exclude",
+                    "teams_files_exclude"):
             if key in data:
                 cfg[key] = ", ".join(
                     e for e in (s.strip().lstrip(".").lower()

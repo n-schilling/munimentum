@@ -1098,6 +1098,8 @@
   "settings.teams.channel_files": "Mettre les dossiers de canal en miroir",
   "settings.teams.channel_files.i": "L’onglet Fichiers de chaque canal exporté, en miroir comme une bibliothèque SharePoint : un parcours par bibliothèque d’équipe, la version actuelle de chaque fichier, les supprimés avec une pierre tombale (channels/<équipe>/Dateien/…). Les messages de canal pointent alors vers le miroir au lieu de récupérer le fichier deux fois. Demande la permission Files.Read.All ; l’assistant de jeton la liste.",
   "settings.teams.files_max": "Ignorer les fichiers plus grands que",
+  "settings.teams.files_exclude": "Jamais ces extensions",
+  "settings.teams.files_exclude.i": "Séparées par des virgules, s’applique aux deux options de fichiers. Valeur par défaut « aspx » : un lien vers une page SharePoint n’est pas un fichier, et Microsoft n’en livre pas le contenu. Un fichier écarté garde son lien en ligne dans le message.",
   "settings.teams.files_max.i": "S’applique aux deux options de fichiers. 0 signifie : sans limite.",
   "settings.teams.rules": "Quelles conversations et quels canaux sont exportés",
   "settings.teams.rules.i": "Les mêmes règles que pour les dossiers de la boîte, une par ligne, la dernière qui correspond l’emporte. Chemins : « 1on1/<titre> », « group/<titre> », « meeting/<titre> », « channels/<équipe>/<canal> » – « Synchroniser la liste des équipes » récupère les noms, « Afficher la liste d’export » montre ce que les règles signifient. Vide = tout ce que couvrent les catégories cochées.",

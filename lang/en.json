@@ -1098,6 +1098,8 @@
   "settings.teams.channel_files": "Mirror the channel folders",
   "settings.teams.channel_files.i": "The Files tab of every exported channel, mirrored like a SharePoint library: one walk per team library, the current version of every file, deleted ones with a tombstone (channels/<team>/Dateien/…). Channel posts then link into the mirror instead of fetching the file twice. Needs the Files.Read.All permission; the token wizard lists it.",
   "settings.teams.files_max": "Skip files larger than",
+  "settings.teams.files_exclude": "Never these extensions",
+  "settings.teams.files_exclude.i": "Comma-separated, applies to both file switches. Preset “aspx”: a link to a SharePoint page is no file, and Microsoft does not hand out its content. A file left out keeps its online link in the message.",
   "settings.teams.files_max.i": "Applies to both file switches. 0 means no limit.",
   "settings.teams.rules": "Which chats and channels are exported",
   "settings.teams.rules.i": "The same rules as for mailbox folders, one per line, the last match wins. Paths: “1on1/<title>”, “group/<title>”, “meeting/<title>”, “channels/<team>/<channel>” – “Sync team list” fetches the names, “Show export list” shows what the rules mean. Empty = everything in the ticked categories.",

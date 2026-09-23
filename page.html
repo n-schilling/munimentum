@@ -1628,6 +1628,7 @@ details.rechte p{margin:6px 0}
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.attachments"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.attachments.i">i</span></span><input type="checkbox" id="c-teams_attachments"></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.channel_files"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.channel_files.i">i</span></span><input type="checkbox" id="c-teams_channel_files"></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_max.i">i</span></span><span><input type="number" id="c-teams_files_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_exclude.i">i</span></span><input type="text" id="c-teams_files_exclude" placeholder="aspx, mp4"></div>
         </div>
         <div class="gruppe"><h3 data-i18n="settings.cadence">Sync-Häufigkeit</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.1on1"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-1on1"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
@@ -8383,7 +8384,7 @@ var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
                 'teams_rules','sharepoint_rules','todo_rules',
                 'outlook_since','teams_since',
-                'sharepoint_types_include','sharepoint_types_exclude','case_export_dir',
+                'sharepoint_types_include','sharepoint_types_exclude','teams_files_exclude','case_export_dir',
                 'internal_domains','own_name','evidence_tsa_url'];
 // Cadence selects and the keys they carry in sync_cadence: a whole source
 // (OneDrive, To Do) or one category of it (Outlook, Teams).

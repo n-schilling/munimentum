@@ -2417,3 +2417,98 @@ def test_team_and_channel_listings_carry_no_query_options():
     te._kanal_finden(graph, "k1", {})
     assert {u for u, _p in graph.paged_params} == {f"{GRAPH}/me/joinedTeams", f"{GRAPH}/teams/t1/channels"}
     assert all(p is None for _u, p in graph.paged_params), graph.paged_params
+
+
+# --------------------------------------------------------------------------
+# Extensions that never come along, and a file Graph will not hand out
+# --------------------------------------------------------------------------
+PAGE_URL = "https://firma.sharepoint.com/sites/x/SitePages/Kickoff.aspx"
+
+
+def _page_and_file():
+    return [_msg("Alice Example", "eins", "2025-06-02T08:00:00Z",
+                 attachments=[{"id": "a1", "contentType": "reference",
+                               "contentUrl": PAGE_URL, "name": "Kickoff"},
+                              {"id": "a2", "contentType": "reference",
+                               "contentUrl": DATEI_URL, "name": "Angebot.pdf"}])]
+
+
+def test_the_preset_leaves_a_page_link_out_without_asking(tmp_path, monkeypatch, capsys):
+    """A link to a SharePoint page is no file: with the preset it is not
+    asked about, counts as left out and keeps its online link."""
+    monkeypatch.delenv("TEAMS_FILES_EXCLUDE", raising=False)
+    monkeypatch.setattr(te.settings, "value", lambda key, default=None: default)
+    assert te.files_exclude() == {"aspx"}
+    graph = _DateiGraph()
+    lokal, geladen, ausgelassen, fehler = te.anhaenge_laden(
+        graph, tmp_path, "c1", "1on1/A__x.html", _page_and_file())
+    assert (geladen, ausgelassen, fehler) == (1, 1, 0)
+    assert set(lokal) == {DATEI_URL} and len(graph.gefragt[0]) == 1
+    assert _marks(tmp_path) == {} and _events(capsys) == []
+
+
+def test_the_exclude_list_is_the_settings_and_can_be_emptied(monkeypatch):
+    monkeypatch.setenv("TEAMS_FILES_EXCLUDE", " .PDF, mp4 ,")
+    assert te.files_exclude() == {"pdf", "mp4"}
+    assert te._excluded_type(DATEI_URL, "Angebot.pdf", {"pdf"})
+    assert te._excluded_type(PAGE_URL, "Kickoff", {"aspx"}), "by the address when the name has none"
+    assert not te._excluded_type(DATEI_URL, "Angebot.pdf", {"aspx"})
+    monkeypatch.setenv("TEAMS_FILES_EXCLUDE", "")
+    assert te.files_exclude() == set()
+
+
+def test_a_400_on_a_file_is_a_verdict(tmp_path, monkeypatch, capsys):
+    """A link Graph will not resolve to content answers 400 – asked again
+    it answers the same, so it is recorded like a refusal: said once, no
+    error, not asked again until a full sync. Both places it can come
+    from: the sharing lookup and the download."""
+    monkeypatch.setenv("TEAMS_FILES_EXCLUDE", "")
+    msgs, rel = _page_and_file(), "1on1/A__x.html"
+
+    class _Lookup(_DateiGraph):
+        def batch_get(self, urls, extra_headers=None):
+            self.gefragt.append(list(urls))
+            return {u: ((400, {"error": {"code": "invalidRequest"}}) if te._freigabe(PAGE_URL) in u
+                        else (200, {"name": "Angebot.pdf", "cTag": "c-1", "size": 3}))
+                    for u in urls}
+    lokal, geladen, _a, fehler = te.anhaenge_laden(_Lookup(), tmp_path, "c1", rel, msgs)
+    assert (geladen, fehler) == (1, 0) and set(lokal) == {DATEI_URL}
+    assert [e["k"] for e in _events(capsys)] == ["run.item.refused"]
+    assert _marks(tmp_path)[PAGE_URL]["error"] == "HTTP 400 invalidRequest"
+    again = _Lookup()
+    te.anhaenge_laden(again, tmp_path, "c1", rel, msgs)
+    assert all(te._freigabe(PAGE_URL) not in u for batch in again.gefragt for u in batch)
+
+    import requests
+
+    class _Download(_DateiGraph):
+        def stream(self, url, timeout=None, label=""):
+            r = requests.Response()
+            r.status_code = 400
+            raise requests.HTTPError("400 Client Error", response=r)
+    state_db.StateDb(tmp_path).permanent_leeren()
+    lokal, geladen, _a, fehler = te.anhaenge_laden(
+        _Download(), tmp_path / "other", "c1", rel, [_page_and_file()[0]])
+    assert (geladen, fehler) == (0, 0)
+    assert set(_marks(tmp_path / "other")) == {PAGE_URL, DATEI_URL}
+    assert te._download_verdict_of(RuntimeError("HTTP 400 on the link")) == "refused"
+    assert te._download_verdict_of(RuntimeError("HTTP 423")) is None
+
+
+def test_the_channel_mirror_leaves_the_excluded_types_out(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEAMS_FILES_EXCLUDE", "aspx, mp4")
+    seen = {}
+
+    def lauf(graph, ziel, auswahl, workers, still=False, zustand=None):
+        seen["exclude"] = auswahl.exclude_ext
+        return {}
+    monkeypatch.setattr(te.drive_mirror, "lauf", lauf)
+    team = {"id": "t1", "displayName": "Team Rakete"}
+    ch = {"id": "k1", "displayName": "Allgemein", "membershipType": "standard"}
+    graph = FakeGraph(gets={
+        f"{GRAPH}/teams/t1/channels/k1/filesFolder": {"id": "f1", "parentReference": {"driveId": "d9"}},
+        f"{GRAPH}/drives/d9/items/f1?$select=id,name,parentReference,root,webUrl":
+            {"id": "f1", "name": "Allgemein", "parentReference": {"path": "/drive/root:"},
+             "webUrl": "https://x/sites/r/Shared Documents/Allgemein"}})
+    te.kanal_dateien_spiegeln(graph, tmp_path, [("channel", team, ch)])
+    assert seen["exclude"] == {"aspx", "mp4"}

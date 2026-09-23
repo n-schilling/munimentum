@@ -1098,6 +1098,8 @@
   "settings.teams.channel_files": "Kanal-Ordner spiegeln",
   "settings.teams.channel_files.i": "Der Dateien-Reiter jedes exportierten Kanals, gespiegelt wie eine SharePoint-Bibliothek: ein Durchlauf je Team-Bibliothek, die aktuelle Fassung jeder Datei, gelöschte mit Grabstein (channels/<Team>/Dateien/…). Kanalbeiträge verlinken dann in den Spiegel, statt die Datei ein zweites Mal zu holen. Braucht die Berechtigung Files.Read.All; der Token-Assistent listet sie.",
   "settings.teams.files_max": "Dateien überspringen ab",
+  "settings.teams.files_exclude": "Diese Endungen nie",
+  "settings.teams.files_exclude.i": "Kommagetrennt, gilt für beide Datei-Schalter. Vorgabe „aspx“: ein Link auf eine SharePoint-Seite ist keine Datei, Microsoft gibt ihren Inhalt nicht heraus. Eine ausgelassene Datei behält in der Nachricht ihren Online-Link.",
   "settings.teams.files_max.i": "Gilt für beide Datei-Schalter. 0 heißt: keine Grenze.",
   "settings.teams.rules": "Welche Chats und Kanäle exportiert werden",
   "settings.teams.rules.i": "Dieselben Regeln wie bei den Postfach-Ordnern, eine je Zeile, die letzte zutreffende gewinnt. Pfade: „1on1/<Titel>“, „group/<Titel>“, „meeting/<Titel>“, „channels/<Team>/<Kanal>“ – „Teamliste abgleichen“ holt die Namen, „Exportliste anzeigen“ zeigt, was die Regeln bedeuten. Leer = alles aus den gewählten Kategorien.",

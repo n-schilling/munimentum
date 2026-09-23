@@ -68,14 +68,17 @@ REFRESH_CHANNELS=0 exports channels once and never re-checks them. Delete
 the database (or folder) for a full re-export.
 
 Files, both optional and off by default (TEAMS_ATTACHMENTS,
-TEAMS_CHANNEL_FILES, TEAMS_FILES_MAX_MB): a file a message references lives
+TEAMS_CHANNEL_FILES, TEAMS_FILES_MAX_MB, TEAMS_FILES_EXCLUDE): a file a message references lives
 in the sender's OneDrive or the team's library and dies with the access. With
 the first switch every such file is fetched next to its conversation
 (<kind>/Anhaenge/<conversation>/) and the HTML links the local copy; with
 the second, each exported channel's files folder is mirrored through
 drive_mirror (channels/<Team>/Dateien/<channel folder>/…) – one delta walk
 per team library, its own state.db, tombstones included – and channel posts
-link into that mirror instead of fetching twice.
+link into that mirror instead of fetching twice. An extension in
+TEAMS_FILES_EXCLUDE (preset "aspx") is fetched by neither switch; a file
+Microsoft will not hand out (403, 404, 410, or 400 for a download) is
+recorded as a verdict and not asked for again until a full sync.
 """
 
 import os
@@ -90,7 +93,7 @@ import html as html_lib
 from datetime import datetime, timedelta, UTC
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import auth
 import drive_mirror
@@ -174,6 +177,46 @@ def files_max_bytes():
     """The size cap for both file switches; 0 means no limit."""
     mb = settings.number("TEAMS_FILES_MAX_MB", "teams_files_max_mb", low=0)
     return int(mb) * 1024 * 1024
+
+
+def files_exclude():
+    """Extensions neither file switch fetches: bare, lower-case. The
+    environment beats the file; the preset "aspx" – a link to a SharePoint
+    page, which is no file – holds only while nothing is set."""
+    roh = os.environ.get("TEAMS_FILES_EXCLUDE")
+    if roh is None:
+        roh = settings.value("teams_files_exclude", "aspx")
+    return {e for e in (s.strip().lstrip(".").lower() for s in str(roh or "").split(","))
+            if e}
+
+
+def _excluded_type(url, name, exclude):
+    """Is the file's extension – by its name, else by its address – one
+    that never comes along?"""
+    for text in (name, urlparse(url).path):
+        tail = unquote(str(text or "")).rsplit("/", 1)[-1]
+        if "." in tail:
+            return tail.rsplit(".", 1)[-1].lower() in exclude
+    return False
+
+
+def _download_verdict(status, body=None):
+    """A verdict for a file asked for by its sharing link: what
+    export_util says, and a 400 besides – Graph answers so for a link it
+    will not resolve to content (a page, a folder), and asking again
+    changes nothing."""
+    return export_util.verdict_status(status, body) or (
+        export_util.REFUSED if status == 400 else None)
+
+
+def _download_verdict_of(e):
+    """_download_verdict for an exception: its status, else the "HTTP nnn"
+    its message names."""
+    status = export_util.http_status(e)
+    if status is None:
+        m = re.search(r"\bHTTP (\d{3})\b", str(e))
+        status = int(m.group(1)) if m else None
+    return export_util.verdict(e) or _download_verdict(status)
 
 
 def _dateiscopes(scopes):
@@ -1050,6 +1093,7 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
     ordner_rel = anhang_ordner(rel)
     href_basis = ordner_rel.split("/", 1)[1] if "/" in rel else ordner_rel
     grenze = files_max_bytes()
+    exclude = files_exclude()
     lokal, geladen, ausgelassen, fehler = {}, 0, 0, 0
     offen = {}
     corrected = False          # a record corrected without a fetch
@@ -1060,6 +1104,9 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             continue
         if ausser and url in ausser:
             lokal[url] = ausser[url]
+            continue
+        if exclude and _excluded_type(url, name, exclude):
+            ausgelassen += 1              # keeps its online link
             continue
         alt = stand.get(url) or {}
         # Refused or gone on an earlier run: asking every night changes
@@ -1097,7 +1144,7 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
         alt = stand.get(url) or {}
         try:
             if status != 200 or not isinstance(meta, dict):
-                kind = export_util.verdict_status(status, meta)
+                kind = _download_verdict(status, meta)
                 if kind:
                     raise _Permanent(kind, _batch_fehler(status, meta))
                 raise RuntimeError(_batch_fehler(status, meta))
@@ -1119,7 +1166,7 @@ def anhaenge_laden(graph, out, key, rel, msgs, ausser=None, unveraendert=False):
             except TokenExpired:
                 raise
             except Exception as e:
-                kind = export_util.verdict(e)
+                kind = _download_verdict_of(e)
                 if kind:
                     raise _Permanent(kind, f"{type(e).__name__}: {e}") from e
                 raise
@@ -1241,7 +1288,8 @@ def kanal_dateien_spiegeln(graph, out, channel_jobs):
         # listing would otherwise cost a full walk of the library.
         regeln = [regeln[0], *sorted(set(regeln[1:]))]
         auswahl = drive_mirror.Selection(scope=None if ganz else regeln,
-                                         max_bytes=grenze)
+                                         max_bytes=grenze,
+                                         exclude_ext=files_exclude())
         graph.drive_base = f"{GRAPH}/drives/{drive_id}"
         progress.event("run.teams.files", name=team.get("displayName", "Team"),
                        n=len(d["kanaele"]))

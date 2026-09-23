@@ -235,6 +235,9 @@ VORGABEN = {
     "teams_attachments": False,
     "teams_channel_files": False,
     "teams_files_max_mb": 0,
+    # Extensions no file switch fetches. A link to a SharePoint page
+    # (.aspx) is a page, not a file: Graph will not hand out its content.
+    "teams_files_exclude": "aspx",
     # Evidence (evidence.py, versions.py): a version an export replaces is
     # kept below versions/ – up to this size per file (0 = every size);
     # larger ones keep only their checksum in the chain. Stamping sends
