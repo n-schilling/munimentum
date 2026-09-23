@@ -17,6 +17,20 @@ the page, the board – plus three files that tie them together:
     items.csv     the same list for a spreadsheet
     casebook.md   description and notes as plain text
 
+With the data folder (--data) the ZIP carries the evidence as well
+(evidence.py), so whoever receives it can check it without the app:
+
+    SHA256SUMS.txt        every file's checksum – `shasum -a 256 -c`
+    evidence/manifest.csv every original with the checksum the archive's
+                          chain has for it and when the chain first saw it
+    evidence/chain.jsonl  the chain's lines about those files
+    evidence/closed/      the manifest written when the case was closed,
+                          with its time stamp where a service signed it
+    evidence/stamp/       the chain's last signed head
+    evidence/README.txt   how to check all of it, in the page's language
+    <versions>/           an item changed since it came into the case: the
+                          version it came in with, beside today's
+
 An item whose original the archive no longer holds is listed all the
 same, marked, with what the case remembers about it; what Claude added
 through MCP says so. Nothing in the archive is touched; the folder named
@@ -38,7 +52,9 @@ from pathlib import Path
 from datetime import datetime
 
 import i18n
+import evidence
 import faelle
+import versions
 import version
 import progress
 import export_util
@@ -418,7 +434,102 @@ def zielordner(basis, name):
     return ziel
 
 
-def exportieren(buch, fall_id, pfade, ziel, lang="de", res=None):
+def _pinned_copy(ev, prints, e, target):
+    """An item changed since it came into the case: the version it came in
+    with, next to today's – a file's kept bytes, a message's words. Returns
+    the path written below `target`, or None."""
+    pinned = e.get("fassung")
+    if not pinned or prints.of(e) in (None, pinned):
+        return None
+    stamp = str(e.get("hinzugefuegt") or "")[:10]
+    rel = str(e.get("rel") or "")
+    if e.get("root") == "teams" and "#" in str(e.get("key") or ""):
+        found = evidence.message_versions(prints.dirs.get("teams"), e["key"]) or []
+        v = next((v for v in found if v["sha256"] == pinned), None)
+        if v is None:
+            return None
+        out = target / f"{Path(rel).stem}.{e['key'].rpartition('#')[2]}.{stamp}.txt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(evidence.message_text(v), encoding="utf-8")
+        return out
+    if str(e.get("key") or "").startswith(("planner:", "todo:")):
+        return None
+    base = prints.dirs.get(e.get("root"))
+    rel_data = versions.rel_of(Path(base) / rel, ev.data) if base else None
+    body = ev.bytes_of(rel_data, pinned) if rel_data and ev.exists() else None
+    if body is None:
+        return None
+    path = Path(rel)
+    out = target / path.parent / f"{path.stem}.{stamp}{path.suffix}"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(body)
+    return out
+
+
+def write_evidence(ziel, data, pfade, fall, zeilen, t):
+    """The evidence part of the ZIP (see the module docstring): the pinned
+    versions, the manifest, the chain's lines about the case's files, the
+    closing manifest and the last stamp, the README – and last the
+    checksum of every file."""
+    ev = evidence.Evidence(data)
+    prints = evidence.Fingerprints(data, evidence.export_dirs(data))
+    folder = ziel / "evidence"
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        entries, rels = [], set()
+        versions_dir = ziel / export_util.safe(t("cases.export.versions.folder"))
+        by_key = {e["key"]: e for e in fall["eintraege_liste"]}
+        for z in zeilen:
+            e = by_key.get(z["key"]) or {}
+            base = pfade.get(e.get("root"))
+            if not z["datei"] or not base:
+                continue
+            rel_data = versions.rel_of(Path(base) / e["rel"], data)
+            if rel_data is None:
+                continue
+            rels.add(rel_data)
+            entries.append({"archive_rel": rel_data, "file": z["datei"], "src": e.get("src"),
+                            "key": e.get("key"), "item": prints.of(e)})
+            _pinned_copy(ev, prints, e, versions_dir / z["datei"].rsplit("/", 1)[0])
+        rows = evidence.manifest_rows(ev, entries) if ev.exists() else []
+        (folder / "manifest.csv").write_text(evidence.manifest_csv(rows), encoding="utf-8")
+        lines = []
+        if ev.exists():
+            names = set()
+            for rel in rels:
+                names.update(ev.names_of(rel))
+            for text, d in ev.read_lines():
+                if isinstance(d, dict) and (d.get("rel") in names or d.get("kind") == "genesis"):
+                    lines.append(text)
+        (folder / "chain.jsonl").write_text("".join(z + "\n" for z in lines), encoding="utf-8")
+        closed = evidence.case_records(data, fall["id"])
+        if closed:
+            newest = ev.dir / closed[0]["file"]
+            (folder / "closed").mkdir(exist_ok=True)
+            shutil.copy2(newest, folder / "closed" / newest.name)
+            if newest.with_suffix(".tsr").is_file():
+                shutil.copy2(newest.with_suffix(".tsr"), folder / "closed" / newest.with_suffix(".tsr").name)
+        stamps = sorted((ev.dir / evidence.STAMPS).glob("*.tsr"),
+                        key=lambda p: int(p.stem) if p.stem.isdigit() else 0) \
+            if (ev.dir / evidence.STAMPS).is_dir() else []
+        if stamps:
+            (folder / "stamp").mkdir(exist_ok=True)
+            shutil.copy2(stamps[-1], folder / "stamp" / stamps[-1].name)
+            head = stamps[-1].with_suffix(".head")
+            if head.is_file():
+                shutil.copy2(head, folder / "stamp" / head.name)
+        (folder / "README.txt").write_text(t("cases.export.verify.text"), encoding="utf-8")
+    finally:
+        prints.close()
+        ev.close()
+    sums = []
+    for p in sorted(ziel.rglob("*")):
+        if p.is_file():
+            sums.append(f"{versions.sha256_file(p)}  {p.relative_to(ziel).as_posix()}")
+    (ziel / "SHA256SUMS.txt").write_text("\n".join(sums) + "\n", encoding="utf-8")
+
+
+def exportieren(buch, fall_id, pfade, ziel, lang="de", res=None, data=None):
     """Build the folder `ziel` (the app names it, see zielordner, so it can
     say before the run where the ZIP will lie), pack it into <ziel>.zip
     and remove the folder. Returns (zip path, rows, missing)."""
@@ -459,6 +570,8 @@ def exportieren(buch, fall_id, pfade, ziel, lang="de", res=None):
     (ziel / "timeline.html").write_text(timeline_html(fall, zeilen, t, lang), encoding="utf-8")
     (ziel / "items.csv").write_text(items_csv(zeilen, t), encoding="utf-8", newline="")
     (ziel / "casebook.md").write_text(casebook_md(fall, zeilen, t), encoding="utf-8")
+    if data:
+        write_evidence(ziel, data, pfade, fall, zeilen, t)
     zip_pfad = Path(shutil.make_archive(str(ziel), "zip", root_dir=ziel.parent, base_dir=ziel.name))
     shutil.rmtree(ziel, ignore_errors=True)
     # The case remembers where its last export went – the page's "Show
@@ -483,13 +596,15 @@ def main():
     ap.add_argument("--ziel", required=True, help="the folder to build and pack (zielordner)")
     ap.add_argument("--lang", default="de")
     ap.add_argument("--res", default=None, help="where the lang/ folder lies")
+    ap.add_argument("--data", default="", help="the data folder – adds the evidence")
     a = ap.parse_args()
     pfade = {"outlook": a.outlook, "teams": a.teams, "onedrive": a.onedrive,
              "sharepoint": a.sharepoint, "pages": a.pages,
              "planner": a.planner, "todo": a.todo, "onenote": a.onenote}
     buch = faelle.Fallbuch(a.faelle)
     try:
-        zip_pfad, zeilen, fehlt = exportieren(buch, a.fall, pfade, a.ziel, a.lang, a.res)
+        zip_pfad, zeilen, fehlt = exportieren(buch, a.fall, pfade, a.ziel, a.lang, a.res,
+                                              data=a.data or None)
     except faelle.KeinFall:
         progress.event("run.case.unknown", "err", id=a.fall)
         progress.ergebnis(0, errors=1)

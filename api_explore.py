@@ -6,10 +6,14 @@ Everything here reads the index through the search module the app loaded
 """
 from pathlib import Path
 
+import re
+
 import api
 import detail
+import evidence
 import faelle
 import rest
+import versions
 from api import Ablehnung
 
 
@@ -391,7 +395,19 @@ def document(h, q):
     mod = h.app.search.ensure(h.app.cfg)
     if mod is None:
         raise Ablehnung(503, h.app.search.error)
-    res = mod.get_document(uid=q.get("uid", ""),
+    uid = q.get("uid", "")
+    if not uid and q.get("root") and q.get("rel"):
+        # A file named by its place – the evidence findings name files so.
+        con = mod._db()
+        try:
+            row = con.execute("SELECT uid FROM chunks WHERE root = ? AND rel = ? AND seq = 0 "
+                              "ORDER BY uid LIMIT 1", (q["root"], q["rel"])).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            raise Ablehnung(404, "srv.detail.none")
+        uid = row["uid"]
+    res = mod.get_document(uid=uid,
                            context_before=api.zahl(q, "before", 0, 0, 20),
                            context_after=api.zahl(q, "after", 0, 0, 20))
     if res.get("error"):
@@ -414,7 +430,206 @@ def fakten_lesen(h, q):
     if row is None:
         raise Ablehnung(404, "srv.detail.none")
     ziel, _fehler = mod._resolve_source(row["root"], row["rel"])
-    return detail.fakten(row, text, ziel, mod.STATE)
+    facts = detail.fakten(row, text, ziel, mod.STATE)
+    checksums = item_checksums(h, row, ziel)
+    if checksums:
+        facts["checksums"] = checksums
+    return facts
+
+
+# Items that are part of a file holding many (a chat, a board, a list):
+# the file's checksum says nothing about the one item.
+_PART_OF_A_FILE = ("teams", "planner", "todo")
+
+
+def item_checksums(h, row, path):
+    """The checksums of the file an item is: our SHA-256 always, and –
+    where a mirror fetched it – the quickXorHash we computed beside the one
+    Microsoft gave, and whether they agree. From the evidence chain while
+    the file is as chained, else the SHA-256 read now."""
+    if path is None or row["src"] in _PART_OF_A_FILE:
+        return None
+    data = Path(h.M.BASE)
+    rel = versions.rel_of(path, data)
+    ev = evidence.Evidence(data)
+    try:
+        if rel is not None and ev.exists():
+            current = next((v for v in ev.history(rel) if v.get("current")), None)
+            if current:
+                out = {"sha256": current["sha256"], "captured": current.get("captured")}
+                if current.get("quickxor") or current.get("ms_quickxor"):
+                    out.update(quickxor=current.get("quickxor"),
+                               microsoft_quickxor=current.get("ms_quickxor"),
+                               microsoft_match=current.get("ms_match"))
+                return out
+        return {"sha256": versions.sha256_file(path), "captured": None}
+    except OSError:
+        return None
+    finally:
+        ev.close()
+
+
+# ---------------------------------------------------------------------------
+# The versions of one item (evidence.py, versions.py)
+# ---------------------------------------------------------------------------
+_SHA = re.compile(r"^[0-9a-f]{16,64}$")
+
+
+def _version_target(h, q):
+    """What `uid` – or, for a case's item, `root` and `rel` with its `key` –
+    names: its source, key, file and the data folder the chain lies in."""
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error)
+    uid = str(q.get("uid") or "")
+    if uid:
+        con = mod._db()
+        try:
+            row = con.execute("SELECT * FROM chunks WHERE uid = ? AND seq = 0", (uid,)).fetchone()
+        finally:
+            con.close()
+        if row is None:
+            raise Ablehnung(404, "srv.detail.none")
+        src, root, rel = row["src"], row["root"], row["rel"]
+        key = row["key"] if "key" in row.keys() else ""
+    else:
+        root, rel, key = str(q.get("root") or ""), str(q.get("rel") or ""), str(q.get("key") or "")
+        if not root or not rel:
+            raise Ablehnung(400, "srv.badparam", {"name": "uid"})
+        src = key.partition(":")[0]
+    folders = mod._exportordner()
+    base = folders.get(root)
+    if not base:
+        raise Ablehnung(404, "srv.versions.none")
+    base = Path(base).resolve()
+    path = (base / rel).resolve()
+    if base != path and base not in path.parents:
+        raise Ablehnung(404, "srv.versions.none")
+    return {"src": src, "root": root, "rel": rel, "key": key or "", "path": path,
+            "data": Path(h.M.BASE), "teams": folders.get("teams")}
+
+
+def _message(target):
+    """The versions of a Teams message, or None for anything else."""
+    if target["root"] != "teams" or "#" not in target["key"]:
+        return None
+    return evidence.message_versions(target["teams"], target["key"])
+
+
+def _format(name):
+    ext = Path(str(name)).suffix.lower()
+    return "html" if ext in versions.HTML_TYPES else "text" if versions.is_text(name) else "binary"
+
+
+def _file_versions(target):
+    rel = versions.rel_of(target["path"], target["data"])
+    ev = evidence.Evidence(target["data"])
+    if rel is None or not ev.exists():
+        return rel, []
+    try:
+        return rel, ev.history(rel)
+    finally:
+        ev.close()
+
+
+_VERSION_FIELDS = ("sha256", "size", "captured", "modified", "kind", "current", "available")
+
+
+def _outward(v):
+    """One version as the API names it: Microsoft's checksum under its
+    own name beside ours."""
+    out = {k: v.get(k) for k in _VERSION_FIELDS}
+    if v.get("quickxor") or v.get("ms_quickxor"):
+        out.update(quickxor=v.get("quickxor"), microsoft_quickxor=v.get("ms_quickxor"),
+                   microsoft_match=v.get("ms_match"))
+    return out
+
+
+def item_versions(h, _p, q, _data):
+    """Every version of the item the archive knows, newest first: when it
+    was made, when the chain first saw it, its checksum, whether its bytes
+    are here. A Teams message's versions are its earlier texts; any other
+    item's are those of its file."""
+    target = _version_target(h, q)
+    message = _message(target)
+    if message is not None:
+        return api.json({"unit": "message", "format": "text",
+                         "items": [_outward(v) for v in message]})
+    _rel, found = _file_versions(target)
+    return api.json({"unit": "file", "format": _format(target["rel"]),
+                     "items": [_outward(v) for v in found]})
+
+
+def _sha_param(q, name, required=True):
+    value = str(q.get(name) or "").strip().lower()
+    if not value and not required:
+        return None
+    if not _SHA.match(value):
+        raise Ablehnung(400, "srv.badparam", {"name": name})
+    return value
+
+
+def _version_bytes(target, sha):
+    rel = versions.rel_of(target["path"], target["data"])
+    ev = evidence.Evidence(target["data"])
+    if rel is None or not ev.exists():
+        return None
+    try:
+        full = [v["sha256"] for v in ev.history(rel) if v["sha256"].startswith(sha)]
+        return ev.bytes_of(rel, full[0]) if full else None
+    finally:
+        ev.close()
+
+
+def version_content(h, _p, q, _data):
+    """One version of a file, as its bytes: an archive page shown in a
+    sandbox, anything else handed out as a download."""
+    target = _version_target(h, q)
+    sha = _sha_param(q, "sha")
+    body = None if _message(target) is not None else _version_bytes(target, sha)
+    if body is None:
+        raise Ablehnung(404, "srv.versions.none")
+    ext = target["path"].suffix.lower()
+    ctype = h.M._CONTENT_TYPE.get(ext, "application/octet-stream")
+    headers = {"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"}
+    if ext in versions.HTML_TYPES:
+        body = h.M._links_umleiten(body, target["root"], target["rel"])
+    else:
+        headers["Content-Disposition"] = (
+            f'attachment; filename="{h.M._sicherer_name(target["path"].name)}"')
+    return api.roh(200, body, ctype, extra=headers)
+
+
+def _version_text(target, sha):
+    """The readable text of one version – None when it has none."""
+    message = _message(target)
+    if message is not None:
+        v = next((v for v in message if v["sha256"].startswith(sha)), None)
+        return None if v is None else evidence.message_text(v)
+    if not versions.is_text(target["rel"]):
+        return None
+    raw = _version_bytes(target, sha)
+    return None if raw is None else versions.plain_text(raw, target["rel"])
+
+
+def version_diff(h, _p, q, _data):
+    """What changed between two versions, as a word diff: `sha` the older
+    one, `to` the newer (the current one when not named). The same
+    version on both sides is its text in one piece."""
+    target = _version_target(h, q)
+    older = _sha_param(q, "sha")
+    newer = _sha_param(q, "to", required=False)
+    if newer is None:
+        message = _message(target)
+        if message is not None:
+            newer = message[0]["sha256"]
+        else:
+            newer = next((v["sha256"] for v in _file_versions(target)[1] if v.get("current")), None)
+    old_text = _version_text(target, older)
+    new_text = _version_text(target, newer) if newer else None
+    if old_text is None or new_text is None:
+        raise Ablehnung(404, "srv.versions.notext")
+    return api.json({"from": older, "to": newer, "ops": versions.diff(old_text, new_text)})
 
 
 # The routes of this door, in the order the table in app.py lists them.
@@ -432,4 +647,7 @@ ROUTEN = (
     ("GET", "/api/v1/documents", dokument),
     ("GET", "/api/v1/documents/facts", fakten),
     ("GET", "/api/v1/documents/attachments", anhang),
+    ("GET", "/api/v1/documents/versions", item_versions),
+    ("GET", "/api/v1/documents/versions/content", version_content),
+    ("GET", "/api/v1/documents/versions/diff", version_diff),
 )

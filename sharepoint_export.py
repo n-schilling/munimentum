@@ -72,6 +72,7 @@ import export_util
 import completeness
 import folders
 import progress
+import versions
 import settings
 
 try:
@@ -913,7 +914,7 @@ def seiten_lauf(graph, out, sites, fehl=0):
                 if alt and alt["rel"] != rel:
                     # Renamed, not deleted: the old file would otherwise
                     # linger untracked as a stale duplicate in the index.
-                    (out / alt["rel"]).unlink(missing_ok=True)
+                    versions.remove(out / alt["rel"], successor=out / rel)
                 eintraege_bestand[sid] = geaendert[sid] = {"rel": rel, "etag": etag}
         if geaendert:
             db.seiten_aktualisieren(geaendert)

@@ -49,6 +49,7 @@ import completeness
 import folders
 import graph_client
 import progress
+import versions
 import settings
 import state_db
 
@@ -232,7 +233,7 @@ def _anhaenge_laden(graph, liste, ziel, task, marks=None):
                                           label=" (Anhang)")
             rel = f"{ANHANG_DIR}/{_dateiname(task['id'], name)}"
             (ziel / ANHANG_DIR).mkdir(parents=True, exist_ok=True)
-            (ziel / rel).write_bytes(daten)
+            versions.write_bytes(ziel / rel, daten)
             eintrag["rel"] = rel
             marks.pop(key, None)
         except auth.TokenExpired:

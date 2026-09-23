@@ -55,6 +55,7 @@ import auth
 import export_util
 import graph_client
 import progress
+import versions
 import settings
 import completeness
 import state_db
@@ -341,7 +342,7 @@ def _referenzen_laden(graph, stand, ziel, task, det, marks=None):
             # never a half file under the shared name.
             tmp = (ziel / rel).with_name(f"{name}.{threading.get_ident()}.tmp")
             tmp.write_bytes(daten)
-            tmp.replace(ziel / rel)
+            versions.replace(tmp, ziel / rel)
             neu[url] = {"rel": rel, "ctag": meta.get("cTag") or ""}
             lokal[url] = rel
             if url in marks:

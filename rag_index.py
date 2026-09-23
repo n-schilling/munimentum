@@ -460,7 +460,10 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
                 neu.add(rel)
                 continue
             for c in alte:
-                c["gone"] = weg.get(rel)     # today's answer, not last run's
+                # today's answer, not last run's – except where the file
+                # itself says it per message (Teams): unchanged file,
+                # unchanged answer
+                c["gone"] = weg.get(rel) or (c.get("gone") if art == "teams" else None)
                 chunks.append(c)
             wieder += 1
         if alt_chunks is None:

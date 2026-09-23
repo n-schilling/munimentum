@@ -67,6 +67,7 @@ import answer
 import auth
 import completeness
 import export_util
+import evidence
 import faelle
 import folders
 import i18n
@@ -86,6 +87,7 @@ import state_db
 import store_layout
 import updates
 import version
+import versions
 
 # On Windows the console defaults to a legacy codepage; force UTF-8 so
 # print() does not choke on Unicode (macOS/Linux: no-op).
@@ -101,7 +103,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 # Subprograms the bundled file can start itself via "--run <name>". As
 # scripts they lie side by side, in the bundle as modules inside it.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
-            "mcp_server", "case_export", "case_collect",
+            "mcp_server", "case_export", "case_collect", "evidence",
             # auth is not an export step but a self-report: which sign-in
             # path applies, is a key present, is there a cache. In the
             # bundle this is the only way to check that without network –
@@ -1664,7 +1666,7 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
                 sync_now=False, calendar_full=False, full_sync=False,
                 resync=False, archiv=None, nachgeholt=None, nachholen=None,
                 resync_ordner=None, fall_export=None, case_collect=None,
-                check_rows=None):
+                check_rows=None, lang=None):
     """Assemble the command lines for a run – from the registry.
 
     What a step is lives entirely in steps.REGISTRY; here we only hand in
@@ -1738,12 +1740,24 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # export folder: it speaks about all of them.
         "archiv_bericht": str(archiv_bericht_pfad()),
         "calendar_file": calendar_file(cfg),
+        # The data folder: the evidence chain and the kept versions lie in
+        # it beside the export folders (evidence.py, versions.py).
+        "data": str(BASE),
     }
     # Subprocesses (and auth's MSAL cache) find configuration and token via
     # MUNIMENTUM_HOME in the fixed home folder – independent of the data dir.
     base_env = {"PYTHONUNBUFFERED": "1", "MUNIMENTUM_HOME": str(HEIM),
                 "EXPORT_WORKERS": str(cfg.get("workers", 4)),
                 "MIRROR_WORKERS": str(cfg.get("mirror_workers") or 8),
+                # What an export writes into the archive itself (a Teams
+                # message's deletion mark) speaks the page's language.
+                "MUNIMENTUM_LANG": lang or i18n.FALLBACK,
+                # Every write into the archive keeps the version it replaces
+                # and is journaled for the evidence step (versions.py).
+                "MUNIMENTUM_VERSIONS_DIR": str(BASE / versions.VERSIONS_DIRNAME),
+                "MUNIMENTUM_EVIDENCE_DIR": str(BASE / versions.EVIDENCE_DIRNAME),
+                "KEEP_VERSIONS": "1" if cfg.get("keep_versions", True) else "0",
+                "VERSIONS_MAX_MB": str(cfg.get("versions_max_mb", versions.DEFAULT_MAX_MB)),
                 **_auth_env(cfg)}
     if token:
         base_env["GRAPH_TOKEN"] = token
@@ -1988,6 +2002,8 @@ class App:
         # next to the run history. The history is pruned to its setting
         # at every start, and again whenever the setting changes.
         self.faelle = faelle.Fallbuch(HEIM / faelle.DB_NAME)
+        # An item comes in with the checksum of the version it has then.
+        self.faelle.pinner = evidence.pinner(BASE)
         self.faelle.aufraeumen(historie_tage(self.cfg))
         self.jobs = JobRunner(self.history, cwd=lambda: str(BASE), res=RES)
         self.mcp = McpProcess(self.jobs, _mcp_befehl, mcp_client_config)
@@ -2367,6 +2383,13 @@ class App:
                             "domains": interne_domains(self.cfg), **(case_collect or {})}
         export_gewollt = any(angefragt.get(e["anfrage"])
                              for e in steps_mod.REGISTRY if e.get("corpus"))
+        # The evidence step rides with every run that can change the
+        # archive: after the exports it chains what they wrote and notices
+        # what changed without them (evidence.py).
+        if export_gewollt or any(
+                angefragt.get(e["anfrage"]) for e in steps_mod.REGISTRY
+                if e["key"].startswith("archiv_")):
+            angefragt["evidence"] = True
         # The cadences narrow EVERY run, scheduled and manual alike – but
         # inside the exports, per category, URL or notebook: a source below
         # its interval says so in the log and reports nothing new, which is
@@ -2389,7 +2412,8 @@ class App:
                             full_sync=full_sync, resync=resync, archiv=archiv,
                             nachgeholt=self.nachgeholt(), nachholen=nachholen,
                             resync_ordner=resync_ordner, fall_export=fall_export,
-                            case_collect=case_collect, check_rows=check_rows)
+                            case_collect=case_collect, check_rows=check_rows,
+                            lang=self.run_lang())
         # A button of one source – sync now, fetch again, full sync, a
         # single URL – on a source the settings do not tick: say so, rather
         # than starting a run that carries nothing but the index step.
@@ -2438,12 +2462,15 @@ class App:
             "log_retention_days": int(self.cfg.get("log_retention_days") or 14),
             "notify": str(self.cfg.get("notifications") or "errors"),
             "keep_awake": bool(self.cfg.get("keep_awake", True)),
-            "lang": self.ui_lang or i18n.negotiate(self.cfg.get("language"),
-                                                   None, RES),
+            "lang": self.run_lang(),
         }
         if not self.jobs.start(steps, label, origin=origin, context=kontext):
             return False, {"k": "srv.nostart", "v": {}}
         return True, {"k": "srv.mcp.startok", "v": {}}
+
+    def run_lang(self):
+        """The language a run speaks: the page's last, else the setting."""
+        return self.ui_lang or i18n.negotiate(self.cfg.get("language"), None, RES)
 
     def _folgeschritte_aktuell(self, steps):
         """Is every follow-up step in this run newer than the last export?
@@ -2600,6 +2627,9 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/documents", api_explore.dokument),
     ("GET", "/api/v1/documents/facts", api_explore.fakten),
     ("GET", "/api/v1/documents/attachments", api_explore.anhang),
+    ("GET", "/api/v1/documents/versions", api_explore.item_versions),
+    ("GET", "/api/v1/documents/versions/content", api_explore.version_content),
+    ("GET", "/api/v1/documents/versions/diff", api_explore.version_diff),
     ("GET", "/api/v1/calendar", "_v1_kalender"),
     ("GET", "/api/v1/status", api_app.status),
     ("GET", "/api/v1/app", api_app.umgebung),
@@ -2619,6 +2649,7 @@ ROUTEN_V1 = (
     ("PATCH", "/api/v1/sources/{source}/findings", api_archive.quelle_befunde),
     ("POST", "/api/v1/sources/{source}/open", api_archive.quelle_oeffnen),
     ("QUERY", "/api/v1/sources/{source}/folder-plan", api_archive.quelle_ordnerplan),
+    ("GET", "/api/v1/evidence", api_archive.evidence_summary),
     ("GET", "/api/v1/analytics", api_archive.analytics),
     ("POST", "/api/v1/analytics/refresh", api_archive.analytics_neu),
     ("PATCH", "/api/v1/schedule", api_archive.zeitplan),

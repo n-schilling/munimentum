@@ -78,6 +78,7 @@ from mcp.types import ToolAnnotations
 
 import analytics_db
 import detail
+import evidence
 import export_util
 import completeness
 import corpus
@@ -487,7 +488,18 @@ def _fallbuch():
     pfad = STATE.get("faelle_db")
     if not pfad:
         return None
-    return faelle.Fallbuch(pfad)
+    buch = faelle.Fallbuch(pfad)
+    data = _data_dir()
+    if data is not None:
+        buch.pinner = evidence.pinner(data)
+    return buch
+
+
+def _data_dir():
+    """The data folder the export folders lie in – where the evidence
+    chain and the kept versions are (evidence.py)."""
+    folder = STATE.get("outlook_dir") or STATE.get("teams_dir")
+    return Path(folder).parent if folder else None
 
 
 def _fall_finden(buch, case):
@@ -1388,6 +1400,33 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         con.close()
 
 
+def _versions_of(row, target):
+    """The versions of one indexed item (evidence.py): a Teams message's
+    earlier texts, or its file's versions from the evidence chain."""
+    key = row["key"] if "key" in row.keys() else ""
+    if row["root"] == "teams" and "#" in str(key or ""):
+        found = evidence.message_versions(STATE.get("teams_dir"), key) or []
+        return [{"sha256": v["sha256"], "modified": v["modified"], "captured": None,
+                 "current": v["current"],
+                 **({} if v["current"] else {"text": evidence.message_text(v)[:4000]})}
+                for v in found]
+    data = _data_dir()
+    if data is None or target is None:
+        return []
+    ev = evidence.Evidence(data)
+    rel = evidence.versions.rel_of(target, data)
+    if rel is None or not ev.exists():
+        return []
+    try:
+        return [{**{k: v.get(k) for k in ("sha256", "modified", "captured", "current", "available")},
+                 **({"quickxor": v.get("quickxor"), "microsoft_quickxor": v.get("ms_quickxor"),
+                     "microsoft_match": v.get("ms_match")}
+                    if v.get("quickxor") or v.get("ms_quickxor") else {})}
+                for v in ev.history(rel)]
+    finally:
+        ev.close()
+
+
 @mcp.tool(annotations=_READONLY)
 def get_thread(thread: str, limit: int = 50) -> dict:
     """All messages of one conversation, in chronological order – mail and
@@ -1450,6 +1489,13 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     `steps`, `linked`, `attachments`. An empty value means the item has
     none of it.
 
+    `versions` lists every version the archive keeps of the item, newest
+    first – of its file, or for a chat message its earlier texts: `sha256`,
+    `modified` (when it was made), `captured` (when the archive's evidence
+    chain first saw it), `current`, and for a message's earlier version
+    its `text`. More than one means the item changed after it was first
+    archived; the chain proves which version lay here when.
+
     Args:
         uid: The item's uid from a search or browse hit.
         context_before: Chat messages before this one (0–20).
@@ -1469,6 +1515,8 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
             "title": row["title"],
             "context": row["ctx"],
             "path": row["rel"],
+            "root": row["root"],
+            "key": row["key"] if "key" in row.keys() else None,
             "uri": _source_uri(row["root"], row["rel"]),
             "text": text,
         }
@@ -1492,6 +1540,7 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
                                  st.st_mtime).isoformat(timespec="seconds"),
                              binary=ziel.suffix.lower() not in _TEXTFORMATE)
             out["file"] = datei
+        out["versions"] = _versions_of(row, ziel)
         before = max(0, min(context_before, 20))
         after = max(0, min(context_after, 20))
         if before or after:

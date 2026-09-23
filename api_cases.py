@@ -14,6 +14,8 @@ import api_archive
 import api_explore
 import archive_check
 import case_export
+import evidence
+import versions
 import faelle
 import i18n
 import rest
@@ -41,7 +43,10 @@ def kennzeichen(h, fall):
     the same archive differ in nothing but that stamp."""
     inhalt = json.dumps(fall, sort_keys=True, default=str, ensure_ascii=False)
     index = h.M._mtime_iso(store_layout.db_path(h.M.STORE_PFAD)) or ""
-    return f'W/"{hashlib.sha1(inhalt.encode()).hexdigest()[:16]}.{index}"'
+    # An item's `changed` follows the archive: every run that chains
+    # something new moves the chain's file.
+    chain = h.M._mtime_iso(Path(h.M.BASE) / evidence.EVIDENCE_DIRNAME / evidence.CHAIN) or ""
+    return f'W/"{hashlib.sha1((inhalt + chain).encode()).hexdigest()[:16]}.{index}"'
 
 
 def _kopfliste(h, name):
@@ -112,6 +117,7 @@ def aendern(h, p, _q, data):
                               data.get("description") if "description" in data else None)
         if ziel is not None and ziel != faelle.OFFEN:
             buch.schliessen(kennung)
+            close_manifest(h, kennung)
     except ValueError:
         raise Ablehnung(400, "srv.case.noname") from None
     return fall_antwort(h, kennung)
@@ -656,6 +662,58 @@ def fall_voll(h, kennung):
     return fall
 
 
+def close_manifest(h, case_id):
+    """A closed case writes down what it points at: every original with
+    its checksum now – next to the evidence chain, which takes it in on
+    the next run and, with a time-stamp service, has it signed."""
+    fall = h.app.faelle.fall(case_id)
+    data = Path(h.M.BASE)
+    dirs = evidence.export_dirs(data)
+    ev = evidence.Evidence(data)
+    prints = evidence.Fingerprints(data, dirs)
+    try:
+        entries = []
+        for e in fall["eintraege_liste"]:
+            base = dirs.get(e.get("root"))
+            rel = versions.rel_of(base / str(e.get("rel") or ""), data) if base and e.get("rel") else None
+            if rel:
+                entries.append({"archive_rel": rel, "file": rel, "src": e.get("src"),
+                                "key": e.get("key"), "item": prints.of(e)})
+        rows = evidence.manifest_rows(ev, entries) if ev.exists() else [
+            {"file": x["file"], "source": x["src"] or "", "key": x["key"] or "",
+             "sha256": versions.sha256_file(data / x["archive_rel"]), "item_sha256": x["item"] or "",
+             "size": (data / x["archive_rel"]).stat().st_size, "captured": "", "modified": ""}
+            for x in entries if (data / x["archive_rel"]).is_file()]
+    finally:
+        prints.close()
+        ev.close()
+    evidence.record_case(data, case_id, rows)
+
+
+def version_state(h, fall):
+    """`fassung_geaendert`: whether an item's version differs from the one
+    it came into the case with (evidence.Fingerprints) – false for an
+    item taken in before cases pinned versions, or one no longer here."""
+    if "id" in fall:
+        # The newest manifest the case wrote when it was closed – and
+        # whether the chain holds it yet, and a service signed it.
+        records = evidence.case_records(h.M.BASE, fall["id"]) if fall.get("status") == faelle.ZU else []
+        fall["nachweis"] = records[0] if records else None
+    items = fall["eintraege_liste"]
+    for e in items:
+        e["fassung_geaendert"] = False
+    pinned = [e for e in items if e.get("fassung")]
+    if not pinned:
+        return
+    prints = evidence.Fingerprints(h.M.BASE, evidence.export_dirs(h.M.BASE))
+    try:
+        for e in pinned:
+            now = prints.of(e)
+            e["fassung_geaendert"] = bool(now and now != e["fassung"])
+    finally:
+        prints.close()
+
+
 def index_stand(h, fall):
     """What the index knows about the case's items beyond what the case
     remembers: `thread_offen` – how many messages of the item's
@@ -666,6 +724,7 @@ def index_stand(h, fall):
     for e in fall["eintraege_liste"]:
         e["thread_offen"] = 0
         e["wer_mail"] = ""
+    version_state(h, fall)
     mod = h.app.search.ensure(h.app.cfg)
     if mod is None or not fall["eintraege_liste"]:
         return

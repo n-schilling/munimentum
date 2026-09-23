@@ -203,7 +203,7 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py",
            "todo_export.py", "onenote_export.py", "archive_check.py",
-           "case_export.py", "case_collect.py", "export_util.py")
+           "case_export.py", "case_collect.py", "export_util.py", "evidence.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.

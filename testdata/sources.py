@@ -530,6 +530,10 @@ CONVERSATIONS = [
               "devices, Dana is on it."),
          _msg("b6", people.ME, day(6, 2, 16, 41),
               "Noted, I will put it in the status for Thursday."),
+         # Deleted at Microsoft the next morning – the archive keeps what
+         # it said (DELETED below).
+         _msg("b7", BOB, day(6, 2, 16, 45),
+              "Could we leave the two old printers out of the audit?"),
      ],
      "attachments": [("test-protocol.txt", day(6, 2, 16, 30), f"""Test protocol {PROJECT}
 Workplace setup        passed
@@ -593,6 +597,40 @@ Mail profile           passed
 ]
 
 
+# What happened to messages after they were first archived: an edit keeps
+# the earlier text in the store (teams_export.EARLIER), a deletion keeps
+# the text it had. message id -> (earlier text, when it was edited) and
+# message id -> when it was deleted.
+EDITED = {"msg-b5": ("Test protocol done. Everything passed.", day(6, 2, 17, 5))}
+DELETED = {"msg-b7": day(6, 3, 9, 0)}
+
+
+def _conversation_store(db, conv):
+    """The conversation's message store as two runs of the export would
+    leave it: the first saw every message as it was then, the second the
+    edit and the deletion. Returns the stored messages in order."""
+    area = conv["id"]
+    store = teams_export.Nachrichtenspeicher(db, area)
+    first = []
+    for m in conv["messages"]:
+        if m["id"] in EDITED:
+            m = dict(m, body={"contentType": "text", "content": EDITED[m["id"]][0]})
+        first.append(m)
+    store.merge(first)
+    later = []
+    for m in conv["messages"]:
+        if m["id"] in EDITED:
+            later.append(dict(m, lastModifiedDateTime=graph_time(EDITED[m["id"]][1])))
+        if m["id"] in DELETED:
+            # Graph hands a deleted message out without its words.
+            later.append(dict(m, body={"contentType": "text", "content": ""},
+                              deletedDateTime=graph_time(DELETED[m["id"]]),
+                              lastModifiedDateTime=graph_time(DELETED[m["id"]])))
+    store.merge(later)
+    store.sichern()
+    return sorted(store.nachrichten(), key=lambda m: m.get("createdDateTime") or "")
+
+
 def _conversation_rel(conv):
     stem = export_util.safe(conv["title"])
     short = export_util.kuerzel(conv["id"])
@@ -602,13 +640,23 @@ def _conversation_rel(conv):
 
 
 def write_teams(root):
+    # What the export writes into a conversation itself (a deleted
+    # message's mark) speaks the archive's language.
+    language, teams_export.LANG = teams_export.LANG, "en"
+    try:
+        return _write_teams(root)
+    finally:
+        teams_export.LANG = language
+
+
+def _write_teams(root):
     written, records, spiegel_bestand = [], {}, {}
     db = state_db.StateDb(root)
     for conv in CONVERSATIONS:
         rel = _conversation_rel(conv)
         zeiten = [m["createdDateTime"][:10] for m in conv["messages"]]
         meta = f"{len(conv['messages'])} messages · {zeiten[0]} – {zeiten[-1]}"
-        blocks = [teams_export.render_message(m) for m in conv["messages"]]
+        blocks = [teams_export.render_message(m) for m in _conversation_store(db, conv)]
         html = teams_export.render_conversation(conv["title"], conv["subtitle"],
                                                 meta, blocks)
         written.append(write(root / rel, html))
@@ -771,17 +819,26 @@ the current example: proposal, two open points, decision in the kickoff.</p>""")
 ]
 
 
+def page_rel(title):
+    """Where a page lies below the pages folder."""
+    name = export_util.safe(title.replace(" ", "-"), 100) + ".html"
+    return f"{export_util.safe(people.COMPANY)}/{name}"
+
+
+def page_html(title, when, body):
+    """A page as the export writes it – its earlier versions are built the
+    same way (testdata/history.py)."""
+    return (f'<!doctype html><html><head><meta charset="utf-8">'
+            f"<title>{title}</title></head><body>"
+            f"<h1>{title}</h1>"
+            f'<p class="meta">{graph_time(when)}</p>{body}</body></html>')
+
+
 def write_pages(root):
     written, seiten = [], {}
-    site = export_util.safe(people.COMPANY)
     for key, title, when, body in PAGES:
-        name = export_util.safe(title.replace(" ", "-"), 100) + ".html"
-        html = (f'<!doctype html><html><head><meta charset="utf-8">'
-                f"<title>{title}</title></head><body>"
-                f"<h1>{title}</h1>"
-                f'<p class="meta">{graph_time(when)}</p>{body}</body></html>')
-        rel = f"{site}/{name}"
-        written.append(write(root / rel, html, when))
+        rel = page_rel(title)
+        written.append(write(root / rel, page_html(title, when, body), when))
         seiten[f"page-{key}"] = {"rel": rel, "etag": f"etag-{key}"}
     state_db.StateDb(root).seiten_schreiben(seiten)
     return written

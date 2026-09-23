@@ -18,6 +18,10 @@ msal_cache.bin
 # would otherwise sit unignored in the working copy.
 data/
 rag_store/
+# What evidence.py and versions.py keep beside the export folders: the
+# chain of checksums and the earlier versions of files.
+/evidence/
+/versions/
 teams_export/
 outlook_export/
 onedrive_export/

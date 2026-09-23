@@ -22,7 +22,8 @@ import notify
 # a profile of its own.
 PROJEKT = Path(__file__).resolve().parents[1]
 ARCHIV_NAMEN = ("app_config.json", "gx_token.txt", "msal_cache.bin", "runs.db",
-                "data", "rag_store", "profiles.json", "archivpruefung.json")
+                "data", "rag_store", "profiles.json", "archivpruefung.json",
+                "versions", "evidence")
 
 
 def _projekt_stand():

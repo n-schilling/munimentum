@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.6.1
+  version: 13.7.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2185,10 +2185,14 @@ paths:
       summary: One item with its full text
       description: |
         The uid is not a path segment – it carries the source's path and a
-        chunk number – so it is a query. `facts` is what the kind of item
-        is known by, the same block `/api/v1/documents/facts` returns.
+        chunk number – so it is a query. A file may be named by its place
+        instead, `root` and `rel` – the way the evidence findings name
+        files. `facts` is what the kind of item is known by, the same block
+        `/api/v1/documents/facts` returns.
       parameters:
-        - $ref: "#/components/parameters/Uid"
+        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit (`<source>:<path>:<n>`) – or `root` and `rel`." }
+        - { name: root, in: query, schema: { type: string }, description: "The export's root (`onedrive`, `sharepoint`, …), with `rel`." }
+        - { name: rel, in: query, schema: { type: string }, description: "The file's path below that root." }
         - { name: before, in: query, schema: { type: integer, default: 0, maximum: 20 }, description: "Conversation context before." }
         - { name: after, in: query, schema: { type: integer, default: 0, maximum: 20 } }
       responses:
@@ -2205,6 +2209,8 @@ paths:
                   date: { type: string }
                   title: { type: string }
                   path: { type: string }
+                  root: { type: string, description: "The export's root the file lies in." }
+                  key: { type: [string, "null"], description: "The item's stable key (schluessel.py) – what a case points at." }
                   uri: { type: string }
                   text: { type: string }
                   facts: { type: object, additionalProperties: true }
@@ -2321,6 +2327,153 @@ paths:
               $ref: "#/components/mediaTypes/Problem"
         "404":
           description: No item with this uid (srv.detail.none), or no n-th attachment on it – a chat, a file, a mail with fewer (srv.attach.none).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents/versions:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetVersions
+      x-needs-index: true
+      summary: Every version of one item the archive keeps
+      description: |
+        Newest first. A file's versions come from the evidence chain
+        (evidence.py): every checksum the chain recorded for the file –
+        under this name or an earlier one – with when it was made
+        (`modified`), when the chain first saw it (`captured`), and whether
+        its bytes are still here (`available`: the file itself, or a copy
+        kept below `versions/`). A Teams message's versions are the texts it
+        had before each edit. Empty when the chain knows nothing of it.
+      parameters:
+        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit – or, for a case's item, `root`, `rel` and `key`." }
+        - { name: root, in: query, schema: { type: string }, description: "The item's source root (with `rel`), when there is no uid." }
+        - { name: rel, in: query, schema: { type: string }, description: "The item's path below its root (with `root`)." }
+        - { name: key, in: query, schema: { type: string }, description: "The item's stable key – a Teams message's versions are its own, not its file's." }
+      responses:
+        "200":
+          description: The versions, and how they can be shown (`format`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionList" }
+              example:
+                unit: file
+                format: html
+                items:
+                  - { sha256: 4d02aa0c5f1e8b7d7be1a1d9e6c3f0b2a7d4e5f60718293a4b5c6d7e8f9a0b1c, size: 5120, captured: '2027-03-13T18:00:00+00:00', modified: '2027-03-13T08:12:00+00:00', kind: write, current: true, available: true }
+                  - { sha256: 90e3f1d2c3b4a5968778695a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7ad5c8, size: 5310, captured: '2027-02-28T18:00:00+00:00', modified: '2027-02-28T16:05:00+00:00', kind: write, current: false, available: true }
+        "400":
+          description: Neither a uid nor root and rel (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No item with this uid (srv.detail.none), or a root the archive does not know (srv.versions.none).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents/versions/content:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetVersionContent
+      x-needs-index: true
+      summary: One version of a file, as its bytes
+      description: |
+        An archive page (HTML) is served to be shown in a frame, with its
+        relative links pointing at today's files; anything else is offered
+        as a download. Always `Content-Security-Policy: sandbox`. A Teams
+        message's versions have no bytes of their own – their text comes
+        with `/api/v1/documents/versions/diff`.
+      parameters:
+        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit – or, for a case's item, `root`, `rel` and `key`." }
+        - { name: root, in: query, schema: { type: string }, description: "The item's source root (with `rel`), when there is no uid." }
+        - { name: rel, in: query, schema: { type: string }, description: "The item's path below its root (with `root`)." }
+        - { name: key, in: query, schema: { type: string }, description: "The item's stable key – a Teams message's versions are its own, not its file's." }
+        - { name: sha, in: query, required: true, schema: { type: string, pattern: "^[0-9a-f]{16,64}$" }, description: "The version's checksum, or its first 16 characters at least." }
+      responses:
+        "200":
+          description: The version's bytes.
+          headers:
+            Content-Security-Policy:
+              description: Always `sandbox`.
+              schema: { type: string }
+          content:
+            "*/*":
+              schema: { type: string, format: binary }
+        "400":
+          description: No checksum, or none that could be one (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No such item (srv.detail.none), or no such version whose bytes are here (srv.versions.none).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/documents/versions/diff:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetVersionDiff
+      x-needs-index: true
+      summary: What changed between two versions
+      description: |
+        A word diff of the two versions' readable text – HTML without its
+        markup, the rest as it is: `ops` is a list of `[op, text]` with `=`
+        (both), `-` (only in `sha`) and `+` (only in `to`); the pieces
+        without the `-` ones give the newer text back (whitespace that only
+        moved reads as `=`). `to` defaults to the current version;
+        the same checksum on both sides answers the version's text in one
+        piece. Only for versions with text – not for a Word file or a PDF.
+      parameters:
+        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit – or, for a case's item, `root`, `rel` and `key`." }
+        - { name: root, in: query, schema: { type: string }, description: "The item's source root (with `rel`), when there is no uid." }
+        - { name: rel, in: query, schema: { type: string }, description: "The item's path below its root (with `root`)." }
+        - { name: key, in: query, schema: { type: string }, description: "The item's stable key – a Teams message's versions are its own, not its file's." }
+        - { name: sha, in: query, required: true, schema: { type: string, pattern: "^[0-9a-f]{16,64}$" }, description: "The older version's checksum." }
+        - { name: to, in: query, schema: { type: string, pattern: "^[0-9a-f]{16,64}$" }, description: "The newer version's checksum; the current one when left out." }
+      responses:
+        "200":
+          description: The diff.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VersionDiff" }
+              example:
+                from: 90e3f1d2c3b4a596
+                to: 4d02aa0c5f1e8b7d7be1a1d9e6c3f0b2a7d4e5f60718293a4b5c6d7e8f9a0b1c
+                ops: [["=", "Mängel: "], ["-", "3 offene Punkte."], ["+", "keine."]]
+        "400":
+          description: A checksum that could be none (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No such item (srv.detail.none), or a version without text here (srv.versions.notext).
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -3044,6 +3197,28 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/evidence:
+    get:
+      tags: [Archive, GET]
+      operationId: v1GetEvidence
+      summary: How far the evidence chain reaches
+      description: |
+        The chain of checksums the archive keeps of itself (evidence.py):
+        how many lines it has and the checksum of the last, since when it
+        runs, when a time-stamp service last signed it – and how many
+        earlier versions lie below `versions/`, in how many bytes. Nothing
+        here changes by itself; the page asks when Settings opens.
+      responses:
+        "200":
+          description: The chain's state – zeros and nulls before the first run that keeps one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EvidenceSummary" }
+              example: { lines: 41203, head: 7f3a9c5e2b1d4f6a8c0e2d4f6b8a0c2e4d6f8b0a2c4e6d8f0b2a4c6e8d0fc21e, since: '2026-10-01T18:00:00+00:00', stamped: '2027-03-14T18:02:00+00:00', versions: 1350, versions_bytes: 2254857830 }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /api/v1/analytics:
@@ -3908,7 +4083,7 @@ components:
         index_batch: { type: integer, default: 128, description: "Chunks embedded per request to Ollama." }
         ollama: { type: string, default: "http://localhost:11434", description: "Meaning-based search and the summary need language models on this machine. They are currently run by Ollama — hence the name of the switch below." }
         embed_model: { type: string, default: "bge-m3", description: "Turns text into vectors. bge-m3 understands German and English. Changing it invalidates the existing index." }
-        chat_model: { type: string, default: "qwen3.6:27b", description: "The language model that writes the summary. Larger models phrase better and need more memory." }
+        chat_model: { type: string, default: "qwen3.5:9b", description: "The language model that writes the summary. Larger models phrase better and need more memory – qwen3.6:27b from 32 GB on." }
         answer_sources: { type: integer, default: 8, description: "How many hits the summary takes into account. More means more complete, but slower." }
         semantic_min: { type: integer, default: 45, description: "Meaning-based search also finds what does not contain your words — “applied for leave” finds the mail about the time-off request. That needs a floor: without one it always returns its best hits, even when nothing fits." }
         search_results: { type: integer, default: 20, description: "How many hits one page of search results shows. More means less paging." }
@@ -3928,6 +4103,10 @@ components:
         onenote_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones land in the page's files folder." }
         teams_attachments: { type: boolean, default: false, description: "Download the files a chat or channel post references next to the conversation." }
         teams_channel_files: { type: boolean, default: false, description: "Mirror the Files tab of every exported channel like a SharePoint library." }
+        keep_versions: { type: boolean, default: true, description: "A version a run replaces stays below versions/ beside the export folders; off keeps only its checksum in the evidence chain. Teams messages keep their earlier texts either way." }
+        versions_max_mb: { type: integer, default: 50, minimum: 0, maximum: 100000, description: "Larger files keep only the checksum of an earlier version, not the version. 0 = every size." }
+        evidence_timestamp: { type: boolean, default: false, description: "After every run that adds to the evidence chain, its checksum goes to the time-stamp service (RFC 3161) – 32 bytes, no names, no contents." }
+        evidence_tsa_url: { type: string, default: "", description: "The time-stamp service's address (http or https); anything else keeps the one there was." }
         teams_files_max_mb: { type: integer, default: 0, description: "Size cap for both Teams file switches; 0 = no cap." }
         runs_retention_months: { type: integer, default: 24, description: "How far back the run overview (Insights → Runs) reaches. Only counts, durations and switches are stored per run – locally in runs.db in the data folder. Older entries are removed on start and after every run." }
         data_dir: { type: string, default: "", description: "The data folder; empty = the profile's default (data/)." }
@@ -4078,6 +4257,8 @@ components:
         search: { type: [integer, "null"], description: "The saved search that collected it (`via: auto`)." }
         remark: { type: string }
         thread_open: { type: integer, description: "How many messages of its conversation the case lacks." }
+        pinned: { type: [string, "null"], description: "The checksum of the version the item had when it came into the case – a file's, a Teams message's words, a Planner card's or To Do task's part of its file (evidence.py). Null for an item taken in before cases pinned versions." }
+        changed: { type: boolean, description: "The item's version differs from the pinned one." }
     CaseItemIn:
       type: object
       required: [key]
@@ -4157,6 +4338,65 @@ components:
           type: array
           description: The saved searches attached to the case.
           items: { $ref: "#/components/schemas/SavedSearch" }
+        evidence:
+          type: [object, "null"]
+          description: |
+            A closed case's newest manifest – what it pointed at when it was
+            closed, every original with its checksum (evidence.py): `file`
+            below the evidence folder, `sha256`, `at`, `chained` (when the
+            chain took it in, null until the next run) and `stamp` (the
+            time stamp's file name, null without one). Null for an open
+            case and with one case only.
+          properties:
+            file: { type: string }
+            sha256: { type: string }
+            at: { type: string, format: date-time }
+            chained: { type: [string, "null"] }
+            stamp: { type: [string, "null"] }
+    VersionList:
+      type: object
+      required: [unit, format, items]
+      properties:
+        unit: { type: string, enum: [file, message], description: "Whose versions: the item's file, or a Teams message's own." }
+        format: { type: string, enum: [html, text, binary], description: "How a version shows: a page in a frame, text, or a download." }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Version" }
+    Version:
+      type: object
+      required: [sha256, current, available]
+      properties:
+        sha256: { type: string }
+        size: { type: [integer, "null"] }
+        captured: { type: [string, "null"], description: "When the evidence chain first saw these bytes; null for a message's earlier text or a change not chained yet." }
+        modified: { type: [string, "null"], description: "When the version was made – the file's time, the message's edit." }
+        kind: { type: string, description: "How the chain came to know it: initial, write, outside, moved, version, unrecorded – for a message earlier, current or deleted." }
+        current: { type: boolean }
+        available: { type: boolean, description: "Its bytes are here – false where only the checksum was kept." }
+        quickxor: { type: [string, "null"], description: "A mirrored file's quickXorHash, as we computed it when it came." }
+        microsoft_quickxor: { type: [string, "null"], description: "The quickXorHash Microsoft gave for it then." }
+        microsoft_match: { type: [boolean, "null"], description: "Whether the two agree – a mirror fetches a differing file twice and keeps what came." }
+    VersionDiff:
+      type: object
+      required: [from, to, ops]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        ops:
+          type: array
+          items:
+            type: array
+            prefixItems: [{ type: string, enum: ["=", "-", "+"] }, { type: string }]
+    EvidenceSummary:
+      type: object
+      required: [lines]
+      properties:
+        lines: { type: integer }
+        head: { type: [string, "null"], description: "The checksum of the chain's last line." }
+        since: { type: [string, "null"] }
+        stamped: { type: [string, "null"], description: "When a time-stamp service last signed the chain's head." }
+        versions: { type: integer, description: "Earlier versions kept below versions/." }
+        versions_bytes: { type: integer }
     Error:
       type: object
       required: [ok, type, title, status, detail]
@@ -4432,6 +4672,24 @@ components:
         uid: { type: string, description: "The item this belongs to." }
         kind: { $ref: "#/components/schemas/SourceKey" }
         text: { type: string, description: "The item's text, as the index holds it." }
+        checksums: { $ref: "#/components/schemas/Checksums" }
+    Checksums:
+      type: object
+      required: [sha256]
+      description: |
+        The checksums of the file an item is – absent for an item that is
+        one part of a file holding many (a chat message, a Planner card, a
+        To Do task). `sha256` is ours; where a mirror fetched the file,
+        `quickxor` is the quickXorHash we computed of the bytes and
+        `microsoft_quickxor` the one Microsoft gave, `microsoft_match`
+        whether they agree. From the evidence chain while the file is as
+        chained (`captured` says since when), else read now.
+      properties:
+        sha256: { type: string }
+        captured: { type: [string, "null"] }
+        quickxor: { type: [string, "null"] }
+        microsoft_quickxor: { type: [string, "null"] }
+        microsoft_match: { type: [boolean, "null"] }
     Address:
       type: object
       description: One party of a mail or an appointment.
@@ -4734,12 +4992,22 @@ components:
             the files behind the numbers, `verweigert` and `weg` among the
             kinds, capped at 5000 per kind – `gekappt` says so) and
             `beiseite`, how many files an earlier "set aside" holds.
+            `nachweis` is the evidence chain read end to end and every
+            chained file hashed afresh (evidence.verify): `exists`,
+            `lines`, `since`, `chain_ok`, `broken_at`, `unchanged`,
+            `changed` and `missing` (the files, with `changed_n` and
+            `missing_n`), `outside` (what a run once found changed without
+            an export), `ms_mismatch` and `ms_mismatch_n` (files whose
+            bytes differ from the quickXorHash Microsoft gave for them),
+            `ms_confirmed` (how many agree), `versions`, `versions_bytes`,
+            `stamped`.
   headers:
     ETag:
       description: |
         The case's entity tag (RFC 9110), weak: a digest of the case as
         the case book keeps it, and the index's build, since an item's
-        `thread_open` and `who_mail` come from the index. Hand it back as
+        `thread_open` and `who_mail` come from the index – and the evidence
+        chain's, since an item's `changed` follows the archive. Hand it back as
         `If-None-Match` to be told with a `304` that nothing changed.
       schema: { type: string, example: 'W/"9f2c41ab77d0e34b.2026-09-20T18:00:00"' }
     PreferenceApplied:

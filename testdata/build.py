@@ -109,6 +109,12 @@ def run_calendar(home, exports, store):
                    capture_output=True, text=True)
 
 
+def run_step(home, argv):
+    """One of the app's subprograms over the profile."""
+    subprocess.run([sys.executable, *argv], cwd=str(PROJECT), env=_env(home), check=True,
+                   capture_output=True, text=True)
+
+
 def build(home, *, index=True, clean=True, flat=False):
     """Write the whole profile into `home` and return what was written.
 
@@ -127,20 +133,36 @@ def build(home, *, index=True, clean=True, flat=False):
     if clean and home.exists():
         shutil.rmtree(home)
     write_config(home)
+    before = os.environ.get("MUNIMENTUM_HOME")
     os.environ["MUNIMENTUM_HOME"] = str(home)
     os.environ["TZ"] = "UTC"
     if hasattr(time, "tzset"):
         time.tzset()
     settings.reset()
-    from testdata import sources          # noqa: PLC0415 – after the environment
+    try:
+        from testdata import history, sources  # noqa: PLC0415 – after the environment
 
-    exports = home if flat else home / settings.DATEN_UNTERORDNER
-    store = home / settings.STORE_DIR
-    written = sources.write_all(exports)
-    if index:
-        run_index(home, exports, store)
-        run_calendar(home, exports, store)
-    return {"home": home, "exports": exports, "store": store, "files": written}
+        exports = home if flat else home / settings.DATEN_UNTERORDNER
+        store = home / settings.STORE_DIR
+        written = sources.write_all(exports)
+        # The past: earlier versions, the evidence chain, a change by hand.
+        earlier = history.chain(exports)
+        case_id = None
+        if index:
+            run_index(home, exports, store)
+            run_calendar(home, exports, store)
+            case_id = history.case(home, exports, store, earlier)
+            history.archive_report(home, exports, store, lambda argv: run_step(home, argv))
+    finally:
+        # The profile is written: whoever called this (a test session) goes
+        # on with the home it had.
+        if before is None:
+            os.environ.pop("MUNIMENTUM_HOME", None)
+        else:
+            os.environ["MUNIMENTUM_HOME"] = before
+        settings.reset()
+    return {"home": home, "exports": exports, "store": store, "files": written,
+            "earlier": earlier, "case": case_id}
 
 
 def main(argv=None):

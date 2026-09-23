@@ -18,6 +18,8 @@ import hashlib
 from datetime import datetime, UTC
 from pathlib import Path
 
+import versions
+
 # File names that the Outlook and OneDrive exports use alike: what has
 # disappeared from the source, and the completeness check's report.
 
@@ -148,12 +150,11 @@ def fehlertext(e):
 
 def schreibe_atomar(ziel, text):
     """First .tmp, then replace – an abort never leaves a half file that the
-    next run would take as finished."""
+    next run would take as finished. Inside the archive the version it
+    replaces is kept and the write journaled (versions.py)."""
     ziel = Path(ziel)
     ziel.parent.mkdir(parents=True, exist_ok=True)
-    tmp = ziel.with_name(ziel.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(ziel)
+    versions.write_text(ziel, text)
     return ziel
 
 # Sync cadence: how often a source gets synced at most. 0 = always; the

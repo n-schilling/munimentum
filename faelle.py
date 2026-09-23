@@ -130,7 +130,9 @@ _ERGAENZUNGEN = (("gespeichert", "ordner_id", "INTEGER"), ("eintraege", "ordner_
                  # 13.3: the automatic search, and the search that filed an item
                  ("gespeichert", "automatisch", "INTEGER NOT NULL DEFAULT 0"),
                  ("gespeichert", "auto_zuletzt", "TEXT"), ("gespeichert", "auto_neu", "INTEGER"),
-                 ("gespeichert", "auto_uebersprungen", "INTEGER"), ("eintraege", "suche_id", "INTEGER"))
+                 ("gespeichert", "auto_uebersprungen", "INTEGER"), ("eintraege", "suche_id", "INTEGER"),
+                 # 14.0: the checksum of the version an item had when it came in
+                 ("eintraege", "fassung", "TEXT"))
 
 UI, MCP, AUTO = "ui", "mcp", "auto"       # who wrote an item or a note: the page,
                                           # Claude, or an automatic search (case_collect)
@@ -233,6 +235,10 @@ class Fallbuch:
 
     def __init__(self, pfad):
         self.pfad = Path(pfad)
+        # items -> {key: checksum of the version each has now}; set by
+        # whoever knows the archive (evidence.pinner). Without it an item
+        # comes in unpinned and never reads as changed.
+        self.pinner = None
 
     def _connect(self):
         self.pfad.parent.mkdir(parents=True, exist_ok=True)
@@ -722,7 +728,9 @@ class Fallbuch:
                 # The remark: one or two sentences on why the item is here
                 "bemerkung": e["bemerkung"] or "",
                 # The saved search that collected it ('auto'), else None
-                "suche": e["suche_id"]}
+                "suche": e["suche_id"],
+                # The checksum of the version it had when it came in
+                "fassung": e["fassung"]}
 
     @staticmethod
     def _liste(row):
@@ -750,6 +758,13 @@ class Fallbuch:
             ordner_id = self._ordner_pruefen(con, fall_id, ordner_id)
             wer = quelle if quelle in (MCP, AUTO) else UI
             neu, keys = 0, []
+            eintraege = [e for e in eintraege if e]
+            pins = {}
+            if self.pinner is not None:
+                try:
+                    pins = self.pinner(eintraege) or {}
+                except Exception:        # noqa: BLE001 – pinning never blocks an add
+                    pins = {}
             for e in eintraege:
                 key = str((e or {}).get("key") or "").strip()
                 if not key:
@@ -757,13 +772,13 @@ class Fallbuch:
                 keys.append(key)
                 cur = con.execute(
                     "INSERT OR IGNORE INTO eintraege(fall_id, key, src, root, rel, titel, datum, "
-                    "wer, hinzugefuegt, liste_id, ordner_id, quelle, bemerkung, suche_id) "
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "wer, hinzugefuegt, liste_id, ordner_id, quelle, bemerkung, suche_id, fassung) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (fall_id, key, e.get("src"), e.get("root"), e.get("rel"),
                      e.get("titel") or e.get("title"), e.get("datum") or e.get("date"),
                      e.get("wer") or e.get("who"), jetzt(), liste_id, ordner_id,
                      wer, str(e.get("bemerkung") or "").strip(),
-                     suche_id if wer == AUTO else None))
+                     suche_id if wer == AUTO else None, pins.get(key)))
                 neu += cur.rowcount
             if wer != AUTO and keys:
                 self._marken_loeschen(con, fall_id, keys)

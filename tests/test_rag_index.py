@@ -827,6 +827,27 @@ def test_grabstein_erreicht_wiederverwendete_chunks(tmp_path, monkeypatch):
     assert _nachrichten(store)["outlook:inbox/mail.eml:0"]["gone"] == "2025-05-05"
 
 
+def test_teams_gone_mark_survives_reused_chunks(tmp_path, monkeypatch):
+    """A Teams message says itself that it is gone (data-gone in the file):
+    an unchanged file's reused chunk keeps that answer."""
+    import teams_export as te
+    _make_exports(tmp_path)
+    m = {"id": "1", "messageType": "message", "createdDateTime": "2025-06-01T09:00:00Z",
+         "from": {"user": {"displayName": "Bob Baumeister"}},
+         "body": {"contentType": "text", "content": "Tor 4 ist das Hauptproblem, bitte bis Freitag"},
+         "deletedDateTime": "2025-06-03T10:00:00Z"}
+    (tmp_path / "teams_export" / "1on1" / "bob__def456.html").write_text(
+        te.render_conversation("Bob", "Chat", "", [te.render_message(m)]), encoding="utf-8")
+    uid = "teams:1on1/bob__def456.html:0"
+    _, _, store = _build(tmp_path, monkeypatch)
+    assert _nachrichten(store)[uid]["gone"] == "2025-06-03T10:00:00+00:00"
+    zaehler = _zaehle_parser(monkeypatch)
+    _build(tmp_path, monkeypatch)
+    assert zaehler["n"] == 0
+    assert _nachrichten(store)[uid]["gone"] == "2025-06-03T10:00:00+00:00"
+    assert _nachrichten(store)["teams:1on1/alice__abc123.html:0"]["gone"] is None
+
+
 def test_alter_store_ohne_manifest_wird_voll_gelesen(tmp_path, monkeypatch):
     """A store from before the manifest existed: read everything once, write
     the manifest, and be incremental from the run after."""

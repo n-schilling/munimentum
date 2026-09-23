@@ -132,6 +132,9 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 .tag{display:inline-block;background:var(--code);border-radius:5px;padding:1px 7px;
   font-size:11.5px;color:var(--muted);margin-right:6px}
 .tag.weg{border:1px solid var(--warn);color:var(--warn);background:transparent}
+.checksum{font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;color:var(--muted);background:none;padding:0}
+.checksum-row{display:grid;grid-template-columns:110px minmax(0,1fr);gap:10px;padding:3px 0 3px 22px;font-size:12.5px}
+.checksum-differs{color:var(--warn)}
 .tag.anhang{display:inline-flex;align-items:center;gap:3px;background:transparent;border:1px solid var(--line);color:var(--muted);margin-right:6px}
 a.chip{color:inherit;text-decoration:none}
 a.chip:hover,a.chip:focus-visible{border-color:var(--accent);color:var(--accent)}
@@ -446,6 +449,20 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
   --ev-ok:#7aa2ff; --ev-ok-bg:#1e2733; --ev-warn:#e0a33a; --ev-warn-bg:#2e2716;
   --ev-bad:#f2837c; --ev-bad-bg:#33201f; --ev-gone:#4a525a; --ev-gone-bg:#23272c;
 }
+/* ---- Versions of an item (evidence) ---- */
+:root{ --diff-del:#fbeceb; --diff-del-ink:#8f1d17; --diff-ins:#e3f3ea; --diff-ins-ink:#11603a; }
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){ --diff-del:#3a2220; --diff-del-ink:#f2a7a1; --diff-ins:#1d3326; --diff-ins-ink:#8fd6ab; }
+}
+:root[data-theme="dark"]{ --diff-del:#3a2220; --diff-del-ink:#f2a7a1; --diff-ins:#1d3326; --diff-ins-ink:#8fd6ab; }
+.version-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:8px 10px;margin-bottom:10px;
+  border:1px solid var(--line);border-radius:10px;background:var(--code);font-size:13px}
+.version-bar .modi{margin-left:auto}
+.version-body{white-space:pre-wrap;overflow-wrap:anywhere}
+.version-body del{background:var(--diff-del);color:var(--diff-del-ink);text-decoration:line-through;border-radius:3px}
+.version-body ins{background:var(--diff-ins);color:var(--diff-ins-ink);text-decoration:none;border-radius:3px}
+.version-body .dframe{white-space:normal}
+details.verlauf .vzeile.aus{opacity:.55;cursor:default}
 .calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 .calbar .chip{padding:5px 12px}
 .calbar .ghost{padding:5px 10px}
@@ -1320,7 +1337,9 @@ details.rechte p{margin:6px 0}
       </div>
       <div class="card hide" id="detail">
         <div id="detail-inhalt"></div>
+        <div class="dverlauf" id="detail-versions"></div>
         <div class="dverlauf" id="detail-verlauf"></div>
+        <div class="dverlauf" id="detail-checksums"></div>
       </div>
     </div>
   </div>
@@ -1512,6 +1531,7 @@ details.rechte p{margin:6px 0}
       <button class="snav-punkt" id="pill-ollama" data-ziel="ki-karte" onclick="ollamaKachel()"><span data-i18n="settings.nav.ki">KI (Ollama)</span><span class="stand"><span class="dot" id="p-ollama"></span><span id="p-ollama-t"></span></span></button>
       <button class="snav-punkt" id="pill-mcp" data-ziel="mcp-karte" onclick="zeigeEinstellung('mcp-karte')"><span data-i18n="settings.nav.mcp">Claude (MCP)</span><span class="stand"><span class="dot" id="p-mcp"></span><span id="p-mcp-t"></span></span></button>
       <button class="snav-punkt" data-ziel="ablage-karte" onclick="zeigeEinstellung('ablage-karte')" data-i18n="settings.storage.title">Speicherorte</button>
+      <button class="snav-punkt" data-ziel="evidence-card" onclick="zeigeEinstellung('evidence-card')" data-i18n="settings.evidence.title">Nachweis</button>
       <button class="snav-punkt" data-ziel="app-karte" onclick="zeigeEinstellung('app-karte')"><span data-i18n="settings.app.title">App</span><span class="dot warn hide" id="p-app"></span></button>
       <button class="snav-punkt" data-ziel="expert-karte" onclick="zeigeEinstellung('expert-karte')" data-i18n="expert.title">Expertenmodus</button>
     </div>
@@ -1922,6 +1942,22 @@ details.rechte p{margin:6px 0}
     </div>
   </div>
 
+  <!-- Evidence (evidence.py, versions.py): what an export replaces is
+       kept, every file's checksum is chained, and a time-stamp service may
+       sign the chain. The state line says how far the chain reaches. -->
+  <div class="card" id="evidence-card">
+    <h2 class="mit-info"><span data-i18n="settings.evidence.title">Nachweis</span>
+      <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.evidence.i">i</span></h2>
+    <div class="gruppe">
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.keep_versions"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.keep_versions.i">i</span></span><input type="checkbox" id="c-keep_versions"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.versions_max_mb"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.versions_max_mb.i">i</span></span><span><input type="number" id="c-versions_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.evidence_timestamp"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.evidence_timestamp.i">i</span></span><input type="checkbox" id="c-evidence_timestamp"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.evidence_tsa_url"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.evidence_tsa_url.i">i</span></span><input type="text" id="c-evidence_tsa_url" data-i18n-ph="settings.evidence_tsa_url.ph" placeholder="https://…"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.evidence.chain"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.evidence.chain.i">i</span></span><span class="small" id="evidence-state"></span></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.evidence.kept"></span></span><span class="small" id="evidence-kept"></span></div>
+    </div>
+  </div>
+
   <div class="card" id="app-karte">
     <h2 class="mit-info"><span data-i18n="settings.app.title">App</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.app.i">i</span></h2>
@@ -2136,6 +2172,8 @@ uebersetzeSeite();
    One set of inline SVG paths for the whole page – headings, chips, rows,
    the step list. No emoji, no icon font: the same stroke everywhere. */
 var IKON = {
+  shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
+  stack: '<path d="M7 3h8l4 4v10H7z"/><path d="M4 7v14h12"/>',
   person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   teams: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-4.5A8 8 0 1 1 21 12z"/>',
@@ -2344,7 +2382,7 @@ function tab(name){
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); ladeFaelle(); }
   if(name === 'faelle') ladeFaelle();
   if(name === 'analytics') ladeAnalytics();
-  if(name === 'einstellungen') profileLaden();
+  if(name === 'einstellungen'){ profileLaden(); evidenceLoad(); }
 }
 
 /* "Deleted" is in truth its own view onto the same inventory – like
@@ -3989,7 +4027,7 @@ function doSearch(off, gespeichert){
   // The page searches through the versioned surface – the same engine,
   // the names the rest of the API uses, and the first thing of ours to
   // speak it.
-  api(API + '/search?' + p.toString()).then(function(r){
+  return api(API + '/search?' + p.toString()).then(function(r){
     renderHits(r);
     // Only the AI variant asks the model – and only after the hits are in.
     // The search is instant, the model takes a minute; whoever looks up an
@@ -4581,8 +4619,12 @@ function resultPersonSearch(name, view){
 var DETAIL_STAND = 0;      // the fetch the detail is waiting for
 var DETAIL_HIT = null;     // the hit the detail shows – a hit of the list, or a message of a conversation
 var OHNE_GESPRAECH = ['kalender', 'kontakte', 'datei', 'pages', 'planner', 'todo', 'onenote'];
+var DETAIL_NR = null;      // its place in the list, for going back from a version
+var DETAIL_BODY = '';      // what #detail-text shows for the current version
 function zeigeDetail(h, nr){
   DETAIL_HIT = h;
+  DETAIL_NR = nr;
+  VERSIONS = null;
   var link = trefferLink(h);
   // The archive's own HTML in a frame only where the page IS the item: a
   // SharePoint or OneNote page. A chat message, a Planner or To Do task
@@ -4592,6 +4634,11 @@ function zeigeDetail(h, nr){
   var kennung = ++DETAIL_STAND;
   el('detail').classList.remove('hide');
   el('detail-verlauf').innerHTML = '';
+  el('detail-versions').innerHTML = '';
+  el('detail-checksums').innerHTML = '';
+  DETAIL_BODY = seite
+    ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
+    : hervor(h.preview || '') + '…';
   el('detail-inhalt').innerHTML =
     detailKopf(h, nr) +
     '<div class="dtitel">' + esc(h.title || t('search.nosubject')) + '</div>' +
@@ -4604,8 +4651,14 @@ function zeigeDetail(h, nr){
     if(kennung !== DETAIL_STAND || !r || r.ok === false || r.error) return;
     var fakten = dyn('detail-fakten'), text = dyn('detail-text');
     if(fakten) fakten.innerHTML = detailFakten(h, r);
-    if(text && !seite) text.innerHTML = detailInhalt(h, r);
+    el('detail-checksums').innerHTML = checksumFold(r.checksums);
+    if(!seite) DETAIL_BODY = detailInhalt(h, r);
+    // A version chosen meanwhile keeps the content area.
+    if(text && !seite && !versionShown()) text.innerHTML = DETAIL_BODY;
   }).catch(function(){});
+  // The versions the archive keeps of it – one closed fold, as the
+  // conversation below; nothing when the chain knows none.
+  loadVersions(h, kennung, {list: 'detail-versions', view: 'detail-text', back: 'detail'});
   // A conversation exists for mail and chat only – a file, a page or a
   // task gets nothing for something it can never have.
   if(h.thread && KANN_VERLAUF && OHNE_GESPRAECH.indexOf(h.source) < 0){
@@ -4788,6 +4841,29 @@ function detailFakten(h, r){
     return '<dt>' + esc(t(p[0])) + '</dt><dd>' + p[1] + '</dd>';
   }).join('');
 }
+/* The file's checksums – there when one needs them, not in the way: one
+   closed fold at the very bottom of the detail. Ours for every item that
+   is a file of its own; where a mirror fetched it, the quickXorHash we
+   computed beside Microsoft's word on it. Only a disagreement shows on
+   the closed fold. */
+function checksumFold(c){
+  if(!c || !c.sha256) return '';
+  var mismatch = c.microsoft_match === false;
+  var rows = '<div class="checksum-row"><span class="muted">SHA-256</span><code class="checksum">' + esc(c.sha256) + '</code></div>';
+  if(c.quickxor || c.microsoft_quickxor){
+    rows += '<div class="checksum-row"><span class="muted">quickXorHash</span><span><code class="checksum">' +
+      esc(c.quickxor || c.microsoft_quickxor) + '</code> ' +
+      (c.microsoft_match === true
+        ? '<span class="small muted" title="' + esc(t('search.checksum.match.i', {hash: c.microsoft_quickxor || ''})) + '">' + esc(t('search.checksum.match')) + '</span>'
+        : mismatch
+        ? '<span class="small checksum-differs" title="' + esc(t('search.checksum.mismatch.i', {hash: c.microsoft_quickxor || ''})) + '">' + esc(t('search.checksum.mismatch')) + '</span>'
+        : '') + '</span></div>';
+  }
+  return '<details class="verlauf" id="checksums-fold"><summary><span class="pfeil">' + ikon('rechts', 'klein') + '</span>' +
+    esc(t('search.checksums')) +
+    (mismatch ? ' · <span class="checksum-differs">' + esc(t('search.checksum.mismatch')) + '</span>' : '') +
+    '</summary>' + rows + '</details>';
+}
 /* The content: the text the index holds, the words marked; a task's
    comments below its description. */
 function detailInhalt(h, r){
@@ -4797,6 +4873,118 @@ function detailInhalt(h, r){
       esc([k.who, detailWann(k.when)].filter(Boolean).join(' · ')) + '</span><br>' + hervor(k.text || '') + '</div>';
   });
   return html;
+}
+
+/* ---------- Versions (evidence.py, versions.py) ----------
+   Every version of the item the archive keeps, newest first, in a fold
+   under the content: when it was made, when the chain first saw it, its
+   checksum. A chosen version takes the content area – "This version" or
+   its difference to the current one – until "Back to current". A case's
+   item shows the same in its window, with the version it came in with. */
+var VERSIONS = null;       // {query, items, format, unit, into, chosen, mode}
+function versionQuery(h){
+  return h.uid ? 'uid=' + encodeURIComponent(h.uid)
+    : 'root=' + encodeURIComponent(h.root || '') + '&rel=' + encodeURIComponent(h.rel || '') +
+      '&key=' + encodeURIComponent(h.key || '');
+}
+function versionShown(){
+  return !!(VERSIONS && VERSIONS.chosen !== null && VERSIONS.into.back === 'detail');
+}
+function loadVersions(h, stand, into, pick){
+  return api(API + '/documents/versions?' + versionQuery(h)).then(function(r){
+    if(stand !== null && stand !== DETAIL_STAND) return;
+    var box = dyn(into.list);
+    if(!box) return;
+    // One version is nothing to tell in the detail: the fold comes only
+    // where the item has changed. A case's window shows what there is.
+    var least = into.back === 'detail' ? 2 : 1;
+    if(!r || r.ok === false || (r.items || []).length < least){ box.innerHTML = ''; return; }
+    VERSIONS = {query: versionQuery(h), items: r.items, format: r.format, unit: r.unit,
+                into: into, chosen: null, mode: 'diff'};
+    drawVersionList(!!pick);
+    if(pick) showVersion(pick(r.items), 'diff');
+  }).catch(function(){});
+}
+function drawVersionList(open){
+  var v = VERSIONS, box = v && dyn(v.into.list);
+  if(!box) return;
+  var rows = v.items.map(function(x, i){
+    var on = v.chosen === i || (v.chosen === null && x.current);
+    var mark = [x.current ? t('search.versions.current') : !x.available ? t('search.versions.gone') : '',
+                v.into.pinned && x.sha256 === v.into.pinned ? t('cases.versions.pinned') : ''].filter(Boolean).join(' · ');
+    var go = 'showVersion(' + i + ')';
+    return '<div class="vzeile' + (on ? ' dies' : '') + (x.available ? '' : ' aus') + '" role="button" tabindex="0"' +
+      (x.available ? ' onclick="' + go + '" onkeydown="if(event.key === \'Enter\'){ ' + go + '; }"'
+                   : ' title="' + esc(t('search.versions.gone.i')) + '"') + '>' +
+      '<span class="punkt"></span>' +
+      '<span class="vdatum">' + esc(x.modified || x.captured ? fmt(x.modified || x.captured) : '–') + '</span>' +
+      '<span class="vtitel">' + esc([x.captured ? t('search.versions.captured', {when: fmt(x.captured)}) : '',
+                                     x.size != null ? bytes(x.size) : ''].filter(Boolean).join(' · ')) + '</span>' +
+      '<span class="vwer"><code class="small" title="SHA-256 ' + esc(x.sha256 || '') +
+      (x.quickxor ? ' · quickXorHash ' + esc(x.quickxor) : '') +
+      (x.microsoft_match === true ? ' · ' + esc(t('search.checksum.match')) : '') + '">' + esc(String(x.sha256 || '').slice(0, 12)) + '</code>' +
+      (x.microsoft_match === false ? ' <span class="small checksum-differs">' + esc(t('search.checksum.mismatch')) + '</span>' : '') +
+      (mark ? ' ' + esc(mark) : '') + '</span></div>';
+  }).join('');
+  box.innerHTML = '<details class="verlauf" id="versions-fold"' + (open ? ' open' : '') + '><summary>' +
+    '<span class="pfeil">' + ikon('rechts', 'klein') + '</span>' +
+    esc(t(v.unit === 'message' ? 'search.versions.title.message' : 'search.versions.title', {n: zahl(v.items.length)})) +
+    '</summary>' + rows + '</details>';
+}
+function versionUrl(route, extra){
+  return API + '/documents/versions' + route + '?' + VERSIONS.query + (extra || '');
+}
+function showVersion(i, mode){
+  var v = VERSIONS;
+  var x = v && v.items[i];
+  if(!x || !x.available) return;
+  if(x.current && v.into.back === 'detail') return versionBack();
+  v.chosen = i;
+  if(mode) v.mode = mode;
+  var diffable = v.format !== 'binary' && !x.current;
+  var show = diffable ? v.mode : 'this';
+  drawVersionList(true);
+  var when = x.modified || x.captured;
+  var bar = '<div class="version-bar"><span><b>' +
+    esc(t(x.current ? 'search.versions.showing.current' : 'search.versions.showing', {when: when ? fmt(when) : '–'})) + '</b>' +
+    (x.captured ? ' · ' + esc(t('search.versions.captured', {when: fmt(x.captured)})) : '') + '</span>' +
+    (diffable ? '<span class="modi">' +
+      '<button class="' + (show === 'this' ? 'on' : '') + '" onclick="showVersion(' + i + ', \'this\')">' + esc(t('search.versions.this')) + '</button>' +
+      '<button class="' + (show === 'diff' ? 'on' : '') + '" onclick="showVersion(' + i + ', \'diff\')">' + esc(t('search.versions.diff')) + '</button></span>' : '') +
+    (v.into.back === 'detail' ? '<button class="mini" onclick="versionBack()">' + esc(t('search.versions.back')) + '</button>' : '') +
+    '</div>';
+  var view = dyn(v.into.view);
+  if(!view) return;
+  var sha = encodeURIComponent(x.sha256);
+  if(show === 'this' && v.format === 'html'){
+    view.innerHTML = bar + '<div class="version-body"><iframe class="dframe" sandbox="" src="' +
+      esc(versionUrl('/content', '&sha=' + sha)) + '" title="' + esc(t('search.versions.this')) + '"></iframe></div>';
+    return;
+  }
+  if(v.format === 'binary'){
+    view.innerHTML = bar + '<div class="version-body"><a class="ghost" href="' + esc(versionUrl('/content', '&sha=' + sha)) +
+      '" download>' + ikon('export', 'klein') + esc(t('search.versions.open')) + '</a></div>';
+    return;
+  }
+  // Its own id per place: the detail and a case's window may both hold one.
+  var bodyId = v.into.view + '-body';
+  view.innerHTML = bar + '<div class="version-body" id="' + bodyId + '"><p class="hint">' + esc(t('search.versions.loading')) + '</p></div>';
+  var asked = VERSIONS;
+  api(versionUrl('/diff', '&sha=' + sha + (show === 'this' ? '&to=' + sha : ''))).then(function(r){
+    var body = dyn(bodyId);
+    if(!body || asked !== VERSIONS) return;
+    if(!r || r.ok === false){ body.innerHTML = '<p class="hint err">' + esc(rtext(r)) + '</p>'; return; }
+    body.innerHTML = (r.ops || []).map(function(op){
+      return op[0] === '-' ? '<del>' + esc(op[1]) + '</del>'
+           : op[0] === '+' ? '<ins>' + esc(op[1]) + '</ins>' : esc(op[1]);
+    }).join('') || '<p class="hint">' + esc(t('search.versions.empty')) + '</p>';
+  }).catch(function(){});
+}
+function versionBack(){
+  if(VERSIONS) VERSIONS.chosen = null;
+  var text = dyn('detail-text');
+  if(text) text.innerHTML = DETAIL_BODY;
+  drawVersionList(true);
 }
 
 /* ---------- The conversation ----------
@@ -5717,6 +5905,7 @@ function zeichneFall(){
     '<div class="titelzeile"><h2>' + esc(f.name) + '</h2>' + statusTag(f) +
     (offen ? '<button class="mini rechts" onclick="fallBearbeitenFenster()">' + esc(t('cases.edit')) + '</button>' : '') + '</div>' +
     '<div class="meta small muted">' + esc(fakten.join(' · ')) + '</div>' +
+    caseEvidenceLine(f) +
     (f.description ? '<p class="beschreibung small muted">' + esc(f.description) + '</p>' : '');
   el('fall-ordner-neu').classList.toggle('hide', !offen);
   // The "Automatic" chip is offered only while an automatic search filed something
@@ -5737,6 +5926,37 @@ function zeichneFall(){
     (offen ? '<button class="ghost klein" onclick="schliessenFenster()">' + esc(t('cases.close')) + '</button>'
            : '<button class="ghost klein" onclick="fallOeffnenWieder()">' + esc(t('cases.reopen')) + '</button>') +
     '<button class="ghost klein rot" onclick="fallLoeschen()">' + esc(t('cases.delete')) + '</button></span>';
+}
+/* A closed case wrote down what it points at (evidence.py): when, and
+   whether the chain holds it yet and a time-stamp service signed it. */
+function caseEvidenceLine(f){
+  var n = f.evidence;
+  if(!n || f.status === 'open') return '';
+  var key = n.stamp ? 'cases.evidence.stamped' : n.chained ? 'cases.evidence.chained' : 'cases.evidence.written';
+  return '<div class="meta small" id="case-evidence">' + ikon('shield', 'klein') + ' ' +
+    esc(t(key, {when: wannKurz(n.at)})) +
+    ' <span class="info" tabindex="0" role="img" aria-label="i" title="' + esc(t('cases.evidence.i')) + '">i</span></div>';
+}
+/* An item whose version differs from the one it came in with – and the
+   window that holds the two side by side. */
+function changedMark(e){
+  return e.changed ? ' <span class="tag weg" title="' + esc(t('cases.item.changed.i', {when: wannKurz(e.added)})) + '">' +
+    esc(t('cases.item.changed')) + '</span>' : '';
+}
+function compareVersions(key){
+  var e = ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0];
+  if(!e) return;
+  merke('flow.case.versions', '');
+  oeffneEigenes('versions', modalKopf(t('cases.versions.title', {name: e.title || e.rel || e.key}), 'versions',
+                                       t('cases.versions.i')) +
+    '<div id="versions-list"></div><div class="dinhalt" id="versions-view"><p class="hint">' +
+    esc(t('search.versions.loading')) + '</p></div>');
+  loadVersions(e, null, {list: 'versions-list', view: 'versions-view', back: 'modal', pinned: e.pinned}, function(items){
+    var i = -1;
+    items.forEach(function(x, k){ if(i < 0 && e.pinned && x.sha256 === e.pinned) i = k; });
+    items.forEach(function(x, k){ if(i < 0 && x.captured && e.added && x.captured <= e.added) i = k; });
+    return i < 0 ? items.length - 1 : i;
+  });
 }
 /* Does a row belong to the filter? Title, who, date, path – the case is
    already loaded, so this asks nothing of the server. */
@@ -5810,6 +6030,7 @@ function eintragAktionen(e, offen){
   var wo = fallOrdner(e.folder) || t('cases.folder.unsorted');
   return '<span class="row" style="gap:6px">' +
     (link ? '<a class="mini" href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(t('cases.item.open')) + '</a>' : '') +
+    (e.changed ? '<button class="mini" onclick="compareVersions(\'' + key + '\')">' + esc(t('cases.item.compare')) + '</button>' : '') +
     (offen && e.thread_open > 0
       ? '<button class="mini" title="' + esc(t('cases.thread.more.tip', {n: zahl(e.thread_open), folder: wo})) +
         '" onclick="threadHolen(\'' + key + '\')">' + esc(t('cases.thread.more', {n: zahl(e.thread_open)})) + '</button>' : '') +
@@ -5822,7 +6043,7 @@ function eintragZeile(e, ikonName, offen){
   var titel = e.title || e.rel || e.key;
   return '<div class="eintrag">' + eintragTick(e, offen) +
     '<span class="ikon">' + ikon(ikonName, 'klein') + '</span>' +
-    '<div><span class="t">' + esc(titel) + herkunftMarke(e) + '</span>' +
+    '<div><span class="t">' + esc(titel) + herkunftMarke(e) + changedMark(e) + '</span>' +
     (e.who ? '<span class="w">' + esc(e.who) + '</span>' : '') + bemerkungZeile(e) + '</div>' +
     '<span class="d">' + esc(e.date || '') + '</span>' +
     eintragAktionen(e, offen) + '</div>';
@@ -6624,6 +6845,12 @@ function exportFenster(){
   } else {
     zeilen.push(t('cases.export.line.originals', {n: zahl(f.items)}));
   }
+  // The evidence travels along (case_export.write_evidence): the version
+  // a changed item came in with, what the chain says, every checksum.
+  var changedCount = (f.item_list || []).filter(function(e){ return e.changed; }).length;
+  if(changedCount) zeilen.push(t("cases.export.line.versions", {folder: t("cases.export.versions.folder"), n: zahl(changedCount)}));
+  zeilen.push(t('cases.export.line.evidence'));
+  zeilen.push(t('cases.export.line.sums'));
   oeffneEigenes('fall-export', modalKopf(t('cases.export.title', {name: f.name}), 'fall-export', t('cases.export.i', {path: exportBasis()})) +
     '<pre class="export-inhalt">' + esc(f.name + '.zip') + '\n' + zeilen.map(function(z){ return '  ' + esc(z); }).join('\n') + '</pre>' +
     modalFuss({text: t('cases.export.start'), tun: 'fallExportStarten(true)'}), true);
@@ -7466,6 +7693,117 @@ function indexZeile(ix){
     (ix.gebaut ? '<span class="wann">' + esc(t('ana.archiv.index.built', {when: fmt(ix.gebaut)})) + '</span>' : '') +
     knopf + '</div>';
 }
+/* The evidence chain (evidence.py) in the same row shape: whether the
+   chain reads through, how many files still carry the checksum they were
+   chained with, what deviates – and the kept versions. Its findings
+   window names the files; each source with some offers "Fetch again". */
+var EVIDENCE_SOURCES = {outlook_export: 'outlook', teams_export: 'teams', onedrive_export: 'onedrive',
+                        sharepoint_export: 'sharepoint', sharepoint_pages: 'sharepoint_pages',
+                        planner_export: 'planner', todo_export: 'todo', onenote_export: 'onenote'};
+function evidenceRow(n){
+  var dot, text, button = '';
+  if(!n || !n.exists){
+    dot = 'aus'; text = t('ana.evidence.none');
+  }else if(!n.chain_ok){
+    dot = 'err'; text = t('ana.evidence.broken', {n: zahl(n.broken_at)});
+  }else if(n.changed_n || n.missing_n || n.ms_mismatch_n){
+    dot = 'warn';
+    text = t('ana.evidence.deviations', {n: zahl(n.unchanged), changed: zahl(n.changed_n), missing: zahl(n.missing_n)}) +
+      (n.ms_mismatch_n ? ' · ' + t('ana.evidence.microsoft', {n: zahl(n.ms_mismatch_n)}) : '');
+  }else{
+    dot = 'ok'; text = t('ana.evidence.ok', {n: zahl(n.unchanged), since: fmt(n.since)});
+  }
+  if(n && n.exists && (n.changed_n || n.missing_n || n.ms_mismatch_n || (n.outside || []).length)){
+    button = '<button class="mini" onclick="evidenceFindings()">' + esc(t('ana.evidence.show')) + '</button>';
+  }
+  var extra = n && n.exists ? [t('ana.evidence.kept', {n: zahl(n.versions || 0), size: bytes(n.versions_bytes || 0)})]
+                                .concat(n.ms_confirmed ? [t('ana.evidence.confirmed', {n: zahl(n.ms_confirmed)})] : [])
+                                .concat(n.stamped ? [t('ana.evidence.stamped', {when: fmt(n.stamped)})] : []) : [];
+  return '<div class="zeile" id="evidence-row">' + ikon('shield') +
+    '<div class="text"><b>' + esc(t('ana.evidence')) + '</b>' +
+    '<span><span class="dot ' + dot + '"></span>' + esc(text) + '</span>' +
+    (extra.length ? '<span class="small muted">' + esc(extra.join(' · ')) + '</span>' : '') + '</div>' +
+    button + '</div>';
+}
+function evidenceSource(rel){
+  return EVIDENCE_SOURCES[String(rel || '').split('/')[0]] || null;
+}
+/* The files behind the evidence row: changed since chained, missing, and
+   what a run once found changed without an export. Each source with a
+   changed or missing file gets its "Fetch again" – the export brings the
+   file back, the chain notes it. */
+function evidenceFindings(){
+  var n = (ARCHIV || {}).nachweis || {};
+  function group(key, list, line){
+    if(!list.length) return '';
+    return '<details class="plangruppe" open><summary>' + esc(t(key, {n: zahl(list.length)})) + '</summary>' +
+      '<ul class="planliste">' + list.slice(0, 500).map(function(f){ return '<li>' + line(f) + '</li>'; }).join('') +
+      '</ul></details>';
+  }
+  var sources = {};
+  (n.changed || []).concat(n.missing || [], n.ms_mismatch || []).forEach(function(f){
+    var q = evidenceSource(f.rel);
+    if(q) sources[q] = true;
+  });
+  BEFUNDE_TEXT = (n.changed || []).concat(n.missing || []).map(function(f){ return f.rel; }).join('\n');
+  oeffneEigenes('evidence-findings',
+    modalKopf(t('ana.evidence.findings.title'), 'evidence-findings', t('ana.evidence.findings.i')) +
+    group('ana.evidence.findings.changed', n.changed || [], function(f){
+      return evidenceFileLink(f.rel) + ' <span class="small muted">' +
+        esc(t('ana.evidence.findings.since', {captured: fmt(f.captured), modified: fmt(f.modified)})) + '</span>';
+    }) +
+    group('ana.evidence.findings.missing', n.missing || [], function(f){
+      return '<code>' + esc(f.rel) + '</code> <span class="small muted">' +
+        esc(t('ana.evidence.findings.captured', {captured: fmt(f.captured)})) + '</span>';
+    }) +
+    group('ana.evidence.findings.microsoft', n.ms_mismatch || [], function(f){
+      return evidenceFileLink(f.rel) + ' <span class="small muted">' +
+        esc(t('ana.evidence.findings.hashes', {ours: f.quickxor || '', theirs: f.ms_quickxor || ''})) + '</span>';
+    }) +
+    group('ana.evidence.findings.outside', n.outside || [], function(f){
+      return evidenceFileLink(f.rel || '') + ' <span class="small muted">' + esc(fmt(f.at)) + '</span>';
+    }) +
+    '<div class="row modal-fuss">' +
+    Object.keys(sources).map(function(q){
+      return '<button class="ghost" onclick="closeWizard(\'evidence-findings\'); archivAktion(&quot;nachholen&quot;, &quot;' + q + '&quot;)">' +
+        esc(t('ana.evidence.fetch', {source: t(ARCHIV_TITEL[q] || q)})) + '</button>';
+    }).join('') +
+    '<button class="ghost" onclick="inZwischenablage(BEFUNDE_TEXT, this)">' + esc(t('ana.archiv.findings.copy')) + '</button>' +
+    '</div>');
+}
+/* A file the findings name, one click from its detail: the path is a
+   link that opens the file in Explore – facts, versions, checksums. A file
+   that is gone from the disk has no detail; it stays plain text. */
+var EVIDENCE_ROOTS = {outlook_export: 'outlook', teams_export: 'teams', onedrive_export: 'onedrive',
+                      sharepoint_export: 'sharepoint', sharepoint_pages: 'pages',
+                      planner_export: 'planner', todo_export: 'todo', onenote_export: 'onenote'};
+function evidenceFileLink(rel){
+  var go = 'evidenceOpen(' + JSON.stringify(String(rel)).replace(/"/g, '&quot;') + ')';
+  return '<a href="javascript:void(0)" title="' + esc(t('ana.evidence.findings.open')) + '" onclick="' + go + '">' +
+    '<code>' + esc(rel) + '</code></a>';
+}
+function evidenceOpen(rel){
+  var root = EVIDENCE_ROOTS[String(rel).split('/')[0]];
+  var path = String(rel).split('/').slice(1).join('/');
+  if(!root || !path) return;
+  api(API + '/documents?root=' + encodeURIComponent(root) + '&rel=' + encodeURIComponent(path)).then(function(r){
+    if(!r || r.ok === false){ apiFehler(r); return; }
+    closeWizard('evidence-findings');
+    // Handed over to Search, as every view does: its name as the query,
+    // no filter in the way, and the file chosen among the hits.
+    tab('suche'); sicht('treffer');
+    filterLeeren();
+    el('q').value = r.title || '';
+    var doc = {uid: r.uid, source: r.source, root: r.root, path: r.path, uri: r.uri, key: r.key,
+               title: r.title, date: r.date, who: r.who, context: r.context,
+               preview: String(r.text || '').slice(0, 300)};
+    Promise.resolve(doSearch(0)).then(function(){
+      var j = -1;
+      TREFFER.forEach(function(h, k){ if(j < 0 && h.uid === doc.uid) j = k; });
+      if(j >= 0) waehleTreffer(j); else zeigeDetail(doc, null);
+    });
+  }).catch(function(){});
+}
 function archivQuelle(quelle){
   return ((ARCHIV || {}).quellen || []).filter(function(q){ return q.quelle === quelle; })[0];
 }
@@ -7563,9 +7901,12 @@ function zeigeArchiv(b){
   }
   el('ana-archiv-zeilen').innerHTML =
     '<p class="small muted">' + esc(t('ana.check.when', {when: fmt(b.geprueft)})) + '</p>' +
-    (b.quellen || []).map(archivZeile).join('') + indexZeile(b.index || {stand: 'nicht'});
+    (b.quellen || []).map(archivZeile).join('') + indexZeile(b.index || {stand: 'nicht'}) +
+    evidenceRow(b.nachweis);
+  var n = b.nachweis || {};
   var auffaellig = (b.quellen || []).some(function(z){
-    return z.stand !== 'ganz' || z.fehlt + z.fremd + z.unvollstaendig + z.verloren > 0; });
+    return z.stand !== 'ganz' || z.fehlt + z.fremd + z.unvollstaendig + z.verloren > 0; }) ||
+    (n.exists && (!n.chain_ok || n.changed_n > 0 || n.missing_n > 0 || n.ms_mismatch_n > 0));
   insightPunkt('p-ana-archiv', auffaellig ? 'warn' : 'ok');
 }
 function pruefeArchiv(){
@@ -8030,19 +8371,20 @@ function pruefeUpdate(){
 var SCHALTER = ['embed_images','cache_images','refresh_channels','skip_empty_chats',
                 'include_hidden','calendar_reconstruct','mcp_enabled','mcp_autostart','update_check',
                 'ollama_enabled','planner_attachments',
-                'teams_attachments','teams_channel_files','keep_awake','mcp_cases_write'];
+                'teams_attachments','teams_channel_files','keep_awake','mcp_cases_write',
+                'keep_versions','evidence_timestamp'];
 var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sources','search_results',
                 'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
                 'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months','log_retention_days',
                 'status_poll_seconds',
-                'calendar_months_back','planner_sweep_hours'];
+                'calendar_months_back','planner_sweep_hours','versions_max_mb'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
                 'teams_rules','sharepoint_rules','todo_rules',
                 'outlook_since','teams_since',
                 'sharepoint_types_include','sharepoint_types_exclude','case_export_dir',
-                'internal_domains','own_name'];
+                'internal_domains','own_name','evidence_tsa_url'];
 // Cadence selects and the keys they carry in sync_cadence: a whole source
 // (OneDrive, To Do) or one category of it (Outlook, Teams).
 var KADENZ_FELDER = {'onedrive': 'c-cadence-onedrive', 'todo': 'c-cadence-todo',
@@ -8114,6 +8456,20 @@ function zeigeProfile(pr){
   el('pill-profil').classList.toggle('hide', !pr.mehrere);
   el('p-profil-t').textContent = t('profile.pill', {name: profilName(pr)});
   el('profil-gruppe').classList.toggle('hide', pr.moeglich === false);
+}
+/* The evidence card's two state lines: how far the chain reaches and
+   when it was last stamped, and how much the kept versions hold. Asked
+   for when Settings opens – nothing here changes by itself. */
+function evidenceLoad(){
+  return api(API + '/evidence').then(function(r){
+    if(!r || r.ok === false) return;
+    el('evidence-state').textContent = r.lines
+      ? t(r.stamped ? 'settings.evidence.chain.stamped' : 'settings.evidence.chain.state',
+          {n: zahl(r.lines), since: fmt(r.since), stamped: r.stamped ? fmt(r.stamped) : ''})
+      : t('settings.evidence.chain.none');
+    el('evidence-kept').textContent = t('settings.evidence.kept.state',
+      {n: zahl(r.versions || 0), size: bytes(r.versions_bytes || 0)});
+  }).catch(function(){});
 }
 function profileLaden(){
   return api(API + '/profiles').then(function(pr){ if(pr && pr.alle) zeigeProfilliste(pr); return pr; });

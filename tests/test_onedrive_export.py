@@ -17,6 +17,7 @@ import time
 
 import pytest
 
+import drive_mirror
 import folders
 import onedrive_export as od
 import progress
@@ -1029,3 +1030,88 @@ def test_the_check_counts_a_marked_version_as_its_own_number(tmp_path):
     # without marks: all three open, as before
     b = od.pruefe_vollstaendigkeit(eintraege, tmp_path, od.Selection())
     assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 3, 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# A download held against Microsoft's quickXorHash
+# ---------------------------------------------------------------------------
+class _Answer:
+    def __init__(self, body):
+        self.body = body
+
+    def iter_content(self, chunk_size=1):
+        for i in range(0, len(self.body), 3):
+            yield self.body[i:i + 3]
+
+
+class _Drive(drive_mirror.DriveOps):
+    """The download of DriveOps over answers one after the other."""
+
+    def __init__(self, *bodies):
+        self.bodies = list(bodies)
+        self.asked = 0
+
+    def stream(self, url, timeout=None, label=""):
+        self.asked += 1
+        return _Answer(self.bodies.pop(0))
+
+
+def _journal_of(tmp_path):
+    lines = []
+    for p in sorted((tmp_path / "evidence" / "pending").glob("*.jsonl")):
+        lines += [json.loads(z) for z in p.read_text(encoding="utf-8").splitlines()]
+    return lines
+
+
+@pytest.fixture
+def chained(tmp_path, monkeypatch):
+    import versions
+    monkeypatch.setenv("MUNIMENTUM_EVIDENCE_DIR", str(tmp_path / "evidence"))
+    monkeypatch.setenv("MUNIMENTUM_VERSIONS_DIR", str(tmp_path / "versions"))
+    monkeypatch.setitem(versions._JOURNAL, "path", None)
+    (tmp_path / "onedrive_export").mkdir()
+    return tmp_path
+
+
+def test_a_download_that_matches_microsoft_is_confirmed(chained, capsys):
+    import versions
+    body = b"the rollout plan, draft 2"
+    qx = versions.QuickXor().update(body).b64()
+    drive = _Drive(body)
+    assert drive.lade("i1", chained / "onedrive_export" / "plan.md", expected=qx) == len(body)
+    assert drive.asked == 1
+    entry = _journal_of(chained)[-1]
+    assert (entry["quickxor"], entry["ms_quickxor"], entry["ms_match"]) == (qx, qx, True)
+    assert "hash_mismatch" not in capsys.readouterr().out
+
+
+def test_a_mismatch_is_fetched_again_and_then_kept_and_said(chained, capsys):
+    import versions
+    good, bad = b"what Microsoft holds", b"what came instead"
+    theirs = versions.QuickXor().update(good).b64()
+    # the second try brings the right bytes: confirmed
+    drive = _Drive(bad, good)
+    drive.lade("i1", chained / "onedrive_export" / "a.bin", expected=theirs)
+    assert drive.asked == 2 and _journal_of(chained)[-1]["ms_match"] is True
+    # both tries differ: kept as it came, said once, chained as differing
+    drive = _Drive(bad, bad)
+    target = chained / "onedrive_export" / "b.bin"
+    drive.lade("i2", target, expected=theirs)
+    assert drive.asked == 2 and target.read_bytes() == bad
+    entry = _journal_of(chained)[-1]
+    assert entry["ms_match"] is False and entry["ms_quickxor"] == theirs
+    assert entry["quickxor"] == versions.QuickXor().update(bad).b64()
+    assert capsys.readouterr().out.count("run.mirror.hash_mismatch") == 1
+
+
+def test_without_microsofts_hash_only_ours_is_kept(chained):
+    drive = _Drive(b"personal drive")
+    drive.lade("i1", chained / "onedrive_export" / "c.txt")
+    entry = _journal_of(chained)[-1]
+    assert entry["quickxor"] and "ms_quickxor" not in entry and "ms_match" not in entry
+
+
+def test_the_plan_carries_microsofts_hash():
+    item = {"file": {"hashes": {"quickXorHash": "abc="}}}
+    assert drive_mirror.quick_xor_of(item) == "abc="
+    assert drive_mirror.quick_xor_of({"file": {}}) is None

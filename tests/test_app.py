@@ -490,6 +490,15 @@ def test_build_steps_setzt_kategorien_und_token(sandbox):
     assert steps[0]["argv"][1].endswith("outlook_export.py")
     assert "outlook_export" in steps[0]["argv"][2:]       # output folder
     assert "--no-embeddings" not in steps[2]["argv"]
+    assert steps[1]["env"]["MUNIMENTUM_LANG"] == i18n.FALLBACK
+
+
+def test_build_steps_hands_the_run_language_to_the_exports(sandbox):
+    """A Teams export writes its deletion marks in the page's language."""
+    cfg = app_mod.load_config()
+    cfg["teams_categories"] = ["1on1"]
+    steps = app_mod.build_steps(cfg, {"teams": True}, lang="fr")
+    assert steps[0]["env"]["MUNIMENTUM_LANG"] == "fr"
 
 
 def test_vorgabe_waehlt_nichts_aus(sandbox):
@@ -2454,8 +2463,8 @@ def test_http_legacy_kommentare_neu_lesen(server, monkeypatch):
                    {"planner": True, "legacy_comments": True,
                     "label": "job.planner.legacy"})
     assert code == 202 and r["run"]
-    (schritt,) = gesehen["steps"]
-    assert schritt["key"] == "planner"
+    (schritt, kette) = gesehen["steps"]
+    assert schritt["key"] == "planner" and kette["key"] == "evidence"
     assert schritt["env"]["PLANNER_LEGACY_SYNC"] == "1"
 
     seite = app_mod.seite()
@@ -5689,8 +5698,9 @@ def test_http_run_full_sync(server, monkeypatch):
     code, r = call(port, "POST", "/api/v1/runs",
                    {"todo": True, "full_sync": True, "label": "job.full"})
     assert code == 202 and r["run"]
-    (schritt,) = gesehen["steps"]
+    (schritt, kette) = gesehen["steps"]
     assert schritt["key"] == "todo" and schritt["env"]["FULL_SYNC"] == "1"
+    assert kette["key"] == "evidence"
     assert gesehen["label"] == "job.full"
 
 
@@ -7249,6 +7259,84 @@ def test_archivzeile_spricht_in_saetzen():
     _in_node(PRUEFUNG_ARCHIV)
 
 
+EVIDENCE_ON_THE_PAGE = GRUNDZUSTAND + """
+// The evidence row: no chain yet, all well, deviations, a broken chain
+var row = evidenceRow(null);
+pruefe(row.indexOf('dot aus') >= 0 && row.indexOf('nächsten Lauf') >= 0, 'no chain: ' + row);
+row = evidenceRow({exists: true, chain_ok: true, unchanged: 4200, changed_n: 0, missing_n: 0,
+                   since: '2026-09-01T10:00:00+00:00', versions: 3, versions_bytes: 2048, outside: []});
+pruefe(row.indexOf('dot ok') >= 0 && row.indexOf('4.200') >= 0, 'all well: ' + row);
+pruefe(row.indexOf('evidenceFindings') < 0, 'a findings button with nothing to show');
+pruefe(row.indexOf('3 frühere Fassungen') >= 0, 'kept versions missing: ' + row);
+row = evidenceRow({exists: true, chain_ok: true, unchanged: 10, changed_n: 2, missing_n: 1,
+                   changed: [{rel: 'onedrive_export/a.txt'}], missing: [{rel: 'teams_export/b.html'}],
+                   outside: [], versions: 0, versions_bytes: 0, stamped: '2026-09-02T10:00:00+00:00'});
+pruefe(row.indexOf('dot warn') >= 0 && row.indexOf('2 verändert') >= 0 && row.indexOf('1 fehlen') >= 0, 'deviations: ' + row);
+pruefe(row.indexOf('evidenceFindings()') >= 0 && row.indexOf('gestempelt') >= 0, 'findings or stamp missing: ' + row);
+row = evidenceRow({exists: true, chain_ok: false, broken_at: 17, unchanged: 1, changed_n: 0, missing_n: 0, outside: []});
+pruefe(row.indexOf('dot err') >= 0 && row.indexOf('17') >= 0, 'broken chain: ' + row);
+pruefe(evidenceSource('onedrive_export/Dateien/a.txt') === 'onedrive' && evidenceSource('sharepoint_pages/x.html') === 'sharepoint_pages',
+       'the source of an evidence path');
+// The Insights dot follows the chain as well
+zeigeArchiv({geprueft: 'x', quellen: [], index: {stand: 'ganz', geaendert: 0, neu: 0, weg: 0},
+             nachweis: {exists: true, chain_ok: true, unchanged: 1, changed_n: 1, missing_n: 0, outside: []}});
+pruefe(el('ana-archiv-zeilen').innerHTML.indexOf('evidence-row') >= 0, 'the evidence row is not drawn');
+
+// A case item that changed since it came in: the mark and its compare button
+var e = {key: 'file:1', title: 'plan.md', changed: true, added: '2026-09-01T10:00:00+00:00', pinned: 'ab'};
+pruefe(changedMark(e).indexOf('seit Aufnahme geändert') >= 0, 'changed mark: ' + changedMark(e));
+pruefe(changedMark({key: 'x'}) === '', 'a mark on an unchanged item');
+pruefe(eintragAktionen(e, true).indexOf("compareVersions('file:1')") >= 0, 'compare button missing');
+pruefe(eintragAktionen({key: 'x'}, true).indexOf('compareVersions') < 0, 'compare on an unchanged item');
+// A closed case's manifest line
+pruefe(caseEvidenceLine({status: 'open', evidence: {at: 'x'}}) === '', 'an open case has no manifest line');
+pruefe(caseEvidenceLine({status: 'closed', evidence: {at: '2026-09-01T10:00:00+00:00', chained: null, stamp: null}})
+       .indexOf('nächsten Lauf') >= 0, 'not yet chained');
+pruefe(caseEvidenceLine({status: 'closed', evidence: {at: '2026-09-01T10:00:00+00:00', chained: 'x', stamp: 'a.tsr'}})
+       .indexOf('Zeitstempel') >= 0, 'stamped');
+
+// The versions fold and a version shown with its difference
+var asked = [];
+global.fetch = function(path){
+  asked.push(String(path));
+  var answer = String(path).indexOf('/diff') >= 0
+    ? {from: 'b', to: 'a', ops: [['=', 'Draft '], ['-', '1'], ['+', '2']]}
+    : {unit: 'file', format: 'text', items: [
+        {sha256: 'aaaaaaaaaaaaaaaa', size: 10, captured: '2026-09-02T10:00:00+00:00', modified: '2026-09-02T09:00:00+00:00', current: true, available: true},
+        {sha256: 'bbbbbbbbbbbbbbbb', size: 9, captured: '2026-09-01T10:00:00+00:00', modified: '2026-09-01T09:00:00+00:00', current: false, available: true},
+        {sha256: 'cccccccccccccccc', size: 9, captured: null, modified: null, current: false, available: false}]};
+  return Promise.resolve({ok: true, status: 200, headers: {get: function(){ return null; }},
+                          json: function(){ return Promise.resolve(answer); }});
+};
+DETAIL_STAND = 1;
+el('detail-versions').innerHTML = '';
+el('detail-text').innerHTML = 'today';
+DETAIL_BODY = 'today';
+loadVersions({uid: 'datei:a.txt:0'}, 1, {list: 'detail-versions', view: 'detail-text', back: 'detail'}).then(function(){
+  var fold = el('detail-versions').innerHTML;
+  pruefe(asked[0].indexOf('/documents/versions?uid=datei%3Aa.txt%3A0') >= 0, 'versions asked for: ' + asked[0]);
+  pruefe(fold.indexOf('Fassungen: 3') >= 0 && fold.indexOf('aktuell') >= 0 && fold.indexOf('nur Prüfsumme') >= 0, 'fold: ' + fold);
+  pruefe(fold.indexOf('showVersion(2)') < 0, 'a version without bytes is clickable');
+  showVersion(1);
+  return new Promise(function(r){ setTimeout(r, 10); });
+}).then(function(){
+  pruefe(asked[1].indexOf('/documents/versions/diff?uid=') >= 0 && asked[1].indexOf('&sha=bbbbbbbbbbbbbbbb') >= 0, 'diff asked for: ' + asked[1]);
+  // The stub keeps a redrawn part under its own id (see AGENTS.md)
+  var view = document.getElementById('detail-text-body').innerHTML;
+  pruefe(view.indexOf('<del>1</del><ins>2</ins>') >= 0, 'the difference is not drawn: ' + view);
+  pruefe(el('detail-text').innerHTML.indexOf('version-bar') >= 0, 'the version bar is missing');
+  pruefe(versionShown(), 'a chosen version does not count as shown');
+  versionBack();
+  pruefe(el('detail-text').innerHTML === 'today' && !versionShown(), 'back to current');
+  console.log('OK');
+});
+"""
+
+
+def test_evidence_and_versions_on_the_page():
+    _in_node(EVIDENCE_ON_THE_PAGE)
+
+
 def _outlook_mit_befunden(sandbox):
     """An Outlook folder with one mail the log knows, one foreign file and
     one lost tombstone."""
@@ -7284,8 +7372,9 @@ def test_http_archivaktionen_bewegen_nur_beiseite_und_loeschen_nie(server, sandb
         code, r = call(port, "PATCH", "/api/v1/sources/outlook/findings",
                        {"state": ZUSTAND[aktion], **(koerper or {})})
         assert code == 202 and r["run"] and "error" not in r, r
-        (s,) = gesehen["steps"]
-        assert s["key"] == "archiv_" + aktion.replace("-", "_")
+        # The archive's action, and the evidence step that chains what it moved.
+        (s, kette) = gesehen["steps"]
+        assert s["key"] == "archiv_" + aktion.replace("-", "_") and kette["key"] == "evidence"
         assert gesehen["label"] == "job.archiv." + aktion
         argv = s["argv"]
         assert argv[argv.index("--aktion") + 1] == aktion
@@ -7345,7 +7434,7 @@ def test_http_neu_aufbauen_ist_ein_lauf_aus_drei_schritten(server, sandbox, monk
     code, r = call(port, "POST", "/api/v1/sources/outlook/rebuild", {})
     assert code == 202 and r["run"] and "error" not in r
     keys = [s["key"] for s in gesehen["steps"]]
-    assert keys == ["archiv_neu_aufbauen", "outlook", "index"], keys
+    assert keys == ["archiv_neu_aufbauen", "outlook", "evidence", "index"], keys
     assert gesehen["steps"][1]["env"]["SYNC_NOW"] == "1"
     assert gesehen["label"] == "job.archiv.neu-aufbauen"
     assert list(out.glob("state.db")) and not list(out.glob("state.db.beschaedigt-*")), \
@@ -7412,7 +7501,7 @@ def test_http_nachholen_schreibt_die_liste_und_startet_den_lauf(server, sandbox,
                         lambda steps, label, **kw: gesehen.update(steps=steps, label=label, **kw) or True)
     code, r = call(port, "POST", "/api/v1/sources/outlook/refetch", {})
     assert code == 202 and r["run"] and "error" not in r
-    assert [s["key"] for s in gesehen["steps"]] == ["outlook", "index", "archiv_pruefen"]
+    assert [s["key"] for s in gesehen["steps"]] == ["outlook", "evidence", "index", "archiv_pruefen"]
     assert gesehen["label"] == "job.archiv.nachholen"
     liste = sandbox / "nachholen-outlook.json"
     assert gesehen["steps"][0]["env"]["FETCH_LIST"] == str(liste)
@@ -7498,7 +7587,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     code, r = call(port, "POST", "/api/v1/balance/outlook_mail/fetch", {})
     assert code == 202 and gesehen["label"] == "job.holen"
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["outlook", "index", "check"]
+    assert list(schritte) == ["outlook", "evidence", "index", "check"]
     assert schritte["outlook"]["env"]["RESYNC"] == "1"
     assert sorted(json.loads(schritte["outlook"]["env"]["RESYNC_FOLDERS"])) == ["E-Mail/Archiv", "E-Mail/Posteingang"]
     assert schritte["outlook"]["env"]["EXPORT_CATEGORIES"] == "mail"
@@ -7508,7 +7597,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     a.cfg["outlook_categories"] = ["contacts"]
     call(port, "POST", "/api/v1/balance/outlook_mail/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["outlook", "index", "check"]
+    assert list(schritte) == ["outlook", "evidence", "index", "check"]
     assert schritte["outlook"]["env"]["EXPORT_CATEGORIES"] == "contacts,mail"
     assert schritte["check"]["env"]["EXPORT_CATEGORIES"] == "mail"
     # and the run says what it runs, not what the settings tick
@@ -7521,7 +7610,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     code, r = call(port, "POST", "/api/v1/balance/onedrive/fetch", {})
     assert code == 202 and r["run"]
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["onedrive", "index"]
+    assert list(schritte) == ["onedrive", "evidence", "index"]
     liste = sandbox / "nachholen-onedrive.json"
     assert schritte["onedrive"]["env"]["FETCH_LIST"] == str(liste)
     assert json.loads(liste.read_text(encoding="utf-8"))["dateien"] == [{"id": "i1", "rel": "Dateien/a.pdf"}]
@@ -7532,7 +7621,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
                                                    "offene_gekappt": True}))
     call(port, "POST", "/api/v1/balance/onedrive/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["onedrive", "index", "check_onedrive"]
+    assert list(schritte) == ["onedrive", "evidence", "index", "check_onedrive"]
     assert schritte["onedrive"]["env"]["RESYNC"] == "1" and "FETCH_LIST" not in schritte["onedrive"]["env"]
     # The calendar with the open events by id: the list, no calendar read, no check step.
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.OUTLOOK_DIR), completeness.bilanz(
@@ -7541,7 +7630,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
                "offene_gekappt": False}))
     call(port, "POST", "/api/v1/balance/outlook_calendar/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["outlook", "index"]
+    assert list(schritte) == ["outlook", "evidence", "index"]
     assert schritte["outlook"]["env"]["FETCH_LIST"] == str(sandbox / "nachholen-outlook.json")
     assert "RESYNC" not in schritte["outlook"]["env"]
     assert json.loads((sandbox / "nachholen-outlook.json").read_text(encoding="utf-8"))["dateien"] == \
@@ -7549,7 +7638,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
     # Teams without a stored list: the regular run is the diff already.
     call(port, "POST", "/api/v1/balance/teams/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["teams", "index", "check_teams"]
+    assert list(schritte) == ["teams", "evidence", "index", "check_teams"]
     assert "RESYNC" not in schritte["teams"]["env"] and schritte["teams"]["env"]["SYNC_NOW"] == "1"
     # Teams with the open conversations by key: the list, no chat listing, no check step.
     completeness.schreiben(state_db.StateDb(sandbox / app_mod.TEAMS_DIR), completeness.bilanz(
@@ -7557,7 +7646,7 @@ def test_http_bilanz_holen_holt_je_quelle_nur_das_offene(server, sandbox, monkey
         extra={"offene": [{"id": "c7", "rel": "", "pfad": "1on1"}], "offene_gekappt": False}))
     call(port, "POST", "/api/v1/balance/teams/fetch", {})
     schritte = {s["key"]: s for s in gesehen["steps"]}
-    assert list(schritte) == ["teams", "index"]
+    assert list(schritte) == ["teams", "evidence", "index"]
     liste = sandbox / "nachholen-teams.json"
     assert schritte["teams"]["env"]["FETCH_LIST"] == str(liste)
     assert json.loads(liste.read_text(encoding="utf-8"))["dateien"] == [{"id": "c7", "rel": "", "pfad": "1on1"}]
@@ -9543,7 +9632,7 @@ PRUEFUNG_RUNDREISE = GRUNDZUSTAND + """
 // nicht zurueckgibt, kann der Nutzer nicht speichern.
 var cfg = Object.assign({}, KONFIG);
 cfg.ollama_enabled = true; cfg.index_semantic = false;
-cfg.workers = 6; cfg.embed_model = 'bge-m3'; cfg.chat_model = 'qwen3.6:27b';
+cfg.workers = 6; cfg.embed_model = 'bge-m3'; cfg.chat_model = 'qwen3.5:9b';
 cfg.ollama = 'http://x:1'; cfg.search_results = 25; cfg.semantic_min = 55;
 cfg.answer_sources = 3; cfg.index_batch = 32; cfg.mcp_port = 8400;
 cfgGefuellt = false;

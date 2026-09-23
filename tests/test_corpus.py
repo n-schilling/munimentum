@@ -787,3 +787,23 @@ def test_teams_dateien_gehoeren_zu_ihrer_art(tmp_path):
     assert dateien[3]["gone"] == "2026-01-02T00:00:00+00:00" and "gone" not in dateien[2]
     assert set(corpus.manifest("teams_files", tmp_path)) == {r["rel"] for r in dateien}
     assert set(corpus.manifest("teams", tmp_path)) == {"1on1/alice__abc123.html"}
+
+
+def test_teams_message_carries_since_when_it_is_gone(tmp_path):
+    """The export marks a deleted or vanished message with data-gone; the
+    message keeps its text and becomes a hit of the "gone" filter."""
+    import teams_export as te
+    msgs = [{"id": "1", "messageType": "message", "createdDateTime": "2025-06-01T09:00:00Z",
+             "from": {"user": {"displayName": "Bob Baumeister"}},
+             "body": {"contentType": "text", "content": "Tor 4 ist das Hauptproblem"},
+             "deletedDateTime": "2025-06-03T10:00:00Z"},
+            {"id": "2", "messageType": "message", "createdDateTime": "2025-06-01T10:00:00Z",
+             "from": {"user": {"displayName": "Alice Beispiel"}},
+             "body": {"contentType": "text", "content": "Noch da"}}]
+    (tmp_path / "1on1").mkdir()
+    (tmp_path / "1on1" / "Bob__x.html").write_text(
+        te.render_conversation("Bob", "Chat", "", [te.render_message(m) for m in msgs]),
+        encoding="utf-8")
+    recs = {r["text"]: r for r in corpus.load_teams(str(tmp_path))}
+    assert recs["Tor 4 ist das Hauptproblem"]["gone"] == "2025-06-03T10:00:00+00:00"
+    assert "gone" not in recs["Noch da"]

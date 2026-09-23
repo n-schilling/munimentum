@@ -72,9 +72,15 @@ Each rule is one sentence and the reason behind it.
   prompt, no switch in a row.
 - **Facts, not prose.** A detail shows only what its kind of item is
   known by; an empty fact is no row, never "none"; a value that is also
-  a filter is a link. Nothing about the archive itself in a detail.
+  a filter is a link. Nothing about the archive itself in a detail –
+  the checksums of a file sit in one closed fold at its very bottom,
+  quiet unless Microsoft's disagrees.
 - **Mention once, fold the rest.** A conversation is one closed fold
-  under the content, not a button and a line in the head as well.
+  under the content, not a button and a line in the head as well; so are
+  an item's versions – only where it has more than one. A chosen version
+  takes the content area with one bar above it – which version, *This
+  version* or *Changes to the current one*, *Back to current* – and
+  nothing else changes.
 - **An empty state can do something.** Before the first search the last
   searches and the saved ones stand as rows, one click runs them; an
   empty list says what would fill it, never a bare "no data".
@@ -108,7 +114,7 @@ inside it, one button, two icons for history and saved searches — the
 pill row, the empty state before the first search (`#suche-anfang`), and
 the result in three views — the case's strip, *List · Timeline · People*
 (`#result-views`), nothing beside it: the list at the left, the chosen hit at the right with head, title, facts, one
-action row, content and the conversation fold; the timeline and the
+action row, content, the versions fold and the conversation fold; the timeline and the
 people over the whole result, up to the cap a case's list has. *Calendar*
 (week, month, reconstructed appointments marked in the grid; the month
 name as picker, *Today*), *Contacts* (list or picture as a segment — the
@@ -123,11 +129,17 @@ People*), the tool row (filter field, *Search in this case*, fold
 buttons), the folds, and a foot in two groups (export left, close and
 delete right). Every heading in a case is a fold, closed when the case
 opens. Anything that puts items into a case goes through the one choice
-window.
+window. An item that changed since it came in carries the mark and one
+*Compare*, which opens the versions in a window, the version it came in
+with chosen; a closed case says in one line under its head that its
+state was recorded, and whether the chain holds it and a service signed
+it.
 
 **Insights** has the shape of **Settings**: a side navigation, one card
-per entry, the two checks with a dot on their entry. Settings: Microsoft
-Access, Sources, Schedule, AI, Claude, Profiles, App, Expert mode; each
+per entry, the two checks with a dot on their entry – the archive check
+ends in the *Evidence* row, the chain's state and its deviations.
+Settings: Microsoft Access, Sources, Schedule, AI, Claude, Profiles,
+Evidence, App, Expert mode; each
 source a block with the essentials open and the rest under *Advanced*;
 the save bar appears only with unsaved changes. Access saves on its own
 button, like the MCP card: a key is pasted and applied, not collected
@@ -176,10 +188,11 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Popover | `.popover` | under the thing it changes: a control, one `.satz`; `.picker` is the month picker |
 | Way strip / view tab | `.sichten .sicht` | the four ways of the door (`#sichten`), the three views of a case; exactly one `.on` |
 | Hit row | `.hit` | tick, icon, title with the case mark, date, who with marks, preview; `.on` when chosen |
-| Detail | `#detail` | `.dkopf` (kind, marks, the `.zaehler` with arrows), `.dtitel`, `.fakten`, `.daktionen`, `.dinhalt`, `details.verlauf` for the conversation |
+| Detail | `#detail` | `.dkopf` (kind, marks, the `.zaehler` with arrows), `.dtitel`, `.fakten`, `.daktionen`, `.dinhalt`, `details.verlauf` for the versions (`#versions-fold`) and the conversation |
+| Version | `.version-bar`, `.version-body` | the bar over a chosen version; `del`/`ins` in the body with the `--diff-*` tokens |
 | Empty state | `.leer` | two `.card.liste` groups of `.hist` rows with a `.gruppe-kopf` each |
 | History row | `.hist` | title, criteria as `.tag`s, time or last run; with `.knoepfe` in the windows |
-| Tag / mark | `.tag`, `.tag.extern`, `.tag.weg`, `.tag.mcp`, `.im-fall` | source, external, deleted, via MCP, in a case |
+| Tag / mark | `.tag`, `.tag.extern`, `.tag.weg`, `.tag.mcp`, `.im-fall` | source, external, deleted – and changed since taken into a case –, via MCP, in a case |
 | Status dot / state line | `.dot.ok/.warn/.err` / `.stand` | always next to a word |
 | Info | `.info` | 17 px circle; text in `data-i18n-title` |
 | Setting row | `.feldzeile` | label with `(i)` left, control right; `.kipp` for every boolean |

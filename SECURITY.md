@@ -61,5 +61,7 @@ are deliberate.
   SharePoint page, that runs code while being parsed or while being shown in
   the interface.
 - Anything that moves archive content, tokens or telemetry off the machine. The
-  only outbound connections are Microsoft Graph, your local Ollama, and — unless
-  you switch it off — one update check against `api.github.com` at startup.
+  only outbound connections are Microsoft Graph, your local Ollama, one update
+  check against `api.github.com` at startup (unless you switch it off), and a
+  time-stamp service that receives a checksum of the evidence chain (only if
+  you name one).

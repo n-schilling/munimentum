@@ -52,7 +52,10 @@ conversation (area msgs:<id>, one row per message, slimmed to what the
 rendering needs). A chat whose lastMessagePreview moved fetches only the
 messages modified after the newest one stored ($filter on
 lastModifiedDateTime) and merges them – new and edited messages replace
-their row, deleted ones carry deletedDateTime. A channel keeps a delta
+their row; a deleted one keeps the text stored before and gains
+deletedDateTime, and a message a full read no longer lists stays with
+goneDateTime (never removed: an archive keeps what the source dropped).
+A channel keeps a delta
 link (kv delta:<channel id>, written only after a clean finish): later
 runs ask Graph only for the root posts that changed and re-read the replies
 of those posts. A reply never moves its root in the delta, so every run
@@ -96,8 +99,10 @@ import completeness
 import folders
 import state_db
 import graph_client
+import i18n
 import settings
 import progress
+import versions
 
 try:
     # msal is only needed in auth.py (and only in login mode) – checked here
@@ -592,6 +597,47 @@ def render_reactions(rs):
         " ".join(f"{k} ×{v}" for k, v in c.items())) + "</div>"
 
 
+# The language the app spoke when it started the run: what the export
+# itself writes into a conversation comes from the same lang/ files.
+LANG = os.environ.get("MUNIMENTUM_LANG") or i18n.FALLBACK
+
+
+def _text(key, **values):
+    return i18n.satz(LANG, key, export_util.resource_dir(), values) or key
+
+
+def _body_html(body):
+    """A stored body as HTML – cleaned markup, or escaped text."""
+    body = body or {}
+    if (body.get("contentType") or "text") == "html":
+        return clean_html(body.get("content", ""))
+    return f'<div class="text">{html_lib.escape(body.get("content", ""))}</div>'
+
+
+def render_earlier(msg):
+    """What an edited message said before, newest first, in one closed
+    fold below its text – outside the body, so the index reads only what
+    the message says now."""
+    earlier = msg.get(EARLIER) or []
+    if not earlier:
+        return ""
+    rows = "".join(
+        f'<div class="ver"><div class="time">{html_lib.escape(human_time(e.get("at")))}</div>'
+        + (f'<div class="subj"><strong>{html_lib.escape(e["subject"])}</strong></div>'
+           if e.get("subject") else "")
+        + f'<div class="vbody">{_body_html(e.get("body"))}</div></div>'
+        for e in reversed(earlier))
+    summary = html_lib.escape(_text("export.teams.earlier", n=len(earlier)))
+    return f'<details class="earlier"><summary>{summary}</summary>{rows}</details>'
+
+
+def gone_since(msg):
+    """ISO time since which a stored message is no longer at Microsoft
+    (deleted, or no longer listed) – None while it is still there."""
+    dt = export_util.graph_zeit(msg.get("deletedDateTime") or msg.get(GONE))
+    return dt.astimezone(UTC).isoformat(timespec="seconds") if dt else None
+
+
 def render_message(msg, is_reply=False, img_counter=None, lokal=None):
     when = human_time(msg.get("createdDateTime"))
     if msg.get("messageType", "message") != "message":   # system event
@@ -607,8 +653,22 @@ def render_message(msg, is_reply=False, img_counter=None, lokal=None):
 
     cls = "msg reply" if is_reply else "msg"
     body = msg.get("body") or {}
+    # Deleted or gone at Microsoft: the text stays as it was stored, the
+    # head says since when. Only a message deleted before its first fetch
+    # has no text left to show.
     if msg.get("deletedDateTime"):
-        body_html = "<em>[gelöscht]</em>"
+        mark = _text("export.teams.deleted", when=human_time(msg["deletedDateTime"]))
+    elif msg.get(GONE):
+        mark = _text("export.teams.gone", when=human_time(msg[GONE]))
+    else:
+        mark = ""
+    if mark:
+        mark = f'<span class="gone">{html_lib.escape(mark)}</span>'
+    elif msg.get(EARLIER):
+        edited = _text("export.teams.edited", when=human_time(msg.get("lastModifiedDateTime")))
+        mark = f'<span class="edited">{html_lib.escape(edited)}</span>'
+    if msg.get("deletedDateTime") and not (body.get("content") or "").strip():
+        body_html = f"<em>{html_lib.escape(_text('export.teams.deleted_empty'))}</em>"
     elif (body.get("contentType") or "text") == "html":
         body_html = clean_html(body.get("content", ""))
         if EMBED_IMAGES:
@@ -624,11 +684,16 @@ def render_message(msg, is_reply=False, img_counter=None, lokal=None):
     # id so a link – from a case export, say – lands on the message.
     kennung = html_lib.escape(str(msg.get("id") or ""))
     anker = f' id="m-{kennung}"' if kennung else ""
+    # Since when the message is no longer at Microsoft, for the index – the
+    # "gone" every other source has, here per message (corpus.ConvParser).
+    since = gone_since(msg)
+    if since:
+        anker += f' data-gone="{html_lib.escape(since)}"'
     return (f'<div class="{cls}"{anker} data-id="{kennung}">'
             f'<div class="head">'
             f'<span class="name">{html_lib.escape(name)}</span>'
-            f'<span class="time">{when}</span></div>{subj_html}'
-            f'<div class="body">{body_html}</div>'
+            f'<span class="time">{when}</span>{mark}</div>{subj_html}'
+            f'<div class="body">{body_html}</div>{render_earlier(msg)}'
             f'{render_attachments(msg.get("attachments"), lokal)}'
             f'{render_reactions(msg.get("reactions"))}</div>')
 
@@ -673,6 +738,12 @@ main{max-width:860px;margin:0 auto;padding:20px 16px 60px}
 .msg .head{display:flex;gap:8px;align-items:baseline;margin-bottom:3px}
 .msg .name{font-weight:600}
 .msg .time{color:#9aa0a6;font-size:12px}
+.msg .gone{color:#b3261e;font-size:12px}
+.msg .edited{color:#8a8f98;font-size:12px}
+.earlier{margin-top:6px;font-size:13px;color:#5b5f66}
+.earlier summary{cursor:pointer}
+.earlier .ver{border-left:2px solid #d7dadf;padding:2px 0 2px 10px;margin:6px 0}
+.earlier .text{white-space:pre-wrap}
 .msg .subj{margin-bottom:4px}
 .msg .body{word-wrap:break-word;overflow-wrap:anywhere}
 .msg .body img{max-width:100%;height:auto;border-radius:6px}
@@ -705,6 +776,23 @@ def render_conversation(title, subtitle, meta, blocks):
 # ---------------------------------------------------------------------------
 _FELDER = ("id", "replyToId", "messageType", "createdDateTime",
            "lastModifiedDateTime", "deletedDateTime", "subject", "body")
+# The store's own mark, not a Graph field: since when a full read no longer
+# lists the message (a retention policy, a purge). Named after Graph's
+# timestamps so a row reads as one record.
+GONE = "goneDateTime"
+# What a deletion must not take from a stored message: Graph hands a
+# deleted message out without its text.
+# The store's own record of an edited message: what it said before, one
+# entry per edit ({"at", "body", "subject"}), oldest first. Graph keeps no
+# history; an archive that overwrote the text would lose exactly the
+# version someone later needs.
+EARLIER = "earlierVersions"
+_KEPT_ON_DELETE = ("body", "subject", "attachments", EARLIER)
+
+
+def _said(m):
+    """What a message says – the part whose change makes a new version."""
+    return ((m.get("body") or {}).get("content") or "", m.get("subject") or "")
 
 
 def schlank(m):
@@ -743,7 +831,8 @@ class Nachrichtenspeicher:
     """The messages of one conversation, one row each (area msgs:<id>).
 
     Loaded once, changed in memory, written at the end: rows that differ
-    are upserted, rows that vanished are deleted, nothing else is touched.
+    are upserted, nothing else is touched. No row is ever removed – a
+    deleted message keeps its text, a vanished one its whole row.
     `geaendert()` is the question the HTML write hangs on."""
 
     def __init__(self, db, kennung):
@@ -751,7 +840,6 @@ class Nachrichtenspeicher:
         self.bereich = f"msgs:{kennung}"
         self.zeilen = dict(db.saetze_lesen(self.bereich))   # id -> JSON
         self._neu = {}
-        self._weg = set()
 
     def leer(self):
         return not self.zeilen
@@ -760,33 +848,59 @@ class Nachrichtenspeicher:
         return len(self.zeilen)
 
     def geaendert(self):
-        return bool(self._neu or self._weg)
+        return bool(self._neu)
+
+    def _put(self, sid, roh):
+        if self.zeilen.get(sid) != roh:
+            self.zeilen[sid] = roh
+            self._neu[sid] = roh
+
+    def _stored(self, sid):
+        try:
+            m = json.loads(self.zeilen.get(sid) or "null")
+        except ValueError:
+            return None
+        return m if isinstance(m, dict) else None
 
     def merge(self, msgs):
-        """New and edited messages replace their row by id."""
+        """New and edited messages replace their row by id – an edit keeps
+        the text it replaces under EARLIER; a deletion takes the new state
+        but keeps what the stored row said."""
         for m in msgs:
             sid = _nachrichten_id(m)
-            roh = json.dumps(schlank(m), ensure_ascii=False)
-            self._weg.discard(sid)
-            if self.zeilen.get(sid) != roh:
-                self.zeilen[sid] = roh
-                self._neu[sid] = roh
+            new = schlank(m)
+            old = self._stored(sid)
+            if old is not None and new.get("deletedDateTime"):
+                for field in _KEPT_ON_DELETE:
+                    if field in old:
+                        new[field] = old[field]
+            elif old is not None:
+                earlier = list(old.get(EARLIER) or [])
+                if _said(old) != _said(new) and not old.get("deletedDateTime"):
+                    earlier.append({"at": old.get("lastModifiedDateTime") or old.get("createdDateTime"),
+                                    "body": old.get("body"), "subject": old.get("subject")})
+                if earlier:
+                    new[EARLIER] = earlier
+            self._put(sid, json.dumps(new, ensure_ascii=False))
 
-    def entferne(self, ids):
+    def mark_gone(self, ids):
+        """Messages a clean full read no longer lists: kept, marked once."""
+        now = graph_zeitstempel(datetime.now(UTC).isoformat())
         for sid in ids:
-            if self.zeilen.pop(sid, None) is not None:
-                self._neu.pop(sid, None)
-                self._weg.add(sid)
+            m = self._stored(sid)
+            if m is not None and not m.get(GONE):
+                m[GONE] = now
+                self._put(sid, json.dumps(m, ensure_ascii=False))
 
     def ersetze(self, msgs):
-        """A full read: everything not in it is gone."""
+        """A full read: everything not in it is gone at the source."""
         jetzt = {_nachrichten_id(m) for m in msgs}
-        self.entferne([sid for sid in list(self.zeilen) if sid not in jetzt])
+        self.mark_gone([sid for sid in self.zeilen if sid not in jetzt])
         self.merge(msgs)
 
     def ersetze_antworten(self, root_id, replies):
         """The replies of one root post, freshly read: the stored ones the
-        listing no longer knows are gone."""
+        listing no longer knows are gone at the source."""
         jetzt = {_nachrichten_id(r) for r in replies}
         # A channel holds thousands of rows and a delta round may name many
         # roots: the substring test spares parsing every row per root.
@@ -800,7 +914,7 @@ class Nachrichtenspeicher:
                     alt.append(sid)
             except (ValueError, AttributeError):
                 continue
-        self.entferne(alt)
+        self.mark_gone(alt)
         self.merge(replies)
 
     def nachrichten(self, mit_id=False):
@@ -821,9 +935,8 @@ class Nachrichtenspeicher:
                           for m in self.nachrichten())
 
     def sichern(self):
-        self.db.saetze_loeschen(self.bereich, self._weg)
         self.db.saetze_schreiben(self.bereich, self._neu)
-        self._neu, self._weg = {}, set()
+        self._neu = {}
 
 
 # ---------------------------------------------------------------------------
@@ -852,11 +965,13 @@ def _lade_datei(graph, url, ziel):
     r = graph.stream(url, timeout=drive_mirror.TIMEOUT_BYTES, label=" (Datei)")
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".teil")
+    digest = hashlib.sha256()
     with open(tmp, "wb") as f:
         for stueck in r.iter_content(chunk_size=1 << 20):
             if stueck:
                 f.write(stueck)
-    os.replace(tmp, ziel)
+                digest.update(stueck)
+    versions.replace(tmp, ziel, sha=digest.hexdigest())
 
 
 def anhaenge_umziehen(out, prior, new_rel):
@@ -869,6 +984,7 @@ def anhaenge_umziehen(out, prior, new_rel):
         neu.parent.mkdir(parents=True, exist_ok=True)
         try:
             alt.replace(neu)
+            versions.moved(alt, neu)
         except OSError:
             pass
 
@@ -1198,6 +1314,22 @@ def already_done(out, state, key):
     return (out / rec["rel"]).exists()   # only skip while the file is still there
 
 
+def needs_rewrite(out, state, key, rec):
+    """Does an unchanged chat's file predate RECORD_V with a deleted message
+    in its store? Then it is written once more, so the index learns what is
+    gone; without one the record just moves up and is never asked again."""
+    if (rec.get("v") or 0) >= RECORD_V or rec.get("empty"):
+        return False
+    db = state_db.StateDb(out)
+    if any('"deletedDateTime"' in roh for roh in db.saetze_lesen(f"msgs:{key}").values()):
+        return True
+    with STATE_LOCK:
+        rec = dict(rec, v=RECORD_V)
+        state["conversations"][key] = rec
+        db.saetze_schreiben("conversations", {key: _satz(rec)})
+    return False
+
+
 def get_record(out, state, key):
     """Read an existing, completed record (including last_activity) – or None
     if not exported or the file is missing. Thread-safe."""
@@ -1223,10 +1355,16 @@ def cleanup_old(out, prior, new_rel):
     """On a rename (e.g. 'Unbekannt' -> real name) remove the orphaned old
     file so no duplicate is left behind."""
     if prior and prior.get("rel") and prior["rel"] != new_rel:
-        try:
-            (out / prior["rel"]).unlink()
-        except OSError:
-            pass
+        # A conversation keeps its history per message (the store), not
+        # per file: the old file goes without a kept copy, journaled.
+        versions.remove(out / prior["rel"], successor=out / new_rel if new_rel else None,
+                        keep=False)
+
+
+# What a conversation's record says about the file it points at:
+#   2  written from a message store (the store is the history since 9.0)
+#   3  deleted and vanished messages carry data-gone for the index
+RECORD_V = 3
 
 
 def record_done(out, state, key, category, title, rel, count, last_activity=None, empty=False):
@@ -1235,7 +1373,7 @@ def record_done(out, state, key, category, title, rel, count, last_activity=None
         "count": count, "done": True, "empty": empty,
         "ts": datetime.now().isoformat(timespec="seconds"),
         "last_activity": last_activity,   # newest message -> basis for incremental runs
-        "v": 2,                           # written with a message store behind it
+        "v": RECORD_V,
     }
     with STATE_LOCK:   # several workers write -> serialize
         state["conversations"][key] = rec
@@ -1263,7 +1401,7 @@ def _seit_gilt(state, key, speicher):
     if SEIT is None or not speicher.leer():
         return None
     rec = _bekannt(state, key)
-    return SEIT if rec is None or rec.get("v") == 2 else None
+    return SEIT if rec is None or (rec.get("v") or 0) >= 2 else None
 
 
 def chat_delta_url(key, wasserzeichen):
@@ -1333,9 +1471,9 @@ def export_one_chat(graph, out, state, my_id, chat):
                            unveraendert=not speicher.geaendert())
     blocks, nimg = render_blocks(msgs, lokal)
     (out / folder).mkdir(parents=True, exist_ok=True)
-    (out / folder / fname).write_text(
-        render_conversation(title, SUBNAME.get(folder, "Chat"), meta, blocks),
-        encoding="utf-8")
+    versions.write_text(out / folder / fname,
+                        render_conversation(title, SUBNAME.get(folder, "Chat"), meta, blocks),
+                        keep=False)
     cleanup_old(out, prior, new_rel)   # remove old 'Unbekannt__…' file if renamed
     speicher.sichern()
     last_act = newest_iso(m.get("createdDateTime") for m in msgs)
@@ -1540,6 +1678,7 @@ def export_one_channel(graph, out, state, team, ch, spiegel=None):
     # brought files the posts point at is a change too: the links must move
     # from the cloud to the copy.
     if (prior and unveraendert and prior.get("rel") == new_rel
+            and (prior.get("v") or 0) >= RECORD_V
             and not (spiegel and spiegel.get("neu"))):
         stand_merken()
         return ("unchanged", "channels", title, count,
@@ -1561,8 +1700,8 @@ def export_one_channel(graph, out, state, team, ch, spiegel=None):
                                      lokal=lokal or None))
     tdir = out / "channels" / safe(tname)
     tdir.mkdir(parents=True, exist_ok=True)
-    (tdir / fname).write_text(
-        render_conversation(title, "Team-Kanal", meta, blocks), encoding="utf-8")
+    versions.write_text(tdir / fname, render_conversation(title, "Team-Kanal", meta, blocks),
+                        keep=False)
     cleanup_old(out, prior, new_rel)
     speicher.sichern()
     stand_merken()                     # only now: the channel is clean
@@ -1800,6 +1939,9 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
         ps, cs = parse_ts(rec.get("last_activity")), parse_ts(cur)
         if alles or abgleich or (cs is not None and (ps is None or cs > ps)):
             jobs.append(("chat", chat, None))   # new messages -> export again
+            upd += 1
+        elif needs_rewrite(out, state, chat["id"], rec):
+            jobs.append(("chat", chat, None))   # deleted messages to be marked
             upd += 1
         else:
             stats["skipped"] += 1               # unchanged

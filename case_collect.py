@@ -27,6 +27,7 @@ it, the run history keeps it.
 import sys
 import argparse
 
+import evidence
 import faelle
 import progress
 import export_util
@@ -121,8 +122,11 @@ def main():
     ap.add_argument("--domains", default="", help="the user's own mail domains (the 'external' mark)")
     ap.add_argument("--case", type=int, default=None, help="only this case's automatic searches")
     ap.add_argument("--search", type=int, default=None, help="only this saved search, on or off")
+    ap.add_argument("--data", default="", help="the data folder – pins what comes in (evidence.py)")
     a = ap.parse_args()
     buch = faelle.Fallbuch(a.faelle)
+    if a.data:
+        buch.pinner = evidence.pinner(a.data)
     suchen = _suchen(buch, a.case, a.search)
     if suchen is None:
         progress.event("run.collect.nosearch", "err", id=a.search)

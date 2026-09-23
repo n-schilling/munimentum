@@ -177,7 +177,10 @@ VORGABEN = {
     "index_batch": 128,
     "ollama": ollama_client.DEFAULT_URL,
     "embed_model": "bge-m3",
-    "chat_model": "qwen3.6:27b",            # phrases the answer, locally
+    # Phrases the answer, locally. 9B fits a 16 GB machine and answers at
+    # reading speed; the 27B of the same family phrases better and wants
+    # 32 GB – the (i) on the setting names it.
+    "chat_model": "qwen3.5:9b",
     "answer_sources": 8,                    # how many hits it reads for that
     # Lower bound of the semantic search; see mcp_server.SEM_MIN. As an
     # integer in percent so the UI can use a plain number field and nobody
@@ -232,6 +235,16 @@ VORGABEN = {
     "teams_attachments": False,
     "teams_channel_files": False,
     "teams_files_max_mb": 0,
+    # Evidence (evidence.py, versions.py): a version an export replaces is
+    # kept below versions/ – up to this size per file (0 = every size);
+    # larger ones keep only their checksum in the chain. Stamping sends
+    # the chain's checksum to a time-stamp authority (RFC 3161) after every
+    # run – off until someone names one, because it is the one thing
+    # besides Graph that leaves the machine.
+    "keep_versions": True,
+    "versions_max_mb": 50,
+    "evidence_timestamp": False,
+    "evidence_tsa_url": "",
     "runs_retention_months": 24,
     # Levels 3 and 4 of the storage model: empty means subfolders of the
     # fixed home directory ("rag_store" and "data"). Resolved in app.py.

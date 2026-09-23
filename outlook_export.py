@@ -71,6 +71,7 @@ import state_db
 import graph_client
 import settings
 import progress
+import versions
 
 try:
     # msal is only needed in auth.py (and only in login mode) – checked here
@@ -667,10 +668,7 @@ def _alte_datei_weg(out, alt, rel):
     """A rewrite under a new name (subject or start changed): the old file
     would stand as a second entry."""
     if alt and alt != rel:
-        try:
-            (out / alt).unlink()
-        except OSError:
-            pass
+        versions.remove(out / alt, successor=out / rel)
 
 
 MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
@@ -776,7 +774,7 @@ def download_one(graph, out, done, mid, rel):
             return ("verdict", (kind, mid, rel, f"{type(e).__name__}: {e}"))
         return ("error", f"{mid[:16]}…: {e}")
     try:
-        (out / rel).write_bytes(content)
+        versions.write_bytes(out / rel, content)
     except Exception as e:
         return ("error", f"{rel}: {e}")
     done.mark(mid, rel)
@@ -1083,7 +1081,7 @@ def schreibe_termin(out, done, stats, stempel, cname, ev, lm):
     neu = not done.is_done(out, key)
     (out / "kalender" / cname).mkdir(parents=True, exist_ok=True)
     try:
-        (out / rel).write_text(build_ics(ev), encoding="utf-8")
+        versions.write_text(out / rel, build_ics(ev))
     except Exception as e:
         progress.event("run.event_skipped", "warn", detail=str(e))
         return 1
@@ -1307,7 +1305,7 @@ def export_contacts(graph, out, done, stats):
                     neu = not done.is_done(out, ckey)
                     (out / rel_dir).mkdir(parents=True, exist_ok=True)
                     try:
-                        (out / rel).write_text(build_vcf(c), encoding="utf-8")
+                        versions.write_text(out / rel, build_vcf(c))
                     except Exception as e:
                         progress.event("run.contact_skipped", "warn", detail=str(e))
                         fehler += 1
@@ -1856,7 +1854,7 @@ def nachholen(graph, out, done, rels):
                 c = graph.get(f"{GRAPH}/me/contacts/{key}")
                 rel = rel or f"{pfad or 'kontakte'}/{contact_filename(c)}"
                 (out / rel).parent.mkdir(parents=True, exist_ok=True)
-                (out / rel).write_text(build_vcf(c), encoding="utf-8")
+                versions.write_text(out / rel, build_vcf(c))
                 done.mark(key, rel)
                 stempel["contacts"].merke(key, c.get("lastModifiedDateTime") or "")
             else:
@@ -1866,7 +1864,7 @@ def nachholen(graph, out, done, rels):
                 content, _ = graph.get_bytes(f"{GRAPH}/me/messages/{key}/$value",
                                              label=" (MIME)")
                 (out / rel).parent.mkdir(parents=True, exist_ok=True)
-                (out / rel).write_bytes(content)
+                versions.write_bytes(out / rel, content)
                 done.mark(key, rel)
             geholt += 1
             if art in gekommen:

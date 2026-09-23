@@ -27,6 +27,8 @@ FALL = {
     "notizen": "notes", "suchen": "searches", "ordner": "folders",
     "ordner_liste": "folder_list", "eintraege_liste": "item_list",
     "listen_liste": "list_list", "notizen_liste": "note_list",
+    # The manifest a closed case wrote (evidence.py), or null.
+    "nachweis": "evidence",
     "suchen_liste": "search_list",
 }
 EINTRAG = {
@@ -36,6 +38,9 @@ EINTRAG = {
     "suche": "search",
     # What the index knows on top of the case (app.py, _index_stand).
     "thread_offen": "thread_open", "wer_mail": "who_mail",
+    # The version it came in with, and whether the item has changed since
+    # (evidence.py).
+    "fassung": "pinned", "fassung_geaendert": "changed",
 }
 NOTIZ = {"wann": "when", "quelle": "via"}
 LISTE = {"wann": "when", "kriterien": "criteria", "anzahl": "hits", "ordner": "folder"}

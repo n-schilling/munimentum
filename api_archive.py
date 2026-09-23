@@ -8,6 +8,7 @@ import json
 import api
 import archive_check
 import completeness
+import evidence
 import export_util
 import folders
 import i18n
@@ -314,6 +315,16 @@ def bilanz_lauf(h, eintrag):
     return lauf_antwort(h)
 
 
+def evidence_findings(h, folder):
+    """The files below one export folder the stored evidence check found
+    changed or missing – named relative to that folder, as a fetch list
+    wants them."""
+    report = archive_check.bericht_lesen(h.M.archiv_bericht_pfad()).get("nachweis") or {}
+    prefix = f"{folder}/"
+    return [f["rel"][len(prefix):] for kind in ("changed", "missing", "ms_mismatch")
+            for f in report.get(kind) or [] if str(f.get("rel") or "").startswith(prefix)]
+
+
 def archiv(h, aktion, data):
     """The archive check's actions (archive_check.py): one source at a
     time, explicit, each a run of its own – the run window shows what
@@ -347,6 +358,9 @@ def archiv(h, aktion, data):
         zeile = archive_check.zeile_lesen(h.M.archiv_bericht_pfad(), quelle)
         befunde = (zeile or {}).get("befunde") or {}
         dateien = list(befunde.get("fehlt") or []) + list(befunde.get("unvollstaendig") or [])
+        # What the evidence check found changed or gone below this source's
+        # folder comes along: the fresh copy replaces it, the chain notes it.
+        dateien += [f for f in evidence_findings(h, unterordner) if f not in dateien]
         if not dateien:
             return api.json({"message": {"k": "srv.archiv.nothing", "v": {}}})
         liste = h.M.HEIM / f"nachholen-{quelle}.json"
@@ -568,6 +582,21 @@ def bericht(h, _p, _q, data):
         cfg=h.app.cfg))
 
 
+def evidence_summary(h, _p, _q, _data):
+    """How far the evidence chain reaches: its length and head, since
+    when it runs, when it was last stamped, and what the kept versions
+    hold. Asked for when Settings opens, never polled."""
+    ev = evidence.Evidence(h.M.BASE)
+    if not ev.exists():
+        return api.json({"lines": 0, "head": None, "since": None, "stamped": None,
+                         "versions": evidence.kept_versions(ev.versions)[0],
+                         "versions_bytes": evidence.kept_versions(ev.versions)[1]})
+    try:
+        return api.json(ev.summary())
+    finally:
+        ev.close()
+
+
 # The routes of this door, in the order the table in app.py lists them.
 ROUTEN = (
     ("GET", "/api/v1/runs", laeufe),
@@ -583,6 +612,7 @@ ROUTEN = (
     ("PATCH", "/api/v1/sources/{source}/findings", quelle_befunde),
     ("POST", "/api/v1/sources/{source}/open", quelle_oeffnen),
     ("QUERY", "/api/v1/sources/{source}/folder-plan", quelle_ordnerplan),
+    ("GET", "/api/v1/evidence", evidence_summary),
     ("GET", "/api/v1/analytics", analytics),
     ("POST", "/api/v1/analytics/refresh", analytics_neu),
     ("PATCH", "/api/v1/schedule", zeitplan),

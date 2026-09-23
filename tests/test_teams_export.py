@@ -391,13 +391,25 @@ def test_render_message_html_is_cleaned():
 
 
 def test_render_message_deleted_and_subject_and_reply():
-    m = _msg("Bob", "weg", "2025-06-01T09:30:00Z",
+    # A deleted message keeps the text the store held; the head says when
+    m = _msg("Bob", "noch da", "2025-06-01T09:30:00Z",
              deletedDateTime="2025-06-02T00:00:00Z", subject="Thema <1>")
     out = te.render_message(m, is_reply=True)
-    assert "[gelöscht]" in out
-    assert "weg" not in out
+    assert ">noch da<" in out and "[gelöscht]" not in out
+    assert f'<span class="gone">gelöscht {te.human_time("2025-06-02T00:00:00Z")}</span>' in out
     assert "<strong>Thema &lt;1&gt;</strong>" in out
-    assert 'class="msg reply"' in out
+    assert 'class="msg reply text"' in out
+    # deleted before its first fetch: no text was ever stored
+    empty = _msg("Bob", "", "2025-06-01T09:30:00Z", deletedDateTime="2025-06-02T00:00:00Z")
+    assert "[gelöscht]" in te.render_message(empty)
+
+
+def test_render_message_gone_keeps_text_with_mark():
+    m = _msg("Bob", "verschwunden", "2025-06-01T09:30:00Z",
+             **{te.GONE: "2025-07-01T00:00:00.000Z"})
+    out = te.render_message(m)
+    assert ">verschwunden<" in out
+    assert f"nicht mehr bei Microsoft seit {te.human_time('2025-07-01T00:00:00.000Z')}" in out
 
 
 def test_render_message_from_application_and_unknown():
@@ -1176,14 +1188,98 @@ def test_nachrichtenspeicher_merges_replaces_and_persists(tmp_path):
     sp2.merge([m1])                              # identical -> no change
     assert not sp2.geaendert()
     assert sp2.wasserzeichen() == "2025-06-02T09:05:00Z"   # lastModified beats created
-    sp2.ersetze([m1])                            # a full read without m2 -> gone
+    sp2.ersetze([m1])                  # a full read without m2 -> kept, marked
     assert sp2.geaendert()
     sp2.sichern()
-    assert set(db.saetze_lesen("msgs:c1")) == {"1"}
-    assert [m["id"] for m in te.Nachrichtenspeicher(db, "c1").nachrichten()] == ["1"]
+    assert set(db.saetze_lesen("msgs:c1")) == {"1", "2"}
+    read = {m["id"]: m for m in te.Nachrichtenspeicher(db, "c1").nachrichten()}
+    assert read["2"]["body"]["content"] == "zwei" and read["2"][te.GONE]
+    assert te.GONE not in read["1"]
+
+    sp3 = te.Nachrichtenspeicher(db, "c1")
+    sp3.ersetze([m1])                  # marked once, not again on every read
+    assert not sp3.geaendert()
+    sp3.ersetze([m1, m2])              # back at the source: the mark goes
+    assert te.GONE not in dict(sp3.nachrichten(mit_id=True))["2"]
 
 
-def test_nachrichtenspeicher_ersetze_antworten_drops_vanished_replies(tmp_path):
+def test_render_message_marks_speak_the_run_language(monkeypatch):
+    """The marks come from lang/ in the language the app started the run
+    in (MUNIMENTUM_LANG), like every other text a user reads."""
+    monkeypatch.setattr(te, "LANG", "en")
+    deleted = _msg("Bob", "weg", "2025-06-01T09:30:00Z",
+                     deletedDateTime="2025-06-02T00:00:00Z")
+    assert f'deleted {te.human_time("2025-06-02T00:00:00Z")}' in te.render_message(deleted)
+    vanished = _msg("Bob", "vanished", "2025-06-01T09:30:00Z", **{te.GONE: "2025-07-01T00:00:00.000Z"})
+    assert "no longer at Microsoft since" in te.render_message(vanished)
+    empty = _msg("Bob", "", "2025-06-01T09:30:00Z", deletedDateTime="2025-06-02T00:00:00Z")
+    assert "<em>[deleted]</em>" in te.render_message(empty)
+
+
+def test_render_message_names_since_when_a_message_is_gone():
+    """data-gone is what the index reads (corpus.ConvParser): the deletion
+    time, else the store's own mark, in UTC; nothing while it is there."""
+    assert "data-gone" not in te.render_message(_msg("Bob", "da", "2025-06-01T09:30:00Z"))
+    deleted = _msg("Bob", "weg", "2025-06-01T09:30:00Z",
+                     deletedDateTime="2025-06-02T08:15:30.123Z")
+    assert 'data-gone="2025-06-02T08:15:30+00:00"' in te.render_message(deleted)
+    vanished = _msg("Bob", "vanished", "2025-06-01T09:30:00Z", **{te.GONE: "2025-07-01T00:00:00.000Z"})
+    assert 'data-gone="2025-07-01T00:00:00+00:00"' in te.render_message(vanished)
+
+
+def test_needs_rewrite_only_for_older_records_with_a_deletion(tmp_path):
+    import state_db
+    db = state_db.StateDb(tmp_path)
+    state = te.load_state(tmp_path)
+    older = {"rel": "1on1/a.html", "done": True, "v": 2}
+    sp = te.Nachrichtenspeicher(db, "c1")
+    sp.merge([_msg("Bob", "weg", "2025-06-01T09:30:00Z", id="1",
+                   deletedDateTime="2025-06-02T00:00:00Z")])
+    sp.sichern()
+    assert te.needs_rewrite(tmp_path, state, "c1", older)
+    assert not te.needs_rewrite(tmp_path, state, "c1", dict(older, v=te.RECORD_V))
+    # nothing deleted: no rewrite, and the record moves up for good
+    te.Nachrichtenspeicher(db, "c2").merge([_msg("Bob", "da", "2025-06-01T09:30:00Z")])
+    state["conversations"]["c2"] = dict(older)
+    assert not te.needs_rewrite(tmp_path, state, "c2", dict(older))
+    assert state["conversations"]["c2"]["v"] == te.RECORD_V
+    assert te.load_state(tmp_path)["conversations"]["c2"]["v"] == te.RECORD_V
+
+
+def test_channel_from_an_older_record_is_written_once_more(tmp_path):
+    team, ch, graph = _channel_fixture()
+    state = te.load_state(tmp_path)
+    te.export_one_channel(graph, tmp_path, state, team, ch)
+    state["conversations"]["ch:k1"]["v"] = 2
+    status = te.export_one_channel(graph, tmp_path, state, team, ch)[0]
+    assert status == "updated" and state["conversations"]["ch:k1"]["v"] == te.RECORD_V
+    assert te.export_one_channel(graph, tmp_path, state, team, ch)[0] == "unchanged"
+
+
+def test_nachrichtenspeicher_deletion_keeps_the_stored_text(tmp_path):
+    import state_db
+    sp = te.Nachrichtenspeicher(state_db.StateDb(tmp_path), "c1")
+    m = _msg("Bob", "Tor 4 ist das Hauptproblem", "2025-06-01T09:00:00Z", id="1",
+             subject="Abnahme", attachments=[{"id": "a", "name": "liste.xlsx"}])
+    sp.merge([m])
+    sp.sichern()
+    # Graph hands a deleted message out without its text
+    deleted = dict(m, body={"contentType": "html", "content": ""}, attachments=[],
+                     subject=None, deletedDateTime="2025-06-03T10:00:00Z",
+                     lastModifiedDateTime="2025-06-03T10:00:00Z")
+    sp.merge([deleted])
+    kept = sp.nachrichten()[0]
+    assert kept["body"]["content"] == "Tor 4 ist das Hauptproblem"
+    assert kept["subject"] == "Abnahme"
+    assert kept["attachments"] == [{"id": "a", "name": "liste.xlsx"}]
+    assert kept["deletedDateTime"] == "2025-06-03T10:00:00Z"
+    assert sp.wasserzeichen() == "2025-06-03T10:00:00Z"
+    sp.sichern()
+    sp.merge([deleted])              # the same deletion again: nothing moves
+    assert not sp.geaendert()
+
+
+def test_nachrichtenspeicher_ersetze_antworten_keeps_vanished_replies(tmp_path):
     import state_db
     sp = te.Nachrichtenspeicher(state_db.StateDb(tmp_path), "k1")
     root = _msg("Alice", "Wurzel", "2025-06-01T09:00:00Z", id="r1")
@@ -1192,7 +1288,10 @@ def test_nachrichtenspeicher_ersetze_antworten_drops_vanished_replies(tmp_path):
     sp.merge([root, a1, a2])
     a3 = _msg("Carol", "drei", "2025-06-01T12:00:00Z", id="a3", replyToId="r1")
     sp.ersetze_antworten("r1", [a1, a3])
-    assert {m["id"] for m in sp.nachrichten()} == {"r1", "a1", "a3"}
+    read = dict(sp.nachrichten(mit_id=True))
+    assert set(read) == {"r1", "a1", "a2", "a3"}
+    assert read["a2"][te.GONE] and read["a2"]["body"]["content"] == "zwei"
+    assert not any(te.GONE in read[k] for k in ("r1", "a1", "a3"))
 
 
 # --- category cadences ------------------------------------------------------
@@ -1535,7 +1634,7 @@ def test_export_one_chat_incremental_edit_and_deletion(tmp_path):
     alt = graph.pages[f"{GRAPH}/me/chats/c1/messages"]
     bearbeitet = _msg("Alice Example", "zweite (neu)", "2025-06-02T08:00:00Z", id=alt[0]["id"],
                       lastModifiedDateTime="2025-06-04T08:00:00Z")
-    geloescht = _msg("Ich", "erste", "2025-06-01T09:30:00Z", id=alt[1]["id"],
+    geloescht = _msg("Ich", "", "2025-06-01T09:30:00Z", id=alt[1]["id"],
                      lastModifiedDateTime="2025-06-04T08:01:00Z",
                      deletedDateTime="2025-06-04T08:01:00Z")
     graph.pages[te.chat_delta_url("c1", "2025-06-02T08:00:00.000Z")] = [bearbeitet, geloescht]
@@ -1544,7 +1643,9 @@ def test_export_one_chat_incremental_edit_and_deletion(tmp_path):
     status, _f, _t, count, _s, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
     assert status == "updated" and count == 2
     html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
-    assert "zweite (neu)" in html and "[gelöscht]" in html and ">erste<" not in html
+    # the deleted message keeps the text stored before, marked
+    assert "zweite (neu)" in html and ">erste<" in html and "[gelöscht]" not in html
+    assert f'gelöscht {te.human_time("2025-06-04T08:01:00Z")}' in html
 
 
 # --- the per-channel file flag ----------------------------------------------
@@ -1682,13 +1783,14 @@ def test_channel_recent_threads_bring_replies_the_delta_never_names(tmp_path):
     assert set(state_db.StateDb(tmp_path).saetze_lesen("msgs:k1")) == {"r1", "a1", "a2"}
 
     # the same reply deleted today arrives the same way
-    weg = dict(neu, deletedDateTime=_vor_tagen(0), lastModifiedDateTime=_vor_tagen(0))
+    weg = dict(neu, body={"contentType": "text", "content": ""},
+               deletedDateTime=_vor_tagen(0), lastModifiedDateTime=_vor_tagen(0))
     graph3 = FakeGraph(pages={KANAL: [_alter_thread(weg)]},
                        gets={LINK1: {"value": [], "@odata.deltaLink": LINK1}})
     status, _c, _t, count, _s, _z = te.export_one_channel(graph3, tmp_path, state, team, ch)
     assert status == "updated" and count == 3
     html = (tmp_path / state["conversations"]["ch:k1"]["rel"]).read_text(encoding="utf-8")
-    assert "[gelöscht]" in html and "Späte Antwort" not in html
+    assert "Späte Antwort" in html and '<span class="gone">gelöscht' in html
 
 
 def test_channel_weekly_full_pass_brings_replies_on_old_threads(tmp_path):

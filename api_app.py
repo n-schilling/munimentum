@@ -62,6 +62,8 @@ def konfig_speichern(h, data):
                                ("sharepoint_pages_image_max_mb", 0, 100),
                                ("onenote_image_max_mb", 0, 100),
                                ("teams_files_max_mb", 0, 100000),
+                               # 0 = keep a replaced version whatever its size.
+                               ("versions_max_mb", 0, 100000),
                                # 0 = the whole calendar, every run.
                                ("calendar_months_back", 0, 240),
                                # 0 = never re-read the chat comments.
@@ -88,7 +90,8 @@ def konfig_speichern(h, data):
                     "sharepoint_pages_enabled", "planner_enabled",
                     "planner_attachments", "todo_enabled",
                     "onenote_enabled", "teams_attachments",
-                    "teams_channel_files", "keep_awake", "mcp_cases_write"):
+                    "teams_channel_files", "keep_awake", "mcp_cases_write",
+                    "keep_versions", "evidence_timestamp"):
             if key in data:
                 cfg[key] = bool(data[key])
         if "search_history" in data:
@@ -97,6 +100,12 @@ def konfig_speichern(h, data):
                 cfg["search_history"] = wahl
                 # The new rule applies at once – "off" empties the list.
                 h.app.faelle.aufraeumen(h.M.historie_tage(cfg))
+        # The time-stamp service: an http(s) address or nothing – anything
+        # else keeps the address there was.
+        if "evidence_tsa_url" in data:
+            url = str(data["evidence_tsa_url"] or "").strip()
+            if not url or url.lower().startswith(("https://", "http://")):
+                cfg["evidence_tsa_url"] = url
         if "case_export_dir" in data:
             cfg["case_export_dir"] = str(data["case_export_dir"] or "").strip()
         # Who counts as internal, and who you are – both plain text

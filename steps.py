@@ -256,7 +256,7 @@ def _archiv_pfade(pfade):
             "--sharepoint", pfade["sharepoint"], "--pages", pfade["sharepoint_pages"],
             "--planner", pfade["planner"], "--todo", pfade["todo"],
             "--onenote", pfade["onenote"], "--store", pfade["store"],
-            "--report", pfade["archiv_bericht"]]
+            "--report", pfade["archiv_bericht"], "--data", pfade.get("data") or ""]
 
 
 def _archiv_argv(aktion):
@@ -280,7 +280,8 @@ def _fall_export_argv(cfg, ctx, pfade):
            "--planner", pfade["planner"], "--todo", pfade["todo"],
            "--onenote", pfade["onenote"],
            "--faelle", str(f.get("faelle") or ""), "--fall", str(f.get("fall") or 0),
-           "--ziel", str(f.get("ziel") or ""), "--lang", str(f.get("lang") or "de")]
+           "--ziel", str(f.get("ziel") or ""), "--lang", str(f.get("lang") or "de"),
+           "--data", pfade.get("data") or ""]
     if f.get("res"):
         out += ["--res", str(f["res"])]
     return out
@@ -291,12 +292,26 @@ def _case_collect_argv(cfg, ctx, pfade):
     – and, for "Collect now", the one case or the one search."""
     s = ctx.get("case_collect") or {}
     out = ["--faelle", str(s.get("faelle") or ""), "--store", pfade["store"],
-           "--domains", str(s.get("domains") or "")]
+           "--domains", str(s.get("domains") or ""), "--data", pfade.get("data") or ""]
     if s.get("case"):
         out += ["--case", str(s["case"])]
     if s.get("search"):
         out += ["--search", str(s["search"])]
     return out
+
+
+def _evidence_argv(cfg, ctx, pfade):
+    """evidence.py: every export folder, and the data folder the chain
+    and the versions lie in."""
+    return [pfade[k] for k in ("outlook", "teams", "onedrive", "sharepoint",
+                               "sharepoint_pages", "planner", "todo", "onenote")] + \
+        ["--data", pfade["data"]]
+
+
+def _evidence_env(cfg, ctx):
+    """The time-stamp service, only while stamping is switched on."""
+    url = str(cfg.get("evidence_tsa_url") or "").strip()
+    return {"EVIDENCE_TSA_URL": url if cfg.get("evidence_timestamp") and url else ""}
 
 
 def _archiv_eintrag(aktion):
@@ -386,6 +401,14 @@ REGISTRY = (
      "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
      "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
      "env": _teams_env},
+
+    # The evidence chain (evidence.py): after the exports, before the
+    # index – what the exports wrote is chained, what changed without them
+    # is said. Rides with every run that can change the archive (app.py).
+    {"key": "evidence", "anfrage": "evidence", "script": "evidence",
+     "start": "job.start.evidence", "label": "job.step.evidence",
+     "corpus": False, "zugang": False, "schedule": None, "master": None,
+     "quelle": None, "argv": _evidence_argv, "env": _evidence_env},
 
     {"key": "index", "anfrage": "index", "script": "rag_index",
      "start": "job.start.index",

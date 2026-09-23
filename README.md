@@ -56,20 +56,21 @@ because any one source can mean tens of thousands of items.
 |---|---|
 | **Mail, calendar, contacts** | every folder you choose as `.eml`, `.ics`, `.vcf`; the calendar as a window of months back plus everything ahead |
 | **Teams** | 1:1, group, meeting and channel chats as readable HTML; on request the files shared in them and the channels' file folders |
-| **OneDrive** | a mirror of your files, current version of each |
+| **OneDrive** | a mirror of your files, each held against Microsoft's own checksum, earlier versions kept |
 | **SharePoint** | libraries behind the URLs you list, with type filters, a size cap and a size preview; the sites' pages as standalone HTML |
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
 
 Every run asks Microsoft only for what changed, so the second takes minutes
-rather than hours. Deleted items stay in the archive with a marker — that
-is the point of keeping one — and nothing in it is ever deleted by a run. A
-running job opens its own window with progress, steps and log. Which
-folders, chats and lists come along is a list of include and exclude rules
-per source, spelled out by *Show export list*; a **schedule** repeats the
-run, and a **sync cadence** — always, daily, weekly, monthly — can be set
-per source, per part of it or for a single folder.
+rather than hours. Deleted items stay in the archive with a marker — that is
+the point of keeping one — and nothing in it is ever deleted by a run: a
+replaced file keeps its **earlier version**, and a **chain of checksums**
+records what lay here when. A run shows progress, steps and log in its own
+window. Which folders, chats and lists come along is a list of include and
+exclude rules per source, spelled out by *Show export list*; a **schedule**
+repeats the run, and a **sync cadence** — always, daily, weekly, monthly —
+can be set per source, per part of it or for a single folder.
 
 ### Explore archive
 
@@ -86,12 +87,13 @@ date, folder, file type, case, internal or external parties, items no
 longer at Microsoft, mails with an attachment, and the lines *From*, *To*,
 *Cc*, *Bcc* for mail. Nothing searches until you press *Search*.
 
-A chosen hit opens on the right with the facts its kind is known by — a
-mail its lines, folder and attachments, each a download — then *Open
-original*, *Add to case*, *Find similar* and the content, the rest of a
-conversation in a fold below, each message a click away. **History** keeps every search by its
-criteria, never its hits; **Saved** keeps them under a name, with the case
-a search files into and whether it collects by itself.
+A chosen hit opens on the right with the facts its kind is known by — a mail
+its lines, folder and attachments, each a download — then *Open original*,
+*Add to case*, *Find similar* and the content; below it, its **versions**,
+the rest of a conversation and a file's checksums, each in a fold.
+**History** keeps every search by its criteria, never its hits; **Saved**
+keeps them under a name, with the case a search files into and whether it
+collects by itself.
 
 A result has **three views**: *List*, the page the search answered;
 *Timeline*, every hit in the order it happened under a band of months that
@@ -113,13 +115,15 @@ and *Whole result into a case…* takes all of them.
 
 A case has a **casebook** of short dated notes, **folders** one level deep,
 a filter field, three views — *Folders*, *Timeline*, *People* — and a
-**remark** on every item saying
-why it is there. A saved search attached to it says what it finds today
-that the case lacks — or, switched to **automatic**, files that by itself
-with every run that updates the index. **Export case…** writes one ZIP with
-the originals sorted by folder and source, an `index.html`, a
-`timeline.html`, `items.csv` and the casebook. *Close case* makes it
-read-only; *Delete case* touches nothing in the archive.
+**remark** on every item saying why it is there. A saved search attached to
+it says what it finds today that the case lacks — or, switched to
+**automatic**, files that by itself with every run that updates the index.
+Changed items are marked; *Compare* shows the version they came with.
+**Export case…** writes one ZIP: originals by folder and source,
+`index.html`, `timeline.html`, `items.csv`, the casebook, earlier versions
+of changed items, and `SHA256SUMS.txt` with an `evidence/` folder anyone can
+check without the app. *Close case* makes it read-only and records every
+original's checksum; *Delete case* touches nothing in the archive.
 
 ### Insights
 
@@ -127,20 +131,21 @@ What the archive holds, computed once per index run: messages, people and
 period, the mirrored files, disk usage, and the **gaps** — months with no
 message at all. On request a **completeness balance** against Microsoft for
 the sources you tick: what is here, still open, excluded, deleted but kept,
-and what Microsoft refuses to hand out; *Fetch now* fetches what a row
-found open. **Archive and bookkeeping** checks each export against the
-files on disk, asking nobody, and offers one action per finding — each asks
-first, none deletes. **Runs** keeps every run with its log.
+and what Microsoft refuses to hand out; *Fetch now* fetches what a row found
+open. **Archive and bookkeeping** checks each export and its checksums
+against the disk, asking nobody, and offers one action per finding — each
+asks first, none deletes. **Runs** keeps every run with its log.
 
 ### Settings
 
 Microsoft Access, Sources, Schedule, AI (Ollama), Claude (MCP), Profiles,
-App, Expert mode — one card each on one running page, every setting with an
-**(i)** that says what changes. The App card holds notifications, how long
-the search history is kept, where case exports land, your organisation's
-mail domains (what *external* means), and *Report a problem*, which fills
-in a GitHub issue with the log — addresses and user names replaced, shown
-for you to edit, sent by nobody but you.
+Evidence, App, Expert mode — one card each on one running page, every
+setting with an **(i)** that says what changes. *Evidence* keeps earlier
+versions and can have runs time-stamped (RFC 3161). The App card holds
+notifications, how long the search history is kept, where case exports land,
+your organisation's mail domains (what *external* means), and *Report a
+problem*: a GitHub issue with the log, anonymised, shown for you to edit and
+sent by nobody but you.
 
 ## Search with Claude
 
@@ -149,9 +154,9 @@ any other MCP client — on this machine only. It searches every source with
 the same filters the search page offers, browses the mirrored drives and
 answers with citations; it can ask the archive about itself — how far it
 reaches, which months are empty, when each source last ran — and read your
-cases. It changes one only when *Claude may change cases* is on under
-*Settings › Claude (MCP)*, and then only adds, marked *via MCP*.
-*Settings* prints the exact snippet for your client.
+cases and every version of an item. It changes a case only when *Claude may
+change cases* is on under *Settings › Claude (MCP)*, and then only adds,
+marked *via MCP*. *Settings* prints the exact snippet for your client.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

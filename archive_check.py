@@ -73,10 +73,12 @@ from pathlib import Path
 import completeness
 import corpus
 import drive_mirror
+import evidence
 import export_util
 import progress
 import state_db
 import store_layout
+import versions
 
 export_util.erzwinge_utf8()
 
@@ -616,7 +618,22 @@ def _zeile_von(bericht, quelle):
     return next((q for q in bericht.get("quellen") or [] if q.get("quelle") == quelle), None)
 
 
-def pruefe_alles(pfade, store, vorher=None, nachgeholt=None):
+def check_evidence(data):
+    """The evidence chain read end to end and every chained file hashed
+    afresh (evidence.verify) – the report's `nachweis`, None without a
+    data folder."""
+    if not data:
+        return None
+    result = evidence.verify(data)
+    if result.get("exists"):
+        progress.event("run.evidence.verified", "info", n=result["unchanged"],
+                       changed=result["changed_n"], missing=result["missing_n"])
+        if not result["chain_ok"]:
+            progress.event("run.evidence.broken", "err", n=result["broken_at"])
+    return result
+
+
+def pruefe_alles(pfade, store, vorher=None, nachgeholt=None, data=None):
     """Every source that has a folder, in the order of the overview, plus
     the index. `pfade` maps outlook, teams, onedrive, sharepoint,
     sharepoint_pages, planner, todo, onenote -> folder; `vorher` is the
@@ -638,7 +655,7 @@ def pruefe_alles(pfade, store, vorher=None, nachgeholt=None):
         "sharepoint": pfade.get("sharepoint"), "pages": pfade.get("sharepoint_pages"),
         "onenote": pfade.get("onenote")})
     return {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
-            "quellen": quellen, "index": index}
+            "quellen": quellen, "index": index, "nachweis": check_evidence(data)}
 
 
 def bericht_aktualisieren(bericht_pfad, quelle, ordner, zustand=None, nachgeholt=None):
@@ -724,6 +741,7 @@ def beiseitelegen(ordner, quelle):
         except OSError:
             uebersprungen += 1
             continue
+        versions.moved(quelle_pfad, ziel)
         bewegt.append(rel)
     if bewegt:
         export_util.schreibe_atomar(stapel / LISTE, json.dumps(
@@ -763,12 +781,14 @@ def zurueckholen(ordner, stapel=None):
         nach.parent.mkdir(parents=True, exist_ok=True)
         try:
             von.replace(nach)
+            versions.moved(von, nach)
             bewegt += 1
         except OSError:
             uebersprungen += 1
     # Only what is empty goes: the list, then folders without a file.
     rest = [p for p in stapel_ordner.rglob("*") if p.is_file() and p.name != LISTE]
     if not rest:
+        versions.remove(stapel_ordner / LISTE, keep=False)
         shutil.rmtree(stapel_ordner, ignore_errors=True)
         if basis.is_dir() and not any(basis.iterdir()):
             basis.rmdir()
@@ -940,6 +960,7 @@ def main():
     ap.add_argument("--onenote", required=True)
     ap.add_argument("--store", required=True)
     ap.add_argument("--report", required=True)
+    ap.add_argument("--data", default="", help="the data folder (evidence chain, versions)")
     ap.add_argument("--nachgeholt", default="{}",
                     help="JSON: source -> when its last resync completed")
     ap.add_argument("--aktion", choices=SCHRITTE, default=None)
@@ -954,7 +975,7 @@ def main():
         aktion(a.aktion, a.quelle, pfade, Path(a.report), a.arten)
         return
     bericht = pruefe_alles(pfade, a.store, vorher=bericht_lesen(a.report),
-                           nachgeholt=_json(a.nachgeholt))
+                           nachgeholt=_json(a.nachgeholt), data=a.data or None)
     export_util.schreibe_atomar(Path(a.report), json.dumps(bericht, ensure_ascii=False))
     summe = Counter()
     for q in bericht["quellen"]:

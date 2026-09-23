@@ -16,6 +16,7 @@ The mirror promise is the same everywhere: the CURRENT version of every
 file is kept, deleted files stay here with a tombstone entry.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,7 @@ import settings
 import folders
 import graph_client
 import progress
+import versions
 
 GRAPH = graph_client.GRAPH
 
@@ -136,7 +138,7 @@ class DriveOps:
 
     drive_base = f"{GRAPH}/me/drive"
 
-    def lade(self, item_id, ziel, geaendert=None):
+    def lade(self, item_id, ziel, geaendert=None, expected=None):
         """Write a file's content to `ziel` – in chunks, not in one piece.
 
         Pulling a large file completely into memory just to write it to
@@ -146,16 +148,33 @@ class DriveOps:
         next run.
         """
         url = f"{self.drive_base}/items/{item_id}/content"
-        r = self.stream(url, timeout=TIMEOUT_BYTES, label=" (Inhalt)")
         ziel.parent.mkdir(parents=True, exist_ok=True)
         tmp = ziel.with_name(ziel.name + ".teil")
-        groesse = 0
-        with open(tmp, "wb") as f:
-            for stueck in r.iter_content(chunk_size=1 << 20):
-                if stueck:
-                    f.write(stueck)
-                    groesse += len(stueck)
-        os.replace(tmp, ziel)
+        # Microsoft names the file's quickXorHash (`expected`): the bytes
+        # are held against it. A download that does not match is fetched
+        # once more; one that still differs is kept – it is what Microsoft
+        # hands out – and the difference is said and chained.
+        for attempt in (1, 2):
+            r = self.stream(url, timeout=TIMEOUT_BYTES, label=" (Inhalt)")
+            groesse = 0
+            digest, quick = hashlib.sha256(), versions.QuickXor()
+            with open(tmp, "wb") as f:
+                for stueck in r.iter_content(chunk_size=1 << 20):
+                    if stueck:
+                        f.write(stueck)
+                        digest.update(stueck)
+                        quick.update(stueck)
+                        groesse += len(stueck)
+            ours = quick.b64()
+            if not expected or ours == expected or attempt == 2:
+                break
+        extra = {"quickxor": ours}
+        if expected:
+            extra.update(ms_quickxor=expected, ms_match=ours == expected)
+            if ours != expected:
+                progress.event("run.mirror.hash_mismatch", "warn", name=ziel.name)
+        # The version it replaces is kept, the write journaled (versions.py).
+        versions.replace(tmp, ziel, sha=digest.hexdigest(), extra=extra)
         # Take the modification time from the drive. Without it every file
         # would carry the moment of its download, and the index would hold
         # hundreds of files with the same date – sorting by date would be
@@ -479,7 +498,7 @@ def wartende_pruefen(graph, warteliste, einheiten, bestand, auswahl, wurzel):
             weg.append(k)
             continue
         aufgaben.append({"id": k, "rel": rel, "ctag": ctag, "size": groesse,
-                         "mtime": geaendert_am(meta)})
+                         "mtime": geaendert_am(meta), "qx": quick_xor_of(meta)})
     warteliste.vergiss(weg)
     return aufgaben, gestoert
 
@@ -624,7 +643,7 @@ def plane(eintraege, bestand, wurzel, auswahl):
                 bestand.merke(kennung, rel, alt["ctag"], alt["size"])
             continue
         laden.append({"id": kennung, "rel": rel, "ctag": e.get("cTag") or "",
-                      "size": groesse, "mtime": geaendert_am(e)})
+                      "size": groesse, "mtime": geaendert_am(e), "qx": quick_xor_of(e)})
     # A delta may name the same entry several times (and a resumed walk may
     # repeat a page): the last version counts – otherwise two threads would
     # write to the same target file at the same time.
@@ -657,10 +676,18 @@ def verschiebe(wurzel, paare):
             n.parent.mkdir(parents=True, exist_ok=True)
             try:
                 a.replace(n)
+                versions.moved(a, n)
                 bewegt += 1
             except OSError:
                 pass
     return bewegt
+
+
+def quick_xor_of(item):
+    """The quickXorHash Microsoft gives for a drive item, or None
+    (OneDrive for Business and SharePoint give it; personal OneDrive may
+    not)."""
+    return ((item.get("file") or {}).get("hashes") or {}).get("quickXorHash") or None
 
 
 def marked(marks, kennung, ctag):
@@ -684,7 +711,8 @@ def hole_alle(graph, wurzel, bestand, aufgaben, arbeiter, marks=None):
         return 0, 0, []
     progress.melde(0, gesamt, "files")
     with ThreadPoolExecutor(max_workers=arbeiter) as pool:
-        auftrag = {pool.submit(graph.lade, a["id"], wurzel / a["rel"], a.get("mtime")): a
+        auftrag = {pool.submit(graph.lade, a["id"], wurzel / a["rel"], a.get("mtime"),
+                               **({"expected": a["qx"]} if a.get("qx") else {})): a
                    for a in aufgaben}
         for f in as_completed(auftrag):
             a = auftrag[f]
@@ -756,7 +784,7 @@ def nachholen(graph, wurzel, rels, arbeiter, zustand=None, still=False):
             aufgaben.append({"id": k, "rel": rel,
                              "ctag": meta.get("cTag") or e.get("ctag") or "",
                              "size": int(meta.get("size") or e.get("size") or 0),
-                             "mtime": geaendert_am(meta)})
+                             "mtime": geaendert_am(meta), "qx": quick_xor_of(meta)})
     db = getattr(zustand, "db", None)
     marks = db.permanent_lesen() if db is not None else None
     vorher = dict(marks or {})

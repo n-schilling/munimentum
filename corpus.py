@@ -114,6 +114,8 @@ class ConvParser(HTMLParser):
                 # The message id the export writes since 11.0 – the stable
                 # half of the message's key (schluessel.py).
                 self._id = next((v for k, v in attrs if k == "data-id"), None) or None
+                # Since when the message is no longer at Microsoft.
+                self._gone = next((v for k, v in attrs if k == "data-gone"), None) or None
             if self._cur is not None and "body" in cls and not self._in_body:
                 self._in_body = True
                 self._body_depth = self._depth
@@ -151,6 +153,8 @@ class ConvParser(HTMLParser):
                 if text:
                     self.msgs.append({"n": name, "t": time, "x": text,
                                       "id": getattr(self, "_id", None)})
+                    if getattr(self, "_gone", None):
+                        self.msgs[-1]["gone"] = self._gone
                 self._cur = None
             self._depth -= 1
 
@@ -203,6 +207,8 @@ def _teams_file(p_str, root_str):
             "text": (m["x"] or "")[:SAFETY_CAP],
             "msg_id": m.get("id"),
         })
+        if m.get("gone"):
+            out[-1]["gone"] = m["gone"]
     return out
 
 

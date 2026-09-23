@@ -66,6 +66,7 @@ import completeness
 import folders
 import graph_client
 import progress
+import versions
 import settings
 import state_db
 
@@ -533,7 +534,7 @@ class _Ressourcen:
         pfad = self.ziel / rel
         if self._herkunft.get(kennung) != pfad:
             pfad.parent.mkdir(parents=True, exist_ok=True)
-            pfad.write_bytes(daten)
+            versions.write_bytes(pfad, daten)
             self.dateien += 1
         self._merke(kennung, rel, daten, ctype)
         # The link is relative to the page, which lies next to its folder.
@@ -687,18 +688,11 @@ def markiere_weg(pfad, seit):
 # ---------------------------------------------------------------------------
 def _entferne(ziel, rel):
     """An old copy of a page – renamed section or title – and its files."""
-    datei = ziel / rel
-    try:
-        datei.unlink()
-    except OSError:
-        pass
+    versions.remove(ziel / rel)
     ordner = ziel / (rel[:-5] + DATEI_SUFFIX)
     if ordner.is_dir():
         for f in ordner.iterdir():
-            try:
-                f.unlink()
-            except OSError:
-                pass
+            versions.remove(f)
         try:
             ordner.rmdir()
         except OSError:
