@@ -863,3 +863,26 @@ def test_alter_store_ohne_manifest_wird_voll_gelesen(tmp_path, monkeypatch):
     zaehler["n"] = 0
     _build(tmp_path, monkeypatch)
     assert zaehler["n"] == 0
+
+
+def test_a_teams_file_unchanged_is_not_read_again(tmp_path, monkeypatch, capsys):
+    """The files next to a conversation are listed as "teams_files" and
+    searched under "teams": looked up under the one, found under the other,
+    they were read again on every run."""
+    _make_exports(tmp_path)
+    anhang = tmp_path / "teams_export" / "1on1" / "Anhaenge" / "alice__abc123"
+    anhang.mkdir(parents=True)
+    (anhang / "Angebot Nordwind.pdf").write_bytes(b"%PDF-1.4")
+    monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
+
+    def read_counts():
+        capsys.readouterr()
+        rag_index.build_index(str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
+                              str(tmp_path / "store"), "m", "http://ollama.test", embeddings=False)
+        (ev,) = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines())
+                 if e and e["k"] == "run.index.read"]
+        return ev["v"]["reused"], ev["v"]["read"], ev["v"]["chunks"]
+    first = read_counts()
+    assert first[1] == 3 and first[0] == 0
+    again = read_counts()
+    assert again == (3, 0, first[2]), "an unchanged file was read again"

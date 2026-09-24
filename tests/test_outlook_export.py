@@ -2485,12 +2485,18 @@ def test_first_pages_come_in_batches_and_a_folder_with_more_reads_on(tmp_path, c
     done.close()
     assert got == ["m2", "m3", "m4"]
     (urls, headers, parallel), = g.batched
-    assert len(urls) == 3 and parallel == 2
+    assert len(urls) == 3 and parallel == 1, "two batches at once met Outlook's limit"
     assert headers == {"Prefer": f"odata.maxpagesize={outlook_export.DELTA_PAGE}"}
     # f1 needed nothing more, f2 read on from its page, f3 started over.
     assert g.gets == [_DELTA_F2 + "?$skiptoken=s", _DELTA_F3]
     assert db.kv_lesen("delta:f3") is None
-    assert "run.outlook.delta_reset" in [e["k"] for e in _events(capsys) if e]
+    events = [e for e in _events(capsys) if e]
+    assert "run.outlook.delta_reset" in [e["k"] for e in events]
+    # Only the folders with something to say get a line, then one summary.
+    named = [e["v"]["name"] for e in events if e["k"] in ("run.folder", "run.folder_plain")]
+    assert named == ["E-Mail/B", "E-Mail/C"]
+    (summary,) = [e["v"] for e in events if e["k"] == "run.outlook.folders_checked"]
+    assert summary == {"n": 3, "changed": 2}
 
 
 def test_a_refused_first_page_is_a_folder_error(tmp_path):

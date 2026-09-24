@@ -565,6 +565,7 @@
   "run.outlook.delta_reset": "{name}: Änderungsverfolgung neu gestartet – der Ordner wird einmal vollständig gelesen.",
   "run.outlook.checking": "{n} Ordner auf Änderungen geprüft – gebündelt.",
   "run.outlook.checking_failed": "Gebündelte Prüfung nicht möglich ({error}) – die Ordner werden einzeln gefragt.",
+  "run.outlook.folders_checked": "{n} Ordner geprüft, {changed} davon mit Änderungen.",
   "run.outlook.tree_fallback": "Ordnerbaum nicht in einem Zug lesbar ({error}) – er wird Ordner für Ordner gelesen.",
   "run.outlook.folders_paced": "{n} Ordner unter ihrer Kadenz – nicht in diesem Lauf.",
   "run.calendar.window": "{name}: Termine ab {from} plus alles Zukünftige.",

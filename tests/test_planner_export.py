@@ -155,6 +155,19 @@ def test_a_sweep_that_finds_nothing_counts_nothing_new(tmp_path):
     g2 = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")])
     assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 2, 0, 0)
     assert any("beta/" in u for u in g2.aufrufe), "the sweep did not run"
+    # The comments of both cards came in one batch.
+    assert [sorted(u.rsplit("/", 2)[-2] for u in b) for b in g2.batches
+            if any("/messages" in u for u in b)] == [["t1", "t2"]]
+
+
+def test_batched_comments_read_like_single_answers():
+    assert pl._neue_kommentare(None, "t1", (404, {"error": {}})) == []
+    assert pl._neue_kommentare(None, "t1", (403, {"error": {}})) is None
+    got = pl._neue_kommentare(None, "t1", (200, {"value": [
+        {"content": "<p>ok</p>", "createdDateTime": "2026-07-01T10:00:00Z",
+         "createdBy": {"user": {"id": "u-1"}}},
+        {"content": "weg", "deletedDateTime": "2026-07-02T10:00:00Z"}]}))
+    assert [(k["wer"], k["wann"]) for k in got] == [("u-1", "2026-07-01T10:00:00Z")]
 
 
 def test_verschwundene_task_bleibt_als_grabstein(tmp_path):

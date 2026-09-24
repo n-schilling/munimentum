@@ -387,18 +387,48 @@ def _legacy_posts(graph, gruppe, thread):
     return out
 
 
-def _neue_kommentare(graph, task_id):
-    """The chat-based comments; 404 with "no chat thread" simply means none.
-    Returns None when the endpoint refused for another reason."""
+def _kommentar_url(task_id):
+    return f"{BETA}/planner/tasks/{task_id}/messages"
+
+
+def kommentare_vorab(graph, tids):
+    """The chat comments of many cards in JSON batches: {task id: (status,
+    body)}. The daily sweep asks every card of a board – one request each
+    took some 35 s for a board of a few hundred cards, twenty to a batch
+    take a few. An empty answer when the batch itself fails: every card
+    then asks on its own, as before."""
+    if len(tids) < 2:
+        return {}
+    urls = {_kommentar_url(t): t for t in tids}
     try:
-        d = graph.get(f"{BETA}/planner/tasks/{task_id}/messages")
+        antworten = graph.batch_get(list(urls))
     except auth.TokenExpired:
         raise
-    except Exception as e:
-        status = getattr(getattr(e, "response", None), "status_code", 0)
+    except Exception:
+        return {}
+    return {urls[u]: a for u, a in antworten.items()}
+
+
+def _neue_kommentare(graph, task_id, vorab=None):
+    """The chat-based comments; 404 with "no chat thread" simply means none.
+    Returns None when the endpoint refused for another reason. `vorab` is
+    the (status, body) a batch already brought."""
+    if vorab is not None:
+        status, d = vorab
         if status == 404:
             return []
-        return None
+        if status != 200 or not isinstance(d, dict):
+            return None
+    else:
+        try:
+            d = graph.get(_kommentar_url(task_id))
+        except auth.TokenExpired:
+            raise
+        except Exception as e:
+            status = getattr(getattr(e, "response", None), "status_code", 0)
+            if status == 404:
+                return []
+            return None
     out = []
     for m in d.get("value", []):
         if m.get("deletedDateTime"):
@@ -603,7 +633,7 @@ def _marked(marks, tid, etag):
 
 
 def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
-                      threads, sweep, anhang_stand, marks=None):
+                      threads, sweep, anhang_stand, marks=None, kommentare_da=None):
     """One task's refresh – runs in a worker and touches no shared state.
     Returns (record, thread mark, attachment state, verdicts): the new
     record, the legacy thread's (id, delivered-at) or None, the
@@ -637,7 +667,8 @@ def _task_auffrischen(graph, ziel, plan, t, alt, geaendert, legacy_holen,
                      default=""))
     elif thread:
         kommentare += [k for k in eintrag["kommentare"] if k["art"] == "legacy"]
-    neue = _neue_kommentare(graph, tid) if (geaendert or sweep) else None
+    neue = _neue_kommentare(graph, tid, (kommentare_da or {}).get(tid)) \
+        if (geaendert or sweep) else None
     kommentare += (neue if neue is not None else
                    [k for k in eintrag["kommentare"] if k["art"] == "neu"])
     eintrag["kommentare"] = kommentare
@@ -743,10 +774,12 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     # The refreshes run side by side; the shared state is touched only
     # here, in this thread, once the workers are done.
     ergebnisse = {}
+    kommentare_da = kommentare_vorab(
+        graph, [t["id"] for t, _alt, geaendert, _l in faellig if geaendert or sweep])
     with ThreadPoolExecutor(max_workers=max(1, int(workers or 1))) as pool:
         offen = {pool.submit(_task_auffrischen, graph, ziel, plan, t, alt,
                              geaendert, legacy_holen, threads, sweep,
-                             anhang_stand, marks): t
+                             anhang_stand, marks, kommentare_da): t
                  for t, alt, geaendert, legacy_holen in faellig}
         for lfd, fut in enumerate(as_completed(offen), 1):
             t = offen[fut]

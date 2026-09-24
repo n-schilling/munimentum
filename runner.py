@@ -26,6 +26,10 @@ import progress
 # --------------------------------------------------------------------------
 # Run jobs: one after the other, output live into the buffer
 # --------------------------------------------------------------------------
+
+# Result extras that mean the corpus changed, besides "new".
+CORPUS_CHANGES = ("updated", "moved", "gone", "gone_new")
+
 class JobRunner:
     """Runs a sequence of steps as subprocesses, one at a time.
 
@@ -311,9 +315,14 @@ class JobRunner:
             if fazit is not None:
                 self._step_result = fazit
                 # Only export steps count for the skip logic: index and
-                # calendar report too, but do not change the corpus.
+                # calendar report too, but do not change the corpus. A
+                # rewritten, moved or newly tombstoned item changes it as
+                # much as a new one – an appointment moved to another day
+                # must reach the calendar and the search.
                 if step.get("corpus"):
-                    self.neu = (self.neu or 0) + fazit["new"]
+                    extra = fazit.get("extra") or {}
+                    self.neu = (self.neu or 0) + fazit["new"] + sum(
+                        int(extra.get(k) or 0) for k in CORPUS_CHANGES)
                 continue
             kaputt = progress.lies_fehler(line)
             if kaputt is not None:

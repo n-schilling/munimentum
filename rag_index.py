@@ -422,6 +422,14 @@ _QUELLEN = (("teams", corpus.load_teams), ("teams_files", corpus.load_teams_file
             ("pages", corpus.load_pages), ("onenote", corpus.load_onenote))
 
 
+# The root a source's chunks carry when it is not the source's own name:
+# the files next to a Teams conversation are listed as "teams_files" but
+# searched under "teams". Looking them up under "teams_files" found none,
+# and every such file was read again on every run – some ten thousand on
+# a real archive, eight seconds each time.
+CHUNK_ROOT = {"teams_files": "teams"}
+
+
 def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
                  pages_dir, planner_dir, store, todo_dir=None,
                  onenote_dir=None):
@@ -453,7 +461,7 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
         neu = set()
         for rel, signatur in jetzt.items():
             manifest[(art, rel)] = signatur
-            alte = (alt_chunks.get((art, rel))
+            alte = (alt_chunks.get((CHUNK_ROOT.get(art, art), rel))
                     if alt_chunks and alt_manifest.get((art, rel)) == signatur
                     else None)
             if alte is None:

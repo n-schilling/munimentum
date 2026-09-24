@@ -565,6 +565,7 @@
   "run.outlook.delta_reset": "{name} : suivi des modifications relancé – le dossier est relu une fois en entier.",
   "run.outlook.checking": "{n} dossiers vérifiés – par lots.",
   "run.outlook.checking_failed": "Vérification par lots impossible ({error}) – les dossiers sont interrogés un par un.",
+  "run.outlook.folders_checked": "{n} dossiers vérifiés, dont {changed} avec des changements.",
   "run.outlook.tree_fallback": "Arborescence illisible d’un seul coup ({error}) – elle est lue dossier par dossier.",
   "run.outlook.folders_paced": "{n} dossiers sous leur fréquence – pas dans cette exécution.",
   "run.calendar.window": "{name} : rendez-vous à partir du {from} plus tout l’avenir.",

@@ -565,6 +565,7 @@
   "run.outlook.delta_reset": "{name}: change tracking restarted – the folder is read once in full.",
   "run.outlook.checking": "{n} folders checked for changes – in batches.",
   "run.outlook.checking_failed": "Batched check not possible ({error}) – the folders are asked one by one.",
+  "run.outlook.folders_checked": "{n} folders checked, {changed} of them with changes.",
   "run.outlook.tree_fallback": "Folder tree not readable in one go ({error}) – it is read folder by folder.",
   "run.outlook.folders_paced": "{n} folders below their cadence – not in this run.",
   "run.calendar.window": "{name}: appointments from {from} on plus everything ahead.",

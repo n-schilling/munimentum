@@ -1063,6 +1063,21 @@ def test_jobrunner_indiziert_wenn_es_etwas_neues_gibt(sandbox):
     assert ergebnis and ergebnis[0]["v"]["ergebnis"]["new"] == 1
 
 
+@pytest.mark.parametrize("extra", ["updated", "moved", "gone", "gone_new"])
+def test_a_rewritten_or_tombstoned_item_counts_as_a_change(sandbox, extra):
+    """Outlook said "new: 0 · updated 1" for a moved appointment, and the
+    calendar and the index were skipped – the change never reached them."""
+    ziel = sandbox / "corpus.db"
+    ziel.write_text("x", encoding="utf-8")
+    folge = _py_step("print('INDIZIERT')", "job.step.index")
+    folge.update(nur_bei_neuem=True, ziel=ziel)
+    melde = _melde_step(f"0, extra={{{extra!r}: 1}}")
+    r = app_mod.JobRunner()
+    r.start([melde, folge], "job.export")
+    _warte(r)
+    assert "INDIZIERT" in "\n".join(str(ln["text"]) for ln in r.lines)
+
+
 def test_jobrunner_indiziert_ohne_vorhandenen_index(sandbox):
     """Otherwise a first run with an unchanged corpus would never get one."""
     _, text = _folge(sandbox, neu=0, ziel_da=False)

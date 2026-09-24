@@ -1,20 +1,20 @@
-## New in 13.8.0 – Performance improvements
+## New in 13.8.1
 
-A run that finds little to do now takes seconds where it took minutes,
-and what it reports as new is what really changed.
+More speed, and one fix the faster runs brought to light.
 
-- **Mail** – the folder tree comes in one request instead of one per
-  folder, and the folders are asked for their changes in bundles of
-  twenty. On several hundred folders, minutes become seconds.
-- **Teams chats** – the chat list is read newest first and only down to
-  where the last run left off. The whole list is still read once a week.
-- **Honest counts** – Planner cards, calendar entries and contacts that
-  were only read again no longer count as new. A Teams conversation's log
-  line names its new messages, changes and system events apart.
+- **Changed items reach the search** – a rescheduled appointment or a
+  mail deleted at Microsoft now updates the search and the calendar even
+  when the run brought nothing new.
+- **Mail** – the folders are checked one bundle after another, which
+  keeps Microsoft from making the run wait. The log names only folders
+  with changes, plus one line for all.
+- **SharePoint, Planner, index** – several URLs into one site ask for it
+  once, Planner comments come in bundles, and the files next to Teams
+  chats are no longer read again on every index run.
 
 ## Upgrading
 
-The first run after the update reads the Teams chat list once in full.
+Nothing to do after this update.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

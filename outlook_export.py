@@ -744,9 +744,12 @@ MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
 
 def erste_seiten(graph, db, selected):
     """The first page of every folder's stored round, asked for in JSON
-    batches, two at a time: {folder id: (status, body)}. Most folders have
-    nothing new, and their whole round is this one page – measured on 40
-    folders: 21 s asked one by one, 1.1 s this way. A folder whose page
+    batches, one after another: {folder id: (status, body)}. Most folders
+    have nothing new, and their whole round is this one page – measured on
+    40 folders: 21 s asked one by one, 2.4 s this way. Two batches at once
+    were faster still on 40 folders, but on some 400 they ran into
+    Outlook's four-requests-per-mailbox limit and waited out a 429 every
+    run. A folder whose page
     says there is more reads on page by page. Without a stored link, or
     in a resync, a folder starts its round the usual way."""
     if export_util.abgleich():
@@ -762,8 +765,7 @@ def erste_seiten(graph, db, selected):
     progress.event("run.outlook.checking", n=len(links))
     try:
         antworten = graph.batch_get(list(dict.fromkeys(links.values())),
-                                    extra_headers={"Prefer": f"odata.maxpagesize={DELTA_PAGE}"},
-                                    parallel=2)
+                                    extra_headers={"Prefer": f"odata.maxpagesize={DELTA_PAGE}"})
     except TokenExpired:
         raise
     except Exception as e:
@@ -789,24 +791,36 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
     # A full sync writes every mail again – the resume log is not asked.
     alles = export_util.voll_neu()
     vorab = erste_seiten(graph, db, selected)
+    geprueft = veraendert_n = 0
     for top in selected:
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
-            total = folder.get("totalItemCount")
-            if total is not None:
-                progress.event("run.folder", name=rel_path, n=int(total))
-            else:
-                progress.event("run.folder_plain", name=rel_path)
+            geprueft += 1
+            genannt = False
+
+            def nennen(folder=folder, rel_path=rel_path):
+                # A folder gets its line only when it has something to say –
+                # a full round, or changes; the rest is one summary line.
+                total = folder.get("totalItemCount")
+                if total is not None:
+                    progress.event("run.folder", name=rel_path, n=int(total))
+                else:
+                    progress.event("run.folder_plain", name=rel_path)
+                return True
             seen, link = 0, None
             try:
                 seiten, voll = delta_runde(
                     graph, db, f"delta:{folder['id']}",
                     f"{GRAPH}/me/mailFolders/{folder['id']}/messages/delta",
                     {"$select": MAIL_SELECT}, name=rel_path, erste=vorab.pop(folder["id"], None))
+                if voll:
+                    genannt = nennen()
                 if bestand is not None and not voll:
                     bestand.per_link.add(rel_path)
                 for eintraege, ende in seiten:
                     link = ende or link      # the link comes with the last page
+                    if eintraege and not genannt:
+                        genannt = nennen()
                     for msg in eintraege:
                         mid = msg.get("id")
                         if not mid:
@@ -853,9 +867,13 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
                     bestand.ordner_fertig(rel_path)
                 if link:
                     bestand.link_merken(rel_path, folder["id"], link)
+            if genannt:
+                veraendert_n += 1
             if seen:
                 progress.event("run.scanned", n=seen,
                                unit=progress.atom("progress.unit.mails"))
+    if geprueft:
+        progress.event("run.outlook.folders_checked", n=geprueft, changed=veraendert_n)
 
 
 # ---------------------------------------------------------------------------

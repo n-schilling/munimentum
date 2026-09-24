@@ -236,6 +236,10 @@ def resolve_drives(graph, urls):
     gefunden, fehl = [], 0
     nach_id = {}
     seiten_namen = {}
+    # Several URLs into one site (a library each, a folder each) ask for
+    # the site and its libraries once: a dozen URLs cost a dozen times two
+    # requests – some twelve seconds – before a single cadence was asked.
+    je_adresse = {}
     kadenz_map = kadenzen()
     for url in urls:
         kadenz = kadenz_map.get(f"sharepoint-url:{url}") or "always"
@@ -247,8 +251,10 @@ def resolve_drives(graph, urls):
             continue
         adresse, rest = teile
         try:
-            site = graph.get(f"{GRAPH}/sites/{adresse}")
-            drives = list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives"))
+            if adresse not in je_adresse:
+                site = graph.get(f"{GRAPH}/sites/{adresse}")
+                je_adresse[adresse] = (site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
+            site, drives = je_adresse[adresse]
         except auth.TokenExpired:
             raise
         except requests.HTTPError as e:

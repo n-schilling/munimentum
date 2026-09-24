@@ -138,6 +138,28 @@ def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
     assert drives[0]["site"] == "Team X"
 
 
+def test_several_urls_into_one_site_ask_for_it_once(capsys):
+    """Eleven URLs into one site cost two requests, not twenty-two."""
+    class Counting(_FakeGraph):
+        calls = 0
+
+        def get(self, url):
+            Counting.calls += 1
+            return super().get(url)
+
+        def paged(self, url):
+            Counting.calls += 1
+            yield from super().paged(url)
+    g = Counting(sites={"firma.sharepoint.com:/sites/PS-UK": {
+        "id": "s1", "name": "PS UK",
+        "drives": [{"id": "d2", "name": "Projects", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Projects"}]}})
+    urls = [f"https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Ordner{i}" for i in range(11)]
+    drives, fehl = sp.resolve_drives(g, urls)
+    assert fehl == 0 and Counting.calls == 2
+    assert drives[0]["prefixes"] == {f"N/Ordner{i}" for i in range(11)}
+
+
 def test_resolve_drives_pfad_begrenzt_auf_eine_bibliothek(capsys):
     """A folder URL mirrors exactly that subtree – not the whole site."""
     g = _FakeGraph(sites={"firma.sharepoint.com:/sites/PS-UK": {
