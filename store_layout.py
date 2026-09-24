@@ -52,7 +52,10 @@ MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 #      headings a message pasted in brought with it
 #   3  a Planner card's assignees are joined with " · ", not ", " – a
 #      sender written "Surname, Given" is one person, not two
-PARSER = 3
+#   4  a mail always gives a chunk: an invitation its description, an
+#      empty plain part the HTML beside it, a forward without own words
+#      its quote, and a mail with no text at all its subject and people
+PARSER = 4
 
 
 def parser_stand(store):

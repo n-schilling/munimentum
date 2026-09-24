@@ -294,6 +294,21 @@ def test_a_heading_inside_a_chat_message_is_not_the_name_of_the_chat(archive_pag
     expect(archive_page.locator("#detail-text")).to_contain_text("Executive summary")
 
 
+@pytest.mark.parametrize("word, key", [
+    ("canteen", "invite-steering"),     # the words of an invitation sit in its calendar part
+    ("blueprint", "site-plan"),         # an empty text part, the words in the HTML beside it
+    ("warranty", "fwd-terms"),          # a forward without a word of its own
+    ("whiteboard", "photo"),            # a picture and a subject, no text at all
+])
+def test_a_mail_whose_words_are_not_plain_text_is_found(archive_page, archive, word, key):
+    """Nearly one mail in five on a real mailbox – none of them could be
+    found before: they had no entry in the index at all."""
+    mail = next(m for m in sources.MAILS if m["key"] == key)
+    hits = search(archive_page, archive, word)
+    expect(hits).to_have_count(1)
+    assert hit_title(hits.first) == mail["subject"]
+
+
 def test_a_mail_knows_the_conversation_it_belongs_to(archive_page, archive):
     search(archive_page, archive, f"proposal for project {PROJECT}")
     archive_page.locator("#results .hit").first.click()

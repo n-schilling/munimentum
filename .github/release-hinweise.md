@@ -1,20 +1,16 @@
-## New in 13.8.1
+## New in 13.8.2
 
-More speed, and one fix the faster runs brought to light.
-
-- **Changed items reach the search** – a rescheduled appointment or a
-  mail deleted at Microsoft now updates the search and the calendar even
-  when the run brought nothing new.
-- **Mail** – the folders are checked one bundle after another, which
-  keeps Microsoft from making the run wait. The log names only folders
-  with changes, plus one line for all.
-- **SharePoint, Planner, index** – several URLs into one site ask for it
-  once, Planner comments come in bundles, and the files next to Teams
-  chats are no longer read again on every index run.
+- **Every mail can be found** – invitations and their answers, mails whose
+  text is only in HTML, forwards without a word of their own and mails with
+  no text at all now reach the search. On a real mailbox that was nearly
+  one mail in five.
+- **Faster index runs** – those mails are no longer read again on every
+  run.
 
 ## Upgrading
 
-Nothing to do after this update.
+The first index run after the update reads every file once more and
+takes longer for it, once.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

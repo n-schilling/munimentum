@@ -275,6 +275,37 @@ a word on the network change – that is the one thing the board will ask
 about.
 
 Carla"""},
+
+    # Four mails whose words are not where a plain text part would hold
+    # them – on a real mailbox nearly one mail in five, and none of them
+    # used to reach the index. The invitation's own words sit in its
+    # calendar part (its UID is the steering meeting's, which the calendar
+    # holds, so no appointment is rebuilt from it).
+    {"key": "invite-steering", "folder": "Inbox", "when": day(6, 11, 9, 0),
+     "frm": CARLA, "to": [people.ME], "shape": "invitation",
+     "subject": f"Invitation: {PROJECT} steering meeting",
+     "invitation": {"uid": f"steering@{people.DOMAIN}", "start": day(6, 18, 15, 0),
+                    "location": "Board room",
+                    "description": "Please bring the canteen figures for the second site."},
+     "body": ""},
+    {"key": "site-plan", "folder": "Inbox", "when": day(6, 12, 14, 30),
+     "frm": BOB, "to": [people.ME], "shape": "html",
+     "subject": "Site plan for the second site",
+     "body": "<p>The <b>blueprint</b> of the second site is in the portal now.</p>"},
+    {"key": "fwd-terms", "folder": "Inbox", "when": day(6, 13, 8, 15),
+     "frm": BOB, "to": [people.ME],
+     "subject": "FW: Terms for the devices",
+     "body": f"""________________________________
+From: {DANA[0]} <{DANA[1]}>
+Sent: Monday, 12 June 10:00
+Subject: Terms for the devices
+
+The warranty covers every device for three years."""},
+    {"key": "photo", "folder": "Inbox", "when": day(3, 21, 9, 30),
+     "frm": BOB, "to": [people.ME, CARLA],
+     "subject": "Whiteboard photo from the kickoff",
+     "body": "",
+     "attachments": [("kickoff.png", PNG_8x8)]},
 ]
 
 # A mail that is no longer in the mailbox but stays in the archive: it is
@@ -316,12 +347,41 @@ def _mime(entry):
         msg["In-Reply-To"] = _message_id(entry["reply_to"])
         msg["References"] = " ".join(_message_id(k) for k in _chain(entry))
     msg["Subject"] = entry["subject"]
-    msg.set_content(entry["body"])
-    for name, text in entry.get("attachments") or []:
+    shape = entry.get("shape")
+    if shape == "invitation":
+        # As Outlook sends it: an empty text part beside the calendar one.
+        msg.set_content("")
+        msg.add_alternative(_invitation(entry), subtype="calendar",
+                            params={"method": "REQUEST"})
+    elif shape == "html":
+        # An empty text part beside the HTML that holds the words.
+        msg.set_content("")
+        msg.add_alternative(entry["body"], subtype="html")
+    else:
+        msg.set_content(entry["body"])
+    for name, content in entry.get("attachments") or []:
+        if isinstance(content, bytes):
+            msg.add_attachment(content, maintype="image", subtype="png", filename=name)
+            continue
         subtype = {"csv": "csv", "md": "markdown"}.get(name.rsplit(".", 1)[-1], "plain")
-        msg.add_attachment(text.encode("utf-8"), maintype="text",
+        msg.add_attachment(content.encode("utf-8"), maintype="text",
                            subtype=subtype, filename=name)
     return msg.as_bytes()
+
+
+def _invitation(entry):
+    """The text/calendar part of an invitation mail."""
+    inv = entry["invitation"]
+    start = inv["start"].strftime("%Y%m%dT%H%M%SZ")
+    ende = (inv["start"] + timedelta(hours=1)).strftime("%Y%m%dT%H%M%SZ")
+    organizer = entry["frm"]
+    return "\r\n".join([
+        "BEGIN:VCALENDAR", "METHOD:REQUEST", "BEGIN:VEVENT",
+        f"UID:{inv['uid']}", f"SUMMARY:{entry['subject'].split(': ', 1)[-1]}",
+        f"DTSTART:{start}", f"DTEND:{ende}",
+        f"ORGANIZER;CN={organizer[0]}:mailto:{organizer[1]}",
+        f"LOCATION:{inv['location']}", f"DESCRIPTION:{inv['description']}",
+        "END:VEVENT", "END:VCALENDAR", ""])
 
 
 def mail_rel(entry):

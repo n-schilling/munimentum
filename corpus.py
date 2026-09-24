@@ -325,6 +325,33 @@ def decode_part(part):
         return ""
 
 
+def _part_text(part):
+    text = decode_part(part)
+    if part.get_content_type() == "text/html":
+        text = strip_html(text)
+    return text
+
+
+def _calendar_text(msg):
+    """The words of an invitation: where, and what its description says.
+
+    Outlook sends invitations and their answers with an empty text part
+    beside the text/calendar one – measured on a real mailbox, nearly one
+    mail in five, and without this each of them had no text at all."""
+    for p in msg.walk():
+        if p.get_content_type() != "text/calendar":
+            continue
+        location = description = ""
+        for line in _unfold(decode_part(p)):
+            name, _params, value = _prop(line)
+            if name == "LOCATION" and not location:
+                location = _unescape(value)
+            elif name == "DESCRIPTION" and not description:
+                description = _unescape(value)
+        return ((f"Ort: {location}. " if location.strip() else "") + description).strip()
+    return ""
+
+
 def extract_body(msg):
     part = None
     try:
@@ -337,13 +364,21 @@ def extract_body(msg):
                     and p.get_content_disposition() != "attachment"):
                 part = p
                 break
-    if part is None:
-        return ""
-    text = decode_part(part)
-    if part.get_content_type() == "text/html":
-        text = strip_html(text)
-    text = strip_quoted(text)
-    return collapse(text)
+    text = _part_text(part) if part is not None else ""
+    if not text.strip() and part is not None and part.get_content_type() == "text/plain":
+        # An empty plain part beside an HTML one: the words are in the HTML.
+        try:
+            html = msg.get_body(preferencelist=("html",))
+        except Exception:
+            html = None
+        if html is not None:
+            text = _part_text(html)
+    if not text.strip():
+        text = _calendar_text(msg)
+    eigenes = strip_quoted(text)
+    # A forward or reply without a word of its own is all quote – then the
+    # quote is the content, not something to cut away.
+    return collapse(eigenes if eigenes.strip() else text)
 
 
 # Characters that belong in no filename – and the leading dot, so an
@@ -1289,6 +1324,11 @@ def chunk_records(records, size=1500, overlap=200):
     chunks = []
     for r in records:
         parts = _split(r["text"], size, overlap)
+        if not parts and r.get("src") == "outlook":
+            # A mail without a word of text is still a mail: one chunk, so
+            # its subject, people and attachments can be found – and so the
+            # next index run knows the file instead of reading it again.
+            parts = [""]
         for j, part in enumerate(parts):
             c = dict(r)
             c.pop("text", None)

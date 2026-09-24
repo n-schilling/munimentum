@@ -72,7 +72,7 @@ every pull request. A failed one leaves a screenshot in `tests/ui/output/`.
 Most of them need an archive with something in it, and that archive is
 generated – `testdata/` writes a whole profile with all eight sources,
 every name and file in it invented. It is not a handful of files but a
-year of traffic: some two thousand four hundred of them, a few thousand
+year of traffic: some two and a half thousand of them, a few thousand
 items, enough that a result runs over pages and a timeline needs its
 band. You can open it yourself:
 

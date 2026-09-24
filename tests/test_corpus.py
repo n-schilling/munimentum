@@ -807,3 +807,57 @@ def test_teams_message_carries_since_when_it_is_gone(tmp_path):
     recs = {r["text"]: r for r in corpus.load_teams(str(tmp_path))}
     assert recs["Tor 4 ist das Hauptproblem"]["gone"] == "2025-06-03T10:00:00+00:00"
     assert "gone" not in recs["Noch da"]
+
+
+# --------------------------------------------------------------------------
+# Mails that used to give the index no text at all (PARSER 4)
+# --------------------------------------------------------------------------
+def _alternative_mail(*parts, subject="Abnahme Nordwind"):
+    """A multipart/alternative mail from (type, content) pairs."""
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m["From"] = "Alice Beispiel <alice@nordwind.example>"
+    m["To"] = "bob@nordwind.example"
+    m["Subject"] = subject
+    (first_type, first), *rest = parts
+    m.set_content(first, subtype=first_type.split("/")[1])
+    for kind, content in rest:
+        m.add_alternative(content, subtype=kind.split("/")[1])
+    return m
+
+
+_ICS = "\r\n".join(["BEGIN:VCALENDAR", "BEGIN:VEVENT", "SUMMARY:Abnahme",
+                    "LOCATION:Werk 2\\, Halle B",
+                    "DESCRIPTION:Bitte die Mängelliste mitbringen.\\nDanke!",
+                    "END:VEVENT", "END:VCALENDAR", ""])
+
+
+def test_an_invitation_gives_its_place_and_description():
+    """Outlook sends invitations with an empty plain part beside the
+    calendar one – nearly one mail in five had no text at all."""
+    text = corpus.extract_body(_alternative_mail(("text/plain", ""), ("text/calendar", _ICS)))
+    assert text == "Ort: Werk 2, Halle B. Bitte die Mängelliste mitbringen. Danke!"
+
+
+def test_an_empty_plain_part_gives_way_to_the_html():
+    text = corpus.extract_body(_alternative_mail(("text/plain", ""), ("text/html", "<p>Die Abnahme ist <b>durch</b>.</p>")))
+    assert text == "Die Abnahme ist durch ."
+
+
+def test_a_forward_without_own_words_keeps_the_forwarded_text():
+    body = ("________________________________\nVon: Bob Baumeister <bob@nordwind.example>\n"
+            "Gesendet: Montag, 7. Juli 2025 10:00\nBetreff: Abnahme\nDie Mängelliste ist leer.\n")
+    text = corpus.extract_body(_alternative_mail(("text/plain", body)))
+    assert "Die Mängelliste ist leer." in text
+    # With own words the quote is cut, as before.
+    assert "Mängelliste" not in corpus.extract_body(_alternative_mail(("text/plain", "Siehe unten.\n\n" + body)))
+
+
+def test_a_mail_without_any_text_still_gives_one_chunk():
+    """Found by subject, people and attachments – and known to the next
+    index run instead of being read again every time."""
+    rec = {"uid": "outlook:a.eml:0", "src": "outlook", "rel": "a.eml", "title": "Nur ein Bild", "text": ""}
+    chunks = corpus.chunk_records([rec])
+    assert len(chunks) == 1 and chunks[0]["text"] == "" and chunks[0]["title"] == "Nur ein Bild"
+    # Other sources keep leaving an empty record out.
+    assert corpus.chunk_records([{**rec, "src": "teams", "uid": "teams:a:0"}]) == []
