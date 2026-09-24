@@ -883,6 +883,23 @@ class Nachrichtenspeicher:
         self.bereich = f"msgs:{kennung}"
         self.zeilen = dict(db.saetze_lesen(self.bereich))   # id -> JSON
         self._neu = {}
+        self._known = set(self.zeilen)
+
+    def news(self):
+        """What this run brought, before `sichern()`: new messages people
+        wrote, new system events (a meeting started, someone joined) and
+        stored messages that changed – an edit, a deletion, a reaction."""
+        counts = {"messages": 0, "events": 0, "edited": 0}
+        for sid, roh in self._neu.items():
+            if sid in self._known:
+                counts["edited"] += 1
+                continue
+            try:
+                kind = json.loads(roh).get("messageType", "message")
+            except (ValueError, AttributeError):
+                kind = "message"
+            counts["messages" if kind == "message" else "events"] += 1
+        return counts
 
     def leer(self):
         return not self.zeilen
@@ -1496,12 +1513,17 @@ def export_one_chat(graph, out, state, my_id, chat):
                           alles=export_util.voll_neu())
     msgs = speicher.nachrichten()
     msgs.sort(key=lambda m: m.get("createdDateTime") or "")
+    # The chat list's preview dates the chat too: a preview Graph shows but
+    # the message listing never returns would otherwise make the chat due
+    # on every run. The store's watermark, not this, bounds the next read.
+    preview = (chat.get("lastMessagePreview") or {}).get("createdDateTime")
+    last_act = newest_iso([*(m.get("createdDateTime") for m in msgs), preview])
+    news = speicher.news()
 
     # Only system/event messages and no real message? -> not exported by default
     real = sum(1 for m in msgs if m.get("messageType", "message") == "message")
     if SKIP_EMPTY_CHATS and real == 0:
         cleanup_old(out, prior, None)   # remove a file possibly written earlier
-        last_act = newest_iso(m.get("createdDateTime") for m in msgs)
         speicher.sichern()
         record_done(out, state, key, folder, title, None, len(msgs),
                     last_activity=last_act, empty=True)
@@ -1511,7 +1533,15 @@ def export_one_chat(graph, out, state, my_id, chat):
     meta = f"{len(msgs)} Nachrichten · Chat-ID {key}"
     fname = f"{safe(title)}__{short_id(key)}.html"
     new_rel = f"{folder}/{fname}"
-    lokal, zahlen = None, dict(_KEINE_DATEIEN)
+    # Due, but nothing came: the file stays as it is, and so does the count.
+    if (prior and not speicher.geaendert() and not export_util.voll_neu()
+            and not export_util.abgleich() and prior.get("rel") == new_rel and (prior.get("v") or 0) >= RECORD_V
+            and (out / new_rel).exists()):
+        record_done(out, state, key, folder, title, new_rel, len(msgs),
+                    last_activity=last_act)
+        return ("unchanged", folder, title, len(msgs), time.monotonic() - t0,
+                dict(_KEINE_DATEIEN))
+    lokal, zahlen = None, {**_KEINE_DATEIEN, **news}
     if ATTACHMENTS:
         anhaenge_umziehen(out, prior, new_rel)
         lokal, zahlen["files"], zahlen["excluded"], zahlen["file_errors"] = \
@@ -1524,7 +1554,6 @@ def export_one_chat(graph, out, state, my_id, chat):
                         keep=False)
     cleanup_old(out, prior, new_rel)   # remove old 'Unbekannt__…' file if renamed
     speicher.sichern()
-    last_act = newest_iso(m.get("createdDateTime") for m in msgs)
     record_done(out, state, key, folder, title, new_rel, len(msgs),
                 last_activity=last_act)
     return ("updated" if prior else "new", folder, title, len(msgs),
@@ -1734,7 +1763,7 @@ def export_one_channel(graph, out, state, team, ch, spiegel=None):
 
     meta = f"{count} Nachrichten (inkl. Antworten) · {ch.get('membershipType', 'standard')}"
     msgs = [m for m, _r in reihe]
-    lokal, zahlen = {}, dict(_KEINE_DATEIEN)
+    lokal, zahlen = {}, {**_KEINE_DATEIEN, **speicher.news()}
     if spiegel:
         lokal = spiegel_links(out, spiegel, msgs)
     if ATTACHMENTS:
@@ -1947,16 +1976,110 @@ def _ausgeschlossen(stats):
     stats["excluded"] = stats.get("excluded", 0) + 1
 
 
-def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, takt=None):
-    progress.event("run.teams.chats_loading")
-    chats = []
-    # members + lastMessagePreview inline -> correct 1:1 names without an extra
-    # call, and the per-chat activity timestamp for incremental runs
-    for c in graph.paged(f"{GRAPH}/me/chats",
-                         {"$top": PAGE, "$expand": "members,lastMessagePreview"}):
+# The chat list, newest activity first. Measured on a real account with
+# a few thousand chats: with the members expanded Graph pages 25 chats at 3–4 s
+# a page – minutes for the whole list; without them 50 at about 2 s. So the
+# members are left out (a known chat's name is in its record, a new one's
+# members are asked for on their own), and a regular run reads only down to
+# the moment the last listing covered: the first page usually reaches back
+# weeks. The whole list is still read once a week, on a full sync or a
+# resync, when the rules, the kinds or the start day change, and whenever
+# Graph refuses the ordering – renames and new members arrive that way.
+CHATS_FULL_DAYS = 7
+CHATS_MARGIN = timedelta(days=1)
+_CHAT_SELECT = "id,chatType,topic,lastUpdatedDateTime"
+
+
+def _chat_list_fingerprint(chat_cats, regeln):
+    """What decides which chats count: a change reads the whole list once."""
+    return hashlib.sha256(json.dumps(
+        [sorted(chat_cats), folders.schreibe_regeln(regeln or []),
+         (os.environ.get("TEAMS_SINCE") or "").strip()],
+        ensure_ascii=False).encode("utf-8")).hexdigest()[:16]
+
+
+def list_chats(graph, db, fingerprint):
+    """The chats to look at, and how they were listed: (chats, info) –
+    info names the moment the listing started, whether it was whole, and
+    collects the chats the run has to settle. Every chat once, however
+    often the paging names it."""
+    start = datetime.now(UTC)
+    cutoff = parse_ts(db.kv_lesen("chats_cutoff") or "")
+    try:
+        whole_at = float(db.kv_lesen("chats_full") or 0)
+    except ValueError:
+        whole_at = 0.0
+    whole = (cutoff is None or export_util.voll_neu() or export_util.abgleich()
+             or db.kv_lesen("chats_fp") != fingerprint
+             or time.time() - whole_at > CHATS_FULL_DAYS * 86400)
+    chats, seen = [], set()
+
+    def take(c):
+        if c.get("id") in seen:
+            return
+        seen.add(c.get("id"))
         chats.append(c)
         if len(chats) % 50 == 0:
             progress.melde(len(chats), what="chats")
+
+    try:
+        for c in graph.paged(f"{GRAPH}/me/chats",
+                             {"$top": PAGE, "$orderby": "lastMessagePreview/createdDateTime desc",
+                              "$expand": "lastMessagePreview", "$select": _CHAT_SELECT}):
+            if not whole:
+                ts = parse_ts((c.get("lastMessagePreview") or {}).get("createdDateTime"))
+                if ts is None:
+                    continue               # never a message: nothing to export
+                if ts < cutoff:
+                    break                  # older than what the last listing covered
+            take(c)
+    except requests.HTTPError as e:
+        if chats or _ist_status(e, 401):
+            raise
+        # The ordering refused: the whole list, the way it always worked.
+        progress.event("run.teams.chats_unsorted", "warn", error=export_util.fehlertext(e))
+        whole = True
+        for c in graph.paged(f"{GRAPH}/me/chats",
+                             {"$top": PAGE, "$expand": "members,lastMessagePreview"}):
+            take(c)
+    if whole:
+        progress.event("run.teams.chats_whole", n=len(chats))
+    else:
+        progress.event("run.teams.chats_recent", n=len(chats),
+                       since=human_time(cutoff.isoformat()))
+    return chats, {"start": start, "whole": whole, "pending": []}
+
+
+def chat_listing_done(db, info, fingerprint, state, out):
+    """After the run: the next listing reads down to the older of the
+    moment this one started (less a margin) and the activity of every chat
+    this run saw but did not settle – held back by its cadence, failed, or
+    still behind its preview. A chat outside the listing was settled
+    before, so it stays settled; a whole listing is dated."""
+    cutoff = info["start"] - CHATS_MARGIN
+    for chat in info["pending"]:
+        cs = parse_ts((chat.get("lastMessagePreview") or {}).get("createdDateTime"))
+        if cs is None:
+            continue
+        rec = get_record(out, state, chat["id"])
+        ps = parse_ts(rec.get("last_activity")) if rec else None
+        if ps is None or ps < cs:
+            cutoff = min(cutoff, cs - timedelta(seconds=1))
+    db.kv_schreiben("chats_cutoff", cutoff.isoformat())
+    db.kv_schreiben("chats_fp", fingerprint)
+    if info["whole"]:
+        db.kv_schreiben("chats_full", str(info["start"].timestamp()))
+
+
+def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, takt=None,
+                    listing=None):
+    progress.event("run.teams.chats_loading")
+    if listing is None:
+        listing = {"db": state_db.StateDb(out),
+                   "fingerprint": _chat_list_fingerprint(chat_cats, regeln)}
+    chats, info = list_chats(graph, listing["db"], listing["fingerprint"])
+    listing.update(info)
+    pending = info["pending"]
     wanted = [c for c in chats if TYPEMAP.get(c.get("chatType"), "other") in chat_cats]
     jobs, new, upd, same = [], 0, 0, 0
     # A full sync exports every chat again, whether or not it moved; a
@@ -1967,11 +2090,16 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
     for chat in wanted:
         folder = TYPEMAP.get(chat.get("chatType"), "other")
         if regeln or takt is not None:
-            pfad = chat_pfad(folder, chat_title(graph, chat, my_id))
+            # A known chat's name is in its record; only a new one's
+            # members are asked for.
+            title = (_bekannt(state, chat["id"]) or {}).get("title") \
+                or chat_title(graph, chat, my_id)
+            pfad = chat_pfad(folder, title)
             if regeln and not folders.gilt(pfad, regeln):
                 _ausgeschlossen(stats)
                 continue
             if takt is not None and not takt.faellig(folder, pfad, chat["id"]):
+                pending.append(chat)          # due later: the next listing reaches it
                 continue                      # counted and said once per category
         cur = (chat.get("lastMessagePreview") or {}).get("createdDateTime")
         rec = get_record(out, state, chat["id"])
@@ -1982,14 +2110,17 @@ def build_chat_jobs(graph, out, state, stats, my_id, chat_cats, regeln=None, tak
                 _ausgeschlossen(stats)        # nothing newer than the start day
                 continue
             jobs.append(("chat", chat, None))
+            pending.append(chat)
             new += 1
             continue
         ps, cs = parse_ts(rec.get("last_activity")), parse_ts(cur)
         if alles or abgleich or (cs is not None and (ps is None or cs > ps)):
             jobs.append(("chat", chat, None))   # new messages -> export again
+            pending.append(chat)
             upd += 1
         elif needs_rewrite(out, state, chat["id"], rec):
             jobs.append(("chat", chat, None))   # deleted messages to be marked
+            pending.append(chat)
             upd += 1
         else:
             stats["skipped"] += 1               # unchanged
@@ -2076,8 +2207,11 @@ def run_parallel(runners, stats, workers, fehler=None):
                                    kind=kind, name=label, n=count, dur=dur)
                 elif status == "updated":
                     stats["updated"] += 1
-                    progress.event("run.conv.updated", i=done_count, total=total,
-                                   kind=kind, name=label, n=count, dur=dur)
+                    progress.event("run.conv.changed", i=done_count, total=total,
+                                   kind=kind, name=label, n=count, dur=dur,
+                                   new=int(zahlen.get("messages") or 0),
+                                   events=int(zahlen.get("events") or 0),
+                                   edited=int(zahlen.get("edited") or 0))
                 elif status == "unchanged":
                     stats["skipped"] += 1   # checked, but no change
                     progress.event("run.conv.same", i=done_count, total=total,
@@ -2367,8 +2501,9 @@ def main():
         selected_teams = select_teams(graph, fehler=fehler_kats) if want_channels else []
 
         chat_cats = categories & {"1on1", "group", "meeting"}
+        listing = {"db": root_db, "fingerprint": _chat_list_fingerprint(chat_cats, regeln)}
         chat_jobs = (build_chat_jobs(graph, out, state, stats, my_id, chat_cats,
-                                     regeln=regeln, takt=takt)
+                                     regeln=regeln, takt=takt, listing=listing)
                      if chat_cats else [])
         if not chat_cats:
             progress.event("run.teams.chats_skipped")
@@ -2397,6 +2532,8 @@ def main():
         if runners:
             progress.event("run.teams.exporting", n=len(runners))
         result = run_parallel(runners, stats, workers, fehler=fehler_kats)
+        if chat_cats and "start" in listing and result == "done":
+            chat_listing_done(root_db, listing, listing["fingerprint"], state, out)
     except TokenExpired:
         result = "expired"
 
@@ -2408,7 +2545,8 @@ def main():
     # Updated conversations count as well: their files have changed, so the
     # index knows them only in the old version. Files fetched count too –
     # they are new archive content the index has not seen.
-    extra = {"updated": stats["updated"], "empty": stats["empty"]}
+    extra = {"updated": stats["updated"], "messages": stats.get("messages", 0),
+             "empty": stats["empty"]}
     if ATTACHMENTS or CHANNEL_FILES:
         extra.update(files=stats["files"], gone=stats["gone"])
     uebersprungen += takt.uebersprungen()

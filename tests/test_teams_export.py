@@ -14,6 +14,8 @@ import requests
 
 import progress
 import state_db
+import time
+from datetime import datetime, timedelta, UTC
 import teams_export as te
 
 GRAPH = te.GRAPH
@@ -1009,7 +1011,8 @@ def test_anhaenge_ueber_der_grenze_bleiben_links(tmp_path, monkeypatch):
     chat, graph = _chat_mit_datei(size=5 * 1024 * 1024)
     state = te.load_state(tmp_path)
     _s, _f, _t, _n, _d, zahlen = te.export_one_chat(graph, tmp_path, state, "me", chat)
-    assert zahlen == {"files": 0, "excluded": 1, "file_errors": 0}
+    assert zahlen == {"files": 0, "excluded": 1, "file_errors": 0,
+                      "messages": 1, "events": 0, "edited": 0}
     html = (tmp_path / state["conversations"]["c1"]["rel"]).read_text(encoding="utf-8")
     assert f'href="{DATEI_URL}"' in html and graph.geladen == []
 
@@ -2512,3 +2515,186 @@ def test_the_channel_mirror_leaves_the_excluded_types_out(tmp_path, monkeypatch)
              "webUrl": "https://x/sites/r/Shared Documents/Allgemein"}})
     te.kanal_dateien_spiegeln(graph, tmp_path, [("channel", team, ch)])
     assert seen["exclude"] == {"aspx", "mp4"}
+
+
+# --------------------------------------------------------------------------
+# A second run brings nothing new: counts that say what really came
+# --------------------------------------------------------------------------
+def _chat(chat_id="c1", preview="2025-06-02T09:00:00Z"):
+    return {"id": chat_id, "chatType": "oneOnOne",
+            "members": [{"userId": "me", "displayName": "Ich"},
+                        {"userId": "u2", "displayName": "Alice Example"}],
+            "lastMessagePreview": {"createdDateTime": preview}}
+
+
+def test_news_says_what_came_new_changed_and_system(tmp_path):
+    speicher = te.Nachrichtenspeicher(state_db.StateDb(tmp_path), "c1")
+    first = _msg("Alice Example", "eins", "2025-06-02T08:00:00Z")
+    speicher.merge([first])
+    assert speicher.news() == {"messages": 1, "events": 0, "edited": 0}
+    speicher.sichern()
+    speicher = te.Nachrichtenspeicher(state_db.StateDb(tmp_path), "c1")
+    speicher.merge([{**first, "body": {"contentType": "text", "content": "eins!"}},
+                    _msg("Alice Example", "zwei", "2025-06-02T09:00:00Z"),
+                    {"id": "e1", "messageType": "systemEventMessage",
+                     "createdDateTime": "2025-06-02T09:05:00Z", "body": {"content": ""}}])
+    assert speicher.news() == {"messages": 1, "events": 1, "edited": 1}
+
+
+def test_a_due_chat_that_brings_nothing_is_unchanged_and_not_due_again(tmp_path):
+    """The preview names a moment no listed message has: the chat is due,
+    the listing brings nothing – nothing is written, nothing counted, and
+    the preview's moment is taken so the next run does not ask again."""
+    msgs = [_msg("Alice Example", "eins", "2025-06-02T08:00:00Z")]
+    graph = FakeGraph(pages={f"{GRAPH}/me/chats/c1/messages": msgs})
+    state = te.load_state(tmp_path)
+    assert te.export_one_chat(graph, tmp_path, state, "me", _chat())[0] == "new"
+    rec = te.get_record(tmp_path, state, "c1")
+    assert rec["last_activity"] == "2025-06-02T09:00:00Z", "the preview dates the chat"
+    path = tmp_path / rec["rel"]
+    stamp = path.stat().st_mtime_ns
+
+    later = _chat(preview="2025-06-03T10:00:00Z")
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    graph2 = FakeGraph(pages={f"{GRAPH}/me/chats": [later]})
+    assert len(te.build_chat_jobs(graph2, tmp_path, state, stats, "me", {"1on1"})) == 1
+    graph3 = FakeGraph(pages={te.chat_delta_url("c1", "2025-06-02T08:00:00.000Z"): []})
+    status, *_rest, zahlen = te.export_one_chat(graph3, tmp_path, state, "me", later)
+    assert status == "unchanged" and path.stat().st_mtime_ns == stamp
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    graph4 = FakeGraph(pages={f"{GRAPH}/me/chats": [later]})
+    assert te.build_chat_jobs(graph4, tmp_path, state, stats, "me", {"1on1"}) == []
+    assert stats["skipped"] == 1
+
+
+def test_a_chat_the_paging_names_twice_is_one_job(tmp_path):
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    graph = FakeGraph(pages={f"{GRAPH}/me/chats": [_chat(), _chat(), _chat("c2")]})
+    jobs = te.build_chat_jobs(graph, tmp_path, te.load_state(tmp_path), stats, "me", {"1on1"})
+    assert [j[1]["id"] for j in jobs] == ["c1", "c2"]
+
+
+def test_the_result_counts_the_new_messages(tmp_path, monkeypatch, capsys):
+    """The line of an updated conversation names what came; the result
+    carries the new messages next to the conversations."""
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    runner = lambda: ("updated", "1on1", "Alice Example", 3, 0.1,  # noqa: E731
+                      {"messages": 2, "events": 1, "edited": 0})
+    te.run_parallel([runner], stats, 1)
+    line = [e for e in _events(capsys) if e["k"] == "run.conv.changed"][0]
+    assert (line["v"]["new"], line["v"]["events"], line["v"]["edited"]) == (2, 1, 0)
+    assert stats["messages"] == 2 and stats["updated"] == 1
+
+
+# --------------------------------------------------------------------------
+# The chat list, newest first: a regular run reads only what moved
+# --------------------------------------------------------------------------
+def _dated(cid, ts, ctype="group", topic="Nordwind"):
+    return {"id": cid, "chatType": ctype, "topic": topic,
+            "lastMessagePreview": {"id": f"p-{cid}", "createdDateTime": ts}}
+
+
+class _SortedGraph(FakeGraph):
+    """Serves the chat list newest first, as Graph does when asked to –
+    and refuses the ordering on request."""
+
+    def __init__(self, chats, refuse=False):
+        super().__init__(pages={f"{GRAPH}/me/chats": chats})
+        self.refuse = refuse
+        self.served = 0
+
+    def paged(self, url, params=None):
+        self.paged_params.append((url, params))
+        if self.refuse and "$orderby" in (params or {}):
+            raise _http_error(400)
+        for c in sorted(self.pages[url], reverse=True,
+                        key=lambda c: (c.get("lastMessagePreview") or {}).get("createdDateTime") or ""):
+            self.served += 1
+            yield c
+
+
+def _listing(tmp_path, graph, chat_cats=frozenset({"group"}), regeln=None):
+    db = state_db.StateDb(tmp_path)
+    fp = te._chat_list_fingerprint(chat_cats, regeln)
+    chats, info = te.list_chats(graph, db, fp)
+    return chats, info, db, fp
+
+
+def test_the_first_listing_is_whole_and_the_next_reads_only_what_moved(tmp_path, capsys):
+    old = [_dated(f"o{i}", f"2025-05-{i + 1:02d}T10:00:00Z") for i in range(20)]
+    chats, info, db, fp = _listing(tmp_path, _SortedGraph(old))
+    assert info["whole"] and len(chats) == 20
+    params = _SortedGraph(old)
+    _listing(tmp_path, params)
+    url, p = params.paged_params[0]
+    assert p["$orderby"] == "lastMessagePreview/createdDateTime desc"
+    assert p["$expand"] == "lastMessagePreview" and "members" not in p["$expand"]
+    assert p["$select"] == "id,chatType,topic,lastUpdatedDateTime"
+    state = te.load_state(tmp_path)
+    te.chat_listing_done(db, info, fp, state, tmp_path)
+    assert db.kv_lesen("chats_full") and db.kv_lesen("chats_cutoff")
+
+    now = datetime.now(UTC)
+    fresh = [_dated("n1", (now - timedelta(hours=2)).isoformat().replace("+00:00", "Z"))]
+    graph = _SortedGraph(old + fresh)
+    capsys.readouterr()
+    chats, info, _db, _fp = _listing(tmp_path, graph)
+    assert [c["id"] for c in chats] == ["n1"] and not info["whole"]
+    assert graph.served == 2, "stopped at the first chat older than the last listing"
+    assert [e["k"] for e in _events(capsys)] == ["run.teams.chats_recent"]
+
+
+def test_a_chat_the_run_did_not_settle_keeps_the_next_listing_reaching_it(tmp_path):
+    """Held back by its cadence or failed: its activity bounds the next
+    listing, so it is seen again instead of falling behind the cutoff."""
+    now = datetime.now(UTC)
+    ts = (now - timedelta(days=3)).isoformat().replace("+00:00", "Z")
+    held = _dated("h1", ts)
+    db = state_db.StateDb(tmp_path)
+    info = {"start": now, "whole": True, "pending": [held]}
+    state = te.load_state(tmp_path)
+    te.chat_listing_done(db, info, "fp", state, tmp_path)
+    assert te.parse_ts(db.kv_lesen("chats_cutoff")) < te.parse_ts(ts)
+    # Settled since (its record reaches its preview): only the margin counts.
+    (tmp_path / "group").mkdir()
+    (tmp_path / "group" / "h.html").write_text("x", encoding="utf-8")
+    te.record_done(tmp_path, state, "h1", "group", "Nordwind", "group/h.html", 1, last_activity=ts)
+    te.chat_listing_done(db, info, "fp", state, tmp_path)
+    assert te.parse_ts(db.kv_lesen("chats_cutoff")) == now - te.CHATS_MARGIN
+
+
+def test_the_whole_list_again_when_the_rules_change_or_a_week_passed(tmp_path):
+    old = [_dated("o1", "2025-05-01T10:00:00Z")]
+    _chats, info, db, fp = _listing(tmp_path, _SortedGraph(old))
+    te.chat_listing_done(db, info, fp, te.load_state(tmp_path), tmp_path)
+    assert not _listing(tmp_path, _SortedGraph(old))[1]["whole"]
+    import folders
+    regeln = folders.lies_regeln("- group/Nordwind")
+    assert _listing(tmp_path, _SortedGraph(old), regeln=regeln)[1]["whole"], "rules changed"
+    db.kv_schreiben("chats_full", str(time.time() - 8 * 86400))
+    assert _listing(tmp_path, _SortedGraph(old))[1]["whole"], "a week passed"
+
+
+def test_an_ordering_graph_refuses_falls_back_to_the_whole_list(tmp_path, capsys):
+    chats, info, _db, _fp = _listing(tmp_path, _SortedGraph([_dated("o1", "2025-05-01T10:00:00Z")],
+                                                            refuse=True))
+    assert [c["id"] for c in chats] == ["o1"] and info["whole"]
+    kinds = [e["k"] for e in _events(capsys)]
+    assert kinds == ["run.teams.chats_unsorted", "run.teams.chats_whole"]
+
+
+def test_a_known_chat_takes_its_name_from_the_record(tmp_path):
+    """Without members in the listing, a known untitled chat is not asked
+    for them: the rules see the name its record carries."""
+    import folders
+    chat = {"id": "g1", "chatType": "group", "topic": None,
+            "lastMessagePreview": {"createdDateTime": "2025-06-05T00:00:00Z"}}
+    state = te.load_state(tmp_path)
+    state["conversations"]["g1"] = {"done": True, "rel": "group/x.html", "title": "Alice, Bob",
+                                    "last_activity": "2025-06-05T00:00:00Z", "v": te.RECORD_V}
+    graph = _SortedGraph([chat])
+    stats = {"new": 0, "updated": 0, "skipped": 0, "empty": 0}
+    te.build_chat_jobs(graph, tmp_path, state, stats, "me", {"group"},
+                       regeln=folders.lies_regeln("- group/Alice, Bob"))
+    assert stats["excluded"] == 1
+    assert all("/members" not in url for url, _p in graph.paged_params)

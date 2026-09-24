@@ -429,7 +429,7 @@ def test_write_calendar_json_schreibt_atomar(tmp_path):
     assert counts["rekonstruiert"] == 1
     assert not ziel.with_name(ziel.name + ".tmp").exists()
     daten = json.loads(ziel.read_text(encoding="utf-8"))
-    assert daten["counts"] == counts
+    assert {**daten["counts"], "changed": 3, "removed": 0} == counts
     assert any(r.get("st") == "deleted" for r in daten["recs"])
 
 
@@ -448,6 +448,32 @@ def test_main_json_schreibt_die_daten(tmp_path, monkeypatch, capsys):
     fazit = [f for f in fazit if f is not None]
     assert fazit and fazit[0]["extra"] == {"events": 1, "rebuilt": 1,
                                           "contacts": 1}
+
+
+def test_a_second_build_reports_nothing_new(tmp_path, monkeypatch, capsys):
+    """The file is rebuilt whole, but "new" counts only what the last
+    build did not have as it is now: a second build reports 0, a changed
+    contact 1, a vanished one as removed."""
+    outlook = _kalender_export(tmp_path)
+    ziel = tmp_path / "kal.json"
+    monkeypatch.setattr(sys, "argv", ["combined_search.py", str(outlook),
+                                      "--json", str(ziel)])
+
+    def build():
+        capsys.readouterr()
+        combined_search.main()
+        return [f for f in (progress.lies_ergebnis(z) for z in capsys.readouterr().out.splitlines())
+                if f is not None][0]
+    first = build()
+    assert (first["new"], first["unchanged"]) == (3, 0)
+    second = build()
+    assert (second["new"], second["unchanged"]) == (0, 3)
+    vcf = outlook / "kontakte" / "Team" / "alice.vcf"
+    vcf.write_text(VCF.replace("Alice Example", "Alice Beispiel"), encoding="utf-8")
+    third = build()
+    assert (third["new"], third["unchanged"]) == (1, 2)
+    assert third["extra"]["removed"] == 1, "the contact as it was is gone from the file"
+    assert "removed" not in second["extra"]
 
 
 def test_main_json_ohne_wiederherstellung(tmp_path, monkeypatch):

@@ -93,7 +93,10 @@ SCOPES = [RES + "Mail.Read", RES + "Calendars.Read", RES + "Contacts.Read", RES 
 # Environment variable > app_config.json > default here (see settings.py)
 INCLUDE_HIDDEN = settings.flag("INCLUDE_HIDDEN", "include_hidden")
 PAGE = 50                   # $top for list requests
-DELTA_PAGE = 200            # Prefer: odata.maxpagesize for delta rounds (no documented cap)
+# Prefer: odata.maxpagesize for delta rounds. No documented cap; measured on
+# a real mailbox Graph gives at most about 512, and 500 reads a folder in
+# 1.2 s per thousand mails where 200 took 3.2 s.
+DELTA_PAGE = 500
 YEARS_AHEAD = 10            # the calendar window always reaches this far ahead
 EPOCH = "1970-01-01T00:00:00Z"     # the window's start when it has no start
 UTC_PREF = 'outlook.timezone="UTC"'  # times in UTC -> correct .ics
@@ -318,23 +321,69 @@ def _subtree(graph, folder, rel_path, acc):
         _subtree(graph, child, f"{rel_path}/{cname}", acc)
 
 
+FOLDER_SELECT = "id,displayName,parentFolderId,childFolderCount,totalItemCount"
+
+
+def _tree_by_delta(graph):
+    """The whole folder tree in one delta round: [(top folder, [children
+    in order] per id)]. Measured on a mailbox with several hundred folders:
+    one request and under a second, where listing every folder's children
+    took a request per folder and two minutes – same folders, same counts.
+    Hidden folders are not in it (the round knows no includeHiddenFolders),
+    so INCLUDE_HIDDEN keeps the listing folder by folder."""
+    alle = []
+    for seite, _link in delta_seiten(graph, f"{GRAPH}/me/mailFolders/delta",
+                                     {"$select": FOLDER_SELECT}):
+        alle += [f for f in seite if f.get("id") and "@removed" not in f]
+    ids = {f["id"] for f in alle}
+    kinder = {}
+    for f in alle:
+        kinder.setdefault(f.get("parentFolderId"), []).append(f)
+    roots = [f for f in alle if f.get("parentFolderId") not in ids]
+    return roots, kinder
+
+
 def build_tree(graph):
     """Reads the complete folder structure ONCE and yields, per top-level
     folder, the subtree with its recursive item count. The result is used for
     the selection AND the export (no re-listing during the parallel download)."""
+    kinder = None
+    if not INCLUDE_HIDDEN:
+        try:
+            roots, kinder = _tree_by_delta(graph)
+        except TokenExpired:
+            raise
+        except Exception as e:
+            progress.event("run.outlook.tree_fallback", "warn", error=export_util.fehlertext(e))
+            kinder = None
+    if kinder is None:
+        roots = list(graph.paged(f"{GRAPH}/me/mailFolders", folder_params()))
     tops = []
-    roots = list(graph.paged(f"{GRAPH}/me/mailFolders", folder_params()))
     count = 0
     for tf in roots:
         rel = f"{MAIL_DIR}/{safe(tf.get('displayName') or 'Ordner')}"
         sub = []
-        _subtree(graph, tf, rel, sub)
+        if kinder is None:
+            _subtree(graph, tf, rel, sub)
+        else:
+            _subtree_known(tf, rel, sub, kinder, set())
         items = sum((f.get("totalItemCount") or 0) for f, _ in sub)
         tops.append({"folder": tf, "rel": rel, "subtree": sub,
                      "items": items, "nfolders": len(sub)})
         count += len(sub)
     progress.event("run.folders_listed", n=count)
     return tops
+
+
+def _subtree_known(folder, rel_path, acc, kinder, gesehen):
+    """_subtree over a tree already read: no request."""
+    if folder["id"] in gesehen:
+        return
+    gesehen.add(folder["id"])
+    acc.append((folder, rel_path))
+    for child in kinder.get(folder["id"], []):
+        cname = safe(child.get("displayName") or "Ordner")
+        _subtree_known(child, f"{rel_path}/{cname}", acc, kinder, gesehen)
 
 
 # ---------------------------------------------------------------------------
@@ -554,12 +603,13 @@ def token_ungueltig(e):
     return bool(_TOKEN_TOT.search(text))
 
 
-def delta_seiten(graph, url, params=None, prefer=()):
+def delta_seiten(graph, url, params=None, prefer=(), erste=None):
     """One delta round, page by page: (entries, link) – the link only with
     the last page. Pages are handed on as they arrive, so a big folder is
-    never held in memory at once."""
+    never held in memory at once. `erste` is the first page when a batch
+    already asked for it."""
     headers = {"Prefer": ", ".join((f"odata.maxpagesize={DELTA_PAGE}", *prefer))}
-    daten = graph.get(url, params, headers)
+    daten = erste if erste is not None else graph.get(url, params, headers)
     while True:
         weiter = daten.get("@odata.nextLink")
         yield daten.get("value") or [], (None if weiter else daten.get("@odata.deltaLink"))
@@ -568,7 +618,14 @@ def delta_seiten(graph, url, params=None, prefer=()):
         daten = graph.get(weiter, extra_headers=headers)
 
 
-def delta_runde(graph, db, key, url, params=None, prefer=(), name=""):
+def _antwort_tot(status, body):
+    """token_ungueltig for a batch part: a stored link Graph no longer knows."""
+    if status == 410:
+        return True
+    return bool(_TOKEN_TOT.search(json.dumps(body or {}, ensure_ascii=False)))
+
+
+def delta_runde(graph, db, key, url, params=None, prefer=(), name="", erste=None):
     """Start a round: from the stored link when there is one, from the top
     otherwise. Returns (pages, full) – full says whether the round lists
     the whole collection or only the changes since the last one.
@@ -584,6 +641,17 @@ def delta_runde(graph, db, key, url, params=None, prefer=(), name=""):
         # again next time. The resync then skips what the resume log knows
         # and finds on disk; the full sync writes everything over.
         db.kv_schreiben(key, None)
+        token = None
+    if token and erste is not None:
+        # The first page came in a batch with the other folders' first pages.
+        status, body = erste
+        if status == 200 and isinstance(body, dict):
+            return delta_seiten(graph, token, prefer=prefer, erste=body), False
+        if not _antwort_tot(status, body):
+            code = ((body or {}).get("error") or {}).get("code") if isinstance(body, dict) else None
+            raise RuntimeError(f"HTTP {status}" + (f" {code}" if code else ""))
+        db.kv_schreiben(key, None)
+        progress.event("run.outlook.delta_reset", "warn", name=name)
         token = None
     if token:
         seiten = delta_seiten(graph, token, prefer=prefer)
@@ -674,6 +742,37 @@ def _alte_datei_weg(out, alt, rel):
 MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
 
 
+def erste_seiten(graph, db, selected):
+    """The first page of every folder's stored round, asked for in JSON
+    batches, two at a time: {folder id: (status, body)}. Most folders have
+    nothing new, and their whole round is this one page – measured on 40
+    folders: 21 s asked one by one, 1.1 s this way. A folder whose page
+    says there is more reads on page by page. Without a stored link, or
+    in a resync, a folder starts its round the usual way."""
+    if export_util.abgleich():
+        return {}
+    links = {}
+    for top in selected:
+        for folder, _rel in top["subtree"]:
+            link = db.kv_lesen(f"delta:{folder['id']}")
+            if link:
+                links[folder["id"]] = link
+    if len(links) < 2:
+        return {}
+    progress.event("run.outlook.checking", n=len(links))
+    try:
+        antworten = graph.batch_get(list(dict.fromkeys(links.values())),
+                                    extra_headers={"Prefer": f"odata.maxpagesize={DELTA_PAGE}"},
+                                    parallel=2)
+    except TokenExpired:
+        raise
+    except Exception as e:
+        # One by one, as before: every folder asks for its own first page.
+        progress.event("run.outlook.checking_failed", "warn", error=export_util.fehlertext(e))
+        return {}
+    return {fid: antworten[link] for fid, link in links.items() if link in antworten}
+
+
 def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, marks=None):
     """Mirrors the folders onto the filesystem and yields (mid, rel) for
     every mail not yet exported. Listing runs in the main thread (lazily).
@@ -689,6 +788,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
     seit = outlook_since()
     # A full sync writes every mail again – the resume log is not asked.
     alles = export_util.voll_neu()
+    vorab = erste_seiten(graph, db, selected)
     for top in selected:
         for folder, rel_path in top["subtree"]:
             (out / rel_path).mkdir(parents=True, exist_ok=True)
@@ -702,7 +802,7 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
                 seiten, voll = delta_runde(
                     graph, db, f"delta:{folder['id']}",
                     f"{GRAPH}/me/mailFolders/{folder['id']}/messages/delta",
-                    {"$select": MAIL_SELECT}, name=rel_path)
+                    {"$select": MAIL_SELECT}, name=rel_path, erste=vorab.pop(folder["id"], None))
                 if bestand is not None and not voll:
                     bestand.per_link.add(rel_path)
                 for eintraege, ende in seiten:
@@ -1386,9 +1486,10 @@ _hilfe_gewuenscht = export_util.hilfe_gewuenscht
 # ---------------------------------------------------------------------------
 # Folder structure: its own step, its own result
 #
-# Listing the tree takes two minutes for over 400 folders, and it rarely
-# changes. Separate means: sync once, after that the export reads it from
-# disk.
+# The stored tree is what the rules choose from and what the page shows;
+# it renews on "sync folder structure". Reading it is one delta round
+# (build_tree) – two minutes only with hidden folders, which are listed
+# folder by folder.
 # ---------------------------------------------------------------------------
 def baum_eintraege(graph):
     """The tree as a flat list: path, ID, name, item count."""
@@ -1442,8 +1543,8 @@ def auswahl_aus_puffer(daten, regeln):
 def waehle_ordner(graph, out):
     """Which folders get exported – from the cache, otherwise fresh.
 
-    The cache is the normal case: nobody wants to pay two minutes for over
-    400 folders on every run. If it is missing it is created once; after
+    The stored tree is the normal case: the selection the rules made there
+    is what the page shows. If it is missing it is created once; after
     that "sync folder structure" decides when it renews.
     """
     regeln = aktuelle_regeln()

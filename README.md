@@ -62,15 +62,15 @@ because any one source can mean tens of thousands of items.
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
 
-Every run asks Microsoft only for what changed, so the second takes minutes
-rather than hours. Deleted items stay in the archive with a marker — that is
-the point of keeping one — and nothing in it is ever deleted by a run: a
-replaced file keeps its **earlier version**, and a **chain of checksums**
-records what lay here when. A run shows progress, steps and log in its own
-window. Which folders, chats and lists come along is a list of include and
-exclude rules per source, spelled out by *Show export list*; a **schedule**
-repeats the run, and a **sync cadence** — always, daily, weekly, monthly —
-can be set per source, per part of it or for a single folder.
+Every run asks Microsoft only for what changed, chats newest first and mail
+folders in bundles, and counts only that as new. Deleted items stay in the
+archive with a marker — that is the point of keeping one — and nothing in it is
+ever deleted by a run: a replaced file keeps its **earlier version**, and a
+**chain of checksums** records what lay here when. A run shows progress, steps
+and log in its own window. Which folders, chats and lists come along is a list
+of include and exclude rules per source, spelled out by *Show export list*; a
+**schedule** repeats the run, and a **sync cadence** — always, daily, weekly,
+monthly — can be set per source, per part of it or for a single folder.
 
 ### Explore archive
 

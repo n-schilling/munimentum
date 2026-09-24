@@ -121,7 +121,7 @@ def test_plan_lauf_holt_beide_kommentarwelten(tmp_path, capsys):
                "createdDateTime": "2026-07-24T04:53:27Z",
                "createdBy": {"user": {"id": "u-1"}}}],
         threads="2026-07-01T10:00:00Z")
-    neu, unveraendert, fehler = pl.plan_lauf(g, tmp_path, PLAN, {})
+    neu, unveraendert, fehler, _updated = pl.plan_lauf(g, tmp_path, PLAN, {})
     assert (neu, unveraendert, fehler) == (1, 0, 0)
     html = (pl.plan_ziel(tmp_path, PLAN) / "board.html").read_text(
         encoding="utf-8")
@@ -137,12 +137,24 @@ def test_unveraenderte_tasks_kosten_keine_detailabrufe(tmp_path):
     pl.plan_lauf(g, tmp_path, PLAN, {})
     g.aufrufe = []
     threads = {}
-    neu, unveraendert, fehler = pl.plan_lauf(g, tmp_path, PLAN, threads)
+    neu, unveraendert, fehler, _updated = pl.plan_lauf(g, tmp_path, PLAN, threads)
     assert (neu, unveraendert) == (0, 1)
     assert not any("/planner/tasks/" in u and "/details" in u
                    for u in g.aufrufe), "Task-Details trotz gleichem etag"
     assert not any("beta/" in u for u in g.aufrufe), \
         "Sweep lief erneut, obwohl der letzte keinen Tag her ist"
+
+
+def test_a_sweep_that_finds_nothing_counts_nothing_new(tmp_path):
+    """The daily sweep re-reads every card's comments; a card that comes
+    back as it was is unchanged, not new – a second run reports 0."""
+    g = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")])
+    assert pl.plan_lauf(g, tmp_path, PLAN, {})[0] == 2
+    db = state_db.StateDb(pl.plan_ziel(tmp_path, PLAN))
+    db.kv_schreiben("sweep", "0")                      # the sweep is due
+    g2 = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")])
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 2, 0, 0)
+    assert any("beta/" in u for u in g2.aufrufe), "the sweep did not run"
 
 
 def test_verschwundene_task_bleibt_als_grabstein(tmp_path):
@@ -563,9 +575,9 @@ def test_parallele_auffrischung_liefert_dasselbe_board(tmp_path, capsys):
         return g
 
     eins, vier = tmp_path / "eins", tmp_path / "vier"
-    assert pl.plan_lauf(fake(), eins, PLAN, {}, workers=1) == (6, 0, 0)
+    assert pl.plan_lauf(fake(), eins, PLAN, {}, workers=1)[:3] == (6, 0, 0)
     capsys.readouterr()
-    assert pl.plan_lauf(fake(), vier, PLAN, {}, workers=4) == (6, 0, 0)
+    assert pl.plan_lauf(fake(), vier, PLAN, {}, workers=4)[:3] == (6, 0, 0)
     fortschritt = [progress.lies(z)["done"]
                    for z in capsys.readouterr().out.splitlines()
                    if progress.lies(z)]
@@ -586,7 +598,7 @@ def test_parallele_auffrischung_liefert_dasselbe_board(tmp_path, capsys):
 def test_fehler_im_worker_zaehlt_und_stoert_die_anderen_nicht(tmp_path, capsys):
     g = _graph_fuer_plan([_task("t1", "Aufgabe A"), _task("t2", "Aufgabe B")])
     g.antworten["/planner/tasks/t2/details"] = RuntimeError("504")
-    assert pl.plan_lauf(g, tmp_path, PLAN, {}, workers=3) == (1, 0, 1)
+    assert pl.plan_lauf(g, tmp_path, PLAN, {}, workers=3)[:3] == (1, 0, 1)
     assert any(e["k"] == "run.planner.task_failed" and
                e["v"]["name"] == "Aufgabe B" for e in _events(capsys))
 
@@ -599,7 +611,7 @@ def test_full_sync_holt_jede_karte_und_referenz_erneut(tmp_path, monkeypatch):
     pl.plan_lauf(g, tmp_path, PLAN, {})
     monkeypatch.setenv("FULL_SYNC", "1")
     g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
-    neu, unveraendert, fehler = pl.plan_lauf(g2, tmp_path, PLAN, {})
+    neu, unveraendert, fehler, _updated = pl.plan_lauf(g2, tmp_path, PLAN, {})
     assert (neu, unveraendert, fehler) == (1, 0, 0)
     assert any("/planner/tasks/t1/details" in u for u in g2.aufrufe)
     assert len(g2.geladen) == 1, "the referenced file is fetched again"
@@ -651,10 +663,10 @@ def test_karte_mit_fehlender_referenz_ist_wieder_faellig(tmp_path, monkeypatch):
     ziel = pl.plan_ziel(tmp_path, PLAN)
     (anhang,) = (ziel / pl.ANHANG_DIR).glob("*")
     g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
-    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 1, 0) and g2.geladen == []
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {})[:3] == (0, 1, 0) and g2.geladen == []
     anhang.unlink()
     g3 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
-    assert pl.plan_lauf(g3, tmp_path, PLAN, {}) == (1, 0, 0)
+    assert pl.plan_lauf(g3, tmp_path, PLAN, {})[:3] == (1, 0, 0)
     assert len(g3.geladen) == 1 and anhang.is_file()
 
 
@@ -716,7 +728,7 @@ def test_a_refused_reference_is_recorded_and_the_card_stands(tmp_path, monkeypat
     run leaves it alone."""
     monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
     g = _reference_verdict([_task("t1", "Aufgabe A")], _http(403, '{"error": {"code": "accessDenied"}}'))
-    assert pl.plan_lauf(g, tmp_path, PLAN, {}) == (1, 0, 0)
+    assert pl.plan_lauf(g, tmp_path, PLAN, {})[:3] == (1, 0, 0)
     ziel = pl.plan_ziel(tmp_path, PLAN)
     db = state_db.StateDb(ziel)
     m = db.permanent_lesen()[REF_URL]
@@ -728,7 +740,7 @@ def test_a_refused_reference_is_recorded_and_the_card_stands(tmp_path, monkeypat
     html = (ziel / "board.html").read_text(encoding="utf-8")
     assert f'href="{REF_URL}"' in html and 'href="None"' not in html
     g2 = _reference_verdict([_task("t1", "Aufgabe A")], _http(403))
-    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (0, 1, 0) and g2.geladen == []
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {})[:3] == (0, 1, 0) and g2.geladen == []
 
 
 def test_a_passing_failure_on_a_reference_makes_the_card_due_again(tmp_path, monkeypatch, capsys):
@@ -737,13 +749,13 @@ def test_a_passing_failure_on_a_reference_makes_the_card_due_again(tmp_path, mon
     the link local."""
     monkeypatch.setenv("PLANNER_ATTACHMENTS", "1")
     g = _reference_verdict([_task("t1", "Aufgabe A")], RuntimeError("HTTP 502 Bad Gateway"))
-    assert pl.plan_lauf(g, tmp_path, PLAN, {}) == (1, 0, 0)
+    assert pl.plan_lauf(g, tmp_path, PLAN, {})[:3] == (1, 0, 0)
     ziel = pl.plan_ziel(tmp_path, PLAN)
     db = state_db.StateDb(ziel)
     assert db.permanent_lesen() == {}
     assert [e["k"] for e in _events(capsys)].count("run.planner.ref_failed") == 1
     g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
-    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (1, 0, 0) and len(g2.geladen) == 1
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {})[:3] == (1, 0, 0) and len(g2.geladen) == 1
     rel = json.loads(db.kv_lesen("tasks"))["t1"]["anhaenge"][REF_URL]
     assert rel and (ziel / rel).is_file()
     assert f'href="{rel}"' in (ziel / "board.html").read_text(encoding="utf-8")
@@ -760,7 +772,7 @@ def test_a_refused_card_is_recorded_for_its_version(tmp_path, capsys):
     g.antworten[f"/planner/plans/{pid}"] = plan
     g.antworten["/planner/tasks/t1/details"] = _http(403)
     plaene, _fehl = pl.resolve_plans(g, [url], out=tmp_path)
-    assert pl.plan_lauf(g, tmp_path, plaene[0], {}) == (1, 0, 0), "a verdict is no error"
+    assert pl.plan_lauf(g, tmp_path, plaene[0], {})[:3] == (1, 0, 0), "a verdict is no error"
     db = state_db.StateDb(pl.plan_ziel(tmp_path, plaene[0]))
     m = db.permanent_lesen()["task:t1"]
     assert m["kind"] == "refused" and m["version"] == "e1" and m["unit"] == "Team X Board"
@@ -769,11 +781,11 @@ def test_a_refused_card_is_recorded_for_its_version(tmp_path, capsys):
     g2.antworten[f"/planner/plans/{pid}"] = plan
     b = pl.nur_pruefen(g2, tmp_path, [url])
     assert (b["da"], b["offen"], b["verweigert"], b["weg"]) == (1, 0, 1, 0)
-    assert pl.plan_lauf(g2, tmp_path, plaene[0], {}) == (0, 2, 0)
+    assert pl.plan_lauf(g2, tmp_path, plaene[0], {})[:3] == (0, 2, 0)
     assert not any("/tasks/t1/details" in u for u in g2.aufrufe), "the marked version was asked"
     g3 = _graph_fuer_plan([_task("t1", "Aufgabe A", etag="e2"), _task("t2", "Aufgabe B")], pid=pid)
     g3.antworten[f"/planner/plans/{pid}"] = plan
-    assert pl.plan_lauf(g3, tmp_path, plaene[0], {}) == (1, 1, 0)
+    assert pl.plan_lauf(g3, tmp_path, plaene[0], {})[:3] == (1, 1, 0)
     assert db.permanent_lesen() == {}, "the new version came – the mark goes"
 
 
@@ -785,5 +797,5 @@ def test_a_full_sync_forgets_the_marks(tmp_path, monkeypatch):
     assert db.permanent_lesen()[REF_URL]["kind"] == "gone"
     monkeypatch.setenv("FULL_SYNC", "1")
     g2 = _graph_mit_referenz([_task("t1", "Aufgabe A")])
-    assert pl.plan_lauf(g2, tmp_path, PLAN, {}) == (1, 0, 0) and len(g2.geladen) == 1
+    assert pl.plan_lauf(g2, tmp_path, PLAN, {})[:3] == (1, 0, 0) and len(g2.geladen) == 1
     assert db.permanent_lesen() == {}

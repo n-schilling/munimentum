@@ -708,7 +708,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     sweep = takt > 0 and \
         (time.time() - float(db.kv_lesen("sweep") or 0)) > takt
     anhang_stand = {} if alles else _json(vorher["anhaenge"])
-    neu = unveraendert = fehler = 0
+    neu = unveraendert = fehler = aktualisiert = 0
     gesehen = set()
     # Decide first, then work: the progress bar then knows its target, and
     # the start line says how much this run really intends – on a first run
@@ -775,7 +775,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
     # board (cards of one bucket with equal order hints) and the stored
     # blob must not depend on thread timing.
     anhang_neu = {}
-    for t, _alt, _geaendert, _legacy in faellig:
+    for t, alt, _geaendert, _legacy in faellig:
         if t["id"] not in ergebnisse:
             continue
         eintrag, faden, anhang, verdicts = ergebnisse[t["id"]]
@@ -789,7 +789,16 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
                 marks.pop(url, None)
             else:
                 marks[url] = mark
-        neu += 1
+        # Refreshed is not changed: the daily sweep re-reads every card,
+        # and one that comes back as it was – no field and no file new –
+        # counts as unchanged.
+        if not alt:
+            neu += 1
+        elif eintrag != alt or anhang:
+            neu += 1
+            aktualisiert += 1
+        else:
+            unveraendert += 1
     # Absence in a complete, error-free listing is the deletion signal –
     # the record stays, the card moves to the greyed section.
     if not fehler:
@@ -835,7 +844,7 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
         export_util.schreibe_atomar(
             board, render_board(plan, buckets, eintraege, labels, namen, stand))
     progress.event("run.planner.plan", name=plan["titel"], n=len(tasks))
-    return neu, unveraendert, fehler
+    return neu, unveraendert, fehler, aktualisiert
 
 
 def nachholen(graph, out, rels, workers=1):
@@ -864,7 +873,7 @@ def nachholen(graph, out, rels, workers=1):
                    "gruppe": None, "kadenz": "always", "ordner": name}
         progress.event("run.nachholen.unit", name=eintrag["titel"], n=n)
         try:
-            g, _u, f = plan_lauf(graph, out, eintrag, {}, workers)
+            g, _u, f, _a = plan_lauf(graph, out, eintrag, {}, workers)
             neu, fehler = neu + g, fehler + f
         except auth.TokenExpired:
             raise
@@ -877,7 +886,7 @@ def nachholen(graph, out, rels, workers=1):
 
 def lauf(graph, out, plaene, fehl=0, workers=1):
     out = Path(out)
-    neu = unveraendert = fehler = uebersprungen = 0
+    neu = unveraendert = fehler = uebersprungen = aktualisiert = 0
     threads_cache = {}
     if export_util.voll_neu():
         progress.event("run.full_sync")
@@ -893,7 +902,7 @@ def lauf(graph, out, plaene, fehl=0, workers=1):
                            cadence=progress.atom(f"cadence.{kadenz}"))
             continue
         try:
-            n, u, f = plan_lauf(graph, out, plan, threads_cache, workers)
+            n, u, f, a = plan_lauf(graph, out, plan, threads_cache, workers)
         except auth.TokenExpired:
             raise
         except Exception as e:
@@ -903,11 +912,13 @@ def lauf(graph, out, plaene, fehl=0, workers=1):
             fehl += 1
             continue
         neu, unveraendert, fehler = neu + n, unveraendert + u, fehler + f
+        aktualisiert += a
         if not f:
             db.kv_schreiben("last_sync",
                             str(datetime.now(UTC).timestamp()))
     progress.ergebnis(neu, unchanged=unveraendert, errors=fehler + fehl,
                       extra={"plans": len(plaene),
+                             **({"updated": aktualisiert} if aktualisiert else {}),
                              **({"skipped": uebersprungen}
                                 if uebersprungen else {})})
 

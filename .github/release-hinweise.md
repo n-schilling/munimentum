@@ -1,33 +1,27 @@
-## New in 13.7.1
+## New in 13.8.0 – Performance improvements
 
-- **Teams files** – a link to a SharePoint page is no file and is no
-  longer fetched: the Teams card has *Never these extensions*, preset to
-  `aspx`, for both file switches; what it leaves out keeps its online
-  link. A file Microsoft will not hand out is noted once and asked for
-  again only by a full sync, instead of failing on every run.
-- **Archive and bookkeeping** – the app's own bookkeeping next to an
-  export (the calendar's `kalender.db` among it) is no longer reported
-  as changed outside the app.
+A run that finds little to do now takes seconds where it took minutes,
+and what it reports as new is what really changed.
+
+- **Mail** – the folder tree comes in one request instead of one per
+  folder, and the folders are asked for their changes in bundles of
+  twenty. On several hundred folders, minutes become seconds.
+- **Teams chats** – the chat list is read newest first and only down to
+  where the last run left off. The whole list is still read once a week.
+- **Honest counts** – Planner cards, calendar entries and contacts that
+  were only read again no longer count as new. A Teams conversation's log
+  line names its new messages, changes and system events apart.
 
 ## Upgrading
 
-**From 13.6.x or older:** the first run that exports begins the chain of
-checksums and reads every file once, as the notes of
-[13.7.0](https://github.com/n-schilling/munimentum/releases/tag/v13.7.0)
-describe.
+The first run after the update reads the Teams chat list once in full.
 
-**From 13.5.x or older:** the first run that updates the index reads
-every file once more, as the notes of
-[13.6.1](https://github.com/n-schilling/munimentum/releases/tag/v13.6.1)
-describe.
-
-**From 12.x or older:** the first run after the update rebuilds the
-search index once, and every script against the HTTP interface has to
-move to `/api/v1` – both are spelled out in the notes of
-[13.0.0](https://github.com/n-schilling/munimentum/releases/tag/v13.0.0).
-From 9.x or older see
-[10.0.0](https://github.com/n-schilling/munimentum/releases/tag/v10.0.0)
-first.
+Skipping releases is fine: whatever an older release does once after an
+update, the first run does too. What changes for scripts against the
+HTTP interface is in the notes of the release that changed it – see
+[all releases](https://github.com/n-schilling/munimentum/releases).
+Coming from far back? A quick look through the notes you skipped shows
+whether any of them asks something of you.
 
 ## Which file?
 

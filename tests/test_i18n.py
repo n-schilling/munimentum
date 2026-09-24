@@ -208,7 +208,8 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
 # Step labels that run records written by earlier versions still carry.
-GESPEICHERTE_ETIKETTEN = ("job.step.check",)     # every check step until 13.4.0
+GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
+                          "run.conv.updated")    # a conversation's line until 13.7.1
 
 DYNAMISCH = (
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),

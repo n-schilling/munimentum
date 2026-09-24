@@ -573,15 +573,36 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
     }
 
 
+def _signatures(recs):
+    """One line per record, as it is written: a record whose line was in
+    the file before is unchanged, any other is new or changed."""
+    return [json.dumps(r, ensure_ascii=False, sort_keys=True) for r in recs]
+
+
+def _previous_signatures(ziel):
+    try:
+        alt = json.loads(Path(ziel).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    recs = alt.get("recs") if isinstance(alt, dict) else None
+    return set(_signatures(r for r in recs or [] if isinstance(r, dict)))
+
+
 def write_calendar_json(outlook_dir, ziel, reconstruct=True):
-    """Write the calendar data to `ziel` (atomically). Returns the counts."""
+    """Write the calendar data to `ziel` (atomically). Returns the counts,
+    with `changed` – the records not in the previous file as they are now,
+    new or changed – and `removed`, those of the previous file gone."""
     daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct)
     ziel = Path(ziel)
+    vorher = _previous_signatures(ziel)
+    jetzt = _signatures(daten["recs"])
+    changed = sum(1 for s in jetzt if s not in vorher)
+    removed = len(vorher - set(jetzt))
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")
     tmp.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
     tmp.replace(ziel)
-    return daten["counts"]
+    return {**daten["counts"], "changed": changed, "removed": removed}
 
 
 _hilfe_gewuenscht = export_util.hilfe_gewuenscht
@@ -616,12 +637,15 @@ def main():
     outlook_dir = export_util.ausgabeordner(pos)
 
     c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct)
-    # Same result schema as every other subprogram; the file is rebuilt as a
-    # whole, so "new" is everything it now contains.
-    progress.ergebnis(c["kalender"] + c["rekonstruiert"] + c["kontakte"],
+    # Same result schema as every other subprogram. The file is rebuilt as
+    # a whole, but "new" is only what the last build did not have as it is
+    # now; the totals stay in the extra.
+    total = c["kalender"] + c["rekonstruiert"] + c["kontakte"]
+    progress.ergebnis(c["changed"], unchanged=total - c["changed"],
                       extra={"events": c["kalender"],
                              "rebuilt": c["rekonstruiert"],
-                             "contacts": c["kontakte"]})
+                             "contacts": c["kontakte"],
+                             **({"removed": c["removed"]} if c["removed"] else {})})
 
 
 if __name__ == "__main__":

@@ -457,6 +457,28 @@ def test_batch_get_buendelt_zwanzig_und_ordnet_die_antworten_zu(session):
     assert ergebnis[urls[44]] == (200, {"url": "/me/messages/m44?$select=id"})
 
 
+def test_batch_get_sends_batches_side_by_side(session, monkeypatch):
+    """parallel=2: the batches go out two at a time, every answer lands
+    at its url."""
+    import threading
+    import time
+    urls = [f"{graph_client.GRAPH}/me/mailFolders/f{i}/messages/delta" for i in range(45)]
+    lock, live, peak = threading.Lock(), [0], [0]
+
+    def post(url, headers=None, json=None, timeout=None):
+        with lock:
+            live[0] += 1
+            peak[0] = max(peak[0], live[0])
+        time.sleep(0.05)
+        with lock:
+            live[0] -= 1
+        return _batch_antwort(json["requests"])
+    monkeypatch.setattr(session, "post", post)
+    ergebnis = _bare_graph().batch_get(urls, parallel=2)
+    assert len(ergebnis) == 45 and peak[0] == 2
+    assert ergebnis[urls[30]] == (200, {"url": "/me/mailFolders/f30/messages/delta"})
+
+
 def test_batch_get_wiederholt_gedrosselte_teile_und_reicht_404_durch(session, sleeps, monkeypatch):
     monkeypatch.setattr(graph_client, "_DROSSEL", {"bis": 0.0})
     urls = [f"{graph_client.GRAPH}/users/u1", f"{graph_client.GRAPH}/users/u2",

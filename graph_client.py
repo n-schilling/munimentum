@@ -35,6 +35,7 @@ downloads files in chunks and pages via delta links.
 """
 
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import time
 
 import requests
@@ -320,7 +321,7 @@ class Basis:
             return r
         raise _erschoepft(r, url)
 
-    def batch_get(self, urls, extra_headers=None):
+    def batch_get(self, urls, extra_headers=None, parallel=1):
         """Many small GETs as JSON batches of twenty: {url: (status, body)}.
 
         The per-item round trips this replaces – a tombstone check per
@@ -329,10 +330,24 @@ class Basis:
         after the wait one request would take (the part's Retry-After, else
         the ladder); any other status is an answer and is handed back as it
         is – a 404 says "gone", it is not a failure. A 401 on the envelope
-        renews the token like a single request would."""
+        renews the token like a single request would.
+
+        `parallel` sends that many batches at once. Outlook runs the parts
+        of one batch one after another and allows four requests per mailbox
+        at a time, so two batches side by side stay well inside that –
+        measured on a mailbox with 40 folders: 21 s one by one, 2.4 s in
+        batches, 1.1 s in two batches at once."""
         ergebnis = {}
         offen = list(dict.fromkeys(urls))
         letzter = None
+
+        def schicken(endpunkt, stueck):
+            koerper = {"requests": [
+                {"id": str(n), "method": "GET", "url": rel,
+                 **({"headers": extra_headers} if extra_headers else {})}
+                for n, (_url, rel) in enumerate(stueck)]}
+            return stueck, self._json(endpunkt, json_body=koerper)
+
         for versuch in range(HTTP_RETRIES):
             if not offen:
                 break
@@ -340,38 +355,39 @@ class Basis:
             for url in offen:
                 endpunkt, rel = _batch_ziel(url)
                 gruppen.setdefault(endpunkt, []).append((url, rel))
+            stuecke = [(endpunkt, teile[i:i + BATCH_GROESSE])
+                       for endpunkt, teile in gruppen.items()
+                       for i in range(0, len(teile), BATCH_GROESSE)]
+            if parallel > 1 and len(stuecke) > 1:
+                with ThreadPoolExecutor(max_workers=parallel) as pool:
+                    antworten = list(pool.map(lambda st: schicken(*st), stuecke))
+            else:
+                antworten = [schicken(*st) for st in stuecke]
             naechste, warten, erneuern = [], None, False
-            for endpunkt, teile in gruppen.items():
-                for i in range(0, len(teile), BATCH_GROESSE):
-                    stueck = teile[i:i + BATCH_GROESSE]
-                    koerper = {"requests": [
-                        {"id": str(n), "method": "GET", "url": rel,
-                         **({"headers": extra_headers} if extra_headers else {})}
-                        for n, (_url, rel) in enumerate(stueck)]}
-                    antwort = self._json(endpunkt, json_body=koerper)
-                    gesehen = set()
-                    for a in antwort.get("responses") or []:
-                        try:
-                            url = stueck[int(a.get("id"))][0]
-                        except (TypeError, ValueError, IndexError):
-                            continue
-                        gesehen.add(url)
-                        status = int(a.get("status") or 0)
-                        if status == 429 or 500 <= status < 600:
-                            letzter = status
-                            naechste.append(url)
-                            w = _wartezeit(a.get("headers"), status, versuch)
-                            warten = max(warten or 0, w)
-                        elif status == 401:
-                            # The token ran out between two batches: renew
-                            # like a single request would, then ask again.
-                            letzter = status
-                            naechste.append(url)
-                            erneuern = True
-                        else:
-                            ergebnis[url] = (status, a.get("body"))
-                    # A part the envelope did not answer counts as a retry.
-                    naechste.extend(u for u, _rel in stueck if u not in gesehen)
+            for stueck, antwort in antworten:
+                gesehen = set()
+                for a in antwort.get("responses") or []:
+                    try:
+                        url = stueck[int(a.get("id"))][0]
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    gesehen.add(url)
+                    status = int(a.get("status") or 0)
+                    if status == 429 or 500 <= status < 600:
+                        letzter = status
+                        naechste.append(url)
+                        w = _wartezeit(a.get("headers"), status, versuch)
+                        warten = max(warten or 0, w)
+                    elif status == 401:
+                        # The token ran out between two batches: renew
+                        # like a single request would, then ask again.
+                        letzter = status
+                        naechste.append(url)
+                        erneuern = True
+                    else:
+                        ergebnis[url] = (status, a.get("body"))
+                # A part the envelope did not answer counts as a retry.
+                naechste.extend(u for u, _rel in stueck if u not in gesehen)
             if erneuern:
                 self._erneuern()
             if warten is not None:

@@ -1692,7 +1692,7 @@ def test_delta_erste_runde_ohne_link_mit_stichtag(tmp_path, monkeypatch):
     assert stats["excluded"] == 1
     assert g.urls == [_DELTA_F1]
     assert g.params == [{"$select": outlook_export.MAIL_SELECT}]
-    assert g.headers == [{"Prefer": "odata.maxpagesize=200"}]
+    assert g.headers == [{"Prefer": f"odata.maxpagesize={outlook_export.DELTA_PAGE}"}]
     # The old mail was seen all the same – it is no tombstone suspect.
     assert bestand.gesehen == {"m1", "m2", "m3"}
     assert bestand.vollstaendig == ["E-Mail/Posteingang/"]
@@ -2386,3 +2386,122 @@ def test_resync_mit_ordnerliste_liest_nur_diese_ordner(tmp_path, monkeypatch, ca
     assert outlook_export.exportiere(None, tmp_path, done, stats, 2) == "done"
     done.close()
     assert len(gesehen["ordner"]) == 3 and gesehen["kalender"] == ["Arbeit", "Privat"] and gesehen["kontakte"]
+
+
+# --------------------------------------------------------------------------
+# Faster rounds: the tree in one delta round, first pages in batches
+# --------------------------------------------------------------------------
+class FlatTreeGraph:
+    """Answers mailFolders/delta with the whole tree, flat – and refuses
+    to be asked folder by folder."""
+
+    def __init__(self, folders):
+        self.folders = folders
+        self.gets = []
+
+    def get(self, url, params=None, extra_headers=None):
+        self.gets.append((url, params, extra_headers))
+        return _seite(self.folders, url)
+
+    def paged(self, url, params=None, extra_headers=None):
+        raise AssertionError(f"listed folder by folder: {url}")
+
+
+def test_the_tree_comes_in_one_delta_round(monkeypatch):
+    monkeypatch.setattr(outlook_export, "INCLUDE_HIDDEN", False)
+    g = FlatTreeGraph([
+        {"id": "r1", "displayName": "Posteingang", "parentFolderId": "root", "totalItemCount": 5},
+        {"id": "g1", "displayName": "Tief", "parentFolderId": "c1", "totalItemCount": 1},
+        {"id": "c1", "displayName": "Sub/Ordner", "parentFolderId": "r1", "totalItemCount": 2},
+        {"id": "r2", "displayName": "Projekte", "parentFolderId": "root", "totalItemCount": 1},
+        {"id": "x", "@removed": {"reason": "deleted"}}])
+    tops = outlook_export.build_tree(g)
+    assert len(g.gets) == 1 and g.gets[0][0].endswith("/me/mailFolders/delta")
+    assert g.gets[0][1] == {"$select": outlook_export.FOLDER_SELECT}
+    assert [t["rel"] for t in tops] == ["E-Mail/Posteingang", "E-Mail/Projekte"]
+    assert [rel for _f, rel in tops[0]["subtree"]] == [
+        "E-Mail/Posteingang", "E-Mail/Posteingang/Sub_Ordner", "E-Mail/Posteingang/Sub_Ordner/Tief"]
+    assert tops[0]["items"] == 8 and tops[1]["nfolders"] == 1
+
+
+def test_hidden_folders_keep_the_listing_folder_by_folder(monkeypatch):
+    monkeypatch.setattr(outlook_export, "INCLUDE_HIDDEN", True)
+    roots = [{"id": "r1", "displayName": "Posteingang", "totalItemCount": 1}]
+    tops = outlook_export.build_tree(FakeTreeGraph(roots, {}))
+    assert [t["rel"] for t in tops] == ["E-Mail/Posteingang"]
+
+
+def test_a_refused_tree_round_falls_back_to_the_listing(monkeypatch, capsys):
+    monkeypatch.setattr(outlook_export, "INCLUDE_HIDDEN", False)
+
+    class Refusing(FakeTreeGraph):
+        def get(self, url, params=None, extra_headers=None):
+            raise RuntimeError("HTTP 400")
+    roots = [{"id": "r1", "displayName": "Posteingang", "totalItemCount": 1}]
+    tops = outlook_export.build_tree(Refusing(roots, {}))
+    assert [t["rel"] for t in tops] == ["E-Mail/Posteingang"]
+    assert "run.outlook.tree_fallback" in [e["k"] for e in _events(capsys) if e]
+
+
+_DELTA_F2 = f"{outlook_export.GRAPH}/me/mailFolders/f2/messages/delta"
+_DELTA_F3 = f"{outlook_export.GRAPH}/me/mailFolders/f3/messages/delta"
+_DREI = [{"subtree": [({"id": "f1"}, "E-Mail/A"), ({"id": "f2"}, "E-Mail/B"),
+                      ({"id": "f3"}, "E-Mail/C")]}]
+
+
+class BatchedDeltaGraph:
+    """Three folders with stored links: their first pages come in one
+    batch; f2's page says there is more, f3's link is dead."""
+
+    def __init__(self):
+        self.batched, self.gets = [], []
+
+    def batch_get(self, urls, extra_headers=None, parallel=1):
+        self.batched.append((list(urls), extra_headers, parallel))
+        return {
+            _DELTA_F1 + "?$deltatoken=a": (200, _seite([], _DELTA_F1)),
+            _DELTA_F2 + "?$deltatoken=b": (200, _seite([{"id": "m2", "subject": "x"}], _DELTA_F2,
+                                                        weiter=_DELTA_F2 + "?$skiptoken=s")),
+            _DELTA_F3 + "?$deltatoken=c": (410, {"error": {"code": "SyncStateNotFound"}}),
+        }
+
+    def get(self, url, params=None, extra_headers=None):
+        self.gets.append(url)
+        if "$skiptoken" in url:
+            return _seite([{"id": "m3", "subject": "y"}], _DELTA_F2)
+        if url == _DELTA_F3:
+            return _seite([{"id": "m4", "subject": "z"}], url)
+        raise AssertionError(f"asked alone: {url}")
+
+
+def test_first_pages_come_in_batches_and_a_folder_with_more_reads_on(tmp_path, capsys):
+    db = state_db.StateDb(tmp_path)
+    for fid, tok in (("f1", "a"), ("f2", "b"), ("f3", "c")):
+        db.kv_schreiben(f"delta:{fid}", f"{outlook_export.GRAPH}/me/mailFolders/{fid}/messages/delta?$deltatoken={tok}")
+    g = BatchedDeltaGraph()
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    got = [mid for mid, _rel in outlook_export.iter_messages_to_export(g, tmp_path, done, stats, _DREI)]
+    done.close()
+    assert got == ["m2", "m3", "m4"]
+    (urls, headers, parallel), = g.batched
+    assert len(urls) == 3 and parallel == 2
+    assert headers == {"Prefer": f"odata.maxpagesize={outlook_export.DELTA_PAGE}"}
+    # f1 needed nothing more, f2 read on from its page, f3 started over.
+    assert g.gets == [_DELTA_F2 + "?$skiptoken=s", _DELTA_F3]
+    assert db.kv_lesen("delta:f3") is None
+    assert "run.outlook.delta_reset" in [e["k"] for e in _events(capsys) if e]
+
+
+def test_a_refused_first_page_is_a_folder_error(tmp_path):
+    class Refusing(BatchedDeltaGraph):
+        def batch_get(self, urls, extra_headers=None, parallel=1):
+            return {u: (403, {"error": {"code": "ErrorAccessDenied"}}) for u in urls}
+    db = state_db.StateDb(tmp_path)
+    for fid, tok in (("f1", "a"), ("f2", "b")):
+        db.kv_schreiben(f"delta:{fid}", f"{outlook_export.GRAPH}/me/mailFolders/{fid}/messages/delta?$deltatoken={tok}")
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    list(outlook_export.iter_messages_to_export(Refusing(), tmp_path, done, stats, _DREI[:1]))
+    done.close()
+    assert stats["folder_errors"] == 3 - 1, "f1 and f2 refused, f3 has no link"
