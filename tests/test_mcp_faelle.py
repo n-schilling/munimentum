@@ -24,6 +24,14 @@ from tests.test_mcp_server import (_build_store, _sample_records,
 from tests.hilfen import ohne_schluesselspalte
 
 
+@pytest.fixture(autouse=True)
+def fresh_subscribers(monkeypatch):
+    """Every test starts with nobody subscribed – a session of an earlier
+    test would otherwise count as a listener until a send to it fails."""
+    monkeypatch.setattr(mcp_server, "_LEGACY_SUBSCRIBERS", {})
+    monkeypatch.setattr(mcp_server, "_SESSIONS", set())
+
+
 @pytest.fixture
 def welt(tmp_path, monkeypatch):
     """Store with keys + an empty case book, STATE pointing at both."""
@@ -257,6 +265,35 @@ def test_case_timeline_ist_chronologisch_mit_auszug(welt):
     assert "preview" not in ohne["items"][0]
 
 
+def test_case_timeline_pages_on_from_an_offset(welt):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1, UID_T1, UID_T0, UID_CAL)
+    buch.hinzufuegen(fid, [{"key": "mail:weg", "src": "outlook", "root": "outlook",
+                            "rel": "inbox/weg.eml", "titel": "Verschwunden"}])
+    zweite = mcp_server.case_timeline("Nordwind", limit=2, offset=2)
+    assert [h["uid"] for h in zweite["items"]] == [UID_M1, UID_CAL]
+    assert zweite["offset"] == 2
+    # What the index lacks is measured against the whole case, not the page.
+    assert [e["title"] for e in zweite["not_in_index"]] == ["Verschwunden"]
+
+
+def test_a_large_case_comes_as_a_summary_first(welt, monkeypatch):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1, UID_T0, UID_CAL)
+    buch.bemerkung_setzen(fid, _key(welt, UID_T0), "the offer's origin")
+    monkeypatch.setattr(mcp_server, "CASE_ITEMS_AT_ONCE", 2)
+    kurz = mcp_server.get_case("Nordwind")
+    assert kurz["items_per_source"] == {"outlook": 1, "kalender": 1, "teams": 1}
+    assert [e["remark"] for e in kurz["items"]] == ["the offer's origin"]
+    assert kurz["span"] == {"first": "2025-06-01 09:30", "last": "2025-06-15 14:00"}
+    assert "case_timeline" in kurz["summary"]
+    assert len(mcp_server.get_case("Nordwind", view="items")["items"]) == 3
+    monkeypatch.setattr(mcp_server, "CASE_ITEMS_AT_ONCE", 50)
+    assert len(mcp_server.get_case("Nordwind")["items"]) == 3 and "summary" not in mcp_server.get_case("Nordwind")
+    assert mcp_server.get_case("Nordwind", view="summary")["items"] == [
+        e for e in mcp_server.get_case("Nordwind")["items"] if e["remark"]]
+
+
 def test_case_people_zaehlt_die_beteiligten(welt):
     _nordwind(welt, UID_M1, UID_T0, UID_T1, UID_T2, UID_CAL)
     res = mcp_server.case_people("Nordwind")
@@ -475,3 +512,198 @@ def test_die_anleitung_nennt_die_faelle():
     assert "via MCP" in mcp_server._INSTRUCTIONS
     assert "case_new_hits" in mcp_server._INSTRUCTIONS
     assert "run_saved_search" in mcp_server._INSTRUCTIONS
+
+
+def test_a_prompt_completes_the_case_name(welt):
+    from mcp.types import PromptReference
+    welt["buch"].fall_anlegen("Nordwind", "")
+    welt["buch"].fall_anlegen("Nordsee", "")
+    welt["buch"].fall_anlegen("Ostwind", "")
+
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            ref = PromptReference(type="ref/prompt", name="case_brief")
+            nord = await c.complete(ref, {"name": "case", "value": "nord"})
+            alle = await c.complete(ref, {"name": "case", "value": ""})
+            anderes = await c.complete(ref, {"name": "topic", "value": "n"})
+            return nord, alle, anderes
+    nord, alle, anderes = anyio.run(run)
+    assert sorted(nord.completion.values) == ["Nordsee", "Nordwind"]
+    assert len(alle.completion.values) == 3
+    assert anderes.completion.values == []
+
+
+# --------------------------------------------------------------------------
+# Cases as resources, and hearing when they change
+# --------------------------------------------------------------------------
+def _read(uri):
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return (await c.read_resource(uri)).contents[0].text
+    return anyio.run(run)
+
+
+def test_the_cases_resource_lists_every_case_with_its_address(welt):
+    fid = _nordwind(welt, UID_M1)
+    text = _read(mcp_server.CASES_URI)
+    assert "**Nordwind**" in text and f"munimentum://case/{fid}" in text and "1 items" in text
+
+
+def test_a_case_reads_as_a_page_oldest_first(welt):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1, UID_T0)
+    belege = buch.ordner_anlegen(fid, "Belege")
+    buch.verschieben(fid, [_key(welt, UID_M1)], belege)
+    buch.bemerkung_setzen(fid, _key(welt, UID_M1), "the approval")
+    buch.notiz(fid, "Call back on Monday", quelle=faelle.MCP)
+    buch.speichern("Invoices", faelle.kriterien({"q": "Rechnung"}), fid)
+    text = _read(f"munimentum://case/{fid}")
+    assert text.startswith("# Case: Nordwind")
+    assert "(via MCP): Call back on Monday" in text and "- Belege (1 items)" in text
+    zeilen = [z for z in text.splitlines() if "uid `" in z]
+    assert [UID_T0 in zeilen[0], UID_M1 in zeilen[1]] == [True, True]
+    assert "folder: Belege" in zeilen[1] and "remark: the approval" in zeilen[1]
+    assert "- Invoices: Rechnung" in text
+    assert _read("munimentum://case/Nordwind") == text        # by name as well
+
+
+def test_a_long_case_says_where_the_page_ends(welt, monkeypatch):
+    fid = _nordwind(welt, UID_M1, UID_T0, UID_CAL)
+    monkeypatch.setattr(mcp_server, "RESOURCE_ITEMS", 1)
+    text = _read(f"munimentum://case/{fid}")
+    assert "… and 2 more – case_timeline with offset=1 goes on." in text
+
+
+def test_new_hits_of_a_case_as_a_page(welt):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    buch.speichern("Invoices", faelle.kriterien({"q": "Rechnung"}), fid)
+    text = _read(f"munimentum://case/{fid}/new-hits")
+    assert "## Invoices" in text and UID_T0 in text and UID_M1 not in text
+
+
+def test_an_unknown_case_is_an_error_not_a_page(welt):
+    from mcp.shared.exceptions import MCPError
+
+    # Caught inside the client: escaping anyio.run() it would come wrapped
+    # in the task group's ExceptionGroup.
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            with pytest.raises(MCPError, match="No case named"):
+                await c.read_resource("munimentum://case/99")
+    anyio.run(run)
+
+
+def test_a_listening_client_hears_its_case_change(welt, monkeypatch):
+    from mcp.shared.subscriptions import ResourcesListChanged, ResourceUpdated
+    monkeypatch.setattr(mcp_server, "WATCH_SECONDS", 0.05)
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    uri = f"munimentum://case/{fid}"
+
+    async def run():
+        heard = []
+        async with Client(mcp_server.mcp) as c:
+            async with c.listen(resource_subscriptions=[uri], resources_list_changed=True) as sub:
+                await anyio.sleep(0.2)                  # the watcher's first look
+                buch.notiz(fid, "a change")
+                with anyio.fail_after(3):
+                    async for event in sub:
+                        heard.append(event)
+                        if isinstance(event, ResourceUpdated):
+                            break
+                buch.fall_anlegen("Ostwind", "")
+                with anyio.fail_after(3):
+                    async for event in sub:
+                        heard.append(event)
+                        if isinstance(event, ResourcesListChanged):
+                            break
+        return heard
+    heard = anyio.run(run)
+    assert ResourceUpdated(uri=uri) in heard
+    # Only what was asked for arrives: the new-hits page of the case changed
+    # too, but nobody subscribed to it.
+    assert all(e.uri == uri for e in heard if isinstance(e, ResourceUpdated))
+    assert isinstance(heard[-1], ResourcesListChanged)
+
+
+def test_a_client_of_an_earlier_protocol_hears_it_too(welt, monkeypatch):
+    import mcp.types as types
+    from mcp.shared.exceptions import MCPDeprecationWarning
+    monkeypatch.setattr(mcp_server, "WATCH_SECONDS", 0.05)
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    uri = f"munimentum://case/{fid}"
+    heard = []
+
+    async def handler(message):
+        if isinstance(message, types.ResourceUpdatedNotification):
+            heard.append(message.params.uri)
+
+    async def run():
+        async with Client(mcp_server.mcp, mode="legacy", message_handler=handler) as c:
+            assert c.server_capabilities.resources.subscribe is True
+            with pytest.warns(MCPDeprecationWarning):    # as the SDK says: 2025-era
+                await c.session.subscribe_resource(uri)
+            await anyio.sleep(0.2)
+            buch.bemerkung_setzen(fid, _key(welt, UID_M1), "why it matters")
+            with anyio.fail_after(3):
+                while not heard:
+                    await anyio.sleep(0.02)
+    anyio.run(run)
+    assert heard == [uri]
+
+
+def test_every_case_is_listed_for_the_attach_menu(welt):
+    buch = welt["buch"]
+    fid = _nordwind(welt, UID_M1)
+    zu = buch.fall_anlegen("Alt", "")
+    buch.schliessen(zu)
+
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return (await c.list_resources()).resources
+    listed = {str(r.uri): r for r in anyio.run(run)}
+    assert set(listed) == {mcp_server.CASES_URI, f"munimentum://case/{fid}", f"munimentum://case/{zu}"}
+    assert listed[f"munimentum://case/{fid}"].title == "Case: Nordwind"
+    assert listed[f"munimentum://case/{zu}"].description.startswith("A closed case")
+
+
+def test_the_cases_are_digested_only_while_someone_listens(welt, monkeypatch):
+    monkeypatch.setattr(mcp_server, "WATCH_SECONDS", 0.02)
+    fid = _nordwind(welt, UID_M1)
+    calls = []
+    echt = mcp_server._case_digests
+    monkeypatch.setattr(mcp_server, "_case_digests", lambda: calls.append(1) or echt())
+
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            await anyio.sleep(0.3)
+            ohne = len(calls)
+            async with c.listen(resource_subscriptions=[f"munimentum://case/{fid}"]):
+                await anyio.sleep(0.3)
+            return ohne, len(calls)
+    ohne, mit = anyio.run(run)
+    assert ohne == 0 and mit > 0
+
+
+def test_a_client_of_an_earlier_protocol_hears_the_list_change(welt, monkeypatch):
+    import mcp.types as types
+    monkeypatch.setattr(mcp_server, "WATCH_SECONDS", 0.05)
+    _nordwind(welt, UID_M1)
+    heard = []
+
+    async def handler(message):
+        if isinstance(message, types.ResourceListChangedNotification):
+            heard.append(message)
+
+    async def run():
+        async with Client(mcp_server.mcp, mode="legacy", message_handler=handler) as c:
+            assert c.server_capabilities.resources.list_changed is True
+            await anyio.sleep(0.2)
+            welt["buch"].fall_anlegen("Ostwind", "")
+            with anyio.fail_after(3):
+                while not heard:
+                    await anyio.sleep(0.02)
+    anyio.run(run)
+    assert len(heard) == 1

@@ -25,8 +25,9 @@ Ranking backends, per query:
                fallback when Ollama is down.
 
 Tools: search_messages, browse_messages, get_document, list_people,
-read_source_file, corpus_stats. Every hit carries an o365:// resource URI;
-the corresponding MCP resource returns the raw source file.
+read_source_file, corpus_stats. A hit's full form (detail="full") and
+get_document carry an o365:// resource URI; the corresponding MCP resource
+returns the raw source file.
 
 Install (SDK required; numpy/requests only for semantic/hybrid ranking):
     pip install -r requirements.txt   # pinned; mcp 2.x (MCPServer API)
@@ -66,15 +67,27 @@ import os
 import re
 import sys
 import json
+import time
+import hashlib
+import inspect
 import sqlite3
 import argparse
+import functools
+from contextlib import asynccontextmanager
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from urllib.parse import quote, unquote
 
+import anyio
+
+from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
+from mcp.server.subscriptions import InMemorySubscriptionBus, ResourcesListChanged, ResourceUpdated
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import ToolAnnotations
+from mcp.types import (Completion, EmptyResult, SubscribeRequestParams, TextContent,
+                       ToolAnnotations, UnsubscribeRequestParams)
+from mcp.types import Resource as MCPResource
 
 import analytics_db
 import detail
@@ -84,6 +97,7 @@ import completeness
 import corpus
 import faelle
 import i18n
+import instance
 import ollama_client
 import run_history
 import settings
@@ -131,18 +145,22 @@ Which tool to use:
     "Summarise the Nordwind case" → get_case for the casebook, the folders
     and what it holds, case_timeline for the chronology with excerpts,
     case_people for who is involved; search_messages(case=…, case_folder=…)
-    searches inside one case or one of its folders. Every hit carries
-    `cases` – where it already sits, folder included. case_new_hits says
+    searches inside one case or one of its folders. A hit that already sits
+    in a case says so in `cases`, folder included. case_new_hits says
     what the attached searches find that the case lacks; add_to_case (into
     a folder the user made, with a `remark` saying why) and add_case_note
     write, but only when the user allowed that in Munimentum – what they
     wrote is marked "via MCP". Every item of a case can carry a remark;
-    get_case shows them.
+    get_case shows them. The resource munimentum://case/{id} is the same
+    case as a page to read.
   • list_saved_searches / run_saved_search – the user's saved searches, run
     exactly as saved.
   • get_document    – full text of one hit, via the uid from a search/browse
     result. For chats, context_before/context_after return the neighbouring
-    messages of the conversation.
+    messages of the conversation. Its `cite` is how to quote the item: the
+    label, and a link that opens it in Munimentum while the app runs.
+  • verify_item     – before calling an item unchanged evidence: its file
+    hashed afresh and held against the evidence chain and its time-stamp.
   • list_people     – resolve a name before filtering; the person filter is a
     substring match over names and addresses. Files and pages carry none.
   • list_folders / list_filetypes – what the folder and filetype filters can
@@ -181,8 +199,10 @@ to work out the date); folder restricts to one unit and everything below it –
 "Dateien/Projekte" in OneDrive, "TeamX/Dokumente" for a library, a board name
 for Planner, a list name for To Do, a notebook (or notebook/section) for
 OneNote – and list_folders shows what exists, per source; results are one
-hit per item – page with offset rather than raising k; a hit's "uri" can be
-read as an MCP resource.
+hit per item – page with next_offset rather than raising k. Hits come brief
+(uid, date, who, title, where, a preview): get_document reads one in full,
+detail="full" adds the paths and addresses to every hit. An answer stays
+within max_chars and says what it left out.
 """
 
 # What the client gets to see when access is switched off. Deliberately worded
@@ -232,7 +252,60 @@ def _profil_text(namen):
             "entry in this client with it.")
 
 
-mcp = MCPServer(
+# Change events for the case resources: the bus the listen streams read
+# from, and the watcher that feeds it – run for as long as the server
+# runs, over either transport.
+class _CountingBus(InMemorySubscriptionBus):
+    """The SDK's bus, counting who listens: the watcher digests every case
+    only while someone could hear that one changed."""
+
+    def __init__(self):
+        super().__init__()
+        self.listeners = 0
+
+    def subscribe(self, listener):
+        self.listeners += 1
+        stop, done = super().subscribe(listener), []
+
+        def unsubscribe():
+            if not done:
+                done.append(True)
+                self.listeners -= 1
+            stop()
+        return unsubscribe
+
+
+_BUS = _CountingBus()
+_SESSIONS = set()               # sessions of earlier protocols – for list_changed
+
+
+async def _remember_sessions(ctx, call_next):
+    """Middleware: a client of a protocol before 2026-07-28 shakes hands
+    with `initialize` and keeps its session; list_changed reaches it there."""
+    if ctx.method == "initialize" and getattr(ctx, "session", None) is not None:
+        _SESSIONS.add(ctx.session)
+    return await call_next(ctx)
+
+
+@asynccontextmanager
+async def _lifespan(_server):
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(_watch_cases)
+        try:
+            yield {}
+        finally:
+            tg.cancel_scope.cancel()
+
+
+class _Server(MCPServer):
+    """MCPServer, with every case listed as a resource of its own: a
+    client's attach menu shows listed resources, not templates."""
+
+    async def list_resources(self):
+        return [*await super().list_resources(), *_listed_cases()]
+
+
+mcp = _Server(
     "munimentum",
     title="Munimentum",
     version=version.VERSION,
@@ -241,11 +314,188 @@ mcp = MCPServer(
     # WARNING silences uvicorn's startup narration ("Started server process",
     # "Press CTRL+C to quit" …) in the app log; real problems still surface.
     log_level="WARNING",
+    lifespan=_lifespan,
+    subscriptions=_BUS,
+    middleware=[_remember_sessions],
 )
 _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 
 _READONLY = ToolAnnotations(readOnlyHint=True, idempotentHint=True,
                             openWorldHint=False)
+_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
+                         idempotentHint=False, openWorldHint=False)
+
+
+# --------------------------------------------------------------------------
+# The MCP boundary: what an answer costs the client's context
+# --------------------------------------------------------------------------
+# Measured on the synthetic archive (testdata/): 30 hits of browse_messages
+# came to 26.6 KB – 21.1 KB of it once the SDK's two-space indentation is
+# gone, 10.7 KB once a hit carries only what a model reads. The tools
+# themselves keep returning the full dict: the app's search calls the same
+# functions in-process and draws from every field. Only what leaves over
+# MCP is compact, short and bounded.
+#
+# No output schema on purpose: with one the SDK sends every answer twice,
+# as text and as structuredContent.
+_BRIEF = ("uid", "source_label", "date", "who", "title", "context", "preview")
+# … and these only when they say something – an empty list or a null is
+# nothing a model needs to read thirty times.
+_BRIEF_IF_SET = ("thread", "attachments", "gone", "cases", "more_in_thread")
+_HIT_LISTS = ("results", "messages", "items", "new")
+MAX_CHARS = 40000               # default budget of one answer (~10k tokens)
+_MAX_CHARS_CAP = 400000
+_HIT_ARGS = """
+        detail: "brief" (default) – a hit carries uid, source_label, date,
+            who, title, context, preview, and thread, attachments, gone,
+            cases when it has them. "full" adds source, root, path, uri,
+            key, score, who_mail, domains and cid.
+        max_chars: Budget of the whole answer in characters (default
+            40000). Hits past it are left out and `truncated` says how
+            many; `next_offset`, where the tool pages, goes on from there.
+"""
+_COLLAPSE_NOTE = """
+    Hits of one conversation are folded into its best one: that hit says
+    `more_in_thread` – how many more of this conversation the page
+    matched – and get_thread returns them all.
+"""
+
+
+def _compact_json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _brief(hit):
+    if not isinstance(hit, dict):
+        return hit
+    out = {k: hit[k] for k in _BRIEF if k in hit}
+    out.update({k: hit[k] for k in _BRIEF_IF_SET if hit.get(k)})
+    return out
+
+
+def _collapse_threads(hits):
+    """One hit per conversation: the first (best ranked) keeps its place
+    and counts the others as `more_in_thread`."""
+    first, out = {}, []
+    for h in hits:
+        thread = h.get("thread") if isinstance(h, dict) else None
+        if thread and thread in first:
+            first[thread]["more_in_thread"] = first[thread].get("more_in_thread", 0) + 1
+            continue
+        if thread:
+            first[thread] = h
+        out.append(h)
+    return out
+
+
+def _within_budget(res, max_chars, offset=None):
+    """Leave hits out from the end until the answer fits `max_chars`, and
+    say so. Only a top-level hit list shrinks – everything else is small
+    or a single item a caller asked for by name."""
+    name = next((k for k in _HIT_LISTS if isinstance(res.get(k), list)), None)
+    if name is None or len(_compact_json(res)) <= max_chars:
+        return res
+    hits = res[name]
+    total = len(hits)
+    # Each hit's own length is what it adds (plus a comma): cheaper than
+    # serialising the whole answer again for every hit left out.
+    rest = len(_compact_json({**res, name: []})) + 120
+    kept = 0
+    for h in hits:
+        rest += len(_compact_json(h)) + 1
+        if rest > max_chars:
+            break
+        kept += 1
+    res = {**res, name: hits[:kept]}
+    if "count" in res:
+        res["count"] = kept
+    res["truncated"] = {"omitted": total - kept,
+                        "note": ("Left out to stay within max_chars. Raise max_chars, lower "
+                                 "preview_chars, or page on with next_offset."
+                                 if offset is not None else
+                                 "Left out to stay within max_chars. Raise max_chars or lower "
+                                 "preview_chars / limit.")}
+    if offset is not None:
+        res["next_offset"] = offset + kept
+    return res
+
+
+def _answer(res, *, detail="brief", max_chars=MAX_CHARS, paging=None, collapse=False):
+    """What one tool call hands the client: brief hits, one per
+    conversation where asked, within the budget – as compact JSON."""
+    if not isinstance(res, dict) or res.get("error"):
+        return res
+    res = dict(res)
+    if paging is not None:
+        # A full page says there may be more; a short one that there is not.
+        k, offset = paging
+        name = next((n for n in _HIT_LISTS if isinstance(res.get(n), list)), None)
+        full = name is not None and len(res[name]) >= k
+        res["next_offset"] = offset + len(res[name]) if full else None
+    brief = str(detail or "brief").lower() != "full"
+    for name in _HIT_LISTS:
+        if isinstance(res.get(name), list):
+            hits = [dict(h) if isinstance(h, dict) else h for h in res[name]]
+            if collapse:
+                hits = _collapse_threads(hits)
+                if "count" in res:
+                    res["count"] = len(hits)
+            res[name] = [_brief(h) for h in hits] if brief else hits
+    if isinstance(res.get("searches"), list):
+        # case_new_hits: one block of hits per saved search.
+        res["searches"] = [{**b, "new": [_brief(h) for h in b["new"]]}
+                           if brief and isinstance(b, dict) and isinstance(b.get("new"), list)
+                           else b for b in res["searches"]]
+    cap = max(1000, min(int(max_chars or MAX_CHARS), _MAX_CHARS_CAP))
+    return _within_budget(res, cap, paging[1] if paging is not None else None)
+
+
+def _tool(annotations, *, hits=False, collapse=False, post=None):
+    """Register a tool with the MCP server – the function itself stays as
+    it is, the app calls it in-process. What the client gets passes
+    through _answer(); a tool that returns hits also takes `detail` and
+    `max_chars`, which the function never sees; `post` adds what only a
+    client needs (a citation) to an answer that is not an error."""
+    def register(fn):
+        sig = inspect.signature(fn)
+        params = list(sig.parameters.values())
+        doc = fn.__doc__ or ""
+        if hits:
+            params += [inspect.Parameter("detail", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                         default="brief", annotation=str),
+                       inspect.Parameter("max_chars", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                         default=MAX_CHARS, annotation=int)]
+            doc = doc.rstrip() + "\n" + _HIT_ARGS
+            if collapse:
+                doc += _COLLAPSE_NOTE
+        size = next((n for n in ("k", "limit") if n in sig.parameters), None)
+        pages = "offset" in sig.parameters and size is not None
+
+        @functools.wraps(fn)
+        def call(**kw):
+            detail = kw.pop("detail", "brief")
+            max_chars = kw.pop("max_chars", MAX_CHARS)
+            res = fn(**kw)
+            if post is not None and isinstance(res, dict) and not res.get("error"):
+                res = post(res)
+            if hits:
+                paging = None
+                if pages:
+                    bound = sig.bind_partial(**kw)
+                    bound.apply_defaults()
+                    paging = (max(1, int(bound.arguments[size])),
+                              max(0, int(bound.arguments["offset"])))
+                res = _answer(res, detail=detail, max_chars=max_chars,
+                              paging=paging, collapse=collapse)
+            return TextContent(type="text", text=_compact_json(res))
+
+        call.__signature__ = sig.replace(parameters=params)
+        call.__doc__ = doc
+        mcp.add_tool(call, name=fn.__name__, annotations=annotations)
+        return fn
+    return register
+
+
 _WORD = re.compile(r"\w+", re.UNICODE)
 # English throughout: these labels go to MCP clients; the app's interface
 # translates its own tags from the source value instead.
@@ -1126,7 +1376,7 @@ def _read_window(target, offset, max_chars):
 # --------------------------------------------------------------------------
 # MCP tools
 # --------------------------------------------------------------------------
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY, hits=True, collapse=True)
 def search_messages(query: str, person: str = "", date_from: str = "",
                     date_to: str = "", days: int = 0, source: str = "all",
                     k: int = 12, offset: int = 0, mode: str = "auto",
@@ -1191,15 +1441,15 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             list_filetypes to see what exists.
         case: Restrict to the items of one case (its name or id, see
             list_cases): what the user collected there, from every source.
-            Every hit carries `key` and `cases` – the cases it already sits
-            in, each with the folder inside the case.
+            A hit already in a case carries `cases` – each with the folder
+            inside the case.
         case_folder: With `case`: only the items of one of its folders
             (name or id; get_case lists them).
         party: "all" (default), "internal" – mails and appointments whose
             every party lies inside the user's own mail domains – or
             "external" – at least one party outside them. Items without
-            addresses (chat, tasks, files) are on neither side. Every hit
-            carries `domains`.
+            addresses (chat, tasks, files) are on neither side. A hit's full
+            form (detail="full") carries its `domains`.
         mail_from: Optional. Only mails whose From line holds this name or
             address; `*` is the wildcard ("*@nordwind.example").
         mail_to: Optional. The same for the To line, mail_cc for Cc.
@@ -1325,7 +1575,7 @@ def facet_rows(person: str = "", date_from: str = "", date_to: str = "",
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY, hits=True)
 def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     days: int = 0, source: str = "all", k: int = 30,
                     offset: int = 0, preview_chars: int = 200,
@@ -1427,7 +1677,7 @@ def _versions_of(row, target):
         ev.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY, hits=True)
 def get_thread(thread: str, limit: int = 50) -> dict:
     """All messages of one conversation, in chronological order – mail and
     Teams only.
@@ -1461,7 +1711,81 @@ def get_thread(thread: str, limit: int = 50) -> dict:
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+# --------------------------------------------------------------------------
+# Citations: what a model quotes, where it leads, and whether it still holds
+# --------------------------------------------------------------------------
+APP_CHECK_SECONDS = 30          # how long "the app runs there" is believed
+_APP = {"at": None, "url": None, "state": "not_running"}
+
+
+def _app_url():
+    """(url, state) of the app serving this profile (instance.find) –
+    asked at most every APP_CHECK_SECONDS, not on every tool call."""
+    now = time.monotonic()
+    if _APP["at"] is None or now - _APP["at"] > APP_CHECK_SECONDS:
+        url, state = instance.find(settings.home_env())
+        _APP.update(at=now, url=url, state=state)
+    return _APP["url"], _APP["state"]
+
+
+def _label(item):
+    """How a citation names an item: kind · day · who · title."""
+    who = item.get("who") if item.get("who") != "(unbekannt)" else ""
+    # A file names its mirror, as a hit does – "File" says less than "OneDrive".
+    kind = (_SOURCE_LABEL.get(item.get("root"), item.get("source_label"))
+            if item.get("source") == "datei" else item.get("source_label"))
+    parts = (kind, str(item.get("date") or "")[:10], who, item.get("title"))
+    return " · ".join(str(p) for p in parts if p)
+
+
+def _export_dirs():
+    return {index: STATE.get(name) for index, name in QUELLE_ORDNER.items() if STATE.get(name)}
+
+
+def _item_sha(item):
+    """The checksum of the item's own version where the item is only a
+    part of its file: a chat message's words, a Planner card's or To Do
+    task's section. None for an item that is its file."""
+    key = str(item.get("key") or "")
+    if not (key.startswith(("planner:", "todo:")) or (item.get("root") == "teams" and "#" in key)):
+        return None
+    prints = evidence.Fingerprints(_data_dir(), _export_dirs())
+    try:
+        return prints.of({"root": item.get("root"), "rel": item.get("path"), "key": key})
+    finally:
+        prints.close()
+
+
+def _with_cite(doc):
+    """get_document over MCP: the item's citation – label, key, what the
+    evidence chain recorded of it, and a link that opens it in the app
+    while the app runs (null, with `app` saying why, when it does not)."""
+    key = doc.get("key")
+    cite = {"label": _label(doc), "key": key}
+    data = _data_dir()
+    target, err = _resolve_source(doc.get("root"), doc.get("path"))
+    if data is not None and not err:
+        ev = evidence.Evidence(data)
+        try:
+            rel = evidence.versions.rel_of(target, data)
+            rec = ev.recorded(rel) if rel and ev.exists() else None
+            if rec:
+                stamp = ev.stamp_after(rec["n"]) if rec.get("n") else None
+                cite.update(sha256=rec["sha256"], captured=rec["at"], chain_line=rec["n"],
+                            stamped=stamp["at"] if stamp else None)
+        finally:
+            ev.close()
+        own = _item_sha(doc)
+        if own:
+            cite["item_sha256"] = own
+    url, state = _app_url()
+    cite["link"] = f"{url}#item={quote(key, safe='')}" if url and key else None
+    if not url:
+        cite["app"] = state
+    return {**doc, "cite": cite}
+
+
+@_tool(_READONLY, post=_with_cite)
 def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> dict:
     """Full text and metadata of one item by its uid – mail, chat message,
     appointment, contact, Planner or To Do task, SharePoint or OneNote
@@ -1495,6 +1819,16 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     chain first saw it), `current`, and for a message's earlier version
     its `text`. More than one means the item changed after it was first
     archived; the chain proves which version lay here when.
+
+    `cite` is how to quote the item: `label` (kind · day · who · title),
+    `key`, and what the evidence chain recorded – `sha256`, `captured`,
+    `chain_line`, `stamped` (when a time-stamp authority signed the chain
+    past that line), `item_sha256` for a message or task that is only
+    part of its file – and `link`, which opens the item in Munimentum.
+    `link` is null while the app is not running (`app` says
+    "not_running" or "other_profile"): quote the label then, and tell the
+    user the link works once Munimentum runs. verify_item checks a
+    citation against the file as it lies now.
 
     Args:
         uid: The item's uid from a search or browse hit.
@@ -1564,7 +1898,132 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+def _verdict_text(v, rec, stamp):
+    captured = (rec or {}).get("captured")
+    line = (rec or {}).get("line")
+    signed = (f" The chain was time-stamped past that line on {stamp['at']}"
+              + (f" by {stamp['tsa']}." if stamp.get("tsa") else ".") if stamp
+              else " No time-stamp covers that line yet.")
+    return {
+        "unchanged": f"Unchanged since the archive captured it on {captured}: its SHA-256 "
+                     f"matches line {line} of an intact evidence chain." + signed,
+        "unchanged_outside_version": f"Matches line {line} of an intact evidence chain – but "
+                                     f"that line recorded a change made outside the app on "
+                                     f"{captured}: this is not the version Microsoft handed "
+                                     f"out. get_document's `versions` names the earlier one."
+                                     + signed,
+        "changed_by_app": "The app's last export changed it; the next run's evidence step "
+                          "chains the new version. The version the chain recorded is kept.",
+        "changed_outside": "Changed since the chain recorded it, and not by the app: the file "
+                           "on disk no longer matches line " + str(line) + ".",
+        "not_yet_chained": "The evidence chain does not know this file yet – it came with an "
+                           "export after the last run's evidence step.",
+        "chain_broken": "The evidence chain itself is broken, so it proves nothing about "
+                        "this file – the archive check in Munimentum names the line.",
+        "missing": "The file is no longer on disk.",
+        "no_chain": "This archive keeps no evidence chain yet – it starts with the next run.",
+    }[v]
+
+
+@_tool(_READONLY)
+def verify_item(uid: str = "", key: str = "") -> dict:
+    """Check one item against the evidence chain, as it lies now: hash
+    its file afresh, hold the checksum against the chain line that
+    recorded it, walk the whole chain (every line names the checksum of
+    the one before) and find the time-stamp that covers the line. For
+    "is this still the original?" and before quoting an item as evidence.
+
+    `verdict` is one of "unchanged", "unchanged_outside_version" (as
+    the chain recorded it – but it recorded a change made outside the
+    app), "changed_by_app" (a newer version
+    the app fetched, chained with the next run), "changed_outside",
+    "not_yet_chained", "chain_broken", "missing", "no_chain"; `summary`
+    says it in one sentence to pass on. `recorded` is what the chain
+    holds (line, sha256, captured), `stamp` the time-stamp (line, at,
+    tsa), `versions` how many versions the archive keeps. A chat message,
+    Planner card or To Do task is part of a file: the file is checked,
+    `item_sha256` is the checksum of the item's own words.
+
+    Args:
+        uid: The item's uid from a search or browse hit.
+        key: Or its stable key (get_document's `cite.key`).
+    """
+    con = _db()
+    try:
+        if uid:
+            row = con.execute("SELECT * FROM chunks WHERE uid = ? AND seq = 0", (uid,)).fetchone()
+        elif key and _hat_spalte(con, "key"):
+            row = con.execute("SELECT * FROM chunks WHERE key = ? AND seq = 0 LIMIT 1",
+                              (key,)).fetchone()
+        else:
+            return {"error": "Name the item by its uid or its key."}
+    finally:
+        con.close()
+    if row is None:
+        return {"error": f"No item {(uid or key)!r} in the index."}
+    item = {"root": row["root"], "path": row["rel"], "key": row["key"] if "key" in row.keys() else None,
+            "source_label": _SOURCE_LABEL.get(row["root"] if row["src"] == "datei" else row["src"],
+                                              row["src"]),
+            "date": row["date"], "who": row["who"], "title": row["title"]}
+    out = {"uid": row["uid"], "key": item["key"], "label": _label(item)}
+    target, err = _resolve_source(row["root"], row["rel"])
+    if err and err.startswith("File not found") and _exportordner().get(row["root"]):
+        # Gone from disk is a verdict of its own, not an error: the chain
+        # still says what lay there.
+        target, err = Path(_exportordner()[row["root"]]).resolve() / row["rel"], None
+    data = _data_dir()
+    if err or data is None:
+        return {**out, "error": err or "No data folder."}
+    own = _item_sha(item)
+    if own:
+        out["item_sha256"] = own
+    ev = evidence.Evidence(data)
+    if not ev.exists():
+        return {**out, "verdict": "no_chain", "summary": _verdict_text("no_chain", None, None)}
+    try:
+        rel = evidence.versions.rel_of(target, data)
+        rec = ev.recorded(rel)
+        recorded = ({"line": rec["n"], "sha256": rec["sha256"], "captured": rec["at"]}
+                    if rec else None)
+        walked = evidence.walk_chain(ev, want=[rec["n"]] if rec and rec.get("n") else [])
+        out["chain"] = {"intact": walked["ok"], "lines": walked["lines"],
+                        "broken_at": walked["broken_at"]}
+        out["recorded"] = recorded
+        stamp = None
+        if rec and rec.get("n"):
+            s = next((d for d in walked["stamps"] if d.get("n", 0) > rec["n"]), None)
+            stamp = {"line": s["n"], "at": s.get("at"), "tsa": s.get("tsa")} if s else None
+        out["stamp"] = stamp
+        if not target.is_file():
+            v = "missing"
+        else:
+            now = evidence.versions.sha256_file(target)
+            out["sha256"] = now
+            history = ev.history(rel)
+            out["versions"] = len(history)
+            current = next((h for h in history if h.get("current")), None)
+            if current and current.get("ms_match") is not None:
+                out["microsoft_match"] = current["ms_match"]
+            line = walked["found"].get(rec["n"]) if rec and rec.get("n") else None
+            written = evidence.read_pending(ev)[0].get(rel)
+            if not walked["ok"]:
+                v = "chain_broken"
+            elif rec is None:
+                v = "not_yet_chained"
+            elif now == rec["sha256"] and line is not None and line.get("sha256") == rec["sha256"]:
+                v = "unchanged_outside_version" if line.get("kind") == "outside" else "unchanged"
+            elif written and written.get("sha256") == now:
+                v = "changed_by_app"
+            else:
+                v = "changed_outside"
+    finally:
+        ev.close()
+    out["verdict"] = v
+    out["summary"] = _verdict_text(v, recorded, stamp)
+    return out
+
+
+@_tool(_READONLY)
 def list_people(source: str = "all", contains: str = "", limit: int = 100) -> dict:
     """List the people in the archive (senders, chat authors, organizers,
     assignees) with item counts – resolve a name before filtering by it.
@@ -1622,7 +2081,7 @@ def list_people(source: str = "all", contains: str = "", limit: int = 100) -> di
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def read_source_file(source_root: str, path: str, max_chars: int = 100000,
                      offset: int = 0) -> dict:
     """Read a raw exported source file in windows – the .eml, the Teams
@@ -1662,7 +2121,7 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
             "content": content}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict:
     """List the units the `folder` filter can take, with item counts.
 
@@ -1709,7 +2168,7 @@ def list_folders(contains: str = "", limit: int = 200, source: str = "") -> dict
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_filetypes(limit: int = 40, source: str = "") -> dict:
     """List the attachment and file types present, with counts.
 
@@ -1750,7 +2209,7 @@ def list_filetypes(limit: int = 40, source: str = "") -> dict:
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_addresses(role: str = "from", limit: int = 20, contains: str = "") -> dict:
     """List the mail addresses of one line, most used first, with counts.
 
@@ -1805,7 +2264,7 @@ def _archiv_stand():
     }
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_events(date_from: str = "", date_to: str = "", days: int = 0,
                 calendar: str = "", include_recovered: bool = True,
                 k: int = 100, offset: int = 0) -> dict:
@@ -1874,7 +2333,7 @@ def list_events(date_from: str = "", date_to: str = "", days: int = 0,
             "events": aus[offset:offset + k]}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def lookup_contact(query: str, limit: int = 20) -> dict:
     """Look a person up in the exported address book – structured: name,
     organisation, e-mail addresses, phone numbers, contact folder.
@@ -1909,7 +2368,7 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
     return {"count": len(kontakte), "contacts": kontakte}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_sources() -> dict:
     """Which sources this archive holds, and how to search each – start here.
 
@@ -1950,7 +2409,7 @@ def list_sources() -> dict:
                              "file mirrors, \"all\" or empty means every source"}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def archive_analytics() -> dict:
     """The archive about itself, as the app's Analytics tab shows it.
 
@@ -1972,7 +2431,7 @@ def archive_analytics() -> dict:
     return block
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def corpus_stats() -> dict:
     """Corpus size, per-source counts, the active ranking backend – and the
     archive's edges: coverage, gaps, last successful run per source."""
@@ -2027,7 +2486,7 @@ def _satz(text):
     return text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_runs(limit: int = 20) -> dict:
     """What the archive's runs did, newest first – worth asking before
     concluding from the archive that something does not exist.
@@ -2070,7 +2529,7 @@ def list_runs(limit: int = 20) -> dict:
             "has_more": len(laeufe) > wieviele}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def run_log(run: int, limit: int = 200) -> dict:
     """The log one run wrote, oldest first – why a step failed, in words.
 
@@ -2100,7 +2559,7 @@ def run_log(run: int, limit: int = 200) -> dict:
             "has_more": len(zeilen) > wieviele}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def source_completeness(source: str = "") -> dict:
     """What a source's last check found against Microsoft: what is here,
     what was never fetched, what the rules leave out, and what is gone at
@@ -2157,7 +2616,7 @@ def source_completeness(source: str = "") -> dict:
     return {"reports": berichte, "never_checked": ohne}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_files(root: str = "", path: str = "") -> dict:
     """Browse the mirrored drives, the files next to Teams conversations and
     the Planner attachments one folder level at a time.
@@ -2300,17 +2759,11 @@ def _planner_anhaenge():
 
 
 # --------------------------------------------------------------------------
-# MCP resources – fetch a source file by its URI (as advertised in each hit)
-# --------------------------------------------------------------------------
-# --------------------------------------------------------------------------
 # Cases and saved searches (faelle.py) – what the user collected
 # --------------------------------------------------------------------------
+CASE_ITEMS_AT_ONCE = 50        # get_case(view="auto") lists items up to this many
 _KEIN_FALLBUCH = ("This server knows no case book: it was started without a "
                   "profile, so cases and saved searches are out of reach.")
-_WRITE = ToolAnnotations(readOnlyHint=False, destructiveHint=False,
-                         idempotentHint=False, openWorldHint=False)
-
-
 def _fall_kurz(f):
     return {"id": f["id"], "name": f["name"], "description": f["beschreibung"],
             "status": "open" if f["status"] == "offen" else "closed",
@@ -2369,7 +2822,7 @@ def _mit_kriterien(k, kk, offset=0, preview_chars=200):
     return browse_messages(**gemeinsam)
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_cases(include_closed: bool = True) -> dict:
     """The user's cases – the matters they collect archive items, result
     lists and saved searches around. Start here before anything about a
@@ -2386,18 +2839,26 @@ def list_cases(include_closed: bool = True) -> dict:
     return {"count": len(faelle_), "cases": faelle_}
 
 
-@mcp.tool(annotations=_READONLY)
-def get_case(case: str) -> dict:
-    """One case in full: its description, the casebook (the user's notes,
-    newest first), its folders, every item it holds with source, title,
-    date, people, the folder it sits in and the uri read_source_file takes,
-    the result lists it stores (a search as it stood at one moment) and the
-    saved searches attached to it. Items say `from_result_list` when they
-    came with a list; `origin` says who wrote an item or a note – "page"
-    (the user) or "mcp" (Claude, through add_to_case / add_case_note).
+@_tool(_READONLY)
+def get_case(case: str, view: str = "auto") -> dict:
+    """One case: its description, the casebook (the user's notes, newest
+    first), its folders, the result lists it stores (a search as it stood
+    at one moment), the saved searches attached to it – and its items,
+    each with source, title, date, people, the folder it sits in, the uri
+    read_source_file takes and the user's `remark`. Items say
+    `from_result_list` when they came with a list; `origin` says who wrote
+    an item or a note – "page" (the user) or "mcp" (Claude, through
+    add_to_case / add_case_note).
+
+    A large case comes as a summary first: how many items, per source,
+    per folder, from when to when – and `items` only for those that carry
+    a remark. case_timeline pages through the rest, in order.
 
     Args:
         case: The case's name or id (list_cases).
+        view: "auto" (default) – every item up to 50, the summary beyond;
+            "summary" – never the items; "items" – every item, however
+            many.
     """
     buch = _fallbuch()
     if buch is None:
@@ -2411,8 +2872,17 @@ def get_case(case: str) -> dict:
                       for o in fall["ordner_liste"]]
     out["notes"] = [{"id": n["id"], "when": n["wann"], "text": n["text"],
                      "origin": _herkunft(n.get("quelle"))} for n in fall["notizen_liste"]]
+    eintraege = fall["eintraege_liste"]
+    view = str(view or "auto").lower()
+    whole = view == "items" or (view == "auto" and len(eintraege) <= CASE_ITEMS_AT_ONCE)
+    if not whole:
+        daten = sorted(e["datum"] for e in eintraege if e.get("datum"))
+        out["span"] = {"first": daten[0] if daten else None, "last": daten[-1] if daten else None}
+        out["summary"] = ("A summary: `items` lists only those with a remark. case_timeline "
+                          "returns every item in order (with offset), view='items' all at once.")
+        eintraege = [e for e in eintraege if e.get("bemerkung")]
     out["items"] = [_eintrag_aussen({**e, "ordner_name": ordner.get(e.get("ordner"))})
-                    for e in fall["eintraege_liste"]]
+                    for e in eintraege]
     out["result_lists"] = [{"id": li["id"], "taken": li["wann"], "hits": li["anzahl"],
                             "criteria": _kriterien_aussen(li["kriterien"]),
                             "folder": ordner.get(li.get("ordner"))}
@@ -2421,8 +2891,9 @@ def get_case(case: str) -> dict:
     return out
 
 
-@mcp.tool(annotations=_READONLY)
-def case_timeline(case: str, limit: int = 200, preview_chars: int = 160) -> dict:
+@_tool(_READONLY, hits=True)
+def case_timeline(case: str, limit: int = 200, preview_chars: int = 160,
+                  offset: int = 0) -> dict:
     """The items of a case in the order they happened – oldest first, each
     with a short excerpt from the index: the chronology of the matter, the
     tool for "what happened" and "summarise this case". Items the index no
@@ -2432,6 +2903,8 @@ def case_timeline(case: str, limit: int = 200, preview_chars: int = 160) -> dict
         case: The case's name or id.
         limit: Items at most (default 200).
         preview_chars: Excerpt length per item (0 disables).
+        offset: Items to skip – to go on where a shortened answer ended
+            (`next_offset`).
     """
     buch = _fallbuch()
     if buch is None:
@@ -2447,18 +2920,22 @@ def case_timeline(case: str, limit: int = 200, preview_chars: int = 160) -> dict
         _keys_tabelle(con, keys)
         rows = con.execute(
             "SELECT * FROM chunks WHERE seq = 0 AND key IN (SELECT key FROM fallkeys) "
-            "ORDER BY (ts IS NULL), ts LIMIT ?", (max(1, limit),)).fetchall()
+            "ORDER BY (ts IS NULL), ts, id LIMIT ? OFFSET ?",
+            (max(1, limit), max(0, offset))).fetchall()
         pc = max(0, min(preview_chars, 2000))
         im_index = [_hit(r, None, pc) for r in rows]
-        gesehen = {h["key"] for h in im_index}
+        # What the index no longer holds, measured against the whole case –
+        # not against this page of it.
+        gesehen = {r[0] for r in con.execute(
+            "SELECT DISTINCT key FROM chunks WHERE seq = 0 AND key IN (SELECT key FROM fallkeys)")}
         weg = [_eintrag_aussen(e) for e in fall["eintraege_liste"] if e["key"] not in gesehen]
-        return {"case": fall["name"], "count": len(im_index), "items": im_index,
-                "not_in_index": weg}
+        return {"case": fall["name"], "count": len(im_index), "offset": max(0, offset),
+                "items": im_index, "not_in_index": weg}
     finally:
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def case_people(case: str, limit: int = 50) -> dict:
     """Who appears in a case – the people behind its items (senders,
     authors, organisers, assignees) with how many items each has, most
@@ -2500,7 +2977,7 @@ def case_people(case: str, limit: int = 50) -> dict:
         con.close()
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY, hits=True)
 def case_new_hits(case: str, k: int = 50) -> dict:
     """What the case's attached saved searches find today that the case
     does not hold yet – one block per search. The way to keep a case
@@ -2532,7 +3009,7 @@ def case_new_hits(case: str, k: int = 50) -> dict:
     return {"case": fall["name"], "searches": bloecke}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY)
 def list_saved_searches() -> dict:
     """The user's saved searches – criteria under a name, with when each
     last ran and how many hits it had then, and the case it is attached
@@ -2544,7 +3021,7 @@ def list_saved_searches() -> dict:
     return {"count": len(suchen), "searches": suchen}
 
 
-@mcp.tool(annotations=_READONLY)
+@_tool(_READONLY, hits=True, collapse=True)
 def run_saved_search(search: str, k: int = 12, offset: int = 0,
                      preview_chars: int = 200) -> dict:
     """Run a saved search by its name or id – exactly the criteria the user
@@ -2582,7 +3059,7 @@ def _schreiben_erlaubt():
     return None
 
 
-@mcp.tool(annotations=_WRITE)
+@_tool(_WRITE)
 def add_to_case(case: str, uids: list[str] | None = None,
                 keys: list[str] | None = None, folder: str = "",
                 remark: str = "") -> dict:
@@ -2596,7 +3073,8 @@ def add_to_case(case: str, uids: list[str] | None = None,
     Args:
         case: The case's name or id.
         uids: Hit uids to add.
-        keys: Item keys to add (a hit's `key`).
+        keys: Item keys to add (the `key` of get_document or of a hit's
+            full form).
         folder: The folder inside the case (name or id, get_case lists
             them); empty puts the items in unsorted.
         remark: One or two sentences on why these items are in the case –
@@ -2645,7 +3123,7 @@ def add_to_case(case: str, uids: list[str] | None = None,
             "not_found": len(list(uids or ())) + len(list(keys or ())) - len(eintraege)}
 
 
-@mcp.tool(annotations=_WRITE)
+@_tool(_WRITE)
 def collect_case(case: str, search: str = "") -> dict:
     """Run the case's automatic searches now and file what they find into
     the case – the same thing every indexing run does by itself for a
@@ -2692,7 +3170,7 @@ def collect_case(case: str, search: str = "") -> dict:
             "searches": [{k: v for k, v in z.items() if k not in ("case", "case_id")} for z in bericht]}
 
 
-@mcp.tool(annotations=_WRITE)
+@_tool(_WRITE)
 def add_case_note(case: str, text: str) -> dict:
     """Add a note to a case's casebook – a short, dated remark, marked
     "via MCP" in Munimentum. Only when the user allowed changes through
@@ -2720,6 +3198,108 @@ def add_case_note(case: str, text: str) -> dict:
     return {"case": fall["name"], "note_id": kennung}
 
 
+# --------------------------------------------------------------------------
+# Prompts – the ways through the tools a user starts by name
+# --------------------------------------------------------------------------
+# A client offers them as commands (Claude Code: /mcp__munimentum__case_brief,
+# Claude Desktop: the "+" menu). Each is an instruction the model follows
+# with the tools it already has; the tools it names stand in backticks,
+# and a test holds them against the tool list, so a renamed tool cannot
+# leave a prompt pointing at nothing.
+_CITE = ("Quote every statement with the item's `get_document` cite.label, and its "
+         "cite.link when that is not null (null means Munimentum is not running: say "
+         "once that the links work when it runs). Answer in the language the user "
+         "writes in.")
+
+
+@mcp.prompt(title="Brief me on a case")
+def case_brief(case: str) -> str:
+    """The state of one case: chronology, people, open points and what
+    the archive cannot say."""
+    return f"""Brief me on the case "{case}" in my Munimentum archive.
+
+1. `get_case` for its description, the casebook notes, the folders and the remarks on its items. A large case comes as a summary – `case_timeline` pages through the items in order.
+2. `case_timeline` for the chronology. Where a single message says too little, `get_thread` for the conversation around it.
+3. `case_people` for who is involved.
+4. `corpus_stats` and `source_completeness`: how far the archive reaches, and whether a source the case depends on has gaps.
+5. `case_new_hits`: what the case's saved searches find today that the case does not hold yet.
+
+Then write: the state of the matter in three sentences; a dated chronology; the people and their part; open points; what the archive cannot tell (gaps, sources not exported). Before calling an item unchanged evidence, check it with `verify_item`. {_CITE}"""
+
+
+@mcp.prompt(title="Who knew what, and since when")
+def who_knew_what(topic: str, until: str = "") -> str:
+    """Who demonstrably knew about a topic, and from when."""
+    bis = f" up to {until}" if until else ""
+    return f"""Who knew about "{topic}"{bis}, and since when? Use my Munimentum archive.
+
+1. `search_messages` with the words that would literally stand in the texts – try several phrasings, and mind the backend it names (with "lexical" a paraphrase misses).{" Pass date_to=" + until + "." if until else ""}
+2. For every relevant hit `get_document` (its facts name from, to and cc) and, for replies, `get_thread`.
+3. `list_events` for meetings on the topic, with their attendees.
+4. `corpus_stats`: where the archive begins and ends and which months are empty – no evidence in a gap proves nothing.
+
+Answer with a table: person · first date they demonstrably knew · how (wrote it, received it directly, in cc, invited to a meeting) · the item. {_CITE}"""
+
+
+@mcp.prompt(title="Chronology of a topic")
+def timeline(topic: str, date_from: str = "", date_to: str = "") -> str:
+    """Everything on a topic in the order it happened, across sources."""
+    span = " ".join(x for x in (f"from {date_from}" if date_from else "",
+                                f"to {date_to}" if date_to else "") if x)
+    return f"""Build a chronology of "{topic}"{(" " + span) if span else ""} from my Munimentum archive – mail, Teams, calendar, files, pages, tasks and notes alike.
+
+1. `search_messages` (several phrasings, date_from/date_to where given); follow next_offset while the hits still matter. Files are found by name and path only.
+2. `list_events` for the meetings in the period.
+3. `get_document` or `get_thread` where a hit's preview is not enough to date or place it.
+4. `corpus_stats` for gaps in the period.
+
+Write one line per event: date · what happened · who · the item. Mark the gaps in the archive where they fall. {_CITE}"""
+
+
+@mcp.prompt(title="Collect into a case")
+def collect_into_case(case: str, question: str) -> str:
+    """Find what belongs in a case and file it – after the user says yes."""
+    return f"""Find what belongs in the case "{case}" in my Munimentum archive: {question}
+
+1. `get_case` for what the case holds already, its folders and its saved searches.
+2. `search_messages` (and `browse_messages` for "everything from … in …"), several phrasings. Leave out what the case holds (a hit's cases field names them).
+3. Show me the candidates as a numbered list – cite.label and one line on why each belongs – grouped by the case folder it would go into.
+4. Only after I say which ones: `add_to_case` with their uids, the folder, and a remark saying why. Never add anything I did not confirm. If it answers that changes through MCP are switched off, tell me where to allow them and stop.
+
+{_CITE}"""
+
+
+@mcp.prompt(title="Can I rely on the archive?")
+def archive_health() -> str:
+    """Whether the archive is current and complete enough to draw
+    conclusions from – per source."""
+    return f"""Can I rely on my Munimentum archive right now?
+
+1. `list_runs`: the last runs, when, and whether they ended with errors – `run_log` for a run that did.
+2. `source_completeness`: per source, what Microsoft holds against what the archive holds – missing, refused, gone.
+3. `corpus_stats`: what is indexed, how far it reaches, the empty months, the ranking backend.
+
+Answer with one line per source: current / stale / incomplete, since when, and what to do about it in Munimentum. Then one sentence: what I can and cannot conclude from the archive today. {_CITE}"""
+
+
+@mcp.completion()
+async def complete_argument(ref, argument, context):
+    """A case while the user types it: its name into a prompt, its id
+    into a case resource's address."""
+    if argument.name not in ("case", "case_id"):
+        return None
+    buch = _fallbuch()
+    if buch is None:
+        return None
+    typed = str(argument.value or "").lower()
+    alle = buch.faelle(mit_geschlossenen=True)
+    if argument.name == "case":
+        values = [f["name"] for f in alle if f["name"].lower().startswith(typed)]
+    else:
+        values = [str(f["id"]) for f in alle if str(f["id"]).startswith(typed)]
+    return Completion(values=values[:100], total=len(values), has_more=len(values) > 100)
+
+
 @mcp.resource("o365://{root}/{path}")
 def source_resource(root: str, path: str) -> str:
     """Return a raw exported source file by URI.
@@ -2727,7 +3307,8 @@ def source_resource(root: str, path: str) -> str:
     URI form: o365://{root}/{path}, where {root} is "teams", "outlook",
     "onedrive" or "sharepoint" and {path} is the export-relative file path,
     percent-encoded (slashes as %2F).
-    This is the "uri" field returned with every search/browse hit. Files larger
+    This is the "uri" field of get_document and of a hit's full form
+    (detail="full"). Files larger
     than 500k characters are truncated – use the read_source_file tool with
     offset to page through the rest.
     """
@@ -2739,6 +3320,255 @@ def source_resource(root: str, path: str) -> str:
         content += (f"\n\n[truncated: {total} bytes total – use the "
                     f"read_source_file tool with offset to read more]")
     return content
+
+
+# --------------------------------------------------------------------------
+# Cases as resources – attach one to a conversation
+# --------------------------------------------------------------------------
+# The tools hand a case over as JSON for a model to work with; these are
+# the same case as a page to read – Markdown, the way a client attaches it
+# as context. Every case is listed on its own (a client's attach menu shows
+# listed resources, not templates), and the list follows the case book:
+# a new, renamed, closed or deleted case sends resources/list_changed.
+#
+# What the Claude clients do with that, measured with a probe server and
+# read in their docs (2026-09): Claude Desktop (protocol 2025-11-25) reads
+# a resource once when it is attached and subscribes to nothing; Claude
+# Code refreshes its lists on list_changed but subscribes to no single
+# resource either (anthropics/claude-code#7252, closed as not planned).
+# The per-case "updated" notifications stay for clients that do subscribe
+# – and cost nothing while none does: the watcher digests the cases only
+# while someone listens.
+CASES_URI = "munimentum://cases"
+CASE_URI = "munimentum://case/{case_id}"
+NEW_HITS_URI = "munimentum://case/{case_id}/new-hits"
+RESOURCE_ITEMS = 200            # items a case resource lists; case_timeline pages further
+WATCH_SECONDS = 5.0             # how often the watcher looks at faelle.db and the index
+_LEGACY_SUBSCRIBERS = {}        # uri -> sessions that asked with resources/subscribe
+
+
+def _md_line(text):
+    return " ".join(str(text or "").split())
+
+
+def _case_or_error(case_id):
+    buch = _fallbuch()
+    if buch is None:
+        raise ResourceError(_KEIN_FALLBUCH)
+    fall, fehler = _fall_finden(buch, str(case_id))
+    if fehler:
+        raise ResourceNotFoundError(fehler)
+    return fall
+
+
+@mcp.resource(CASES_URI, name="cases", title="Cases", mime_type="text/markdown")
+def cases_resource() -> str:
+    """The user's cases, one line each: id, name, state, how many items,
+    when last changed."""
+    buch = _fallbuch()
+    if buch is None:
+        return _KEIN_FALLBUCH
+    zeilen = ["# Cases", ""]
+    for f in buch.faelle(mit_geschlossenen=True):
+        zustand = "open" if f["status"] == faelle.OFFEN else "closed"
+        zeilen.append(f"- **{_md_line(f['name'])}** (id {f['id']}, {zustand}) – "
+                      f"{f['eintraege']} items, changed {f['geaendert']} – {CASE_URI.format(case_id=f['id'])}")
+    if len(zeilen) == 2:
+        zeilen.append("No case yet.")
+    return "\n".join(zeilen) + "\n"
+
+
+@mcp.resource(CASE_URI, name="case", title="A case", mime_type="text/markdown")
+def case_resource(case_id: str) -> str:
+    """One case to read: description, casebook, folders, its items in the
+    order they happened (with the user's remarks) and its saved searches."""
+    fall = _case_or_error(case_id)
+    voll = get_case(str(fall["id"]), view="items")
+    zeit = case_timeline(str(fall["id"]), limit=RESOURCE_ITEMS, preview_chars=0)
+    je_key = {e["key"]: e for e in voll["items"]}
+    zustand = "open" if voll["status"] == "open" else "closed"
+    z = [f"# Case: {_md_line(voll['name'])}", "",
+         f"id {voll['id']} · {zustand} · {len(voll['items'])} items · changed {voll['changed']}"]
+    if voll.get("description"):
+        z += ["", _md_line(voll["description"])]
+    if voll["notes"]:
+        z += ["", "## Casebook", ""]
+        z += [f"- {n['when']}{' (via MCP)' if n['origin'] == 'mcp' else ''}: {_md_line(n['text'])}"
+              for n in voll["notes"]]
+    if voll["folders"]:
+        z += ["", "## Folders", ""]
+        z += [f"- {_md_line(o['name'])} ({o['items']} items)" for o in voll["folders"]]
+    z += ["", "## Items, oldest first", ""]
+    for h in zeit.get("items", []):
+        e = je_key.get(h.get("key"), {})
+        teile = [str(h.get("date") or "")[:16], h.get("source_label"),
+                 h.get("who") if h.get("who") != "(unbekannt)" else "", h.get("title")]
+        zeile = "- " + " · ".join(_md_line(t) for t in teile if t) + f" — uid `{h['uid']}`"
+        if e.get("folder"):
+            zeile += f" — folder: {_md_line(e['folder'])}"
+        if e.get("remark"):
+            zeile += f" — remark: {_md_line(e['remark'])}"
+        z.append(zeile)
+    rest = len(voll["items"]) - len(zeit.get("items", [])) - len(zeit.get("not_in_index", []))
+    if rest > 0:
+        z.append(f"- … and {rest} more – case_timeline with offset={RESOURCE_ITEMS} goes on.")
+    for e in zeit.get("not_in_index", []):
+        z.append(f"- {_md_line(e.get('date'))} · {_md_line(e.get('title'))} — no longer in the index")
+    if voll["saved_searches"]:
+        z += ["", "## Saved searches", ""]
+        z += [f"- {_md_line(g['name'])}{' (automatic)' if g['auto'] else ''}: "
+              f"{_md_line(g['criteria'].get('query')) or '(filters only)'}" for g in voll["saved_searches"]]
+    return "\n".join(z) + "\n"
+
+
+@mcp.resource(NEW_HITS_URI, name="case-new-hits", title="New hits for a case",
+              mime_type="text/markdown")
+def case_new_hits_resource(case_id: str) -> str:
+    """What the case's saved searches find today that the case does not
+    hold yet – one block per search."""
+    fall = _case_or_error(case_id)
+    res = case_new_hits(str(fall["id"]))
+    z = [f"# New hits for the case {_md_line(res['case'])}", ""]
+    if not res["searches"]:
+        z.append("No saved search is attached to this case.")
+    for b in res["searches"]:
+        z += [f"## {_md_line(b['search'])}", ""]
+        if b.get("error"):
+            z.append(f"Error: {_md_line(b['error'])}")
+        elif not b["new"]:
+            z.append("Nothing new.")
+        z += [f"- {str(h.get('date') or '')[:16]} · {_md_line(h.get('source_label'))} · "
+              f"{_md_line(h.get('title'))} — uid `{h['uid']}`" for h in b.get("new", [])]
+        z.append("")
+    return "\n".join(z) + "\n"
+
+
+def _listed_cases():
+    """Every case as a listed resource."""
+    pfad = STATE.get("faelle_db")
+    if not pfad or not Path(pfad).exists():
+        return []
+    return [MCPResource(uri=CASE_URI.format(case_id=f["id"]), name=f"case-{f['id']}",
+                        title=f"Case: {f['name']}", mime_type="text/markdown",
+                        description=("An open case" if f["status"] == faelle.OFFEN
+                                     else "A closed case") + " in Munimentum, as a page to read.")
+            for f in faelle.Fallbuch(pfad).faelle(mit_geschlossenen=True)]
+
+
+def _case_list():
+    """What the list of resources shows of the cases – id, name, state."""
+    pfad = STATE.get("faelle_db")
+    if not pfad or not Path(pfad).exists():
+        return ()
+    return tuple((f["id"], f["name"], f["status"])
+                 for f in faelle.Fallbuch(pfad).faelle(mit_geschlossenen=True))
+
+
+def _case_digests():
+    """{uri: digest} of every case resource – what the watcher compares
+    while someone listens. A case book without a pinner: the digest is the
+    book's own state, and no file is hashed to compute it."""
+    pfad = STATE.get("faelle_db")
+    if not pfad or not Path(pfad).exists():
+        return {}
+    buch = faelle.Fallbuch(pfad)
+    index = ""
+    if STATE.get("db"):
+        try:
+            index = str(Path(STATE["db"]).stat().st_mtime_ns)
+        except OSError:
+            pass
+    out, ids = {}, []
+    for f in buch.faelle(mit_geschlossenen=True):
+        ids.append(f["id"])
+        voll = buch.fall(f["id"])
+        digest = hashlib.sha1(json.dumps(voll, sort_keys=True, default=str,
+                                         ensure_ascii=False).encode("utf-8")).hexdigest()
+        out[CASE_URI.format(case_id=f["id"])] = digest
+        out[NEW_HITS_URI.format(case_id=f["id"])] = digest + index
+    out[CASES_URI] = hashlib.sha1(json.dumps(
+        [(f, out[CASE_URI.format(case_id=f)]) for f in ids]).encode()).hexdigest()
+    return out
+
+
+def _someone_subscribed():
+    return _BUS.listeners > 0 or any(_LEGACY_SUBSCRIBERS.values())
+
+
+async def _publish_list():
+    """The list of resources changed: to listen streams over the bus, and
+    to every session of an earlier protocol."""
+    await _BUS.publish(ResourcesListChanged())
+    for session in list(_SESSIONS):
+        try:
+            await session.send_resource_list_changed()
+        except Exception:           # a session that went away: forget it
+            _SESSIONS.discard(session)
+
+
+async def _publish(changed):
+    """These resources changed: to listen streams (2026-07-28 onward) over
+    the bus, and to sessions of earlier protocols that subscribed."""
+    for uri in changed:
+        await _BUS.publish(ResourceUpdated(uri=uri))
+        for session in list(_LEGACY_SUBSCRIBERS.get(uri, ())):
+            try:
+                await session.send_resource_updated(uri)
+            except Exception:
+                _LEGACY_SUBSCRIBERS[uri].discard(session)
+
+
+async def _watch_cases():
+    """For as long as the server runs, every WATCH_SECONDS: did the list of
+    cases change (one query) – and, only while someone subscribed, which
+    case resources changed (a digest per case)."""
+    listed, digests = None, None
+    while True:
+        try:
+            now = await anyio.to_thread.run_sync(_case_list)
+        except Exception:           # a locked or half-written book: next round
+            now = listed
+        if listed is not None and now is not None and now != listed:
+            await _publish_list()
+        listed = now
+        if _someone_subscribed():
+            try:
+                fresh = await anyio.to_thread.run_sync(_case_digests)
+            except Exception:
+                fresh = digests
+            if digests is not None and fresh is not None:
+                changed = [u for u in fresh if digests.get(u) != fresh[u]]
+                changed += [u for u in digests if u not in fresh]
+                if changed:
+                    await _publish(changed)
+            digests = fresh
+        else:
+            # Nobody to tell: the next subscriber starts from a fresh look.
+            digests = None
+        await anyio.sleep(WATCH_SECONDS)
+
+
+async def _subscribe(ctx, params: SubscribeRequestParams) -> EmptyResult:
+    _LEGACY_SUBSCRIBERS.setdefault(str(params.uri), set()).add(ctx.session)
+    return EmptyResult()
+
+
+async def _unsubscribe(ctx, params: UnsubscribeRequestParams) -> EmptyResult:
+    _LEGACY_SUBSCRIBERS.get(str(params.uri), set()).discard(ctx.session)
+    return EmptyResult()
+
+
+# Clients before the 2026-07-28 protocol subscribe resource by resource;
+# MCPServer serves only the newer `subscriptions/listen`, so the older pair
+# goes onto the low-level server it wraps.
+mcp._lowlevel_server.add_request_handler("resources/subscribe", SubscribeRequestParams, _subscribe)
+mcp._lowlevel_server.add_request_handler("resources/unsubscribe", UnsubscribeRequestParams, _unsubscribe)
+# … and learn from the handshake whether list_changed will come, which
+# MCPServer denies unless told otherwise (the newer protocol derives it).
+_initialization_options = mcp._lowlevel_server.create_initialization_options
+mcp._lowlevel_server.create_initialization_options = (
+    lambda notification_options=None, *a, **kw: _initialization_options(
+        notification_options or NotificationOptions(resources_changed=True), *a, **kw))
 
 
 # --------------------------------------------------------------------------

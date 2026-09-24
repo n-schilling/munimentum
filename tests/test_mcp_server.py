@@ -1066,7 +1066,9 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "case_new_hits", "list_saved_searches", "run_saved_search",
               "add_to_case", "add_case_note",
               # 13.3: the automatic searches, run now
-              "collect_case"}
+              "collect_case",
+              # an item held against the evidence chain
+              "verify_item"}
 # The two that write – behind the "Claude may change cases" switch.
 SCHREIBEND = {"add_to_case", "add_case_note", "collect_case"}
 
@@ -1131,13 +1133,16 @@ def test_tool_schema_enthaelt_alle_parameter():
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
         "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party",
-        "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments"}
+        "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments",
+        # the MCP boundary's own two (_tool): the function never sees them
+        "detail", "max_chars"}
     assert schema["required"] == ["query"]      # only query is required
 
 
 def test_resource_template_ist_registriert():
     tpl = _via_client(lambda c: c.list_resource_templates()).resource_templates
-    assert [t.uri_template for t in tpl] == ["o365://{root}/{path}"]
+    assert sorted(t.uri_template for t in tpl) == sorted([
+        "o365://{root}/{path}", mcp_server.CASE_URI, mcp_server.NEW_HITS_URI])
 
 
 def test_call_tool_ueber_sdk_liefert_ergebnis(state):
@@ -2197,3 +2202,112 @@ def test_facet_rows_liefert_wer_adresse_datum_und_quelle_ohne_grenze(state):
 def test_facet_rows_gibt_die_absagen_der_filter_weiter(state):
     r = mcp_server.facet_rows(party="external")
     assert r["rows"] == [] and "domains" in r["error"] or "internal domains" in r["error"]
+
+
+# --------------------------------------------------------------------------
+# The MCP boundary: compact, brief, bounded (_tool / _answer)
+# --------------------------------------------------------------------------
+BRIEF_FIELDS = set(mcp_server._BRIEF) | set(mcp_server._BRIEF_IF_SET)
+
+
+def test_a_client_gets_compact_brief_hits_while_the_app_keeps_the_full_dict(state):
+    full = mcp_server.browse_messages()
+    assert all("uri" in h and "root" in h for h in full["results"])
+    res = _via_client(lambda c: c.call_tool("browse_messages", {}))
+    text = res.content[0].text
+    assert "\n" not in text and '": ' not in text          # no indentation, no padding
+    payload = json.loads(text)
+    assert [h["uid"] for h in payload["results"]] == [h["uid"] for h in full["results"]]
+    for h in payload["results"]:
+        assert set(h) <= BRIEF_FIELDS
+        assert all(h[k] for k in mcp_server._BRIEF_IF_SET if k in h)   # nothing empty
+    # What the measurement promised: well under half of the old answer.
+    assert len(text) < 0.5 * len(json.dumps(full, indent=2, ensure_ascii=False))
+
+
+def test_detail_full_hands_out_every_field(state):
+    payload = _payload(_via_client(lambda c: c.call_tool(
+        "search_messages", {"query": "Rechnung", "mode": "lexical", "detail": "full"})))
+    assert payload["results"] and all("uri" in h and "key" in h for h in payload["results"])
+
+
+def test_a_full_page_names_the_next_offset_a_short_one_none(state):
+    erste = _payload(_via_client(lambda c: c.call_tool("browse_messages", {"k": 2})))
+    assert erste["count"] == 2 and erste["next_offset"] == 2
+    rest = _payload(_via_client(lambda c: c.call_tool("browse_messages", {"k": 50})))
+    assert rest["next_offset"] is None
+
+
+def test_the_budget_leaves_hits_out_and_says_where_to_go_on(state):
+    payload = _payload(_via_client(lambda c: c.call_tool(
+        "browse_messages", {"k": 50, "max_chars": 1000, "preview_chars": 400})))
+    alle = mcp_server.browse_messages(k=50)["count"]
+    kept = len(payload["results"])
+    assert 0 < kept < alle
+    assert payload["truncated"]["omitted"] == alle - kept
+    assert payload["next_offset"] == kept
+    assert len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"))) <= 1000
+
+
+def test_hits_of_one_conversation_fold_into_the_best(state):
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET thread = 'tix:chat' WHERE uid LIKE 'teams:1on1/alice__chat.html:%'")
+    con.commit()
+    con.close()
+    einzeln = mcp_server.search_messages(query="Rechnung", mode="lexical")["results"]
+    im_chat = [h["uid"] for h in einzeln if h["thread"] == "tix:chat"]
+    assert sorted(im_chat) == [UID_T0, UID_T1]
+    payload = _payload(_via_client(lambda c: c.call_tool(
+        "search_messages", {"query": "Rechnung", "mode": "lexical"})))
+    kopf = [h for h in payload["results"] if h.get("thread") == "tix:chat"]
+    # The best ranked keeps its place and counts the other.
+    assert [h["uid"] for h in kopf] == [im_chat[0]] and kopf[0]["more_in_thread"] == 1
+    assert payload["count"] == len(einzeln) - 1
+    assert UID_M1 in [h["uid"] for h in payload["results"]]
+
+
+def test_errors_pass_the_boundary_untouched(state):
+    payload = _payload(_via_client(lambda c: c.call_tool(
+        "search_messages", {"query": "x", "case": "Nowhere"})))
+    assert payload["error"] and "next_offset" not in payload
+
+
+# --------------------------------------------------------------------------
+# Prompts: the ways through the tools a user starts by name
+# --------------------------------------------------------------------------
+PROMPT_NAMES = {"case_brief", "who_knew_what", "timeline", "collect_into_case", "archive_health"}
+PROMPT_ARGS = {"case_brief": {"case": "Nordwind"},
+               "who_knew_what": {"topic": "the offer", "until": "2025-06-30"},
+               "timeline": {"topic": "the offer", "date_from": "2025-01-01"},
+               "collect_into_case": {"case": "Nordwind", "question": "everything on invoice 4711"},
+               "archive_health": {}}
+
+
+def test_every_prompt_is_offered_with_a_title_and_a_description():
+    prompts = _via_client(lambda c: c.list_prompts()).prompts
+    assert {p.name for p in prompts} == PROMPT_NAMES == set(PROMPT_ARGS)
+    for p in prompts:
+        assert p.title and p.description, p.name
+
+
+def test_a_prompt_names_only_tools_that_exist_and_asks_for_citations():
+    import re
+
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return {n: (await c.get_prompt(n, a)).messages for n, a in PROMPT_ARGS.items()}
+    for name, messages in anyio.run(run).items():
+        assert len(messages) == 1 and messages[0].role == "user"
+        text = messages[0].content.text
+        named = set(re.findall(r"`([a-z_]+)`", text))
+        assert named and named <= TOOL_NAMES, (name, named - TOOL_NAMES)
+        assert "cite.label" in text and "cite.link" in text
+    assert "2025-06-30" in anyio.run(run)["who_knew_what"][0].content.text
+
+
+def test_only_collecting_into_a_case_writes_and_it_asks_first():
+    text = mcp_server.collect_into_case("Nordwind", "x")
+    assert "add_to_case" in text and "Never add anything I did not confirm" in text
+    for name in PROMPT_NAMES - {"collect_into_case"}:
+        rendered = getattr(mcp_server, name)(**PROMPT_ARGS[name])
+        assert not any(w in rendered for w in SCHREIBEND), name

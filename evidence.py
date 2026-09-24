@@ -370,6 +370,14 @@ class Evidence:
         kept = versions.find(self.versions, self.names_of(rel), sha)
         return kept.read_bytes() if kept is not None else None
 
+    def stamp_after(self, n):
+        """The first stamp of the chain's head written after line `n` – the
+        one that covers it (a case's stamp covers its manifest only)."""
+        row = self.db().execute("SELECT n, at FROM history WHERE kind = 'stamp' AND n > ? "
+                                "AND (other IS NULL OR other NOT LIKE 'cases/%') "
+                                "ORDER BY n LIMIT 1", (n,)).fetchone()
+        return {"line": row[0], "at": row[1]} if row else None
+
     def last_stamp(self):
         row = self.db().execute("SELECT at, other FROM history WHERE kind = 'stamp' "
                                 "AND (other IS NULL OR other NOT LIKE 'cases/%') "
@@ -562,6 +570,36 @@ def sweep(data, roots, tsa=None, events=None):
 # ---------------------------------------------------------------------------
 # Checking: the chain end to end, every file hashed afresh
 # ---------------------------------------------------------------------------
+def walk_chain(ev, want=()):
+    """Read the chain line by line: every `prev` must be the checksum of
+    the line before it. Says whether it holds (`ok`, else `broken_at`),
+    how many lines it has, since when it runs, the lines asked for by
+    number (`found`) and the stamps of its head (`stamps`, not a case's)."""
+    want = set(want)
+    ok, broken_at, n, prev, first_at = True, None, 0, None, None
+    found, stamps = {}, []
+    for text, d in ev.read_lines():
+        n += 1
+        if not isinstance(d, dict) or d.get("n") != n or d.get("prev") != prev:
+            if ok:
+                ok, broken_at = False, n
+        if isinstance(d, dict):
+            if first_at is None:
+                first_at = d.get("at")
+            if n in want:
+                found[n] = d
+            if d.get("kind") == "stamp" and not d.get("for"):
+                stamps.append(d)
+        prev = line_hash(text)
+    ev.db()
+    # The last line has no successor to name it: its checksum is held
+    # against the head the index recorded when the line was written.
+    if ok and prev and ev._meta("head") and ev._meta("head") != prev:
+        ok, broken_at = False, n
+    return {"ok": ok, "broken_at": broken_at, "lines": n, "since": first_at,
+            "found": found, "stamps": stamps}
+
+
 def verify(data, roots=None, events=None):
     """The archive check's part. Reads the chain line by line (every
     `prev` must be the checksum of the line before it), then hashes every
@@ -570,21 +608,8 @@ def verify(data, roots=None, events=None):
     ev = Evidence(data)
     if not ev.exists():
         return {"exists": False}
-    chain_ok, broken_at, n, prev = True, None, 0, None
-    first_at = None
-    for text, d in ev.read_lines():
-        n += 1
-        if not isinstance(d, dict) or d.get("n") != n or d.get("prev") != prev:
-            if chain_ok:
-                chain_ok, broken_at = False, n
-        if first_at is None and isinstance(d, dict):
-            first_at = d.get("at")
-        prev = line_hash(text)
-    ev.db()
-    # The last line has no successor to name it: its checksum is held
-    # against the head the index recorded when the line was written.
-    if chain_ok and prev and ev._meta("head") and ev._meta("head") != prev:
-        chain_ok, broken_at = False, n
+    walked = walk_chain(ev)
+    chain_ok, broken_at, n, first_at = walked["ok"], walked["broken_at"], walked["lines"], walked["since"]
     unchanged, changed, missing = 0, [], []
     for row in ev.db().execute("SELECT * FROM files ORDER BY rel"):
         path = ev.data / row["rel"]

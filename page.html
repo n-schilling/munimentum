@@ -7790,19 +7790,40 @@ function evidenceOpen(rel){
   api(API + '/documents?root=' + encodeURIComponent(root) + '&rel=' + encodeURIComponent(path)).then(function(r){
     if(!r || r.ok === false){ apiFehler(r); return; }
     closeWizard('evidence-findings');
-    // Handed over to Search, as every view does: its name as the query,
-    // no filter in the way, and the file chosen among the hits.
-    tab('suche'); sicht('treffer');
-    filterLeeren();
-    el('q').value = r.title || '';
-    var doc = {uid: r.uid, source: r.source, root: r.root, path: r.path, uri: r.uri, key: r.key,
-               title: r.title, date: r.date, who: r.who, context: r.context,
-               preview: String(r.text || '').slice(0, 300)};
-    Promise.resolve(doSearch(0)).then(function(){
-      var j = -1;
-      TREFFER.forEach(function(h, k){ if(j < 0 && h.uid === doc.uid) j = k; });
-      if(j >= 0) waehleTreffer(j); else zeigeDetail(doc, null);
-    });
+    showDocument(r);
+  }).catch(function(){});
+}
+/* One item, as /api/v1/documents answers it, handed over to Search as
+   every view does: its name as the query, no filter in the way, and the
+   item chosen among the hits – or shown alone when the query does not
+   find it. */
+function showDocument(r){
+  tab('suche'); sicht('treffer');
+  filterLeeren();
+  el('q').value = r.title || '';
+  var doc = {uid: r.uid, source: r.source, root: r.root, path: r.path, uri: r.uri, key: r.key,
+             title: r.title, date: r.date, who: r.who, context: r.context,
+             preview: String(r.text || '').slice(0, 300)};
+  Promise.resolve(doSearch(0)).then(function(){
+    var j = -1;
+    TREFFER.forEach(function(h, k){ if(j < 0 && h.uid === doc.uid) j = k; });
+    if(j >= 0) waehleTreffer(j); else zeigeDetail(doc, null);
+  });
+}
+/* A link into the page from a citation over MCP (#item=<key>, the tool
+   get_document's `cite.link`): the item opens in Search. The address is
+   cleared first, so a reload does not open it again. */
+function itemFromAddress(){
+  var hash = '';
+  try { hash = String(location.hash || ''); } catch(e){ return; }
+  var m = /^#item=(.+)$/.exec(hash);
+  if(!m) return;
+  try { history.replaceState(null, '', location.pathname + location.search); } catch(e){}
+  var key;
+  try { key = decodeURIComponent(m[1]); } catch(e){ return; }
+  api(API + '/documents?key=' + encodeURIComponent(key)).then(function(r){
+    if(!r || r.ok === false){ apiFehler(r); return; }
+    showDocument(r);
   }).catch(function(){});
 }
 function archivQuelle(quelle){
@@ -9858,9 +9879,13 @@ function takt(){
   }
 }
 stelleProtokollHer();
-refresh();
+refresh().then(itemFromAddress).catch(function(){});
 ladeFaelle();
 setInterval(takt, 500);
+try {
+  // The app already open, another citation clicked: the same tab may get it.
+  window.addEventListener('hashchange', itemFromAddress);
+} catch(e){}
 try {
   document.addEventListener('visibilitychange', function(){
     if(!sichtbar()) return;

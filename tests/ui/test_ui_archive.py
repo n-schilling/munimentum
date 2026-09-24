@@ -11,12 +11,14 @@ module that generated the archive, so adding a mail to testdata/sources.py
 does not make a test here wrong.
 """
 
+from urllib.parse import quote
+
 import pytest
 
 from playwright.sync_api import expect
 
 from testdata import people, sources
-from tests.ui.helpers import hit_title, open_app, open_calendar, texts
+from tests.ui.helpers import hit_title, hits, open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
 
@@ -168,3 +170,15 @@ def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
     archive_page.locator('#sicht-adressbuch [data-book-mode="list"]').click()
     expect(archive_page.locator('#sicht-adressbuch [data-book="comm"]')).to_be_visible()
     expect(archive_page.locator("#kbBox .card2").first).to_be_visible()
+
+
+def test_a_citation_link_opens_the_item(archive_page, archive):
+    """The link a citation over MCP carries (#item=<key>) opens the item
+    in Search – and leaves the address, so a reload does not do it again."""
+    title = next(p[2] for p in sources.ONENOTE_PAGES if p[0] == "page-steering")
+    key = next(h["key"] for h in hits(archive, title, 20) if h["title"] == title)
+    archive_page.goto(archive.base + "/#item=" + quote(key, safe=""))
+    detail = archive_page.locator("#detail")
+    expect(detail).to_be_visible()
+    expect(detail.locator(".dtitel")).to_have_text(title)
+    assert "#item" not in archive_page.url

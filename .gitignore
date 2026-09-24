@@ -34,6 +34,9 @@ app.log
 # The ETag of the last update check – the one file the app keeps outside
 # the profiles besides the register.
 update_cache.json
+# Where a running app answers (instance.py) – written at start, removed at
+# the end, in the profile's folder.
+instance.json
 # Further profiles of a source run – each one a whole archive – and the
 # register saying which was opened last.
 profiles/

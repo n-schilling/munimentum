@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.8.2
+  version: 13.9.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2187,10 +2187,13 @@ paths:
         The uid is not a path segment – it carries the source's path and a
         chunk number – so it is a query. A file may be named by its place
         instead, `root` and `rel` – the way the evidence findings name
-        files. `facts` is what the kind of item is known by, the same block
-        `/api/v1/documents/facts` returns.
+        files – or any item by its stable `key`, the way a citation over
+        MCP links into the page (`#item=<key>`). `facts` is what the kind
+        of item is known by, the same block `/api/v1/documents/facts`
+        returns.
       parameters:
-        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit (`<source>:<path>:<n>`) – or `root` and `rel`." }
+        - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit (`<source>:<path>:<n>`) – or `key`, or `root` and `rel`." }
+        - { name: key, in: query, schema: { type: string }, description: "The item's stable key (`cite.key` of the MCP tool get_document)." }
         - { name: root, in: query, schema: { type: string }, description: "The export's root (`onedrive`, `sharepoint`, …), with `rel`." }
         - { name: rel, in: query, schema: { type: string }, description: "The file's path below that root." }
         - { name: before, in: query, schema: { type: integer, default: 0, maximum: 20 }, description: "Conversation context before." }

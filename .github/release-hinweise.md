@@ -1,16 +1,17 @@
-## New in 13.8.2
+## New in 13.9.0
 
-- **Every mail can be found** – invitations and their answers, mails whose
-  text is only in HTML, forwards without a word of their own and mails with
-  no text at all now reach the search. On a real mailbox that was nearly
-  one mail in five.
-- **Faster index runs** – those mails are no longer read again on every
-  run.
+- **Citations that lead back** – when Claude quotes an item from the
+  archive, the citation opens it in Munimentum while the app runs, and
+  Claude can check it against the chain of checksums before calling it
+  unchanged.
+- **Prompts for Claude** – ready-made ways for Claude to brief you on a
+  case or build a chronology of a topic from the archive.
+- **Cases to attach** – every case appears as a page you can attach to a
+  conversation in Claude, from its casebook to its items in order.
 
 ## Upgrading
 
-The first index run after the update reads every file once more and
-takes longer for it, once.
+Nothing happens once after this update; the first run is an ordinary one.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

@@ -52,7 +52,8 @@ Each rule is one sentence and the reason behind it.
 - **One search.** A view never grows a search of its own; it hands over
   to Search with its source and filters set (one `.ghost` at the right
   of its tool row). Cases, saved searches and the history then have one
-  home, and nothing is built twice.
+  home, and nothing is built twice. A link from outside lands there too:
+  `#item=<key>`, the link of a citation over MCP, opens the item in Search.
 - **A view's tool row** has its controls at the left and the one
   hand-over at the right, nothing above it that does not belong to it.
 - **Filters count, they do not search.** Every filter is a pill with its

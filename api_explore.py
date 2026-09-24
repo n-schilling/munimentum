@@ -396,12 +396,19 @@ def document(h, q):
     if mod is None:
         raise Ablehnung(503, h.app.search.error)
     uid = q.get("uid", "")
-    if not uid and q.get("root") and q.get("rel"):
-        # A file named by its place – the evidence findings name files so.
+    if not uid and (q.get("key") or (q.get("root") and q.get("rel"))):
+        # A file named by its place – the evidence findings name files so –
+        # or an item by its stable key: the link a citation over MCP
+        # carries (#item=<key>).
         con = mod._db()
         try:
-            row = con.execute("SELECT uid FROM chunks WHERE root = ? AND rel = ? AND seq = 0 "
-                              "ORDER BY uid LIMIT 1", (q["root"], q["rel"])).fetchone()
+            if q.get("key"):
+                row = (con.execute("SELECT uid FROM chunks WHERE key = ? AND seq = 0 "
+                                   "ORDER BY uid LIMIT 1", (q["key"],)).fetchone()
+                       if mod._hat_spalte(con, "key") else None)
+            else:
+                row = con.execute("SELECT uid FROM chunks WHERE root = ? AND rel = ? AND seq = 0 "
+                                  "ORDER BY uid LIMIT 1", (q["root"], q["rel"])).fetchone()
         finally:
             con.close()
         if row is None:

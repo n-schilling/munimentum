@@ -4029,6 +4029,35 @@ def test_serve_oeffnet_den_browser_und_raeumt_auf(sandbox, with_ollama, monkeypa
     assert a.scheduler.stop_event.is_set()                  # shutdown() cleaned up
 
 
+def test_serve_says_where_it_answers_while_it_runs(sandbox, with_ollama, monkeypatch):
+    """instance.json in the profile's folder names the port while serve()
+    runs – what the MCP server's links into the page are built on – and
+    is gone once it stopped."""
+    import instance
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: None)
+    a = app_mod.App(app_mod.load_config())
+    httpd_box, gelesen = [], []
+    echtes_make = app_mod.make_server
+    monkeypatch.setattr(app_mod, "make_server",
+                        lambda app, port, host="127.0.0.1":
+                        httpd_box.append(echtes_make(app, port, host)) or httpd_box[0])
+
+    def stop_gleich():
+        ende = time.time() + 5
+        while time.time() < ende and not (httpd_box and instance.read(app_mod.HEIM)):
+            time.sleep(0.02)
+        gelesen.append(instance.read(app_mod.HEIM))
+        gelesen.append(instance.find(app_mod.HEIM, timeout=2))
+        httpd_box[0].shutdown()
+
+    threading.Timer(0.05, stop_gleich).start()
+    app_mod.serve(a, 0, open_browser=False)
+    port = httpd_box[0].server_address[1]
+    assert gelesen[0]["port"] == port and gelesen[0]["profile"] == app_mod.PROFIL
+    assert gelesen[1] == (f"http://127.0.0.1:{port}/", "running")
+    assert instance.read(app_mod.HEIM) is None
+
+
 # --------------------------------------------------------------------------
 # Only one instance – and a way to quit it
 # --------------------------------------------------------------------------

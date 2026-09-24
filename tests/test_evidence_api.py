@@ -296,3 +296,114 @@ def test_a_file_is_found_by_its_place(archive):
     assert code == 200 and r["path"] == rel and r["root"] == "sharepoint" and r["key"]
     code, r = call(port, "GET", "/api/v1/documents?root=sharepoint&rel=nowhere.csv")
     assert code == 404 and r["error"]["k"] == "srv.detail.none"
+
+
+# --------------------------------------------------------------------------
+# Over MCP: a citation, and an item held against the chain (verify_item)
+# --------------------------------------------------------------------------
+def _file_uid(port, rel):
+    name = Path(rel).stem
+    return _uid(port, name.replace("-", " "), f"datei:{rel}")
+
+
+def _stamp(home, tsa="https://tsa.example"):
+    """A stamp line on the chain's head, as stamp_head writes one – no
+    authority asked."""
+    ev = evidence.Evidence(home)
+    n, head = ev.head()
+    line = ev.append({"kind": "stamp", "head": head, "lines": n, "tsa": tsa,
+                      "sha256": versions.sha256_bytes(evidence.head_text(n, head, "x").encode())})
+    ev.flush()
+    ev.close()
+    return line
+
+
+def test_claude_verifies_an_item_against_the_chain(archive):
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    plan = _file_uid(port, "Dateien/Documents/Ostwind/rollout-plan.md")
+    before = mod.verify_item(uid=plan)
+    assert before["verdict"] == "unchanged" and before["stamp"] is None
+    assert before["chain"]["intact"] and before["versions"] == 2 and before["microsoft_match"] is True
+    assert before["sha256"] == before["recorded"]["sha256"]
+    assert "No time-stamp covers that line yet" in before["summary"]
+    stamp = _stamp(home)
+    after = mod.verify_item(key=before["key"])
+    assert after["verdict"] == "unchanged" and after["uid"] == plan
+    assert after["stamp"] == {"line": stamp["n"], "at": stamp["at"], "tsa": "https://tsa.example"}
+    assert "time-stamped past that line" in after["summary"]
+    # Changed by hand after the last run – and before it: the chain
+    # recorded that version as a change made outside the app.
+    tampered = mod.verify_item(uid=_file_uid(port, history.TAMPERED[1]))
+    assert tampered["verdict"] == "changed_outside"
+    assert tampered["sha256"] != tampered["recorded"]["sha256"]
+    outside = mod.verify_item(uid=_file_uid(port, history.OUTSIDE[1]))
+    assert outside["verdict"] == "unchanged_outside_version"
+    assert mod.verify_item(uid="nowhere:0")["error"]
+    assert mod.verify_item()["error"]
+
+
+def test_a_version_the_app_wrote_is_not_an_outside_change(archive):
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    rel = "Dateien/Documents/Ostwind/rollout-plan.md"
+    uid = _file_uid(port, rel)
+    path = home / settings.ONEDRIVE_DIR / rel
+    path.write_text("a newer version\n", encoding="utf-8")
+    assert mod.verify_item(uid=uid)["verdict"] == "changed_outside"
+    pending = home / evidence.EVIDENCE_DIRNAME / versions.PENDING_DIRNAME
+    pending.mkdir(parents=True, exist_ok=True)
+    (pending / "1-1.jsonl").write_text(json.dumps(
+        {"op": "write", "rel": f"{settings.ONEDRIVE_DIR}/{rel}",
+         "sha256": versions.sha256_file(path)}) + "\n", encoding="utf-8")
+    assert mod.verify_item(uid=uid)["verdict"] == "changed_by_app"
+    path.unlink()
+    assert mod.verify_item(uid=uid)["verdict"] == "missing"
+
+
+def test_a_broken_chain_proves_nothing(archive):
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    chain = home / evidence.EVIDENCE_DIRNAME / evidence.CHAIN
+    lines = chain.read_text(encoding="utf-8").splitlines()
+    lines[3] = lines[3].replace('"at":"', '"at":"1', 1)
+    chain.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    v = mod.verify_item(uid=_file_uid(port, "Dateien/Documents/Ostwind/rollout-plan.md"))
+    assert v["verdict"] == "chain_broken" and v["chain"]["broken_at"] == 5
+
+
+def test_a_citation_links_into_the_running_app_and_only_then(archive, monkeypatch):
+    import instance
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(home))
+    monkeypatch.setitem(mod._APP, "at", None)
+    uid = _file_uid(port, "Dateien/Documents/Ostwind/rollout-plan.md")
+    cite = mod._with_cite(mod.get_document(uid=uid))["cite"]
+    assert cite["link"] is None and cite["app"] == "not_running"
+    assert cite["label"].startswith("OneDrive · ") and cite["label"].endswith("rollout-plan.md")
+    assert cite["sha256"] and cite["chain_line"] and cite["captured"] and cite["stamped"] is None
+    instance.write(home, port, app_mod.PROFIL)
+    monkeypatch.setitem(mod._APP, "at", None)
+    cite = mod._with_cite(mod.get_document(uid=uid))["cite"]
+    assert cite["link"] == f"http://127.0.0.1:{port}/#item={quote(cite['key'], safe='')}"
+    assert "app" not in cite
+    # What the link opens: the page asks for the item by its key.
+    code, r = call(port, "GET", f"/api/v1/documents?key={quote(cite['key'], safe='')}")
+    assert code == 200 and r["uid"] == uid
+    code, r = call(port, "GET", "/api/v1/documents?key=nowhere")
+    assert code == 404 and r["error"]["k"] == "srv.detail.none"
+    # Another profile on that port: no link into the wrong archive.
+    instance.write(home, port, "nordwind")
+    monkeypatch.setitem(mod._APP, "at", None)
+    assert mod._with_cite(mod.get_document(uid=uid))["cite"]["app"] == "other_profile"
+
+
+def test_a_message_is_cited_with_its_own_checksum(archive):
+    a, port, _home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    message = _uid(port, "printer mapping fails", "teams:1on1/")
+    cite = mod._with_cite(mod.get_document(uid=message))["cite"]
+    versions_ = mod.get_document(uid=message)["versions"]
+    assert cite["item_sha256"] == next(v["sha256"] for v in versions_ if v["current"])
+    assert mod.verify_item(uid=message)["item_sha256"] == cite["item_sha256"]

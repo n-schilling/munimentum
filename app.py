@@ -71,6 +71,7 @@ import evidence
 import faelle
 import folders
 import i18n
+import instance
 import notify
 import ollama_client
 import analytics_db
@@ -3306,35 +3307,16 @@ def _sicherer_name(name):
 
 
 def laeuft_bereits(port, host="127.0.0.1", timeout=1.5, profil=None):
-    """Is an instance of this app already answering on the port?
+    """Is an instance of this app already answering on the port – of this
+    profile, when one is named? (instance.answers)
 
     Without this check every further double-click would start a second
     instance on the next free port. Nobody notices that one – the app has
     no window and does not stay in the Dock either – and it could only be
-    got rid of via Activity Monitor.
+    got rid of via Activity Monitor. Another profile's instance keeps its
+    port, this one takes the next free one.
     """
-    import urllib.request
-    try:
-        with urllib.request.urlopen(f"http://{host}:{port}{API_V1}/status",
-                                    timeout=timeout) as r:
-            # The header says whose answer this is – every one of ours
-            # carries it, and no other server on a free port will.
-            unser = r.headers.get("X-Munimentum-Api")
-            daten = json.loads(r.read().decode("utf-8"))
-    except Exception:
-        return False
-    if not unser:
-        return False
-    # Something entirely different could be listening on the port; only
-    # our own answer counts as "already running" – and only with the same
-    # profile: another profile's instance keeps its port, this one takes
-    # the next free one.
-    if not (isinstance(daten, dict) and "token" in daten and "jobs" in daten):
-        return False
-    if profil is not None:
-        laufend = (daten.get("profile") or {}).get("name") or settings.STANDARD_PROFIL
-        return laufend == profil
-    return True
+    return instance.answers(port, host, timeout, profil)
 
 
 class Server(ThreadingHTTPServer):
@@ -3540,6 +3522,8 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     httpd = make_server(app, port, host)
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
+    # Where this profile answers – for the MCP server's links into the page.
+    instance.write(HEIM, port, PROFIL)
     app.log_token_state()
     if _UMZUG.get("bewegt"):
         app.jobs.logk("srv.layout.moved", "info", path=_UMZUG["nach"])
@@ -3581,6 +3565,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
             httpd.shutdown()
             app.shutdown()
             httpd.server_close()
+            instance.remove(HEIM)
         neustart_ausfuehren()
         return httpd
     try:
@@ -3590,6 +3575,7 @@ def serve(app, port, open_browser=True, host="127.0.0.1"):
     finally:
         app.shutdown()
         httpd.server_close()
+        instance.remove(HEIM)
     neustart_ausfuehren()
     return httpd
 
