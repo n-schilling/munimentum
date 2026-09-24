@@ -768,7 +768,8 @@ def test_ohne_ordnertakt_bleibt_alles_wie_es_war(tmp_path, monkeypatch, capsys):
     g = _TaktGraph(_beide())
     sp.lauf(g, tmp_path, [d])
     ziel = sp.drive_ziel(tmp_path, d)
-    assert g.geladen == ["alt", "neu"] and _wartend(ziel) == {}
+    # The downloads run side by side: which one finishes first is chance.
+    assert sorted(g.geladen) == ["alt", "neu"] and _wartend(ziel) == {}
     assert sp.state_db.StateDb(ziel).kv_lesen("last_sync"), "a clean run stamps the library"
     assert "waiting" not in _ergebnis(capsys)["extra"]
 
