@@ -7340,7 +7340,11 @@ function kalenderSuchen(){
    cards it touched carry a mark. The view searches nothing – the
    hand-over names the person to Search. */
 var ORG = {version: null, versions: [], top: null, person: null, name: null, marks: {}, open: false,
-           role: null, exact: false, roles: null, rolesOpen: false, shown: 0};
+           role: null, exact: false, roles: null, rolesOpen: false, shown: 0,
+           // Every step the view takes counts up; an answer that arrives
+           // after a later step was taken draws nothing – a click is never
+           // overtaken by a slower answer to an earlier one.
+           seq: 0};
 
 function orgQuery(){ return '?version=' + encodeURIComponent(ORG.version || ''); }
 
@@ -7377,6 +7381,7 @@ function orgVersion(sha, keep){
   el('org-version').innerHTML = esc(orgVersionLabel(v)) + (ORG.versions.length > 1 ? ikon('runter') : '');
   el('org-version').disabled = ORG.versions.length < 2;
   el('org-version').title = ORG.versions.length < 2 ? t('org.version.only') : '';
+  var seq = ++ORG.seq;
   Promise.all([api(API + '/organization' + orgQuery()),
                api(API + '/organization/changes' + orgQuery())]).then(function(r){
     if(!r[0] || r[0].ok === false){ orgEmpty(); return; }
@@ -7385,6 +7390,7 @@ function orgVersion(sha, keep){
     orgChanges((r[1] && r[1].items) || [], r[1] && r[1].from);
     orgButtons();
     ORG.roles = null;
+    if(seq !== ORG.seq) return;
     if(ORG.role) orgRoleShow(0);
     else if(keep) orgOpen(keep, true); else orgHome();
   }).catch(function(){});
@@ -7450,6 +7456,7 @@ function orgButtons(){
 
 function orgHome(){
   if(!ORG.top) return;
+  ++ORG.seq;
   var roots = ORG.top.roots || [];
   if(roots.length === 1){ orgOpen(roots[0].id); return; }
   ORG.person = null; ORG.name = null;
@@ -7462,7 +7469,9 @@ function orgHome(){
 function orgToMe(){ if(ORG.top && ORG.top.me) orgOpen(ORG.top.me); }
 
 function orgOpen(id, keep){
+  var seq = ++ORG.seq;
   api(API + '/organization/people/' + encodeURIComponent(id) + orgQuery()).then(function(r){
+    if(seq !== ORG.seq) return;
     if(!r || r.ok === false || !r.person){
       // A person the chosen version does not hold: back to its top.
       if(keep){ orgHome(); return; }
@@ -7565,10 +7574,10 @@ function orgRoleClear(){
 }
 function orgRoleShow(offset){
   if(!ORG.role) return;
-  var role = ORG.role;
+  var role = ORG.role, seq = ++ORG.seq;
   api(API + '/organization/people' + orgQuery() + '&role=' + encodeURIComponent(role) +
       (ORG.exact ? '&exact=true' : '') + '&offset=' + offset).then(function(r){
-    if(role !== ORG.role || !r || r.ok === false) return;
+    if(seq !== ORG.seq || role !== ORG.role || !r || r.ok === false) return;
     ORG.person = null; ORG.name = null;
     orgButtons();
     var cards = r.items.map(function(c){ return orgCard(c); }).join('');
