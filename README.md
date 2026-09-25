@@ -1,10 +1,10 @@
 # Munimentum
 
 Your own Microsoft 365 data, kept where you can reach it: Teams chats and
-channels with the files they share, Outlook mail, calendar, contacts,
-OneDrive files, SharePoint libraries and pages, Planner boards, To Do lists
-and OneNote notebooks — exported through Microsoft Graph and searchable
-offline, in the app or through Claude via MCP.
+channels with the files they share, your organization, Outlook mail,
+calendar, contacts, OneDrive files, SharePoint libraries and pages, Planner
+boards, To Do lists and OneNote notebooks — exported through Microsoft Graph
+and searchable offline, in the app or through Claude via MCP.
 
 **The magic:** all via delegated access, no admin consent required.
 
@@ -61,6 +61,7 @@ because any one source can mean tens of thousands of items.
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
+| **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it, kept as one file whose every change is a version; needs `User.Read.All`, which some tenants grant only with an admin's consent |
 
 Every run asks Microsoft only for what changed, chats newest first and mail
 folders in bundles, and counts only that as new. Deleted items stay in the
@@ -74,9 +75,9 @@ monthly — can be set per source, per part of it or for a single folder.
 
 ### Explore archive
 
-Four ways in, one strip under the header: **Search**, **Calendar**,
-**Contacts** and **Files**. Only Search searches; the others hand over to
-it with their source, month or folder set.
+Five ways in, one strip: **Search**, **Calendar**, **Contacts**, **Files** and
+**Organization**, the tenant top-down in any version or by role. Only Search
+searches; the others hand it their source, month, folder or person.
 
 **Search.** Three kinds, chosen in the field: *Text search* finds the words
 that actually occur, best matches first — a phrase in quotes must occur as
@@ -89,11 +90,11 @@ longer at Microsoft, mails with an attachment, and the lines *From*, *To*,
 
 A chosen hit opens on the right with the facts its kind is known by — a mail
 its lines, folder and attachments, each a download — then *Open original*,
-*Add to case*, *Find similar* and the content; below it, its **versions**,
-the rest of a conversation and a file's checksums, each in a fold.
-**History** keeps every search by its criteria, never its hits; **Saved**
-keeps them under a name, with the case a search files into and whether it
-collects by itself.
+*Add to case*, *Find similar*, a link to copy, and the content; below it,
+its **versions**, a conversation and a file's checksums, each in a fold;
+*List* clicked again gives it the whole width. **History** keeps each search by
+its criteria, never its hits; **Saved** keeps them under a name, with the
+case a search files into and whether it collects by itself.
 
 A result has **three views**: *List*, the page the search answered;
 *Timeline*, every hit in the order it happened under a band of months that
@@ -139,24 +140,23 @@ asks first, none deletes. **Runs** keeps every run with its log.
 ### Settings
 
 Microsoft Access, Sources, Schedule, AI (Ollama), Claude (MCP), Profiles,
-Evidence, App, Expert mode — one card each on one running page, every
-setting with an **(i)** that says what changes. *Evidence* keeps earlier
-versions and can have runs time-stamped (RFC 3161). The App card holds
-notifications, how long the search history is kept, where case exports land,
-your organisation's mail domains (what *external* means), and *Report a
-problem*: a GitHub issue with the log, anonymised, shown for you to edit and
-sent by nobody but you.
+Evidence, App, Expert mode — one card each on one running page, every setting
+with an **(i)** that says what changes. *Evidence* keeps earlier versions and
+can have runs time-stamped (RFC 3161). The App card holds notifications, how
+long the search history is kept, where case exports land, your organisation's
+mail domains (what *external* means), and *Report a problem*: a GitHub issue
+with the log, anonymised, shown for you to edit and sent by nobody but you.
 
 ## Search with Claude
 
-A built-in MCP server hands the archive to Claude Code, Claude Desktop or
-any other MCP client — on this machine only: every source with the search
-page's filters, how far the archive reaches, every version of an item, and
-your cases, also as pages to attach to a conversation. Citations
-open the item in the app and hold against the chain of checksums; prompts
-brief you on a case or build a chronology. It changes a case only when
-*Claude may change cases* is on under *Settings › Claude (MCP)*, and then
-only adds, marked *via MCP*. *Settings* prints the snippet for your client.
+A built-in MCP server hands the archive to Claude Code, Claude Desktop or any
+other MCP client — on this machine only: every source with the search page's
+filters, how far the archive reaches, every version of an item, the org chart
+on any day, and your cases, also as pages to attach. Citations open the item
+in the app, alone on the page, and hold against the chain of checksums;
+prompts brief you on a case or build a chronology. It changes a case only when
+*Claude may change cases* is on under *Settings › Claude (MCP)*, and then only
+adds, marked *via MCP*. *Settings* prints the snippet for your client.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

@@ -139,7 +139,7 @@ def test_the_chain_state_for_the_settings_card(archive):
     code, r = call(port, "GET", "/api/v1/evidence")
     assert code == 200
     assert r["lines"] == evidence.Evidence(home).lines_on_disk() and len(r["head"]) == 64
-    assert r["versions"] == len(history.EARLIER) and r["stamped"] is None and r["since"]
+    assert r["versions"] == len(history.KEPT) and r["stamped"] is None and r["since"]
 
 
 def test_a_case_marks_what_changed_since_it_came_in(archive):
@@ -386,7 +386,10 @@ def test_a_citation_links_into_the_running_app_and_only_then(archive, monkeypatc
     instance.write(home, port, app_mod.PROFIL)
     monkeypatch.setitem(mod._APP, "at", None)
     cite = mod._with_cite(mod.get_document(uid=uid))["cite"]
-    assert cite["link"] == f"http://127.0.0.1:{port}/#item={quote(cite['key'], safe='')}"
+    # The version read now is pinned in the link – unchanged here, so the
+    # one the chain recorded.
+    assert cite["link"] == (f"http://127.0.0.1:{port}/#item={quote(cite['key'], safe='')}"
+                            f"&sha={cite['sha256']}")
     assert "app" not in cite
     # What the link opens: the page asks for the item by its key.
     code, r = call(port, "GET", f"/api/v1/documents?key={quote(cite['key'], safe='')}")
@@ -407,3 +410,22 @@ def test_a_message_is_cited_with_its_own_checksum(archive):
     versions_ = mod.get_document(uid=message)["versions"]
     assert cite["item_sha256"] == next(v["sha256"] for v in versions_ if v["current"])
     assert mod.verify_item(uid=message)["item_sha256"] == cite["item_sha256"]
+
+
+def test_a_link_pins_what_the_page_lists_as_versions(archive, monkeypatch):
+    """The checksum in a citation's link is one the page finds among the
+    item's versions: a message's words, a file's bytes, a task's board."""
+    import instance
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(home))
+    instance.write(home, port, app_mod.PROFIL)
+    monkeypatch.setitem(mod._APP, "at", None)
+    for uid in (_uid(port, "printer mapping fails", "teams:1on1/"),
+                _file_uid(port, history.TAMPERED[1]),
+                mod.browse_messages(source="planner", k=1)["results"][0]["uid"]):
+        link = mod._with_cite(mod.get_document(uid=uid))["cite"]["link"]
+        pin = link.rsplit("&sha=", 1)[1]
+        code, r = call(port, "GET", f"/api/v1/documents/versions?uid={quote(uid)}")
+        assert code == 200
+        assert next(v["sha256"] for v in r["items"] if v["current"]) == pin, uid

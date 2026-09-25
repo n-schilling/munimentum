@@ -11,6 +11,7 @@ module that generated the archive, so adding a mail to testdata/sources.py
 does not make a test here wrong.
 """
 
+import re
 from urllib.parse import quote
 
 import pytest
@@ -172,13 +173,69 @@ def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
     expect(archive_page.locator("#kbBox .card2").first).to_be_visible()
 
 
-def test_a_citation_link_opens_the_item(archive_page, archive):
-    """The link a citation over MCP carries (#item=<key>) opens the item
-    in Search – and leaves the address, so a reload does not do it again."""
+def test_a_citation_link_opens_the_item_and_nothing_else(archive_page, archive):
+    """The link a citation over MCP carries (#item=<key>) opens the item –
+    and only the item: nobody searched, so no search row, no filters, no
+    list. The address is cleared, so a reload does not open it again."""
     title = next(p[2] for p in sources.ONENOTE_PAGES if p[0] == "page-steering")
     key = next(h["key"] for h in hits(archive, title, 20) if h["title"] == title)
     archive_page.goto(archive.base + "/#item=" + quote(key, safe=""))
     detail = archive_page.locator("#detail")
-    expect(detail).to_be_visible()
+    expect(detail.locator(".dtitel")).to_be_visible()
     expect(detail.locator(".dtitel")).to_have_text(title)
     assert "#item" not in archive_page.url
+    door = ("#sichten", "#q", "#filter", "#results")
+    for part in door:
+        expect(archive_page.locator(part)).to_be_hidden()
+    # "Explore archive" brings the door back as it was – nothing searched.
+    archive_page.click('nav [data-tab="suche"]')
+    for part in ("#sichten", "#q", "#filter"):
+        expect(archive_page.locator(part)).to_be_visible()
+    expect(detail).to_be_hidden()
+    expect(archive_page.locator("#q")).to_have_value("")
+
+
+def test_a_hit_chosen_before_comes_back_after_a_link(archive_page, archive):
+    hits_ = search_for(archive_page, archive, "budget approved")
+    hits_.first.click()
+    before = archive_page.locator("#detail .dtitel").inner_text()
+    title = next(p[2] for p in sources.ONENOTE_PAGES if p[0] == "page-steering")
+    key = next(h["key"] for h in hits(archive, title, 20) if h["title"] == title)
+    archive_page.evaluate("k => { location.hash = 'item=' + encodeURIComponent(k); }", key)
+    expect(archive_page.locator("#detail .dtitel")).to_be_visible()
+    expect(archive_page.locator("#detail .dtitel")).to_have_text(title)
+    expect(archive_page.locator("#results")).to_be_hidden()
+    archive_page.click('nav [data-tab="suche"]')
+    expect(archive_page.locator("#results")).to_be_visible()
+    expect(archive_page.locator("#detail .dtitel")).to_have_text(before)
+
+
+def test_list_on_an_open_hit_steps_the_list_aside_and_back(archive_page, archive):
+    hits_ = search_for(archive_page, archive, "budget approved")
+    hits_.first.click()
+    detail, results = archive_page.locator("#detail"), archive_page.locator("#results")
+    expect(detail).to_be_visible()
+    title = detail.locator(".dtitel").inner_text()
+    liste = archive_page.locator("#result-views").get_by_role("button", name=EN["search.view.list"])
+    liste.click()
+    expect(results).to_be_hidden()
+    expect(detail.locator(".dtitel")).to_have_text(title)
+    expect(archive_page.locator("#filter")).to_be_visible()      # set by hand: they stay
+    liste.click()
+    expect(results).to_be_visible()
+    expect(detail.locator(".dtitel")).to_have_text(title)
+
+
+def test_a_fact_of_an_item_opened_alone_searches_with_the_whole_door(archive_page, archive):
+    """A fact of the detail is a filter: clicked on an item a link opened,
+    the door comes back with the pill set and the result drawn."""
+    key = next(h["key"] for h in hits(archive, "rollout plan", 20)
+               if h["uid"].endswith("rollout-plan.md:0"))
+    archive_page.goto(archive.base + "/#item=" + quote(key, safe=""))
+    detail = archive_page.locator("#detail")
+    expect(detail.locator(".dtitel")).to_be_visible()
+    with archive_page.expect_response(lambda r: "/api/v1/search?" in r.url):
+        detail.locator("#detail-fakten a", has_text="md").first.click()
+    expect(archive_page.locator("#filter")).to_be_visible()
+    expect(archive_page.locator("#p-typ")).to_have_class(re.compile(r"\bon\b"))
+    expect(archive_page.locator("#results .hit").first).to_be_visible()

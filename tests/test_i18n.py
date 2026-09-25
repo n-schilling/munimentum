@@ -190,7 +190,7 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "settings.", "wizard.", "job.", "srv.", "unit.", "update.", "quit.",
            "progress.", "view.", "ana.", "folders.", "plan.", "report.", "flow.",
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
-           "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.",
+           "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.", "org.",
            # What the case, a search result and the address book share (13.6)
            "people.", "timeline.")
 
@@ -203,7 +203,8 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "graph_client.py", "drive_mirror.py",
            "sharepoint_export.py", "planner_export.py",
            "todo_export.py", "onenote_export.py", "archive_check.py",
-           "case_export.py", "case_collect.py", "export_util.py", "evidence.py")
+           "case_export.py", "case_collect.py", "export_util.py", "evidence.py",
+           "org_export.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
@@ -212,6 +213,10 @@ GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
                           "run.conv.updated")    # a conversation's line until 13.7.1
 
 DYNAMISCH = (
+    # The organization view names a change's kind and its fields.
+    ("org.change.", ("joined", "moved", "changed", "left")),
+    ("org.field.", ("title", "department", "office", "company", "city", "country",
+                    "mail", "manager", "place")),
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
@@ -222,6 +227,8 @@ DYNAMISCH = (
     ("search.ph.", ("text", "aehnlich", "ki")),
     # The filter pills say their name until a value is set (11.2).
     ("search.pill.", ("person", "source", "date", "typ", "folder", "fall", "party", "weg")),
+    # What a link's pinned version says in the detail's head (pinnedVersion).
+    ("search.pin.", ("changed", "changed.i", "missing", "missing.i")),
     # A task's state in the hit's detail.
     ("search.state.", ("notstarted", "inprogress", "done", "completed")),
     # The four Teams kinds are named in the index after their storage

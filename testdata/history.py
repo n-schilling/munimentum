@@ -10,6 +10,7 @@ the app's own code paths (versions.py, evidence.py, faelle.py):
   * one file was changed without an export saying so before the last
     run, which chained it as `outside`, and one after it, which only the
     archive check finds (and "Fetch again" would put right);
+  * the organization had an earlier version a week before today's;
   * a case holds three items pinned to the version they had when they
     came in – each has changed since, so the case marks them.
 
@@ -25,6 +26,7 @@ import sqlite3
 
 import evidence
 import faelle
+import organization
 import settings
 import store_layout
 import versions
@@ -73,6 +75,22 @@ EARLIER = [
      RISK_LOG_BEFORE, day(4, 28, 9, 0)),
 ]
 
+# The organization a week earlier: Alice still reported to Carla, Nina was
+# an engineer, Olaf's account was still on, Kai had not joined. Today's
+# version therefore brings one move, one change, one departure, one arrival.
+ORG_BEFORE = sources.org_users({
+    sources.ORG_ME: {"manager": "org-carla"},
+    "org-nina": {"jobTitle": "Network Engineer"},
+    "org-olaf": {"accountEnabled": True},
+    "org-kai": {"accountEnabled": False},
+})
+ORG_EARLIER = (settings.TEAMS_DIR, f"{organization.ORG_DIR}/{organization.FILE}",
+               sources.org_text(ORG_BEFORE), day(6, 7, 6, 0))
+# Every file with a kept earlier version – what the evidence card counts.
+KEPT = [*EARLIER, ORG_EARLIER]
+ORG_CHANGES = {"moved": [sources.ORG_ME], "changed": ["org-nina"], "left": ["org-olaf"],
+               "joined": ["org-kai"]}
+
 # What Microsoft said about a mirrored file when the later run fetched it
 # (its quickXorHash): the rollout plan agrees with what came, the risk log
 # does not – Microsoft still names the bytes of the earlier version.
@@ -114,7 +132,7 @@ def chain(exports):
     earlier = {}
     today = {}
     # 1. The archive as the first chained run found it: earlier versions.
-    for folder, rel, content, when in EARLIER:
+    for folder, rel, content, when in KEPT:
         path = exports / folder / rel
         today[path] = (path.read_bytes(), path.stat().st_mtime)
         data = content.encode("utf-8")

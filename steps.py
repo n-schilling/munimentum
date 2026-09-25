@@ -109,6 +109,12 @@ def _teams_env(cfg, ctx):
             "TEAMS_FILES_EXCLUDE": str(cfg.get("teams_files_exclude") or "")}
 
 
+def _org_env(cfg, ctx):
+    return {**_kadenz_env(cfg, ctx),
+            # Always set, even empty: empty means "the whole organization".
+            "ORG_RULES": str(cfg.get("org_rules") or "")}
+
+
 def _todo_env(cfg, ctx):
     return {**_kadenz_env(cfg, ctx),
             # Always set, even empty: empty means "every list".
@@ -403,6 +409,16 @@ REGISTRY = (
      "aktiv": lambda cfg, ctx: bool(ctx["cats_teams"]),
      "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
      "env": _teams_env},
+
+    # The organization (org_export.py): the directory's managers, written
+    # as one file below the Teams folder – each change a version of it.
+    {"key": "organization", "anfrage": "organization", "script": "org_export",
+     "start": "job.start.organization",
+     "label": "job.step.organization", "corpus": True, "zugang": True,
+     "schedule": "organization", "master": "org_enabled",
+     "quelle": "export.org",
+     "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
+     "env": _org_env},
 
     # The evidence chain (evidence.py): after the exports, before the
     # index – what the exports wrote is chained, what changed without them

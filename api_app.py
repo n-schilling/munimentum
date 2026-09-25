@@ -89,7 +89,7 @@ def konfig_speichern(h, data):
                     "onedrive_enabled", "sharepoint_enabled",
                     "sharepoint_pages_enabled", "planner_enabled",
                     "planner_attachments", "todo_enabled",
-                    "onenote_enabled", "teams_attachments",
+                    "onenote_enabled", "org_enabled", "teams_attachments",
                     "teams_channel_files", "keep_awake", "mcp_cases_write",
                     "keep_versions", "evidence_timestamp"):
             if key in data:
@@ -138,7 +138,7 @@ def konfig_speichern(h, data):
             cfg["onedrive_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["onedrive_rules"] or "")))
         for key in ("onenote_rules", "teams_rules", "sharepoint_rules",
-                    "todo_rules"):
+                    "todo_rules", "org_rules"):
             if key in data:
                 cfg[key] = folders.schreibe_regeln(
                     folders.lies_regeln(str(data[key] or "")))

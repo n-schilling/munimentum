@@ -1,4 +1,5 @@
-"""The eight export folders, written as a real export would leave them.
+"""The eight export folders, written as a real export would leave them –
+and the organization below the Teams folder.
 
 One writer per source, all of them fed from testdata/people.py. Where the
 app has a builder of its own – the `.ics` and `.vcf` writers, the Teams
@@ -40,6 +41,7 @@ from pathlib import Path
 import export_util
 import folders
 import onenote_export
+import organization
 import outlook_export
 import planner_export
 import settings
@@ -1211,6 +1213,78 @@ ONENOTE_PAGES += bulk.onenote_pages(bulk.more(ONENOTE_PAGES))
 
 
 # ---------------------------------------------------------------------------
+# The organization (org_export.py): the directory as users/delta names it
+# ---------------------------------------------------------------------------
+def _user(uid, name, title, department, manager=None, **extra):
+    """One directory user in Graph's shape – the fields org_export selects,
+    the manager as the id `apply` leaves behind."""
+    first, _, last = name.partition(" ")
+    return {"id": uid, "displayName": name, "jobTitle": title, "department": department,
+            "officeLocation": "Hamburg", "companyName": people.COMPANY, "city": "Hamburg",
+            "country": "Germany", "mail": people.ADDRESS.get(name) or
+            f"{first.lower()}.{last.lower()}@{people.DOMAIN}",
+            "accountEnabled": True, "userType": "Member", "manager": manager, **extra}
+
+
+# The story: Carla leads Nordwind; Alice runs the project under Bob. The
+# three at the end are what the export leaves out – a disabled account, a
+# guest, a service account with no place in the tree.
+ORG_ME = "org-alice"
+ORG_STORY = [
+    _user("org-carla", CARLA[0], "Managing Director", "Executive"),
+    _user("org-bob", BOB[0], "Head of Projects", "Projects", "org-carla"),
+    _user(ORG_ME, ME, "Project Lead", "Projects", "org-bob"),
+    _user("org-kai", "Kai Kalkulation", "Cost Engineer", "Projects", ORG_ME),
+    _user("org-lena", "Lena Lager", "Logistics Planner", "Projects", ORG_ME),
+    _user("org-nina", "Nina Netzwerk", "Network Architect", "Projects", "org-bob"),
+    _user("org-frida", "Frida Finanz", "Head of Finance", "Finance", "org-carla"),
+    _user("org-ines", "Ines Innendienst", "Sales Assistant", "Finance", "org-frida"),
+    _user("org-malte", "Malte Marketing", "Head of Marketing", "Marketing", "org-carla"),
+    _user("org-hanno", "Hanno Helpdesk", "Service Desk Lead", "Marketing", "org-malte"),
+    _user("org-olaf", "Olaf Organisation", "Office Manager", "Executive", "org-carla",
+          accountEnabled=False),
+    _user("org-greta", GRETA[0], "Consultant", "", "org-bob", userType="Guest"),
+    _user("org-scanner", "Scanner Service", "", ""),
+]
+ORG_LEFT_OUT = ("org-olaf", "org-greta", "org-scanner")
+ORG_TOP = "org-carla"
+
+
+def _org_volume():
+    """The volume under the three department heads: eight each, named from
+    two fixed lists so every build names them alike."""
+    firsts = ["Anna", "Ben", "Clara", "David", "Eva", "Felix", "Hanna", "Jonas"]
+    lasts = {"org-hanno": "Service", "org-ines": "Vertrieb", "org-nina": "Technik"}
+    out = []
+    for boss, last in lasts.items():
+        dept = next(u["department"] for u in ORG_STORY if u["id"] == boss)
+        out += [_user(f"{boss}-{i}", f"{first} {last}", "Specialist", dept, boss)
+                for i, first in enumerate(firsts)]
+    return out
+
+
+ORG_USERS = {u["id"]: u for u in ORG_STORY + _org_volume()}
+
+
+def org_users(changes=None):
+    """The directory, optionally with some users' fields replaced."""
+    users = {uid: dict(u) for uid, u in ORG_USERS.items()}
+    for uid, fields in (changes or {}).items():
+        users.setdefault(uid, {"id": uid}).update(fields)
+    return users
+
+
+def org_text(users):
+    return organization.text_of(organization.build(users, me=ORG_ME))
+
+
+def write_organization(root):
+    """organization/organization.json as org_export writes it."""
+    return [write(Path(root) / organization.ORG_DIR / organization.FILE,
+                  org_text(org_users()), day(6, 14, 6, 0))]
+
+
+# ---------------------------------------------------------------------------
 # All of it
 # ---------------------------------------------------------------------------
 WRITERS = [
@@ -1218,6 +1292,7 @@ WRITERS = [
     (settings.OUTLOOK_DIR, write_calendar),
     (settings.OUTLOOK_DIR, write_contacts),
     (settings.TEAMS_DIR, write_teams),
+    (settings.TEAMS_DIR, write_organization),
     (settings.ONEDRIVE_DIR, write_onedrive),
     (settings.SHAREPOINT_DIR, write_sharepoint),
     (settings.SHAREPOINT_PAGES_DIR, write_pages),

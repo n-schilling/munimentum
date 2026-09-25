@@ -1057,7 +1057,8 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "get_thread", "list_people", "list_folders", "list_filetypes",
               "list_files", "read_source_file", "corpus_stats",
               "archive_analytics", "list_sources", "list_events",
-              "lookup_contact",
+              "lookup_contact", "get_org_chart", "org_changes", "get_manager",
+              "list_reports", "find_by_role", "list_roles",
               # 13.0: the addresses behind the mail lines, and whether the
               # archive is current and complete enough to conclude from
               "list_addresses", "list_runs", "run_log", "source_completeness",

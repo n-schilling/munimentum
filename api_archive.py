@@ -393,7 +393,7 @@ def zeitplan_speichern(h, data):
         plan = cfg["schedule"]
         for key in ("enabled", "outlook", "teams", "onedrive",
                     "sharepoint", "sharepoint_pages", "planner", "todo",
-                    "onenote", "index", "calendar"):
+                    "onenote", "organization", "index", "calendar"):
             if key in data:
                 plan[key] = bool(data[key])
         if "interval_minutes" in data:

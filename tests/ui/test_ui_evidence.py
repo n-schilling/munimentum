@@ -12,6 +12,7 @@ tests/test_evidence*.py.
 """
 
 import re
+from urllib.parse import quote
 
 import pytest
 
@@ -209,7 +210,7 @@ def test_the_settings_card_says_how_far_the_chain_reaches(archive_page, archive)
     expect(card.locator("#c-versions_max_mb")).to_have_value("50")
     expect(card.locator("#evidence-state")).to_contain_text(
         EN["settings.evidence.chain.state"].split("{")[1].split("}")[1].strip())
-    expect(card.locator("#evidence-kept")).to_contain_text(f"{len(history.EARLIER)} files")
+    expect(card.locator("#evidence-kept")).to_contain_text(f"{len(history.KEPT)} files")
 
 
 # --------------------------------------------------------------------------
@@ -267,3 +268,48 @@ def test_a_mail_shows_its_own_checksum_only(archive_page, archive):
     fold = checksums(archive_page)
     expect(fold).to_contain_text("SHA-256")
     expect(fold).not_to_contain_text("quickXorHash")
+
+
+# --------------------------------------------------------------------------
+# A link to an item – copied from its detail, and pinned to a version
+# --------------------------------------------------------------------------
+def _plan(archive):
+    uid = next(h["uid"] for h in archive.get("/api/v1/search?q=rollout%20plan&limit=20")["items"]
+               if h["uid"].endswith("rollout-plan.md:0"))
+    doc = archive.get(f"/api/v1/documents?uid={quote(uid)}")
+    items = archive.get(f"/api/v1/documents/versions?uid={quote(uid)}")["items"]
+    return doc["key"], doc["title"], items
+
+
+def test_the_detail_copies_a_link_to_the_version_it_shows(archive_page, archive):
+    archive_page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    key, _title, items = _plan(archive)
+    current = next(v["sha256"] for v in items if v["current"])
+    search(archive_page, archive, "rollout plan")
+    choose(archive_page, "rollout-plan.md")
+    button = archive_page.locator("#detail-link")
+    expect(button).to_have_attribute("title", EN["search.detail.link"])
+    button.click()
+    expect(button).to_have_attribute("title", EN["search.detail.link.copied"])
+    copied = archive_page.evaluate("() => navigator.clipboard.readText()")
+    assert copied == f"{archive.base}/#item={quote(key, safe='')}&sha={current}"
+
+
+def test_a_link_to_an_earlier_version_opens_that_version(archive_page, archive):
+    key, title, items = _plan(archive)
+    earlier = next(v["sha256"] for v in items if not v["current"])
+    archive_page.goto(f"{archive.base}/#item={quote(key, safe='')}&sha={earlier}")
+    detail = archive_page.locator("#detail")
+    expect(detail.locator(".dtitel")).to_be_visible()
+    expect(detail.locator("#detail-pin")).to_have_text(EN["search.pin.changed"])
+    expect(detail.locator(".version-bar")).to_be_visible()
+    # The current version: nothing to say.
+    current = next(v["sha256"] for v in items if v["current"])
+    archive_page.goto(f"{archive.base}/#item={quote(key, safe='')}&sha={current}")
+    expect(detail.locator(".dtitel")).to_have_text(title)
+    expect(detail.locator("#versions-fold")).to_be_visible()
+    expect(detail.locator("#detail-pin")).to_have_text("")
+    # A version the archive never held.
+    archive_page.goto(f"{archive.base}/#item={quote(key, safe='')}&sha={'0' * 64}")
+    expect(detail.locator("#detail-pin")).to_have_text(EN["search.pin.missing"])
+    expect(detail.locator(".version-bar")).to_have_count(0)

@@ -58,6 +58,7 @@ CONFIG = {
     "planner_enabled": True,
     "todo_enabled": True,
     "onenote_enabled": True,
+    "org_enabled": True,
     "sharepoint_urls": people.SHAREPOINT_SITE,
     "sharepoint_pages_urls": people.SHAREPOINT_SITE,
     "internal_domains": people.DOMAIN,

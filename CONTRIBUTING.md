@@ -70,8 +70,8 @@ is; with it, they ride along. The *UI* workflow runs them on `main` and on
 every pull request. A failed one leaves a screenshot in `tests/ui/output/`.
 
 Most of them need an archive with something in it, and that archive is
-generated – `testdata/` writes a whole profile with all eight sources,
-every name and file in it invented. It is not a handful of files but a
+generated – `testdata/` writes a whole profile with all eight sources
+and an organization, every name and file in it invented. It is not a handful of files but a
 year of traffic: some two and a half thousand of them, a few thousand
 items, enough that a result runs over pages and a timeline needs its
 band. You can open it yourself:
@@ -81,16 +81,16 @@ python3 -m testdata.build --profile testdaten   # writes profiles/testdaten/
 python3 app.py --profile testdaten              # and look at it
 ```
 
-It is the quickest way to see the interface with data in it without
-touching a Microsoft account. It has a past, too (`testdata/history.py`):
-files with an earlier version, an edited and a deleted Teams message, a
-case whose items changed since they came in, a file changed by hand – and
-the chain of checksums over all of it. The browser tests use the same
-archive, and that is what lets them go deeper than "every page renders":
-they set the search filters one by one and count what comes back, fill a
-case from the search, order it into folders, write a note and a remark,
-remove an item and close the case, and open an earlier version with its
-changes.
+It is the quickest way to see the interface with data in it without touching
+a Microsoft account. It has a past, too (`testdata/history.py`): files with
+an earlier version, an organization a week older than today's, an edited and
+a deleted Teams message, a case whose items changed since they came in, a
+file changed by hand – and the chain of checksums over all of it. The
+browser tests use the same archive, and that is what lets them go deeper
+than "every page renders": they set the search filters one by one and count
+what comes back, fill a case from the search, order it into folders, write a
+note and a remark, remove an item and close the case, and open an earlier
+version with its changes.
 
 Code, comments and documentation are English throughout; the interface texts
 live in `lang/`, one JSON file per language.
@@ -99,10 +99,11 @@ Where things are: `app.py` is the server, the page and the three routes that
 stream; the rest of `/api/v1` lives in `api_cases.py`, `api_explore.py`,
 `api_archive.py` and `api_app.py`, one module per door, with what they share
 in `api.py`; `openapi.yaml` describes it all and changes in the same commit.
-Every export writes through `versions.py`, which keeps what it replaces
-and journals the write; `evidence.py` turns that into the chain of
-checksums after every run and checks it. `mcp_server.py` is the MCP server;
-the app's search calls its tools in-process, so what leaves over MCP passes
-`_tool()`, which keeps the answer compact, brief and within a budget. Its
-prompts and case resources sit beside the tools; `instance.py` says where a
-running app answers, so a citation can link into it.
+The organization is one file `org_export.py` writes and `organization.py`
+reads, walks and compares. Every export writes through `versions.py`, which
+keeps what it replaces and journals the write; `evidence.py` turns that into
+the chain of checksums after every run and checks it. `mcp_server.py` is the
+MCP server; the app's search calls its tools in-process, so what leaves over
+MCP passes `_tool()`, which keeps the answer compact, brief and within a
+budget. Its prompts and case resources sit beside the tools; `instance.py`
+says where a running app answers, so a citation can link into it.

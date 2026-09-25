@@ -15,7 +15,7 @@ The app does three things, and the header says exactly that:
 
 - **Build archive** — everything about getting data in.
 - **Explore archive** — everything about getting data out: search,
-  calendar, address book, files.
+  calendar, address book, files, organization.
 - **Cases** — what someone keeps around one matter, for months, across
   sources.
 
@@ -51,9 +51,19 @@ Each rule is one sentence and the reason behind it.
 
 - **One search.** A view never grows a search of its own; it hands over
   to Search with its source and filters set (one `.ghost` at the right
-  of its tool row). Cases, saved searches and the history then have one
+  of its tool row). Narrowing what the view itself shows is not a search:
+  the organization's *Role* pill lists the people holding a title there. Cases, saved searches and the history then have one
   home, and nothing is built twice. A link from outside lands there too:
-  `#item=<key>`, the link of a citation over MCP, opens the item in Search.
+  `#item=<key>`, the link of a citation over MCP, opens the item in
+  *Explore archive* with nothing else on the door
+  (`.item-only`): nobody searched, so no search is made up – no ways
+  strip, no search row, no pills, no list. *Explore archive* brings the
+  door back as it was. *List* on an open hit steps the list aside
+  (`.item-alone`) and back – no button of its own. A link may pin a
+  version (`&sha=<checksum>`): an earlier one opens as a chosen version
+  does, and one tag in the head says the item changed since, or that the
+  archive does not hold that version. The detail's action row ends with
+  the icon that copies such a link.
 - **A view's tool row** has its controls at the left and the one
   hand-over at the right, nothing above it that does not belong to it.
 - **Filters count, they do not search.** Every filter is a pill with its
@@ -109,7 +119,7 @@ Each rule is one sentence and the reason behind it.
 per source — name, `(i)` with the state, gear, chips for its categories,
 nothing below the chips but an actionable warning.
 
-**Explore archive**: first the strip of the four ways (`#sichten`, with
+**Explore archive**: first the strip of the five ways (`#sichten`, with
 icons). *Search* owns the search row — one field with the mode switch
 inside it, one button, two icons for history and saved searches — the
 pill row, the empty state before the first search (`#suche-anfang`), and
@@ -120,8 +130,12 @@ people over the whole result, up to the cap a case's list has. *Calendar*
 (week, month, reconstructed appointments marked in the grid; the month
 name as picker, *Today*), *Contacts* (list or picture as a segment — the
 picture is the case's, over the archive — then all, from contacts, from
-communication as chips, absent in the picture) and *Files* (the mirrors
-as a tree) keep their own controls and hand over with one button.
+communication as chips, absent in the picture), *Files* (the mirrors
+as a tree) and *Organization* (the version as picker like the month, *Top*,
+*To me*, a *Role* pill whose popover lists the titles by how many hold them;
+the changes of the chosen version in one closed fold; the chain
+above the chosen person, the person, the reports below as cards, a change
+marked on its card) keep their own controls and hand over with one button.
 
 **Cases**: the overview at the left (name, status, counts, closed cases
 behind a link; narrowed to names while a case is open) and the case at
@@ -187,7 +201,8 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Chip (choice / segment) | `label.chip` / `.modi button` | exactly one `.on` in a segment |
 | Filter pill | `.pill` in `.filterzeile` | `.wert` names the filter or its value, `.on` while set, `.x` clears, the `.popover` below holds the control |
 | Popover | `.popover` | under the thing it changes: a control, one `.satz`; `.picker` is the month picker |
-| Way strip / view tab | `.sichten .sicht` | the four ways of the door (`#sichten`), the three views of a case; exactly one `.on` |
+| Way strip / view tab | `.sichten .sicht` | the five ways of the door (`#sichten`), the three views of a case; exactly one `.on` |
+| Org card | `.org-card` (`.main` for the chosen person) | initials, name, title, department, how many below; `.org-chain` stacks the managers above with `.org-line`, `.org-grid` holds the reports |
 | Hit row | `.hit` | tick, icon, title with the case mark, date, who with marks, preview; `.on` when chosen |
 | Detail | `#detail` | `.dkopf` (kind, marks, the `.zaehler` with arrows), `.dtitel`, `.fakten`, `.daktionen`, `.dinhalt`, `details.verlauf` for the versions (`#versions-fold`) and the conversation |
 | Version | `.version-bar`, `.version-body` | the bar over a chosen version; `del`/`ins` in the body with the `--diff-*` tokens |

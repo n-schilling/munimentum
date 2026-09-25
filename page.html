@@ -318,7 +318,7 @@ input.fehler{border-color:var(--err)!important}
 #po-mail .bez{min-width:74px}
 /* The four views onto the same inventory. */
 .sichten{display:flex;align-items:center;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
-/* The door's strip (11.3): the four ways, with icons, first under the header */
+/* The door's strip (11.3): the five ways, with icons, first under the header */
 #sichten{margin:0 0 16px;gap:2px}
 #sichten .sicht{display:inline-flex;align-items:center;gap:8px;font-size:14px;font-weight:500;padding:10px 16px 10px 14px}
 #sichten .sicht.on{font-weight:650}
@@ -347,6 +347,16 @@ input.fehler{border-color:var(--err)!important}
 /* The answer stands where the hits would: the same distance from the pills. */
 #sicht-treffer .answer{margin-top:16px}
 .treffer-split:has(#detail.hide){grid-template-columns:1fr}
+/* A hit whose list stepped aside: the detail takes the whole width. */
+.treffer-split.item-alone{grid-template-columns:1fr}
+.treffer-split.item-alone > .liste{display:none}
+/* One item opened directly by a citation's link: no search ran,
+   so nothing of one is shown – the item's detail and nothing else, until
+   "Explore archive" is clicked. */
+#tab-suche.item-only #sichten,
+#tab-suche.item-only #sicht-treffer > :not(#treffer-split){display:none}
+#tab-suche.item-only .treffer-split{grid-template-columns:1fr;margin-top:0}
+#tab-suche.item-only .treffer-split > .liste{display:none}
 .treffer-split .liste{padding:0}
 #results>.hint,#results>.banner{margin:14px}
 .hit{display:grid;grid-template-columns:22px minmax(0,1fr) auto;column-gap:12px;row-gap:3px;
@@ -388,6 +398,10 @@ input.fehler{border-color:var(--err)!important}
 .fakten .pfad svg{width:10px;height:10px;color:var(--muted)}
 .daktionen{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .daktionen .ghost{display:inline-flex;align-items:center;gap:6px}
+/* The link to copy: a square as tall as the buttons beside it, at the
+   right edge – under the arrows of the head, which are squares as well. */
+.daktionen .item-link{margin-left:auto;padding:0;justify-content:center;
+  align-self:stretch;width:calc(1.5em + 16px)}
 .dinhalt{border:1px solid var(--line);border-radius:10px;padding:14px;font-size:14px;line-height:1.55;overflow-wrap:anywhere}
 .dinhalt:empty{display:none}
 .dinhalt.rahmenlos{border:0;padding:0}
@@ -433,6 +447,34 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
 .dateizeile>svg{color:var(--muted)} .dateizeile.ordner>svg{color:var(--accent)}
 .dateizeile.ordner{cursor:pointer} .dateizeile.ordner:hover{background:var(--code)}
 #dateien-liste>.hint{margin:14px}
+
+/* ---- Organization: the chain above, the person, the reports below ---- */
+.org-chain{display:flex;flex-direction:column;max-width:680px;margin:0 auto}
+.org-card{display:flex;gap:14px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);cursor:pointer;min-width:0;position:relative}
+.org-card:hover,.org-card:focus-visible{border-color:var(--accent);outline:none}
+.org-card.main{cursor:default;border-color:var(--accent);background:var(--accent-weich);padding:16px 18px;align-items:flex-start}
+.org-line{width:1px;height:16px;background:var(--line);margin:0 auto}
+.org-initials{width:40px;height:40px;border-radius:50%;background:var(--accent-weich);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:650;font-size:13px;flex:0 0 auto}
+.org-card.main .org-initials{width:56px;height:56px;font-size:18px;background:var(--card)}
+.org-text{display:flex;flex-direction:column;min-width:0;flex:1}
+.org-text b{overflow-wrap:anywhere}
+.org-text .sub{color:var(--muted);font-size:13px;overflow-wrap:anywhere}
+.org-text .fakten{margin-top:10px}
+.org-count{align-self:flex-end;color:var(--muted);font-size:12.5px;display:inline-flex;gap:4px;align-items:center;white-space:nowrap;font-variant-numeric:tabular-nums}
+.org-card .tag{position:absolute;top:8px;right:10px}
+.org-head{margin:18px 0 8px;font-size:13px;color:var(--muted);font-weight:650}
+.org-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:8px}
+.org-grid .org-card{padding:10px 12px}
+.org-grid .org-initials{width:32px;height:32px;font-size:12px}
+.popover.org-versions{max-height:320px;overflow:auto;min-width:280px}
+.popover.org-roles{width:340px;cursor:default}
+#org-role-list{max-height:300px;overflow:auto;margin-top:8px}
+#org-role-list .zeile{justify-content:space-between;padding:4px 6px;border-radius:6px;margin:0;gap:12px}
+#org-role-list .zeile:hover,#org-role-list .zeile.on{background:var(--code)}
+#org-role-list .zeile span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.org-versions .zeile{justify-content:space-between;padding:4px 6px;border-radius:6px;margin:0}
+.org-versions .zeile:hover{background:var(--code)}
+#org-changes details{margin-top:4px}
 
 /* ---- Calendar and address book ---- */
 :root{
@@ -1031,6 +1073,11 @@ details.rechte p{margin:6px 0}
       <div class="qkopf"><h3><span data-ikon="teams"></span><span data-i18n="export.teams">Teams</span><span class="info" id="q-teams-info" tabindex="0" aria-label="i" role="img">i</span></h3>
         <button class="zahnrad" onclick="zeigeEinstellung('q-teams')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
       <div class="chips" id="cat-teams"></div>
+      <!-- The organization comes from the directory, not from a chat: its
+           own switch, a chip on the card whose profile pages show it -->
+      <div class="chips">
+        <label class="chip"><input type="checkbox" id="c-org_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.org">Organisation</span></label>
+      </div>
       <p class="chk-note" id="teams-note"></p>
     </div>
     <div class="quelle" id="qk-onedrive">
@@ -1075,14 +1122,15 @@ details.rechte p{margin:6px 0}
 </section>
 
 <section id="tab-suche" class="hide">
-  <!-- The four ways into the archive – one strip, the first thing under
-       the header. Search owns the search row; the other three keep their
+  <!-- The five ways into the archive – one strip, the first thing under
+       the header. Search owns the search row; the other four keep their
        own controls and hand over to Search with a button. -->
   <div class="sichten wege" id="sichten">
     <button class="sicht on" data-sicht="treffer" onclick="sicht('treffer')"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="view.hits">Suche</span></button>
     <button class="sicht" data-sicht="kalender" onclick="sicht('kalender')"><span data-ikon="kalender" data-ikon-klasse="klein"></span><span data-i18n="nav.calendar">Kalender</span></button>
     <button class="sicht" data-sicht="adressbuch" onclick="sicht('adressbuch')"><span data-ikon="kontakt" data-ikon-klasse="klein"></span><span data-i18n="nav.book">Adressbuch</span></button>
     <button class="sicht" data-sicht="dateien" onclick="sicht('dateien')"><span data-ikon="ordner" data-ikon-klasse="klein"></span><span data-i18n="view.files">Dateien</span></button>
+    <button class="sicht" data-sicht="org" onclick="sicht('org')"><span data-ikon="org" data-ikon-klasse="klein"></span><span data-i18n="view.org">Organisation</span></button>
   </div>
 
   <div id="sicht-treffer">
@@ -1315,7 +1363,7 @@ details.rechte p{margin:6px 0}
          strip is the case's. No tool beside it: the band narrows the
          timeline, the person pill the people. -->
     <div class="sichten result-views hide" id="result-views">
-      <button class="sicht on" data-result-view="list" onclick="resultView('list')"><span data-ikon="liste" data-ikon-klasse="klein"></span><span data-i18n="search.view.list">Liste</span></button>
+      <button class="sicht on" data-result-view="list" onclick="resultView('list')" data-i18n-title="search.view.list.i"><span data-ikon="liste" data-ikon-klasse="klein"></span><span data-i18n="search.view.list">Liste</span></button>
       <button class="sicht" data-result-view="timeline" onclick="resultView('timeline')"><span data-ikon="uhr" data-ikon-klasse="klein"></span><span data-i18n="search.view.timeline">Zeitleiste</span></button>
       <button class="sicht" data-result-view="people" onclick="resultView('people')"><span data-ikon="person" data-ikon-klasse="klein"></span><span data-i18n="search.view.people">Personen</span><span class="n num" id="result-people-count"></span></button>
     </div>
@@ -1400,6 +1448,38 @@ details.rechte p{margin:6px 0}
     <p class="small muted" style="margin:8px 0 0" id="book-note" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
   </div>
   <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
+  </div>
+
+  <!-- The organization as the Teams profile card shows it, from the top
+       down by click; one version at a time, picked like the calendar's
+       month, the changes it brought in one closed fold -->
+  <div id="sicht-org" class="hide">
+  <div class="card">
+    <div class="calbar">
+      <span class="monat-nav" id="org-stand">
+        <button class="name" id="org-version" onclick="orgVersionsToggle()"></button>
+        <div class="popover org-versions hide" id="org-versions" onclick="event.stopPropagation()"></div>
+      </span>
+      <button class="ghost" id="org-top" onclick="orgHome()"><span data-ikon="hoch" data-ikon-klasse="klein"></span><span data-i18n="org.top">Ganz oben</span></button>
+      <button class="ghost" id="org-me" onclick="orgToMe()"><span data-ikon="person" data-ikon-klasse="klein"></span><span data-i18n="org.me">Zu mir</span></button>
+      <!-- Everyone holding a role: a pill like the search's, its popover
+           lists the titles the version knows, the most held first -->
+      <div class="pill" id="org-role-pill" role="button" tabindex="0" onclick="orgRolesToggle()">
+        <span data-ikon="marke" data-ikon-klasse="klein"></span><span class="wert" id="org-role-value" data-i18n="org.role">Rolle</span><span class="pfeil" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="org-role-x" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();orgRoleClear()">×</span>
+        <div class="popover org-roles hide" id="org-roles" onclick="event.stopPropagation()">
+          <h4 data-i18n="org.role">Rolle</h4>
+          <input type="text" id="org-role-q" class="feld" data-i18n-ph="org.role.ph" placeholder="Titel" autocomplete="off"
+                 oninput="orgRolesFilter()" onkeydown="orgRoleKey(event)">
+          <div id="org-role-list"></div>
+          <p class="satz" data-i18n="org.role.i">Ein Titel zeigt alle, die ihn tragen; Enter nimmt jeden Titel, der den Text enthält.</p>
+        </div>
+      </div>
+      <span class="small muted" id="org-stats"></span>
+      <button class="ghost rechts" id="org-search" onclick="orgSearch()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="org.search">Nachrichten dieser Person</span></button>
+    </div>
+    <div id="org-changes"></div>
+  </div>
+  <div class="card"><div id="org-box"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
   </div>
 </section>
 
@@ -1630,6 +1710,16 @@ details.rechte p{margin:6px 0}
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_max"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_max.i">i</span></span><span><input type="number" id="c-teams_files_max_mb" min="0" step="10"> <span class="muted small">MB</span></span></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="settings.teams.files_exclude"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.teams.files_exclude.i">i</span></span><input type="text" id="c-teams_files_exclude" placeholder="aspx, mp4"></div>
         </div>
+        <!-- The organization: its own chip on the Teams card, its own rules
+             over the path of names from the top, its own cadence -->
+        <div class="gruppe" id="org-settings"><h3 data-i18n="settings.org.title">Organisation</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.org.rules"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.org.rules.i">i</span></span></div>
+          <div class="feldzeile breit">
+            <textarea id="c-org_rules"
+              placeholder="- Greta Gast/Bob Baumeister/**&#10;+ Greta Gast/Bob Baumeister/Alice Beispiel/**"></textarea>
+          </div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.org.cadence.i">i</span></span><select id="c-cadence-organization"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
+        </div>
         <div class="gruppe"><h3 data-i18n="settings.cadence">Sync-Häufigkeit</h3>
           <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.1on1"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-1on1"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
           <div class="feldzeile "><span class="bez"><span data-i18n="export.cat.group"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.cat.i">i</span></span><select id="c-cadence-teams-group"><option value="always" data-i18n="cadence.always"></option><option value="daily" data-i18n="cadence.daily"></option><option value="weekly" data-i18n="cadence.weekly"></option><option value="monthly" data-i18n="cadence.monthly"></option></select></div>
@@ -1652,6 +1742,10 @@ details.rechte p{margin:6px 0}
             <div class="aktionen">
               <span class="small muted"></span>
               <button class="mini" onclick="vollSync('teams')" data-i18n="settings.full_sync">Vollständig neu synchronisieren</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.teams">i</span>
+            </div>
+            <div class="aktionen">
+              <span class="small muted"></span>
+              <button class="mini" onclick="vollSync('organization')" data-i18n="settings.org.full_sync">Organisation vollständig neu lesen</button><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.full_sync.i.organization">i</span>
             </div>
           </div>
         </details>
@@ -1848,6 +1942,7 @@ details.rechte p{margin:6px 0}
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.planner"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.planner.i">i</span></span><input type="checkbox" id="s-planner"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.todo"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.todo.i">i</span></span><input type="checkbox" id="s-todo"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.onenote"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.onenote.i">i</span></span><input type="checkbox" id="s-onenote"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="sched.organization"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.organization.i">i</span></span><input type="checkbox" id="s-organization"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.index"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.index.i">i</span></span><input type="checkbox" id="s-index"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="sched.calendar"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="sched.calendar.i">i</span></span><input type="checkbox" id="s-calendar"></div>
     </div>
@@ -2176,6 +2271,7 @@ var IKON = {
   shield: '<path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>',
   stack: '<path d="M7 3h8l4 4v10H7z"/><path d="M4 7v14h12"/>',
   person: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  org: '<rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   teams: '<path d="M21 12a8 8 0 0 1-11.5 7.2L4 21l1.8-4.5A8 8 0 1 1 21 12z"/>',
   onedrive: '<path d="M17.5 19a4.5 4.5 0 0 0 .5-9 7 7 0 0 0-13.4 1.5A4 4 0 0 0 6 19h11.5z"/>',
@@ -2217,6 +2313,7 @@ var IKON = {
   kreis: '<circle cx="12" cy="12" r="9"/>',
   minus: '<path d="M5 12h14"/>',
   aus: '<path d="M12 3v9"/><path d="M6.3 6.3a8 8 0 1 0 11.4 0"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
   zahnrad: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8' +
            'l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5' +
            ' 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3' +
@@ -2341,7 +2438,7 @@ var KANN_ADRESSEN = false;  // the index carries sender addresses (11.1)
 var KANN_MAIL = false;      // …and the To/Cc/Bcc lines (13.0)
 var MAIL_ROLLEN = ['from', 'to', 'cc', 'bcc'];
 var REITER = ['export', 'suche', 'faelle', 'analytics', 'einstellungen'];
-var SICHTEN = ['treffer', 'kalender', 'adressbuch', 'dateien'];
+var SICHTEN = ['treffer', 'kalender', 'adressbuch', 'dateien', 'org'];
 var offeneSicht = 'treffer';
 
 /* ---------- UI userflow recording ----------
@@ -2376,6 +2473,8 @@ function ablaufText(){
 
 function tab(name){
   merke('flow.tab', name);
+  // A door clicked ends an item shown alone (showDocument sets it again).
+  setItemOnly(false);
   REITER.forEach(function(t){
     el('tab-' + t).classList.toggle('hide', t !== name);
     document.querySelector('[data-tab=' + t + ']').classList.toggle('on', t === name);
@@ -2402,6 +2501,7 @@ function sicht(name){
   // The calendar data is a few megabytes – fetch it only when someone looks.
   if(name === 'kalender' || name === 'adressbuch') ladeKalender(name);
   if(name === 'dateien') ladeDateien();
+  if(name === 'org') orgLoad();
 }
 
 /* ---------- Before the first search (11.3) ----------
@@ -2413,7 +2513,8 @@ function sicht(name){
 var SUCHE_LIEF = false;
 function zeigeAnfang(){
   el('suche-anfang').classList.toggle('hide', SUCHE_LIEF);
-  el('treffer-split').classList.toggle('hide', !SUCHE_LIEF || !TREFFER_OFFEN);
+  // An item opened directly needs no search to be shown (showDocument).
+  el('treffer-split').classList.toggle('hide', !ITEM_ONLY && (!SUCHE_LIEF || !TREFFER_OFFEN));
   updateResultStrip();
   if(!SUCHE_LIEF) ladeAnfang();
 }
@@ -2932,6 +3033,7 @@ function renderStatus(s){
     el('c-planner_enabled').checked = !!s.config.planner_enabled;
     el('c-todo_enabled').checked = !!s.config.todo_enabled;
     el('c-onenote_enabled').checked = !!s.config.onenote_enabled;
+    el('c-org_enabled').checked = !!s.config.org_enabled;
     fuelleSprachen();
     fuelleZeitplan(s.config);
   }
@@ -3125,6 +3227,7 @@ function fuelleZeitplan(cfg){
   el('s-planner').checked = p.planner !== false;
   el('s-todo').checked = p.todo !== false;
   el('s-onenote').checked = p.onenote !== false;
+  el('s-organization').checked = p.organization !== false;
   el('s-index').checked = !!p.index;
   el('s-calendar').checked = !!p.calendar;
 }
@@ -3151,7 +3254,8 @@ function saveCats(){
                        sharepoint_pages_enabled: el('c-sharepoint_pages_enabled').checked,
                        planner_enabled: el('c-planner_enabled').checked,
                        todo_enabled: el('c-todo_enabled').checked,
-                       onenote_enabled: el('c-onenote_enabled').checked}).then(refresh);
+                       onenote_enabled: el('c-onenote_enabled').checked,
+                       org_enabled: el('c-org_enabled').checked}).then(refresh);
 }
 
 /* ---------- Runs ----------
@@ -3179,11 +3283,12 @@ function runExport(){
   var pl = el('c-planner_enabled').checked;
   var td = el('c-todo_enabled').checked;
   var on = el('c-onenote_enabled').checked;
-  if(!o && !tm && !od && !sp && !sps && !pl && !td && !on){ meldung(t('export.nothing'), 'err'); return; }
+  var org = el('c-org_enabled').checked;
+  if(!o && !tm && !od && !sp && !sps && !pl && !td && !on && !org){ meldung(t('export.nothing'), 'err'); return; }
   // Calendar only with Outlook: events, contacts and the reconstruction of
   // deleted events come exclusively from the mailbox.
   run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
-       planner:pl, todo:td, onenote:on, index:true, calendar:o}, t('job.export'));
+       planner:pl, todo:td, onenote:on, organization:org, index:true, calendar:o}, t('job.export'));
 }
 
 /* ---------- Progress ----------
@@ -3996,6 +4101,10 @@ function sofortSuchen(){
 var SUCHE_GESPEICHERT = null;   // the saved search the current result came from, if any
 function doSearch(off, gespeichert){
   SUCHE_LIEF = true;
+  setItemAlone(false);
+  // A search from an item shown alone – a fact of its detail clicked as a
+  // filter – brings the whole door back, with the result.
+  if(ITEM_ONLY) setItemOnly(false, true);
   if(!off) SUCHE_GESPEICHERT = gespeichert || null;
   zeigeAnfang();
   var fehler = datumPruefen();
@@ -4347,6 +4456,7 @@ function renderHits(r){
   PAGE_HITS = hits;
   TREFFER = hits;
   el('detail').classList.add('hide');
+  DETAIL_SHOWN = false;
   TREFFER_GEWAEHLT = -1;
   SUCHE_LIEF = true;
   wholeReset();
@@ -4459,20 +4569,26 @@ function knownHits(){
   return alle;
 }
 function resultView(name){
+  // "List" on the list while a hit is open: the list steps aside for the
+  // hit, and comes back on the next click – no button of its own.
+  if(name === 'list' && RESULT_VIEW === 'list' && DETAIL_SHOWN){
+    setItemAlone(!ITEM_ALONE);
+    return;
+  }
   if(name !== RESULT_VIEW) merke('flow.result_view', name);
+  setItemAlone(false);
   RESULT_VIEW = name;
   drawResult();
 }
 function drawResult(){
   if(!PAGE_HITS.length) return;
   var s = RESULT_VIEW;
-  document.querySelectorAll('#result-views [data-result-view]').forEach(function(b){
-    b.classList.toggle('on', b.dataset.resultView === s);
-  });
+  markResultView();
   el('pager').classList.toggle('hide', s !== 'list');
   updateResultStrip();
   if(s === 'list'){ TREFFER = PAGE_HITS; zeichneTrefferListe(); zeigeTrefferKopf(); return; }
   el('detail').classList.add('hide');
+  DETAIL_SHOWN = false;
   el('result-activity').classList.add('hide');
   TREFFER_GEWAEHLT = -1;
   if(s === 'timeline') drawResultTimeline(); else drawResultPeople();
@@ -4634,6 +4750,7 @@ function zeigeDetail(h, nr){
   var seite = !!(link && /\.html?$/i.test(h.uri || '') && (h.source === 'pages' || h.source === 'onenote'));
   var kennung = ++DETAIL_STAND;
   el('detail').classList.remove('hide');
+  DETAIL_SHOWN = true;
   el('detail-verlauf').innerHTML = '';
   el('detail-versions').innerHTML = '';
   el('detail-checksums').innerHTML = '';
@@ -4659,7 +4776,11 @@ function zeigeDetail(h, nr){
   }).catch(function(){});
   // The versions the archive keeps of it – one closed fold, as the
   // conversation below; nothing when the chain knows none.
-  loadVersions(h, kennung, {list: 'detail-versions', view: 'detail-text', back: 'detail'});
+  // A link that pinned a version opens that version, and the head says so.
+  var pin = DETAIL_PIN;
+  DETAIL_PIN = null;
+  loadVersions(h, kennung, {list: 'detail-versions', view: 'detail-text', back: 'detail'},
+               pin ? pinnedVersion(pin) : null, 'this');
   // A conversation exists for mail and chat only – a file, a page or a
   // task gets nothing for something it can never have.
   if(h.thread && KANN_VERLAUF && OHNE_GESPRAECH.indexOf(h.source) < 0){
@@ -4673,6 +4794,8 @@ function detailKopf(h, nr){
   return '<div class="dkopf"><span class="tag">' + esc(quellTag(h)) + '</span>' + externMarke(h) +
     (h.gone ? '<span class="tag weg">' + esc(t('search.gone.since', {when: fmt(h.gone)})) + '</span>' : '') +
     fallMarke(h) +
+    // Where a link pinned a version (#item=…&sha=…): whether it still is the one.
+    '<span id="detail-pin"></span>' +
     // A message opened from its conversation is no hit of the list: no
     // position in it, no arrows through it.
     (nr ? '<span class="zaehler"><span>' + esc(t('search.detail.of', {i: zahl(nr), n: zahl(n)})) + '</span>' +
@@ -4703,7 +4826,58 @@ function detailAktionen(h, nr, link){
                                ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
                                : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
       '>' + ikon('lupe', 'klein') + esc(t('search.menu.similar')) + '</button>' +
+    '<button class="ghost item-link" id="detail-link"' + (h.key
+      ? ' onclick="copyItemLink(' + chosenIndex(nr) + ')" title="' + esc(t('search.detail.link')) + '"'
+      : ' disabled title="' + esc(t('search.detail.link.nokey')) + '"') +
+      ' aria-label="' + esc(t('search.detail.link')) + '">' + ikon('link') + '</button>' +
     '</div>';
+}
+/* The link to the item, into the clipboard: its key, and the checksum of
+   the version it has now – the one a link pins (itemFromAddress). The
+   button says it worked by a tick for a moment; nothing else changes. */
+function copyItemLink(i){
+  var h = chosenHit(i);
+  if(!h || !h.key) return;
+  var base = location.origin + '/#item=' + encodeURIComponent(h.key);
+  api(API + '/documents/versions?' + versionQuery(h)).then(function(r){
+    var now = ((r && r.items) || []).filter(function(x){ return x.current; })[0];
+    return base + (now && now.sha256 ? '&sha=' + now.sha256 : '');
+  }).catch(function(){ return base; }).then(function(url){
+    return copyText(url);
+  }).then(function(done){
+    var b = dyn('detail-link');
+    if(!b || !done) return;
+    b.innerHTML = ikon('haken');
+    b.setAttribute('title', t('search.detail.link.copied'));
+    setTimeout(function(){
+      var b2 = dyn('detail-link');
+      if(!b2) return;
+      b2.innerHTML = ikon('link');
+      b2.setAttribute('title', t('search.detail.link'));
+    }, 1500);
+  });
+}
+/* Text into the clipboard – the Clipboard API where the page may use it
+   (127.0.0.1 counts as secure), a selected field otherwise. */
+function copyText(text){
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText)
+      return navigator.clipboard.writeText(text).then(function(){ return true; }, function(){ return copyByField(text); });
+  } catch(e){}
+  return Promise.resolve(copyByField(text));
+}
+function copyByField(text){
+  try {
+    var f = document.createElement('textarea');
+    f.value = text;
+    f.setAttribute('readonly', '');
+    f.style.position = 'fixed'; f.style.opacity = '0';
+    document.body.appendChild(f);
+    f.select();
+    var ok = document.execCommand('copy');
+    document.body.removeChild(f);
+    return !!ok;
+  } catch(e){ return false; }
 }
 
 /* ---------- The facts ----------
@@ -4891,7 +5065,7 @@ function versionQuery(h){
 function versionShown(){
   return !!(VERSIONS && VERSIONS.chosen !== null && VERSIONS.into.back === 'detail');
 }
-function loadVersions(h, stand, into, pick){
+function loadVersions(h, stand, into, pick, pickMode){
   return api(API + '/documents/versions?' + versionQuery(h)).then(function(r){
     if(stand !== null && stand !== DETAIL_STAND) return;
     var box = dyn(into.list);
@@ -4899,11 +5073,17 @@ function loadVersions(h, stand, into, pick){
     // One version is nothing to tell in the detail: the fold comes only
     // where the item has changed. A case's window shows what there is.
     var least = into.back === 'detail' ? 2 : 1;
-    if(!r || r.ok === false || (r.items || []).length < least){ box.innerHTML = ''; return; }
+    if(!r || r.ok === false || (r.items || []).length < least){
+      box.innerHTML = '';
+      // A pin is judged even where there is no fold to open.
+      if(pick && r && r.ok !== false) pick(r.items || []);
+      return;
+    }
     VERSIONS = {query: versionQuery(h), items: r.items, format: r.format, unit: r.unit,
                 into: into, chosen: null, mode: 'diff'};
-    drawVersionList(!!pick);
-    if(pick) showVersion(pick(r.items), 'diff');
+    var chosen = pick ? pick(r.items) : null;
+    drawVersionList(chosen !== null && chosen !== undefined);
+    if(chosen !== null && chosen !== undefined) showVersion(chosen, pickMode || 'diff');
   }).catch(function(){});
 }
 function drawVersionList(open){
@@ -4980,6 +5160,21 @@ function showVersion(i, mode){
            : op[0] === '+' ? '<ins>' + esc(op[1]) + '</ins>' : esc(op[1]);
     }).join('') || '<p class="hint">' + esc(t('search.versions.empty')) + '</p>';
   }).catch(function(){});
+}
+/* The version a link pinned by its checksum: the index of an earlier one
+   to open, or null for the current one – and the head says when the item
+   changed since, or when the archive does not hold that version. */
+var DETAIL_PIN = null;
+function pinnedVersion(sha){
+  return function(items){
+    var i = -1;
+    items.forEach(function(x, k){ if(i < 0 && String(x.sha256 || '').indexOf(sha) === 0) i = k; });
+    var state = i < 0 ? (items.length ? 'missing' : '') : items[i].current ? '' : 'changed';
+    var box = dyn('detail-pin');
+    if(box) box.innerHTML = state ? '<span class="tag weg" title="' + esc(t('search.pin.' + state + '.i')) + '">' +
+      esc(t('search.pin.' + state)) + '</span>' : '';
+    return i < 0 || items[i].current || !items[i].available ? null : i;
+  };
 }
 function versionBack(){
   if(VERSIONS) VERSIONS.chosen = null;
@@ -7137,6 +7332,269 @@ function kalenderSuchen(){
   ladeOrdner();
   sicht('treffer'); zeigeFilterstand(); doSearch(0);
 }
+/* ---------- Organization (org_export.py, organization.py) ----------
+   The directory's managers as the Teams profile card shows them, one
+   version at a time: from the top down by click, the chain above the
+   person, whoever reports to them below. A version is picked like the
+   calendar's month; what it changed stands in one closed fold, and the
+   cards it touched carry a mark. The view searches nothing – the
+   hand-over names the person to Search. */
+var ORG = {version: null, versions: [], top: null, person: null, name: null, marks: {}, open: false,
+           role: null, exact: false, roles: null, rolesOpen: false, shown: 0};
+
+function orgQuery(){ return '?version=' + encodeURIComponent(ORG.version || ''); }
+
+function orgLoad(){
+  api(API + '/organization/versions').then(function(r){
+    ORG.versions = (r && r.items) || [];
+    if(!ORG.versions.length){ orgEmpty(); return; }
+    var known = ORG.versions.some(function(v){ return v.sha256 === ORG.version; });
+    orgVersion(known ? ORG.version : ORG.versions[0].sha256, ORG.person);
+  }).catch(function(){});
+}
+
+function orgEmpty(){
+  ORG.top = null; ORG.person = null; ORG.name = null; ORG.roles = null;
+  orgRoleSet(null);
+  el('org-version').textContent = t('org.version.none');
+  el('org-version').disabled = true;
+  el('org-stats').textContent = '';
+  el('org-changes').innerHTML = '';
+  orgButtons();
+  el('org-box').innerHTML = '<p class="hint">' + esc(t('org.empty')) + '</p>' +
+    '<button class="mini" onclick="tab(\'export\')">' + esc(t('org.empty.go')) + '</button>';
+}
+
+function orgVersionLabel(v){
+  return t('org.version', {when: v.captured ? fmt(v.captured) : '–'}) +
+    (v.current ? ' · ' + t('org.current') : '');
+}
+
+function orgVersion(sha, keep){
+  ORG.version = sha;
+  orgVersionsClose();
+  var v = ORG.versions.filter(function(x){ return x.sha256 === sha; })[0] || ORG.versions[0];
+  el('org-version').innerHTML = esc(orgVersionLabel(v)) + (ORG.versions.length > 1 ? ikon('runter') : '');
+  el('org-version').disabled = ORG.versions.length < 2;
+  el('org-version').title = ORG.versions.length < 2 ? t('org.version.only') : '';
+  Promise.all([api(API + '/organization' + orgQuery()),
+               api(API + '/organization/changes' + orgQuery())]).then(function(r){
+    if(!r[0] || r[0].ok === false){ orgEmpty(); return; }
+    ORG.top = r[0];
+    el('org-stats').textContent = t('org.stats', {n: zahl(r[0].people)});
+    orgChanges((r[1] && r[1].items) || [], r[1] && r[1].from);
+    orgButtons();
+    ORG.roles = null;
+    if(ORG.role) orgRoleShow(0);
+    else if(keep) orgOpen(keep, true); else orgHome();
+  }).catch(function(){});
+}
+
+function orgVersionsToggle(){
+  if(ORG.open){ orgVersionsClose(); return; }
+  ORG.open = true;
+  el('org-versions').innerHTML = ORG.versions.map(function(v){
+    return '<div class="zeile' + (v.sha256 === ORG.version ? ' on' : '') + '" onclick="orgVersion(' +
+      esc(JSON.stringify(v.sha256)) + ', ORG.person)"><span>' +
+      esc(v.captured ? fmt(v.captured) : '–') + '</span>' +
+      (v.current ? '<span class="tag">' + esc(t('org.current')) + '</span>' : '') + '</div>';
+  }).join('');
+  el('org-versions').classList.remove('hide');
+  el('org-version').classList.add('offen');
+}
+function orgVersionsClose(){
+  ORG.open = false;
+  el('org-versions').classList.add('hide');
+  el('org-version').classList.remove('offen');
+}
+document.addEventListener('click', function(ev){
+  var k = ev.target;
+  while(k){ if(k.id === 'org-stand') return; k = k.parentElement; }
+  if(ORG.open) orgVersionsClose();
+});
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape' && ORG.open) orgVersionsClose(); });
+
+var ORG_FIELDS = ['title', 'department', 'office', 'company', 'city', 'country', 'mail', 'manager'];
+function orgChanges(items, from){
+  ORG.marks = {};
+  items.forEach(function(c){ ORG.marks[c.id] = c.kind; });
+  // The first version has nothing to compare with, and a version that
+  // changed nothing a person shows gets no fold.
+  if(!from || !items.length){ el('org-changes').innerHTML = ''; return; }
+  var rows = items.map(function(c){
+    var what = ORG_FIELDS.filter(function(f){ return c.fields && f in c.fields; }).map(function(f){
+      var v = c.fields[f];
+      return t('org.field.' + f) + ': ' + (v[0] || '–') + ' → ' + (v[1] || '–');
+    }).join(' · ');
+    var gone = c.kind === 'left';
+    return '<div class="vzeile' + (gone ? ' aus' : '') + '"' +
+      (gone ? '' : ' role="button" tabindex="0" onclick="orgOpen(' + esc(JSON.stringify(c.id)) + ')"') +
+      '><span class="punkt"></span><span class="vdatum">' + esc(t('org.change.' + c.kind)) +
+      '</span><span class="vtitel">' + esc(c.name) + '</span><span class="vwer">' + esc(what || c.title || '') +
+      '</span></div>';
+  }).join('');
+  el('org-changes').innerHTML = '<details class="verlauf" id="org-changes-fold"><summary><span class="pfeil">' +
+    ikon('rechts', 'klein') + '</span>' + esc(t('org.changes', {n: zahl(items.length),
+                                                               when: from.captured ? fmt(from.captured) : '–'})) +
+    '</summary>' + rows + '</details>';
+}
+
+function orgButtons(){
+  var me = ORG.top && ORG.top.me;
+  el('org-me').disabled = !me;
+  el('org-me').title = me ? '' : t('org.me.none');
+  el('org-top').disabled = !ORG.top;
+  el('org-search').disabled = !ORG.name;
+  el('org-search').title = ORG.name ? '' : t('org.search.none');
+}
+
+function orgHome(){
+  if(!ORG.top) return;
+  var roots = ORG.top.roots || [];
+  if(roots.length === 1){ orgOpen(roots[0].id); return; }
+  ORG.person = null; ORG.name = null;
+  orgRoleSet(null);
+  orgButtons();
+  el('org-box').innerHTML = '<div class="org-head">' + esc(t('org.top.title', {n: zahl(roots.length)})) +
+    '</div><div class="org-grid">' + roots.map(function(c){ return orgCard(c); }).join('') + '</div>';
+}
+
+function orgToMe(){ if(ORG.top && ORG.top.me) orgOpen(ORG.top.me); }
+
+function orgOpen(id, keep){
+  api(API + '/organization/people/' + encodeURIComponent(id) + orgQuery()).then(function(r){
+    if(!r || r.ok === false || !r.person){
+      // A person the chosen version does not hold: back to its top.
+      if(keep){ orgHome(); return; }
+      apiFehler(r); return;
+    }
+    ORG.person = r.person.id; ORG.name = r.person.name;
+    orgRoleSet(null);
+    orgButtons();
+    var chain = r.chain.map(function(c){ return orgCard(c); });
+    chain.push(orgCard(r.person, true));
+    var html = '<div class="org-chain">' + chain.join('<div class="org-line"></div>') + '</div>';
+    if(r.reports.length)
+      html += '<div class="org-head">' + esc(t('org.reports', {n: zahl(r.reports.length)})) + '</div>' +
+        '<div class="org-grid">' + r.reports.map(function(c){ return orgCard(c); }).join('') + '</div>';
+    el('org-box').innerHTML = html;
+  }).catch(function(){});
+}
+
+function orgInitials(name){
+  return String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2)
+    .map(function(w){ return w.charAt(0).toUpperCase(); }).join('') || '?';
+}
+
+function orgCard(c, main){
+  var facts = '';
+  if(main){
+    var place = [c.city, c.country].filter(Boolean).join(', ');
+    facts = [['org.field.office', c.office], ['org.field.company', c.company],
+             ['org.field.place', place], ['org.field.mail', c.mail]]
+      .filter(function(f){ return f[1]; })
+      .map(function(f){ return '<dt>' + esc(t(f[0])) + '</dt><dd>' + esc(f[1]) + '</dd>'; }).join('');
+    if(facts) facts = '<dl class="fakten">' + facts + '</dl>';
+  }
+  var mark = ORG.marks[c.id];
+  var count = c.total ? '<span class="org-count" title="' + esc(t('org.count.tip', {direct: zahl(c.reports), total: zahl(c.total)})) +
+    '">' + ikon('person', 'klein') + esc(zahl(c.total)) + '</span>' : '';
+  return '<div class="org-card' + (main ? ' main' : '') + '"' +
+    (main ? '' : ' role="button" tabindex="0" onclick="orgOpen(' + esc(JSON.stringify(c.id)) + ')"') + '>' +
+    '<span class="org-initials">' + esc(orgInitials(c.name)) + '</span>' +
+    '<span class="org-text"><b>' + esc(c.name) + '</b>' +
+    (c.title ? '<span class="sub">' + esc(c.title) + '</span>' : '') +
+    (c.department ? '<span class="sub">' + esc(c.department) + '</span>' : '') +
+    (c.manager ? '<span class="sub">' + esc(t('org.under', {name: c.manager})) + '</span>' : '') + facts + '</span>' +
+    count + (mark ? '<span class="tag">' + esc(t('org.change.' + mark)) + '</span>' : '') + '</div>';
+}
+
+/* Everyone holding a role. The titles come once per version; the field
+   narrows the list as it is typed, a title clicked takes that title,
+   Enter every title containing the text. */
+function orgRolesToggle(){
+  if(ORG.rolesOpen){ orgRolesClose(); return; }
+  if(!ORG.top) return;
+  ORG.rolesOpen = true;
+  el('org-roles').classList.remove('hide');
+  el('org-role-pill').classList.add('offen');
+  var load = ORG.roles ? Promise.resolve(ORG.roles)
+    : api(API + '/organization/roles' + orgQuery()).then(function(r){
+        ORG.roles = (r && r.items) || []; return ORG.roles; });
+  load.then(function(){ orgRolesFilter(); try{ el('org-role-q').focus(); }catch(e){} }).catch(function(){});
+}
+function orgRolesClose(){
+  ORG.rolesOpen = false;
+  el('org-roles').classList.add('hide');
+  el('org-role-pill').classList.remove('offen');
+}
+document.addEventListener('click', function(ev){
+  var k = ev.target;
+  while(k){ if(k.id === 'org-role-pill') return; k = k.parentElement; }
+  if(ORG.rolesOpen) orgRolesClose();
+});
+function orgRolesFilter(){
+  var q = String(el('org-role-q').value || '').toLowerCase();
+  var rows = (ORG.roles || []).filter(function(r){ return !q || r.title.toLowerCase().indexOf(q) >= 0; });
+  el('org-role-list').innerHTML = rows.slice(0, 200).map(function(r){
+    return '<div class="zeile' + (ORG.exact && r.title === ORG.role ? ' on' : '') + '" onclick="orgRolePick(' +
+      esc(JSON.stringify(r.title)) + ', true)"><span>' + esc(r.title) + '</span><span class="num muted">' +
+      esc(zahl(r.count)) + '</span></div>';
+  }).join('') || '<p class="hint">' + esc(t('org.role.none')) + '</p>';
+}
+function orgRoleKey(ev){
+  if(ev.key === 'Escape'){ orgRolesClose(); return; }
+  if(ev.key !== 'Enter') return;
+  var q = String(el('org-role-q').value || '').trim();
+  if(q) orgRolePick(q, false);
+}
+function orgRolePick(role, exact){
+  orgRolesClose();
+  orgRoleSet(role, exact);
+  orgRoleShow(0);
+}
+function orgRoleSet(role, exact){
+  ORG.role = role; ORG.exact = !!exact;
+  el('org-role-pill').classList.toggle('on', !!role);
+  el('org-role-x').classList.toggle('hide', !role);
+  el('org-role-value').textContent = role ? (exact ? role : t('org.role.contains', {role: role})) : t('org.role');
+}
+function orgRoleClear(){
+  orgRoleSet(null);
+  if(ORG.person) orgOpen(ORG.person, true); else orgHome();
+}
+function orgRoleShow(offset){
+  if(!ORG.role) return;
+  var role = ORG.role;
+  api(API + '/organization/people' + orgQuery() + '&role=' + encodeURIComponent(role) +
+      (ORG.exact ? '&exact=true' : '') + '&offset=' + offset).then(function(r){
+    if(role !== ORG.role || !r || r.ok === false) return;
+    ORG.person = null; ORG.name = null;
+    orgButtons();
+    var cards = r.items.map(function(c){ return orgCard(c); }).join('');
+    if(offset){
+      el('org-role-more') && el('org-role-more').remove();
+      el('org-role-grid').insertAdjacentHTML('beforeend', cards);
+    }else{
+      el('org-box').innerHTML = '<div class="org-head">' +
+        esc(t('org.role.title', {role: role, n: zahl(r.total)})) + '</div>' +
+        (r.total ? '<div class="org-grid" id="org-role-grid">' + cards + '</div>'
+                 : '<p class="hint">' + esc(t('org.role.nobody')) + '</p>');
+    }
+    if(r.has_more)
+      el('org-box').insertAdjacentHTML('beforeend', '<button class="mini" id="org-role-more" onclick="orgRoleShow(' +
+        (r.offset + r.limit) + ')">' + esc(t('org.role.more', {n: zahl(r.total - r.offset - r.limit)})) + '</button>');
+  }).catch(function(){});
+}
+
+function orgSearch(){
+  if(!ORG.name) return;
+  filterLeeren();
+  el('q').value = '';
+  el('f-person').value = ORG.name;
+  sicht('treffer'); zeigeFilterstand(); doSearch(0);
+}
+
 function kontakteSuchen(){
   filterLeeren();
   el('q').value = '';
@@ -7790,24 +8248,70 @@ function evidenceOpen(rel){
   api(API + '/documents?root=' + encodeURIComponent(root) + '&rel=' + encodeURIComponent(path)).then(function(r){
     if(!r || r.ok === false){ apiFehler(r); return; }
     closeWizard('evidence-findings');
-    showDocument(r);
+    handOverDocument(r);
   }).catch(function(){});
 }
-/* One item, as /api/v1/documents answers it, handed over to Search as
-   every view does: its name as the query, no filter in the way, and the
-   item chosen among the hits – or shown alone when the query does not
-   find it. */
-function showDocument(r){
+/* A file of a finding, handed over to Search as every view does: its name
+   as the query, no filter in the way, and the file chosen among the hits
+   – or shown alone when the query does not find it. */
+function handOverDocument(r){
   tab('suche'); sicht('treffer');
   filterLeeren();
   el('q').value = r.title || '';
-  var doc = {uid: r.uid, source: r.source, root: r.root, path: r.path, uri: r.uri, key: r.key,
-             title: r.title, date: r.date, who: r.who, context: r.context,
-             preview: String(r.text || '').slice(0, 300)};
+  var doc = documentHit(r);
   Promise.resolve(doSearch(0)).then(function(){
     var j = -1;
     TREFFER.forEach(function(h, k){ if(j < 0 && h.uid === doc.uid) j = k; });
     if(j >= 0) waehleTreffer(j); else zeigeDetail(doc, null);
+  });
+}
+/* A hit made of what /api/v1/documents answers. */
+function documentHit(r){
+  return {uid: r.uid, source: r.source, root: r.root, path: r.path, uri: r.uri, key: r.key,
+          title: r.title, date: r.date, who: r.who, context: r.context, gone: r.gone,
+          preview: String(r.text || '').slice(0, 300)};
+}
+/* One item, as /api/v1/documents answers it, opened directly by a
+   citation's link. Nobody searched, so no search is made up for it: the
+   door shows the item's detail and nothing else, and "Explore archive"
+   brings the door back as it was. */
+function showDocument(r, sha){
+  tab('suche'); sicht('treffer');
+  setItemOnly(true);
+  DETAIL_PIN = sha || null;
+  zeigeDetail(documentHit(r), null);
+}
+/* The door with the one item alone (showDocument) – or back as it was:
+   the hit chosen before shows again, and without one the detail goes.
+   Kept in a variable, not read back from the markup. */
+var ITEM_ONLY = false;
+function setItemOnly(on, searching){
+  var was = ITEM_ONLY;
+  ITEM_ONLY = !!on;
+  el('tab-suche').classList.toggle('item-only', ITEM_ONLY);
+  // A search about to run draws the door itself.
+  if(searching) return;
+  zeigeAnfang();
+  if(!was || ITEM_ONLY) return;
+  if(TREFFER_GEWAEHLT >= 0 && TREFFER[TREFFER_GEWAEHLT]){ waehleTreffer(TREFFER_GEWAEHLT); return; }
+  el('detail').classList.add('hide');
+  DETAIL_SHOWN = false;
+}
+/* "List" on an open hit: the list steps aside and the hit takes the
+   whole width – and comes back on the next click. Kept in variables, not
+   read back from the markup. */
+var ITEM_ALONE = false;
+var DETAIL_SHOWN = false;
+function setItemAlone(on){
+  ITEM_ALONE = !!on;
+  el('treffer-split').classList.toggle('item-alone', ITEM_ALONE);
+  markResultView();
+}
+/* The view shown is marked – none while an item stands alone, so "List"
+   reads as the way back to the list. */
+function markResultView(){
+  document.querySelectorAll('#result-views [data-result-view]').forEach(function(b){
+    b.classList.toggle('on', !ITEM_ALONE && b.dataset.resultView === RESULT_VIEW);
   });
 }
 /* A link into the page from a citation over MCP (#item=<key>, the tool
@@ -7816,14 +8320,15 @@ function showDocument(r){
 function itemFromAddress(){
   var hash = '';
   try { hash = String(location.hash || ''); } catch(e){ return; }
-  var m = /^#item=(.+)$/.exec(hash);
+  var m = /^#item=([^&]+)(?:&sha=([0-9a-fA-F]{16,64}))?$/.exec(hash);
   if(!m) return;
   try { history.replaceState(null, '', location.pathname + location.search); } catch(e){}
   var key;
   try { key = decodeURIComponent(m[1]); } catch(e){ return; }
+  var sha = m[2] ? m[2].toLowerCase() : null;
   api(API + '/documents?key=' + encodeURIComponent(key)).then(function(r){
     if(!r || r.ok === false){ apiFehler(r); return; }
-    showDocument(r);
+    showDocument(r, sha);
   }).catch(function(){});
 }
 function archivQuelle(quelle){
@@ -8313,6 +8818,7 @@ function planAusFormular(){
     sharepoint_pages: el('s-sharepoint_pages').checked,
     planner: el('s-planner').checked,
     todo: el('s-todo').checked, onenote: el('s-onenote').checked,
+    organization: el('s-organization').checked,
     index: el('s-index').checked, calendar: el('s-calendar').checked};
 }
 
@@ -8403,13 +8909,14 @@ var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sour
                 'calendar_months_back','planner_sweep_hours','versions_max_mb'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
-                'teams_rules','sharepoint_rules','todo_rules',
+                'teams_rules','sharepoint_rules','todo_rules','org_rules',
                 'outlook_since','teams_since',
                 'sharepoint_types_include','sharepoint_types_exclude','teams_files_exclude','case_export_dir',
                 'internal_domains','own_name','evidence_tsa_url'];
 // Cadence selects and the keys they carry in sync_cadence: a whole source
 // (OneDrive, To Do) or one category of it (Outlook, Teams).
 var KADENZ_FELDER = {'onedrive': 'c-cadence-onedrive', 'todo': 'c-cadence-todo',
+                     'organization': 'c-cadence-organization',
                      'outlook:mail': 'c-cadence-outlook-mail',
                      'outlook:calendar': 'c-cadence-outlook-calendar',
                      'outlook:contacts': 'c-cadence-outlook-contacts',
@@ -9204,7 +9711,8 @@ var VOLLSYNC = {
   sharepoint: {lauf: {sharepoint: true}, titel: 'settings.sharepoint.title'},
   planner:    {lauf: {planner: true},    titel: 'settings.planner.title'},
   todo:       {lauf: {todo: true},       titel: 'settings.todo.title'},
-  onenote:    {lauf: {onenote: true},    titel: 'settings.onenote.title'}
+  onenote:    {lauf: {onenote: true},    titel: 'settings.onenote.title'},
+  organization: {lauf: {organization: true}, titel: 'settings.org.title'}
 };
 function vollSync(quelle){
   var wahl = VOLLSYNC[quelle];

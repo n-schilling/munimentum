@@ -4659,15 +4659,16 @@ def test_die_tuer_beginnt_mit_dem_letzten_und_der_kalender_uebergibt():
     _in_node(PRUEFUNG_TUER)
 
 
-def test_die_tuer_hat_vier_wege_und_eine_suche():
+def test_the_door_has_five_ways_and_one_search():
     """Explore archive (11.3): the strip of ways first, the search row inside
-    the Search way, and the three views without a search of their own – one
-    hand-over button each."""
+    the Search way, and the four views without a search of their own – one
+    hand-over button each, the organization's too."""
     seite = app_mod.seite()
     block = seite[seite.index('<section id="tab-suche"'):seite.index('<section id="tab-faelle"')]
     assert block.index('id="sichten"') < block.index('id="sicht-treffer"') < block.index('class="suchzeile"')
-    assert block.count('data-sicht=') == 4 and 'treffer-zahl' not in block
-    for kennung in ('kalSuchen', 'kbSuchen', 'dateien-suchen', 'kalWahl', 'kalMonat', 'suche-anfang'):
+    assert block.count('data-sicht=') == 5 and 'treffer-zahl' not in block
+    for kennung in ('kalSuchen', 'kbSuchen', 'dateien-suchen', 'kalWahl', 'kalMonat', 'suche-anfang',
+                    'org-search', 'org-versions'):
         assert f'id="{kennung}"' in block, kennung
     assert 'id="kbQ"' not in block, "the address book grew a search of its own again"
 
@@ -5768,6 +5769,13 @@ def test_jede_quelle_hat_den_vollsync_knopf_unter_erweitert():
         assert (f'data-i18n-title="settings.full_sync.i.{key}"'
                 in seite[knopf:knopf + 260]), f"{key}: no (i) of its own"
     assert "full_sync: true" in seite and "'job.full'" in seite
+    # The organization reads the directory, not a Teams chat: its own
+    # button, under the Advanced of the Teams block its chip belongs to.
+    start = seite.index('id="q-teams"')
+    knopf = seite.index("vollSync('organization')", start)
+    assert seite.rfind('<details class="erweitert"', start, knopf) > start
+    assert knopf < seite.find('<details class="quelle-einst"', start + 1)
+    assert 'data-i18n-title="settings.full_sync.i.organization"' in seite[knopf:knopf + 260]
 
 
 PRUEFUNG_VOLLSYNC = GRUNDZUSTAND + """
@@ -9474,12 +9482,13 @@ def test_jedes_feld_ist_auch_gelistet():
                  "planner_enabled",   # likewise, saveCats()
                  "todo_enabled",      # likewise, saveCats()
                  "onenote_enabled",   # likewise, saveCats()
+                 "org_enabled",       # likewise, saveCats()
                  "sharepoint_urls",      # multi-line text, handled separately
                  "planner_urls",         # URL table, liesUrlTabelle()
                  "sharepoint_pages_urls",     # likewise
                  # cadence selects, leseKadenzen() – a whole source or one
                  # category of it
-                 "cadence-onedrive", "cadence-todo",
+                 "cadence-onedrive", "cadence-todo", "cadence-organization",
                  "cadence-outlook-mail", "cadence-outlook-calendar",
                  "cadence-outlook-contacts",
                  "cadence-teams-1on1", "cadence-teams-group",

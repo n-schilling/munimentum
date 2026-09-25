@@ -111,7 +111,7 @@ RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             # the smoke test does exactly that.
             "auth", "onedrive_export", "sharepoint_export",
             "planner_export", "todo_export", "onenote_export",
-            "archive_check")
+            "archive_check", "org_export")
 
 
 # Directory of the shipped scripts (in the bundle: the unpacked archive) –
@@ -770,6 +770,7 @@ SCOPE_FOR = {
     "tasks": "Tasks.Read",            # Planner and To Do alike
     "groups": "Group.Read.All",       # Planner: the legacy comments
     "notes": "Notes.Read",            # OneNote
+    "org": "User.Read.All",           # the organization: everyone's manager
 }
 # One row per mirror-style source: config switch -> (scope category for the
 # token wizard, name in the system report). New sources register here.
@@ -778,14 +779,15 @@ SPIEGEL_QUELLEN = (("onedrive_enabled", "files", "onedrive"),
                    ("sharepoint_pages_enabled", "sites", "pages"),
                    ("planner_enabled", "tasks", "planner"),
                    ("todo_enabled", "tasks", "todo"),
-                   ("onenote_enabled", "notes", "onenote"))
+                   ("onenote_enabled", "notes", "onenote"),
+                   ("org_enabled", "org", "organization"))
 
 LABEL_FOR = {
     "mail": "E-Mail", "calendar": "Kalender", "contacts": "Kontakte",
     "1on1": "1:1-Chats", "group": "Gruppenchats",
     "meeting": "Meeting-Chats", "channels": "Team-Kanäle", "files": "OneDrive",
     "sites": "SharePoint", "tasks": "Planner / To Do",
-    "groups": "Planner-Kommentare", "notes": "OneNote",
+    "groups": "Planner-Kommentare", "notes": "OneNote", "org": "Organisation",
 }
 
 # Additional permissions that each cover the required one. The Graph
@@ -817,6 +819,7 @@ SCOPE_COVERED_BY = {
                        "Sites.FullControl.All"),
     # Graph also allows reading channel messages with the group permissions.
     "ChannelMessage.Read.All": ("Group.Read.All", "Group.ReadWrite.All"),
+    "User.Read.All": ("User.ReadWrite.All", "Directory.Read.All", "Directory.ReadWrite.All"),
 }
 
 
@@ -835,6 +838,7 @@ SCOPE_QUERY = {
     "Tasks.Read": "https://graph.microsoft.com/v1.0/me/planner/plans?$top=1",
     "Notes.Read": "https://graph.microsoft.com/v1.0/me/onenote/notebooks?$top=1",
     "Group.Read.All": "https://graph.microsoft.com/v1.0/groups?$top=1",
+    "User.Read.All": "https://graph.microsoft.com/v1.0/users/delta?$select=manager",
     "User.Read": "https://graph.microsoft.com/v1.0/me",
 }
 
@@ -2631,6 +2635,12 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/documents/versions", api_explore.item_versions),
     ("GET", "/api/v1/documents/versions/content", api_explore.version_content),
     ("GET", "/api/v1/documents/versions/diff", api_explore.version_diff),
+    ("GET", "/api/v1/organization", api_explore.org_top),
+    ("GET", "/api/v1/organization/versions", api_explore.org_versions),
+    ("GET", "/api/v1/organization/changes", api_explore.org_changes),
+    ("GET", "/api/v1/organization/roles", api_explore.org_roles),
+    ("GET", "/api/v1/organization/people", api_explore.org_people),
+    ("GET", "/api/v1/organization/people/{id}", api_explore.org_person),
     ("GET", "/api/v1/calendar", "_v1_kalender"),
     ("GET", "/api/v1/status", api_app.status),
     ("GET", "/api/v1/app", api_app.umgebung),

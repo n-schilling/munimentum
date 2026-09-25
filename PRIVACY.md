@@ -21,14 +21,19 @@ Settings, access token and run history live in a fixed folder in your user
 profile; exports and the search index live below it by default and can each
 point elsewhere — all paths are shown in *Settings*. While the app runs, an
 `instance.json` in the profile's folder names the port it answers on, so a
-citation Claude quotes can link into it; quitting removes it. Every archive is a
-profile folder of its own below that one, with its own token, exports and
+citation Claude quotes can link into it; quitting removes it. Every archive is
+a profile folder of its own below that one, with its own token, exports and
 index; nothing crosses between profiles, and the only things outside them are
 a small file naming the one opened last, the start-up log, and what the update
 check remembers of GitHub's last answer so it need not ask again. Each
 export's bookkeeping — change tokens, inventories, for Teams the message texts
 the pages are rendered from — sits in a `state.db` inside its export folder,
-nowhere else. Beside the export folders lie two more of the archive's own:
+nowhere else. With *Organization* ticked the archive also holds what the
+directory says of your colleagues — names, titles, departments, offices, mail
+addresses and who reports to whom — as one file below the Teams folder, every
+earlier state of it kept; its `state.db` holds every account the directory
+named, guests and disabled ones included, so a changed rule needs no second
+reading. Beside the export folders lie two more of the archive's own:
 `versions/` with the earlier version of every file a run replaced, and
 `evidence/` with the chain of checksums the archive keeps of itself, the time
 stamps a service signed and the list a closed case wrote down. The search
@@ -58,7 +63,8 @@ before posting.
 **The MCP server** hands your archive — and what the app knows about it:
 coverage, the run history with the logs those runs wrote, the completeness
 balance against Microsoft, the analytics figures, your cases and saved
-searches, the earlier versions of items and their checksums — to Claude
+searches, the earlier versions of items and their checksums, the organization
+in every version the archive holds — to Claude
 on `127.0.0.1`. It reads; it changes a case only when
 *Claude may change cases* is on under *Settings › Claude (MCP)*, and then
 only adds. What Claude does with the passages it reads is governed by your

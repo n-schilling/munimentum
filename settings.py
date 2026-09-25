@@ -100,6 +100,13 @@ VORGABEN = {
     "sharepoint_types_include": "",
     "sharepoint_types_exclude": "",
     "sharepoint_max_mb": 0,
+    # The organization (managers and reports, the whole tenant): off until
+    # someone ticks it on the Teams card – the first round reads every
+    # account in the directory.
+    "org_enabled": False,
+    # Include/exclude rules over each person's path of names from the top
+    # ("- Greta Gast/Bob Baumeister/**"); empty means the whole organization.
+    "org_rules": "",
     # Site pages as HTML – its own list: pages and libraries rarely overlap.
     "sharepoint_pages_enabled": False,
     "sharepoint_pages_urls": "",
@@ -292,6 +299,7 @@ VORGABEN = {
         "planner": True,
         "todo": True,
         "onenote": True,
+        "organization": True,
         "index": True,
         "calendar": True,
     },

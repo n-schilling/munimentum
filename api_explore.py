@@ -12,6 +12,7 @@ import api
 import detail
 import evidence
 import faelle
+import organization
 import rest
 import versions
 from api import Ablehnung
@@ -639,6 +640,113 @@ def version_diff(h, _p, q, _data):
     return api.json({"from": older, "to": newer, "ops": versions.diff(old_text, new_text)})
 
 
+# ---------------------------------------------------------------------------
+# The organization (org_export.py, organization.py): one file, its versions
+# ---------------------------------------------------------------------------
+# The versions, parsed on demand – the view asks one person at a time,
+# and a whole tenant is a few megabytes of JSON.
+_ORG_ARCHIVE = {}
+
+
+def _org_archive(h):
+    data, teams = Path(h.M.BASE), Path(h.M.BASE) / h.M.TEAMS_DIR
+    key = str(teams)
+    if key not in _ORG_ARCHIVE:
+        _ORG_ARCHIVE.clear()
+        _ORG_ARCHIVE[key] = organization.Archive(data, teams, keep=2)
+    return _ORG_ARCHIVE[key]
+
+
+def _org_version(h, q, found=None):
+    """(the version asked for – `version`, a checksum or its first 16
+    characters; the current one when absent –, its Org, every version)."""
+    archive = _org_archive(h)
+    found = archive.versions() if found is None else found
+    if not found:
+        raise Ablehnung(404, "srv.org.none")
+    asked = _sha_param(q, "version", required=False)
+    v = next((v for v in found if (v["sha256"].startswith(asked) if asked else v["current"])),
+             None)
+    org = archive.org(v) if v is not None else None
+    if org is None:
+        raise Ablehnung(404, "srv.org.noversion")
+    return v, org, found
+
+
+def _org_of(h, v):
+    return _org_archive(h).org(v)
+
+
+def _org_stamp(v):
+    return {"sha256": v["sha256"], "captured": v.get("captured"), "current": v["current"]}
+
+
+def org_versions(h, _p, _q, _data):
+    """The versions of the organization, newest first – each change a
+    run brought is one. Empty before the first run that fetched it."""
+    return api.json({"items": [_org_stamp(v) for v in _org_archive(h).versions()]})
+
+
+def org_top(h, _p, q, _data):
+    """One version of the organization from above: the people at the top,
+    the largest part first, how many it holds, and who the account is."""
+    v, org, _found = _org_version(h, q)
+    return api.json({"version": _org_stamp(v), "people": len(org.people),
+                     "me": org.me if org.me in org.people else None,
+                     "roots": [org.card(pid) for pid in org.roots()]})
+
+
+def org_person(h, p, q, _data):
+    """One person as the profile card shows them: the managers above, top
+    first, the person, and whoever reports to them."""
+    v, org, _found = _org_version(h, q)
+    pid = str(p.get("id") or "")
+    if pid not in org.people:
+        raise Ablehnung(404, "srv.org.noperson")
+    return api.json({"version": _org_stamp(v),
+                     "chain": [org.card(b) for b in org.chain(pid)],
+                     "person": org.person(pid),
+                     "reports": [org.card(r) for r in org.reports.get(pid, ())]})
+
+
+def org_roles(h, _p, q, _data):
+    """Every job title of that version with how many hold it, the most
+    held first; `contains` narrows."""
+    _v, org, _found = _org_version(h, q)
+    limit = api.zahl(q, "limit", 500, 1, 5000)
+    roles = org.roles(q.get("contains") or "", q.get("department") or "")
+    return api.json({"items": roles[:limit], "total": len(roles), "has_more": len(roles) > limit})
+
+
+def org_people(h, _p, q, _data):
+    """The people holding a role: whose title contains `role`, or is it
+    with `exact=true` – by name, each with their manager's name."""
+    _v, org, _found = _org_version(h, q)
+    role = str(q.get("role") or "").strip()
+    if not role:
+        raise Ablehnung(400, "srv.badparam", {"name": "role"})
+    exact = str(q.get("exact") or "").strip().lower() in ("1", "true", "yes")
+    limit = api.zahl(q, "limit", 200, 1, 1000)
+    offset = api.zahl(q, "offset", 0, 0)
+    ids = org.with_role(role, exact=exact, department=q.get("department") or "")
+    return api.json({"items": [{**org.card(i),
+                                "manager": (org.people.get(org.manager(i)) or {}).get("name")}
+                               for i in ids[offset:offset + limit]],
+                     "total": len(ids), "limit": limit, "offset": offset,
+                     "has_more": offset + limit < len(ids)})
+
+
+def org_changes(h, _p, q, _data):
+    """What a version changed against the one before it: who joined, who
+    left, who moved to another manager, whose title or department
+    changed. The first version has nothing before it."""
+    v, org, found = _org_version(h, q)
+    i = next(i for i, w in enumerate(found) if w["sha256"] == v["sha256"])
+    before = found[i + 1] if i + 1 < len(found) else None
+    return api.json({"from": _org_stamp(before) if before else None, "to": _org_stamp(v),
+                     "items": organization.changes(_org_of(h, before) if before else None, org)})
+
+
 # The routes of this door, in the order the table in app.py lists them.
 ROUTEN = (
     ("GET", "/api/v1/search", suche),
@@ -657,4 +765,10 @@ ROUTEN = (
     ("GET", "/api/v1/documents/versions", item_versions),
     ("GET", "/api/v1/documents/versions/content", version_content),
     ("GET", "/api/v1/documents/versions/diff", version_diff),
+    ("GET", "/api/v1/organization", org_top),
+    ("GET", "/api/v1/organization/versions", org_versions),
+    ("GET", "/api/v1/organization/changes", org_changes),
+    ("GET", "/api/v1/organization/roles", org_roles),
+    ("GET", "/api/v1/organization/people", org_people),
+    ("GET", "/api/v1/organization/people/{id}", org_person),
 )

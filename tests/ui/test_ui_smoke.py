@@ -33,11 +33,11 @@ def test_every_door_opens_and_the_others_close(page, server):
                 expect(page.locator(f"#tab-{other}")).to_be_hidden()
 
 
-def test_the_four_ways_of_explore_render(page, server):
+def test_the_five_ways_of_explore_render(page, server):
     open_app(page, server, tab="suche")
     strip = page.locator("#sichten")
     expect(strip).to_be_visible()
-    for way in ["kalender", "adressbuch", "dateien", "treffer"]:
+    for way in ["kalender", "adressbuch", "dateien", "org", "treffer"]:
         strip.locator(f'[data-sicht="{way}"]').click()
         expect(strip.locator(f'[data-sicht="{way}"]')).to_have_class("sicht on")
     # Search is the way with the field: it is the one that searches.
@@ -93,3 +93,16 @@ def test_the_help_window_opens_and_escape_closes_it(page, server):
     expect(modal.locator("button.act")).to_have_text(en["help.all"])
     page.keyboard.press("Escape")
     expect(modal).to_be_hidden()
+
+
+def test_the_organization_says_what_would_fill_it(page, server):
+    """No organization yet: the way says how it comes in and leads there."""
+    open_app(page, server, tab="suche")
+    page.click('#sichten [data-sicht="org"]')
+    box = page.locator("#org-box")
+    en = texts("en")
+    expect(box).to_contain_text(en["org.empty"])
+    expect(page.locator("#org-search")).to_be_disabled()
+    box.get_by_role("button", name=en["org.empty.go"]).click()
+    expect(page.locator("#c-org_enabled")).to_be_attached()
+    expect(page.locator("#tab-export")).to_be_visible()

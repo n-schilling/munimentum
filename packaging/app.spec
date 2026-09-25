@@ -52,7 +52,7 @@ TEILPROGRAMME = ["outlook_export", "teams_export", "onedrive_export", "rag_index
                  "progress", "answer", "notify",
                  "drive_mirror", "sharepoint_export", "state_db",
                  "planner_export", "analytics_db",
-                 "todo_export", "onenote_export",
+                 "todo_export", "onenote_export", "org_export", "organization",
                  "steps", "runner", "awake", "completeness",
                  "archive_check", "schluessel", "faelle", "case_export",
                  "case_collect", "evidence", "versions", "instance"]

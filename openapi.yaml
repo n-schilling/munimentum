@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 13.9.0
+  version: 14.0.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2489,6 +2489,280 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/organization:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganization
+      summary: The organization from above
+      description: |
+        One version of the organization – the directory's managers as the
+        Teams profile card shows them, kept by the step `organization` as
+        one file whose every change is a version. The people at the top
+        come first by the size of their part of the tree; `me` is the
+        signed-in account when it is part of it.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+      responses:
+        "200":
+          description: The top of that version.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, people, roots]
+                properties:
+                  version: { $ref: "#/components/schemas/OrgVersion" }
+                  people: { type: integer, description: "How many people the version holds." }
+                  me: { type: [string, "null"], description: "The signed-in account's id, when it is part of the organization." }
+                  roots: { type: array, items: { $ref: "#/components/schemas/OrgCard" } }
+              example:
+                version: { sha256: 4d02aa0c5f1e8b7d7be1a1d9e6c3f0b2a7d4e5f60718293a4b5c6d7e8f9a0b1c, captured: "2026-09-25T06:00:04+00:00", current: true }
+                people: 214
+                me: 5b1e0c2a-7d0e-4c1f-9a51-2f7e4b8d6c10
+                roots:
+                - { id: 0f7c2d1e-3b4a-4c5d-8e6f-7a8b9c0d1e2f, name: Greta Gast, title: Chief Executive Officer, department: Executive, reports: 4, total: 213 }
+        "400":
+          description: A version that could be no checksum (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No organization in the archive yet (srv.org.none), or not that version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/versions:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListOrganizationVersions
+      summary: The versions of the organization
+      description: |
+        Every version the archive holds, newest first: each run that
+        changed the organization left one. `captured` is when the evidence
+        chain first saw it (when it was written, before the chain did).
+        Empty before the first run that fetched the organization.
+      responses:
+        "200":
+          description: The versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/OrgVersion" } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/changes:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganizationChanges
+      summary: What a version of the organization changed
+      description: |
+        The version against the one before it: who `joined`, who `left`,
+        who `moved` to another manager, whose fields `changed` – each with
+        `fields` naming the old and the new value (the manager by name).
+        The first version has nothing before it: `from` is null and the
+        list empty.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+      responses:
+        "200":
+          description: The changes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [from, to, items]
+                properties:
+                  from: { oneOf: [{ $ref: "#/components/schemas/OrgVersion" }, { type: "null" }] }
+                  to: { $ref: "#/components/schemas/OrgVersion" }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [kind, id, name]
+                      properties:
+                        kind: { type: string, enum: [joined, moved, changed, left] }
+                        id: { type: string }
+                        name: { type: string }
+                        title: { type: [string, "null"] }
+                        fields: { type: object, description: "Field -> [old, new]." }
+              example:
+                from: { sha256: 90e3f1d2c3b4a5960718293a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c, captured: "2026-09-18T06:00:03+00:00", current: false }
+                to: { sha256: 4d02aa0c5f1e8b7d7be1a1d9e6c3f0b2a7d4e5f60718293a4b5c6d7e8f9a0b1c, captured: "2026-09-25T06:00:04+00:00", current: true }
+                items:
+                - { kind: moved, id: 5b1e0c2a-7d0e-4c1f-9a51-2f7e4b8d6c10, name: Alice Beispiel, title: Lead Consultant, fields: { manager: [Bob Baumeister, Carla Chef] } }
+        "400":
+          description: A version that could be no checksum (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No organization in the archive yet (srv.org.none), or not that version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/roles:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListOrganizationRoles
+      summary: The job titles of the organization
+      description: |
+        Every job title that version knows, with how many people hold it,
+        the most held first. `contains` and `department` narrow,
+        case-insensitively.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+        - { name: contains, in: query, schema: { type: string }, description: "Only titles containing this." }
+        - { name: department, in: query, schema: { type: string }, description: "Only people whose department contains this." }
+        - { name: limit, in: query, schema: { type: integer, default: 500, minimum: 1, maximum: 5000 }, description: "Max titles." }
+      responses:
+        "200":
+          description: The titles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, has_more]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [title, count]
+                      properties:
+                        title: { type: string }
+                        count: { type: integer }
+                  total: { type: integer, description: "How many titles match in all." }
+                  has_more: { type: boolean }
+              example:
+                items: [{ title: Consultant, count: 12 }, { title: Head of Projects, count: 1 }]
+                total: 2
+                has_more: false
+        "400":
+          description: A version or a limit that could be none (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No organization yet (srv.org.none), or not that version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/people:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListOrganizationPeopleByRole
+      summary: Everyone holding a role
+      description: |
+        The people whose job title contains `role` – or is exactly it with
+        `exact=true` – by name, each with their manager's name.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+        - { name: role, in: query, required: true, schema: { type: string }, description: "The title or part of it, case-insensitive." }
+        - { name: exact, in: query, schema: { type: boolean, default: false }, description: "The title must be `role` exactly." }
+        - { name: department, in: query, schema: { type: string }, description: "Only people whose department contains this." }
+        - { name: limit, in: query, schema: { type: integer, default: 200, minimum: 1, maximum: 1000 }, description: "Max people." }
+        - { name: offset, in: query, schema: { type: integer, default: 0, minimum: 0 }, description: "Skip that many." }
+      responses:
+        "200":
+          description: The people.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total, limit, offset, has_more]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/OrgCard" }
+                        - type: object
+                          properties:
+                            manager: { type: [string, "null"], description: "The manager's name." }
+                  total: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+                  has_more: { type: boolean }
+        "400":
+          description: No role named, or a version or number that could be none (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No organization yet (srv.org.none), or not that version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/people/{id}:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganizationPerson
+      summary: One person in the organization
+      description: |
+        The person as the profile card shows them in that version: the
+        managers above, top first, the person with what the directory
+        says of them, and whoever reports to them – each card with how
+        many report to it directly and in all.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string }, description: "The person's directory id." }
+        - { $ref: "#/components/parameters/OrgVersion" }
+      responses:
+        "200":
+          description: The person, the chain above, the reports below.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, chain, person, reports]
+                properties:
+                  version: { $ref: "#/components/schemas/OrgVersion" }
+                  chain: { type: array, items: { $ref: "#/components/schemas/OrgCard" } }
+                  person:
+                    allOf:
+                      - { $ref: "#/components/schemas/OrgCard" }
+                      - type: object
+                        properties:
+                          office: { type: string }
+                          company: { type: string }
+                          city: { type: string }
+                          country: { type: string }
+                          mail: { type: string }
+                  reports: { type: array, items: { $ref: "#/components/schemas/OrgCard" } }
+        "400":
+          description: A version that could be no checksum (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No organization yet (srv.org.none), not that version (srv.org.noversion), or nobody by that id in it (srv.org.noperson).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
   /api/v1/calendar:
     get:
       tags: [Explore, GET]
@@ -2669,8 +2943,8 @@ paths:
       description: |
         One run at a time. The body names the steps by the keys the step
         registry uses (`outlook`, `teams`, `onedrive`, `sharepoint`,
-        `sharepoint_pages`, `planner`, `todo`, `onenote`, `calendar`,
-        `index`, `archiv_pruefen`, `check_*`) and how they should work.
+        `sharepoint_pages`, `planner`, `todo`, `onenote`, `organization`,
+        `calendar`, `index`, `archiv_pruefen`, `check_*`) and how they should work.
         The answer is `202` with `Location: /api/v1/runs/current`: the run
         is on, its progress travels with `/api/v1/status` and its lines with
         `/api/v1/log`.
@@ -3287,6 +3561,7 @@ paths:
                 planner: { type: boolean }
                 todo: { type: boolean }
                 onenote: { type: boolean }
+                organization: { type: boolean }
                 calendar: { type: boolean }
                 index: { type: boolean }
       responses:
@@ -4102,6 +4377,8 @@ components:
         planner_attachments: { type: boolean, default: false, description: "Download the files a task references next to the board." }
         todo_enabled: { type: boolean, default: false, description: "Master switch of the To Do export." }
         onenote_enabled: { type: boolean, default: false, description: "Master switch of the OneNote export." }
+        org_enabled: { type: boolean, default: false, description: "Master switch of the organization: every directory user with their manager, kept as one file below the Teams folder whose every change is a version." }
+        org_rules: { type: string, default: "", description: "Include/exclude rules over each person's path of names from the top (“- Greta Gast/Bob Baumeister/**”); empty = the whole organization." }
         onenote_rules: { type: string, default: "", description: "Include/exclude rules over the notebooks; empty = every notebook." }
         onenote_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones land in the page's files folder." }
         teams_attachments: { type: boolean, default: false, description: "Download the files a chat or channel post references next to the conversation." }
@@ -4143,6 +4420,7 @@ components:
         planner: { type: boolean, default: true }
         todo: { type: boolean, default: true }
         onenote: { type: boolean, default: true }
+        organization: { type: boolean, default: true }
         index: { type: boolean, default: true }
         calendar: { type: boolean, default: true }
     I18nMessage:
@@ -4391,6 +4669,23 @@ components:
           items:
             type: array
             prefixItems: [{ type: string, enum: ["=", "-", "+"] }, { type: string }]
+    OrgVersion:
+      type: object
+      required: [sha256, current]
+      properties:
+        sha256: { type: string, description: "The version's checksum; `version` takes it, or its first 16 characters." }
+        captured: { type: [string, "null"], description: "When the evidence chain first saw it, else when it was written." }
+        current: { type: boolean }
+    OrgCard:
+      type: object
+      required: [id, name, reports, total]
+      properties:
+        id: { type: string, description: "The directory id." }
+        name: { type: string }
+        title: { type: [string, "null"] }
+        department: { type: [string, "null"] }
+        reports: { type: integer, description: "How many report to this person directly." }
+        total: { type: integer, description: "How many are below this person in all." }
     EvidenceSummary:
       type: object
       required: [lines]
@@ -5018,6 +5313,12 @@ components:
       description: Says the `Prefer` was honoured (RFC 7240) – only on an answer without a body.
       schema: { type: string, enum: [return=minimal] }
   parameters:
+    OrgVersion:
+      name: version
+      in: query
+      required: false
+      description: "A version of the organization by its checksum (or its first 16 characters); the current one when left out."
+      schema: { type: string, pattern: "^[0-9a-f]{16,64}$" }
     Prefer:
       name: Prefer
       in: header

@@ -99,6 +99,7 @@ import faelle
 import i18n
 import instance
 import ollama_client
+import organization
 import run_history
 import settings
 import state_db
@@ -173,6 +174,11 @@ Which tool to use:
     date_from/date_to.
   • lookup_contact  – the address book, structured: e-mail, phone,
     organisation.
+  • get_org_chart / get_manager / list_reports / find_by_role / list_roles /
+    org_changes – the ORGANIZATION as the directory had it, kept version by
+    version: where someone stands, their manager, their team (direct or all
+    levels), everyone with a job title, which titles exist, and who joined,
+    left or moved when – each on any day (as_of). Not in the search.
   • list_files      – browse OneDrive, the SharePoint libraries, the files
     shared in Teams and mirrored channel folders, and the Planner
     attachments folder by folder; the files' contents are not indexed, only
@@ -1764,6 +1770,7 @@ def _with_cite(doc):
     cite = {"label": _label(doc), "key": key}
     data = _data_dir()
     target, err = _resolve_source(doc.get("root"), doc.get("path"))
+    pin = None
     if data is not None and not err:
         ev = evidence.Evidence(data)
         try:
@@ -1773,13 +1780,21 @@ def _with_cite(doc):
                 stamp = ev.stamp_after(rec["n"]) if rec.get("n") else None
                 cite.update(sha256=rec["sha256"], captured=rec["at"], chain_line=rec["n"],
                             stamped=stamp["at"] if stamp else None)
+            pin = ev.current_sha(rel) if rel and ev.exists() else evidence.versions.sha256_file(target)
         finally:
             ev.close()
         own = _item_sha(doc)
         if own:
             cite["item_sha256"] = own
+            # A chat message's versions are its texts; a card's or task's
+            # those of its board or list – the page lists them so.
+            if doc.get("root") == "teams":
+                pin = own
     url, state = _app_url()
-    cite["link"] = f"{url}#item={quote(key, safe='')}" if url and key else None
+    # The version read now is pinned: opened later, after a change, the
+    # page shows this one and says the item changed since.
+    cite["link"] = (f"{url}#item={quote(key, safe='')}" + (f"&sha={pin}" if pin else "")
+                    if url and key else None)
     if not url:
         cite["app"] = state
     return {**doc, "cite": cite}
@@ -1824,7 +1839,8 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     `key`, and what the evidence chain recorded – `sha256`, `captured`,
     `chain_line`, `stamped` (when a time-stamp authority signed the chain
     past that line), `item_sha256` for a message or task that is only
-    part of its file – and `link`, which opens the item in Munimentum.
+    part of its file – and `link`, which opens the item in Munimentum, in
+    the version read now (a later change is shown as such).
     `link` is null while the app is not running (`app` says
     "not_running" or "other_profile"): quote the label then, and tell the
     user the link works once Munimentum runs. verify_item checks a
@@ -2366,6 +2382,259 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
                          "emails": mails, "phones": telefone,
                          "folder": ctx, "path": rel, "text": text})
     return {"count": len(kontakte), "contacts": kontakte}
+
+
+# ---------------------------------------------------------------------------
+# The organization (org_export.py): managers and reports, version by version
+# ---------------------------------------------------------------------------
+_ORG = {}
+_ORG_NONE = ("No organization in this archive: it comes in once \"Organization\" is "
+             "ticked under Teams in Munimentum's Build archive and a run has fetched it.")
+_ORG_PAIRS = 60           # version pairs one org_changes call compares at most
+
+
+def _org_archive():
+    teams = STATE.get("teams_dir")
+    data = _data_dir()
+    if not teams or data is None:
+        return None
+    key = (str(data), str(teams))
+    if _ORG.get("key") != key:
+        _ORG.update(key=key, archive=organization.Archive(data, teams))
+    return _ORG["archive"]
+
+
+def _org_day(v):
+    return str(v.get("captured") or "")[:10]
+
+
+@_tool(_READONLY)
+def get_org_chart(person: str = "", as_of: str = "") -> dict:
+    """Where someone stands in the organization, as the Teams profile card
+    shows it: the managers above (top first), the person with title,
+    department, office and mail, and whoever reports to them – each card
+    with how many report to it directly (`reports`) and in all (`total`).
+
+    The organization comes from the directory and is kept version by
+    version: every change a run noticed is one. `as_of` picks the version
+    that was current on that day – "who was Alice's manager in March?".
+    Disabled accounts, guests and service accounts are not part of it.
+
+    Args:
+        person: A name or part of one, a directory id, or empty for the
+            signed-in user (the top of the organization when unknown).
+            Several matches come back as `matches` to choose from.
+        as_of: "YYYY-MM-DD" – the version current on that day; empty for
+            the latest.
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    pid, err = _org_person(org, stamp, person)
+    if err:
+        return err
+    boss = org.manager(pid)
+    reports = org.reports.get(pid, [])
+    return {**stamp, "chain": [org.card(b) for b in org.chain(pid)], "person": org.person(pid),
+            "reports": [org.card(r) for r in reports[:200]],
+            "reports_left_out": max(0, len(reports) - 200),
+            "peers": len(org.reports.get(boss, [])) - 1 if boss else 0}
+
+
+@_tool(_READONLY)
+def get_manager(person: str, as_of: str = "") -> dict:
+    """Who someone's manager is – "who is Alice's boss?" – with the whole
+    line above, top first, and how many report to that manager.
+
+    Args:
+        person: A name or part of one, or a directory id. Several matches
+            come back as `matches` to choose from.
+        as_of: "YYYY-MM-DD" – the version current on that day; empty for
+            the latest.
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    pid, err = _org_person(org, stamp, person)
+    if err:
+        return err
+    boss = org.manager(pid)
+    out = {**stamp, "person": org.card(pid)}
+    if boss is None:
+        return {**out, "manager": None, "note": "Nobody above: this person is at the top."}
+    return {**out, "manager": org.person(boss), "chain": [org.card(b) for b in org.chain(pid)]}
+
+
+@_tool(_READONLY)
+def list_reports(person: str = "", as_of: str = "", all_levels: bool = False,
+                 limit: int = 200, offset: int = 0) -> dict:
+    """Who works for someone – "show me Bob's team": the direct reports, or
+    with `all_levels` everyone below, each with `level` (1 = direct) and
+    their manager's name. By name within a level.
+
+    Args:
+        person: A name or part of one, a directory id, or empty for the
+            signed-in user.
+        as_of: "YYYY-MM-DD" – the version current on that day.
+        all_levels: Everyone below instead of the direct reports only.
+        limit: Max people (default 200). offset: Skip that many.
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    pid, err = _org_person(org, stamp, person)
+    if err:
+        return err
+    rows = org.below(pid) if all_levels else [(r, 1) for r in org.reports.get(pid, [])]
+    limit, offset = max(1, min(int(limit), 1000)), max(0, int(offset))
+    page = rows[offset:offset + limit]
+    out = {**stamp, "person": org.card(pid), "total": len(rows),
+           "reports": [{**org.card(i), "level": lv,
+                        "manager": (org.people.get(org.manager(i)) or {}).get("name")}
+                       for i, lv in page]}
+    if offset + limit < len(rows):
+        out["next_offset"] = offset + limit
+    return out
+
+
+@_tool(_READONLY)
+def find_by_role(role: str, as_of: str = "", department: str = "", exact: bool = False,
+                 limit: int = 100, offset: int = 0) -> dict:
+    """Everyone with a role – "all Solution Architects": the people whose
+    job title contains `role` (case-insensitive), or is exactly it with
+    `exact`, each with department, manager and path from the top.
+    list_roles names the titles that exist.
+
+    Args:
+        role: The title or part of it, e.g. "architect".
+        as_of: "YYYY-MM-DD" – the version current on that day.
+        department: Only people whose department contains this.
+        exact: The title must be `role` exactly (still case-insensitive).
+        limit: Max people (default 100). offset: Skip that many.
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    if not str(role or "").strip():
+        return {**stamp, "error": "Name a role – list_roles shows which exist."}
+    ids = org.with_role(role, exact=exact, department=department)
+    limit, offset = max(1, min(int(limit), 500)), max(0, int(offset))
+    out = {**stamp, "total": len(ids), "roles": org.roles(role, department)[:20] if not exact else None,
+           "people": [{**org.card(i),
+                       "manager": (org.people.get(org.manager(i)) or {}).get("name"),
+                       "path": organization.path_of(org, i)}
+                      for i in ids[offset:offset + limit]]}
+    if out["roles"] is None:
+        out.pop("roles")
+    if offset + limit < len(ids):
+        out["next_offset"] = offset + limit
+    return out
+
+
+@_tool(_READONLY)
+def list_roles(as_of: str = "", contains: str = "", department: str = "",
+               limit: int = 200) -> dict:
+    """Every job title in the organization with how many hold it, the most
+    held first – "which roles are there?", "how many consultants?".
+
+    Args:
+        as_of: "YYYY-MM-DD" – the version current on that day.
+        contains: Only titles containing this (case-insensitive).
+        department: Only people whose department contains this.
+        limit: Max titles (default 200).
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    roles = org.roles(contains, department)
+    limit = max(1, min(int(limit), 2000))
+    out = {**stamp, "total": len(roles), "roles": roles[:limit]}
+    if len(roles) > limit:
+        out["note"] = f"{len(roles) - limit} more titles – narrow with contains or department."
+    return out
+
+
+def _org_at(as_of):
+    """(stamp, Org) of the version current on `as_of` (the latest when
+    empty) – or ({"error": …}, None)."""
+    archive = _org_archive()
+    found = archive.versions() if archive else []
+    if not found:
+        return {"error": _ORG_NONE}, None
+    day = str(as_of or "").strip()
+    v = found[0] if not day else next((v for v in found if _org_day(v) <= day), None)
+    if v is None:
+        return {"error": f"The archive's organization starts on {_org_day(found[-1])}; "
+                         f"nothing is known of it on {day}."}, None
+    org = archive.org(v)
+    if org is None:
+        return {"error": "That version of the organization is no longer here."}, None
+    return {"as_of": v.get("captured"), "version": v["sha256"][:16], "people": len(org.people),
+            "versions_in_archive": len(found)}, org
+
+
+def _org_person(org, stamp, person):
+    """(id, None) for the person meant – the signed-in user when empty – or
+    (None, an answer: several matches to choose from, or none)."""
+    wanted = str(person or "").strip()
+    if not wanted:
+        if org.me in org.people:
+            return org.me, None
+        return None, {**stamp, "top": [org.card(r) for r in org.roots()[:20]],
+                      "note": "The signed-in user is not in the organization – name a person."}
+    pid, hits = org.find(wanted)
+    if pid:
+        return pid, None
+    if not hits:
+        return None, {**stamp, "error": f"Nobody named like \"{wanted}\" in this version."}
+    return None, {**stamp, "matches": [{**org.card(i), "path": organization.path_of(org, i)}
+                                       for i in hits[:20]],
+                  "note": f"{len(hits)} people match – ask again with a fuller name or the id."}
+
+
+@_tool(_READONLY)
+def org_changes(date_from: str = "", date_to: str = "", person: str = "",
+                limit: int = 100) -> dict:
+    """What changed in the organization between the kept versions: who
+    joined, who left, who moved to another manager (`fields.manager` names
+    both), whose title, department or office changed – each with the day
+    the archive first held the new version.
+
+    Args:
+        date_from: "YYYY-MM-DD" – versions from this day on.
+        date_to: "YYYY-MM-DD" – versions up to this day.
+        person: Only changes of people whose name contains this.
+        limit: Max changes (default 100), newest version first.
+    """
+    archive = _org_archive()
+    found = archive.versions() if archive else []
+    if not found:
+        return {"error": _ORG_NONE}
+    lo, hi = str(date_from or "").strip(), str(date_to or "").strip()
+    pairs = [(found[i + 1], found[i]) for i in range(len(found) - 1)
+             if (not lo or _org_day(found[i]) >= lo) and (not hi or _org_day(found[i]) <= hi)]
+    compared = pairs[:_ORG_PAIRS]
+    wanted = str(person or "").strip().casefold()
+    limit = max(1, min(int(limit), 500))
+    out, more = [], False
+    for old, new in compared:
+        a, b = archive.org(old), archive.org(new)
+        if a is None or b is None:
+            continue
+        for c in organization.changes(a, b):
+            if wanted and wanted not in c["name"].casefold():
+                continue
+            if len(out) >= limit:
+                more = True
+                break
+            out.append({"date": _org_day(new), **c})
+        if more:
+            break
+    res = {"versions_in_archive": len(found), "versions_compared": len(compared),
+           "first_version": _org_day(found[-1]), "count": len(out), "changes": out}
+    if more or len(pairs) > len(compared):
+        res["note"] = ("More changes than returned – narrow with date_from/date_to or person.")
+    return res
 
 
 @_tool(_READONLY)
