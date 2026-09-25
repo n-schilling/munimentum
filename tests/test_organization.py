@@ -11,6 +11,7 @@ import time
 import pytest
 
 import app as app_mod
+import graph_contract
 import mcp_server
 import org_export
 import organization
@@ -147,6 +148,8 @@ class _Graph:
         """Direct questions: an answer whose fragment the URL holds, else
         404 – nobody above."""
         self.batched = getattr(self, "batched", []) + list(urls)
+        for url in urls:
+            graph_contract.check(url)
         out = {}
         for url in urls:
             hit = next((a for f, a in self.answers.items() if f in url and "/manager?" in f
@@ -157,6 +160,7 @@ class _Graph:
 
     def get(self, url, params=None, extra_headers=None):
         self.calls.append(url)
+        graph_contract.check(url, params)
         self.heads.append(extra_headers)
         for frag, answer in self.answers.items():
             if frag in url:

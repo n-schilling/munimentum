@@ -106,4 +106,7 @@ the chain of checksums after every run and checks it. `mcp_server.py` is the
 MCP server; the app's search calls its tools in-process, so what leaves over
 MCP passes `_tool()`, which keeps the answer compact, brief and within a
 budget. Its prompts and case resources sit beside the tools; `instance.py`
-says where a running app answers, so a citation can link into it.
+says where a running app answers, so a citation can link into it. Every
+Microsoft Graph endpoint the exports ask has its line in
+`tests/graph_contract.py` with the query options it takes; the test fakes
+answer anything else with Graph's own 400.

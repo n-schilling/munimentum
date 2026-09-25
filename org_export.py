@@ -155,7 +155,7 @@ def settle_managers(graph, users, now=None, rounds=12):
     when a question failed (that person is asked again next run), else 0."""
     now = time.time() if now is None else now
     total = {"asked": 0, "found": 0, "fetched": 0}
-    failed, tried = 0, set()
+    failed, tried, first = 0, set(), None
     for _ in range(rounds):
         # Every member without a manager – a disabled one too once someone
         # reports to them, since they may still hold a line together.
@@ -190,7 +190,9 @@ def settle_managers(graph, users, now=None, rounds=12):
                 # A 404 says "nobody above" for a week; anything else is
                 # asked again on the next run – but not again in this one.
                 users[uid]["manager_checked"] = now if status == 404 else now - RECHECK_S + 1
-                failed += status != 404
+                if status != 404:
+                    failed += 1
+                    first = first or _answer_text(status, body)
         for mid, url in fetched.items():
             status, body = answers.get(url, (0, None))
             if status == 200 and isinstance(body, dict):
@@ -201,10 +203,21 @@ def settle_managers(graph, users, now=None, rounds=12):
                 users.setdefault(mid, {"id": mid, "userType": "Unknown"})
             else:
                 failed += 1
+                first = first or _answer_text(status, body)
         total["asked"] += len(asked)
         total["fetched"] += len(fetched)
     progress.event("run.org.managers", **total)
+    if failed:
+        # Which answer came, in Graph's own words – the count alone does
+        # not say whether a permission is missing or the service hiccupped.
+        progress.event("run.org.managers_refused", "warn", n=failed, error=first or "?")
     return 1 if failed else 0
+
+
+def _answer_text(status, body):
+    code = export_util.graph_code(body) if isinstance(body, dict) else ""
+    message = ((body or {}).get("error") or {}).get("message") if isinstance(body, dict) else ""
+    return f"HTTP {status} {code} {message or ''}".strip()[:200]
 
 
 # ---------------------------------------------------------------------------

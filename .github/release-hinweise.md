@@ -1,14 +1,17 @@
-## New in 14.0.2
+## New in 14.0.3
 
-- **The whole line, as Teams shows it** – a manager whose account is off
-  now stays in the line of the people below, marked *disabled* and counted
-  as nobody; they no longer stand at the top. A member the directory feed
-  names without a manager is asked for one directly.
+- **1:1 chats keep their names** – a chat whose members were asked for on
+  their own came back as “Unbekannt”, was renamed and had every message
+  indexed anew; it now keeps its name, and a run that brings one message
+  indexes one message.
+- **The run window says “accounts”** for the organization's progress, and
+  the log names Graph's answer when a question for a manager is refused.
 
 ## Upgrading
 
-The next run that syncs *Organization* rebuilds it once with the lines
-above: a new version whose changes list who moved back under a manager.
+Nothing happens once after this update. A chat an earlier run renamed to
+“Unbekannt” gets its name back the next time it brings a message; its
+messages are indexed once more then.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

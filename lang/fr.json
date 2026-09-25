@@ -653,6 +653,7 @@
   "progress.unit.lists": "listes",
   "progress.unit.conversations": "conversations",
   "progress.unit.embeddings": "embeddings",
+  "progress.unit.users": "comptes",
   "nav.analytics": "Insights",
   "ana.title": "Ce que contient l’archive",
   "ana.nav.kpi": "Chiffres clés",
@@ -1969,5 +1970,6 @@
   "org.role.titles_more": "{n} titres de plus – précisez",
   "run.org.managers": "Organisation : {asked} personnes sans responsable interrogées directement, {found} trouvés ; {fetched} responsables récupérés.",
   "run.org.managers_failed": "Organisation : responsables non interrogés ({error}) – la prochaine exécution redemande.",
-  "org.disabled": "désactivé"
+  "org.disabled": "désactivé",
+  "run.org.managers_refused": "Organisation : {n} demandes de responsables refusées ({error}) – la prochaine exécution redemande."
 }

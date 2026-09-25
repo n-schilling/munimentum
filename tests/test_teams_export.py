@@ -17,6 +17,7 @@ import state_db
 import time
 from datetime import datetime, timedelta, UTC
 import teams_export as te
+import graph_contract
 
 GRAPH = te.GRAPH
 TIME_RE = re.compile(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")   # local time, no fixed value
@@ -72,6 +73,7 @@ class FakeGraph:
     def paged(self, url, params=None):
         self.paged_calls.append(url)
         self.paged_params.append((url, params))
+        graph_contract.check(url, params)
         val = self.pages[url]
         if isinstance(val, Exception):
             raise val
@@ -79,6 +81,7 @@ class FakeGraph:
 
     def get(self, url, params=None):
         self.get_calls.append((url, params))
+        graph_contract.check(url, params)
         val = self.gets[url]
         if isinstance(val, Exception):
             raise val
@@ -2698,3 +2701,80 @@ def test_a_known_chat_takes_its_name_from_the_record(tmp_path):
                        regeln=folders.lies_regeln("- group/Alice, Bob"))
     assert stats["excluded"] == 1
     assert all("/members" not in url for url, _p in graph.paged_params)
+
+
+def test_chat_members_are_listed_without_query_options():
+    """The members listing takes no OData option: with `$top` Graph
+    answered 400 and every 1:1 chat without expanded members became
+    "Unbekannt" – renamed, moved, and re-embedded message by message."""
+    url = f"{GRAPH}/me/chats/c1/members"
+    graph = FakeGraph(pages={url: [{"userId": "me", "displayName": "Ich"},
+                                   {"userId": "u2", "displayName": "Alice Example"}]})
+    assert te.chat_title(graph, {"chatType": "oneOnOne", "id": "c1"}, "me") == "Alice Example"
+    assert graph.paged_params == [(url, None)]
+
+
+def test_a_known_chat_keeps_its_name_when_its_members_cannot_be_read(tmp_path):
+    chat, graph = _chat_fixture(danach=[_msg("Alice Example", "dritte", "2025-06-03T08:00:00Z")])
+    state = te.load_state(tmp_path)
+    te.export_one_chat(graph, tmp_path, state, "me", chat)
+    rel = state["conversations"]["c1"]["rel"]
+    del chat["members"]                          # the listing no longer expands them
+    graph.pages[f"{GRAPH}/me/chats/c1/members"] = _http_error(400)
+    status, _, title, _, _, _z = te.export_one_chat(graph, tmp_path, state, "me", chat)
+    assert status == "updated" and title == "Alice Example"
+    assert state["conversations"]["c1"]["rel"] == rel and (tmp_path / rel).exists()
+
+
+# --------------------------------------------------------------------------
+# Export and index together: one new message is one new embedding
+# --------------------------------------------------------------------------
+def _embed_counter(monkeypatch):
+    import rag_index
+    embedded = []
+
+    def fake_embed(texts, model, url, timeout=600):
+        embedded.extend(texts)
+        return [[(hash(t) % 97 + 1) / 97.0] * 8 for t in texts]
+    monkeypatch.setattr(rag_index, "embed", fake_embed)
+    return embedded
+
+
+def _index(tmp_path):
+    import rag_index
+    empty = tmp_path / "outlook_export"
+    empty.mkdir(exist_ok=True)
+    return rag_index.build_index(str(tmp_path / "teams_export"), str(empty),
+                                 str(tmp_path / "store"), "test", "http://ollama.test")
+
+
+@pytest.mark.parametrize("members_readable", [True, False])
+def test_one_new_message_costs_one_embedding(tmp_path, monkeypatch, members_readable):
+    """A run that brings one message must embed one message. The index
+    matches every chunk by the hash of its title and text, so anything
+    that changes a conversation's name between two runs – a member list
+    Graph refuses, a fallback name – makes every message of it new: in
+    14.0.2 that re-embedded some 8 000 messages of three chats for 24 new
+    ones."""
+    out = tmp_path / "teams_export"
+    out.mkdir()
+    embedded = _embed_counter(monkeypatch)
+    long = "Der Bericht zum Quartal ist fertig und liegt im geteilten Ordner bereit."
+    chat, graph = _chat_fixture(danach=[_msg("Alice Example", "Neu: " + long, "2025-06-03T08:00:00Z")])
+    graph.pages[f"{GRAPH}/me/chats/c1/messages"] = [
+        _msg("Alice Example", "Erste Nachricht. " + long, "2025-06-01T09:30:00Z"),
+        _msg("Ich", "Zweite Nachricht. " + long, "2025-06-02T08:00:00Z")]
+    state = te.load_state(out)
+    te.export_one_chat(graph, out, state, "me", chat)
+    assert _index(tmp_path)[1] == 2 and len(embedded) == 2
+    # The next run: the chat list no longer expands the members (13.7.2),
+    # so the export asks for them – or, when that is refused, cannot.
+    del chat["members"]
+    graph.pages[f"{GRAPH}/me/chats/c1/members"] = (
+        [{"userId": "me", "displayName": "Ich"}, {"userId": "u2", "displayName": "Alice Example"}]
+        if members_readable else _http_error(400))
+    embedded.clear()
+    status, _f, title, _n, _t, _z = te.export_one_chat(graph, out, state, "me", chat)
+    assert status == "updated" and title == "Alice Example"
+    _n, new, _d = _index(tmp_path)
+    assert new == 1 and embedded == ["Alice Example\nNeu: " + long]

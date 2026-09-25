@@ -653,6 +653,7 @@
   "progress.unit.lists": "lists",
   "progress.unit.conversations": "conversations",
   "progress.unit.embeddings": "embeddings",
+  "progress.unit.users": "accounts",
   "nav.analytics": "Insights",
   "ana.title": "What the archive holds",
   "ana.nav.kpi": "Key figures",
@@ -1969,5 +1970,6 @@
   "org.role.titles_more": "{n} more titles – type more",
   "run.org.managers": "Organization: {asked} people without a manager asked directly, {found} found; {fetched} managers fetched.",
   "run.org.managers_failed": "Organization: managers not asked ({error}) – the next run asks again.",
-  "org.disabled": "disabled"
+  "org.disabled": "disabled",
+  "run.org.managers_refused": "Organization: {n} questions for managers refused ({error}) – the next run asks again."
 }

@@ -222,7 +222,7 @@ DYNAMISCH = (
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks",
                         "pages", "notebooks", "events", "contacts",
-                        "conversations", "lists", "calendars")),
+                        "conversations", "lists", "calendars", "users")),
     # The placeholder in the search field changes with the search type.
     ("search.ph.", ("text", "aehnlich", "ki")),
     # The filter pills say their name until a value is set (11.2).
@@ -323,3 +323,17 @@ def test_seite_traegt_keine_deutschen_reste_bei_fremder_sprache():
     en = i18n.strings("en")
     for k in ("nav.settings", "export.start", "sched.title", "mcp.title"):
         assert en[k] and not re.search(r"[äöüß]", en[k])
+
+
+def test_every_progress_unit_a_script_names_is_translated():
+    """The run window names the unit a step counts (`progress.melde(…,
+    what="users")`) through `progress.unit.<what>`; a unit without a text
+    shows its bare key, as the organization's did in 14.0."""
+    wurzel = Path(__file__).resolve().parents[1]
+    units = set()
+    for datei in wurzel.glob("*.py"):
+        units |= set(re.findall(r"""what=["']([a-z_]+)["']""", datei.read_text(encoding="utf-8")))
+    assert units, "no unit found – the pattern no longer matches"
+    for sprache in ("de", "en", "fr"):
+        fehlt = {u for u in units if f"progress.unit.{u}" not in roh(sprache)}
+        assert not fehlt, f"{sprache}: {sorted(fehlt)}"

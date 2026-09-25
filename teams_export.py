@@ -753,7 +753,9 @@ def chat_title(graph, chat, my_id):
     members = chat.get("members")            # usually already present via $expand
     if not members:
         try:   # fallback: load members separately
-            members = list(graph.paged(f"{GRAPH}/me/chats/{chat['id']}/members", {"$top": PAGE}))
+            # The member listing takes no query options – `$top` there is
+            # answered with a 400, and the chat came back as "Unbekannt".
+            members = list(graph.paged(f"{GRAPH}/me/chats/{chat['id']}/members"))
         except TokenExpired:
             raise
         except Exception:
@@ -1505,8 +1507,13 @@ def export_one_chat(graph, out, state, my_id, chat):
     t0 = time.monotonic()
     key = chat["id"]
     folder = TYPEMAP.get(chat.get("chatType"), "other")
-    title = chat_title(graph, chat, my_id)
     prior = get_record(out, state, key)
+    title = chat_title(graph, chat, my_id)
+    # A chat whose members cannot be read this time keeps the name it has:
+    # a rename to "Unbekannt" moves the file and re-embeds every message
+    # of it, and the next run moves it back.
+    if prior and prior.get("title") and title in ("Unbekannt", chat.get("chatType"), "Chat"):
+        title = prior["title"]
     db = state_db.StateDb(out)
     speicher = Nachrichtenspeicher(db, key)
     lade_chat_nachrichten(graph, key, speicher, _seit_gilt(state, key, speicher),

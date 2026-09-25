@@ -653,6 +653,7 @@
   "progress.unit.lists": "Listen",
   "progress.unit.conversations": "Unterhaltungen",
   "progress.unit.embeddings": "Embeddings",
+  "progress.unit.users": "Konten",
   "nav.analytics": "Insights",
   "ana.title": "Was im Archiv steckt",
   "ana.nav.kpi": "Kennzahlen",
@@ -1969,5 +1970,6 @@
   "org.role.titles_more": "{n} weitere Titel – genauer tippen",
   "run.org.managers": "Organisation: {asked} Personen ohne Führungskraft direkt nachgefragt, {found} gefunden; {fetched} Führungskräfte nachgeladen.",
   "run.org.managers_failed": "Organisation: Führungskräfte nicht nachgefragt ({error}) – der nächste Lauf fragt wieder.",
-  "org.disabled": "deaktiviert"
+  "org.disabled": "deaktiviert",
+  "run.org.managers_refused": "Organisation: {n} Fragen nach Führungskräften abgelehnt ({error}) – der nächste Lauf fragt wieder."
 }
