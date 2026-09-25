@@ -1964,5 +1964,7 @@
   "org.role.nobody": "Nobody holds this title in this version.",
   "org.role.more": "Show {n} more",
   "org.role.contains": "contains “{role}”",
-  "org.under": "under {name}"
+  "org.under": "under {name}",
+  "org.role.all": "Everyone with “{role}” in their title",
+  "org.role.titles_more": "{n} more titles – type more"
 }

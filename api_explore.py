@@ -711,11 +711,13 @@ def org_person(h, p, q, _data):
 
 def org_roles(h, _p, q, _data):
     """Every job title of that version with how many hold it, the most
-    held first; `contains` narrows."""
+    held first; `contains` narrows, and `people` counts everyone holding
+    one of the titles it leaves – whether or not `limit` cut the list."""
     _v, org, _found = _org_version(h, q)
     limit = api.zahl(q, "limit", 500, 1, 5000)
     roles = org.roles(q.get("contains") or "", q.get("department") or "")
-    return api.json({"items": roles[:limit], "total": len(roles), "has_more": len(roles) > limit})
+    return api.json({"items": roles[:limit], "total": len(roles), "has_more": len(roles) > limit,
+                     "people": sum(r["count"] for r in roles)})
 
 
 def org_people(h, _p, q, _data):

@@ -1,28 +1,12 @@
-## New in 14.0.0
+## New in 14.0.1
 
-- **Your organization** – a chip on the Teams card keeps who reports to
-  whom across the tenant, as Teams' profile card shows it, and every change
-  of it becomes a version. It needs `User.Read.All`, which some tenants
-  grant only with an admin's consent.
-- **A fifth way into the archive** – *Organization* walks the tenant from
-  the top down by click, in any version, or lists everyone holding a role.
-- **The org chart for Claude** – Claude can ask for it on any day the
-  archive knows: someone's manager, their team, everyone holding a role.
-- **One item, nothing else** – an item opened from Claude's citation fills
-  the page on its own, with no search around it; *Explore archive* brings
-  the search back as it was.
-- **A link to every item** – the detail copies a link to the item in the
-  version it shows; Claude's citations carry the same, and a later change
-  opens the cited version with a note that it changed since.
-- **The list steps aside on request** – with a hit open, a second click on
-  *List* hides the list and gives the hit the whole width; one more brings
-  it back.
+- **Every role is found** – the *Role* pill of *Organization* now finds a
+  title by any part of it, also one only a single person holds; with text
+  typed, the first row takes everyone whose title contains it.
 
 ## Upgrading
 
-Nothing happens once after this update. Once *Organization* is ticked, the
-next run reads the whole directory – a minute or two on a large tenant –
-and every later run asks only for what changed.
+Nothing happens once after this update; the first run is an ordinary one.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

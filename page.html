@@ -472,6 +472,7 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
 #org-role-list .zeile{justify-content:space-between;padding:4px 6px;border-radius:6px;margin:0;gap:12px}
 #org-role-list .zeile:hover,#org-role-list .zeile.on{background:var(--code)}
 #org-role-list .zeile span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#org-role-list .org-role-all{font-weight:600;border-bottom:1px solid var(--line);border-radius:6px 6px 0 0;margin-bottom:4px}
 .org-versions .zeile{justify-content:space-between;padding:4px 6px;border-radius:6px;margin:0}
 .org-versions .zeile:hover{background:var(--code)}
 #org-changes details{margin-top:4px}
@@ -7340,7 +7341,7 @@ function kalenderSuchen(){
    cards it touched carry a mark. The view searches nothing – the
    hand-over names the person to Search. */
 var ORG = {version: null, versions: [], top: null, person: null, name: null, marks: {}, open: false,
-           role: null, exact: false, roles: null, rolesOpen: false, shown: 0,
+           role: null, exact: false, rolesOpen: false,
            // Every step the view takes counts up; an answer that arrives
            // after a later step was taken draws nothing – a click is never
            // overtaken by a slower answer to an earlier one.
@@ -7358,7 +7359,7 @@ function orgLoad(){
 }
 
 function orgEmpty(){
-  ORG.top = null; ORG.person = null; ORG.name = null; ORG.roles = null;
+  ORG.top = null; ORG.person = null; ORG.name = null;
   orgRoleSet(null);
   el('org-version').textContent = t('org.version.none');
   el('org-version').disabled = true;
@@ -7389,7 +7390,6 @@ function orgVersion(sha, keep){
     el('org-stats').textContent = t('org.stats', {n: zahl(r[0].people)});
     orgChanges((r[1] && r[1].items) || [], r[1] && r[1].from);
     orgButtons();
-    ORG.roles = null;
     if(seq !== ORG.seq) return;
     if(ORG.role) orgRoleShow(0);
     else if(keep) orgOpen(keep, true); else orgHome();
@@ -7527,10 +7527,8 @@ function orgRolesToggle(){
   ORG.rolesOpen = true;
   el('org-roles').classList.remove('hide');
   el('org-role-pill').classList.add('offen');
-  var load = ORG.roles ? Promise.resolve(ORG.roles)
-    : api(API + '/organization/roles' + orgQuery()).then(function(r){
-        ORG.roles = (r && r.items) || []; return ORG.roles; });
-  load.then(function(){ orgRolesFilter(); try{ el('org-role-q').focus(); }catch(e){} }).catch(function(){});
+  orgRolesFilter(true);
+  try{ el('org-role-q').focus(); }catch(e){}
 }
 function orgRolesClose(){
   ORG.rolesOpen = false;
@@ -7542,14 +7540,31 @@ document.addEventListener('click', function(ev){
   while(k){ if(k.id === 'org-role-pill') return; k = k.parentElement; }
   if(ORG.rolesOpen) orgRolesClose();
 });
-function orgRolesFilter(){
-  var q = String(el('org-role-q').value || '').toLowerCase();
-  var rows = (ORG.roles || []).filter(function(r){ return !q || r.title.toLowerCase().indexOf(q) >= 0; });
-  el('org-role-list').innerHTML = rows.slice(0, 200).map(function(r){
-    return '<div class="zeile' + (ORG.exact && r.title === ORG.role ? ' on' : '') + '" onclick="orgRolePick(' +
-      esc(JSON.stringify(r.title)) + ', true)"><span>' + esc(r.title) + '</span><span class="num muted">' +
-      esc(zahl(r.count)) + '</span></div>';
-  }).join('') || '<p class="hint">' + esc(t('org.role.none')) + '</p>';
+/* The titles are asked for as they are typed: a tenant knows thousands,
+   most held by one person, and a list cut at the most held ones would
+   never show them. With text, the first row takes every title containing
+   it – "Lead" is everyone with Lead in their title. */
+var ORG_ROLE_ROWS = 200, orgRoleTimer = null, orgRoleAsked = 0;
+function orgRolesFilter(now){
+  clearTimeout(orgRoleTimer);
+  orgRoleTimer = setTimeout(orgRolesFetch, now === true ? 0 : 200);
+}
+function orgRolesFetch(){
+  var q = String(el('org-role-q').value || '').trim(), asked = ++orgRoleAsked;
+  api(API + '/organization/roles' + orgQuery() + '&limit=' + ORG_ROLE_ROWS +
+      (q ? '&contains=' + encodeURIComponent(q) : '')).then(function(r){
+    if(asked !== orgRoleAsked || !r || r.ok === false) return;
+    var rows = (r.items || []).map(function(x){
+      return '<div class="zeile' + (ORG.exact && x.title === ORG.role ? ' on' : '') + '" onclick="orgRolePick(' +
+        esc(JSON.stringify(x.title)) + ', true)"><span>' + esc(x.title) + '</span><span class="num muted">' +
+        esc(zahl(x.count)) + '</span></div>';
+    }).join('');
+    var all = q && r.total ? '<div class="zeile org-role-all' + (!ORG.exact && ORG.role === q ? ' on' : '') +
+      '" onclick="orgRolePick(' + esc(JSON.stringify(q)) + ', false)"><span>' +
+      esc(t('org.role.all', {role: q})) + '</span><span class="num muted">' + esc(zahl(r.people)) + '</span></div>' : '';
+    var more = r.has_more ? '<p class="hint">' + esc(t('org.role.titles_more', {n: zahl(r.total - r.items.length)})) + '</p>' : '';
+    el('org-role-list').innerHTML = (all + rows + more) || '<p class="hint">' + esc(t('org.role.none')) + '</p>';
+  }).catch(function(){});
 }
 function orgRoleKey(ev){
   if(ev.key === 'Escape'){ orgRolesClose(); return; }

@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.0.0
+  version: 14.0.1
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2634,7 +2634,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, total, has_more]
+                required: [items, total, has_more, people]
                 properties:
                   items:
                     type: array
@@ -2646,10 +2646,12 @@ paths:
                         count: { type: integer }
                   total: { type: integer, description: "How many titles match in all." }
                   has_more: { type: boolean }
+                  people: { type: integer, description: "How many people hold one of the matching titles – all of them, whatever `limit` cut." }
               example:
                 items: [{ title: Consultant, count: 12 }, { title: Head of Projects, count: 1 }]
                 total: 2
                 has_more: false
+                people: 13
         "400":
           description: A version or a limit that could be none (srv.badparam).
           content:

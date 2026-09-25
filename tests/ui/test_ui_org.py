@@ -109,3 +109,21 @@ def test_a_role_shows_everyone_holding_it(archive_page, archive):
     box.locator(".org-grid .org-card", has_text=name("org-bob")).click()
     expect(box.locator(".org-card.main")).to_contain_text(name("org-bob"))
     expect(archive_page.locator("#org-role-x")).to_be_hidden()
+
+
+def test_typing_part_of_a_title_finds_it_and_everyone_holding_it(archive_page, archive):
+    """The titles are asked for as they are typed, not cut from a list of
+    the most held – a title held once is found by any part of it, and the
+    first row takes every title containing the text."""
+    box = open_org(archive_page, archive)
+    archive_page.click("#org-role-pill")
+    with archive_page.expect_response(lambda r: "contains=lead" in r.url):
+        archive_page.fill("#org-role-q", "lead")
+    leads = [u for u in USERS.values() if "lead" in u["jobTitle"].lower()
+             and u["id"] not in sources.ORG_LEFT_OUT]
+    rows = archive_page.locator("#org-role-list .zeile")
+    expect(rows.first).to_contain_text(EN["org.role.all"].format(role="lead"))
+    expect(rows.first).to_contain_text(str(len(leads)))
+    expect(rows).to_have_count(1 + len({u["jobTitle"] for u in leads}))
+    rows.first.click()
+    expect(box.locator(".org-grid .org-card")).to_have_count(len(leads))

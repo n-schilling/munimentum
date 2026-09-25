@@ -1964,5 +1964,7 @@
   "org.role.nobody": "Personne ne porte ce titre dans cette version.",
   "org.role.more": "Afficher {n} de plus",
   "org.role.contains": "contient « {role} »",
-  "org.under": "sous {name}"
+  "org.under": "sous {name}",
+  "org.role.all": "Tous ceux avec « {role} » dans leur titre",
+  "org.role.titles_more": "{n} titres de plus – précisez"
 }

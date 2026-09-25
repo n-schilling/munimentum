@@ -405,6 +405,11 @@ def test_the_role_routes(served):
     assert r["total"] == len(r["items"]) and r["has_more"] is False
     code, r = call(port, "GET", "/api/v1/organization/roles?contains=head&limit=2")
     assert code == 200 and len(r["items"]) == 2 and r["total"] == 3 and r["has_more"]
+    assert r["people"] == 3, "everyone holding a matching title, whatever the limit cut"
+    # A title held once is found by any part of it, however many titles
+    # are held more often.
+    code, r = call(port, "GET", "/api/v1/organization/roles?contains=desk%20le&limit=1")
+    assert code == 200 and r["items"] == [{"title": "Service Desk Lead", "count": 1}]
     code, r = call(port, "GET", "/api/v1/organization/people?role=specialist&limit=10")
     assert code == 200 and r["total"] == len(_specialists()) and len(r["items"]) == 10 and r["has_more"]
     assert all(p["manager"] for p in r["items"])
