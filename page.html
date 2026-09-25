@@ -453,6 +453,8 @@ details[open].verlauf summary .pfeil svg{transform:rotate(90deg)}
 .org-card{display:flex;gap:14px;align-items:center;border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--card);cursor:pointer;min-width:0;position:relative}
 .org-card:hover,.org-card:focus-visible{border-color:var(--accent);outline:none}
 .org-card.main{cursor:default;border-color:var(--accent);background:var(--accent-weich);padding:16px 18px;align-items:flex-start}
+.org-card.org-off{border-style:dashed}
+.org-card.org-off .org-text,.org-card.org-off .org-initials{opacity:.6}
 .org-line{width:1px;height:16px;background:var(--line);margin:0 auto}
 .org-initials{width:40px;height:40px;border-radius:50%;background:var(--accent-weich);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:650;font-size:13px;flex:0 0 auto}
 .org-card.main .org-initials{width:56px;height:56px;font-size:18px;background:var(--card)}
@@ -7506,16 +7508,18 @@ function orgCard(c, main){
     if(facts) facts = '<dl class="fakten">' + facts + '</dl>';
   }
   var mark = ORG.marks[c.id];
+  // A disabled account that still holds someone's line, as Teams keeps it.
+  var tag = mark ? t('org.change.' + mark) : c.disabled ? t('org.disabled') : '';
   var count = c.total ? '<span class="org-count" title="' + esc(t('org.count.tip', {direct: zahl(c.reports), total: zahl(c.total)})) +
     '">' + ikon('person', 'klein') + esc(zahl(c.total)) + '</span>' : '';
-  return '<div class="org-card' + (main ? ' main' : '') + '"' +
+  return '<div class="org-card' + (main ? ' main' : '') + (c.disabled ? ' org-off' : '') + '"' +
     (main ? '' : ' role="button" tabindex="0" onclick="orgOpen(' + esc(JSON.stringify(c.id)) + ')"') + '>' +
     '<span class="org-initials">' + esc(orgInitials(c.name)) + '</span>' +
     '<span class="org-text"><b>' + esc(c.name) + '</b>' +
     (c.title ? '<span class="sub">' + esc(c.title) + '</span>' : '') +
     (c.department ? '<span class="sub">' + esc(c.department) + '</span>' : '') +
     (c.manager ? '<span class="sub">' + esc(t('org.under', {name: c.manager})) + '</span>' : '') + facts + '</span>' +
-    count + (mark ? '<span class="tag">' + esc(t('org.change.' + mark)) + '</span>' : '') + '</div>';
+    count + (tag ? '<span class="tag">' + esc(tag) + '</span>' : '') + '</div>';
 }
 
 /* Everyone holding a role. The titles come once per version; the field

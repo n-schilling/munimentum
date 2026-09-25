@@ -1226,9 +1226,11 @@ def _user(uid, name, title, department, manager=None, **extra):
             "accountEnabled": True, "userType": "Member", "manager": manager, **extra}
 
 
-# The story: Carla leads Nordwind; Alice runs the project under Bob. The
-# three at the end are what the export leaves out – a disabled account, a
-# guest, a service account with no place in the tree.
+# The story: Carla leads Nordwind; Alice runs the project under Bob. Petra
+# has left, but Hanno still reports to her: her disabled account holds his
+# line, as Teams shows it. The three at the end are what the export leaves
+# out – a disabled account nobody reports to, a guest, a service account
+# with no place in the tree.
 ORG_ME = "org-alice"
 ORG_STORY = [
     _user("org-carla", CARLA[0], "Managing Director", "Executive"),
@@ -1240,13 +1242,16 @@ ORG_STORY = [
     _user("org-frida", "Frida Finanz", "Head of Finance", "Finance", "org-carla"),
     _user("org-ines", "Ines Innendienst", "Sales Assistant", "Finance", "org-frida"),
     _user("org-malte", "Malte Marketing", "Head of Marketing", "Marketing", "org-carla"),
-    _user("org-hanno", "Hanno Helpdesk", "Service Desk Lead", "Marketing", "org-malte"),
+    _user("org-petra", "Petra Pause", "Head of Service", "Marketing", "org-malte",
+          accountEnabled=False),
+    _user("org-hanno", "Hanno Helpdesk", "Service Desk Lead", "Marketing", "org-petra"),
     _user("org-olaf", "Olaf Organisation", "Office Manager", "Executive", "org-carla",
           accountEnabled=False),
     _user("org-greta", GRETA[0], "Consultant", "", "org-bob", userType="Guest"),
     _user("org-scanner", "Scanner Service", "", ""),
 ]
 ORG_LEFT_OUT = ("org-olaf", "org-greta", "org-scanner")
+ORG_LINKS = ("org-petra",)          # disabled, kept for the line, counted as nobody
 ORG_TOP = "org-carla"
 
 

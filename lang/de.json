@@ -1966,5 +1966,8 @@
   "org.role.contains": "enthält „{role}“",
   "org.under": "unter {name}",
   "org.role.all": "Alle mit „{role}“ im Titel",
-  "org.role.titles_more": "{n} weitere Titel – genauer tippen"
+  "org.role.titles_more": "{n} weitere Titel – genauer tippen",
+  "run.org.managers": "Organisation: {asked} Personen ohne Führungskraft direkt nachgefragt, {found} gefunden; {fetched} Führungskräfte nachgeladen.",
+  "run.org.managers_failed": "Organisation: Führungskräfte nicht nachgefragt ({error}) – der nächste Lauf fragt wieder.",
+  "org.disabled": "deaktiviert"
 }

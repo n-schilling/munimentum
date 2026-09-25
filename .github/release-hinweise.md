@@ -1,12 +1,14 @@
-## New in 14.0.1
+## New in 14.0.2
 
-- **Every role is found** – the *Role* pill of *Organization* now finds a
-  title by any part of it, also one only a single person holds; with text
-  typed, the first row takes everyone whose title contains it.
+- **The whole line, as Teams shows it** – a manager whose account is off
+  now stays in the line of the people below, marked *disabled* and counted
+  as nobody; they no longer stand at the top. A member the directory feed
+  names without a manager is asked for one directly.
 
 ## Upgrading
 
-Nothing happens once after this update; the first run is an ordinary one.
+The next run that syncs *Organization* rebuilds it once with the lines
+above: a new version whose changes list who moved back under a manager.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

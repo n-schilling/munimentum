@@ -6,6 +6,7 @@ organization has an earlier version (testdata/history.py)."""
 import json
 import shutil
 import threading
+import time
 
 import pytest
 
@@ -42,13 +43,36 @@ def test_only_enabled_members_with_a_place_in_the_tree_are_kept():
         _user("top", "Carla Chef"), _user("bob", "Bob Baumeister", "top"),
         _user("gone", "Olaf Organisation", "top", accountEnabled=False),
         _user("guest", "Greta Gast", "bob", userType="Guest"),
-        _user("svc", "Scanner Service"),
-        _user("orphan", "Dana Dienstleister", "gone"))}
+        _user("svc", "Scanner Service"))}
     org = organization.build(users, me="bob")
     assert [p["id"] for p in org["people"]] == ["bob", "top"]
     assert org["me"] == "bob"
-    # A report whose manager is out stands alone – and alone, out as well.
-    assert "orphan" not in {p["id"] for p in org["people"]}
+
+
+def test_a_disabled_manager_keeps_the_line_together():
+    """Seen on a real tenant: a manager who had left was out of the file,
+    and everyone below stood at the top – Teams shows them in their line.
+    The disabled manager stays as a link, marked and counted as nobody."""
+    users = {u["id"]: u for u in (
+        _user("top", "Carla Chef"),
+        _user("gone", "Adam Abwesend", "top", accountEnabled=False),
+        _user("a", "Alice", "gone"), _user("b", "Bob", "a"),
+        _user("idle", "Olaf Organisation", "top", accountEnabled=False))}
+    built = organization.build(users)
+    assert {p["id"] for p in built["people"]} == {"top", "gone", "a", "b"}, \
+        "a disabled account nobody hangs on stays out"
+    org = organization.Org(built)
+    assert org.roots() == ["top"] and org.chain("b") == ["top", "gone", "a"]
+    assert org.card("gone")["disabled"] is True and org.total["top"] == 2
+    assert org.active == 3
+    assert organization.changes(org, org) == []
+    # Adam's account coming back is someone joining; Alice's leaving too.
+    users["gone"]["accountEnabled"] = True
+    users["a"]["accountEnabled"] = False
+    later = organization.Org(organization.build(users))
+    kinds = {(c["kind"], c["id"]) for c in organization.changes(org, later)}
+    assert kinds == {("joined", "gone"), ("left", "a")}
+    assert later.card("a")["disabled"] is True, "Alice now holds Bob's line"
 
 
 def test_the_text_is_canonical_one_person_a_line():
@@ -118,6 +142,18 @@ class _Graph:
     def __init__(self, answers, me="a"):
         self.answers = {"/me?": {"id": me}, **answers}
         self.calls, self.heads = [], []
+
+    def batch_get(self, urls, extra_headers=None, parallel=1):
+        """Direct questions: an answer whose fragment the URL holds, else
+        404 – nobody above."""
+        self.batched = getattr(self, "batched", []) + list(urls)
+        out = {}
+        for url in urls:
+            hit = next((a for f, a in self.answers.items() if f in url and "/manager?" in f
+                        or f in url and f.startswith("/users/") and "/manager" not in f
+                        and "delta" not in f), None)
+            out[url] = (200, hit) if hit is not None else (404, {"error": {"code": "Request_ResourceNotFound"}})
+        return out
 
     def get(self, url, params=None, extra_headers=None):
         self.calls.append(url)
@@ -268,7 +304,7 @@ def test_the_versions_and_the_top(served):
     code, top = call(port, "GET", "/api/v1/organization")
     assert code == 200 and top["me"] == sources.ORG_ME
     assert [c["id"] for c in top["roots"]] == [sources.ORG_TOP]
-    assert top["people"] == len(sources.ORG_USERS) - len(sources.ORG_LEFT_OUT)
+    assert top["people"] == len(sources.ORG_USERS) - len(sources.ORG_LEFT_OUT) - len(sources.ORG_LINKS)
     assert top["roots"][0]["total"] == top["people"] - 1
 
 
@@ -443,3 +479,48 @@ def test_mcp_manager_team_role_and_roles(mcp_state):
     roles = mcp_server.list_roles(contains="lead")
     assert {r["title"] for r in roles["roles"]} == {"Project Lead", "Service Desk Lead"}
     assert mcp_server.list_roles(limit=1)["note"]
+
+
+def test_a_manager_the_feed_left_out_is_asked_for_directly(tmp_path, capsys):
+    """Seen on a real tenant: users/delta named no manager for dozens of
+    people Teams shows in a proper line, and they stood at the top. Who is
+    left without one is asked directly; a manager nobody described comes
+    along; a 404 is kept for a week before the question comes again."""
+    feed = {"/users/delta?$select=": {
+        "value": [_fed("c", "Carla"), _fed("b", "Bob", "c"), _fed("a", "Alice")],
+        "@odata.deltaLink": LINK1},
+        "/users/a/manager?": {"id": "x", "displayName": "Xaver", "accountEnabled": True,
+                              "userType": "Member"},
+        "/users/x?": {"id": "x", "displayName": "Xaver", "accountEnabled": True},
+        "/users/x/manager?": {"id": "c"}}
+    g = _Graph(feed)
+    assert org_export.run(g, tmp_path)[2] == 0
+    people = {p["id"]: p for p in _file(tmp_path)["people"]}
+    assert people["a"]["manager"] == "x", "asked directly"
+    assert people["x"]["manager"] == "c", "the manager nobody described came along, with his own"
+    assert any("/users/c/manager" in u for u in g.batched), "the top is asked too"
+    events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
+    assert any(e["k"] == "run.org.managers" and e["v"]["found"] == 2 for e in events)
+    # Carla's 404 holds for a week: the next round does not ask her again.
+    g2 = _Graph({"deltatoken=abc": {"value": [], "@odata.deltaLink": LINK1}})
+    org_export.run(g2, tmp_path)
+    assert not getattr(g2, "batched", [])
+    later = time.time() + org_export.RECHECK_S + 1
+    users = {"c": {**_user("c", "Carla"), "manager": None, "manager_checked": 1.0}}
+    g3 = _Graph({})
+    org_export.settle_managers(g3, users, now=later)
+    assert g3.batched and "/users/c/manager" in g3.batched[0]
+
+
+def test_the_archive_keeps_a_departed_managers_line(served):
+    """Hanno reports to Petra, whose account is off: he stands in his line
+    under her, not at the top, and she is marked and counted as nobody."""
+    port, _home = served
+    code, r = call(port, "GET", "/api/v1/organization/people/org-hanno")
+    assert code == 200
+    assert [c["id"] for c in r["chain"]] == [sources.ORG_TOP, "org-malte", "org-petra"]
+    assert r["chain"][2]["disabled"] is True and "disabled" not in r["chain"][1]
+    _c, top = call(port, "GET", "/api/v1/organization")
+    assert [c["id"] for c in top["roots"]] == [sources.ORG_TOP]
+    _c, roles = call(port, "GET", "/api/v1/organization/roles?contains=head%20of%20service")
+    assert roles["items"] == [], "a disabled account holds no role"

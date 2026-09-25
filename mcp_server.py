@@ -2569,7 +2569,7 @@ def _org_at(as_of):
     org = archive.org(v)
     if org is None:
         return {"error": "That version of the organization is no longer here."}, None
-    return {"as_of": v.get("captured"), "version": v["sha256"][:16], "people": len(org.people),
+    return {"as_of": v.get("captured"), "version": v["sha256"][:16], "people": org.active,
             "versions_in_archive": len(found)}, org
 
 

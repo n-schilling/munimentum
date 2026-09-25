@@ -691,7 +691,7 @@ def org_top(h, _p, q, _data):
     """One version of the organization from above: the people at the top,
     the largest part first, how many it holds, and who the account is."""
     v, org, _found = _org_version(h, q)
-    return api.json({"version": _org_stamp(v), "people": len(org.people),
+    return api.json({"version": _org_stamp(v), "people": org.active,
                      "me": org.me if org.me in org.people else None,
                      "roots": [org.card(pid) for pid in org.roots()]})
 

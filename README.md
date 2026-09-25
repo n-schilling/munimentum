@@ -61,7 +61,7 @@ because any one source can mean tens of thousands of items.
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
-| **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it, kept as one file whose every change is a version; needs `User.Read.All`, which some tenants grant only with an admin's consent |
+| **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it – a manager who left kept in the line – kept as one file whose every change is a version; needs `User.Read.All`, which some tenants grant only with an admin's consent |
 
 Every run asks Microsoft only for what changed, chats newest first and mail
 folders in bundles, and counts only that as new. Deleted items stay in the

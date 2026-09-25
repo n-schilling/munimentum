@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.0.1
+  version: 14.0.2
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -4688,6 +4688,7 @@ components:
         department: { type: [string, "null"] }
         reports: { type: integer, description: "How many report to this person directly." }
         total: { type: integer, description: "How many are below this person in all." }
+        disabled: { type: boolean, description: "Present and true for an account that is off but still holds someone's line; counted as nobody." }
     EvidenceSummary:
       type: object
       required: [lines]

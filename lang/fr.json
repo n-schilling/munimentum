@@ -1966,5 +1966,8 @@
   "org.role.contains": "contient « {role} »",
   "org.under": "sous {name}",
   "org.role.all": "Tous ceux avec « {role} » dans leur titre",
-  "org.role.titles_more": "{n} titres de plus – précisez"
+  "org.role.titles_more": "{n} titres de plus – précisez",
+  "run.org.managers": "Organisation : {asked} personnes sans responsable interrogées directement, {found} trouvés ; {fetched} responsables récupérés.",
+  "run.org.managers_failed": "Organisation : responsables non interrogés ({error}) – la prochaine exécution redemande.",
+  "org.disabled": "désactivé"
 }

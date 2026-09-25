@@ -7,7 +7,9 @@ feed (`/users/delta`, `$select` with `manager`): the first round brings
 the whole tenant – measured on one with about 15 000 accounts, some 170
 users a page at a good second each, so a minute or two – every later
 round only who changed since the stored deltaLink, which takes seconds.
-The raw users live in the folder's state.db (area "users"); from them the
+Managers the feed does not name are asked for directly afterwards
+(settle_managers). The raw users live in the folder's state.db (area
+"users"); from them the
 organization is built (organization.build) and written as ONE file,
 `organization.json`, through versions.py – a run that changed nothing in
 it writes nothing, a run that did leaves the earlier organization behind
@@ -132,6 +134,80 @@ def _first_url():
 
 
 # ---------------------------------------------------------------------------
+# Managers the feed did not name
+# ---------------------------------------------------------------------------
+# The delta feed does not name every manager: on a real tenant (about 5 000
+# people) dozens of colleagues whom Teams shows in a proper line came
+# without one and stood at the top. Whoever is left without a manager is
+# therefore asked once more, directly (`/users/{id}/manager`, twenty to a
+# $batch); a 404 there is the answer "nobody above", kept for a week before
+# it is asked again. A manager the feed never named as a user is fetched
+# the same way, so the line above does not end at a stranger.
+RECHECK_S = 7 * 86400
+_USER_FIELDS = organization.SELECT.replace(",manager", "")
+
+
+def settle_managers(graph, users, now=None, rounds=12):
+    """Ask Graph directly for the manager of every member the feed left
+    without one (unless asked within RECHECK_S), and for every manager the
+    feed named but never described – round after round, since a manager
+    found that way may lack one too. Changes `users` in place; returns 1
+    when a question failed (that person is asked again next run), else 0."""
+    now = time.time() if now is None else now
+    total = {"asked": 0, "found": 0, "fetched": 0}
+    failed, tried = 0, set()
+    for _ in range(rounds):
+        # Every member without a manager – a disabled one too once someone
+        # reports to them, since they may still hold a line together.
+        bosses = {u["manager"] for u in users.values() if u.get("manager")}
+        asked = {uid: f"{GRAPH}/users/{uid}/manager?$select={_USER_FIELDS}"
+                 for uid, u in users.items()
+                 if organization.person_of(u, links=uid in bosses) is not None
+                 and not u.get("manager")
+                 and now - float(u.get("manager_checked") or 0) >= RECHECK_S}
+        unknown = {u["manager"] for u in users.values()
+                   if u.get("manager") and u["manager"] not in users} - tried
+        tried |= unknown
+        fetched = {mid: f"{GRAPH}/users/{mid}?$select={_USER_FIELDS}" for mid in unknown}
+        if not asked and not fetched:
+            break
+        try:
+            answers = graph.batch_get(list(asked.values()) + list(fetched.values()))
+        except auth.TokenExpired:
+            raise
+        except Exception as e:                      # noqa: BLE001 – next run asks again
+            progress.event("run.org.managers_failed", "warn", error=export_util.fehlertext(e)[:200])
+            return 1
+        for uid, url in asked.items():
+            status, body = answers.get(url, (0, None))
+            if status == 200 and isinstance(body, dict) and body.get("id"):
+                boss = body["id"]
+                users[uid]["manager"] = boss
+                if boss not in users:
+                    users[boss] = {"id": boss, **{k: v for k, v in body.items() if k in _KEPT}}
+                total["found"] += 1
+            else:
+                # A 404 says "nobody above" for a week; anything else is
+                # asked again on the next run – but not again in this one.
+                users[uid]["manager_checked"] = now if status == 404 else now - RECHECK_S + 1
+                failed += status != 404
+        for mid, url in fetched.items():
+            status, body = answers.get(url, (0, None))
+            if status == 200 and isinstance(body, dict):
+                users.setdefault(mid, {"id": mid}).update(
+                    {k: v for k, v in body.items() if k in _KEPT})
+            elif status in (403, 404):
+                # Not to be described (gone, or a contact): the line ends here.
+                users.setdefault(mid, {"id": mid, "userType": "Unknown"})
+            else:
+                failed += 1
+        total["asked"] += len(asked)
+        total["fetched"] += len(fetched)
+    progress.event("run.org.managers", **total)
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
 def _load(db):
@@ -202,6 +278,7 @@ def run(graph, out):
         progress.event("run.org.failed", "err", error=export_util.fehlertext(e)[:300])
         progress.ergebnis(0, errors=1)
         return 0, 0, 1
+    errors = settle_managers(graph, users)
     _store(db, users, before, new_link, whole)
     if me:
         db.kv_schreiben("me", me)
@@ -218,13 +295,13 @@ def run(graph, out):
             earlier = None
         # What changed, by person; the first version counts everyone in it.
         n = len(organization.changes(earlier, organization.Org(org))) if earlier \
-            else len(org["people"])
+            else sum(1 for p in org["people"] if not p.get("disabled"))
         n = max(n, 1)
         export_util.schreibe_atomar(path, text)
-    progress.event("run.org.done", n=len(org["people"]), users=seen, changes=n)
-    progress.ergebnis(n, unchanged=len(org["people"]) - min(n, len(org["people"])),
-                      extra={"people": len(org["people"])})
-    return n, len(org["people"]), 0
+    count = sum(1 for p in org["people"] if not p.get("disabled"))
+    progress.event("run.org.done", n=count, users=seen, changes=n)
+    progress.ergebnis(n, unchanged=max(0, count - n), errors=errors, extra={"people": count})
+    return n, count, errors
 
 
 def main():

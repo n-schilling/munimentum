@@ -1966,5 +1966,8 @@
   "org.role.contains": "contains “{role}”",
   "org.under": "under {name}",
   "org.role.all": "Everyone with “{role}” in their title",
-  "org.role.titles_more": "{n} more titles – type more"
+  "org.role.titles_more": "{n} more titles – type more",
+  "run.org.managers": "Organization: {asked} people without a manager asked directly, {found} found; {fetched} managers fetched.",
+  "run.org.managers_failed": "Organization: managers not asked ({error}) – the next run asks again.",
+  "org.disabled": "disabled"
 }

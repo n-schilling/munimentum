@@ -20,11 +20,14 @@ the same bytes, which is what lets "changed" mean changed.
     ]}
 
 Who is in it: enabled member accounts, narrowed by the rules of the
-settings (`org_rules`, over each person's path of names from the top), that have a place in the tree – a
-manager among them, or someone reporting to them. Disabled accounts
-(which is also what shared and resource mailboxes are), guests, and
-accounts standing alone (service accounts, rooms) stay out; a manager
-outside the file leaves their reports at the top.
+settings (`org_rules`, over each person's path of names from the top),
+that have a place in the tree – a manager among them, or someone
+reporting to them. Guests and accounts standing alone (service accounts,
+rooms) stay out, and so do disabled accounts (which is also what shared
+and resource mailboxes are) – except where one still stands in someone's
+line: a manager who left keeps the line together as Teams shows it, with
+`"disabled": true`, counted as nobody. Without that, everyone below such
+a manager stood at the top of the tree.
 
 The reading side (`Org`) answers what the view asks: the top, one person
 with the chain above and the reports below, and what changed between
@@ -53,12 +56,14 @@ COMPARED = tuple(f for _, f in FIELDS)
 # ---------------------------------------------------------------------------
 # Writing: Graph's users -> the canonical text
 # ---------------------------------------------------------------------------
-def person_of(user):
+def person_of(user, links=False):
     """One directory user as the file keeps them, or None when the account
-    does not belong to the organization (disabled, a guest)."""
-    if user.get("accountEnabled") is False:
-        return None
+    does not belong to the organization (a guest; a disabled account,
+    unless `links` – then it comes marked, for the line it may hold)."""
     if (user.get("userType") or "Member") != "Member":
+        return None
+    disabled = user.get("accountEnabled") is False
+    if disabled and not links:
         return None
     p = {"id": user["id"]}
     for graph, field in FIELDS:
@@ -67,6 +72,8 @@ def person_of(user):
             p[field] = value
     if user.get("manager"):
         p["manager"] = user["manager"]
+    if disabled:
+        p["disabled"] = True
     return p
 
 
@@ -77,25 +84,34 @@ def build(users, me=None, rules=None):
     the last matching one wins) narrow it over each person's path – the
     names from the top down to them, "Greta Gast/Bob Baumeister": a rule
     ending in `/**` takes or leaves a whole part of the tree."""
-    people = {}
+    cand = {}
     for user in users.values():
-        p = person_of(user)
+        p = person_of(user, links=True)
         if p is not None:
-            people[p["id"]] = p
-    for p in people.values():
-        if p.get("manager") not in people or p.get("manager") == p["id"]:
+            cand[p["id"]] = p
+    for p in cand.values():
+        if p.get("manager") not in cand or p.get("manager") == p["id"]:
             p.pop("manager", None)
+    active = {pid for pid, p in cand.items() if not p.get("disabled")}
     if rules:
-        tree = Org({"people": list(people.values())})
-        drop = {pid for pid in people
-                if not folders.gilt(path_of(tree, pid), rules)}
-        people = {pid: p for pid, p in people.items() if pid not in drop}
-        for p in people.values():
-            if p.get("manager") in drop:
-                p.pop("manager")
+        tree = Org({"people": list(cand.values())})
+        active = {pid for pid in active if folders.gilt(path_of(tree, pid), rules)}
+    # The disabled accounts that still stand in the line of someone kept.
+    links = set()
+    for pid in active:
+        seen, boss = {pid}, cand[pid].get("manager")
+        while boss and boss not in seen and boss not in active:
+            seen.add(boss)
+            if cand[boss].get("disabled"):
+                links.add(boss)
+            boss = cand[boss].get("manager")
+    people = {pid: cand[pid] for pid in active | links}
+    for p in people.values():
+        if p.get("manager") not in people:
+            p.pop("manager", None)
     managers = {p["manager"] for p in people.values() if p.get("manager")}
     kept = [p for p in people.values() if p.get("manager") or p["id"] in managers]
-    return {"format": FORMAT, "me": me if me in people else None,
+    return {"format": FORMAT, "me": me if me in active else None,
             "people": sorted(kept, key=lambda p: p["id"])}
 
 
@@ -107,7 +123,7 @@ def path_of(org, pid):
 
 def text_of(org):
     """The canonical bytes: one person per line, keys in a fixed order."""
-    order = ["id"] + [f for _, f in FIELDS] + ["manager"]
+    order = ["id"] + [f for _, f in FIELDS] + ["manager", "disabled"]
     lines = [json.dumps({k: p[k] for k in order if k in p}, ensure_ascii=False,
                         separators=(",", ":")) for p in org["people"]]
     head = json.dumps({"format": org.get("format", FORMAT), "me": org.get("me")})[:-1]
@@ -124,6 +140,8 @@ class Org:
         data = json.loads(raw) if isinstance(raw, (bytes, str)) else raw
         self.me = data.get("me")
         self.people = {p["id"]: p for p in data.get("people") or [] if p.get("id")}
+        self.disabled = {pid for pid, p in self.people.items() if p.get("disabled")}
+        self.active = len(self.people) - len(self.disabled)
         self.parent = {pid: p.get("manager") for pid, p in self.people.items()
                        if p.get("manager") in self.people and p.get("manager") != pid}
         self._cut_circles()
@@ -159,7 +177,7 @@ class Org:
             stack.extend(self.reports.get(pid, ()))
         total = {}
         for pid in reversed(order):
-            total[pid] = sum(1 + total[c] for c in self.reports.get(pid, ()))
+            total[pid] = sum((c not in self.disabled) + total[c] for c in self.reports.get(pid, ()))
         return total
 
     def manager(self, pid):
@@ -183,9 +201,12 @@ class Org:
     def card(self, pid):
         """A person as a card names them: who, what, and how many below."""
         p = self.people[pid]
-        return {"id": pid, "name": p.get("name") or "", "title": p.get("title"),
-                "department": p.get("department"),
-                "reports": len(self.reports.get(pid, ())), "total": self.total.get(pid, 0)}
+        out = {"id": pid, "name": p.get("name") or "", "title": p.get("title"),
+               "department": p.get("department"),
+               "reports": len(self.reports.get(pid, ())), "total": self.total.get(pid, 0)}
+        if pid in self.disabled:
+            out["disabled"] = True
+        return out
 
     def person(self, pid):
         """One person with everything the file knows of them."""
@@ -201,9 +222,9 @@ class Org:
         held first. `contains` and `department` narrow, case-insensitively."""
         low, dept = str(contains or "").casefold(), str(department or "").casefold()
         count = {}
-        for p in self.people.values():
+        for pid, p in self.people.items():
             title = p.get("title")
-            if not title or low not in title.casefold():
+            if pid in self.disabled or not title or low not in title.casefold():
                 continue
             if dept and dept not in (p.get("department") or "").casefold():
                 continue
@@ -218,7 +239,7 @@ class Org:
         out = []
         for pid, p in self.people.items():
             title = (p.get("title") or "").casefold()
-            if not title or (title != want if exact else want not in title):
+            if pid in self.disabled or not title or (title != want if exact else want not in title):
                 continue
             if dept and dept not in (p.get("department") or "").casefold():
                 continue
@@ -260,9 +281,12 @@ def changes(old, new):
     if old is None:
         return []
     out = []
+    was = {pid for pid in old.people if pid not in old.disabled}
     for pid, p in new.people.items():
+        if pid in new.disabled:
+            continue
         q = old.people.get(pid)
-        if q is None:
+        if pid not in was:
             out.append({"kind": "joined", "id": pid, "name": p.get("name") or "",
                         "title": p.get("title")})
             continue
@@ -273,8 +297,9 @@ def changes(old, new):
         if fields:
             out.append({"kind": "moved" if moved else "changed", "id": pid,
                         "name": p.get("name") or "", "title": p.get("title"), "fields": fields})
-    for pid, q in old.people.items():
-        if pid not in new.people:
+    for pid in was:
+        if pid not in new.people or pid in new.disabled:
+            q = old.people[pid]
             out.append({"kind": "left", "id": pid, "name": q.get("name") or "",
                         "title": q.get("title")})
     rank = {"joined": 0, "moved": 1, "changed": 2, "left": 3}

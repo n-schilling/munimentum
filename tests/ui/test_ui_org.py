@@ -33,7 +33,7 @@ def test_the_top_comes_first_and_a_click_walks_down(archive_page, archive):
     box = open_org(archive_page, archive)
     main = box.locator(".org-card.main")
     expect(main).to_contain_text(name(sources.ORG_TOP))
-    kept = len(USERS) - len(sources.ORG_LEFT_OUT)
+    kept = len(USERS) - len(sources.ORG_LEFT_OUT) - len(sources.ORG_LINKS)
     expect(archive_page.locator("#org-stats")).to_have_text(f"{kept} people")
     reports = [u for u in USERS.values() if u["manager"] == sources.ORG_TOP
                and u["id"] not in sources.ORG_LEFT_OUT]
@@ -103,7 +103,8 @@ def test_a_role_shows_everyone_holding_it(archive_page, archive):
     archive_page.click("#org-role-pill")
     archive_page.fill("#org-role-q", "head")
     archive_page.keyboard.press("Enter")
-    heads = [u for u in USERS.values() if "head" in u["jobTitle"].lower()]
+    heads = [u for u in USERS.values() if "head" in u["jobTitle"].lower()
+             and u["id"] not in sources.ORG_LINKS]
     expect(box.locator(".org-grid .org-card")).to_have_count(len(heads))
     # A card opens the person, and the role steps aside.
     box.locator(".org-grid .org-card", has_text=name("org-bob")).click()
@@ -120,10 +121,21 @@ def test_typing_part_of_a_title_finds_it_and_everyone_holding_it(archive_page, a
     with archive_page.expect_response(lambda r: "contains=lead" in r.url):
         archive_page.fill("#org-role-q", "lead")
     leads = [u for u in USERS.values() if "lead" in u["jobTitle"].lower()
-             and u["id"] not in sources.ORG_LEFT_OUT]
+             and u["id"] not in sources.ORG_LEFT_OUT + sources.ORG_LINKS]
     rows = archive_page.locator("#org-role-list .zeile")
     expect(rows.first).to_contain_text(EN["org.role.all"].format(role="lead"))
     expect(rows.first).to_contain_text(str(len(leads)))
     expect(rows).to_have_count(1 + len({u["jobTitle"] for u in leads}))
     rows.first.click()
     expect(box.locator(".org-grid .org-card")).to_have_count(len(leads))
+
+
+def test_a_departed_manager_holds_the_line_marked(archive_page, archive):
+    box = open_org(archive_page, archive)
+    for uid in ("org-malte", "org-petra"):
+        with archive_page.expect_response(lambda r: "/api/v1/organization/people/" in r.url):
+            box.locator(".org-grid .org-card", has_text=name(uid)).click()
+    main = box.locator(".org-card.main")
+    expect(main).to_contain_text(name("org-petra"))
+    expect(main).to_contain_text(EN["org.disabled"])
+    expect(box.locator(".org-grid")).to_contain_text(name("org-hanno"))
