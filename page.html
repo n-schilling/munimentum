@@ -2485,7 +2485,8 @@ function tab(name){
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); ladeFaelle(); }
   if(name === 'faelle') ladeFaelle();
   if(name === 'analytics') ladeAnalytics();
-  if(name === 'einstellungen'){ profileLaden(); evidenceLoad(); }
+  if(name === 'einstellungen'){ profileLaden(); evidenceLoad(); accessSessionLoad(); }
+  OPEN_TAB = name;
 }
 
 /* "Deleted" is in truth its own view onto the same inventory – like
@@ -3389,6 +3390,8 @@ function laufVerfolgen(jobs, first){
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     laufErgebnisZeigen(LAUF.ergebnis);
     nachEinsammeln(LAUF.ergebnis);
+    // A run may have found the sign-in gone.
+    if(accessCardShown()) accessSessionLoad();
     // The overview's numbers are stale after any run: reload them while
     // it is on screen, or on the next visit.
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
@@ -3400,6 +3403,7 @@ function laufVerfolgen(jobs, first){
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
     nachEinsammeln(jobs.last || {});
+    if(accessCardShown()) accessSessionLoad();
   }
   if(!jobs.busy) LAUF.zuletzt = fertig;
 }
@@ -9998,7 +10002,7 @@ function zustandsKennung(kind){
     var o = S.ollama || {};
     return ['ollama', o.running, o.has_model, KONFIG && KONFIG.embed_model].join('|');
   }
-  var tk = S.token || {}, au = S.auth || {}, dev = au.device || {};
+  var tk = S.token || {}, au = ACCESS_SESSION || {}, dev = au.device || {};
   return ['token', tk.present, tk.valid, tk.expired, tk.account,
           (tk.missing || []).join(','), (S.scopes_needed || []).join(','),
           (KONFIG && KONFIG.auth_mode), au.signed_in, au.account, au.own_registration,
@@ -10153,7 +10157,7 @@ function modusWahl(){
 }
 
 function eigeneRegistrierung(){
-  var au = S.auth || {};
+  var au = ACCESS_SESSION || {};
   return '<details class="rechte"' + (au.own_registration ? ' open' : '') + '>' +
     '<summary>' + esc(t('wizard.login.own.title')) + '</summary>' +
     '<p class="small muted">' + t('wizard.login.own.intro') + '</p>' +
@@ -10169,9 +10173,11 @@ function eigeneRegistrierung(){
 }
 
 function loginTeil(){
-  var au = S.auth || {}, dev = au.device;
+  var au = ACCESS_SESSION || {}, dev = au.device;
   var kopf;
-  if(au.signed_in)
+  // Until the sign-in's state is in, the card claims neither way.
+  if(!ACCESS_SESSION) kopf = '';
+  else if(au.signed_in)
     kopf = banner('', '<span class="dot ok"></span>' +
       t(au.account ? 'wizard.login.state.in' : 'wizard.login.state.in.plain',
         {who: esc(au.account || '')}));
@@ -10189,6 +10195,9 @@ function loginTeil(){
     mitte = banner('err', esc(t('wizard.login.failed', {detail: dev.error || ''})));
   }
 
+  // State unknown (not yet in, or its request failed – the idle tick asks
+  // again): no action that assumes either way.
+  if(!ACCESS_SESSION) return kopf + mitte + eigeneRegistrierung();
   var primaer = au.signed_in
     ? {text: t('wizard.login.again'), tun: 'starteLogin()'}
     : {text: t('wizard.login.start'), tun: 'starteLogin()'};
@@ -10228,10 +10237,38 @@ function schluesselTeil(){
    next status poll. What it is for and where the key stays sits in the (i)
    next to the card's title. */
 var zugangStand = null;
+/* The sign-in's state is not in the polled status: reading it is asked for
+   only while the card can show it – the settings open in login mode – and
+   every few seconds while a device code waits (see takt). */
+var ACCESS_SESSION = null, OPEN_TAB = null;
+function accessSessionLoad(){
+  if(((KONFIG && KONFIG.auth_mode) || 'token') !== 'login'){
+    ACCESS_SESSION = null;
+    return Promise.resolve();
+  }
+  TAKT_STATUS.access = Date.now();
+  return api(API + '/access/session').then(function(r){
+    if(!r || r.ok === false) return;
+    ACCESS_SESSION = r;
+    zeichneZugang();
+  }).catch(function(){});
+}
+function accessCardShown(){
+  return OPEN_TAB === 'einstellungen' && !!KONFIG && KONFIG.auth_mode === 'login';
+}
+function accessCodeWaiting(){
+  var dev = ACCESS_SESSION && ACCESS_SESSION.device;
+  return accessCardShown() && !!(dev && !dev.done);
+}
 function zugangNeu(){ zugangStand = null; zeichneZugang(); }
 function zeichneZugang(){
   var kasten = document.getElementById('zugang-inhalt');
   if(!kasten || !S) return;
+  // The settings opened before the configuration was in (a first start
+  // straight into them): the state is asked once the mode is known.
+  if(!ACCESS_SESSION && OPEN_TAB === 'einstellungen' && KONFIG &&
+     KONFIG.auth_mode === 'login' && Date.now() - TAKT_STATUS.access >= TAKT.an)
+    accessSessionLoad();
   var kennung = zustandsKennung('token');
   if(zugangStand === kennung) return;
   var feld = document.getElementById('tok');       // rescue what was already pasted
@@ -10247,23 +10284,23 @@ function zeichneZugang(){
 
 function setzeModus(wert){
   konfig({auth_mode: wert}).then(function(){
-    refresh().then(zugangNeu);
+    Promise.all([refresh(), accessSessionLoad()]).then(zugangNeu);
   });
 }
 function starteLogin(){
   post(API + '/access/session', {}).then(function(){
-    refresh().then(zugangNeu);
+    Promise.all([refresh(), accessSessionLoad()]).then(zugangNeu);
   });
 }
 function abmelden(){
   entferne(API + '/access/session').then(function(){
-    refresh().then(zugangNeu);
+    Promise.all([refresh(), accessSessionLoad()]).then(zugangNeu);
   });
 }
 function speichereRegistrierung(){
   konfig({client_id: el('au-client').value.trim(),
           tenant: el('au-tenant').value.trim()}).then(function(){
-    refresh().then(zugangNeu);
+    Promise.all([refresh(), accessSessionLoad()]).then(zugangNeu);
   });
 }
 
@@ -10344,7 +10381,7 @@ function beenden(){
    itself – every action refreshes on its own – so asking every couple of
    seconds only fills the network panel. A hidden tab asks nothing and
    catches up the moment it comes back. */
-var TAKT_STATUS = {status: 0, log: 0};
+var TAKT_STATUS = {status: 0, log: 0, access: 0};
 var TAKT = {an: 2500, log_an: 1000};
 /* How long the page waits between two questions while nothing runs. A
    setting, because how fast something someone else changed has to show up
@@ -10405,7 +10442,13 @@ function refresh(){
 function takt(){
   if(beendet || !sichtbar()) return;
   var jetzt = Date.now(), lauft = laeuftGerade();
-  if(jetzt - TAKT_STATUS.status >= (lauft ? TAKT.an : taktAus())) refresh();
+  if(jetzt - TAKT_STATUS.status >= (lauft ? TAKT.an : taktAus())){
+    refresh();
+    // A sign-out in another tab, a sign-in that ran out: the card in view
+    // follows on the idle tick – not in the status, asked only while seen.
+    if(!lauft && accessCardShown()) accessSessionLoad();
+  }
+  if(accessCodeWaiting() && jetzt - TAKT_STATUS.access >= TAKT.an) accessSessionLoad();
   // The log lives in the run window and nowhere else. With that window
   // shut there is nobody to read it, so it is not fetched – opening the
   // window catches up in one request (the runner keeps 4000 lines).

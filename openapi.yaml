@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.0.3
+  version: 14.1.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -3756,6 +3756,30 @@ paths:
         "500": { $ref: "#/components/responses/ServerError" }
 
   /api/v1/access/session:
+    get:
+      tags: [App, GET]
+      operationId: v1GetSession
+      summary: The sign-in's state
+      description: |
+        Whether a sign-in is cached, for whom, whether an own app
+        registration is set, and the device code while a sign-in runs.
+        Read from the cache file on disk – nothing is asked of Microsoft.
+        The page asks it only while the access card is drawn in login
+        mode, every few seconds while a device code waits.
+      responses:
+        "200":
+          description: The sign-in's state.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessSession" }
+              example:
+                signed_in: true
+                account: alice.beispiel@nordwind.example
+                own_registration: false
+                device: null
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
     post:
       tags: [App, POST]
       operationId: v1SignIn
@@ -4110,7 +4134,7 @@ paths:
       description: |
         Polled by the page. Carries token state, Ollama state, index and
         export inventories, the job runner snapshot (`jobs.seq` is the log
-        cursor), MCP state, update info and auth state.
+        cursor), MCP state and update info.
 
         **Only what changes on its own.** Since 12.0 three things that do
         not are gone from here, because this answer is polled every few
@@ -4123,9 +4147,16 @@ paths:
         list of column names repeated in every poll. While the chooser holds the port (more than one
         profile, none named at start) the answer is `{"chooser": true}`
         instead – the page polls until the app answers.
+
+        The `auth` node is deprecated and goes in 16.0.0 – the one field
+        an answer under v1 loses, announced on every answer by the
+        `Deprecation` and `Link` headers (RFC 9745) until then.
       responses:
         "200":
           description: The state object.
+          headers:
+            Deprecation: { $ref: "#/components/headers/Deprecation" }
+            Link: { $ref: "#/components/headers/DeprecationLink" }
           content:
             application/json:
               schema:
@@ -4154,16 +4185,9 @@ paths:
                     description: Which assistant the app would open – decided here, not in the page.
                   update: { $ref: "#/components/schemas/UpdateState" }
                   auth:
-                    type: object
-                    description: What follows from the settings; the mode and the ids themselves are settings.
-                    properties:
-                      signed_in: { type: boolean }
-                      account: { type: [string, "null"], description: "Whose account the token belongs to." }
-                      own_registration: { type: boolean, description: "An app registration of your own, not the built-in one." }
-                      device:
-                        oneOf:
-                          - { $ref: "#/components/schemas/DeviceCode" }
-                          - { type: "null" }
+                    $ref: "#/components/schemas/AccessSession"
+                    deprecated: true
+                    description: "Deprecated since 14.1.0, removed in 16.0.0: ask GET /api/v1/access/session. Every status answer announces it with `Deprecation` and `Link` (RFC 9745)."
                   profile: { $ref: "#/components/schemas/ProfileState" }
               example:
                 jobs:
@@ -4305,6 +4329,17 @@ components:
         ahead: { type: boolean, description: "What runs here is newer than the newest release – a build from source." }
         error: { type: [string, "null"], description: "Why the check failed – `HTTP 403` and the like, or the exception." }
         retry_at: { type: [string, "null"], format: date-time, description: "When GitHub answers again, when its hourly limit for anonymous requests refused the check; local time without zone." }
+    AccessSession:
+      type: object
+      description: What follows from the sign-in settings; the mode and the ids themselves are settings.
+      properties:
+        signed_in: { type: boolean }
+        account: { type: [string, "null"], description: "Whose account the cached sign-in belongs to." }
+        own_registration: { type: boolean, description: "An app registration of your own, not the built-in one." }
+        device:
+          oneOf:
+            - { $ref: "#/components/schemas/DeviceCode" }
+            - { type: "null" }
     DeviceCode:
       type: object
       description: |
@@ -5304,6 +5339,15 @@ components:
             `ms_confirmed` (how many agree), `versions`, `versions_bytes`,
             `stamped`.
   headers:
+    Deprecation:
+      description: |
+        RFC 9745: part of this answer is deprecated, since the date given
+        (an RFC 9651 date, seconds since 1970). The `Link` beside it points
+        to this contract, which names what goes and in which release.
+      schema: { type: string, example: "@1790899200" }
+    DeprecationLink:
+      description: 'RFC 8288 link with `rel="deprecation"` (RFC 9745) to the contract that says what is deprecated.'
+      schema: { type: string, example: '</api/v1/openapi>; rel="deprecation"; type="text/yaml"' }
     ETag:
       description: |
         The case's entity tag (RFC 9110), weak: a digest of the case as

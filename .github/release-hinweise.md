@@ -1,17 +1,26 @@
-## New in 14.0.3
+## New in 14.1.0
 
-- **1:1 chats keep their names** – a chat whose members were asked for on
-  their own came back as “Unbekannt”, was renamed and had every message
-  indexed anew; it now keeps its name, and a run that brings one message
-  indexes one message.
-- **The run window says “accounts”** for the organization's progress, and
-  the log names Graph's answer when a question for a manager is refused.
+- **Starting the app again opens the one already running** – with the
+  browser closed and the app left in the background, a second start no
+  longer brings up a second app on the next port; it opens the page of the
+  running one. From source, `--profile` naming another profile starts that
+  one beside it, and `--port` starts another one on purpose.
+- **Fewer calls to Microsoft** – whether you are signed in is read from the
+  file on disk instead of asking Microsoft on every look at the state; its
+  sign-in is asked only when you sign in and when a run renews the key (see
+  [PRIVACY.md](https://github.com/n-schilling/munimentum/blob/main/PRIVACY.md)).
+- **Organization: managers the feed leaves out are found again** – since
+  14.0.2 they were asked for without their id, so every answer counted as
+  refused and the line above ended there.
+- **For scripts against the HTTP interface** – `GET /api/v1/access/session`
+  is new; the `auth` node of `GET /api/v1/status` is deprecated, announced
+  by `Deprecation` and `Link` headers on every status, and goes in 16.0.0.
 
 ## Upgrading
 
-Nothing happens once after this update. A chat an earlier run renamed to
-“Unbekannt” gets its name back the next time it brings a message; its
-messages are indexed once more then.
+The next run that reads the organization asks once more for the managers
+the feed left out and puts them into the line – the organization gets one
+new version.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

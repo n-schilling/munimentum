@@ -207,6 +207,22 @@ def test_ohne_cache_wird_gefragt(sauber, fake_msal):
     assert ("interaktiv", ("S",)) in anmeldung.app.gesehen
 
 
+def test_the_sign_in_does_not_name_the_app(sauber, fake_msal, monkeypatch):
+    """MSAL would send `app_name`/`app_version` to Microsoft's sign-in as
+    x-app-name/x-app-ver headers; the app gives neither, so the sign-in log
+    shows only the client id."""
+    given = {}
+
+    class Recording(FakeApp):
+        def __init__(self, *args, **kwargs):
+            given.update(kwargs, args=args)
+            super().__init__(*args, **kwargs)
+    monkeypatch.setattr(fake_msal, "PublicClientApplication", Recording)
+    auth.Login(["S"])
+    assert not {"app_name", "app_version"} & set(given)
+    assert "munimentum" not in repr(given).lower()
+
+
 def test_nur_still_reisst_kein_fenster_auf(sauber, fake_msal):
     """The schedule runs at night – a sign-in window would wait until morning."""
     anmeldung = auth.Login(["S"])
@@ -302,18 +318,37 @@ def test_angemeldet_ohne_cache(sauber, fake_msal):
     assert auth.angemeldet() is None
 
 
-def test_angemeldet_nennt_das_konto(sauber, fake_msal, tmp_path):
+def test_signed_in_names_the_account_without_asking_microsoft(sauber, tmp_path, monkeypatch):
+    """The account comes from the cache file. An MSAL application would
+    fetch the discovery document from login.microsoftonline.com first –
+    and the status asked on every poll."""
+    import msal
+    monkeypatch.setattr(msal, "PublicClientApplication",
+                        lambda *a, **k: pytest.fail("an MSAL application was built"))
+    (tmp_path / auth.CACHE_DATEI).write_text(json.dumps({"Account": {"k": {
+        "home_account_id": "h", "environment": "login.microsoftonline.com",
+        "realm": "r", "local_account_id": "l", "authority_type": "MSSTS",
+        "username": "alice@example.com"}}}), encoding="utf-8")
+    assert auth.angemeldet() == "alice@example.com"
+    assert auth.angemeldet(heim=tmp_path) == "alice@example.com"
     (tmp_path / auth.CACHE_DATEI).write_text("{}", encoding="utf-8")
-    orig = FakeApp.__init__
+    assert auth.angemeldet() is None
+    (tmp_path / auth.CACHE_DATEI).write_text("kaputt", encoding="utf-8")
+    assert auth.angemeldet() is None
 
-    def mit_konto(self, *a, **kw):
-        orig(self, *a, **kw)
-        self.konten = [{"username": "nico@example.com"}]
-    FakeApp.__init__ = mit_konto
-    try:
-        assert auth.angemeldet() == "nico@example.com"
-    finally:
-        FakeApp.__init__ = orig
+
+def test_signed_in_uses_no_deprecated_msal_call(sauber, tmp_path):
+    """msal 1.39 deprecates TokenCache.find(); the catch-all around the
+    read would turn its removal into "not signed in" everywhere, the
+    chooser included. With warnings as errors the account still comes."""
+    import warnings
+    (tmp_path / auth.CACHE_DATEI).write_text(json.dumps({"Account": {"k": {
+        "home_account_id": "h", "environment": "login.microsoftonline.com",
+        "realm": "r", "local_account_id": "l", "authority_type": "MSSTS",
+        "username": "alice@example.com"}}}), encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert auth.angemeldet() == "alice@example.com"
 
 
 # --------------------------------------------------------------------------

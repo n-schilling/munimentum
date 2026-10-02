@@ -60,8 +60,9 @@ are deliberate.
   `.ics` or `.vcf`, a file mirrored from OneDrive or SharePoint, or a rendered
   SharePoint page, that runs code while being parsed or while being shown in
   the interface.
-- Anything that moves archive content, tokens or telemetry off the machine. The
-  only outbound connections are Microsoft Graph, your local Ollama, one update
-  check against `api.github.com` at startup (unless you switch it off), and a
-  time-stamp service that receives a checksum of the evidence chain (only if
-  you name one).
+- Anything that moves archive content, tokens or telemetry off the machine.
+  The only outbound connections are Microsoft Graph, Microsoft's sign-in (only
+  with *Sign in*, when you sign in and when a run renews the key), your local
+  Ollama, one update check against `api.github.com` at startup (unless you
+  switch it off), and a time-stamp service that receives a checksum of the
+  evidence chain (only if you name one).

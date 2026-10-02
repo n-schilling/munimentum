@@ -137,6 +137,18 @@ class _HttpError(Exception):
         self.response = type("R", (), {"status_code": status, "text": text})()
 
 
+def _selected(url, body):
+    """What Graph answers under `$select`: the named properties only – not
+    even the id unless it is named (14.0.3 asked for managers without it,
+    and every answer read as refused)."""
+    from urllib.parse import parse_qs, urlsplit
+    names = parse_qs(urlsplit(url).query).get("$select")
+    if not names or not isinstance(body, dict):
+        return body
+    keep = set(names[0].split(","))
+    return {k: v for k, v in body.items() if k in keep or k.startswith("@odata")}
+
+
 class _Graph:
     """URL fragment -> answer (an exception is raised); records every call."""
 
@@ -155,7 +167,8 @@ class _Graph:
             hit = next((a for f, a in self.answers.items() if f in url and "/manager?" in f
                         or f in url and f.startswith("/users/") and "/manager" not in f
                         and "delta" not in f), None)
-            out[url] = (200, hit) if hit is not None else (404, {"error": {"code": "Request_ResourceNotFound"}})
+            out[url] = (200, _selected(url, hit)) if hit is not None \
+                else (404, {"error": {"code": "Request_ResourceNotFound"}})
         return out
 
     def get(self, url, params=None, extra_headers=None):

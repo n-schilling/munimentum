@@ -521,3 +521,46 @@ def test_batch_get_gibt_nach_der_leiter_auf(session, sleeps, monkeypatch):
     g = _bare_graph()
     with pytest.raises(graph_client.Ueberlastet):
         g.batch_get([url])
+
+
+class _WireSession(requests.Session):
+    """A real requests session that keeps every prepared request instead of
+    sending it – what would leave the machine, default headers included."""
+
+    def __init__(self, answers):
+        super().__init__()
+        self.answers = list(answers)
+        self.sent = []
+
+    def send(self, request, **kwargs):
+        self.sent.append(request)
+        return self.answers.pop(0)
+
+
+def test_nothing_sent_to_microsoft_names_the_app(monkeypatch):
+    """Microsoft must not learn which tool asks: the app's name appears in no
+    URL, header or body that goes to Graph – not as a User-Agent, not in a
+    batch. Each access path and each kind of request is put on the wire."""
+    def answer(payload=None, content=b""):
+        r = requests.Response()
+        r.status_code = 200
+        r._content = content or requests.compat.json.dumps(payload or {}).encode()
+        r.headers["Content-Type"] = "application/json"
+        return r
+    wire = _WireSession([answer({"value": []}), answer(content=b"X"), answer(content=b"Y"),
+                         answer({"responses": [{"id": "0", "status": 200, "body": {}}]}),
+                         answer({"value": []})])
+    monkeypatch.setattr(graph_client, "SESSION", wire)
+    me = f"{graph_client.GRAPH}/me"
+    g = _bare_graph()
+    g.get(me, params={"$select": "id"}, extra_headers={"Prefer": "odata.maxpagesize=50"})
+    g.get_bytes(f"{me}/photo/$value")
+    g.stream(f"{me}/drive/root/content")
+    g.batch_get([f"{me}/messages/m1"])
+    graph_client.TokenClient("tok").get(me)
+    assert len(wire.sent) == 5
+    for request in wire.sent:
+        body = request.body or b""
+        seen = " ".join([request.method, request.url, repr(dict(request.headers)),
+                         body.decode() if isinstance(body, bytes) else body]).lower()
+        assert "munimentum" not in seen, seen

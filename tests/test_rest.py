@@ -1004,6 +1004,27 @@ def test_der_status_traegt_nur_was_sich_von_selbst_aendert(server):
     assert len(_json.dumps(status)) < 1200, "der Status ist wieder schwer geworden"
 
 
+def test_the_status_announces_its_auth_node_and_drops_it_in_16(server):
+    """`auth` left the page's poll for GET /api/v1/access/session; under v1
+    it may only go announced. RFC 9745 says so on every status – and once
+    the version reaches 16 this test insists the node and the headers are
+    gone, so the announcement cannot outlive its release."""
+    import api_app
+    import version
+    _, port = server
+    code, headers, status = roh(port, "GET", "/api/v1/status")
+    assert code == 200
+    if int(version.VERSION.split(".")[0]) < api_app.AUTH_GONE_IN:
+        assert "auth" in status
+        assert re.fullmatch(r"@\d+", headers["Deprecation"])
+        assert 'rel="deprecation"' in headers["Link"] and "</api/v1/openapi>" in headers["Link"]
+        assert roh(port, "GET", "/api/v1/access/session")[2] == status["auth"]
+    else:
+        assert "auth" not in status, "16.0.0: the deprecated auth node goes"
+        assert "Deprecation" not in headers
+    assert "Deprecation" not in roh(port, "GET", "/api/v1/app")[1]
+
+
 def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
     """Node by node: no list of installed models, no scopes the key has, no
     model names, ports or ids – those are settings, and what follows from

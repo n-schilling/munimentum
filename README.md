@@ -26,8 +26,8 @@ for Linux (glibc 2.35+).
 On macOS drag the app to *Applications*; on Windows and Linux unpack the
 archive. Windows asks once on first launch, because the build carries no
 code-signing certificate: *More info* → *Run anyway*. The app has no window
-of its own — it opens a page in your browser, and the power button at the
-top right quits it.
+of its own — it opens a page in your browser, and the power button at the top
+right quits it. Started again while it runs, it only reopens that page.
 
 ## Signing in
 

@@ -8,6 +8,7 @@ analytics, and nothing you export ever reaches the author of this software.
 | To | Why | Optional |
 |---|---|---|
 | Microsoft Graph | fetching your own data — this *is* the export | no |
+| Microsoft's sign-in (`login.microsoftonline.com`) | only with *Sign in*: when you sign in, and when a run renews its key — showing whether you are signed in reads the file on disk | yes, the pasted key needs none |
 | `api.github.com` | one check at startup for a newer release | yes, *Settings* |
 | your local Ollama | similar search, the AI answer, a name for a search you save | it never leaves the machine |
 | the time-stamp service you name | after a run, the 32-byte checksum of the evidence chain (and of a closed case's list), to have it signed – no names, no contents | yes, off until you name one under *Settings › Evidence* |

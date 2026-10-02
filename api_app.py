@@ -13,8 +13,20 @@ from api import Ablehnung
 import settings
 
 
+# The status's `auth` node is deprecated – GET /api/v1/access/session
+# answers the same, asked only where it is shown – and goes in 16.0.0.
+# RFC 9745 announces it on every status: since when (an RFC 9651 date,
+# 2026-10-02) and a link to the contract that names the node and the
+# release. The header and the node leave together.
+AUTH_GONE_IN = 16
+AUTH_DEPRECATION = {
+    "Deprecation": "@1790899200",
+    "Link": '</api/v1/openapi>; rel="deprecation"; type="text/yaml"',
+}
+
+
 def status(h, _p, _q, _data):
-    return api.json(h.app.status())
+    return api.json(h.app.status(), extra=AUTH_DEPRECATION)
 
 
 def umgebung(h, _p, _q, _data):
@@ -244,6 +256,10 @@ def anmelden(h, _p, _q, _data):
     return api.json({"device": daten})
 
 
+def session_state(h, _p, _q, _data):
+    return api.json(h.app.access_session())
+
+
 def abmelden(h, _p, _q, _data):
     h.app.abmelden()
     return api.leer()
@@ -321,7 +337,7 @@ def profil_wechseln(h, name):
     port = h.server.server_address[1]
     if name == h.M.PROFIL:
         return api.json({"name": name, "url": "/"})
-    lauft = h.M.eigene_instanz(port, profil=name)
+    lauft = h.M.instance_port(name, port)
     if lauft:
         return api.json({"name": name, "url": f"http://127.0.0.1:{lauft}/"})
     if h.app.jobs.busy:
@@ -357,6 +373,7 @@ ROUTEN = (
     ("POST", "/api/v1/ollama/recheck", ollama),
     ("POST", "/api/v1/updates/check", update),
     ("PUT", "/api/v1/access/token", token),
+    ("GET", "/api/v1/access/session", session_state),
     ("POST", "/api/v1/access/session", anmelden),
     ("DELETE", "/api/v1/access/session", abmelden),
     ("DELETE", "/api/v1/access/notice", hinweis_weg),

@@ -65,6 +65,42 @@ def test_only_the_writing_process_takes_the_file_away(tmp_path):
     instance.remove(tmp_path)                 # nothing there: nothing happens
 
 
+def test_a_second_instance_leaves_the_first_ones_file(tmp_path, monkeypatch):
+    """A started, B beside it with --port: B writes nothing, and B's end
+    takes nothing away – A stays findable for links and the next start."""
+    asked = []
+    monkeypatch.setattr(instance, "profile_at",
+                        lambda port, host=instance.LOOPBACK, timeout=1.5:
+                        asked.append((port, timeout)) or ("standard" if port == 8701 else None))
+    first = {"port": 8701, "pid": os.getpid() + 1, "profile": "standard",
+             "started": "2026-10-02T08:00:00+00:00"}
+    (tmp_path / instance.FILE).write_text(json.dumps(first), encoding="utf-8")
+    assert instance.write(tmp_path, 9003, "standard") is None
+    assert asked == [(8701, instance.PROBE)]
+    instance.remove(tmp_path)
+    assert instance.read(tmp_path) == first
+    # A gone (nothing answers on its port): its file is taken over.
+    monkeypatch.setattr(instance, "profile_at", lambda *a, **k: None)
+    assert instance.write(tmp_path, 9003, "standard") == tmp_path / instance.FILE
+    assert instance.read(tmp_path)["port"] == 9003
+    # Its port now serves another profile: taken over as well.
+    (tmp_path / instance.FILE).write_text(json.dumps(first), encoding="utf-8")
+    monkeypatch.setattr(instance, "profile_at", lambda *a, **k: "nordwind")
+    assert instance.write(tmp_path, 9003, "standard") == tmp_path / instance.FILE
+
+
+def test_the_probe_never_goes_through_a_proxy(running, monkeypatch):
+    """A corporate shell's http_proxy without no_proxy for loopback: every
+    probe would go to the proxy and fail – and each start spawn a fresh
+    instance."""
+    port = running(profile="standard")
+    monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    assert instance.profile_at(port, timeout=2) == "standard"
+
+
 def test_a_broken_file_is_no_instance(tmp_path):
     (tmp_path / instance.FILE).write_text("{half")
     assert instance.read(tmp_path) is None
@@ -83,6 +119,7 @@ def test_the_file_is_a_hint_the_probe_is_the_proof(tmp_path, running):
     frei_port = frei.server_address[1]
     frei.shutdown()
     frei.server_close()
+    (tmp_path / instance.FILE).unlink()
     instance.write(tmp_path, frei_port, "standard")
     assert instance.find(tmp_path, timeout=0.5) == (None, "not_running")
 

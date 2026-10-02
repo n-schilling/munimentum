@@ -30,6 +30,9 @@ routes, and the wiring between them.
 
     python3 app.py [--port 8700] [--no-browser]
 
+A start without --port opens the instance already running for this app
+folder instead of a second one; --port starts another one on that port.
+
 The server binds only to the loopback address and checks the Host header.
 It has no authentication and serves the entire mail and chat archive – it
 does not belong on 0.0.0.0.
@@ -302,12 +305,8 @@ def profil_konto(heim):
             konto = None
         if konto:
             return konto
-    cfg = _config_lesen(heim / settings.CONFIG_NAME)
     try:
-        konto = auth.angemeldet(
-            client=str(cfg.get("client_id") or "").strip() or auth.STANDARD_CLIENT_ID,
-            mandant=str(cfg.get("tenant") or "").strip() or auth.STANDARD_TENANT,
-            heim=heim)
+        konto = auth.angemeldet(heim=heim)
     except Exception:
         return None
     return konto if isinstance(konto, str) else None
@@ -384,7 +383,7 @@ def profil_umbenennen(alt, neu, port=None):
         return None, {"k": "srv.profile.impossible", "v": {}}
     if alt not in profil_namen():
         return None, {"k": "srv.profile.unknown", "v": {"name": alt}}
-    if alt == PROFIL or (port and eigene_instanz(port, profil=alt)):
+    if alt == PROFIL or instance_port(alt, port):
         return None, {"k": "srv.profile.active", "v": {"name": alt}}
     if not settings.profil_name_ok(neu):
         return None, {"k": "srv.profile.badname", "v": {}}
@@ -530,16 +529,24 @@ def set_profil(name):
     return HEIM
 
 
+def known_profile(wanted):
+    """The named profile, normalised – or the start ends: a mistyped
+    --profile must not open whatever happens to run."""
+    names = profil_namen()
+    wanted = str(wanted).strip().lower()
+    if wanted not in names:
+        raise SystemExit(f"Unbekanntes Profil: {wanted}. "
+                         f"Vorhanden: {', '.join(names)}")
+    return wanted
+
+
 def profil_waehlen(gewuenscht, port, open_browser):
     """Which profile this start runs: the named one, the only one, the last
     one when asking is switched off – otherwise the chooser in the
     browser. Returns (name, browser already open)."""
     namen = profil_namen()
     if gewuenscht:
-        gewuenscht = str(gewuenscht).strip().lower()
-        if gewuenscht not in namen:
-            raise SystemExit(f"Unbekanntes Profil: {gewuenscht}. "
-                             f"Vorhanden: {', '.join(namen)}")
+        gewuenscht = known_profile(gewuenscht)
         profil_register_schreiben(zuletzt=gewuenscht)
         return gewuenscht, False
     if len(namen) == 1:
@@ -2161,7 +2168,6 @@ class App:
         # the paths, the constants of the interface – has its own route and
         # is asked for once: this one is polled, and a polled answer should
         # not keep repeating the names of someone's mail folders.
-        auth = self.auth_status()
         return {
             # Per node only what the interface acts on. What the settings
             # already say (the models by name, the port, the mode, the own
@@ -2183,8 +2189,9 @@ class App:
             "wizard": wizard,
             "update": {k: self._update.get(k) for k in
                        ("status", "latest", "url", "newer", "ahead", "error", "retry_at")},
-            "auth": {k: auth.get(k) for k in
-                     ("signed_in", "account", "own_registration", "device")},
+            # Deprecated, announced by header, gone in 16.0.0
+            # (api_app.AUTH_GONE_IN): the page asks GET /api/v1/access/session.
+            "auth": self.access_session(),
         }
 
     def umgebung(self):
@@ -2307,7 +2314,7 @@ class App:
         able to show the state without kicking off a sign-in unasked.
         """
         klient, mandant = self.auth_ziel()
-        konto = auth.angemeldet(client=klient, mandant=mandant)
+        konto = auth.angemeldet()
         laeuft = self.device_login
         return {
             "mode": self.auth_modus(),
@@ -2321,6 +2328,12 @@ class App:
             # Is a device-code sign-in in progress? Then code and address.
             "device": dict(laeuft) if laeuft else None,
         }
+
+    def access_session(self):
+        """The sign-in's state as the access card shows it – asked by the
+        page only while that card is drawn in login mode."""
+        auth = self.auth_status()
+        return {k: auth.get(k) for k in ("signed_in", "account", "own_registration", "device")}
 
     # -- Actions -----------------------------------------------------------
     def calendar_payload(self):
@@ -2669,6 +2682,7 @@ ROUTEN_V1 = (
     ("POST", "/api/v1/ollama/recheck", api_app.ollama),
     ("POST", "/api/v1/updates/check", api_app.update),
     ("PUT", "/api/v1/access/token", api_app.token),
+    ("GET", "/api/v1/access/session", api_app.session_state),
     ("POST", "/api/v1/access/session", api_app.anmelden),
     ("DELETE", "/api/v1/access/session", api_app.abmelden),
     ("DELETE", "/api/v1/access/notice", api_app.hinweis_weg),
@@ -3370,27 +3384,39 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+DEFAULT_PORT = 8700
 PORT_VERSUCHE = 12          # a taken port: the next ones are tried
+START_PROBE = instance.PROBE   # how long a running instance's status may take
+# A named port is not bumped, but waited for a moment: the restart of a
+# profile switch names the port it just left, and Windows (exclusive bind)
+# may not hand it back at once.
+BIND_WAIT = 5.0
 POLL = 0.5                  # serve_forever's poll interval (tests shorten it)
 
 
-def make_server(app, port, host="127.0.0.1", tries=PORT_VERSUCHE, handler=None):
+def make_server(app, port, host="127.0.0.1", tries=PORT_VERSUCHE, handler=None, wait=0.0):
     """Bind the server and fix the allowed Host headers.
 
     Bind first, then build the list: with port=0 the operating system
     picks a free port, and that one must appear in the allowed headers.
     If the desired port is taken (second start, foreign program), the
     next ones are tried – a double-click must not end in a traceback
-    nobody sees.
+    nobody sees. With `wait` the one port is asked again until that many
+    seconds are up instead.
     """
     handler = handler or Handler
     httpd = None
-    for versuch in range(tries if port else 1):
+    deadline = time.monotonic() + wait
+    versuch = 0
+    while httpd is None:
         try:
             httpd = Server((host, port + versuch), handler)
-            break
         except OSError as e:
-            if versuch == tries - 1:
+            if port and versuch < tries - 1:
+                versuch += 1
+            elif time.monotonic() < deadline:
+                time.sleep(0.2)
+            else:
                 raise SystemExit(f"Kein freier Port ab {port}: {e}") from None
     real = httpd.server_address[1]
     handler.app = app
@@ -3407,9 +3433,21 @@ def eigene_instanz(port, host="127.0.0.1", profil=None, spanne=PORT_VERSUCHE):
     if not port:
         return None
     for p in range(max(1024, port - spanne + 1), port + spanne):
-        if laeuft_bereits(p, host, timeout=0.5, profil=profil):
+        if laeuft_bereits(p, host, timeout=START_PROBE, profil=profil):
             return p
     return None
+
+
+def instance_port(name, port=None, host="127.0.0.1"):
+    """The port an instance of profile `name` answers on – where its
+    instance.json says, a named port included, then the neighbours of
+    `port` for one that left no file – or None. Switching to a profile or
+    renaming it asks this: an instance on --port 9999 is open as well."""
+    if profile_moeglich():
+        url, state = instance.find(settings.profil_ordner(name, WURZEL), START_PROBE)
+        if state == "running":
+            return urlsplit(url).port
+    return eigene_instanz(port, host, profil=name) if port else None
 
 
 # The running app module – `__main__` when started as a script, `app` when
@@ -3481,7 +3519,7 @@ class Wahl(Handler):
             profil_register_schreiben(zuletzt=name,
                                       ohne_nachfrage=not data.get("ask_at_start", True))
             antwort = {"name": name}
-            lauft = eigene_instanz(self.server.server_address[1], profil=name)
+            lauft = instance_port(name, self.server.server_address[1])
             if lauft:
                 # Already open in another instance: the page goes there,
                 # and this start ends once the chooser has handed over.
@@ -3520,19 +3558,66 @@ def waehle_profil_im_browser(port, open_browser):
     return _wahl_abwarten(chooser_server(port), open_browser)
 
 
-def serve(app, port, open_browser=True, host="127.0.0.1"):
-    lauft = eigene_instanz(port, host, PROFIL) if port else None
+def running_instance(wanted=None):
+    """(url, profile) of an instance of this app folder that already
+    serves, or None – read from the instance.json every serving process
+    leaves in its profile's folder, so the exact port is asked and no
+    neighbour is guessed at. A profile asked for by name is the only one
+    looked for; otherwise the one opened last comes first, then the rest."""
+    if not profile_moeglich():
+        homes = [(PROFIL, HEIM)]
+    elif wanted:
+        homes = [(wanted, settings.profil_ordner(wanted, WURZEL))]
+    else:
+        last = profil_register_lesen().get("zuletzt")
+        names = sorted(profil_namen(), key=lambda n: (n != wanted, n != last, n))
+        homes = [(n, settings.profil_ordner(n, WURZEL)) for n in names]
+    for name, home in homes:
+        url, state = instance.find(home, timeout=START_PROBE)
+        if state == "running":
+            return url, name
+    return None
+
+
+def open_existing(url, open_browser):
+    print(f"Läuft bereits – öffne {url}")
+    print("Beenden geht dort oben rechts über „Beenden“.")
+    if open_browser:
+        webbrowser.open(url)
+
+
+def open_running(wanted, open_browser):
+    """A start without --port: the app forgotten in the background after
+    the browser was closed is opened again instead of a second one next to
+    it – any profile when none is named, since the page switches profiles
+    itself. A profile named that is not running is started (serve() takes
+    the next free port beside the running one). True when one was found."""
+    found = running_instance(str(wanted).strip().lower() if wanted else None)
+    if found is None:
+        return False
+    open_existing(found[0], open_browser)
+    return True
+
+
+def serve(app, port, open_browser=True, host="127.0.0.1", fixed=False):
+    """Serve the app. `fixed` is a port the user named: exactly that one,
+    and an instance of this profile elsewhere does not stop it – that is
+    how a second instance is started on purpose. Such a second instance
+    leaves the first one's instance.json alone (instance.write): links and
+    the next start without --port keep finding the first."""
+    if fixed:
+        lauft = port if port and laeuft_bereits(port, host, START_PROBE, PROFIL) else None
+    else:
+        lauft = eigene_instanz(port, host, PROFIL) if port else None
     if lauft:
-        url = f"http://{host}:{lauft}/"
-        print(f"Läuft bereits – öffne {url}")
-        print("Beenden geht dort oben rechts über „Beenden“.")
-        if open_browser:
-            webbrowser.open(url)
+        open_existing(f"http://{host}:{lauft}/", open_browser)
         return None
-    httpd = make_server(app, port, host)
+    httpd = (make_server(app, port, host, tries=1, wait=BIND_WAIT) if fixed
+             else make_server(app, port, host))
     port = httpd.server_address[1]
     url = f"http://{host}:{port}/"
-    # Where this profile answers – for the MCP server's links into the page.
+    # Where this profile answers – for the MCP server's links into the page;
+    # not written when the file names another instance that still answers.
     instance.write(HEIM, port, PROFIL)
     app.log_token_state()
     if _UMZUG.get("bewegt"):
@@ -3623,7 +3708,10 @@ def main(argv=None):
     ensure_streams()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--port", type=int, default=8700)
+    ap.add_argument("--port", type=int,
+                    help=f"Port (Vorgabe {DEFAULT_PORT}). Ohne Angabe öffnet ein "
+                         "zweiter Start die laufende Instanz; mit Angabe startet "
+                         "eine weitere auf genau diesem Port.")
     ap.add_argument("--no-browser", action="store_true",
                     help="Oberfläche nicht automatisch öffnen.")
     ap.add_argument("--data-dir", metavar="ORDNER",
@@ -3638,22 +3726,30 @@ def main(argv=None):
                  f"Teilprogramm direkt: {', '.join(RUNNABLE)}. So ruft sich die "
                  "gebündelte Datei selbst auf; von Hand nur zum Nachsehen nötig.")
     a = ap.parse_args(argv)
+    fixed = a.port is not None
+    port = a.port if fixed else DEFAULT_PORT
+    wanted = a.profile or os.environ.get("MUNIMENTUM_PROFILE")
     browser_offen = False
-    if a.data_dir or settings.data_dir_env():
+    data_dir = a.data_dir or settings.data_dir_env()
+    if data_dir:
         # One archive, no profiles – the flag and the variable alike.
-        set_data_dir(a.data_dir or settings.data_dir_env())
+        set_data_dir(data_dir)
     else:
         # Before anything opens a file: an archive from before 10.0 moves
         # into its profile folder (ensure_streams touched only the app
         # folder's own log).
         layout_umzug()
-        profil, browser_offen = profil_waehlen(
-            a.profile or os.environ.get("MUNIMENTUM_PROFILE"), a.port, not a.no_browser)
+        if wanted:
+            wanted = known_profile(wanted)
+    if not fixed and open_running(wanted, not a.no_browser):
+        return None
+    if not data_dir:
+        profil, browser_offen = profil_waehlen(wanted, port, not a.no_browser)
         set_profil(profil)
         altbestand_pinnen()
     HEIM.mkdir(parents=True, exist_ok=True)
     BASE.mkdir(parents=True, exist_ok=True)
-    serve(App(), a.port, open_browser=not a.no_browser and not browser_offen)
+    serve(App(), port, open_browser=not a.no_browser and not browser_offen, fixed=fixed)
 
 
 

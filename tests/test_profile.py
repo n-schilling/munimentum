@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import app as app_mod
+import instance
 import mcp_server
 import settings
 from hilfen import call, call_kopf
@@ -143,10 +144,9 @@ def test_profil_konto_aus_der_anmeldung(wurzel, monkeypatch):
     heim = profil_mit_config(wurzel, "nordwind", client_id="abc", tenant="org")
     gefragt = []
     monkeypatch.setattr(app_mod.auth, "angemeldet",
-                        lambda client=None, mandant=None, heim=None:
-                        gefragt.append((client, mandant, heim)) or "bob@example.com")
+                        lambda heim=None: gefragt.append(heim) or "bob@example.com")
     assert app_mod.profil_konto(heim) == "bob@example.com"
-    assert gefragt == [("abc", "org", heim)]
+    assert gefragt == [heim]
     assert app_mod.profil_info("nordwind")["konto"] == "bob@example.com"
     assert len(gefragt) == 2
     # A pasted key wins, and the sign-in is not even asked.
@@ -634,7 +634,7 @@ def test_profilwechsel_startet_erst_nach_dem_stopp_neu(wurzel, monkeypatch, with
     box = []
     echtes = app_mod.make_server
     monkeypatch.setattr(app_mod, "make_server",
-                        lambda app, port, host="127.0.0.1": box.append(echtes(app, port, host)) or box[0])
+                        lambda app, port, host="127.0.0.1", **k: box.append(echtes(app, port, host)) or box[0])
     monkeypatch.setattr(app_mod, "_NEUSTART", None)
     aufruf = {}
     monkeypatch.setattr(app_mod.os, "execv",
@@ -669,7 +669,7 @@ def test_main_profile_setzt_das_profil(wurzel, monkeypatch):
     profil_mit_config(wurzel, "nordwind")
     gesehen = {}
     monkeypatch.setattr(app_mod, "serve",
-                        lambda a, port, open_browser=True:
+                        lambda a, port, open_browser=True, **k:
                         gesehen.update(port=port, browser=open_browser))
     app_mod.main(["--profile", "nordwind", "--port", "9002", "--no-browser"])
     assert app_mod.PROFIL == "nordwind"
@@ -693,10 +693,233 @@ def test_main_nach_der_wahl_im_browser_kein_zweiter_tab(wurzel, monkeypatch):
     monkeypatch.setattr(app_mod, "waehle_profil_im_browser",
                         lambda port, browser: ("nordwind", True))
     monkeypatch.setattr(app_mod, "serve",
-                        lambda a, port, open_browser=True: gesehen.update(browser=open_browser))
+                        lambda a, port, open_browser=True, **k: gesehen.update(browser=open_browser))
     app_mod.main([])
     assert gesehen == {"browser": False}
     assert app_mod.PROFIL == "nordwind"
+
+
+# --------------------------------------------------------------------------
+# A second start – the running instance, not a second one
+# --------------------------------------------------------------------------
+@pytest.fixture
+def no_second(monkeypatch):
+    """Any further server or chooser fails the test; what the browser was
+    sent to is recorded."""
+    opened = []
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(app_mod, "serve", lambda *a, **k: pytest.fail("second instance"))
+    monkeypatch.setattr(app_mod, "waehle_profil_im_browser",
+                        lambda *a: pytest.fail("chooser on a second port"))
+    return opened
+
+
+def test_a_start_without_port_opens_the_running_instance(server, wurzel, no_second):
+    """The browser closed, the app left running in the background, the app
+    started again: the browser opens the running one, nothing new binds."""
+    _a, port = server
+    instance.write(heim_von(wurzel), port, "standard")
+    assert app_mod.main([]) is None
+    assert no_second == [f"http://127.0.0.1:{port}/"]
+
+
+def test_the_running_instance_wins_over_the_chooser(server, wurzel, no_second):
+    """With several profiles the chooser would have taken the next port."""
+    _a, port = server
+    instance.write(heim_von(wurzel), port, "standard")
+    profil_mit_config(wurzel, "nordwind")
+    app_mod.main([])
+    app_mod.main(["--profile", "Standard"])
+    assert no_second == [f"http://127.0.0.1:{port}/", f"http://127.0.0.1:{port}/"]
+
+
+def test_another_profile_named_starts_beside_the_running_one(server, wurzel, monkeypatch):
+    """standard runs; a start naming nordwind brings nordwind up – on a port
+    of its own, found by bumping (no named port), never by opening
+    standard."""
+    _a, port = server
+    instance.write(heim_von(wurzel), port, "standard")
+    profil_mit_config(wurzel, "nordwind")
+    opened, seen = [], {}
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: opened.append(url))
+    monkeypatch.setattr(app_mod, "serve", lambda a, port, open_browser=True, fixed=False:
+                        seen.update(port=port, fixed=fixed, profile=app_mod.PROFIL))
+    app_mod.main(["--profile", "nordwind", "--no-browser"])
+    assert opened == []
+    assert seen == {"port": app_mod.DEFAULT_PORT, "fixed": False, "profile": "nordwind"}
+
+
+def test_a_mistyped_profile_ends_the_start_even_with_one_running(
+        server, wurzel, no_second, monkeypatch):
+    """The name is checked before the running instance is looked for: a
+    typo must not open whatever happens to run."""
+    _a, port = server
+    instance.write(heim_von(wurzel), port, "standard")
+    profil_mit_config(wurzel, "nordwind")
+    with pytest.raises(SystemExit, match="Unbekanntes Profil: nordwnd"):
+        app_mod.main(["--profile", "Nordwnd"])
+    monkeypatch.setenv("MUNIMENTUM_PROFILE", "fremd")
+    with pytest.raises(SystemExit, match="Vorhanden: nordwind, standard"):
+        app_mod.main([])
+    assert no_second == []
+
+
+def test_a_data_dir_start_opens_the_instance_of_that_folder(server, wurzel, no_second):
+    _a, port = server
+    folder = wurzel / "eins"
+    folder.mkdir()
+    instance.write(folder, port, "standard")
+    app_mod.main(["--data-dir", str(folder)])
+    assert no_second == [f"http://127.0.0.1:{port}/"]
+
+
+def test_a_named_port_starts_a_second_instance(server, wurzel, monkeypatch):
+    _a, port = server
+    instance.write(heim_von(wurzel), port, "standard")
+    seen = {}
+    monkeypatch.setattr(app_mod, "serve", lambda a, port, open_browser=True, fixed=False:
+                        seen.update(port=port, fixed=fixed))
+    app_mod.main(["--port", "9003", "--no-browser"])
+    assert seen == {"port": 9003, "fixed": True}
+    app_mod.main(["--port", "0", "--no-browser"])
+    assert seen == {"port": 0, "fixed": True}
+
+
+def test_serve_on_a_named_port_binds_exactly_that_one(server, monkeypatch):
+    """The neighbour of this profile does not stop a named port, and a
+    taken one is not bumped to the next – but the very port the instance
+    serves on is still opened, it could not be bound anyway."""
+    a, port = server
+    bound = []
+
+    def make_server(app, p, host="127.0.0.1", tries=None, wait=0.0, **k):
+        bound.append((p, tries, wait))
+        raise SystemExit("stop")
+    monkeypatch.setattr(app_mod, "make_server", make_server)
+    opened = []
+    monkeypatch.setattr(app_mod.webbrowser, "open", lambda url: opened.append(url))
+    with pytest.raises(SystemExit):
+        app_mod.serve(a, port + 1, open_browser=False, fixed=True)
+    assert bound == [(port + 1, 1, app_mod.BIND_WAIT)]
+    assert app_mod.serve(a, port, open_browser=True, fixed=True) is None
+    assert opened == [f"http://127.0.0.1:{port}/"]
+
+
+def test_a_named_port_is_waited_for_not_bumped():
+    """The restart of a profile switch names the port it just left; Windows
+    may not hand it back at once. The port is asked again for a moment,
+    never swapped for the next one – the page waits on this one."""
+    import socket
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    port = holder.getsockname()[1]
+    threading.Timer(0.5, holder.close).start()
+    httpd = app_mod.make_server(None, port, tries=1, wait=5.0)
+    try:
+        assert httpd.server_address[1] == port
+    finally:
+        httpd.server_close()
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen()
+    try:
+        with pytest.raises(SystemExit, match="Kein freier Port"):
+            app_mod.make_server(None, holder.getsockname()[1], tries=1, wait=0.3)
+    finally:
+        holder.close()
+
+
+def test_switch_and_rename_see_an_instance_on_any_port(server, wurzel, monkeypatch):
+    """Profile nordwind runs on a named port far from this one: switching
+    goes there, renaming refuses – its instance.json says where, the
+    neighbour scan alone missed it."""
+    _a, port = server
+    heim = profil_mit_config(wurzel, "nordwind")
+    instance.write(heim, 9999, "nordwind")
+    real = instance.profile_at
+    monkeypatch.setattr(instance, "profile_at",
+                        lambda p, host=instance.LOOPBACK, timeout=instance.PROBE:
+                        "nordwind" if p == 9999 else real(p, host, timeout))
+    code, r = call(port, "POST", "/api/v1/profiles/nordwind/open", {})
+    assert code == 200 and r["url"] == "http://127.0.0.1:9999/"
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
+    assert code == 400 and r["error"]["k"] == "srv.profile.active"
+    assert heim.is_dir()
+
+
+def _serve_briefly(a, monkeypatch, seen):
+    """serve() on a named free port, stopped as soon as it serves; `seen`
+    gets what instance.json said while it ran."""
+    box = []
+    real = app_mod.make_server
+    monkeypatch.setattr(app_mod, "make_server",
+                        lambda app, port, host="127.0.0.1", **k: box.append(real(app, port, host, **k)) or box[0])
+
+    def stop():
+        for _ in range(250):
+            if box:
+                break
+            time.sleep(0.02)
+        seen.append(instance.read(app_mod.HEIM))
+        box[0].shutdown()
+    threading.Thread(target=stop, daemon=True).start()
+    app_mod.serve(a, 0, open_browser=False, fixed=True)
+
+
+def test_a_named_port_beside_a_running_instance_keeps_its_file(wurzel, monkeypatch, with_ollama):
+    """Profile running as A; B on a named port starts and ends: A's
+    instance.json is untouched – links and open_running() still find A."""
+    (heim_von(wurzel) / "data").mkdir(exist_ok=True)
+    first = {"port": 8701, "pid": os.getpid() + 1, "profile": "standard",
+             "started": "2026-10-02T08:00:00+00:00"}
+    (app_mod.HEIM / instance.FILE).write_text(json.dumps(first), encoding="utf-8")
+    monkeypatch.setattr(instance, "profile_at",
+                        lambda port, host=instance.LOOPBACK, timeout=1.5:
+                        "standard" if port == 8701 else None)
+    seen = []
+    _serve_briefly(app_mod.App(app_mod.load_config()), monkeypatch, seen)
+    assert seen == [first]
+    assert instance.read(app_mod.HEIM) == first
+
+
+def test_a_named_port_alone_writes_its_file_and_takes_it_away(wurzel, monkeypatch, with_ollama):
+    (heim_von(wurzel) / "data").mkdir(exist_ok=True)
+    monkeypatch.setattr(instance, "profile_at", lambda *a, **k: None)
+    seen = []
+    _serve_briefly(app_mod.App(app_mod.load_config()), monkeypatch, seen)
+    assert seen[0]["pid"] == os.getpid() and seen[0]["profile"] == "standard"
+    assert instance.read(app_mod.HEIM) is None
+
+
+def test_a_slow_status_is_still_found(wurzel, monkeypatch):
+    """Regression: with a sign-in cache the status takes 0.3 s and more
+    (MSAL asks Microsoft for its discovery document), and the probe gave
+    up after 0.5 s – the second start took the next port."""
+    import http.server
+
+    class Slow(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            time.sleep(1.0)
+            body = json.dumps({"token": {}, "jobs": {},
+                               "profile": {"name": "standard"}}).encode()
+            self.send_response(200)
+            self.send_header("X-Munimentum-Api", "v1")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Slow)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        port = httpd.server_address[1]
+        instance.write(heim_von(wurzel), port, "standard")
+        assert app_mod.running_instance() == (f"http://127.0.0.1:{port}/", "standard")
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_main_data_dir_kennt_keine_profile(wurzel, monkeypatch):
@@ -939,7 +1162,7 @@ def test_main_zieht_um_bevor_es_losgeht(wurzel, monkeypatch):
     altes_archiv(wurzel, data_dir="", index_dir="")
     (wurzel / "data").mkdir()
     gesehen = {}
-    monkeypatch.setattr(app_mod, "serve", lambda a, port, open_browser=True: gesehen.update(heim=app_mod.HEIM))
+    monkeypatch.setattr(app_mod, "serve", lambda a, port, open_browser=True, **k: gesehen.update(heim=app_mod.HEIM))
     app_mod.main(["--no-browser"])
     assert gesehen["heim"] == heim_von(wurzel)
     assert app_mod._UMZUG["nach"] == str(heim_von(wurzel))
@@ -959,7 +1182,7 @@ def test_serve_sagt_was_der_umzug_tat(wurzel, monkeypatch, with_ollama):
     box = []
     echtes = app_mod.make_server
     monkeypatch.setattr(app_mod, "make_server",
-                        lambda app, port, host="127.0.0.1": box.append(echtes(app, port, host)) or box[0])
+                        lambda app, port, host="127.0.0.1", **k: box.append(echtes(app, port, host)) or box[0])
     threading.Timer(0.05, lambda: box[0].shutdown()).start()
     app_mod.serve(a, 0, open_browser=False)
     assert ("srv.layout.moved", "info", {"path": "/x/profiles/standard"}) in zeilen

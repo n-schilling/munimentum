@@ -144,7 +144,9 @@ def _first_url():
 # it is asked again. A manager the feed never named as a user is fetched
 # the same way, so the line above does not end at a stranger.
 RECHECK_S = 7 * 86400
-_USER_FIELDS = organization.SELECT.replace(",manager", "")
+# The id is named: under $select Graph returns only what is named, and a
+# manager without an id cannot be put into anyone's line.
+_USER_FIELDS = "id," + organization.SELECT.replace(",manager", "")
 
 
 def settle_managers(graph, users, now=None, rounds=12):
@@ -215,6 +217,8 @@ def settle_managers(graph, users, now=None, rounds=12):
 
 
 def _answer_text(status, body):
+    if status == 200:
+        return "HTTP 200 without an id"
     code = export_util.graph_code(body) if isinstance(body, dict) else ""
     message = ((body or {}).get("error") or {}).get("message") if isinstance(body, dict) else ""
     return f"HTTP {status} {code} {message or ''}".strip()[:200]

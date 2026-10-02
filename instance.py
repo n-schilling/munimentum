@@ -25,12 +25,31 @@ import settings
 FILE = "instance.json"
 API_STATUS = "/api/v1/status"
 LOOPBACK = "127.0.0.1"
+# How long a probe waits for an instance's status. Generous: the status is
+# not instant – every ten seconds the Ollama check rides along (up to its
+# own 1.5 s timeout on a slow or remote host). 0.5 s missed the running app
+# and a second start took the next port. A refused port answers at once.
+PROBE = 3.0
+# Loopback never goes through a proxy: urllib would follow http_proxy from
+# the environment (a corporate VPN shell) and every probe would fail.
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
-def write(home, port, profile):
+def write(home, port, profile, timeout=PROBE):
     """Say where this process serves the profile – atomically, so a
-    reader never sees half a file."""
+    reader never sees half a file.
+
+    The file belongs to the first instance that still answers: when it
+    names another port and an instance of this profile answers there (a
+    second start with --port), nothing is written and None returned – the
+    first keeps its file, and since remove() only takes this process's
+    own, the second's end leaves it in place. A file of a crashed instance,
+    or one whose port now serves another profile, is taken over."""
     home = Path(home)
+    old = read(home)
+    if (old is not None and old["port"] != int(port)
+            and find(home, timeout)[1] == "running"):
+        return None
     data = {"port": int(port), "pid": os.getpid(), "profile": profile,
             "started": datetime.now(UTC).isoformat(timespec="seconds")}
     tmp = home / (FILE + ".tmp")
@@ -51,9 +70,9 @@ def read(home):
 
 
 def remove(home):
-    """Take the file away – only this process's own: a second start that
-    found the first one running wrote nothing, and must not take the
-    first one's file with it."""
+    """Take the file away – only this process's own: a second instance
+    (found the first running, or started beside it with --port) wrote
+    nothing, and must not take the first one's file with it."""
     data = read(home)
     if data is not None and data.get("pid") == os.getpid():
         try:
@@ -62,11 +81,11 @@ def remove(home):
             pass
 
 
-def profile_at(port, host=LOOPBACK, timeout=1.5):
+def profile_at(port, host=LOOPBACK, timeout=PROBE):
     """The profile an instance of this app serves on the port – or None
     when nothing of ours answers there."""
     try:
-        with urllib.request.urlopen(f"http://{host}:{port}{API_STATUS}", timeout=timeout) as r:
+        with _OPENER.open(f"http://{host}:{port}{API_STATUS}", timeout=timeout) as r:
             # The header says whose answer this is – every one of ours
             # carries it, and no other server on a free port will.
             ours = r.headers.get("X-Munimentum-Api")
@@ -78,7 +97,7 @@ def profile_at(port, host=LOOPBACK, timeout=1.5):
     return (data.get("profile") or {}).get("name") or settings.STANDARD_PROFIL
 
 
-def answers(port, host=LOOPBACK, timeout=1.5, profile=None):
+def answers(port, host=LOOPBACK, timeout=PROBE, profile=None):
     """Does an instance of this app answer on the port – of this profile,
     when one is named?"""
     running = profile_at(port, host, timeout)
@@ -87,7 +106,7 @@ def answers(port, host=LOOPBACK, timeout=1.5, profile=None):
     return profile is None or running == profile
 
 
-def find(home, timeout=0.5):
+def find(home, timeout=PROBE):
     """(url, state) of the app serving the profile in `home`: the url and
     "running", or None and "not_running" (no file, or nothing of ours on
     its port) or "other_profile" (the port now serves another one)."""

@@ -3933,7 +3933,7 @@ def test_assistent_ist_mit_der_tastatur_bedienbar():
 PRUEFUNG_ANMELDEWAHL = GRUNDZUSTAND + """
 // Der Status sagt, was folgt; der Weg und die eigenen Kennungen stehen in
 // den Einstellungen, die Vorgabe-Kennung in der Umgebung.
-S.auth = {signed_in: false, account: null, own_registration: false, device: null};
+ACCESS_SESSION = {signed_in: false, account: null, own_registration: false, device: null};
 S.default_client_id = 'std';
 KONFIG = Object.assign({}, KONFIG, {auth_mode: 'token', client_id: 'std',
                                     tenant: 'organizations'});
@@ -3956,12 +3956,12 @@ pruefe(html.indexOf('id="tok"') < 0, 'Textfeld steht noch da');
 pruefe(html.indexOf('id="au-client"') >= 0, 'Eigene Registrierung nicht erreichbar');
 
 // Ein laufender Gerätecode ist das Einzige, was dann zaehlt.
-S.auth.device = {code: 'ABCD-1234', url: 'https://ms.example/dev', done: false};
+ACCESS_SESSION.device = {code: 'ABCD-1234', url: 'https://ms.example/dev', done: false};
 zugangNeu();
 pruefe(karte.innerHTML.indexOf('ABCD-1234') >= 0, 'Der Code wird nicht angezeigt');
 
 // Angemeldet: die Abmeldung ist der sekundaere Knopf, nicht der primaere.
-S.auth.device = null; S.auth.signed_in = true; S.auth.account = 'a@b.c';
+ACCESS_SESSION.device = null; ACCESS_SESSION.signed_in = true; ACCESS_SESSION.account = 'a@b.c';
 zugangNeu();
 pruefe(karte.innerHTML.indexOf('a@b.c') >= 0, 'Konto wird nicht genannt');
 var act = karte.querySelector('button.act'), ghost = karte.querySelector('button.ghost');
@@ -3969,12 +3969,116 @@ pruefe(act.onclickCode.indexOf('starteLogin') >= 0, 'Primaer ist nicht das Anmel
 pruefe(ghost && ghost.onclickCode.indexOf('abmelden') >= 0, 'Abmelden fehlt');
 
 // Eigene Registrierung: der Block steht offen, wenn eine eingetragen ist.
-S.auth.own_registration = true;
+ACCESS_SESSION.own_registration = true;
 KONFIG = Object.assign({}, KONFIG, {client_id: 'eigene-id'});
 zugangNeu();
 pruefe(karte.innerHTML.indexOf('value="eigene-id"') >= 0, 'Eigene Client-ID fehlt');
 console.log('OK');
 """
+
+
+# The sign-in's state is not polled: asked only while the access card can
+# show it in login mode, and in step while a device code waits.
+CHECK_ACCESS_SESSION = GRUNDZUSTAND + """
+var asked = 0;
+global.SESSION = {signed_in: true, account: 'a@b.c', own_registration: false,
+                  device: {code: 'C-1', url: 'https://ms.example/dev', done: false}};
+global.fetch = function(path){
+  if(String(path).indexOf('/api/v1/access/session') === 0) asked++;
+  return Promise.resolve({json: function(){
+    if(String(path).indexOf('/api/v1/access/session') === 0) return Promise.resolve(global.SESSION);
+    return Promise.resolve(statusGeruest());
+  }});
+};
+// After the first status poll, which sets KONFIG from the page's own start.
+setTimeout(function(){
+  KONFIG = Object.assign({}, KONFIG, {auth_mode: 'token'});
+  tab('einstellungen');
+  pruefe(asked === 0, 'asked in token mode');
+  KONFIG.auth_mode = 'login';
+  tab('suche');
+  pruefe(asked === 0, 'asked outside the settings');
+  tab('einstellungen');
+  pruefe(asked === 1, 'not asked in login mode: ' + asked);
+  // Until the answer is in, the card claims nothing and offers nothing.
+  pruefe(ACCESS_SESSION === null, 'the answer came too early for this check');
+  pruefe(document.getElementById('zugang-inhalt').innerHTML.indexOf('starteLogin') < 0,
+         'sign-in offered while the state is unknown');
+  setTimeout(function(){
+    var html = document.getElementById('zugang-inhalt').innerHTML;
+    pruefe(html.indexOf('a@b.c') >= 0, 'account not drawn');
+    pruefe(html.indexOf('C-1') >= 0, 'device code not drawn');
+    pruefe(accessCodeWaiting(), 'a waiting code is not polled');
+    tab('suche');
+    pruefe(!accessCodeWaiting(), 'polled with the settings closed');
+    tab('einstellungen');
+    global.SESSION = {signed_in: true, account: 'a@b.c', own_registration: false,
+                      device: {code: 'C-1', done: true, ok: true}};
+    accessSessionLoad().then(function(){
+      pruefe(!accessCodeWaiting(), 'polled after the sign-in ended');
+      console.log('OK');
+    });
+  }, 20);
+}, 20);
+"""
+
+
+# The card in view follows a sign-in that changed elsewhere: on the idle
+# tick and when a finished run is seen – never through the status.
+PRUEFUNG_ACCESS_SESSION_FOLLOWS = GRUNDZUSTAND + """
+var asked = 0;
+global.SESSION = {signed_in: true, account: 'a@b.c', own_registration: false, device: null};
+global.fetch = function(path){
+  if(String(path).indexOf('/api/v1/access/session') === 0) asked++;
+  return Promise.resolve({json: function(){
+    if(String(path).indexOf('/api/v1/access/session') === 0) return Promise.resolve(global.SESSION);
+    return Promise.resolve(statusGeruest());
+  }});
+};
+function drawn(){ return document.getElementById('zugang-inhalt').innerHTML; }
+setTimeout(function(){
+  KONFIG = Object.assign({}, KONFIG, {auth_mode: 'login'});
+  tab('einstellungen');
+  setTimeout(function(){
+    pruefe(drawn().indexOf('a@b.c') >= 0, 'signed-in state not drawn');
+    // Signed out in another tab; the idle tick comes round.
+    global.SESSION = {signed_in: false, account: null, own_registration: false, device: null};
+    var before = asked;
+    TAKT_STATUS.status = 0;
+    takt();
+    pruefe(asked === before + 1, 'the idle tick did not ask: ' + (asked - before));
+    setTimeout(function(){
+      pruefe(drawn().indexOf('a@b.c') < 0, 'the card still says signed in');
+      // Outside the settings the tick asks nothing.
+      tab('suche');
+      before = asked;
+      TAKT_STATUS.status = 0;
+      takt();
+      pruefe(asked === before, 'asked with the card out of view');
+      // A run that ended between two polls, seen by its stamp.
+      tab('einstellungen');
+      global.SESSION = {signed_in: true, account: 'b@c.d', own_registration: false, device: null};
+      before = asked;
+      LAUF.zuletzt = '2026-10-01T10:00:00';
+      laufVerfolgen({busy: false, job: null, token_expired: false, seq: 0,
+                     last: {finished: '2026-10-02T10:00:00', steps: ['outlook_export']}}, false);
+      pruefe(asked >= before + 1, 'a finished run did not ask');
+      setTimeout(function(){
+        pruefe(drawn().indexOf('b@c.d') >= 0, 'the card missed the run');
+        console.log('OK');
+      }, 20);
+    }, 20);
+  }, 20);
+}, 20);
+"""
+
+
+def test_the_access_card_follows_the_sign_in():
+    _in_node(PRUEFUNG_ACCESS_SESSION_FOLLOWS)
+
+
+def test_the_sign_in_state_is_asked_only_where_it_is_shown():
+    _in_node(CHECK_ACCESS_SESSION)
 
 
 def test_assistent_bietet_beide_anmeldewege():
@@ -4019,7 +4123,7 @@ def test_serve_oeffnet_den_browser_und_raeumt_auf(sandbox, with_ollama, monkeypa
     httpd_box = []
     echtes_make = app_mod.make_server
     monkeypatch.setattr(app_mod, "make_server",
-                        lambda app, port, host="127.0.0.1":
+                        lambda app, port, host="127.0.0.1", **k:
                         httpd_box.append(echtes_make(app, port, host)) or httpd_box[0])
     threading.Timer(0.05, stop_gleich).start()
     app_mod.serve(a, 0, open_browser=True)
@@ -4039,7 +4143,7 @@ def test_serve_says_where_it_answers_while_it_runs(sandbox, with_ollama, monkeyp
     httpd_box, gelesen = [], []
     echtes_make = app_mod.make_server
     monkeypatch.setattr(app_mod, "make_server",
-                        lambda app, port, host="127.0.0.1":
+                        lambda app, port, host="127.0.0.1", **k:
                         httpd_box.append(echtes_make(app, port, host)) or httpd_box[0])
 
     def stop_gleich():
@@ -4133,7 +4237,7 @@ def test_serve_mit_port_null_prueft_nicht(sandbox, with_ollama, monkeypatch):
     box = []
     echtes = app_mod.make_server
     monkeypatch.setattr(app_mod, "make_server",
-                        lambda app, port, host="127.0.0.1":
+                        lambda app, port, host="127.0.0.1", **k:
                         box.append(echtes(app, port, host)) or box[0])
     threading.Timer(0.05, lambda: box[0].shutdown()).start()
     app_mod.serve(a, 0, open_browser=False)
@@ -4145,7 +4249,7 @@ def test_main_reicht_argumente_an_serve_weiter(sandbox, monkeypatch):
     # app folder – never the real one from a test.
     gesehen = {}
     monkeypatch.setattr(app_mod, "serve",
-                        lambda a, port, open_browser=True: gesehen.update(
+                        lambda a, port, open_browser=True, **k: gesehen.update(
                             port=port, browser=open_browser))
     monkeypatch.setattr(sys, "argv", ["app.py", "--port", "9001", "--no-browser"])
     app_mod.main()
@@ -4168,6 +4272,17 @@ def test_http_status_nennt_den_anmeldemodus(server):
     assert call(port, "GET", "/api/v1/app")[1]["default_client_id"] == app_mod.auth.STANDARD_CLIENT_ID
 
 
+def test_http_session_says_what_the_cache_says(server, sandbox):
+    """The sign-in's state on its own route – what the access card shows,
+    nothing of the settings, and the same as the deprecated status node."""
+    _, port = server
+    code, r = call(port, "GET", "/api/v1/access/session")
+    assert code == 200
+    assert r == {"signed_in": False, "account": None, "own_registration": False,
+                 "device": None}
+    assert call(port, "GET", "/api/v1/status")[1]["auth"] == r
+
+
 def test_http_modus_umschalten(server):
     a, port = server
     code, r = call(port, "PATCH", "/api/v1/config", {"auth_mode": "login"})
@@ -4184,7 +4299,7 @@ def test_http_eigene_registrierung_speichern(server):
     code, r = call(port, "PATCH", "/api/v1/config",
                    {"client_id": " eigene-id ", "tenant": "contoso.example"})
     assert code == 200 and r["config"]["client_id"] == "eigene-id"
-    st = call(port, "GET", "/api/v1/status")[1]["auth"]
+    st = call(port, "GET", "/api/v1/access/session")[1]
     assert st["own_registration"] is True
     assert call(port, "GET", "/api/v1/config")[1]["config"]["tenant"] == "contoso.example"
     assert a.cfg["tenant"] == "contoso.example"
