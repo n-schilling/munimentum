@@ -767,9 +767,11 @@ def plan_lauf(graph, out, plan, threads_cache, workers=1):
         legacy_holen = bool(thread and gruppe and (
             thread not in stand_threads or threads is not None))
         faellig.append((t, alt, geaendert, legacy_holen))
-    progress.event("run.planner.start", name=plan["titel"], n=len(tasks),
-                   m=len(faellig))
     if faellig:
+        # Named ahead only when there is something to wait for; the board's
+        # line with its count follows either way.
+        progress.event("run.planner.start", name=plan["titel"], n=len(tasks),
+                       m=len(faellig))
         progress.melde(0, len(faellig), "tasks")
     # The refreshes run side by side; the shared state is touched only
     # here, in this thread, once the workers are done.

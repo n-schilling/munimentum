@@ -210,7 +210,10 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
 # therefore appear nowhere in full in the source.
 # Step labels that run records written by earlier versions still carry.
 GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
-                          "run.conv.updated")    # a conversation's line until 13.7.1
+                          "run.conv.updated",    # a conversation's line until 13.7.1
+                          # Their shape changed in 14.1.1 under a new key; runs
+                          # stored before still carry these (counts, `m`).
+                          "run.conv.changed", "run.collect.start")
 
 DYNAMISCH = (
     # The organization view names a change's kind and its fields.
@@ -300,12 +303,92 @@ def benutzte_schluessel():
         assert f"'{rumpf}'" in quelle, f"{rumpf} wird nicht mehr zusammengesetzt"
         keys |= {rumpf + e for e in enden}
     keys |= set(app_mod.ollama_hint()["steps"])
+    # A `.one` variant is picked by rule (mtext, i18n.log_line) when its stem's
+    # `n` is 1 – used wherever the stem is.
+    keys |= {k + ".one" for k in list(keys)} & set(roh("de"))
     return keys
 
 
 def test_jeder_verwendete_schluessel_ist_uebersetzt():
     fehlt = benutzte_schluessel() - set(roh("de"))
     assert not fehlt, f"in app.py verwendet, aber nicht in lang/: {sorted(fehlt)}"
+
+
+def test_log_lines_render_on_the_server_as_on_the_page():
+    """i18n.log_line – what the MCP server hands Claude of a run's log –
+    takes the singular when n is 1 (its unit too), joins a list, renders a
+    step's result and a run's selection, and groups counts as the language
+    does – but no code, port, id, [i/total] counter or line of the chain."""
+    unit = {"k": "progress.unit.mails", "v": {}}
+    line = i18n.log_line
+    assert line("en", "run.scanned", values={"n": 1, "unit": unit}) == "1 mail seen."
+    assert line("en", "run.scanned", values={"n": 24680, "unit": unit}) == "24,680 mails seen."
+    assert line("de", "run.scanned", values={"n": 24680, "unit": unit}) == "24.680 Mails gesichtet."
+    assert line("fr", "run.scanned", values={"n": 1, "unit": unit}) == "1 courriel parcouru."
+    by = [{"k": "run.index.read_part", "v": {"source": {"k": "search.source.outlook", "v": {}},
+                                             "count": 7}},
+          {"k": "run.index.read_part", "v": {"source": {"k": "search.source.teams", "v": {}},
+                                             "count": 2}}]
+    assert line("en", "run.index.read_by", values={"by": by}) == "Read: Mail 7 · Teams 2."
+    assert line("en", "srv.job.result", values={"ergebnis": {
+        "new": 4, "unchanged": 4200, "errors": 0, "extra": {"moved": 0, "updated": 3}}}) \
+        == "Result: new: 4 · unchanged: 4,200 · errors: 0 · updated 3"
+    assert line("en", "srv.job.elements", values={"elements": {
+        "outlook": ["mail", "calendar", "contacts"], "teams": ["1on1"], "onedrive": True}}) \
+        == "Selected: Outlook (all), Teams (1:1 chats), OneDrive (all)"
+    # Positions stay as they are, counts beside them are grouped.
+    assert line("en", "run.conv.same", values={"i": 1001, "total": 3000, "kind": "",
+                                                "name": "x"}).startswith("· [1001/3000]")
+    assert line("en", "run.evidence.stamped", values={"n": 24680}).endswith("line 24680.")
+    assert line("en", "run.sync.result", values={"total": 3000, "chosen": 2850, "unit": "chats"}) \
+        == "3,000 chats present, 2,850 chosen by the rules."
+    assert line("en", "srv.mcp.started", values={"port": 49152}) == "MCP server started on port 49152."
+    # A list renders its numbers like counts and survives what is no message.
+    assert line("en", "run.index.read_by", values={"by": [1250, None, "x"]}) == "Read: 1,250 · x."
+    # Only the unit follows the count: a name beside it stays as it is.
+    assert line("en", "run.scanned_in", values={"name": {"k": "progress.unit.mails", "v": {}},
+                                                 "n": 1, "unit": unit}) == "mails: 1 mail seen."
+
+
+def test_a_singular_is_never_borrowed_from_another_language(tmp_path):
+    """A language with the plural but without its `.one` keeps its plural
+    for one – the line never switches to German, here or on the page."""
+    (tmp_path / "lang").mkdir()
+    (tmp_path / "lang" / "de.json").write_text(json.dumps({"x.n": "{n} Dinge", "x.n.one": "{n} Ding"}))
+    (tmp_path / "lang" / "en.json").write_text(json.dumps({"x.n": "{n} things"}))
+    i18n.reset()
+    try:
+        assert i18n.log_line("en", "x.n", tmp_path, {"n": 1}) == "1 things"
+        assert "x.n.one" not in i18n.strings("en", tmp_path)
+        assert i18n.strings("de", tmp_path)["x.n.one"] == "{n} Ding"
+    finally:
+        i18n.reset()
+
+
+def test_runs_stored_before_render_as_they_did():
+    """14.1.1 changed two lines' shape under new keys; a line stored
+    with the old one renders as it always did, here and on the page."""
+    line = i18n.log_line
+    assert line("en", "run.conv.changed", values={
+        "i": 1, "total": 2, "kind": "", "name": "x", "n": 10, "dur": "2s",
+        "new": 3, "edited": 0, "events": 0}).endswith("3 new, 0 changed, 0 system events · 10 messages, 2s")
+    assert line("en", "run.collect.start", values={"n": 1, "m": 1}) == "1 automatic searches in 1 cases."
+
+
+def test_archive_text_keeps_the_plain_rule():
+    """An exported page is filled by satz(), which knows no log rule: a
+    count there stays as it was written, whatever the language."""
+    assert "1000" in i18n.satz("de", "run.scanned", werte={"n": 1000, "unit": "Mails"})
+
+
+def test_page_and_server_keep_the_same_raw_numbers():
+    import re as _re
+    page = (Path(app_mod.RES) / "page.html").read_text(encoding="utf-8")
+    names = _re.search(r"var LOG_RAW_NUMBERS = \[([^\]]*)\]", page).group(1)
+    assert set(_re.findall(r"'(\w+)'", names)) == set(i18n.RAW_NUMBERS)
+    by_key = _re.search(r"var LOG_RAW_BY_KEY = \{(.*?)\};", page, _re.S).group(1)
+    pairs = _re.findall(r"'([\w.]+)': \[([^\]]*)\]", by_key)
+    assert {k: frozenset(_re.findall(r"'(\w+)'", v)) for k, v in pairs} == i18n.RAW_BY_KEY
 
 
 def test_keine_verwaisten_texte():

@@ -2584,8 +2584,10 @@ def test_the_result_counts_the_new_messages(tmp_path, monkeypatch, capsys):
     runner = lambda: ("updated", "1on1", "Alice Example", 3, 0.1,  # noqa: E731
                       {"messages": 2, "events": 1, "edited": 0})
     te.run_parallel([runner], stats, 1)
-    line = [e for e in _events(capsys) if e["k"] == "run.conv.changed"][0]
-    assert (line["v"]["new"], line["v"]["events"], line["v"]["edited"]) == (2, 1, 0)
+    line = [e for e in _events(capsys) if e["k"] == "run.conv.changed_parts"][0]
+    # What did not happen is left out of the line; what did is a counted part.
+    assert line["v"]["parts"] == [{"k": "run.conv.part.new", "v": {"n": 2}},
+                                  {"k": "run.conv.part.events", "v": {"n": 1}}]
     assert stats["messages"] == 2 and stats["updated"] == 1
 
 
@@ -2754,7 +2756,7 @@ def test_one_new_message_costs_one_embedding(tmp_path, monkeypatch, members_read
     matches every chunk by the hash of its title and text, so anything
     that changes a conversation's name between two runs – a member list
     Graph refuses, a fallback name – makes every message of it new: in
-    14.0.2 that re-embedded some 8 000 messages of three chats for 24 new
+    14.0.2 that re-embedded thousands of messages for a handful of new
     ones."""
     out = tmp_path / "teams_export"
     out.mkdir()

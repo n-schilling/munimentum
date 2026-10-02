@@ -2214,11 +2214,18 @@ def run_parallel(runners, stats, workers, fehler=None):
                                    kind=kind, name=label, n=count, dur=dur)
                 elif status == "updated":
                     stats["updated"] += 1
-                    progress.event("run.conv.changed", i=done_count, total=total,
+                    # What did not happen is not named: ", 0 changed, 0
+                    # system events" said nothing on almost every line.
+                    parts = [progress.atom_n(key, int(zahlen[z]))
+                             for z, key in (("messages", "run.conv.part.new"),
+                                            ("edited", "run.conv.part.edited"),
+                                            ("events", "run.conv.part.events"))
+                             if zahlen.get(z)]
+                    # A new key for the new shape: lines stored with the
+                    # old one carry counts where this one carries parts.
+                    progress.event("run.conv.changed_parts", i=done_count, total=total,
                                    kind=kind, name=label, n=count, dur=dur,
-                                   new=int(zahlen.get("messages") or 0),
-                                   events=int(zahlen.get("events") or 0),
-                                   edited=int(zahlen.get("edited") or 0))
+                                   parts=parts or [progress.atom_n("run.conv.part.new", 0)])
                 elif status == "unchanged":
                     stats["skipped"] += 1   # checked, but no change
                     progress.event("run.conv.same", i=done_count, total=total,

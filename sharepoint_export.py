@@ -240,85 +240,102 @@ def resolve_drives(graph, urls):
     # the site and its libraries once: a dozen URLs cost a dozen times two
     # requests – some twelve seconds – before a single cadence was asked.
     je_adresse = {}
+    # One log line per site, after all URLs: a dozen lines into one site
+    # used to say "1 libraries." a dozen times.
+    per_site = {}
     kadenz_map = kadenzen()
-    for url in urls:
-        kadenz = kadenz_map.get(f"sharepoint-url:{url}") or "always"
-        teile = url_teile(url)
-        if not teile:
-            progress.event("run.sharepoint.site_failed", "err", url=url,
-                           error="invalid URL")
-            fehl += 1
-            continue
-        adresse, rest = teile
-        try:
-            if adresse not in je_adresse:
-                site = graph.get(f"{GRAPH}/sites/{adresse}")
-                je_adresse[adresse] = (site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
-            site, drives = je_adresse[adresse]
-        except auth.TokenExpired:
-            raise
-        except requests.HTTPError as e:
-            status = getattr(e.response, "status_code", None)
-            if status == 403:
-                # Missing Sites.Read.All on a pasted key – say so clearly.
-                progress.event("run.sharepoint.denied", "warn", url=url)
-            else:
+    try:
+        for url in urls:
+            kadenz = kadenz_map.get(f"sharepoint-url:{url}") or "always"
+            teile = url_teile(url)
+            if not teile:
                 progress.event("run.sharepoint.site_failed", "err", url=url,
-                               error=f"HTTP {status}")
-            fehl += 1
-            continue
-        except Exception as e:
-            progress.event("run.sharepoint.site_failed", "err", url=url,
-                           error=f"{type(e).__name__}: {e}")
-            fehl += 1
-            continue
-        sname = site.get("displayName") or site.get("name") or adresse
-        # Two different sites can share a display name; their mirrors must
-        # not share a folder – the second one gets a suffix from its id.
-        kennung = site.get("id") or adresse
-        bekannt = seiten_namen.setdefault(sname, kennung)
-        if bekannt != kennung:
-            sname = f"{sname}__{export_util.kuerzel(kennung)}"
-        bibliotheken = [d for d in drives
-                        if (d.get("driveType") or "") == "documentLibrary"]
-        kandidaten, unterpfad = bibliotheken, None
-        if rest:
-            for d in bibliotheken:
-                libsegs = _drive_pfad(d, adresse)
-                if libsegs and rest[:len(libsegs)] == libsegs:
-                    kandidaten = [d]
-                    unterpfad = "/".join(rest[len(libsegs):]) or None
-                    break
-            else:
-                # A path we cannot place: mirror the whole site rather than
-                # silently nothing, and say why.
-                progress.event("run.sharepoint.path_unmatched", "warn",
-                               url=url, path="/".join(rest))
-        progress.event("run.sharepoint.libraries", site=sname,
-                       n=len(kandidaten))
-        for d in kandidaten:
-            if not d.get("id"):
+                               error="invalid URL")
+                fehl += 1
                 continue
-            eintrag = nach_id.get(d["id"])
-            if eintrag is None:
-                eintrag = {"id": d["id"], "site": sname,
-                           "name": d.get("name") or "Bibliothek",
-                           "kadenz": kadenz,
-                           "prefixes": None if unterpfad is None
-                           else {unterpfad},
-                           "urls": []}
-                nach_id[d["id"]] = eintrag
-                gefunden.append(eintrag)
-            elif unterpfad is None:
-                eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
-                eintrag["prefixes"] = None            # full scope wins
-            elif eintrag["prefixes"] is not None:
-                eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
-                _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
-            # Which configured lines led here – the library's state.db
-            # remembers them for the settings page.
-            if url not in eintrag["urls"]:
-                eintrag["urls"].append(url)
+            adresse, rest = teile
+            try:
+                if adresse not in je_adresse:
+                    site = graph.get(f"{GRAPH}/sites/{adresse}")
+                    je_adresse[adresse] = (site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
+                site, drives = je_adresse[adresse]
+            except auth.TokenExpired:
+                raise
+            except requests.HTTPError as e:
+                status = getattr(e.response, "status_code", None)
+                if status == 403:
+                    # Missing Sites.Read.All on a pasted key – say so clearly.
+                    progress.event("run.sharepoint.denied", "warn", url=url)
+                else:
+                    progress.event("run.sharepoint.site_failed", "err", url=url,
+                                   error=f"HTTP {status}")
+                fehl += 1
+                continue
+            except Exception as e:
+                progress.event("run.sharepoint.site_failed", "err", url=url,
+                               error=f"{type(e).__name__}: {e}")
+                fehl += 1
+                continue
+            sname = site.get("displayName") or site.get("name") or adresse
+            # Two different sites can share a display name; their mirrors must
+            # not share a folder – the second one gets a suffix from its id.
+            kennung = site.get("id") or adresse
+            bekannt = seiten_namen.setdefault(sname, kennung)
+            if bekannt != kennung:
+                sname = f"{sname}__{export_util.kuerzel(kennung)}"
+            bibliotheken = [d for d in drives
+                            if (d.get("driveType") or "") == "documentLibrary"]
+            kandidaten, unterpfad = bibliotheken, None
+            if rest:
+                for d in bibliotheken:
+                    libsegs = _drive_pfad(d, adresse)
+                    if libsegs and rest[:len(libsegs)] == libsegs:
+                        kandidaten = [d]
+                        unterpfad = "/".join(rest[len(libsegs):]) or None
+                        break
+                else:
+                    # A path we cannot place: mirror the whole site rather than
+                    # silently nothing, and say why.
+                    progress.event("run.sharepoint.path_unmatched", "warn",
+                                   url=url, path="/".join(rest))
+            site_seen = per_site.setdefault(sname, {"libraries": set(), "urls": set()})
+            site_seen["urls"].add(url)
+            site_seen["libraries"].update(d["id"] for d in kandidaten if d.get("id"))
+            for d in kandidaten:
+                if not d.get("id"):
+                    continue
+                eintrag = nach_id.get(d["id"])
+                if eintrag is None:
+                    eintrag = {"id": d["id"], "site": sname,
+                               "name": d.get("name") or "Bibliothek",
+                               "kadenz": kadenz,
+                               "prefixes": None if unterpfad is None
+                               else {unterpfad},
+                               "urls": []}
+                    nach_id[d["id"]] = eintrag
+                    gefunden.append(eintrag)
+                elif unterpfad is None:
+                    eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
+                    eintrag["prefixes"] = None            # full scope wins
+                elif eintrag["prefixes"] is not None:
+                    eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
+                    _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
+                # Which configured lines led here – the library's state.db
+                # remembers them for the settings page.
+                if url not in eintrag["urls"]:
+                    eintrag["urls"].append(url)
+    finally:
+        # Even when the token runs out half way: the sites already resolved
+        # keep their line.
+        for sname, site_seen in per_site.items():
+            if len(site_seen["urls"]) > 1:
+                progress.event("run.sharepoint.libraries_from", site=sname,
+                               n=len(site_seen["libraries"]),
+                               urls=progress.atom_n("run.sharepoint.addresses",
+                                                    len(site_seen["urls"])))
+            else:
+                progress.event("run.sharepoint.libraries", site=sname,
+                               n=len(site_seen["libraries"]))
     return gefunden, fehl
 
 

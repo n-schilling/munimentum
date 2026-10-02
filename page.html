@@ -2196,21 +2196,48 @@ function t(key, vars){
    that keeps "schedule active (every 60 minutes)" one sentence instead of
    three fragments. If v carries a `minutes`, a readable `rest` duration is
    derived from it in addition: only the interface knows the language. */
-function mtext(m){
+/* Three conveniences every log line gets without asking (i18n.log_line
+   does the same for the MCP server): an integer is a count and reads like
+   the result lines (24,680, not 24680) – except a code, a port, an id, and
+   the positions some keys carried as numbers (an emitter that logs a
+   position passes a string); a list is one line joined by " · "; and a
+   key with a `.one` variant takes it when its `n` is 1 – "1 mail seen",
+   not "1 mails" – which its `unit` follows. The two lists below are
+   i18n.RAW_NUMBERS and i18n.RAW_BY_KEY (a test compares them). */
+var LOG_RAW_NUMBERS = ['code', 'status', 'port', 'id', 'version', 'pointer'];
+var LOG_RAW_BY_KEY = {
+  'run.conv.new': ['i', 'total'], 'run.conv.updated': ['i', 'total'],
+  'run.conv.changed': ['i', 'total'], 'run.conv.changed_parts': ['i', 'total'],
+  'run.conv.same': ['i', 'total'], 'run.conv.empty': ['i', 'total'],
+  'run.conv.failed': ['i', 'total'],
+  'run.evidence.stamped': ['n'], 'run.evidence.broken': ['n']
+};
+function logValue(name, x, one, raw){
+  if(Array.isArray(x))
+    return x.map(function(y){ return logValue(name, y, false, raw); })
+      .filter(function(y){ return y !== '' && y != null; }).join(' · ');
+  if(typeof x === 'number' && Number.isInteger(x) && raw.indexOf(name) < 0) return zahl(x);
+  return mtext(x, one);
+}
+function mtext(m, one){
   if(m == null) return '';
   if(typeof m === 'string') return m;
+  if(Array.isArray(m)) return logValue('', m, false, LOG_RAW_NUMBERS);
   if(!m.k) return String(m);
-  var v = {};
+  var v = {}, n1 = !!(m.v && m.v.n === 1);
+  var raw = LOG_RAW_NUMBERS.concat(LOG_RAW_BY_KEY[m.k] || []);
   Object.keys(m.v || {}).forEach(function(k){
+    var x = m.v[k];
     // A step's structured result renders as one translated line; the
     // selected sources of a run use the runs table's wording.
-    v[k] = (k === 'ergebnis' && m.v[k] && typeof m.v[k] === 'object')
-      ? ergebnisText(m.v[k])
-      : (k === 'elements' && m.v[k] && typeof m.v[k] === 'object')
-      ? runElements({elements: m.v[k]}) : mtext(m.v[k]);
+    v[k] = (k === 'ergebnis' && x && typeof x === 'object')
+      ? ergebnisText(x)
+      : (k === 'elements' && x && typeof x === 'object')
+      ? runElements({elements: x}) : logValue(k, x, n1 && k === 'unit', raw);
   });
   if(m.v && m.v.minutes !== undefined) v.rest = restzeit(m.v.minutes);
-  return t(m.k, v);
+  var key = ((n1 || one) && STR[m.k + '.one'] != null) ? m.k + '.one' : m.k;
+  return t(key, v);
 }
 
 /* The labels are the same atoms the run history table uses; extras keep
@@ -2223,8 +2250,9 @@ function ergebnisText(e){
       if(e[p[0]] !== undefined && e[p[0]] !== null)
         bits.push(t(p[1]) + ' ' + zahl(e[p[0]]));
     });
+  // An extra that counted nothing says nothing: "moved 0 · gone 0" is noise.
   Object.keys(e.extra || {}).forEach(function(k){
-    bits.push(k + ' ' + zahl(e.extra[k]));
+    if(e.extra[k]) bits.push(k + ' ' + zahl(e.extra[k]));
   });
   return bits.join(' · ') || '–';
 }

@@ -189,11 +189,11 @@ def _invite(uid, *, method="CANCEL", summary="Abgesagt: Jour Fixe",
 
 
 def test_combined_norm_uid_packt_exchange_id_aus():
-    # Exchange global object ID with embedded Google UID (as in the real export)
-    blob = ("040000008200E00074C5B7101A82E00800000000000000000000000000000000000000003200"
-            "00007643616C2D55696401000000326E6934386C71716B6B326E313772687567643335383"
-            "46A6F7140676F6F676C652E636F6D00")
-    assert combined_search.norm_uid(blob) == "2ni48lqqkk2n17rhugd3584joq@google.com"
+    # Exchange global object ID with an embedded vCal UID, as Outlook writes it
+    blob = ("040000008200E00074C5B7101A82E008000000000000000000000000000000000000000032"
+            "0000007643616C2D556964010000006E6F726477696E642D7265766965772D30303031"
+            "4063616C656E6461722E6578616D706C6500")
+    assert combined_search.norm_uid(blob) == "nordwind-review-0001@calendar.example"
     # native UIDs stay unchanged (except for case)
     assert combined_search.norm_uid("ABC@example.com") == "abc@example.com"
     assert combined_search.norm_uid("") == ""
@@ -202,12 +202,12 @@ def test_combined_norm_uid_packt_exchange_id_aus():
 
 
 def test_combined_reconstruct_erkennt_ausgepackte_uid():
-    blob = ("040000008200E00074C5B7101A82E00800000000000000000000000000000000000000003200"
-            "00007643616C2D55696401000000326E6934386C71716B6B326E313772687567643335383"
-            "46A6F7140676F6F676C652E636F6D00")
+    blob = ("040000008200E00074C5B7101A82E008000000000000000000000000000000000000000032"
+            "0000007643616C2D556964010000006E6F726477696E642D7265766965772D30303031"
+            "4063616C656E6461722E6578616D706C6500")
     im_kalender = {"uid": blob, "st": "confirmed", "title": "Review", "ts": None}
     ghosts, marked, dupes = combined_search.reconstruct_events(
-        [_invite("2ni48lqqkk2n17rhugd3584joq@google.com", summary="Review")], [im_kalender])
+        [_invite("nordwind-review-0001@calendar.example", summary="Review")], [im_kalender])
     # same event -> no ghost copy, the status is healed instead
     assert ghosts == [] and marked == 1 and dupes == 0
 

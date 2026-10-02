@@ -2751,7 +2751,7 @@ def _satz(text):
     text key with placeholders; this renders it in English, which is the
     language of everything this server says."""
     if isinstance(text, dict) and text.get("k"):
-        return i18n.satz("en", text["k"], export_util.resource_dir(), text.get("v")) or text["k"]
+        return i18n.log_line("en", text["k"], export_util.resource_dir(), text.get("v")) or text["k"]
     return text if isinstance(text, str) else json.dumps(text, ensure_ascii=False)
 
 

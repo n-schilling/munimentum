@@ -40,19 +40,19 @@ def test_site_address_ohne_host_ist_none():
 def test_url_teile_sharing_link_findet_site_und_pfad():
     """The reported case: a sharing link (/:f:/r/…) landed on the root
     site and found nothing there."""
-    url = ("https://firma.sharepoint.com/:f:/r/sites/PS-UK"
-           "/Projects/N/Nordwind?d=w46c78&csf=1&web=1&e=y7q8ln")
+    url = ("https://firma.sharepoint.com/:f:/r/sites/Workspace"
+           "/Templates/Folder/Nordwind?web=1")
     adresse, rest = sp.url_teile(url)
-    assert adresse == "firma.sharepoint.com:/sites/PS-UK"
-    assert rest == ["Projects", "N", "Nordwind"]
+    assert adresse == "firma.sharepoint.com:/sites/Workspace"
+    assert rest == ["Templates", "Folder", "Nordwind"]
 
 
 def test_url_teile_forms_ansicht_nimmt_den_id_parameter():
-    url = ("https://firma.sharepoint.com/sites/PS-UK/Projects/Forms/AllItems.aspx"
-           "?id=%2Fsites%2FPS-UK%2FProjects%2FN%2FNordwind&viewid=x")
+    url = ("https://firma.sharepoint.com/sites/Workspace/Templates/Forms/AllItems.aspx"
+           "?id=%2Fsites%2FWorkspace%2FTemplates%2FFolder%2FNordwind&viewid=x")
     adresse, rest = sp.url_teile(url)
-    assert adresse == "firma.sharepoint.com:/sites/PS-UK"
-    assert rest == ["Projects", "N", "Nordwind"]
+    assert adresse == "firma.sharepoint.com:/sites/Workspace"
+    assert rest == ["Templates", "Folder", "Nordwind"]
 
 
 def test_url_teile_site_ohne_pfad():
@@ -139,7 +139,7 @@ def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
 
 
 def test_several_urls_into_one_site_ask_for_it_once(capsys):
-    """Eleven URLs into one site cost two requests, not twenty-two."""
+    """Six URLs into one site cost two requests, not twelve."""
     class Counting(_FakeGraph):
         calls = 0
 
@@ -150,47 +150,87 @@ def test_several_urls_into_one_site_ask_for_it_once(capsys):
         def paged(self, url):
             Counting.calls += 1
             yield from super().paged(url)
-    g = Counting(sites={"firma.sharepoint.com:/sites/PS-UK": {
-        "id": "s1", "name": "PS UK",
-        "drives": [{"id": "d2", "name": "Projects", "driveType": "documentLibrary",
-                    "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Projects"}]}})
-    urls = [f"https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Ordner{i}" for i in range(11)]
+    g = Counting(sites={"firma.sharepoint.com:/sites/Workspace": {
+        "id": "s1", "name": "Workspace",
+        "drives": [{"id": "d2", "name": "Templates", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/Workspace/Templates"}]}})
+    urls = [f"https://firma.sharepoint.com/:f:/r/sites/Workspace/Templates/Folder/Sub{i}" for i in range(6)]
     drives, fehl = sp.resolve_drives(g, urls)
     assert fehl == 0 and Counting.calls == 2
-    assert drives[0]["prefixes"] == {f"N/Ordner{i}" for i in range(11)}
+    assert drives[0]["prefixes"] == {f"Folder/Sub{i}" for i in range(6)}
+
+
+def test_several_urls_into_one_site_say_so_in_one_line(capsys):
+    """Seven URLs into one site used to log "Workspace: 1 libraries." seven
+    times; now one line per site counts its libraries and addresses."""
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/Workspace": {
+        "id": "s1", "name": "Workspace",
+        "drives": [{"id": "d1", "name": "Documents", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/Workspace/Shared%20Documents"},
+                   {"id": "d2", "name": "Templates", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/Workspace/Templates"}]}})
+    urls = [f"https://firma.sharepoint.com/:f:/r/sites/Workspace/Templates/Folder/Sub{i}" for i in range(6)]
+    urls.append("https://firma.sharepoint.com/:f:/r/sites/Workspace/Shared%20Documents/A")
+    sp.resolve_drives(g, urls)
+    lines = [e for e in _events(capsys) if e["k"].startswith("run.sharepoint.libraries")]
+    assert lines == [{"k": "run.sharepoint.libraries_from", "level": "info",
+                      "v": {"site": "Workspace", "n": 2,
+                            "urls": {"k": "run.sharepoint.addresses", "v": {"n": 7}}}}]
+    sp.resolve_drives(g, ["https://firma.sharepoint.com/sites/Workspace/Templates"])
+    lines = [e for e in _events(capsys) if e["k"].startswith("run.sharepoint.libraries")]
+    assert [(e["k"], e["v"]["n"]) for e in lines] == [("run.sharepoint.libraries", 1)]
+
+
+def test_a_token_that_runs_out_keeps_the_lines_already_resolved(capsys):
+    import auth
+
+    class RunsOut(_FakeGraph):
+        def get(self, url):
+            if "Second" in url:
+                raise auth.TokenExpired()
+            return super().get(url)
+    g = RunsOut(sites={"firma.sharepoint.com:/sites/First": {
+        "id": "s1", "name": "First",
+        "drives": [{"id": "d1", "name": "Documents", "driveType": "documentLibrary"}]}})
+    with pytest.raises(auth.TokenExpired):
+        sp.resolve_drives(g, ["https://firma.sharepoint.com/sites/First",
+                              "https://firma.sharepoint.com/sites/Second"])
+    lines = [(e["k"], e["v"]["site"]) for e in _events(capsys)
+             if e["k"].startswith("run.sharepoint.libraries")]
+    assert lines == [("run.sharepoint.libraries", "First")]
 
 
 def test_resolve_drives_pfad_begrenzt_auf_eine_bibliothek(capsys):
     """A folder URL mirrors exactly that subtree – not the whole site."""
-    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/PS-UK": {
-        "id": "s1", "name": "PS UK",
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/Workspace": {
+        "id": "s1", "name": "Workspace",
         "drives": [
             {"id": "d1", "name": "Dokumente", "driveType": "documentLibrary",
-             "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Freigegebene%20Dokumente"},
-            {"id": "d2", "name": "Projects", "driveType": "documentLibrary",
-             "webUrl": "https://firma.sharepoint.com/sites/PS-UK/Projects"}]}})
+             "webUrl": "https://firma.sharepoint.com/sites/Workspace/Freigegebene%20Dokumente"},
+            {"id": "d2", "name": "Templates", "driveType": "documentLibrary",
+             "webUrl": "https://firma.sharepoint.com/sites/Workspace/Templates"}]}})
     drives, fehl = sp.resolve_drives(
-        g, ["https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Nordwind?web=1"])
+        g, ["https://firma.sharepoint.com/:f:/r/sites/Workspace/Templates/Folder/Nordwind?web=1"])
     assert fehl == 0 and [d["id"] for d in drives] == ["d2"]
-    assert drives[0]["prefixes"] == {"N/Nordwind"}
+    assert drives[0]["prefixes"] == {"Folder/Nordwind"}
 
     # The same site in full on top: the wider scope wins.
     drives, _ = sp.resolve_drives(
-        g, ["https://firma.sharepoint.com/:f:/r/sites/PS-UK/Projects/N/Nordwind",
-            "https://firma.sharepoint.com/sites/PS-UK"])
+        g, ["https://firma.sharepoint.com/:f:/r/sites/Workspace/Templates/Folder/Nordwind",
+            "https://firma.sharepoint.com/sites/Workspace"])
     d2 = next(d for d in drives if d["id"] == "d2")
     assert d2["prefixes"] is None and len(drives) == 2
 
 
 def test_drive_auswahl_nimmt_nur_den_teilbaum():
     basis = Selection(exclude_ext=["mp4"])
-    wahl = sp.drive_auswahl(basis, {"prefixes": {"N/Nordwind"}})
-    assert wahl.takes("Dateien/N/Nordwind/plan.pdf", 1)
-    assert wahl.takes("Dateien/N/Nordwind/tief/mehr.docx", 1)
-    assert not wahl.takes("Dateien/N/Anderes/plan.pdf", 1)
+    wahl = sp.drive_auswahl(basis, {"prefixes": {"Folder/Nordwind"}})
+    assert wahl.takes("Dateien/Folder/Nordwind/plan.pdf", 1)
+    assert wahl.takes("Dateien/Folder/Nordwind/tief/mehr.docx", 1)
+    assert not wahl.takes("Dateien/Folder/Other/plan.pdf", 1)
     assert not wahl.takes("Dateien/oben.pdf", 1)
-    assert not wahl.takes("Dateien/N/Nordwind/film.mp4", 1)   # filters still apply
-    assert wahl.pfad_ok("Dateien/N/Nordwind/film.mp4")        # but in path scope
+    assert not wahl.takes("Dateien/Folder/Nordwind/film.mp4", 1)   # filters still apply
+    assert wahl.pfad_ok("Dateien/Folder/Nordwind/film.mp4")        # but in path scope
 
 
 def test_resolve_drives_403_wird_als_verweigert_gemeldet(capsys):
@@ -881,7 +921,7 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
                 return
             yield {"id": "in1", "name": "plan.pdf", "file": {}, "size": 1,
                    "cTag": "c1",
-                   "parentReference": {"path": "/drive/root:/N/Nordwind"}}, None
+                   "parentReference": {"path": "/drive/root:/Folder/Nordwind"}}, None
             yield {"id": "out1", "name": "fremd.pdf", "file": {}, "size": 1,
                    "cTag": "c1",
                    "parentReference": {"path": "/drive/root:/Anderes"}}, None
@@ -893,13 +933,13 @@ def test_gescopte_bibliothek_laeuft_ueber_das_delta(tmp_path):
             return 1
 
     g = FakeGraph()
-    wahl = sp.drive_auswahl(Selection(), {"prefixes": {"N/Nordwind"}})
+    wahl = sp.drive_auswahl(Selection(), {"prefixes": {"Folder/Nordwind"}})
     zustand = sp.state_db.DbZustand(tmp_path)
     zahlen = drive_mirror.lauf(g, tmp_path, wahl, 1, still=True,
                                zustand=zustand)
     assert zahlen == {"new": 1, "excluded": 0, "errors": 0,
                       "moved": 0, "gone": 0}
-    assert (tmp_path / "Dateien/N/Nordwind/plan.pdf").is_file()
+    assert (tmp_path / "Dateien/Folder/Nordwind/plan.pdf").is_file()
     assert not (tmp_path / "Dateien/Anderes").exists()
 
     zahlen = drive_mirror.lauf(g, tmp_path, wahl, 1, still=True,

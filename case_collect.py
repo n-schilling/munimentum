@@ -147,7 +147,8 @@ def main():
         sys.exit(1)
     mcp_server = mod
     mcp_server.STATE["faelle_db"] = str(buch.pfad)
-    progress.event("run.collect.start", n=len(suchen), m=len({g["fall"] for g in suchen}))
+    progress.event("run.collect.started", n=len(suchen),
+                   cases=progress.atom_n("run.collect.cases", len({g["fall"] for g in suchen})))
 
     def suche(k, n):
         return mcp_server._mit_kriterien(k, n, preview_chars=0)

@@ -1888,8 +1888,8 @@ def spiegel_db(tmp_path, monkeypatch):
                 " gone TEXT, att TEXT, ext TEXT, thread TEXT)")
     zeilen = [
         ("od1", "onedrive", "Dateien/Doks/plan.pdf", None),
-        ("sp1", "sharepoint", "Team X/Projects/Dateien/N/x.pdf", None),
-        ("sp2", "sharepoint", "Team X/Projects/Dateien/N/tief/y.docx",
+        ("sp1", "sharepoint", "Team X/Documents/Dateien/Folder/x.pdf", None),
+        ("sp2", "sharepoint", "Team X/Documents/Dateien/Folder/tief/y.docx",
          "2026-02-01"),
     ]
     for i, (uid, root, rel, gone) in enumerate(zeilen):
@@ -1908,12 +1908,12 @@ def spiegel_db(tmp_path, monkeypatch):
 def test_list_files_wurzeln_und_ebene(spiegel_db):
     wurzeln = mcp_server.list_files()["roots"]
     assert [(w["root"], w["path"], w["files"]) for w in wurzeln] == [
-        ("onedrive", "", 1), ("sharepoint", "Team X/Projects", 2)]
+        ("onedrive", "", 1), ("sharepoint", "Team X/Documents", 2)]
     # Every root says its source, like the Teams and Planner roots do
-    assert [w["label"] for w in wurzeln] == ["OneDrive", "SharePoint: Team X/Projects"]
+    assert [w["label"] for w in wurzeln] == ["OneDrive", "SharePoint: Team X/Documents"]
 
-    ebene = mcp_server.list_files("sharepoint", "Team X/Projects/Dateien/N")
-    assert ebene["label"] == "SharePoint: Team X/Projects" and ebene["base"] == 2
+    ebene = mcp_server.list_files("sharepoint", "Team X/Documents/Dateien/Folder")
+    assert ebene["label"] == "SharePoint: Team X/Documents" and ebene["base"] == 2
     assert [d["name"] for d in ebene["dirs"]] == ["tief"]
     assert [f["name"] for f in ebene["files"]] == ["x.pdf"]
     assert ebene["dirs"][0]["files"] == 1
@@ -1956,9 +1956,9 @@ def test_list_folders_einheiten_je_spiegelquelle(state):
          "Team X Board/Offen"),
         ("planner:x/t2:0", "planner", "planner", "x/board.html",
          "Team X Board/Erledigt"),
-        ("sharepoint:Nordwind/Projects/Dateien/N/a.pdf:0", "datei",
-         "sharepoint", "Nordwind/Projects/Dateien/N/a.pdf",
-         "Nordwind/Projects/Dateien/N"),
+        ("sharepoint:Nordwind/Documents/Dateien/Folder/a.pdf:0", "datei",
+         "sharepoint", "Nordwind/Documents/Dateien/Folder/a.pdf",
+         "Nordwind/Documents/Dateien/Folder"),
         ("pages:Team X/Sub/seite.html:0", "pages", "pages",
          "Team X/Sub/seite.html", "Team X/Sub"),
     ]
@@ -1973,7 +1973,7 @@ def test_list_folders_einheiten_je_spiegelquelle(state):
                 mcp_server.list_folders(limit=100, **kw)["folders"]}
 
     assert pfade(source="planner") == {"Team X Board"}
-    assert pfade(source="sharepoint") == {"Nordwind/Projects"}
+    assert pfade(source="sharepoint") == {"Nordwind/Documents"}
     assert pfade(source="pages") == {"Team X"}
     # OneDrive keeps the full folder tree.
     assert "Dateien/Kunden" not in pfade(source="sharepoint")

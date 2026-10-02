@@ -1364,7 +1364,7 @@ def test_nur_standard_faellt_auf_den_ersten_zurueck():
 # --------------------------------------------------------------------------
 # Moved is not deleted
 #
-# Reported and measured: in a real archive 16 of 19 entries were wrong.
+# Reported and measured: in a real archive most such entries were wrong.
 # Exchange assigns a new message id on moving; asking about the old one,
 # Graph answers with 404, and the export would conclude "deleted".
 # --------------------------------------------------------------------------
@@ -2492,11 +2492,34 @@ def test_first_pages_come_in_batches_and_a_folder_with_more_reads_on(tmp_path, c
     assert db.kv_lesen("delta:f3") is None
     events = [e for e in _events(capsys) if e]
     assert "run.outlook.delta_reset" in [e["k"] for e in events]
-    # Only the folders with something to say get a line, then one summary.
-    named = [e["v"]["name"] for e in events if e["k"] in ("run.folder", "run.folder_plain")]
-    assert named == ["E-Mail/B", "E-Mail/C"]
+    # Only the folders with something to say get a line, then one summary:
+    # a folder with changes one line with its count at the end, a full
+    # round its name as it starts.
+    named = [(e["k"], e["v"]["name"]) for e in events
+             if e["k"] in ("run.folder", "run.folder_plain", "run.scanned_in")]
+    assert named == [("run.scanned_in", "E-Mail/B"), ("run.folder_plain", "E-Mail/C")]
     (summary,) = [e["v"] for e in events if e["k"] == "run.outlook.folders_checked"]
     assert summary == {"n": 3, "changed": 2}
+
+
+def test_a_folder_with_only_removals_is_named_too(tmp_path, capsys):
+    """Five mails deleted, nothing added: the folder counts as changed, so
+    the log says which one and what happened – not a bare "changed: 1"."""
+    class Removals(BatchedDeltaGraph):
+        def get(self, url, params=None, extra_headers=None):
+            return _seite([{"id": f"m{i}", "@removed": {"reason": "deleted"}} for i in range(5)],
+                          _DELTA_F1)
+    db = state_db.StateDb(tmp_path)
+    db.kv_schreiben("delta:f1", f"{outlook_export.GRAPH}/me/mailFolders/f1/messages/delta?$deltatoken=a")
+    done = _donelog(tmp_path)
+    one = [{"subtree": [({"id": "f1"}, "E-Mail/A")]}]
+    list(outlook_export.iter_messages_to_export(Removals(), tmp_path, done, {"new": 0, "skipped": 0},
+                                                one))
+    done.close()
+    events = [e for e in _events(capsys) if e]
+    gone = [e["v"] for e in events if e["k"] == "run.folder_gone"]
+    assert gone == [{"name": "E-Mail/A", "n": 5, "unit": {"k": "progress.unit.mails", "v": {}}}]
+    assert not any(e["k"] == "run.scanned_in" for e in events)
 
 
 def test_a_refused_first_page_is_a_folder_error(tmp_path):

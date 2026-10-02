@@ -91,8 +91,8 @@ def test_main_meldet_ueber_das_protokoll(welt):  # noqa: F811
     r = _lauf(welt)
     assert r.returncode == 0, r.stdout + r.stderr
     events = _events(r)
-    assert [e["k"] for e in events] == ["run.collect.start", "run.collect.search", "run.collect.done"]
-    assert events[0]["v"] == {"n": 1, "m": 1}
+    assert [e["k"] for e in events] == ["run.collect.started", "run.collect.search", "run.collect.done"]
+    assert events[0]["v"] == {"n": 1, "cases": {"k": "run.collect.cases", "v": {"n": 1}}}
     assert events[1]["v"]["case"] == "Nordwind" and events[1]["v"]["search"] == "Rechnungen"
     assert events[1]["v"]["new"] >= 1 and events[2]["v"]["n"] == events[1]["v"]["new"]
     ergebnis = [progress.lies_ergebnis(z) for z in r.stdout.splitlines() if z.startswith(progress.MARKE_ERGEBNIS)]

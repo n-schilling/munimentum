@@ -516,7 +516,7 @@ def test_build_index_batcht_embedding_aufrufe(tmp_path, monkeypatch):
 
 
 def test_zu_kurze_chunks_bekommen_keinen_vektor(tmp_path, monkeypatch):
-    """22 % of a real archive are "ok", "danke", "bis morgen".
+    """About a fifth of a real archive is "ok", "danke", "bis morgen".
 
     Together they cost a quarter of an hour per run and carry no meaning
     anyone searches for. They stay in the index and in the text search;
@@ -790,6 +790,30 @@ def test_zweiter_lauf_liest_unveraenderte_dateien_nicht(tmp_path, monkeypatch):
     con = sqlite3.connect(store_layout.db_path(store))
     assert con.execute("SELECT COUNT(*) FROM dateien").fetchone()[0] == 2
     con.close()
+
+
+def test_the_log_says_which_source_was_read(tmp_path, monkeypatch, capsys):
+    """A bare "read" count alone does not say whose files: the line beside it names
+    each source with its count – and stays away when nothing was read."""
+    _make_exports(tmp_path)
+    monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
+
+    def read_by():
+        capsys.readouterr()
+        rag_index.build_index(str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
+                              str(tmp_path / "store"), "m", "http://ollama.test", embeddings=False)
+        events = [e for e in (progress.lies_event(z) for z in
+                              capsys.readouterr().out.splitlines()) if e]
+        keys = [e["k"] for e in events]
+        if "run.index.read_by" in keys:     # the line under the totals it explains
+            assert keys.index("run.index.read") < keys.index("run.index.read_by")
+        return [e["v"]["by"] for e in events if e["k"] == "run.index.read_by"]
+    assert read_by() == []                          # the first run reads all, says nothing
+    assert read_by() == []
+    (tmp_path / "outlook_export" / "inbox" / "mail.eml").write_bytes(
+        _eml(subject="Ganz neu und deutlich laenger"))
+    assert read_by() == [[{"k": "run.index.read_part",
+                           "v": {"source": {"k": "search.source.outlook", "v": {}}, "count": 1}}]]
 
 
 def test_geaenderte_datei_wird_neu_gelesen(tmp_path, monkeypatch):

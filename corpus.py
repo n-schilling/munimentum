@@ -278,8 +278,8 @@ def strip_quoted(text):
 # Threads: which mails belong together
 #
 # Everything for this is already in the .eml files – no re-export needed.
-# Measured on a real mailbox (sample of 400 out of about 45,000): Thread-Index 89 %,
-# References/In-Reply-To 58 %, Message-ID 100 %. Hence a cascade that starts
+# Measured on a real mailbox: Thread-Index on most mails, References/In-Reply-To
+# on about half, Message-ID on all of them. Hence a cascade that starts
 # with the most precise field and in the end assigns every mail at least to
 # itself – a thread of one message is correct, just boring.
 # --------------------------------------------------------------------------

@@ -1961,8 +1961,8 @@ def test_ein_einsammelnder_lauf_legt_neue_treffer_in_den_fall(welt):
     _warte(a.jobs, 60)
     assert a.jobs.last["ok"], "\n".join(str(z.get("text")) for z in a.jobs.lines)
     assert a.jobs.last["steps"] == ["case_collect"]
-    log = "\n".join(json.dumps(z, ensure_ascii=False) for z in a.jobs.lines)
-    assert "run.collect.start" in log and "run.collect.search" in log and "run.collect.done" in log
+    keys = {(z.get("text") or {}).get("k") for z in a.jobs.lines if isinstance(z.get("text"), dict)}
+    assert {"run.collect.started", "run.collect.search", "run.collect.done"} <= keys
     fall = call(port, "GET", f"/api/v1/cases/{fid}")[1]["case"]
     e = {x["key"]: x for x in fall["item_list"]}
     assert set(e) == {mail1["key"]}

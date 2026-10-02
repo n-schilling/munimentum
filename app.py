@@ -1265,7 +1265,7 @@ def _zaehle(db):
     """Chunks and messages in the index – cached.
 
     The interface polls the state every few seconds. COUNT(DISTINCT uid)
-    scans the whole index (about 30 ms on 270,000 rows); repeating that
+    scans the whole index (tens of milliseconds on a large one); repeating that
     every time would be waste, because the numbers only change when the
     file does. Size and modification time are the fingerprint for that.
     """

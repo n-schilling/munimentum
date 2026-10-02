@@ -500,7 +500,7 @@ def verschoben_statt_weg(out, kandidaten, bestand):
 
     Exchange assigns a NEW message ID on a move. Asking Graph about the old
     one therefore returns 404 – and a mail merely shoved into another folder
-    counted as deleted. On a real archive, 16 of 19 records were wrong that
+    counted as deleted. On a real archive most such records were wrong that
     way.
 
     The internetMessageId survives the move. It sits in every stored .eml
@@ -800,14 +800,16 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
 
             def nennen(folder=folder, rel_path=rel_path):
                 # A folder gets its line only when it has something to say –
-                # a full round, or changes; the rest is one summary line.
+                # a full round, or changes; the rest is one summary line. A
+                # full round may take a while and is named as it starts;
+                # changes are named once, with their counts, at the end.
                 total = folder.get("totalItemCount")
                 if total is not None:
                     progress.event("run.folder", name=rel_path, n=int(total))
                 else:
                     progress.event("run.folder_plain", name=rel_path)
                 return True
-            seen, link = 0, None
+            seen, gone, link = 0, 0, None
             try:
                 seiten, voll = delta_runde(
                     graph, db, f"delta:{folder['id']}",
@@ -820,12 +822,13 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
                 for eintraege, ende in seiten:
                     link = ende or link      # the link comes with the last page
                     if eintraege and not genannt:
-                        genannt = nennen()
+                        genannt = True
                     for msg in eintraege:
                         mid = msg.get("id")
                         if not mid:
                             continue
                         if "@removed" in msg:
+                            gone += 1
                             if bestand is not None:
                                 bestand.entfernt.add(mid)
                             continue
@@ -869,9 +872,18 @@ def iter_messages_to_export(graph, out, done, stats, selected, bestand=None, mar
                     bestand.link_merken(rel_path, folder["id"], link)
             if genannt:
                 veraendert_n += 1
-            if seen:
+            if voll and seen:
                 progress.event("run.scanned", n=seen,
                                unit=progress.atom("progress.unit.mails"))
+            elif genannt:
+                # Without the folder's size: it comes from the stored tree
+                # and is as old as the last folder sync.
+                if seen:
+                    progress.event("run.scanned_in", name=rel_path, n=seen,
+                                   unit=progress.atom("progress.unit.mails"))
+                if gone:
+                    progress.event("run.folder_gone", name=rel_path, n=gone,
+                                   unit=progress.atom("progress.unit.mails"))
     if geprueft:
         progress.event("run.outlook.folders_checked", n=geprueft, changed=veraendert_n)
 
@@ -1213,7 +1225,8 @@ def schreibe_termin(out, done, stats, stempel, cname, ev, lm):
     return 0
 
 
-def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, monate):
+def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, monate,
+                   label=None):
     """One calendar: the view's round, then the series masters that are
     new or changed. Returns the number of errors."""
     db = stempel.db
@@ -1281,7 +1294,7 @@ def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, mo
         db.kv_schreiben(key, link)
         db.kv_schreiben(f"{key}:window", str(monate))
     if seen:
-        progress.event("run.scanned", n=seen,
+        progress.event("run.scanned_in", name=label or cname, n=seen,
                        unit=progress.atom("progress.unit.events"))
     return fehler
 
@@ -1308,11 +1321,12 @@ def export_calendar(graph, out, done, stats, cals):
         if von is not None and not voll:
             progress.event("run.calendar.window", name=cal.get("name") or cname,
                            **{"from": von.strftime("%Y-%m-%d")})
+        else:
+            progress.event("run.folder_plain", name=cal.get("name") or cname)
         url = (f"{GRAPH}/me/calendars/{cal['id']}/calendarView/delta" if cal.get("id")
                else f"{GRAPH}/me/calendarView/delta")
-        progress.event("run.folder_plain", name=cname)
         fehler += kalender_runde(graph, out, done, stats, stempel, cname, key, url,
-                                 params, monate)
+                                 params, monate, label=cal.get("name") or cname)
     return fehler
 
 

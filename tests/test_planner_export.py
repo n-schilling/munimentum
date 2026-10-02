@@ -33,7 +33,7 @@ def _events(capsys):
 def test_plan_id_aus_beiden_adressformen():
     neu = ("https://planner.cloud.microsoft/webui/v1/plan/"
            "abcdefID123_-x/view/board/task/tsk?tid=t-1")
-    alt = ("https://tasks.office.com/firma.com/de-DE/Home/Planner/"
+    alt = ("https://tasks.office.com/firma.example/de-DE/Home/Planner/"
            "#/plantaskboard?groupId=g1&planId=altPlanId99")
     assert pl.plan_id_aus(neu) == "abcdefID123_-x"
     assert pl.plan_id_aus(alt) == "altPlanId99"
@@ -358,8 +358,12 @@ def test_legacy_faeden_nur_auf_wunsch_neu_gelesen(tmp_path, monkeypatch,
     pl.plan_lauf(g2, tmp_path, PLAN, {})
     assert not any("$top=100" in u or "/th1/posts" in u for u in g2.aufrufe)
     assert len(json.loads(db.kv_lesen("tasks"))["t1"]["kommentare"]) == 1
+    second = _events(capsys)
     assert any(e["k"] == "run.planner.legacy_skip" and
-               e["v"]["name"] == PLAN["titel"] for e in _events(capsys))
+               e["v"]["name"] == PLAN["titel"] for e in second)
+    # Nothing to refresh: the board says its count once, no "0 to refresh…".
+    keys = [e["k"] for e in second]
+    assert "run.planner.plan" in keys and "run.planner.start" not in keys
 
     # Asked for: the listing runs, the moved thread arrives fresh.
     monkeypatch.setenv("PLANNER_LEGACY_SYNC", "1")

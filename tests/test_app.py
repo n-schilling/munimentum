@@ -3562,7 +3562,7 @@ function kachel(id){ return document.getElementById('p-' + id + '-t').textConten
 function hinweis(id){ return document.getElementById('pill-' + id).title || ''; }
 
 var st = statusGeruest();
-st.store = {exists: true, chunks: 269744, messages: 238408, semantic: true,
+st.store = {exists: true, chunks: 250000, messages: 123456, semantic: true,
             built_at: '2026-08-07T09:00:00', model: 'bge-m3'};
 st.ollama = {running: true, has_model: true, has_chat_model: true,
              model: 'bge-m3', chat_model: 'q', models: []};
@@ -3774,6 +3774,51 @@ def _in_node(pruefung, sprache="de"):
         assert "OK" in r.stdout
     finally:
         os.unlink(pfad)
+
+
+# A log line reads like the result lines: counts with separators, the
+# singular for one, a list joined, zero extras left out – codes as they are.
+PRUEFUNG_LOG_LINES = GRUNDZUSTAND + """
+var unit = {k: 'progress.unit.mails', v: {}};
+var one = mtext({k: 'run.scanned_in', v: {name: 'Inbox', n: 1, unit: unit}});
+pruefe(one === 'Inbox: 1 mail seen.', 'singular: ' + one);
+var many = mtext({k: 'run.scanned', v: {n: 24680, unit: unit}});
+pruefe(many === '24,680 mails seen.', 'count: ' + many);
+var by = mtext({k: 'run.index.read_by', v: {by: [
+  {k: 'run.index.read_part', v: {source: {k: 'search.source.outlook', v: {}}, count: 7}},
+  {k: 'run.index.read_part', v: {source: {k: 'search.source.onedrive', v: {}}, count: 1250}}]}});
+pruefe(by === 'Read: Mail 7 · OneDrive 1,250.', 'list: ' + by);
+var conv = mtext({k: 'run.conv.changed_parts', v: {i: 1001, total: 3000, kind: '', name: 'Alice',
+  n: 2468, dur: '3s', parts: [{k: 'run.conv.part.edited', v: {n: 3}},
+                               {k: 'run.conv.part.events', v: {n: 1}}]}});
+pruefe(conv.indexOf('[1001/3000]') > 0 && conv.indexOf('— 3 changed · 1 system event · 2,468 messages') > 0,
+       'parts: ' + conv);
+// A count named `total` is grouped; a line of the chain is not.
+var sync = mtext({k: 'run.sync.result', v: {total: 3000, chosen: 2850, unit: 'chats'}});
+pruefe(sync === '3,000 chats present, 2,850 chosen by the rules.', 'total as count: ' + sync);
+var stamped = mtext({k: 'run.evidence.stamped', v: {n: 24680}});
+pruefe(stamped.slice(-11) === 'line 24680.', 'chain line grouped: ' + stamped);
+var nums = mtext({k: 'run.index.read_by', v: {by: [1250, null, 'x']}});
+pruefe(nums === 'Read: 1,250 · x.', 'list of numbers: ' + nums);
+// Lines stored before 14.1.1 keep their old shape under the old keys.
+var old = mtext({k: 'run.conv.changed', v: {i: 1, total: 2, kind: '', name: 'A', n: 10, dur: '2s',
+  new: 3, edited: 0, events: 0}});
+pruefe(old.indexOf('3 new, 0 changed, 0 system events') > 0, 'stored line: ' + old);
+var oldCollect = mtext({k: 'run.collect.start', v: {n: 2, m: 1}});
+pruefe(oldCollect === '2 automatic searches in 1 cases.', 'stored collect line: ' + oldCollect);
+// Only the unit follows the count, a name beside it stays.
+var named = mtext({k: 'run.scanned_in', v: {name: {k: 'progress.unit.mails', v: {}}, n: 1, unit: unit}});
+pruefe(named === 'mails: 1 mail seen.', 'a name turned singular: ' + named);
+var res = ergebnisText({new: 0, unchanged: 12, errors: 0, extra: {moved: 0, gone: 0, written: 9}});
+pruefe(res.indexOf('moved') < 0 && res.indexOf('written 9') >= 0, 'zero extras: ' + res);
+var port = mtext({k: 'srv.mcp.started', v: {port: 49152}});
+pruefe(port.indexOf('port 49152.') > 0, 'a port got separators: ' + port);
+console.log('OK');
+"""
+
+
+def test_log_lines_read_like_the_results():
+    _in_node(PRUEFUNG_LOG_LINES, sprache="en")
 
 
 def test_assistent_ueberschreibt_die_eingabe_nicht():
@@ -5614,21 +5659,21 @@ def test_pruefschritte_folgen_der_nutzung(sandbox):
 
 PRUEFUNG_ANALYTICS = GRUNDZUSTAND + """
 zeigeAnalytics({exists: true, built_at: '2026-09-01T10:00:00+00:00',
-  komm: {nachrichten: 238408, gespraeche: 16545, mit_anhang: null,
-         personen: 3860, verschwunden: 12,
-         von: 1568851200, bis: 1789603200},
-  quellen: [{src: 'teams', n: 196668}, {src: 'outlook', n: 36827}],
+  komm: {nachrichten: 123456, gespraeche: 7890, mit_anhang: null,
+         personen: 2500, verschwunden: 10,
+         von: 1577836800, bis: 1789603200},
+  quellen: [{src: 'teams', n: 100000}, {src: 'outlook', n: 23456}],
   dateien: {n: 0, pages: 0, onedrive: 0, sharepoint: 0, verschwunden: null},
-  groesse: {teams: 3758096384, outlook: 28879134720, index: 966367641},
+  groesse: {teams: 3000000000, outlook: 20000000000, index: 900000000},
   pruefungen: {outlook_mail: {genutzt: true, bericht: {
     quelle: 'outlook_mail', einheit: 'mails', geprueft: '2026-08-10T20:00:00',
-    stand: 'ganz', grund: null, da: 39994, offen: 6, ausgeschlossen: 15000,
+    stand: 'ganz', grund: null, da: 30000, offen: 6, ausgeschlossen: 15000,
     ausgeschlossen_einheit: 'mails', behalten: 12, wartend: 0,
-    zeilen: [{pfad: 'E-Mail/Gesendete Elemente', da: 97, offen: 3}], fehler: []}}}});
+    zeilen: [{pfad: 'E-Mail/Gesendete Elemente', da: 90, offen: 3}], fehler: []}}}});
 
 var kpi = document.getElementById('ana-kpi').innerHTML;
-pruefe(kpi.indexOf('238.408') >= 0, 'Nachrichtenzahl fehlt');
-pruefe(kpi.indexOf('16.545') >= 0, 'Gespraeche fehlen');
+pruefe(kpi.indexOf('123.456') >= 0, 'Nachrichtenzahl fehlt');
+pruefe(kpi.indexOf('7.890') >= 0, 'Gespraeche fehlen');
 // null heisst „weiss ich nicht“ – keinesfalls 0.
 pruefe(kpi.indexOf('>0<') < 0, 'Unbekanntes wurde als 0 gezeigt');
 pruefe(kpi.indexOf('–') >= 0, 'Unbekanntes nicht als Strich gezeigt');
@@ -6275,11 +6320,11 @@ def test_kalenderliste_zeigt_bestand_statt_leerer_zahlen():
 PRUEFUNG_ORDNERAUSWAHL = GRUNDZUSTAND + r"""
 S.store = {exists: true, built_at: '2026-08-12T10:00:00+00:00'};
 var ORDNER = {
-  outlook:  [{path:'E-Mail/Posteingang', messages:12480},
-             {path:'E-Mail/Kunden', messages:8102}],
-  kalender: [{path:'kalender/Arbeit', messages:4854},
-             {path:'kalender/Privat', messages:912}],
-  teams:    [{path:'1on1', messages:31204}, {path:'channels', messages:15302}],
+  outlook:  [{path:'E-Mail/Posteingang', messages:12000},
+             {path:'E-Mail/Kunden', messages:8000}],
+  kalender: [{path:'kalender/Arbeit', messages:4000},
+             {path:'kalender/Privat', messages:900}],
+  teams:    [{path:'1on1', messages:30000}, {path:'channels', messages:15000}],
   kontakte: [{path:'kontakte/Team', messages:64}]
 };
 var gefragt = [];
@@ -6321,7 +6366,7 @@ waehle('outlook', function(){
     waehle('teams', function(){
       var namen = optionen().map(function(o){ return o.split(' (')[0]; });
       pruefe(namen.indexOf('Kan\u00e4le') > 0, 'Kanaele nicht lesbar benannt: ' + namen);
-      // Ohne das gezaehlte Wort im Namen: "1:1-Chats (89.273)" liest sich als
+      // Ohne das gezaehlte Wort im Namen: "1:1-Chats (30.000)" liest sich als
       // Zahl der Chats, gezaehlt werden aber die Nachrichten - wie ueberall
       // sonst in dieser Liste auch.
       pruefe(namen.indexOf('1:1') > 0, 'Chatart nicht lesbar benannt: ' + namen);
@@ -8783,7 +8828,7 @@ renderRuns([{started_at: 1755000000, finished_at: 1755000065,
     // Der Kalenderschritt meldet den GANZEN Neuaufbau – der zaehlt nicht
     // als neu Exportiertes und darf weder Summe noch Aufteilung verzerren.
     {key: 'calendar', label: 'job.step.calendar', started_at: 1755000040,
-     duration_s: 2, new: 5860, unchanged: null, excluded: null, errors: null,
+     duration_s: 2, new: 4000, unchanged: null, excluded: null, errors: null,
      skipped: 0, ok: 1, extra: null},
     {key: 'index', label: 'job.step.index', started_at: 1755000042,
      duration_s: null, new: null, unchanged: null, excluded: null,
@@ -8808,7 +8853,7 @@ pruefe(html.indexOf('1 min') >= 0, 'Gesamtdauer fehlt: ' + html);
 pruefe(html.indexOf('title="Outlook: 3\\nOneDrive: 5"') >= 0,
        'Aufteilung je Quelle fehlt: ' + html);
 pruefe(html.indexOf('>8<') >= 0, 'Summe stimmt nicht (nur Exporte): ' + html);
-pruefe(html.indexOf('>5.868<') < 0 && html.indexOf('>5868<') < 0,
+pruefe(html.indexOf('>4.008<') < 0 && html.indexOf('>4008<') < 0,
        'Der Kalender-Neuaufbau steht in der Summe: ' + html);
 
 // A run without a source is named after its step – a row saying "–" for

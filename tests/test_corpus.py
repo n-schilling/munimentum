@@ -389,8 +389,8 @@ def test_calendar_file_folgt_der_tzid(tmp_path):
 # Threads: which mails belong together
 #
 # Everything needed is in the .eml files – no re-export required. Measured
-# on the real corpus (sample of 400 out of about 45,000): Thread-Index 89 %,
-# References/In-Reply-To 58 %, Message-ID 100 %.
+# on a real corpus: Thread-Index on most mails, References/In-Reply-To on
+# about half, Message-ID on all of them.
 # --------------------------------------------------------------------------
 def _msg(**kopf):
     from email import policy
@@ -704,17 +704,17 @@ def test_endungen_aus_anhangnamen():
 # SharePoint mirror in the corpus: one tree per library, prefixed tombstones
 # --------------------------------------------------------------------------
 def test_load_sharepoint_liest_bibliotheken_mit_grabsteinen(tmp_path):
-    lib = tmp_path / "Team X" / "Projects"
-    (lib / "Dateien" / "N").mkdir(parents=True)
-    (lib / "Dateien" / "N" / "plan.pdf").write_bytes(b"x")
+    lib = tmp_path / "Team X" / "Documents"
+    (lib / "Dateien" / "Folder").mkdir(parents=True)
+    (lib / "Dateien" / "Folder" / "plan.pdf").write_bytes(b"x")
     (lib / "Dateien" / "weg.pdf").write_bytes(b"y")
     import state_db
     state_db.StateDb(lib).verschwunden_ergaenzen(
         ["Dateien/weg.pdf"], "2026-03-01T00:00:00+00:00")
 
     recs = corpus.load_sharepoint(tmp_path)
-    assert {r["rel"] for r in recs} == {"Team X/Projects/Dateien/N/plan.pdf",
-                                        "Team X/Projects/Dateien/weg.pdf"}
+    assert {r["rel"] for r in recs} == {"Team X/Documents/Dateien/Folder/plan.pdf",
+                                        "Team X/Documents/Dateien/weg.pdf"}
     assert all(r["root"] == "sharepoint" for r in recs)
     assert all(r["uid"].startswith("sharepoint:") for r in recs)
     weg = next(r for r in recs if r["rel"].endswith("weg.pdf"))

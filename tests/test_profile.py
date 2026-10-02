@@ -182,7 +182,7 @@ def test_ohne_profile_unter_festem_datenordner(wurzel, monkeypatch):
     monkeypatch.setenv("MUNIMENTUM_DATA_DIR", str(wurzel))
     assert app_mod.profile_moeglich() is False
     assert app_mod.profil_namen() == ["standard"]
-    info, fehler = app_mod.profil_anlegen("beratung")
+    info, fehler = app_mod.profil_anlegen("second")
     assert info is None and fehler["k"] == "srv.profile.impossible"
     st = app_mod.profil_status()
     assert st["moeglich"] is False and st["mehrere"] is False
@@ -300,8 +300,8 @@ def test_profilwahl_im_browser(wurzel, monkeypatch):
     assert [p["name"] for p in pr["alle"]] == ["nordwind", "standard"]
     # The chooser chooses; creating lives in the app's settings – the path
     # is there, the method is not (405 with Allow).
-    code, r = call(port, "POST", "/api/v1/profiles", {"name": "beratung"})
-    assert code == 405 and not (wurzel / "profiles" / "beratung").exists()
+    code, r = call(port, "POST", "/api/v1/profiles", {"name": "second"})
+    assert code == 405 and not (wurzel / "profiles" / "second").exists()
     code, r = call(port, "POST", "/api/v1/profiles/fremd/open", {})
     assert code == 404 and r["error"]["k"] == "srv.profile.unknown"
     assert faden.is_alive()
@@ -843,7 +843,7 @@ def test_switch_and_rename_see_an_instance_on_any_port(server, wurzel, monkeypat
                         "nordwind" if p == 9999 else real(p, host, timeout))
     code, r = call(port, "POST", "/api/v1/profiles/nordwind/open", {})
     assert code == 200 and r["url"] == "http://127.0.0.1:9999/"
-    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "second"})
     assert code == 400 and r["error"]["k"] == "srv.profile.active"
     assert heim.is_dir()
 
@@ -964,13 +964,13 @@ def test_api_profile_rename(server, wurzel, monkeypatch):
     code, r = call(port, "PATCH", "/api/v1/profiles/standard", {"name": "x"})
     assert code == 400 and r["error"]["k"] == "srv.profile.active"
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
-    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "second"})
     assert code == 409
     monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: False))
-    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "beratung"})
-    assert code == 200 and r["name"] == "beratung"
-    assert [p["name"] for p in r["profiles"]["alle"]] == ["beratung", "standard"]
-    assert (wurzel / "profiles" / "beratung").is_dir()
+    code, r = call(port, "PATCH", "/api/v1/profiles/nordwind", {"name": "second"})
+    assert code == 200 and r["name"] == "second"
+    assert [p["name"] for p in r["profiles"]["alle"]] == ["second", "standard"]
+    assert (wurzel / "profiles" / "second").is_dir()
 
 
 # --------------------------------------------------------------------------
@@ -1113,7 +1113,7 @@ def test_umzug_alles_oder_nichts(wurzel, monkeypatch):
     assert app_mod.profile_moeglich() is False
     st = app_mod.profil_status()
     assert st["moeglich"] is False and st["alle"][0]["ordner"] == str(wurzel)
-    assert app_mod.profil_anlegen("beratung")[1]["k"] == "srv.profile.impossible"
+    assert app_mod.profil_anlegen("second")[1]["k"] == "srv.profile.impossible"
     assert not (wurzel / "profiles").exists()
     args = app_mod.mcp_client_config({}, 8700)["stdio"]["mcpServers"]["munimentum"]["args"]
     assert "--profile" not in args and args[args.index("--data-dir") + 1] == str(app_mod.BASE)

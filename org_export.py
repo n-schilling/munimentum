@@ -4,8 +4,8 @@ org_export.py – the organization as Teams shows it, kept version by version.
 
 Reads every directory user with their manager through the users' delta
 feed (`/users/delta`, `$select` with `manager`): the first round brings
-the whole tenant – measured on one with about 15 000 accounts, some 170
-users a page at a good second each, so a minute or two – every later
+the whole tenant – on a large one some hundred and fifty users a page at
+a good second each, so a minute or two – every later
 round only who changed since the stored deltaLink, which takes seconds.
 Managers the feed does not name are asked for directly afterwards
 (settle_managers). The raw users live in the folder's state.db (area
@@ -136,8 +136,8 @@ def _first_url():
 # ---------------------------------------------------------------------------
 # Managers the feed did not name
 # ---------------------------------------------------------------------------
-# The delta feed does not name every manager: on a real tenant (about 5 000
-# people) dozens of colleagues whom Teams shows in a proper line came
+# The delta feed does not name every manager: on a real tenant some
+# colleagues whom Teams shows in a proper line came
 # without one and stood at the top. Whoever is left without a manager is
 # therefore asked once more, directly (`/users/{id}/manager`, twenty to a
 # $batch); a 404 there is the answer "nobody above", kept for a week before

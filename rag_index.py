@@ -58,7 +58,7 @@ STALE_VECTORS = "vectors_stale.npz"   # set-aside embeddings, hash-indexed
 
 # Minimum length before a chunk gets embedded at all.
 #
-# Measured on a real archive: 22 % of all chunks are shorter than this —
+# Measured on a real archive: about a fifth of all chunks are shorter than this —
 # "ok", "thanks", "see you tomorrow" — and together they cost a quarter of an
 # hour per run. They carry no meaning anyone would search for: what they
 # contain appears a hundred times in almost every chat and answers no question.
@@ -432,7 +432,7 @@ CHUNK_ROOT = {"teams_files": "teams"}
 
 def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
                  pages_dir, planner_dir, store, todo_dir=None,
-                 onenote_dir=None):
+                 onenote_dir=None, read_per_source=None):
     """Every chunk of the archive – re-used from the previous index where the
     file did not change, parsed where it did.
 
@@ -444,7 +444,10 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
     chunk list, so the store is rebuilt as before – a wrong reuse could
     only ever make the index stale, never inconsistent.
 
-    Returns (chunks, manifest, files reused, files read).
+    Returns (chunks, manifest, files reused, files read); `read_per_source`,
+    when given, gets the read files per source – the line under the totals
+    (build_index): "dozens read" alone does not say whether that was the run's
+    own ten writes or a source read again on every run.
     """
     alt_manifest, alt_chunks = _alter_bestand(store)
     ordner = {"teams": teams_dir, "teams_files": teams_dir,
@@ -452,6 +455,7 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
               "onedrive": onedrive_dir, "sharepoint": sharepoint_dir,
               "pages": pages_dir, "onenote": onenote_dir}
     chunks, manifest, wieder, gelesen = [], {}, 0, 0
+    read_per_source = {} if read_per_source is None else read_per_source
     for art, laden in _QUELLEN:
         wurzel = ordner[art]
         if not wurzel or not Path(wurzel).is_dir():
@@ -480,6 +484,8 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
         elif neu:
             chunks += corpus.chunk_records(laden(wurzel, nur=neu))
             gelesen += len(neu)
+            source = CHUNK_ROOT.get(art, art)
+            read_per_source[source] = read_per_source.get(source, 0) + len(neu)
         if art == "outlook":
             chunks += corpus.chunk_records(corpus.load_calendar(wurzel)
                                            + corpus.load_contacts(wurzel))
@@ -502,9 +508,11 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     # long enough for someone watching the log to suspect a hang.
     progress.event("run.index.reading")
     begonnen = time.time()
+    read_per_source = {}
     chunks, manifest, wieder, gelesen = lese_bestand(
         teams_dir, outlook_dir, onedrive_dir, sharepoint_dir, pages_dir,
-        planner_dir, store, todo_dir=todo_dir, onenote_dir=onenote_dir)
+        planner_dir, store, todo_dir=todo_dir, onenote_dir=onenote_dir,
+        read_per_source=read_per_source)
     if corpus.POOL_FEHLER:
         # Don't keep quiet about this: the index is correct, but reading ran
         # on one core instead of all, and with large archives that shows.
@@ -517,6 +525,11 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
             c["hash"] = corpus.chunk_hash(c)
     progress.event("run.index.read", reused=wieder, read=gelesen,
                    chunks=len(chunks), s=int(time.time() - begonnen))
+    if read_per_source:
+        progress.event("run.index.read_by", by=[
+            progress.msg("run.index.read_part", source=progress.atom("search.source." + source),
+                         count=n)
+            for source, n in sorted(read_per_source.items(), key=lambda x: -x[1])])
 
     Path(store).mkdir(parents=True, exist_ok=True)
     if not embeddings:

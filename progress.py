@@ -82,9 +82,21 @@ def event(key, level="info", **vars):
         pass
 
 
+def msg(key, **values):
+    """A nested message – a text key and its variables, rendered inside
+    the line that carries it. The one spelling of that shape."""
+    return {"k": str(key), "v": values}
+
+
 def atom(key):
     """A nested message with no variables – e.g. a unit or category name."""
-    return {"k": str(key), "v": {}}
+    return msg(key)
+
+
+def atom_n(key, n):
+    """A nested message with a count – it takes its key's `.one` variant
+    when the count is 1."""
+    return msg(key, n=int(n))
 
 
 def fehler(art):

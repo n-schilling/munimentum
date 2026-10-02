@@ -562,7 +562,8 @@ def list_lauf(graph, out, liste):
             1 for tid, e in eintraege.items()
             if tid not in lebend and tid not in entfernt and not e.get("deleted"))
     gesamt = unveraendert + len(faellig)
-    _event("run.todo.start", name=liste["titel"], n=gesamt, m=len(faellig))
+    if faellig:
+        _event("run.todo.start", name=liste["titel"], n=gesamt, m=len(faellig))
     for t, alt, etag_neu in faellig:
         tid = t["id"]
         eintrag = {"etag": etag_neu, "task": t, "deleted": None,

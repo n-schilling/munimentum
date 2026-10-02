@@ -75,7 +75,13 @@ def strings(code, base=None):
     d = lang_dir(base)
     basis = dict(_read(d / f"{FALLBACK}.json"))
     if code and code != FALLBACK:
-        basis.update({k: v for k, v in _read(d / f"{code}.json").items() if v})
+        eigen = {k: v for k, v in _read(d / f"{code}.json").items() if v}
+        basis.update(eigen)
+        # A singular is never filled in beside the language's own plural:
+        # "1 mails" beats a German "1 Mail" in an English line.
+        for k in [k for k in basis if k.endswith(".one")]:
+            if k not in eigen and k[:-4] in eigen:
+                del basis[k]
     basis.pop("_meta", None)
     return basis
 
@@ -146,6 +152,100 @@ def fuelle(vorlage, werte=None):
         return vorlage
 
 
+# Placeholders whose number is never a count – a code, a port, an id.
+# Every other integer in a log line is a count and grouped like one. A
+# position is not: an emitter that logs one passes it as a string, and the
+# keys that carried positions as numbers before (stored runs) are named
+# with them in RAW_BY_KEY. The page's LOG_RAW_NUMBERS and LOG_RAW_BY_KEY
+# hold the same (a test compares them).
+RAW_NUMBERS = frozenset({"code", "status", "port", "id", "version", "pointer"})
+RAW_BY_KEY = {
+    **{k: frozenset({"i", "total"}) for k in (
+        "run.conv.new", "run.conv.updated", "run.conv.changed", "run.conv.changed_parts",
+        "run.conv.same", "run.conv.empty", "run.conv.failed")},
+    "run.evidence.stamped": frozenset({"n"}),      # a line of the chain
+    "run.evidence.broken": frozenset({"n"}),
+}
+# How a count is grouped per language – what the page's toLocaleString does.
+_GROUPING = {"de": ".", "fr": "\u202f"}
+
+
+def _own(code, key, base):
+    return _read(lang_dir(base) / f"{code}.json").get(key) if code else None
+
+
+def _text(code, key, base):
+    """A text of the language, or of the source language when it lacks it."""
+    return _own(code, key, base) or _read(lang_dir(base) / f"{FALLBACK}.json").get(key)
+
+
+def _count(code, n):
+    return f"{n:,}".replace(",", _GROUPING.get(code, ","))
+
+
+def _elements(code, base, value):
+    """A run's selection, as the page's runElements() names it."""
+    import steps
+    alle = _text(code, "ana.runs.all", base) or "all"
+    parts = []
+    for key, name, every in (("outlook", "Outlook", 3), ("teams", "Teams", 4)):
+        cats = value.get(key) or []
+        if cats:
+            names = [alle] if len(cats) >= every else [
+                _text(code, f"export.cat.{c}", base) or c for c in cats]
+            parts.append(f"{name} ({', '.join(names)})")
+    for key, meta in steps.ui_metadaten().items():
+        if key not in ("outlook", "teams") and value.get(key):
+            q = meta.get("quelle") or key
+            parts.append(f"{(_text(code, q, base) or q) if '.' in q else q} ({alle})")
+    return ", ".join(parts) or "–"
+
+
+def _render_value(code, base, name, value, one, raw):
+    """One placeholder's value as the page's mtext() renders it: a nested
+    message translated (the `unit` in its singular under an `n` of 1), a
+    list of messages joined by " · ", a step's result and a run's selection
+    as their lines, a count with the language's grouping."""
+    if isinstance(value, list):
+        parts = (_render_value(code, base, name, v, False, raw) for v in value)
+        return " · ".join(str(p) for p in parts if p not in (None, ""))
+    if name == "ergebnis" and isinstance(value, dict) and "new" in value:
+        bits = [f"{_text(code, 'ana.runs.' + k, base) or k} {_count(code, value[k])}"
+                for k in ("new", "unchanged", "excluded", "errors")
+                if isinstance(value.get(k), int)]
+        bits += [f"{k} {_count(code, v)}" for k, v in (value.get("extra") or {}).items()
+                 if isinstance(v, int) and v]
+        return " · ".join(bits) or "–"
+    if name == "elements" and isinstance(value, dict) and not value.get("k"):
+        return _elements(code, base, value)
+    if isinstance(value, dict) and value.get("k"):
+        return log_line(code, value["k"], base, value.get("v"),
+                        one=one and name == "unit") or value["k"]
+    if isinstance(value, int) and not isinstance(value, bool) and name not in raw:
+        return _count(code, value)
+    return value
+
+
+def log_line(code, key, base=None, values=None, one=False):
+    """A log line as the page's mtext() renders it – for the MCP server,
+    which hands a run's log to Claude: a `.one` variant when `n` is 1 (only
+    where the language has one of its own), nested messages, lists,
+    counts. Archive text and refusals keep the plain satz(): an exported
+    page must not change with a log rule."""
+    values = values if isinstance(values, dict) else {}
+    n1 = values.get("n") == 1 and not isinstance(values.get("n"), bool)
+    text = None
+    if n1 or one:
+        text = _own(code, key + ".one", base)
+        if not text and not _own(code, key, base):
+            text = _text(code, key + ".one", base)
+    text = text or _text(code, key, base)
+    if not text:
+        return None
+    raw = RAW_NUMBERS | RAW_BY_KEY.get(key, frozenset())
+    return fuelle(text, {k: _render_value(code, base, k, v, n1, raw) for k, v in values.items()})
+
+
 def satz(code, key, base=None, werte=None):
     """One text of a language, filled – without copying the whole table.
 
@@ -153,8 +253,5 @@ def satz(code, key, base=None, werte=None):
     need that, and error answers do exactly one per refusal. Returns None
     when neither the language nor the source language knows the key.
     """
-    d = lang_dir(base)
-    text = _read(d / f"{code}.json").get(key) if code else None
-    if not text:
-        text = _read(d / f"{FALLBACK}.json").get(key)
+    text = _text(code, key, base)
     return None if not text else fuelle(text, werte)
