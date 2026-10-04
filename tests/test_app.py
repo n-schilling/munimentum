@@ -4248,6 +4248,38 @@ def test_a_burst_of_tree_clicks_is_one_save():
     _in_node(PRUEFUNG_SAVE_BURST, sprache="en")
 
 
+# A change made while a save is on its way: the earlier save's answer must
+# not refill over it (the browser tests saw a cadence snap back on CI).
+PRUEFUNG_SAVE_RACE = GRUNDZUSTAND + r"""
+process.on('unhandledRejection', function(e){ console.error('unhandled: ' + e); process.exit(1); });
+var filled = 0, saves = 0, release = null;
+// Only the refills a save's answer triggers count – the page's own first
+// fetches fill the settings too, with another configuration.
+fuelleEinstellungen = function(cfg){ if(cfg && cfg.probe) filled++; };
+konfig = function(b){ saves++; return new Promise(function(ok){ release = function(){ ok({config: {probe: true}}); }; }); };
+SAVE_DELAY_MS = 1;
+addrFill('pages', 'https://firma.sharepoint.com/sites/TeamX', {});
+addrSet('pages', 0, 'weekly');
+setTimeout(function(){
+  pruefe(saves === 1, 'the first change was not saved: ' + saves);
+  addrSet('pages', 0, 'always');                 // a newer change while the save is in flight
+  release();                                     // the first save answers now
+  setTimeout(function(){
+    pruefe(filled === 0 && ADDR_ROWS.pages[0].cad === 'always', 'the earlier save\'s answer refilled over a newer change: ' + filled);
+    setTimeout(function(){
+      pruefe(saves === 2, 'the newer change was not saved: ' + saves);
+      release();
+      setTimeout(function(){ pruefe(filled === 1, 'the last save did not refill: ' + filled); console.log('OK'); }, 0);
+    }, 10);
+  }, 0);
+}, 10);
+"""
+
+
+def test_a_change_during_a_save_is_not_overwritten_by_its_answer():
+    _in_node(PRUEFUNG_SAVE_RACE, sprache="en")
+
+
 def test_an_address_note_in_error_is_red():
     """`.err` is declared early; a later `.addr-note` rule of equal
     specificity would turn the "not recognised" and "listed twice" notes

@@ -10290,6 +10290,7 @@ function speichereBald(){
 }
 function speichereEinstellungen(){
   merke('flow.save', 'settings');
+  if(saveTimer){ clearTimeout(saveTimer); saveTimer = null; }   // this save carries what was waiting
   speichernLaeuft = true;
   // One save button for the whole tab – but only really post the schedule
   // when it changed: /api/v1/schedule restarts the interval, and a settings
@@ -10314,6 +10315,10 @@ function speichereEinstellungen(){
     // The language is baked into the delivered page – switching needs a
     // rebuild, everything else takes effect immediately.
     if(cfg.language !== undefined && cfg.language !== spracheVorher){ location.reload(); return; }
+    // A change made while this save was on its way waits for a save of
+    // its own: playing this answer back now would overwrite it – that
+    // save's answer refills.
+    if(saveTimer){ speichernLaeuft = false; return; }
     cfgGefuellt = false;                 // play back saved (and clamped) values
     fuelleEinstellungen(cfg);
     // The hidden types affect the select list – it sits cached and would
