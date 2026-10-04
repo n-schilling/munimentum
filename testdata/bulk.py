@@ -44,7 +44,7 @@ OUTSIDE = people.EXTERNALS
 RESERVED = frozenset("""
 ostwind offer 4711 proposal budget approved rollout printer mapping
 protocol framework agreement executive summary visitor badge workshop
-canteen blueprint warranty whiteboard
+canteen blueprint warranty whiteboard quayside
 """.split())
 
 # The other matters the archive knows: enough of them that a filter has

@@ -251,7 +251,11 @@ def rel_pfad(eintrag):
     roh = unquote(roh)
     _, _, rest = roh.partition("root:")
     stuecke = [safe(s) for s in rest.strip("/").split("/") if s not in ("", ".", "..")]
-    name = safe(eintrag.get("name") or "unbenannt", kennung=eintrag.get("id"))
+    # A folder is spelled by its name alone – as it is in every child's
+    # parent path – so a long one has one spelling; a file's tag comes
+    # from its id.
+    name = safe(eintrag.get("name") or "unbenannt",
+                kennung=eintrag.get("id") if "file" in eintrag else None)
     return "/".join([DATEI_DIR, *stuecke, name])
 
 
@@ -337,6 +341,12 @@ class Bestand:
 # ---------------------------------------------------------------------------
 # Folder cadences: units, their stamps, and the files that wait for them
 # ---------------------------------------------------------------------------
+def folder_key(path):
+    """A folder path as a cadence key spells it: no surrounding slash, none
+    doubled – one spelling for one folder."""
+    return re.sub(r"/+", "/", path or "").strip("/")
+
+
 class Einheiten:
     """Cadences over one drive's folder tree.
 
@@ -359,25 +369,45 @@ class Einheiten:
     """
 
     def __init__(self, kadenzen, praefix, db, laufwerk=None, unter=""):
-        self.kadenzen = kadenzen or {}
+        # A key written with a slash at its end or doubled (by hand, by a
+        # script) is the folder without it: one spelling, so the lookup
+        # finds it.
+        self.kadenzen = {}
+        for k, v in (kadenzen or {}).items():
+            if k.startswith(praefix + ":"):
+                k = f"{praefix}:{folder_key(k[len(praefix) + 1:])}"
+            if k in self.kadenzen:          # two spellings of one folder: the more frequent stands
+                v = export_util.haeufigere(self.kadenzen[k], v)
+            self.kadenzen[k] = v
         self.praefix = praefix
         self.db = db
         self.laufwerk = laufwerk
         self.unter = (unter or "").strip("/")
         marke = f"{praefix}:{self.unter}/" if self.unter else f"{praefix}:"
-        self.ordner = sorted({k[len(marke):].strip("/") for k in self.kadenzen
-                              if k.startswith(marke) and k[len(marke):].strip("/")})
-        self._ordner = set(self.ordner)
+        # Drives do not tell "Folder/B" from "folder/b": two keys that differ
+        # only in case are one unit, spelled as the one with the more
+        # frequent cadence (ties: the first in order), and a path in any
+        # case finds it.
+        self._ordner, chosen = {}, {}
+        for key in sorted(k for k in self.kadenzen if k.startswith(marke) and k[len(marke):].strip("/")):
+            folder = key[len(marke):].strip("/")
+            known = chosen.get(folder.lower())
+            if known is None or (export_util.KADENZ_RANG.get(self.kadenzen[key], 0)
+                                 < export_util.KADENZ_RANG.get(self.kadenzen[known], 0)):
+                self._ordner[folder.lower()] = folder
+                chosen[folder.lower()] = key
+        self.ordner = sorted(self._ordner.values())
         self._faellig = {}           # decided once per run, so a stamp does not flip it
 
     def einheit(self, rel):
         """The unit a path belongs to – the deepest folder with a key of
-        its own, "" for the drive. The same walk as export_util.kadenz_fuer."""
-        teile = [t for t in str(rel or "").split("/") if t]
+        its own (in the key's spelling), "" for the drive. The same walk
+        as export_util.kadenz_fuer."""
+        teile = [t.lower() for t in str(rel or "").split("/") if t]
         while teile:
-            pfad = "/".join(teile)
-            if pfad in self._ordner:
-                return pfad
+            hit = self._ordner.get("/".join(teile))
+            if hit is not None:
+                return hit
             teile.pop()
         return ""
 
@@ -401,6 +431,11 @@ class Einheiten:
 
     def irgendeine_faellig(self):
         return any(self.faellig(e) for e in ["", *self.ordner])
+
+    def erzwingen(self, rel):
+        """"Sync now" on one address: the unit at `rel` is due this run,
+        whatever its stamp says – the others keep to their cadence."""
+        self._faellig[self.einheit(rel)] = True
 
     def zurueckgehalten(self):
         """The folder units not due this run."""

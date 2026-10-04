@@ -1,6 +1,7 @@
 """The mails whose words are not in a plain text part – an invitation, an
 empty text part beside HTML, a forward without own words, a picture with
-no text – as the synthetic archive holds them (testdata/sources.py) and
+no text, and a chat of nothing but pictures – as the synthetic archive
+holds them (testdata/sources.py) and
 as the index has to take them: findable, and not read again on the next
 run. On a real mailbox nearly one mail in five was of these kinds, and
 none of them reached the index before PARSER 4."""
@@ -68,4 +69,17 @@ def test_the_next_index_run_reads_no_mail_again(built):
     now = corpus.manifest("outlook", built["exports"] / "outlook_export")
     again = [rel for rel, sig in now.items()
              if manifest.get(("outlook", rel)) != sig or ("outlook", rel) not in chunks]
+    assert again == []
+
+
+def test_a_conversation_of_pictures_is_found_and_known(built):
+    """A chat with nothing but pictures has no word for the parser; its one
+    empty chunk makes it findable by its title and known to the next run."""
+    conv = next(c for c in sources.CONVERSATIONS if c["id"] == "chat-quayside")
+    rel = sources._conversation_rel(conv)
+    assert _found(built["store"], "quayside") == {rel}
+    manifest, chunks = rag_index._alter_bestand(built["store"])
+    now = corpus.manifest("teams", built["exports"] / "teams_export")
+    again = [r for r, sig in now.items()
+             if manifest.get(("teams", r)) != sig or ("teams", r) not in chunks]
     assert again == []

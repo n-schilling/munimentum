@@ -364,10 +364,12 @@ REGISTRY = (
      "schedule": "sharepoint", "master": "sharepoint_enabled",
      "quelle": "search.source.sharepoint",
      "argv": lambda cfg, ctx, pfade: [pfade["sharepoint"]],
+     # "Sync now" on one address: every line still rides along (the
+     # libraries keep their scope and delta pointer), the unit behind the
+     # line alone is due – sharepoint_export.sync_unit.
      "env": lambda cfg, ctx: {
          **_sharepoint_env(cfg, ctx),
-         **({"SHAREPOINT_URLS": ctx["nur_einheit"], "SYNC_NOW": "1"}
-            if ctx["nur_einheit"] else {})}},
+         **({"SHAREPOINT_UNIT": ctx["nur_einheit"]} if ctx["nur_einheit"] else {})}},
 
     {"key": "planner", "anfrage": "planner", "script": "planner_export",
      "start": "job.start.planner",

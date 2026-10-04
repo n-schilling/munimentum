@@ -39,7 +39,7 @@ if str(PROJECT) not in sys.path:
 
 import settings  # noqa: E402
 
-from testdata import people  # noqa: E402
+from testdata import people, sources  # noqa: E402
 
 # The configuration of the profile: the sources the archive holds are
 # ticked, the outward doors shut. Whoever opens this profile should see an
@@ -59,7 +59,15 @@ CONFIG = {
     "todo_enabled": True,
     "onenote_enabled": True,
     "org_enabled": True,
-    "sharepoint_urls": people.SHAREPOINT_SITE,
+    # One library whole, one only through two folders in it (a placeholder
+    # in the tree), one of them paced on its own.
+    "sharepoint_urls": "\n".join(
+        [sources.sharepoint_library_url(sources.SHAREPOINT_LIBRARY)]
+        + [sources.sharepoint_library_url(sources.SHAREPOINT_PROJECTS, f)
+           for f in sources.SHAREPOINT_PROJECT_FOLDERS]),
+    "sync_cadence": {
+        "sharepoint-url:" + sources.sharepoint_library_url(
+            sources.SHAREPOINT_PROJECTS, sources.SHAREPOINT_PROJECT_FOLDERS[1]): "weekly"},
     "sharepoint_pages_urls": people.SHAREPOINT_SITE,
     "internal_domains": people.DOMAIN,
     "own_name": people.ME[0],

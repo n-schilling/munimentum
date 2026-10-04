@@ -45,6 +45,7 @@ import organization
 import outlook_export
 import planner_export
 import settings
+import sharepoint_export
 import state_db
 import teams_export
 import todo_export
@@ -639,6 +640,16 @@ Mail profile           passed
               "stays in May."),
      ]},
 
+    # Pictures and nothing else: no word for the parser to keep. It still
+    # gets one empty chunk, found by its title – and read once, not on
+    # every index run.
+    {"id": "chat-quayside", "kind": "group", "title": "Quayside pictures",
+     "subtitle": f"{ME}, {BOB[0]}",
+     "messages": [
+         _msg("q1", BOB, day(4, 3, 10, 0),
+              '<p><img src="data:image/png;base64,iVBORw0KGgo=" alt=""></p>', html=True),
+     ]},
+
     {"id": "channel-general", "kind": "channels", "team": f"{people.COMPANY} {PROJECT}",
      "title": "General", "subtitle": f"Channel of {people.COMPANY} {PROJECT}",
      "messages": [
@@ -828,6 +839,30 @@ Stage 1  ...
 
 SHAREPOINT_SITE_DIR = people.COMPANY
 SHAREPOINT_LIBRARY = "Documents"
+# A second library the settings never name as a whole: only two folders
+# in it are mirrored, through an address each (build.CONFIG). In the tree
+# it is a placeholder – no cadence, no "Sync now" of its own – so nobody
+# mirrors a whole library by accident.
+SHAREPOINT_PROJECTS = "Projects"
+SHAREPOINT_PROJECT_FOLDERS = ["Customers/Seestern", "Customers/Windrose"]
+SHAREPOINT_PROJECT_FILES = [
+    ("Customers/Seestern/kickoff-notes.md", day(2, 18, 9, 30), """# Seestern kickoff
+
+Two sites, one rollout wave each; the second wave waits for the network
+team's date.
+"""),
+    ("Customers/Windrose/inventory.csv", day(4, 14, 11, 0), """room;device;state
+2.01;Laptop 14";delivered
+2.02;Laptop 14";ordered
+"""),
+]
+
+
+def sharepoint_library_url(library, folder=None):
+    """The address of a library, or of a folder in it, as the settings
+    hold it."""
+    url = f"{people.SHAREPOINT_SITE}/{library}"
+    return f"{url}/{folder}" if folder else url
 
 
 def write_onedrive(root):
@@ -845,16 +880,35 @@ def write_onedrive(root):
     return written
 
 
-def write_sharepoint(root):
+def _write_library(root, name, files, urls):
+    """One library as the mirror leaves it: its files, the inventory, and
+    the addresses and name the settings know it by (the page maps the
+    library on disk to its place in the tree by them)."""
     written, bestand = [], {}
-    library = root / SHAREPOINT_SITE_DIR / SHAREPOINT_LIBRARY
-    for i, (rel, when, content) in enumerate(SHAREPOINT_FILES):
+    library = root / SHAREPOINT_SITE_DIR / name
+    for i, (rel, when, content) in enumerate(files):
         written.append(write(library / "Dateien" / rel, content, when))
-        bestand[f"sp-item-{i:02d}"] = {
-            "rel": f"Dateien/{rel}", "ctag": f"ctag-{i:02d}",
+        bestand[f"sp-{name.lower()}-{i:02d}"] = {
+            "rel": f"Dateien/{rel}", "ctag": f"ctag-{name.lower()}-{i:02d}",
             "size": len(content if isinstance(content, bytes)
                         else content.encode("utf-8"))}
-    state_db.StateDb(library).bestand_schreiben(bestand)
+    db = state_db.StateDb(library)
+    db.bestand_schreiben(bestand)
+    db.kv_schreiben("urls", json.dumps(urls))
+    # Named as a run names it – from the site's address and the library's
+    # URL, the way resolve_drives builds it.
+    db.kv_schreiben("lib_id", sharepoint_export.library_id(
+        sharepoint_export.site_address(people.SHAREPOINT_SITE),
+        {"name": name, "webUrl": sharepoint_library_url(name)}))
+    return written
+
+
+def write_sharepoint(root):
+    written = _write_library(root, SHAREPOINT_LIBRARY, SHAREPOINT_FILES,
+                             [sharepoint_library_url(SHAREPOINT_LIBRARY)])
+    written += _write_library(root, SHAREPOINT_PROJECTS, SHAREPOINT_PROJECT_FILES,
+                              [sharepoint_library_url(SHAREPOINT_PROJECTS, f)
+                               for f in SHAREPOINT_PROJECT_FOLDERS])
     return written
 
 

@@ -534,8 +534,9 @@ def test_pages_schritt_traegt_die_eigene_urlliste(sandbox):
     url = "https://firma.sharepoint.com/sites/TeamX"
     cfg["sync_cadence"] = {f"sharepoint-url:{url}": "weekly"}
     nur = app_mod.build_steps(cfg, {"sharepoint": True}, nur_einheit=url)
-    assert nur[0]["env"]["SHAREPOINT_URLS"] == url
-    assert nur[0]["env"]["SYNC_NOW"] == "1"
+    # "Sync now" on one line: every line rides along, the line names the unit.
+    assert nur[0]["env"]["SHAREPOINT_URLS"] == str(cfg.get("sharepoint_urls") or "")
+    assert nur[0]["env"]["SHAREPOINT_UNIT"] == url and "SYNC_NOW" not in nur[0]["env"]
     assert '"weekly"' in nur[0]["env"]["SYNC_CADENCE"]
     assert steps[0]["corpus"] is True
 
@@ -3772,8 +3773,15 @@ def _in_node(pruefung, sprache="de"):
         r = subprocess.run([node, pfad], capture_output=True, text=True, timeout=60)
         assert r.returncode == 0, f"{r.stdout}\n{r.stderr}"
         assert "OK" in r.stdout
+        return r.stdout
     finally:
         os.unlink(pfad)
+
+
+def _node_json(js, sprache="en"):
+    """What page code printed after "JSON " – one value, read back."""
+    out = _in_node(GRUNDZUSTAND + js + "\nconsole.log('OK');\n", sprache)
+    return json.loads(next(z[5:] for z in out.splitlines() if z.startswith("JSON ")))
 
 
 # A log line reads like the result lines: counts with separators, the
@@ -3819,6 +3827,506 @@ console.log('OK');
 
 def test_log_lines_read_like_the_results():
     _in_node(PRUEFUNG_LOG_LINES, sprache="en")
+
+
+# SharePoint addresses as a tree: one field adds, the page files the address
+# under its site and library, every address keeps its own cadence.
+PRUEFUNG_SP_TREE = GRUNDZUSTAND + r"""
+var saved = 0;
+speichereBald = function(){ saved++; };
+var B = 'https://firma.sharepoint.com/sites/TeamX/';
+var kad = {};
+kad['sharepoint-url:' + B + 'Documents'] = 'weekly';
+kad['sharepoint-url:' + B + 'Documents/Folder/A'] = 'daily';
+kad['sharepoint-url:' + B + 'Templates/Folder/C'] = 'inherit';
+kad['sharepoint-url:https://firma.sharepoint.com/sites/Marketing'] = 'daily';
+spFill([B + 'Documents', B + 'Documents/Folder/A', B + 'Templates/Folder/C',
+        B + 'Templates/Folder/C', 'https://firma.sharepoint.com/sites/Marketing',
+        'https://example.com/nothing'].join('\n'), kad);
+pruefe(SP.sites.length === 2, 'sites: ' + SP.sites.length);
+var teamx = SP.sites[0], marketing = SP.sites[1];
+pruefe(teamx.libs.length === 2 && teamx.wholeUrl === null, 'TeamX libraries');
+var docs = teamx.libs[0], tpl = teamx.libs[1];
+pruefe(docs.wholeUrl === B + 'Documents' && docs.cad === 'weekly', 'whole library');
+pruefe(docs.folders.length === 1 && docs.folders[0].cad === 'daily', 'folder address');
+pruefe(tpl.wholeUrl === null && !tpl.cadSet && tpl.folders.length === 1, 'the twice-given line counts once');
+// A library named only through folders is a placeholder: no cadence of
+// its own; a folder that said "inherit" takes the saved default itself.
+pruefe(!spLibWhole(teamx, tpl) && tpl.folders[0].cad === 'inherit', 'placeholder: ' + JSON.stringify(tpl));
+pruefe(spFolderCadence(teamx, tpl, tpl.folders[0]) === 'always', 'an inherit under a placeholder with no other folder: ' + spFolderCadence(teamx, tpl, tpl.folders[0]));
+// What the browser shows for a site, a document viewer or a list is the
+// site; every SharePoint Online host passes, and names map to disk as the
+// export writes them.
+['https://firma.sharepoint.com/sites/TeamX/SitePages/Home.aspx', 'https://firma.sharepoint.com/sites/TeamX/_layouts/15/Doc.aspx?sourcedoc=x',
+ 'https://firma.sharepoint.com/sites/TeamX/Lists/Tasks/AllItems.aspx'].forEach(function(u){
+  var p = addrParse(u);
+  pruefe(p && p.site === 'TeamX' && p.lib === '', 'site chrome is not the site: ' + u + ' -> ' + JSON.stringify(p));
+});
+pruefe(addrParse('https://contoso.sharepoint-mil.us/sites/TeamX/Documents').lib === 'Documents', 'a government host was refused');
+pruefe(addrParse('https://example.com/sites/TeamX') === null, 'a stranger host passed');
+// Chrome counts only right below the site: a folder named Lists or
+// SitePages in a library is a folder, SiteAssets a library, and a folder
+// named Forms is one unless a view (…/Forms/AllItems.aspx) follows it.
+pruefe(addrParse(B + 'Documents/Lists/Old').path === 'Lists/Old', 'a folder named Lists was cut');
+pruefe(addrParse(B + 'SiteAssets/Logos').lib === 'SiteAssets', 'SiteAssets is a library');
+pruefe(addrParse(B + 'Documents/Forms/Travel').path === 'Forms/Travel', 'a folder named Forms was cut');
+pruefe(addrParse(B + 'Documents/Forms/AllItems.aspx').lib === 'Documents' && addrParse(B + 'Documents/Forms/AllItems.aspx').path === '', 'a view is not chrome');
+pruefe(addrParse(B + 'Documents/Forms/AllItems.aspx?id=%2Fsites%2FTeamX%2FDocuments%2FGeneral%2Freport.docx&parent=%2Fsites%2FTeamX%2FDocuments%2FGeneral').path === 'General', 'a selected file was taken as a folder');
+pruefe(addrParse('https://firma.sharepoint.com/sites/Home.aspx') === null, 'a page below /sites/ was filed as a site');
+pruefe(addrParse('https://firma.sharepoint.com/:f:/s/TeamX/EabcXYZ?e=abc') === null, 'a short sharing link was read as a structure');
+pruefe(addrParse(B + 'Sub/Docs/Forms/AllItems.aspx').path === 'Docs', 'the view of a library deeper down is a folder named Forms: ' + JSON.stringify(addrParse(B + 'Sub/Docs/Forms/AllItems.aspx')));
+pruefe(addrDiskPath('Q&A?/ Sub.') === 'Q&A_/Sub', 'names not written as the export does: ' + addrDiskPath('Q&A?/ Sub.'));
+pruefe(Object.keys(spFolderIndex({folders: [{path: 'Q&A?'}]}, 'TeamX/Documents'))[0] === 'teamx/documents/dateien/q&a_', 'the skip map speaks the browser name');
+pruefe(marketing.wholeUrl && marketing.cad === 'daily' && marketing.libs.length === 0, 'a site address');
+pruefe(SP.bad.length === 1, 'an unrecognised line is kept');
+pruefe(SP.dup.length === 1 && SP.dup[0].of === 'Folder/C', 'the second line for one place is dropped: ' + JSON.stringify(SP.dup));
+pruefe(document.getElementById('sp-tree').innerHTML.indexOf(t('sp.dup.row', {path: 'Folder/C'})) >= 0, 'the duplicate is invisible');
+var html = document.getElementById('sp-tree').innerHTML;
+pruefe(html.indexOf(t('sp.whole')) >= 0 && html.indexOf(t('sp.only.one')) >= 0 && html.indexOf(t('sp.site.whole')) >= 0,
+       'chips: ' + html.slice(0, 300));
+pruefe(html.indexOf('addr-placeholder') >= 0 && html.indexOf(t('sp.lib.placeholder')) >= 0, 'no placeholder row');
+pruefe(html.indexOf('id="sp-k-' + tpl.key + '"') < 0, 'a placeholder got a cadence select');
+pruefe(html.indexOf('id="sp-k-' + docs.key + '"') >= 0, 'the whole library has none');
+
+// A sharing link into a known library: filed under it, sorted, and taking
+// the library's cadence when it asks for the same.
+document.getElementById('sp-add-url').value = 'https://firma.sharepoint.com/:f:/r/sites/TeamX/Templates/Folder/B?d=w0&csf=1&web=1';
+document.getElementById('sp-add-cadence').value = 'monthly';
+spAdd();
+pruefe(tpl.folders.map(function(f){ return f.path; }).join(',') === 'Folder/B,Folder/C', 'not filed: ' + JSON.stringify(tpl.folders));
+pruefe(tpl.folders[0].cad === 'monthly' && !spLibWhole(teamx, tpl), 'a folder under a placeholder inherits: ' + tpl.folders[0].cad);
+pruefe(spFolderCadence(teamx, tpl, tpl.folders[1]) === 'monthly', 'the inherit folder does not wait for the slowest: ' + spFolderCadence(teamx, tpl, tpl.folders[1]));
+pruefe(document.getElementById('sp-note').textContent.indexOf('Folder/B') >= 0, 'no note');
+pruefe(saved === 1, 'not saved');
+// The same place again – whatever its spelling – is no second line.
+document.getElementById('sp-add-url').value = B + 'Templates/Folder/B';
+spAdd();
+pruefe(tpl.folders.length === 2 && saved === 1, 'a duplicate was added');
+pruefe(document.getElementById('sp-note').textContent === t('sp.dup', {path: 'Folder/B'}), 'duplicate not said');
+// A library under the whole-site address: it takes the site's cadence
+// until it gets its own.
+document.getElementById('sp-add-url').value = 'https://firma.sharepoint.com/sites/Marketing/Assets/Logos';
+document.getElementById('sp-add-cadence').value = 'daily';
+spAdd();
+var assets = marketing.libs[0];
+pruefe(marketing.libs.length === 1 && !assets.cadSet && assets.folders[0].cad === 'inherit', 'library under a site');
+pruefe(spLibCadence(marketing, assets) === 'daily', 'takes the site: ' + spLibCadence(marketing, assets));
+spSetLib(1, 0, 'monthly');
+pruefe(spLibCadence(marketing, assets) === 'monthly' && spFolderCadence(marketing, assets, assets.folders[0]) === 'monthly', 'own cadence under a site');
+// A cadence of its own is an address line on the library – the same line
+// a pasted library address is; "like the site" takes it away again.
+pruefe(assets.wholeUrl === 'https://firma.sharepoint.com/sites/Marketing/Assets' && assets.cadSet, 'no line on the library: ' + JSON.stringify(assets));
+spSetLib(1, 0, 'inherit');
+pruefe(assets.wholeUrl === null && spLibCadence(marketing, assets) === 'daily', '"like the site" did not take the line away');
+spSetLib(1, 0, 'monthly');
+// The root site, without sites/… in the path.
+document.getElementById('sp-add-url').value = 'https://firma.sharepoint.com/Shared%20Documents/General';
+spAdd();
+pruefe(SP.sites.length === 3 && SP.sites[2].label === 'firma.sharepoint.com' && SP.sites[2].libs[0].lib === 'Shared Documents', 'root site');
+
+// What is saved: every address with its cadence, the default of a library
+// without an address of its own.
+var out = {}, urls = spRead(out);
+pruefe(urls.split('\n').length === 10, 'lines (the duplicate stays until taken away): ' + urls);
+spRemoveDup(0);
+pruefe(spRead({}).split('\n').length === 9 && SP.dup.length === 0, 'the duplicate did not go');
+pruefe(out['sharepoint-url:' + B + 'Documents/Folder/A'] === 'daily', 'folder cadence');
+pruefe(out['sharepoint-url:' + B + 'Templates/Folder/C'] === 'inherit', 'a stored inherit was rewritten');
+pruefe(out['sharepoint-url:https://firma.sharepoint.com/sites/Marketing/Assets'] === 'monthly', 'the library line under a site');
+pruefe(!Object.keys(out).some(function(k){ return k.indexOf('sharepoint-url:') !== 0; }), 'a key family besides the address lines: ' + JSON.stringify(Object.keys(out)));
+pruefe(out['sharepoint-url:https://firma.sharepoint.com/sites/Marketing'] === 'daily', 'site cadence');
+
+// The cadence a folder on disk gets: a folder value, a folder address, the
+// library – the library from the structure sync's `libs`, named once each.
+var M = 'https://firma.sharepoint.com/sites/Marketing';
+var LIBS = {'TeamX/Documents': {urls: [B + 'Documents', B + 'Documents/Folder/A'], lib_id: 'firma.sharepoint.com/sites/TeamX/Documents'},
+            'Marketing/Assets': {urls: [M, M + '/Assets/Logos'], lib_id: 'firma.sharepoint.com/sites/Marketing/Assets'},
+            'Marketing/Brand': {urls: [M], lib_id: 'firma.sharepoint.com/sites/Marketing/Brand'},
+            'Marketing/Other': {urls: [M], lib_id: 'firma.sharepoint.com/sites/Marketing/Other'}};
+spPlanTake({an: [], aus: [], libs: LIBS});
+pruefe(spCadenceFor('TeamX/Documents/Dateien/Folder/A/Old') === 'daily', 'below an address');
+pruefe(spCadenceFor('TeamX/Documents/Dateien/Other') === 'weekly', 'the library');
+pruefe(spCadenceFor('Marketing/Other/Dateien/x') === 'daily', 'a library only the site names');
+pruefe(spCadenceFor('Nowhere/Lib/Dateien/x') === 'always', 'a library the tree does not know');
+// The folder values live as rows in #sp-abw; the stub has no rows to read.
+var realAbw = abwLesen, abwStub = {'TeamX/Documents/Dateien/Folder/A/Old': 'monthly'};
+abwLesen = function(q){ return q === 'sharepoint' ? abwStub : realAbw(q); };
+pruefe(spCadenceFor('TeamX/Documents/Dateien/Folder/A/Old/x') === 'monthly', 'a folder value below');
+// A folder value at an address's own path is overruled by the address.
+abwStub['TeamX/Documents/Dateien/Folder/A'] = 'monthly';
+pruefe(spCadenceFor('TeamX/Documents/Dateien/Folder/A/x') === 'daily', 'the address did not win');
+delete abwStub['TeamX/Documents/Dateien/Folder/A'];     // overruled, and shown as a stray value otherwise
+// With an index given nothing is read again – the export list builds it
+// once per draw and asks for every folder – and the disk path of an
+// address is computed once.
+var reads = 0, countingAbw = abwLesen;
+abwLesen = function(q){ reads++; return countingAbw(q); };
+var index = folderValueIndex(abwStub);
+pruefe(spCadenceFor('TeamX/Documents/Dateien/Folder/A/Old/x', index) === 'monthly' && reads === 0, 'an index given, the rows were read again: ' + reads);
+planQuelle = 'sharepoint'; PLAN_FOLDER_VALUES = index;
+pruefe(planKadenzTag({pfad: 'TeamX/Documents/Dateien/Folder/A/Old/x'}).indexOf(t('cadence.monthly')) >= 0 && reads === 0, 'the export list read the rows per entry: ' + reads);
+planQuelle = 'outlook'; PLAN_FOLDER_VALUES = null; abwLesen = countingAbw;
+pruefe(docs.folders[0].disk === 'folder/a', 'the disk path is not cached: ' + JSON.stringify(docs.folders[0]));
+// A library added by hand is known to the export list at once, a removed one gone.
+document.getElementById('sp-add-url').value = B + 'Fresh';
+document.getElementById('sp-add-cadence').value = 'monthly';
+spAdd();
+pruefe(SP.libByKey['firma.sharepoint.com/sites/teamx/fresh'], 'a new library is not indexed until a refill');
+spRemove(0, teamx.libs.length - 1, 'all');
+pruefe(!SP.libByKey['firma.sharepoint.com/sites/teamx/fresh'] && teamx.libs.length === 2, 'a removed library stays indexed');
+
+// The folds: what the structure sync knows, indexed once; an address has
+// its own row and is not listed again below its library; the selects get
+// their value by script, and the libraries a whole-site address brings
+// survive a refill.
+spPlanTake({an: [
+  {pfad: 'TeamX/Documents/Dateien'},
+  {pfad: 'TeamX/Documents/Dateien/Folder'},
+  {pfad: 'TeamX/Documents/Dateien/Folder/A'},
+  {pfad: 'TeamX/Documents/Dateien/Folder/A/Old'},
+  {pfad: 'TeamX/Documents/Dateien/Other'},
+  {pfad: 'Marketing/Assets/Dateien'},
+  {pfad: 'Marketing/Brand/Dateien'}], aus: [], libs: LIBS});
+SP.planAsked = true;
+pruefe(spChildren('TeamX/Documents/Dateien').join(',') === 'TeamX/Documents/Dateien/Folder,TeamX/Documents/Dateien/Other', 'children: ' + spChildren('TeamX/Documents/Dateien'));
+spToggle(docs.key); spToggle('TeamX/Documents/Dateien/Folder');
+var tree = document.getElementById('sp-tree').innerHTML;
+pruefe(tree.indexOf('id="sp-k-TeamX/Documents/Dateien/Folder"') >= 0, 'the fold lists no folder');
+pruefe(tree.indexOf('id="sp-k-TeamX/Documents/Dateien/Folder/A"') < 0, 'the address is listed again below its library');
+pruefe(dyn('sp-k-' + docs.key).value === 'weekly' && dyn('sp-k-TeamX/Documents/Dateien/Folder').value === '', 'select values not set by script');
+pruefe(SP.diskByLib[LIBS['TeamX/Documents'].lib_id.toLowerCase()] === 'TeamX/Documents' && spDisk([], LIBS['TeamX/Documents'].lib_id) === 'TeamX/Documents' && spDisk([M], null) === 'Marketing/Assets', 'where a library lies on disk is not indexed');
+spPlanLibs();
+pruefe(marketing.libs.map(function(l){ return l.lib; }).join(',') === 'Assets,Brand,Other', 'the plan\'s libraries: ' + marketing.libs.map(function(l){ return l.lib; }));
+spFill(spRead({}), out);
+marketing = SP.sites[1];
+pruefe(marketing.libs.map(function(l){ return l.lib; }).join(',') === 'Assets,Brand,Other', 'the plan\'s libraries vanished on a refill');
+docs = SP.sites[0].libs[0];
+
+// Removing a library with folder addresses asks first, in the card; so
+// does a site with addresses below it.
+spRemove(0, 0, 'ask');
+pruefe(SP.ask === docs.key && SP.sites[0].libs.length === 2, 'did not ask');
+pruefe(document.getElementById('sp-tree').innerHTML.indexOf(t('sp.ask.keep')) >= 0, 'no choice to keep the folders');
+// A folder value on a folder no fold shows stands in the box below the
+// tree; one an open fold shows (Old, under the address Folder/A) does not.
+abwStub['TeamX/Documents/Dateien/Gone'] = 'weekly';
+spToggle(docs.key + '|folder/a');
+spDraw();
+pruefe(document.getElementById('sp-tree').innerHTML.indexOf('id="sp-k-TeamX/Documents/Dateien/Gone"') >= 0, 'a stray folder value is invisible');
+pruefe(document.getElementById('sp-tree').innerHTML.split('id="sp-k-TeamX/Documents/Dateien/Folder/A/Old"').length === 2, 'a folder value an open fold shows was listed twice');
+delete abwStub['TeamX/Documents/Dateien/Gone'];
+// Keeping the folder addresses: Folder/A ran daily on its own and keeps
+// it; a folder that took the library's weekly keeps weekly as its own.
+docs.folders.push({url: B + 'Documents/Folder/Z', path: 'Folder/Z', cad: 'inherit'});
+spRemove(0, 0, 'keep');
+pruefe(SP.sites[0].libs[0].wholeUrl === null && SP.sites[0].libs[0].folders.length === 2, 'keep removed the folders');
+pruefe(SP.sites[0].libs[0].folders.map(function(f){ return f.cad; }).join(',') === 'daily,weekly', 'the kept folders lost their cadence: ' + JSON.stringify(SP.sites[0].libs[0].folders));
+// … and only that library: the placeholder beside it keeps its "inherit"
+// folder and the default that resolves it.
+var beside = SP.sites[0].libs[1], kept = {};
+spRead(kept);
+pruefe(beside.folders.map(function(f){ return f.cad; }).join(',') === 'monthly,inherit' && kept['sharepoint-url:' + beside.folders[1].url] === 'inherit',
+       'removing one library settled another: ' + JSON.stringify(beside.folders) + ' ' + JSON.stringify(kept));
+docs.folders.pop();
+spRemove(0, 0, 'all');
+pruefe(SP.sites[0].libs.length === 1, 'not removed');
+spRemove(1, null, 'ask');
+pruefe(SP.ask === marketing.key, 'the site did not ask');
+spRemove(1, null, 'keep');
+pruefe(SP.sites[1].wholeUrl === null && SP.sites[1].libs.length === 1, 'the site kept its library');
+spRemove(1, null, 'all');
+pruefe(SP.sites.length === 2 && SP.sites[1].label === 'firma.sharepoint.com', 'the site went with its library');
+console.log('OK');
+"""
+
+
+def test_sharepoint_addresses_file_themselves_into_a_tree():
+    _in_node(PRUEFUNG_SP_TREE, sprache="en")
+
+
+# Every shape the browser hands out – the page and the run must read each
+# one the same way, or the tree files an address where the run never looks.
+ADDRESSES = [
+    "https://firma.sharepoint.com",
+    "https://firma.sharepoint.com/sites/Home.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx?id=%2Fsites%2FTeamX%2FDocuments%2FGeneral%2Freport.docx&parent=%2Fsites%2FTeamX%2FDocuments%2FGeneral",
+    "https://firma.sharepoint.com/sites/TeamX",
+    "https://firma.sharepoint.com/sites/TeamX/",
+    "firma.sharepoint.com/sites/TeamX/Docs",
+    "https://firma.sharepoint.com/sites/TeamX/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2FTeamX%2FShared%20Documents%2FGeneral%2FSub&viewid=x",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx?RootFolder=%2Fsites%2FTeamX%2FDocuments",
+    "https://firma.sharepoint.com/:f:/r/sites/TeamX/Documents/Folder%20A/B?csf=1&web=1&e=abc",
+    "https://firma.sharepoint.com/:f:/s/TeamX/Eabc123?e=xyz",
+    "https://firma.sharepoint.com/sites/TeamX/SitePages/Home.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/_layouts/15/Doc.aspx?sourcedoc=%7Bx%7D",
+    "https://firma.sharepoint.com/sites/TeamX/Lists/Tasks/AllItems.aspx",
+    "https://firma.sharepoint.com/_layouts/15/sharepoint.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/SiteAssets/Logos",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Lists/Old",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/SitePages/x.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Report.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Forms/Travel",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/Sub/Docs/Folder",
+    "https://firma.sharepoint.com/sites/TeamX/Sub/Docs/Forms/AllItems.aspx",
+    "https://firma.sharepoint.com/sites/TeamX/Sub/SitePages/Home.aspx",
+    "https://firma.sharepoint.com/teams/Ops/Docs/A%20b/c",
+    "https://firma-my.sharepoint.com/personal/alice_example_com/Documents/X",
+    "https://firma.sharepoint.com/Shared%20Documents/General",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Ü%20und%20ß/Ordner",
+    "https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx?id=%2Fsites%2FTeamX%2FDocuments%2FQ4%2520Report",
+    "https://User@FIRMA.sharepoint.com:443/sites/TeamX/Docs",
+    "https://firma.sharepoint.com:8443/sites/TeamX/Docs",
+    "https://firma.sharepoint.com:99999/sites/TeamX",
+]
+
+
+def test_the_page_reads_an_address_as_the_export_does():
+    """addrParse and sharepoint_export.url_teile are one reading: site,
+    library, folder – held together here, shape by shape."""
+    import sharepoint_export as sp
+    seen = _node_json("console.log('JSON ' + JSON.stringify(" + json.dumps(ADDRESSES) +
+                      ".map(function(u){ var p = addrParse(u); return p && [p.siteId, p.lib, p.path]; })));")
+    for url, page in zip(ADDRESSES, seen, strict=True):
+        parts = sp.url_teile(url)
+        if parts is None:
+            assert page is None, url
+            continue
+        address, rest = parts
+        assert page == [address.replace(":/", "/", 1), rest[0] if rest else "", "/".join(rest[1:])], url
+
+
+def test_the_page_files_a_subsite_address_as_the_run_does(monkeypatch):
+    """By the address alone, "…/TeamX/Sub/Docs/Folder" is a folder of a
+    library "Sub", and "…/TeamX/Documents/Reports" a folder of a library
+    "Documents"; the run finds a subsite Sub with a library Docs, and the
+    library "Shared Documents" by its display name. The structure sync
+    carries the libraries' lib_id and lines, the page learns both from it
+    and files the addresses where the run did – the library keys, every
+    cadence and the folders' units agree with the run's. The pages list
+    keeps keying the top site, as the pages export reads its lines."""
+    import sharepoint_export as sp
+    from tests.test_sharepoint_export import _FakeGraph
+    # TeamX with a library whose URL segment and display name differ, and
+    # below it a subsite Sub with a library Docs.
+    graph = _FakeGraph(sites={
+        "firma.sharepoint.com:/sites/TeamX": {"id": "s1", "name": "TeamX", "drives": [
+            {"id": "d1", "name": "Documents", "driveType": "documentLibrary",
+             "webUrl": "https://firma.sharepoint.com/sites/TeamX/Shared%20Documents"}]},
+        "firma.sharepoint.com:/sites/TeamX/Sub": {"id": "s2", "name": "Sub", "drives": [
+            {"id": "d2", "name": "Docs", "driveType": "documentLibrary",
+             "webUrl": "https://firma.sharepoint.com/sites/TeamX/Sub/Docs"}]}})
+    base = "https://firma.sharepoint.com/sites/TeamX/"
+    urls = [base + "Documents/Reports", base + "Sub/Docs/Folder", base + "Sub/Docs", base + "Sub"]
+    kad = {"sharepoint-url:" + urls[0]: "daily", "sharepoint-url:" + urls[1]: "daily",
+           "sharepoint-url:" + urls[2]: "inherit", "sharepoint-url:" + urls[3]: "weekly"}
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps(kad))
+    drives, fehl = sp.resolve_drives(graph, urls)
+    assert fehl == 0
+    docs = next(d for d in drives if d["name"] == "Docs")
+    shared = next(d for d in drives if d["name"] == "Documents")
+    assert docs["kadenz"] == "weekly" and docs["einheiten"] == {"Folder": "daily"}
+    assert shared["lib_id"] == "firma.sharepoint.com/sites/TeamX/Shared Documents"
+    assert shared["prefixes"] == {"Reports"} and shared["kadenz"] == "daily"
+    plan = [{"pfad": f"{d['site']}/{d['name']}/Dateien"} for d in drives] + [{"pfad": "Sub/Docs/Dateien/Folder"}]
+    libs = {f"{d['site']}/{d['name']}": {"urls": d["urls"], "lib_id": d["lib_id"]} for d in drives}
+    js = (f"var urls = {json.dumps(urls)}, kad = {json.dumps(kad)}, lib = {json.dumps(docs, default=list)}, shared = {json.dumps(shared, default=list)};\n"
+          "speichereBald = function(){};\n"
+          "spFill(urls.join('\\n'), kad);\n"
+          "pruefe(SP.sites.length === 1 && SP.sites[0].libs.length === 2, 'before a run: one site, Sub a library');\n"
+          "addrFill('pages', 'https://firma.sharepoint.com/sites/TeamX', {});\n"
+          f"spPlanTake({{an: {json.dumps(plan)}, aus: [], libs: {json.dumps(libs)}}});\n"
+          "var sub = SP.sites.filter(function(s){ return s.key === 'firma.sharepoint.com/sites/teamx/sub'; })[0];\n"
+          "pruefe(sub && sub.label === 'TeamX / Sub' && sub.wholeUrl === urls[3] && sub.cad === 'weekly' && sub.libs.length === 1, 'the subsite is no site of its own: ' + JSON.stringify(SP.sites.map(function(s){ return s.key; })));\n"
+          "var l = sub.libs[0];\n"
+          "pruefe(l.key === lib.lib_id.toLowerCase() && l.lib === 'Docs', 'library key: ' + l.key);\n"
+          "pruefe(l.wholeUrl === urls[2] && !l.cadSet, 'whole library with inherit: ' + JSON.stringify(l));\n"
+          "pruefe(spLibCadence(sub, l) === lib.kadenz, 'library cadence: ' + spLibCadence(sub, l) + ' vs ' + lib.kadenz);\n"
+          "pruefe(l.folders.length === 1 && spFolderCadence(sub, l, l.folders[0]) === lib.einheiten['Folder'], 'folder cadence');\n"
+          "var teamx = SP.sites[0], sd = teamx.libs[0];\n"
+          "pruefe(teamx.libs.length === 1 && sd.key === shared.lib_id.toLowerCase() && sd.lib === 'Shared Documents' && sd.folders.length === 1 && sd.folders[0].path === 'Reports', 'the display name was not mapped to the segment on disk: ' + JSON.stringify(teamx.libs));\n"
+          "pruefe(spLibCadence(teamx, sd) === shared.kadenz, 'placeholder cadence: ' + spLibCadence(teamx, sd));\n"
+          "var out = {}, lines = spRead(out);\n"
+          "pruefe(lines.split('\\n').length === 4 && out['sharepoint-url:' + urls[2]] === 'inherit' && out['sharepoint-url:' + urls[0]] === 'daily' && out['sharepoint-url:' + urls[3]] === 'weekly', 'not written back as stored: ' + lines + ' ' + JSON.stringify(out));\n"
+          "pruefe(spCadenceFor('Sub/Docs/Dateien/Folder/x') === 'daily' && spCadenceFor('Sub/Docs/Dateien/Other') === 'weekly', 'the export list disagrees with the run');\n"
+          "pruefe(spDisk([], lib.lib_id) === 'Sub/Docs', 'disk: ' + spDisk([], lib.lib_id));\n"
+          "var p = addrParse(urls[1] + '/New');\n"
+          "pruefe(p.siteId === 'firma.sharepoint.com/sites/TeamX/Sub' && p.lib === 'Docs' && p.path === 'Folder/New', 'a new address is not filed into the subsite: ' + JSON.stringify(p));\n"
+          "pruefe(addrParse(urls[0] + '/New').lib === 'Shared Documents', 'the display name is not read as the segment on disk: ' + JSON.stringify(addrParse(urls[0] + '/New')));\n"
+          "pruefe(addrParse('https://firma.sharepoint.com/sites/TeamX/Sub/SitePages/Home.aspx').lib === '', 'the subsite\\'s home page is not the subsite');\n"
+          "var html = document.getElementById('sp-tree').innerHTML;\n"
+          "pruefe(html.indexOf('TeamX / Sub') >= 0 && html.indexOf(t('sp.whole')) >= 0, 'the tree does not show the subsite');\n"
+          "// The pages list keys the top site, as the pages export reads the line.\n"
+          "document.getElementById('pg-add-url').value = urls[3];\n"
+          "addrAdd('pages');\n"
+          "pruefe(ADDR_ROWS.pages.length === 1 && document.getElementById('pg-note').textContent === t('addr.dup', {name: 'TeamX'}), 'a subsite passed as a second pages site: ' + document.getElementById('pg-note').textContent);\n"
+          "console.log('OK');\n")
+    _in_node(GRUNDZUSTAND + js, sprache="en")
+
+
+# The fold under an address when the structure cannot be fetched: a refusal
+# arrives as an answer (frage never rejects on a status), 404 is "nothing
+# mirrored yet"; it says so and offers to ask again – not "Loading…" for
+# ever – and a run of another source does not re-ask.
+PRUEFUNG_SP_PLAN_FAILS = GRUNDZUSTAND + r"""
+process.on('unhandledRejection', function(e){ console.error('unhandled: ' + e); process.exit(1); });
+speichereBald = function(){};
+OPEN_TAB = 'einstellungen';
+var B = 'https://firma.sharepoint.com/sites/TeamX/';
+spFill(B + 'Documents', {});
+var docs = SP.sites[0].libs[0], calls = 0;
+var answers = [
+  {ok: false, status: 500, error: {k: 'srv.internal', v: {}}},
+  {ok: false, status: 404, error: {k: 'srv.plan.nolist', v: {}}},
+  {an: [{pfad: 'TeamX/Documents/Dateien'}, {pfad: 'TeamX/Documents/Dateien/Sub'}], aus: [],
+   libs: {'TeamX/Documents': {urls: [B + 'Documents'], lib_id: 'firma.sharepoint.com/sites/TeamX/Documents'}}}];
+frage = function(){ return Promise.resolve(answers[calls++]); };
+spToggle(docs.key);
+pruefe(SP.planAsked && document.getElementById('sp-tree').innerHTML.indexOf(t('plan.loading')) >= 0, 'not loading');
+setTimeout(function(){
+  // The page's own first fetches have run by now and refilled the settings
+  // from an empty configuration: fill the tree again, the fold stays open.
+  spFill(B + 'Documents', {});
+  var html = document.getElementById('sp-tree').innerHTML;
+  pruefe(!SP.planAsked && SP.planFailed && !SP.plan && html.indexOf(t('sp.plan.failed')) >= 0 && html.indexOf(t('sp.plan.retry')) >= 0, 'a refusal was taken for a structure: ' + html.slice(0, 400));
+  pruefe(html.indexOf(t('plan.loading')) < 0, 'loading and failed at once');
+  spPlanLoad();                                   // the "Try again" button
+  setTimeout(function(){
+    spFill(B + 'Documents', {});
+    html = document.getElementById('sp-tree').innerHTML;
+    pruefe(SP.plan && SP.planAsked && !SP.planFailed && html.indexOf(t('sp.folders.none')) >= 0 && html.indexOf(t('sp.plan.retry')) < 0, 'nothing mirrored yet is not an empty structure: ' + html.slice(0, 400));
+    spPlanForget({steps: ['todo', 'index']});
+    pruefe(calls === 2 && SP.plan, 'a To Do run re-asked the structure: ' + calls);
+    spPlanForget({steps: ['sharepoint_folders', 'index']});
+    pruefe(calls === 3, 'a structure sync did not re-ask: ' + calls);
+    setTimeout(function(){
+      spFill(B + 'Documents', {});
+      html = document.getElementById('sp-tree').innerHTML;
+      pruefe(html.indexOf('id="sp-k-TeamX/Documents/Dateien/Sub"') >= 0, 'the structure did not load: ' + html.slice(0, 400));
+      console.log('OK');
+    }, 0);
+  }, 0);
+}, 0);
+"""
+
+
+def test_a_fold_whose_structure_cannot_be_fetched_offers_to_ask_again():
+    _in_node(PRUEFUNG_SP_PLAN_FAILS, sprache="en")
+
+
+# The folder values of a mirror as the run reads them: in any case, without
+# a trailing slash – the list must not name another cadence than the run.
+PRUEFUNG_FOLDER_VALUES = GRUNDZUSTAND + r"""
+var v = {'Dateien/fotos/': 'daily', 'Dateien/Fotos': 'weekly', 'Dateien/Alt': 'monthly'};
+var idx = folderValueIndex(v);
+pruefe(idx['dateien/fotos'].value === 'daily' && idx['dateien/fotos'].path === 'Dateien/fotos/', 'two spellings are not one value, the more frequent: ' + JSON.stringify(idx));
+pruefe(folderValueIndex({'Dateien//Alt/': 'weekly'})['dateien/alt'].value === 'weekly', 'a doubled slash is a folder of its own');
+pruefe(kadenzWirksam('Dateien/Fotos/2024', v, 'monthly', true).wert === 'daily', 'the list reads a folder value in another case, or with a slash, differently from the run');
+pruefe(kadenzWirksam('Dateien/Fotos/2024', v, 'monthly').wert === 'weekly', 'the exact reading of the other sources changed');
+console.log('OK');
+"""
+
+
+def test_the_list_reads_a_mirror_s_folder_values_as_the_run_does():
+    _in_node(PRUEFUNG_FOLDER_VALUES, sprache="en")
+
+
+# A burst of clicks in the tree is one save – not one round of requests
+# and a refill per click.
+PRUEFUNG_SAVE_BURST = GRUNDZUSTAND + r"""
+var saves = 0;
+speichereEinstellungen = function(){ saves++; };
+SAVE_DELAY_MS = 1;
+spFill('https://firma.sharepoint.com/sites/TeamX/Documents', {});
+spSetLib(0, 0, 'daily'); spSetLib(0, 0, 'weekly'); spSetSite(0, 'monthly');
+pruefe(saves === 0, 'saved on the click itself');
+setTimeout(function(){ pruefe(saves === 1, 'a burst of clicks is not one save: ' + saves); console.log('OK'); }, 30);
+"""
+
+
+def test_a_burst_of_tree_clicks_is_one_save():
+    _in_node(PRUEFUNG_SAVE_BURST, sprache="en")
+
+
+def test_an_address_note_in_error_is_red():
+    """`.err` is declared early; a later `.addr-note` rule of equal
+    specificity would turn the "not recognised" and "listed twice" notes
+    muted – the pair has a rule of its own."""
+    css = app_mod.seite()
+    assert ".addr-note.err{color:var(--err)}" in css
+    assert css.index(".addr-note{") < css.index(".addr-note.err{")
+
+
+# Folder names as they land on disk: the page maps a folder address to the
+# export list's rows by the name the mirror wrote, so the cleaning, the cut
+# at 120 characters and the tag must be the mirror's own.
+NAMES = [
+    "Reports", " .Reports. ", "a   b\tc", "Q&A?", "Name (2024) – final", "trailing.", ". leading",
+    "x" * 119 + "📁📁", "📁" * 70 + ".pdf", "a" * 60 + "😀" + "b" * 60 + ".docx", "😀" * 121,
+    "a\u0085b", "\u001cx\u001f", "\ufeffy\ufeff", "a\u00a0 b", "\u2003z\u2003", "x" * 118 + "\u0085\u0085\u0085.txt",
+    "...", "a/b:c*d", "x" * 130 + ".docx", "y" * 130, "Ü" * 121 + ".pdf",
+    "a" * 121 + ".averyveryverylongext", "a" * 120, "a" * 110 + "." + "b" * 12,
+    "a" * 110 + "." + "b" * 13, "." * 3 + "b" * 125 + ".txt",
+]
+
+
+def test_the_page_names_a_folder_on_disk_as_the_export_does():
+    import drive_mirror
+    seen = _node_json("console.log('JSON ' + JSON.stringify(" + json.dumps(NAMES) + ".map(addrSafe)));")
+    assert seen == [drive_mirror.safe(n) for n in NAMES]
+
+
+# The pages' sites and the boards: the same field and rows, a flat list.
+PRUEFUNG_ADDR_LISTS = GRUNDZUSTAND + r"""
+var saved = 0;
+speichereBald = function(){ saved++; };
+addrFill('pages', 'https://firma.sharepoint.com/sites/x\nhttps://firma.sharepoint.com/sites/X/\nhttps://firma.sharepoint.com/sites/y',
+         {'pages-url:https://firma.sharepoint.com/sites/y': 'weekly'});
+pruefe(ADDR_ROWS.pages.length === 3 && ADDR_ROWS.pages[1].dup && ADDR_ROWS.pages[2].cad === 'weekly', 'the same site twice is kept, marked');
+pruefe(document.getElementById('pg-list').innerHTML.indexOf(t('addr.dup.row')) >= 0, 'the duplicate is not marked');
+pruefe(document.getElementById('pg-list').innerHTML.indexOf('<b>x</b>') >= 0, 'the site by its name');
+document.getElementById('pg-add-url').value = 'https://example.com/none';
+addrAdd('pages');
+pruefe(ADDR_ROWS.pages.length === 3 && saved === 0, 'a non-site was added');
+pruefe(document.getElementById('pg-note').textContent === t('addr.bad.pages'), 'no reason given');
+document.getElementById('pg-add-url').value = 'https://firma.sharepoint.com/sites/z/SitePages/Home.aspx';
+document.getElementById('pg-add-cadence').value = 'monthly';
+addrAdd('pages');
+pruefe(ADDR_ROWS.pages.length === 4 && ADDR_ROWS.pages[3].cad === 'monthly' && saved === 1, 'page added');
+var out = {};
+pruefe(addrRead('pages', out).split('\n').length === 4 && out['pages-url:https://firma.sharepoint.com/sites/z/SitePages/Home.aspx'] === 'monthly', 'saved');
+addrRemove('pages', 1);
+pruefe(ADDR_ROWS.pages.length === 3 && saved === 2 && !ADDR_ROWS.pages.some(function(r){ return r.dup; }), 'the duplicate was not removed');
+
+addrFill('planner', 'https://planner.cloud.microsoft/webui/v1/plan/abcdefID123_-x/view/board\nhttps://tasks.office.com/firma.example/de-DE/Home/Planner/#/plantaskboard?groupId=g1&planId=altPlanId99',
+         {'planner-url:https://tasks.office.com/firma.example/de-DE/Home/Planner/#/plantaskboard?groupId=g1&planId=altPlanId99': 'weekly'});
+pruefe(ADDR_ROWS.planner.length === 2, 'both board shapes');
+// The SharePoint buttons save through their own path: it carries every
+// list and every cadence, the boards' included.
+var body = null;
+konfig = function(b){ body = b; return Promise.resolve({}); };
+speichereSharepointFelder();
+pruefe(body && body.planner_urls && body.planner_urls.split('\n').length === 2, 'the boards left the save: ' + JSON.stringify(body && body.planner_urls));
+pruefe(body.sync_cadence['planner-url:https://tasks.office.com/firma.example/de-DE/Home/Planner/#/plantaskboard?groupId=g1&planId=altPlanId99'] === 'weekly', 'a board cadence left the save');
+pruefe(body.sharepoint_pages_urls.split('\n').length === 3 && typeof body.sharepoint_urls === 'string', 'the other lists left the save');
+// Back in the settings with a fold still open, the plan is asked for.
+var asked = 0;
+frage = function(){ asked++; return Promise.resolve({ok: false, status: 404, error: {k: 'srv.plan.nolist', v: {}}}); };   // nothing mirrored yet
+SP.open['x'] = true; SP.planAsked = false;
+tab('einstellungen');
+pruefe(asked === 1, 'the fold was not asked for on return: ' + asked);
+document.getElementById('pl-add-url').value = 'https://tasks.office.com/x/#/plantaskboard?planId=abcdefID123_-x';
+addrAdd('planner');
+pruefe(ADDR_ROWS.planner.length === 2 && document.getElementById('pl-note').textContent.indexOf('already') > 0, 'the same board in the other shape');
+document.getElementById('pl-add-url').value = 'https://example.com/board';
+addrAdd('planner');
+pruefe(document.getElementById('pl-note').textContent === t('addr.bad.planner'), 'no board said');
+console.log('OK');
+"""
+
+
+def test_the_pages_and_the_boards_are_the_same_kind_of_list():
+    _in_node(PRUEFUNG_ADDR_LISTS, sprache="en")
 
 
 def test_assistent_ueberschreibt_die_eingabe_nicht():
@@ -4326,6 +4834,23 @@ def test_http_session_says_what_the_cache_says(server, sandbox):
     assert r == {"signed_in": False, "account": None, "own_registration": False,
                  "device": None}
     assert call(port, "GET", "/api/v1/status")[1]["auth"] == r
+
+
+def test_inherit_is_a_folder_addresss_word_only(server):
+    """A folder address may take its library's cadence; an address on a
+    whole library or site has nothing above it – "inherit" there is
+    dropped, so page and export never read one value two ways."""
+    _, port = server
+    kad = {"sharepoint-url:https://firma.sharepoint.com/sites/TeamX/Lib": "inherit",
+           "sharepoint-url:https://firma.sharepoint.com/sites/TeamX": "inherit",
+           "sharepoint-url:https://firma.sharepoint.com/sites/TeamX/Lib/Folder": "inherit",
+           "sharepoint-url:https://firma.sharepoint.com/:f:/r/sites/TeamX/Lib/Deep/er?web=1": "inherit",
+           "planner-url:https://planner.cloud.microsoft/webui/v1/plan/abcdefID123_-x/view": "inherit"}
+    kad["sharepoint-url:https://[x/sites/a/b/c"] = "inherit"     # no address: dropped, no 500
+    kad["sharepoint-url:https://firma.sharepoint.com/sites/Home.aspx"] = "inherit"   # no site named: the same
+    r = call(port, "PATCH", "/api/v1/config", {"sync_cadence": kad})[1]["config"]["sync_cadence"]
+    assert r == {"sharepoint-url:https://firma.sharepoint.com/sites/TeamX/Lib/Folder": "inherit",
+                 "sharepoint-url:https://firma.sharepoint.com/:f:/r/sites/TeamX/Lib/Deep/er?web=1": "inherit"}
 
 
 def test_http_modus_umschalten(server):
@@ -6779,7 +7304,12 @@ def test_exportliste_sharepoint_mit_regeln_und_urls(server, sandbox):
     r = call(port, "QUERY", "/api/v1/sources/sharepoint/folder-plan",
              {"sharepoint_rules": "- Nordwind/Dokumente/Dateien/Archiv/**"})[1]
     assert [z["pfad"] for z in r["an"]] == ["Nordwind/Dokumente/Dateien"]
-    assert r["an"][0]["urls"] == ["https://nordwind.sharepoint.com/sites/x"]
+    # The library's lines and name once, under `libs` – not on every entry.
+    assert r["libs"] == {"Nordwind/Dokumente": {"urls": ["https://nordwind.sharepoint.com/sites/x"]}}
+    assert "urls" not in r["an"][0] and "lib_id" not in r["an"][0]
+    state_db.StateDb(lib).kv_schreiben("lib_id", "nordwind.sharepoint.com/sites/x/Dokumente")
+    named = call(port, "QUERY", "/api/v1/sources/sharepoint/folder-plan", {"sharepoint_rules": ""})[1]
+    assert named["libs"]["Nordwind/Dokumente"]["lib_id"] == "nordwind.sharepoint.com/sites/x/Dokumente"
     assert [z["pfad"] for z in r["aus"]] == ["Nordwind/Dokumente/Dateien/Archiv"]
     assert r["aus"][0]["regel"] == "- Nordwind/Dokumente/Dateien/Archiv/**"
 
@@ -9644,7 +10174,7 @@ def test_jedes_feld_ist_auch_gelistet():
                  "onenote_enabled",   # likewise, saveCats()
                  "org_enabled",       # likewise, saveCats()
                  "sharepoint_urls",      # multi-line text, handled separately
-                 "planner_urls",         # URL table, liesUrlTabelle()
+                 "planner_urls",         # address list, addrRead()
                  "sharepoint_pages_urls",     # likewise
                  # cadence selects, leseKadenzen() – a whole source or one
                  # category of it
@@ -10540,3 +11070,28 @@ def test_teams_exclude_list_is_preset_normalised_and_reaches_the_step(sandbox, s
     assert app_mod.build_steps(cfg, {"teams": True})[0]["env"]["TEAMS_FILES_EXCLUDE"] == "aspx, mp4"
     cfg["teams_files_exclude"] = ""
     assert app_mod.build_steps(cfg, {"teams": True})[0]["env"]["TEAMS_FILES_EXCLUDE"] == ""
+
+
+def test_the_api_modules_import_no_export_module_at_load():
+    """An export module's import guard prints and exits when a package is
+    missing, and it reconfigures stdout at import – nothing an API module
+    may trigger by being loaded. What one needs from an export, it imports
+    where it needs it."""
+    import ast
+    import steps as steps_mod
+    repo = Path(__file__).resolve().parent.parent
+
+    def guarded(script):
+        # A module-level `try: import … except ImportError:` – the guard
+        # that prints and exits.
+        tree = ast.parse((repo / f"{script}.py").read_text(encoding="utf-8"))
+        return any(isinstance(n, ast.Try) and any(
+            isinstance(h.type, ast.Name) and h.type.id == "ImportError" for h in n.handlers)
+            for n in tree.body)
+    scripts = {e["script"] for e in steps_mod.REGISTRY if e.get("script") and guarded(e["script"])}
+    assert "sharepoint_export" in scripts and "case_export" not in scripts
+    for name in ("app.py", "api.py", "api_app.py", "api_archive.py", "api_cases.py", "api_explore.py"):
+        tree = ast.parse((repo / name).read_text(encoding="utf-8"))
+        top = [a.name for n in tree.body if isinstance(n, ast.Import) for a in n.names]
+        top += [n.module for n in tree.body if isinstance(n, ast.ImportFrom) and n.module]
+        assert not [m for m in top if m in scripts], (name, top)

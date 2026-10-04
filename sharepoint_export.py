@@ -132,7 +132,6 @@ def max_bytes():
 # The cadence machinery is shared by the URL-based exports (export_util).
 kadenzen = export_util.kadenzen
 sync_jetzt = export_util.sync_jetzt
-_haeufigere = export_util.haeufigere
 einheit_faellig = export_util.einheit_faellig
 
 
@@ -172,6 +171,28 @@ class TokenClient(drive_mirror.DriveOps, graph_client.TokenClient):
 # ---------------------------------------------------------------------------
 # Addressing: URL -> site -> document libraries
 # ---------------------------------------------------------------------------
+# Segments that are the site's own pages and machinery, never a library:
+# an address that reaches one of them directly below the site names the
+# site. Deeper down the same names are folders; SiteAssets is a library.
+SITE_CHROME = {"sitepages", "_layouts", "_api", "lists", "_catalogs"}
+
+
+def _host(u):
+    """The host as the page reads it (URL.host): lower-cased, without
+    userinfo, the port only when it is not the scheme's own."""
+    host = (u.hostname or "").lower()
+    port = u.port
+    if port and port != (443 if u.scheme == "https" else 80):
+        host += f":{port}"
+    return host
+
+
+def _site_depth(segments):
+    """How many segments the site takes: two under sites/teams/personal,
+    none on the root site."""
+    return 2 if len(segments) >= 2 and segments[0].lower() in ("sites", "teams", "personal") else 0
+
+
 def url_teile(url):
     """(site address, path inside the site) from whatever the browser hands
     out.
@@ -183,25 +204,46 @@ def url_teile(url):
     site; whatever follows names the library and folder – the run then
     mirrors exactly that subtree instead of the whole site.
     """
-    u = urlsplit(url if "://" in url else "https://" + url)
-    host = u.netloc
+    try:
+        u = urlsplit(url if "://" in url else "https://" + url)
+        host = _host(u)
+    except ValueError:                     # "https://[x/…", a port that is none: no address
+        return None
     if not host:
         return None
     stuecke = [unquote(s) for s in u.path.split("/") if s]
-    # Sharing links: /:f:/r/sites/… – the marker and its one-letter mode.
+    # Sharing links: "/:f:/r/<path>" carries the path after the marker and
+    # its mode letter; "/:f:/s/<site>/<token>" and the like carry a token
+    # only Graph could resolve – no address.
     if stuecke and re.fullmatch(r":[a-z]:", stuecke[0]):
-        stuecke = stuecke[1:]
-        if stuecke and len(stuecke[0]) == 1:
-            stuecke = stuecke[1:]
-    # Library views: everything from Forms/… is view chrome, and the id= (or
-    # RootFolder=) parameter carries the real server-relative folder path.
-    if "Forms" in stuecke:
-        stuecke = stuecke[:stuecke.index("Forms")]
+        if len(stuecke) < 2 or stuecke[1].lower() != "r":
+            return None
+        stuecke = stuecke[2:]
+    # Library views: "<library>/Forms/<view>.aspx" is view chrome – wherever
+    # the library stands, in a subsite too – and the id= (or RootFolder=)
+    # parameter carries the real server-relative folder path; with a file
+    # selected, id= is the file and parent= its folder, which is what the
+    # address names. A folder named Forms with no view behind it is a folder.
+    for i in range(len(stuecke) - 1):
+        if stuecke[i].lower() == "forms" and stuecke[i + 1].lower().endswith(".aspx"):
+            stuecke = stuecke[:i]
+            break
+    depth = _site_depth(stuecke)
     ziel = parse_qs(u.query)
-    kennung = (ziel.get("id") or ziel.get("RootFolder") or [None])[0]
-    if kennung:
-        stuecke = [s for s in unquote(kennung).split("/") if s]
-    if stuecke and stuecke[0].lower() in ("sites", "teams", "personal") and len(stuecke) >= 2:
+    kennung = (ziel.get("parent") or ziel.get("id") or ziel.get("RootFolder") or [None])[0]
+    if kennung:                            # decoded once, by parse_qs – as the page reads it
+        stuecke = [s for s in kennung.split("/") if s]
+        depth = _site_depth(stuecke)
+    # Site chrome – the home page, a document viewer, a list – directly
+    # below the site, and a page as the last segment: what the browser
+    # shows for the site itself.
+    if len(stuecke) > depth and stuecke[depth].lower() in SITE_CHROME:
+        stuecke = stuecke[:depth]
+    if stuecke and stuecke[-1].lower().endswith(".aspx"):
+        stuecke = stuecke[:-1]
+    if len(stuecke) < depth:
+        return None                        # "/sites/Home.aspx": no site named
+    if depth:
         return f"{host}:/{stuecke[0]}/{stuecke[1]}", stuecke[2:]
     return host, stuecke
 
@@ -220,26 +262,45 @@ def _drive_pfad(drive, adresse):
     """
     wp = [unquote(s) for s in
           urlsplit(drive.get("webUrl") or "").path.split("/") if s]
-    return wp[2:] if ":" in adresse else wp
+    # Below the site's own path – two segments for /sites/<name>, more for
+    # a subsite ("<host>:/sites/<name>/<sub>"), none on the root site.
+    depth = len([s for s in adresse.partition(":/")[2].split("/") if s])
+    return wp[depth:]
 
 
 def resolve_drives(graph, urls):
     """The document libraries behind the configured URLs, deduplicated.
 
     A URL that points into one library (or a folder inside it) scopes the
-    mirror to exactly that subtree; a plain site URL brings every library.
-    Broken URLs and denied sites are reported and skipped – one bad line
-    must not cost the other mirrors. Returns (drives, failures) where each
-    drive is {"id", "site", "name", "prefixes"} and prefixes is None for the
-    whole library or a set of folder paths inside it.
+    mirror to exactly that subtree; a plain site URL brings every library;
+    a path whose first segment is no library is followed into a subsite
+    of that name (`_place`). Broken URLs, denied sites and paths that lead
+    nowhere are reported and skipped – one bad line must not cost the
+    other mirrors, and never mirrors more than it names. Returns (drives,
+    failures) where each drive is {"id", "site", "name", "prefixes"} and
+    prefixes is None for the whole library or a set of folder paths inside
+    it.
+
+    Every address keeps its own cadence. A folder address becomes a unit
+    of its library (`einheiten`: folder path -> cadence, "inherit" taking
+    the library's); the library's own cadence (`kadenz`) is, in this
+    order, that of an address pointing at the whole library, that of an
+    address pointing at the whole site, else the slowest of its folder
+    addresses – the closer setting wins. A line repeated verbatim or
+    pointing at the same place counts once. `unit_of` maps each line to
+    the unit it is (its folder path, None for the whole library or site)
+    – "Sync now" on a line forces that unit alone (lauf).
     """
     gefunden, fehl = [], 0
+    seen = set()
     nach_id = {}
     seiten_namen = {}
     # Several URLs into one site (a library each, a folder each) ask for
-    # the site and its libraries once: a dozen URLs cost a dozen times two
-    # requests – some twelve seconds – before a single cadence was asked.
+    # the site and its libraries once, however they spell it: a dozen URLs
+    # cost a dozen times two requests – some twelve seconds – before a
+    # single cadence was asked. The first spelling names the site for all.
     je_adresse = {}
+    subsites = {}
     # One log line per site, after all URLs: a dozen lines into one site
     # used to say "1 libraries." a dozen times.
     per_site = {}
@@ -254,11 +315,16 @@ def resolve_drives(graph, urls):
                 fehl += 1
                 continue
             adresse, rest = teile
+            place = (adresse.lower(), tuple(r.lower() for r in rest))
+            if place in seen:
+                continue
+            seen.add(place)
             try:
-                if adresse not in je_adresse:
+                if adresse.lower() not in je_adresse:
                     site = graph.get(f"{GRAPH}/sites/{adresse}")
-                    je_adresse[adresse] = (site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
-                site, drives = je_adresse[adresse]
+                    je_adresse[adresse.lower()] = (adresse, site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
+                adresse, site, drives = je_adresse[adresse.lower()]
+                placed = _place(graph, subsites, adresse, site, drives, rest)
             except auth.TokenExpired:
                 raise
             except requests.HTTPError as e:
@@ -276,6 +342,15 @@ def resolve_drives(graph, urls):
                                error=f"{type(e).__name__}: {e}")
                 fehl += 1
                 continue
+            if placed is None:
+                # A path we cannot place names nothing – and mirroring the
+                # whole site instead would be exactly the accident the
+                # address tree rules out. The line is skipped, said.
+                progress.event("run.sharepoint.path_unmatched", "err",
+                               url=url, path="/".join(rest))
+                fehl += 1
+                continue
+            adresse, site, kandidaten, unterpfad, whole_site = placed
             sname = site.get("displayName") or site.get("name") or adresse
             # Two different sites can share a display name; their mirrors must
             # not share a folder – the second one gets a suffix from its id.
@@ -283,21 +358,6 @@ def resolve_drives(graph, urls):
             bekannt = seiten_namen.setdefault(sname, kennung)
             if bekannt != kennung:
                 sname = f"{sname}__{export_util.kuerzel(kennung)}"
-            bibliotheken = [d for d in drives
-                            if (d.get("driveType") or "") == "documentLibrary"]
-            kandidaten, unterpfad = bibliotheken, None
-            if rest:
-                for d in bibliotheken:
-                    libsegs = _drive_pfad(d, adresse)
-                    if libsegs and rest[:len(libsegs)] == libsegs:
-                        kandidaten = [d]
-                        unterpfad = "/".join(rest[len(libsegs):]) or None
-                        break
-                else:
-                    # A path we cannot place: mirror the whole site rather than
-                    # silently nothing, and say why.
-                    progress.event("run.sharepoint.path_unmatched", "warn",
-                                   url=url, path="/".join(rest))
             site_seen = per_site.setdefault(sname, {"libraries": set(), "urls": set()})
             site_seen["urls"].add(url)
             site_seen["libraries"].update(d["id"] for d in kandidaten if d.get("id"))
@@ -308,22 +368,34 @@ def resolve_drives(graph, urls):
                 if eintrag is None:
                     eintrag = {"id": d["id"], "site": sname,
                                "name": d.get("name") or "Bibliothek",
-                               "kadenz": kadenz,
+                               "lib_id": library_id(adresse, d),
+                               "ganz": None, "site_ganz": None, "einheiten": {},
                                "prefixes": None if unterpfad is None
                                else {unterpfad},
-                               "urls": []}
+                               "urls": [], "unit_of": {}}
                     nach_id[d["id"]] = eintrag
                     gefunden.append(eintrag)
                 elif unterpfad is None:
-                    eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
                     eintrag["prefixes"] = None            # full scope wins
                 elif eintrag["prefixes"] is not None:
-                    eintrag["kadenz"] = _haeufigere(eintrag.get("kadenz"), kadenz)
                     _praefix_aufnehmen(eintrag["prefixes"], unterpfad)
+                # Every place is reached once (`seen`): the address on
+                # the whole library, the one on the whole site, each folder.
+                # "inherit" on a whole library or site means no cadence of
+                # its own – the library takes its default, the site's, else
+                # its slowest folder (_set_cadences).
+                if unterpfad is None:
+                    if kadenz != "inherit":
+                        eintrag["site_ganz" if whole_site else "ganz"] = kadenz
+                else:
+                    eintrag["einheiten"][unterpfad] = kadenz
                 # Which configured lines led here – the library's state.db
                 # remembers them for the settings page.
                 if url not in eintrag["urls"]:
                     eintrag["urls"].append(url)
+                    eintrag["unit_of"][url] = unterpfad
+        for eintrag in gefunden:
+            _set_cadences(eintrag)
     finally:
         # Even when the token runs out half way: the sites already resolved
         # keep their line.
@@ -337,6 +409,90 @@ def resolve_drives(graph, urls):
                 progress.event("run.sharepoint.libraries", site=sname,
                                n=len(site_seen["libraries"]))
     return gefunden, fehl
+
+
+def _subsite(graph, subsites, address, name):
+    """(address, site, drives) of the subsite `name` below `address`, or
+    None when Graph knows no site of that name (404) – asked once per name
+    and run. Graph addresses a subsite by its path: "<host>:/sites/TeamX/
+    Sub". A refusal, a throttle or an outage is not "no site": it is
+    raised, so the line reports its status like a site that fails, and is
+    asked again on the next line into it."""
+    sub = f"{address}/{name}" if ":/" in address else f"{address}:/{name}"
+    if sub.lower() not in subsites:
+        try:
+            site = graph.get(f"{GRAPH}/sites/{sub}")
+            subsites[sub.lower()] = (sub, site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
+        except requests.HTTPError as e:
+            if getattr(e.response, "status_code", None) != 404:
+                raise
+            subsites[sub.lower()] = None
+    return subsites[sub.lower()]
+
+
+def _place(graph, subsites, address, site, drives, rest):
+    """Where a path inside a site leads: (address, site, libraries,
+    subpath, whole_site).
+
+    No path: every library of the site. A path names a library – in any
+    spelling, the segment comes from the library's webUrl – and perhaps a
+    folder in it. A first segment that is no library may be a subsite
+    ("…/sites/TeamX/Sub/Docs/Folder"): the path is followed into it, as
+    deep as it goes. None when nothing of that name is there – the caller
+    says so and mirrors nothing, never the whole site in its place. The
+    page learns the subsites from the libraries' lib_id after a run and
+    files such addresses the same way (addrParse, SP.subsites)."""
+    while True:
+        libraries = [d for d in drives
+                     if (d.get("driveType") or "") == "documentLibrary"]
+        # A subsite's own pages or machinery (url_teile cuts them off the
+        # top site): the subsite itself.
+        if rest and rest[0].lower() in SITE_CHROME:
+            rest = []
+        if not rest:
+            return address, site, libraries, None, True
+        for d in libraries:
+            libsegs = [s.lower() for s in _drive_pfad(d, address)]
+            if libsegs and [r.lower() for r in rest[:len(libsegs)]] == libsegs:
+                return address, site, [d], "/".join(rest[len(libsegs):]) or None, False
+        # Typed with the library's display name ("Documents" for the URL
+        # segment "Shared Documents"): that library – the page learns the
+        # alias from the library's lib_id after a run (spLearnPlacement).
+        for d in libraries:
+            if rest[0].lower() == (d.get("name") or "").lower():
+                return address, site, [d], "/".join(rest[1:]) or None, False
+        below = _subsite(graph, subsites, address, rest[0])
+        if below is None:
+            return None
+        address, site, drives = below
+        rest = rest[1:]
+
+
+def library_id(address, drive):
+    """"<host>/sites/<site>/<library>" – how the page keys a library in
+    its tree, built from the same pieces it reads off an address: the
+    site's address and the library's own URL segment, its name when Graph
+    sends no webUrl. Written to the library's state.db (kv lib_id) so the
+    export list can name it."""
+    segments = _drive_pfad(drive, address) or [drive.get("name") or "Bibliothek"]
+    return "/".join([address.replace(":/", "/", 1), *segments]).strip("/")
+
+
+def _set_cadences(entry):
+    """The library's cadence and its units' – "inherit" resolved.
+
+    The library's own: the address on the whole library, else the address
+    on the whole site. Without either, nothing of it lies outside its
+    folder addresses, so it takes the least frequent of theirs: the
+    listing then waits for the slowest unit, and every unit still runs on
+    its own. A folder that said "inherit" takes what the library ended up
+    with – also that slowest one, as the page shows it (spLibCadence)."""
+    own, site = entry.pop("ganz"), entry.pop("site_ganz")
+    lib = own or site or max(["always", *entry["einheiten"].values()],
+                             key=lambda k: export_util.KADENZ_RANG.get(k, 0))
+    entry["einheiten"] = {p: (lib if k == "inherit" else k)
+                          for p, k in entry["einheiten"].items()}
+    entry["kadenz"] = lib
 
 
 def _praefix_aufnehmen(vorhanden, neu):
@@ -398,18 +554,46 @@ def drive_ziel(out, drive):
 
 def drive_einheiten(kadenz_map, drive, db):
     """The library and its folder cadences as units over its state.db: the
-    drive unit runs on the library's merged URL cadence, folder units come
-    from the "sharepoint:<site>/<library>/<folder path>" keys, stamped as
-    "last_sync:sharepoint:<folder path>" in the library's state.db."""
-    return drive_mirror.Einheiten(kadenz_map, KADENZ_PRAEFIX, db,
+    drive unit runs on the library's own cadence, every folder address is
+    a unit of its own with its cadence, and the folder values set below
+    them come from the "sharepoint:<site>/<library>/<folder path>" keys –
+    all stamped as "last_sync:sharepoint:<folder path>" in the library's
+    state.db. A new address has no stamp yet, so it is due at once."""
+    cadences = dict(kadenz_map)
+    # An address is the unit at its path, however a folder value there was
+    # written – case, slashes: the keys are read the way
+    # drive_mirror.Einheiten reads them, else the value would be merged
+    # with the address and could outvote it. Normalised once, not per address.
+    spelled = {}
+    for k in cadences:
+        spelled.setdefault(_unit_key(k), []).append(k)
+    for path, cadence in (drive.get("einheiten") or {}).items():
+        pattern = "/".join(safe(s) for s in path.split("/") if s)
+        key = f"{KADENZ_PRAEFIX}:{drive_praefix(drive)}/{drive_mirror.DATEI_DIR}/{pattern}"
+        for other in spelled.get(_unit_key(key), []):
+            if other != key:
+                del cadences[other]
+        cadences[key] = cadence
+    return drive_mirror.Einheiten(cadences, KADENZ_PRAEFIX, db,
                                   laufwerk=drive.get("kadenz") or "always",
                                   unter=drive_praefix(drive))
 
 
+def _unit_key(k):
+    """A cadence key as drive_mirror.Einheiten reads it: the folder path
+    without surrounding or doubled slashes, compared without case."""
+    if k.startswith(KADENZ_PRAEFIX + ":"):
+        k = f"{KADENZ_PRAEFIX}:{drive_mirror.folder_key(k[len(KADENZ_PRAEFIX) + 1:])}"
+    return k.lower()
+
+
 def _urls_merken(db, drive):
-    """kv "urls": the configured URLs that resolved to this library."""
+    """kv "urls": the configured URLs that resolved to this library; kv
+    "lib_id": how the settings name it – the page maps the library on disk
+    to its place in the tree by both."""
     db.kv_schreiben("urls", json.dumps(list(drive.get("urls") or []),
                                        ensure_ascii=False))
+    db.kv_schreiben("lib_id", drive.get("lib_id") or "")
 
 
 def _anzeigename(drive):
@@ -426,6 +610,32 @@ def je_drive(graph, drives):
 # ---------------------------------------------------------------------------
 # The three runs: mirror, folder sync, check/preview
 # ---------------------------------------------------------------------------
+def sync_unit():
+    """"Sync now" on one address: SHAREPOINT_UNIT names the line. The run
+    still carries every line, so each library keeps its scope, its delta
+    pointer and its stored walk – only the unit behind that line is due,
+    and only its library runs."""
+    return (os.environ.get("SHAREPOINT_UNIT") or "").strip() or None
+
+
+def _unit_rel(path):
+    """A folder address's unit as drive_einheiten names it – "" for the
+    library itself."""
+    if not path:
+        return ""
+    return f"{drive_mirror.DATEI_DIR}/" + "/".join(safe(s) for s in path.split("/") if s)
+
+
+def _unnamed_libraries(out, drives):
+    """Libraries in the archive that no configured line leads to any more
+    – "<site>/<library>" each. They stay as they are and are not updated;
+    said once per run, so a line that stopped reaching its library (a
+    typo, a subsite address that used to bring the whole site along) does
+    not go unnoticed."""
+    named = {drive_ziel(out, d) for d in drives}
+    return [p.relative_to(out).as_posix() for p in _bibliotheken(out) if p not in named]
+
+
 def lauf(graph, out, drives, fehl=0):
     """The mirror runs, one library after the other, behind each library's
     cadence gate. A library is skipped before listing only when none of
@@ -434,6 +644,7 @@ def lauf(graph, out, drives, fehl=0):
     after its downloads succeeded – the library's "last_sync" included)."""
     wahl = auswahl()
     kadenz_map = kadenzen()
+    unit = sync_unit()
     summe = {"new": 0, "excluded": 0, "errors": 0, "moved": 0, "gone": 0}
     uebersprungen = wartend = 0
     getaktet = False
@@ -441,11 +652,18 @@ def lauf(graph, out, drives, fehl=0):
         progress.event("run.full_sync")
     elif export_util.abgleich():
         progress.event("run.resync")
+    if unit is None and not fehl:
+        for name in _unnamed_libraries(out, drives):
+            progress.event("run.sharepoint.unnamed", "warn", name=name)
     for d in je_drive(graph, drives):
+        if unit is not None and unit not in (d.get("unit_of") or {}):
+            continue                       # "Sync now": only the line's library
         ziel = drive_ziel(out, d)
         db = state_db.StateDb(ziel)
         _urls_merken(db, d)
         takt = drive_einheiten(kadenz_map, d, db)
+        if unit is not None:
+            takt.erzwingen(_unit_rel(d["unit_of"][unit]))
         if not takt.irgendeine_faellig():
             uebersprungen += 1
             progress.event("run.cadence.skip", name=_anzeigename(d),

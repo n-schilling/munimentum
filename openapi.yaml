@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.1.1
+  version: 14.2.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -3448,8 +3448,9 @@ paths:
                 type: object
                 properties:
                   regeln: { type: array, items: { type: string } }
-                  an: { type: array, items: { type: object, additionalProperties: true } }
-                  aus: { type: array, items: { type: object, additionalProperties: true } }
+                  an: { type: array, description: "The units the rules take, one entry each (pfad, elemente, archiv, regel).", items: { type: object, additionalProperties: true } }
+                  aus: { type: array, description: "The units the rules leave out, in the same shape.", items: { type: object, additionalProperties: true } }
+                  libs: { type: object, description: "SharePoint only – the libraries on disk (`<site>/<library>`, the first two steps of every pfad), each with `urls`, the configured addresses that resolved to it, and `lib_id`, the library as the page keys it (<host>/sites/<site>/<library>); once per library, so the page maps every folder on disk to its place in the address tree without each entry carrying them.", additionalProperties: { type: object, additionalProperties: true } }
               example:
                 regeln:
                 - '- E-Mail/Archiv/**'
@@ -4371,7 +4372,7 @@ components:
         sharepoint_pages_enabled: { type: boolean, default: false, description: "Master switch of the SharePoint pages export." }
         sharepoint_pages_urls: { type: string, default: "", description: "Site URLs whose modern pages (subsites included) are exported, one per line." }
         sharepoint_pages_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones are linked." }
-        sync_cadence: { type: object, description: "Key -> always|daily|weekly|monthly: a source (onedrive, todo), a category (outlook:mail, teams:1on1), a unit (sharepoint-url:<url>, planner-url:<url>, pages-url:<url>, onenote:<id>) or a departure below a category (ou…" }
+        sync_cadence: { type: object, description: "Key -> always|daily|weekly|monthly: a source (onedrive, todo), a category (outlook:mail, teams:1on1), a unit (sharepoint-url:<url>, there also 'inherit' for its library's – on a whole library or site: none of its own; planner-url:<url>, pages-url:<url>, onenote:<id>) or a departure below a category (ou…" }
         outlook_categories: { type: array, items: { type: string }, description: "The ticked mailbox categories: mail, calendar, contacts." }
         teams_categories: { type: array, items: { type: string }, description: "The ticked Teams kinds: 1on1, group, meeting, channels." }
         check_sources: { type: array, items: { type: string }, description: "The balance rows the completeness check asks – the Insights card's own selection, all ten to begin with: outlook_mail, outlook_calendar, outlook_contacts, teams, onedrive, sharepoint, sharepoint_pages, planner, todo, onenote." }

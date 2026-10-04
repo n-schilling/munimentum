@@ -158,7 +158,18 @@ Evidence, App, Expert mode; each
 source a block with the essentials open and the rest under *Advanced*;
 the save bar appears only with unsaved changes. Access saves on its own
 button, like the MCP card: a key is pasted and applied, not collected
-with the rest.
+with the rest. Sources configured by addresses (the SharePoint mirror,
+its pages, the Planner boards) share one shape: a field adds an address
+with its cadence, rows of four columns (name, cadence, *Sync now*, ×)
+show what is there. The mirror's rows form a tree – a pasted address
+files itself under its site and library, every address and every folder
+below it carries its own cadence there, a library a site address brings
+takes the site's until its select writes it a line of its own, a library
+named only through folders is a placeholder without cadence or *Sync now*
+of its own, a
+folder value no open fold shows stands in one box below the tree – and
+removing a site or library with addresses below it asks in the card
+itself.
 
 **The run window** is the one place for a running process: headline,
 progress, the steps, the log with *Copy* and *Report a problem*,
@@ -209,6 +220,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Empty state | `.leer` | two `.card.liste` groups of `.hist` rows with a `.gruppe-kopf` each |
 | History row | `.hist` | title, criteria as `.tag`s, time or last run; with `.knoepfe` in the windows |
 | Tag / mark | `.tag`, `.tag.extern`, `.tag.weg`, `.tag.mcp`, `.im-fall` | source, external, deleted – and changed since taken into a case –, via MCP, in a case |
+| Address tree / list | `.addr-box`, `.addr-node`, `.addr-chip` | a site, or an address list, as a box; one row per address with its cadence, *Sync now* and ×; the chips say *whole site*, *whole library*, *only its N folder addresses*, *listed twice* |
 | Status dot / state line | `.dot.ok/.warn/.err` / `.stand` | always next to a word |
 | Info | `.info` | 17 px circle; text in `data-i18n-title` |
 | Setting row | `.feldzeile` | label with `(i)` left, control right; `.kipp` for every boolean |

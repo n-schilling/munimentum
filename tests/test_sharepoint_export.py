@@ -102,9 +102,9 @@ class _FakeGraph:
                 fehler = requests.HTTPError(response=antwort)
                 raise fehler
         for adresse, site in self.sites.items():
-            if f"/sites/{adresse}" in url:
+            if url.endswith(f"/sites/{adresse}"):
                 return {"id": site["id"], "displayName": site["name"]}
-        raise RuntimeError(f"unbekannt: {url}")
+        raise requests.HTTPError(response=_Antwort(404))     # as Graph: no such site
 
     def paged(self, url):
         for site in self.sites.values():
@@ -127,11 +127,12 @@ def _events(capsys):
 def test_resolve_drives_sammelt_bibliotheken_und_dedupliziert(capsys):
     g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
         "id": "s1", "name": "Team X",
-        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary"},
+        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Dokumente"},
                    {"id": "d2", "name": "Assets", "driveType": "documentLibrary"},
                    {"id": "d3", "name": "Papierkorb", "driveType": "recycleBin"}]}})
     urls = ["https://firma.sharepoint.com/sites/TeamX",
-            "https://firma.sharepoint.com/sites/TeamX/Unterseite"]
+            "https://firma.sharepoint.com/sites/TeamX/Dokumente"]
     drives, fehl = sp.resolve_drives(g, urls)
     assert fehl == 0
     assert [d["id"] for d in drives] == ["d1", "d2"]      # deduped, no recycle bin
@@ -817,9 +818,10 @@ def test_ohne_ordnertakt_bleibt_alles_wie_es_war(tmp_path, monkeypatch, capsys):
 def test_urls_landen_in_der_state_db_der_bibliothek(tmp_path, monkeypatch, capsys):
     g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
         "id": "s1", "name": "Team X",
-        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary"}]}})
+        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Dokumente"}]}})
     urls = ["https://firma.sharepoint.com/sites/TeamX",
-            "https://firma.sharepoint.com/sites/TeamX/Unterseite"]
+            "https://firma.sharepoint.com/sites/TeamX/Dokumente"]
     monkeypatch.setenv("SYNC_CADENCE", "{}")
     drives, _ = sp.resolve_drives(g, urls)
     assert drives[0]["urls"] == urls
@@ -1126,16 +1128,16 @@ def test_lange_aufzaehlung_meldet_zwischenstand(capsys):
 # Cadence: units below their interval are skipped, with a clear line
 # ---------------------------------------------------------------------------
 def test_resolve_drives_haengt_die_url_kadenz_an(capsys, monkeypatch):
-    """Cadence lives on the source URL; two URLs feeding one drive merge to
-    the more frequent one."""
+    """Cadence lives on the source URL; the site's and the library's own
+    both reach one drive – the closer one, the library's, wins."""
     g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
         "id": "s1", "name": "Team X",
-        "drives": [{"id": "d1", "name": "Dokumente",
-                    "driveType": "documentLibrary"}]}})
+        "drives": [{"id": "d1", "name": "Dokumente", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Dokumente"}]}})
     urls = ["https://firma.sharepoint.com/sites/TeamX",
-            "https://firma.sharepoint.com/sites/TeamX/Unterseite"]
+            "https://firma.sharepoint.com/sites/TeamX/Dokumente"]
     monkeypatch.setenv("SYNC_CADENCE", json.dumps(
-        {f"sharepoint-url:{urls[0]}": "monthly",
+        {f"sharepoint-url:{urls[0]}": "daily",
          f"sharepoint-url:{urls[1]}": "weekly"}))
     drives, fehl = sp.resolve_drives(g, urls)
     assert fehl == 0 and drives[0]["kadenz"] == "weekly"
@@ -1380,3 +1382,447 @@ def test_an_image_verdict_is_quiet_and_a_passing_failure_keeps_the_page_due(tmp_
     assert sp.seiten_lauf(g4, tmp_path, SITES) == 1 and g4.detailabrufe >= 1
     assert db.seiten_lesen()["p1"]["etag"] == "e3"
     assert "data:image/png;base64," in next(tmp_path.rglob("*.html")).read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# Every address its own cadence
+# --------------------------------------------------------------------------
+def _two_libraries():
+    return _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
+        "id": "s1", "name": "TeamX",
+        "drives": [{"id": "d1", "name": "Documents", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Documents"},
+                   {"id": "d2", "name": "Templates", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Templates"}]}})
+
+
+BASIS = "https://firma.sharepoint.com/sites/TeamX/"
+
+
+def test_every_address_keeps_its_own_cadence(monkeypatch, capsys):
+    """A folder address behind the whole library's address keeps its
+    cadence; two folder addresses keep each their own."""
+    urls = [BASIS + "Documents", BASIS + "Documents/Folder/A",
+            BASIS + "Templates/Folder/B", BASIS + "Templates/Folder/C"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "weekly", "sharepoint-url:" + urls[1]: "daily",
+        "sharepoint-url:" + urls[2]: "weekly", "sharepoint-url:" + urls[3]: "daily"}))
+    drives, fehl = sp.resolve_drives(_two_libraries(), urls)
+    docs, tpl = drives
+    assert fehl == 0
+    assert docs["kadenz"] == "weekly" and docs["einheiten"] == {"Folder/A": "daily"}
+    assert docs["prefixes"] is None
+    # Only folder addresses: each its own, the library waits for the slowest.
+    assert tpl["einheiten"] == {"Folder/B": "weekly", "Folder/C": "daily"}
+    assert tpl["kadenz"] == "weekly"
+
+
+def test_a_site_address_paces_every_library_unless_set_closer(monkeypatch, capsys):
+    """A site address gives each library its cadence – an address on the
+    whole library wins over it (the page writes one when a library under
+    a site gets a cadence of its own)."""
+    urls = [BASIS.rstrip("/"), BASIS + "Documents/Folder/A", BASIS + "Templates"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "weekly", "sharepoint-url:" + urls[1]: "daily",
+        "sharepoint-url:" + urls[2]: "monthly"}))
+    drives, fehl = sp.resolve_drives(_two_libraries(), urls)
+    docs, tpl = drives
+    assert fehl == 0 and docs["prefixes"] is None and tpl["prefixes"] is None
+    assert docs["kadenz"] == "weekly" and docs["einheiten"] == {"Folder/A": "daily"}
+    assert tpl["kadenz"] == "monthly" and tpl["einheiten"] == {}
+    assert "site_ganz" not in docs and "ganz" not in docs
+
+
+def test_a_folder_address_can_take_the_library_s_cadence(monkeypatch, capsys):
+    urls = [BASIS + "Templates", BASIS + "Templates/Folder/B", BASIS + "Templates/Folder/C"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "monthly", "sharepoint-url:" + urls[1]: "inherit",
+        "sharepoint-url:" + urls[2]: "daily"}))
+    (tpl,), _ = sp.resolve_drives(_two_libraries(), urls)
+    assert tpl["lib_id"] == "firma.sharepoint.com/sites/TeamX/Templates"
+    assert tpl["kadenz"] == "monthly" and tpl["prefixes"] is None
+    assert tpl["einheiten"] == {"Folder/B": "monthly", "Folder/C": "daily"}
+    assert tpl["unit_of"] == {urls[0]: None, urls[1]: "Folder/B", urls[2]: "Folder/C"}
+
+
+def test_inherit_under_a_placeholder_takes_the_slowest_folder(monkeypatch, capsys):
+    """No address on the library, no default: the library waits for its
+    slowest folder, and a folder that said "inherit" waits with it – what
+    the page shows for it (spLibCadence), not "always"."""
+    urls = [BASIS + "Templates/Folder/B", BASIS + "Templates/Folder/C"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "inherit", "sharepoint-url:" + urls[1]: "monthly"}))
+    (tpl,), _ = sp.resolve_drives(_two_libraries(), urls)
+    assert tpl["kadenz"] == "monthly"
+    assert tpl["einheiten"] == {"Folder/B": "monthly", "Folder/C": "monthly"}
+
+
+def test_an_address_given_twice_counts_once(monkeypatch, capsys):
+    """The place counts once, whatever its spelling, and the first line's
+    cadence is the one that holds."""
+    urls = [BASIS + "Templates/Folder/B", BASIS + "Templates/Folder/B",
+            "https://firma.sharepoint.com/:f:/r/sites/TeamX/Templates/Folder/B?web=1"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "daily", "sharepoint-url:" + urls[2]: "monthly"}))
+    (tpl,), _ = sp.resolve_drives(_two_libraries(), urls)
+    assert tpl["urls"] == [urls[0]] and tpl["prefixes"] == {"Folder/B"}
+    assert tpl["einheiten"] == {"Folder/B": "daily"}
+
+
+def test_one_site_in_two_spellings_is_fetched_once(monkeypatch, capsys):
+    """"TeamX" and "teamx" are one site: asked for once, and named by the
+    first spelling in every lib_id."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    g = _two_libraries()
+    asked, original = [], g.get
+    g.get = lambda url: (asked.append(url), original(url))[1]
+    drives, fehl = sp.resolve_drives(g, [BASIS + "Documents", "https://firma.sharepoint.com/sites/teamx/Templates"])
+    assert fehl == 0 and len(asked) == 1
+    assert [d["lib_id"] for d in drives] == ["firma.sharepoint.com/sites/TeamX/Documents",
+                                              "firma.sharepoint.com/sites/TeamX/Templates"]
+
+
+def test_the_host_is_read_as_the_page_reads_it():
+    """Lower-cased, without userinfo, the scheme's own port left out – and
+    a port that is none is no address (URL.host in the browser)."""
+    assert sp.url_teile("https://User@FIRMA.sharepoint.com:443/sites/TeamX/Docs") == (
+        "firma.sharepoint.com:/sites/TeamX", ["Docs"])
+    assert sp.url_teile("https://firma.sharepoint.com:8443/sites/TeamX") == (
+        "firma.sharepoint.com:8443:/sites/TeamX", [])
+    assert sp.url_teile("https://firma.sharepoint.com:99999/sites/TeamX") is None
+    # The folder parameter is decoded once, as the page decodes it: a
+    # folder whose name holds "%20" keeps it.
+    assert sp.url_teile("https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx"
+                        "?id=%2Fsites%2FTeamX%2FDocuments%2FQ4%2520Report") == (
+        "firma.sharepoint.com:/sites/TeamX", ["Documents", "Q4%20Report"])
+
+
+def test_site_chrome_names_the_site():
+    """What the browser shows for a site – its home page, a document
+    viewer, a list – is the site, not a library of that name."""
+    for url in ("https://firma.sharepoint.com/sites/TeamX/SitePages/Home.aspx",
+                "https://firma.sharepoint.com/sites/TeamX/_layouts/15/Doc.aspx?sourcedoc=%7Bx%7D",
+                "https://firma.sharepoint.com/sites/TeamX/Lists/Tasks/AllItems.aspx"):
+        assert sp.url_teile(url) == ("firma.sharepoint.com:/sites/TeamX", []), url
+    assert sp.url_teile("https://firma.sharepoint.com/sites/TeamX/Documents/Report.aspx") == (
+        "firma.sharepoint.com:/sites/TeamX", ["Documents"])
+    assert sp.url_teile("https://firma.sharepoint.com/_layouts/15/sharepoint.aspx") == (
+        "firma.sharepoint.com", [])
+    assert sp.url_teile("https://[x/sites/a") is None
+    # A page right below /sites/ names no site at all – no address, no crash.
+    assert sp.url_teile("https://firma.sharepoint.com/sites/Home.aspx") is None
+
+
+def test_site_chrome_counts_only_directly_below_the_site():
+    """SitePages, Lists, _layouts … name the site where the browser puts
+    them – right after it. Deeper down they are folders (a library may
+    well hold a folder "Lists"), SiteAssets is a library of its own, and
+    a folder named Forms is a folder unless a view follows it."""
+    for url, expected in (
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/Lists/Old", ["Documents", "Lists", "Old"]),
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/SitePages/x.aspx", ["Documents", "SitePages"]),
+            ("https://firma.sharepoint.com/sites/TeamX/SiteAssets/Logos", ["SiteAssets", "Logos"]),
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/Forms/Travel", ["Documents", "Forms", "Travel"]),
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx", ["Documents"]),
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx?id=%2Fsites%2FTeamX%2FDocuments%2FGeneral",
+             ["Documents", "General"]),
+            ("https://firma.sharepoint.com/Shared%20Documents/Forms/AllItems.aspx", ["Shared Documents"]),
+            # A selected file: id= is the file, parent= its folder – the address names the folder.
+            ("https://firma.sharepoint.com/sites/TeamX/Documents/Forms/AllItems.aspx"
+             "?id=%2Fsites%2FTeamX%2FDocuments%2FGeneral%2Freport.docx&parent=%2Fsites%2FTeamX%2FDocuments%2FGeneral",
+             ["Documents", "General"])):
+        assert sp.url_teile(url)[1] == expected, url
+
+
+def test_a_library_is_found_in_any_spelling(monkeypatch, capsys):
+    """Typed as documents/Folder/A: the library Documents (its segment from
+    the webUrl), the folder as typed – not a path that matches nothing."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    (docs,), fehl = sp.resolve_drives(_two_libraries(), [BASIS + "documents/Folder/A"])
+    assert fehl == 0 and docs["name"] == "Documents" and docs["prefixes"] == {"Folder/A"}
+    assert docs["lib_id"] == "firma.sharepoint.com/sites/TeamX/Documents"
+
+
+def _with_subsite():
+    g = _two_libraries()
+    g.sites["firma.sharepoint.com:/sites/TeamX/Sub"] = {
+        "id": "s2", "name": "Sub",
+        "drives": [{"id": "d3", "name": "Docs", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Sub/Docs"}]}
+    return g
+
+
+def test_a_path_that_is_no_library_may_lead_through_a_subsite(monkeypatch, capsys):
+    """…/sites/TeamX/Sub/Docs/Folder: Sub is no library of TeamX but a site
+    below it – the run follows the path into it, asking once per name; a
+    name that is neither library nor subsite is still skipped, and the
+    whole site is never mirrored in its place."""
+    urls = [BASIS + "Sub/Docs/Folder", BASIS + "Sub/Docs", BASIS + "Typo/Folder", BASIS + "Typo/Other"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + urls[0]: "daily", "sharepoint-url:" + urls[1]: "weekly"}))
+    g = _with_subsite()
+    asked, original = [], g.get
+    g.get = lambda url: (asked.append(url), original(url))[1]
+    drives, fehl = sp.resolve_drives(g, urls)
+    (docs,) = drives
+    assert fehl == 2
+    assert docs["site"] == "Sub" and docs["name"] == "Docs" and docs["prefixes"] is None
+    assert docs["lib_id"] == "firma.sharepoint.com/sites/TeamX/Sub/Docs"
+    assert docs["kadenz"] == "weekly" and docs["einheiten"] == {"Folder": "daily"}
+    assert docs["urls"] == urls[:2]
+    assert [u.rsplit("/", 1)[-1] for u in asked] == ["TeamX", "Sub", "Typo"]
+    events = _events(capsys)
+    assert [e["v"]["path"] for e in events if e["k"] == "run.sharepoint.path_unmatched"] == ["Typo/Folder", "Typo/Other"]
+    assert [e["v"]["site"] for e in events if e["k"] == "run.sharepoint.libraries_from"] == ["Sub"]
+    # The subsite itself as a plain address: every library of it.
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    (docs,), fehl = sp.resolve_drives(_with_subsite(), [BASIS + "Sub"])
+    assert fehl == 0 and docs["site"] == "Sub" and docs["prefixes"] is None
+
+
+def test_a_subsite_probe_that_fails_reports_its_status(monkeypatch, capsys):
+    """Only a 404 means "no subsite of that name". A refusal is said as
+    one, an outage with its status – and neither is remembered as "no
+    site" for the rest of the run."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    g = _with_subsite()
+    g.kaputt = {"TeamX/Secret": _Antwort(403), "TeamX/Down": _Antwort(500)}
+    asked, original = [], g.get
+    g.get = lambda url: (asked.append(url), original(url))[1]
+    urls = [BASIS + "Secret/Docs", BASIS + "Secret/Other", BASIS + "Down/Docs", BASIS + "Sub/Docs"]
+    drives, fehl = sp.resolve_drives(g, urls)
+    assert [d["name"] for d in drives] == ["Docs"] and fehl == 3
+    events = _events(capsys)
+    assert [e["v"]["url"] for e in events if e["k"] == "run.sharepoint.denied"] == urls[:2]
+    (down,) = [e for e in events if e["k"] == "run.sharepoint.site_failed"]
+    assert down["v"]["url"] == urls[2] and down["v"]["error"] == "HTTP 500"
+    assert not [e for e in events if e["k"] == "run.sharepoint.path_unmatched"]
+    assert [u.rsplit("/", 1)[-1] for u in asked] == ["TeamX", "Secret", "Secret", "Down", "Sub"]
+
+
+def test_inherit_on_a_whole_library_address_means_no_cadence_of_its_own(monkeypatch, capsys):
+    """A library in a subsite looks like a folder address until a run
+    names the subsite, so "inherit" can be stored on it: the library then
+    takes the site's address, else its slowest folder – the page reads it
+    the same way (spLibCadence)."""
+    url = BASIS + "Sub/Docs"
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"sharepoint-url:" + url: "inherit"}))
+    (docs,), _ = sp.resolve_drives(_with_subsite(), [url])
+    assert docs["prefixes"] is None and docs["kadenz"] == "always"
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({
+        "sharepoint-url:" + url: "inherit", "sharepoint-url:" + BASIS + "Sub": "weekly"}))
+    (docs,), _ = sp.resolve_drives(_with_subsite(), [url, BASIS + "Sub"])
+    assert docs["kadenz"] == "weekly"
+
+
+def test_a_subsite_s_library_view_and_pages_read_as_the_top_site_s_do(monkeypatch, capsys):
+    """The browser's address at the root of a subsite library ends in
+    Forms/AllItems.aspx like any other – view chrome, wherever the library
+    stands; the subsite's own pages or machinery name the subsite, as the
+    top site's name the site."""
+    assert sp.url_teile(BASIS + "Sub/Docs/Forms/AllItems.aspx")[1] == ["Sub", "Docs"]
+    assert sp.url_teile(BASIS + "Sub/SitePages/Home.aspx")[1] == ["Sub", "SitePages"]
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    (docs,), fehl = sp.resolve_drives(_with_subsite(), [BASIS + "Sub/Docs/Forms/AllItems.aspx"])
+    assert fehl == 0 and docs["name"] == "Docs" and docs["prefixes"] is None
+    for url in (BASIS + "Sub/SitePages/Home.aspx", BASIS + "Sub/_layouts/15/viewlsts.aspx"):
+        (docs,), fehl = sp.resolve_drives(_with_subsite(), [url])
+        assert fehl == 0 and docs["site"] == "Sub" and docs["prefixes"] is None, url
+
+
+def test_a_library_typed_by_its_display_name_is_found(monkeypatch, capsys):
+    """"Documents" is what SharePoint shows for the URL segment "Shared
+    Documents": typed that way, the line reaches the library – not a
+    subsite probe that ends in an error every run."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
+        "id": "s1", "name": "TeamX",
+        "drives": [{"id": "d1", "name": "Documents", "driveType": "documentLibrary",
+                    "webUrl": "https://firma.sharepoint.com/sites/TeamX/Shared%20Documents"}]}})
+    asked, original = [], g.get
+    g.get = lambda url: (asked.append(url), original(url))[1]
+    (docs,), fehl = sp.resolve_drives(g, [BASIS + "Documents/Reports"])
+    assert fehl == 0 and docs["prefixes"] == {"Reports"}
+    assert docs["lib_id"] == "firma.sharepoint.com/sites/TeamX/Shared Documents"
+    assert len(asked) == 1, "the display name was probed as a subsite"
+
+
+def test_a_short_sharing_link_is_no_address():
+    """"/:f:/s/<site>/<token>" carries a token only Graph could resolve –
+    refused on both sides, not read as a library named after the site."""
+    assert sp.url_teile("https://firma.sharepoint.com/:f:/s/TeamX/EabcXYZ?e=abc") is None
+    assert sp.url_teile("https://firma.sharepoint.com/:f:/r/sites/TeamX/Documents/A?web=1") == (
+        "firma.sharepoint.com:/sites/TeamX", ["Documents", "A"])
+
+
+def test_a_library_no_line_reaches_any_more_is_said(tmp_path, monkeypatch, capsys):
+    """A line that stopped reaching its library – a typo, a subsite address
+    that used to bring the whole site along – leaves the library in the
+    archive untouched; the run says so, once, after a clean resolution."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    files = [_sp_datei("b", "b.pdf", "/drive/root:/Folder/B")]
+    d = {"id": "d2", "site": "TeamX", "name": "Templates", "kadenz": "always", "prefixes": None,
+         "einheiten": {}, "urls": [BASIS + "Templates"], "unit_of": {BASIS + "Templates": None}}
+    other = {"id": "d1", "site": "TeamX", "name": "Documents", "kadenz": "always", "prefixes": None,
+             "einheiten": {}, "urls": [BASIS + "Documents"], "unit_of": {BASIS + "Documents": None}}
+    sp.lauf(_TaktGraph(files), tmp_path, [dict(d), dict(other)])
+    capsys.readouterr()
+    sp.lauf(_TaktGraph(files), tmp_path, [dict(d)])
+    assert [e["v"]["name"] for e in _events(capsys) if e["k"] == "run.sharepoint.unnamed"] == ["TeamX/Documents"]
+    # Not after a line that failed to resolve: that library may be its own.
+    sp.lauf(_TaktGraph(files), tmp_path, [dict(d)], fehl=1)
+    assert not [e for e in _events(capsys) if e["k"] == "run.sharepoint.unnamed"]
+
+
+def test_sync_now_on_a_folder_address_forces_that_unit_alone(tmp_path, monkeypatch, capsys):
+    """The button on a folder address: every line still rides along, so the
+    library keeps its scope and its delta pointer (nothing is re-read in
+    full, a deletion keeps its tombstone), its own stamp does not move –
+    the rest of it comes on its cadence – and no other library runs."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    files = [_sp_datei("b", "b.pdf", "/drive/root:/Folder/B"), _sp_datei("o", "o.pdf", "/drive/root:/Other")]
+    lines = [BASIS + "Templates", BASIS + "Templates/Folder/B"]
+    d = {"id": "d2", "site": "TeamX", "name": "Templates", "kadenz": "weekly", "prefixes": None,
+         "einheiten": {"Folder/B": "daily"}, "urls": lines, "unit_of": {lines[0]: None, lines[1]: "Folder/B"}}
+    other = {"id": "d1", "site": "TeamX", "name": "Documents", "kadenz": "always", "prefixes": None,
+             "einheiten": {}, "urls": [BASIS + "Documents"], "unit_of": {BASIS + "Documents": None}}
+    sp.lauf(_TaktGraph(files), tmp_path, [dict(d)])
+    db = sp.state_db.StateDb(sp.drive_ziel(tmp_path, d))
+    stamp = db.kv_lesen("last_sync")
+    capsys.readouterr()
+    monkeypatch.setenv("SHAREPOINT_UNIT", lines[1])
+    changed = [_sp_datei("b", "b.pdf", "/drive/root:/Folder/B", "c2"),
+               _sp_datei("o", "o.pdf", "/drive/root:/Other", "c2")]
+    g = _TaktGraph(changed)
+    sp.lauf(g, tmp_path, [dict(d), dict(other)])
+    events = _events(capsys)
+    assert g.geladen == ["b"], "the unit alone is due"
+    assert not [e for e in events if e["k"] in ("run.rules_changed", "run.drive.full")]
+    assert g.log[0][0] == "delta" and g.log[0][1] is not None, "the delta pointer was dropped"
+    assert db.kv_lesen("last_sync") == stamp, "the library's own stamp moved"
+    assert json.loads(db.kv_lesen("urls")) == lines
+    assert not (sp.drive_ziel(tmp_path, other) / sp.state_db.DB_NAME).exists(), "another library ran"
+    # The unit's own stamp moved: on its cadence it is not due again.
+    g = _TaktGraph(changed)
+    sp.lauf(g, tmp_path, [dict(d)])
+    assert g.geladen == []
+
+
+def test_a_library_without_web_url_is_named_by_its_name(monkeypatch, capsys):
+    """Graph sends no webUrl: the library is still named, not the bare
+    site – the page's tree and the default cadence hang on that name."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {
+        "id": "s1", "name": "TeamX",
+        "drives": [{"id": "d1", "name": "Documents", "driveType": "documentLibrary"}]}})
+    (docs,), fehl = sp.resolve_drives(g, [BASIS.rstrip("/")])
+    assert fehl == 0 and docs["lib_id"] == "firma.sharepoint.com/sites/TeamX/Documents"
+
+
+def test_the_synthetic_archive_names_its_libraries_as_a_run_does(tmp_path, monkeypatch):
+    """testdata writes the kv lib_id a run writes – the page maps the
+    library on disk to its place in the tree by it, so another spelling
+    there would leave the tree's folds empty."""
+    from testdata import people, sources
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    url = sources.sharepoint_library_url("Projects")
+    sources._write_library(tmp_path, "Projects", [], [url])
+    db = sp.state_db.StateDb(tmp_path / sources.SHAREPOINT_SITE_DIR / "Projects")
+    g = _FakeGraph(sites={sp.site_address(people.SHAREPOINT_SITE): {
+        "id": "s1", "name": "Nordwind",
+        "drives": [{"id": "d1", "name": "Projects", "driveType": "documentLibrary", "webUrl": url}]}})
+    (lib,), fehl = sp.resolve_drives(g, [url])
+    assert fehl == 0
+    assert db.kv_lesen("lib_id") == lib["lib_id"] == "firma.sharepoint.com/sites/nordwind/Projects"
+    assert json.loads(db.kv_lesen("urls")) == lib["urls"] == [url]
+
+
+def test_a_line_that_matches_no_library_is_skipped(monkeypatch, capsys):
+    """It names nothing – the tree shows it as a folder address, and
+    mirroring the whole site instead would be the accident the tree rules
+    out. Skipped, counted, said."""
+    urls = [BASIS + "Documents", BASIS + "Typo/Folder"]
+    monkeypatch.setenv("SYNC_CADENCE", json.dumps({"sharepoint-url:" + urls[0]: "weekly"}))
+    drives, fehl = sp.resolve_drives(_two_libraries(), urls)
+    assert [d["name"] for d in drives] == ["Documents"] and fehl == 1
+    assert drives[0]["kadenz"] == "weekly"
+    (ev,) = [e for e in _events(capsys) if e["k"] == "run.sharepoint.path_unmatched"]
+    assert ev["level"] == "err" and ev["v"]["path"] == "Typo/Folder"
+
+
+def test_a_folder_address_finds_its_folder_in_any_case(tmp_path):
+    """Typed as folder/b, mirrored as Folder/B: still that unit, with its
+    cadence and its stamp."""
+    db = sp.state_db.StateDb(tmp_path)
+    e = sp.drive_einheiten({}, {"site": "TeamX", "name": "Templates", "kadenz": "weekly",
+                                "einheiten": {"folder/b": "daily"}}, db)
+    assert e.einheit("Dateien/Folder/B/x.pdf") == "Dateien/folder/b"
+    assert e.kadenz("Dateien/folder/b") == "daily"
+    # A folder value typed in the other case is the same unit: the address
+    # wins, and the unit is listed once.
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien/Folder/B": "monthly"},
+                           {"site": "TeamX", "name": "Templates", "kadenz": "weekly",
+                            "einheiten": {"folder/b": "daily"}}, db)
+    assert e.ordner == ["Dateien/folder/b"] and e.kadenz("Dateien/folder/b") == "daily"
+    # A key written with a trailing slash (by hand, by a script) is no crash.
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien/X/": "weekly",
+                            "sharepoint:TeamX/Templates/Dateien/x": "daily"},
+                           {"site": "TeamX", "name": "Templates", "kadenz": "monthly"}, db)
+    assert e.ordner == ["Dateien/x"] and e.einheit("Dateien/X/a.pdf") == "Dateien/x"
+    assert e.kadenz("Dateien/x") == "daily"
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien/X/": "daily"},
+                           {"site": "TeamX", "name": "Templates", "kadenz": "monthly"}, db)
+    assert e.ordner == ["Dateien/X"] and e.kadenz("Dateien/X") == "daily", "the slash hid the cadence"
+    # Two spellings that normalise to one folder: the more frequent stands,
+    # whichever came last.
+    for order in ({"sharepoint:TeamX/Templates/Dateien/X/": "daily", "sharepoint:TeamX/Templates/Dateien/X": "monthly"},
+                  {"sharepoint:TeamX/Templates/Dateien/X": "monthly", "sharepoint:TeamX/Templates/Dateien/X/": "daily"}):
+        e = sp.drive_einheiten(order, {"site": "TeamX", "name": "Templates", "kadenz": "weekly"}, db)
+        assert e.kadenz("Dateien/X") == "daily"
+    # A folder value written at the address's path with a trailing slash
+    # is the same path: the address is the unit there, not outvoted by the
+    # more frequent value.
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien/Folder/B/": "daily"},
+                           {"site": "TeamX", "name": "Templates", "kadenz": "weekly",
+                            "einheiten": {"Folder/B": "monthly"}}, db)
+    assert e.ordner == ["Dateien/Folder/B"] and e.kadenz("Dateien/Folder/B") == "monthly"
+    # A doubled slash is no folder of its own: the unit is found, with its cadence.
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien//X": "daily"},
+                           {"site": "TeamX", "name": "Templates", "kadenz": "weekly"}, db)
+    assert e.ordner == ["Dateien/X"] and e.einheit("Dateien/X/a.pdf") == "Dateien/X"
+    assert e.kadenz("Dateien/X") == "daily"
+
+
+def test_each_folder_address_is_a_unit_of_its_own(tmp_path):
+    db = sp.state_db.StateDb(tmp_path)
+    d = {"site": "TeamX", "name": "Templates", "kadenz": "weekly",
+         "einheiten": {"Folder/B": "weekly", "Folder/C": "daily"}}
+    e = sp.drive_einheiten({}, d, db)
+    assert e.ordner == ["Dateien/Folder/B", "Dateien/Folder/C"]
+    assert e.kadenz("Dateien/Folder/C") == "daily"
+    assert e.einheit("Dateien/Folder/C/sub/a.pdf") == "Dateien/Folder/C"
+    # A folder value set below an address paces what lies under it.
+    e = sp.drive_einheiten({"sharepoint:TeamX/Templates/Dateien/Folder/C/Archiv": "monthly"}, d, db)
+    assert e.kadenz("Dateien/Folder/C/Archiv") == "monthly"
+
+
+def test_a_new_address_comes_on_the_next_run(tmp_path, monkeypatch, capsys):
+    """Added to a library that is not due: it has no stamp yet, so it runs at
+    once – and the widened scope reads the library once, so its files come."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    files = [_sp_datei("b", "b.pdf", "/drive/root:/Folder/B"),
+             _sp_datei("d", "d.pdf", "/drive/root:/Folder/D")]
+    d = {"id": "d2", "site": "TeamX", "name": "Templates", "kadenz": "weekly",
+         "prefixes": {"Folder/B"}, "einheiten": {"Folder/B": "weekly"}, "urls": [BASIS + "Templates/Folder/B"]}
+    sp.lauf(_TaktGraph(files), tmp_path, [dict(d)])
+    capsys.readouterr()
+    # Nothing due a minute later …
+    g = _TaktGraph(files)
+    sp.lauf(g, tmp_path, [dict(d)])
+    assert g.geladen == []
+    # … until a folder address joins it.
+    widened = dict(d, prefixes={"Folder/B", "Folder/D"},
+                   einheiten={"Folder/B": "weekly", "Folder/D": "weekly"})
+    g = _TaktGraph(files)
+    sp.lauf(g, tmp_path, [widened])
+    assert g.geladen == ["d"]

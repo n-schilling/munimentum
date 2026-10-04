@@ -538,10 +538,12 @@ def todo_plan(h, roh):
 def sharepoint_plan(h, roh=None):
     """The export list for the SharePoint mirror: every library's tree,
     paths prefixed with site/library, judged by the path rules on top
-    of the URL list. Each entry names the URLs its library came from,
-    so the page can tell which cadence row paces it."""
+    of the address list. `libs` names, once per library on disk, the
+    lines that led to it and its lib_id, so the page can map every
+    folder to its place in the address tree – not repeated on each of
+    thousands of entries."""
     wurzel = h.M.BASE / h.M.SHAREPOINT_DIR
-    eintraege, stand = [], None
+    eintraege, libs, stand = [], {}, None
     if wurzel.is_dir():
         for lib in sorted(p for p in wurzel.glob("*/*") if p.is_dir()):
             with state_db.StateDb(lib) as db:
@@ -552,11 +554,14 @@ def sharepoint_plan(h, roh=None):
                     urls = json.loads(db.kv_lesen("urls") or "[]")
                 except ValueError:
                     urls = []
+                lib_id = db.kv_lesen("lib_id") or ""
             praefix = lib.relative_to(wurzel).as_posix()
             stand = max(stand or "", d.get("abgeglichen") or "") or None
+            if urls or lib_id:
+                libs[praefix] = {**({"urls": urls} if urls else {}),
+                                 **({"lib_id": lib_id} if lib_id else {})}
             for e in d.get("ordner", []):
-                eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}",
-                                  **({"urls": urls} if urls else {})})
+                eintraege.append({**e, "pfad": f"{praefix}/{e['pfad']}"})
     if not eintraege:
         raise Ablehnung(404, "srv.plan.nolist", leer=True)
     daten = {"ordner": eintraege, "abgeglichen": stand}
@@ -567,7 +572,7 @@ def sharepoint_plan(h, roh=None):
     plan["weg"] = [z for z in plan["weg"]           # drive_mirror.DATEI_DIR
                    if "/Dateien/" in z["pfad"] + "/"]
     plan["mails_weg"] = sum(z["archiv"] for z in plan["weg"])
-    return {"regeln": folders.schreibe_regeln(regeln), **plan}
+    return {"regeln": folders.schreibe_regeln(regeln), **plan, "libs": libs}
 
 
 def bericht(h, _p, _q, data):

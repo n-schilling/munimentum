@@ -192,7 +192,9 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            "run.", "sharepoint.", "files.", "view.", "cadence.", "stand.",
            "lauf.", "kadenz.", "tour.", "profile.", "cases.", "help.", "org.",
            # What the case, a search result and the address book share (13.6)
-           "people.", "timeline.")
+           "people.", "timeline.",
+           # The addresses as a tree and as lists (14.2)
+           "sp.", "addr.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -252,9 +254,9 @@ DYNAMISCH = (
     ("ana.runs.origin.", ("manual", "schedule")),
     # The cadence window serves two sources; title, (i) and filter text
     # are composed from the source key.
-    ("kadenz.title.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
-    ("kadenz.info.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
-    ("kadenz.filter.", ("mail", "teams", "onedrive", "todo", "sharepoint")),
+    ("kadenz.title.", ("mail", "teams", "onedrive", "todo")),
+    ("kadenz.info.", ("mail", "teams", "onedrive", "todo")),
+    ("kadenz.filter.", ("mail", "teams", "onedrive", "todo")),
     ("ana.runs.result.", ("done", "error", "aborted", "token_expired",
                           "running")),
     # The archive check's actions are steps whose keys steps.py composes

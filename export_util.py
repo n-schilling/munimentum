@@ -371,12 +371,12 @@ def voll_neu():
     return bool((os.environ.get("FULL_SYNC") or "").strip())
 
 
-_KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}
+KADENZ_RANG = {"always": 0, "daily": 1, "weekly": 2, "monthly": 3}
 
 
 def haeufigere(a, b):
     """Two URLs feeding one unit: the more frequent cadence wins."""
-    return a if _KADENZ_RANG.get(a, 0) <= _KADENZ_RANG.get(b, 0) else b
+    return a if KADENZ_RANG.get(a, 0) <= KADENZ_RANG.get(b, 0) else b
 
 
 def kadenz_fuer(kadenzen, praefix, pfad, vorgabe="always"):

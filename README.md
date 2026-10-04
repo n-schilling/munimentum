@@ -57,7 +57,7 @@ because any one source can mean tens of thousands of items.
 | **Mail, calendar, contacts** | every folder you choose as `.eml`, `.ics`, `.vcf`; the calendar as a window of months back plus everything ahead |
 | **Teams** | 1:1, group, meeting and channel chats as readable HTML; on request the files shared in them and the channels' file folders, minus the extensions you exclude (links to SharePoint pages from the start) |
 | **OneDrive** | a mirror of your files, each held against Microsoft's own checksum, earlier versions kept |
-| **SharePoint** | libraries behind the URLs you list, with type filters, a size cap and a size preview; the sites' pages as standalone HTML |
+| **SharePoint** | libraries – or single folders in them – behind the addresses you paste, each with its own cadence, with type filters, a size cap and a size preview; the sites' pages as standalone HTML |
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |

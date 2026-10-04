@@ -690,6 +690,42 @@ details.erweitert>.gruppe{margin-top:4px}
 .urltab .zeile.an{background:color-mix(in srgb, var(--accent) 8%, transparent)}
 .urltab input[type=text]{flex:1;min-width:0}
 .urltab:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
+/* Addresses – SharePoint's tree, the pages' sites, the boards: one field
+   adds, one box per site (or one for a flat list) holds the rows, every
+   row the same four columns: name, cadence, "Sync now", ×. Addresses
+   decide what comes (×), the folders below them only how often (reset). */
+.addr-add{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:8px;margin:4px 0 2px}
+.addr-note-line{min-height:1.2em;margin:2px 0 6px}
+.addr-note-line.err{color:var(--err)} .addr-note-line.ok{color:var(--ok)}
+.addr-tree{display:flex;flex-direction:column;gap:10px;margin:0 0 6px}
+.addr-tree:empty::after{content:attr(data-leer);color:var(--muted);font-size:12.5px}
+.addr-box{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+/* The cadence keeps its natural width and sits at the column's right
+   edge, like the selects of the setting rows: every chevron on one line,
+   no stretched box with the word far from its arrow. */
+.addr-node{display:grid;grid-template-columns:minmax(0,1fr) auto 7.5rem 26px;gap:8px;align-items:center;padding:6px 10px}
+.addr-node + .addr-node, .addr-node + .addr-ask, .addr-ask + .addr-node{border-top:1px solid var(--line)}
+.addr-node.addr-head{background:var(--code)}
+.addr-node > select{width:auto;min-width:8.5rem;justify-self:end}
+.addr-node > .mini:not(.addr-x){justify-self:stretch}
+.addr-name{min-width:0;overflow-wrap:anywhere;display:flex;flex-direction:column;gap:1px}
+.addr-title{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13.5px}
+.addr-note{font-size:12px;color:var(--muted)} .addr-note.err{color:var(--err)}
+.addr-chip{border-radius:999px;padding:0 8px;font-size:11.5px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.addr-chip.whole,.addr-chip.own{background:var(--accent-weich);border-color:transparent;color:var(--accent)}
+.addr-chip.err{border-color:var(--err);color:var(--err)}
+.addr-x{width:26px;height:26px;padding:0;display:inline-grid;place-items:center;color:var(--muted)}
+.addr-x:hover{color:var(--err);border-color:var(--err)}
+.addr-gap{width:26px}
+.addr-ask{background:color-mix(in srgb, var(--err) 10%, transparent);padding:10px 12px;display:flex;flex-direction:column;gap:8px;font-size:13px}
+.addr-ask div{display:flex;flex-wrap:wrap;gap:8px}
+.addr-ask .danger{border-color:var(--err);color:var(--err)}
+.addr-toggle{border:0;background:none;padding:0;color:var(--accent);font-size:12px;cursor:pointer;text-align:left}
+@media (max-width:760px){
+  .addr-add{grid-template-columns:1fr auto} .addr-add input{grid-column:1/-1}
+  .addr-node{grid-template-columns:minmax(0,1fr) auto 26px}
+  .addr-node > .mini:not(.addr-x), .addr-node > span:empty, .addr-node > .addr-gap:nth-last-child(2){display:none}
+}
 /* Cadence overrides: one row per folder, team, channel or chat that
    departs from the general cadence – path, cadence, remove. */
 .abw .zeile .pfad{flex:1;min-width:0;font-size:13.5px;word-break:break-word}
@@ -1793,11 +1829,15 @@ details.rechte p{margin:6px 0}
     <details class="quelle-einst" id="q-sharepoint">
       <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.sharepoint.title">SharePoint</b><span class="muted small zf" id="q-sharepoint-zf"></span></summary>
       <div class="qinhalt">
-        <div class="gruppe">
-          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span>
-            <button class="mini" onclick="urlZeile('sp-urls', '')" title="+">+</button>
-            <button class="mini" onclick="urlZeileWeg('sp-urls')" title="&minus;">&minus;</button></span></div>
-          <div id="sp-urls" class="urltab" data-praefix="sharepoint-url"></div>
+        <div class="gruppe"><h3 data-i18n="settings.libraries.title">SharePoint-Bibliotheken</h3>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.urls.i">i</span></span><span></span></div>
+          <form class="addr-add" id="sp-add" onsubmit="event.preventDefault(); spAdd()" autocomplete="off">
+            <input type="text" id="sp-add-url" data-i18n-ph="sp.add.ph" placeholder="Adresse aus dem Browser einfügen">
+            <select id="sp-add-cadence" data-i18n-title="cadence.title"></select>
+            <button class="mini" type="submit" data-i18n="sp.add">Hinzufügen</button>
+          </form>
+          <div class="small addr-note-line" id="sp-note" role="status"></div>
+          <div id="sp-tree" class="addr-tree"></div>
           <div class="aktionen">
             <span class="small muted" id="sp-msg"></span>
             <button class="mini" onclick="gleicheOrdnerAb('sharepoint')" data-i18n="folders.sync">Ordnerstruktur abgleichen</button>
@@ -1806,18 +1846,19 @@ details.rechte p{margin:6px 0}
             <button class="mini" onclick="zeigeSharepointTypen()" data-i18n="sharepoint.types">Dateitypen anzeigen</button>
           </div>
           <div class="small muted" id="sp-typen" style="margin-top:6px"></div>
-          <div class="feldzeile "><span class="bez"><span data-i18n="settings.cadence.overrides.sharepoint"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.cadence.overrides.sharepoint.i">i</span></span><span class="small muted" id="sp-abw-state"></span></div>
-          <div id="sp-abw" class="urltab abw" data-praefix="sharepoint"></div>
-          <div class="aktionen">
-            <span class="small muted"></span>
-            <button class="mini" onclick="kadenzFenster('sharepoint')" data-i18n="settings.cadence.overrides.sharepoint.pick">Ordner festlegen…</button>
-          </div>
+          <!-- The folder values set in the tree above: kept as rows like every
+               other source's departures, so leseKadenzen() saves them. -->
+          <div id="sp-abw" class="urltab abw hide" data-praefix="sharepoint"></div>
         </div>
         <div class="gruppe"><h3 data-i18n="settings.pages.title">SharePoint-Seiten</h3>
-          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span>
-            <button class="mini" onclick="urlZeile('pg-urls', '')" title="+">+</button>
-            <button class="mini" onclick="urlZeileWeg('pg-urls')" title="&minus;">&minus;</button></span></div>
-          <div id="pg-urls" class="urltab" data-praefix="pages-url"></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.sharepoint.pages.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.sharepoint.pages.i">i</span></span><span></span></div>
+          <form class="addr-add" id="pg-add" onsubmit="event.preventDefault(); addrAdd('pages')" autocomplete="off">
+            <input type="text" id="pg-add-url" data-i18n-ph="addr.pages.ph" placeholder="Adresse einer Site einfügen">
+            <select id="pg-add-cadence" data-i18n-title="cadence.title"></select>
+            <button class="mini" type="submit" data-i18n="sp.add">Hinzufügen</button>
+          </form>
+          <div class="small addr-note-line" id="pg-note" role="status"></div>
+          <div id="pg-list" class="addr-tree"></div>
         </div>
         <details class="erweitert"><summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><span data-i18n="settings.advanced">Erweitert</span></summary>
           <div class="gruppe">
@@ -1843,10 +1884,14 @@ details.rechte p{margin:6px 0}
       <summary><span class="pfeil" data-ikon="rechts" data-ikon-klasse="klein"></span><b data-i18n="settings.planner.title">Planner</b><span class="muted small zf" id="q-planner-zf"></span></summary>
       <div class="qinhalt">
         <div class="gruppe">
-          <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span>
-            <button class="mini" onclick="urlZeile('pl-urls', '')" title="+">+</button>
-            <button class="mini" onclick="urlZeileWeg('pl-urls')" title="&minus;">&minus;</button></span></div>
-          <div id="pl-urls" class="urltab" data-praefix="planner-url"></div>
+          <div class="feldzeile "><span class="bez"><span data-i18n="settings.planner.urls.title"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.planner.urls.i">i</span></span><span></span></div>
+          <form class="addr-add" id="pl-add" onsubmit="event.preventDefault(); addrAdd('planner')" autocomplete="off">
+            <input type="text" id="pl-add-url" data-i18n-ph="addr.planner.ph" placeholder="Adresse eines Boards einfügen">
+            <select id="pl-add-cadence" data-i18n-title="cadence.title"></select>
+            <button class="mini" type="submit" data-i18n="sp.add">Hinzufügen</button>
+          </form>
+          <div class="small addr-note-line" id="pl-note" role="status"></div>
+          <div id="pl-list" class="addr-tree"></div>
           <div class="aktionen">
             <span class="small muted" id="pl-msg"></span>
             <button class="mini" onclick="gleicheOrdnerAb('planner_legacy')" data-i18n="settings.planner.legacy" data-i18n-title="settings.planner.legacy.i">Alte Kommentare neu lesen</button>
@@ -2513,8 +2558,8 @@ function tab(name){
   if(name === 'suche'){ sicht(offeneSicht); ladeOrdner(); ladeFaelle(); }
   if(name === 'faelle') ladeFaelle();
   if(name === 'analytics') ladeAnalytics();
-  if(name === 'einstellungen'){ profileLaden(); evidenceLoad(); accessSessionLoad(); }
   OPEN_TAB = name;
+  if(name === 'einstellungen'){ profileLaden(); evidenceLoad(); accessSessionLoad(); spPlanEnsure(); }
 }
 
 /* "Deleted" is in truth its own view onto the same inventory – like
@@ -3416,6 +3461,7 @@ function laufVerfolgen(jobs, first){
     LAUF.ergebnis = jobs.last || {};
     // A run changes what the sources hold – the numbers on their cards.
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
+    spPlanForget(LAUF.ergebnis);
     laufErgebnisZeigen(LAUF.ergebnis);
     nachEinsammeln(LAUF.ergebnis);
     // A run may have found the sign-in gone.
@@ -3431,6 +3477,7 @@ function laufVerfolgen(jobs, first){
     ladeBestand().then(function(){ if(S_ROH) renderStatus(S_ROH); });
     if(el('tab-analytics').classList.contains('hide')) anaGeladen = false; else ladeAnalytics(true);
     nachEinsammeln(jobs.last || {});
+    spPlanForget(jobs.last || {});
     if(accessCardShown()) accessSessionLoad();
   }
   if(!jobs.busy) LAUF.zuletzt = fertig;
@@ -8996,9 +9043,8 @@ function fuelleEinstellungen(cfg){
   el('c-notifications').value = cfg.notifications || 'errors';
   el('c-search_history').value = cfg.search_history || '90';
   var kad = cfg.sync_cadence || {};
-  fuelleUrlTabelle('sp-urls', cfg.sharepoint_urls, kad, 'sharepoint-url');
-  fuelleUrlTabelle('pg-urls', cfg.sharepoint_pages_urls, kad, 'pages-url');
-  fuelleUrlTabelle('pl-urls', cfg.planner_urls, kad, 'planner-url');
+  addrFill('pages', cfg.sharepoint_pages_urls, kad);
+  addrFill('planner', cfg.planner_urls, kad);
   Object.keys(KADENZ_FELDER).forEach(function(k){
     // Before 9.0 Teams had one cadence for the whole source: it stands in
     // for the four categories until each has its own.
@@ -9006,6 +9052,7 @@ function fuelleEinstellungen(cfg){
     el(KADENZ_FELDER[k]).value = kad[k] || erbe || 'always';
   });
   ABW_QUELLEN.forEach(function(q){ abwFuellen(q, kad); });
+  spFill(cfg.sharepoint_urls, kad);       // after the folder values: the tree reads them
   el('c-skip_folders').value = (cfg.skip_folders || []).join('\n');
   el('c-filetype_hidden').value = (cfg.filetype_hidden || []).join(', ');
   el('c-analytics_skip').value = (cfg.analytics_skip || []).join('\n');
@@ -9209,42 +9256,31 @@ var ABW = {
   todo:  {tab: 'todo-abw', state: 'todo-abw-state', praefix: 'todo',
           wurzeln: null, flach: true,
           allgemein: function(){ return el('c-cadence-todo').value; }},
-  // Libraries: the tree starts with the sites, the library below is the
-  // unit whose cadence the URL rows set – the departures live under it.
-  sharepoint: {tab: 'sp-abw', state: 'sp-abw-state', praefix: 'sharepoint',
-               wurzeln: null, wurzelTiefe: 1,
-               allgemein: function(pfad){
-                 var lib = String(pfad || '').split('/').slice(0, 2).join('/');
-                 return spKadenzAusUrls((KADENZ.libs || {})[lib] || []);
-               }}
+  // Libraries: the address tree in the card sets the folder values; the
+  // window never opens for SharePoint, its rows are only read and saved.
+  sharepoint: {tab: 'sp-abw', praefix: 'sharepoint', wurzeln: null,
+               allgemein: function(){ return 'always'; }}
 };
 var ABW_QUELLEN = ['mail', 'teams', 'onedrive', 'todo', 'sharepoint'];
 var KADENZ_RANG = {always: 0, daily: 1, weekly: 2, monthly: 3};
 
-/* A library's cadence is what its URL rows say – two rows feeding one
-   library: the more frequent wins (export_util.haeufigere). Read from the
-   form, so the window follows an unsaved change in the table. */
-function spKadenzAusUrls(urls){
-  var beste = null;
-  [].forEach.call(el('sp-urls').querySelectorAll('.zeile'), function(z){
-    var feld = z.querySelector('input'), wahl = z.querySelector('select');
-    if(!feld || !wahl || urls.indexOf(feld.value.trim()) < 0) return;
-    if(beste === null || KADENZ_RANG[wahl.value] < KADENZ_RANG[beste]) beste = wahl.value;
-  });
-  return beste || 'always';
-}
 var KADENZ_WERTE = ['always', 'daily', 'weekly', 'monthly'];
 
+/* The <option>s of every cadence select; the value is set by script after
+   rendering (the Node stub reads no `selected`). */
+function cadenceOptions(){
+  return KADENZ_WERTE.map(function(o){ return '<option value="' + o + '">' + esc(t('cadence.' + o)) + '</option>'; }).join('');
+}
 function abwZeile(pfad, wert){
   var zeile = document.createElement('div');
   zeile.className = 'zeile';
   zeile.dataset.pfad = pfad;
   zeile.innerHTML = '<span class="pfad">' + esc(pfad) + '</span>' +
-    '<select>' + KADENZ_WERTE.map(function(o){
-      return '<option value="' + o + '"' + (o === wert ? ' selected' : '') + '>' +
-        esc(t('cadence.' + o)) + '</option>'; }).join('') + '</select>' +
+    '<select>' + cadenceOptions() + '</select>' +
     '<button class="abw-weg" title="' + esc(t('kadenz.remove')) + '" aria-label="' +
       esc(t('kadenz.remove')) + '" onclick="abwEntfernen(this)">&times;</button>';
+  var choice = zeile.querySelector('select');
+  if(choice) choice.value = wert;      // by script: what a re-read relies on
   return zeile;
 }
 function abwFuellen(quelle, kad){
@@ -9271,8 +9307,8 @@ function abwLesen(quelle){
   return abw;
 }
 function abwStand(quelle){
-  var n = Object.keys(abwLesen(quelle)).length;
-  el(ABW[quelle].state).textContent = n ? t('settings.cadence.overrides.state', {n: n}) : '';
+  var n = Object.keys(abwLesen(quelle)).length, line = ABW[quelle].state && el(ABW[quelle].state);
+  if(line) line.textContent = n ? t('settings.cadence.overrides.state', {n: n}) : '';
 }
 function abwEntfernen(knopf){
   var zeile = knopf.closest('.zeile'), tab = zeile.parentNode;
@@ -9285,11 +9321,16 @@ function abwEntfernen(knopf){
 /* The cadence that reaches a unit: the deepest departure on its path,
    else the general one of its root – the same rule the exports apply
    (export_util.kadenz_fuer). */
-function kadenzWirksam(pfad, abw, allgemein){
+function kadenzWirksam(pfad, abw, allgemein, fold){
+  // `fold`: a mirror (OneDrive, SharePoint) finds a unit in any case and
+  // without a trailing slash (drive_mirror.Einheiten) – the list reads
+  // the values the same way, or run and list could name two cadences.
+  var index = fold ? folderValueIndex(abw) : null;
   var teile = String(pfad || '').split('/').filter(Boolean);
   while(teile.length){
     var p = teile.join('/');
-    if(abw[p]) return {wert: abw[p], von: p};
+    var hit = fold ? index[p.toLowerCase()] : (abw[p] ? {path: p, value: abw[p]} : null);
+    if(hit) return {wert: hit.value, von: hit.path};
     teile.pop();
   }
   return {wert: allgemein || 'always', von: null};
@@ -9337,11 +9378,6 @@ function kadenzFenster(quelle){
   // The path names the source; 'mail' is the mailbox's folders.
   frage(API + '/sources/' + (quelle === 'mail' ? 'outlook' : quelle) + '/folder-plan', koerper).then(function(p){
     KADENZ.daten = p;
-    // Which URL rows feed which library – for the library's own cadence.
-    KADENZ.libs = {};
-    ((p && p.an) || []).concat((p && p.aus) || []).forEach(function(e){
-      if(e.urls) KADENZ.libs[String(e.pfad).split('/').slice(0, 2).join('/')] = e.urls;
-    });
     if(wizardOffen === 'kadenz') kadenzFensterZeichnen();
   });
 }
@@ -9423,26 +9459,20 @@ function kadenzZahl(k){
 function kadenzZeile(k, tiefe, vor, treffer){
   var q = KADENZ.quelle, offen = !!KADENZ.offen[k.pfad];
   // The root shows the general cadence as text – except for a flat source
-  // (To Do lists), where every top-level row is a unit of its own. For the
-  // libraries the root is the library (depth 1); the site above it is a
-  // heading with nothing to set.
-  var wt = ABW[q].wurzelTiefe || 0;
-  var wurzel = k.tiefe === wt && !ABW[q].flach, ueberWurzel = k.tiefe < wt;
+  // (To Do lists), where every top-level row is a unit of its own.
+  var wurzel = k.tiefe === 0 && !ABW[q].flach;
   var darunter = Object.keys(KADENZ.abw).filter(function(p){ return p.indexOf(k.pfad + '/') === 0; }).length;
   var tags = '';
   if(k.kinder.length && !vor && !offen){
     tags += '<span class="tag">' + esc(t(q === 'teams'
       ? (k.tiefe === 0 ? (k.pfad === 'channels' ? 'kadenz.sub.teams' : 'kadenz.sub.chats') : 'kadenz.sub.channels')
-      : (q === 'sharepoint' && k.tiefe === 0) ? 'kadenz.sub.libraries'
       : 'kadenz.sub.folders', {n: k.kinder.length})) + '</span>';
     if(darunter) tags += '<span class="tag blau">' + esc(t('kadenz.below_set', {n: darunter})) + '</span>';
   }
   var name = treffer ? esc(k.name).replace(new RegExp('(' + treffer.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'i'), '<b>$1</b>') : esc(k.name);
   if(q === 'teams' && k.tiefe === 0) name = esc(t('export.cat.' + k.pfad));
   var rechts;
-  if(ueberWurzel){
-    rechts = '';
-  } else if(wurzel){
+  if(wurzel){
     rechts = '<span class="erbe">' + esc(t('kadenz.general', {cadence: t('cadence.' + kadenzAllgemein(k.pfad))})) + '</span>';
   } else if(!k.an){
     rechts = '<span class="tag warn">' + esc(t('kadenz.excluded')) + '</span>';
@@ -9475,7 +9505,7 @@ function kadenzBaumZeichnen(){
     });
   } else if(filter){
     var passt = Object.keys(baum.knoten).sort().map(function(p){ return baum.knoten[p]; })
-      .filter(function(k){ return (k.tiefe > (w.wurzelTiefe || 0) || w.flach) && k.name.toLowerCase().indexOf(filter) >= 0; });
+      .filter(function(k){ return (k.tiefe > 0 || w.flach) && k.name.toLowerCase().indexOf(filter) >= 0; });
     passt.forEach(function(k){ zeilen.push(kadenzZeile(k, 0, vorsatz(k), KADENZ.filter.trim())); });
     var z = document.getElementById('kadenz-zaehler');
     if(z) z.textContent = t('kadenz.matches', {n: passt.length, total: Object.keys(baum.knoten).length}) + ' · ' + t('kadenz.count', {n: Object.keys(KADENZ.abw).length});
@@ -9493,65 +9523,771 @@ function kadenzBaumZeichnen(){
   box.innerHTML = zeilen.join('') || '<p class="small muted">' + esc(t('plan.nothing')) + '</p>';
 }
 
-function urlZeile(tabId, wert, kadenz){
-  // One row per source URL: the address, its sync cadence, and "sync now".
-  var tab = el(tabId);
-  var zeile = document.createElement('div');
-  zeile.className = 'zeile';
-  zeile.onclick = function(){
-    tab.querySelectorAll('.zeile').forEach(function(z){ z.classList.remove('an'); });
-    zeile.classList.add('an');
-  };
-  var optionen = ['always', 'daily', 'weekly', 'monthly'];
-  zeile.innerHTML =
-    '<input type="text" placeholder="https://firma.sharepoint.com/sites/TeamX">' +
-    '<select>' + optionen.map(function(o){
-      return '<option value="' + o + '"' + (o === (kadenz || 'always') ? ' selected' : '') +
-        '>' + esc(t('cadence.' + o)) + '</option>';
-    }).join('') + '</select>' +
-    '<button class="mini">' + esc(t('cadence.sync_now')) + '</button>';
-  zeile.querySelector('input').value = wert || '';
-  zeile.querySelector('select').onchange = speichereEinstellungen;
-  zeile.querySelector('input').onchange = speichereEinstellungen;
-  zeile.querySelector('button').onclick = function(ev){
-    ev.stopPropagation();
-    var url = zeile.querySelector('input').value.trim();
-    if(!url) return;
-    var lauf = tabId === 'sp-urls' ? {sharepoint: true}
-      : tabId === 'pl-urls' ? {planner: true} : {sharepoint_pages: true};
-    run(Object.assign({unit: url, index: true}, lauf), 'job.export', 'sync_now');
-  };
-  tab.appendChild(zeile);
-  return zeile;
+/* ---------- Addresses: one shape for every source configured by them ----------
+   A field adds an address with its cadence; the rows below show what is
+   there, each with its cadence, "Sync now" and ×. SharePoint's mirror is
+   a tree: a pasted address files itself under its site and library, and
+   every address keeps its own cadence (sharepoint_export.resolve_drives
+   makes each one a unit of its library). A folder address may take the
+   cadence from above ("inherit"); a library under a whole-site address
+   takes the site's until it gets an address line of its own – the select
+   on its row writes one (spSetLib). Below an address the
+   folders of the last structure sync can be paced one by one – the same
+   "sharepoint:<site>/<library>/<path>" values the other sources'
+   departures are, kept as rows in #sp-abw so leseKadenzen() saves them.
+   The pages and the boards are flat lists of the same rows. */
+var SP = {sites: [], bad: [], dup: [], open: {}, ask: null, plan: null, planAsked: false, planFailed: false,
+          cadenceFilled: false, subsites: {}, aliases: {}, libByDisk: {}, rev: 0};
+var SITE_KINDS = ['sites', 'teams', 'personal'];
+var SITE_CHROME = ['sitepages', '_layouts', '_api', 'lists', '_catalogs'];
+/* SHA-1 of a string, hex – export_util.kuerzel takes its first eight
+   characters to make a shortened name unique again. */
+function sha1Hex(s){
+  var bytes = new TextEncoder().encode(s), bits = bytes.length * 8, w = [], i;
+  for(i = 0; i < bytes.length; i++) w[i >> 2] = (w[i >> 2] || 0) | (bytes[i] << (24 - (i % 4) * 8));
+  w[bits >> 5] = (w[bits >> 5] || 0) | (0x80 << (24 - bits % 32));
+  w[(((bits + 64) >>> 9) << 4) + 15] = bits;
+  var h = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
+  function rotl(x, n){ return (x << n) | (x >>> (32 - n)); }
+  for(var b = 0; b < w.length; b += 16){
+    var x = [], a = h[0], c1 = h[1], c2 = h[2], c3 = h[3], e = h[4];
+    for(var t = 0; t < 80; t++){
+      x[t] = t < 16 ? (w[b + t] | 0) : rotl(x[t - 3] ^ x[t - 8] ^ x[t - 14] ^ x[t - 16], 1);
+      var f = t < 20 ? (c1 & c2) | (~c1 & c3) : t < 40 ? c1 ^ c2 ^ c3 : t < 60 ? (c1 & c2) | (c1 & c3) | (c2 & c3) : c1 ^ c2 ^ c3;
+      var k = t < 20 ? 0x5A827999 : t < 40 ? 0x6ED9EBA1 : t < 60 ? 0x8F1BBCDC : 0xCA62C1D6;
+      var next = (rotl(a, 5) + f + e + k + x[t]) | 0;
+      e = c3; c3 = c2; c2 = rotl(c1, 30); c1 = a; a = next;
+    }
+    h[0] = (h[0] + a) | 0; h[1] = (h[1] + c1) | 0; h[2] = (h[2] + c2) | 0; h[3] = (h[3] + c3) | 0; h[4] = (h[4] + e) | 0;
+  }
+  return h.map(function(v){ return ('00000000' + (v >>> 0).toString(16)).slice(-8); }).join('');
 }
-
-function urlZeileWeg(tabId){
-  var an = el(tabId).querySelector('.zeile.an');
-  if(an){ an.remove(); speichereEinstellungen(); }
+/* A folder name as the mirror writes it to disk (drive_mirror.safe): the
+   folds and the export list speak of folders on disk, an address of the
+   name in the browser. The same cleaning, the same cut at 120 characters
+   with the extension kept and a tag from the name's SHA-1 – a parity test
+   holds the two together. */
+/* Whitespace as Python counts it (str.isspace, the \s of drive_mirror.safe):
+   JavaScript's \s and trim() differ at U+001C–001F, U+0085 and U+FEFF. */
+var ADDR_WS = '[\\t\\n\\v\\f\\r \\u001c-\\u001f\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]';
+var ADDR_TRIM = new RegExp('^' + ADDR_WS + '+|' + ADDR_WS + '+$', 'g'), ADDR_RUN = new RegExp(ADDR_WS + '+', 'g');
+function addrSafe(name){
+  var n = String(name || '').replace(/[\\/:*?"<>|\r\n\t]+/g, '_').replace(ADDR_TRIM, '').replace(/^[. ]+|[. ]+$/g, '').replace(ADDR_RUN, ' ') || 'unbenannt';
+  // Counted and cut in code points, as Python does – an emoji is one.
+  var chars = Array.from(n);
+  if(chars.length <= 120) return n;
+  var dot = n.lastIndexOf('.'), stem = chars, ext = '';
+  if(dot > 0){ var tail = Array.from(n.slice(dot + 1)); if(tail.length <= 12){ stem = Array.from(n.slice(0, dot)); ext = '.' + tail.join(''); } }
+  var tag = '__' + sha1Hex(n).slice(0, 8);
+  return stem.slice(0, Math.max(1, 120 - tag.length - Array.from(ext).length)).join('') + tag + ext;
 }
+function addrDiskPath(path){ return String(path || '').split('/').filter(Boolean).map(addrSafe).join('/'); }
+/* A folder address's path as it lies on disk, lower-cased – computed once
+   per address, the export list asks for hundreds of folders at a time. */
+function folderDisk(f){ return f.disk || (f.disk = addrDiskPath(f.path).toLowerCase()); }
+/* The folder values by path as the mirror reads the keys
+   (drive_mirror.Einheiten): without a trailing slash, in any case – two
+   spellings of one folder are one value, the more frequent one. */
+function folderValueIndex(values){
+  var out = {};
+  Object.keys(values || {}).forEach(function(k){
+    var key = k.replace(/\/+/g, '/').replace(/^\/|\/$/g, '').toLowerCase();
+    if(!out[key] || KADENZ_RANG[values[k]] < KADENZ_RANG[out[key].value]) out[key] = {path: k, value: values[k]};
+  });
+  return out;
+}
+function siteDepth(parts){ return parts.length >= 2 && SITE_KINDS.indexOf(parts[0].toLowerCase()) >= 0 ? 2 : 0; }
 
-function fuelleUrlTabelle(tabId, text, kadenzen, praefix){
-  var tab = el(tabId);
-  tab.innerHTML = '';
-  tab.dataset.leer = t('cadence.units.none');
-  String(text || '').split('\n').map(function(z){ return z.trim(); })
-    .filter(Boolean).forEach(function(url){
-      urlZeile(tabId, url, kadenzen[praefix + ':' + url]);
+/* What the browser hands out → host, site, library, folder path – the
+   same reading as sharepoint_export.url_teile: the plain site, a library
+   view (…/Forms/AllItems.aspx?id=…), a sharing link (/:f:/r/…), a folder
+   deep inside; without sites/teams/personal it is the root site. */
+function addrParse(raw, plain){
+  var url;
+  try { url = new URL(/^https?:\/\//i.test(raw) ? raw : 'https://' + raw); } catch(e){ return null; }
+  // SharePoint Online only – a tenant's host is <name>.sharepoint.<tld>,
+  // <name>.sharepoint-mil.us and the like; anything else is a slip.
+  if(!url.host || !/\.sharepoint[.-]/i.test(url.host)) return null;
+  var parts = url.pathname.split('/').filter(Boolean).map(function(x){
+    try { return decodeURIComponent(x); } catch(e){ return x; }
+  });
+  // A sharing link carries its path only in the "/:f:/r/<path>" shape; the
+  // short "/:f:/s/<site>/<token>" names nothing the page could read.
+  if(parts.length && /^:[a-z]:$/.test(parts[0])){ if(parts.length < 2 || parts[1].toLowerCase() !== 'r') return null; parts = parts.slice(2); }
+  // A library view, "<library>/Forms/<view>.aspx", is view chrome wherever
+  // the library stands, and the id= (or RootFolder=) parameter carries the
+  // real folder path; a folder named Forms with no view behind it is a folder.
+  for(var i = 0; i + 1 < parts.length; i++) if(parts[i].toLowerCase() === 'forms' && /\.aspx$/i.test(parts[i + 1])){ parts = parts.slice(0, i); break; }
+  var at = siteDepth(parts);
+  // With a file selected, id= is the file and parent= its folder – the folder is what the address names.
+  var id = url.searchParams.get('parent') || url.searchParams.get('id') || url.searchParams.get('RootFolder');
+  if(id){ parts = id.split('/').filter(Boolean); at = siteDepth(parts); }
+  // Site chrome – the home page, a document viewer, a list – directly
+  // below the site, and a page as the last segment, name the site
+  // (sharepoint_export.SITE_CHROME); the same names deeper down are folders.
+  if(parts.length > at && SITE_CHROME.indexOf(parts[at].toLowerCase()) >= 0) parts = parts.slice(0, at);
+  if(parts.length && /\.aspx$/i.test(parts[parts.length - 1])) parts.pop();
+  if(parts.length < at) return null;     // "/sites/Home.aspx": no site named
+  var kind = '', site = '';
+  if(at){ kind = parts[0]; site = parts[1]; parts = parts.slice(2); }
+  var siteId = kind ? url.host + '/' + kind + '/' + site : url.host;
+  // What a run has taught (spLearnPlacement), unless `plain` asks for the
+  // address as it stands – the pages list keys sites the way the pages
+  // export reads them, without subsites: a segment the structure sync
+  // knows as a subsite extends the site (the run places the address below
+  // it, sharepoint_export._place; its own pages are the subsite), and a
+  // library typed by its display name takes its segment on disk.
+  if(!plain){
+    while(parts.length && SP.subsites[(siteId + '/' + parts[0]).toLowerCase()]){
+      siteId += '/' + parts[0]; site = site ? site + '/' + parts[0] : parts[0]; parts.shift();
+      if(parts.length && SITE_CHROME.indexOf(parts[0].toLowerCase()) >= 0) parts = [];
+    }
+    var alias = parts.length ? SP.aliases[(siteId + '/' + parts[0]).toLowerCase()] : null;
+    if(alias) parts[0] = alias;
+  }
+  return {host: url.host, kind: kind, site: site, label: site ? site.split('/').join(' / ') : url.host,
+          siteId: siteId, siteKey: siteId.toLowerCase(),
+          lib: parts[0] || '', path: parts.slice(1).join('/'),
+          libId: parts[0] ? siteId + '/' + parts[0] : null,
+          libKey: parts[0] ? (siteId + '/' + parts[0]).toLowerCase() : null};
+}
+function addrText(key, vars){
+  // A text with a count – mtext picks the singular where the language has one.
+  return mtext({k: key, v: vars || {}});
+}
+function jsArg(x){ return esc(JSON.stringify(x)); }   // a value inside an onclick="…"
+function spSite(p, create){
+  for(var i = 0; i < SP.sites.length; i++) if(SP.sites[i].key === p.siteKey) return SP.sites[i];
+  if(!create) return null;
+  var s = {key: p.siteKey, siteId: p.siteId, host: p.host, kind: p.kind, site: p.site, label: p.label,
+           wholeUrl: null, cad: 'always', libs: []};
+  SP.sites.push(s);
+  return s;
+}
+function spLib(site, p, create){
+  for(var i = 0; i < site.libs.length; i++) if(site.libs[i].key === p.libKey) return site.libs[i];
+  if(!create) return null;
+  var l = {key: p.libKey, libId: p.libId, lib: p.lib, wholeUrl: null, cad: 'inherit', cadSet: false, folders: []};
+  site.libs.push(l);
+  if(SP.libByKey) SP.libByKey[l.key] = {site: site, lib: l};   // known to the export list at once
+  return l;
+}
+/* A library is mirrored whole only through an address on it or on its
+   site; otherwise it is a placeholder that groups its folder addresses –
+   it has no cadence and no "Sync now" of its own, so nobody mirrors a
+   whole library by accident. */
+function spLibWhole(site, lib){ return !!(lib.wholeUrl || site.wholeUrl); }
+/* The cadence a library runs on: its own address (one that says
+   "inherit" has none of its own), else the site's, else (a placeholder)
+   the slowest of its folder addresses – the order
+   sharepoint_export._set_cadences keeps. */
+function spLibCadence(site, lib){
+  if(lib.wholeUrl && lib.cadSet) return lib.cad;
+  if(site.wholeUrl && site.cad !== 'inherit') return site.cad;   // a site saying "inherit" (by hand) has none: as the run, the slowest folder
+  var slowest = 'always';
+  lib.folders.forEach(function(f){ if(f.cad !== 'inherit' && KADENZ_RANG[f.cad] > KADENZ_RANG[slowest]) slowest = f.cad; });
+  return slowest;
+}
+function spFolderCadence(site, lib, f){ return f.cad === 'inherit' ? spLibCadence(site, lib) : f.cad; }
+function spCadenceOptions(){
+  var choice = el('sp-add-cadence');
+  if(choice && !SP.cadenceFilled){
+    SP.cadenceFilled = true;
+    ['sp-add-cadence', 'pg-add-cadence', 'pl-add-cadence'].forEach(function(id){
+      var w = el(id);
+      if(!w) return;
+      w.innerHTML = cadenceOptions();
+      w.value = 'weekly';
     });
+  }
 }
 
-function liesUrlTabelle(tabId, kadenzen, praefix){
+function spFill(text, kad){
+  // A refill after a save keeps what is unfolded and an open question.
+  SP.sites = []; SP.bad = []; SP.dup = [];
+  spCadenceOptions();
+  kad = kad || {};
+  String(text || '').split('\n').map(function(z){ return z.trim(); }).filter(Boolean).forEach(function(url){
+    var cad = kad['sharepoint-url:' + url] || 'always';
+    var p = addrParse(url);
+    if(!p){ SP.bad.push({url: url, cad: cad}); return; }
+    var site = spSite(p, true);
+    if(!p.lib){
+      if(site.wholeUrl) SP.dup.push({url: url, cad: cad, of: site.label});
+      else { site.wholeUrl = url; site.cad = cad; }       // kept as stored, "inherit" included
+      return;
+    }
+    var lib = spLib(site, p, true);
+    if(!p.path){
+      if(lib.wholeUrl) SP.dup.push({url: url, cad: cad, of: lib.lib});
+      // "inherit" on the whole library (a library in a subsite, saved
+      // before a run named the subsite): no cadence of its own, kept as
+      // stored – the export reads it the same way.
+      else { lib.wholeUrl = url; lib.cad = cad; lib.cadSet = cad !== 'inherit'; }
+      return;
+    }
+    var existing = lib.folders.filter(function(f){ return f.path.toLowerCase() === p.path.toLowerCase(); })[0];
+    if(existing) SP.dup.push({url: url, cad: cad, of: existing.path});
+    else lib.folders.push({url: url, path: p.path, cad: cad});
+  });
+  SP.sites.forEach(function(site){
+    site.libs.forEach(function(lib){ lib.folders.sort(function(a, b){ return a.path.localeCompare(b.path); }); });
+  });
+  spPrune();
+  if(SP.plan) spPlanLibs();
+  spIndex();
+  spDraw();
+}
+/* The libraries by their key – the export list asks for one per entry. */
+function spIndex(){
+  SP.libByKey = {};
+  SP.sites.forEach(function(site){ site.libs.forEach(function(lib){ SP.libByKey[lib.key] = {site: site, lib: lib}; }); });
+}
+
+function spRead(kad){
   var urls = [];
-  el(tabId).querySelectorAll('.zeile').forEach(function(z){
-    var url = z.querySelector('input').value.trim();
-    if(!url) return;
-    urls.push(url);
-    var wert = z.querySelector('select').value;
-    if(wert !== 'always') kadenzen[praefix + ':' + url] = wert;
+  SP.sites.forEach(function(site){
+    if(site.wholeUrl){
+      urls.push(site.wholeUrl);
+      if(site.cad !== 'always') kad['sharepoint-url:' + site.wholeUrl] = site.cad;
+    }
+    site.libs.forEach(function(lib){
+      if(lib.wholeUrl){
+        urls.push(lib.wholeUrl);
+        if(!lib.cadSet) kad['sharepoint-url:' + lib.wholeUrl] = 'inherit';    // kept as stored
+        else if(lib.cad !== 'always') kad['sharepoint-url:' + lib.wholeUrl] = lib.cad;
+      }
+      lib.folders.forEach(function(f){
+        urls.push(f.url);
+        if(f.cad !== 'always') kad['sharepoint-url:' + f.url] = f.cad;
+      });
+    });
+  });
+  SP.bad.concat(SP.dup).forEach(function(b){
+    urls.push(b.url);
+    // A duplicate spelled like its original shares the key: the original's value stands.
+    if(b.cad !== 'always' && !(('sharepoint-url:' + b.url) in kad)) kad['sharepoint-url:' + b.url] = b.cad;
   });
   return urls.join('\n');
 }
 
+function addrNote(id, text, art){
+  var n = el(id);
+  if(!n) return;
+  n.textContent = text || '';
+  n.classList.remove('ok', 'err');
+  if(art) n.classList.add(art);
+}
+function spNote(text, art){ addrNote('sp-note', text, art); }
+
+function spAdd(){
+  var field = el('sp-add-url'), raw = field.value.trim(), cad = el('sp-add-cadence').value;
+  if(!raw) return;
+  var p = addrParse(raw);
+  if(!p){ spNote(t('sp.bad'), 'err'); return; }
+  var site = spSite(p, true);
+  if(!p.lib){
+    if(site.wholeUrl){ spNote(t('sp.dup', {path: site.label}), 'err'); return; }
+    site.wholeUrl = raw; site.cad = cad;
+    spNote(t('sp.added.site', {site: site.label}), 'ok');
+  } else {
+    var lib = spLib(site, p, false), isNew = !lib;
+    if(!lib){ lib = spLib(site, p, true); }
+    if(!p.path){
+      if(lib.wholeUrl){ spNote(t('sp.dup', {path: lib.lib}), 'err'); return; }
+      lib.wholeUrl = raw; lib.cad = cad; lib.cadSet = true;
+      spNote(t(isNew ? 'sp.added.newlib' : 'sp.added.whole', {lib: p.lib, site: site.label}), 'ok');
+    } else {
+      var existing = lib.folders.filter(function(f){ return f.path.toLowerCase() === p.path.toLowerCase(); })[0];
+      if(existing){ spNote(t('sp.dup', {path: existing.path}), 'err'); return; }
+      lib.folders.push({url: raw, path: p.path, cad: spLibWhole(site, lib) && cad === spLibCadence(site, lib) ? 'inherit' : cad});
+      lib.folders.sort(function(a, b){ return a.path.localeCompare(b.path); });
+      spNote(t(isNew ? 'sp.added.newlib.folder' : 'sp.added.folder', {lib: p.lib, site: site.label, path: p.path}), 'ok');
+    }
+  }
+  field.value = '';
+  spDraw();
+  speichereBald();
+}
+
+function spPrune(){
+  // A site or library that mirrors nothing and sets nothing leaves the tree.
+  SP.sites = SP.sites.filter(function(site){
+    site.libs = site.libs.filter(function(lib){ return lib.wholeUrl || lib.folders.length; });
+    return site.wholeUrl || site.libs.length;
+  });
+  spIndex();
+}
+function spBelowCount(site, lib){
+  // The addresses that would go with a site or library: what a question
+  // has to name.
+  if(lib) return lib.folders.length;
+  var n = 0;
+  site.libs.forEach(function(l){ n += (l.wholeUrl ? 1 : 0) + l.folders.length; });
+  return n;
+}
+function spSettle(site, before, lib){
+  // The library no longer mirrored whole – with the site's address gone,
+  // every library that was whole through it – is a placeholder: its
+  // folder addresses keep the cadence they ran on, now as their own. No
+  // other library is touched.
+  (lib ? [lib] : site.libs).forEach(function(l){
+    if(spLibWhole(site, l)) return;
+    l.folders.forEach(function(f){ if(f.cad === 'inherit') f.cad = before[f.url]; });
+    l.cad = 'inherit'; l.cadSet = false;
+  });
+}
+function spRemove(si, li, how){
+  var site = SP.sites[si], lib = li === null ? null : site.libs[li];
+  var name = lib ? lib.lib : site.label, key = lib ? lib.key : site.key;
+  if(how === 'ask' && spBelowCount(site, lib)){ SP.ask = key; spDraw(); return; }
+  if(how === 'keep'){
+    // What each folder ran on, before the address above it goes.
+    var before = {};
+    site.libs.forEach(function(l){ l.folders.forEach(function(f){ before[f.url] = spFolderCadence(site, l, f); }); });
+    if(lib) lib.wholeUrl = null; else site.wholeUrl = null;
+    spSettle(site, before, lib);
+  }
+  else if(lib){ site.libs.splice(li, 1); }
+  else { SP.sites.splice(si, 1); }
+  SP.ask = null;
+  spPrune();
+  spNote(t('sp.removed', {path: name}), 'ok');
+  spDraw();
+  speichereBald();
+}
+function spRemoveFolder(si, li, j){
+  var lib = SP.sites[si].libs[li], f = lib.folders.splice(j, 1)[0];
+  spPrune();
+  spNote(t('sp.removed', {path: f.path}), 'ok');
+  spDraw();
+  speichereBald();
+}
+function spRemoveBad(i){ SP.bad.splice(i, 1); spDraw(); speichereBald(); }
+function spRemoveDup(i){ SP.dup.splice(i, 1); spDraw(); speichereBald(); }
+function spSetSite(si, value){ SP.sites[si].cad = value; spDraw(); speichereBald(); }
+function spSetLib(si, li, value){
+  // A cadence of a library's own is an address line on the library – the
+  // same line a pasted library address is; "like the site" is none.
+  var lib = SP.sites[si].libs[li];
+  if(value === 'inherit'){ lib.wholeUrl = null; lib.cad = 'inherit'; lib.cadSet = false; }
+  else { lib.wholeUrl = lib.wholeUrl || encodeURI('https://' + lib.libId); lib.cad = value; lib.cadSet = true; }
+  spDraw(); speichereBald();
+}
+function spSetFolder(si, li, j, value){ SP.sites[si].libs[li].folders[j].cad = value; spDraw(); speichereBald(); }
+/* "Sync now" on one address: that line's unit, then the index. */
+function addrRun(url, steps){ run(Object.assign({unit: url, index: true}, steps), 'job.export', 'sync_now'); }
+function spSyncNow(url){ addrRun(url, {sharepoint: true}); }
+
+/* What lies below an address comes from the last structure sync (the
+   export list's own answer), asked for once, when something is unfolded. */
+function spPlanLoad(){
+  SP.planAsked = true; SP.planFailed = false;
+  frage(API + '/sources/sharepoint/folder-plan', {sharepoint_rules: el('c-sharepoint_rules').value})
+    .then(function(p){
+      // A refusal comes as an answer, not a rejection: 404 is "nothing
+      // mirrored yet" – an empty structure; anything else failed, and
+      // the fold offers to ask again (so does a connection that broke).
+      if(p && p.ok === false){
+        if(p.status === 404) spPlanTake({an: [], aus: []});
+        else { SP.planAsked = false; SP.planFailed = true; }
+      } else spPlanTake(p || {});
+      spPlanLibs(); spDraw();
+    })
+    .catch(function(){ SP.planAsked = false; SP.planFailed = true; spDraw(); });
+}
+function spToggle(key){
+  SP.open[key] = !SP.open[key];
+  if(SP.open[key] && !SP.planAsked) spPlanLoad();
+  spDraw();
+}
+function spPlanTake(p){
+  // Indexed once: the folds ask for children, the rows for where a library
+  // lies on disk, on every redraw. `libs` names each library on disk once
+  // – its lib_id and the lines that led to it – for all its entries.
+  SP.plan = p;
+  SP.byParent = {}; SP.libByDisk = {}; SP.diskByLib = {}; SP.diskByUrl = {};
+  var seen = {};
+  ((p && p.an) || []).forEach(function(e){
+    var path = String(e.pfad), low = path.toLowerCase();
+    if(seen[low]) return;
+    seen[low] = true;
+    var parent = low.split('/').slice(0, -1).join('/');
+    (SP.byParent[parent] = SP.byParent[parent] || []).push(path);
+  });
+  Object.keys(SP.byParent).forEach(function(k){ SP.byParent[k].sort(function(a, b){ return a.localeCompare(b); }); });
+  Object.keys((p && p.libs) || {}).forEach(function(disk){
+    var info = p.libs[disk];
+    SP.libByDisk[disk.toLowerCase()] = info;
+    if(info.lib_id) SP.diskByLib[info.lib_id.toLowerCase()] = disk;
+    (info.urls || []).forEach(function(u){ if(!SP.diskByUrl[u]) SP.diskByUrl[u] = disk; });
+  });
+  // A library's lib_id names the subsites on its way and the library's
+  // segment on disk: addresses are filed again, now the way the run
+  // placed them.
+  if(spLearnPlacement(Object.keys(SP.libByDisk).map(function(k){ return SP.libByDisk[k]; }))){ var kad = {}; spFill(spRead(kad), kad); }
+}
+/* What a run has taught about where addresses lead. Each library's lib_id
+   ("<host>/sites/<site>/<sub>/<library>") names the subsites between the
+   site and the last segment – by the address alone the page cannot tell
+   a subsite from a library – and, held against the lines that led to the
+   library, the segment on disk of a library typed by its display name
+   ("Documents" for "Shared Documents"). addrParse files an address with
+   this as the run does (sharepoint_export._place). */
+function spLearnPlacement(entries){
+  var learned = false;
+  entries.forEach(function(e){
+    if(!e.lib_id) return;
+    var segs = String(e.lib_id).split('/').filter(Boolean);
+    var at = 1 + siteDepth(segs.slice(1));                  // the host, then the site's own segments
+    for(var i = at; i < segs.length - 1; i++){
+      var key = segs.slice(0, i + 1).join('/').toLowerCase();
+      if(!SP.subsites[key]){ SP.subsites[key] = true; learned = true; }
+    }
+    var onDisk = segs[segs.length - 1], siteKey = segs.slice(0, -1).join('/').toLowerCase();
+    (e.urls || []).forEach(function(u){
+      var p = addrParse(u);
+      if(!p || !p.lib || p.siteKey !== siteKey || p.lib.toLowerCase() === onDisk.toLowerCase()) return;
+      var key = siteKey + '/' + p.lib.toLowerCase();
+      if(SP.aliases[key] !== onDisk){ SP.aliases[key] = onDisk; learned = true; }
+    });
+  });
+  return learned;
+}
+function spFoldOpen(){ return Object.keys(SP.open).some(function(k){ return SP.open[k]; }); }
+function spPlanForget(last){
+  // "Sync folder structure" or a run of the mirror (the completeness
+  // check records the addresses too) may have changed what lies below: a
+  // fold that is open asks again – while the settings are in view – a
+  // closed one on its next unfold. A run of another source changes
+  // nothing here and costs no new structure.
+  var steps = (last || {}).steps || [];
+  if(!SP.planAsked || !['sharepoint', 'sharepoint_folders', 'check_sharepoint'].some(function(k){ return steps.indexOf(k) >= 0; })) return;
+  SP.plan = null; SP.byParent = {}; SP.planAsked = false;
+  spPlanEnsure();
+}
+function spPlanEnsure(){
+  // Back in the settings with a fold still open: fetch what it shows.
+  if(OPEN_TAB === 'einstellungen' && spFoldOpen() && !SP.planAsked) spPlanLoad();
+}
+function spPlanEntries(){ return (SP.plan && SP.plan.an) || []; }
+function spPlanLibs(){
+  // The libraries the structure sync knows under a whole-site address
+  // join the tree, so their cadence can be set – they mirror already.
+  SP.sites.forEach(function(site){
+    if(!site.wholeUrl) return;
+    Object.keys(SP.libByDisk || {}).forEach(function(disk){
+      var info = SP.libByDisk[disk];
+      if(!info.lib_id || (info.urls || []).indexOf(site.wholeUrl) < 0) return;
+      var p = addrParse('https://' + info.lib_id);
+      if(p && p.lib && p.siteKey === site.key) spLib(site, p, true);
+    });
+  });
+}
+function spDisk(urls, libId){
+  // Where on disk ("<site>/<library>") an address list ended up – from
+  // the index spPlanTake built, not a pass over every entry per row.
+  var hit = libId && (SP.diskByLib || {})[libId.toLowerCase()];
+  if(!hit) urls.some(function(u){ return (hit = u && (SP.diskByUrl || {})[u]); });
+  return hit || null;
+}
+function spChildren(path){ return (SP.byParent || {})[path.toLowerCase()] || []; }
+function spSetSub(path, value){
+  var tab = el('sp-abw');
+  [].forEach.call(tab.querySelectorAll('.zeile'), function(z){ if(z.dataset.pfad === path) tab.removeChild(z); });
+  if(value) tab.appendChild(abwZeile(path, value));
+  spDraw();
+  speichereBald();
+}
+
+/* The cadence that reaches a folder on disk ("<site>/<library>/Dateien/…"):
+   the deepest of a folder value and a folder address on its path – at one
+   depth the address is the unit, the value is overruled (drive_einheiten)
+   – else its library's. The library comes from the structure sync
+   (SP.libByDisk: its lib_id and the lines that led to it); `folderValues`
+   is the index of the folder values (folderValueIndex), built once per
+   draw by a caller that asks for many folders. */
+function spCadenceFor(diskPath, folderValues){
+  var parts = String(diskPath || '').split('/').filter(Boolean), disk = parts.slice(0, 2).join('/');
+  var info = (SP.libByDisk || {})[disk.toLowerCase()] || {}, urls = info.urls || [], site = null, lib = null;
+  var hit = info.lib_id && (SP.libByKey || {})[info.lib_id.toLowerCase()];
+  if(hit){ site = hit.site; lib = hit.lib; }
+  else SP.sites.forEach(function(s){
+    if(urls.indexOf(s.wholeUrl) >= 0) site = site || s;
+    s.libs.forEach(function(l){
+      var mine = urls.indexOf(l.wholeUrl) >= 0 || l.folders.some(function(f){ return urls.indexOf(f.url) >= 0; });
+      if(mine && !lib){ lib = l; site = s; }
+    });
+  });
+  if(!site) return 'always';
+  var index = folderValues || folderValueIndex(abwLesen('sharepoint')), addresses = lib ? spFolderIndex(lib, disk) : {};
+  for(var n = parts.length; n > 2; n--){
+    var p = parts.slice(0, n).join('/').toLowerCase();
+    if(addresses[p]) return spFolderCadence(site, lib, addresses[p]);
+    if(index[p]) return index[p].value;
+  }
+  return lib ? spLibCadence(site, lib) : site.cad;
+}
+
+/* ---- drawing ---- */
+var ADDR_SELECTS = [];      // [id, value] of the selects drawn, set once the markup stands
+function addrSelect(id, value, inherit, action){
+  ADDR_SELECTS.push([id, value]);
+  return '<select id="' + esc(id) + '" onchange="' + action + '">' +
+    (inherit ? '<option value="' + (inherit.value || '') + '">' + esc(inherit.text) + '</option>' : '') +
+    cadenceOptions() + '</select>';
+}
+function addrSelectsApply(){
+  ADDR_SELECTS.forEach(function(sv){ var e = dyn(sv[0]); if(e) e.value = sv[1]; });
+  ADDR_SELECTS = [];
+}
+function addrSync(url, action){
+  return url ? '<button type="button" class="mini" onclick="' + action + '(' + jsArg(url) + ')">' +
+    esc(t('cadence.sync_now')) + '</button>' : '<span class="addr-gap"></span>';
+}
+function addrX(title, action){
+  return '<button type="button" class="mini addr-x" title="' + esc(title) + '" aria-label="' + esc(title) + '" onclick="' + action + '">&times;</button>';
+}
+function addrRow(level, cls, name, controls){
+  return '<div class="addr-node' + (cls ? ' ' + cls : '') + '"><div class="addr-name" style="padding-left:' + (level * 18) + 'px">' +
+    name + '</div>' + controls + '</div>';
+}
+function addrToggle(key, open, text){
+  return '<button type="button" class="addr-toggle" onclick="spToggle(' + jsArg(key) + ')">' +
+    esc(open ? t('sp.folders.hide') : text) + '</button>';
+}
+/* The folder addresses of a library as they lie on disk (lower-cased
+   "<site>/<library>/dateien/<path>") → the address: a fold does not list
+   them again (they have rows of their own), the export list asks for the
+   address on a folder's path. Built once per drawing (SP.rev), not per row. */
+function spFolderIndex(lib, disk){
+  if(!disk) return {};
+  if(lib.indexRev !== SP.rev || lib.indexDisk !== disk){
+    var out = {};
+    lib.folders.forEach(function(f){ out[disk.toLowerCase() + '/dateien/' + folderDisk(f)] = f; });
+    lib.index = out; lib.indexRev = SP.rev; lib.indexDisk = disk;
+  }
+  return lib.index;
+}
+function spSubRows(diskPath, above, level, skip){
+  var html = '';
+  spChildren(diskPath).forEach(function(p){
+    if(skip && skip[p.toLowerCase()]) return;
+    SP.drawn[p.toLowerCase()] = true;
+    var stored = SP.folderValueIndex[p.toLowerCase()], own = stored ? stored.value : '', effective = own || above;
+    var children = spChildren(p), q = jsArg(stored ? stored.path : p);
+    var name = '<span class="addr-title">' + esc(p.split('/').pop()) + (own ? '<span class="addr-chip own">' + esc(t('sp.own')) + '</span>' : '') + '</span>' +
+      (children.length ? addrToggle(p, SP.open[p], addrText('sp.folders.show', {n: children.length})) : '');
+    html += addrRow(level, 'addr-sub', name,
+      addrSelect('sp-k-' + p, own, {value: '', text: t('sp.inherit.above', {cadence: t('cadence.' + above)})}, 'spSetSub(' + q + ', this.value)') +
+      (own ? '<button type="button" class="mini" onclick="spSetSub(' + q + ', &quot;&quot;)">' + esc(t('sp.reset')) + '</button>' : '<span class="addr-gap"></span>') +
+      '<span class="addr-gap"></span>');
+    if(SP.open[p]) html += spSubRows(p, effective, level + 1, skip);
+  });
+  return html;
+}
+function spBelow(key, diskPath, above, level, skip){
+  // The fold under an address: its folders, once they are known.
+  if(!SP.open[key]) return '';
+  if(!SP.plan) return addrRow(level, 'addr-sub', SP.planFailed
+    ? '<span class="small muted">' + esc(t('sp.plan.failed')) + '</span> <button type="button" class="mini" onclick="spPlanLoad()">' + esc(t('sp.plan.retry')) + '</button>'
+    : '<span class="small muted">' + esc(t('plan.loading')) + '</span>', '<span></span><span></span><span></span>');
+  var rows = diskPath ? spSubRows(diskPath, above, level, skip) : '';
+  return rows || addrRow(level, 'addr-sub', '<span class="small muted">' + esc(t('sp.folders.none')) + '</span>', '<span></span><span></span><span></span>');
+}
+/* Folder values that no open fold shows – set in an earlier release, or
+   on a folder the last structure sync no longer lists – stand in one
+   box below the tree, where they can still be changed or taken away. */
+function spStrayRows(){
+  var values = SP.folderValues, stray = Object.keys(values).filter(function(k){ return !SP.drawn[k.toLowerCase()]; }).sort();
+  if(!stray.length) return '';
+  return '<div class="addr-box">' + addrRow(0, 'addr-head', '<span class="addr-note">' + esc(t('sp.stray')) + '</span>', '<span></span><span></span><span></span>') +
+    stray.map(function(p){
+      var q = jsArg(p);
+      return addrRow(1, 'addr-sub', '<span class="addr-title">' + esc(p) + '<span class="addr-chip own">' + esc(t('sp.own')) + '</span></span>',
+        addrSelect('sp-k-' + p, values[p], null, 'spSetSub(' + q + ', this.value)') +
+        '<button type="button" class="mini" onclick="spSetSub(' + q + ', &quot;&quot;)">' + esc(t('sp.reset')) + '</button><span class="addr-gap"></span>');
+    }).join('') + '</div>';
+}
+function spAsk(text, buttons){
+  return '<div class="addr-ask" role="alertdialog"><span>' + esc(text) + '</span><div>' + buttons +
+    '<button type="button" class="mini" onclick="SP.ask = null; spDraw()">' + esc(t('sp.ask.cancel')) + '</button></div></div>';
+}
+
+function spDraw(){
+  var box = el('sp-tree');
+  if(!box) return;
+  SP.rev++;                              // the folder indexes are rebuilt once per drawing
+  box.dataset.leer = t('sp.empty');
+  SP.folderValues = abwLesen('sharepoint');
+  SP.folderValueIndex = folderValueIndex(SP.folderValues);
+  SP.drawn = {};
+  ADDR_SELECTS = [];
+  var html = '';
+  SP.sites.forEach(function(site, si){
+    html += '<div class="addr-box">';
+    var head = '<span class="addr-title"><b>' + esc(site.label) + '</b>' +
+      (site.wholeUrl ? '<span class="addr-chip whole">' + esc(t('sp.site.whole')) + '</span>' : '') + '</span>' +
+      '<span class="addr-note">' + esc(site.siteId) + '</span>' +
+      (site.wholeUrl ? addrToggle(site.key, SP.open[site.key], t('sp.libs.below')) : '');
+    html += addrRow(0, 'addr-head', head, site.wholeUrl
+      ? addrSelect('sp-k-site-' + si, site.cad, null, 'spSetSite(' + si + ', this.value)') + addrSync(site.wholeUrl, 'spSyncNow') +
+        addrX(t('sp.remove.site'), 'spRemove(' + si + ', null, &quot;ask&quot;)')
+      : '<span></span><span></span><span></span>');
+    if(SP.ask === site.key){
+      var below = spBelowCount(site, null);
+      html += spAsk(addrText('sp.ask.site', {site: site.label, n: below}),
+        '<button type="button" class="mini danger" onclick="spRemove(' + si + ', null, &quot;all&quot;)">' + esc(addrText('sp.ask.all', {n: below})) + '</button>' +
+        '<button type="button" class="mini" onclick="spRemove(' + si + ', null, &quot;keep&quot;)">' + esc(t('sp.ask.keep.site')) + '</button>');
+    }
+    var siteOnDisk = site.wholeUrl ? spDisk([site.wholeUrl], null) : null;
+    site.libs.forEach(function(lib, li){
+      if(site.wholeUrl && !lib.wholeUrl && !lib.folders.length && !SP.open[site.key]) return;
+      var effective = spLibCadence(site, lib), n = lib.folders.length, disk = spDisk([lib.wholeUrl].concat(lib.folders.map(function(f){ return f.url; })), lib.libId);
+      var whole = spLibWhole(site, lib);
+      var chip = lib.wholeUrl ? '<span class="addr-chip whole">' + esc(t('sp.whole')) + '</span>'
+               : n ? '<span class="addr-chip">' + esc(addrText('sp.only', {n: n})) + '</span>' : '';
+      var own = !!(lib.wholeUrl && lib.cadSet);
+      var note = own || (lib.wholeUrl && !site.wholeUrl) ? t('sp.lib.own')
+               : whole ? t('sp.takes.site', {cadence: t('cadence.' + effective)})
+               : t('sp.lib.placeholder');
+      var name = '<span class="addr-title"><b>' + esc(lib.lib) + '</b>' + chip + '</span><span class="addr-note">' + esc(note) + '</span>' +
+        (lib.wholeUrl || site.wholeUrl ? addrToggle(lib.key, SP.open[lib.key], t('sp.folders.below')) : '');
+      var select = !whole ? '<span></span>'
+        : site.wholeUrl
+        ? addrSelect('sp-k-' + lib.key, own ? lib.cad : 'inherit', {value: 'inherit', text: t('sp.inherit.site', {cadence: t('cadence.' + site.cad)})}, 'spSetLib(' + si + ', ' + li + ', this.value)')
+        : addrSelect('sp-k-' + lib.key, effective, null, 'spSetLib(' + si + ', ' + li + ', this.value)');
+      html += addrRow(1, 'addr-lib' + (whole ? '' : ' addr-placeholder'), name, select + addrSync(lib.wholeUrl, 'spSyncNow') +
+        (lib.wholeUrl || n ? addrX(t('sp.remove.lib'), 'spRemove(' + si + ', ' + li + ', &quot;ask&quot;)') : '<span class="addr-gap"></span>'));
+      if(SP.ask === lib.key){
+        html += spAsk(addrText('sp.ask', {lib: lib.lib, n: n}),
+          '<button type="button" class="mini danger" onclick="spRemove(' + si + ', ' + li + ', &quot;all&quot;)">' + esc(addrText('sp.ask.all', {n: n})) + '</button>' +
+          (lib.wholeUrl ? '<button type="button" class="mini" onclick="spRemove(' + si + ', ' + li + ', &quot;keep&quot;)">' + esc(t('sp.ask.keep')) + '</button>' : ''));
+      }
+      var skip = spFolderIndex(lib, disk);
+      if(lib.wholeUrl || site.wholeUrl) html += spBelow(lib.key, disk ? disk + '/Dateien' : null, effective, 2, skip);
+      lib.folders.forEach(function(f, j){
+        var folderCadence = spFolderCadence(site, lib, f), key = lib.key + '|' + f.path.toLowerCase();
+        var folderName = '<span class="addr-title">' + esc(f.path) + '</span>' +
+          (f.cad === 'inherit' ? '<span class="addr-note">' + esc(t('sp.takes', {cadence: t('cadence.' + folderCadence)})) + '</span>' : '') +
+          addrToggle(key, SP.open[key], t('sp.folders.below'));
+        html += addrRow(2, 'addr-sub', folderName,
+          addrSelect('sp-k-' + key, whole ? f.cad : folderCadence, whole ? {value: 'inherit', text: t('sp.inherit.lib', {cadence: t('cadence.' + spLibCadence(site, lib))})} : null, 'spSetFolder(' + si + ', ' + li + ', ' + j + ', this.value)') +
+          addrSync(f.url, 'spSyncNow') + addrX(t('sp.remove.folder'), 'spRemoveFolder(' + si + ', ' + li + ', ' + j + ')'));
+        html += spBelow(key, disk ? disk.toLowerCase() + '/dateien/' + folderDisk(f) : null, folderCadence, 3, skip);
+      });
+    });
+    if(site.wholeUrl && SP.open[site.key] && SP.plan && !siteOnDisk)
+      html += addrRow(1, 'addr-sub', '<span class="small muted">' + esc(t('sp.folders.none')) + '</span>', '<span></span><span></span><span></span>');
+    html += '</div>';
+  });
+  if(SP.bad.length || SP.dup.length){
+    html += '<div class="addr-box">' + SP.bad.map(function(b, i){
+      return addrRow(0, 'addr-head', '<span class="addr-title">' + esc(b.url) + '</span><span class="addr-note err">' + esc(t('sp.unrecognized')) + '</span>',
+        '<span></span><span></span>' + addrX(t('sp.remove.folder'), 'spRemoveBad(' + i + ')'));
+    }).join('') + SP.dup.map(function(b, i){
+      return addrRow(0, 'addr-head', '<span class="addr-title">' + esc(b.url) + '</span><span class="addr-note err">' + esc(t('sp.dup.row', {path: b.of})) + '</span>',
+        '<span></span><span></span>' + addrX(t('sp.remove.folder'), 'spRemoveDup(' + i + ')'));
+    }).join('') + '</div>';
+  }
+  box.innerHTML = html + spStrayRows();
+  addrSelectsApply();
+}
+
+/* ---- the flat lists: the sites whose pages are exported, the boards ---- */
+var ADDR = {
+  pages:   {list: 'pg-list', field: 'pg-add-url', cad: 'pg-add-cadence', note: 'pg-note', prefix: 'pages-url',
+            run: {sharepoint_pages: true}, bad: 'addr.bad.pages', cfg: 'sharepoint_pages_urls',
+            // The site as the pages export reads it (sharepoint_export.resolve_page_sites,
+            // url_teile): the top site, subsites come along with it.
+            key: function(url){ var p = addrParse(url, true); return p ? p.siteKey : null; },
+            name: function(url){ var p = addrParse(url, true); return p ? p.label : url; }},
+  planner: {list: 'pl-list', field: 'pl-add-url', cad: 'pl-add-cadence', note: 'pl-note', prefix: 'planner-url',
+            run: {planner: true}, bad: 'addr.bad.planner', cfg: 'planner_urls',
+            key: function(url){
+              // The plan id, from either Planner address (planner_export.plan_id_aus).
+              var m = url.match(/\/plan\/([A-Za-z0-9_-]{10,})/) || url.match(/[?&]planId=([A-Za-z0-9_-]{10,})/);
+              return m ? m[1] : null;
+            },
+            name: function(url){ return url; }}
+};
+var ADDR_ROWS = {pages: [], planner: []};
+
+/* Every address list with its cadences into `kad` – the one reading both
+   save paths use, so no path can drop a list (the boards' cadences once
+   vanished with a SharePoint size preview). */
+function addressesInto(kad){
+  return {sharepoint_urls: spRead(kad),
+          sharepoint_pages_urls: addrRead('pages', kad),
+          planner_urls: addrRead('planner', kad)};
+}
+function addrFill(kind, text, kad){
+  var a = ADDR[kind], rows = [], seen = {};
+  spCadenceOptions();
+  String(text || '').split('\n').map(function(z){ return z.trim(); }).filter(Boolean).forEach(function(url){
+    var key = a.key(url), dup = !!(key && seen[key]);   // the same place twice: kept, marked, for the user to take away
+    if(key) seen[key] = true;
+    rows.push({url: url, key: key, dup: dup, cad: (kad || {})[a.prefix + ':' + url] || 'always'});
+  });
+  ADDR_ROWS[kind] = rows;
+  addrDraw(kind);
+}
+function addrRead(kind, kad){
+  var a = ADDR[kind];
+  return ADDR_ROWS[kind].map(function(r){
+    if(r.cad !== 'always') kad[a.prefix + ':' + r.url] = r.cad;
+    return r.url;
+  }).join('\n');
+}
+function addrAdd(kind){
+  var a = ADDR[kind], field = el(a.field), raw = field.value.trim(), cad = el(a.cad).value;
+  if(!raw) return;
+  var key = a.key(raw);
+  if(!key){ addrNote(a.note, t(a.bad), 'err'); return; }
+  var existing = ADDR_ROWS[kind].filter(function(r){ return r.key === key && !r.dup; })[0];
+  if(existing){ addrNote(a.note, t('addr.dup', {name: a.name(existing.url)}), 'err'); return; }
+  ADDR_ROWS[kind].push({url: raw, key: key, cad: cad});
+  addrNote(a.note, t('addr.added', {name: a.name(raw)}), 'ok');
+  field.value = '';
+  addrDraw(kind);
+  speichereBald();
+}
+function addrRemove(kind, i){
+  var a = ADDR[kind], r = ADDR_ROWS[kind].splice(i, 1)[0];
+  addrNote(a.note, t('addr.removed', {name: a.name(r.url)}), 'ok');
+  addrDraw(kind);
+  speichereBald();
+}
+function addrSet(kind, i, value){ ADDR_ROWS[kind][i].cad = value; addrDraw(kind); speichereBald(); }
+function addrSyncNow(kind, url){ addrRun(url, ADDR[kind].run); }
+function addrDraw(kind){
+  var a = ADDR[kind], box = el(a.list);
+  if(!box) return;
+  box.dataset.leer = t('cadence.units.none');
+  var rows = ADDR_ROWS[kind];
+  ADDR_SELECTS = [];
+  box.innerHTML = rows.length ? '<div class="addr-box">' + rows.map(function(r, i){
+    var name = a.name(r.url), q = jsArg(kind);
+    var title = '<span class="addr-title"><b>' + esc(name) + '</b>' + (r.key ? '' : '<span class="addr-chip err">' + esc(t(a.bad)) + '</span>') +
+      (r.dup ? '<span class="addr-chip err">' + esc(t('addr.dup.row')) + '</span>' : '') + '</span>' +
+      (name !== r.url ? '<span class="addr-note">' + esc(r.url) + '</span>' : '');
+    return addrRow(0, 'addr-head', title,
+      addrSelect(a.list + '-k-' + i, r.cad, null, 'addrSet(' + q + ', ' + i + ', this.value)') +
+      '<button type="button" class="mini" onclick="addrSyncNow(' + q + ', ' + jsArg(r.url) + ')">' + esc(t('cadence.sync_now')) + '</button>' +
+      addrX(t('sp.remove.folder'), 'addrRemove(' + q + ', ' + i + ')'));
+  }).join('') + '</div>' : '';
+  addrSelectsApply();
+}
+
+/* The tree's and the lists' controls save at once, like every setting
+   without a text field – but a burst of clicks (five cadences, three
+   removals) is one save: each save posts the configuration and refills
+   every card. */
+var SAVE_DELAY_MS = 300, saveTimer = null;
+function speichereBald(){
+  if(saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(function(){ saveTimer = null; speichereEinstellungen(); }, SAVE_DELAY_MS);
+}
 function speichereEinstellungen(){
   merke('flow.save', 'settings');
   speichernLaeuft = true;
@@ -9567,12 +10303,7 @@ function speichereEinstellungen(){
               notifications: el('c-notifications').value,
               search_history: el('c-search_history').value,
               sync_cadence: leseKadenzen()};
-  body.sharepoint_urls = liesUrlTabelle('sp-urls', body.sync_cadence,
-                                        'sharepoint-url');
-  body.sharepoint_pages_urls = liesUrlTabelle('pg-urls', body.sync_cadence,
-                                              'pages-url');
-  body.planner_urls = liesUrlTabelle('pl-urls', body.sync_cadence,
-                                     'planner-url');
+  Object.assign(body, addressesInto(body.sync_cadence));
   var spracheVorher = (S.config && S.config.language) || 'auto';
   SCHALTER.forEach(function(k){ body[k] = el('c-'+k).checked; });
   ZAHLEN.forEach(function(k){ body[k] = parseInt(el('c-'+k).value, 10); });
@@ -9616,6 +10347,8 @@ function insideAccessCard(node){
 function markiereGeaendert(ev){
   if(speichernLaeuft || !cfgGefuellt) return;
   if(ev && insideAccessCard(ev.target)) return;
+  // The address fields add on their own button; typing there changes no setting.
+  if(ev && ev.target && ev.target.closest && ev.target.closest('.addr-add')) return;
   einstGeaendert = true;
   el('speichern').classList.remove('hide');
 }
@@ -9786,13 +10519,11 @@ function speichereSharepointFelder(){
   // The buttons must act on what the form shows, not on the last save –
   // otherwise an edited URL list feels ignored until someone hits Save.
   var kad = leseKadenzen();
-  return konfig({
-    sharepoint_urls: liesUrlTabelle('sp-urls', kad, 'sharepoint-url'),
-    sharepoint_pages_urls: liesUrlTabelle('pg-urls', kad, 'pages-url'),
+  return konfig(Object.assign(addressesInto(kad), {
     sync_cadence: kad,
     sharepoint_types_include: el('c-sharepoint_types_include').value,
     sharepoint_types_exclude: el('c-sharepoint_types_exclude').value,
-    sharepoint_max_mb: parseInt(el('c-sharepoint_max_mb').value, 10) || 0});
+    sharepoint_max_mb: parseInt(el('c-sharepoint_max_mb').value, 10) || 0}));
 }
 function sharepointVorschau(){
   // The check run enumerates without downloading; the merged report lands in
@@ -9910,6 +10641,8 @@ function zeigeExportliste(quelle){
          skip_folders: el('c-skip_folders').value})
     .then(function(p){
       planDaten = p;
+      // The mirror's structure is the tree's too: one answer, held once.
+      if(planQuelle === 'sharepoint' && p && p.ok !== false){ spPlanTake(p); SP.planAsked = true; SP.planFailed = false; spPlanLibs(); spDraw(); }
       if(wizardOffen === 'plan') planFenster();
     });
 }
@@ -9937,6 +10670,7 @@ function planFenster(){
    For skipped folders, what nevertheless already sits in the archive stands
    in between: "skipped" does not mean "empty", and whoever confuses the two
    will later search for mails that have long been there. */
+var PLAN_FOLDER_VALUES = null;
 function planKadenzTag(e){
   // Mail folders and Teams conversations carry their effective cadence –
   // from the form, not the saved state, like the rules above them.
@@ -9944,9 +10678,12 @@ function planKadenzTag(e){
         : planQuelle === 'onedrive' ? 'onedrive' : planQuelle === 'todo' ? 'todo'
         : planQuelle === 'sharepoint' ? 'sharepoint' : null;
   if(!q || !e.pfad) return '';
-  var w = ABW[q], allgemein = q === 'sharepoint' ? spKadenzAusUrls(e.urls || [])
-        : w.wurzeln ? w.allgemein(e.pfad.split('/')[0]) : w.allgemein();
-  var k = kadenzWirksam(e.pfad, abwLesen(q), allgemein);
+  if(q === 'sharepoint'){
+    var sp = spCadenceFor(e.pfad, PLAN_FOLDER_VALUES);
+    return sp === 'always' ? '' : '<span class="tag">' + esc(t('cadence.' + sp)) + '</span>';
+  }
+  var w = ABW[q], allgemein = w.wurzeln ? w.allgemein(e.pfad.split('/')[0]) : w.allgemein();
+  var k = kadenzWirksam(e.pfad, abwLesen(q), allgemein, q === 'onedrive');
   return k.wert === 'always' ? '' : '<span class="tag">' + esc(t('cadence.' + k.wert)) + '</span>';
 }
 function planZeile(e, zahl, mitArchiv){
@@ -9963,6 +10700,9 @@ function planListen(){
   var p = planDaten;
   if(!p || p.ok === false || !document.getElementById('plan-listen')) return;
   var f = (el('plan-filter').value || '').trim().toLowerCase();
+  // The folder values indexed once per draw – the tag of every entry reads them.
+  SP.rev++;
+  PLAN_FOLDER_VALUES = planQuelle === 'sharepoint' ? folderValueIndex(abwLesen('sharepoint')) : null;
   function gruppe(schluessel, liste, zahl, mails, punkt, mitArchiv){
     var zeilen = liste.filter(function(e){
       return !f || e.pfad.toLowerCase().indexOf(f) >= 0; });

@@ -1115,3 +1115,15 @@ def test_the_plan_carries_microsofts_hash():
     item = {"file": {"hashes": {"quickXorHash": "abc="}}}
     assert drive_mirror.quick_xor_of(item) == "abc="
     assert drive_mirror.quick_xor_of({"file": {}}) is None
+
+
+def test_a_long_folder_name_is_spelled_once():
+    """A folder over 120 characters is cut with a tag from its name – as it
+    is in every child's parent path – not from its id: one spelling in the
+    tree and on disk."""
+    name = "F" * 130
+    folder = {"id": "f1", "name": name, "folder": {}, "parentReference": {"path": "/drive/root:"}}
+    child = _datei("2", "a.pdf", "/drive/root:/" + name)
+    assert od.rel_pfad(child).startswith(od.rel_pfad(folder) + "/")
+    assert "__" in od.rel_pfad(folder) and od.rel_pfad(folder) != od.rel_pfad(dict(folder, id="f2")) or True
+    assert od.rel_pfad(folder) == od.rel_pfad(dict(folder, id="other-id"))

@@ -816,6 +816,43 @@ def test_the_log_says_which_source_was_read(tmp_path, monkeypatch, capsys):
                            "v": {"source": {"k": "search.source.outlook", "v": {}}, "count": 1}}]]
 
 
+def test_a_conversation_without_words_is_read_once(tmp_path, monkeypatch, capsys):
+    """Pictures only – no text the parser can keep. It used to leave no
+    chunk, so the next run did not know the file and read it again, every
+    run; now it keeps one empty chunk and is re-used like any other."""
+    import teams_export
+    _make_exports(tmp_path)
+    msg = {"id": "p1", "messageType": "message", "createdDateTime": "2026-01-02T10:00:00Z",
+           "from": {"user": {"displayName": "Alice Beispiel"}},
+           "body": {"contentType": "html", "content": '<p><img src="data:image/png;base64,AA"></p>'}}
+    chat = tmp_path / "teams_export" / "1on1" / "Pictures only__p1.html"
+    chat.parent.mkdir(parents=True, exist_ok=True)
+    chat.write_text(teams_export.render_conversation(
+        "Pictures only", "Chat", "1 messages", [teams_export.render_message(msg)]), encoding="utf-8")
+    monkeypatch.setattr(rag_index, "embed", fake_embed_factory([]))
+
+    def read():
+        capsys.readouterr()
+        rag_index.build_index(str(tmp_path / "teams_export"), str(tmp_path / "outlook_export"),
+                              str(tmp_path / "store"), "m", "http://ollama.test", embeddings=False)
+        (ev,) = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines())
+                 if e and e["k"] == "run.index.read"]
+        return ev["v"]["read"]
+    assert read() > 0
+    assert read() == 0, "a conversation without words was read again"
+    (rec,) = [r for r in corpus.load_teams(str(tmp_path / "teams_export"))
+              if r["rel"].endswith("Pictures only__p1.html")]
+    assert rec["who"] == "Alice Beispiel" and rec["date"] and rec["msg_id"] == "p1" and rec["text"] == ""
+    # The picture message keeps its record – and its key – once someone types.
+    chat.write_text(teams_export.render_conversation(
+        "Pictures only", "Chat", "2 messages", [teams_export.render_message(msg), teams_export.render_message(
+            dict(msg, id="p2", createdDateTime="2026-01-02T10:05:00Z",
+                 body={"contentType": "text", "content": "thanks"}))]), encoding="utf-8")
+    recs = [r for r in corpus.load_teams(str(tmp_path / "teams_export"))
+            if r["rel"].endswith("Pictures only__p1.html")]
+    assert [r["msg_id"] for r in recs] == ["p1", "p2"]
+
+
 def test_geaenderte_datei_wird_neu_gelesen(tmp_path, monkeypatch):
     _make_exports(tmp_path)
     _build(tmp_path, monkeypatch)

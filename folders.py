@@ -314,7 +314,6 @@ def plan(ordner, regeln, daten=None, endung=".eml", datei=DATEI, archiv=None):
             # last activity of a chat – rides along for the cadence window.
             **({"name": e["name"]} if e.get("name") else {}),
             **({"zuletzt": e["zuletzt"]} if e.get("zuletzt") else {}),
-            **({"urls": e["urls"]} if e.get("urls") else {}),
             "regel": (("+ " if regel[0] else "- ") + regel[1]) if regel else None,
         })
     bekannt = {e["pfad"] for e in eintraege}

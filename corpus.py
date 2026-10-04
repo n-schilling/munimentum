@@ -150,11 +150,12 @@ class ConvParser(HTMLParser):
                 text = " ".join("".join(self._bb).split())
                 name = "".join(self._nb).strip()
                 time = "".join(self._tb).strip()
-                if text:
-                    self.msgs.append({"n": name, "t": time, "x": text,
-                                      "id": getattr(self, "_id", None)})
-                    if getattr(self, "_gone", None):
-                        self.msgs[-1]["gone"] = self._gone
+                # A message without a word – a picture, a file, a card – is
+                # a message: it keeps its sender, time and id (PARSER 5).
+                self.msgs.append({"n": name, "t": time, "x": text,
+                                  "id": getattr(self, "_id", None)})
+                if getattr(self, "_gone", None):
+                    self.msgs[-1]["gone"] = self._gone
                 self._cur = None
             self._depth -= 1
 
@@ -188,6 +189,7 @@ def _teams_file(p_str, root_str):
         pr.finish()
         title, msgs = pr.title, pr.msgs
     except Exception:
+        # Unknown to the index, so the next run reads it again.
         title, msgs = p.stem.rsplit("__", 1)[0], []
     rel = p.relative_to(root).as_posix()
     top = rel.split("/")[0]
@@ -198,7 +200,18 @@ def _teams_file(p_str, root_str):
     # entry per channel – and "1on1" exactly the 1:1 chats.
     ctx = rel.rsplit("/", 1)[0] if "/" in rel else cat
     out = []
-    for i, m in enumerate(msgs):
+    # The position in the uid counts the messages with words, as it did
+    # before wordless ones became records (PARSER 5): a conversation file
+    # from before 11.0 carries no message ids, and its keys fall back to
+    # that position (schluessel.fuer) – they must not shift. The wordless
+    # ones are numbered after them.
+    with_words = sum(1 for m in msgs if m["x"])
+    seen_words = seen_wordless = 0
+    for m in msgs:
+        if m["x"]:
+            i, seen_words = seen_words, seen_words + 1
+        else:
+            i, seen_wordless = with_words + seen_wordless, seen_wordless + 1
         out.append({
             "uid": f"teams:{rel}:{i}", "src": "teams", "root": "teams", "rel": rel,
             "thread": f"chat:{rel}",
@@ -1320,15 +1333,31 @@ def _split(text, size, overlap):
 
 
 def chunk_records(records, size=1500, overlap=200):
-    """One message/mail = base unit; long texts into overlapping pieces."""
+    """One message/mail = base unit; long texts into overlapping pieces.
+
+    A mail without a word of text is still a mail, a OneNote page of ink
+    alone still a page: one empty chunk, so its subject, sender and date
+    can be found – and the next index run knows the file instead of
+    reading it again. A Teams message without
+    words – a picture, a file, a card – gets none: its empty chunk would
+    carry nothing but the chat's title and sender, and a search for a
+    partner's name would list every picture of the chat first. Only a
+    conversation with no words at all keeps one empty chunk, on its first
+    message, so the next index run knows the file instead of reading it
+    again."""
     chunks = []
-    for r in records:
-        parts = _split(r["text"], size, overlap)
-        if not parts and r.get("src") == "outlook":
-            # A mail without a word of text is still a mail: one chunk, so
-            # its subject, people and attachments can be found – and so the
-            # next index run knows the file instead of reading it again.
-            parts = [""]
+    pieces = [_split(r["text"], size, overlap) for r in records]
+    files_with_words = {r["rel"] for r, parts in zip(records, pieces, strict=True)
+                        if parts and r.get("src") == "teams"}
+    covered = set()
+    for r, parts in zip(records, pieces, strict=True):
+        if not parts:
+            if r.get("src") in ("outlook", "onenote"):
+                parts = [""]
+            elif (r.get("src") == "teams" and r["rel"] not in files_with_words
+                  and r["rel"] not in covered):
+                covered.add(r["rel"])
+                parts = [""]
         for j, part in enumerate(parts):
             c = dict(r)
             c.pop("text", None)

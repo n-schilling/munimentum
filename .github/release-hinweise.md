@@ -1,16 +1,22 @@
-## New in 14.1.1
+## New in 14.2.0
 
-- **A run's log reads more easily** – counts are grouped like the result
-  lines, one item is named in the singular, and what did not happen
-  (“0 changed”, “moved 0”) is left out. A mail folder or a calendar with
-  changes gets one line, a SharePoint site reached by many addresses too.
-- **The index says what it read again** – beside the number of files it
-  read, a line names the sources they came from.
+- **SharePoint addresses as a tree** – paste a site, a subsite, a library
+  or a folder in one, and it files itself under its site and library.
+  Every address keeps its own cadence and *Sync now*, and a library named
+  only through folders is never mirrored whole by accident.
+- **A conversation without words is read once** – a chat of pictures,
+  files or cards alone used to be read again by every index run.
 
 ## Upgrading
 
-Nothing happens once after this update; runs logged before it read as
-they did.
+The first index run after this update reads every file once, because the
+readers changed; what it computed before is reused.
+
+A SharePoint line that reaches no library – a typo, a name the address does
+not carry – used to bring the whole site along; now the run skips it and
+says so in the log, and names any library in the archive that no line
+reaches any more. A site address and an address on one of its libraries:
+the library's own cadence now wins over the site's.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

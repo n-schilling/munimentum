@@ -859,5 +859,55 @@ def test_a_mail_without_any_text_still_gives_one_chunk():
     rec = {"uid": "outlook:a.eml:0", "src": "outlook", "rel": "a.eml", "title": "Nur ein Bild", "text": ""}
     chunks = corpus.chunk_records([rec])
     assert len(chunks) == 1 and chunks[0]["text"] == "" and chunks[0]["title"] == "Nur ein Bild"
-    # Other sources keep leaving an empty record out.
-    assert corpus.chunk_records([{**rec, "src": "teams", "uid": "teams:a:0"}]) == []
+    # A conversation of pictures likewise; other sources keep leaving an
+    # empty record out.
+    assert len(corpus.chunk_records([{**rec, "src": "teams", "uid": "teams:a:0"}])) == 1
+    assert corpus.chunk_records([{**rec, "src": "onedrive", "uid": "onedrive:a:0"}]) == []
+
+
+def test_wordless_messages_count_after_the_ones_with_words(tmp_path):
+    """The uid position counts the messages with words, as before PARSER 5:
+    a conversation file from before 11.0 carries no message ids, its keys
+    fall back to that position (schluessel.fuer), and a picture in front
+    must not shift them. A wordless message gets no chunk of its own – its
+    empty chunk would make every picture a hit for the chat's name – and a
+    conversation without any words keeps one, on its first message."""
+    import re
+    import teams_export
+
+    def msg(i, content, ctype="text"):
+        return {"id": f"m{i}", "messageType": "message", "createdDateTime": f"2026-01-02T10:0{i}:00Z",
+                "from": {"user": {"displayName": "Alice Beispiel"}},
+                "body": {"contentType": ctype, "content": content}}
+    picture = '<p><img src="data:image/png;base64,AA"></p>'
+    root = tmp_path / "teams_export"
+    chat = root / "1on1" / "Alice Beispiel__c1.html"
+    chat.parent.mkdir(parents=True)
+    html = teams_export.render_conversation("Alice Beispiel", "Chat", "3 messages", [
+        teams_export.render_message(msg(1, picture, "html")),
+        teams_export.render_message(msg(2, "Thanks, looks good")),
+        teams_export.render_message(msg(3, "Signed off"))])
+    chat.write_text(re.sub(r' data-id="[^"]*"', "", html), encoding="utf-8")   # as a file from before 11.0
+    recs = corpus._teams_file(str(chat), str(root))
+    assert [(r["uid"].rsplit(":", 1)[1], r["text"]) for r in recs] == [
+        ("2", ""), ("0", "Thanks, looks good"), ("1", "Signed off")]
+    assert all(r["msg_id"] is None for r in recs)
+    chunks = corpus.chunk_records(recs)
+    assert [c["text"] for c in chunks] == ["Thanks, looks good", "Signed off"], "a picture got a chunk of its own"
+    only = root / "1on1" / "Pictures__c2.html"
+    only.write_text(teams_export.render_conversation("Pictures", "Chat", "2 messages", [
+        teams_export.render_message(msg(1, picture, "html")),
+        teams_export.render_message(msg(2, picture, "html"))]), encoding="utf-8")
+    recs = corpus._teams_file(str(only), str(root))
+    chunks = corpus.chunk_records(recs)
+    assert len(recs) == 2 and [c["uid"] for c in chunks] == [recs[0]["uid"]] and chunks[0]["text"] == ""
+
+
+def test_a_page_without_text_keeps_one_empty_chunk():
+    """A OneNote page of ink alone is still a page: one empty chunk, so the
+    next index run knows the file – like a mail without words."""
+    page = {"src": "onenote", "root": "onenote", "rel": "Nordwind/Ink.html", "uid": "onenote:Nordwind/Ink.html:0",
+            "title": "Ink", "text": ""}
+    (chunk,) = corpus.chunk_records([page])
+    assert chunk["text"] == "" and chunk["cid"] == "onenote:Nordwind/Ink.html:0#0"
+    assert corpus.chunk_records([dict(page, src="pages", uid="pages:x:0")]) == []

@@ -47,6 +47,18 @@ def konfig_aendern(h, _p, _q, data):
     return api.json({"config": konfig_speichern(h, data)["config"]})
 
 
+def _folder_address(key):
+    """A "sharepoint-url:<url>" whose path reaches below a library – as
+    far as the address tells: a library in a subsite looks the same, and
+    there "inherit" means the library has no cadence of its own
+    (sharepoint_export.resolve_drives)."""
+    if not key.startswith("sharepoint-url:"):
+        return False
+    import sharepoint_export                # its import guard may exit: never at load
+    parts = sharepoint_export.url_teile(key[len("sharepoint-url:"):])
+    return bool(parts and len(parts[1]) >= 2)
+
+
 def konfig_speichern(h, data):
     def uebernehmen(cfg):
         if "outlook_categories" in data:
@@ -176,9 +188,12 @@ def konfig_speichern(h, data):
             if key in data:
                 cfg[key] = str(data[key] or "").strip()
         if "sync_cadence" in data and isinstance(data["sync_cadence"], dict):
+            # "inherit": a SharePoint folder address taking its library's –
+            # only an address below a library has one to take it from.
             cfg["sync_cadence"] = {
                 str(k): v for k, v in data["sync_cadence"].items()
-                if v in ("always", "daily", "weekly", "monthly")}
+                if v in ("always", "daily", "weekly", "monthly")
+                or (v == "inherit" and _folder_address(str(k)))}
         if "notifications" in data:
             wert = str(data["notifications"] or "").strip().lower()
             if wert in ("off", "errors", "all"):

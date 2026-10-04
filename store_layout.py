@@ -55,7 +55,11 @@ MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 #   4  a mail always gives a chunk: an invitation its description, an
 #      empty plain part the HTML beside it, a forward without own words
 #      its quote, and a mail with no text at all its subject and people
-PARSER = 4
+#   5  a Teams message without a word – a picture, a file – is a record
+#      too, with its sender, time and id: a conversation of them alone was
+#      read again on every run, and its one record changed identity as
+#      soon as someone typed
+PARSER = 5
 
 
 def parser_stand(store):
