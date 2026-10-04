@@ -350,6 +350,11 @@ def test_log_lines_render_on_the_server_as_on_the_page():
     # Only the unit follows the count: a name beside it stays as it is.
     assert line("en", "run.scanned_in", values={"name": {"k": "progress.unit.mails", "v": {}},
                                                  "n": 1, "unit": unit}) == "mails: 1 mail seen."
+    # One person asked for a manager is "1 person", not "1 people".
+    assert line("en", "run.org.managers", values={"n": 1, "asked": 1, "found": 0, "fetched": 0}) \
+        == "Organization: 1 person without a manager asked directly, 0 found; 0 fetched."
+    assert line("en", "run.org.managers", values={"n": 3, "asked": 3, "found": 1, "fetched": 1}) \
+        .startswith("Organization: 3 people")
 
 
 def test_a_singular_is_never_borrowed_from_another_language(tmp_path):

@@ -490,7 +490,13 @@ def sweep(data, roots, tsa=None, events=None):
     for rel in sorted(on_disk):
         st = on_disk[rel]
         rec = known.get(rel)
-        if rec and rec["size"] == st.st_size and rec["mtime_ns"] == st.st_mtime_ns:
+        # Unchanged by size and time: nothing to hash – unless the journal
+        # announced a write. A mirror sets a file's time from Microsoft, so
+        # a re-download with other bytes can keep size and time alike; its
+        # line must still reach the chain, or the check would report the
+        # file changed for good while nothing lies there but what the app
+        # itself wrote.
+        if rec and rel not in writes and rec["size"] == st.st_size and rec["mtime_ns"] == st.st_mtime_ns:
             continue
         try:
             sha = versions.sha256_file(data / rel)
@@ -598,6 +604,47 @@ def walk_chain(ev, want=()):
         ok, broken_at = False, n
     return {"ok": ok, "broken_at": broken_at, "lines": n, "since": first_at,
             "found": found, "stamps": stamps}
+
+
+def accept(data, rels):
+    """The archive's keeper vouches for files as they lie: for each `rel`
+    whose bytes differ from the chain's last line, one line of kind
+    "accepted" with today's checksum and the one the chain held (`was`)
+    – so the history says the record changed on someone's word, not on
+    an export's, and the check reads the file as unchanged from here on.
+    A file already as recorded only gets its size and time noted. Returns
+    {"accepted": [...], "unknown": [...]}: unknown is what the chain never
+    held, what is not on disk, or what points outside the archive."""
+    data = Path(data)
+    ev = Evidence(data)
+    if not ev.exists():
+        return {"accepted": [], "unknown": list(rels)}
+    accepted, unknown = [], []
+    try:
+        known = {r["rel"]: dict(r) for r in ev.db().execute("SELECT * FROM files")}
+        for rel in rels:
+            rec, path = known.get(rel), data / rel
+            if rec is None or versions.rel_of(path, data) != rel or not path.is_file() or is_bookkeeping(path):
+                unknown.append(rel)
+                continue
+            st = path.stat()
+            try:
+                sha = versions.sha256_file(path)
+            except OSError:
+                unknown.append(rel)
+                continue
+            if sha == rec["sha256"]:
+                ev.db().execute("UPDATE files SET size = ?, mtime_ns = ? WHERE rel = ?",
+                                (st.st_size, st.st_mtime_ns, rel))
+            else:
+                ev.append({"kind": "accepted", "rel": rel, "sha256": sha, "was": rec["sha256"],
+                           "size": st.st_size, "mtime_ns": st.st_mtime_ns,
+                           "modified": _mtime_iso(st.st_mtime_ns)})
+            accepted.append(rel)
+        ev.flush()
+    finally:
+        ev.close()
+    return {"accepted": accepted, "unknown": unknown}
 
 
 def verify(data, roots=None, events=None):

@@ -11127,3 +11127,61 @@ def test_the_api_modules_import_no_export_module_at_load():
         top = [a.name for n in tree.body if isinstance(n, ast.Import) for a in n.names]
         top += [n.module for n in tree.body if isinstance(n, ast.ImportFrom) and n.module]
         assert not [m for m in top if m in scripts], (name, top)
+
+
+def test_http_evidence_accept_records_changed_files_on_the_keepers_word(server, sandbox, monkeypatch):
+    """POST /evidence/accept: a chain line per changed file, the check
+    reads it as unchanged afterwards; refused with a bad body and while a
+    job is on; paths the chain never held or that point outside come back
+    as unknown."""
+    import evidence
+    a, port = server
+    out = sandbox / app_mod.OUTLOOK_DIR / "E-Mail" / "Posteingang"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "a.eml").write_bytes(b"x")
+    evidence.sweep(sandbox, [sandbox / app_mod.OUTLOOK_DIR])
+    (out / "a.eml").write_bytes(b"y")
+    rel = f"{app_mod.OUTLOOK_DIR}/E-Mail/Posteingang/a.eml"
+    assert evidence.verify(sandbox)["changed_n"] == 1
+    for body in ({"rels": "x"}, {"rels": []}, {"rels": [rel, 3]}, {}):
+        code, r = call(port, "POST", "/api/v1/evidence/accept", body)
+        assert code == 400 and r["error"]["k"] == "srv.evidence.badrels", body
+    code, r = call(port, "POST", "/api/v1/evidence/accept", {"rels": [rel, "../nope", "nope.eml"]})
+    assert code == 200 and r == {"accepted": [rel], "unknown": ["../nope", "nope.eml"]}
+    assert evidence.verify(sandbox)["changed_n"] == 0
+    monkeypatch.setattr(type(a.jobs), "busy", property(lambda self: True))
+    assert call(port, "POST", "/api/v1/evidence/accept", {"rels": [rel]})[0] == 409
+
+
+# The findings window's "Record as they lie": the button counts the changed
+# files, asks, posts them, and the row counts them as unchanged afterwards.
+PRUEFUNG_EVIDENCE_ACCEPT = GRUNDZUSTAND + r"""
+process.on('unhandledRejection', function(e){ console.error('unhandled: ' + e); process.exit(1); });
+ARCHIV = {nachweis: {exists: true, chain_ok: true, unchanged: 5, changed_n: 2, missing_n: 0, ms_mismatch_n: 0, outside: [],
+  changed: [{rel: 'onedrive_export/a.txt', captured: '2026-09-23T15:56:00Z', modified: '2025-08-14T12:32:00Z'},
+            {rel: 'sharepoint_export/S/L/Dateien/b.docx', captured: '2026-09-23T15:56:00Z', modified: '2025-08-14T12:32:00Z'}],
+  missing: [], ms_mismatch: []}};
+var posted = null, asked = 0, said = '';
+confirm = function(text){ asked++; return text.indexOf('2') >= 0; };
+post = function(p, body){ posted = {p: p, body: body}; return Promise.resolve({accepted: [body.rels[0]], unknown: [body.rels[1]]}); };
+meldung = function(text){ said = text; };
+evidenceFindings();
+var html = el('modal').innerHTML;
+pruefe(html.indexOf(t('ana.evidence.accept', {n: 2})) >= 0, 'no button to record the files: ' + html.slice(0, 300));
+evidenceAccept();
+pruefe(asked === 1 && posted && posted.p.indexOf('/evidence/accept') > 0 && posted.body.rels.length === 2, 'not asked, or not posted: ' + JSON.stringify(posted));
+setTimeout(function(){
+  var n = ARCHIV.nachweis;
+  pruefe(n.changed.length === 1 && n.changed[0].rel === 'sharepoint_export/S/L/Dateien/b.docx' && n.changed_n === 1 && n.unchanged === 6, 'the row did not take the record: ' + JSON.stringify(n));
+  pruefe(said === t('ana.evidence.accepted.one'), 'not said: ' + said);
+  // Without the changed list the button is not there.
+  ARCHIV.nachweis.changed = [];
+  evidenceFindings();
+  pruefe(el('modal').innerHTML.indexOf('evidenceAccept') < 0, 'a button with nothing to record');
+  console.log('OK');
+}, 0);
+"""
+
+
+def test_the_findings_window_can_record_changed_files_as_they_lie():
+    _in_node(PRUEFUNG_EVIDENCE_ACCEPT, sprache="en")

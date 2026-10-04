@@ -128,14 +128,14 @@ original's checksum; *Delete case* touches nothing in the archive.
 
 ### Insights
 
-What the archive holds, computed once per index run: messages, people and
-period, the mirrored files, disk usage, and the **gaps** — months with no
-message at all. On request a **completeness balance** against Microsoft for
-the sources you tick: what is here, still open, excluded, deleted but kept,
-and what Microsoft refuses to hand out; *Fetch now* fetches what a row found
-open. **Archive and bookkeeping** checks each export and its checksums
-against the disk, asking nobody, and offers one action per finding — each
-asks first, none deletes. **Runs** keeps every run with its log.
+What the archive holds, computed per index run: messages, people and period,
+the mirrored files, disk usage, and the **gaps** — months without a message.
+On request a **completeness balance** against Microsoft for the sources you
+tick: what is here, open, excluded, deleted but kept, and what Microsoft
+refuses to hand out; *Fetch now* fetches what a row found open. **Archive and
+bookkeeping** checks every export and its checksums against the disk, asking
+nobody; a finding is fetched again, noted, or recorded as it lies — each asks
+first, none deletes. **Runs** keeps every run with its log.
 
 ### Settings
 

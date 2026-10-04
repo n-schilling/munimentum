@@ -1,22 +1,18 @@
-## New in 14.2.0
+## New in 14.2.1
 
-- **SharePoint addresses as a tree** – paste a site, a subsite, a library
-  or a folder in one, and it files itself under its site and library.
-  Every address keeps its own cadence and *Sync now*, and a library named
-  only through folders is never mirrored whole by accident.
-- **A conversation without words is read once** – a chat of pictures,
-  files or cards alone used to be read again by every index run.
+- **A changed file can be recorded as it lies** – the evidence findings
+  offer it, with a question first: the chain gets a line per file naming
+  the checksum before and after, on your word.
+- **A re-download with the same size and date reaches the chain** – it
+  used to slip past the evidence step, and the check reported the file
+  changed from then on, whatever you fetched.
+- **Logs**: one person asked for a manager is “1 person”.
 
 ## Upgrading
 
-The first index run after this update reads every file once, because the
-readers changed; what it computed before is reused.
-
-A SharePoint line that reaches no library – a typo, a name the address does
-not carry – used to bring the whole site along; now the run skips it and
-says so in the log, and names any library in the archive that no line
-reaches any more. A site address and an address on one of its libraries:
-the library's own cadence now wins over the site's.
+Nothing happens once after this update. A file the check has been
+reporting changed since a re-download is settled once with the new
+*Record as it lies* in its findings window.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

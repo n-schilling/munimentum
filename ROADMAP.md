@@ -15,6 +15,12 @@ the code, not here.
 * **Searching file contents.** The index knows file names, not what is in
   them. Deliberately parked: extraction is a heavy step, and whether the
   archive needs it at all is not settled yet.
+* **A new folder address without a full walk.** Adding a folder address to
+  a SharePoint library changes the library's selection, and the next run
+  reads the whole library once to find the folder's files – minutes for
+  a large library, for one folder. Listing only the new subtree and
+  keeping the inventory would make it seconds; a file that already lies
+  there with the same bytes is not written again even today.
 * **Steps of a run in parallel.** The mirrors and the index have other
   budgets than the mailbox and Teams, so they could overlap. Parked: the
   run window, the log order and the disk would all have to learn it, and

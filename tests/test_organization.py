@@ -517,7 +517,9 @@ def test_a_manager_the_feed_left_out_is_asked_for_directly(tmp_path, capsys):
     assert people["x"]["manager"] == "c", "the manager nobody described came along, with his own"
     assert any("/users/c/manager" in u for u in g.batched), "the top is asked too"
     events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
-    assert any(e["k"] == "run.org.managers" and e["v"]["found"] == 2 for e in events)
+    (asked,) = [e for e in events if e["k"] == "run.org.managers"]
+    assert asked["v"]["found"] == 2
+    assert asked["v"]["n"] == asked["v"]["asked"], "the count that leads the line picks its singular"
     # Carla's 404 holds for a week: the next round does not ask her again.
     g2 = _Graph({"deltatoken=abc": {"value": [], "@odata.deltaLink": LINK1}})
     org_export.run(g2, tmp_path)

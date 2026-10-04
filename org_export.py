@@ -208,7 +208,8 @@ def settle_managers(graph, users, now=None, rounds=12):
                 first = first or _answer_text(status, body)
         total["asked"] += len(asked)
         total["fetched"] += len(fetched)
-    progress.event("run.org.managers", **total)
+    # `n` is what leads the sentence – the singular rule of the log reads it.
+    progress.event("run.org.managers", n=total["asked"], **total)
     if failed:
         # Which answer came, in Graph's own words – the count alone does
         # not say whether a permission is missing or the service hiccupped.

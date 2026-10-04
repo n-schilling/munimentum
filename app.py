@@ -2674,6 +2674,7 @@ ROUTEN_V1 = (
     ("POST", "/api/v1/sources/{source}/open", api_archive.quelle_oeffnen),
     ("QUERY", "/api/v1/sources/{source}/folder-plan", api_archive.quelle_ordnerplan),
     ("GET", "/api/v1/evidence", api_archive.evidence_summary),
+    ("POST", "/api/v1/evidence/accept", api_archive.evidence_accept),
     ("GET", "/api/v1/analytics", api_archive.analytics),
     ("POST", "/api/v1/analytics/refresh", api_archive.analytics_neu),
     ("PATCH", "/api/v1/schedule", api_archive.zeitplan),

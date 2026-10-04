@@ -602,6 +602,19 @@ def evidence_summary(h, _p, _q, _data):
         ev.close()
 
 
+def evidence_accept(h, _p, _q, data):
+    """Files the archive check found changed since they were chained, as
+    the keeper vouches for them: a chain line each with today's checksum
+    and the one before (evidence.accept). The chain is written by runs
+    too, so not while one is on."""
+    rels = data.get("rels")
+    if not isinstance(rels, list) or not rels or not all(isinstance(r, str) and r.strip() for r in rels):
+        raise Ablehnung(400, "srv.evidence.badrels")
+    if h.app.jobs.busy:
+        raise Ablehnung(409, "srv.busy")
+    return api.json(evidence.accept(h.M.BASE, [r.strip() for r in rels]))
+
+
 # The routes of this door, in the order the table in app.py lists them.
 ROUTEN = (
     ("GET", "/api/v1/runs", laeufe),
@@ -618,6 +631,7 @@ ROUTEN = (
     ("POST", "/api/v1/sources/{source}/open", quelle_oeffnen),
     ("QUERY", "/api/v1/sources/{source}/folder-plan", quelle_ordnerplan),
     ("GET", "/api/v1/evidence", evidence_summary),
+    ("POST", "/api/v1/evidence/accept", evidence_accept),
     ("GET", "/api/v1/analytics", analytics),
     ("POST", "/api/v1/analytics/refresh", analytics_neu),
     ("PATCH", "/api/v1/schedule", zeitplan),

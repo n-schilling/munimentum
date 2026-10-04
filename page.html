@@ -8334,8 +8334,27 @@ function evidenceFindings(){
       return '<button class="ghost" onclick="closeWizard(\'evidence-findings\'); archivAktion(&quot;nachholen&quot;, &quot;' + q + '&quot;)">' +
         esc(t('ana.evidence.fetch', {source: t(ARCHIV_TITEL[q] || q)})) + '</button>';
     }).join('') +
+    ((n.changed || []).length ? '<button class="ghost" onclick="evidenceAccept()">' + esc(addrText('ana.evidence.accept', {n: (n.changed || []).length})) + '</button>' : '') +
     '<button class="ghost" onclick="inZwischenablage(BEFUNDE_TEXT, this)">' + esc(t('ana.archiv.findings.copy')) + '</button>' +
     '</div>');
+}
+/* The changed files taken as they lie – on the keeper's word, after the
+   question: the chain gets a line per file with the checksum before and
+   after (evidence.accept), the row counts them as unchanged. A fetch could
+   not settle them: what Microsoft hands out is what lies here already. */
+function evidenceAccept(){
+  var n = (ARCHIV || {}).nachweis || {}, rels = (n.changed || []).map(function(f){ return f.rel; });
+  if(!rels.length || !confirm(addrText('ana.evidence.accept.confirm', {n: rels.length}))) return;
+  post(API + '/evidence/accept', {rels: rels}).then(function(r){
+    if(!r || r.ok === false){ apiFehler(r); return; }
+    var done = r.accepted || [];
+    n.changed = (n.changed || []).filter(function(f){ return done.indexOf(f.rel) < 0; });
+    n.changed_n = Math.max(0, (n.changed_n || 0) - done.length);
+    n.unchanged = (n.unchanged || 0) + done.length;
+    closeWizard('evidence-findings');
+    meldung(addrText('ana.evidence.accepted', {n: done.length}));
+    if(typeof zeichneArchiv === 'function') zeichneArchiv();
+  }).catch(function(){});
 }
 /* A file the findings name, one click from its detail: the path is a
    link that opens the file in Explore – facts, versions, checksums. A file

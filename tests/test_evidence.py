@@ -418,3 +418,46 @@ def test_the_bookkeeping_names_follow_the_app():
     assert combined_search.MANIFEST_DB in evidence.BOOKKEEPING
     assert {folders.DATEI, folders.KALENDER, folders.NOTIZBUECHER} <= evidence.BOOKKEEPING
     assert {n for names in app.ALT_STATE.values() for n in names} <= evidence.BOOKKEEPING
+
+
+def test_a_write_with_the_same_size_and_time_is_still_chained(data, monkeypatch):
+    """A mirror sets a file's time from Microsoft, so a re-download with
+    other bytes can keep size and time alike. It used to slip past the
+    sweep's fast path: the journal's line was dropped, the chain kept the
+    old checksum, and the check reported the file changed for good."""
+    import os
+    p = data / "onedrive_export" / "a.bin"
+    p.write_bytes(b"first")
+    evidence.sweep(data, roots(data))
+    st = p.stat()
+    new_run(monkeypatch)
+    versions.write_bytes(p, b"later")                 # the same length
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))  # the same time
+    evidence.sweep(data, roots(data))
+    last = [d for d in lines(data) if d.get("rel") == "onedrive_export/a.bin"][-1]
+    assert last["kind"] == "write" and last["sha256"] == versions.sha256_file(p)
+    assert evidence.verify(data)["changed_n"] == 0
+
+
+def test_the_keeper_can_record_a_file_as_it_lies(data):
+    """"Record as they lie": a line of kind accepted with the checksum
+    before and after; the check then reads the file as unchanged. What the
+    chain never held, what is not on disk or what points outside the
+    archive is named as unknown, and a file already as recorded gets no
+    second line."""
+    p = data / "onedrive_export" / "a.txt"
+    p.write_text("a", encoding="utf-8")
+    evidence.sweep(data, roots(data))
+    p.write_text("changed by hand", encoding="utf-8")
+    assert evidence.verify(data)["changed_n"] == 1
+    out = evidence.accept(data, ["onedrive_export/a.txt", "onedrive_export/nope.txt", "../outside", "evidence/chain.jsonl"])
+    assert out == {"accepted": ["onedrive_export/a.txt"],
+                   "unknown": ["onedrive_export/nope.txt", "../outside", "evidence/chain.jsonl"]}
+    last = lines(data)[-1]
+    assert last["kind"] == "accepted" and last["was"] and last["sha256"] == versions.sha256_file(p)
+    assert last["was"] != last["sha256"]
+    assert evidence.verify(data)["changed_n"] == 0
+    assert evidence.accept(data, ["onedrive_export/a.txt"]) == {"accepted": ["onedrive_export/a.txt"], "unknown": []}
+    assert lines(data)[-1] == last
+    # The chain still reads through after the keeper's line.
+    assert evidence.verify(data)["chain_ok"]

@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.2.0
+  version: 14.2.1
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -3499,6 +3499,58 @@ paths:
               example: { lines: 41203, head: 7f3a9c5e2b1d4f6a8c0e2d4f6b8a0c2e4d6f8b0a2c4e6d8f0b2a4c6e8d0fc21e, since: '2026-10-01T18:00:00+00:00', stamped: '2027-03-14T18:02:00+00:00', versions: 1350, versions_bytes: 2254857830 }
         "403": { $ref: "#/components/responses/Forbidden" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/evidence/accept:
+    post:
+      tags: [Archive, POST]
+      operationId: v1AcceptEvidence
+      summary: Record changed files as they lie
+      description: |
+        The files the archive check found changed since they were chained,
+        taken as they are today on the keeper's word: the chain gets one
+        line per file (kind `accepted`) with today's checksum and the one it
+        held before, so the history says who changed the record, and the
+        check reads the file as unchanged from here on. Nothing on disk
+        changes. Refused while a run is on – runs write the chain too.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rels]
+              properties:
+                rels:
+                  type: array
+                  minItems: 1
+                  items: { type: string }
+                  description: "The files as the check names them – paths below the data folder (`outlook_export/…`)."
+            example: { rels: ["onedrive_export/Dateien/Reports/q3.docx"] }
+      responses:
+        "200":
+          description: Which files were recorded, and which the chain never held, are not on disk or point outside the archive.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  accepted: { type: array, items: { type: string } }
+                  unknown: { type: array, items: { type: string } }
+              example: { accepted: ["onedrive_export/Dateien/Reports/q3.docx"], unknown: [] }
+        "400":
+          description: "`rels` missing, empty or not a list of paths (srv.evidence.badrels)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409":
+          description: A run is on (srv.busy).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /api/v1/analytics:
