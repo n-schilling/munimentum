@@ -54,7 +54,7 @@ because any one source can mean tens of thousands of items.
 
 | Source | What comes along |
 |---|---|
-| **Mail, calendar, contacts** | every folder you choose as `.eml`, `.ics`, `.vcf`; the calendar as a window of months back plus everything ahead |
+| **Mail, calendar, contacts** | every folder you choose as `.eml`, `.ics`, `.vcf`; the calendar as a window of months back plus everything ahead, a series as one file with its exceptions |
 | **Teams** | 1:1, group, meeting and channel chats as readable HTML; on request the files shared in them and the channels' file folders, minus the extensions you exclude (links to SharePoint pages from the start) |
 | **OneDrive** | a mirror of your files, each held against Microsoft's own checksum, earlier versions kept |
 | **SharePoint** | libraries – or single folders in them – behind the addresses you paste, each with its own cadence, with type filters, a size cap and a size preview; the sites' pages as standalone HTML |
@@ -101,10 +101,10 @@ A result has **three views**: *List*, the page the search answered;
 narrows the rows to one; and *People*, everyone the hits name by their last
 contact, *external* marked. The last two take the whole result.
 
-**Calendar** shows the appointments by week or month, those recovered from
-invitation mails among them. **Contacts** merges the Outlook address book
-with everyone found in the communication, as a list or as that picture.
-**Files** walks the mirrored drives, originals one click away.
+**Calendar** shows the appointments by week or month: every date of a series,
+deleted ones marked, those recovered from invitation mails. **Contacts** merges
+the Outlook address book with everyone found in the communication, as a list or
+as that picture. **Files** walks the mirrored drives, originals one click away.
 
 ### Cases
 

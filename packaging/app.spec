@@ -91,6 +91,10 @@ for paket in ("mcp", "uvicorn", "starlette", "pydantic", "msal", "requests"):
         datas += copy_metadata(paket)
     except Exception:                 # package not installed: then not needed either
         pass
+# The time zones a series of appointments counts on (recurrence.py) come
+# from the system's database – which Windows has none of: there the tzdata
+# package (requirements.txt) stands in, and PyInstaller's own hooks bundle
+# it on Windows alone (hook-zoneinfo names it, hook-tzdata collects it).
 
 a = Analysis(                          # noqa: F821
     [str(ROOT / "app.py")],

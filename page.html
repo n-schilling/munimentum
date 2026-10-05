@@ -554,6 +554,7 @@ details.verlauf .vzeile.aus{opacity:.55;cursor:default}
 .ev.cancelled{border-left-color:var(--ev-bad);background:var(--ev-bad-bg);text-decoration:line-through;opacity:.75}
 .ev.deleted{border:1px dashed var(--ev-bad);border-left-width:3px;background:var(--ev-bad-bg);text-decoration:line-through;opacity:.85}
 .ev.gone{border:1px dashed var(--ev-gone);border-left-width:3px;background:var(--ev-gone-bg);color:var(--muted)}
+.ev.removed{border:1px dashed var(--ev-gone);border-left-width:3px;background:var(--ev-gone-bg);color:var(--muted);text-decoration:line-through}
 .mo .day{min-height:96px}
 @media(max-width:820px){.wk,.mo{grid-template-columns:minmax(0,1fr)}.dowrow{display:none}
   .day{min-height:0}.dnum .wd{display:inline}}
@@ -7159,7 +7160,7 @@ var DAYMS = 86400000;
 /* Weekday and month names come from the browser for the chosen language –
    they do not belong in the language files. */
 var WD = wochentage(), MON = monatsnamen();
-var STATI = ['confirmed','tentative','cancelled','deleted','gone'];
+var STATI = ['confirmed','tentative','cancelled','deleted','gone','removed'];
 function wochentage(){
   var f = new Intl.DateTimeFormat(LOC, {weekday: 'short'});
   return [0,1,2,3,4,5,6].map(function(i){ return f.format(new Date(Date.UTC(2024, 0, 1 + i))); });
@@ -7268,7 +7269,7 @@ function evHtml(r){
              r.who ? t('cal.tip.organizer', {v: r.who}) : '',
              (r.att && r.att.length) ? t('cal.tip.attendees', {v: r.att.join(', ')}) : '',
              r.ctx].filter(Boolean).join('\n');
-  var rek = st === 'deleted' || st === 'gone';       // recovered from a mail, not in the calendar export
+  var rek = st === 'deleted' || st === 'gone';       // recovered from a mail – a removed one has its file
   return '<a class="ev ' + st + '" href="' + quelle(r) + '" target="_blank" rel="noopener" title="' +
          esc(tip) + '">' + (rek ? ikon('mail', 'klein') + ' ' : '') + '<span class="evt">' + esc(evTime(r)) + '</span> ' + esc(r.title) + '</a>';
 }

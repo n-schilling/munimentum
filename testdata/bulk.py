@@ -10,7 +10,9 @@ five faces.
 
 This module writes that size. Every list in `sources.py` ends with what
 one of these generators produced: a year of everyday traffic among the
-same cast, over the same eight sources, FACTOR times the story's volume.
+same cast, over the same eight sources, FACTOR times the story's volume –
+the calendar thicker still (CALENDAR_FACTOR), with FACTOR series of
+every pattern Graph knows on top.
 
 Two rules keep it honest:
 
@@ -23,10 +25,12 @@ Two rules keep it honest:
   what testdata/people.py promises for the dates holds for the rest.
 """
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
+import outlook_export
+import recurrence
 from testdata import people
-from testdata.people import day
+from testdata.people import day, graph_node
 
 # How much bigger than the hand-written story the archive is. One number:
 # the generators derive their counts from the lists they extend, so
@@ -44,7 +48,7 @@ OUTSIDE = people.EXTERNALS
 RESERVED = frozenset("""
 ostwind offer 4711 proposal budget approved rollout printer mapping
 protocol framework agreement executive summary visitor badge workshop
-canteen blueprint warranty whiteboard quayside
+canteen blueprint warranty whiteboard quayside lunch opener
 """.split())
 
 # The other matters the archive knows: enough of them that a filter has
@@ -323,6 +327,13 @@ def mails(count):
 # ---------------------------------------------------------------------------
 # Calendar
 # ---------------------------------------------------------------------------
+# A calendar is denser than the rest of the traffic: a working week holds
+# several appointments a day, and the series among them – the weekly
+# sync, the monthly figures, the standup – make most of the dates one
+# sees. The single appointments come CALENDAR_FACTOR times as thick as
+# FACTOR alone would make them; the series are a list of their own.
+CALENDAR_FACTOR = 3
+
 MEETINGS = [
     ("Weekly {project}", "Online", 30),
     ("{project} planning", "Meeting room 3", 60),
@@ -332,17 +343,35 @@ MEETINGS = [
     ("Service call {project}", "Online", 30),
     ("Site walk {site}", "Site {site}", 120),
     ("Training {project}", "Training room", 180),
+    ("Interview with {person}", "Meeting room 1", 45),
+    ("Supplier visit {company}", "Site {site}", 120),
+    ("Kick-off {project}", "Meeting room 3", 90),
+    ("Status {project} with {company}", "Online", 30),
+    ("Travel to {site}", "On the road", 240),
+    ("Audit {site}", "Site {site}", 180),
+    ("Demo {project}", "Showroom", 60),
+    ("Retrospective {project}", "Meeting room 2", 60),
 ]
 
 CALENDARS = ["Calendar", "Team", "Travel"]
 
+# Where the cast's series are counted, as Graph names a zone: most of
+# them at home, a few on a partner's clock – the view has to unfold
+# every one of them on its own wall clock, across the clock changes.
+# Seven of them, so the zones do not cycle in step with the ten kinds.
+ZONES = ["W. Europe Standard Time"] * 3 + ["GMT Standard Time", "Eastern Standard Time",
+                                           "India Standard Time", "UTC"]
+
 
 def events(make, count):
     """Appointments over the year, in three calendars: the own one, the
-    team's and what takes the owner out of the house."""
+    team's and what takes the owner out of the house – in working hours,
+    which the spread alone would not keep. Every seventh is tentative,
+    every nineteenth was cancelled, every thirty-seventh takes the whole
+    day."""
     out = []
     for n in range(count):
-        when = _spread(n, count).replace(minute=0 if n % 2 else 30)
+        when = _spread(n, count).replace(hour=7 + n % 11, minute=0 if n % 2 else 30)
         titel, where, minutes = MEETINGS[n % len(MEETINGS)]
         ctx = _context(n, when)
         organizer = people.ME if n % 3 == 0 else _person(n)
@@ -355,7 +384,140 @@ def events(make, count):
             titel.format(**ctx), when, minutes, organizer, attendees,
             location=where.format(**ctx),
             body=f"{titel.format(**ctx)} – {ctx['project']}, {ctx['site']}.",
-            all_day=all_day)))
+            all_day=all_day, show_as="tentative" if n % 7 == 3 else "busy",
+            cancelled=n % 19 == 11)))
+    return out
+
+
+# The series: Graph's six patterns and three kinds of range, the way a
+# real calendar mixes them. Each entry names its title, place, length and
+# a rule builder (n, moment) -> (pattern, range); an all-day kind says so.
+# Graph's day names by the RRULE's – the export's own table, inverted.
+_DAY_NAMES = {short: name for name, short in outlook_export._WD.items()}
+
+
+def _day_name(n):
+    return _DAY_NAMES[recurrence.WEEKDAYS[n % 5]]
+
+
+def _turn(n):
+    """Which round through the kinds a series belongs to: the kinds cycle
+    with ten, so a weekday or an ordinal taken from n alone would give
+    every series of a kind the same one – every sync on Monday."""
+    return n // len(SERIES_KINDS)
+
+
+SERIES_KINDS = [
+    {"title": "Sync {project}", "where": "Online", "minutes": 30,
+     "rule": lambda n, m: ({"type": "weekly", "interval": 1, "daysOfWeek": [_day_name(_turn(n))]},
+                           {"type": "noEnd"})},
+    {"title": "1:1 with {person}", "where": "Meeting room 1", "minutes": 30,
+     "rule": lambda n, m: ({"type": "weekly", "interval": 2, "daysOfWeek": [_day_name(_turn(n) + 1)]},
+                           {"type": "endDate"})},
+    {"title": "Standup {project}", "where": "Online", "minutes": 15,
+     "rule": lambda n, m: ({"type": "weekly", "interval": 1,
+                            "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"]},
+                           {"type": "numbered", "numberOfOccurrences": 40})},
+    {"title": "Figures {project}", "where": "Carla's office", "minutes": 60,
+     "rule": lambda n, m: ({"type": "absoluteMonthly", "interval": 1, "dayOfMonth": 1 + n % 27},
+                           {"type": "noEnd"})},
+    {"title": "Steering {project}", "where": "Meeting room 2", "minutes": 90,
+     "rule": lambda n, m: ({"type": "relativeMonthly", "interval": 1, "daysOfWeek": [_day_name(_turn(n) + 2)],
+                            "index": ["first", "second", "third", "last"][_turn(n) % 4]},
+                           {"type": "endDate"})},
+    {"title": "Training block {site}", "where": "Training room", "minutes": 180,
+     "rule": lambda n, m: ({"type": "daily", "interval": 1},
+                           {"type": "numbered", "numberOfOccurrences": 5})},
+    {"title": "Home office", "where": "", "minutes": 0, "all_day": True,
+     "rule": lambda n, m: ({"type": "weekly", "interval": 1, "daysOfWeek": [_day_name(_turn(n) + 3)]},
+                           {"type": "noEnd"})},
+    {"title": "Founding day {company}", "where": "", "minutes": 0, "all_day": True,
+     "rule": lambda n, m: ({"type": "absoluteYearly", "interval": 1, "month": m.month,
+                            "dayOfMonth": min(m.day, 28)},
+                           {"type": "noEnd"})},
+    {"title": "Quarterly review {company}", "where": "Meeting room 3", "minutes": 120,
+     "rule": lambda n, m: ({"type": "absoluteMonthly", "interval": 3, "dayOfMonth": 1 + n % 27},
+                           {"type": "numbered", "numberOfOccurrences": 8})},
+    {"title": "Shift plan {site}", "where": "Site {site}", "minutes": 45,
+     "rule": lambda n, m: ({"type": "weekly", "interval": 2, "daysOfWeek": ["monday", "wednesday", "friday"],
+                            "firstDayOfWeek": "sunday"},
+                           {"type": "noEnd"})},
+]
+
+
+def _utc(when):
+    """An occurrence as Graph states it: its start in UTC, naive."""
+    if isinstance(when, datetime):
+        return when.astimezone(UTC).replace(tzinfo=None)
+    return datetime(when.year, when.month, when.day)
+
+
+def _occurrence_key(when):
+    """An occurrence as the series book keys it – through the export's own
+    reading of a Graph node."""
+    return outlook_export._iso_utc(graph_node(_utc(when))["dateTime"])
+
+
+def series(make, count):
+    """Series over the year, `count` of them, through the kinds above in
+    turn and on the zones in turn. Every third has one date moved an hour
+    and into another room, every fourth one date cancelled, every fifth
+    one date taken out – at a date the rule really makes: the rule is
+    built by the export's own builder and unfolded by the view's own
+    reader, so the book's keys land on the dates the view will show."""
+    out = []
+    for n in range(count):
+        kind = SERIES_KINDS[n % len(SERIES_KINDS)]
+        zone_name = ZONES[n % len(ZONES)]
+        tz = recurrence.zone(zone_name)
+        moment = _spread(n, count)
+        ctx = _context(n, moment)
+        title, where = kind["title"].format(**ctx), kind["where"].format(**ctx)
+        all_day = kind.get("all_day", False)
+        pattern, rng = kind["rule"](n, moment)
+        rec = {"pattern": pattern, "range": rng}
+        if all_day:
+            candidate = moment.date()
+        else:
+            candidate = datetime(moment.year, moment.month, moment.day, 8 + (n + _turn(n)) % 9,
+                                 30 * (n % 2), tzinfo=tz)
+        rule = recurrence.parse_rrule(outlook_export.build_rrule(rec, all_day, tz))
+        dates = recurrence.expand(candidate, rule, cap=12)
+        first = dates[0]
+        if rng["type"] == "endDate":
+            rng["startDate"] = (first if all_day else first.date()).isoformat()
+            rng["endDate"] = ((first if all_day else first.date()) + timedelta(days=300)).isoformat()
+            rng["recurrenceTimeZone"] = zone_name
+        minutes = kind["minutes"]
+        book = {"occ": {}, "ex": {}, "del": []}
+        changed = (_utc(first) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # A yearly series has its dates years apart: its changes sit on the
+        # next ones, where the view still unfolds them (recurrence.horizon).
+        yearly = pattern["type"] in ("absoluteYearly", "relativeYearly")
+        at_moved, at_cancelled, at_out = (1, 1, 1) if yearly else (2, 3, 1)
+        if n % 3 == 0 and not all_day and len(dates) > at_moved:
+            moved = _utc(dates[at_moved]) + timedelta(hours=1)
+            book["ex"][_occurrence_key(dates[at_moved])] = {
+                "subject": title, "isAllDay": False, "start": graph_node(moved),
+                "end": graph_node(moved + timedelta(minutes=minutes)), "location": "Meeting room 1",
+                "isCancelled": False, "showAs": "busy", "lastModifiedDateTime": changed}
+        if n % 4 == 1 and len(dates) > at_cancelled:
+            at = _utc(dates[at_cancelled])
+            book["ex"][_occurrence_key(dates[at_cancelled])] = {
+                "subject": title, "isAllDay": all_day, "start": graph_node(at),
+                "end": graph_node(at + timedelta(minutes=minutes or 1440)), "location": where,
+                "isCancelled": True, "showAs": "busy", "lastModifiedDateTime": changed}
+        if n % 5 == 2 and len(dates) > at_out and _occurrence_key(dates[at_out]) not in book["ex"]:
+            book["del"].append(_occurrence_key(dates[at_out]))
+        organizer = people.ME if n % 3 == 0 else _person(n)
+        attendees = [_person(n + 1), _person(n + 4)]
+        if organizer is not people.ME:
+            attendees = [people.ME, _person(n + 2)]
+        out.append((CALENDARS[n % len(CALENDARS)], make(
+            f"bulk-series-{n:03d}", CALENDARS[n % len(CALENDARS)], title, _utc(first),
+            minutes, organizer, attendees, location=where,
+            body="" if all_day else f"{title} – {ctx['project']}, {ctx['site']}.",
+            all_day=all_day, rrule=rec, series=book, zone=zone_name)))
     return out
 
 
@@ -632,6 +794,7 @@ def _guard():
     quellen = [t["subject"] for t in TOPICS]
     quellen += [s for t in TOPICS for s in t["says"] + t["answers"]]
     quellen += [m[0] for m in MEETINGS] + CHAT_LINES + TASKS + STEPS
+    quellen += [k["title"] for k in SERIES_KINDS] + [k["where"] for k in SERIES_KINDS]
     quellen += [d[1] for d in DOCUMENTS] + PROJECTS + SITES + COMPANIES
     quellen += SECTIONS + CHANNELS + ROLES + SURNAMES + GIVEN
     quellen += GREETINGS + CLOSINGS + ASIDES

@@ -71,9 +71,15 @@ def test_the_calendar_shows_what_the_export_holds(archive_page, archive):
     open_calendar(archive_page)
     sicht = archive_page.locator("#sicht-kalender")
     expect(sicht).to_be_visible()
-    # The line above the grid counts the appointments in the export.
-    expect(sicht).to_contain_text(str(len(sources.EVENTS)))
-    expect(archive_page.locator("#kalBox")).to_be_visible()
+    # The line above the grid counts the appointments in the export – every
+    # date of a series one, so more than the files.
+    shown = int(re.search(r"(\d[\d,.\u202f]*) ", sicht.locator("#kalStats").inner_text()).group(1).replace(",", "").replace(".", "").replace("\u202f", ""))
+    assert shown > len(sources.EVENTS)
+    grid = archive_page.locator("#kalBox")
+    expect(grid).to_be_visible()
+    # The week opens on today, and the weekday lunch – a series without an
+    # end – has a date in every week of the year.
+    expect(grid).to_contain_text("Team lunch")
 
 
 def test_the_contacts_hold_everyone_the_archive_knows(archive_page, archive):

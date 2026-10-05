@@ -208,6 +208,13 @@ def _outlook_env(cfg, ctx):
                if ctx.get("resync") and ctx.get("resync_ordner") else {})}
 
 
+def _window_env(cfg, ctx):
+    """The calendar's window for the steps that unfold a series: the
+    index and the calendar view count its dates from where the export
+    reads the calendar."""
+    return {"CALENDAR_MONTHS_BACK": str(int(cfg.get("calendar_months_back") or 0))}
+
+
 def _planner_env(cfg, ctx):
     return {**_kadenz_env(cfg, ctx),
             "PLANNER_URLS": (ctx["nur_einheit"] or
@@ -436,7 +443,7 @@ REGISTRY = (
                            else "job.step.index.lexical"),
      "corpus": False, "zugang": False,
      "schedule": "index", "master": None, "quelle": None,
-     "argv": _index_argv, "env": lambda cfg, ctx: {},
+     "argv": _index_argv, "env": _window_env,
      # If the export brought nothing new, this step indexes the same
      # corpus a second time. "ziel" is the condition under which skipping
      # is safe: only when an index already exists – and one that carries
@@ -451,7 +458,7 @@ REGISTRY = (
                            else "job.step.calendar.plain"),
      "corpus": False, "zugang": False,
      "schedule": None, "master": None, "quelle": None,
-     "argv": _calendar_argv, "env": lambda cfg, ctx: {},
+     "argv": _calendar_argv, "env": _window_env,
      "ziel": lambda cfg, pfade: pfade["calendar_file"]},
 
     {"key": "onedrive_folders", "anfrage": "sync_onedrive",

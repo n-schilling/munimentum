@@ -1122,6 +1122,10 @@ def test_pruefe_kalender_zaehlt_termine_serien_und_kalender(tmp_path, monkeypatc
     stempel.merke("s1", "2026-01-01T10:00:00Z")        # the series moved since
     stempel.merke("alt", "2025-01-01T10:00:00Z")       # no longer in the window
     stempel.schreibe()
+    # "Kept" is what is gone at Microsoft and still on disk: the calendar's
+    # tombstones, never the mails' beside them in the same table.
+    db.verschwunden_ergaenzen(["kalender/Arbeit/alt.ics", "E-Mail/Posteingang/x.eml"],
+                              "2026-03-01T00:00:00+00:00")
     g = _PruefGraph(listen={"/calendars/c1/calendarView": [
         _termin("e1", "2026-01-01T10:00:00Z"),
         _termin("e2", "2026-02-01T10:00:00Z"),
@@ -1956,28 +1960,51 @@ def test_wirklich_weg_fragt_als_batch():
 # Calendar: a window of change tracking, series via their master
 # --------------------------------------------------------------------------
 class KalDeltaGraph:
-    """calendarView/delta answers `eintraege` (a stored link `aenderungen`);
-    batch_get hands out series masters by id."""
+    """calendarView/delta answers `eintraege` (a stored link `aenderungen`)
+    – per calendar id when given as a dict; batch_get and get hand out
+    events by id (`masters`), a 404 for the rest, or the `status` named
+    for an id."""
 
-    def __init__(self, eintraege, aenderungen=(), masters=None):
-        self.eintraege, self.aenderungen = list(eintraege), list(aenderungen)
-        self.masters = masters or {}
-        self.urls, self.params, self.geholt = [], [], []
+    def __init__(self, eintraege, aenderungen=(), masters=None, status=None, slots=None):
+        self.eintraege = eintraege
+        self.aenderungen = aenderungen if isinstance(aenderungen, dict) else list(aenderungen)
+        self.masters, self.status, self.slots = masters or {}, status or {}, slots or {}
+        self.urls, self.params, self.geholt, self.batch_urls = [], [], [], []
+
+    def _listing(self, url, entries=None):
+        entries = self.eintraege if entries is None else entries
+        if isinstance(entries, dict):
+            cal = url.split("/calendars/")[1].split("/")[0]
+            return entries.get(cal, [])
+        return list(entries)
 
     def get(self, url, params=None, extra_headers=None):
         self.urls.append(url)
         self.params.append(params)
         assert 'outlook.timezone="UTC"' in extra_headers["Prefer"]
-        return _seite(self.aenderungen if "$deltatoken" in url else self.eintraege, url)
+        if "/me/events/" in url:
+            eid = url.rsplit("/", 1)[-1].split("?")[0]
+            self.geholt.append(eid)
+            return self.masters[eid]
+        return _seite(self._listing(url, self.aenderungen) if "$deltatoken" in url else self._listing(url), url)
 
     def batch_get(self, urls, extra_headers=None):
         assert extra_headers == {"Prefer": 'outlook.timezone="UTC"'}
+        self.batch_urls += list(urls)
+        if self.status.get("*") == "raise":
+            raise RuntimeError("batch refused")
         antworten = {}
         for u in urls:
             eid = u.rsplit("/", 1)[-1].split("?")[0]
             self.geholt.append(eid)
+            if u.endswith("$select=id,originalStart"):
+                antworten[u] = ((self.status[eid], None) if eid in self.status
+                                else (200, {"id": eid, "originalStart": self.slots[eid]}) if eid in self.slots
+                                else (404, None))
+                continue
             ev = self.masters.get(eid)
-            antworten[u] = (200, ev) if ev else (404, None)
+            antworten[u] = ((self.status[eid], None) if eid in self.status
+                            else (200, ev) if ev else (404, None))
         return antworten
 
 
@@ -2064,9 +2091,11 @@ def test_export_calendar_altes_archiv_schreibt_nur_geaendertes_neu(tmp_path):
     assert set(saetze) == {"ev1", "ev2"}
 
 
-def test_export_calendar_entferntes_behaelt_die_datei(tmp_path):
-    """Gone events keep their file, as they always have – only the record
-    goes. A removed date of a living series was never a file."""
+def test_export_calendar_entferntes_behaelt_die_datei(tmp_path, capsys):
+    """Gone events keep their file, as they always have – the bookkeeping
+    says since when it is gone, the record goes. An id the book never held
+    (a date of a series it does not know) is nothing. Written again – the
+    event came back – the file takes its tombstone back."""
     done = _donelog(tmp_path)
     stats = {"new": 0, "skipped": 0}
     outlook_export.export_calendar(KalDeltaGraph([EVENT]), tmp_path, done, stats, _ARBEIT)
@@ -2074,11 +2103,564 @@ def test_export_calendar_entferntes_behaelt_die_datei(tmp_path):
            {"id": "o77", "@removed": {"reason": "deleted"}}]
     outlook_export.export_calendar(KalDeltaGraph([], aenderungen=weg), tmp_path, done,
                                    stats, _ARBEIT)
-    done.close()
-    assert stats == {"new": 1, "skipped": 0}
+    assert stats == {"new": 1, "skipped": 0, "gone": 1}
     assert len(list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))) == 1
-    assert "ev1" not in state_db.StateDb(tmp_path).saetze_lesen("events")
+    db = state_db.StateDb(tmp_path)
+    assert "ev1" not in db.saetze_lesen("events")
+    assert set(db.verschwunden_lesen()) == {done.done["ev1"]}
+    back = {**EVENT, "lastModifiedDateTime": "2025-08-01T08:00:00Z"}
+    outlook_export.export_calendar(KalDeltaGraph([], aenderungen=[back]), tmp_path, done,
+                                   stats, _ARBEIT)
+    done.close()
+    assert db.verschwunden_lesen() == {} and stats["gone"] == 1
 
+
+EXCEPTION = {"id": "o2", "type": "exception", "seriesMasterId": "s1", "subject": "Jour fixe (moved)",
+             "originalStart": "2025-06-09T12:00:00Z",
+             "start": {"dateTime": "2025-06-09T14:00:00.0000000", "timeZone": "UTC"},
+             "end": {"dateTime": "2025-06-09T15:00:00.0000000", "timeZone": "UTC"},
+             "location": {"displayName": "Room 7"},
+             "lastModifiedDateTime": "2025-06-05T08:00:00Z"}
+CANCELLED = {"id": "o3", "type": "occurrence", "seriesMasterId": "s1", "subject": "Jour fixe",
+             "originalStart": "2025-06-16T12:00:00Z", "isCancelled": True,
+             "start": {"dateTime": "2025-06-16T12:00:00.0000000", "timeZone": "UTC"},
+             "end": {"dateTime": "2025-06-16T13:00:00.0000000", "timeZone": "UTC"},
+             "lastModifiedDateTime": "2025-06-05T08:00:00Z"}
+BERLIN_MASTER = {**MASTER, "originalStartTimeZone": "W. Europe Standard Time",
+                 "start": {"dateTime": "2025-06-02T12:00:00.0000000", "timeZone": "UTC"},
+                 "end": {"dateTime": "2025-06-02T13:00:00.0000000", "timeZone": "UTC"}}
+
+
+def test_a_series_carries_its_zone_its_exceptions_and_the_dates_taken_out(tmp_path, capsys):
+    """One .ics for the series: DTSTART on the series' own clock (12:00Z
+    is 14:00 in Berlin), a moved date and a cancelled one as VEVENTs with
+    a RECURRENCE-ID, a date Graph took out as EXDATE – each change writes
+    the file again. A series gone at Microsoft is said gone: only its
+    dates are removed from the view, the master answers 404."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN, EXCEPTION, CANCELLED], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    (ics,) = (tmp_path / "kalender" / "Arbeit").glob("*.ics")
+    text = ics.read_text(encoding="utf-8")
+    assert "DTSTART;TZID=Europe/Berlin:20250602T140000" in text
+    assert "DTEND;TZID=Europe/Berlin:20250602T150000" in text
+    assert "RRULE:FREQ=WEEKLY;BYDAY=MO" in text and "EXDATE" not in text
+    assert "RECURRENCE-ID;TZID=Europe/Berlin:20250609T140000" in text
+    assert "DTSTART;TZID=Europe/Berlin:20250609T160000" in text
+    assert "SUMMARY:Jour fixe (moved)" in text and "LOCATION:Room 7" in text
+    assert "RECURRENCE-ID;TZID=Europe/Berlin:20250616T140000" in text
+    assert text.count("BEGIN:VEVENT") == 3 and text.count("STATUS:CANCELLED") == 1
+    book = state_db.StateDb(tmp_path).saetze_lesen("series")
+    listed = state_db.StateDb(tmp_path).saetze_lesen("series_occ")      # one row per date the view listed
+    assert {occ: v.split("\t")[0] for occ, v in listed.items()} == {"o1": "s1", "o2": "s1", "o3": "s1"}
+    assert set(json.loads(book["s1"])["ex"]) == {"2025-06-09T12:00:00", "2025-06-16T12:00:00"}
+    # A date taken out: the master is written again, with the EXDATE.
+    gone = [{"id": "o1", "@removed": {"reason": "deleted"}}]
+    g = KalDeltaGraph([], aenderungen=gone, masters={"s1": BERLIN_MASTER})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert g.geholt == ["s1"] and "gone" not in stats
+    text = ics.read_text(encoding="utf-8")
+    assert "EXDATE;TZID=Europe/Berlin:20250602T140000" in text
+    assert json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])["del"] == ["2025-06-02T12:00:00"]
+    # The exception reverts to the rule: its VEVENT goes.
+    g = KalDeltaGraph([], aenderungen=[{**EXCEPTION, "type": "occurrence", "subject": "Jour fixe",
+                                        "start": CANCELLED["start"] | {"dateTime": "2025-06-09T12:00:00.0000000"}}],
+                      masters={"s1": BERLIN_MASTER})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    assert "20250609T160000" not in ics.read_text(encoding="utf-8")
+    # The whole series gone: every date removed, the master answers 404.
+    gone = [{"id": "o2", "@removed": {"reason": "deleted"}}, {"id": "o3", "@removed": {"reason": "deleted"}}]
+    g = KalDeltaGraph([], aenderungen=gone, masters={})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    done.close()
+    assert g.geholt == ["s1"] and stats["gone"] == 1
+    db = state_db.StateDb(tmp_path)
+    assert set(db.verschwunden_lesen()) == {ics.relative_to(tmp_path).as_posix()}
+    assert "s1" not in db.saetze_lesen("series") and ics.exists()
+
+
+def test_build_rrule_speaks_graphs_patterns():
+    """What Graph's six patterns need: the first weekday of a month is a
+    set with a position, not five dates; the week's first day; an end date
+    as the instant it is over on the series' clock."""
+    from zoneinfo import ZoneInfo
+    berlin = ZoneInfo("Europe/Berlin")
+    rr = outlook_export.build_rrule
+    assert rr({"pattern": {"type": "relativeMonthly", "daysOfWeek": ["weekday"], "index": "first"},
+               "range": {"type": "noEnd"}}, False) == "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1"
+    assert rr({"pattern": {"type": "relativeMonthly", "daysOfWeek": ["friday"], "index": "last"},
+               "range": {"type": "noEnd"}}, False) == "FREQ=MONTHLY;BYDAY=-1FR"
+    assert rr({"pattern": {"type": "relativeYearly", "daysOfWeek": ["weekendDay"], "index": "last", "month": 11},
+               "range": {"type": "noEnd"}}, False) == "FREQ=YEARLY;BYMONTH=11;BYDAY=SA,SU;BYSETPOS=-1"
+    assert rr({"pattern": {"type": "weekly", "daysOfWeek": ["sunday", "monday"], "interval": 2,
+                           "firstDayOfWeek": "sunday"}, "range": {"type": "noEnd"}}, False) \
+        == "FREQ=WEEKLY;BYDAY=SU,MO;WKST=SU;INTERVAL=2"
+    assert rr({"pattern": {"type": "daily"}, "range": {"type": "endDate", "endDate": "2026-03-31"}},
+              False, berlin) == "FREQ=DAILY;UNTIL=20260331T215959Z"
+    assert rr({"pattern": {"type": "daily"}, "range": {"type": "endDate", "endDate": "2026-03-31"}},
+              True) == "FREQ=DAILY;UNTIL=20260331"
+    assert rr({"pattern": {"type": "absoluteMonthly", "dayOfMonth": 15},
+               "range": {"type": "numbered", "numberOfOccurrences": 6}}, False) == "FREQ=MONTHLY;BYMONTHDAY=15;COUNT=6"
+    assert outlook_export.series_zone({"originalStartTimeZone": "W. Europe Standard Time"}) == "Europe/Berlin"
+    assert outlook_export.series_zone({"originalStartTimeZone": "UTC"}) is None
+    assert outlook_export.series_zone({"recurrence": {"range": {"recurrenceTimeZone": "Pacific Standard Time"}}}) == "America/Los_Angeles"
+
+
+def test_an_archive_of_the_earlier_shape_is_read_once_in_full_per_calendar(tmp_path, monkeypatch, capsys):
+    """A calendar at the earlier shape (series without their dates) is
+    read once in full, said once, and stamped per calendar – one a
+    targeted run left out gets its turn. After the full round the
+    archive is held against the listing: an event inside the window the
+    view did not list is asked for and, gone at Graph, marked; one
+    outside the window is nobody's business. The series' rewrite counts
+    once, as updated – not as skipped too."""
+    monkeypatch.setenv("CALENDAR_MONTHS_BACK", "2")
+    done = _donelog(tmp_path)
+    (tmp_path / "kalender" / "Arbeit").mkdir(parents=True)
+    now = datetime.now(UTC)
+    from datetime import timedelta
+    from testdata.people import graph_node as node
+
+    def old_file(key, ev):
+        rel = f"kalender/Arbeit/{outlook_export.event_filename(ev)}"
+        (tmp_path / rel).write_text(outlook_export.build_ics(ev), encoding="utf-8")
+        done.mark(key, rel)
+        return rel
+    inside = old_file("old1", {**EVENT, "id": "old1", "subject": "Gone meanwhile",
+                               "start": node(now - timedelta(days=10)), "end": node(now - timedelta(days=10, hours=-1))})
+    outside = old_file("old2", {**EVENT, "id": "old2", "subject": "Long ago",
+                                "start": node(now - timedelta(days=5 * 365)), "end": node(now - timedelta(days=5 * 365, hours=-1))})
+    old_file("s1", MASTER)                        # the series at the earlier shape: UTC, no dates
+    db = state_db.StateDb(tmp_path)
+    stempel = outlook_export.Stempel(db, "events")
+    stempel.merke("s1", EVENT["lastModifiedDateTime"])
+    stempel.schreibe()
+    db.kv_schreiben("delta:cal:cal1:window", "2")   # exported before: a window stamp, no layout stamp
+    db.kv_schreiben("delta:cal:cal2:window", "2")
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    assert set(db.verschwunden_lesen()) == {inside}
+    assert (tmp_path / outside).exists() and outside not in db.verschwunden_lesen()
+    assert sorted(g.geholt) == ["old1", "s1"]          # the one outside the window is not asked
+    assert "DTSTART;TZID=Europe/Berlin" in (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    assert (stats["gone"], stats["updated"], stats["skipped"]) == (1, 1, 0)
+    kinds = [e["k"] for e in _events(capsys)]
+    assert kinds.count("run.calendar.relayout") == 1 and kinds.count("run.calendar.gone") == 1
+    assert db.kv_lesen("delta:cal:cal1:layout") == outlook_export.CAL_LAYOUT
+    assert db.kv_lesen("delta:cal:cal2:layout") is None
+    # The next run: nothing to say again, nothing counted again.
+    g = KalDeltaGraph([], aenderungen=[], masters={"s1": BERLIN_MASTER})
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    kinds = [e["k"] for e in _events(capsys)]
+    assert "run.calendar.relayout" not in kinds and "run.calendar.gone" not in kinds and "gone" not in stats
+    # The second calendar, read in a later run, gets its own full read and its stamp.
+    g = KalDeltaGraph({"cal2": [TERMIN]}, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, [{"id": "cal2", "name": "Arbeit"}]) == 0
+    assert [e["k"] for e in _events(capsys)].count("run.calendar.relayout") == 1
+    assert db.kv_lesen("delta:cal:cal2:layout") == outlook_export.CAL_LAYOUT
+    # A calendar never exported before is read in full anyway: no relayout, no line.
+    g = KalDeltaGraph({"cal3": [EVENT]})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, [{"id": "cal3", "name": "Privat"}]) == 0
+    assert "run.calendar.relayout" not in [e["k"] for e in _events(capsys)]
+    assert db.kv_lesen("delta:cal:cal3:layout") == outlook_export.CAL_LAYOUT
+    done.close()
+
+
+def test_a_fresh_archive_says_nothing_of_the_earlier_shape(tmp_path, capsys):
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    assert outlook_export.export_calendar(KalDeltaGraph([]), tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert "run.calendar.relayout" not in [e["k"] for e in _events(capsys)]
+
+
+def test_a_failed_master_rewrite_stays_due_until_it_went_through(tmp_path):
+    """A date taken out makes the master due; when Graph refuses the
+    master, the EXDATE must not be lost: the row stays due, and the next
+    round asks for the master again although nothing else changed."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN, EXCEPTION], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    (datei,) = (tmp_path / "kalender" / "Arbeit").glob("*.ics")
+    gone = [{"id": "o1", "@removed": {"reason": "deleted"}}]
+    g = KalDeltaGraph([], aenderungen=gone, masters={"s1": BERLIN_MASTER}, status={"s1": 503})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 1
+    assert "EXDATE" not in datei.read_text(encoding="utf-8")
+    row = json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])
+    assert row["due"] is True and row["del"] == ["2025-06-02T12:00:00"]
+    g = KalDeltaGraph([], aenderungen=[], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert g.geholt == ["s1"] and "EXDATE;TZID=Europe/Berlin:20250602T140000" in datei.read_text(encoding="utf-8")
+    assert json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])["due"] is False
+
+
+def test_a_deletion_alone_is_a_change_the_result_carries(tmp_path, capsys):
+    """A run whose only change is a deleted appointment says so in the
+    log and in the result – the runner's change gate reads `gone`, so the
+    calendar view and the index are built again. A master's own @removed
+    beside its dates' counts once."""
+    import runner
+    assert set(runner.CORPUS_CHANGES) <= set(outlook_export.RESULT_EXTRA)
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([EVENT, TERMIN], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    _events(capsys)
+    gone = [{"id": "ev1", "@removed": {"reason": "deleted"}},
+            {"id": "o1", "@removed": {"reason": "deleted"}},
+            {"id": "s1", "@removed": {"reason": "deleted"}}]
+    g = KalDeltaGraph([], aenderungen=gone, masters={})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert stats["gone"] == 2 and len(state_db.StateDb(tmp_path).verschwunden_lesen()) == 2
+    said = [e for e in _events(capsys) if e["k"] == "run.calendar.gone"]
+    assert len(said) == 1 and said[0]["v"]["n"] == 2
+
+
+def test_fetch_again_writes_a_series_file_with_its_exceptions(tmp_path):
+    """"Fetch again" on a series master writes the same file the round
+    writes – EXDATEs and exceptions included – and keeps the newest
+    date's stamp, which the master alone does not know."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN, EXCEPTION, CANCELLED], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    g = KalDeltaGraph([], aenderungen=[{"id": "o1", "@removed": {"reason": "deleted"}}], masters={"s1": BERLIN_MASTER})
+    outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT)
+    rel = done.done["s1"]
+    before = (tmp_path / rel).read_text(encoding="utf-8")
+    assert before.count("BEGIN:VEVENT") == 3 and "EXDATE" in before
+    g = KalDeltaGraph([], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.nachholen(g, tmp_path, done, [{"id": "s1", "rel": rel, "art": "event"}]) == "done"
+    done.close()
+    assert (tmp_path / rel).read_text(encoding="utf-8") == before
+    assert outlook_export.Stempel(state_db.StateDb(tmp_path), "events").bekannt("s1") == "2025-06-05T08:00:00Z"
+
+
+def test_a_full_round_judges_what_the_view_no_longer_lists(tmp_path, monkeypatch, capsys):
+    """After a full, clean round, a series with dates on the book and an
+    event inside the window that the view did not list are asked for: a
+    404 is gone at Microsoft, said once; a second full round counts
+    nothing again. A series Graph still has (it ended) is left alone."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([EVENT, TERMIN], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    monkeypatch.setenv("CALENDAR_FULL", "1")
+    g = KalDeltaGraph([], masters={"s1": BERLIN_MASTER, "ev1": EVENT})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    assert sorted(g.geholt) == ["ev1", "s1"] and "gone" not in stats
+    assert all(u.endswith("$select=id") for u in g.batch_urls)   # a suspect is asked for its id alone
+    _events(capsys)
+    g = KalDeltaGraph([], masters={})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    assert stats["gone"] == 2 and len(state_db.StateDb(tmp_path).verschwunden_lesen()) == 2
+    assert "s1" not in state_db.StateDb(tmp_path).saetze_lesen("series")
+    assert [e["v"]["n"] for e in _events(capsys) if e["k"] == "run.calendar.gone"] == [2]
+    g = KalDeltaGraph([], masters={})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert stats["gone"] == 2 and g.geholt == []
+    assert "run.calendar.gone" not in [e["k"] for e in _events(capsys)]
+
+
+def test_a_master_gone_during_a_full_round_counts_once(tmp_path, capsys):
+    """The view lists a date whose master answers 404: gone once – the
+    master's id counts as seen, the judgement does not ask again."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    g = KalDeltaGraph([], aenderungen=[{**TERMIN, "lastModifiedDateTime": "2025-07-01T08:00:00Z"}], masters={})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert stats["gone"] == 1 and g.geholt == ["s1"]
+    assert [e["v"]["n"] for e in _events(capsys) if e["k"] == "run.calendar.gone"] == [1]
+
+
+def test_a_tombstone_is_taken_back_when_the_event_is_at_microsoft_after_all(tmp_path):
+    """Listed again unchanged (no rewrite), or written again under a new
+    name: either way the mark goes – the old file's too."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([EVENT])
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    db = state_db.StateDb(tmp_path)
+    rel = done.done["ev1"]
+    db.verschwunden_ergaenzen([rel], "2025-07-01T00:00:00+00:00")
+    g = KalDeltaGraph([], aenderungen=[EVENT])             # the same stamp: adopted, not written
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    assert db.verschwunden_lesen() == {} and stats["skipped"] == 1 and "updated" not in stats
+    db.verschwunden_ergaenzen([rel], "2025-07-01T00:00:00+00:00")
+    renamed = {**EVENT, "subject": "Planung; Q4", "lastModifiedDateTime": "2025-08-01T08:00:00Z"}
+    g = KalDeltaGraph([], aenderungen=[renamed])
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert db.verschwunden_lesen() == {} and not (tmp_path / rel).exists()
+    assert "Q4" in done.done["ev1"]
+
+
+def test_two_calendars_with_one_name_share_one_judgement(tmp_path, monkeypatch):
+    """Two selected calendars with the same sanitised name share a folder
+    on disk: the archive of that folder is judged against what both
+    listed, so neither round marks the other's live events."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    cals = [{"id": "c1", "name": "Arbeit"}, {"id": "c2", "name": "Arbeit"}]
+    other = {**EVENT, "id": "ev2", "iCalUId": "uid-2", "subject": "Second calendar"}
+    monkeypatch.setenv("CALENDAR_FULL", "1")
+    for _ in range(2):
+        g = KalDeltaGraph({"c1": [EVENT], "c2": [other]})
+        assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 0
+        assert state_db.StateDb(tmp_path).verschwunden_lesen() == {} and g.geholt == []
+    done.close()
+    assert len(list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))) == 2
+
+
+def test_an_unknown_zone_is_said_once_and_the_series_stays_in_utc(tmp_path, capsys):
+    """A zone name the table does not know: said once per run, the
+    series written in UTC – and its EXDATE in the same form, with its Z,
+    so an outside reader excludes the same instant."""
+    outlook_export._UNKNOWN_ZONES.clear()
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    master = {**MASTER, "originalStartTimeZone": "Nowhere Standard Time"}
+    second = {**TERMIN, "id": "o9", "seriesMasterId": "s2"}
+    g = KalDeltaGraph([TERMIN, second], masters={"s1": master, "s2": {**master, "id": "s2", "iCalUId": "uid-s2"}})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    said = [e for e in _events(capsys) if e["k"] == "run.calendar.zone_unknown"]
+    assert len(said) == 1 and said[0]["v"]["name"] == "Nowhere Standard Time"
+    g = KalDeltaGraph([], aenderungen=[{"id": "o1", "@removed": {"reason": "deleted"}}],
+                      masters={"s1": master})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    text = (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    assert "DTSTART:20250601T120000Z" in text and "EXDATE:20250602T120000Z" in text
+
+
+def test_a_whole_series_moved_drops_the_keys_of_the_old_slots(tmp_path):
+    """Every date of a series listed again with another original start:
+    the exceptions and the dates taken out move with them – no stale
+    RECURRENCE-ID or EXDATE from the old slots stays in the file."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    g = KalDeltaGraph([TERMIN, EXCEPTION, CANCELLED], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    g = KalDeltaGraph([], aenderungen=[{"id": "o1", "@removed": {"reason": "deleted"}}], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+
+    def later(ev, hours=1):
+        out = dict(ev)
+        for field in ("originalStart",):
+            if ev.get(field):
+                out[field] = ev[field].replace("T12:00:00Z", "T13:00:00Z")
+        for field in ("start", "end"):
+            if ev.get(field):
+                dt = datetime.strptime(ev[field]["dateTime"][:19], "%Y-%m-%dT%H:%M:%S") + timedelta(hours=hours)
+                out[field] = {**ev[field], "dateTime": dt.strftime("%Y-%m-%dT%H:%M:%S.0000000")}
+        return {**out, "lastModifiedDateTime": "2025-07-01T08:00:00Z"}
+    from datetime import timedelta
+    moved = {**BERLIN_MASTER, "start": later(BERLIN_MASTER)["start"], "end": later(BERLIN_MASTER)["end"],
+             "lastModifiedDateTime": "2025-07-01T08:00:00Z"}
+    g = KalDeltaGraph([], aenderungen=[later(TERMIN), later(EXCEPTION), later(CANCELLED)], masters={"s1": moved})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    row = json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])
+    assert set(row["ex"]) == {"2025-06-09T13:00:00", "2025-06-16T13:00:00"}
+    assert row["del"] == ["2025-06-02T13:00:00"]      # the date taken out moved with the series
+    text = (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    assert text.count("BEGIN:VEVENT") == 3 and "EXDATE;TZID=Europe/Berlin:20250602T150000" in text
+    assert "RECURRENCE-ID;TZID=Europe/Berlin:20250609T150000" in text and "T140000" not in text.split("RRULE")[1]
+
+
+def test_a_moved_date_listed_without_its_slot_is_asked_for_it(tmp_path):
+    """The view lists a moved date with its new start only; the slot it
+    stands for is asked for by name, and the book keys the exception by
+    that slot – not by the new time, which no date of the rule has. A
+    refused answer is an error: the page is replayed next round."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    listed = {k: v for k, v in EXCEPTION.items() if k != "originalStart"}
+    g = KalDeltaGraph([TERMIN, listed], masters={"s1": BERLIN_MASTER}, slots={"o2": "2025-06-09T12:00:00Z"})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    assert g.geholt == ["o2", "s1"]
+    row = json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])
+    assert list(row["ex"]) == ["2025-06-09T12:00:00"]
+    text = (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    assert "RECURRENCE-ID;TZID=Europe/Berlin:20250609T140000" in text
+    assert "DTSTART;TZID=Europe/Berlin:20250609T160000" in text
+    g = KalDeltaGraph([], aenderungen=[{**listed, "id": "o5", "originalStart": None,
+                                        "start": {"dateTime": "2025-06-23T14:00:00.0000000", "timeZone": "UTC"}}],
+                      masters={"s1": BERLIN_MASTER}, status={"o5": 503})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 1
+    done.close()
+    assert "2025-06-23T14:00:00" not in json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])["ex"]
+
+
+def test_a_due_master_is_written_in_its_own_calendars_round(tmp_path):
+    """One book serves every calendar of the run: a master whose dates
+    changed in calendar B is fetched and written in B's round, never
+    under A's folder – which runs first and sees the same due row."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    cals = [{"id": "a", "name": "Arbeit"}, {"id": "b", "name": "Bereitschaft"}]
+    g = KalDeltaGraph({"a": [EVENT], "b": [TERMIN]}, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 0
+    assert done.done["s1"].startswith("kalender/Bereitschaft/")
+    gone = {"id": "o1", "@removed": {"reason": "deleted"}}
+    g = KalDeltaGraph({"a": [], "b": []}, aenderungen={"a": [], "b": [gone]}, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 0
+    done.close()
+    assert done.done["s1"].startswith("kalender/Bereitschaft/") and g.geholt == ["s1"]
+    assert not list((tmp_path / "kalender" / "Arbeit").glob("*Jour*"))
+    assert "EXDATE" in (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    row = json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])
+    assert row["cal"] == "Bereitschaft" and row["due"] is False
+
+
+def test_a_date_without_an_id_is_nobodys_file(tmp_path):
+    """A date of a series the view lists without an id: folded into its
+    series as before, never written as a file of its own."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    nameless = {k: v for k, v in TERMIN.items() if k != "id"}
+    g = KalDeltaGraph([TERMIN, nameless], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    assert len(list((tmp_path / "kalender" / "Arbeit").glob("*.ics"))) == 1 and stats["new"] == 1
+
+
+def test_a_round_that_fails_takes_no_verdict_into_the_next_calendars(tmp_path, capsys):
+    """One tombstone reader serves every calendar: a round that ends in an
+    error drops what it had judged – the next calendar's line names only
+    its own, and the failed page is listed again next run."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    cals = [{"id": "a", "name": "Arbeit"}, {"id": "b", "name": "Bereitschaft"}]
+    other = {**EVENT, "id": "ev2", "iCalUId": "uid-2", "subject": "Second"}
+    g = KalDeltaGraph({"a": [EVENT, TERMIN], "b": [other]}, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 0
+    _events(capsys)
+    gone = {"id": "ev1", "@removed": {"reason": "deleted"}}
+    moved = {"id": "o1", "@removed": {"reason": "deleted"}}
+    g = KalDeltaGraph({"a": [], "b": []}, aenderungen={"a": [gone, moved], "b": []},
+                      masters={"s1": BERLIN_MASTER}, status={"*": "raise"})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 1
+    assert "gone" not in stats and state_db.StateDb(tmp_path).verschwunden_lesen() == {}
+    assert "run.calendar.gone" not in [e["k"] for e in _events(capsys)]
+    g = KalDeltaGraph({"a": [], "b": []}, aenderungen={"a": [gone, moved], "b": []}, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cals) == 0
+    done.close()
+    said = [e["v"] for e in _events(capsys) if e["k"] == "run.calendar.gone"]
+    assert said == [{"name": "Arbeit", "n": 1}] and stats["gone"] == 1
+
+
+def test_a_series_moved_to_another_weekday_leaves_no_exdate_behind(tmp_path):
+    """Every old date arrives as removed, the new ones are listed: the old
+    slots are dates the new rule never makes, and no EXDATE names them."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    mondays = [{**TERMIN, "id": f"m{i}", "start": {"dateTime": f"2025-06-{2 + 7 * i:02d}T12:00:00.0000000", "timeZone": "UTC"}}
+               for i in range(3)]
+    g = KalDeltaGraph(mondays, masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    tuesday = {**BERLIN_MASTER, "recurrence": {"pattern": {"type": "weekly", "daysOfWeek": ["tuesday"]},
+                                              "range": {"type": "noEnd"}},
+               "start": {"dateTime": "2025-06-03T12:00:00.0000000", "timeZone": "UTC"},
+               "end": {"dateTime": "2025-06-03T13:00:00.0000000", "timeZone": "UTC"},
+               "lastModifiedDateTime": "2025-07-01T08:00:00Z"}
+    tuesdays = [{**TERMIN, "id": f"t{i}", "start": {"dateTime": f"2025-06-{3 + 7 * i:02d}T12:00:00.0000000", "timeZone": "UTC"},
+                 "lastModifiedDateTime": "2025-07-01T08:00:00Z"} for i in range(3)]
+    removed = [{"id": f"m{i}", "@removed": {"reason": "deleted"}} for i in range(3)]
+    g = KalDeltaGraph([], aenderungen=removed + tuesdays, masters={"s1": tuesday})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    text = (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    assert "RRULE:FREQ=WEEKLY;BYDAY=TU" in text and "EXDATE" not in text
+    assert json.loads(state_db.StateDb(tmp_path).saetze_lesen("series")["s1"])["del"] == []
+
+
+def test_the_judgement_names_the_calendar_as_the_round_does_and_asks_only_graph_ids(tmp_path, monkeypatch, capsys):
+    """The gone line of the judgement carries the calendar's display name,
+    not its folder name; a fallback key in the done log (a path, an
+    iCalUId) is nothing Graph can be asked about and is left alone."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    cal = [{"id": "c1", "name": "Projekte / 2026"}]
+    g = KalDeltaGraph([EVENT])
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cal) == 0
+    folder = next(p for p in (tmp_path / "kalender").iterdir()).name
+    rel = f"kalender/{folder}/2026-10-01_0900__Nameless__abcd1234.ics"
+    (tmp_path / rel).write_text(outlook_export.build_ics({**EVENT, "id": None, "iCalUId": None, "subject": "Nameless"}),
+                                encoding="utf-8")
+    done.mark(rel, rel)                       # the path as the key: an event that came without an id
+    monkeypatch.setenv("CALENDAR_FULL", "1")
+    _events(capsys)
+    g = KalDeltaGraph([])
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, cal) == 0
+    done.close()
+    assert g.geholt == ["ev1"]
+    assert set(state_db.StateDb(tmp_path).verschwunden_lesen()) == {done.done["ev1"]}
+    assert [e["v"]["name"] for e in _events(capsys) if e["k"] == "run.calendar.gone"] == ["Projekte / 2026"]
+
+
+def test_the_file_name_says_the_start(tmp_path):
+    """The export names every calendar file by its start: the judgement
+    reads the name, not the file – one named otherwise is read."""
+    stamped = tmp_path / "2026-03-05_1430__Something__abcdef12.ics"
+    stamped.write_text("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART:20200101T000000Z\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n", encoding="utf-8")
+    assert outlook_export.ics_dtstart(stamped) == datetime(2026, 3, 5, 14, 30, tzinfo=UTC)
+    whole_day = tmp_path / "2026-03-05__Something__abcdef12.ics"
+    whole_day.write_text("", encoding="utf-8")
+    assert outlook_export.ics_dtstart(whole_day) == datetime(2026, 3, 5, tzinfo=UTC)
+    other = tmp_path / "foreign.ics"
+    other.write_text("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;TZID=Europe/Berlin:20260305T143000\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n", encoding="utf-8")
+    assert outlook_export.ics_dtstart(other) == datetime(2026, 3, 5, 13, 30, tzinfo=UTC)
+
+
+def test_one_gone_appointment_is_said_in_the_singular():
+    import i18n
+    for code, expected in (("en", "1 appointment gone"), ("de", "1 Termin bei Microsoft weg"), ("fr", "1 rendez-vous disparu ")):
+        assert expected in i18n.log_line(code, "run.calendar.gone", values={"name": "A", "n": 1})
+    assert "2 appointments gone" in i18n.log_line("en", "run.calendar.gone", values={"name": "A", "n": 2})
+
+
+def test_an_exception_replaces_its_date_whole(tmp_path):
+    """The exception VEVENT names its own people, text and transparency –
+    an outside reader sees them on the moved date (RFC 5545)."""
+    done = _donelog(tmp_path)
+    stats = {"new": 0, "skipped": 0}
+    full = {**EXCEPTION, "body": {"contentType": "text", "content": "Moved for the audit"},
+            "organizer": {"emailAddress": {"name": "Carla Chef", "address": "carla@example.com"}},
+            "attendees": [{"emailAddress": {"name": "Dana Dienstleister", "address": "dana@example.com"}}],
+            "showAs": "free"}
+    g = KalDeltaGraph([TERMIN, full], masters={"s1": BERLIN_MASTER})
+    assert outlook_export.export_calendar(g, tmp_path, done, stats, _ARBEIT) == 0
+    done.close()
+    text = (tmp_path / done.done["s1"]).read_text(encoding="utf-8")
+    exception = text.split("RECURRENCE-ID")[1]
+    assert "DESCRIPTION:Moved for the audit" in exception
+    assert 'ORGANIZER;CN="Carla Chef":mailto:carla@example.com' in exception
+    assert 'ATTENDEE;CN="Dana Dienstleister":mailto:dana@example.com' in exception
+    assert "TRANSP:TRANSPARENT" in exception and "STATUS:CONFIRMED" in exception
+
+
+def test_the_mail_readers_see_no_calendar_tombstone(tmp_path, monkeypatch):
+    """The calendar's tombstones sit in the same table as the mails': the
+    healing pass does not open an .ics as a mail, and the kept count of
+    the mail row counts mails alone."""
+    import types
+    monkeypatch.setattr(outlook_export, "brief_kennung",
+                        lambda path: (_ for _ in ()).throw(AssertionError(f"read as a mail: {path}"))
+                        if str(path).endswith(".ics") else None)
+    known = {"kalender/Arbeit/x.ics": "t1", "E-Mail/Posteingang/a.eml": "t2"}
+    kept, healed = outlook_export.zuruecknehmen(tmp_path, known, types.SimpleNamespace(briefe={"<m>"}))
+    assert kept == known and healed == 0
 
 def test_export_calendar_voll_und_fensterwechsel_verwerfen_den_link(tmp_path, monkeypatch, capsys):
     done = _donelog(tmp_path)

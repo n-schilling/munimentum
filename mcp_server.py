@@ -596,6 +596,37 @@ def _hat_spalte(con, name):
     return any(r[1] == name for r in con.execute("PRAGMA table_info(chunks)"))
 
 
+def _has_table(con, name):
+    """Does the index carry this table? `series_dates` came with 14.3; an
+    index from before has none, and its series answer to their first date
+    alone until the next index run."""
+    return con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                       (name,)).fetchone() is not None
+
+
+def _span(start, end, column="ts"):
+    """The window as SQL: (conditions, values) – one or both bounds."""
+    conds, values = [], []
+    if start is not None:
+        conds.append(f"{column} >= ?")           # also excludes NULL timestamps
+        values.append(start)
+    if end is not None:
+        conds.append(f"{column} <= ?")
+        values.append(end)
+    return conds, values
+
+
+def _effective(start, end, series):
+    """The date a hit counts by inside a window, as SQL: a series' first
+    date inside it (series_dates), every other item's own. (expression,
+    values) – plain `ts` without a window or without series."""
+    conds, values = _span(start, end, "d.ts")
+    if not conds or not series:
+        return "ts", []
+    return ("COALESCE((SELECT MIN(d.ts) FROM series_dates d WHERE d.uid = chunks.uid AND "
+            + " AND ".join(conds) + "), ts)"), values
+
+
 # Which sources offer a folder selection – all whose ctx is a path.
 _LISTBAR = ("outlook", "datei", "onedrive", "sharepoint", "pages",
             "kalender", "teams", "kontakte", "planner", "todo", "onenote")
@@ -822,7 +853,8 @@ def _im_fall(con, case, case_folder=""):
 
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
-           im_fall=False, party="all", mail=None, with_attachments=False):
+           im_fall=False, party="all", mail=None, with_attachments=False,
+           series=False):
     conds, params = [], []
     if with_attachments:
         # Only what carries an attachment – `att` holds the names of a
@@ -883,12 +915,17 @@ def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
     if person:
         conds.append("ppl LIKE ? ESCAPE '\\'")
         params.append(_wie(person))
-    if dfrom is not None:
-        conds.append("ts >= ?")                # also excludes NULL timestamps
-        params.append(dfrom)
-    if dto is not None:
-        conds.append("ts <= ?")
-        params.append(dto)
+    span, bounds = _span(dfrom, dto)
+    if span and series:
+        # A series is one item, dated at its first date; the dates it makes
+        # stand in series_dates (rag_index._series_rows). A window finds
+        # the series by any of them – as the calendar shows it.
+        own = " AND ".join(span)
+        conds.append(f"(({own}) OR uid IN (SELECT uid FROM series_dates WHERE {own}))")
+        params.extend(bounds + bounds)
+    elif span:
+        conds.extend(span)
+        params.extend(bounds)
     return (" AND ".join(conds) or _WHERE_ALL), params
 
 
@@ -1300,13 +1337,38 @@ def _mit_faellen(hits):
     return hits
 
 
-def _rows_for(con, pairs, preview_chars, woerter=()):
+def _rows_for(con, pairs, preview_chars, woerter=(), window=(None, None)):
+    eff, values = _effective(*window, _has_table(con, "series_dates"))
     hits = []
     for cid, score in pairs:
-        row = con.execute("SELECT * FROM chunks WHERE id = ?", (cid,)).fetchone()
+        row = con.execute(f"SELECT *, {eff} AS eff FROM chunks WHERE id = ?", [*values, cid]).fetchone()
         if row is not None:
-            hits.append(_hit(row, score, preview_chars, woerter))
+            hits.append(_series_date_in(row, _hit(row, score, preview_chars, woerter)))
     return hits
+
+
+def _series_date_in(row, hit):
+    """A series found through the date window says the date it has in
+    the window (`eff`, see _effective), not its first – the list reads
+    like the calendar it was handed over from. Everything else keeps its
+    own date."""
+    if "eff" in row.keys():
+        hit["date"] = _window_date(row["date"], row["ts"], row["eff"],
+                                   row["series"] if "series" in row.keys() else None)
+    return hit
+
+
+def _window_date(date, ts, eff, series):
+    """The date to show: the item's own, or the series' date inside the
+    window when that is another one – formatted as the index formats a
+    date, a day alone for an all-day series."""
+    if eff is None or ts is None or eff == ts:
+        return date
+    try:
+        all_day = bool(json.loads(series).get("all_day")) if series else False
+    except (ValueError, AttributeError):
+        all_day = False
+    return datetime.fromtimestamp(eff).strftime("%Y-%m-%d" if all_day else "%Y-%m-%d %H:%M")
 
 
 def _join_chunks(rows):
@@ -1489,7 +1551,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             return {"error": fehler, "count": 0, "results": []}
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                               filetype, im_fall, party, mail, with_attachments)
+                               filetype, im_fall, party, mail, with_attachments,
+                               series=_has_table(con, "series_dates"))
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -1499,7 +1562,7 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         page = _dedupe_page(con, pairs, max(1, k), max(0, offset))
         return {"backend": used, "count": len(page), "offset": max(0, offset),
                 "results": _mit_faellen(_rows_for(con, page, max(0, min(preview_chars, 2000)),
-                                                  _WORD.findall(query.lower())))}
+                                                  _WORD.findall(query.lower()), (von, bis)))}
     finally:
         con.close()
 
@@ -1547,7 +1610,8 @@ def _browse_where(con, person, date_from, date_to, days, source, only_gone,
         return "", [], fehler
     von, bis = _zeitraum(date_from, date_to, days)
     where, params = _where(person.strip(), von, bis, source, only_gone, folder,
-                           filetype, im_fall, party, mail, with_attachments)
+                           filetype, im_fall, party, mail, with_attachments,
+                           series=_has_table(con, "series_dates"))
     return where, params, None
 
 
@@ -1573,10 +1637,13 @@ def facet_rows(person: str = "", date_from: str = "", date_to: str = "",
         # An index from before 11.1 carries no addresses – the count
         # still works, only the external mark stays away (as on the page).
         adresse = "who_mail" if _hat_spalte(con, "who_mail") else "NULL"
+        # A series counts by its date inside the window, as the list shows it.
+        series = _has_table(con, "series_dates")
+        eff, values = _effective(*_zeitraum(date_from, date_to, 0), series)
         rows = con.execute(
-            f"SELECT who, {adresse}, date, src FROM chunks WHERE seq = 0 AND {where}",
-            params).fetchall()
-        return {"rows": [(r[0], r[1], r[2], r[3]) for r in rows]}
+            f"SELECT who, {adresse}, date, src, ts, {eff} AS eff, {'series' if series else 'NULL'} "
+            f"FROM chunks WHERE seq = 0 AND {where}", [*values, *params]).fetchall()
+        return {"rows": [(r[0], r[1], _window_date(r[2], r[4], r[5], r[6]), r[3]) for r in rows]}
     finally:
         con.close()
 
@@ -1642,16 +1709,19 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
             mail_bcc, with_attachments)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
-        # Plain "ts DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
+        # Plain "DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
         # below every value, so DESC already puts undated messages last – same
-        # order, but ix_chunks_msg_ts can serve it without a temp sort.
+        # order, but ix_chunks_msg_ts can serve it without a temp sort. A
+        # series inside a window sorts by its date in it (_effective).
+        von, bis = _zeitraum(date_from, date_to, days)
+        eff, values = _effective(von, bis, _has_table(con, "series_dates"))
         rows = con.execute(
-            f"SELECT * FROM chunks WHERE seq = 0 AND {where} "
-            f"ORDER BY ts DESC LIMIT ? OFFSET ?",
-            [*params, max(1, k), max(0, offset)]).fetchall()
+            f"SELECT *, {eff} AS eff FROM chunks WHERE seq = 0 AND {where} "
+            f"ORDER BY eff DESC LIMIT ? OFFSET ?",
+            [*values, *params, max(1, k), max(0, offset)]).fetchall()
         pc = max(0, min(preview_chars, 2000))
         return {"count": len(rows), "offset": max(0, offset),
-                "results": _mit_faellen([_hit(r, None, pc) for r in rows])}
+                "results": _mit_faellen([_series_date_in(r, _hit(r, None, pc)) for r in rows])}
     finally:
         con.close()
 

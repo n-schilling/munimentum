@@ -59,6 +59,10 @@ MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 #      too, with its sender, time and id: a conversation of them alone was
 #      read again on every run, and its one record changed identity as
 #      soon as someone typed
+#
+# The calendar is not under this number: its files are read on every run
+# (rag_index.lese_bestand), so a corrected calendar reader reaches every
+# archive without a re-read of the rest.
 PARSER = 5
 
 

@@ -84,3 +84,9 @@ OFFER = "Offer 4711"         # what is being negotiated with the provider
 def day(month, number, hour=9, minute=0):
     """A timestamp in the archive's year – the one date helper."""
     return datetime(YEAR, month, number, hour, minute)
+
+
+def graph_node(when):
+    """A naive UTC moment as Graph writes a start or end: the one builder
+    of that node, for the story, the bulk and the tests alike."""
+    return {"dateTime": when.strftime("%Y-%m-%dT%H:%M:%S.0000000"), "timeZone": "UTC"}

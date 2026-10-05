@@ -222,7 +222,7 @@ DYNAMISCH = (
     ("org.change.", ("joined", "moved", "changed", "left")),
     ("org.field.", ("title", "department", "office", "company", "city", "country",
                     "mail", "manager", "place")),
-    ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone")),
+    ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone", "removed")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),
     ("progress.unit.", ("chats", "mails", "embeddings", "files", "tasks",

@@ -225,9 +225,9 @@ def test_deleted_only_shows_what_microsoft_no_longer_has(archive_page, archive):
     archive_page.check("#f-gone")
     archive_page.keyboard.press("Escape")
     hits = search(archive_page)
-    # One mail, one file, one task – and the chat messages deleted at
-    # Microsoft after they were archived.
-    gone = 3 + len(sources.DELETED)
+    # One mail, one file, one task, one appointment – and the chat
+    # messages deleted at Microsoft after they were archived.
+    gone = 4 + len(sources.DELETED)
     assert hits.count() == gone
     # Every one of them is marked as gone, and the archive still has it.
     expect(archive_page.locator("#results .hit .tag.weg")).to_have_count(gone)

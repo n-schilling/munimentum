@@ -51,7 +51,7 @@ import teams_export
 import todo_export
 
 from testdata import bulk, people
-from testdata.people import day
+from testdata.people import day, graph_node
 
 ME, ME_MAIL = people.ME
 # The story's cast by name – the rest of the people are the volume's, and
@@ -431,27 +431,67 @@ def write_mail(root):
 # Outlook: calendar
 # ---------------------------------------------------------------------------
 def _event(key, calendar, subject, start, minutes, organizer, attendees,
-           location="", body="", all_day=False, rrule=None):
-    """A Graph event – built here, turned into .ics by the exporter."""
+           location="", body="", all_day=False, rrule=None, series=None, zone=None,
+           show_as="busy", cancelled=False):
+    """A Graph event – built here, turned into .ics by the exporter. A
+    series carries its rule (`rrule`, Graph's recurrence), its zone (a
+    Windows name, as Graph sends it) and what the view listed of it
+    (`series`: the SeriesBook row – dates taken out, exceptions)."""
     ende = start + timedelta(days=1 if all_day else 0, minutes=0 if all_day else minutes)
-    def node(when):
-        return {"dateTime": when.strftime("%Y-%m-%dT%H:%M:%S.0000000"),
-                "timeZone": "UTC"}
     ev = {"id": f"event-{key}", "iCalUId": f"{key}@{people.DOMAIN}",
           "subject": subject, "isAllDay": all_day,
-          "start": node(start), "end": node(ende),
+          "start": graph_node(start), "end": graph_node(ende),
           "location": {"displayName": location},
           "body": {"contentType": "text", "content": body},
           "organizer": {"emailAddress": {"name": organizer[0], "address": organizer[1]}},
           "attendees": [{"type": "required",
                          "emailAddress": {"name": n, "address": m}}
                         for n, m in attendees],
-          "showAs": "busy", "isCancelled": False,
+          "showAs": show_as, "isCancelled": cancelled,
           "createdDateTime": graph_time(start - timedelta(days=7)),
           "lastModifiedDateTime": graph_time(start - timedelta(days=3))}
     if rrule:
         ev["recurrence"] = rrule
+        ev["originalStartTimeZone"] = zone or "W. Europe Standard Time"
+        ev["series"] = series or {"occ": {}, "ex": {}, "del": []}
     return ev
+
+
+def _weekday_on_or_after(when):
+    """The first Monday to Friday from `when` on – the archive's year
+    changes, a series' first date must be one of its own."""
+    while when.weekday() > 4:
+        when += timedelta(days=1)
+    return when
+
+
+# The weekday lunch: a series without an end, the one every week of the
+# year has – one date moved to another room, one taken out.
+LUNCH_START = _weekday_on_or_after(day(1, 5, 11, 30))   # 12:30 Berlin in winter
+LUNCH_MOVED = _weekday_on_or_after(LUNCH_START + timedelta(days=7))
+LUNCH_OUT = _weekday_on_or_after(LUNCH_MOVED + timedelta(days=1))
+LUNCH_SERIES = {
+    "occ": {}, "del": [LUNCH_OUT.strftime("%Y-%m-%dT%H:%M:%S")],
+    "ex": {LUNCH_MOVED.strftime("%Y-%m-%dT%H:%M:%S"): {
+        "subject": "Team lunch (restaurant closed)", "isAllDay": False,
+        "start": graph_node(LUNCH_MOVED + timedelta(minutes=30)),
+        "end": graph_node(LUNCH_MOVED + timedelta(minutes=75)),
+        "location": "Pizzeria Rossi", "isCancelled": False, "showAs": "busy",
+        "lastModifiedDateTime": graph_time(LUNCH_MOVED - timedelta(days=1))}}}
+# The month opener: the first weekday of every month – Graph's
+# relativeMonthly with five days, one date cancelled by the organiser.
+OPENER_START = _weekday_on_or_after(day(1, 1, 8, 0))       # 09:00 Berlin in winter
+OPENER_CANCELLED = _weekday_on_or_after(day(4, 1, 7, 0))   # 09:00 Berlin in summer
+OPENER_SERIES = {
+    "occ": {}, "del": [],
+    "ex": {OPENER_CANCELLED.strftime("%Y-%m-%dT%H:%M:%S"): {
+        "subject": "Month opener", "isAllDay": False,
+        "start": graph_node(OPENER_CANCELLED), "end": graph_node(OPENER_CANCELLED + timedelta(minutes=30)),
+        "location": "", "isCancelled": True, "showAs": "busy",
+        "lastModifiedDateTime": graph_time(OPENER_CANCELLED - timedelta(days=2))}}}
+# A meeting that was deleted at Microsoft after it was exported: the file
+# stays, the bookkeeping says since when it is gone.
+GONE_EVENT = "vendor-call"
 
 
 EVENTS = [
@@ -491,17 +531,53 @@ EVENTS = [
         rrule={"pattern": {"type": "weekly", "interval": 1,
                            "daysOfWeek": ["monday"]},
                "range": {"type": "numbered", "numberOfOccurrences": 8}})),
+    ("Calendar", _event(
+        "team-lunch", "Calendar", "Team lunch",
+        LUNCH_START, 45, people.ME, [BOB, CARLA], location="Staff restaurant",
+        rrule={"pattern": {"type": "weekly", "interval": 1,
+                           "daysOfWeek": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+                           "firstDayOfWeek": "monday"},
+               "range": {"type": "noEnd"}},
+        series=LUNCH_SERIES)),
+    ("Calendar", _event(
+        "month-opener", "Calendar", "Month opener",
+        OPENER_START, 30, CARLA, [people.ME, BOB], location="Board room",
+        body="The month's numbers and the week's priorities.",
+        rrule={"pattern": {"type": "relativeMonthly", "interval": 1,
+                           "daysOfWeek": ["weekday"], "index": "first"},
+               "range": {"type": "numbered", "numberOfOccurrences": 12}},
+        series=OPENER_SERIES)),
+    ("Calendar", _event(
+        GONE_EVENT, "Calendar", "Vendor call (cancelled later)",
+        day(5, 12, 14, 0), 30, DANA, [people.ME], location="Phone")),
 ]
 
 
 def write_calendar(root):
-    written, inventory = [], []
+    """The calendars as the export leaves them: one .ics per event, a
+    series as one file with its exceptions and the dates taken out
+    (outlook_export.build_ics), the series book beside it – and a meeting
+    deleted at Microsoft after it was exported, gone in the bookkeeping."""
+    written, inventory, book = [], [], {}
     log = _done_log(root)
+    db = state_db.StateDb(root)
     for calendar, ev in EVENTS:
+        ev = dict(ev)
+        series = ev.pop("series", None)
         rel = (f"{outlook_export.KALENDER_DIR}/{export_util.safe(calendar)}/"
                f"{outlook_export.event_filename(ev)}")
-        written.append(write(root / rel, outlook_export.build_ics(ev)))
+        ics = None
+        if series is not None:
+            book[ev["id"]] = series
+            holder = outlook_export.SeriesBook(db)
+            holder.rows[ev["id"]] = series
+            ics = outlook_export.build_ics(ev, holder.for_ics(ev["id"], ev))
+        written.append(write(root / rel, ics or outlook_export.build_ics(ev)))
         log.mark(ev["id"], rel)
+    db.saetze_schreiben(outlook_export.SERIES_AREA,
+                        {master: json.dumps(row) for master, row in book.items()})
+    db.verschwunden_ergaenzen([log.done[f"event-{GONE_EVENT}"]],
+                              day(5, 13, 9, 0).replace(tzinfo=UTC).isoformat(timespec="seconds"))
     log.close()
     for i, name in enumerate(dict.fromkeys(c for c, _ in EVENTS)):
         inventory.append({"id": f"calendar-{i:02d}",
@@ -1251,7 +1327,8 @@ def write_onenote(root):
 # is in them – fifty boards of seven cards would be a filing cabinet, not
 # an archive.
 MAILS += bulk.mails(bulk.more(MAILS))
-EVENTS += bulk.events(_event, bulk.more(EVENTS))
+EVENTS += bulk.events(_event, bulk.CALENDAR_FACTOR * bulk.more(EVENTS))
+EVENTS += bulk.series(_event, bulk.FACTOR)
 CONTACTS += bulk.contacts(bulk.more(CONTACTS))
 CONVERSATIONS += bulk.conversations(_msg, bulk.more(CONVERSATIONS))
 # A picture comes back without content: the one PNG stands for all of them,

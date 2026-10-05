@@ -178,6 +178,8 @@ def _termin(row, text, ziel):
         name, params, value = corpus._prop(line)
         if not name:
             continue
+        if name == "END" and value.strip().upper() == "VEVENT":
+            break                        # a series: its exceptions follow, the facts are the master's
         if name == "DTSTART":
             tag = "VALUE=DATE" in (params or "").upper()
             out["allday"] = tag

@@ -41,7 +41,7 @@ import sqlite3
 from email import policy
 from email.parser import BytesParser
 from email.utils import parsedate_to_datetime
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from urllib.parse import quote, unquote
 
@@ -49,9 +49,10 @@ import export_util
 import progress
 import settings
 import state_db
+import recurrence
 # The parser primitives for .eml, iCalendar and vCard live in corpus.py –
 # they are only reused here, not maintained a second time.
-from corpus import addr_people, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
+from corpus import addr_people, grabsteine, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
 
 export_util.erzwinge_utf8()
 
@@ -238,12 +239,13 @@ def read_outlook(root, out_dir, invites, db=None):
 def _new_event():
     """The VEVENT fields the reconstruction works with – a fresh dict each
     time, the lists must not be shared between events."""
-    return {"uid": "", "recid": "", "summary": "", "location": "",
+    return {"uid": "", "recid": "", "recid_tz": "", "summary": "", "location": "",
             "description": "", "dtstart": "", "dateonly": False,
             "tzstart": "", "dtend": "", "enddateonly": False,
             "tzend": "", "status": "", "seq": 0,
             "org_cn": "", "org_mail": "",
-            "att_names": [], "att_mails": []}
+            "att_names": [], "att_mails": [],
+            "rrule": "", "exdates": []}
 
 
 def parse_vevents(text):
@@ -279,6 +281,12 @@ def parse_vevents(text):
             ev["uid"] = value.strip()
         elif name == "RECURRENCE-ID":
             ev["recid"] = value.strip()
+            ev["recid_tz"] = _pval(params, "TZID")
+        elif name == "RRULE":
+            ev["rrule"] = value.strip()
+        elif name == "EXDATE":
+            tz = _pval(params, "TZID")
+            ev["exdates"] += [(v.strip(), tz) for v in value.split(",") if v.strip()]
         elif name == "SUMMARY":
             ev["summary"] = _unescape(value)
         elif name == "LOCATION":
@@ -337,18 +345,119 @@ def event_rec(ev, *, ctx, href, status, cal):
     }
 
 
-def read_calendar(root, out_dir):
+def read_calendar(root, out_dir, now=None, since=None):
+    """Every .ics as calendar records: a single event one record, a series
+    (RRULE) one per date – its exceptions in place of the dates they
+    stand for, its EXDATEs left out, counted on the series' own clock
+    (recurrence.py), from `since` (where the export's window begins; None
+    is everything) to two years ahead (recurrence.horizon). What the
+    bookkeeping says is gone at Microsoft keeps its records, marked
+    `removed` – the same tombstones the index reads."""
+    gone = grabsteine("outlook", root)
+    horizon = recurrence.horizon(now)
     recs = []
     for p in sorted(root.rglob("*.ics")):
+        rel = p.relative_to(root).as_posix()
         _, events = parse_vevents(p.read_text(encoding="utf-8", errors="replace"))
         if not events:
             continue
-        ev = events[0]                       # the export stores one event per file
-        segs = p.relative_to(root).as_posix().split("/")
+        ev = events[0]                       # the first VEVENT is the event, or the series' master
+        segs = rel.split("/")
         cal = segs[1] if len(segs) >= 3 and segs[0] == "kalender" else "Kalender"
-        recs.append(event_rec(ev, ctx=f"Kalender: {cal}", href=link(p, out_dir),
-                              status=ev["status"] or "confirmed", cal=cal))
+        status = "removed" if rel in gone else (ev["status"] or "confirmed")
+        href = link(p, out_dir)
+        if ev["rrule"]:
+            recs += series_records(ev, events[1:], ctx=f"Kalender: {cal}", href=href,
+                                   status=status, cal=cal, horizon=horizon, since=since)
+        else:
+            recs.append(event_rec(ev, ctx=f"Kalender: {cal}", href=href, status=status, cal=cal))
     return recs
+
+
+def series_records(ev, exceptions, *, ctx, href, status, cal, horizon, since=None):
+    """The dates of one series as records, from `since` to `horizon`.
+    `exceptions` are the VEVENTs with a RECURRENCE-ID: each replaces the
+    date it names – moved, renamed, or cancelled (its STATUS) – and says
+    the slot it stands for (`rts`), which a cancellation mail names."""
+    setup = recurrence.series_setup(ev["dtstart"], ev["tzstart"], ev["dateonly"], ev["rrule"], ev["exdates"])
+    if setup is None:
+        return [event_rec(ev, ctx=ctx, href=href, status=status, cal=cal)]
+    start, rule, exdates, tz = setup
+    end = recurrence.parse_wall(ev["dtend"], tz) if ev["dtend"] else None
+    length = (end - start).total_seconds() if end is not None and type(end) is type(start) else None
+    by_key = {}
+    for ex in exceptions:
+        key = recurrence.key_of(ex["recid"], ex["recid_tz"], tz)
+        if key:
+            by_key[key] = ex
+    # The master's record once; every plain date is a copy with its own
+    # time – no .ics line is written and read back for it.
+    base = event_rec(ev, ctx=ctx, href=href, status=status, cal=cal)
+    out, placed = [], set()
+    for when in recurrence.expand(start, rule, exdates=exdates,
+                                  horizon_end=recurrence.bound(start, horizon),
+                                  horizon_start=recurrence.bound(start, since) if since is not None else None):
+        ts, disp = _when_of(when)
+        key = recurrence.wall_key(when)
+        placed.add(key)
+        ex = by_key.get(key)
+        plain = dict(base, ts=ts, d=disp, te=(ts + length) if ts is not None and length is not None else None)
+        if ex is None:
+            out.append(plain)
+            continue
+        own = status if status == "removed" else (ex["status"] or "confirmed")
+        if ex["dtstart"]:
+            rec = event_rec(ex, ctx=ctx, href=href, status=own, cal=cal)
+        else:
+            # An exception without a time of its own: the slot's, with
+            # what the exception says of it.
+            rec = dict(plain, st=own, loc=ex["location"] or plain["loc"],
+                       x=(ex["description"] or "")[:BODY_CAP] or plain["x"])
+        if not ex["summary"]:
+            rec["title"] = base["title"]
+        else:
+            rec["title"] = ex["summary"]
+        if not ex["org_cn"] and not ex["org_mail"]:
+            rec["who"] = base["who"]
+        if not ex["att_names"] and not ex["att_mails"]:
+            rec["att"] = base["att"]
+        rec["uid"] = ev["uid"]
+        rec["rts"] = ts
+        out.append(rec)
+    # A date moved into the window from a slot outside it (or from one the
+    # rule no longer makes): its own start says where it is.
+    for key, ex in by_key.items():
+        if key in placed or not ex["dtstart"]:
+            continue
+        rec = event_rec(ex, ctx=ctx, href=href,
+                        status=status if status == "removed" else (ex["status"] or "confirmed"), cal=cal)
+        if rec["ts"] is None or not _inside(rec["ts"], since, horizon):
+            continue
+        if not ex["summary"]:
+            rec["title"] = base["title"]
+        if not ex["org_cn"] and not ex["org_mail"]:
+            rec["who"] = base["who"]
+        if not ex["att_names"] and not ex["att_mails"]:
+            rec["att"] = base["att"]
+        slot = recurrence.parse_wall(key, tz)
+        rec["uid"], rec["rts"] = ev["uid"], _when_of(slot)[0] if slot is not None else rec["ts"]
+        out.append(rec)
+    for rec in out:
+        rec["sr"] = 1                       # made by a rule: the window's business, not a change
+    return out
+
+
+def _inside(ts, since, horizon):
+    return (since is None or ts >= since.timestamp()) and ts <= horizon.timestamp()
+
+
+def _when_of(when):
+    """A date the rule made, as the record says it: the instant and the
+    display – the way _ics_when reads them off a file."""
+    if isinstance(when, datetime):
+        return when.timestamp(), when.astimezone().strftime("%Y-%m-%d %H:%M")
+    local = datetime(when.year, when.month, when.day)
+    return local.timestamp(), local.strftime("%Y-%m-%d")
 
 
 # Outlook puts a status in front of the subject of reply/cancellation mails –
@@ -399,10 +508,15 @@ def reconstruct_events(invites, cal_recs):
     Returns: (reconstructed records, number of calendar events marked
     cancelled after the fact, number of reconstructions discarded as dupes).
     """
-    known, same = {}, set()
+    known, same, by_minute = {}, set(), {}
     for r in cal_recs:
         if r.get("uid"):
             known.setdefault(norm_uid(r["uid"]), []).append(r)
+            # A date of a series by its minute – and a moved date by the
+            # slot it stands for too: a cancellation mail names that one.
+            for ts in {r.get("ts"), r.get("rts")}:
+                if ts:
+                    by_minute.setdefault((norm_uid(r["uid"]), int(ts // 60)), []).append(r)
         if r.get("ts"):
             same.add((r["title"].strip().lower(), int(r["ts"] // 60)))
 
@@ -431,6 +545,17 @@ def reconstruct_events(invites, cal_recs):
                 continue
             if not cancel:
                 continue      # instance without cancellation is already in the series event
+            # One date of a series the mail cancels: the date's own record
+            # (the series unfolded) takes the status; no second entry.
+            it = cancel[1]
+            ts, _ = _ics_when(it["ev"]["recid"], it["ev"]["dateonly"], it["ev"].get("recid_tz", ""))
+            hits = by_minute.get((uid, int(ts // 60))) if ts else None
+            if hits:
+                for r in hits:
+                    if r["st"] not in ("cancelled", "removed"):
+                        r["st"] = "cancelled"
+                        marked += 1
+                continue
         it = (cancel or g["best"])[1]
         ev = it["ev"]
         if not ev["dtstart"]:
@@ -511,7 +636,7 @@ def link(path, out_dir):
         return Path(path).as_uri()
 
 
-def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
+def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True, now=None, since=None):
     """Deliver calendar, contacts and reconstructed events as plain data.
 
     Paths come as `root` + `rel` (unencoded) instead of a finished link:
@@ -539,7 +664,7 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
             read_outlook(root, root, invites, db)
         finally:
             db.close()
-    cal = read_calendar(root, root)
+    cal = read_calendar(root, root, now=now, since=since)
     if reconstruct:
         ghosts, marked, dupes = reconstruct_events(invites, cal)
     contacts = read_contacts(root, root)
@@ -549,6 +674,7 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
         r["root"] = "outlook"
         r["rel"] = unquote(r.pop("p", ""))
         r.pop("uid", None)          # only needed for the matching above, ~1 MB
+        r.pop("rts", None)          # the slot a moved date stands for – matching only
         # Only the search over reconstructed events needs the people list
         # and the description. Across all events they make up two thirds of
         # the response without anyone ever reading them.
@@ -559,6 +685,7 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
             r.pop("ppl", None)
             r.pop("x", None)
     recs.sort(key=lambda r: (r["ts"] is None, -(r["ts"] or 0)))
+    series_rows = [i for i, r in enumerate(recs) if r.pop("sr", None)]
     return {
         "generated": datetime.now().isoformat(timespec="seconds"),
         "outlook_dir": str(root),
@@ -566,6 +693,13 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True):
         # could only read an empty list as "there was nothing", not as
         # "nobody looked in the first place".
         "reconstruct": bool(reconstruct),
+        # The window the series were unfolded in, and which records a rule
+        # made (their places in `recs`): the next build counts a rule-made
+        # record that entered or left with the window as the window moving,
+        # not as an appointment that changed.
+        "since": since.timestamp() if since else None,
+        "horizon": recurrence.horizon(now).timestamp(),
+        "series": series_rows,
         "counts": {"kalender": len(cal), "rekonstruiert": len(ghosts),
                    "kontakte": len(contacts), "abgesagt_markiert": marked,
                    "doppel_verworfen": dupes},
@@ -579,25 +713,45 @@ def _signatures(recs):
     return [json.dumps(r, ensure_ascii=False, sort_keys=True) for r in recs]
 
 
-def _previous_signatures(ziel):
+def _previous(ziel):
+    """The file as it lies: its signatures, the rule-made ones with their
+    time, and its window – nothing of either when it is from before the
+    series were unfolded."""
     try:
         alt = json.loads(Path(ziel).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return set()
-    recs = alt.get("recs") if isinstance(alt, dict) else None
-    return set(_signatures(r for r in recs or [] if isinstance(r, dict)))
+        alt = None
+    if not isinstance(alt, dict):
+        return {"sigs": set(), "rule": {}, "since": None, "horizon": None}
+    recs = [r for r in alt.get("recs") or [] if isinstance(r, dict)]
+    sigs = _signatures(recs)
+    rule = {sigs[i]: recs[i].get("ts") for i in alt.get("series") or [] if isinstance(i, int) and i < len(recs)}
+    return {"sigs": set(sigs), "rule": rule, "since": alt.get("since"), "horizon": alt.get("horizon")}
 
 
-def write_calendar_json(outlook_dir, ziel, reconstruct=True):
+def write_calendar_json(outlook_dir, ziel, reconstruct=True, since=None, now=None):
     """Write the calendar data to `ziel` (atomically). Returns the counts,
     with `changed` – the records not in the previous file as they are now,
-    new or changed – and `removed`, those of the previous file gone."""
-    daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct)
+    new or changed – and `removed`, those of the previous file gone. A
+    series' date that entered or left with the window – the horizon moves
+    with the day, the start with the month – is neither: rule-made records
+    count only inside the window both files share."""
+    daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct, now=now, since=since)
     ziel = Path(ziel)
-    vorher = _previous_signatures(ziel)
+    before = _previous(ziel)
     jetzt = _signatures(daten["recs"])
-    changed = sum(1 for s in jetzt if s not in vorher)
-    removed = len(vorher - set(jetzt))
+    rule_rows = set(daten["series"])
+    starts = [x for x in (before["since"], daten["since"]) if x is not None]
+    ends = [x for x in (before["horizon"], daten["horizon"]) if x is not None]
+    lo, hi = (max(starts) if starts else None), (min(ends) if ends else None)
+
+    def shared(ts):
+        return ts is None or ((lo is None or ts >= lo) and (hi is None or ts <= hi))
+    now_set = set(jetzt)
+    changed = sum(1 for i, (r, s) in enumerate(zip(daten["recs"], jetzt, strict=True))
+                  if s not in before["sigs"] and (i not in rule_rows or shared(r.get("ts"))))
+    removed = sum(1 for s in before["sigs"]
+                  if s not in now_set and (s not in before["rule"] or shared(before["rule"][s])))
     ziel.parent.mkdir(parents=True, exist_ok=True)
     tmp = ziel.with_name(ziel.name + ".tmp")
     tmp.write_text(json.dumps(daten, ensure_ascii=False), encoding="utf-8")
@@ -636,7 +790,9 @@ def main():
     # The app passes exactly one positional: the Outlook export.
     outlook_dir = export_util.ausgabeordner(pos)
 
-    c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct)
+    since = recurrence.months_back(datetime.now(UTC),
+                                   settings.number("CALENDAR_MONTHS_BACK", "calendar_months_back", low=0))
+    c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct, since=since)
     # Same result schema as every other subprogram. The file is rebuilt as
     # a whole, but "new" is only what the last build did not have as it is
     # now; the totals stay in the extra.

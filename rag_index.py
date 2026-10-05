@@ -31,6 +31,7 @@ work lexically (BM25), only the semantic half of hybrid ranking is missing.
 
 import json
 import time
+from datetime import UTC, datetime
 import sqlite3
 import argparse
 from pathlib import Path
@@ -40,6 +41,7 @@ import numpy as np
 
 import analytics_db
 import corpus
+import recurrence
 import schluessel
 import export_util
 import ollama_client
@@ -92,6 +94,50 @@ def embed(texts, model, url, timeout=600):
 # --------------------------------------------------------------------------
 # Writing the SQLite store
 # --------------------------------------------------------------------------
+def _series_rows(chunks, now=None, since=None):
+    """(uid, ts) for every date of every series among the chunks, from
+    `since` as far as the calendar view unfolds them – what the search's
+    date filter holds a window against (mcp_server._where)."""
+    limit = recurrence.horizon(now)
+    seen = set()
+    for c in chunks:
+        raw = c.get("series")
+        if not raw or c["uid"] in seen:
+            continue
+        seen.add(c["uid"])
+        try:
+            s = json.loads(raw)
+            setup = recurrence.series_setup(s["start"], s.get("tz"), s.get("all_day"),
+                                            s.get("rrule"), s.get("exdates"))
+        except (ValueError, TypeError, KeyError):
+            continue
+        if setup is None:
+            continue
+        start, rule, exdates, tz = setup
+        # A moved date is where its own start says, not at its slot – and
+        # a slot outside the window may have been moved into it.
+        moved = {}
+        for e in s.get("ex") or []:
+            slot = recurrence.key_of(e.get("rid"), e.get("rtz"), tz)
+            own = None
+            if e.get("start"):
+                own = (recurrence.parse_wall(e["start"]) if e.get("date")
+                       else recurrence.parse_wall(e["start"], recurrence.zone(e.get("tz")) or tz))
+            if slot:
+                moved[slot] = own
+        lo = recurrence.stamp(recurrence.bound(start, since)) if since is not None else None
+        hi = recurrence.stamp(recurrence.bound(start, limit))
+        for when in recurrence.expand(start, rule, exdates=exdates, horizon_end=recurrence.bound(start, limit),
+                                      horizon_start=recurrence.bound(start, since) if since is not None else None):
+            key = recurrence.wall_key(when)
+            own = moved.pop(key, None) if key in moved else when
+            if own is not None:
+                yield c["uid"], recurrence.stamp(own)
+        for own in moved.values():
+            if own is not None and (lo is None or recurrence.stamp(own) >= lo) and recurrence.stamp(own) <= hi:
+                yield c["uid"], recurrence.stamp(own)
+
+
 def _chunk_row(i, c):
     seq = int(c["cid"].rsplit("#", 1)[1])
     try:
@@ -113,7 +159,9 @@ def _chunk_row(i, c):
             # One mail line each (13.0): who stood in To, in Cc, in Bcc.
             c.get("to_ppl") or None,
             c.get("cc_ppl") or None,
-            c.get("bcc_ppl") or None)
+            c.get("bcc_ppl") or None,
+            # A series of appointments (14.3): its rule as JSON, see corpus
+            c.get("series") or None)
 
 
 def _people_rows(chunks):
@@ -157,11 +205,21 @@ def _adressen_rows(chunks):
     return [(rolle, addr, n) for (rolle, addr), n in agg.items()]
 
 
-def write_db(store, chunks, manifest=None):
+def window_start(now=None):
+    """Where the calendar's window begins (the setting the export reads
+    the calendar by): a series is unfolded from there for the index, as
+    the view unfolds it. None means everything."""
+    return recurrence.months_back(now or datetime.now(UTC),
+                                  settings.number("CALENDAR_MONTHS_BACK", "calendar_months_back", low=0))
+
+
+def write_db(store, chunks, manifest=None, now=None, since=None):
     """Rewrite corpus.db atomically (first .tmp, then replace).
 
     `manifest` – (root, rel) -> (mtime_ns, size) of every file read – goes
-    in as its own table, so the next run can tell which files to skip."""
+    in as its own table, so the next run can tell which files to skip.
+    `now` is where the series' dates are counted to, `since` from
+    (window_start; tests pass both)."""
     dbp = store_layout.db_path(store)
     tmp = dbp.with_name(dbp.name + ".tmp")
     tmp.unlink(missing_ok=True)
@@ -189,7 +247,11 @@ def write_db(store, chunks, manifest=None):
             -- say in which line – "from her to him", not "both somewhere".
             to_ppl TEXT,
             cc_ppl TEXT,
-            bcc_ppl TEXT);                -- only in mail one sent oneself
+            bcc_ppl TEXT,                 -- only in mail one sent oneself
+            -- A series of appointments is one item: its start, zone, rule
+            -- and the dates taken out as JSON (corpus._calendar_file), from
+            -- which series_dates below is unfolded on every run.
+            series TEXT);
         CREATE INDEX ix_chunks_uid ON chunks(uid);
         -- A case names its items by key: the case filter and the membership
         -- mark on every hit look it up.
@@ -212,6 +274,14 @@ def write_db(store, chunks, manifest=None):
         -- Teilindex scannt SQLite alle Chunks und sortiert sie temporär: 48 ms
         -- statt 0,06 ms bei 270k Chunks. Kostet ~1 MB.
         CREATE INDEX ix_chunks_msg_ts ON chunks(ts DESC) WHERE seq = 0;
+        -- Every date a series makes, as far as the calendar unfolds it
+        -- (recurrence.horizon): the date filter asks this table too, so a
+        -- week finds the series that has a date in it, not only the one
+        -- that starts there. Rebuilt on every run, so the horizon moves.
+        CREATE TABLE series_dates(uid TEXT NOT NULL, ts REAL NOT NULL);
+        CREATE INDEX ix_series_dates_ts ON series_dates(ts);
+        -- The date one series has inside a window, per hit (mcp_server._effective).
+        CREATE INDEX ix_series_dates_uid ON series_dates(uid, ts);
         CREATE TABLE people(src TEXT, who TEXT, messages INTEGER, ppl TEXT);
         CREATE INDEX ix_people_who ON people(who);
         -- The addresses of the mail archive, per line and with their weight:
@@ -231,14 +301,20 @@ def write_db(store, chunks, manifest=None):
                              mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL,
                              PRIMARY KEY (root, rel));
     """)
-    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (_chunk_row(i, c) for i, c in enumerate(chunks)))
+    con.executemany("INSERT INTO series_dates VALUES (?,?)", _series_rows(chunks, now, since))
     con.executemany("INSERT INTO dateien VALUES (?,?,?,?)",
                     ((root, rel, mtime, size) for (root, rel), (mtime, size)
                      in (manifest or {}).items()))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.executemany("INSERT INTO adressen VALUES (?,?,?)", _adressen_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+    # The planner's statistics. With them a date window that also asks
+    # series_dates (mcp_server._where) is two index seeks and a sort;
+    # without them SQLite walks every row from the newest down – measured
+    # on a 200k-chunk index: a week of 2020 took 127 ms, now 0.7 ms.
+    con.execute("ANALYZE")
     con.commit()
     con.close()
     tmp.replace(dbp)
@@ -398,6 +474,11 @@ def _alter_bestand(store):
         # its chunks get theirs on the way through (schluessel.zuweisen).
         if "key" in vorhanden:
             spalten += ("key",)
+        # A series' rule (14.3). Calendar files are read on every run
+        # (lese_bestand), so an index without the column has nothing to
+        # carry over for them – everything else is carried as before.
+        if "series" in vorhanden:
+            spalten += ("series",)
         chunks = {}
         for row in con.execute(f"SELECT {', '.join(spalten)} FROM chunks "
                                "ORDER BY id"):
@@ -540,7 +621,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
         saved = retire_vectors(store)
         if saved:
             progress.event("run.index.saved_stale", n=saved)
-        write_db(store, chunks, manifest)
+        write_db(store, chunks, manifest, since=window_start())
         write_info(store, None, 0, len(chunks))
         return len(chunks), 0, 0
 
@@ -601,7 +682,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     vectors = [leer if v is None else v for v in vectors]
 
     V, vp = save_vectors(store, np.vstack(vectors))
-    write_db(store, chunks, manifest)
+    write_db(store, chunks, manifest, since=window_start())
     write_info(store, model, V.shape[1], len(chunks), vp)
     # Everything is back in the vector file – the hash backup is no longer
     # needed.

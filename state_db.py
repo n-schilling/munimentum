@@ -373,6 +373,15 @@ class StateDb:
                 "ON CONFLICT(rel) DO NOTHING",
                 [(rel, jetzt) for rel in rels])
 
+    def tombstones_remove(self, rels):
+        """Take named tombstones back – an item seen alive again (a file
+        written or listed again) – without touching the rest."""
+        if not rels:
+            return
+        con = self._verbinden()
+        with con:
+            con.executemany("DELETE FROM verschwunden WHERE rel = ?", [(rel,) for rel in rels])
+
     def verschwunden_ersetzen(self, eintraege):
         """Replace the tombstones wholesale – Outlook's healing path: a mail
         that reappears (it was merely moved) gets its marker withdrawn."""
@@ -632,6 +641,9 @@ class DbZustand:
 
     def verschwunden_ergaenzen(self, rels, jetzt):
         self.db.verschwunden_ergaenzen(rels, jetzt)
+
+    def tombstones_remove(self, rels):
+        self.db.tombstones_remove(rels)
 
     def baum_lesen(self):
         return self.db.baum_lesen()

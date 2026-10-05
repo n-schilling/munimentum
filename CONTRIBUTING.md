@@ -72,9 +72,9 @@ every pull request. A failed one leaves a screenshot in `tests/ui/output/`.
 Most of them need an archive with something in it, and that archive is
 generated – `testdata/` writes a whole profile with all eight sources
 and an organization, every name and file in it invented. It is not a handful of files but a
-year of traffic: some two and a half thousand of them, a few thousand
-items, enough that a result runs over pages and a timeline needs its
-band. You can open it yourself:
+year of traffic: close to four thousand of them, several thousand items,
+fifty series of appointments among them, enough that a result runs over
+pages and a timeline needs its band. You can open it yourself:
 
 ```
 python3 -m testdata.build --profile testdaten   # writes profiles/testdaten/

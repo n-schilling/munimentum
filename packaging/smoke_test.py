@@ -38,6 +38,7 @@ No network, no Graph, no Ollama – only the bundle itself.
 
 import json
 import os
+from datetime import UTC, datetime
 import re
 import shutil
 import socket
@@ -71,6 +72,22 @@ DTSTART:20250601T090000Z
 DTEND:20250601T100000Z
 END:VEVENT
 END:VCALENDAR"""
+
+# A series on a zone, without an end, so the calendar's window (a month
+# back by default) always holds dates of it: the bundle has to carry the
+# zone database (Windows ships none) – without it the wall time is read
+# as local time, and the instants are wrong on every runner outside Berlin.
+SERIES_ICS = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:rauchtest-serie
+SUMMARY:Rauchtest-Serie
+DTSTART;TZID=Europe/Berlin:20250106T123000
+DTEND;TZID=Europe/Berlin:20250106T131500
+RRULE:FREQ=WEEKLY;BYDAY=MO
+END:VEVENT
+END:VCALENDAR"""
+SERIES_UTC_TIMES = {"11:30", "10:30"}   # 12:30 Berlin in winter and in summer
 
 VCF = """BEGIN:VCARD
 VERSION:3.0
@@ -346,6 +363,7 @@ def testdaten(ordner):
     outlook = Path(ordner) / "outlook_export"
     (outlook / "kalender" / "Arbeit").mkdir(parents=True)
     (outlook / "kalender" / "Arbeit" / "termin.ics").write_text(ICS, encoding="utf-8")
+    (outlook / "kalender" / "Arbeit" / "serie.ics").write_text(SERIES_ICS, encoding="utf-8")
     (outlook / "kontakte" / "Team").mkdir(parents=True)
     (outlook / "kontakte" / "Team" / "alice.vcf").write_text(VCF, encoding="utf-8")
 
@@ -449,6 +467,11 @@ def pruefe(exe, daten, port, proc):
     if "Rauchtest-Termin" not in titel or "Alice Example" not in titel:
         raise Fehler(f"Kalender/Adressbuch unvollständig: {sorted(titel)}\n"
                      f"{protokoll(basis)}")
+    serie = sorted(r.get("ts") for r in kal.get("recs", []) if r.get("title") == "Rauchtest-Serie")
+    stunden = {datetime.fromtimestamp(ts, UTC).strftime("%H:%M") for ts in serie if ts}
+    if len(serie) < 3 or not stunden <= SERIES_UTC_TIMES:
+        raise Fehler(f"Die Serie zählt nicht auf ihrer Zeitzone (Zonendaten im Bündel?): "
+                     f"{len(serie)} Termine, Uhrzeiten {sorted(stunden)}\n{protokoll(basis)}")
 
     schritt("MCP-Server starten")
     r = sende(f"{basis}/api/v1/mcp", {"running": True}, methode="PATCH")

@@ -1,18 +1,19 @@
-## New in 14.2.1
+## New in 14.3.0
 
-- **A changed file can be recorded as it lies** – the evidence findings
-  offer it, with a question first: the chain gets a line per file naming
-  the checksum before and after, on your word.
-- **A re-download with the same size and date reaches the chain** – it
-  used to slip past the evidence step, and the check reported the file
-  changed from then on, whatever you fetched.
-- **Logs**: one person asked for a manager is “1 person”.
+- **A series of appointments is one file with its exceptions** – every date
+  it makes stands in the calendar, on the series’ own clock across the
+  clock change, and the month the calendar hands to the search finds the
+  series by any of them; a date moved, renamed, cancelled or taken out
+  shows as such.
+- **An appointment deleted at Microsoft is marked** – in the calendar and
+  behind the search’s *no longer at Microsoft* filter; the file stays, as
+  every file does.
 
 ## Upgrading
 
-Nothing happens once after this update. A file the check has been
-reporting changed since a re-download is settled once with the new
-*Record as it lies* in its findings window.
+The first run after this update reads every selected calendar once in full,
+so each series gets its dates, its exceptions and the dates taken out – the
+run says so in its log. Nothing else happens once.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

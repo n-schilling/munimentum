@@ -71,7 +71,9 @@ import state_db
 import graph_client
 import settings
 import progress
+import recurrence
 import versions
+import corpus
 
 try:
     # msal is only needed in auth.py (and only in login mode) – checked here
@@ -529,6 +531,9 @@ def zuruecknehmen(out, bekannt, bestand):
         return bekannt, 0
     behalten = {}
     for rel, wann in bekannt.items():
+        if not rel.startswith(MAIL_DIR + "/"):
+            behalten[rel] = wann             # a calendar's tombstone: not a mail's business
+            continue
         kennung = brief_kennung(out / rel)
         if kennung and kennung in bestand.briefe:
             continue
@@ -740,6 +745,11 @@ def _alte_datei_weg(out, alt, rel):
 
 
 MAIL_SELECT = "id,internetMessageId,subject,receivedDateTime,sentDateTime"
+
+# What the result event carries beside the counts: everything the runner
+# reads as a change of the corpus (runner.CORPUS_CHANGES) must be here, or
+# a run whose only change is a deletion skips the calendar and the index.
+RESULT_EXTRA = ("updated", "gone", "gone_new", "moved", "gone_healed")
 
 
 def erste_seiten(graph, db, selected):
@@ -1047,16 +1057,46 @@ def _stamp(node, all_day):
     return dt.strftime("%Y-%m-%d") if all_day else dt.strftime("%Y-%m-%d_%H%M")
 
 
-def build_rrule(recurrence, all_day):
-    if not recurrence:
+_WD_GROUPS = {"weekday": ["MO", "TU", "WE", "TH", "FR"], "weekendday": ["SA", "SU"],
+              "day": list(recurrence.WEEKDAYS)}
+
+
+def _rule_days(pat):
+    """Graph's daysOfWeek as RRULE weekdays – "weekday", "weekendDay" and
+    "day" spelled out."""
+    out = []
+    for d in pat.get("daysOfWeek") or []:
+        for wd in (_WD_GROUPS.get(d.lower()) or ([_WD[d.lower()]] if d.lower() in _WD else [])):
+            if wd not in out:
+                out.append(wd)
+    return out
+
+
+def _relative_byday(pat):
+    """A relative pattern ("the second Tuesday", "the first weekday", "the
+    last weekend day"): one day takes its ordinal, several days are the
+    set the ordinal picks from (BYSETPOS) – BYDAY=1MO,1TU would mean two
+    dates a month."""
+    days, idx = _rule_days(pat), _IDX.get(pat.get("index", "first"), 1)
+    if not days:
+        return []
+    if len(days) == 1:
+        return [f"BYDAY={idx}{days[0]}"]
+    return ["BYDAY=" + ",".join(days), f"BYSETPOS={idx}"]
+
+
+def build_rrule(recurrence_, all_day, tz=None):
+    """Graph's recurrence as the RRULE the .ics carries (recurrence.py
+    reads it back). `tz` is the series' zone: UNTIL is the instant the end
+    date is over there, as iCalendar wants it for a DTSTART with a zone."""
+    if not recurrence_:
         return None
     try:
-        pat = recurrence.get("pattern") or {}
-        rng = recurrence.get("range") or {}
+        pat = recurrence_.get("pattern") or {}
+        rng = recurrence_.get("range") or {}
         ptype = pat.get("type", "")
         interval = int(pat.get("interval", 1) or 1)
-        days = [_WD[d.lower()] for d in (pat.get("daysOfWeek") or []) if d.lower() in _WD]
-        idx = _IDX.get(pat.get("index", "first"), 1)
+        days = _rule_days(pat)
         parts = []
         if ptype == "daily":
             parts.append("FREQ=DAILY")
@@ -1064,14 +1104,16 @@ def build_rrule(recurrence, all_day):
             parts.append("FREQ=WEEKLY")
             if days:
                 parts.append("BYDAY=" + ",".join(days))
+            wkst = _WD.get(str(pat.get("firstDayOfWeek") or "").lower())
+            if wkst and wkst != "MO":
+                parts.append(f"WKST={wkst}")
         elif ptype == "absoluteMonthly":
             parts.append("FREQ=MONTHLY")
             if pat.get("dayOfMonth"):
                 parts.append(f"BYMONTHDAY={pat['dayOfMonth']}")
         elif ptype == "relativeMonthly":
             parts.append("FREQ=MONTHLY")
-            if days:
-                parts.append("BYDAY=" + ",".join(f"{idx}{d}" for d in days))
+            parts += _relative_byday(pat)
         elif ptype == "absoluteYearly":
             parts.append("FREQ=YEARLY")
             if pat.get("month"):
@@ -1082,21 +1124,70 @@ def build_rrule(recurrence, all_day):
             parts.append("FREQ=YEARLY")
             if pat.get("month"):
                 parts.append(f"BYMONTH={pat['month']}")
-            if days:
-                parts.append("BYDAY=" + ",".join(f"{idx}{d}" for d in days))
+            parts += _relative_byday(pat)
         else:
             return None
         if interval != 1:
             parts.append(f"INTERVAL={interval}")
         rtype = rng.get("type", "")
         if rtype == "endDate" and rng.get("endDate"):
-            d = rng["endDate"].replace("-", "")
-            parts.append("UNTIL=" + (d if all_day else d + "T235959Z"))
+            y, m, d = (int(x) for x in rng["endDate"][:10].split("-"))
+            if all_day:
+                parts.append(f"UNTIL={y:04d}{m:02d}{d:02d}")
+            else:
+                end = datetime(y, m, d, 23, 59, 59, tzinfo=tz or UTC).astimezone(UTC)
+                parts.append("UNTIL=" + end.strftime("%Y%m%dT%H%M%SZ"))
         elif rtype == "numbered" and rng.get("numberOfOccurrences"):
             parts.append(f"COUNT={int(rng['numberOfOccurrences'])}")
         return ";".join(parts)
     except Exception:
         return None
+
+
+_UNKNOWN_ZONES = set()      # zone names said once per run (run.calendar.zone_unknown)
+
+
+def series_zone(ev):
+    """The zone a series counts on – its original start zone (a Windows
+    name Graph sends), else the recurrence's; None when unknown, then the
+    .ics stays in UTC as every single event does – said once per name and
+    run, because a series in UTC keeps its UTC hour across the clock
+    change while the people in that zone do not."""
+    rng = (ev.get("recurrence") or {}).get("range") or {}
+    name = ev.get("originalStartTimeZone") or rng.get("recurrenceTimeZone") or ""
+    if name.upper() == "UTC":
+        return None
+    found = recurrence.iana(name)
+    if found is None and name and name not in _UNKNOWN_ZONES:
+        _UNKNOWN_ZONES.add(name)
+        progress.event("run.calendar.zone_unknown", "warn", name=name)
+    return found
+
+
+def _wall(node_or_iso, tz, all_day):
+    """A Graph UTC time as the series' wall clock (recurrence.wall_key):
+    "YYYYMMDDTHHMMSS" in `tz`, a date for an all-day series, None when
+    unreadable."""
+    raw = node_or_iso.get("dateTime") if isinstance(node_or_iso, dict) else node_or_iso
+    dt = _graph_dt(raw or "")
+    if dt is None:
+        return None
+    if all_day:
+        return recurrence.wall_key(dt.date())
+    return recurrence.wall_key(dt.replace(tzinfo=UTC).astimezone(recurrence.zone(tz) if tz else UTC))
+
+
+def _dt_lines(name, node, all_day, tz):
+    """DTSTART/DTEND/RECURRENCE-ID as the .ics says a time: a date for an
+    all-day event, wall time with TZID for a series with a zone, UTC else."""
+    if all_day:
+        value = _ics_dt(node, True)
+        return [f"{name};VALUE=DATE:{value}"] if value else []
+    if tz:
+        value = _wall(node, tz, False)
+        return [f"{name};TZID={tz}:{value}"] if value else []
+    value = _ics_dt(node, False)
+    return [f"{name}:{value}"] if value else []
 
 
 def event_filename(ev):
@@ -1107,19 +1198,22 @@ def event_filename(ev):
     return f"{prefix}{safe(subj, 90)}__{short_id(ev.get('id') or ev.get('iCalUId') or subj)}.ics"
 
 
-def build_ics(ev):
+def build_ics(ev, series=None):
+    """One event as .ics. A series (`ev` has a recurrence) is its master:
+    DTSTART in the series' zone, the RRULE, an EXDATE for every date taken
+    out and one VEVENT per exception – `series` brings those two from the
+    bookkeeping as {"exdates": [wall keys], "exceptions": {wall key:
+    event}} (SeriesBook.for_ics)."""
     all_day = bool(ev.get("isAllDay"))
     uid = ev.get("iCalUId") or ev.get("id") or short_id(ev.get("subject") or "")
     stamp = _graph_dt(ev.get("lastModifiedDateTime") or ev.get("createdDateTime") or "")
     dtstamp = (stamp or datetime.now(UTC).replace(tzinfo=None)).strftime("%Y%m%dT%H%M%SZ")
+    tz = series_zone(ev) if ev.get("recurrence") else None
     L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//outlook_export//Graph//DE",
          "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "BEGIN:VEVENT",
          f"UID:{_esc(uid)}", f"DTSTAMP:{dtstamp}"]
-    start, end = _ics_dt(ev.get("start"), all_day), _ics_dt(ev.get("end"), all_day)
-    if start:
-        L.append(("DTSTART;VALUE=DATE:" if all_day else "DTSTART:") + start)
-    if end:
-        L.append(("DTEND;VALUE=DATE:" if all_day else "DTEND:") + end)
+    L += _dt_lines("DTSTART", ev.get("start"), all_day, tz)
+    L += _dt_lines("DTEND", ev.get("end"), all_day, tz)
     L.append("SUMMARY:" + _esc(ev.get("subject") or "(kein Betreff)"))
     loc = (ev.get("location") or {}).get("displayName")
     if loc:
@@ -1142,11 +1236,288 @@ def build_ics(ev):
     else:
         L.append("STATUS:CONFIRMED")
     L.append("TRANSP:" + ("TRANSPARENT" if show == "free" else "OPAQUE"))
-    rr = build_rrule(ev.get("recurrence"), all_day)
+    rr = build_rrule(ev.get("recurrence"), all_day, recurrence.zone(tz) if tz else None)
     if rr:
         L.append("RRULE:" + rr)
-    L += ["END:VEVENT", "END:VCALENDAR"]
+        exdates = sorted((series or {}).get("exdates") or [])
+        for i in range(0, len(exdates), 10):
+            # The same form as DTSTART (RFC 5545 3.3.5): a date, a wall
+            # time with the zone, or an instant with its Z.
+            chunk = ",".join(v if (all_day or tz) else v + "Z" for v in exdates[i:i + 10])
+            L.append(("EXDATE;VALUE=DATE:" if all_day else f"EXDATE;TZID={tz}:" if tz else "EXDATE:")
+                     + chunk)
+    L.append("END:VEVENT")
+    if rr:
+        for key, ex in sorted(((series or {}).get("exceptions") or {}).items()):
+            L += _exception_lines(uid, key, ex, all_day, tz, dtstamp)
+    L.append("END:VCALENDAR")
     return "\r\n".join(_fold(x) for x in L) + "\r\n"
+
+
+def _exception_lines(uid, key, ex, all_day, tz, dtstamp):
+    """One date of a series that differs from the rule: moved, renamed,
+    or cancelled – RECURRENCE-ID names the date it stands for."""
+    rid = (f"RECURRENCE-ID;VALUE=DATE:{key}" if all_day
+           else f"RECURRENCE-ID;TZID={tz}:{key}" if tz else f"RECURRENCE-ID:{key}Z")
+    L = ["BEGIN:VEVENT", f"UID:{_esc(uid)}", rid,
+         "DTSTAMP:" + (_ics_stempel(ex.get("lastModifiedDateTime")) or dtstamp)]
+    ex_all_day = bool(ex.get("isAllDay", all_day))
+    L += _dt_lines("DTSTART", ex.get("start"), ex_all_day, tz)
+    L += _dt_lines("DTEND", ex.get("end"), ex_all_day, tz)
+    L.append("SUMMARY:" + _esc(ex.get("subject") or "(kein Betreff)"))
+    if ex.get("location"):
+        L.append("LOCATION:" + _esc(ex["location"]))
+    if ex.get("description"):
+        L.append("DESCRIPTION:" + _esc(ex["description"]))
+    # An exception replaces its date whole (RFC 5545): it names its own
+    # people, so an outside reader sees them on the moved date too.
+    org = ex.get("organizer") or {}
+    if org.get("address"):
+        L.append(f'ORGANIZER;CN={_cn(org.get("name") or org["address"])}:mailto:{org["address"]}')
+    for a in ex.get("attendees") or []:
+        if a.get("address"):
+            L.append(f'ATTENDEE;CN={_cn(a.get("name") or a["address"])}:mailto:{a["address"]}')
+    L.append("STATUS:" + ("CANCELLED" if ex.get("isCancelled")
+                          else "TENTATIVE" if ex.get("showAs") == "tentative" else "CONFIRMED"))
+    L.append("TRANSP:" + ("TRANSPARENT" if ex.get("showAs") == "free" else "OPAQUE"))
+    L.append("END:VEVENT")
+    return L
+
+
+def exception_subset(ev):
+    """What of a series' exception the .ics will say – kept in the
+    bookkeeping until the series is written again: the date's own time,
+    place, text and people, as the exception VEVENT replaces the date."""
+    org = (ev.get("organizer") or {}).get("emailAddress") or {}
+    people = [a.get("emailAddress") or {} for a in ev.get("attendees") or []]
+    return {"subject": ev.get("subject") or "", "start": ev.get("start"), "end": ev.get("end"),
+            "isAllDay": bool(ev.get("isAllDay")),
+            "location": ((ev.get("location") or {}).get("displayName") or ""),
+            "description": _plain_text(ev.get("body")),
+            "organizer": {"name": org.get("name") or "", "address": org.get("address") or ""},
+            "attendees": [{"name": p.get("name") or "", "address": p["address"]}
+                          for p in people if p.get("address")],
+            "isCancelled": bool(ev.get("isCancelled")), "showAs": ev.get("showAs") or "",
+            "lastModifiedDateTime": ev.get("lastModifiedDateTime") or ""}
+
+
+def _iso_utc(raw):
+    """A Graph time as the bookkeeping keys it: "YYYY-MM-DDTHH:MM:SS" UTC."""
+    dt = _graph_dt(raw or "")
+    return dt.strftime("%Y-%m-%dT%H:%M:%S") if dt else None
+
+
+class SeriesBook:
+    """What the export knows of every series beyond its master: the dates
+    the view listed, the exceptions among them, and the dates taken out.
+    One row per master in the Outlook state.db (SERIES_AREA: exceptions,
+    dates taken out, `due`, the calendar it was listed in); the dates the
+    view listed one row EACH (OCC_AREA: occurrence id -> master and
+    original start) – a daily series lists thousands, and they are read
+    without decoding and written only where they changed. A changed row
+    makes its master due for a rewrite, so the .ics carries today's
+    exceptions and EXDATEs, and it stays due until that rewrite went
+    through: a master whose fetch failed is asked for again next round."""
+
+    def __init__(self, db):
+        self.db = db
+        self.rows = {}
+        for master, raw in db.saetze_lesen(SERIES_AREA).items():
+            try:
+                row = json.loads(raw)
+            except ValueError:
+                continue
+            if isinstance(row, dict):
+                self.rows[master] = {"ex": dict(row.get("ex") or {}), "del": list(row.get("del") or []),
+                                     "due": bool(row.get("due")), "cal": row.get("cal")}
+        self.occ = {}                       # occurrence id -> (master, original start)
+        for occ, raw in db.saetze_lesen(OCC_AREA).items():
+            master, _, orig = (raw or "").partition("\t")
+            if master:
+                self.occ[occ] = (master, orig)
+        self.occ_changed = {}               # occurrence id -> (master, orig) to write, None to drop
+        self.dirty = {m for m, row in self.rows.items() if row["due"]}
+        self.shifted = {}                   # master -> the delta its dates moved by this run
+
+    def _row(self, master):
+        return self.rows.setdefault(master, {"ex": {}, "del": [], "due": False, "cal": None})
+
+    def _due(self, master):
+        self.rows[master]["due"] = True
+        self.dirty.add(master)
+
+    def _moved(self, master, before, orig):
+        """A date listed again with another original start: the whole
+        series moved. The dates taken out are not listed – they moved
+        with it, by the same delta, and that is where their EXDATEs go."""
+        row = self.rows[master]
+        row["ex"].pop(before, None)
+        if before in row["del"]:
+            row["del"].remove(before)
+        if master in self.shifted:
+            return
+        a, b = _graph_dt(before), _graph_dt(orig)
+        self.shifted[master] = (b - a) if a and b else None
+        if self.shifted[master]:
+            row["del"] = [_iso_utc((_graph_dt(d) + self.shifted[master]).strftime("%Y-%m-%dT%H:%M:%SZ"))
+                          if _graph_dt(d) else d for d in row["del"]]
+
+    def listed(self, ev, cal=None):
+        """A date of a series the view listed – an occurrence, an exception,
+        a cancelled one – in the calendar `cal` (its folder on disk).
+        Returns the master's id."""
+        master = ev["seriesMasterId"]
+        row = self._row(master)
+        if cal and row.get("cal") != cal:
+            row["cal"] = cal
+            self.dirty.add(master)
+        orig = _iso_utc(ev.get("originalStart") or (ev.get("start") or {}).get("dateTime"))
+        if not orig:
+            return master
+        before = self.occ.get(ev["id"])
+        changed = before is None or before[1] != orig
+        if before is not None and before[1] != orig:
+            self._moved(master, before[1], orig)
+        if changed:
+            self.occ[ev["id"]] = (master, orig)
+            self.occ_changed[ev["id"]] = (master, orig)
+        if orig in row["del"]:
+            row["del"].remove(orig)
+            changed = True
+        if ev.get("type") == "exception" or ev.get("isCancelled"):
+            sub = exception_subset(ev)
+            if row["ex"].get(orig) != sub:
+                row["ex"][orig] = sub
+                changed = True
+        elif orig in row["ex"]:
+            del row["ex"][orig]
+            changed = True
+        if changed:
+            self._due(master)
+        return master
+
+    def removed(self, occ_id):
+        """A date Graph took out of the view: the master it belonged to, or
+        None for an id the book never held (a single event, or nothing)."""
+        entry = self.occ.pop(occ_id, None)
+        if entry is None:
+            return None
+        self.occ_changed[occ_id] = None
+        master, orig = entry
+        row = self._row(master)
+        if orig and orig not in row["del"]:
+            row["del"].append(orig)
+            row["ex"].pop(orig, None)
+        self._due(master)
+        return master
+
+    def due(self, cal):
+        """The masters whose file is behind their row, in this calendar –
+        one book serves every calendar of the run, and a master is written
+        where its dates were listed, never under another calendar's name."""
+        return {m for m in self.dirty
+                if m in self.rows and self.rows[m]["due"] and self.rows[m].get("cal") in (cal, None)}
+
+    def written(self, master):
+        """The master's .ics carries the row now."""
+        row = self.rows.get(master)
+        if row is not None and row["due"]:
+            row["due"] = False
+            self.dirty.add(master)
+
+    def forget(self, master):
+        self.rows.pop(master, None)
+        self.dirty.add(master)
+        for occ, (m, _orig) in list(self.occ.items()):
+            if m == master:
+                del self.occ[occ]
+                self.occ_changed[occ] = None
+
+    def for_ics(self, master, ev):
+        """The EXDATEs and exceptions of a series, keyed on its wall clock.
+        A date taken out that the rule (as the master says it now) does not
+        make – a series moved to another weekday leaves such slots behind –
+        is dropped from the row: an EXDATE for it would only grow the file."""
+        row = self.rows.get(master) or {}
+        tz, all_day = series_zone(ev), bool(ev.get("isAllDay"))
+        taken_out = row.get("del", [])
+        kept = _dates_the_rule_makes(ev, taken_out, tz, all_day)
+        if kept != taken_out and master in self.rows:
+            row["del"] = kept
+            self.dirty.add(master)
+        exdates = [k for k in (_wall(o, tz, all_day) for o in kept) if k]
+        exceptions = {}
+        for orig, sub in row.get("ex", {}).items():
+            key = _wall(orig, tz, all_day)
+            if key:
+                exceptions[key] = sub
+        return {"exdates": exdates, "exceptions": exceptions}
+
+    def save(self):
+        if self.dirty:
+            self.db.saetze_schreiben(SERIES_AREA, {m: json.dumps(self.rows[m], ensure_ascii=False)
+                                                   for m in self.dirty if m in self.rows})
+            self.db.saetze_loeschen(SERIES_AREA, [m for m in self.dirty if m not in self.rows])
+            self.dirty.clear()
+        if self.occ_changed:
+            self.db.saetze_schreiben(OCC_AREA, {occ: f"{entry[0]}\t{entry[1]}"
+                                                for occ, entry in self.occ_changed.items() if entry})
+            self.db.saetze_loeschen(OCC_AREA, [occ for occ, entry in self.occ_changed.items() if entry is None])
+            self.occ_changed.clear()
+
+
+def _dates_the_rule_makes(ev, taken_out, tz, all_day):
+    """Of the dates taken out of a series, those its rule still makes."""
+    if not taken_out:
+        return []
+    zone = recurrence.zone(tz) if tz else None
+    rule = recurrence.parse_rrule(build_rrule(ev.get("recurrence"), all_day, zone) or "")
+    first = _wall(ev.get("start"), tz, all_day)
+    start = recurrence.parse_wall(first, zone) if first else None
+    keys = {o: _wall(o, tz, all_day) for o in taken_out}
+    last = max((recurrence.parse_wall(k, zone) for k in keys.values() if k), default=None,
+               key=lambda w: recurrence.stamp(w))
+    if rule is None or start is None or last is None:
+        return list(taken_out)
+    made = {recurrence.wall_key(w) for w in
+            recurrence.expand(start, rule, horizon_end=recurrence.bound(start, last), cap=100000)}
+    return [o for o in taken_out if keys[o] in made]
+
+
+_NAME_STAMP = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?:_(\d{2})(\d{2}))?__")
+
+
+def ics_dtstart(path):
+    """The start of a stored .ics – the master's, for a series – as an
+    instant (UTC), a date at midnight UTC for an all-day event, or None.
+    The export names every calendar file by that start (event_filename),
+    so the name answers without opening the file; one named otherwise is
+    read the way the index reads it (corpus._unfold/_prop), so a folded
+    or quoted DTSTART line counts."""
+    stamped = _NAME_STAMP.match(Path(path).name)
+    if stamped:
+        y, mo, d, hh, mm = stamped.groups()
+        try:
+            return datetime(int(y), int(mo), int(d), int(hh or 0), int(mm or 0), tzinfo=UTC)
+        except ValueError:
+            pass
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in corpus._unfold(text):
+        name, params, value = corpus._prop(line)
+        if name == "END" and value.strip().upper() == "VEVENT":
+            return None
+        if name == "DTSTART":
+            tzid = corpus._pval(params, "TZID")
+            parsed = recurrence.parse_wall(value.strip(), recurrence.zone(tzid) if tzid else None)
+            if parsed is None:
+                return None
+            if not isinstance(parsed, datetime):
+                return datetime(parsed.year, parsed.month, parsed.day, tzinfo=UTC)
+            return parsed.astimezone(UTC)
+    return None
 
 
 def ics_stempel(pfad):
@@ -1181,8 +1552,8 @@ def kalender_fenster(monate, jetzt=None):
     everything."""
     jetzt = jetzt or datetime.now(UTC)
     heute = jetzt.replace(hour=0, minute=0, second=0, microsecond=0)
-    von = _verschiebe_monate(heute, -monate) if monate else None
-    return von, _verschiebe_monate(heute, 12 * YEARS_AHEAD)
+    # The start is the one the view and the index unfold a series from.
+    return recurrence.months_back(jetzt, monate), _verschiebe_monate(heute, 12 * YEARS_AHEAD)
 
 
 def _graph_zeit(dt):
@@ -1191,56 +1562,147 @@ def _graph_zeit(dt):
 
 EVENT_SELECT = ("id,iCalUId,subject,start,end,isAllDay,location,organizer,attendees,"
                 "body,showAs,isCancelled,recurrence,seriesMasterId,type,"
-                "createdDateTime,lastModifiedDateTime")
+                "originalStart,originalStartTimeZone,createdDateTime,lastModifiedDateTime")
+
+# The shape of what the calendar export keeps. 2 (14.3): a series is one
+# .ics with its dates taken out and its exceptions, counted on the series'
+# own clock, and the bookkeeping knows every date the view listed – an
+# archive of shape 1 reads its calendars once more in full to get there.
+CAL_LAYOUT = "2"
+SERIES_AREA = "series"          # state.db: master id -> the exceptions, the dates taken out, due, calendar
+OCC_AREA = "series_occ"         # state.db: occurrence id -> "master<TAB>original start", one row per listed date
 
 
-def hole_termine(graph, ids):
-    """Series masters by id, as JSON batches: {id: (status, event)} – a 404
-    means the series is gone meanwhile."""
-    urls = {f"{GRAPH}/me/events/{eid}?$select={EVENT_SELECT}": eid for eid in ids}
+def hole_termine(graph, ids, select=EVENT_SELECT):
+    """Events by id, as JSON batches: {id: (status, event)} – a 404 means
+    the item is gone meanwhile. Series masters with every field; a moved
+    date with `select="id,originalStart"` for the slot it stands for."""
+    urls = {f"{GRAPH}/me/events/{eid}?$select={select}": eid for eid in ids}
     antworten = graph.batch_get(list(urls), extra_headers={"Prefer": UTC_PREF})
     return {eid: antworten.get(url) or (0, None) for url, eid in urls.items()}
 
 
-def schreibe_termin(out, done, stats, stempel, cname, ev, lm):
-    """Write or rewrite one .ics. Returns 1 on a write error, else 0."""
+def schreibe_termin(out, done, stats, stempel, cname, ev, lm, series=None, book=None, stones=None):
+    """Write or rewrite one .ics. A series master takes its EXDATEs and
+    exceptions from `series` (SeriesBook.for_ics) or looks them up in
+    `book` – every writer of a series file writes the same file. A file
+    whose bytes did not change counts as skipped, not updated. `stones`
+    takes the file (and the one it replaces) back from the tombstones;
+    without it the withdrawal happens here. Returns 1 on a write error,
+    else 0."""
     rel = f"kalender/{cname}/{event_filename(ev)}"
     # Events without a Graph ID: the file path as a stable fallback key,
     # else None lands in the log and resume never kicks in.
     key = ev.get("id") or ev.get("iCalUId") or rel
+    if series is None and book is not None and ev.get("recurrence"):
+        series = book.for_ics(key, ev)
     neu = not done.is_done(out, key)
     (out / "kalender" / cname).mkdir(parents=True, exist_ok=True)
+    text = build_ics(ev, series)
     try:
-        versions.write_text(out / rel, build_ics(ev))
+        same = (out / rel).is_file() and (out / rel).read_bytes() == text.encode("utf-8")
+        if not same:
+            versions.write_text(out / rel, text)
     except Exception as e:
         progress.event("run.event_skipped", "warn", detail=str(e))
         return 1
-    _alte_datei_weg(out, done.done.get(key), rel)
+    before = done.done.get(key)
+    _alte_datei_weg(out, before, rel)
     done.mark(key, rel)
     stempel.merke(key, lm)
+    if stones is not None:
+        stones.seen(rel, before)
+    else:
+        Tombstones(stempel.db).seen(rel, before).settle(stats, cname)
     if neu:
         stats["new"] += 1
+    elif same:
+        stats["skipped"] += 1
     else:
         stats["updated"] = stats.get("updated", 0) + 1
     return 0
 
 
-def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, monate,
-                   label=None):
+class Tombstones:
+    """The calendar's tombstones for one run: read once, taken back for
+    every file seen alive, added once per round – each file once, a
+    known one never again, and said in the log once per round."""
+
+    def __init__(self, db):
+        self.db = db
+        self.known = db.verschwunden_lesen()
+        self.alive = set()
+        self.gone = {}                      # key -> rel, this round
+
+    def seen(self, *rels):
+        """A file written or listed again: at Microsoft after all."""
+        self.alive.update(r for r in rels if r)
+        return self
+
+    def lost(self, key, rel):
+        self.gone[key] = rel
+
+    def discard(self):
+        """A round that did not end cleanly: its verdicts are nobody's –
+        the next round lists the page again."""
+        self.alive.clear()
+        self.gone.clear()
+
+    def settle(self, stats, name):
+        """Write the round's verdicts. Returns the number of new tombstones."""
+        back = [rel for rel in self.alive if rel in self.known]
+        if back:
+            self.db.tombstones_remove(back)
+            for rel in back:
+                self.known.pop(rel, None)
+        new = [rel for rel in dict.fromkeys(self.gone.values())
+               if rel not in self.known and rel not in self.alive]
+        if new:
+            now = datetime.now(UTC).isoformat(timespec="seconds")
+            self.db.verschwunden_ergaenzen(new, now)
+            self.known.update((rel, now) for rel in new)
+            stats["gone"] = stats.get("gone", 0) + len(new)
+            progress.event("run.calendar.gone", name=name, n=len(new))
+        self.alive.clear()
+        self.gone.clear()
+        return len(new)
+
+
+def _calendar_gone(stones, done, stempel, key):
+    """An event or series Graph no longer has: the file stays, as every
+    file does, the bookkeeping notes since when it is gone (the calendar
+    view and the search say so), the stamp goes so a return is measured
+    afresh."""
+    rel = done.done.get(key)
+    if rel:
+        stones.lost(key, rel)
+    stempel.vergiss(key)
+
+
+def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, months,
+                   label=None, book=None, stones=None):
     """One calendar: the view's round, then the series masters that are
-    new or changed. Returns the number of errors."""
+    new or changed – or whose dates changed (`book`, a SeriesBook: a
+    date taken out, an exception, a cancellation), or whose last rewrite
+    failed. Returns (errors, full, seen): whether the round listed the
+    whole window, and every id it listed – export_calendar judges the
+    archive against them once every calendar of a folder ran."""
     db = stempel.db
-    familien, entfernt = {}, []      # series master -> newest date's stamp
-    fehler = seen = 0
+    book = book if book is not None else SeriesBook(db)
+    stones = stones if stones is not None else Tombstones(db)
+    families, removed, seen_ids = {}, [], set()      # series master -> newest date's stamp
+    unplaced = {}                                    # a moved date without the slot it stands for
+    errors = seen = 0
     link = None
+    full = False
     try:
-        seiten, _voll = delta_runde(graph, db, key, url, params,
-                                    prefer=(UTC_PREF,), name=cname)
-        for eintraege, ende in seiten:
-            link = ende or link      # the link comes with the last page
-            for ev in eintraege:
+        pages, full = delta_runde(graph, db, key, url, params,
+                                  prefer=(UTC_PREF,), name=cname)
+        for entries, end in pages:
+            link = end or link      # the link comes with the last page
+            for ev in entries:
                 if "@removed" in ev:
-                    entfernt.append(ev.get("id"))
+                    removed.append(ev.get("id"))
                     continue
                 seen += 1
                 if seen % 100 == 0:
@@ -1250,53 +1712,134 @@ def kalender_runde(graph, out, done, stats, stempel, cname, key, url, params, mo
                 master = ev.get("seriesMasterId")
                 if master and ev.get("type") in ("occurrence", "exception"):
                     # The view expands a series into its dates; the file is
-                    # the series itself, and its newest date speaks for it.
-                    lm = ev.get("lastModifiedDateTime") or ""
-                    if lm > familien.get(master, ""):
-                        familien[master] = lm
+                    # the series itself, and its newest date speaks for it –
+                    # and the book keeps what the date is: a plain one, an
+                    # exception, a cancelled one. A date without an id is
+                    # nobody's file either.
+                    if ev.get("id"):
+                        seen_ids.add(ev["id"])
+                        seen_ids.add(master)
+                        lm = ev.get("lastModifiedDateTime") or ""
+                        if lm > families.get(master, ""):
+                            families[master] = lm
+                        if ev.get("type") == "exception" and not ev.get("originalStart"):
+                            unplaced[ev["id"]] = ev   # asked for below, by name
+                        else:
+                            book.listed(ev, cname)
                     continue
                 rel = f"kalender/{cname}/{event_filename(ev)}"
                 ekey = ev.get("id") or ev.get("iCalUId") or rel
+                seen_ids.add(ekey)
                 lm = ev.get("lastModifiedDateTime") or ""
                 if veraendert(out, done, stempel, ekey, lm, ics_stempel):
-                    fehler += schreibe_termin(out, done, stats, stempel, cname, ev, lm)
+                    errors += schreibe_termin(out, done, stats, stempel, cname, ev, lm, stones=stones)
                 else:
                     stats["skipped"] += 1
-        offen = []
-        for master, lm in familien.items():
-            if veraendert(out, done, stempel, master, lm, ics_stempel):
-                offen.append(master)
+                    stones.seen(done.done.get(ekey))     # listed again: at Microsoft after all
+        # The view and its delta list a moved date with its new start only
+        # (measured 2026-10 on a real calendar): the slot it stands for,
+        # originalStart, comes when asked for by name – and asking the delta
+        # for it thins every plain date to its start, without a stamp. So
+        # the round stays as it is and asks for the slots apart.
+        ids = list(unplaced)
+        for i in range(0, len(ids), 100):
+            for eid, (status, got) in hole_termine(graph, ids[i:i + 100], select="id,originalStart").items():
+                if 200 <= status < 300 and isinstance(got, dict) and got.get("originalStart"):
+                    book.listed({**unplaced[eid], "originalStart": got["originalStart"]}, cname)
+                else:
+                    progress.event("run.event_skipped", "warn",
+                                   detail=f"HTTP {status}: {eid[:16]}… (originalStart)")
+                    errors += 1
+        for eid in removed:
+            if book.removed(eid) is not None:
+                continue                     # a date of a series: its master is rewritten below
+            if eid in done.done:
+                # A single event gone at Microsoft – said, so the view and
+                # the search can show it; the file stays.
+                _calendar_gone(stones, done, stempel, eid)
+        open_masters, due = [], book.due(cname)
+        for master, lm in families.items():
+            if veraendert(out, done, stempel, master, lm, ics_stempel) or master in due:
+                open_masters.append(master)
             else:
                 stats["skipped"] += 1
-        for i in range(0, len(offen), 100):
-            for master, (status, ev) in hole_termine(graph, offen[i:i + 100]).items():
+                stones.seen(done.done.get(master))
+        for master in sorted(due):
+            if master not in open_masters:
+                open_masters.append(master)  # its dates changed, the master itself may not have
+        for i in range(0, len(open_masters), 100):
+            for master, (status, ev) in hole_termine(graph, open_masters[i:i + 100]).items():
                 if 200 <= status < 300 and isinstance(ev, dict):
-                    fehler += schreibe_termin(out, done, stats, stempel, cname, ev,
-                                              familien[master])
-                elif status != 404:              # 404: gone meanwhile, nothing to write
+                    lm = families.get(master) or stempel.bekannt(master) or ev.get("lastModifiedDateTime") or ""
+                    if schreibe_termin(out, done, stats, stempel, cname, ev, lm,
+                                       series=book.for_ics(master, ev), stones=stones):
+                        errors += 1
+                    else:
+                        book.written(master)
+                elif status == 404:
+                    # The series is gone at Microsoft – only its dates were
+                    # said to be, never the master itself.
+                    _calendar_gone(stones, done, stempel, master)
+                    book.forget(master)
+                else:
                     progress.event("run.event_skipped", "warn",
                                    detail=f"HTTP {status}: {master[:16]}…")
-                    fehler += 1
+                    errors += 1
     except TokenExpired:
         raise
     except Exception as e:
         progress.event("run.folder_incomplete", "err", name=cname, error=str(e))
+        stones.discard()
+        book.save()
         stempel.schreibe()
-        return 1
-    for eid in entfernt:
-        # An exported event or series Graph no longer lists keeps its file,
-        # as it always has – only the record goes, so a return is measured
-        # afresh. Removed dates of a living series never had a file.
-        if eid in done.done:
-            stempel.vergiss(eid)
+        return 1, False, seen_ids
+    book.save()
     stempel.schreibe()
-    if link and not fehler:
+    stones.settle(stats, label or cname)
+    if link and not errors:
         db.kv_schreiben(key, link)
-        db.kv_schreiben(f"{key}:window", str(monate))
+        db.kv_schreiben(f"{key}:window", str(months))
     if seen:
         progress.event("run.scanned_in", name=label or cname, n=seen,
                        unit=progress.atom("progress.unit.events"))
-    return fehler
+    return errors, full, seen_ids
+
+
+def _reconcile(graph, out, done, stempel, book, stones, cname, seen_ids, params, stats, label=None):
+    """After full, clean rounds of every calendar of one folder: what the
+    archive holds of it that the view did not list is a suspect – a single
+    event whose date lies inside the window, or a series with dates on
+    the book – and Graph is asked about each one: a 404 is gone at
+    Microsoft (the file stays, marked), anything else leaves it alone (a
+    series that ended, an event moved out of the window). Files already
+    marked gone are not asked again."""
+    start = _graph_dt(params.get("startDateTime") or "")
+    end = _graph_dt(params.get("endDateTime") or "")
+    start = start.replace(tzinfo=UTC) if start else None
+    end = end.replace(tzinfo=UTC) if end else None
+    prefix = f"kalender/{cname}/"
+    suspects = []
+    for ekey, rel in list(done.done.items()):
+        if not rel.startswith(prefix) or rel in stones.known or ekey in seen_ids:
+            continue
+        if "/" in ekey or "@" in ekey:
+            continue                         # a fallback key (the path, an iCalUId), not a Graph id: nothing to ask
+        if ekey not in book.rows:
+            first = ics_dtstart(out / rel)
+            if first is None or (start and first < start) or (end and first > end):
+                continue                     # outside the window: the view says nothing of it
+        suspects.append(ekey)
+    for i in range(0, len(suspects), 100):
+        for ekey, (status, _ev) in hole_termine(graph, suspects[i:i + 100], select="id").items():
+            if status == 404:
+                _calendar_gone(stones, done, stempel, ekey)
+                if ekey in book.rows:
+                    book.forget(ekey)
+            elif not 200 <= status < 300:
+                progress.event("run.event_skipped", "warn", detail=f"HTTP {status}: {ekey[:16]}…")
+    book.save()
+    stempel.schreibe()
+    stones.settle(stats, label or cname)
 
 
 def export_calendar(graph, out, done, stats, cals):
@@ -1308,26 +1851,50 @@ def export_calendar(graph, out, done, stats, cals):
     progress.event("run.section", name=progress.atom("export.cat.calendar"))
     db = state_db.StateDb(out)
     stempel = Stempel(db, "events")
-    monate, voll = calendar_months_back(), calendar_full()
-    von, bis = kalender_fenster(monate)
-    params = {"startDateTime": _graph_zeit(von) if von and not voll else EPOCH,
-              "endDateTime": _graph_zeit(bis)}
-    fehler = 0
+    book = SeriesBook(db)
+    stones = Tombstones(db)
+    months, full = calendar_months_back(), calendar_full()
+    start, end = kalender_fenster(months)
+    params = {"startDateTime": _graph_zeit(start) if start and not full else EPOCH,
+              "endDateTime": _graph_zeit(end)}
+    errors, said = 0, False
+    folders_on_disk = {}        # folder -> (every id listed, every round full and clean, the first name)
     for cal in cals:
         cname = safe(cal.get("name") or "Kalender")
         key = f"delta:cal:{cal.get('id') or cname}"
-        if voll or db.kv_lesen(f"{key}:window") != str(monate):
-            db.kv_schreiben(key, None)      # another window, or a full read asked for
-        if von is not None and not voll:
+        # A calendar exported at the earlier shape (series without their
+        # dates – it has a link or a window stamp, but no layout stamp) is
+        # read once more in full, so the book gets every date. Stamped per
+        # calendar – one a targeted run left out gets its turn; a calendar
+        # never exported is read in full anyway and is no relayout.
+        relayout = (db.kv_lesen(f"{key}:layout") != CAL_LAYOUT
+                    and (db.kv_lesen(key) or db.kv_lesen(f"{key}:window")) is not None)
+        if relayout and not said and (out / KALENDER_DIR).is_dir():
+            progress.event("run.calendar.relayout")
+            said = True
+        if full or relayout or db.kv_lesen(f"{key}:window") != str(months):
+            db.kv_schreiben(key, None)      # another window, a new shape, or a full read asked for
+        if start is not None and not full:
             progress.event("run.calendar.window", name=cal.get("name") or cname,
-                           **{"from": von.strftime("%Y-%m-%d")})
+                           **{"from": start.strftime("%Y-%m-%d")})
         else:
             progress.event("run.folder_plain", name=cal.get("name") or cname)
         url = (f"{GRAPH}/me/calendars/{cal['id']}/calendarView/delta" if cal.get("id")
                else f"{GRAPH}/me/calendarView/delta")
-        fehler += kalender_runde(graph, out, done, stats, stempel, cname, key, url,
-                                 params, monate, label=cal.get("name") or cname)
-    return fehler
+        cal_errors, listed_all, seen_ids = kalender_runde(
+            graph, out, done, stats, stempel, cname, key, url, params, months,
+            label=cal.get("name") or cname, book=book, stones=stones)
+        errors += cal_errors
+        ids, clean, label = folders_on_disk.get(cname, (set(), True, cal.get("name") or cname))
+        folders_on_disk[cname] = (ids | seen_ids, clean and listed_all and not cal_errors, label)
+        if not cal_errors:
+            db.kv_schreiben(f"{key}:layout", CAL_LAYOUT)
+    # Two calendars with one name share a folder on disk: the archive of
+    # that folder is judged against what both of them listed.
+    for cname, (ids, clean, label) in folders_on_disk.items():
+        if clean:
+            _reconcile(graph, out, done, stempel, book, stones, cname, ids, params, stats, label=label)
+    return errors
 
 
 def contact_filename(c):
@@ -1508,7 +2075,8 @@ def pruefe_verschwundene(graph, out, done, bestand, listing=True):
             neue, datetime.now(UTC).isoformat(timespec="seconds"))
     progress.event("run.gone.result", gone=len(weg), new=len(neue),
                    moved=verschoben)
-    return {"gone_new": len(neue), "gone_total": len(bekannt) + len(neue),
+    mails = sum(1 for rel in bekannt if rel.startswith(MAIL_DIR + "/"))
+    return {"gone_new": len(neue), "gone_total": mails + len(neue),
             "moved": verschoben, "gone_healed": geheilt}
 
 
@@ -1681,7 +2249,7 @@ def pruefe_mails(graph, out, done, weg=None):
     """The mail balance, per folder the rules take. A mail Microsoft
     refuses is listed by the folder but will never come: its own number,
     not open. One that was gone before it came is no longer listed."""
-    weg = weg or {}
+    weg = {rel: seit for rel, seit in (weg or {}).items() if rel.startswith(MAIL_DIR + "/")}
     regeln = aktuelle_regeln()
     seit = outlook_since()
     da_je, weg_je, verweigert_je = Counter(), Counter(), Counter()
@@ -1811,8 +2379,7 @@ def pruefe_kalender(graph, out, done, db):
         zeilen.append(completeness.zeile(pfad, z_da, z_offen))
         da += z_da
         offen += z_offen
-    behalten = sum(1 for key in stempel.alt
-                   if key not in gesehen and done.is_done(out, key))
+    behalten = sum(1 for rel in db.verschwunden_lesen() if rel.startswith(KALENDER_DIR + "/"))
     return completeness.bilanz("outlook_calendar", "events", da=da, offen=offen,
                                ausgeschlossen=max(0, alle - len(cals)),
                                ausgeschlossen_einheit="calendars",
@@ -1957,6 +2524,7 @@ def nachholen(graph, out, done, rels):
     progress.event("run.nachholen.start", n=len(rels))
     db = state_db.StateDb(out)
     stempel = {"events": Stempel(db, "events"), "contacts": Stempel(db, "contacts")}
+    book, stones = SeriesBook(db), Tombstones(db)
     stats = {"new": 0, "updated": 0, "skipped": 0}
     geholt = weg = fehler = unbekannt = 0
     gekommen = {"event": [], "contact": []}   # by kind, for the balance
@@ -1979,10 +2547,14 @@ def nachholen(graph, out, done, rels):
                                extra_headers={"Prefer": UTC_PREF})
                 teile = (pfad or rel).split("/")
                 cname = teile[1] if len(teile) >= 2 and teile[0] == "kalender" else "Kalender"
-                if schreibe_termin(out, done, stats, stempel["events"], cname, ev,
-                                   ev.get("lastModifiedDateTime") or ""):
+                # A series' stamp is its newest date's, which the master
+                # alone does not know: the known one stays when it is newer.
+                lm = max(stempel["events"].bekannt(key) or "", ev.get("lastModifiedDateTime") or "")
+                if schreibe_termin(out, done, stats, stempel["events"], cname, ev, lm,
+                                   book=book, stones=stones):
                     fehler += 1
                     continue
+                book.written(key)
             elif art == "contact":
                 c = graph.get(f"{GRAPH}/me/contacts/{key}")
                 rel = rel or f"{pfad or 'kontakte'}/{contact_filename(c)}"
@@ -2012,6 +2584,8 @@ def nachholen(graph, out, done, rels):
                 fehler += 1
                 progress.event("run.nachholen.failed", "warn", name=name,
                                error=f"{type(e).__name__}: {e}")
+    stones.settle(stats, 'nachholen')
+    book.save()
     for s in stempel.values():
         s.schreibe()
     for art, quelle in (("event", "outlook_calendar"), ("contact", "outlook_contacts")):
@@ -2152,8 +2726,7 @@ def main():
     progress.ergebnis(stats["new"], unchanged=stats["skipped"],
                       excluded=stats.get("excluded"),
                       errors=stats.get("folder_errors"),
-                      extra={k: v for k, v in stats.items()
-                             if k in ("updated", "gone_new", "moved", "gone_healed")})
+                      extra={k: v for k, v in stats.items() if k in RESULT_EXTRA})
     if stats.get("folder_errors"):
         progress.event("run.folders_failed", "warn", n=stats["folder_errors"])
 

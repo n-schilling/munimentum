@@ -12,6 +12,7 @@ mcp==2.2.0              # MCP SDK, 2.x API (MCPServer) – see mcp_server.py
 msal==1.39.0            # Graph login (device code flow)
 numpy==2.5.3            # embedding matrix for semantic/hybrid search
 requests==2.34.2        # Graph REST calls and Ollama
+tzdata==2026.5          # time zones for the calendar's series (Windows ships none)
 
 
 # Native macOS notifications (UNUserNotificationCenter, notify.py). Only the

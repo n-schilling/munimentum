@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.2.1
+  version: 14.3.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2772,8 +2772,10 @@ paths:
       summary: Appointments, reconstructions and contacts in one file
       description: |
         The result of the calendar step, served as it lies – gzipped when
-        the request accepts it. Appointments recovered from invitation and
-        cancellation mails travel with it.
+        the request accepts it. A series stands with every date it makes,
+        two years ahead at most; an appointment deleted at Microsoft keeps
+        its record, marked `removed`. Appointments recovered from invitation
+        and cancellation mails travel with it.
       responses:
         "200":
           description: The file as the calendar step built it.
@@ -5206,7 +5208,7 @@ components:
         source_label: { type: string, description: "The source as the interface names it – for files the mirror (OneDrive, SharePoint, Teams)." }
         root: { $ref: "#/components/schemas/Root" }
         who: { type: string }
-        date: { type: string }
+        date: { type: string, description: "The item's date. A series found through `from`/`to` says its first date inside that window, as the calendar shows it." }
         title: { type: string }
         context: { type: string }
         path: { type: string, description: "Relative path; input for /api/v1/files/content." }

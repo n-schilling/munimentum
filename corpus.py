@@ -8,6 +8,7 @@ records and splits long texts into overlapping chunks. Used by rag_index.py
 """
 
 import json
+import recurrence
 import os
 import base64
 import binascii
@@ -20,7 +21,6 @@ from email.parser import BytesParser
 from email.utils import getaddresses
 from datetime import datetime, UTC
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from html.parser import HTMLParser
 from functools import partial
 from concurrent.futures import ProcessPoolExecutor, BrokenExecutor
@@ -645,59 +645,8 @@ def _demail(v):
 # IANA names. Without a mapping, appointments from other time zones land in
 # the calendar shifted by that difference. The most common names suffice –
 # everything else falls back to local time.
-WIN_TZ = {
-    "W. Europe Standard Time": "Europe/Berlin",
-    "Central Europe Standard Time": "Europe/Budapest",
-    "Central European Standard Time": "Europe/Warsaw",
-    "Romance Standard Time": "Europe/Paris",
-    "GMT Standard Time": "Europe/London",
-    "Greenwich Standard Time": "Etc/UTC",
-    "UTC": "Etc/UTC",
-    "GTB Standard Time": "Europe/Athens",
-    "FLE Standard Time": "Europe/Helsinki",
-    "Turkey Standard Time": "Europe/Istanbul",
-    "Russian Standard Time": "Europe/Moscow",
-    "Israel Standard Time": "Asia/Jerusalem",
-    "Arabian Standard Time": "Asia/Dubai",
-    "India Standard Time": "Asia/Kolkata",
-    "SE Asia Standard Time": "Asia/Bangkok",
-    "China Standard Time": "Asia/Shanghai",
-    "Singapore Standard Time": "Asia/Singapore",
-    "Tokyo Standard Time": "Asia/Tokyo",
-    "Korea Standard Time": "Asia/Seoul",
-    "AUS Eastern Standard Time": "Australia/Sydney",
-    "New Zealand Standard Time": "Pacific/Auckland",
-    "Eastern Standard Time": "America/New_York",
-    "US Eastern Standard Time": "America/Indiana/Indianapolis",
-    "Central Standard Time": "America/Chicago",
-    "Central Standard Time (Mexico)": "America/Mexico_City",
-    "Mountain Standard Time": "America/Denver",
-    "US Mountain Standard Time": "America/Phoenix",
-    "Pacific Standard Time": "America/Los_Angeles",
-    "Alaskan Standard Time": "America/Anchorage",
-    "Hawaiian Standard Time": "Pacific/Honolulu",
-    "E. South America Standard Time": "America/Sao_Paulo",
-    "Argentina Standard Time": "America/Argentina/Buenos_Aires",
-    "Pacific SA Standard Time": "America/Santiago",
-    "South Africa Standard Time": "Africa/Johannesburg",
-    "W. Central Africa Standard Time": "Africa/Lagos",
-    "E. Africa Standard Time": "Africa/Nairobi",
-}
-_ZONES = {}
-
-
-def _zone(tzid):
-    """TZID (Windows or IANA name) -> tzinfo, else None (= local time)."""
-    tzid = (tzid or "").strip().strip('"')
-    if not tzid:
-        return None
-    if tzid not in _ZONES:
-        try:
-            _ZONES[tzid] = ZoneInfo(WIN_TZ.get(tzid, tzid))
-        except Exception:
-            # unknown name or missing time zone data (Windows without tzdata)
-            _ZONES[tzid] = None
-    return _ZONES[tzid]
+WIN_TZ = recurrence.WIN_TZ        # the one table, kept with the series code
+_zone = recurrence.zone           # TZID (Windows or IANA name) -> tzinfo, else None (= local time)
 
 
 def _ics_when(val, dateonly, tzid=""):
@@ -721,12 +670,30 @@ def _ics_when(val, dateonly, tzid=""):
 def _calendar_file(p_str, root_str):
     p, root = Path(p_str), Path(root_str)
     summary = location = description = org_cn = org_mail = dtstart = tzstart = ""
-    uid = ""
-    dateonly = False
-    att_names, att_mails = [], []
+    uid = rrule = ""
+    dateonly, in_master, current = False, True, None
+    att_names, att_mails, exdates, extra, exceptions = [], [], [], [], []
     for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
         name, params, value = _prop(line)
         if not name:
+            continue
+        if name == "END" and value.strip().upper() == "VEVENT":
+            in_master, current = False, None     # a series: its exceptions follow, the master is the item
+            continue
+        if not in_master:
+            # An exception's own words – the room a date moved to, a
+            # renamed date – are searchable too; the item stays the master's.
+            # Its slot and its own start let the index date it where it is.
+            if name == "BEGIN" and value.strip().upper() == "VEVENT":
+                current = {"rid": "", "rtz": "", "start": "", "tz": "", "date": False}
+                exceptions.append(current)
+            elif current is not None and name == "RECURRENCE-ID":
+                current["rid"], current["rtz"] = value.strip(), _pval(params, "TZID")
+            elif current is not None and name == "DTSTART":
+                current["start"], current["tz"] = value.strip(), _pval(params, "TZID")
+                current["date"] = "VALUE=DATE" in (params or "").upper()
+            elif name in ("SUMMARY", "LOCATION", "DESCRIPTION"):
+                extra.append(_unescape(value))
             continue
         if name == "UID":
             uid = value.strip()
@@ -740,6 +707,10 @@ def _calendar_file(p_str, root_str):
             dtstart = value.strip()
             dateonly = "VALUE=DATE" in (params or "").upper()
             tzstart = _pval(params, "TZID")
+        elif name == "RRULE":
+            rrule = value.strip()
+        elif name == "EXDATE":
+            exdates += [(v.strip(), _pval(params, "TZID")) for v in value.split(",") if v.strip()]
         elif name == "ORGANIZER":
             org_cn, org_mail = _pval(params, "CN"), _demail(value)
         elif name == "ATTENDEE":
@@ -758,6 +729,10 @@ def _calendar_file(p_str, root_str):
     cal = "/".join(segs[:2]) if len(segs) >= 3 and segs[0] == "kalender" else "kalender"
     ppl = " ".join(x for x in ([org_cn, org_mail] + att_names + att_mails) if x).lower()
     text = ((f"Ort: {location}. " if location else "") + description).strip()
+    own = {summary, location, description}
+    words = [w for w in dict.fromkeys(extra) if w and w not in own]
+    if words:
+        text = (text + "\n" + "\n".join(words)).strip()
     return {
         "uid": f"kalender:{rel}:0", "src": "kalender", "root": "outlook", "rel": rel,
         "key": f"event:{uid}" if uid else None,
@@ -766,13 +741,27 @@ def _calendar_file(p_str, root_str):
         "domains": domains([org_mail] + att_mails),
         "ts": ts, "date": disp, "title": summary or "(kein Betreff)",
         "ctx": cal, "text": text[:SAFETY_CAP],
+        # A series: what unfolding it takes (recurrence.series_setup), so
+        # the index can date it by every date it makes, not its first alone.
+        "series": (json.dumps({"start": dtstart, "tz": tzstart, "all_day": dateonly,
+                               "rrule": rrule, "exdates": exdates,
+                               "ex": [e for e in exceptions if e["rid"]]}) if rrule else None),
     }
 
 
 def load_calendar(root_dir):
     root = Path(root_dir)
     files = sorted(root.rglob("*.ics"))
-    return [r for r in _pmap(_calendar_file, files, root_dir) if r is not None]
+    recs = [r for r in _pmap(_calendar_file, files, root_dir) if r is not None]
+    # What is gone at Microsoft: the calendar's tombstones sit beside the
+    # mails' in the same table, and the index says `gone` for both.
+    gone = grabsteine("outlook", root_dir)
+    if gone:
+        for r in recs:
+            since = gone.get(r["rel"])
+            if since:
+                r["gone"] = since
+    return recs
 
 
 def load_contacts(root_dir):
@@ -1336,8 +1325,9 @@ def chunk_records(records, size=1500, overlap=200):
     """One message/mail = base unit; long texts into overlapping pieces.
 
     A mail without a word of text is still a mail, a OneNote page of ink
-    alone still a page: one empty chunk, so its subject, sender and date
-    can be found – and the next index run knows the file instead of
+    alone still a page, an appointment without a place or a description
+    still an appointment: one empty chunk, so its subject, people and
+    date can be found – and the next index run knows the file instead of
     reading it again. A Teams message without
     words – a picture, a file, a card – gets none: its empty chunk would
     carry nothing but the chat's title and sender, and a search for a
@@ -1352,7 +1342,7 @@ def chunk_records(records, size=1500, overlap=200):
     covered = set()
     for r, parts in zip(records, pieces, strict=True):
         if not parts:
-            if r.get("src") in ("outlook", "onenote"):
+            if r.get("src") in ("outlook", "onenote", "kalender"):
                 parts = [""]
             elif (r.get("src") == "teams" and r["rel"] not in files_with_words
                   and r["rel"] not in covered):
