@@ -203,6 +203,8 @@ def test_every_skill_is_a_resource_to_read():
     for name in FOLLOWS:
         uri = f"skill://{name}/SKILL.md"
         assert listed[uri].name == name and listed[uri].mime_type == "text/markdown"
+        # the menu shows the title, prefixed by its kind like every entry there
+        assert listed[uri].title == f"Skill: {name.removeprefix('munimentum-').capitalize()}"
         assert listed[uri].description == _frontmatter(_text(name))["description"]
         assert read_back[uri].text == _text(name)
 

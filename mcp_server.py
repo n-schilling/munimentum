@@ -376,7 +376,11 @@ def _load_skills(folder=None):
             raise ValueError(f"{file}: name {front.get('name')!r} is not the folder name")
         sha = hashlib.sha256(raw).hexdigest()
         topic = name.removeprefix(_SKILL_PREFIX)
+        # The name is the spec's (the folder, `munimentum-case`); the title
+        # is what an attach menu shows, prefixed by its kind like every
+        # other entry there ("Ask: …" prompts, "Cases: All", "Case: …").
         skills[topic] = {"name": name, "uri": f"skill://{name}/SKILL.md",
+                         "title": f"Skill: {topic.capitalize()}",
                          "text": text, "body": body, "frontmatter": front,
                          "digest": f"sha256:{sha}", "size": len(raw),
                          "token": f"{topic}-{sha[:10]}"}
@@ -405,7 +409,8 @@ class _SkillsExtension(Extension):
 
     def resources(self):
         return [ResourceBinding(resource=TextResource(
-                    uri=s["uri"], name=s["name"], description=s["frontmatter"]["description"],
+                    uri=s["uri"], name=s["name"], title=s["title"],
+                    description=s["frontmatter"]["description"],
                     mime_type="text/markdown", text=s["text"]))
                 for s in _SKILLS.values()]
 
@@ -437,7 +442,13 @@ class _Server(MCPServer):
     client's attach menu shows listed resources, not templates."""
 
     async def list_resources(self):
-        return [*await super().list_resources(), *_listed_cases()]
+        # The attach menu's order: the cases first (the overview, then
+        # each case – what one attaches most), the skills last.
+        served = await super().list_resources()
+        overview = [r for r in served if str(r.uri) == CASES_URI]
+        skills = [r for r in served if str(r.uri).startswith("skill://")]
+        rest = [r for r in served if r not in overview and r not in skills]
+        return [*overview, *_listed_cases(), *rest, *skills]
 
 
 mcp = _Server(
@@ -3726,7 +3737,7 @@ _CITE = ("Quote every statement with the item's `get_document` cite.label, and i
          "writes in.")
 
 
-@mcp.prompt(title="Brief me on a case")
+@mcp.prompt(title="Ask: Brief me on a case")
 def case_brief(case: str) -> str:
     """The state of one case: chronology, people, open points and what
     the archive cannot say."""
@@ -3741,7 +3752,7 @@ def case_brief(case: str) -> str:
 Then write: the state of the matter in three sentences; a dated chronology; the people and their part; open points; what the archive cannot tell (gaps, sources not exported). Before calling an item unchanged evidence, check it with `verify_item`. {_CITE}"""
 
 
-@mcp.prompt(title="Who knew what, and since when")
+@mcp.prompt(title="Ask: Who knew what, and since when")
 def who_knew_what(topic: str, until: str = "") -> str:
     """Who demonstrably knew about a topic, and from when."""
     bis = f" up to {until}" if until else ""
@@ -3755,7 +3766,7 @@ def who_knew_what(topic: str, until: str = "") -> str:
 Answer with a table: person · first date they demonstrably knew · how (wrote it, received it directly, in cc, invited to a meeting) · the item. {_CITE}"""
 
 
-@mcp.prompt(title="Chronology of a topic")
+@mcp.prompt(title="Ask: Chronology of a topic")
 def timeline(topic: str, date_from: str = "", date_to: str = "") -> str:
     """Everything on a topic in the order it happened, across sources."""
     span = " ".join(x for x in (f"from {date_from}" if date_from else "",
@@ -3770,7 +3781,7 @@ def timeline(topic: str, date_from: str = "", date_to: str = "") -> str:
 Write one line per event: date · what happened · who · the item. Mark the gaps in the archive where they fall. {_CITE}"""
 
 
-@mcp.prompt(title="Collect into a case")
+@mcp.prompt(title="Ask: Collect into a case")
 def collect_into_case(case: str, question: str) -> str:
     """Find what belongs in a case and file it – after the user says yes."""
     return f"""Find what belongs in the case "{case}" in my Munimentum archive: {question}
@@ -3783,7 +3794,7 @@ def collect_into_case(case: str, question: str) -> str:
 {_CITE}"""
 
 
-@mcp.prompt(title="Can I rely on the archive?")
+@mcp.prompt(title="Ask: Can I rely on the archive?")
 def archive_health() -> str:
     """Whether the archive is current and complete enough to draw
     conclusions from – per source."""
@@ -3875,7 +3886,7 @@ def _case_or_error(case_id):
     return fall
 
 
-@mcp.resource(CASES_URI, name="cases", title="Cases", mime_type="text/markdown")
+@mcp.resource(CASES_URI, name="cases", title="Cases: All", mime_type="text/markdown")
 def cases_resource() -> str:
     """The user's cases, one line each: id, name, state, how many items,
     when last changed."""

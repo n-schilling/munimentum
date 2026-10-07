@@ -653,6 +653,24 @@ def test_a_client_of_an_earlier_protocol_hears_it_too(welt, monkeypatch):
     assert heard == [uri]
 
 
+def test_every_entry_of_the_attach_menu_says_its_kind_first(welt):
+    """A client's attach menu is one flat list of prompts and resources:
+    every title carries its kind as a prefix – "Ask:" for a prompt,
+    "Cases: All", "Case: <name>", "Skill: <topic>" – and the cases come
+    before the skills, the overview first of all."""
+    async def run():
+        async with Client(mcp_server.mcp) as c:
+            return (await c.list_prompts()).prompts, (await c.list_resources()).resources
+    prompts, resources = anyio.run(run)
+    assert prompts and all(p.title.startswith("Ask: ") for p in prompts), [p.title for p in prompts]
+    titles = [r.title for r in resources]
+    assert titles[0] == "Cases: All"
+    assert all(t.startswith(("Cases: All", "Case: ", "Skill: ")) for t in titles), titles
+    kinds = [t.split(":")[0] for t in titles]
+    assert kinds == sorted(kinds, key=lambda k: {"Cases": 0, "Case": 1, "Skill": 2}[k])
+    assert [t for t in titles if t.startswith("Skill: ")] == ["Skill: Case", "Skill: Evidence", "Skill: Research"]
+
+
 def test_every_case_is_listed_for_the_attach_menu(welt):
     buch = welt["buch"]
     fid = _nordwind(welt, UID_M1)

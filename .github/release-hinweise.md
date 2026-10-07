@@ -1,18 +1,13 @@
-## New in 14.4.0
+## New in 14.4.1
 
-- **Three skills for Claude** – researching the archive, working a case,
-  building evidence – carry the prompts’ know-how to every MCP client: as
-  skills a host loads from the server, or through the new tool `get_guide`
-  for one that sees only tools.
-- **Searching, changing a case and verifying an item want the guide first**:
-  called without its token they answer with the guide instead of a result,
-  once per conversation.
+- **A client’s attach menu says what each entry is**: the prompts read
+  “Ask: …”, the case pages “Cases: All” and “Case: <name>”, the skills
+  “Skill: Case”, “Skill: Evidence”, “Skill: Research” – cases before skills.
 
 ## Upgrading
 
-Nothing happens once after this update. A client that already talks to the
-MCP server gets the guide on its first search, case write or verification
-of a conversation and the token with it; nothing else changes for it.
+Nothing happens once after this update. A client shows the new names after
+it reconnects to the MCP server – Claude Desktop after a restart.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the
