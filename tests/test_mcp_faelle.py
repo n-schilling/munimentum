@@ -21,7 +21,7 @@ import schluessel
 import store_layout
 from tests.test_mcp_server import (_build_store, _sample_records,
                                    UID_M1, UID_M2, UID_T0, UID_T1, UID_T2, UID_CAL, _payload,
-                                   _mit_guide)
+                                   _with_guide)
 from tests.hilfen import ohne_schluesselspalte
 
 
@@ -496,8 +496,8 @@ def test_die_falltools_sprechen_mcp(welt):
         async with Client(mcp_server.mcp) as c:
             faelle_ = _payload(await c.call_tool("list_cases", {}))
             fall = _payload(await c.call_tool("get_case", {"case": "Nordwind"}))
-            treffer = _payload(await c.call_tool("search_messages", _mit_guide("search_messages", {"query": "Rechnung", "case": str(fid)})))
-            gesperrt = _payload(await c.call_tool("add_to_case", _mit_guide("add_to_case", {"case": "Nordwind", "uids": [UID_T0]})))
+            treffer = _payload(await c.call_tool("search_messages", _with_guide("search_messages", {"query": "Rechnung", "case": str(fid)})))
+            gesperrt = _payload(await c.call_tool("add_to_case", _with_guide("add_to_case", {"case": "Nordwind", "uids": [UID_T0]})))
             return faelle_, fall, treffer, gesperrt
     faelle_, fall, treffer, gesperrt = anyio.run(run)
     assert faelle_["cases"][0]["name"] == "Nordwind"

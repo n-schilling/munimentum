@@ -31,11 +31,11 @@ from pydantic import TypeAdapter
 
 import mcp_server
 
-WURZEL = Path(__file__).resolve().parent.parent
-SKILLS = WURZEL / "skills"
+ROOT = Path(__file__).resolve().parent.parent
+SKILLS = ROOT / "skills"
 
 # Which prompts each skill follows step by step (skills/README.md).
-FOLGT = {"munimentum-research": ["archive_health"],
+FOLLOWS = {"munimentum-research": ["archive_health"],
          "munimentum-case": ["case_brief", "collect_into_case"],
          "munimentum-evidence": ["who_knew_what", "timeline"]}
 PROMPT_ARGS = {"archive_health": {},
@@ -46,13 +46,13 @@ PROMPT_ARGS = {"archive_health": {},
 
 # Result fields a skill may name besides tools and parameters. Only what a
 # tool really returns – grep mcp_server.py before adding one here.
-FELDER = {"default_backend", "not_in_archive", "next_offset",
+FIELDS = {"default_backend", "not_in_archive", "next_offset",
           "more_in_thread", "item_sha256", "guide_token",
           # the one tool the server offers when MCP access is switched off
           "archive_unavailable"}
 
 # snake_case in backticks: a tool, a parameter, a field or a verdict.
-BEZEICHNER = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
+IDENTIFIER = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
 FRONTMATTER = re.compile(r"\A---\n(.*?)\n---\n", re.S)
 
 
@@ -66,12 +66,12 @@ def _text(name):
 
 def _frontmatter(text):
     m = FRONTMATTER.match(text)
-    assert m, "SKILL.md beginnt nicht mit einem ---Block"
-    felder = {}
-    for zeile in m.group(1).splitlines():
-        schluessel, _, wert = zeile.partition(":")
-        felder[schluessel.strip()] = wert.strip()
-    return felder
+    assert m, "SKILL.md beginnt nicht with_guide einem ---Block"
+    fields = {}
+    for line in m.group(1).splitlines():
+        key, _, value = line.partition(":")
+        fields[key.strip()] = value.strip()
+    return fields
 
 
 def _tools():
@@ -84,54 +84,54 @@ def _verdicts():
     """The verdicts verify_item documents – its docstring is what a client
     reads, so that is where the list lives."""
     doc = mcp_server.verify_item.__doc__
-    teil = doc[doc.index("`verdict` is one of"):doc.index("`summary`")]
-    return set(re.findall(r'"([a-z_]+)"', teil))
+    part = doc[doc.index("`verdict` is one of"):doc.index("`summary`")]
+    return set(re.findall(r'"([a-z_]+)"', part))
 
 
 def test_there_are_three_skills():
     """Safeguard against a path error that silently empties every test below."""
-    assert [p.name for p in _skills()] == sorted(FOLGT)
+    assert [p.name for p in _skills()] == sorted(FOLLOWS)
 
 
-@pytest.mark.parametrize("pfad", _skills(), ids=lambda p: p.name)
-def test_frontmatter_is_what_clients_accept(pfad):
+@pytest.mark.parametrize("path", _skills(), ids=lambda p: p.name)
+def test_frontmatter_is_what_clients_accept(path):
     """name matches the folder, description says when – within the limits
     claude.ai checks on upload."""
-    felder = _frontmatter((pfad / "SKILL.md").read_text(encoding="utf-8"))
-    assert felder.get("name") == pfad.name
-    assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", pfad.name) and len(pfad.name) <= 64
-    assert "claude" not in pfad.name and "anthropic" not in pfad.name
-    beschreibung = felder.get("description", "")
-    assert beschreibung.startswith("Use when"), "sagt nicht, wann der Skill greift"
-    assert len(beschreibung) <= 1024
-    assert "<" not in beschreibung and ">" not in beschreibung
+    fields = _frontmatter((path / "SKILL.md").read_text(encoding="utf-8"))
+    assert fields.get("name") == path.name
+    assert re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", path.name) and len(path.name) <= 64
+    assert "claude" not in path.name and "anthropic" not in path.name
+    description = fields.get("description", "")
+    assert description.startswith("Use when"), "does not say when the skill applies"
+    assert len(description) <= 1024
+    assert "<" not in description and ">" not in description
 
 
-@pytest.mark.parametrize("name", sorted(FOLGT))
+@pytest.mark.parametrize("name", sorted(FOLLOWS))
 def test_skill_names_only_what_the_server_has(name):
     tools = _tools()
-    bekannt = set(tools) | set().union(*tools.values()) | _verdicts() | FELDER
-    unbekannt = set(BEZEICHNER.findall(_text(name))) - bekannt
-    assert not unbekannt, f"{name} nennt, was der Server nicht kennt: {sorted(unbekannt)}"
+    known = set(tools) | set().union(*tools.values()) | _verdicts() | FIELDS
+    unknown = set(IDENTIFIER.findall(_text(name))) - known
+    assert not unknown, f"{name} names what the server does not have: {sorted(unknown)}"
 
 
-@pytest.mark.parametrize("name", sorted(FOLGT))
+@pytest.mark.parametrize("name", sorted(FOLLOWS))
 def test_skill_keeps_up_with_its_prompts(name):
     """A step a prompt gains is a step its skill must learn."""
     tools = set(_tools())
-    im_skill = set(BEZEICHNER.findall(_text(name))) & tools
-    for prompt in FOLGT[name]:
+    in_skill = set(IDENTIFIER.findall(_text(name))) & tools
+    for prompt in FOLLOWS[name]:
         text = getattr(mcp_server, prompt)(**PROMPT_ARGS[prompt])
-        fehlt = (set(re.findall(r"`(\w+)`", text)) & tools) - im_skill
-        assert not fehlt, f"{prompt} nutzt {sorted(fehlt)}, {name} kennt sie nicht"
+        missing = (set(re.findall(r"`(\w+)`", text)) & tools) - in_skill
+        assert not missing, f"{prompt} uses {sorted(missing)}, {name} does not know them"
 
 
 def test_every_tool_is_in_some_skill():
     """A new tool without a word in any skill is a tool Claude meets
     through its docstring alone."""
     tools = set(_tools())
-    genannt = set().union(*(BEZEICHNER.findall(_text(n)) for n in FOLGT))
-    assert tools - genannt == set()
+    named = set().union(*(IDENTIFIER.findall(_text(n)) for n in FOLLOWS))
+    assert tools - named == set()
 
 
 def test_evidence_skill_words_every_verdict():
@@ -140,32 +140,32 @@ def test_evidence_skill_words_every_verdict():
     text = _text("munimentum-evidence")
     for v in _verdicts():
         mcp_server._verdict_text(v, {}, None)       # a verdict the server knows
-        assert re.search(rf"^\| {v} \|", text, re.M), f"{v} fehlt in der Tabelle"
+        assert re.search(rf"^\| {v} \|", text, re.M), f"{v} missing in der Tabelle"
 
 
 def test_readme_lists_the_prompts_each_skill_follows():
-    """skills/README.md and FOLGT say the same, so a reader finds the pairs."""
-    zeilen = (SKILLS / "README.md").read_text(encoding="utf-8").splitlines()
-    for name, prompts in FOLGT.items():
+    """skills/README.md and FOLLOWS say the same, so a reader finds the pairs."""
+    lines = (SKILLS / "README.md").read_text(encoding="utf-8").splitlines()
+    for name, prompts in FOLLOWS.items():
         assert any(z.startswith(f"| `{name}` |") and all(f"`{p}`" in z for p in prompts)
-                   for z in zeilen), f"README nennt {prompts} nicht bei {name}"
+                   for z in lines), f"README does not name {prompts} beside {name}"
 
 
 def test_every_prompt_is_followed_by_a_skill():
     """A new prompt without a skill is a workflow a bridged client never sees."""
-    quelle = (WURZEL / "mcp_server.py").read_text(encoding="utf-8")
-    prompts = {n.name for n in ast.parse(quelle).body
+    source = (ROOT / "mcp_server.py").read_text(encoding="utf-8")
+    prompts = {n.name for n in ast.parse(source).body
                if isinstance(n, ast.FunctionDef)
                and any(ast.unparse(d).startswith("mcp.prompt") for d in n.decorator_list)}
-    assert prompts == set(PROMPT_ARGS) == set().union(*FOLGT.values())
+    assert prompts == set(PROMPT_ARGS) == set().union(*FOLLOWS.values())
 
 
 def test_every_gated_tool_is_named_in_its_guide():
     """A tool that refuses without a guide must be one that guide covers –
     else the model reads a text that does not mention what it wanted."""
     for tool, topic in mcp_server._GUIDE_FOR.items():
-        assert topic in mcp_server._SKILLS, f"{tool}: kein Skill {topic}"
-        assert f"`{tool}`" in _text(f"munimentum-{topic}"), f"{tool} fehlt in {topic}"
+        assert topic in mcp_server._SKILLS, f"{tool}: no skill {topic}"
+        assert f"`{tool}`" in _text(f"munimentum-{topic}"), f"{tool} missing in {topic}"
 
 
 # --------------------------------------------------------------------------
@@ -199,42 +199,42 @@ def test_every_skill_is_a_resource_to_read():
         listed = {str(r.uri): r for r in (await c.list_resources()).resources}
         return listed, {u: (await c.read_resource(u)).contents[0]
                         for u in listed if u.startswith("skill://")}
-    listed, gelesen = _client(run)
-    for name in FOLGT:
+    listed, read_back = _client(run)
+    for name in FOLLOWS:
         uri = f"skill://{name}/SKILL.md"
         assert listed[uri].name == name and listed[uri].mime_type == "text/markdown"
         assert listed[uri].description == _frontmatter(_text(name))["description"]
-        assert gelesen[uri].text == _text(name)
+        assert read_back[uri].text == _text(name)
 
 
 def test_skills_list_carries_frontmatter_digest_and_size():
     res = _client(lambda c: _skills_request(c, "skills/list"))
-    eintraege = {e["uri"]: e for e in res["skills"]}
-    assert set(eintraege) == {f"skill://{n}/SKILL.md" for n in FOLGT}
-    for name in FOLGT:
-        roh = (SKILLS / name / "SKILL.md").read_bytes()
-        e = eintraege[f"skill://{name}/SKILL.md"]
-        assert e["frontmatter"] == _frontmatter(roh.decode("utf-8"))
-        assert e["resources"] == [{"uri": e["uri"], "size": len(roh),
-                                   "digest": "sha256:" + hashlib.sha256(roh).hexdigest()}]
+    entries = {e["uri"]: e for e in res["skills"]}
+    assert set(entries) == {f"skill://{n}/SKILL.md" for n in FOLLOWS}
+    for name in FOLLOWS:
+        raw = (SKILLS / name / "SKILL.md").read_bytes()
+        e = entries[f"skill://{name}/SKILL.md"]
+        assert e["frontmatter"] == _frontmatter(raw.decode("utf-8"))
+        assert e["resources"] == [{"uri": e["uri"], "size": len(raw),
+                                   "digest": "sha256:" + hashlib.sha256(raw).hexdigest()}]
 
 
 def test_skills_get_answers_by_uri_and_refuses_an_unknown_one():
     uri = "skill://munimentum-case/SKILL.md"
     res = _client(lambda c: _skills_request(c, "skills/get", uri=uri))
     assert res["skill"]["uri"] == uri and res["skill"]["frontmatter"]["name"] == "munimentum-case"
-    async def unbekannt(c):
+    async def unknown(c):
         # caught inside the connection – outside it arrives as a task group's error
         try:
             await _skills_request(c, "skills/get", uri="skill://nope/SKILL.md")
         except MCPError as e:
             return e.code
-    assert _client(unbekannt) == INVALID_PARAMS        # what the SEP prescribes
+    assert _client(unknown) == INVALID_PARAMS        # what the SEP prescribes
 
 
 def test_the_instructions_point_at_the_guides():
     """A host that reads instructions finds the skills without discovery."""
-    for name in FOLGT:
+    for name in FOLLOWS:
         assert f"skill://{name}/SKILL.md" in mcp_server._INSTRUCTIONS
     assert "get_guide" in mcp_server._INSTRUCTIONS
 
@@ -244,58 +244,58 @@ def test_the_instructions_point_at_the_guides():
 # --------------------------------------------------------------------------
 # The fewest arguments each gated tool's schema lets through – the gate
 # answers before the function runs, so no archive is needed.
-MINDESTENS = {"search_messages": {"query": "x"}, "browse_messages": {},
+LEAST = {"search_messages": {"query": "x"}, "browse_messages": {},
               "add_to_case": {"case": "x"}, "add_case_note": {"case": "x", "text": "y"},
               "collect_case": {"case": "x"}, "verify_item": {}}
 
 
-def _rufe(tool, args):
+def _call(tool, args):
     res = _client(lambda c: c.call_tool(tool, args))
     return res, json.loads(res.content[0].text)
 
 
 def test_minimal_args_cover_every_gated_tool():
-    assert set(MINDESTENS) == set(mcp_server._GUIDE_FOR)
+    assert set(LEAST) == set(mcp_server._GUIDE_FOR)
 
 
-@pytest.mark.parametrize("tool", sorted(MINDESTENS))
+@pytest.mark.parametrize("tool", sorted(LEAST))
 def test_without_the_token_a_gated_tool_answers_with_its_guide(tool):
     topic = mcp_server._GUIDE_FOR[tool]
     skill = mcp_server._SKILLS[topic]
-    res, antwort = _rufe(tool, MINDESTENS[tool])
+    res, answer = _call(tool, LEAST[tool])
     # An answer, not a protocol error: the model reads it and goes on.
     assert res.is_error is False
-    assert antwort["guide_token"] == skill["token"]
-    assert antwort["guide"] == skill["body"] and antwort["guide"].startswith("# ")
-    assert f'guide="{skill["token"]}"' in antwort["error"]
+    assert answer["guide_token"] == skill["token"]
+    assert answer["guide"] == skill["body"] and answer["guide"].startswith("# ")
+    assert f'guide="{skill["token"]}"' in answer["error"]
 
 
-@pytest.mark.parametrize("tool", sorted(MINDESTENS))
+@pytest.mark.parametrize("tool", sorted(LEAST))
 def test_another_guides_token_does_not_open_the_gate(tool):
-    fremd = next(s["token"] for t, s in mcp_server._SKILLS.items()
+    other = next(s["token"] for t, s in mcp_server._SKILLS.items()
                  if t != mcp_server._GUIDE_FOR[tool])
-    _, antwort = _rufe(tool, {**MINDESTENS[tool], "guide": fremd})
-    assert antwort.get("guide_token") == mcp_server._SKILLS[mcp_server._GUIDE_FOR[tool]]["token"]
+    _, answer = _call(tool, {**LEAST[tool], "guide": other})
+    assert answer.get("guide_token") == mcp_server._SKILLS[mcp_server._GUIDE_FOR[tool]]["token"]
 
 
 def test_get_guide_hands_out_text_token_and_what_it_opens():
-    _, antwort = _rufe("get_guide", {"topic": "case"})
+    _, answer = _call("get_guide", {"topic": "case"})
     skill = mcp_server._SKILLS["case"]
-    assert antwort["guide_token"] == skill["token"] and antwort["guide"] == skill["body"]
-    assert antwort["skill"] == "skill://munimentum-case/SKILL.md"
-    assert antwort["token_for"] == ["add_case_note", "add_to_case", "collect_case"]
+    assert answer["guide_token"] == skill["token"] and answer["guide"] == skill["body"]
+    assert answer["skill"] == "skill://munimentum-case/SKILL.md"
+    assert answer["token_for"] == ["add_case_note", "add_to_case", "collect_case"]
     # the skill's own name works as well
-    assert _rufe("get_guide", {"topic": "munimentum-case"})[1]["guide_token"] == skill["token"]
-    unbekannt = _rufe("get_guide", {"topic": "nope"})[1]
-    assert unbekannt["error"] and unbekannt["topics"] == sorted(mcp_server._SKILLS)
+    assert _call("get_guide", {"topic": "munimentum-case"})[1]["guide_token"] == skill["token"]
+    unknown = _call("get_guide", {"topic": "nope"})[1]
+    assert unknown["error"] and unknown["topics"] == sorted(mcp_server._SKILLS)
 
 
 def test_only_gated_tools_take_a_guide_and_the_app_never_meets_it():
     """The parameter exists at the MCP boundary; the functions the app
     calls in-process have no such argument."""
     tools = _client(lambda c: c.list_tools()).tools
-    mit = {t.name for t in tools if "guide" in t.input_schema.get("properties", {})}
-    assert mit == set(mcp_server._GUIDE_FOR)
+    with_guide = {t.name for t in tools if "guide" in t.input_schema.get("properties", {})}
+    assert with_guide == set(mcp_server._GUIDE_FOR)
     for tool in mcp_server._GUIDE_FOR:
         assert "guide" not in inspect.signature(getattr(mcp_server, tool)).parameters
 
@@ -303,19 +303,19 @@ def test_only_gated_tools_take_a_guide_and_the_app_never_meets_it():
 def test_a_changed_guide_is_a_new_token(tmp_path):
     """The token is the guide's hash: an old one stops working when the
     text changes, so a model cannot pass a gate with a guide it never saw."""
-    kopie = tmp_path / "skills"
-    shutil.copytree(SKILLS, kopie)
-    vorher = mcp_server._load_skills(kopie)
-    datei = kopie / "munimentum-case" / "SKILL.md"
-    datei.write_text(datei.read_text(encoding="utf-8") + "\nOne more rule.\n", encoding="utf-8")
-    nachher = mcp_server._load_skills(kopie)
-    assert nachher["case"]["token"] != vorher["case"]["token"]
-    assert nachher["research"]["token"] == vorher["research"]["token"]
+    copy = tmp_path / "skills"
+    shutil.copytree(SKILLS, copy)
+    before = mcp_server._load_skills(copy)
+    file = copy / "munimentum-case" / "SKILL.md"
+    file.write_text(file.read_text(encoding="utf-8") + "\nOne more rule.\n", encoding="utf-8")
+    after = mcp_server._load_skills(copy)
+    assert after["case"]["token"] != before["case"]["token"]
+    assert after["research"]["token"] == before["research"]["token"]
 
 
 def test_no_skills_folder_serves_nothing_and_gates_nothing(tmp_path):
     """A bundle that lost skills/ must not refuse every search."""
-    assert mcp_server._load_skills(tmp_path / "fehlt") == {}
+    assert mcp_server._load_skills(tmp_path / "missing") == {}
 
 
 def test_frontmatter_the_server_cannot_read_flat_is_an_error():

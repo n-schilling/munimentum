@@ -150,19 +150,13 @@ with the log, anonymised, shown for you to edit and sent by nobody but you.
 ## Search with Claude
 
 A built-in MCP server hands the archive to Claude Code, Claude Desktop or any
-other MCP client — on this machine only: every source with the search page's
-filters, how far the archive reaches, every version of an item, the org chart
-on any day, and your cases, also as pages to attach. Citations open the item
-in the app, alone on the page, and hold against the chain of checksums;
-prompts brief you on a case or build a chronology. It changes a case only when
-*Claude may change cases* is on under *Settings › Claude (MCP)*, and then only
-adds, marked *via MCP*. *Settings* prints the snippet for your client.
-
-Three [skills](skills/README.md) carry the prompts' know-how – researching,
-working a case, building evidence – to every client: as skills for a host
-that loads them from the server, and through `get_guide` for one that sees
-only tools. Searching, changing a case and verifying an item want the
-guide's token; without it they answer with the guide.
+other MCP client — on this machine only: every source with its filters, how far
+the archive reaches, item versions, the org chart on any day, and your cases as
+pages to attach. Citations open the item in the app and hold against the
+checksum chain; three [skills](skills/README.md) teach research, case work and
+evidence (`get_guide` hands them out). It changes a case only when *Claude may
+change cases* is on under *Settings › Claude (MCP)*, and then only adds, marked
+*via MCP*. *Settings* prints the snippet for your client.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

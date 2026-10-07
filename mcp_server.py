@@ -346,34 +346,34 @@ def _skill_frontmatter(text):
     m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
     if not m:
         raise ValueError("SKILL.md does not start with a --- block")
-    felder = {}
-    for zeile in m.group(1).splitlines():
-        schluessel, sep, wert = zeile.partition(":")
+    fields = {}
+    for line in m.group(1).splitlines():
+        key, sep, value = line.partition(":")
         # No indentation and no empty value: either would open a nested block.
-        if not (sep and re.fullmatch(r"[a-z][a-z0-9-]*", schluessel) and wert.strip()):
-            raise ValueError(f"frontmatter line is not `key: value`: {zeile!r}")
-        felder[schluessel] = wert.strip()
-    return felder, text[m.end():].lstrip("\n")
+        if not (sep and re.fullmatch(r"[a-z][a-z0-9-]*", key) and value.strip()):
+            raise ValueError(f"frontmatter line is not `key: value`: {line!r}")
+        fields[key] = value.strip()
+    return fields, text[m.end():].lstrip("\n")
 
 
-def _load_skills(ordner=None):
+def _load_skills(folder=None):
     """topic → the skill: name, uri, text, frontmatter, digest, size, token.
     A missing folder is an empty dict – a bundle without skills/ serves no
     guide and gates nothing, rather than refusing every search."""
-    ordner = Path(ordner or SKILLS_DIR)
+    folder = Path(folder or SKILLS_DIR)
     skills = {}
-    for datei in sorted(ordner.glob("*/SKILL.md")):
-        roh = datei.read_bytes()
-        text = roh.decode("utf-8")
-        fm, rumpf = _skill_frontmatter(text)
-        name = datei.parent.name
-        if fm.get("name") != name:
-            raise ValueError(f"{datei}: name {fm.get('name')!r} is not the folder name")
-        sha = hashlib.sha256(roh).hexdigest()
+    for file in sorted(folder.glob("*/SKILL.md")):
+        raw = file.read_bytes()
+        text = raw.decode("utf-8")
+        front, body = _skill_frontmatter(text)
+        name = file.parent.name
+        if front.get("name") != name:
+            raise ValueError(f"{file}: name {front.get('name')!r} is not the folder name")
+        sha = hashlib.sha256(raw).hexdigest()
         topic = name.removeprefix(_SKILL_PREFIX)
         skills[topic] = {"name": name, "uri": f"skill://{name}/SKILL.md",
-                         "text": text, "body": rumpf, "frontmatter": fm,
-                         "digest": f"sha256:{sha}", "size": len(roh),
+                         "text": text, "body": body, "frontmatter": front,
+                         "digest": f"sha256:{sha}", "size": len(raw),
                          "token": f"{topic}-{sha[:10]}"}
     return skills
 
