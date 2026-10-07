@@ -154,9 +154,10 @@ other MCP client — on this machine only: every source with its filters, how fa
 the archive reaches, item versions, the org chart on any day, and your cases as
 pages to attach. Citations open the item in the app and hold against the
 checksum chain; three [skills](skills/README.md) teach research, case work and
-evidence (`get_guide` hands them out). It changes a case only when *Claude may
-change cases* is on under *Settings › Claude (MCP)*, and then only adds, marked
-*via MCP*. *Settings* prints the snippet for your client.
+evidence, and search, case writes and verification ask for their token first
+(`get_guide`). It changes a case only when *Claude may change cases* is on
+under *Settings › Claude (MCP)*, and then only adds, marked *via MCP*.
+*Settings* prints the snippet for your client.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot
@@ -191,7 +192,6 @@ python3 -m venv .venv
 source .venv/bin/activate          # PowerShell: .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python3 app.py
-
 python3 -m testdata.build --profile testdaten   # an invented archive…
 python3 app.py --profile testdaten              # …to look at without an account
 ```

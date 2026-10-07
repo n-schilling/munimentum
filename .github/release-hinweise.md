@@ -1,19 +1,18 @@
-## New in 14.3.0
+## New in 14.4.0
 
-- **A series of appointments is one file with its exceptions** – every date
-  it makes stands in the calendar, on the series’ own clock across the
-  clock change, and the month the calendar hands to the search finds the
-  series by any of them; a date moved, renamed, cancelled or taken out
-  shows as such.
-- **An appointment deleted at Microsoft is marked** – in the calendar and
-  behind the search’s *no longer at Microsoft* filter; the file stays, as
-  every file does.
+- **Three skills for Claude** – researching the archive, working a case,
+  building evidence – carry the prompts’ know-how to every MCP client: as
+  skills a host loads from the server, or through the new tool `get_guide`
+  for one that sees only tools.
+- **Searching, changing a case and verifying an item want the guide first**:
+  called without its token they answer with the guide instead of a result,
+  once per conversation.
 
 ## Upgrading
 
-The first run after this update reads every selected calendar once in full,
-so each series gets its dates, its exceptions and the dates taken out – the
-run says so in its log. Nothing else happens once.
+Nothing happens once after this update. A client that already talks to the
+MCP server gets the guide on its first search, case write or verification
+of a conversation and the token with it; nothing else changes for it.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the
