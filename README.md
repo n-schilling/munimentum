@@ -158,6 +158,10 @@ prompts brief you on a case or build a chronology. It changes a case only when
 *Claude may change cases* is on under *Settings › Claude (MCP)*, and then only
 adds, marked *via MCP*. *Settings* prints the snippet for your client.
 
+Three [skills](skills/README.md) carry the prompts' know-how to clients that
+see only the tools – researching, working a case, building evidence – and
+come in by themselves when a question matches.
+
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot
 > reach it. Leave it that way.
