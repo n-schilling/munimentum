@@ -313,6 +313,20 @@ def test_a_changed_guide_is_a_new_token(tmp_path):
     assert after["research"]["token"] == before["research"]["token"]
 
 
+def test_a_skill_with_windows_line_endings_is_the_same_skill(tmp_path):
+    """Git for Windows checks SKILL.md out with CRLF: the frontmatter still
+    parses, and digest, size and token are those of the LF text – the
+    Windows bundle must serve what the others serve."""
+    copy = tmp_path / "skills"
+    shutil.copytree(SKILLS, copy)
+    for file in copy.glob("*/SKILL.md"):
+        file.write_bytes(file.read_bytes().replace(b"\n", b"\r\n"))
+    crlf, lf = mcp_server._load_skills(copy), mcp_server._load_skills(SKILLS)
+    assert {t: s["token"] for t, s in crlf.items()} == {t: s["token"] for t, s in lf.items()}
+    assert all(crlf[t]["digest"] == lf[t]["digest"] and crlf[t]["size"] == lf[t]["size"] for t in lf)
+    assert "\r" not in crlf["case"]["text"]
+
+
 def test_no_skills_folder_serves_nothing_and_gates_nothing(tmp_path):
     """A bundle that lost skills/ must not refuse every search."""
     assert mcp_server._load_skills(tmp_path / "missing") == {}

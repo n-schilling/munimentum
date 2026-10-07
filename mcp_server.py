@@ -363,8 +363,13 @@ def _load_skills(folder=None):
     folder = Path(folder or SKILLS_DIR)
     skills = {}
     for file in sorted(folder.glob("*/SKILL.md")):
-        raw = file.read_bytes()
-        text = raw.decode("utf-8")
+        # A Windows checkout may carry CRLF (Git for Windows' autocrlf): the
+        # skill is its text, not the bytes on disk – read with any line
+        # ending, served, hashed and sized as LF, so digest and token are
+        # the same on every platform. The Windows bundle's search answered
+        # 500 once because the frontmatter did not start with "---\n".
+        text = file.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        raw = text.encode("utf-8")
         front, body = _skill_frontmatter(text)
         name = file.parent.name
         if front.get("name") != name:

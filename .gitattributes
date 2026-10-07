@@ -1,0 +1,3 @@
+# The skills are served byte for byte (mcp_server._load_skills hashes them):
+# the same text on every platform, whatever Git for Windows would do.
+skills/**/SKILL.md text eol=lf
