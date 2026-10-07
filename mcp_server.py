@@ -80,12 +80,16 @@ from urllib.parse import quote, unquote
 
 import anyio
 
+from mcp.server.extension import Extension, MethodBinding, ResourceBinding
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError
+from mcp.server.mcpserver.resources import TextResource
+from mcp.shared.exceptions import MCPError
 from mcp.server.subscriptions import InMemorySubscriptionBus, ResourcesListChanged, ResourceUpdated
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import (Completion, EmptyResult, SubscribeRequestParams, TextContent,
+from mcp.types import (INVALID_PARAMS, Completion, EmptyResult, PaginatedRequestParams,
+                       RequestParams, SubscribeRequestParams, TextContent,
                        ToolAnnotations, UnsubscribeRequestParams)
 from mcp.types import Resource as MCPResource
 
@@ -124,6 +128,14 @@ anything not exported is simply absent – and the archive has edges: it
 starts and ends somewhere, sources sync on their own cadence, and months can
 be empty. corpus_stats knows those edges; ask it before concluding that
 something does not exist.
+
+Guides: get_guide("research" | "case" | "evidence") returns how to work
+with this archive for that kind of question, and a token. search_messages
+and browse_messages take the research token as `guide`, the tools that
+change a case the case token, verify_item the evidence token – read once
+per conversation; without it they answer with the guide instead. The same
+guides are skills: skill://munimentum-research/SKILL.md,
+skill://munimentum-case/SKILL.md, skill://munimentum-evidence/SKILL.md.
 
 Which tool to use:
   • list_sources    – START HERE once per session: which sources this archive
@@ -303,6 +315,118 @@ async def _lifespan(_server):
             tg.cancel_scope.cancel()
 
 
+# --------------------------------------------------------------------------
+# Skills: the know-how of the instructions and prompts, for every client
+# --------------------------------------------------------------------------
+# skills/ holds three Agent Skills (skills/README.md). They reach a client
+# two ways. One is SEP-2640, the skills extension: each SKILL.md is a
+# resource under skill://, listed by skills/list and skills/get – for hosts
+# that load skills from a server. The other works wherever tools work, a
+# bridge that passes nothing but tools included: get_guide hands out a
+# skill's text with a token, and the tools in _GUIDE_FOR refuse without
+# that token – answering with the guide instead. A token is a hash of the
+# guide, so it needs no session (protocol 2026-07-28 has none): whoever
+# holds it has read the guide, in this conversation or one that kept it.
+# The app's own search calls the functions in-process and never meets the
+# gate; only _tool()'s MCP boundary checks it.
+SKILLS_DIR = export_util.resource_dir() / "skills"
+_SKILLS_EXT = "io.modelcontextprotocol/skills"
+_SKILL_PREFIX = "munimentum-"
+# Which guide a tool asks for: the entry points to content, the tools that
+# change a case, and the one whose answer decides what counts as evidence.
+_GUIDE_FOR = {"search_messages": "research", "browse_messages": "research",
+              "add_to_case": "case", "add_case_note": "case",
+              "collect_case": "case", "verify_item": "evidence"}
+
+
+def _skill_frontmatter(text):
+    """The YAML frontmatter of a SKILL.md as a dict. Ours is flat – one
+    `key: value` per line – and kept so; anything else is an error here
+    rather than a skill a host reads differently than we do."""
+    m = re.match(r"\A---\n(.*?)\n---\n", text, re.S)
+    if not m:
+        raise ValueError("SKILL.md does not start with a --- block")
+    felder = {}
+    for zeile in m.group(1).splitlines():
+        schluessel, sep, wert = zeile.partition(":")
+        # No indentation and no empty value: either would open a nested block.
+        if not (sep and re.fullmatch(r"[a-z][a-z0-9-]*", schluessel) and wert.strip()):
+            raise ValueError(f"frontmatter line is not `key: value`: {zeile!r}")
+        felder[schluessel] = wert.strip()
+    return felder, text[m.end():].lstrip("\n")
+
+
+def _load_skills(ordner=None):
+    """topic → the skill: name, uri, text, frontmatter, digest, size, token.
+    A missing folder is an empty dict – a bundle without skills/ serves no
+    guide and gates nothing, rather than refusing every search."""
+    ordner = Path(ordner or SKILLS_DIR)
+    skills = {}
+    for datei in sorted(ordner.glob("*/SKILL.md")):
+        roh = datei.read_bytes()
+        text = roh.decode("utf-8")
+        fm, rumpf = _skill_frontmatter(text)
+        name = datei.parent.name
+        if fm.get("name") != name:
+            raise ValueError(f"{datei}: name {fm.get('name')!r} is not the folder name")
+        sha = hashlib.sha256(roh).hexdigest()
+        topic = name.removeprefix(_SKILL_PREFIX)
+        skills[topic] = {"name": name, "uri": f"skill://{name}/SKILL.md",
+                         "text": text, "body": rumpf, "frontmatter": fm,
+                         "digest": f"sha256:{sha}", "size": len(roh),
+                         "token": f"{topic}-{sha[:10]}"}
+    return skills
+
+
+_SKILLS = _load_skills()
+
+
+def _skill_entry(s):
+    """A skills/list entry (SEP-2640): one file, so `resources` is just
+    SKILL.md with its digest and size."""
+    return {"uri": s["uri"], "frontmatter": s["frontmatter"],
+            "resources": [{"uri": s["uri"], "digest": s["digest"], "size": s["size"]}]}
+
+
+class _SkillGetParams(RequestParams):
+    uri: str
+
+
+class _SkillsExtension(Extension):
+    """SEP-2640: the skills in skills/ as skill:// resources, plus the two
+    methods every server declaring the extension serves."""
+
+    identifier = _SKILLS_EXT
+
+    def resources(self):
+        return [ResourceBinding(resource=TextResource(
+                    uri=s["uri"], name=s["name"], description=s["frontmatter"]["description"],
+                    mime_type="text/markdown", text=s["text"]))
+                for s in _SKILLS.values()]
+
+    def methods(self):
+        return [MethodBinding("skills/list", PaginatedRequestParams, self._list),
+                MethodBinding("skills/get", _SkillGetParams, self._get)]
+
+    async def _list(self, _ctx, _params):
+        return {"skills": [_skill_entry(s) for s in _SKILLS.values()]}
+
+    async def _get(self, _ctx, params):
+        for s in _SKILLS.values():
+            if s["uri"] == params.uri:
+                return {"skill": _skill_entry(s)}
+        raise MCPError(INVALID_PARAMS, f"No skill at {params.uri}")
+
+
+def _guide_refusal(tool, topic):
+    """What a gated tool answers without the token: the guide itself."""
+    s = _SKILLS[topic]
+    return {"error": (f"{tool} wants the \"{topic}\" guide read first – it is below. Call "
+                      f"{tool} again with guide=\"{s['token']}\"; the same token serves "
+                      f"every later call in this conversation."),
+            "guide_token": s["token"], "guide": s["body"]}
+
+
 class _Server(MCPServer):
     """MCPServer, with every case listed as a resource of its own: a
     client's attach menu shows listed resources, not templates."""
@@ -323,6 +447,7 @@ mcp = _Server(
     lifespan=_lifespan,
     subscriptions=_BUS,
     middleware=[_remember_sessions],
+    extensions=[_SkillsExtension()],
 )
 _HTTP_PATH = "/mcp"             # streamable-http mount point (SDK default)
 
@@ -359,6 +484,11 @@ _HIT_ARGS = """
         max_chars: Budget of the whole answer in characters (default
             40000). Hits past it are left out and `truncated` says how
             many; `next_offset`, where the tool pages, goes on from there.
+"""
+_GUIDE_ARG = """
+        guide: The token of the "{topic}" guide, from get_guide or from the
+            answer this tool gives without one – once per conversation, then
+            on every call. Without it the call returns the guide instead.
 """
 _COLLAPSE_NOTE = """
     Hits of one conversation are folded into its best one: that hit says
@@ -476,11 +606,22 @@ def _tool(annotations, *, hits=False, collapse=False, post=None):
                 doc += _COLLAPSE_NOTE
         size = next((n for n in ("k", "limit") if n in sig.parameters), None)
         pages = "offset" in sig.parameters and size is not None
+        # A gated tool takes the guide's token – the function never sees it.
+        topic = _GUIDE_FOR.get(fn.__name__)
+        if topic not in _SKILLS:        # no such skill shipped: nothing to gate on
+            topic = None
+        if topic:
+            params += [inspect.Parameter("guide", inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                                         default="", annotation=str)]
+            doc = doc.rstrip() + "\n" + _GUIDE_ARG.format(topic=topic)
 
         @functools.wraps(fn)
         def call(**kw):
             detail = kw.pop("detail", "brief")
             max_chars = kw.pop("max_chars", MAX_CHARS)
+            if topic and str(kw.pop("guide", "") or "").strip() != _SKILLS[topic]["token"]:
+                return TextContent(type="text",
+                                   text=_compact_json(_guide_refusal(fn.__name__, topic)))
             res = fn(**kw)
             if post is not None and isinstance(res, dict) and not res.get("error"):
                 res = post(res)
@@ -2746,6 +2887,35 @@ def list_sources() -> dict:
             "source_filter": "one key, or several comma-separated: "
                              "\"onedrive,sharepoint\"; \"datei\" means both "
                              "file mirrors, \"all\" or empty means every source"}
+
+
+@_tool(_READONLY)
+def get_guide(topic: str = "research") -> dict:
+    """How to work with this archive well, for one kind of question – and
+    the token the tools that need it take.
+
+    Three guides, the same text as the skills of the same name:
+    "research" – which tool, how to search per backend, what an empty
+    result does and does not mean, citing; "case" – briefing on a case,
+    keeping it current, filing into it only after the user says yes;
+    "evidence" – who knew what since when, a chronology meant as proof,
+    and how to word an item by its verify_item verdict.
+
+    search_messages and browse_messages ask for the "research" token,
+    add_to_case, add_case_note and collect_case for "case", verify_item
+    for "evidence" – as `guide`, once read on every call of the
+    conversation. Read the guide; do not merely copy the token.
+
+    Args:
+        topic: "research", "case" or "evidence" (or the skill's name,
+            "munimentum-case").
+    """
+    s = _SKILLS.get(str(topic or "").strip().removeprefix(_SKILL_PREFIX))
+    if s is None:
+        return {"error": f"No guide {topic!r}.", "topics": sorted(_SKILLS)}
+    gated = sorted(t for t, g in _GUIDE_FOR.items() if _SKILLS.get(g) is s)
+    return {"topic": s["name"].removeprefix(_SKILL_PREFIX), "skill": s["uri"],
+            "guide_token": s["token"], "token_for": gated, "guide": s["body"]}
 
 
 @_tool(_READONLY)

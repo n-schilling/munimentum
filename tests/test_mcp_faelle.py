@@ -20,7 +20,8 @@ import rag_index
 import schluessel
 import store_layout
 from tests.test_mcp_server import (_build_store, _sample_records,
-                                   UID_M1, UID_M2, UID_T0, UID_T1, UID_T2, UID_CAL, _payload)
+                                   UID_M1, UID_M2, UID_T0, UID_T1, UID_T2, UID_CAL, _payload,
+                                   _mit_guide)
 from tests.hilfen import ohne_schluesselspalte
 
 
@@ -495,10 +496,8 @@ def test_die_falltools_sprechen_mcp(welt):
         async with Client(mcp_server.mcp) as c:
             faelle_ = _payload(await c.call_tool("list_cases", {}))
             fall = _payload(await c.call_tool("get_case", {"case": "Nordwind"}))
-            treffer = _payload(await c.call_tool("search_messages",
-                                                 {"query": "Rechnung", "case": str(fid)}))
-            gesperrt = _payload(await c.call_tool("add_to_case",
-                                                  {"case": "Nordwind", "uids": [UID_T0]}))
+            treffer = _payload(await c.call_tool("search_messages", _mit_guide("search_messages", {"query": "Rechnung", "case": str(fid)})))
+            gesperrt = _payload(await c.call_tool("add_to_case", _mit_guide("add_to_case", {"case": "Nordwind", "uids": [UID_T0]})))
             return faelle_, fall, treffer, gesperrt
     faelle_, fall, treffer, gesperrt = anyio.run(run)
     assert faelle_["cases"][0]["name"] == "Nordwind"
@@ -663,7 +662,8 @@ def test_every_case_is_listed_for_the_attach_menu(welt):
     async def run():
         async with Client(mcp_server.mcp) as c:
             return (await c.list_resources()).resources
-    listed = {str(r.uri): r for r in anyio.run(run)}
+    # the skills are listed beside them (SEP-2640, tests/test_skills.py)
+    listed = {str(r.uri): r for r in anyio.run(run) if not str(r.uri).startswith("skill://")}
     assert set(listed) == {mcp_server.CASES_URI, f"munimentum://case/{fid}", f"munimentum://case/{zu}"}
     assert listed[f"munimentum://case/{fid}"].title == "Case: Nordwind"
     assert listed[f"munimentum://case/{zu}"].description.startswith("A closed case")

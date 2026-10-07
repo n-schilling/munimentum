@@ -23,6 +23,11 @@ in the app: pass its sentence on and stop – no other path reaches the data.
 
 ## Once per conversation, before the first answer
 
+0. **The guide token.** `search_messages` and `browse_messages` take a
+   `guide` token and answer without one with this guide instead. If this
+   text reached you through `get_guide` or such an answer, the
+   `guide_token` beside it is the one; otherwise call `get_guide` with
+   topic "research" once. Pass it on every later call.
 1. `list_sources` – which sources exist, what each indexes, what `folder`
    and `person` mean there, and `not_in_archive` (never exported: say so
    instead of searching).

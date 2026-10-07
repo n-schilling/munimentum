@@ -58,7 +58,10 @@ A hit that already sits in a case says so in `cases`, folder included.
 ## Adding to a case – only after a yes
 
 The tools that write are `add_to_case`, `add_case_note` and `collect_case`.
-Everything they add is marked "via MCP" in Munimentum.
+Everything they add is marked "via MCP" in Munimentum. They take the case
+guide's token as `guide` – the `guide_token` that came with this text, or
+`get_guide` with topic "case" once – and answer without it with this
+guide instead.
 
 1. `get_case` for what the case holds already, its folders and searches.
 2. Search with several phrasings; leave out hits whose `cases` already

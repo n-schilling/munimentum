@@ -1069,7 +1069,9 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               # 13.3: the automatic searches, run now
               "collect_case",
               # an item held against the evidence chain
-              "verify_item"}
+              "verify_item",
+              # the skills' text and token for the gated tools (test_skills.py)
+              "get_guide"}
 # The two that write – behind the "Claude may change cases" switch.
 SCHREIBEND = {"add_to_case", "add_case_note", "collect_case"}
 
@@ -1080,6 +1082,13 @@ def _via_client(fn):
         async with Client(mcp_server.mcp) as c:
             return await fn(c)
     return anyio.run(run)
+
+
+def _mit_guide(tool, args):
+    """The arguments plus the guide token a gated tool asks for over MCP
+    (mcp_server._GUIDE_FOR) – what a client holds once it read the guide."""
+    topic = mcp_server._GUIDE_FOR.get(tool)
+    return {**args, "guide": mcp_server._SKILLS[topic]["token"]} if topic else args
 
 
 def _payload(res):
@@ -1135,8 +1144,8 @@ def test_tool_schema_enthaelt_alle_parameter():
         "query", "person", "date_from", "date_to", "days", "source", "k",
         "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party",
         "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments",
-        # the MCP boundary's own two (_tool): the function never sees them
-        "detail", "max_chars"}
+        # the MCP boundary's own three (_tool): the function never sees them
+        "detail", "max_chars", "guide"}
     assert schema["required"] == ["query"]      # only query is required
 
 
@@ -1147,8 +1156,7 @@ def test_resource_template_ist_registriert():
 
 
 def test_call_tool_ueber_sdk_liefert_ergebnis(state):
-    res = _via_client(lambda c: c.call_tool(
-        "search_messages", {"query": "Rechnung", "mode": "lexical"}))
+    res = _via_client(lambda c: c.call_tool("search_messages", _mit_guide("search_messages", {"query": "Rechnung", "mode": "lexical"})))
     payload = _payload(res)
     assert payload["backend"] == "lexical"
     assert UID_M1 in [h["uid"] for h in payload["results"]]
@@ -2214,7 +2222,7 @@ BRIEF_FIELDS = set(mcp_server._BRIEF) | set(mcp_server._BRIEF_IF_SET)
 def test_a_client_gets_compact_brief_hits_while_the_app_keeps_the_full_dict(state):
     full = mcp_server.browse_messages()
     assert all("uri" in h and "root" in h for h in full["results"])
-    res = _via_client(lambda c: c.call_tool("browse_messages", {}))
+    res = _via_client(lambda c: c.call_tool("browse_messages", _mit_guide("browse_messages", {})))
     text = res.content[0].text
     assert "\n" not in text and '": ' not in text          # no indentation, no padding
     payload = json.loads(text)
@@ -2227,21 +2235,19 @@ def test_a_client_gets_compact_brief_hits_while_the_app_keeps_the_full_dict(stat
 
 
 def test_detail_full_hands_out_every_field(state):
-    payload = _payload(_via_client(lambda c: c.call_tool(
-        "search_messages", {"query": "Rechnung", "mode": "lexical", "detail": "full"})))
+    payload = _payload(_via_client(lambda c: c.call_tool("search_messages", _mit_guide("search_messages", {"query": "Rechnung", "mode": "lexical", "detail": "full"}))))
     assert payload["results"] and all("uri" in h and "key" in h for h in payload["results"])
 
 
 def test_a_full_page_names_the_next_offset_a_short_one_none(state):
-    erste = _payload(_via_client(lambda c: c.call_tool("browse_messages", {"k": 2})))
+    erste = _payload(_via_client(lambda c: c.call_tool("browse_messages", _mit_guide("browse_messages", {"k": 2}))))
     assert erste["count"] == 2 and erste["next_offset"] == 2
-    rest = _payload(_via_client(lambda c: c.call_tool("browse_messages", {"k": 50})))
+    rest = _payload(_via_client(lambda c: c.call_tool("browse_messages", _mit_guide("browse_messages", {"k": 50}))))
     assert rest["next_offset"] is None
 
 
 def test_the_budget_leaves_hits_out_and_says_where_to_go_on(state):
-    payload = _payload(_via_client(lambda c: c.call_tool(
-        "browse_messages", {"k": 50, "max_chars": 1000, "preview_chars": 400})))
+    payload = _payload(_via_client(lambda c: c.call_tool("browse_messages", _mit_guide("browse_messages", {"k": 50, "max_chars": 1000, "preview_chars": 400}))))
     alle = mcp_server.browse_messages(k=50)["count"]
     kept = len(payload["results"])
     assert 0 < kept < alle
@@ -2258,8 +2264,7 @@ def test_hits_of_one_conversation_fold_into_the_best(state):
     einzeln = mcp_server.search_messages(query="Rechnung", mode="lexical")["results"]
     im_chat = [h["uid"] for h in einzeln if h["thread"] == "tix:chat"]
     assert sorted(im_chat) == [UID_T0, UID_T1]
-    payload = _payload(_via_client(lambda c: c.call_tool(
-        "search_messages", {"query": "Rechnung", "mode": "lexical"})))
+    payload = _payload(_via_client(lambda c: c.call_tool("search_messages", _mit_guide("search_messages", {"query": "Rechnung", "mode": "lexical"}))))
     kopf = [h for h in payload["results"] if h.get("thread") == "tix:chat"]
     # The best ranked keeps its place and counts the other.
     assert [h["uid"] for h in kopf] == [im_chat[0]] and kopf[0]["more_in_thread"] == 1
@@ -2268,8 +2273,7 @@ def test_hits_of_one_conversation_fold_into_the_best(state):
 
 
 def test_errors_pass_the_boundary_untouched(state):
-    payload = _payload(_via_client(lambda c: c.call_tool(
-        "search_messages", {"query": "x", "case": "Nowhere"})))
+    payload = _payload(_via_client(lambda c: c.call_tool("search_messages", _mit_guide("search_messages", {"query": "x", "case": "Nowhere"}))))
     assert payload["error"] and "next_offset" not in payload
 
 

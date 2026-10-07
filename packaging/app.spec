@@ -85,6 +85,11 @@ assert datas, "lang/ is empty – the interface would have no texts"
 # app.py reads both from RES; without them the app would start blank.
 datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "profil.html"), "."),
           (str(ROOT / "openapi.yaml"), ".")]
+# The skills the MCP server serves and gates on (mcp_server._load_skills) –
+# without them it serves no guide and gates nothing.
+skills = [(str(p), f"skills/{p.parent.name}") for p in sorted((ROOT / "skills").glob("*/SKILL.md"))]
+assert skills, "skills/ is empty – the MCP server would serve no guide"
+datas += skills
 
 for paket in ("mcp", "uvicorn", "starlette", "pydantic", "msal", "requests"):
     try:

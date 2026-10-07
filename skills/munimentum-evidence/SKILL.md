@@ -58,8 +58,10 @@ as nothing happening.
 ## Before an item is called evidence
 
 `verify_item` with its `uid` (or the `key` from cite.key). It hashes the file
-afresh, holds it against the evidence chain and finds the time-stamp. Pass
-its `summary` on, and word the item by `verdict`:
+afresh, holds it against the evidence chain and finds the time-stamp. It
+takes this guide's token as `guide` – the `guide_token` that came with this
+text, or `get_guide` with topic "evidence" once. Pass its `summary` on, and
+word the item by `verdict`:
 
 | verdict | How to quote the item |
 |---|---|
