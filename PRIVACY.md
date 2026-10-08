@@ -22,7 +22,7 @@ Settings, access token and run history live in a fixed folder in your user
 profile; exports and the search index live below it by default and can each
 point elsewhere — all paths are shown in *Settings*. While the app runs, an
 `instance.json` in the profile's folder names the port it answers on, so a
-citation Claude quotes can link into it; quitting removes it. Every archive is
+citation an MCP client quotes can link into it; quitting removes it. Every archive is
 a profile folder of its own below that one, with its own token, exports and
 index; nothing crosses between profiles, and the only things outside them are
 a small file naming the one opened last, the start-up log, and what the update
@@ -65,8 +65,8 @@ before posting.
 coverage, the run history with the logs those runs wrote, the completeness
 balance against Microsoft, the analytics figures, your cases and saved
 searches, the earlier versions of items and their checksums, the organization
-in every version the archive holds — to Claude
-on `127.0.0.1`. It reads; it changes a case only when
-*Claude may change cases* is on under *Settings › Claude (MCP)*, and then
-only adds. What Claude does with the passages it reads is governed by your
-agreement with Anthropic, not by this app.
+in every version the archive holds — to any MCP client, Claude for one,
+on `127.0.0.1`. It reads; it changes a case only when *MCP clients may
+change cases* is on under *Settings › MCP clients*, and then only adds.
+What the client does with the passages it reads is governed by your
+agreement with its provider — Anthropic for Claude — not by this app.

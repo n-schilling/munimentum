@@ -5,6 +5,11 @@ description: Use when the user needs something they can rely on from their Munim
 
 # Evidence from a Munimentum archive
 
+This guide belongs to Munimentum 14.5.0. Installed by hand – under
+Customize › Skills or in `~/.claude/skills/` – it does not change with the
+app: `get_guide` (and `get_version`) answer the server's `version`; when
+it differs from this one, follow the guide `get_guide` hands you instead.
+
 The user wants something that holds up: in a dispute, a handover, a review.
 Search technique and the archive's edges are in `munimentum-research` –
 follow it. What changes here is the standard: **every line rests on a cited
@@ -83,8 +88,9 @@ changed after it was archived: say which version a quote comes from.
 ## Citing and handing over
 
 Every line carries the item's cite.label, and cite.link when not null (null:
-Munimentum is not running – say once that the links work when it runs).
-Answer in the user's language.
+Munimentum is not running – say once that the links work when it runs). An
+item shown on its own was read with `get_document` and carries its link; a
+list of hits carries labels only. Answer in the user's language.
 
 To hand the evidence to someone, suggest filing the items into a case
 (`munimentum-case`) and using *Export case…* in Munimentum: one ZIP with

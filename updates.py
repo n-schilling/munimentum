@@ -90,6 +90,28 @@ def retry_at(r):
     return when.isoformat(timespec="seconds")
 
 
+def new_in(body):
+    """The release notes' "New in" section as its points – one string per
+    bullet, the Markdown inline marks kept (**bold**, *italic*, `code`),
+    a bullet's continuation lines joined. Empty when the body has no such
+    section: then the page shows the window without notes."""
+    points, inside = [], False
+    for raw in str(body or "").replace("\r\n", "\n").split("\n"):
+        line = raw.rstrip()
+        if line.startswith("## "):
+            if inside:
+                break
+            inside = line[3:].strip().lower().startswith("new in")
+            continue
+        if not inside:
+            continue
+        if line.lstrip().startswith(("- ", "* ")):
+            points.append(line.lstrip()[2:].strip())
+        elif line.strip() and points:
+            points[-1] += " " + line.strip()
+    return points
+
+
 def check(current, repo, timeout=4.0, enabled=True, cache=None):
     """Look once. Never raises – a failure here must not hold anything up.
 
@@ -98,12 +120,14 @@ def check(current, repo, timeout=4.0, enabled=True, cache=None):
     app's startup as a missing network.
 
     `cache` is a dict the caller keeps between checks – the ETag of the
-    last answer and what it said (`etag`, `tag`, `url`). It is sent as
-    If-None-Match, a 304 is answered from it, a 200 replaces it in place.
+    last answer and what it said (`etag`, `tag`, `url`, `notes`,
+    `published_at`). It is sent as If-None-Match, a 304 is answered from
+    it, a 200 replaces it in place. `notes` are the release's "New in"
+    points and `published_at` its date – what the window at start shows.
     """
     out = {"status": "off", "current": current, "latest": None,
            "url": None, "newer": False, "ahead": False, "error": None,
-           "retry_at": None}
+           "retry_at": None, "notes": [], "published_at": None}
     if not enabled:
         return out
     cache = cache if cache is not None else {}
@@ -121,6 +145,7 @@ def check(current, repo, timeout=4.0, enabled=True, cache=None):
         if r.status_code == 304:
             # Unchanged since the cached answer – and not counted by GitHub.
             tag, url = str(cache.get("tag") or ""), cache.get("url")
+            notes, published = list(cache.get("notes") or []), cache.get("published_at")
         elif r.status_code != 200:
             out["status"], out["error"] = "error", f"HTTP {r.status_code}"
             out["retry_at"] = retry_at(r)
@@ -129,9 +154,10 @@ def check(current, repo, timeout=4.0, enabled=True, cache=None):
             daten = r.json()
             tag = (daten.get("tag_name") or daten.get("name") or "").strip()
             url = daten.get("html_url")
+            notes, published = new_in(daten.get("body")), daten.get("published_at")
             etag = _headers(r).get("ETag")
             if tag and etag:
-                cache.update(etag=etag, tag=tag, url=url)
+                cache.update(etag=etag, tag=tag, url=url, notes=notes, published_at=published)
         if not tag:
             out["status"] = "none"
             return out
@@ -143,7 +169,9 @@ def check(current, repo, timeout=4.0, enabled=True, cache=None):
         # newer": with equal versions and with incomparable numbers both are
         # False, and rightly so.
         out["ahead"] = is_newer(current, tag)
+        out["notes"], out["published_at"] = notes, published
     except Exception as e:
         out.update(status="error", latest=None, url=None, newer=False,
-                   ahead=False, error=f"{type(e).__name__}: {e}")
+                   ahead=False, error=f"{type(e).__name__}: {e}",
+                   notes=[], published_at=None)
     return out

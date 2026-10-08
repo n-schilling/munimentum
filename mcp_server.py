@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-mcp_server.py – expose the Teams + Outlook exports to Claude as an MCP server.
+mcp_server.py – expose the archive to an MCP client (Claude, for one) as an MCP server.
 
 Instead of generating answers with a local LLM, this server hands the
-*retrieval* to Claude as MCP tools and lets Claude be the reasoning/answer
-layer. It reads the store built by rag_index.py:
+*retrieval* to the client's model as MCP tools and lets that model be the
+reasoning/answer layer. It reads the store built by rag_index.py:
 
     corpus.db     SQLite with all chunks + an FTS5 (BM25) full-text index and a
                   precomputed people table. Queried on demand – the server keeps
@@ -32,12 +32,12 @@ returns the raw source file.
 Install (SDK required; numpy/requests only for semantic/hybrid ranking):
     pip install -r requirements.txt   # pinned; mcp 2.x (MCPServer API)
 
-Run (HTTP, default – one shared server for all Claude sessions):
+Run (HTTP, default – one shared server for every client session):
     python3 mcp_server.py --store rag_store \
         --teams teams_export --outlook outlook_export
     # → MCP endpoint at http://127.0.0.1:8365/mcp
 
-    Register in Claude Code (.mcp.json):
+    Register in a client that takes a URL (Claude Code: .mcp.json):
         {"mcpServers": {"munimentum":
             {"type": "http", "url": "http://127.0.0.1:8365/mcp"}}}
 
@@ -135,7 +135,10 @@ and browse_messages take the research token as `guide`, the tools that
 change a case the case token, verify_item the evidence token – read once
 per conversation; without it they answer with the guide instead. The same
 guides are skills: skill://munimentum-research/SKILL.md,
-skill://munimentum-case/SKILL.md, skill://munimentum-evidence/SKILL.md.
+skill://munimentum-case/SKILL.md, skill://munimentum-evidence/SKILL.md. A
+guide installed by hand names the version it belongs to; get_guide and
+get_version say this server's – when they differ, the installed copy is
+old: follow the guide get_guide hands out.
 
 Which tool to use:
   • list_sources    – START HERE once per session: which sources this archive
@@ -171,7 +174,10 @@ Which tool to use:
   • get_document    – full text of one hit, via the uid from a search/browse
     result. For chats, context_before/context_after return the neighbouring
     messages of the conversation. Its `cite` is how to quote the item: the
-    label, and a link that opens it in Munimentum while the app runs.
+    label, and a link that opens it in Munimentum while the app runs. An
+    item shown on its own – quoted, summarised or described as one message
+    – was read with it and carries that link; a list of hits carries
+    labels only.
   • verify_item     – before calling an item unchanged evidence: its file
     hashed afresh and held against the evidence chain and its time-stamp.
   • list_people     – resolve a name before filtering; the person filter is a
@@ -231,7 +237,7 @@ AUS_TEXT = (
     "served: no search, no documents, no statistics. This is a deliberate "
     "setting, not a fault, and no other tool or path will get at the data. "
     "Tell the user in plain words that access is off and that they can allow "
-    "it again in Munimentum under Settings -> MCP server -> \"Allow MCP "
+    "it again in Munimentum under Settings -> MCP clients -> \"Allow MCP "
     "access\". The entry in this client stays valid and works again the moment "
     "they do; nothing needs to be reconfigured."
 )
@@ -266,7 +272,7 @@ def _profil_text(namen):
             "this server was started without --profile, so it cannot know which "
             "archive to serve. Nothing is served. Tell the user to copy the "
             "snippet for the wanted profile from Munimentum under Settings -> "
-            "Claude (MCP) – it carries --profile <name> – and to replace the "
+            "MCP clients – it carries --profile <name> – and to replace the "
             "entry in this client with it.")
 
 
@@ -1948,17 +1954,58 @@ def get_thread(thread: str, limit: int = 50) -> dict:
 # Citations: what a model quotes, where it leads, and whether it still holds
 # --------------------------------------------------------------------------
 APP_CHECK_SECONDS = 30          # how long "the app runs there" is believed
-_APP = {"at": None, "url": None, "state": "not_running"}
+APP_RETRY_SECONDS = 5           # how long a miss is believed – a burst of calls probes once
+_APP = {"at": None, "url": None, "state": "not_running", "said": None}
 
 
 def _app_url():
-    """(url, state) of the app serving this profile (instance.find) –
-    asked at most every APP_CHECK_SECONDS, not on every tool call."""
+    """(url, state) of the app serving this profile (instance.probe). A
+    found app is believed APP_CHECK_SECONDS, a miss APP_RETRY_SECONDS: a
+    miss held for thirty seconds once told the user "Munimentum is not
+    running" while they were looking at it, and a miss asked again on
+    every call would cost a slow probe per item read. A port that took
+    the connection but answered late ("slow") keeps the link an earlier
+    probe found – the app is there, busy. Each change is said once on
+    stderr, where a client's log shows it."""
     now = time.monotonic()
-    if _APP["at"] is None or now - _APP["at"] > APP_CHECK_SECONDS:
-        url, state = instance.find(settings.home_env())
-        _APP.update(at=now, url=url, state=state)
-    return _APP["url"], _APP["state"]
+    if _APP["at"] is not None:
+        hold = APP_CHECK_SECONDS if _APP["url"] else APP_RETRY_SECONDS
+        if now - _APP["at"] <= hold:
+            return _APP["url"], _APP["state"]
+    home = settings.home_env()
+    url, state, data = instance.probe(home)
+    # Kept only while the record still names the port that answered late:
+    # an app restarted on another port leaves the old link behind.
+    if state == instance.SLOW and _APP["url"] and _APP["url"] == instance.url_of(data):
+        url, state = _APP["url"], "running"
+    _APP.update(at=now, url=url, state=state)
+    _say_app_link(home, data, url, state)
+    return url, state
+
+
+def _say_app_link(home, data, url, state):
+    """One stderr line per change: why there is no link, and when it is
+    back – the port and the loopback address, nothing personal. `data` is
+    the record the probe read, so the line cannot disagree with it."""
+    if url:
+        word = None
+    elif home is None:
+        word = "no profile named – started without --profile, nothing was looked for"
+    elif data is None:
+        word = "no instance.json for this profile – the app is not running"
+    elif state == "other_profile":
+        word = f"port {data['port']} serves another profile"
+    elif state == instance.SLOW:
+        word = f"port {data['port']} took the connection but did not answer within {instance.PROBE:g} s"
+    else:
+        word = f"port {data['port']} does not answer"
+    if word == _APP["said"]:
+        return
+    if word:
+        print(f"munimentum MCP: no app link – {word}", file=sys.stderr)
+    else:
+        print(f"munimentum MCP: app link on – {url}", file=sys.stderr)
+    _APP["said"] = word
 
 
 def _label(item):
@@ -2069,8 +2116,9 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     part of its file – and `link`, which opens the item in Munimentum, in
     the version read now (a later change is shown as such).
     `link` is null while the app is not running (`app` says
-    "not_running" or "other_profile"): quote the label then, and tell the
-    user the link works once Munimentum runs. verify_item checks a
+    "not_running", "other_profile" or "slow" – the port answered too late;
+    the next call asks again): quote the label then, and tell the user the
+    link works once Munimentum runs. verify_item checks a
     citation against the file as it lies now.
 
     Args:
@@ -2920,7 +2968,9 @@ def get_guide(topic: str = "research") -> dict:
     search_messages and browse_messages ask for the "research" token,
     add_to_case, add_case_note and collect_case for "case", verify_item
     for "evidence" – as `guide`, once read on every call of the
-    conversation. Read the guide; do not merely copy the token.
+    conversation. Read the guide; do not merely copy the token. `version`
+    is the app's: a guide installed by hand names the one it belongs to,
+    and this guide is the one to follow when they differ.
 
     Args:
         topic: "research", "case" or "evidence" (or the skill's name,
@@ -2931,7 +2981,23 @@ def get_guide(topic: str = "research") -> dict:
         return {"error": f"No guide {topic!r}.", "topics": sorted(_SKILLS)}
     gated = sorted(t for t, g in _GUIDE_FOR.items() if _SKILLS.get(g) is s)
     return {"topic": s["name"].removeprefix(_SKILL_PREFIX), "skill": s["uri"],
-            "guide_token": s["token"], "token_for": gated, "guide": s["body"]}
+            "guide_token": s["token"], "token_for": gated, "guide": s["body"],
+            "version": version.VERSION}
+
+
+@_tool(_READONLY)
+def get_version() -> dict:
+    """The app's version – to tell whether a guide installed by hand is
+    the one this server serves.
+
+    Every guide names the Munimentum version it belongs to in its first
+    lines; a copy installed under Customize › Skills or in
+    ~/.claude/skills/ does not change with the app. When `version` here
+    (get_guide answers it too) differs from the one the installed guide
+    names, follow the guide get_guide hands out. `build` is the commit
+    the bundle was built from; null from source without git.
+    """
+    return {"version": version.VERSION, "build": version.build() or None}
 
 
 @_tool(_READONLY)
@@ -3580,7 +3646,7 @@ def run_saved_search(search: str, k: int = 12, offset: int = 0,
 def _schreiben_erlaubt():
     if not STATE.get("cases_write"):
         return ("Changing cases through MCP is switched off. The user can allow "
-                "it under Settings → Claude (MCP) → “Claude may change cases”.")
+                "it under Settings → MCP clients → “MCP clients may change cases”.")
     return None
 
 
@@ -3733,8 +3799,10 @@ def add_case_note(case: str, text: str) -> dict:
 # leave a prompt pointing at nothing.
 _CITE = ("Quote every statement with the item's `get_document` cite.label, and its "
          "cite.link when that is not null (null means Munimentum is not running: say "
-         "once that the links work when it runs). Answer in the language the user "
-         "writes in.")
+         "once that the links work when it runs). An item shown on its own – quoted, "
+         "summarised or described as one message – was read with `get_document` and "
+         "carries its cite.label and cite.link; a list of hits carries labels only. "
+         "Answer in the language the user writes in.")
 
 
 @mcp.prompt(title="Ask: Brief me on a case")
@@ -4236,7 +4304,7 @@ def _alter_schnipsel(a):
 ALT_TEXT = ("This Munimentum entry is from before version 10.0: it names folders "
             "that the archive has left – it lives in a profile folder now. "
             "Nothing is served. Tell the user to copy the stdio snippet again "
-            "from Munimentum under Settings -> Claude (MCP) and replace this "
+            "from Munimentum under Settings -> MCP clients and replace this "
             "entry with it.")
 
 
@@ -4274,7 +4342,7 @@ def main():
                     help="Do not embed, even when vectors exist. "
                          "Ranks purely lexically.")
     ap.add_argument("--transport", choices=["http", "stdio"], default="http",
-                    help="http: one shared server, register its URL in Claude "
+                    help="http: one shared server, register its URL in the client "
                          "(default). stdio: launched per client via command.")
     ap.add_argument("--host", default="127.0.0.1",
                     help="HTTP bind address. Keep 127.0.0.1 – the server has no "

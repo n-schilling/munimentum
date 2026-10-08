@@ -1384,6 +1384,27 @@ def test_http_update_check(server, monkeypatch):
     assert code == 200 and r["update"]["newer"] is True and r["update"]["latest"] == "2.0.0"
 
 
+def test_http_the_whole_update_is_one_request_the_status_stays_slim(server, monkeypatch):
+    """The notes and the date ride on GET /updates and on the check's
+    answer, never in the polled status – which keeps its seven fields."""
+    monkeypatch.setattr(app_mod.updates, "check", lambda *a, **k: {
+        "status": "ok", "current": "1.0.0", "latest": "2.0.0", "url": "u", "newer": True,
+        "ahead": False, "error": None, "retry_at": None,
+        "notes": ["**One**: thing.", "Another."], "published_at": "2026-10-08T06:00:00Z"})
+    code, r = call(server[1], "POST", "/api/v1/updates/check")
+    assert code == 200 and r["update"]["notes"] == ["**One**: thing.", "Another."]
+    code, r = call(server[1], "GET", "/api/v1/updates")
+    assert code == 200 and r["update"]["published_at"] == "2026-10-08T06:00:00Z"
+    assert r["update"]["notes"] == ["**One**: thing.", "Another."] and r["update"]["latest"] == "2.0.0"
+    code, r = call(server[1], "GET", "/api/v1/status")
+    assert code == 200 and "notes" not in r["update"] and "published_at" not in r["update"]
+    # The window's two settings go through the one door.
+    code, r = call(server[1], "PATCH", "/api/v1/config", {"update_dismissed": " 2.0.0 "})
+    assert code == 200 and r["config"]["update_dismissed"] == "2.0.0"
+    code, r = call(server[1], "PATCH", "/api/v1/config", {"update_dismissed": None})
+    assert code == 200 and r["config"]["update_dismissed"] == ""
+
+
 def test_http_config_keeps_every_chapter_of_the_tour_seen(server, sandbox):
     """Every chapter the help window lists can be marked seen. The server's
     list once stopped at the first three, so Cases, Insights and Claude came
@@ -11185,3 +11206,118 @@ setTimeout(function(){
 
 def test_the_findings_window_can_record_changed_files_as_they_lie():
     _in_node(PRUEFUNG_EVIDENCE_ACCEPT, sprache="en")
+
+
+# A newer release is announced once after start – in a window with the
+# release's notes, Download, Dismiss and the switch-off. Not twice, not
+# for a dismissed version, not with the check off.
+PRUEFUNG_UPDATE_POPUP = GRUNDZUSTAND + """
+var calls = [], geruestEcht = statusGeruest;
+var UPD = {status: 'ok', current: '1.0.1', latest: '1.2.0', url: 'https://x/v1.2.0',
+           newer: true, ahead: false, error: null, retry_at: null,
+           notes: ['**Faster search**: the index answers in half the time.',
+                   'A *quieter* log with `run.index` lines <b>raw</b>.'],
+           published_at: '2026-10-08T06:00:00Z'};
+statusGeruest = function(){
+  var s = geruestEcht();
+  s.update = {status: 'ok', latest: UPD.latest, url: UPD.url, newer: true,
+              ahead: false, error: null, retry_at: null};
+  return s;
+};
+global.fetch = function(pfad, opt){
+  var p = String(pfad), body = opt && opt.body ? JSON.parse(opt.body) : null;
+  calls.push({p: p, m: (opt && opt.method) || 'GET', body: body});
+  var antwort = p.indexOf('/api/v1/updates') >= 0 ? {update: UPD}
+    : p.indexOf('/api/v1/config') >= 0 ? {config: Object.assign({}, KONFIG, body || {})}
+    : p.indexOf('/api/v1/app') >= 0 ? UMGEBUNG
+    : p.indexOf('/api/v1/inventory') >= 0 ? BESTAND : statusGeruest();
+  return Promise.resolve({json: function(){ return Promise.resolve(antwort); }});
+};
+function asked(){ return calls.filter(function(c){ return c.p.indexOf('/api/v1/updates') >= 0; }).length; }
+function lastPatch(){ return calls.filter(function(c){ return c.m === 'PATCH'; }).pop(); }
+renderStatus(statusGeruest());
+setTimeout(function(){
+  pruefe(wizardOffen === 'update', 'window not open: ' + wizardOffen);
+  var html = modal.innerHTML;
+  pruefe(html.indexOf('1.2.0') >= 0, 'version missing: ' + html.slice(0, 200));
+  pruefe(html.indexOf('<b>Faster search</b>') >= 0 && html.indexOf('<i>quieter</i>') >= 0 &&
+         html.indexOf('<code>run.index</code>') >= 0, 'inline marks not rendered: ' + html);
+  pruefe(html.indexOf('&lt;b&gt;raw&lt;/b&gt;') >= 0 && html.indexOf('<b>raw</b>') < 0,
+         'markup of a release reached the page: ' + html);
+  pruefe(html.indexOf('href="https://x/v1.2.0"') >= 0, 'download link missing: ' + html);
+  pruefe(html.indexOf('dismissUpdate(') >= 0 && html.indexOf('disableUpdateCheck()') >= 0,
+         'buttons missing: ' + html);
+  // The same status again: neither a second window nor a second request.
+  var n = asked();
+  renderStatus(statusGeruest());
+  pruefe(asked() === n, 'asked for the notes again');
+  // Dismiss: remembered in the settings, closed, and quiet on the next poll.
+  dismissUpdate('1.2.0');
+  setTimeout(function(){
+    var p = lastPatch();
+    pruefe(p && p.body.update_dismissed === '1.2.0', 'dismiss not saved: ' + JSON.stringify(p));
+    pruefe(wizardOffen === null, 'window still open after dismiss');
+    renderStatus(statusGeruest());
+    setTimeout(function(){
+      pruefe(wizardOffen === null, 'reopened for a dismissed version');
+      // A release newer than the dismissed one asks again.
+      UPD.latest = '1.3.0'; UPD.url = 'https://x/v1.3.0';
+      renderStatus(statusGeruest());
+      setTimeout(function(){
+        pruefe(wizardOffen === 'update', 'not shown for a newer release than the dismissed one');
+        disableUpdateCheck();
+        setTimeout(function(){
+          var q = lastPatch();
+          pruefe(q && q.body.update_check === false, 'switch-off not saved: ' + JSON.stringify(q));
+          pruefe(document.getElementById('c-update_check').checked === false, 'checkbox still on');
+          pruefe(wizardOffen === null, 'window still open after the switch-off');
+          UPD.latest = '1.4.0';
+          renderStatus(statusGeruest());
+          setTimeout(function(){
+            pruefe(wizardOffen === null, 'shown although the check is off');
+            console.log('OK');
+          }, 20);
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 20);
+}, 20);
+"""
+
+
+def test_a_newer_release_is_announced_once_after_start():
+    _in_node(PRUEFUNG_UPDATE_POPUP, sprache="en")
+
+
+PRUEFUNG_UPDATE_POPUP_WAITS = GRUNDZUSTAND + """
+// A wizard holds the overlay: the window waits for a later poll.
+var geruestEcht = statusGeruest, asked = 0;
+statusGeruest = function(){
+  var s = geruestEcht();
+  s.update = {status: 'ok', latest: '1.2.0', url: 'u', newer: true, ahead: false, error: null, retry_at: null};
+  return s;
+};
+global.fetch = function(pfad){
+  if(String(pfad).indexOf('/api/v1/updates') >= 0) asked++;
+  return Promise.resolve({json: function(){ return Promise.resolve(
+    String(pfad).indexOf('/api/v1/updates') >= 0
+      ? {update: {latest: '1.2.0', url: 'u', newer: true, notes: [], published_at: null}}
+      : statusGeruest()); }});
+};
+openWizard('ollama');
+renderStatus(statusGeruest());
+setTimeout(function(){
+  pruefe(asked === 0 && wizardOffen === 'ollama', 'the window pushed a wizard aside');
+  closeWizard('ollama');
+  renderStatus(statusGeruest());
+  setTimeout(function(){
+    pruefe(asked === 1 && wizardOffen === 'update', 'not shown once the overlay was free: ' + wizardOffen);
+    pruefe(modal.innerHTML.indexOf('update-notes') < 0, 'an empty notes box was drawn');
+    console.log('OK');
+  }, 20);
+}, 20);
+"""
+
+
+def test_the_update_window_waits_while_a_wizard_holds_the_overlay():
+    _in_node(PRUEFUNG_UPDATE_POPUP_WAITS, sprache="en")

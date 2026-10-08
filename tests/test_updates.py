@@ -214,7 +214,7 @@ def test_the_etag_is_kept_and_sent_back(github):
                              headers={"ETag": 'W/"abc"'}))
     out = updates.check("1.2.0", "x/y", cache=cache)
     assert out["status"] == "ok" and out["newer"] is True
-    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u"}
+    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u", "notes": [], "published_at": None}
     assert "If-None-Match" not in aufrufe[0]["headers"]     # nothing to send yet
 
     github(Antwort(304))
@@ -222,7 +222,7 @@ def test_the_etag_is_kept_and_sent_back(github):
     assert aufrufe[-1]["headers"]["If-None-Match"] == 'W/"abc"'
     assert out["status"] == "ok" and out["latest"] == "1.4.0" and out["url"] == "u"
     assert out["newer"] is True and out["error"] is None
-    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u"}   # untouched
+    assert cache == {"etag": 'W/"abc"', "tag": "v1.4.0", "url": "u", "notes": [], "published_at": None}   # untouched
 
 
 def test_a_new_release_replaces_the_cached_one(github):
@@ -231,7 +231,46 @@ def test_a_new_release_replaces_the_cached_one(github):
                    headers={"ETag": 'W/"def"'}))
     out = updates.check("1.4.0", "x/y", cache=cache)
     assert out["latest"] == "1.5.0" and out["newer"] is True
-    assert cache == {"etag": 'W/"def"', "tag": "v1.5.0", "url": "u5"}
+    assert cache == {"etag": 'W/"def"', "tag": "v1.5.0", "url": "u5", "notes": [], "published_at": None}
+
+
+NOTES = """## New in 1.5.0
+
+- **Faster search**: the index answers in half
+  the time.
+- A *quieter* log with `run.index` lines.
+
+## Upgrading
+
+- Not a point of the release.
+"""
+
+
+def test_the_new_in_section_is_read_point_by_point():
+    """The window at start shows the release's "New in" points – the
+    bullets of that section, continuation lines joined, nothing from the
+    sections after it; a body without the section gives no points."""
+    assert updates.new_in(NOTES) == ["**Faster search**: the index answers in half the time.",
+                                     "A *quieter* log with `run.index` lines."]
+    assert updates.new_in(NOTES.replace("\n", "\r\n")) == updates.new_in(NOTES)
+    assert updates.new_in("## Upgrading\n\n- x\n") == [] and updates.new_in(None) == []
+
+
+def test_notes_and_date_travel_with_the_check_and_its_cache(github):
+    cache = {}
+    github(Antwort(200, {"tag_name": "v1.5.0", "html_url": "u5", "body": NOTES,
+                         "published_at": "2026-10-08T06:00:00Z"}, headers={"ETag": 'W/"n"'}))
+    out = updates.check("1.4.0", "x/y", cache=cache)
+    assert out["notes"] == updates.new_in(NOTES) and out["published_at"] == "2026-10-08T06:00:00Z"
+    assert cache["notes"] == out["notes"] and cache["published_at"] == "2026-10-08T06:00:00Z"
+    # A 304 answers them from the cache, like the tag and the url.
+    github(Antwort(304))
+    again = updates.check("1.4.0", "x/y", cache=cache)
+    assert again["notes"] == out["notes"] and again["published_at"] == "2026-10-08T06:00:00Z"
+    # Switched off, or no release: no notes either.
+    assert updates.check("1.4.0", "x/y", enabled=False)["notes"] == []
+    github(Antwort(404))
+    assert updates.check("1.4.0", "x/y")["published_at"] is None
 
 
 def test_no_etag_in_the_answer_leaves_the_cache_alone(github):

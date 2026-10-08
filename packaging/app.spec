@@ -86,8 +86,15 @@ assert datas, "lang/ is empty – the interface would have no texts"
 datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "profil.html"), "."),
           (str(ROOT / "openapi.yaml"), ".")]
 # The skills the MCP server serves and gates on (mcp_server._load_skills) –
-# without them it serves no guide and gates nothing.
-skills = [(str(p), f"skills/{p.parent.name}") for p in sorted((ROOT / "skills").glob("*/SKILL.md"))]
+# without them it serves no guide and gates nothing. The files are the
+# ones skills_pack zips for the download and the release: one list decides
+# what a skill ships, and the smoke test holds the bundle's download
+# against the checkout file for file.
+sys.path.insert(0, str(ROOT))
+import skills_pack  # noqa: E402
+skills = [(str(f), f"skills/{folder.name}/{f.parent.relative_to(folder).as_posix()}".removesuffix("/."))
+          for folder in skills_pack.skill_folders(ROOT / "skills")
+          for f in skills_pack.skill_files(folder)]
 assert skills, "skills/ is empty – the MCP server would serve no guide"
 datas += skills
 

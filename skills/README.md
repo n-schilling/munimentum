@@ -1,7 +1,8 @@
-# Skills for Claude
+# Skills for MCP clients
 
-Three [Agent Skills](https://agentskills.io/specification) that teach Claude
-how to work with the Munimentum MCP server:
+Three [Agent Skills](https://agentskills.io/specification) that teach an
+MCP client's model – Claude, for one – how to work with the Munimentum MCP
+server:
 
 | Skill | For |
 |---|---|
@@ -9,7 +10,7 @@ how to work with the Munimentum MCP server:
 | `munimentum-case` | Briefing on a case, keeping it current, and filing into it – only after the user says yes |
 | `munimentum-evidence` | Who knew what and since when, a chronology meant as proof, and checking an item with `verify_item` before quoting it |
 
-## How they reach Claude
+## How they reach the client
 
 The server's instructions and its prompts carry the same know-how, but not
 every client passes them on: a client that reaches the server through a
@@ -52,13 +53,20 @@ guide.
 ## Installing by hand
 
 For a client that does not load skills from servers, so that the know-how
-is there before the first tool is picked:
+is there before the first tool is picked. The files: *Download skills*
+under *Settings › MCP clients* in the app, the same three ZIPs on every
+[release](../../../releases) (`Munimentum-skill-<name>.zip`, each the
+skill's folder as its single top-level item – `skills_pack.py` makes
+them), or this folder.
 
-- **Claude Code:** copy the three folders into `~/.claude/skills/` (for you)
-  or `.claude/skills/` of a project.
-- **claude.ai and Claude Desktop:** zip each folder on its own – the folder
-  itself as the single top-level item – and upload it; then switch it on
-  under *Customize › Skills*. Skills need code execution to be on.
+- **Claude Code:** unzip into `~/.claude/skills/` (for you) or
+  `.claude/skills/` of a project.
+- **claude.ai and Claude Desktop:** upload each skill's ZIP, then switch it
+  on under *Customize › Skills*. Skills need code execution to be on.
 
-Installed by hand or not, the gated tools still want their token; the skill
-says where to get it.
+A copy installed by hand does not change with the app. Every `SKILL.md`
+names the Munimentum version it belongs to, and the tool `get_version`
+says the server's, and so does `get_guide`: the skill tells the model to
+follow the guide `get_guide` hands out when they differ. After an update,
+download again. Installed by hand or not, the gated tools still
+want their token; the skill says where to get it.

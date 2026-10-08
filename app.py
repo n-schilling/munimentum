@@ -2026,7 +2026,8 @@ class App:
         self.device_login = None         # device-code sign-in in progress
         self._update = {"status": "off", "current": version.VERSION,
                         "latest": None, "url": None, "newer": False,
-                        "ahead": False, "error": None, "retry_at": None}
+                        "ahead": False, "error": None, "retry_at": None,
+                        "notes": [], "published_at": None}
 
     # -- derived state ----------------------------------------------------
     def konfiguriere(self, aendern):
@@ -2087,6 +2088,12 @@ class App:
         """Should the next index contain vectors?"""
         return bool(self.cfg.get("ollama_enabled", True)
                     and self.cfg.get("index_semantic", True))
+
+    def update_state(self):
+        """What the last check found, notes and date included – asked once
+        by the page for the window at start, never polled: the status
+        carries only what says whether there is something to show."""
+        return dict(self._update)
 
     def check_updates(self, blockierend=False):
         """Check once whether a newer release exists.
@@ -2202,6 +2209,9 @@ class App:
         return {
             "version": version.VERSION,
             "api_version": API_VERSION,
+            # The profile this instance serves – constant while it runs;
+            # instance.profile_at reads it to tell a link's target apart.
+            "profile": PROFIL,
             "build": version.build(),
             "releases_url": version.RELEASES_URL,
             "default_client_id": auth.STANDARD_CLIENT_ID,
@@ -2680,7 +2690,9 @@ ROUTEN_V1 = (
     ("PATCH", "/api/v1/schedule", api_archive.zeitplan),
     ("PATCH", "/api/v1/storage", api_archive.speicherorte),
     ("PATCH", "/api/v1/mcp", api_app.mcp),
+    ("GET", "/api/v1/mcp/skills", api_app.skills_download),
     ("POST", "/api/v1/ollama/recheck", api_app.ollama),
+    ("GET", "/api/v1/updates", api_app.updates_state),
     ("POST", "/api/v1/updates/check", api_app.update),
     ("PUT", "/api/v1/access/token", api_app.token),
     ("GET", "/api/v1/access/session", api_app.session_state),
@@ -3445,9 +3457,10 @@ def instance_port(name, port=None, host="127.0.0.1"):
     `port` for one that left no file – or None. Switching to a profile or
     renaming it asks this: an instance on --port 9999 is open as well."""
     if profile_moeglich():
-        url, state = instance.find(settings.profil_ordner(name, WURZEL), START_PROBE)
-        if state == "running":
-            return urlsplit(url).port
+        _url, state, record = instance.probe(settings.profil_ordner(name, WURZEL), START_PROBE)
+        # Answering late is answering: a busy instance is open as well.
+        if state in ("running", instance.SLOW):
+            return record["port"]
     return eigene_instanz(port, host, profil=name) if port else None
 
 
@@ -3574,9 +3587,13 @@ def running_instance(wanted=None):
         names = sorted(profil_namen(), key=lambda n: (n != wanted, n != last, n))
         homes = [(n, settings.profil_ordner(n, WURZEL)) for n in names]
     for name, home in homes:
-        url, state = instance.find(home, timeout=START_PROBE)
+        url, state, record = instance.probe(home, timeout=START_PROBE)
         if state == "running":
             return url, name
+        if state == instance.SLOW:
+            # The port took the connection and answered late: an instance
+            # is there, busy – open it rather than start a twin beside it.
+            return instance.url_of(record), name
     return None
 
 

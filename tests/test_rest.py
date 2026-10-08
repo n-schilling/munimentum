@@ -826,6 +826,9 @@ def test_die_umgebung_nennt_die_api_version(server):
     header anyway."""
     _, port = server
     assert call(port, "GET", "/api/v1/app")[1]["api_version"] == app_mod.API_VERSION
+    # The profile too: constant while the app runs, read by the MCP
+    # server's probe before it links into the app.
+    assert call(port, "GET", "/api/v1/app")[1]["profile"] == app_mod.PROFIL
 
 
 # --------------------------------------------------------------------------
@@ -1157,3 +1160,28 @@ def test_die_beiden_sichten_geben_absagen_der_engine_als_409_weiter(server, monk
                  "/api/v1/search/people?party=external"):
         code, _, r = roh(port, "GET", pfad)
         assert code == 409 and r["items"] == [] and r["count"] == 0, (pfad, code, r)
+
+
+def test_the_skills_come_as_one_zip_of_three(server):
+    """GET /mcp/skills – the download the MCP card offers: a ZIP named
+    after the version, holding one ZIP per skill (its folder as the
+    single top-level item) and a README naming the version."""
+    import io
+    import zipfile
+
+    import version
+    _a, port = server
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", "/api/v1/mcp/skills")
+    r = con.getresponse()
+    raw, kopf = r.read(), dict(r.getheaders())
+    con.close()
+    assert r.status == 200 and kopf["Content-Type"].split(";")[0] == "application/zip"
+    assert kopf["Content-Disposition"] == f'attachment; filename="Munimentum-skills-{version.VERSION}.zip"'
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        assert sorted(z.namelist()) == ["Munimentum-skill-case.zip", "Munimentum-skill-evidence.zip",
+                                        "Munimentum-skill-research.zip", "README.txt"]
+        assert version.VERSION in z.read("README.txt").decode("utf-8")
+        with zipfile.ZipFile(io.BytesIO(z.read("Munimentum-skill-case.zip"))) as inner:
+            assert inner.namelist() == ["munimentum-case/SKILL.md"]
+            assert inner.read("munimentum-case/SKILL.md").startswith(b"---\nname: munimentum-case\n")

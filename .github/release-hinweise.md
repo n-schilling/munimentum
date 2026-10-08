@@ -1,13 +1,36 @@
-## New in 14.4.1
+## New in 14.5.0
 
-- **A client’s attach menu says what each entry is**: the prompts read
-  “Ask: …”, the case pages “Cases: All” and “Case: <name>”, the skills
-  “Skill: Case”, “Skill: Evidence”, “Skill: Research” – cases before skills.
+- **MCP clients, not Claude**: the settings room is *MCP clients*, the
+  switch *MCP clients may change cases*, the tour chapter *Connect an MCP
+  client*; Claude stays where a format is its own – the two snippets, the
+  skills’ install paths. Any MCP client was always meant; the words now
+  say so.
+- **Skills to install by hand**: *Download skills* under *Settings › MCP
+  clients* gives the three skills as ZIP files, one per skill, for Claude
+  Code’s `~/.claude/skills/` or an upload under Customize › Skills; every
+  release carries the same three files. A copy installed by hand does not
+  change with the app: each guide names the version it belongs to, and the
+  new MCP tool `get_version` lets the client notice an outdated one and
+  read the current guide instead.
+- **A message shown on its own carries its link**: the guides, the prompts
+  and the server’s instructions now say that an item quoted, summarised
+  or described as one message was read with `get_document` and carries
+  its link; a list of hits carries labels only.
+- **A newer release is announced at start**: with “Look for updates at
+  startup” on, a window shows the release’s notes with *Download* and
+  *Dismiss*; *Disable update check* in it switches the check off. Dismiss
+  keeps that version quiet, the next release asks again.
+- **The link finds a running app sooner**: a busy app no longer counts as
+  closed, and a missed one is found on the next call rather than half a
+  minute later.
 
 ## Upgrading
 
-Nothing happens once after this update. A client shows the new names after
-it reconnects to the MCP server – Claude Desktop after a restart.
+Nothing happens once after this update. A client reads the changed guides
+after it reconnects to the MCP server – Claude Desktop after a restart; a
+conversation holding an older guide token is handed the guide once more.
+Skills you installed by hand are from an earlier version now: download
+them again.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the
@@ -23,6 +46,7 @@ whether any of them asks something of you.
 | `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1 or newer) |
 | `Munimentum-windows-x64.zip` | Windows 10/11 (64-bit) |
 | `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
+| `Munimentum-skill-research.zip`, `…-case.zip`, `…-evidence.zip` | the three skills for MCP clients, to install by hand – the same files *Download skills* gives |
 
 
 ## Getting started

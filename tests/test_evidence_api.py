@@ -400,6 +400,70 @@ def test_a_citation_links_into_the_running_app_and_only_then(archive, monkeypatc
     instance.write(home, port, "nordwind")
     monkeypatch.setitem(mod._APP, "at", None)
     assert mod._with_cite(mod.get_document(uid=uid))["cite"]["app"] == "other_profile"
+    (home / instance.FILE).unlink()
+
+
+def test_a_missed_app_is_believed_briefly_a_found_one_longer_a_slow_one_kept(archive, monkeypatch, capsys):
+    """A miss is believed five seconds (a burst of reads probes once), a
+    found app thirty; a port that takes the connection but answers late
+    keeps the link an earlier probe found. Each change is said once on
+    stderr, where a client's log shows it."""
+    import instance
+    a, port, home, _built = archive
+    mod = a.search.ensure(a.cfg)
+    monkeypatch.setenv("MUNIMENTUM_HOME", str(home))
+    for key, value in (("at", None), ("url", None), ("state", "not_running"), ("said", None)):
+        monkeypatch.setitem(mod._APP, key, value)
+    file = home / instance.FILE
+    file.unlink(missing_ok=True)
+    uid = _file_uid(port, "Dateien/Documents/Ostwind/rollout-plan.md")
+
+    def cite():
+        return mod._with_cite(mod.get_document(uid=uid))["cite"]
+
+    def expire():
+        monkeypatch.setitem(mod._APP, "at", mod._APP["at"] - mod.APP_CHECK_SECONDS - 1)
+
+    try:
+        for _ in range(2):
+            assert cite()["app"] == "not_running"
+        err = capsys.readouterr().err
+        assert err.count("munimentum MCP: no app link") == 1 and "instance.json" in err
+        # The app comes up: seen once the short belief in the miss is over.
+        instance.write(home, port, app_mod.PROFIL)
+        assert cite()["app"] == "not_running"
+        monkeypatch.setitem(mod._APP, "at", mod._APP["at"] - mod.APP_RETRY_SECONDS - 1)
+        link = cite()["link"]
+        assert link.startswith(f"http://127.0.0.1:{port}/#item=")
+        assert "munimentum MCP: app link on – http://127.0.0.1" in capsys.readouterr().err
+        # A found app is believed: the file now names another profile, the
+        # link stays until the belief runs out – then the change is said once.
+        instance.write(home, port, "nordwind")
+        assert cite()["link"] == link and capsys.readouterr().err == ""
+        expire()
+        for _ in range(2):
+            assert cite()["app"] == "other_profile"
+        err = capsys.readouterr().err
+        assert err.count("no app link") == 1 and f"port {port} serves another profile" in err
+        # Back, then busy: a late answer keeps the link, says nothing new.
+        instance.write(home, port, app_mod.PROFIL)
+        expire()
+        assert cite()["link"] == link
+        monkeypatch.setattr(instance, "profile_at", lambda *a, **kw: instance.SLOW)
+        expire()
+        assert cite()["link"] == link and capsys.readouterr().err.count("app link on") == 1
+        # Busy on another port than the link names: no link on a guess.
+        file.write_text(json.dumps({"port": port + 1, "pid": 0, "profile": app_mod.PROFIL}), encoding="utf-8")
+        expire()
+        assert cite()["app"] == "slow"
+        assert f"port {port + 1} took the connection" in capsys.readouterr().err
+        # No profile named at all: said as such, not as a closed app.
+        monkeypatch.delenv("MUNIMENTUM_HOME")
+        expire()
+        assert cite()["app"] == "not_running"
+        assert "no profile named" in capsys.readouterr().err
+    finally:
+        file.unlink(missing_ok=True)
 
 
 def test_a_message_is_cited_with_its_own_checksum(archive):

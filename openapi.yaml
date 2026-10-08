@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.4.1
+  version: 14.5.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -717,7 +717,7 @@ paths:
       operationId: v1ListCaseNotes
       summary: The casebook
       description: |
-        The casebook: short dated notes, oldest first. A note Claude wrote
+        The casebook: short dated notes, oldest first. A note an MCP client wrote
         through MCP carries `via`.
       responses:
         "200":
@@ -2852,7 +2852,7 @@ paths:
         their defaults, whether it is a bundle or a script, the two
         defaults behind settings, the Graph Explorer's address, the scopes
         the chosen sources need with one example query each, and the
-        ready-made snippet for a Claude client. It used to travel with
+        ready-made snippet for an MCP client. It used to travel with
         every status answer – paths and all – which is nothing a polled
         answer should repeat. The page asks once, and again after a save.
       responses:
@@ -2866,6 +2866,7 @@ paths:
                   version: { type: string, description: "The program's version." }
                   build: { type: string, description: "The commit it was built from, where that is known." }
                   api_version: { type: string, description: "The contract this API answers under – the same value as the `X-Munimentum-Api` header on every answer and as the path segment. Here, not in the polled status: it does not change." }
+                  profile: { type: string, description: "The profile this instance serves – constant while it runs. The MCP server's probe reads it before it links into the app." }
                   releases_url: { type: string }
                   default_client_id: { type: string, description: "The app registration used unless someone enters their own." }
                   data_dir: { type: string }
@@ -2881,7 +2882,7 @@ paths:
                   scopes_needed: { type: array, items: { type: string } }
                   scope_queries: { type: object, additionalProperties: { type: string }, description: "One example query per scope – the assistant shows them." }
                   ollama_hint: { type: object, description: "How to install Ollama on this system." }
-                  mcp_client: { type: object, description: "The client configuration for Claude, http and stdio." }
+                  mcp_client: { type: object, description: "The client configuration for an MCP client, http and stdio." }
         "403": { $ref: "#/components/responses/Forbidden" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
@@ -3684,7 +3685,7 @@ paths:
     patch:
       tags: [App, PATCH]
       operationId: v1UpdateMcp
-      summary: The endpoint Claude talks to
+      summary: The endpoint MCP clients talk to
       description: |
         `running` says whether the local MCP endpoint should be on. It
         needs an index; without one, starting is refused.
@@ -3722,6 +3723,37 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/mcp/skills:
+    get:
+      tags: [App, GET]
+      operationId: v1GetSkills
+      summary: The skills as ZIP files, to install by hand
+      description: |
+        One ZIP holding three – one per skill, the skill's folder as its
+        single top-level item, the shape claude.ai takes under Customize ›
+        Skills and that unpacks into Claude Code's `~/.claude/skills/` –
+        plus a README naming the version. The same three files are
+        attached to every release. A copy installed by hand does not
+        change with the app: each guide names the version it belongs to,
+        and the MCP tool get_version says the server's.
+      responses:
+        "200":
+          description: The ZIP, offered as a download named after the version.
+          headers:
+            Content-Disposition:
+              description: "`attachment; filename=\"Munimentum-skills-<version>.zip\"`."
+              schema: { type: string }
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "404":
+          description: This build ships no skills (srv.skills.none).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
   /api/v1/ollama/recheck:
     post:
       tags: [App, POST]
@@ -3742,6 +3774,28 @@ paths:
                   ollama: { $ref: "#/components/schemas/OllamaStatus" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/updates:
+    get:
+      tags: [App, GET]
+      operationId: v1GetUpdate
+      summary: What the last update check found, notes included
+      description: |
+        The whole of the last check – the status carries only what says
+        whether there is something newer; the release's notes and date
+        are here, for the window the page shows once after start.
+      responses:
+        "200":
+          description: The last check's answer.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  update: { $ref: "#/components/schemas/UpdateState" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/ServerError" }
 
@@ -4377,13 +4431,15 @@ components:
         the block travels on its own.
       properties:
         status: { type: string, enum: ["off", ok, error] }
-        current: { type: string, description: "The running version – only on /api/v1/updates/check." }
+        current: { type: string, description: "The running version – on /api/v1/updates and /updates/check, not in the status." }
         latest: { type: [string, "null"], description: "The newest release on GitHub." }
         url: { type: [string, "null"], format: uri, description: "That release's page." }
         newer: { type: boolean, description: "There is something newer than what runs here." }
         ahead: { type: boolean, description: "What runs here is newer than the newest release – a build from source." }
         error: { type: [string, "null"], description: "Why the check failed – `HTTP 403` and the like, or the exception." }
         retry_at: { type: [string, "null"], format: date-time, description: "When GitHub answers again, when its hourly limit for anonymous requests refused the check; local time without zone." }
+        notes: { type: array, items: { type: string }, description: "The release notes' \"New in\" section, one entry per point with its Markdown inline marks – on /api/v1/updates and /updates/check, not in the status." }
+        published_at: { type: [string, "null"], format: date-time, description: "When the release was published, as GitHub states it (UTC) – on /api/v1/updates and /updates/check, not in the status." }
     AccessSession:
       type: object
       description: What follows from the sign-in settings; the mode and the ids themselves are settings.
@@ -4488,9 +4544,10 @@ components:
         status_poll_seconds: { type: integer, default: 30, minimum: 5, maximum: 600, description: "How often the page asks /api/v1/status while nothing runs, in seconds. During a run it follows the run's own rhythm; this only decides how quickly something changed elsewhere shows up. Out-of-range values are clamped." }
         mcp_port: { type: integer, default: 8365, description: "Which port the MCP server listens on. A changed port takes effect after restarting the server." }
         mcp_enabled: { type: boolean, default: true, description: "The hard switch. Off means the server refuses to serve, no matter who starts it — the HTTP endpoint here as well as a client that launches it as a subprocess (stdio, which is how Claude Desktop does it)." }
-        mcp_cases_write: { type: boolean, default: false, description: "Off: Claude reads cases and saved searches but changes nothing. On: Claude can put items and notes into open cases through the MCP tools add_to_case, add_case_note and collect_case, and run a case's automatic searches now – never delete, never close." }
+        mcp_cases_write: { type: boolean, default: false, description: "Off: a client reads cases and saved searches but changes nothing. On: it can put items and notes into open cases through the MCP tools add_to_case, add_case_note and collect_case, and run a case's automatic searches now – never delete, never close." }
         mcp_autostart: { type: boolean, default: true, description: "The HTTP endpoint then runs as soon as the app runs. It covers that one route only: clients that launch the server themselves as a subprocess (stdio) do not need it and run independently." }
         update_check: { type: boolean, default: true, description: "One request to api.github.com at start for a newer release." }
+        update_dismissed: { type: string, default: "", description: "The release the window at start was dismissed for; it stays quiet until a newer one is published." }
         auth_mode: { type: string, enum: ["token", "login"], default: "token", description: "How access is obtained: a pasted token, or the device-code sign-in." }
         client_id: { type: string, default: "", description: "Own app registration for the sign-in; empty = Microsoft's Graph Command Line Tools." }
         tenant: { type: string, default: "", description: "Tenant for the sign-in; empty = common." }
@@ -4627,7 +4684,7 @@ components:
         added: { type: string, format: date-time }
         list: { type: [integer, "null"], description: "Came with this stored result." }
         folder: { type: [integer, "null"] }
-        via: { type: string, enum: [ui, mcp, auto], description: "Who put it there: the page, Claude, or an automatic search of the case." }
+        via: { type: string, enum: [ui, mcp, auto], description: "Who put it there: the page, an MCP client, or an automatic search of the case." }
         search: { type: [integer, "null"], description: "The saved search that collected it (`via: auto`)." }
         remark: { type: string }
         thread_open: { type: integer, description: "How many messages of its conversation the case lacks." }

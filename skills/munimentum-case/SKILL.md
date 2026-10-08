@@ -5,6 +5,11 @@ description: Use when the user works with a case in their Munimentum archive –
 
 # Working with Munimentum cases
 
+This guide belongs to Munimentum 14.5.0. Installed by hand – under
+Customize › Skills or in `~/.claude/skills/` – it does not change with the
+app: `get_guide` (and `get_version`) answer the server's `version`; when
+it differs from this one, follow the guide `get_guide` hands you instead.
+
 A case collects what belongs to one matter – items from every source,
 result lists and saved searches – without copying anything: it points at
 items by a key that survives a rename or a move. It has a casebook of dated
@@ -38,7 +43,9 @@ case's `name` or `id`.
 Then write, in this order: the state of the matter in three sentences; a
 dated chronology; the people and their part; open points; what the archive
 cannot tell (gaps, sources never exported). Cite every statement with
-`get_document`'s cite.label and cite.link.
+`get_document`'s cite.label and cite.link; an item shown on its own was
+read with `get_document` and carries its link, a list of hits carries
+labels only.
 
 ## Search inside a case
 
@@ -78,6 +85,6 @@ guide instead.
    as they would want to read it later.
 
 When a write answers that changes through MCP are switched off, tell the
-user it can be allowed in Munimentum under *Settings › Claude (MCP)* –
-"Claude may change cases" – and stop. When a case is closed, say so; do not
+user it can be allowed in Munimentum under *Settings › MCP clients* –
+"MCP clients may change cases" – and stop. When a case is closed, say so; do not
 look for a way around it. Nothing here ever removes an item or a note.

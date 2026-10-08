@@ -153,7 +153,7 @@ it.
 **Insights** has the shape of **Settings**: a side navigation, one card
 per entry, the two checks with a dot on their entry – the archive check
 ends in the *Evidence* row, the chain's state and its deviations.
-Settings: Microsoft Access, Sources, Schedule, AI, Claude, Profiles,
+Settings: Microsoft Access, Sources, Schedule, AI, MCP clients, Profiles,
 Evidence, App, Expert mode; each
 source a block with the essentials open and the rest under *Advanced*;
 the save bar appears only with unsaved changes. Access saves on its own
@@ -266,6 +266,14 @@ Use the existing class; do not invent a sibling that looks almost the same.
   `DYNAMISCH` in the i18n test.
 - Everyday words on the surface, the technical term in the `(i)`:
   *Access* not *token*, *AI* not *embeddings*, *searchable* not *indexed*.
+- **The protocol, not a product.** Where any client could stand, the
+  surface says *MCP client*: *MCP clients may change cases*, the settings
+  room *MCP clients*, the tour chapter *Connect an MCP client*. A product
+  is named only as an example in an `(i)` or a tour step (*Claude
+  Desktop, for one*), and where a format is its own: the `.mcp.json`
+  snippet for Claude Code, the `command` entry for Claude Desktop,
+  `~/.claude/skills/`. MCP is an open protocol; Claude is the client we
+  test with, not the one the words promise.
 - Labels name the thing, not the mechanism: *Which folders are exported*,
   not *Folder rules*. A control says what happens: *Search*, *Add to
   case*, *Open original*.

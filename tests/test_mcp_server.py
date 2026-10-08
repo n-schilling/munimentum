@@ -1068,11 +1068,13 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "add_to_case", "add_case_note",
               # 13.3: the automatic searches, run now
               "collect_case",
+              # 14.5: which app a guide installed by hand belongs to
+              "get_version",
               # an item held against the evidence chain
               "verify_item",
               # the skills' text and token for the gated tools (test_skills.py)
               "get_guide"}
-# The two that write – behind the "Claude may change cases" switch.
+# The two that write – behind the "MCP clients may change cases" switch.
 SCHREIBEND = {"add_to_case", "add_case_note", "collect_case"}
 
 
@@ -2307,6 +2309,8 @@ def test_a_prompt_names_only_tools_that_exist_and_asks_for_citations():
         named = set(re.findall(r"`([a-z_]+)`", text))
         assert named and named <= TOOL_NAMES, (name, named - TOOL_NAMES)
         assert "cite.label" in text and "cite.link" in text
+        # What the user sees as one item carries its link – read first.
+        assert "shown on its own" in text and "get_document" in text
     assert "2025-06-30" in anyio.run(run)["who_knew_what"][0].content.text
 
 

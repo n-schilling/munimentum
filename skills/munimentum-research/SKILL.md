@@ -5,6 +5,11 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
+This guide belongs to Munimentum 14.5.0. Installed by hand – under
+Customize › Skills or in `~/.claude/skills/` – it does not change with the
+app: `get_guide` (and `get_version`) answer the server's `version`; when
+it differs from this one, follow the guide `get_guide` hands you instead.
+
 Munimentum is a local, read-only copy of the user's Microsoft 365 data,
 served by an MCP server named `munimentum`. Its tools may carry a client
 prefix (`mcp__munimentum__…`, `mcp__remote-devices__munimentum__…`); the
@@ -113,5 +118,8 @@ concluded today.
 ## Citing
 
 Quote every statement with the item's `get_document` cite.label, plus
-cite.link when it is not null. A null link means Munimentum is not running:
-say once that the links work while it runs. Answer in the user's language.
+cite.link when it is not null. An item shown on its own – quoted, summarised
+or described as one message – was read with `get_document` and carries its
+cite.label and cite.link; a list of hits carries labels only. A null link
+means Munimentum is not running: say once that the links work while it
+runs. Answer in the user's language.

@@ -4,7 +4,7 @@ Your own Microsoft 365 data, kept where you can reach it: Teams chats and
 channels with the files they share, your organization, Outlook mail,
 calendar, contacts, OneDrive files, SharePoint libraries and pages, Planner
 boards, To Do lists and OneNote notebooks — exported through Microsoft Graph
-and searchable offline, in the app or through Claude via MCP.
+and searchable offline, in the app or through an MCP client such as Claude.
 
 **The magic:** all via delegated access, no admin consent required.
 
@@ -25,9 +25,10 @@ for Linux (glibc 2.35+).
 
 On macOS drag the app to *Applications*; on Windows and Linux unpack the
 archive. Windows asks once on first launch, because the build carries no
-code-signing certificate: *More info* → *Run anyway*. The app has no window
-of its own — it opens a page in your browser, and the power button at the top
-right quits it. Started again while it runs, it only reopens that page.
+code-signing certificate: *More info* → *Run anyway*. The app has no window of
+its own — it opens a page in your browser, and the power button at the top
+right quits it. Started again while it runs, it only reopens that page. A newer
+release is announced at start, notes and download link included.
 
 ## Signing in
 
@@ -63,15 +64,14 @@ because any one source can mean tens of thousands of items.
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
 | **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it – a manager who left kept in the line – kept as one file whose every change is a version; needs `User.Read.All`, which some tenants grant only with an admin's consent |
 
-Every run asks Microsoft only for what changed, chats newest first and mail
-folders in bundles, and counts only that as new. Deleted items stay in the
-archive with a marker — that is the point of keeping one — and nothing in it is
-ever deleted by a run: a replaced file keeps its **earlier version**, and a
-**chain of checksums** records what lay here when. A run shows progress, steps
-and log in its own window. Which folders, chats and lists come along is a list
-of include and exclude rules per source, spelled out by *Show export list*; a
-**schedule** repeats the run, and a **sync cadence** — always, daily, weekly,
-monthly — can be set per source, per part of it or for a single folder.
+Every run asks Microsoft only for what changed and counts only that as new.
+Deleted items stay in the archive with a marker — that is the point of keeping
+one — and nothing in it is ever deleted by a run: a replaced file keeps its
+**earlier version**, and a **chain of checksums** records what lay here when. A
+run shows progress, steps and log in its window. Which folders, chats and lists
+come along is a list of include and exclude rules per source (*Show export
+list*); a **schedule** repeats the run, and a **sync cadence** — always, daily,
+weekly, monthly — can be set per source, per part of it or for a single folder.
 
 ### Explore archive
 
@@ -139,7 +139,7 @@ first, none deletes. **Runs** keeps every run with its log.
 
 ### Settings
 
-Microsoft Access, Sources, Schedule, AI (Ollama), Claude (MCP), Profiles,
+Microsoft Access, Sources, Schedule, AI (Ollama), MCP clients, Profiles,
 Evidence, App, Expert mode — one card each on one running page, every setting
 with an **(i)** that says what changes. *Evidence* keeps earlier versions and
 can have runs time-stamped (RFC 3161). The App card holds notifications, how
@@ -147,17 +147,17 @@ long the search history is kept, where case exports land, your organisation's
 mail domains (what *external* means), and *Report a problem*: a GitHub issue
 with the log, anonymised, shown for you to edit and sent by nobody but you.
 
-## Search with Claude
+## Search with an MCP client
 
 A built-in MCP server hands the archive to Claude Code, Claude Desktop or any
-other MCP client — on this machine only: every source with its filters, how far
-the archive reaches, item versions, the org chart on any day, and your cases as
-pages to attach. Citations open the item in the app and hold against the
-checksum chain; three [skills](skills/README.md) teach research, case work and
-evidence, and search, case writes and verification ask for their token first
-(`get_guide`). It changes a case only when *Claude may change cases* is on
-under *Settings › Claude (MCP)*, and then only adds, marked *via MCP*.
-*Settings* prints the snippet for your client.
+MCP client on this machine only: every source with its filters, how far the
+archive reaches, item versions, the org chart on any day, your cases as pages
+to attach. Citations open the item in the app and hold against the checksum
+chain; three [skills](skills/README.md) teach research, case work and evidence,
+served or downloaded to install by hand, and search, case writes and
+verification ask for their token first (`get_guide`). It changes a case only
+when *MCP clients may change cases* is on under *Settings › MCP clients*, and
+then only adds, marked *via MCP*; the card prints the snippet.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

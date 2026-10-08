@@ -107,7 +107,8 @@ MCP server; the app's search calls its tools in-process, so what leaves over
 MCP passes `_tool()`, which keeps the answer compact, brief and within a
 budget. Its prompts and case resources sit beside the tools, and the three
 skills in `skills/` say the same for clients that see only tools
-(`tests/test_skills.py` holds them against the server); `instance.py`
+(`tests/test_skills.py` holds them against the server; `skills_pack.py`
+zips them for the download and the release); `instance.py`
 says where a running app answers, so a citation can link into it. Every
 Microsoft Graph endpoint the exports ask has its line in
 `tests/graph_contract.py` with the query options it takes; the test fakes

@@ -797,6 +797,10 @@ button.kopie{position:absolute;top:8px;right:8px;background:var(--card)}
 .modal-zu:hover{color:var(--ink);background:var(--code)}
 .modal-fuss{margin-top:16px;align-items:center}
 .modal.breit{max-width:860px}
+.update-notes{border:1px solid var(--line);border-radius:10px;padding:12px 16px;max-height:280px;overflow:auto;margin-top:12px}
+.update-notes h3{margin:0 0 6px;font-size:14px}
+.update-notes ul{margin:0;padding-left:18px;font-size:14px;line-height:1.45}
+.update-notes li+li{margin-top:8px}
 .plangruppe{margin:10px 0;border:1px solid var(--line);border-radius:8px;padding:8px 12px}
 .plangruppe>summary{cursor:pointer;font-size:13.5px;font-weight:600}
 .plangruppe>summary .dot{display:inline-block;margin-right:7px;vertical-align:middle}
@@ -1649,7 +1653,7 @@ details.rechte p{margin:6px 0}
       <button class="snav-punkt on" data-ziel="quellen-karte" onclick="zeigeEinstellung('quellen-karte')" data-i18n="settings.nav.sources">Quellen</button>
       <button class="snav-punkt" data-ziel="sched-karte" onclick="zeigeEinstellung('sched-karte')"><span data-i18n="sched.nav">Zeitplan</span><span class="nebenwert muted small" id="snav-plan"></span></button>
       <button class="snav-punkt" id="pill-ollama" data-ziel="ki-karte" onclick="ollamaKachel()"><span data-i18n="settings.nav.ki">KI (Ollama)</span><span class="stand"><span class="dot" id="p-ollama"></span><span id="p-ollama-t"></span></span></button>
-      <button class="snav-punkt" id="pill-mcp" data-ziel="mcp-karte" onclick="zeigeEinstellung('mcp-karte')"><span data-i18n="settings.nav.mcp">Claude (MCP)</span><span class="stand"><span class="dot" id="p-mcp"></span><span id="p-mcp-t"></span></span></button>
+      <button class="snav-punkt" id="pill-mcp" data-ziel="mcp-karte" onclick="zeigeEinstellung('mcp-karte')"><span data-i18n="settings.nav.mcp">MCP-Clients</span><span class="stand"><span class="dot" id="p-mcp"></span><span id="p-mcp-t"></span></span></button>
       <button class="snav-punkt" data-ziel="ablage-karte" onclick="zeigeEinstellung('ablage-karte')" data-i18n="settings.storage.title">Speicherorte</button>
       <button class="snav-punkt" data-ziel="evidence-card" onclick="zeigeEinstellung('evidence-card')" data-i18n="settings.evidence.title">Nachweis</button>
       <button class="snav-punkt" data-ziel="app-karte" onclick="zeigeEinstellung('app-karte')"><span data-i18n="settings.app.title">App</span><span class="dot warn hide" id="p-app"></span></button>
@@ -2033,7 +2037,7 @@ details.rechte p{margin:6px 0}
   </div>
 
   <div class="card" id="mcp-karte">
-    <h2 class="mit-info"><span data-i18n="mcp.title">Claude (MCP)</span>
+    <h2 class="mit-info"><span data-i18n="mcp.title">MCP-Clients</span>
       <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.i">i</span></h2>
     <div class="gruppe">
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.mcp_enabled"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.mcp_enabled.i">i</span></span><input type="checkbox" id="c-mcp_enabled" onchange="speichereEinstellungen()"></div>
@@ -2045,12 +2049,14 @@ details.rechte p{margin:6px 0}
       <span class="small" id="mcp-state"></span>
       <button class="mini" id="mcp-toggle" onclick="toggleMcp()">Starten</button>
     </div>
-    <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">In Claude Code eintragen:</p>
+    <p class="small muted" style="margin-top:14px" data-i18n-html="mcp.code.note">Clients mit URL (Claude Code: <code>.mcp.json</code> im Projekt):</p>
     <div class="mitkopie"><pre id="mcp-json"></pre>
       <button class="mini kopie" onclick="kopiere('mcp-json', this)" data-i18n="copy">Kopieren</button></div>
-    <p class="small muted" data-i18n-html="mcp.desktop.note">Claude Desktop akzeptiert nur <code>command</code>-Einträge:</p>
+    <p class="small muted" data-i18n-html="mcp.desktop.note">Clients, die den Server selbst starten (etwa Claude Desktop), brauchen einen <code>command</code>-Eintrag:</p>
     <div class="mitkopie"><pre id="mcp-stdio"></pre>
       <button class="mini kopie" onclick="kopiere('mcp-stdio', this)" data-i18n="copy">Kopieren</button></div>
+    <p class="small muted"><span data-i18n-html="mcp.skills.note">Die Skills zum Herunterladen – eine von Hand installierte Kopie ändert sich nicht mit der App:</span> <span class="info" tabindex="0" aria-label="i" data-i18n-title="mcp.skills.i">i</span></p>
+    <div class="aktionen"><a class="mini" id="mcp-skills" href="/api/v1/mcp/skills" download data-i18n="mcp.skills.download">Skills herunterladen</a></div>
   </div>
 
   <div class="card" id="ablage-karte">
@@ -3156,6 +3162,7 @@ function renderStatus(s){
   zeigeUpdate(Object.assign({current: s.version, build: s.build,
                             releases_url: s.releases_url}, s.update || {}),
               s.api_version);
+  updatePopupMaybe(s.update);
   fuelleEinstellungen(s.config);
 
   var busy = s.jobs.busy;
@@ -3513,7 +3520,7 @@ function laufSchliessen(){
    – and one button. */
 /* ---------- The tour: coach marks through the core workflows ----------
    Six chapters: one per door, one for a source's settings, one for
-   Insights, one for Claude – and the full tour, all six in order. Each step
+   Insights, one for MCP clients – and the full tour, all six in order. Each step
    names its element; the layer dims everything else and puts a card next
    to it. The tour explains only – it never sets a chip or a rule. A step
    whose element is not there (no run window open) is skipped; "seen" per
@@ -5385,12 +5392,12 @@ function externMarke(h){
   return domains.some(function(d){ return intern.indexOf(d) < 0; })
     ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '';
 }
-/* The mark of what Claude wrote through MCP – on the note or the item
+/* The mark of what an MCP client wrote – on the note or the item
    itself, nowhere else. */
 function mcpMarke(quelle){
   return quelle === 'mcp' ? '<span class="tag mcp">' + esc(t('cases.origin.mcp')) + '</span>' : '';
 }
-/* Who put an item into the case: Claude (via MCP), or an automatic
+/* Who put an item into the case: an MCP client (via MCP), or an automatic
    search – then the mark names the search and the day, in its title. */
 function herkunftMarke(e){
   if(e.via !== 'auto') return mcpMarke(e.via);
@@ -9011,6 +9018,70 @@ function zeigeUpdate(u, api){
     : u.retry_at ? t('update.error.limit', {error: u.error || '', at: uhrzeit(u.retry_at)})
     : (u.error || '');
   el('update-link').href = u.url || u.releases_url || '#';
+}
+/* A newer release is said once after start, in a window with its notes –
+   a line under Settings › App was overlooked. The status says only that
+   there is something newer; the notes come from one request, when the
+   window is due: not for a dismissed version, not with the check off, and
+   not while a wizard or another window holds the overlay (the next poll
+   asks again). */
+var UPDATE_POPUP = {shown: null};
+function updatePopupMaybe(u){
+  if(!u || !u.newer || !u.latest) return;
+  if(KONFIG && KONFIG.update_check === false) return;
+  if(KONFIG && KONFIG.update_dismissed === u.latest) return;
+  if(UPDATE_POPUP.shown === u.latest || wizardOffen) return;
+  UPDATE_POPUP.shown = u.latest;
+  api(API + '/updates').then(function(r){
+    var full = r && r.update;
+    if(!full || !full.newer || wizardOffen){ UPDATE_POPUP.shown = null; return; }
+    updatePopup(full);
+  }).catch(function(){ UPDATE_POPUP.shown = null; });
+}
+/* The notes' Markdown is the release's – only the three inline marks are
+   read, after escaping, so nothing a release says reaches the page as markup. */
+function inlineMarkdown(s){
+  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+    .replace(/\*([^*]+)\*/g, '<i>$1</i>');
+}
+function fmtDay(iso){
+  var d = new Date(iso);
+  return isNaN(d) ? iso : d.toLocaleDateString(LOC, {dateStyle: 'long'});
+}
+function updatePopup(u){
+  var kopf = modalKopf(t('update.popup.title', {v: u.latest}), 'update', t('update.popup.i'));
+  var meta = '<p class="small muted" style="margin:-2px 0 0">' +
+    esc(t('update.popup.you', {v: (S && S.version) || u.current || '?'})) +
+    (u.published_at ? ' · ' + esc(t('update.popup.published', {d: fmtDay(u.published_at)})) : '') +
+    '</p>';
+  var notes = (u.notes && u.notes.length)
+    ? '<div class="update-notes"><h3>' + esc(t('update.popup.new', {v: u.latest})) + '</h3><ul>' +
+      u.notes.map(function(n){ return '<li>' + inlineMarkdown(n) + '</li>'; }).join('') + '</ul></div>'
+    : '';
+  var fuss = '<div class="row modal-fuss">' +
+    '<a class="act" href="' + esc(u.url || (S && S.releases_url) || '#') + '" target="_blank" rel="noopener" ' +
+      'title="' + esc(t('update.popup.download.t')) + '" onclick="closeWizard(&quot;update&quot;)">' +
+      esc(t('update.popup.download')) + '</a>' +
+    '<button class="ghost" onclick="dismissUpdate(' + jsArg(u.latest) + ')">' +
+      esc(t('update.popup.dismiss')) + '</button>' +
+    '<button class="ghost klein" style="margin-left:auto" title="' + esc(t('update.popup.disable.t')) + '" ' +
+      'onclick="disableUpdateCheck()">' + esc(t('update.popup.disable')) + '</button></div>';
+  oeffneEigenes('update', kopf + meta + notes + fuss, true);
+}
+/* Dismiss remembers the version in the settings, so the next start stays
+   quiet until a newer one is out; the switch-off is the App card's setting,
+   written here and mirrored into its checkbox. */
+function dismissUpdate(v){
+  if(KONFIG) KONFIG.update_dismissed = v;
+  closeWizard('update');
+  konfig({update_dismissed: v});
+}
+function disableUpdateCheck(){
+  if(KONFIG) KONFIG.update_check = false;
+  el('c-update_check').checked = false;
+  closeWizard('update');
+  konfig({update_check: false});
 }
 function pruefeUpdate(){
   el('update-state').textContent = t('update.checking');

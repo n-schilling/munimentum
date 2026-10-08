@@ -16,9 +16,11 @@ Both are spoken here over real MCP, as a client would.
 import ast
 import hashlib
 import inspect
+import io
 import json
 import re
 import shutil
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,8 @@ from mcp.types import INVALID_PARAMS, Request
 from pydantic import TypeAdapter
 
 import mcp_server
+import skills_pack
+import version
 
 ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / "skills"
@@ -234,11 +238,24 @@ def test_skills_get_answers_by_uri_and_refuses_an_unknown_one():
     assert _client(unknown) == INVALID_PARAMS        # what the SEP prescribes
 
 
+def test_a_shown_item_is_read_and_linked_wherever_the_rule_stands():
+    """A hit from a list carries no link – only get_document's answer
+    does. So every guide, every prompt's citing rule and the server's
+    instructions say the same: an item shown on its own was read with
+    get_document and carries its link, a list carries labels only."""
+    for path in _skills():
+        text = (path / "SKILL.md").read_text(encoding="utf-8")
+        assert "shown on its own" in text and "`get_document`" in text, path.name
+    for text in (mcp_server._CITE, mcp_server._INSTRUCTIONS):
+        assert "shown on its own" in text and "get_document" in text
+
+
 def test_the_instructions_point_at_the_guides():
     """A host that reads instructions finds the skills without discovery."""
     for name in FOLLOWS:
         assert f"skill://{name}/SKILL.md" in mcp_server._INSTRUCTIONS
     assert "get_guide" in mcp_server._INSTRUCTIONS
+    assert "get_version" in mcp_server._INSTRUCTIONS
 
 
 # --------------------------------------------------------------------------
@@ -327,6 +344,8 @@ def test_a_skill_with_windows_line_endings_is_the_same_skill(tmp_path):
     assert {t: s["token"] for t, s in crlf.items()} == {t: s["token"] for t, s in lf.items()}
     assert all(crlf[t]["digest"] == lf[t]["digest"] and crlf[t]["size"] == lf[t]["size"] for t in lf)
     assert "\r" not in crlf["case"]["text"]
+    # … and the ZIP a hand install gets is the same file either way.
+    assert skills_pack.skill_zip(copy / "munimentum-case") == skills_pack.skill_zip(SKILLS / "munimentum-case")
 
 
 def test_no_skills_folder_serves_nothing_and_gates_nothing(tmp_path):
@@ -339,3 +358,67 @@ def test_frontmatter_the_server_cannot_read_flat_is_an_error():
         mcp_server._skill_frontmatter("---\nname: x\nmetadata:\n  a: b\n---\nbody")
     with pytest.raises(ValueError):
         mcp_server._skill_frontmatter("no frontmatter")
+
+
+# --------------------------------------------------------------------------
+# Installed by hand: the ZIPs, the version line, get_version
+# --------------------------------------------------------------------------
+def test_every_skill_names_the_version_it_belongs_to():
+    """A copy installed by hand does not change with the app: the skill
+    says which Munimentum it belongs to and tells Claude to compare with
+    get_version – so the line moves with every release (version.py)."""
+    for path in _skills():
+        text = (path / "SKILL.md").read_text(encoding="utf-8")
+        m = re.search(r"This guide belongs to Munimentum (\d+\.\d+\.\d+)\.", text)
+        assert m and m.group(1) == version.VERSION, path.name
+        assert "`get_version`" in text and "`get_guide`" in text, path.name
+
+
+def test_the_skill_zips_hold_one_folder_each():
+    """One ZIP per skill, the folder as its single top-level item (what
+    claude.ai's upload wants), the same bytes every time (SHA256SUMS can
+    hold them); the bundle holds the three and a README with the version."""
+    folders = skills_pack.skill_folders(SKILLS)
+    assert [f.name for f in folders] == sorted(FOLLOWS)
+    for folder in folders:
+        data = skills_pack.skill_zip(folder)
+        assert data == skills_pack.skill_zip(folder)
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            assert z.namelist() == [f"{folder.name}/SKILL.md"]
+            assert b"\r" not in z.read(f"{folder.name}/SKILL.md")
+    with zipfile.ZipFile(io.BytesIO(skills_pack.bundle(SKILLS, version.VERSION))) as z:
+        assert sorted(z.namelist()) == [skills_pack.zip_name(t) for t in ("case", "evidence", "research")] + ["README.txt"]
+        text = z.read("README.txt").decode("utf-8")
+        assert version.VERSION in text and "get_version" in text
+        with zipfile.ZipFile(io.BytesIO(z.read(skills_pack.zip_name("case")))) as inner:
+            assert inner.namelist() == ["munimentum-case/SKILL.md"]
+    assert skills_pack.bundle_name(version.VERSION) == f"Munimentum-skills-{version.VERSION}.zip"
+
+
+def test_main_writes_the_three_zips_for_the_release(tmp_path):
+    assert skills_pack.main([str(tmp_path), str(SKILLS)]) == 0
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "Munimentum-skill-case.zip", "Munimentum-skill-evidence.zip", "Munimentum-skill-research.zip"]
+    assert skills_pack.main([str(tmp_path / "x"), str(tmp_path / "nowhere")]) == 1
+    assert skills_pack.main([]) == 2
+
+
+def test_get_version_says_the_app_version():
+    _res, data = _call("get_version", {})
+    assert data["version"] == version.VERSION and "build" in data
+    # get_guide says it too: the guide a hand install compares against
+    # comes with the version, no second call needed.
+    assert _call("get_guide", {"topic": "research"})[1]["version"] == version.VERSION
+
+
+def test_the_skill_zip_leaves_hidden_files_behind(tmp_path):
+    """A .DS_Store or an editor's swap file beside SKILL.md never reaches
+    the ZIP a user uploads."""
+    folder = tmp_path / "munimentum-case"
+    shutil.copytree(SKILLS / "munimentum-case", folder)
+    (folder / ".DS_Store").write_bytes(b"\0")
+    (folder / ".SKILL.md.swp").write_bytes(b"\0")
+    (folder / "__pycache__").mkdir()
+    (folder / "__pycache__" / "x.pyc").write_bytes(b"\0")
+    assert [p.name for p in skills_pack.skill_files(folder)] == ["SKILL.md"]
+    assert skills_pack.skill_zip(folder) == skills_pack.skill_zip(SKILLS / "munimentum-case")

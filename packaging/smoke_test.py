@@ -36,6 +36,7 @@ bundling and would go unnoticed by a plain "file exists" test:
 No network, no Graph, no Ollama – only the bundle itself.
 """
 
+import io
 import json
 import os
 from datetime import UTC, datetime
@@ -49,6 +50,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 # Windows consoles use a legacy codepage (cp1252); "→" in the progress
@@ -472,6 +474,36 @@ def pruefe(exe, daten, port, proc):
     if len(serie) < 3 or not stunden <= SERIES_UTC_TIMES:
         raise Fehler(f"Die Serie zählt nicht auf ihrer Zeitzone (Zonendaten im Bündel?): "
                      f"{len(serie)} Termine, Uhrzeiten {sorted(stunden)}\n{protokoll(basis)}")
+
+    schritt("Skills als Download")
+    # The bundle carries skills/ (app.spec, through skills_pack.skill_files)
+    # and the route zips them from there. The release assets are made from
+    # the checkout, and both are promised to be the same files: so the
+    # download is held against the checkout, file for file.
+    try:
+        with urllib.request.urlopen(f"{basis}/api/v1/mcp/skills", timeout=10) as r:   # noqa: S310
+            kind = r.headers.get("Content-Type", "")
+            payload = r.read()
+    except urllib.error.HTTPError as e:
+        raise Fehler(f"Skills-Download antwortet {e.code}: "
+                     f"{e.read().decode('utf-8', 'replace')[:300]}\n{protokoll(basis)}") from None
+    if kind.split(";")[0] != "application/zip":
+        raise Fehler(f"Skills-Download ist kein ZIP: {kind}")
+    # The one list of what a skill ships is skills_pack's (app.spec reads
+    # it too): the checkout's own ZIPs, byte for byte, are the expectation.
+    checkout = Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(checkout))
+    import skills_pack
+    expected = {skills_pack.zip_name(folder.name.removeprefix(skills_pack.PREFIX)): skills_pack.skill_zip(folder)
+                for folder in skills_pack.skill_folders(checkout / "skills")}
+    with zipfile.ZipFile(io.BytesIO(payload)) as z:
+        inner = {n: z.read(n) for n in z.namelist() if n.endswith(".zip")}
+    if sorted(inner) != sorted(expected):
+        raise Fehler(f"Skills-Download enthält {sorted(inner)}, der Checkout {sorted(expected)} "
+                     f"– fehlt skills/ im Bündel?")
+    for name, data in inner.items():
+        if data != expected[name]:
+            raise Fehler(f"{name} im Bündel weicht vom Checkout ab (Byte für Byte verglichen).")
 
     schritt("MCP-Server starten")
     r = sende(f"{basis}/api/v1/mcp", {"running": True}, methode="PATCH")

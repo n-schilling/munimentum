@@ -11,6 +11,8 @@ import folders
 import i18n
 from api import Ablehnung
 import settings
+import skills_pack
+import version
 
 
 # The status's `auth` node is deprecated – GET /api/v1/access/session
@@ -118,6 +120,10 @@ def konfig_speichern(h, data):
                     "keep_versions", "evidence_timestamp"):
             if key in data:
                 cfg[key] = bool(data[key])
+        # The release the window at start was dismissed for: a version
+        # string, "" when none – the next newer one asks again.
+        if "update_dismissed" in data:
+            cfg["update_dismissed"] = str(data["update_dismissed"] or "").strip()
         if "search_history" in data:
             wahl = str(data["search_history"] or "").strip().lower()
             if wahl in h.M.HISTORIE_WAHL:
@@ -220,6 +226,18 @@ def mcp(h, _p, _q, data):
     return api.json(mcp_schalten(h, data["running"]))
 
 
+def skills_download(h, _p, _q, _data):
+    """GET /mcp/skills: the three skills as one ZIP of ZIPs, to install
+    by hand (skills_pack) – read from where the bundle keeps them, as the
+    MCP server does; no index needed. A build without skills/ says so."""
+    folder = h.M.RES / "skills"
+    if not skills_pack.skill_folders(folder):
+        raise Ablehnung(404, "srv.skills.none")
+    name = skills_pack.bundle_name(version.VERSION)
+    return api.roh(200, skills_pack.bundle(folder, version.VERSION), "application/zip",
+                   extra={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 def mcp_schalten(h, an):
     """Start or stop the MCP server – what `running` on PATCH /mcp
     asks for. A refused start still answers the server's state, so
@@ -236,6 +254,12 @@ def mcp_schalten(h, an):
 
 def ollama(h, _p, _q, _data):
     return api.json({"ollama": h.app.ollama(force=True)})
+
+
+def updates_state(h, _p, _q, _data):
+    """GET /updates: the last check whole – with the release's notes and
+    date, which the polled status leaves out."""
+    return api.json({"update": h.app.update_state()})
 
 
 def update(h, _p, _q, _data):
@@ -385,7 +409,9 @@ ROUTEN = (
     ("GET", "/api/v1/config", konfig),
     ("PATCH", "/api/v1/config", konfig_aendern),
     ("PATCH", "/api/v1/mcp", mcp),
+    ("GET", "/api/v1/mcp/skills", skills_download),
     ("POST", "/api/v1/ollama/recheck", ollama),
+    ("GET", "/api/v1/updates", updates_state),
     ("POST", "/api/v1/updates/check", update),
     ("PUT", "/api/v1/access/token", token),
     ("GET", "/api/v1/access/session", session_state),

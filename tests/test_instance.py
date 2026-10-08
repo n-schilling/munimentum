@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -10,12 +11,13 @@ import pytest
 import instance
 
 
-def _server(profile="standard", ours=True):
-    """A stand-in answering /api/v1/status the way the app does – or the
-    way any other server on a free port would."""
+def _server(profile="standard", ours=True, delay=0.0):
+    """A stand-in answering /api/v1/app the way the app does – or the way
+    any other server on a free port would; `delay` makes it a busy one."""
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            body = json.dumps({"token": {}, "jobs": [], "profile": {"name": profile}}).encode()
+            time.sleep(delay)
+            body = json.dumps({"version": "0.0.0", "api_version": "v1", "profile": profile}).encode()
             self.send_response(200)
             if ours:
                 self.send_header("X-Munimentum-Api", "v1")
@@ -79,6 +81,10 @@ def test_a_second_instance_leaves_the_first_ones_file(tmp_path, monkeypatch):
     assert asked == [(8701, instance.PROBE)]
     instance.remove(tmp_path)
     assert instance.read(tmp_path) == first
+    # A busy (it answers late): there, so its file stays its own as well.
+    monkeypatch.setattr(instance, "profile_at", lambda *a, **k: instance.SLOW)
+    assert instance.write(tmp_path, 9003, "standard") is None
+    assert instance.read(tmp_path) == first
     # A gone (nothing answers on its port): its file is taken over.
     monkeypatch.setattr(instance, "profile_at", lambda *a, **k: None)
     assert instance.write(tmp_path, 9003, "standard") == tmp_path / instance.FILE
@@ -129,6 +135,20 @@ def test_another_profile_or_another_server_on_the_port_is_no_link(tmp_path, runn
     assert instance.find(tmp_path, timeout=2) == (None, "other_profile")
     instance.write(tmp_path, running(ours=False), "standard")
     assert instance.find(tmp_path, timeout=2) == (None, "not_running")
+
+
+def test_a_port_that_takes_the_connection_but_answers_late_is_slow(tmp_path, running):
+    """On loopback a refusal is immediate, so a timeout means something is
+    there and busy – said as such, never as "nothing runs"."""
+    port = running(profile="standard", delay=1.0)
+    instance.write(tmp_path, port, "standard")
+    assert instance.profile_at(port, timeout=0.3) == instance.SLOW
+    assert instance.find(tmp_path, timeout=0.3) == (None, "slow")
+    assert instance.answers(port, timeout=0.3) is False
+    url, state, record = instance.probe(tmp_path, timeout=0.3)
+    assert (url, state, record["port"]) == (None, "slow", port)
+    assert instance.url_of(record) == f"http://127.0.0.1:{port}/"
+    assert instance.probe(tmp_path / "nowhere")[2] is None
 
 
 def test_answers_is_the_old_running_check(running):

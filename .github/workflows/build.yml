@@ -221,6 +221,11 @@ jobs:
           path: pakete
           merge-multiple: true
 
+      - name: Skills
+        # One ZIP per skill, the same files the app's "Download skills"
+        # gives – standard library only, so the bare runner can.
+        run: python3 skills_pack.py pakete
+
       - name: Checksums
         run: |
           cd pakete

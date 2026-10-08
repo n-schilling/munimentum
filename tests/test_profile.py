@@ -893,16 +893,17 @@ def test_a_named_port_alone_writes_its_file_and_takes_it_away(wurzel, monkeypatc
 
 
 def test_a_slow_status_is_still_found(wurzel, monkeypatch):
-    """Regression: with a sign-in cache the status takes 0.3 s and more
-    (MSAL asks Microsoft for its discovery document), and the probe gave
-    up after 0.5 s – the second start took the next port."""
+    """Regression: an answer took 0.3 s and more (with a sign-in cache the
+    status asked MSAL for its discovery document) and the probe gave up
+    after 0.5 s – the second start took the next port. The probe asks the
+    constants now, but it still waits long enough for a slow answer."""
     import http.server
 
     class Slow(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             time.sleep(1.0)
-            body = json.dumps({"token": {}, "jobs": {},
-                               "profile": {"name": "standard"}}).encode()
+            body = json.dumps({"version": "0.0.0", "api_version": "v1",
+                               "profile": "standard"}).encode()
             self.send_response(200)
             self.send_header("X-Munimentum-Api", "v1")
             self.send_header("Content-Length", str(len(body)))
@@ -920,6 +921,16 @@ def test_a_slow_status_is_still_found(wurzel, monkeypatch):
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_an_instance_that_answers_too_late_is_opened_not_doubled(wurzel, monkeypatch):
+    """A busy first instance – its answer comes after the probe gave up –
+    is there: the second start opens it instead of starting a twin, and a
+    profile switch finds its port."""
+    instance.write(heim_von(wurzel), 8765, "standard")
+    monkeypatch.setattr(instance, "profile_at", lambda *a, **k: instance.SLOW)
+    assert app_mod.running_instance() == ("http://127.0.0.1:8765/", "standard")
+    assert app_mod.instance_port("standard") == 8765
 
 
 def test_main_data_dir_kennt_keine_profile(wurzel, monkeypatch):

@@ -275,6 +275,7 @@ VORGABEN = {
     "mcp_cases_write": False,
     "mcp_autostart": True,
     "update_check": True,   # check GitHub once at startup
+    "update_dismissed": "",  # the release the notice at start was dismissed for
     # How the app signs in. "token" = pasted access key (no request to IT
     # needed, but valid only for hours); "login" = real sign-in with a
     # refresh token so the schedule runs unattended.
