@@ -301,6 +301,7 @@ def resolve_drives(graph, urls):
     # single cadence was asked. The first spelling names the site for all.
     je_adresse = {}
     subsites = {}
+    said_libraries = set()
     # One log line per site, after all URLs: a dozen lines into one site
     # used to say "1 libraries." a dozen times.
     per_site = {}
@@ -319,12 +320,13 @@ def resolve_drives(graph, urls):
             if place in seen:
                 continue
             seen.add(place)
+            looked = {}
             try:
                 if adresse.lower() not in je_adresse:
                     site = graph.get(f"{GRAPH}/sites/{adresse}")
                     je_adresse[adresse.lower()] = (adresse, site, list(graph.paged(f"{GRAPH}/sites/{site['id']}/drives")))
                 adresse, site, drives = je_adresse[adresse.lower()]
-                placed = _place(graph, subsites, adresse, site, drives, rest)
+                placed = _place(graph, subsites, adresse, site, drives, rest, looked)
             except auth.TokenExpired:
                 raise
             except requests.HTTPError as e:
@@ -345,9 +347,12 @@ def resolve_drives(graph, urls):
             if placed is None:
                 # A path we cannot place names nothing – and mirroring the
                 # whole site instead would be exactly the accident the
-                # address tree rules out. The line is skipped, said.
+                # address tree rules out. The line is skipped, said – and
+                # what the site does have is said with it (issue #3: three
+                # spellings, three skipped lines, and no way to tell why).
                 progress.event("run.sharepoint.path_unmatched", "err",
                                url=url, path="/".join(rest))
+                _say_libraries(looked, said_libraries)
                 fehl += 1
                 continue
             adresse, site, kandidaten, unterpfad, whole_site = placed
@@ -430,9 +435,41 @@ def _subsite(graph, subsites, address, name):
     return subsites[sub.lower()]
 
 
-def _place(graph, subsites, address, site, drives, rest):
+def _library_words(address, libraries):
+    """"Shared Documents (Documents) · Templates": every library's URL
+    segment, its display name in brackets where that differs – the two
+    things a pasted path is matched against, so a skipped line can be
+    corrected from the log instead of guessed at."""
+    words = []
+    for d in libraries:
+        segment = "/".join(_drive_pfad(d, address)) or (d.get("name") or "")
+        name = d.get("name") or ""
+        words.append(f"{segment} ({name})" if name and name.lower() != segment.lower() else segment)
+    return " · ".join(words)
+
+
+def _say_libraries(looked, said):
+    """After a skipped line, once per site and run: what the site does
+    have – or that Graph lists no library there at all, which points at
+    a list, or at the library's site being another one."""
+    address = looked.get("address")
+    if not address or address.lower() in said:
+        return
+    said.add(address.lower())
+    site = looked.get("site") or {}
+    name = site.get("displayName") or site.get("name") or address
+    libraries = looked.get("libraries") or []
+    if libraries:
+        progress.event("run.sharepoint.site_libraries", site=name, n=len(libraries),
+                       libraries=_library_words(address, libraries))
+    else:
+        progress.event("run.sharepoint.site_libraries.none", "warn", site=name)
+
+
+def _place(graph, subsites, address, site, drives, rest, looked=None):
     """Where a path inside a site leads: (address, site, libraries,
-    subpath, whole_site).
+    subpath, whole_site). `looked`, when given, is filled with the site
+    and the libraries of the level where the path led nowhere.
 
     No path: every library of the site. A path names a library – in any
     spelling, the segment comes from the library's webUrl – and perhaps a
@@ -463,6 +500,8 @@ def _place(graph, subsites, address, site, drives, rest):
                 return address, site, [d], "/".join(rest[1:]) or None, False
         below = _subsite(graph, subsites, address, rest[0])
         if below is None:
+            if looked is not None:
+                looked.update(address=address, site=site, libraries=libraries)
             return None
         address, site, drives = below
         rest = rest[1:]

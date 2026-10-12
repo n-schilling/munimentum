@@ -558,10 +558,15 @@ def test_lange_texte_werden_nach_laenge_gestapelt(tmp_path, monkeypatch):
         f"Stapel mischen die Längen weiter: {spannen} bei Gesamtspanne {gesamt}")
 
 
-def test_build_index_ohne_inhalte_bricht_ab(tmp_path):
-    with pytest.raises(SystemExit, match="No content found"):
-        rag_index.build_index(str(tmp_path / "fehlt"), str(tmp_path / "auch_fehlt"),
-                              str(tmp_path / "store"), "m", "http://x")
+def test_an_empty_archive_ends_the_index_quietly(tmp_path, capsys):
+    """Nothing exported yet is no fault of the index (issue #3: a skipped
+    SharePoint line left the archive empty and the index step red): one
+    warning, a zero result, no store written."""
+    assert rag_index.build_index(str(tmp_path / "fehlt"), str(tmp_path / "auch_fehlt"),
+                                 str(tmp_path / "store"), "m", "http://x") == (0, 0, 0)
+    events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
+    assert [(e["k"], e["level"]) for e in events if e["k"] == "run.index.empty"] == [("run.index.empty", "warn")]
+    assert not (tmp_path / "store").exists()
 
 
 # --------------------------------------------------------------------------

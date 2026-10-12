@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 14.5.0. Installed by hand – under
+This guide belongs to Munimentum 14.5.1. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.

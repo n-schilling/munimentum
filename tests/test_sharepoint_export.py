@@ -1750,6 +1750,35 @@ def test_a_line_that_matches_no_library_is_skipped(monkeypatch, capsys):
     assert ev["level"] == "err" and ev["v"]["path"] == "Typo/Folder"
 
 
+def test_a_skipped_line_says_what_the_site_has(monkeypatch, capsys):
+    """Three spellings of one library, three skipped lines, and no way to
+    tell why (issue #3): after the first skipped line the log names the
+    site's libraries by URL segment, the display name where it differs –
+    once per site and run. A site Graph lists no library for says so."""
+    monkeypatch.setenv("SYNC_CADENCE", "{}")
+    g = _two_libraries()
+    g.sites["firma.sharepoint.com:/sites/TeamX"]["drives"][0].update(
+        name="Documents", webUrl="https://firma.sharepoint.com/sites/TeamX/Shared%20Documents")
+    _drives, fehl = sp.resolve_drives(g, [BASIS + "Financials - Archive", BASIS + "FinancialsArchive",
+                                          BASIS + "FinancialsArchive/2017"])
+    assert fehl == 3
+    events = _events(capsys)
+    assert len([e for e in events if e["k"] == "run.sharepoint.path_unmatched"]) == 3
+    (has,) = [e for e in events if e["k"] == "run.sharepoint.site_libraries"]
+    assert has["v"] == {"site": "TeamX", "n": 2,
+                        "libraries": "Shared Documents (Documents) · Templates"}
+    # A path that fails inside a subsite names that subsite's libraries.
+    g = _with_subsite()
+    sp.resolve_drives(g, [BASIS + "Sub/Nope"])
+    (has,) = [e for e in _events(capsys) if e["k"] == "run.sharepoint.site_libraries"]
+    assert has["v"] == {"site": "Sub", "n": 1, "libraries": "Docs"}
+    # No library at all: said as such, as a warning.
+    g = _FakeGraph(sites={"firma.sharepoint.com:/sites/TeamX": {"id": "s1", "name": "TeamX", "drives": []}})
+    sp.resolve_drives(g, [BASIS + "Anything"])
+    (none,) = [e for e in _events(capsys) if e["k"] == "run.sharepoint.site_libraries.none"]
+    assert none["level"] == "warn" and none["v"] == {"site": "TeamX"}
+
+
 def test_a_folder_address_finds_its_folder_in_any_case(tmp_path):
     """Typed as folder/b, mirrored as Folder/B: still that unit, with its
     cadence and its stamp."""

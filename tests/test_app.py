@@ -9147,6 +9147,12 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
                folder_rules="+ E-Mail/Kunden/**\n- E-Mail/Privat/**",
                analytics_skip=["beispiel, alice"],
                tenant="contoso.example",
+               # Issue #3: a reporter's own domain stood in a public issue,
+               # printed by this report – names shrink to their count.
+               internal_domains="nordwind.example, example.com",
+               own_name="Alice Beispiel", case_export_dir="/Users/alice/Documents",
+               teams_rules="- Chat with Bob", org_rules="+ Carla Chef",
+               ollama="http://nas.local:11434",
                schedule={**cfg["schedule"], "enabled": True, "interval_minutes": 30})
     aus = "; ".join(app_mod.einstellungs_abweichungen(cfg))
     assert "workers=8" in aus and "embed_images=false" in aus
@@ -9154,8 +9160,12 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
     assert "analytics_skip: 1 Eintrag" in aus
     assert "tenant: gesetzt" in aus
     assert "enabled=true" in aus and "interval_minutes=30" in aus
+    assert "internal_domains: 2 Einträge" in aus
+    assert "own_name: gesetzt" in aus and "case_export_dir: gesetzt" in aus and "ollama: gesetzt" in aus
+    assert "teams_rules: 1 Zeile" in aus and "org_rules: 1 Zeile" in aus
     # the contents themselves appear nowhere
-    for privat in ("Kunden", "Privat", "beispiel", "contoso"):
+    for privat in ("Kunden", "Privat", "beispiel", "contoso", "nordwind", "example.com",
+                   "Alice", "alice", "Bob", "Carla", "nas.local"):
         assert privat not in aus
 
 

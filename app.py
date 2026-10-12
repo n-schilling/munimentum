@@ -1444,10 +1444,16 @@ def gekuerzt(text, zeilen=BERICHT_ZEILEN, zeichen=BERICHT_ZEICHEN):
 # analytics_skip, the employer in the tenant. The report only says THAT
 # they deviate and to what extent, never the value itself.
 _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
-                  "onenote_rules",
+                  "onenote_rules", "teams_rules", "todo_rules",
+                  "sharepoint_rules", "org_rules",
                   "sharepoint_urls", "sharepoint_pages_urls", "planner_urls"}
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
-_NUR_GESETZT = {"client_id", "tenant"}
+# Comma-separated names: the organisation's mail domains (issue #3 showed
+# a reporter's domain in a public issue, printed by this very report).
+_UMFANG_KOMMA = {"internal_domains"}
+# One's own name, paths with the user name, a host of one's own.
+_NUR_GESETZT = {"client_id", "tenant", "own_name", "case_export_dir",
+                "data_dir", "index_dir", "evidence_tsa_url", "ollama"}
 # Already appear as their own line in the report – do not list twice.
 _SCHON_BERICHTET = {"outlook_categories", "teams_categories", "auth_mode"}
 
@@ -1471,6 +1477,9 @@ def einstellungs_abweichungen(cfg):
             aus.append(f"{key}: {n} " + ("Zeile" if n == 1 else "Zeilen"))
         elif key in _UMFANG_LISTE:
             n = len(wert or [])
+            aus.append(f"{key}: {n} " + ("Eintrag" if n == 1 else "Einträge"))
+        elif key in _UMFANG_KOMMA:
+            n = len([t for t in str(wert or "").split(",") if t.strip()])
             aus.append(f"{key}: {n} " + ("Eintrag" if n == 1 else "Einträge"))
         elif key in _NUR_GESETZT:
             aus.append(f"{key}: gesetzt")

@@ -1,36 +1,19 @@
-## New in 14.5.0
+## New in 14.5.1
 
-- **MCP clients, not Claude**: the settings room is *MCP clients*, the
-  switch *MCP clients may change cases*, the tour chapter *Connect an MCP
-  client*; Claude stays where a format is its own – the two snippets, the
-  skills’ install paths. Any MCP client was always meant; the words now
-  say so.
-- **Skills to install by hand**: *Download skills* under *Settings › MCP
-  clients* gives the three skills as ZIP files, one per skill, for Claude
-  Code’s `~/.claude/skills/` or an upload under Customize › Skills; every
-  release carries the same three files. A copy installed by hand does not
-  change with the app: each guide names the version it belongs to, and the
-  new MCP tool `get_version` lets the client notice an outdated one and
-  read the current guide instead.
-- **A message shown on its own carries its link**: the guides, the prompts
-  and the server’s instructions now say that an item quoted, summarised
-  or described as one message was read with `get_document` and carries
-  its link; a list of hits carries labels only.
-- **A newer release is announced at start**: with “Look for updates at
-  startup” on, a window shows the release’s notes with *Download* and
-  *Dismiss*; *Disable update check* in it switches the check off. Dismiss
-  keeps that version quiet, the next release asks again.
-- **The link finds a running app sooner**: a busy app no longer counts as
-  closed, and a missed one is found on the next call rather than half a
-  minute later.
+- **A SharePoint address that matches nothing now says what the site has**:
+  after the skipped line the log names the site’s document libraries by
+  URL segment, with the display name where it differs – or says that
+  Graph lists no library there at all. The three spellings of one
+  library in issue #3 would have been settled by that one line.
+- **The problem report names nothing of yours**: your organisation’s mail
+  domains, your own name, paths and the rules lists appear only as counts
+  or as “set”, like the folder rules did before.
+- **An empty archive no longer fails the index**: with nothing exported
+  yet, the index step ends with a note instead of an error.
 
 ## Upgrading
 
-Nothing happens once after this update. A client reads the changed guides
-after it reconnects to the MCP server – Claude Desktop after a restart; a
-conversation holding an older guide token is handed the guide once more.
-Skills you installed by hand are from an earlier version now: download
-them again.
+Nothing happens once after this update.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

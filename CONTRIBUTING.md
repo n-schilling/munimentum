@@ -10,8 +10,9 @@ The most useful thing you can send me is a bug report.
 Use **Report a problem** in the app — under *Settings → App*, and in the run
 window while a run is on. It fills in a GitHub issue with the log and the details I would
 otherwise have to ask for (version, operating system, cores, what the index
-holds), replaces e-mail addresses and user names in paths, and shows you the
-whole text to edit before anything happens. You submit it yourself; the app
+holds), replaces e-mail addresses and user names in paths, names no
+setting’s content, and shows you the whole text to edit before anything
+happens. You submit it yourself; the app
 sends nothing.
 
 A report written that way usually needs no follow-up questions. One written
@@ -52,7 +53,7 @@ ruff check .                           # lint
 ```
 
 Both the tests and the lint have to pass before anything is released; CI runs
-them on Python 3.12 and 3.13, and every bundle goes through
+them on Python 3.12 to 3.14, and every bundle goes through
 `packaging/smoke_test.py` before it becomes a download.
 
 A second, smaller set drives the real page in a browser – the app with an

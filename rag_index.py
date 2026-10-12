@@ -600,7 +600,11 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
         progress.event("run.index.no_pool", "warn",
                        error=str(corpus.POOL_FEHLER))
     if not chunks:
-        raise SystemExit("No content found - are the export folders right?")
+        # Nothing exported yet – the first run after a SharePoint line was
+        # skipped, say (issue #3) – is no fault of the index: it ends
+        # quietly, writes no store, and a store that is there keeps.
+        progress.event("run.index.empty", "warn")
+        return 0, 0, 0
     for c in chunks:
         if not c.get("hash"):
             c["hash"] = corpus.chunk_hash(c)
@@ -725,15 +729,17 @@ def main():
                               onenote_dir=a.onenote)
     # The Analytics tab reads a materialised block instead of aggregating on
     # every visit – this run just touched everything, so build it now. Its
-    # failure must not fail the index.
-    try:
-        analytics_db.baue(a.store, {
-            "teams": a.teams, "outlook": a.outlook, "onedrive": a.onedrive,
-            "sharepoint": a.sharepoint, "pages": a.pages,
-            "planner": a.planner, "todo": a.todo, "onenote": a.onenote})
-    except Exception as e:
-        progress.event("run.index.analytics_failed", "warn",
-                       error=f"{type(e).__name__}: {e}")
+    # failure must not fail the index; with nothing indexed there is
+    # nothing to materialise.
+    if n:
+        try:
+            analytics_db.baue(a.store, {
+                "teams": a.teams, "outlook": a.outlook, "onedrive": a.onedrive,
+                "sharepoint": a.sharepoint, "pages": a.pages,
+                "planner": a.planner, "todo": a.todo, "onenote": a.onenote})
+        except Exception as e:
+            progress.event("run.index.analytics_failed", "warn",
+                           error=f"{type(e).__name__}: {e}")
     # Same result schema as every other subprogram: "new" = freshly computed
     # embeddings, "unchanged" = reused ones; the chunk total goes into extra.
     progress.ergebnis(new, unchanged=max(0, n - new), extra={"chunks": n})

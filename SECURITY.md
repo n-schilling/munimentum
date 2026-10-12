@@ -42,7 +42,9 @@ are deliberate.
   launch, and the release notes explain the way past it. The macOS builds are
   signed and notarized by Apple.
 - **The redaction in the bug reporter is best-effort.** It replaces e-mail
-  addresses and user names in paths; folder names and subject lines can remain.
+  addresses and user names in paths and reports settings that name people,
+  domains or places only as counts; folder names and subject lines in the
+  log can remain.
   The whole text is shown for editing, and the app sends nothing by itself — you
   submit the form.
 - **The access token lives in the profile's folder** with restricted file

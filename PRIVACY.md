@@ -56,7 +56,8 @@ through the operating system. Delete those folders and nothing of it remains.
 **Report a problem** builds a GitHub issue from the log and some system
 details — optionally including the kind of your last interface actions (tab,
 search, run; never content, kept only in the memory of the open page). The app
-sends nothing: e-mail addresses and user names in paths are replaced, the
+sends nothing: e-mail addresses and user names in paths are replaced,
+settings that name people, domains or places appear only by their size, the
 full text is shown for you to edit, and you submit the form yourself.
 Folder names and subject lines are beyond what a pattern can catch, so read it
 before posting.

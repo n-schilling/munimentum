@@ -16,7 +16,7 @@ jobs:
         # promise honest: without it, some dependency eventually raises the
         # bar, everything stays green, and nobody notices until someone
         # complains. That is exactly what already happened with numpy 2.5.
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     name: checks (py${{ matrix.python-version }})
     steps:
       - uses: actions/checkout@v7
