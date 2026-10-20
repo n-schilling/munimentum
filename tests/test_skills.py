@@ -39,10 +39,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SKILLS = ROOT / "skills"
 
 # Which prompts each skill follows step by step (skills/README.md).
-FOLLOWS = {"munimentum-research": ["archive_health"],
+FOLLOWS = {"munimentum-research": ["archive_health", "org_check", "org_spans", "org_top_heavy", "org_since"],
          "munimentum-case": ["case_brief", "collect_into_case"],
          "munimentum-evidence": ["who_knew_what", "timeline"]}
-PROMPT_ARGS = {"archive_health": {},
+PROMPT_ARGS = {"archive_health": {}, "org_check": {}, "org_spans": {}, "org_top_heavy": {},
+               "org_since": {"date": "2026-07-01"},
                "case_brief": {"case": "Nordwind"},
                "collect_into_case": {"case": "Nordwind", "question": "x"},
                "who_knew_what": {"topic": "x", "until": "2025-06-30"},

@@ -156,6 +156,16 @@ def build(home, *, index=True, clean=True, flat=False):
         written = sources.write_all(exports)
         # The past: earlier versions, the evidence chain, a change by hand.
         earlier = history.chain(exports)
+        # What an organization run after it does once: the overview's
+        # numbers for the versions it finds (organization.fill_series).
+        import organization  # noqa: PLC0415 – after the environment
+        import state_db  # noqa: PLC0415
+        teams = exports / settings.TEAMS_DIR
+        db = state_db.StateDb(teams / organization.ORG_DIR)
+        try:
+            organization.fill_series(exports, teams, db)
+        finally:
+            db.close()
         case_id = None
         if index:
             run_index(home, exports, store)

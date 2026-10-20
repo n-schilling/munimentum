@@ -14,6 +14,8 @@ import evidence
 import faelle
 import organization
 import rest
+import seniority
+import state_db
 import versions
 from api import Ablehnung
 
@@ -720,22 +722,78 @@ def org_roles(h, _p, q, _data):
                      "people": sum(r["count"] for r in roles)})
 
 
+def _role_model(h):
+    cfg = h.app.cfg
+    return cfg.get("role_model") or {}, cfg.get("role_levels") or {}
+
+
 def org_people(h, _p, q, _data):
     """The people holding a role: whose title contains `role`, or is it
-    with `exact=true` – by name, each with their manager's name."""
+    with `exact=true` – by name, each with their manager's name. Or the
+    people of one seniority level: `level` 1–10 by title (the role model),
+    `depth` 0–9 by position in the tree (managers above; 9 = 9 or more)."""
     _v, org, _found = _org_version(h, q)
     role = str(q.get("role") or "").strip()
-    if not role:
-        raise Ablehnung(400, "srv.badparam", {"name": "role"})
-    exact = str(q.get("exact") or "").strip().lower() in ("1", "true", "yes")
     limit = api.zahl(q, "limit", 200, 1, 1000)
     offset = api.zahl(q, "offset", 0, 0)
-    ids = org.with_role(role, exact=exact, department=q.get("department") or "")
+    if q.get("level") is not None or q.get("depth") is not None:
+        ids = _seniority_people(h, org, q)
+    elif not role:
+        raise Ablehnung(400, "srv.badparam", {"name": "role"})
+    else:
+        exact = str(q.get("exact") or "").strip().lower() in ("1", "true", "yes")
+        ids = org.with_role(role, exact=exact, department=q.get("department") or "")
     return api.json({"items": [{**org.card(i),
                                 "manager": (org.people.get(org.manager(i)) or {}).get("name")}
                                for i in ids[offset:offset + limit]],
                      "total": len(ids), "limit": limit, "offset": offset,
                      "has_more": offset + limit < len(ids)})
+
+
+def _seniority_people(h, org, q):
+    """The ids of one level, by name – `level` by title, `depth` by tree."""
+    if q.get("level") is not None:
+        level = api.zahl(q, "level", 1, 1, seniority.LEVELS)
+        model = seniority.Model(*_role_model(h))
+        reports = seniority.direct_reports(org)
+        ids = [pid for pid in org.people if pid not in org.disabled
+               and model.place(org.people[pid].get("title"), bool(reports.get(pid)))[0] == level]
+    else:
+        wanted = api.zahl(q, "depth", 0, 0, seniority.LEVELS - 1)
+        ids = [pid for pid in org.people if pid not in org.disabled
+               and min(seniority.depth(org, pid), seniority.LEVELS - 1) == wanted]
+    return sorted(ids, key=lambda i: organization._name_key(org.people[i]))
+
+
+def org_seniority(h, _p, q, _data):
+    """The seniority pyramid of one version: per level how many people the
+    rules place, how many a level set by hand, how many the tree moved
+    (a leadership title without reports); the people without a title,
+    outside the organization or not assigned; the tree's own layers; and
+    the health figures – for this version and for the oldest one, so the
+    page can say what changed. Numbers only: no title, no name."""
+    v, org, found = _org_version(h, q)
+    model, overrides = _role_model(h)
+    out = {"version": _org_stamp(v), **seniority.analyse(org, model, overrides)}
+    oldest = found[-1]
+    old = _org_archive(h).readable(oldest) if oldest["sha256"] != v["sha256"] else None
+    out["since"] = _org_stamp(oldest) if old is not None else None
+    out["since_figures"] = seniority.figures(old) if old is not None else None
+    return api.json(out)
+
+
+def org_seniority_titles(h, _p, q, _data):
+    """The review dialog's list: every cleaned title of the version once,
+    with its holders, its level and why, how many of them lead somebody,
+    their median depth; the words most common in the titles no rule covers;
+    the role model in force and the presets to start from. The one answer
+    with titles – asked when the dialog opens, never polled."""
+    _v, org, _found = _org_version(h, q)
+    model, overrides = _role_model(h)
+    return api.json({**seniority.titles(org, model, overrides),
+                     "model": seniority.clean_model(model),
+                     "overrides": seniority.clean_overrides(overrides),
+                     "presets": {k: seniority.preset_model(k) for k in seniority.PRESETS}})
 
 
 def org_changes(h, _p, q, _data):
@@ -744,9 +802,25 @@ def org_changes(h, _p, q, _data):
     changed. The first version has nothing before it."""
     v, org, found = _org_version(h, q)
     i = next(i for i, w in enumerate(found) if w["sha256"] == v["sha256"])
-    before = found[i + 1] if i + 1 < len(found) else None
+    # The nearest earlier version that can be read – the one the overview
+    # counted against, so a number clicked there finds its changes here.
+    before, old = _org_archive(h).previous(found, i)
     return api.json({"from": _org_stamp(before) if before else None, "to": _org_stamp(v),
-                     "items": organization.changes(_org_of(h, before) if before else None, org)})
+                     "items": organization.changes(old, org)})
+
+
+def org_series(h, _p, _q, _data):
+    """The overview: per version, oldest first, its date, the people in it
+    and how many joined, moved, changed and left against the version
+    before – numbers only, no names; asked once when the overview opens.
+    `missing` counts the versions the next organization run still
+    computes (the one-time job for versions from before the overview)."""
+    teams = Path(h.M.BASE) / h.M.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR, readonly=True)
+    try:
+        return api.json(organization.series(Path(h.M.BASE), teams, db))
+    finally:
+        db.close()
 
 
 # The routes of this door, in the order the table in app.py lists them.
@@ -770,6 +844,9 @@ ROUTEN = (
     ("GET", "/api/v1/organization", org_top),
     ("GET", "/api/v1/organization/versions", org_versions),
     ("GET", "/api/v1/organization/changes", org_changes),
+    ("GET", "/api/v1/organization/changes/series", org_series),
+    ("GET", "/api/v1/organization/seniority", org_seniority),
+    ("GET", "/api/v1/organization/seniority/titles", org_seniority_titles),
     ("GET", "/api/v1/organization/roles", org_roles),
     ("GET", "/api/v1/organization/people", org_people),
     ("GET", "/api/v1/organization/people/{id}", org_person),

@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 14.5.1. Installed by hand – under
+This guide belongs to Munimentum 14.6.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -57,6 +57,7 @@ Keep both results in mind for the rest of the conversation.
 | Phone, e-mail, organisation | `lookup_contact` |
 | Files by folder | `list_files` (contents are not indexed) |
 | Who reports to whom, on any day | `get_org_chart`, `get_manager`, `list_reports`, `find_by_role`, `list_roles`, `org_changes` (all take `as_of`) |
+| The organization's health: spans, layers, seniority | `org_health` (`as_of`, `below` a person, `history`) |
 | The user's saved searches | `list_saved_searches`, `run_saved_search` |
 | The archive about itself (volume, top contacts, file types) | `archive_analytics` |
 | The raw .eml/.html/.ics/.vcf | `read_source_file` – last resort; binaries return metadata only |
@@ -114,6 +115,20 @@ limit you found.
 Answer with one line per source – current, stale or incomplete, since when,
 and what to do in Munimentum – then one sentence on what can and cannot be
 concluded today.
+
+## "How healthy is the organization?"
+
+`org_health` gives numbers from the tree and the user's role model, never
+job titles: the span of control (direct reports per leader – median, max,
+how many lead one, how many more than twelve), the share of leaders,
+people per leader, the layers, the seniority pyramid with the people not
+assigned or outside the organization beside it, the widest spans and
+`history` – every version's figures. `below` a person gives one part of the
+tree: compare the parts `list_reports` names under the top to find the
+top-heavy ones; `get_org_chart` shows where a leader stands, `org_changes`
+who joined, left or moved between two versions. Say what the numbers rest
+on: a short history, many people not assigned, a role model that is still
+the default.
 
 ## Citing
 

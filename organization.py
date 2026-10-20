@@ -34,11 +34,13 @@ with the chain above and the reports below, and what changed between
 two versions.
 """
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import folders
+import seniority
 
 FORMAT = 1
 ORG_DIR = "organization"
@@ -369,6 +371,26 @@ class Archive:
     def versions(self):
         return versions_of(self.data_dir, self.teams_dir)
 
+    def readable(self, version):
+        """The version's Org, None when its bytes are gone or cannot be
+        read as an organization – any error, not only bad JSON: one odd
+        old version must not stop what reads the others."""
+        try:
+            return self.org(version)
+        except Exception:                          # noqa: BLE001 – unreadable is the answer
+            return None
+
+    def previous(self, found, i):
+        """(version, Org) of the nearest earlier version that can be read
+        (`found` newest first, as versions() gives it), (None, None) when
+        none can. The overview's numbers and the changes a version shows
+        compare with the same one."""
+        for j in range(i + 1, len(found)):
+            org = self.readable(found[j])
+            if org is not None:
+                return found[j], org
+        return None, None
+
     def org(self, version):
         sha = version["sha256"]
         if sha not in self._parsed:
@@ -379,3 +401,127 @@ class Archive:
                 self._parsed.pop(next(iter(self._parsed)))
             self._parsed[sha] = Org(raw)
         return self._parsed[sha]
+
+
+# ---------------------------------------------------------------------------
+# The series: people and changes per version, for the view's overview
+# ---------------------------------------------------------------------------
+# Kept in the organization folder's state.db as ONE kv entry, checksum ->
+# numbers: every version is compared with the one before it once – when the
+# export writes it, or for versions from before the series existed, by
+# `fill_series` on the next organization run – and never again. A version
+# is a whole tenant of JSON; reading two of them on every look at the
+# chart would cost seconds.
+SERIES_KEY = "series"
+KINDS = ("joined", "moved", "changed", "left")
+
+
+def rules_checksum(rules):
+    """The rules a version was built under, as a short checksum – a
+    changed rule set makes people join or leave the file without anything
+    happening in the tenant, and the chart must not count that."""
+    text = json.dumps(rules or [], ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def counts(old, new):
+    """How many people each kind of change names between two versions;
+    None for the first version, which has nothing to compare with."""
+    if old is None:
+        return None
+    out = dict.fromkeys(KINDS, 0)
+    for c in changes(old, new):
+        out[c["kind"]] += 1
+    return out
+
+
+def series_entry(old, new, rules=None, rules_changed=False):
+    """One version's numbers: people, the four kinds, whether the rules
+    changed with it (`rules` the fingerprint, None when nobody knows) –
+    and its health figures, so a history of them never parses a version
+    again."""
+    return {"people": new.active, "counts": counts(old, new),
+            "rules": rules, "rules_changed": bool(rules_changed),
+            "figures": seniority.figures(new)}
+
+
+def pending_entry(rules, rules_changed):
+    """A version written while the one before could not be read: its
+    numbers wait for the one-time job, which compares it with the nearest
+    readable version – but whether its rules changed is known only now."""
+    return {"pending": True, "rules": rules, "rules_changed": bool(rules_changed)}
+
+
+def read_series_store(db):
+    try:
+        data = json.loads(db.kv_lesen(SERIES_KEY) or "{}")
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_series_store(db, data):
+    db.kv_schreiben(SERIES_KEY, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+
+
+def fill_series(data_dir, teams_dir, db):
+    """The one-time job: numbers for every version the archive holds that
+    has none yet, each against the version before it, oldest first. Later
+    runs find nothing left to do – the export adds each new version's
+    numbers as it writes it. Returns how many were computed."""
+    found = versions_of(data_dir, teams_dir)
+    store = read_series_store(db)
+    todo = [i for i, v in enumerate(found)
+            if v["sha256"] not in store or store[v["sha256"]].get("pending")]
+    if not todo:
+        return 0
+    archive = Archive(data_dir, teams_dir, keep=2)
+    n = 0
+    try:
+        for i in sorted(todo, reverse=True):          # oldest first
+            new = archive.readable(found[i])
+            if new is None:
+                # Gone or unreadable: said as such, once – never "missing"
+                # for good, never asked again on every run.
+                store[found[i]["sha256"]] = {"people": None, "counts": None, "rules": None,
+                                             "rules_changed": False, "unreadable": True}
+                n += 1
+                continue
+            _before, old = archive.previous(found, i)
+            waiting = store.get(found[i]["sha256"]) or {}
+            entry = series_entry(old, new, waiting.get("rules"), waiting.get("rules_changed"))
+            if old is None and i + 1 < len(found):
+                # Earlier versions exist, none of them readable: nothing
+                # was compared, which is not the same as nothing changed.
+                entry["no_base"] = True
+            store[found[i]["sha256"]] = entry
+            n += 1
+    finally:
+        # What was counted stays counted, whatever stopped the job.
+        write_series_store(db, store)
+    return n
+
+
+def series(data_dir, teams_dir, db):
+    """{items, missing}: per version, oldest first, its date, people and
+    the four counts (None for the first), whether its rules changed –
+    and how many versions still wait for the one-time job."""
+    found = versions_of(data_dir, teams_dir)
+    store = read_series_store(db) if db is not None else {}
+    items, missing = [], 0
+    for v in reversed(found):
+        e = store.get(v["sha256"])
+        if e is None or e.get("pending"):
+            missing += 1
+            continue
+        c = e.get("counts")
+        item = {"version": v["sha256"][:16], "at": v.get("captured"),
+                "current": bool(v.get("current")), "people": e.get("people"),
+                **{k: c.get(k) if c else None for k in KINDS},
+                "rules_changed": bool(e.get("rules_changed"))}
+        # Why a version carries no numbers when it is not the first.
+        for flag in ("unreadable", "no_base"):
+            if e.get(flag):
+                item[flag] = True
+        items.append(item)
+    return {"items": items, "missing": missing}

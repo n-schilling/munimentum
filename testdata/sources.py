@@ -1399,7 +1399,25 @@ def _org_volume():
     return out
 
 
-ORG_USERS = {u["id"]: u for u in ORG_STORY + _org_volume()}
+# Titles in the shapes directories write them, for the seniority pyramid
+# (seniority.py): a country code behind the role, a grade ladder, a
+# "Manager" and a "Team Lead" who lead nobody, a mailbox and a contractor
+# beside the people, a title no rule covers, and no title at all.
+ORG_MESSY = [
+    _user("org-x-account", "Arne Abrechnung", "Account Manager III - NL", "Finance", "org-frida"),
+    _user("org-x-teamlead", "Tilo Teamlos", "Teamleiter - DE", "Marketing", "org-hanno"),
+    _user("org-x-sre", "Siri Stabil", "Support Engineer IV – AT", "Projects", "org-nina"),
+    _user("org-x-mailbox", "Empfang Hamburg", "Shared Mailbox", "Executive", "org-carla"),
+    _user("org-x-contractor", "Fritz Fremd", "Contractor - Facilities - CH", "Executive", "org-malte"),
+    _user("org-x-odd", "Ronja Rätsel", "Quantum Whisperer", "Finance", "org-frida"),
+    _user("org-x-untitled", "Udo Ohnetitel", "", "Finance", "org-frida"),
+    # A rank before a two-word role, an outside word inside a real role,
+    # and a dash inside a title that is no country code.
+    _user("org-x-senior-pm", "Paula Plan", "Senior Project Manager - SE", "Projects", "org-nina"),
+    _user("org-x-cleanroom", "Rolf Rein", "Clean Room Technician", "Projects", "org-nina"),
+    _user("org-x-coceo", "Clara Co", "Co-CEO", "Executive", "org-carla"),
+]
+ORG_USERS = {u["id"]: u for u in ORG_STORY + _org_volume() + ORG_MESSY}
 
 
 def org_users(changes=None):

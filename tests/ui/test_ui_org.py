@@ -70,14 +70,17 @@ def test_the_changes_of_a_version_and_an_earlier_one(archive_page, archive):
     expect(moved).to_contain_text(EN["org.change.moved"])
     moved.click()
     expect(box.locator(".org-card.main")).to_contain_text(name(sources.ORG_ME))
-    # The version before: Alice under Carla directly, and no fold – there
-    # is nothing before it to compare with.
+    # The version before: Alice under Carla directly.
     archive_page.click("#org-version")
     with archive_page.expect_response(lambda r: "/api/v1/organization/people/" in r.url):
         archive_page.locator("#org-versions .zeile").nth(1).click()
     expect(box.locator(".org-chain .org-card")).to_have_count(2)
-    expect(archive_page.locator("#org-changes-fold")).to_have_count(0)
     expect(archive_page.locator("#org-version")).not_to_contain_text(EN["org.current"])
+    # The oldest version: no fold – nothing before it to compare with.
+    archive_page.click("#org-version")
+    with archive_page.expect_response(lambda r: "/api/v1/organization/changes" in r.url):
+        archive_page.locator("#org-versions .zeile").last.click()
+    expect(archive_page.locator("#org-changes-fold")).to_have_count(0)
 
 
 def test_the_hand_over_searches_the_person(archive_page, archive):
@@ -139,3 +142,44 @@ def test_a_departed_manager_holds_the_line_marked(archive_page, archive):
     expect(main).to_contain_text(name("org-petra"))
     expect(main).to_contain_text(EN["org.disabled"])
     expect(box.locator(".org-grid")).to_contain_text(name("org-hanno"))
+
+
+def test_seniority_draws_the_pyramid_and_the_review_places_a_title(archive_page, archive):
+    """The messy titles of the synthetic directory: a mailbox and a
+    contractor stand outside, an odd title is not assigned until the
+    review places it – and the pyramid moves it."""
+    box = open_org(archive_page, archive)
+    sen = archive_page.request.get(archive.base + "/api/v1/organization/seniority").json()
+    with archive_page.expect_response(lambda r: "/api/v1/organization/seniority" in r.url):
+        archive_page.click("#org-seniority summary")
+    fold = archive_page.locator("#org-sen")
+    pro = sen["levels"][7]
+    row = fold.locator(".org-sen-row").nth(7)
+    expect(row).to_contain_text(pro["name"])
+    expect(row.locator(".org-sen-count")).to_have_text(str(pro["count"]))
+    outside = [u for u in sources.ORG_MESSY if "Contractor" in u["jobTitle"] or "Mailbox" in u["jobTitle"]]
+    expect(fold.locator(".org-sen-row", has_text=EN["org.sen.outside"]).locator(".org-sen-count")) \
+        .to_have_text(str(len(outside)))
+    # A level's people below, like a role's.
+    row.click()
+    expect(box.locator(".org-head")).to_contain_text(f"{pro['name']}: {pro['count']} people")
+    expect(box.locator(".org-grid .org-card")).to_have_count(pro["count"])
+    # The tree's layers.
+    fold.get_by_role("button", name=EN["org.sen.by.tree"]).click()
+    expect(fold.locator(".org-sen-row", has_text=EN["org.sen.depth.top"]).locator(".org-sen-count")) \
+        .to_have_text(str(sen["tree"][0]))
+    fold.get_by_role("button", name=EN["org.sen.by.title"]).click()
+    # The review: the odd title, placed by hand as a professional.
+    odd = next(u["jobTitle"] for u in sources.ORG_MESSY if u["id"] == "org-x-odd")
+    fold.get_by_role("button", name=EN["org.sen.review"]).click()
+    dialog = archive_page.locator("#modal")
+    expect(dialog.locator(".org-review-list")).to_contain_text(odd)
+    try:
+        dialog.get_by_label(EN["org.review.level.aria"].replace("{title}", odd)).select_option("8")
+        with archive_page.expect_response(lambda r: "/api/v1/organization/seniority?" in r.url):
+            dialog.get_by_role("button", name=EN["org.review.save"]).click()
+        expect(row.locator(".org-sen-count")).to_have_text(str(pro["count"] + 1))
+        expect(fold.locator(".org-sen-row", has_text=EN["org.sen.unassigned"]).locator(".org-sen-count")) \
+            .to_have_text(str(sen["unassigned"] - 1))
+    finally:
+        archive_page.request.patch(archive.base + "/api/v1/config", data={"role_levels": {}})

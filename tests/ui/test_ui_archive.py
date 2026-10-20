@@ -18,7 +18,7 @@ import pytest
 
 from playwright.sync_api import expect
 
-from testdata import people, sources
+from testdata import history, people, sources
 from tests.ui.helpers import hit_title, hits, open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
@@ -245,3 +245,37 @@ def test_a_fact_of_an_item_opened_alone_searches_with_the_whole_door(archive_pag
     expect(archive_page.locator("#filter")).to_be_visible()
     expect(archive_page.locator("#p-typ")).to_have_class(re.compile(r"\bon\b"))
     expect(archive_page.locator("#results .hit").first).to_be_visible()
+
+
+def test_the_organization_overview_opens_on_demand_and_leads_to_the_changes(archive_page, archive):
+    """Closed at first – the view opens on the chosen version. Opened, it
+    draws people and changes for the archive's fifteen weeks of versions,
+    one point a day (history.org_timeline, a few days with two runs); a
+    click keeps a point's card, and a number in it opens exactly those
+    changes."""
+    page, en = archive_page, texts("en")
+    open_app(page, archive, tab="suche")
+    page.click('#sichten [data-sicht="org"]')
+    fold = page.locator("#org-overview")
+    expect(fold).to_be_visible()
+    expect(fold).not_to_have_attribute("open", "")
+    with page.expect_response(lambda r: "/organization/changes/series" in r.url):
+        fold.locator("summary").click()
+    chart = page.locator("#org-chart")
+    days = len({when.date() for when, _text in history.org_timeline()}) + 1   # + today's
+    expect(chart.locator("circle.org-ser-people")).to_have_count(days)
+    expect(chart.locator("circle.org-ser-left")).to_have_count(days - 1)    # the first compares nothing
+    expect(page.locator("#org-overview-sum")).to_contain_text(str(history.ORG_TIMELINE_LEN + 1))
+    chart.get_by_role("button", name=en["org.change.left"]).click()
+    expect(chart.locator("circle.org-ser-people")).to_have_count(days)
+    expect(chart.locator("circle.org-ser-left")).to_have_count(0)
+    chart.get_by_role("button", name=en["org.change.left"]).click()
+    # Keep today's card – the last point –, then click its "left" number.
+    box = chart.locator("#org-svg").bounding_box()
+    page.mouse.click(box["x"] + box["width"] * 0.985, box["y"] + box["height"] * 0.6)
+    tip = chart.locator(".org-tip")
+    expect(tip).to_contain_text(en["org.chart.show"])
+    tip.locator("button.org-ser-left").click()
+    changes = page.locator("#org-changes-fold")
+    expect(changes).to_have_attribute("open", "")
+    expect(changes).to_contain_text(en["org.changes.all"])

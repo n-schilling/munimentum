@@ -210,7 +210,7 @@ def test_the_settings_card_says_how_far_the_chain_reaches(archive_page, archive)
     expect(card.locator("#c-versions_max_mb")).to_have_value("50")
     expect(card.locator("#evidence-state")).to_contain_text(
         EN["settings.evidence.chain.state"].split("{")[1].split("}")[1].strip())
-    expect(card.locator("#evidence-kept")).to_contain_text(f"{len(history.KEPT)} files")
+    expect(card.locator("#evidence-kept")).to_contain_text(f"{history.KEPT_VERSIONS} files")
 
 
 # --------------------------------------------------------------------------

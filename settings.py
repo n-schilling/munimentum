@@ -107,6 +107,12 @@ VORGABEN = {
     # Include/exclude rules over each person's path of names from the top
     # ("- Greta Gast/Bob Baumeister/**"); empty means the whole organization.
     "org_rules": "",
+    # The role model the seniority pyramid reads titles with (seniority.py):
+    # empty means the default, "corporate". The levels set by hand per
+    # cleaned title live beside it – titles are free text, so neither
+    # leaves the machine nor reaches a bug report but as "gesetzt".
+    "role_model": {},
+    "role_levels": {},
     # Site pages as HTML – its own list: pages and libraries rarely overlap.
     "sharepoint_pages_enabled": False,
     "sharepoint_pages_urls": "",

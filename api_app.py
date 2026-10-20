@@ -167,6 +167,12 @@ def konfig_speichern(h, data):
         if "onedrive_rules" in data:
             cfg["onedrive_rules"] = folders.schreibe_regeln(
                 folders.lies_regeln(str(data["onedrive_rules"] or "")))
+        if "role_model" in data:
+            import seniority
+            cfg["role_model"] = seniority.clean_model(data["role_model"])
+        if "role_levels" in data:
+            import seniority
+            cfg["role_levels"] = seniority.clean_overrides(data["role_levels"])
         for key in ("onenote_rules", "teams_rules", "sharepoint_rules",
                     "todo_rules", "org_rules"):
             if key in data:

@@ -46,7 +46,7 @@ guide.
 
 | Skill | Follows |
 |---|---|
-| `munimentum-research` | the server instructions, `archive_health` |
+| `munimentum-research` | the server instructions, `archive_health`, `org_check`, `org_spans`, `org_top_heavy`, `org_since` |
 | `munimentum-case` | `case_brief`, `collect_into_case` |
 | `munimentum-evidence` | `who_knew_what`, `timeline` |
 

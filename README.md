@@ -76,8 +76,8 @@ weekly, monthly — can be set per source, per part of it or for a single folder
 ### Explore archive
 
 Five ways in, one strip: **Search**, **Calendar**, **Contacts**, **Files** and
-**Organization**, the tenant top-down in any version or by role. Only Search
-searches; the others hand it their source, month, folder or person.
+**Organization** – the tenant in any version, by role, its changes, seniority and
+health. Only Search searches; the others hand over source, month, folder or person.
 
 **Search.** Three kinds, chosen in the field: *Text search* finds the words
 that actually occur, best matches first — a phrase in quotes must occur as
@@ -151,13 +151,13 @@ with the log, anonymised, shown for you to edit and sent by nobody but you.
 
 A built-in MCP server hands the archive to Claude Code, Claude Desktop or any
 MCP client on this machine only: every source with its filters, how far the
-archive reaches, item versions, the org chart on any day, your cases as pages
-to attach. Citations open the item in the app and hold against the checksum
-chain; three [skills](skills/README.md) teach research, case work and evidence,
-served or downloaded to install by hand, and search, case writes and
-verification ask for their token first (`get_guide`). It changes a case only
-when *MCP clients may change cases* is on under *Settings › MCP clients*, and
-then only adds, marked *via MCP*; the card prints the snippet.
+archive reaches, item versions, the org chart on any day and its health in
+numbers, your cases as pages to attach. Citations open the item in the app and
+hold against the checksum chain; three [skills](skills/README.md) teach
+research, case work and evidence, served or downloaded to install by hand, and
+search, case writes and verification ask for their token first (`get_guide`).
+It changes a case only when *MCP clients may change cases* is on under *Settings
+› MCP clients*, and then only adds, marked *via MCP*; the card prints the snippet.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

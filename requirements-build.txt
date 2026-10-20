@@ -16,4 +16,4 @@ dmgbuild[badge-icons]==1.6.7; sys_platform == "darwin"
 
 # Writes the version and the build id into the disk image's picture
 # (packaging/dmg/stempel.py); the committed PNGs stay the template.
-pillow==12.3.0; sys_platform == "darwin"
+pillow==13.0.0; sys_platform == "darwin"

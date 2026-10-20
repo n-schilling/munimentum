@@ -1,19 +1,19 @@
-## New in 14.5.1
+## New in 14.6.0
 
-- **A SharePoint address that matches nothing now says what the site has**:
-  after the skipped line the log names the site’s document libraries by
-  URL segment, with the display name where it differs – or says that
-  Graph lists no library there at all. The three spellings of one
-  library in issue #3 would have been settled by that one line.
-- **The problem report names nothing of yours**: your organisation’s mail
-  domains, your own name, paths and the rules lists appear only as counts
-  or as “set”, like the folder rules did before.
-- **An empty archive no longer fails the index**: with nothing exported
-  yet, the index step ends with a note instead of an error.
+- **The organization's changes as a chart**: a closed *Overview* fold at the
+  top of *Organization* draws the people and the changes per version.
+- **Its seniority by title**: a second fold shows the pyramid of the titles,
+  read by a role model you can edit, and the organization's health in
+  figures – spans of control, people per leader, layers.
+- **Its health for MCP clients**: `org_health` hands the same figures,
+  numbers only, and four prepared questions ask how healthy the organization
+  is, where spans run wide, which parts are top-heavy and what changed since
+  a day.
 
 ## Upgrading
 
-Nothing happens once after this update.
+The first organization run after this update counts the overview's numbers
+once for the versions already in the archive.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

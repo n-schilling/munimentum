@@ -131,7 +131,13 @@ people over the whole result, up to the cap a case's list has. *Calendar*
 name as picker, *Today*), *Contacts* (list or picture as a segment — the
 picture is the case's, over the archive — then all, from contacts, from
 communication as chips, absent in the picture), *Files* (the mirrors
-as a tree) and *Organization* (the version as picker like the month, *Top*,
+as a tree) and *Organization* (above everything a closed *Overview* fold –
+people and changes per version, one point a day, a drag zooms, a kept
+point's number opens just those changes –, below it a closed *Seniority*
+fold – the pyramid by title or by place in the tree as a segment, the
+pots beside it in grey, the health figures as tiles, *Review titles…* and
+*Role model…* as dialogs, the role model also under *Settings › Sources*
+on the Teams card –; the version as picker like the month, *Top*,
 *To me*, a *Role* pill whose popover lists the titles by how many hold them;
 the changes of the chosen version in one closed fold; the chain
 above the chosen person, the person, the reports below as cards, a change

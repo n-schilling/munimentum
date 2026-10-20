@@ -1453,7 +1453,9 @@ _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 _UMFANG_KOMMA = {"internal_domains"}
 # One's own name, paths with the user name, a host of one's own.
 _NUR_GESETZT = {"client_id", "tenant", "own_name", "case_export_dir",
-                "data_dir", "index_dir", "evidence_tsa_url", "ollama"}
+                "data_dir", "index_dir", "evidence_tsa_url", "ollama",
+                # Titles and rule words: free text that can name people.
+                "role_model", "role_levels"}
 # Already appear as their own line in the report – do not list twice.
 _SCHON_BERICHTET = {"outlook_categories", "teams_categories", "auth_mode"}
 
@@ -2670,6 +2672,9 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/organization", api_explore.org_top),
     ("GET", "/api/v1/organization/versions", api_explore.org_versions),
     ("GET", "/api/v1/organization/changes", api_explore.org_changes),
+    ("GET", "/api/v1/organization/changes/series", api_explore.org_series),
+    ("GET", "/api/v1/organization/seniority", api_explore.org_seniority),
+    ("GET", "/api/v1/organization/seniority/titles", api_explore.org_seniority_titles),
     ("GET", "/api/v1/organization/roles", api_explore.org_roles),
     ("GET", "/api/v1/organization/people", api_explore.org_people),
     ("GET", "/api/v1/organization/people/{id}", api_explore.org_person),

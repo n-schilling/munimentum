@@ -222,6 +222,17 @@ DYNAMISCH = (
     ("org.change.", ("joined", "moved", "changed", "left")),
     ("org.field.", ("title", "department", "office", "company", "city", "country",
                     "mail", "manager", "place")),
+    # The seniority fold, its review and its role model build their keys.
+    ("org.sen.", ("unassigned", "outside", "untitled")),
+    ("org.sen.by.", ("title", "tree")),
+    ("org.sen.key.", ("rule", "tree", "hand")),
+    ("org.sen.tip.", ("unassigned", "outside", "untitled")),
+    ("org.fig.", tuple(f + e for f in ("span", "ppl", "leaders", "layers", "wide", "one")
+                       for e in ("", ".i"))),
+    ("org.review.f.", ("unassigned", "disagree", "hand", "all")),
+    ("org.review.col.", ("title", "people", "leading", "depth", "level")),
+    ("org.model.", tuple(f + e for f in ("outside", "never", "grades") for e in ("", ".i"))),
+    ("org.model.preset.", ("corporate", "consulting", "public", "startup", "own")),
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone", "removed")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
                      "meeting", "channels", "files")),

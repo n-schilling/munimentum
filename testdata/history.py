@@ -10,7 +10,10 @@ the app's own code paths (versions.py, evidence.py, faelle.py):
   * one file was changed without an export saying so before the last
     run, which chained it as `outside`, and one after it, which only the
     archive check finds (and "Fetch again" would put right);
-  * the organization had an earlier version a week before today's;
+  * the organization has a past of its own: a version a week for some
+    fifteen weeks before the latest runs, a few days with two runs –
+    people joining, leaving, moving and being retitled –, ending in the
+    version just before today's (ORG_TIMELINE);
   * a case holds three items pinned to the version they had when they
     came in – each has changed since, so the case marks them.
 
@@ -23,6 +26,7 @@ Everything is derived from the lists here; the browser tests read them.
 import json
 import os
 import sqlite3
+from datetime import UTC, datetime, timedelta
 
 import evidence
 import faelle
@@ -86,8 +90,74 @@ ORG_BEFORE = sources.org_users({
 })
 ORG_EARLIER = (settings.TEAMS_DIR, f"{organization.ORG_DIR}/{organization.FILE}",
                sources.org_text(ORG_BEFORE), day(6, 7, 6, 0))
-# Every file with a kept earlier version – what the evidence card counts.
+# Every file with a kept earlier version.
 KEPT = [*EARLIER, ORG_EARLIER]
+
+# The organization's past: one export a week for fifteen weeks, three days
+# with a second run in the afternoon, the last one ORG_BEFORE (three days
+# ago). Each step is ORG_BEFORE with what had not yet happened undone:
+# volume people who had not joined yet are disabled, six people who left
+# meanwhile are still there, two titles and two managers are the old ones.
+# The dates count back from the build, so the overview always shows the
+# last months; what changes when is fixed, so the numbers are.
+_LATE = sorted(uid for uid in sources.ORG_USERS
+               if uid.startswith(("org-hanno-", "org-ines-", "org-nina-")))[::2]
+_LEAVERS = [sources._user(f"org-leaver-{i}", name, "Specialist", dept, boss)
+            for i, (name, dept, boss) in enumerate([
+                ("Udo Umzug", "Projects", "org-bob"), ("Vera Vertrag", "Finance", "org-frida"),
+                ("Willi Wechsel", "Marketing", "org-malte"), ("Xenia Xaver", "Finance", "org-ines"),
+                ("Yara Yoga", "Projects", "org-nina"), ("Zeno Zukunft", "Marketing", "org-hanno")])]
+# (week before the build, hour) per export, oldest first; the last is the
+# day of ORG_BEFORE.
+_ORG_RUNS = [(15, 6), (14, 6), (13, 6), (12, 6), (12, 14), (11, 6), (10, 6), (9, 6),
+             (8, 6), (7, 6), (7, 15), (6, 6), (5, 6), (4, 6), (3, 6), (2, 6), (2, 13),
+             (1, 6), (0.43, 6)]
+_STEPS = len(_ORG_RUNS)
+
+
+def _org_state(i):
+    """The directory at export i of _ORG_RUNS – ORG_BEFORE at the last."""
+    last = _STEPS - 1
+    changes = {sources.ORG_ME: {"manager": "org-carla"},
+               "org-nina": {"jobTitle": "Network Engineer"},
+               "org-olaf": {"accountEnabled": True},
+               "org-kai": {"accountEnabled": False}}
+    for j, uid in enumerate(_LATE):             # one joins every other step or so
+        if i < last and i < 1 + j * last // len(_LATE):
+            changes[uid] = {"accountEnabled": False}
+    for j, user in enumerate(_LEAVERS):         # leave at steps 3, 6, 9, 12, 14, 17
+        if i < (3, 6, 9, 12, 14, 17)[j]:
+            changes[user["id"]] = dict(user)
+    if i < 5:
+        changes["org-lena"] = {"jobTitle": "Logistics Assistant"}
+    if i < 10:
+        changes["org-hanno-1"] = {"jobTitle": "Junior Specialist"}
+    if i < 8:
+        changes["org-nina-3"] = {"manager": "org-hanno"}
+    if i < 13:
+        changes["org-ines-5"] = {"manager": "org-frida"}
+    if i < 15:
+        changes["org-ines-1"] = {"jobTitle": "Junior Specialist"}
+    if i < 18:
+        changes["org-hanno-6"] = {"manager": "org-ines"}
+    return sources.org_users(changes)
+
+
+def org_timeline(now=None):
+    """[(when, text)] of every organization export before today's, oldest
+    first – the last is ORG_EARLIER's text."""
+    now = now or datetime.now(UTC).replace(microsecond=0)
+    out = []
+    for i, (weeks, hour) in enumerate(_ORG_RUNS):
+        when = (now - timedelta(weeks=weeks)).replace(hour=hour, minute=0, second=0)
+        out.append((when, sources.org_text(_org_state(i))))
+    return out
+
+
+ORG_TIMELINE_LEN = _STEPS
+# Version files the versions folder keeps: one per earlier file version,
+# and every organization version before today's.
+KEPT_VERSIONS = len(EARLIER) + _STEPS
 ORG_CHANGES = {"moved": [sources.ORG_ME], "changed": ["org-nina"], "left": ["org-olaf"],
                "joined": ["org-kai"]}
 
@@ -126,24 +196,46 @@ def _stamp(path, when):
     sources._touch(path, when)
 
 
+def _at(when, run):
+    """Run `run` with the clock versions.py and evidence.py read set to
+    `when` – the chain then says the run happened then."""
+    real = versions.now
+    versions.now = lambda: when.isoformat(timespec="seconds")
+    try:
+        return run()
+    finally:
+        versions.now = real
+
+
 def chain(exports):
-    """Two chained runs over the archive, as described above. Returns the
+    """The chained runs over the archive, as described above. Returns the
     checksums of the earlier versions, by path below the data folder."""
     earlier = {}
     today = {}
-    # 1. The archive as the first chained run found it: earlier versions.
+    timeline = org_timeline()
+    org_folder, org_rel = ORG_EARLIER[0], ORG_EARLIER[1]
+    # 1. The archive as the first chained run found it, fifteen weeks ago:
+    # earlier versions, the organization as it was then.
     for folder, rel, content, when in KEPT:
         path = exports / folder / rel
         today[path] = (path.read_bytes(), path.stat().st_mtime)
+        if (folder, rel) == (org_folder, org_rel):
+            content = timeline[0][1]
         data = content.encode("utf-8")
         path.write_bytes(data)
         _stamp(path, when)
         earlier[f"{folder}/{rel}"] = versions.sha256_bytes(data)
-    evidence.sweep(exports, _roots(exports))
-    # 2. A later run: the exports write today's versions the one way.
+    _at(timeline[0][0], lambda: evidence.sweep(exports, _roots(exports)))
     saved = {k: os.environ.get(k) for k in _env(exports)}
     os.environ.update(_env(exports))
     try:
+        # 2. The organization's exports since, each its own chained run.
+        org_path = exports / org_folder / org_rel
+        for when, text in timeline[1:]:
+            _at(when, lambda text=text: versions.write_bytes(org_path, text.encode("utf-8")))
+            _at(when, lambda: evidence.sweep(exports, _roots(exports)))
+        earlier[f"{org_folder}/{org_rel}"] = versions.sha256_bytes(timeline[-1][1].encode("utf-8"))
+        # 3. A later run: the exports write today's versions the one way.
         for path, (data, mtime) in today.items():
             rel = versions.rel_of(path, exports)
             extra = None
@@ -166,7 +258,7 @@ def chain(exports):
     with open(path, "a", encoding="utf-8") as f:
         f.write(extra)
     evidence.sweep(exports, _roots(exports))
-    # 3. After the last run.
+    # 4. After the last run.
     folder, rel, extra = TAMPERED
     with open(exports / folder / rel, "a", encoding="utf-8") as f:
         f.write(extra)

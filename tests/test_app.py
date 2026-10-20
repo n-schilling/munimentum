@@ -11331,3 +11331,214 @@ setTimeout(function(){
 
 def test_the_update_window_waits_while_a_wizard_holds_the_overlay():
     _in_node(PRUEFUNG_UPDATE_POPUP_WAITS, sprache="en")
+
+
+# The organization's overview: a day's versions add up, a version under
+# other rules is not counted, the legend hides a line, and a number in
+# the kept card picks the version with exactly that kind of change.
+PRUEFUNG_ORG_OVERVIEW = GRUNDZUSTAND + """
+var SERIES = {missing: 1, items: [
+  {version: 'aaaaaaaaaaaaaaaa', at: '2026-06-02T06:00:00Z', current: false, people: 100,
+   joined: null, moved: null, changed: null, left: null, rules_changed: false},
+  {version: 'bbbbbbbbbbbbbbbb', at: '2026-06-09T06:00:00Z', current: false, people: 103,
+   joined: 4, moved: 1, changed: 2, left: 1, rules_changed: false},
+  {version: 'cccccccccccccccc', at: '2026-06-09T15:00:00Z', current: false, people: 104,
+   joined: 1, moved: 0, changed: 1, left: 0, rules_changed: false},
+  {version: 'dddddddddddddddd', at: '2026-06-16T06:00:00Z', current: false, people: 60,
+   joined: 0, moved: 0, changed: 0, left: 44, rules_changed: true},
+  {version: 'ffffffffffffffff', at: '2026-06-23T06:00:00Z', current: true, people: 61,
+   joined: 1, moved: 0, changed: 2, left: 0, rules_changed: false}]};
+var VERSIONS = [{sha256: 'ffffffffffffffff' + 'e'.repeat(48), captured: '2026-06-23T06:00:00Z', current: true},
+                {sha256: 'dddddddddddddddd' + 'e'.repeat(48), captured: '2026-06-16T06:00:00Z', current: false},
+                {sha256: 'cccccccccccccccc' + 'e'.repeat(48), captured: '2026-06-09T15:00:00Z', current: false},
+                {sha256: 'bbbbbbbbbbbbbbbb' + 'e'.repeat(48), captured: '2026-06-09T06:00:00Z', current: false},
+                {sha256: 'aaaaaaaaaaaaaaaa' + 'e'.repeat(48), captured: '2026-06-02T06:00:00Z', current: false}];
+var CHANGES = {from: {sha256: 'x', captured: '2026-06-09T06:00:00Z'}, to: {sha256: 'y'},
+               items: [{kind: 'joined', id: 'p1', name: 'Dana'}, {kind: 'changed', id: 'p2', name: 'Erik', fields: {title: ['A', 'B']}}]};
+var asked = [];
+global.fetch = function(pfad){
+  var p = String(pfad); asked.push(p);
+  var a = p.indexOf('/organization/changes/series') >= 0 ? SERIES
+    : p.indexOf('/organization/versions') >= 0 ? {items: VERSIONS}
+    : p.indexOf('/organization/changes') >= 0 ? CHANGES
+    : p.indexOf('/organization?') >= 0 ? {version: VERSIONS[0], people: 60, me: null, roots: []}
+    : statusGeruest();
+  return Promise.resolve({json: function(){ return Promise.resolve(a); }});
+};
+var B = orgBuckets(SERIES.items, null);
+pruefe(B.unit === 'day' && B.list.length === 4, 'one bucket per day: ' + B.list.length);
+var day = B.list[1];
+pruefe(day.joined === 5 && day.changed === 3 && day.sum === 10 && day.people === 104 && day.n === 2,
+       'a day adds up its versions, people from the last: ' + JSON.stringify(day));
+pruefe(B.list[0].first && !B.list[0].counted, 'the first version counts nothing');
+pruefe(B.list[2].rules && !B.list[2].counted && B.list[2].people === 60, 'a rules change is marked, not counted');
+pruefe(orgBuckets(SERIES.items, [Date.parse('2026-06-08'), Date.parse('2026-06-10')]).list.length === 1, 'a zoom narrows the days');
+// One key for a point: the day, or the Monday of the week; a week ends
+// seven days later – a zoom takes whole points.
+var wed = new Date(2026, 5, 10, 15, 0).getTime(), mon = new Date(2026, 5, 8).getTime();
+pruefe(orgBucketKey(wed, 'week') === mon && orgBucketKey(wed, 'day') === new Date(2026, 5, 10).getTime(), 'bucket keys');
+pruefe(orgBucketEnd(mon, 'week') === new Date(2026, 5, 15).getTime() - 1, 'a week ends before the next Monday');
+// Why a version has no numbers is said as what it is, not as the first.
+var odd = orgBuckets([{version: 'u', at: '2026-06-02T06:00:00Z', people: null, joined: null, unreadable: true},
+                      {version: 'n', at: '2026-06-03T06:00:00Z', people: 9, joined: null, no_base: true}], null).list;
+pruefe(odd[0].unreadable && !odd[0].first && odd[1].noBase && !odd[1].first, 'markers, not first: ' + JSON.stringify(odd));
+pruefe(orgChartNotes(odd[0], 0).indexOf('unreadable') >= 0 && orgChartNotes(odd[1], 1).indexOf('No earlier version') >= 0,
+       'their notes: ' + orgChartNotes(odd[0], 0) + ' / ' + orgChartNotes(odd[1], 1));
+orgOverviewToggle(true);
+setTimeout(function(){
+  var html = el('org-chart').innerHTML;
+  pruefe(html.indexOf('org-ser-people') >= 0 && html.indexOf('org-ser-sum') >= 0, 'people and sum drawn');
+  pruefe(html.indexOf('org-rules') >= 0, 'the rules mark is drawn');
+  pruefe(el('org-overview-sum').textContent.indexOf('5') >= 0, 'the fold names the versions: ' + el('org-overview-sum').textContent);
+  pruefe(html.indexOf('earlier versions are counted') >= 0, 'the one-time job is said: ' + html.slice(-200));
+  // A zoom into a span without a version falls back to everything.
+  ORG_OVERVIEW.range = [Date.parse('2030-01-01'), Date.parse('2030-01-02')]; orgChartDraw();
+  pruefe(ORG_OVERVIEW.range === null && ORG_OVERVIEW.buckets.length === 4, 'an empty zoom is let go');
+  // People hidden: its panel goes, the changes move up.
+  var full = ORG_PLOT.h;
+  orgChartLegend('people');
+  pruefe(el('org-chart').innerHTML.indexOf('>People</text>') < 0 && ORG_PLOT.h < full && !ORG_PLOT.people,
+         'the people panel goes with its line: ' + ORG_PLOT.h);
+  orgChartLegend('people');
+  // Every change line hidden: the changes panel goes.
+  ['sum', 'joined', 'moved', 'changed', 'left'].forEach(orgChartLegend);
+  pruefe(el('org-chart').innerHTML.indexOf('>Changes</text>') < 0 && !ORG_PLOT.changes, 'the changes panel goes with its lines');
+  ['sum', 'joined', 'moved', 'changed', 'left'].forEach(orgChartLegend);
+  pruefe(ORG_PLOT.h === full, 'both panels back');
+  orgChartLegend('joined');
+  pruefe(el('org-chart').innerHTML.indexOf('<polyline class="org-ser-joined"') < 0, 'a hidden line is not drawn');
+  pruefe(el('org-chart').innerHTML.indexOf('aria-pressed="false"') >= 0, 'its chip says so');
+  orgChartLegend('joined');
+  ORG.versions = VERSIONS; ORG.version = VERSIONS[0].sha256;
+  // 9 June holds two versions: its numbers add them up, so they lead
+  // nowhere – the versions themselves are offered instead.
+  ORG_OVERVIEW.pinned = 1; orgChartDraw();
+  var two = el('org-chart').innerHTML;
+  pruefe(two.indexOf('orgChartPick(') < 0, 'a summed number is no button: ' + two);
+  pruefe(two.indexOf('orgChartPickVersion(&quot;bbbbbbbbbbbbbbbb&quot;)') >= 0 && two.indexOf('cccccccccccccccc') >= 0,
+         'each version of the day is offered: ' + two);
+  // 23 June holds one: keep its card, then click its "changed" number.
+  ORG_OVERVIEW.pinned = 3; orgChartDraw();
+  var tip = el('org-chart').innerHTML;
+  pruefe(tip.indexOf('orgChartPick(&quot;changed&quot;)') >= 0, 'numbers are buttons in a kept card');
+  orgChartPick('changed');
+  setTimeout(function(){
+    pruefe(ORG.version === VERSIONS[0].sha256, 'that version is chosen: ' + ORG.version);
+    pruefe(ORG.kind === 'changed', 'the kind is kept');
+    var ch = el('org-changes').innerHTML;
+    pruefe(ch.indexOf('Erik') >= 0 && ch.indexOf('Dana') < 0 && ch.indexOf(' open') >= 0, 'only that kind, fold open: ' + ch);
+    orgKindClear();
+    pruefe(el('org-changes').innerHTML.indexOf('Dana') >= 0, 'show all brings every change back');
+    console.log('OK');
+  }, 30);
+}, 30);
+"""
+
+
+def test_the_organization_overview_counts_days_marks_rules_and_leads_to_the_changes():
+    _in_node(PRUEFUNG_ORG_OVERVIEW, sprache="en")
+
+
+# Seniority: the pyramid by title with its three parts and the pots beside
+# it, the tree's layers, the figures against the oldest version; a level
+# asks for its people; the review saves the levels set by hand, the role
+# model a word taken from the suggestions.
+PRUEFUNG_ORG_SENIORITY = GRUNDZUSTAND + """
+var names = ['Board', 'Senior leadership', 'Head of', 'Senior manager', 'Manager', 'Lead expert',
+             'Senior professional', 'Professional', 'Junior', 'Trainee'];
+var SEN = {version: {sha256: 'f'.repeat(64)}, model: 'x',
+  levels: names.map(function(n, i){ return {level: i + 1, name: n, rule: i === 7 ? 30 : 2, tree: i === 7 ? 5 : 0,
+                                            hand: i === 2 ? 1 : 0, count: (i === 7 ? 35 : 2) + (i === 2 ? 1 : 0)}; }),
+  untitled: 0, outside: 2, unassigned: 4, tree: [1, 4, 12, 30, 0, 0, 0, 0, 0, 0], disagree: 3,
+  figures: {people: 61, leaders: 9, leader_share: 0.1475, span_median: 4, span_mean: 5.2, span_max: 14,
+            span_one: 1, span_wide: 1, people_per_leader: 5.78, layers: 4},
+  since: {sha256: 'a'.repeat(64), captured: '2026-06-02T06:00:00Z', current: false},
+  since_figures: {people: 58, leaders: 9, leader_share: 0.155, span_median: 3, span_mean: 5, span_max: 12,
+                  span_one: 1, span_wide: 0, people_per_leader: 5.44, layers: 4}};
+var MODEL = {preset: 'corporate', levels: names.map(function(n){ return {name: n, rules: n}; }),
+             never: 'EMEA', outside: 'Contractor', grades: 'I = 9', grade_level: 8, needs_reports: [3, 4, 5], no_reports_level: 8};
+var TITLES = {items: [
+    {key: 'quantum whisperer', title: 'Quantum Whisperer', variants: 1, people: 1, leading: 0, depth: 3,
+     level: null, source: 'unassigned', rule_level: null, rule: null, mixed: false},
+    {key: 'teamleiter', title: 'Teamleiter', variants: 2, people: 2, leading: 0, depth: 3,
+     level: 8, source: 'tree', rule_level: 5, rule: 'Teamleiter', mixed: false},
+    {key: 'engineer', title: 'Engineer', variants: 1, people: 20, leading: 0, depth: 3,
+     level: 8, source: 'rule', rule_level: 8, rule: 'Engineer', mixed: false}],
+  words: [{word: 'quantum', titles: 1, people: 1}, {word: 'whisperer', titles: 1, people: 1}],
+  model: MODEL, overrides: {}, presets: {corporate: MODEL,
+    consulting: {levels: names.map(function(n, i){ return {name: 'C' + i, rules: 'c' + i}; }),
+                 needs_reports: [], no_reports_level: 6, grade_level: 6, grades: ''}}};
+var asked = [], sent = [];
+global.fetch = function(pfad, opt){
+  var p = String(pfad); asked.push(p);
+  if(opt && opt.method === 'PATCH'){ sent.push(JSON.parse(opt.body)); }
+  var a = opt && opt.method === 'PATCH' ? {config: {}}
+    : p.indexOf('/organization/seniority/titles') >= 0 ? TITLES
+    : p.indexOf('/organization/seniority') >= 0 ? SEN
+    : p.indexOf('/organization/people') >= 0 ? {items: [], total: 0, limit: 200, offset: 0, has_more: false}
+    : statusGeruest();
+  return Promise.resolve({status: 200, ok: true, headers: {get: function(){ return null; }},
+                          json: function(){ return Promise.resolve(a); }});
+};
+ORG.version = 'f'.repeat(64);
+orgSeniorityToggle(true);
+setTimeout(function(){
+  var html = el('org-sen').innerHTML;
+  pruefe(html.indexOf('Professional') >= 0 && html.indexOf('org-sen-tree') >= 0 && html.indexOf('org-sen-hand') >= 0,
+         'levels with their parts: ' + html.slice(0, 400));
+  pruefe(html.indexOf('Not assigned') >= 0 && html.indexOf('Outside the organization') >= 0, 'the pots beside');
+  pruefe(html.indexOf('No title') < 0, 'an empty pot that is no task stays away');
+  pruefe(html.indexOf('disagree for 3 titles') >= 0, 'the disagreement is said');
+  pruefe(html.indexOf('Span of control') >= 0 && html.indexOf('+1 since') >= 0, 'a figure and its move: ' + html.slice(-900));
+  pruefe(html.indexOf('−0.8 pts since') >= 0, 'a share moves in points');
+  pruefe(el('org-sen-sum').textContent.indexOf('61') >= 0, 'the fold names the people');
+  orgSeniorityBy('tree');
+  html = el('org-sen').innerHTML;
+  pruefe(html.indexOf('Top (no manager)') >= 0 && html.indexOf('3 managers above') >= 0 && html.indexOf('Not assigned') < 0,
+         'the tree by layers: ' + html.slice(0, 600));
+  orgSeniorityBy('title');
+  orgSeniorityPeople('level', 8);
+  setTimeout(function(){
+    pruefe(asked.some(function(p){ return p.indexOf('/organization/people?version=') >= 0 && p.indexOf('&level=8') >= 0; }),
+           'a level asks for its people: ' + asked.join(' '));
+    pruefe(el('org-box').innerHTML.indexOf('Professional: 0 people') >= 0, 'the level heads the list: ' + el('org-box').innerHTML);
+    orgReviewOpen('unassigned');
+    setTimeout(function(){
+      pruefe(wizardOffen === 'org-review', 'the review opens');
+      var list = el('org-review-list').innerHTML;
+      pruefe(list.indexOf('Quantum Whisperer') >= 0 && list.indexOf('Engineer') < 0, 'not assigned only: ' + list);
+      pruefe(el('org-review-chips').innerHTML.indexOf('Title and tree disagree · 1') >= 0, 'the chips count');
+      orgReviewFilter('disagree');
+      pruefe(el('org-review-list').innerHTML.indexOf('Teamleiter') >= 0, 'disagree lists the tree-moved title');
+      var sel = el('org-review-0'); sel.value = '4'; orgReviewPick(0, sel);
+      orgReviewSave();
+      setTimeout(function(){
+        pruefe(JSON.stringify(sent[0]) === JSON.stringify({role_levels: {teamleiter: 4}}), 'the level is saved: ' + JSON.stringify(sent));
+        pruefe(!wizardOffen, 'the review closes');
+        orgModelOpen();
+        setTimeout(function(){
+          pruefe(wizardOffen === 'org-model' && el('org-model-rules-7').value === 'Professional', 'the model fills');
+          orgModelAdd(0, '7');
+          pruefe(el('org-model-rules-7').value === 'Professional, Quantum' && el('org-model-preset').value === 'own',
+                 'a word joins a level: ' + el('org-model-rules-7').value);
+          pruefe(el('org-model-words').innerHTML.indexOf('quantum') < 0, 'and leaves the suggestions');
+          orgModelPreset('consulting');
+          pruefe(el('org-model-name-0').value === 'C0', 'a preset fills the levels');
+          orgModelSave();
+          setTimeout(function(){
+            var m = sent[1] && sent[1].role_model;
+            pruefe(m && m.levels[0].name === 'C0' && m.outside === 'Contractor', 'the model is saved whole: ' + JSON.stringify(sent[1]));
+            pruefe(m.grade_level === 6 && m.needs_reports.length === 0 && m.no_reports_level === 6 && m.grades === '',
+                   'a preset brings its ladder: ' + JSON.stringify(m));
+            console.log('OK');
+          }, 30);
+        }, 30);
+      }, 30);
+    }, 30);
+  }, 30);
+}, 30);
+"""
+
+
+def test_the_seniority_fold_draws_both_pyramids_and_saves_review_and_model():
+    _in_node(PRUEFUNG_ORG_SENIORITY, sprache="en")

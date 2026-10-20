@@ -1070,6 +1070,8 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "collect_case",
               # 14.5: which app a guide installed by hand belongs to
               "get_version",
+              # the organization's health in numbers
+              "org_health",
               # an item held against the evidence chain
               "verify_item",
               # the skills' text and token for the gated tools (test_skills.py)
@@ -2282,12 +2284,14 @@ def test_errors_pass_the_boundary_untouched(state):
 # --------------------------------------------------------------------------
 # Prompts: the ways through the tools a user starts by name
 # --------------------------------------------------------------------------
-PROMPT_NAMES = {"case_brief", "who_knew_what", "timeline", "collect_into_case", "archive_health"}
+PROMPT_NAMES = {"case_brief", "who_knew_what", "timeline", "collect_into_case", "archive_health",
+                "org_check", "org_spans", "org_top_heavy", "org_since"}
 PROMPT_ARGS = {"case_brief": {"case": "Nordwind"},
                "who_knew_what": {"topic": "the offer", "until": "2025-06-30"},
                "timeline": {"topic": "the offer", "date_from": "2025-01-01"},
                "collect_into_case": {"case": "Nordwind", "question": "everything on invoice 4711"},
-               "archive_health": {}}
+               "archive_health": {}, "org_check": {}, "org_spans": {}, "org_top_heavy": {},
+               "org_since": {"date": "2026-07-01"}}
 
 
 def test_every_prompt_is_offered_with_a_title_and_a_description():

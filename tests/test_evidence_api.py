@@ -139,7 +139,7 @@ def test_the_chain_state_for_the_settings_card(archive):
     code, r = call(port, "GET", "/api/v1/evidence")
     assert code == 200
     assert r["lines"] == evidence.Evidence(home).lines_on_disk() and len(r["head"]) == 64
-    assert r["versions"] == len(history.KEPT) and r["stamped"] is None and r["since"]
+    assert r["versions"] == history.KEPT_VERSIONS and r["stamped"] is None and r["since"]
 
 
 def test_a_case_marks_what_changed_since_it_came_in(archive):

@@ -316,8 +316,8 @@ def served(built, tmp_path, monkeypatch):
 def test_the_versions_and_the_top(served):
     port, _home = served
     code, r = call(port, "GET", "/api/v1/organization/versions")
-    assert code == 200 and len(r["items"]) == 2
-    assert r["items"][0]["current"] and not r["items"][1]["current"]
+    assert code == 200 and len(r["items"]) == history.ORG_TIMELINE_LEN + 1
+    assert r["items"][0]["current"] and not any(v["current"] for v in r["items"][1:])
     code, top = call(port, "GET", "/api/v1/organization")
     assert code == 200 and top["me"] == sources.ORG_ME
     assert [c["id"] for c in top["roots"]] == [sources.ORG_TOP]
@@ -348,7 +348,8 @@ def test_an_earlier_version_and_what_the_current_one_changed(served):
     for c in r["items"]:
         kinds.setdefault(c["kind"], []).append(c["id"])
     assert kinds == history.ORG_CHANGES
-    code, r = call(port, "GET", f"/api/v1/organization/changes?version={earlier}")
+    oldest = versions["items"][-1]["sha256"]
+    code, r = call(port, "GET", f"/api/v1/organization/changes?version={oldest}")
     assert code == 200 and r["from"] is None and r["items"] == []
     code, r = call(port, "GET", "/api/v1/organization?version=" + "0" * 16)
     assert code == 404 and r["error"]["k"] == "srv.org.noversion"
@@ -380,7 +381,7 @@ def mcp_state(built):
 
 def test_mcp_names_where_someone_stands_now_and_before(mcp_state):
     r = mcp_server.get_org_chart()
-    assert r["person"]["id"] == sources.ORG_ME and r["versions_in_archive"] == 2
+    assert r["person"]["id"] == sources.ORG_ME and r["versions_in_archive"] == history.ORG_TIMELINE_LEN + 1
     assert [c["name"] for c in r["chain"]] == ["Carla Chef", "Bob Baumeister"]
     assert r["peers"] == 1
     r = mcp_server.get_org_chart(person="nina")
@@ -392,7 +393,8 @@ def test_mcp_names_where_someone_stands_now_and_before(mcp_state):
 
 
 def test_mcp_lists_the_changes_between_versions(mcp_state):
-    r = mcp_server.org_changes()
+    today = mcp_server._org_day(mcp_server._org_archive().versions()[0])
+    r = mcp_server.org_changes(date_from=today)
     assert r["versions_compared"] == 1
     assert {(c["kind"], c["id"]) for c in r["changes"]} == \
         {(k, i) for k, ids in history.ORG_CHANGES.items() for i in ids}
@@ -543,3 +545,352 @@ def test_the_archive_keeps_a_departed_managers_line(served):
     assert [c["id"] for c in top["roots"]] == [sources.ORG_TOP]
     _c, roles = call(port, "GET", "/api/v1/organization/roles?contains=head%20of%20service")
     assert roles["items"] == [], "a disabled account holds no role"
+
+
+# ---------------------------------------------------------------------------
+# The overview: people and changes per version
+# ---------------------------------------------------------------------------
+def _series_store(out):
+    return organization.read_series_store(state_db.StateDb(out / organization.ORG_DIR))
+
+
+def test_the_export_stores_each_version_s_numbers_and_marks_a_rules_change(tmp_path, monkeypatch, capsys):
+    """Each written version gets its numbers while both versions are at
+    hand – the first has nothing to compare with; a version written under
+    other rules is marked, since its joins and leaves come from the rules."""
+    first = {"/users/delta?$select=": {
+        "value": [_fed("a", "Alice", "c"), _fed("b", "Bob", "c"), _fed("c", "Carla")],
+        "@odata.deltaLink": LINK1}}
+    org_export.run(_Graph(first), tmp_path)
+    (only,) = _series_store(tmp_path).values()
+    assert only["people"] == 3 and only["counts"] is None and only["rules_changed"] is False
+    # Bob moves under Alice, Dana joins.
+    org_export.run(_Graph({"deltatoken=abc": {
+        "value": [{"id": "b", "manager@delta": [{"id": "c", "@removed": {"reason": "changed"}},
+                                                {"id": "a"}]},
+                  _fed("d", "Dana", "c")],
+        "@odata.deltaLink": LINK2}}), tmp_path)
+    import hashlib
+    store = _series_store(tmp_path)
+    path = tmp_path / organization.ORG_DIR / organization.FILE
+    second = store[hashlib.sha256(path.read_bytes()).hexdigest()]
+    assert len(store) == 2
+    assert second["counts"] == {"joined": 1, "moved": 1, "changed": 0, "left": 0}
+    assert second["people"] == 4 and second["rules_changed"] is False
+    # A rule leaves Dana out: written as a version, marked as the rules'.
+    monkeypatch.setenv("ORG_RULES", "- **/Dana")
+    org_export.run(_Graph({"deltatoken=def": {"value": [], "@odata.deltaLink": LINK2}}), tmp_path)
+    third = [e for e in _series_store(tmp_path).values() if e["rules_changed"]]
+    assert len(third) == 1 and third[0]["counts"]["left"] == 1
+
+
+def test_a_version_after_an_unreadable_file_keeps_its_rules_change_until_counted(tmp_path, monkeypatch):
+    """The file before could not be read: the version waits for the
+    one-time job – but whether its rules changed is known only now, while
+    the kv `rules` still holds the old checksum. Kept as `pending`, and the
+    job counts it with that mark."""
+    first = {"/users/delta?$select=": {
+        "value": [_fed("a", "Alice", "c"), _fed("b", "Bob", "c"), _fed("c", "Carla")],
+        "@odata.deltaLink": LINK1}}
+    org_export.run(_Graph(first), tmp_path)
+    path = tmp_path / organization.ORG_DIR / organization.FILE
+    path.write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("ORG_RULES", "- **/Bob")
+    org_export.run(_Graph({"deltatoken=abc": {"value": [], "@odata.deltaLink": LINK2}}), tmp_path)
+    import hashlib
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    db = state_db.StateDb(tmp_path / organization.ORG_DIR)
+    entry = organization.read_series_store(db)[sha]
+    assert entry["pending"] is True and entry["rules_changed"] is True
+    # The overview says it is still to be counted, never "no change".
+    monkeypatch.setattr(organization, "versions_of", lambda data, teams: [
+        {"sha256": sha, "captured": "2026-06-09T06:00:00Z", "current": True}])
+    assert organization.series(tmp_path, tmp_path, db)["missing"] == 1
+    monkeypatch.setattr(organization.Archive, "readable", lambda self, v: organization.Org(path.read_bytes()))
+    monkeypatch.setattr(organization.Archive, "previous", lambda self, found, i: (None, None))
+    assert organization.fill_series(tmp_path, tmp_path, db) == 1
+    done = organization.read_series_store(db)[sha]
+    assert "pending" not in done and done["rules_changed"] is True and done["figures"]["people"] == 2
+    assert organization.series(tmp_path, tmp_path, db)["items"][0]["rules_changed"] is True
+
+
+def test_the_one_time_job_counts_the_versions_from_before_the_overview(served):
+    """An archive from before the overview has versions but no numbers:
+    the next organization run computes them once, oldest first, each
+    against the one before – and then finds nothing left to do."""
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR)
+    db.kv_loeschen(organization.SERIES_KEY)
+    code, r = call(port, "GET", "/api/v1/organization/changes/series")
+    versions_held = history.ORG_TIMELINE_LEN + 1
+    assert code == 200 and r == {"items": [], "missing": versions_held}
+    assert organization.fill_series(home, teams, db) == versions_held
+    assert organization.fill_series(home, teams, db) == 0
+    code, r = call(port, "GET", "/api/v1/organization/changes/series")
+    assert code == 200 and r["missing"] == 0
+    first, current = r["items"][0], r["items"][-1]
+    assert len(r["items"]) == versions_held
+    assert first["joined"] is None and first["people"] and not first["current"]
+    assert current["current"] and current["rules_changed"] is False
+    assert {k: current[k] for k in organization.KINDS} == {
+        k: len(history.ORG_CHANGES.get(k, [])) for k in organization.KINDS}
+    before = r["items"][-2]
+    assert current["people"] == before["people"] + current["joined"] - current["left"]
+    # The history's weeks: every step names at least one change.
+    assert all(sum(it[k] for k in organization.KINDS) for it in r["items"][1:])
+    # Numbers only: no name, no id of a person in the answer.
+    raw = json.dumps(r)
+    assert sources.ORG_ME not in raw and "org-" not in raw
+
+
+def test_the_series_route_answers_an_archive_without_an_organization(served):
+    port, home = served
+    shutil.rmtree(home / settings.TEAMS_DIR / organization.ORG_DIR)
+    code, r = call(port, "GET", "/api/v1/organization/changes/series")
+    assert code == 200 and r == {"items": [], "missing": 0}
+
+
+def test_the_export_runs_the_one_time_job_whatever_its_cadence(tmp_path, monkeypatch, capsys):
+    """Versions from before the overview are counted on the next run –
+    also one the cadence lets pass – said once in the log."""
+    calls = []
+    monkeypatch.setattr(org_export.versions, "data_root", lambda: tmp_path)
+    monkeypatch.setattr(organization, "fill_series", lambda data, out, db: calls.append(data) or 2)
+    monkeypatch.setattr(org_export.export_util, "einheit_faellig", lambda db, cadence: False)
+    org_export.run(_Graph({}), tmp_path)
+    assert calls == [tmp_path]
+    events = [e for e in (progress.lies_event(z) for z in capsys.readouterr().out.splitlines()) if e]
+    assert [e["v"] for e in events if e["k"] == "run.org.series"] == [{"n": 2}]
+
+
+def test_an_unreadable_version_is_said_once_and_the_next_compares_past_it(served, monkeypatch):
+    """A version whose bytes are gone or no JSON: recorded as unreadable –
+    not "missing" for ever –, and the version after it is compared with
+    the nearest readable one before, never taken for the first."""
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR)
+    db.kv_loeschen(organization.SERIES_KEY)
+    found = organization.versions_of(home, teams)
+    broken = found[5]["sha256"]
+    real = organization.Archive.org
+
+    def org(self, version):
+        if version["sha256"] == broken:
+            raise ValueError("not JSON")
+        return real(self, version)
+    monkeypatch.setattr(organization.Archive, "org", org)
+    assert organization.fill_series(home, teams, db) == len(found)
+    code, r = call(port, "GET", "/api/v1/organization/changes/series")
+    assert code == 200 and r["missing"] == 0
+    by_version = {it["version"]: it for it in r["items"]}
+    assert by_version[broken[:16]]["people"] is None and by_version[broken[:16]]["joined"] is None
+    after = by_version[found[4]["sha256"][:16]]
+    assert after["joined"] is not None and sum(after[k] for k in organization.KINDS) > 0
+
+
+def test_a_version_that_came_in_another_way_is_counted_too(served):
+    """No one-shot flag: whatever version has no numbers – one restored or
+    changed outside the app – is counted on the next run; with nothing to
+    count, nothing is read."""
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR)
+    store = organization.read_series_store(db)
+    current = organization.versions_of(home, teams)[0]["sha256"]
+    del store[current]
+    organization.write_series_store(db, store)
+    assert call(port, "GET", "/api/v1/organization/changes/series")[1]["missing"] == 1
+    assert organization.fill_series(home, teams, db) == 1
+    assert organization.fill_series(home, teams, db) == 0
+    assert call(port, "GET", "/api/v1/organization/changes/series")[1]["missing"] == 0
+
+
+def test_an_odd_old_version_is_unreadable_not_a_stop(served, monkeypatch):
+    """Any error reading one version – not only bad JSON – marks that
+    version and lets the job go on; what was counted is kept."""
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR)
+    db.kv_loeschen(organization.SERIES_KEY)
+    found = organization.versions_of(home, teams)
+    real = organization.Archive.org
+    monkeypatch.setattr(organization.Archive, "org", lambda self, v: (
+        (_ for _ in ()).throw(KeyError("people")) if v["sha256"] == found[3]["sha256"] else real(self, v)))
+    assert organization.fill_series(home, teams, db) == len(found)
+    r = call(port, "GET", "/api/v1/organization/changes/series")[1]
+    odd = next(it for it in r["items"] if it["version"] == found[3]["sha256"][:16])
+    assert odd["unreadable"] is True and odd["people"] is None
+    # The changes a later version shows compare with the same one as its numbers.
+    later = found[2]["sha256"]
+    code, ch = call(port, "GET", f"/api/v1/organization/changes?version={later[:16]}")
+    assert code == 200 and ch["from"]["sha256"] == found[4]["sha256"]
+    numbers = next(it for it in r["items"] if it["version"] == later[:16])
+    assert len(ch["items"]) == sum(numbers[k] for k in organization.KINDS)
+
+
+def test_earlier_versions_none_can_read_say_no_base_not_zero(served, monkeypatch):
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    db = state_db.StateDb(teams / organization.ORG_DIR)
+    db.kv_loeschen(organization.SERIES_KEY)
+    found = organization.versions_of(home, teams)
+    keep = found[0]["sha256"]
+    real = organization.Archive.org
+    monkeypatch.setattr(organization.Archive, "org", lambda self, v: real(self, v) if v["sha256"] == keep else None)
+    organization.fill_series(home, teams, db)
+    r = call(port, "GET", "/api/v1/organization/changes/series")[1]
+    current = r["items"][-1]
+    assert current["no_base"] is True and current["joined"] is None and current["people"]
+
+
+# ---------------------------------------------------------------------------
+# Seniority: titles read by the role model, health read from the tree
+# ---------------------------------------------------------------------------
+import seniority  # noqa: E402
+
+
+@pytest.mark.parametrize("raw,clean", [
+    ("Data Analyst III - NL", "Data Analyst III"),
+    ("Support Engineer II – AT", "Support Engineer II"),
+    ("Office Coordinator-CH", "Office Coordinator"),
+    ("Solution Designer IV - FR (Interim)", "Solution Designer IV"),
+    ("Analyst  -  Quality IV", "Analyst - Quality IV"),
+    ("Accountant - IV", "Accountant - IV"),          # a grade is no country code
+    ("Co-CEO", "Co-CEO"),                            # nor is a rule's own word
+    ("Co-CTO - SE", "Co-CTO"),
+])
+def test_a_title_is_cleaned_to_its_group(raw, clean):
+    assert seniority.Model().normalize(raw) == clean
+
+
+@pytest.mark.parametrize("title,leads,level,source", [
+    ("Senior Director Sales", True, 2, "rule"),        # more words win: Senior Director
+    ("Lead Architect", False, 6, "rule"),              # before Lead
+    ("Senior Engineer", False, 7, "rule"),             # as many words: the earlier wins
+    ("Junior Consultant", False, 9, "rule"),
+    ("Account Manager IV - NL", False, 6, "rule"),     # a professional, grade IV
+    ("Data Analyst I - AT", False, 9, "rule"),
+    ("Teamleiter (m/w/d)", True, 5, "rule"),
+    ("Teamleiter (m/w/d)", False, 8, "tree"),          # leads nobody: a professional
+    ("Head of IT", False, 8, "tree"),
+    ("Managing Director", False, 1, "rule"),           # no reports needed at the top
+    ("Contractor - Marketing - FR", False, None, "outside"),
+    ("Shared Mailbox", False, None, "outside"),
+    ("Quantum Whisperer", False, None, "unassigned"),
+    # The earliest rule wins, more words only from the same start.
+    ("Senior Project Manager", False, 7, "rule"),
+    ("Senior Account Manager", False, 7, "rule"),
+    ("Senior Executive Assistant", False, 7, "rule"),
+    ("Senior Consultant", False, 7, "rule"),
+    ("Junior Project Manager", False, 9, "rule"),
+    ("Executive Vice President", True, 1, "rule"),
+    ("Senior Vice President", True, 2, "rule"),
+    ("Clean Room Technician", False, 8, "rule"),       # "Room" alone names no room
+    ("Meeting Room 4.12", False, None, "outside"),
+    ("", False, None, "untitled"),
+])
+def test_a_title_takes_its_level_by_the_rules_and_the_tree(title, leads, level, source):
+    assert seniority.Model().place(title, leads) == (level, source)
+
+
+def test_a_level_set_by_hand_wins_and_the_model_is_cleaned():
+    m = seniority.Model(None, {"quantum whisperer": 6, "data analyst iii": "outside", "x": 99})
+    assert m.place("Quantum Whisperer - DE", False) == (6, "hand")
+    assert m.place("Data Analyst III - NL", False) == (None, "outside")
+    assert "x" not in m.overrides
+    # A level set by hand wins over the outside words too.
+    assert seniority.Model(None, {"shared mailbox": 8}).place("Shared Mailbox", False) == (8, "hand")
+    model = seniority.clean_model({"levels": [{"name": "only one"}], "grade_level": True,
+                                   "needs_reports": [4, "x", 0, 11], "preset": "nonsense"})
+    assert len(model["levels"]) == seniority.LEVELS and model["grade_level"] == 8
+    assert model["needs_reports"] == [4] and model["preset"] == "corporate"
+    for name in seniority.PRESETS:
+        assert len(seniority.preset_model(name)["levels"]) == seniority.LEVELS
+    for bad in ([], {}, 3):                              # never a 500 from the config route
+        assert seniority.clean_model({"preset": bad})["preset"] == "corporate"
+
+
+@pytest.mark.parametrize("preset,title,leads,level,source", [
+    # Each preset brings its own ladder: a consulting title is a career
+    # step and needs no reports, a public-service officer is no leader.
+    ("consulting", "Manager", False, 4, "rule"),
+    ("consulting", "Consultant II", False, 6, "rule"),
+    ("public", "Oberrat", False, 5, "rule"),
+    ("public", "Referatsleiter", False, 6, "tree"),
+    ("public", "Referatsleiter", True, 3, "rule"),
+    ("startup", "Head of Growth", False, 8, "tree"),
+    ("startup", "Engineer IV", False, 6, "rule"),             # the corporate grades
+    ("corporate", "Manager", False, 8, "tree"),
+])
+def test_each_preset_places_by_its_own_ladder(preset, title, leads, level, source):
+    assert seniority.Model({"preset": preset}).place(title, leads) == (level, source)
+
+
+def test_the_pyramid_and_the_figures_of_the_synthetic_organization(built):
+    archive = organization.Archive(built["home"], built["home"] / settings.TEAMS_DIR)
+    org = archive.org(archive.versions()[0])
+    a = seniority.analyse(org)
+    assert a["outside"] == 2 and a["untitled"] == 1 and a["unassigned"] >= 1
+    assert sum(x["count"] for x in a["levels"]) + a["outside"] + a["untitled"] + a["unassigned"] == org.active
+    assert sum(a["tree"]) == org.active
+    assert a["levels"][0]["count"] == 2                  # the managing director, the Co-CEO
+    assert a["levels"][7]["tree"] >= 1                   # a "Teamleiter" leading nobody
+    f = a["figures"]
+    reports = seniority.direct_reports(org)
+    assert f["people"] == org.active and f["leaders"] == sum(1 for v in reports.values() if v)
+    assert f["span_max"] == max(reports.values()) and f["layers"] >= 4
+    part = seniority.figures(org, "org-frida")
+    assert part["people"] == 1 + len(org.below("org-frida")) and part["leaders"] >= 1
+    t = seniority.titles(org)
+    odd = next(x for x in t["items"] if x["title"] == "Quantum Whisperer")
+    level = {x["title"]: x["level"] for x in t["items"]}
+    assert level["Senior Project Manager"] == 7 and level["Clean Room Technician"] == 8
+    assert level["Co-CEO"] == 1
+    assert odd["source"] == "unassigned" and odd["people"] == 1
+    assert any(w["word"] == "quantum" for w in t["words"])
+
+
+def test_the_seniority_routes_answer_numbers_and_the_dialog_its_titles(served):
+    port, _home = served
+    code, r = call(port, "GET", "/api/v1/organization/seniority")
+    assert code == 200 and len(r["levels"]) == seniority.LEVELS and r["outside"] == 2
+    assert r["since"] and r["since_figures"]["people"] < r["figures"]["people"]
+    raw = json.dumps(r)
+    assert "Quantum" not in raw and "Account Manager" not in raw     # numbers only
+    code, t = call(port, "GET", "/api/v1/organization/seniority/titles")
+    assert code == 200 and any(x["title"] == "Quantum Whisperer" for x in t["items"])
+    assert set(t["presets"]) == set(seniority.PRESETS) and t["model"]["preset"] == "corporate"
+    # One level's people, by title and by tree.
+    code, p = call(port, "GET", "/api/v1/organization/people?level=1")
+    assert code == 200 and [c["id"] for c in p["items"]] == [sources.ORG_TOP, "org-x-coceo"]
+    code, p = call(port, "GET", "/api/v1/organization/people?depth=0")
+    assert code == 200 and p["total"] == r["tree"][0]
+    # A level set by hand, through the one door: the pyramid follows.
+    code, c = call(port, "PATCH", "/api/v1/config", {"role_levels": {"quantum whisperer": 6, "bad": 0}})
+    assert code == 200 and c["config"]["role_levels"] == {"quantum whisperer": 6}
+    code, r2 = call(port, "GET", "/api/v1/organization/seniority")
+    assert r2["levels"][5]["hand"] == 1 and r2["unassigned"] == r["unassigned"] - 1
+    code, c = call(port, "PATCH", "/api/v1/config", {"role_model": {"levels": "nonsense"}})
+    assert code == 200 and len(c["config"]["role_model"]["levels"]) == seniority.LEVELS
+
+
+def test_mcp_names_the_organization_s_health_in_numbers(mcp_state, monkeypatch):
+    r = mcp_server.org_health()
+    assert len(r["pyramid"]) == seniority.LEVELS and r["beside"]["outside"] == 2
+    assert r["figures"]["leaders"] and r["widest_spans"][0]["reports"] >= r["widest_spans"][-1]["reports"]
+    assert len(r["history"]) == history.ORG_TIMELINE_LEN + 1
+    assert r["history"][0]["people"] < r["history"][-1]["people"]
+    raw = json.dumps(r)
+    assert "Quantum" not in raw and "Account Manager" not in raw    # never job titles
+    # The history comes from the figures each series entry keeps: no
+    # version is parsed for it.
+    mcp_server._ORG_FIGURES.clear()
+    monkeypatch.setattr(organization.Archive, "readable", lambda self, v: pytest.fail("parsed " + v["sha256"]))
+    assert mcp_server.org_health()["history"] == r["history"]
+    monkeypatch.undo()
+    part = mcp_server.org_health(below="Frida")
+    assert part["part"]["name"] == "Frida Finanz" and "pyramid" not in part and "history" not in part
+    assert set(part["part"]) == {"name", "path"}                    # no title, no department
+    assert "error" in mcp_server.org_health(as_of="2000-01-01")

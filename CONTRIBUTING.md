@@ -101,7 +101,8 @@ stream; the rest of `/api/v1` lives in `api_cases.py`, `api_explore.py`,
 `api_archive.py` and `api_app.py`, one module per door, with what they share
 in `api.py`; `openapi.yaml` describes it all and changes in the same commit.
 The organization is one file `org_export.py` writes and `organization.py`
-reads, walks and compares. Every export writes through `versions.py`, which
+reads, walks and compares; `seniority.py` reads its titles into levels by the
+role model and its tree into figures. Every export writes through `versions.py`, which
 keeps what it replaces and journals the write; `evidence.py` turns that into
 the chain of checksums after every run and checks it. `mcp_server.py` is the
 MCP server; the app's search calls its tools in-process, so what leaves over

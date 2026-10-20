@@ -105,6 +105,7 @@ import instance
 import ollama_client
 import organization
 import run_history
+import seniority
 import settings
 import state_db
 import steps
@@ -197,6 +198,10 @@ Which tool to use:
     version: where someone stands, their manager, their team (direct or all
     levels), everyone with a job title, which titles exist, and who joined,
     left or moved when – each on any day (as_of). Not in the search.
+  • org_health      – the organization's health in numbers: span of
+    control, leaders, layers, the seniority pyramid by the user's role
+    model, the widest spans, every version's figures; `below` a person for
+    one part of the tree. Numbers, never job titles.
   • list_files      – browse OneDrive, the SharePoint libraries, the files
     shared in Teams and mirrored channel folders, and the Planner
     attachments folder by folder; the files' contents are not indexed, only
@@ -2829,6 +2834,91 @@ def list_roles(as_of: str = "", contains: str = "", department: str = "",
     return out
 
 
+_ORG_FIGURES = {}         # version checksum -> its health figures (the tree alone)
+
+
+@_tool(_READONLY)
+def org_health(as_of: str = "", below: str = "", history: bool = True) -> dict:
+    """The organization's health in numbers, from the tree and the user's
+    role model – "how healthy is our organization?", "where do spans run
+    wide?", "which parts are top-heavy?".
+
+    `figures`: people; leaders (people with direct reports) and their
+    share; the span of control (direct reports per leader: median, mean,
+    max; how many lead exactly one, how many more than twelve); people per
+    leader; layers (the longest line from the top). `pyramid`: people per
+    seniority level by title (the role model in Munimentum's settings;
+    a leadership title without reports counts as a professional), with
+    `beside` the people without a title, outside the organization and not
+    assigned; `by_depth`: people per number of managers above;
+    `titles_disagreeing`: titles where title and tree disagree.
+    `widest_spans`: the ten leaders with most direct reports (name,
+    department, reports). `history`: the figures of every version, oldest
+    first – what changed and when. Numbers, never job titles.
+
+    Args:
+        as_of: "YYYY-MM-DD" – the version current on that day.
+        below: A person's name: the figures of their part of the tree
+            (them and everyone below) instead of the whole – compare the
+            parts under the top to find the top-heavy ones.
+        history: Include the figures of every version (default true).
+    """
+    stamp, org = _org_at(as_of)
+    if org is None:
+        return stamp
+    root = None
+    if str(below or "").strip():
+        root, answer = _org_person(org, stamp, below)
+        if root is None:
+            return answer
+    if root:
+        # A part: its figures and whose it is – the name and the path of
+        # names, never a title or a department.
+        return {**stamp, "figures": seniority.figures(org, root),
+                "part": {"name": org.people[root].get("name"),
+                         "path": organization.path_of(org, root)}}
+    a = seniority.analyse(org, settings.value("role_model") or {}, settings.value("role_levels") or {})
+    out = {**stamp, "figures": a["figures"],
+           "pyramid": [{"level": x["level"], "name": x["name"], "people": x["count"]}
+                       for x in a["levels"]],
+           "beside": {"untitled": a["untitled"], "outside": a["outside"],
+                      "not_assigned": a["unassigned"]},
+           "by_depth": a["tree"], "titles_disagreeing": a["disagree"],
+           "widest_spans": [{"name": org.people[pid].get("name"),
+                             "department": org.people[pid].get("department"),
+                             "reports": k} for pid, k in seniority.widest(org)]}
+    if history:
+        archive = _org_archive()
+        stored = _org_series_store()
+        rows = []
+        for v in reversed(archive.versions()):
+            # The export keeps each version's figures beside its numbers;
+            # only a version from before that is parsed, once per process.
+            figs = (stored.get(v["sha256"]) or {}).get("figures") or _ORG_FIGURES.get(v["sha256"])
+            if figs is None:
+                o = archive.readable(v)
+                if o is None:
+                    continue
+                figs = _ORG_FIGURES[v["sha256"]] = seniority.figures(o)
+            rows.append({"as_of": v.get("captured"), **figs})
+        out["history"] = rows
+    return out
+
+
+def _org_series_store():
+    """The overview's numbers per version (the org folder's state.db),
+    {} when there are none."""
+    teams = STATE.get("teams_dir")
+    folder = Path(teams) / organization.ORG_DIR if teams else None
+    if folder is None or not (folder / state_db.DB_NAME).is_file():
+        return {}
+    db = state_db.StateDb(folder, readonly=True)
+    try:
+        return organization.read_series_store(db)
+    finally:
+        db.close()
+
+
 def _org_at(as_of):
     """(stamp, Org) of the version current on `as_of` (the latest when
     empty) – or ({"error": …}, None)."""
@@ -3873,6 +3963,54 @@ def archive_health() -> str:
 3. `corpus_stats`: what is indexed, how far it reaches, the empty months, the ranking backend.
 
 Answer with one line per source: current / stale / incomplete, since when, and what to do about it in Munimentum. Then one sentence: what I can and cannot conclude from the archive today. {_CITE}"""
+
+
+@mcp.prompt(title="Ask: How healthy is our organization?")
+def org_check() -> str:
+    """The organization's health in numbers – span of control, layers,
+    leaders, the seniority pyramid – and what changed since the first
+    version the archive holds."""
+    return f"""How healthy is the organization in my Munimentum archive?
+
+1. `org_health`: the figures, the pyramid, the widest spans and the history of every version.
+2. For a span above twelve or a pyramid that bulges, `get_org_chart` on the leaders `org_health` names, to see where they stand.
+
+Answer with the span of control, the layers and the share of leaders – each with its change since the oldest version –, then the three things that stand out, then what the numbers cannot say: people not assigned to a level, people outside the organization, a short history. {_CITE}"""
+
+
+@mcp.prompt(title="Ask: Where do spans of control run wide?")
+def org_spans() -> str:
+    """The leaders with most direct reports, and the ones leading just one."""
+    return f"""Where do spans of control run wide in my organization?
+
+1. `org_health`: the widest spans, how many lead more than twelve and how many exactly one.
+2. For the five widest, `list_reports` for the team and `get_org_chart` for where the leader stands.
+
+Answer with a short table – leader, department, direct reports – then whether wide spans cluster in one part, and how many leaders lead a single person. {_CITE}"""
+
+
+@mcp.prompt(title="Ask: Which parts of the organization are top-heavy?")
+def org_top_heavy() -> str:
+    """The parts under the top compared by leaders, people per leader and
+    layers."""
+    return f"""Which parts of my organization are top-heavy?
+
+1. `get_org_chart` without a person: the top; `list_reports` of the top person for the parts directly below.
+2. `org_health` with below = each of those people: the part's leaders, people per leader, span and layers.
+
+Answer with one line per part – people, share of leaders, people per leader, layers – sorted by share of leaders, then name the parts that stand out and why. {_CITE}"""
+
+
+@mcp.prompt(title="Ask: What changed in the organization since …?")
+def org_since(date: str) -> str:
+    """The organization's figures then and now, and the changes that
+    explain the difference."""
+    return f"""What changed in my organization since {date}?
+
+1. `org_health`: today's figures and their history – the version current on {date} against the latest.
+2. `org_changes` with date_from {date}: who joined, left or moved.
+
+Answer with the figures then and now – people, leaders, span of control, layers –, then the moves that explain the difference most, then what the history cannot say. {_CITE}"""
 
 
 @mcp.completion()

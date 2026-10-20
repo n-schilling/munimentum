@@ -46,6 +46,7 @@ import graph_client
 import organization
 import progress
 import state_db
+import versions
 
 export_util.erzwinge_utf8()
 
@@ -263,12 +264,32 @@ def rules():
     return folders.lies_regeln(raw)
 
 
+def _fill_series(out, db):
+    """The overview's numbers for every version that has none: the ones
+    written before the series existed – the one-time job –, and any that
+    came in another way (a change outside the app, a restore). Run on
+    every organization run, whatever its cadence says: with nothing to
+    count it costs the list of versions and one kv read, nothing is
+    parsed. A failure costs the chart, never the run."""
+    data = versions.data_root()
+    if data is None:
+        return
+    try:
+        n = organization.fill_series(data, out, db)
+    except Exception as e:                          # noqa: BLE001 – the run goes on
+        progress.event("run.org.series_failed", "warn", error=f"{type(e).__name__}: {e}"[:300])
+        return
+    if n:
+        progress.event("run.org.series", n=n)
+
+
 def run(graph, out):
     """One run: the feed, the users, the file. Returns (changes, people,
     errors) and says them as the step's result."""
     folder = Path(out) / organization.ORG_DIR
     folder.mkdir(parents=True, exist_ok=True)
     db = state_db.StateDb(folder)
+    _fill_series(out, db)
     cadence = export_util.kadenzen().get("organization") or "always"
     if not export_util.einheit_faellig(db, cadence):
         progress.event("run.org.paced", cadence=cadence)
@@ -301,21 +322,41 @@ def run(graph, out):
     if me:
         db.kv_schreiben("me", me)
     db.kv_schreiben("last_sync", str(time.time()))
-    org = organization.build(users, me=me, rules=rules())
+    the_rules = rules()
+    org = organization.build(users, me=me, rules=the_rules)
     path = folder / organization.FILE
     text = organization.text_of(org)
     old = path.read_bytes() if path.is_file() else None
+    fingerprint = organization.rules_checksum(the_rules)
+    ruled_before = db.kv_lesen("rules")
     n = 0
     if old != text.encode("utf-8"):
         try:
             earlier = organization.Org(old) if old else None
         except ValueError:
             earlier = None
+        now = organization.Org(org)
         # What changed, by person; the first version counts everyone in it.
-        n = len(organization.changes(earlier, organization.Org(org))) if earlier \
+        n = len(organization.changes(earlier, now)) if earlier \
             else sum(1 for p in org["people"] if not p.get("disabled"))
         n = max(n, 1)
         export_util.schreibe_atomar(path, text)
+        # The overview's numbers for this version, while both are at hand –
+        # unless the file before could not be read: then it would look like
+        # the first version, and the one-time job compares it with the
+        # nearest readable one on the next run instead.
+        # Whether the rules changed is known only now, so a deferred
+        # version keeps that much (`pending_entry`) before the kv moves on.
+        store = organization.read_series_store(db)
+        sha = versions.sha256_bytes(text.encode("utf-8"))
+        changed = ruled_before not in (None, fingerprint)
+        if old is None or earlier is not None:
+            store[sha] = organization.series_entry(earlier, now, fingerprint,
+                                                   rules_changed=earlier is not None and changed)
+        else:
+            store[sha] = organization.pending_entry(fingerprint, changed)
+        organization.write_series_store(db, store)
+    db.kv_schreiben("rules", fingerprint)
     count = sum(1 for p in org["people"] if not p.get("disabled"))
     progress.event("run.org.done", n=count, users=seen, changes=n)
     progress.ergebnis(n, unchanged=max(0, count - n), errors=errors, extra={"people": count})

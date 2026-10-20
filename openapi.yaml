@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.5.1
+  version: 14.6.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2613,6 +2613,183 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/organization/changes/series:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganizationSeries
+      summary: People and changes per version, for the overview
+      description: |
+        Every version of the organization, oldest first: its date, the
+        people in it and how many `joined`, `moved`, `changed` and `left`
+        against the version before (null for the first, which has nothing
+        to compare with). `rules_changed` marks a version built under
+        other organization rules than the one before – its numbers come
+        from the rules, not the tenant. Numbers only, no names. The
+        export stores each version's numbers as it writes it; `missing`
+        counts the versions from before the overview, which the next
+        organization run computes once.
+      responses:
+        "200":
+          description: The series.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, missing]
+                properties:
+                  missing: { type: integer, description: "Versions whose numbers the next organization run computes." }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [version, at, people, rules_changed]
+                      properties:
+                        version: { type: string, description: "The version's checksum, first 16 characters – what `version=` takes." }
+                        at: { type: [string, "null"], format: date-time }
+                        current: { type: boolean }
+                        people: { type: [integer, "null"] }
+                        joined: { type: [integer, "null"] }
+                        moved: { type: [integer, "null"] }
+                        changed: { type: [integer, "null"] }
+                        left: { type: [integer, "null"] }
+                        rules_changed: { type: boolean }
+                        unreadable: { type: boolean, description: "Present when the version's bytes are gone or cannot be read: no numbers." }
+                        no_base: { type: boolean, description: "Present when earlier versions exist but none can be read: nothing was compared." }
+              example:
+                missing: 0
+                items:
+                - { version: 90e3f1d2c3b4a596, at: "2026-09-18T06:00:03+00:00", current: false, people: 1215, joined: null, moved: null, changed: null, left: null, rules_changed: false }
+                - { version: 4d02aa0c5f1e8b7d, at: "2026-09-25T06:00:04+00:00", current: true, people: 1217, joined: 3, moved: 1, changed: 4, left: 1, rules_changed: false }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/seniority:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganizationSeniority
+      summary: The seniority pyramid and the organization's health in numbers
+      description: |
+        One version: per level of the role model how many people the rules
+        place (`rule`), how many a level set by hand (`hand`) and how many
+        the tree moved – a leadership title without reports counts as a
+        professional (`tree`); beside the pyramid the people without a
+        title, outside the organization (contractors, mailboxes) and not
+        assigned; `tree` the people per depth (managers above); `disagree`
+        how many titles disagree with the tree; and the health figures,
+        for this version and the oldest one (`since_figures`). Numbers
+        only – no title, no name.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+      responses:
+        "200":
+          description: The pyramid and the figures.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, levels, untitled, outside, unassigned, tree, disagree, figures, since, since_figures]
+                properties:
+                  version: { $ref: "#/components/schemas/OrgVersion" }
+                  levels:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        level: { type: integer }
+                        name: { type: string }
+                        count: { type: integer }
+                        rule: { type: integer }
+                        hand: { type: integer }
+                        tree: { type: integer }
+                  untitled: { type: integer }
+                  outside: { type: integer }
+                  unassigned: { type: integer }
+                  tree: { type: array, items: { type: integer }, description: "People per depth 0–9, the last nine or more." }
+                  disagree: { type: integer, description: "Titles where title and tree disagree." }
+                  model: { type: string, description: "A checksum of the role model and the levels set by hand." }
+                  figures: { $ref: "#/components/schemas/OrgFigures" }
+                  since: { oneOf: [{ $ref: "#/components/schemas/OrgVersion" }, { type: "null" }] }
+                  since_figures: { oneOf: [{ $ref: "#/components/schemas/OrgFigures" }, { type: "null" }] }
+        "404":
+          description: No organization in the archive (srv.org.none), or no such version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "400":
+          description: A version that is no checksum (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/organization/seniority/titles:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetOrganizationSeniorityTitles
+      summary: Every cleaned title with its level, for the review
+      description: |
+        The review dialog's list – the one answer with titles, asked when
+        the dialog opens and never polled: every title of the version once,
+        cleaned (country codes, bracketed remarks and dashes made alike),
+        with its holders, how many of them lead somebody, their median
+        depth, its level and why (`hand`, `rule`, `tree`, `outside`,
+        `unassigned`); the words most common in the titles no rule covers;
+        the role model in force, the levels set by hand and the presets.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+      responses:
+        "200":
+          description: The titles.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, words, model, overrides, presets]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key: { type: string }
+                        title: { type: string }
+                        variants: { type: integer }
+                        people: { type: integer }
+                        leading: { type: integer }
+                        depth: { type: number }
+                        level: { type: [integer, "null"] }
+                        source: { type: string, enum: [hand, rule, tree, outside, unassigned] }
+                        rule_level: { type: [integer, "null"] }
+                        rule: { type: [string, "null"] }
+                        mixed: { type: boolean }
+                  words:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        word: { type: string }
+                        titles: { type: integer }
+                        people: { type: integer }
+                  model: { type: object, additionalProperties: true }
+                  overrides: { type: object, additionalProperties: true }
+                  presets: { type: object, additionalProperties: true }
+        "404":
+          description: No organization in the archive (srv.org.none), or no such version (srv.org.noversion).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "400":
+          description: A version that is no checksum (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
   /api/v1/organization/roles:
     get:
       tags: [Explore, GET]
@@ -2670,13 +2847,18 @@ paths:
     get:
       tags: [Explore, GET]
       operationId: v1ListOrganizationPeopleByRole
-      summary: Everyone holding a role
+      summary: Everyone holding a role, or on one seniority level
       description: |
         The people whose job title contains `role` – or is exactly it with
-        `exact=true` – by name, each with their manager's name.
+        `exact=true` – by name, each with their manager's name. Instead of
+        `role`: `level` (1–10, the role model's level by title) or `depth`
+        (0–9, how many managers stand above; 9 = nine or more) lists the
+        people of one row of the seniority pyramid.
       parameters:
         - { $ref: "#/components/parameters/OrgVersion" }
-        - { name: role, in: query, required: true, schema: { type: string }, description: "The title or part of it, case-insensitive." }
+        - { name: role, in: query, schema: { type: string }, description: "The title or part of it, case-insensitive; required unless `level` or `depth` is given." }
+        - { name: level, in: query, schema: { type: integer, minimum: 1, maximum: 10 }, description: "A seniority level by title." }
+        - { name: depth, in: query, schema: { type: integer, minimum: 0, maximum: 9 }, description: "A seniority level by position in the tree." }
         - { name: exact, in: query, schema: { type: boolean, default: false }, description: "The title must be `role` exactly." }
         - { name: department, in: query, schema: { type: string }, description: "Only people whose department contains this." }
         - { name: limit, in: query, schema: { type: integer, default: 200, minimum: 1, maximum: 1000 }, description: "Max people." }
@@ -4527,6 +4709,8 @@ components:
         onenote_enabled: { type: boolean, default: false, description: "Master switch of the OneNote export." }
         org_enabled: { type: boolean, default: false, description: "Master switch of the organization: every directory user with their manager, kept as one file below the Teams folder whose every change is a version." }
         org_rules: { type: string, default: "", description: "Include/exclude rules over each person's path of names from the top (“- Greta Gast/Bob Baumeister/**”); empty = the whole organization." }
+        role_model: { type: object, additionalProperties: true, description: "The role model the seniority pyramid reads titles with: ten levels (name, comma-separated rule words), words that never decide, titles outside the organization, the grade ladder, the leadership levels that need reports. Empty = the default, corporate." }
+        role_levels: { type: object, additionalProperties: true, description: "Levels set by hand: cleaned title -> 1–10 or \"outside\"." }
         onenote_rules: { type: string, default: "", description: "Include/exclude rules over the notebooks; empty = every notebook." }
         onenote_image_max_mb: { type: integer, default: 4, description: "Images up to this size are embedded in a page; larger ones land in the page's files folder." }
         teams_attachments: { type: boolean, default: false, description: "Download the files a chat or channel post references next to the conversation." }
@@ -4818,6 +5002,20 @@ components:
           items:
             type: array
             prefixItems: [{ type: string, enum: ["=", "-", "+"] }, { type: string }]
+    OrgFigures:
+      type: object
+      description: The organization's health from the tree alone.
+      properties:
+        people: { type: integer }
+        leaders: { type: integer, description: "People with direct reports." }
+        leader_share: { type: number }
+        span_median: { type: number, description: "Direct reports per leader, median – the span of control." }
+        span_mean: { type: number }
+        span_max: { type: integer }
+        span_one: { type: integer, description: "Leaders with exactly one report." }
+        span_wide: { type: integer, description: "Leaders with more than twelve direct reports." }
+        people_per_leader: { type: number }
+        layers: { type: integer, description: "The longest line from the top down." }
     OrgVersion:
       type: object
       required: [sha256, current]
