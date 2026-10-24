@@ -1,19 +1,13 @@
-## New in 14.6.0
+## New in 14.7.0
 
-- **The organization's changes as a chart**: a closed *Overview* fold at the
-  top of *Organization* draws the people and the changes per version.
-- **Its seniority by title**: a second fold shows the pyramid of the titles,
-  read by a role model you can edit, and the organization's health in
-  figures – spans of control, people per leader, layers.
-- **Its health for MCP clients**: `org_health` hands the same figures,
-  numbers only, and four prepared questions ask how healthy the organization
-  is, where spans run wide, which parts are top-heavy and what changed since
-  a day.
+- **The organization as CSV**: *CSV…* in *Organization* downloads the people
+  of a version – the whole tenant, the part below a person or the list shown
+  – or the changes over a span of versions, ready for Excel. Every file names
+  each person's company; mail addresses come along only when you tick them.
 
 ## Upgrading
 
-The first organization run after this update counts the overview's numbers
-once for the versions already in the archive.
+Nothing happens once after this update.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.6.0
+  version: 14.7.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2725,6 +2725,74 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/organization/export/{kind}:
+    parameters:
+      - name: kind
+        in: path
+        required: true
+        description: "`people` – the people of one version; `changes` – what changed over a span of versions."
+        schema: { type: string, enum: [people, changes] }
+    get:
+      tags: [Explore, GET]
+      operationId: v1ExportOrganization
+      summary: The organization as a CSV file
+      description: |
+        A file for a spreadsheet, offered as a download. `people`: one row
+        per person of `version` – the whole organization top down, the
+        part from `below` down, or a list the view shows (`role` with
+        `exact`/`department`, `level`, `depth`) – with the base columns
+        (id, name, title, department, company, manager_id, manager_name,
+        direct_reports, total_below) and the groups `columns` names:
+        `place` (office, city, country), `seniority`
+        (title_group, level, level_source, depth), `path`, `mail`,
+        `disabled` (the switched-off accounts as rows – in a list too –,
+        and a column). `direct_reports` counts as the line stands: a
+        switched-off manager in between hands their reports up. All
+        groups are everything the archive holds of a person. `changes`:
+        one row per changed field of every version after `from` up to
+        `version`, each against the readable version before it, `from`
+        the first base (an unreadable `from` gives way to the first
+        readable version after it, never to one before); without `from`
+        `version` against the nearest readable one before it; a joiner or leaver is one row with the
+        title; `rules_changed` marks a version written under other
+        organization rules; `below` keeps the people of that part. A cell
+        starting with `=`, `+`, `-` or `@` gets a `'` in front, so no
+        spreadsheet computes it.
+      parameters:
+        - { $ref: "#/components/parameters/OrgVersion" }
+        - { name: from, in: query, schema: { type: string, pattern: "^[0-9a-f]{16,64}$" }, description: "`changes`: the version the span starts after (older than `version`); the one before `version` when left out." }
+        - { name: below, in: query, schema: { type: string }, description: "A person's id: them and everyone below." }
+        - { name: role, in: query, schema: { type: string }, description: "`people`: everyone whose title contains this." }
+        - { name: exact, in: query, schema: { type: boolean, default: false }, description: "The title must be `role` exactly." }
+        - { name: department, in: query, schema: { type: string }, description: "With `role`: only people whose department contains this." }
+        - { name: level, in: query, schema: { type: integer, minimum: 1, maximum: 10 }, description: "`people`: one seniority level by title." }
+        - { name: depth, in: query, schema: { type: integer, minimum: 0, maximum: 9 }, description: "`people`: one seniority level by position in the tree." }
+        - { name: columns, in: query, schema: { type: string, default: "place,seniority,path" }, description: "`people`: the column groups, comma-separated – place, seniority, path, mail, disabled; `none` for the base alone." }
+        - { name: dialect, in: query, schema: { type: string, enum: [excel, rfc4180], default: rfc4180 }, description: "`excel`: UTF-8 with a byte order mark and `;`; `rfc4180`: `,`. Both end lines with CRLF." }
+      responses:
+        "200":
+          description: "The file, named after the version (`organization-<day>-<checksum, 8>-people.csv`, `organization-<first day>-<last day>-changes.csv`)."
+          headers:
+            Content-Disposition:
+              description: "`attachment; filename=\"…\"`."
+              schema: { type: string }
+          content:
+            text/csv:
+              schema: { type: string }
+        "400":
+          description: A version, number, column group, dialect or `from` that could be none, or a `from` not older than `version` (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No such kind (srv.notfound), no organization yet (srv.org.none), not that version (srv.org.noversion), or `below` not in that version – for `changes` neither in `version` nor in the span's first version (srv.org.noperson).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
   /api/v1/organization/seniority/titles:
     get:
       tags: [Explore, GET]
@@ -2853,7 +2921,13 @@ paths:
         `exact=true` – by name, each with their manager's name. Instead of
         `role`: `level` (1–10, the role model's level by title) or `depth`
         (0–9, how many managers stand above; 9 = nine or more) lists the
-        people of one row of the seniority pyramid.
+        people of one row of the seniority pyramid. Asked with
+        `Accept: text/csv` – weighted above JSON, or as high and named
+        while JSON is not; a bare `*/*` keeps JSON –, the whole list comes
+        as the file
+        `/organization/export/people` writes, with its `columns` and
+        `dialect` (content negotiation, RFC 9110); both answers say
+        `Vary: Accept`.
       parameters:
         - { $ref: "#/components/parameters/OrgVersion" }
         - { name: role, in: query, schema: { type: string }, description: "The title or part of it, case-insensitive; required unless `level` or `depth` is given." }
@@ -2863,10 +2937,21 @@ paths:
         - { name: department, in: query, schema: { type: string }, description: "Only people whose department contains this." }
         - { name: limit, in: query, schema: { type: integer, default: 200, minimum: 1, maximum: 1000 }, description: "Max people." }
         - { name: offset, in: query, schema: { type: integer, default: 0, minimum: 0 }, description: "Skip that many." }
+        - { name: columns, in: query, schema: { type: string, default: "place,seniority,path" }, description: "With `Accept: text/csv`: the column groups, as the export takes them." }
+        - { name: dialect, in: query, schema: { type: string, enum: [excel, rfc4180], default: rfc4180 }, description: "With `Accept: text/csv`: the file's dialect." }
       responses:
         "200":
-          description: The people.
+          description: "The people – or, asked with `Accept: text/csv`, all of them as a file."
+          headers:
+            Vary:
+              description: "`Accept`: the same URL answers JSON or CSV."
+              schema: { type: string }
+            Content-Disposition:
+              description: "With the CSV only: `attachment; filename=\"organization-<day>-<checksum, 8>-people.csv\"`."
+              schema: { type: string }
           content:
+            text/csv:
+              schema: { type: string }
             application/json:
               schema:
                 type: object
@@ -2885,7 +2970,7 @@ paths:
                   offset: { type: integer }
                   has_more: { type: boolean }
         "400":
-          description: No role named, or a version or number that could be none (srv.badparam).
+          description: "No role named, a version or number that could be none, or – asked for CSV – a column group or dialect there is none of (srv.badparam)."
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"

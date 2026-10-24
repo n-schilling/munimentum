@@ -234,14 +234,15 @@ class Org:
         return sorted(({"title": t, "count": n} for t, n in count.items()),
                       key=lambda r: (-r["count"], r["title"].casefold()))
 
-    def with_role(self, role, exact=False, department=""):
+    def with_role(self, role, exact=False, department="", disabled=False):
         """The people whose title is `role` (`exact`), or contains it –
-        by name."""
+        by name; switched-off accounts only with `disabled`."""
         want, dept = str(role or "").casefold(), str(department or "").casefold()
         out = []
         for pid, p in self.people.items():
             title = (p.get("title") or "").casefold()
-            if pid in self.disabled or not title or (title != want if exact else want not in title):
+            if (pid in self.disabled and not disabled) or not title \
+                    or (title != want if exact else want not in title):
                 continue
             if dept and dept not in (p.get("department") or "").casefold():
                 continue

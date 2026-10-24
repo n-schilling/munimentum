@@ -340,6 +340,15 @@ def direct_reports(org):
     return out
 
 
+def leads(org, reports, pid):
+    """How many lead from `pid` as the line stands: an active person's
+    direct reports (`reports`, from `direct_reports`); a switched-off one
+    keeps the active people still filed below them in the tree."""
+    if pid in org.disabled:
+        return sum(1 for c in org.reports.get(pid, ()) if c not in org.disabled)
+    return reports.get(pid, 0)
+
+
 def depth(org, pid):
     return sum(1 for i in org.chain(pid) if i not in org.disabled)
 

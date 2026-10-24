@@ -531,6 +531,13 @@ details.org-overview>summary .small{font-weight:400}
 .org-model-levels .kopf{color:var(--muted);font-weight:600}
 .org-model-levels input,.org-model-extra input{width:100%;box-sizing:border-box}
 .org-model-extra{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr);gap:6px 12px;align-items:center;font-size:13px}
+.org-csv-rows{display:grid;grid-template-columns:130px minmax(0,1fr);gap:10px 14px;align-items:center;margin:12px 0 4px;font-size:14px}
+.org-csv-rows>.bez{color:var(--muted)}
+.org-csv-rows>.modi{justify-self:start}
+.org-csv-rows .chips{display:flex;flex-wrap:wrap;gap:6px}
+.org-csv-rows .chip{font:inherit;font-size:13px;padding:3px 10px;cursor:pointer}
+.org-csv-span{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+@media(max-width:720px){.org-csv-rows{grid-template-columns:1fr}}
 .org-model-head{margin:14px 0 0;font-size:14px}
 .org-model-words{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
 .org-model-words select{max-width:220px;font:inherit;font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;background:var(--card);color:var(--ink)}
@@ -1614,7 +1621,8 @@ details.rechte p{margin:6px 0}
         </div>
       </div>
       <span class="small muted" id="org-stats"></span>
-      <button class="ghost rechts" id="org-search" onclick="orgSearch()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="org.search">Nachrichten dieser Person</span></button>
+      <button class="ghost rechts" id="org-csv" onclick="orgCsvOpen()" data-i18n-title="org.csv.i"><span data-ikon="export" data-ikon-klasse="klein"></span><span data-i18n="org.csv">CSV…</span></button>
+      <button class="ghost" id="org-search" onclick="orgSearch()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="org.search">Nachrichten dieser Person</span></button>
     </div>
     <div id="org-changes"></div>
   </div>
@@ -8129,6 +8137,7 @@ function orgRolePick(role, exact){
 }
 function orgRoleSet(role, exact){
   ORG.role = role; ORG.exact = !!exact;
+  ORG.level = null;
   el('org-role-pill').classList.toggle('on', !!role);
   el('org-role-x').classList.toggle('hide', !role);
   el('org-role-value').textContent = role ? (exact ? role : t('org.role.contains', {role: role})) : t('org.role');
@@ -8261,7 +8270,7 @@ function orgSeniorityPeople(kind, n, offset){
   var name = kind === 'level' ? ((ORG_SENIORITY.data || {}).levels || [])[n - 1].name : orgDepthName(n);
   api(API + '/organization/people' + orgQuery() + '&' + kind + '=' + n + '&offset=' + offset).then(function(r){
     if(seq !== ORG.seq || !r || r.ok === false) return;
-    if(!offset){ orgRoleSet(null); ORG.person = null; ORG.name = null; orgButtons(); }
+    if(!offset){ orgRoleSet(null); ORG.level = {kind: kind, n: n, name: name}; ORG.person = null; ORG.name = null; orgButtons(); }
     var cards = r.items.map(function(c){ return orgCard(c); }).join('');
     if(offset){
       el('org-level-more') && el('org-level-more').remove();
@@ -8447,6 +8456,107 @@ function orgModelSave(){
     closeWizard('org-model');
     if(ORG_SENIORITY.open) orgSeniorityLoad();
   }).catch(function(){});
+}
+
+/* ---------- The organization as CSV ----------
+   One window: the people of the version shown, or the changes over a span
+   of versions; what the view shows is chosen beforehand – the person as a
+   part, a role or level list as the list. The file comes from
+   /organization/export/{kind} as a download; nothing is kept. */
+var ORG_CSV = {kind: 'people', scope: 'all', columns: {place: true, seniority: true, path: true, mail: false, disabled: false},
+               // Excel reads `;` where the decimal mark is a comma, `,` in English.
+               dialect: LOC === 'en' ? 'rfc4180' : 'excel', from: null};
+var ORG_CSV_GROUPS = ['place', 'seniority', 'path', 'mail', 'disabled'];
+function orgCsvOpen(){
+  if(!ORG.version) return;
+  var C = ORG_CSV;
+  C.scope = ORG.level || ORG.role ? 'list' : ORG.person ? 'below' : 'all';
+  C.from = null;
+  oeffneEigenes('org-csv', modalKopf(t('org.csv.title'), 'org-csv', t('org.csv.i')) +
+    '<div class="org-csv-rows" id="org-csv-rows"></div>' +
+    modalFuss({tun: 'orgCsvDownload()', text: t('org.csv.download')}));
+  orgCsvDraw();
+}
+function orgCsvSeg(name, options, current){
+  return '<span class="modi" role="group" aria-label="' + esc(t('org.csv.' + name)) + '">' + options.map(function(o){
+    return '<button type="button" class="' + (o[0] === current ? 'on' : '') + '" aria-pressed="' + (o[0] === current) +
+      '" onclick="orgCsvSet(' + jsArg(name) + ', ' + jsArg(o[0]) + ')">' + esc(o[1]) + '</button>';
+  }).join('') + '</span>';
+}
+function orgCsvSet(name, value){
+  ORG_CSV[name] = value;
+  if(name === 'kind' && value === 'changes' && ORG_CSV.scope === 'list') ORG_CSV.scope = 'all';
+  orgCsvDraw();
+}
+function orgCsvColumn(group){ ORG_CSV.columns[group] = !ORG_CSV.columns[group]; orgCsvDraw(); }
+function orgCsvDraw(){
+  var C = ORG_CSV, people = C.kind === 'people', v = ORG.versions.filter(function(x){ return x.sha256 === ORG.version; })[0] || {};
+  var scopes = [['all', t('org.csv.scope.all')]];
+  if(ORG.person) scopes.push(['below', t('org.csv.scope.below', {name: ORG.name || ''})]);
+  if(people && (ORG.level || ORG.role))
+    scopes.push(['list', t('org.csv.scope.list', {list: ORG.level ? ORG.level.name : ORG.role})]);
+  if(!scopes.some(function(o){ return o[0] === C.scope; })) C.scope = 'all';
+  // Newest first, as the server orders them: what follows the shown one is older.
+  var older = ORG.versions.slice(ORG.versions.indexOf(v) + 1);
+  var html = '<span class="bez">' + esc(t('org.csv.kind')) + '</span>' +
+    orgCsvSeg('kind', [['people', t('org.csv.kind.people')], ['changes', t('org.csv.kind.changes')]], C.kind);
+  if(people) html += '<span class="bez">' + esc(t('org.csv.version')) + '</span><span>' + esc(orgVersionLabel(v)) + '</span>';
+  else html += '<span class="bez">' + esc(t('org.csv.span')) + '</span><span class="org-csv-span">' +
+    (older.length ? '<select id="org-csv-from" aria-label="' + esc(t('org.csv.from')) + '" onchange="ORG_CSV.from = this.value">' +
+      older.map(function(x){ return '<option value="' + esc(x.sha256) + '">' + esc(fmtDay(x.captured)) + '</option>'; }).join('') +
+      '</select><span>–</span><span>' + esc(v.captured ? fmtDay(v.captured) : '–') + '</span>'
+      : '<span class="hint">' + esc(t('org.csv.span.none')) + '</span>') + '</span>';
+  html += '<span class="bez">' + esc(t('org.csv.scope')) + '</span>' + orgCsvSeg('scope', scopes, C.scope);
+  if(people) html += '<span class="bez">' + esc(t('org.csv.columns')) + '</span><span class="chips">' +
+    ORG_CSV_GROUPS.map(function(g){
+      return '<button type="button" class="chip' + (C.columns[g] ? ' on' : '') + '" aria-pressed="' + !!C.columns[g] +
+        '" title="' + esc(t('org.csv.col.' + g + '.i')) + '" onclick="orgCsvColumn(\'' + g + '\')">' + esc(t('org.csv.col.' + g)) + '</button>';
+    }).join('') + '</span>';
+  html += '<span class="bez">' + esc(t('org.csv.dialect')) + '</span>' +
+    orgCsvSeg('dialect', [['excel', t('org.csv.dialect.excel')], ['rfc4180', t('org.csv.dialect.rfc4180')]], C.dialect);
+  el('org-csv-rows').innerHTML = html;
+  // Changes without an earlier version would be a header alone.
+  var go = el('modal').querySelector('button.act');
+  if(go){ go.disabled = !people && !older.length; go.title = go.disabled ? t('org.csv.span.none') : ''; }
+  if(!people && older.length){
+    // The version before the shown one, as the changes fold compares; a
+    // longer span is a choice, since every version in it is read.
+    if(!older.some(function(x){ return x.sha256 === C.from; })) C.from = older[0].sha256;
+    el('org-csv-from').value = C.from;
+  }
+}
+/* The address the window's choice makes. */
+function orgCsvUrl(){
+  var C = ORG_CSV, q = ['version=' + encodeURIComponent(ORG.version || ''), 'dialect=' + C.dialect];
+  if(C.scope === 'below' && ORG.person) q.push('below=' + encodeURIComponent(ORG.person));
+  if(C.kind === 'people'){
+    if(C.scope === 'list' && ORG.level) q.push(ORG.level.kind + '=' + ORG.level.n);
+    else if(C.scope === 'list' && ORG.role)
+      q.push('role=' + encodeURIComponent(ORG.role) + (ORG.exact ? '&exact=true' : ''));
+    q.push('columns=' + (ORG_CSV_GROUPS.filter(function(g){ return C.columns[g]; }).join(',') || 'none'));
+  }else if(C.from){
+    q.push('from=' + encodeURIComponent(C.from));
+  }
+  return API + '/organization/export/' + C.kind + '?' + q.join('&');
+}
+/* Asked first, saved second: a refusal (a version gone meanwhile, a
+   person not in it) is said in the window's place instead of becoming a
+   broken download. */
+function orgCsvDownload(){
+  return fetch(orgCsvUrl()).then(function(r){
+    if(!r.ok) return r.json().then(function(body){ apiFehler(body || {ok: false}); });
+    var name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    return r.blob().then(function(blob){
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name ? name[1] : 'organization.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+      closeWizard('org-csv');
+    });
+  }).catch(function(){ apiFehler({ok: false}); });
 }
 
 function orgSearch(){

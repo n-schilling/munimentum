@@ -2675,6 +2675,7 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/organization/changes/series", api_explore.org_series),
     ("GET", "/api/v1/organization/seniority", api_explore.org_seniority),
     ("GET", "/api/v1/organization/seniority/titles", api_explore.org_seniority_titles),
+    ("GET", "/api/v1/organization/export/{kind}", api_explore.org_export),
     ("GET", "/api/v1/organization/roles", api_explore.org_roles),
     ("GET", "/api/v1/organization/people", api_explore.org_people),
     ("GET", "/api/v1/organization/people/{id}", api_explore.org_person),

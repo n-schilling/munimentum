@@ -4,6 +4,7 @@ narrows by, the mirrored files, one item with its facts and attachments.
 Everything here reads the index through the search module the app loaded
 (`h.app.search`); nothing writes.
 """
+from contextlib import contextmanager
 from pathlib import Path
 
 import re
@@ -12,6 +13,7 @@ import api
 import detail
 import evidence
 import faelle
+import org_csv
 import organization
 import rest
 import seniority
@@ -732,36 +734,190 @@ def org_people(h, _p, q, _data):
     with `exact=true` – by name, each with their manager's name. Or the
     people of one seniority level: `level` 1–10 by title (the role model),
     `depth` 0–9 by position in the tree (managers above; 9 = 9 or more)."""
-    _v, org, _found = _org_version(h, q)
-    role = str(q.get("role") or "").strip()
+    csv_wanted = _wants_csv(h)
+    if csv_wanted:
+        # Checked before anything is read or built.
+        dialect, groups = _csv_dialect(q), _csv_groups(h, q)
+    v, org, _found = _org_version(h, q)
+    ids = _listed(h, org, q, disabled=csv_wanted and "disabled" in groups[0])
+    if csv_wanted:
+        # The same list as a file (content negotiation, RFC 9110): every
+        # one of it, the column groups and the dialect as the export takes.
+        return _csv_answer(dialect, "people", v, *org_csv.people(org, ids, *groups), vary=True)
     limit = api.zahl(q, "limit", 200, 1, 1000)
     offset = api.zahl(q, "offset", 0, 0)
-    if q.get("level") is not None or q.get("depth") is not None:
-        ids = _seniority_people(h, org, q)
-    elif not role:
-        raise Ablehnung(400, "srv.badparam", {"name": "role"})
-    else:
-        exact = str(q.get("exact") or "").strip().lower() in ("1", "true", "yes")
-        ids = org.with_role(role, exact=exact, department=q.get("department") or "")
     return api.json({"items": [{**org.card(i),
                                 "manager": (org.people.get(org.manager(i)) or {}).get("name")}
                                for i in ids[offset:offset + limit]],
                      "total": len(ids), "limit": limit, "offset": offset,
-                     "has_more": offset + limit < len(ids)})
+                     "has_more": offset + limit < len(ids)}, extra=_VARY)
 
 
-def _seniority_people(h, org, q):
-    """The ids of one level, by name – `level` by title, `depth` by tree."""
+def _listed(h, org, q, disabled=False):
+    """The ids of a list the organization view shows: a role (its text,
+    `exact`, `department`), or a level of the pyramid (`level`, `depth`);
+    switched-off accounts only with `disabled` (a file that asked for them)."""
+    if q.get("level") is not None or q.get("depth") is not None:
+        return _seniority_people(h, org, q, disabled)
+    role = str(q.get("role") or "").strip()
+    if not role:
+        raise Ablehnung(400, "srv.badparam", {"name": "role"})
+    exact = str(q.get("exact") or "").strip().lower() in ("1", "true", "yes")
+    return org.with_role(role, exact=exact, department=q.get("department") or "", disabled=disabled)
+
+
+def _wants_csv(h):
+    """Whether `Accept` prefers CSV to JSON (RFC 9110 §12.5.1): `text/csv`
+    weighted above JSON, or as high and named while JSON is not; a bare
+    `*/*` keeps JSON."""
+    accept = h.headers.get("Accept", "") if getattr(h, "headers", None) else ""
+    weight = {}
+    for part in accept.lower().split(","):
+        kind, *params = [x.strip() for x in part.split(";")]
+        q = 1.0
+        for param in params:
+            name, _sep, value = param.partition("=")
+            if name.strip() == "q":
+                try:
+                    q = float(value)
+                except ValueError:
+                    q = 0.0
+        weight[kind] = max(weight.get(kind, 0.0), q)
+    # The most specific range names a type's weight (RFC 9110 §12.5.1); at
+    # equal weight a type named outright beats one a wildcard lets in.
+    csv_q = weight.get("text/csv", weight.get("text/*", weight.get("*/*", 0.0)))
+    json_q = weight.get("application/json", weight.get("application/*", weight.get("*/*", 0.0)))
+    if csv_q <= 0 or csv_q < json_q:
+        return False
+    return csv_q > json_q or ("text/csv" in weight and "application/json" not in weight)
+
+
+# One URL, two representations: a cache keys them by the request's Accept.
+_VARY = {"Vary": "Accept"}
+
+
+def _csv_groups(h, q):
+    """(groups, role model, levels set by hand) for a people file."""
+    raw = q.get("columns")
+    groups = org_csv.DEFAULT_GROUPS if raw is None else org_csv.groups_of(raw)
+    if groups is None:
+        raise Ablehnung(400, "srv.badparam", {"name": "columns"})
+    model, overrides = _role_model(h)
+    return groups, model, overrides
+
+
+def _csv_dialect(q):
+    dialect = str(q.get("dialect") or "rfc4180").strip().lower()
+    if dialect not in org_csv.DIALECTS:
+        raise Ablehnung(400, "srv.badparam", {"name": "dialect"})
+    return dialect
+
+
+def _csv_answer(dialect, kind, stamp, header, rows, since=None, vary=False):
+    name = org_csv.filename(kind, stamp, since)
+    extra = {"Content-Disposition": f'attachment; filename="{name}"', **(_VARY if vary else {})}
+    return api.roh(200, org_csv.render(header, rows, dialect),
+                   "text/csv; charset=utf-8; header=present", extra=extra)
+
+
+def org_export(h, p, q, _data):
+    """GET /organization/export/{kind}: a file for a spreadsheet.
+    `people` – one version (`version`), the whole organization, the part
+    from `below` down, or a list the view shows (`role`, `level`,
+    `depth`), in the column groups `columns` names. `changes` – every
+    version after `from` up to `version`, each against the readable one
+    before it, as the overview counts; `below` keeps the people of that
+    part. `dialect`: `excel` or `rfc4180`."""
+    kind = str(p.get("kind") or "")
+    if kind not in org_csv.KINDS:
+        raise Ablehnung(404, "srv.notfound", {"path": "/api/v1/organization/export/" + kind})
+    # Everything the question says is checked before a version is read.
+    dialect = _csv_dialect(q)
+    groups = _csv_groups(h, q) if kind == "people" else None
+    first = _sha_param(q, "from") if kind == "changes" and q.get("from") is not None else None
+    v, org, found = _org_version(h, q)
+    below = str(q.get("below") or "").strip() or None
+    if kind == "people":
+        if below is not None and below not in org.people:
+            raise Ablehnung(404, "srv.org.noperson")
+        if below:
+            ids = org_csv.part(org, below)
+        elif any(q.get(k) is not None for k in ("role", "level", "depth")):
+            ids = _listed(h, org, q, disabled="disabled" in groups[0])
+        else:
+            ids = org_csv.everyone(org)
+        return _csv_answer(dialect, kind, v, *org_csv.people(org, ids, *groups))
+    end = next(i for i, w in enumerate(found) if w["sha256"] == v["sha256"])
+    # Its own walk, two versions in hand at a time: a long span would push
+    # the views' versions out of the shared cache and parse each one twice.
+    archive = organization.Archive(Path(h.M.BASE), Path(h.M.BASE) / h.M.TEAMS_DIR, keep=2)
+    if first is None:
+        # The changes fold's comparison: `version` against the nearest
+        # readable version before it – the same `previous` the fold asks.
+        before, base = archive.previous(found, end)
+        base_at = found.index(before) if before is not None else None
+    else:
+        start = next((i for i, w in enumerate(found) if w["sha256"].startswith(first)), None)
+        if start is None:
+            raise Ablehnung(404, "srv.org.noversion")
+        if start <= end:
+            raise Ablehnung(400, "srv.badparam", {"name": "from"})
+        # The span starts at `from` itself; an unreadable one gives way to
+        # the first readable version after it, never to one before – the
+        # file holds nothing older than asked for.
+        base_at, base = next(((i, o) for i in range(start, end, -1)
+                              if (o := archive.readable(found[i])) is not None), (None, None))
+    # A part's head may have left before `version`: known at either end of
+    # the span is enough – and that is settled before the walk, so a typo
+    # costs no version read.
+    if below is not None and below not in org.people and (base is None or below not in base.people):
+        raise Ablehnung(404, "srv.org.noperson")
+    with _org_db(h) as db:
+        store = organization.read_series_store(db)
+    walk = {"first": None}
+
+    def steps():
+        old = base
+        for i in range((base_at if base_at is not None else end + 1) - 1, end - 1, -1):
+            # `version` is in hand already; the others are read once each.
+            new = org if i == end else archive.readable(found[i])
+            if new is None:
+                continue
+            if old is not None:
+                walk["first"] = walk["first"] or found[i]
+                flag = bool((store.get(found[i]["sha256"]) or {}).get("rules_changed"))
+                yield _org_stamp(found[i]), flag, old, new
+            old = new
+    header, rows = org_csv.changes(steps(), below)
+    # Named after the first and last version whose changes it holds.
+    since = _org_stamp(walk["first"]) if walk["first"] else v
+    return _csv_answer(dialect, kind, v, header, rows, since=since)
+
+
+@contextmanager
+def _org_db(h):
+    """The org folder's state.db, read-only."""
+    # Read-only: a missing file reads as empty and is never created.
+    db = state_db.StateDb(Path(h.M.BASE) / h.M.TEAMS_DIR / organization.ORG_DIR, readonly=True)
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+def _seniority_people(h, org, q, disabled=False):
+    """The ids of one level, by name – `level` by title, `depth` by tree;
+    switched-off accounts only with `disabled`."""
+    people = [pid for pid in org.people if disabled or pid not in org.disabled]
     if q.get("level") is not None:
         level = api.zahl(q, "level", 1, 1, seniority.LEVELS)
         model = seniority.Model(*_role_model(h))
         reports = seniority.direct_reports(org)
-        ids = [pid for pid in org.people if pid not in org.disabled
-               and model.place(org.people[pid].get("title"), bool(reports.get(pid)))[0] == level]
+        ids = [pid for pid in people
+               if model.place(org.people[pid].get("title"), bool(seniority.leads(org, reports, pid)))[0] == level]
     else:
         wanted = api.zahl(q, "depth", 0, 0, seniority.LEVELS - 1)
-        ids = [pid for pid in org.people if pid not in org.disabled
-               and min(seniority.depth(org, pid), seniority.LEVELS - 1) == wanted]
+        ids = [pid for pid in people if min(seniority.depth(org, pid), seniority.LEVELS - 1) == wanted]
     return sorted(ids, key=lambda i: organization._name_key(org.people[i]))
 
 
@@ -815,12 +971,8 @@ def org_series(h, _p, _q, _data):
     before – numbers only, no names; asked once when the overview opens.
     `missing` counts the versions the next organization run still
     computes (the one-time job for versions from before the overview)."""
-    teams = Path(h.M.BASE) / h.M.TEAMS_DIR
-    db = state_db.StateDb(teams / organization.ORG_DIR, readonly=True)
-    try:
-        return api.json(organization.series(Path(h.M.BASE), teams, db))
-    finally:
-        db.close()
+    with _org_db(h) as db:
+        return api.json(organization.series(Path(h.M.BASE), Path(h.M.BASE) / h.M.TEAMS_DIR, db))
 
 
 # The routes of this door, in the order the table in app.py lists them.
@@ -847,6 +999,7 @@ ROUTEN = (
     ("GET", "/api/v1/organization/changes/series", org_series),
     ("GET", "/api/v1/organization/seniority", org_seniority),
     ("GET", "/api/v1/organization/seniority/titles", org_seniority_titles),
+    ("GET", "/api/v1/organization/export/{kind}", org_export),
     ("GET", "/api/v1/organization/roles", org_roles),
     ("GET", "/api/v1/organization/people", org_people),
     ("GET", "/api/v1/organization/people/{id}", org_person),

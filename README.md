@@ -18,10 +18,9 @@ delegated access makes it possible, not permitted.
 
 ## Download and run
 
-Bundles are attached to every [release](../../releases) — nothing to
-install: `Munimentum-macos-arm64.dmg` for Macs with Apple Silicon,
-`Munimentum-windows-x64.zip` for Windows 10/11, `Munimentum-linux-x64.tar.gz`
-for Linux (glibc 2.35+).
+Bundles are attached to every [release](../../releases), nothing to install:
+`Munimentum-macos-arm64.dmg` for Macs with Apple Silicon, `Munimentum-windows-x64.zip`
+for Windows 10/11, `Munimentum-linux-x64.tar.gz` for Linux (glibc 2.35+).
 
 On macOS drag the app to *Applications*; on Windows and Linux unpack the
 archive. Windows asks once on first launch, because the build carries no
@@ -62,7 +61,7 @@ because any one source can mean tens of thousands of items.
 | **Planner** | one `board.html` per plan: buckets, cards, checklists, comments; referenced files on request |
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
-| **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it – a manager who left kept in the line – kept as one file whose every change is a version; needs `User.Read.All`, which some tenants grant only with an admin's consent |
+| **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it – a manager who left kept in the line – kept as one file whose every change is a version; downloadable as CSV with each person's company; needs `User.Read.All`, which some tenants grant only with an admin's consent |
 
 Every run asks Microsoft only for what changed and counts only that as new.
 Deleted items stay in the archive with a marker — that is the point of keeping
@@ -77,7 +76,8 @@ weekly, monthly — can be set per source, per part of it or for a single folder
 
 Five ways in, one strip: **Search**, **Calendar**, **Contacts**, **Files** and
 **Organization** – the tenant in any version, by role, its changes, seniority and
-health. Only Search searches; the others hand over source, month, folder or person.
+health, as CSV too. Only Search searches; the others hand over source, month,
+folder or person.
 
 **Search.** Three kinds, chosen in the field: *Text search* finds the words
 that actually occur, best matches first — a phrase in quotes must occur as

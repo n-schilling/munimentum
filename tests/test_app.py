@@ -11542,3 +11542,59 @@ setTimeout(function(){
 
 def test_the_seniority_fold_draws_both_pyramids_and_saves_review_and_model():
     _in_node(PRUEFUNG_ORG_SENIORITY, sprache="en")
+
+
+# The organization as CSV: the window chooses what the view shows, and
+# its choice becomes the export's address.
+PRUEFUNG_ORG_CSV = GRUNDZUSTAND + r"""
+global.fetch = function(){ return Promise.resolve({json: function(){ return Promise.resolve(statusGeruest()); }}); };
+ORG.versions = [{sha256: 'b'.repeat(64), captured: '2026-06-09T06:00:00Z', current: true},
+                {sha256: 'a'.repeat(64), captured: '2026-06-02T06:00:00Z', current: false}];
+ORG.version = 'b'.repeat(64);
+ORG.person = 'org-bob'; ORG.name = 'Bob Baumeister';
+orgCsvOpen();
+pruefe(wizardOffen === 'org-csv', 'the window opens');
+var rows = el('org-csv-rows').innerHTML;
+pruefe(rows.indexOf('Below Bob Baumeister') >= 0 && rows.indexOf('List shown') < 0, 'the person as a part, no list: ' + rows);
+var u = orgCsvUrl();
+pruefe(u.indexOf('/organization/export/people?version=' + 'b'.repeat(64)) >= 0 && u.indexOf('below=org-bob') >= 0, 'below the person: ' + u);
+pruefe(u.indexOf('columns=place,seniority,path') >= 0 && u.indexOf('dialect=rfc4180') >= 0, 'mail off, commas in English: ' + u);
+['place', 'seniority', 'path'].forEach(orgCsvColumn);
+pruefe(orgCsvUrl().indexOf('columns=none') >= 0, 'no group is the base alone');
+['place', 'seniority', 'path', 'mail', 'disabled'].forEach(orgCsvColumn);
+pruefe(orgCsvUrl().indexOf('columns=place,seniority,path,mail,disabled') >= 0, 'every group');
+// A level list the seniority fold showed.
+orgRoleSet(null); ORG.level = {kind: 'depth', n: 2, name: '2 managers above'}; ORG.person = null;
+orgCsvOpen();
+pruefe(el('org-csv-rows').innerHTML.indexOf('List shown: 2 managers above') >= 0, 'the list offered');
+pruefe(orgCsvUrl().indexOf('&depth=2') >= 0 && orgCsvUrl().indexOf('below=') < 0, 'the list chosen: ' + orgCsvUrl());
+// The changes: from the oldest, no list.
+orgCsvSet('kind', 'changes');
+pruefe(ORG_CSV.scope === 'all' && el('org-csv-from').value === 'a'.repeat(64), 'span from the oldest');
+var c = orgCsvUrl();
+pruefe(c.indexOf('/organization/export/changes?') >= 0 && c.indexOf('from=' + 'a'.repeat(64)) >= 0 && c.indexOf('columns=') < 0,
+       'the changes: ' + c);
+// The older versions by position, not by date: one without a date stays.
+ORG.versions[1].captured = null; ORG_CSV.kind = 'changes'; orgCsvDraw();
+pruefe(el('org-csv-from').value === 'a'.repeat(64), 'an undated older version is offered');
+// One version alone: no span, so no download.
+var all = ORG.versions; ORG.versions = [all[0]]; orgCsvDraw();
+pruefe(modal.querySelector('button.act').disabled === true, 'nothing to compare, nothing to download');
+ORG.versions = all; orgCsvDraw();
+pruefe(modal.querySelector('button.act').disabled === false, 'a span again');
+// A refusal is said, and the window stays for another choice.
+var problem = {ok: false, status: 404, error: {k: 'srv.org.noperson', v: {}}};
+global.fetch = function(){
+  return Promise.resolve({ok: false, status: 404, headers: {get: function(){ return null; }},
+                          json: function(){ return Promise.resolve(problem); }});
+};
+orgCsvDownload().then(function(){
+  pruefe(el('meldung').textContent.indexOf('not in this version') >= 0, 'the refusal is said: ' + el('meldung').textContent);
+  pruefe(wizardOffen === 'org-csv', 'the window stays');
+  console.log('OK');
+});
+"""
+
+
+def test_the_csv_window_makes_the_export_address_from_the_view():
+    _in_node(PRUEFUNG_ORG_CSV, sprache="en")

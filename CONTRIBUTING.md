@@ -102,16 +102,16 @@ stream; the rest of `/api/v1` lives in `api_cases.py`, `api_explore.py`,
 in `api.py`; `openapi.yaml` describes it all and changes in the same commit.
 The organization is one file `org_export.py` writes and `organization.py`
 reads, walks and compares; `seniority.py` reads its titles into levels by the
-role model and its tree into figures. Every export writes through `versions.py`, which
-keeps what it replaces and journals the write; `evidence.py` turns that into
-the chain of checksums after every run and checks it. `mcp_server.py` is the
-MCP server; the app's search calls its tools in-process, so what leaves over
-MCP passes `_tool()`, which keeps the answer compact, brief and within a
+role model and its tree into figures, and `org_csv.py` turns a version, or a
+span of them, into a CSV file. Every export writes through `versions.py`,
+which keeps what it replaces and journals the write; `evidence.py` turns that
+into the chain of checksums after every run and checks it. `mcp_server.py` is
+the MCP server; the app's search calls its tools in-process, so what leaves
+over MCP passes `_tool()`, which keeps the answer compact, brief and within a
 budget. Its prompts and case resources sit beside the tools, and the three
 skills in `skills/` say the same for clients that see only tools
-(`tests/test_skills.py` holds them against the server; `skills_pack.py`
-zips them for the download and the release); `instance.py`
-says where a running app answers, so a citation can link into it. Every
-Microsoft Graph endpoint the exports ask has its line in
-`tests/graph_contract.py` with the query options it takes; the test fakes
-answer anything else with Graph's own 400.
+(`tests/test_skills.py` holds them against the server; `skills_pack.py` zips
+them for the download and the release); `instance.py` says where a running app
+answers, so a citation can link into it. Every Microsoft Graph endpoint the
+exports ask has its line in `tests/graph_contract.py` with the query options
+it takes; the test fakes answer anything else with Graph's own 400.

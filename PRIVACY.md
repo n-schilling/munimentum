@@ -44,10 +44,12 @@ filters — never its hits, for as long as *Settings › App* says (or not at
 all), and a case keeps pointers into the archive plus what a hit said when it
 was added, the remarks you write on its items, and the keys of items you
 removed by hand, so that a search set to collect automatically does not put
-them back. The one thing the app writes outside its folders is a **case
-export**, and only when you ask for one: a ZIP of copied originals under the
-path you chose (your Documents folder by default) — from there on it is yours
-to move, share or delete. The app serves its interface on `127.0.0.1` and is
+them back. Two things leave the app's folders, each only when you ask: a
+**case export**, a ZIP of copied originals under the path you chose (your
+Documents folder by default), and the **organization as CSV**, the names and
+titles of colleagues – mail addresses only when you tick them – where your
+browser saves downloads. From there on they are yours to move, share or
+delete. The app serves its interface on `127.0.0.1` and is
 not reachable from your network. System notifications are posted locally
 through the operating system. Delete those folders and nothing of it remains.
 

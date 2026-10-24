@@ -894,3 +894,233 @@ def test_mcp_names_the_organization_s_health_in_numbers(mcp_state, monkeypatch):
     assert part["part"]["name"] == "Frida Finanz" and "pyramid" not in part and "history" not in part
     assert set(part["part"]) == {"name", "path"}                    # no title, no department
     assert "error" in mcp_server.org_health(as_of="2000-01-01")
+
+
+# ---------------------------------------------------------------------------
+# The organization as CSV
+# ---------------------------------------------------------------------------
+import csv  # noqa: E402
+import http.client  # noqa: E402
+import io  # noqa: E402
+
+import org_csv  # noqa: E402
+
+
+def _fetch(port, path, accept=None):
+    con = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    con.request("GET", path, headers={"Accept": accept} if accept else {})
+    r = con.getresponse()
+    raw, head = r.read(), dict(r.getheaders())
+    con.close()
+    return r.status, head, raw
+
+
+def _rows(raw, delimiter=","):
+    text = raw.decode("utf-8")
+    return list(csv.reader(io.StringIO(text.removeprefix("﻿")), delimiter=delimiter))
+
+
+@pytest.mark.parametrize("value,cell", [
+    ("=HYPERLINK(1)", "'=HYPERLINK(1)"), ("+49 40", "'+49 40"), ("-Lead", "'-Lead"),
+    ("@sum", "'@sum"), ("Head of IT", "Head of IT"), (3, 3), (None, ""), (True, "true"),
+])
+def test_a_cell_never_becomes_a_formula(value, cell):
+    assert org_csv.defuse(value) == cell
+
+
+def test_the_people_of_a_version_as_a_file(served):
+    port, _home = served
+    code, head, raw = _fetch(port, "/api/v1/organization/export/people?dialect=excel")
+    assert code == 200 and head["Content-Type"].startswith("text/csv")
+    assert raw.startswith("﻿".encode()) and b"\r\n" in raw
+    name = head["Content-Disposition"]
+    assert name.startswith('attachment; filename="organization-') and name.endswith('-people.csv"')
+    rows = _rows(raw, ";")
+    header, body = rows[0], rows[1:]
+    _c, top = call(port, "GET", "/api/v1/organization")
+    assert len(body) == top["people"], "everyone active, nobody disabled"
+    assert body[0][0] == sources.ORG_TOP, "top down"
+    assert "mail" not in header and "disabled" not in header, "mail and disabled off by default"
+    assert {"office", "level", "path", "manager_id"} <= set(header)
+    # The company – the legal entity of a group – in every file.
+    companies = {u["companyName"] for u in sources.ORG_USERS.values() if u.get("companyName")}
+    assert header[4] == "company" and companies & {r[4] for r in body}
+    row = dict(zip(header, next(r for r in body if r[0] == sources.ORG_ME), strict=True))
+    assert row["manager_id"] and row["path"].endswith(sources.ORG_USERS[sources.ORG_ME]["displayName"])
+
+
+def test_all_groups_are_everything_held_of_a_person(served):
+    port, _home = served
+    code, _h, raw = _fetch(port, "/api/v1/organization/export/people?columns="
+                                 + ",".join(org_csv.GROUPS))
+    rows = _rows(raw)
+    header = rows[0]
+    held = {f for _g, f in organization.FIELDS} | {"id", "manager_id", "disabled"}
+    assert code == 200 and held <= set(header)
+    disabled = [r for r in rows[1:] if r[header.index("disabled")] == "true"]
+    assert {r[0] for r in disabled} >= set(sources.ORG_LINKS), "switched-off accounts as rows"
+    assert any("@" in r[header.index("mail")] for r in rows[1:])
+    # The base alone, and an unknown group refused.
+    _c, _h, raw = _fetch(port, "/api/v1/organization/export/people?columns=none")
+    assert _rows(raw)[0] == ["id", "name", "title", "department", "company", "manager_id",
+                             "manager_name", "direct_reports", "total_below"]
+    assert _fetch(port, "/api/v1/organization/export/people?columns=salary")[0] == 400
+    assert _fetch(port, "/api/v1/organization/export/people?dialect=tsv")[0] == 400
+    assert _fetch(port, "/api/v1/organization/export/salaries")[0] == 404
+
+
+def test_a_part_a_list_and_the_same_list_by_content_negotiation(served):
+    port, _home = served
+    _c, frida = call(port, "GET", "/api/v1/organization/people/org-frida")
+    _c, _h, raw = _fetch(port, "/api/v1/organization/export/people?below=org-frida")
+    body = _rows(raw)[1:]
+    assert body[0][0] == "org-frida" and len(body) == 1 + frida["person"]["total"]
+    assert _fetch(port, "/api/v1/organization/export/people?below=nobody")[0] == 404
+    _c, level = call(port, "GET", "/api/v1/organization/people?level=8&limit=1000")
+    _c, _h, raw = _fetch(port, "/api/v1/organization/export/people?level=8")
+    assert [r[0] for r in _rows(raw)[1:]] == [x["id"] for x in level["items"]]
+    # The role list the view shows, asked of its own route as a file.
+    code, head, raw = _fetch(port, "/api/v1/organization/people?role=specialist&dialect=excel",
+                             accept="text/csv")
+    _c, role = call(port, "GET", "/api/v1/organization/people?role=specialist&limit=1000")
+    assert code == 200 and head["Content-Type"].startswith("text/csv")
+    assert [r[0] for r in _rows(raw, ";")[1:]] == [x["id"] for x in role["items"]]
+
+
+def test_the_changes_over_a_span_as_a_file(served):
+    port, home = served
+    teams = home / settings.TEAMS_DIR
+    found = organization.versions_of(home, teams)
+    # The last version alone: the changes fold's own changes, field by field.
+    code, head, raw = _fetch(port, "/api/v1/organization/export/changes")
+    rows = _rows(raw)
+    assert code == 200 and rows[0] == org_csv.CHANGE_HEADER
+    assert head["Content-Disposition"].endswith('-changes.csv"')
+    _c, fold = call(port, "GET", "/api/v1/organization/changes")
+    fields = sum(len(c.get("fields") or {"title": 1}) for c in fold["items"])
+    assert len(rows) - 1 == fields
+    assert {r[3] for r in rows[1:]} == set(history.ORG_CHANGES)
+    # From the oldest: every version after it, oldest first.
+    _c, _h, raw = _fetch(port, f"/api/v1/organization/export/changes?from={found[-1]['sha256'][:16]}")
+    span = _rows(raw)[1:]
+    assert len(span) > len(rows) - 1 and span[0][0] <= span[-1][0]
+    assert _fetch(port, f"/api/v1/organization/export/changes?from={found[0]['sha256'][:16]}")[0] == 400
+    # A part: only the people below someone.
+    _c, _h, raw = _fetch(port, f"/api/v1/organization/export/changes?from={found[-1]['sha256'][:16]}"
+                               "&below=org-frida")
+    part = _rows(raw)[1:]
+    assert len(part) < len(span)
+
+
+def test_csv_counts_and_reaches_everyone_even_in_a_circle():
+    """A manager circle is cut at its smallest id, which then stands at the
+    top: the whole-organization file reaches everyone. Both report counts
+    are of active people."""
+    org = organization.Org({"people": [
+        {"id": "a", "name": "A", "manager": "b"}, {"id": "b", "name": "B", "manager": "a"},
+        {"id": "c", "name": "C", "manager": "b"}, {"id": "d", "name": "D", "manager": "b", "disabled": True}]})
+    assert sorted(org_csv.everyone(org)) == ["a", "b", "c", "d"]
+    header, rows = org_csv.people(org, org_csv.everyone(org), groups=())
+    b = dict(zip(header, next(r for r in rows if r[0] == "b"), strict=True))
+    assert b["direct_reports"] == 1 and b["total_below"] == 1 and len(rows) == 3
+
+
+def test_csv_reports_as_the_line_stands_through_a_switched_off_manager():
+    """Carla leads a switched-off manager with two active reports: the
+    line hands them up, so her row counts two, her leadership title holds,
+    and the switched-off manager's own row keeps the two below them."""
+    org = organization.Org({"people": [
+        {"id": "carla", "name": "Carla Chef", "title": "Head of Sales"},
+        {"id": "dana", "name": "Dana", "title": "Head of Field", "manager": "carla", "disabled": True},
+        {"id": "e1", "name": "E1", "title": "Engineer", "manager": "dana"},
+        {"id": "e2", "name": "E2", "title": "Engineer", "manager": "dana"}]})
+    header, rows = org_csv.people(org, org_csv.everyone(org), groups=("seniority", "disabled"))
+    row = {r[0]: dict(zip(header, r, strict=True)) for r in rows}
+    assert row["carla"]["direct_reports"] == 2 and row["carla"]["total_below"] == 2
+    assert row["carla"]["level_source"] == "rule"
+    assert row["dana"]["direct_reports"] == 2 and row["dana"]["level_source"] == "rule"
+
+
+def test_csv_by_content_negotiation_says_vary_and_honours_weights(served):
+    port, _home = served
+    path = "/api/v1/organization/people?role=specialist"
+    for accept, csv_wanted in (("text/csv", True), ("*/*", False), (None, False),
+                               ("application/json, text/csv;q=0", False),
+                               ("text/csv;q=0.9, application/json;q=0.5", True),
+                               ("application/json;q=0.5, text/csv;q=0.4", False),
+                               ("text/csv, */*", True), ("text/*", True),
+                               ("text/csv, application/json", False)):
+        code, head, _raw = _fetch(port, path, accept=accept)
+        assert code == 200 and head.get("Vary") == "Accept", accept
+        assert head["Content-Type"].startswith("text/csv" if csv_wanted else "application/json"), accept
+
+
+def test_the_changes_never_reach_before_the_span(served, monkeypatch):
+    """`from` is the base: an unreadable one gives way to the first
+    readable version after it, never to one before; without `from` the
+    file holds the shown version's changes and is named after it."""
+    port, home = served
+    found = organization.versions_of(home, home / settings.TEAMS_DIR)
+    code, head, _raw = _fetch(port, "/api/v1/organization/export/changes")
+    day = str(found[0]["captured"])[:10]
+    assert code == 200 and head["Content-Disposition"].endswith(f'organization-{day}-{day}-changes.csv"')
+    broken = found[4]["sha256"]
+    real = organization.Archive.org
+
+    def org(self, version):
+        if version["sha256"] == broken:
+            raise ValueError("not JSON")
+        return real(self, version)
+    monkeypatch.setattr(organization.Archive, "org", org)
+    _c, _h, raw = _fetch(port, f"/api/v1/organization/export/changes?from={broken[:16]}")
+    versions_in = {r[1] for r in _rows(raw)[1:]}
+    assert found[3]["sha256"][:16] not in versions_in, "the first readable after `from` is the base"
+    assert versions_in <= {f["sha256"][:16] for f in found[:3]}
+
+
+def test_the_export_checks_the_question_before_it_reads_a_version(served, monkeypatch):
+    port, _home = served
+    monkeypatch.setattr(organization.Archive, "readable",
+                        lambda self, v: pytest.fail("read before the question was checked"))
+    monkeypatch.setattr(organization.Archive, "org",
+                        lambda self, v: pytest.fail("read before the question was checked"))
+    for path in ("/api/v1/organization/export/changes?dialect=xlsx",
+                 "/api/v1/organization/export/people?columns=salary",
+                 "/api/v1/organization/export/changes?from=nothex"):
+        assert _fetch(port, path)[0] == 400, path
+
+
+def test_a_part_whose_head_left_still_has_its_changes(served):
+    """Someone who left before the shown version: their part's changes in
+    the span are found; a person in no version is refused."""
+    port, home = served
+    found = organization.versions_of(home, home / settings.TEAMS_DIR)
+    gone = history.ORG_CHANGES["left"][0]
+    code, _h, raw = _fetch(port, f"/api/v1/organization/export/changes?from={found[-1]['sha256'][:16]}"
+                                 f"&below={gone}")
+    assert code == 200 and any(r[4] == gone and r[3] == "left" for r in _rows(raw)[1:])
+    assert _fetch(port, "/api/v1/organization/export/changes?below=nobody")[0] == 404
+
+
+def test_a_list_file_keeps_switched_off_accounts_when_asked(served):
+    port, _home = served
+    disabled = next(u for u in sources.ORG_USERS.values()
+                    if u["id"] in sources.ORG_LINKS and u.get("jobTitle"))
+    role = disabled["jobTitle"]
+    path = f"/api/v1/organization/export/people?role={role.replace(' ', '%20')}&exact=true&columns="
+    _c, _h, raw = _fetch(port, path + "none")
+    assert disabled["id"] not in {r[0] for r in _rows(raw)[1:]}
+    _c, _h, raw = _fetch(port, path + "disabled")
+    rows = _rows(raw)
+    assert [r[-1] for r in rows[1:] if r[0] == disabled["id"]] == ["true"]
+
+
+def test_an_unknown_part_is_refused_before_the_span_is_walked(served, monkeypatch):
+    port, home = served
+    found = organization.versions_of(home, home / settings.TEAMS_DIR)
+    reads = []
+    real = organization.Archive.readable
+    monkeypatch.setattr(organization.Archive, "readable", lambda self, v: reads.append(v) or real(self, v))
+    code, _h, _raw = _fetch(port, f"/api/v1/organization/export/changes?from={found[-1]['sha256'][:16]}"
+                                  "&below=nobody")
+    assert code == 404 and len(reads) <= 1, "only the base was read"

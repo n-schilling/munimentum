@@ -5,6 +5,9 @@ like a month, the changes a version brought, and the hand-over to Search.
 The people, the tree and the changes are derived from testdata/sources.py
 and testdata/history.py, never written down twice."""
 
+import csv
+import io
+
 import pytest
 
 from playwright.sync_api import expect
@@ -183,3 +186,27 @@ def test_seniority_draws_the_pyramid_and_the_review_places_a_title(archive_page,
             .to_have_text(str(sen["unassigned"] - 1))
     finally:
         archive_page.request.patch(archive.base + "/api/v1/config", data={"role_levels": {}})
+
+
+def test_the_organization_downloads_as_csv(archive_page, archive):
+    """CSV… on the organization's tool row: the person shown is the part
+    chosen, Excel's dialect the default; the file holds them and everyone
+    below, without mail addresses."""
+    box = open_org(archive_page, archive)
+    box.locator(".org-grid .org-card", has_text=name("org-bob")).click()
+    expect(box.locator(".org-card.main")).to_contain_text(name("org-bob"))
+    archive_page.click("#org-csv")
+    dialog = archive_page.locator("#modal")
+    expect(dialog.get_by_role("button", name=EN["org.csv.scope.below"].replace("{name}", name("org-bob")))) \
+        .to_have_attribute("aria-pressed", "true")
+    with archive_page.expect_download() as info:
+        dialog.get_by_role("button", name=EN["org.csv.download"]).click()
+    download = info.value
+    assert download.suggested_filename.endswith("-people.csv")
+    text = open(download.path(), encoding="utf-8-sig", newline="").read()
+    assert text.endswith("\r\n")
+    # An English page writes commas; Excel reads them there.
+    rows = list(csv.reader(io.StringIO(text)))
+    total = archive.get("/api/v1/organization/people/org-bob")["person"]["total"]
+    assert rows[1][0] == "org-bob" and len(rows) - 1 == 1 + total
+    assert "mail" not in rows[0]

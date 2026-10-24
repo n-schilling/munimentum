@@ -232,6 +232,10 @@ DYNAMISCH = (
     ("org.review.f.", ("unassigned", "disagree", "hand", "all")),
     ("org.review.col.", ("title", "people", "leading", "depth", "level")),
     ("org.model.", tuple(f + e for f in ("outside", "never", "grades") for e in ("", ".i"))),
+    # The CSV window names its segments and column groups by key.
+    ("org.csv.", ("kind", "scope", "dialect")),
+    ("org.csv.col.", tuple(g + e for g in ("place", "seniority", "path", "mail", "disabled")
+                           for e in ("", ".i"))),
     ("org.model.preset.", ("corporate", "consulting", "public", "startup", "own")),
     ("cal.st.", ("confirmed", "tentative", "cancelled", "deleted", "gone", "removed")),
     ("export.cat.", ("mail", "calendar", "contacts", "1on1", "group",
