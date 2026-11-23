@@ -12,6 +12,7 @@ import api
 import detail
 import evidence
 import faelle
+import footers
 import org_csv
 import organization
 import own_contacts
@@ -131,14 +132,11 @@ def correspondent_list(h, _p, _q, _data):
     # senders are on no card.
     most = min(_whole(h.app.cfg.get("contacts_people"), 500), PEOPLE_MOST)
     people = mod.correspondent_people(**rule) or []
-    beyond = 0                                   # listed people without a card
-    for person in people:
-        if not person.get("card"):
-            # A frequent contact is listed whatever the cap: the switch
-            # for them would otherwise miss who writes often and little.
-            if beyond >= most and not person["frequent"]:
-                continue
-            beyond += 1
+    # Whose footer is kept (footers.py): the card's mark, without a mail read.
+    signed = footers.Footers(h.app.own_contacts.path).found()
+    # A frequent contact is listed whatever the cap: the switch for them
+    # would otherwise miss who writes often and little.
+    for person in footers.listed(people, most):
         item = {"name": person["name"], "addresses": person["addresses"],
                 "received": person["received"], "sent": person["sent"],
                 "frequent": person["frequent"]}
@@ -146,6 +144,8 @@ def correspondent_list(h, _p, _q, _data):
             item["also"] = person["also"]
         if person.get("writes_from"):
             item["writes_from"] = person["writes_from"]
+        if footers.asked(person) in signed:
+            item["footer"] = True
         items.append(item)
     # `total` says how many the mail knows: the page names the rest.
     return api.json({"items": items, "count": len(items), "total": len(people), "frequent": rule})
@@ -163,8 +163,8 @@ def _signature(mod, address):
 
 
 def correspondent_signature(h, _p, q, _data):
-    """The footer under one address's mails (signature.py), read when the
-    address book opens a person's window."""
+    """The footer under one address's mails (signature.py), as the
+    address book shows it in a person's window."""
     address = str(q.get("address") or "").strip().lower()
     if "@" not in address:
         raise Ablehnung(400, "srv.badparam", {"name": "address"})
@@ -172,11 +172,17 @@ def correspondent_signature(h, _p, q, _data):
     if mod is None:
         raise Ablehnung(503, h.app.search.error)
     _owner_known(h, mod)
-    found = _signature(mod, address)
+    # Kept from the last index run (footers.py), with the moment it was
+    # read; an address not read yet is read now and kept.
+    book = footers.Footers(h.app.own_contacts.path)
+    kept = book.one(address)
+    if kept is None:
+        book.keep(address, _signature(mod, address))
+        kept = book.one(address)
     # What the window draws, no more: the lines, what they rest on, the
-    # mail they stand in. Numbers and links are a client's (get_signatures).
-    return api.json({"lines": found["lines"],
-                     **{k: found[k] for k in ("basis", "uid", "date") if found.get(k)}})
+    # mail they stand in, when they were read. Numbers and links are a
+    # client's (get_signatures).
+    return api.json(kept)
 
 
 # -- the contacts added in the app (own_contacts.py) --------------------------
@@ -284,6 +290,38 @@ def own_contact_versions(h, p, _q, _data):
     if items is None:
         raise Ablehnung(404, "srv.contact.unknown")
     return api.json({"items": items, "count": len(items)})
+
+
+def _ignored(h):
+    items = h.app.own_contacts.ignored()
+    return api.json({"items": items, "count": len(items)})
+
+
+def ignored_contact_list(h, _p, _q, _data):
+    """The addresses the user set to be ignored: not offered for the
+    address book, whatever the mail says of them."""
+    return _ignored(h)
+
+
+def _ignore(h, address, on):
+    try:
+        h.app.own_contacts.ignore(address, on)
+    except own_contacts.BadValue:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": "address"}) from None
+    return _ignored(h)
+
+
+def ignored_contact_add(h, _p, _q, data):
+    """Ignore an address; answers the whole list."""
+    for field in data if isinstance(data, dict) else ():
+        if field != "address":
+            raise Ablehnung(400, "srv.contact.badvalue", {"field": str(field)[:40]})
+    return _ignore(h, (data or {}).get("address") if isinstance(data, dict) else None, True)
+
+
+def ignored_contact_remove(h, _p, q, _data):
+    """No longer ignore an address; answers the whole list."""
+    return _ignore(h, q.get("address"), False)
 
 
 def adressen(h, _p, q, _data):
@@ -1203,6 +1241,9 @@ ROUTEN = (
     ("DELETE", "/api/v1/contacts/own/{id}", own_contact_remove),
     ("POST", "/api/v1/contacts/own/{id}/signature", own_contact_reread),
     ("GET", "/api/v1/contacts/own/{id}/versions", own_contact_versions),
+    ("GET", "/api/v1/contacts/ignored", ignored_contact_list),
+    ("POST", "/api/v1/contacts/ignored", ignored_contact_add),
+    ("DELETE", "/api/v1/contacts/ignored", ignored_contact_remove),
     ("GET", "/api/v1/threads", gespraech),
     ("GET", "/api/v1/documents", dokument),
     ("GET", "/api/v1/documents/facts", fakten),

@@ -1295,10 +1295,29 @@ def test_a_signature_is_asked_for_one_address(server, monkeypatch):
     a, port = server
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeCorrespondents)
     code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=Dana%40Example.com")
-    # What the fold draws, no more: no name, no numbers, no links.
+    # What the window draws, no more: no name, no numbers, no links – and
+    # when the footer was read.
+    read = r.pop("read")
     assert code == 200 and r == {"lines": ["Dana Dienstleister", "Project manager"], "basis": "repeated",
                                  "uid": "outlook:E-Mail/Inbox/a.eml:0", "date": "2026-05-30"}
     assert FakeCorrespondents.asked == ["dana@example.com"]
+    # It is kept from then on: asked again, no mail is read, and the
+    # person's entry in the list says a footer is there.
+    FakeCorrespondents.asked = None
+    again = roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")[2]
+    assert again == {**r, "read": read} and FakeCorrespondents.asked is None
+
+    class Dana(FakeCorrespondents):
+        PEOPLE = [{"name": "Dana Dienstleister", "also": [], "addresses": ["d@example.com", "dana@example.com"],
+                   "writes_from": "dana@example.com", "received": 3, "sent": 1, "frequent": False,
+                   "last": None, "card": False},
+                  {"name": "Erik Einkauf", "also": [], "addresses": ["erik@example.com"],
+                   "writes_from": "erik@example.com", "received": 1, "sent": 0, "frequent": False,
+                   "last": None, "card": False}]
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: Dana)
+    listed = roh(port, "GET", "/api/v1/correspondents")[2]["items"]
+    assert listed[0]["footer"] is True and "footer" not in listed[1]
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeCorrespondents)
     for wrong in ("", "?address=", "?address=dana"):
         code, _, r = roh(port, "GET", "/api/v1/correspondents/signature" + wrong)
         assert code == 400 and r["error"]["k"] == "srv.badparam", r
@@ -1308,7 +1327,7 @@ def test_a_signature_is_asked_for_one_address(server, monkeypatch):
         def get_signatures(cls, addresses):
             return {"error": "The mail export folder is not at hand", "count": 0, "signatures": []}
     monkeypatch.setattr(a.search, "ensure", lambda cfg: NoFiles)
-    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")
+    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=greta@example.com")
     assert code == 409 and r["error"]["k"] == "srv.signature.nofiles", r
 
     class OldIndex(FakeCorrespondents):
@@ -1318,7 +1337,7 @@ def test_a_signature_is_asked_for_one_address(server, monkeypatch):
         def get_signatures(cls, addresses):
             return {"error": cls._NO_MAIL_LINES, "count": 0, "signatures": []}
     monkeypatch.setattr(a.search, "ensure", lambda cfg: OldIndex)
-    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")
+    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=greta@example.com")
     assert code == 409 and r["error"]["k"] == "srv.signature.oldindex", r
 
     class NoFooter(FakeCorrespondents):
@@ -1327,7 +1346,8 @@ def test_a_signature_is_asked_for_one_address(server, monkeypatch):
             return {"count": 1, "signatures": [{"address": addresses[0], "name": "", "lines": [],
                                                 "mails_read": 2}]}
     monkeypatch.setattr(a.search, "ensure", lambda cfg: NoFooter)
-    assert roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")[2] == {"lines": []}
+    none = roh(port, "GET", "/api/v1/correspondents/signature?address=greta@example.com")[2]
+    assert set(none) == {"lines", "read"} and none["lines"] == []
 
 
 def test_the_owners_other_addresses_are_kept_as_addresses(server):

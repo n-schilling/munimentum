@@ -145,12 +145,16 @@ the address book* beside it); an Outlook card for the same address always
 shows instead; a card says who the person is and nothing else – the job
 title, then company and department, the addresses, the numbers with the
 mobile ones marked, and last its marks side by side (where it comes
-from, the frequent contact) – no fold and no button on it; everything
+from, the frequent contact, *footer extracted* where a footer was read from
+the person's mails) – no fold and no button on it; everything
 else is behind the three dots at its corner: *Show communication*,
 *Additional information* – a window with what the archive says of the
 person: messages, mails received and sent, and the footer under their
-mails, read when it opens and set as a quotation, the note that it was
-read automatically apart below it –, *Versions* – a window of its own:
+mails, read by the index run and kept, set as a quotation, the note that
+it was read automatically and when apart below it –, *Ignore* for who has no card – a shared mailbox, a newsletter, somebody
+no card is wanted for: the entry stays, tagged *ignored*, leaves *Not in
+the address book*, and the same place takes it back –, *Versions* – a
+window of its own:
 for an Outlook card the versions the archive keeps of its file, with what
 changed to the current one; for a card of the app's own, absent while
 nothing was replaced, what it said before each change –, and *Add to

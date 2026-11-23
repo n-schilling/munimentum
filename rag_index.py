@@ -709,6 +709,14 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     return len(chunks), new_total, int(V.shape[1])
 
 
+def _whole(value, default):
+    """A setting as a whole number, the default for anything else."""
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
 def main():
     ap = argparse.ArgumentParser()
     # No defaults of their own: the app passes every folder (steps.py), and a
@@ -750,6 +758,23 @@ def main():
                 "planner": a.planner, "todo": a.todo, "onenote": a.onenote})
         except Exception as e:
             progress.event("run.index.analytics_failed", "warn",
+                           error=f"{type(e).__name__}: {e}")
+    # The address book marks who signs their mail and shows the footer
+    # without reading a mail first (footers.py): read here, where the mail
+    # lines were just written, for everyone it lists who has new mail. An
+    # extra like the block above – its failure does not fail the index.
+    home = settings.home_env()
+    if n and home:
+        try:
+            import footers
+            done = footers.fill(home, a.store, a.outlook,
+                                most=_whole(settings.value("contacts_people"), 500),
+                                months=_whole(settings.value("frequent_months"), 12),
+                                mails=_whole(settings.value("frequent_mails"), 12))
+            if done and done[0]:
+                progress.event("run.index.footers", n=done[0], found=done[2])
+        except Exception as e:
+            progress.event("run.index.footers_failed", "warn",
                            error=f"{type(e).__name__}: {e}")
     # Same result schema as every other subprogram: "new" = freshly computed
     # embeddings, "unchanged" = reused ones; the chunk total goes into extra.

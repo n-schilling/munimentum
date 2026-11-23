@@ -16,6 +16,11 @@ the cases), one row per mail address – a person is an address. An Outlook
 card for the same address always wins: the app's own card stays in the
 table and is not shown while Outlook has one.
 
+An address can also be set to be ignored (ignored_contacts): a shared
+mailbox, a newsletter the mail's rules did not tell from a person, or
+somebody the user does not want a card for. It stays what the mail says
+of it and is no longer listed among those the address book lacks.
+
 A card has a history: what a change, a footer read again or a removal
 replaces is kept as an earlier version (own_contact_versions), by address
 – a card added again for the same address continues it. The history lies
@@ -68,6 +73,10 @@ CREATE TABLE IF NOT EXISTS own_contact_versions(
     card        TEXT NOT NULL            -- JSON: the fields of _KEPT as they were
 );
 CREATE INDEX IF NOT EXISTS own_contact_versions_address ON own_contact_versions(address, id);
+CREATE TABLE IF NOT EXISTS ignored_contacts(
+    address     TEXT PRIMARY KEY,        -- lower case: who is not to be offered for the address book
+    since       TEXT NOT NULL
+);
 """
 
 
@@ -270,6 +279,8 @@ class OwnContacts:
                      json.dumps(footer(found), ensure_ascii=False), stamp, stamp))
             except sqlite3.IntegrityError:
                 raise Exists(address) from None
+            # A card says the opposite of "ignore": the mark goes with it.
+            con.execute("DELETE FROM ignored_contacts WHERE address = ?", (address,))
             con.commit()
             return cur.lastrowid
         finally:
@@ -343,6 +354,33 @@ class OwnContacts:
             con.execute("DELETE FROM own_contacts WHERE id = ?", (ident,))
             con.commit()
             return True
+        finally:
+            con.close()
+
+    # -- the addresses not to be offered for the address book ----------------
+    def ignored(self):
+        """The ignored addresses, sorted. Reads without creating anything."""
+        if not self.path.exists():
+            return []
+        con = sqlite3.connect(self.path, timeout=5)
+        try:
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                           "AND name = 'ignored_contacts'").fetchone() is None:
+                return []
+            return [row[0] for row in con.execute("SELECT address FROM ignored_contacts ORDER BY address")]
+        finally:
+            con.close()
+
+    def ignore(self, address, on=True):
+        """Set an address to be ignored, or (`on` False) no longer."""
+        address = clean_address(address)
+        con = self._connect()
+        try:
+            if on:
+                con.execute("INSERT OR IGNORE INTO ignored_contacts(address, since) VALUES(?,?)", (address, now()))
+            else:
+                con.execute("DELETE FROM ignored_contacts WHERE address = ?", (address,))
+            con.commit()
         finally:
             con.close()
 

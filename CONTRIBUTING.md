@@ -108,7 +108,8 @@ which keeps what it replaces and journals the write; `evidence.py` turns that
 into the chain of checksums after every run and checks it. `correspondents.py`
 counts whom the mailbox's owner writes with from one slim row per mail the
 index run writes, and `signature.py` reads the footer under a person's mails
-from the `.eml` files; `own_contacts.py` keeps the contacts added to the
+from the `.eml` files – `footers.py` has every index run read them for the
+people the address book lists and keeps them; `own_contacts.py` keeps the contacts added to the
 address book in the app and what each said before a change – rows in the
 profile's database, never files in an export folder. `mcp_server.py` is
 the MCP server; the app's search calls its tools in-process, so what leaves

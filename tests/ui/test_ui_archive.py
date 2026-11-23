@@ -201,7 +201,7 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     expect(card.locator(".tag.frequent")).to_have_text(EN["book.tag.frequent"])
     received, sent = counts(dana[1])
     # The marks close the card; what the archive says of Dana is a window of its own.
-    expect(card.locator(".ctags .tag")).to_have_count(1)
+    expect(card.locator(".ctags .tag")).to_have_text([EN["book.tag.frequent"], EN["book.tag.footer"]])
     expect(card.locator("details.book-sig")).to_have_count(0)
     window = archive_page.locator("#modal")
     card.locator(".card-menu summary").click()
@@ -300,10 +300,33 @@ def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archi
         for kept_card in archive.get("/api/v1/contacts/own")["items"]:
             if kept_card["address"] == lars[1]:
                 archive.send("DELETE", f"/api/v1/contacts/own/{kept_card['id']}", {})
+        archive.send("DELETE", "/api/v1/contacts/ignored?address=" + lars[1].replace("@", "%40"), {})
 
     # Whatever happens below, the archive is what the other tests expect.
     forget_lars()
     try:
+        # Somebody the address book lacks can be set to be ignored: he leaves that list …
+        missing = archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]')
+        card = cards.filter(has_text=lars[0])
+        # The index run read his footer: the card says so, the window says when.
+        expect(card.locator(".ctags .tag", has_text=EN["book.tag.footer"])).to_be_visible()
+        card.locator(".card-menu summary").click()
+        card.get_by_role("button", name=EN["book.info"]).click()
+        expect(archive_page.locator("#modal .signote")).to_contain_text(EN["book.sig.read"].split(". ")[-1])
+        archive_page.locator("#modal .modal-zu").click()
+        card.locator(".card-menu summary").click()
+        with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/contacts/ignored")):
+            card.get_by_role("button", name=EN["book.ignore"], exact=True).click()
+        expect(cards.filter(has_text=lars[0])).to_have_count(0)
+        # … stays among all contacts, marked, and is taken back there.
+        missing.click()
+        card = cards.filter(has_text=lars[0])
+        expect(card.locator(".ctags .tag", has_text=EN["book.tag.ignored"])).to_be_visible()
+        card.locator(".card-menu summary").click()
+        with archive_page.expect_response(lambda r: "/api/v1/contacts/ignored?address=" in r.url):
+            card.get_by_role("button", name=EN["book.ignore.stop"]).click()
+        expect(card.locator(".ctags .tag", has_text=EN["book.tag.ignored"])).to_have_count(0)
+        missing.click()
         # Lars writes often and has no card: one click makes him one.
         card = cards.filter(has_text=lars[0])
         with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/contacts/own") and r.status == 201):

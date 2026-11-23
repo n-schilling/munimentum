@@ -1,36 +1,21 @@
-## New in 15.0.0
+## New in 15.1.0
 
-- **Contacts know your mail**: a card marks a *frequent contact*, and
-  *Additional information* in its menu shows the mails received from and sent
-  to the person. Three switches narrow the list to an exchange both ways, to
-  frequent contacts and to who the address book lacks.
-- **Mail signatures**: the same window reads what stands under a person's
-  mails – job title, company, numbers – with the mail it came from one click
-  away; it is read automatically and can be incomplete or wrong. The card
-  itself names job title, company, department and mobile numbers apart.
-- **Add to the address book**: who writes to you and has no Outlook card gets
-  a card in Munimentum with one click – begun from the mail and its
-  signature's numbers, completed by hand, marked *added here*. It stays in
-  your profile; Outlook's card wins.
-- **Versions of a card**: *Versions* in a card's menu shows what it said
-  before – for an Outlook card every version the archive keeps, for your own
-  what each change replaced.
-- **One person, one address**: two people of the same name are two entries in
-  *Contacts*, each with the address they are and their own mail.
-- **Frequent contact is yours to define**: from how many mails in how many
-  months someone counts is set under *Settings › App*, twelve in twelve by
-  default – as are your own addresses and how many people *Contacts* lists, 500.
-- **For MCP clients**: a client can ask whom you exchange mail with and what
-  their signatures say – what a contact list needs and the address book lacks –,
-  reads the contacts you added as address book contacts, marked as yours, and
-  is told whose archive it searches.
-- **Linux**: the bundle now needs glibc 2.39 or newer.
+- **Ignore**: an address without a card – a shared mailbox, a newsletter,
+  somebody you do not want listed – can be set to *Ignore* in the card's menu.
+  It leaves *Not in the address book*, stays among all contacts tagged
+  *ignored*, and the same menu takes it back.
+- **Signatures are read ahead**: each index run reads the signatures of the
+  people *Contacts* lists and keeps them in your profile. A card says *footer
+  extracted* where one was found, and the window names when it was read – it
+  may have changed since.
+- **For MCP clients**: an address you set to be ignored is marked as such, and
+  the research skill tells the client to leave it out of a contact list.
 
 ## Upgrading
 
-Run *Build calendar & contacts* under *Settings › Expert mode* once: the
-contact cards then name department and mobile numbers. The next Outlook
-export that brings something new does the same by itself.
+The first index run after the update reads the signatures once for everyone
+*Contacts* lists; later runs read only who has sent new mail. Until then a
+signature is read when you open a person's *Additional information*.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

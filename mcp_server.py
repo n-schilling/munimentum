@@ -2795,6 +2795,18 @@ def _own_cards(outlook=()):
     return cards
 
 
+def _ignored():
+    """The addresses the user set to be ignored in the address book
+    (own_contacts.py) – read on every call, like the cards."""
+    path = STATE.get("faelle_db")
+    if not path:
+        return set()
+    try:
+        return set(own_contacts.OwnContacts(path).ignored())
+    except sqlite3.Error:                        # locked for the moment: asked again next time
+        return set()
+
+
 def _mailbox():
     """The mailbox as a whole – every address's mail counts, the name it
     writes under, the address book – read once per index file. None for an
@@ -2939,7 +2951,10 @@ def list_correspondents(date_from: str = "", date_to: str = "", days: int = 0,
     with `origin: "munimentum"` was not exported from Outlook: the user
     added it to the address book in Munimentum, from the mail and by hand
     – say so when the difference matters. Outlook's card wins where both
-    exist.
+    exist. `ignored: true` marks an address without a card that the user
+    set to be ignored in Munimentum's address book – a shared mailbox, a
+    newsletter, somebody they do not want listed: leave it out of a
+    contact list unless the user asks for it, and say that you did.
 
     `sent` is what tells a person from a sender: a newsletter or a ticket
     system has many received and none sent. The default (min_sent=1)
@@ -2998,7 +3013,7 @@ def list_correspondents(date_from: str = "", date_to: str = "", days: int = 0,
     if box is None:
         return {"error": _NO_MAIL_LINES, **empty}
     own = _own_addresses(box, me)
-    added = _own_cards(box["book"])
+    added, ignored = _own_cards(box["book"]), _ignored()
     # Paging asks the same window again: the count is kept for the last one.
     key = (frozenset(own), since, until)
     # Read once into a local: another thread may store its own window.
@@ -3041,6 +3056,8 @@ def list_correspondents(date_from: str = "", date_to: str = "", days: int = 0,
         row["in_address_book"] = card is not None
         if card is not None:
             row["contact"] = card
+        elif address in ignored:
+            row["ignored"] = True
         rows.append((counts["last"] or 0, row))
     order = {"messages": lambda r: (-(r[1]["received"] + r[1]["sent"]), r[1]["address"]),
              "recent": lambda r: (-r[0], r[1]["address"]),

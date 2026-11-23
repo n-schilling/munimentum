@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 15.0.0. Installed by hand – under
+This guide belongs to Munimentum 15.1.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -145,7 +145,10 @@ the default.
 2. Decide who is in, and say by which rule ("at least five mails each way
    since January"). Follow `next_offset` to the end before counting;
    `exclude_domains` drops what does not belong, `address_book` "no" lists
-   only people the address book lacks.
+   only people the address book lacks. A row marked `ignored` is an
+   address the user set to be ignored in Munimentum's address book (a
+   shared mailbox, a newsletter, somebody they do not want listed): leave
+   it out, and say how many you left out for that reason.
 3. A row with a contact card has name parts, organisation, job title and
    numbers from the address book. A card with `origin` "munimentum" was
    added by the user in Munimentum, not exported from Outlook – it is an

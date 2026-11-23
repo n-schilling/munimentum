@@ -144,10 +144,26 @@ def test_what_a_card_said_before_is_kept(book):
     assert book.versions(book.add("greta.gast@example.com")) == []
 
 
+def test_an_address_is_set_to_be_ignored_and_no_longer(book):
+    assert book.ignored() == []
+    book.ignore("News@Shop.example")
+    book.ignore("news@shop.example")                     # once is enough
+    book.ignore("team@nordwind.example")
+    assert book.ignored() == ["news@shop.example", "team@nordwind.example"]
+    book.ignore("team@nordwind.example", on=False)
+    book.ignore("nobody@example.com", on=False)          # no mark, no error
+    assert book.ignored() == ["news@shop.example"]
+    with pytest.raises(own_contacts.BadValue):
+        book.ignore("no address")
+    # A card says the opposite: adding one takes the mark away.
+    book.add("news@shop.example", "Shop News")
+    assert book.ignored() == []
+
+
 def test_a_read_creates_nothing(tmp_path):
     path = tmp_path / "faelle.db"
     sqlite3.connect(path).close()                        # a profile from before the table
-    assert own_contacts.OwnContacts(path).all() == []
+    assert own_contacts.OwnContacts(path).all() == [] and own_contacts.OwnContacts(path).ignored() == []
     con = sqlite3.connect(path)
     assert con.execute("SELECT name FROM sqlite_master").fetchall() == []
     con.close()
@@ -209,6 +225,17 @@ def test_a_contact_goes_through_the_methods(server, monkeypatch):  # noqa: F811
         assert code == 404 and r["error"]["k"] == "srv.contact.unknown", where
     assert roh(port, "DELETE", path)[0] == 204
     assert roh(port, "GET", "/api/v1/contacts/own")[2]["count"] == 0
+    # Ignoring an address: every write answers the whole list.
+    where = "/api/v1/contacts/ignored"
+    assert roh(port, "GET", where)[2] == {"items": [], "count": 0}
+    assert roh(port, "POST", where, {"address": "News@shop.example"})[2] == {"items": ["news@shop.example"], "count": 1}
+    assert roh(port, "POST", where, {"address": "news@shop.example"})[2]["count"] == 1
+    for body in ({}, {"address": "nobody"}, {"address": "a@example.com", "why": "x"}):
+        code, _, r = roh(port, "POST", where, body)
+        assert code == 400 and r["error"]["k"] == "srv.contact.badvalue", body
+    assert roh(port, "DELETE", where)[0] == 400
+    code, _, r = roh(port, "DELETE", where + "?address=news%40shop.example")
+    assert code == 200 and r == {"items": [], "count": 0}
 
 
 def test_a_contact_is_added_without_an_index_and_read_again_only_with_one(server, monkeypatch):  # noqa: F811
@@ -263,6 +290,18 @@ def test_an_added_contact_is_an_address_book_contact_for_a_client(archive_with_b
     archive_with_book.remove(ident)
     assert _all(contains=row["address"])[0]["in_address_book"] is False
     assert not next(p for p in mcp_server.correspondent_people() if row["address"] in p["addresses"])["card"]
+
+
+def test_a_client_is_told_which_addresses_the_user_ignores(archive_with_book):
+    row = _without_card()
+    assert "ignored" not in row
+    archive_with_book.ignore(row["address"])
+    marked = [r["address"] for r in _all(party="external") if r.get("ignored")]
+    assert marked == [row["address"]]
+    # A card ends it: the address is a contact then.
+    archive_with_book.add(row["address"], row["name"])
+    (now,) = _all(contains=row["address"])
+    assert "ignored" not in now and now["in_address_book"] is True
 
 
 def test_the_outlook_card_always_wins(archive_with_book):

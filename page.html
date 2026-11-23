@@ -9609,7 +9609,9 @@ function cardHtml(e){
   if(o && !e.c) menu += '<button onclick="ownContactDialog(' + o.id + ')">' + esc(t('book.own.edit')) + '</button>';
   else if(!e.c && m && m.addresses.length){
     var a = BOOK_ADD.push({address: m.writes_from || m.addresses[0], name: e.name}) - 1;
-    menu += '<button onclick="ownContactAdd(' + a + ')">' + esc(t('book.add')) + '</button>';
+    menu += '<button onclick="ownContactAdd(' + a + ')">' + esc(t('book.add')) + '</button>' +
+      '<button title="' + esc(t('book.ignore.i')) + '" onclick="bookIgnore(' + a + ', ' + !e.ignored + ')">' +
+      esc(t(e.ignored ? 'book.ignore.stop' : 'book.ignore')) + '</button>';
   }
   // Only entries from the address book have a source file to link to.
   var h = '<div class="card2"><details class="card-menu"><summary title="' + esc(t('book.menu')) + '" aria-label="' +
@@ -9620,7 +9622,9 @@ function cardHtml(e){
   // The marks close the card, side by side.
   var tags = (o ? '<span class="tag added">' + esc(t('book.tag.own')) + '</span>'
        : e.quelle === 'comm' ? '<span class="tag herkunft">' + esc(t('book.tag.comm')) + '</span>' : '') +
-    (m && m.frequent ? '<span class="tag frequent">' + esc(t('book.tag.frequent')) + '</span>' : '');
+    (m && m.frequent ? '<span class="tag frequent">' + esc(t('book.tag.frequent')) + '</span>' : '') +
+    (m && m.footer ? '<span class="tag herkunft">' + esc(t('book.tag.footer')) + '</span>' : '') +
+    (e.ignored ? '<span class="tag herkunft">' + esc(t('book.tag.ignored')) + '</span>' : '');
   // The card field by field: the job title, then where – company and department.
   if(r.role) h += '<div class="crole">' + esc(r.role) + '</div>';
   var where = [r.org, r.dept].filter(Boolean).join(' · ');
@@ -9741,6 +9745,11 @@ function dayWithYear(day){
   var d = new Date(String(day).length > 10 ? String(day) : String(day) + 'T00:00:00');
   return isNaN(d) ? String(day) : d.toLocaleDateString(LOC, {day: 'numeric', month: 'short', year: 'numeric'});
 }
+function signatureRead(stamp){
+  var d = new Date(stamp);
+  if(isNaN(d)) return '';
+  return t('book.sig.read', {date: d.toLocaleDateString(LOC, {dateStyle: 'medium'}), time: d.toLocaleTimeString(LOC, {timeStyle: 'short'})});
+}
 function signatureHtml(r, i){
   if(rtext(r)) return '<p class="hint err small">' + esc(rtext(r)) + '</p>';
   if(!(r.lines || []).length) return '<div class="sigline muted">' + esc(t('book.sig.none')) + '</div>';
@@ -9749,7 +9758,9 @@ function signatureHtml(r, i){
   return '<blockquote class="sigquote">' +
     r.lines.map(function(line){ return '<div class="sigline">' + esc(line) + '</div>'; }).join('') + '</blockquote>' +
     // What is shown was read by rules, not by a person: said where it is shown.
-    '<div class="signote">' + (r.basis === 'single' ? esc(t('book.sig.single')) + ' ' : '') + esc(t('book.sig.auto')) + '</div>' +
+    // … at a moment that is said: the footer is kept from that reading.
+    '<div class="signote">' + (r.basis === 'single' ? esc(t('book.sig.single')) + ' ' : '') + esc(t('book.sig.auto')) +
+      (r.read ? ' ' + esc(signatureRead(r.read)) : '') + '</div>' +
     (r.uid ? '<button class="mini" onclick="bookSignatureMail(' + i + ')">' +
              esc(r.date ? t('book.sig.from', {when: dayWithYear(r.date)}) : t('book.sig.open')) + '</button>' : '');
 }
@@ -9918,6 +9929,25 @@ function loadOwnContacts(){
     OWN_CONTACTS = r.items || [];
     if(OWN_CONTACTS.length && offeneSicht === 'adressbuch') drawBook();
   }).catch(function(){ OWN_CONTACTS_ASKED = false; });
+  api(API + '/contacts/ignored').then(ignoredKeep).catch(function(){});
+}
+/* The addresses set to be ignored: a shared mailbox, a newsletter the
+   mail's rules took for a person, somebody the user wants no card for.
+   They stay in the list, marked, and leave "Not in the address book". */
+var IGNORED = {};
+function ignoredKeep(r){
+  if(!r || r.ok === false){ apiFehler(r); return; }
+  var before = Object.keys(IGNORED).sort().join('|');
+  IGNORED = {};
+  (r.items || []).forEach(function(a){ IGNORED[a] = true; });
+  if(Object.keys(IGNORED).sort().join('|') !== before && offeneSicht === 'adressbuch') drawBook();
+}
+function bookIgnore(i, on){
+  var who = BOOK_ADD[i];
+  if(!who) return;
+  (on ? post(API + '/contacts/ignored', {address: who.address})
+      : entferne(API + '/contacts/ignored?address=' + encodeURIComponent(who.address)))
+    .then(ignoredKeep).catch(ownContactFailed);
 }
 /* The correspondents name a person by their card: a card added, renamed
    or removed asks them again with the next drawing. */
@@ -10194,6 +10224,10 @@ function drawBook(){
   if(personenGeladen !== false) ladePersonen();          // again when the setting is another
   BOOK_ADD = []; BOOK_INFO = []; BOOK_VERSIONS = [];
   var alle = bild ? [] : buchEintraege();
+  // Ignored is who has no card and whose address the user set so.
+  alle.forEach(function(e){
+    e.ignored = !e.c && !e.o && ((e.m || {}).addresses || []).some(function(a){ return IGNORED[a] === true; });
+  });
   // The chip for the cards of the app's own is absent while there is none.
   var anyOwn = alle.some(function(e){ return !!e.o; });
   if(!bild && !anyOwn && bookF === 'own') bookF = 'all';
@@ -10202,7 +10236,8 @@ function drawBook(){
   // A switch that could narrow nothing is absent – and no longer set.
   var can = {exchange: alle.some(function(e){ return e.m && e.m.received && e.m.sent; }),
              frequent: alle.some(function(e){ return e.m && e.m.frequent; }),
-             missing: alle.some(function(e){ return !e.c && !e.o; }) && alle.some(function(e){ return !!(e.c || e.o); })};
+             missing: alle.some(function(e){ return !e.c && !e.o && !e.ignored; }) &&
+                      alle.some(function(e){ return !!(e.c || e.o || e.ignored); })};
   if(!bild) Object.keys(can).forEach(function(flag){ if(!can[flag]) BOOK_FLAGS[flag] = false; });
   document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-flag]').forEach(function(c){
     var flag = c.dataset.bookFlag;
@@ -10230,7 +10265,7 @@ function drawBook(){
     return true;
   }).filter(function(e){
     if(BOOK_FLAGS.exchange && !(e.m && e.m.received && e.m.sent)) return false;
-    if(BOOK_FLAGS.missing && (e.c || e.o)) return false;
+    if(BOOK_FLAGS.missing && (e.c || e.o || e.ignored)) return false;
     return !(BOOK_FLAGS.frequent && !(e.m && e.m.frequent));
   });
   var hits = imFilter.slice();

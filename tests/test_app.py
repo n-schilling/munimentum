@@ -11632,7 +11632,7 @@ PRUEFUNG_ADDRESS_BOOK_MAIL = GRUNDZUSTAND + """
 process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
 var CORR_ANSWER = {items: [
   {name: 'Dana Dienstleister', also: ['Dienstleister, Dana'], addresses: ['dana@example.org', 'dana@home.example'],
-   writes_from: 'dana@home.example', received: 23, sent: 16, frequent: true},
+   writes_from: 'dana@home.example', received: 23, sent: 16, frequent: true, footer: true},
   {name: 'Erik Einkauf', addresses: ['erik@example.org'], received: 3, sent: 1, frequent: false},
   {name: 'Shop News', addresses: ['news@shop.example'], received: 40, sent: 0, frequent: false},
   {name: 'Info', addresses: ['info@shop1.example'], received: 1, sent: 0, frequent: false},
@@ -11719,6 +11719,8 @@ setTimeout(function(){
     // The marks close the card, side by side – after the lines, not beside the name.
     pruefe(dana.indexOf('<div class="ctags">') > dana.indexOf('class="cline"') && dana.indexOf('class="cname"') < dana.indexOf('class="tag'), 'the marks: ' + dana);
     pruefe(card('Only In The Book').indexOf('ctags') < 0, 'an empty row of marks');
+    // A footer kept from the person's mails is a mark of its own – only where one is.
+    pruefe(dana.indexOf(esc(t('book.tag.footer'))) >= 0 && card('Erik Einkauf').indexOf(esc(t('book.tag.footer'))) < 0, 'the footer mark: ' + dana);
     // What the archive says of a person stands in a window of its own, what can be done in the card's menu – neither on the card.
     pruefe(dana.indexOf('<details class="card-menu">') === 0 && dana.indexOf('button class="mini"') < 0 &&
            dana.indexOf('class="card-menu-list"><button onclick="zeigeKommunikation(') > 0, 'the menu: ' + dana);
@@ -11803,6 +11805,10 @@ setTimeout(function(){
       pruefe(box.indexOf(t('book.sig.auto')) >= 0 && signatureHtml({lines: []}, which).indexOf(t('book.sig.auto')) < 0, 'the caveat: ' + box);
       // The mail's day with its year – and no dangling "of" without a day.
       pruefe(box.indexOf('2026') >= 0, 'the day has no year: ' + box);
+      // A kept footer says when it was read – one read without a moment says nothing of it.
+      var said = t('book.sig.read', {date: '', time: ''}).split('.').slice(-2)[0];
+      var kept = signatureHtml({lines: ['x'], read: '2026-11-23T10:28:00Z'}, which);
+      pruefe(said.length > 10 && kept.indexOf(esc(said)) >= 0 && kept.indexOf('2026') >= 0 && box.indexOf(esc(said)) < 0, 'when it was read: ' + kept);
       var undated = signatureHtml({lines: ['x'], uid: 'u'}, which);
       pruefe(undated.indexOf(t('book.sig.open') + '<') >= 0, 'undated: ' + undated);
       bookSignature(true, which);
@@ -11857,7 +11863,7 @@ function cardOf(id, more){
 }
 // Dana has an Outlook card and, from before it, one of the app's own: Outlook's wins.
 var STORED = [cardOf(1, {address: 'dana@example.org', name: 'Somebody Else'})];
-var sent = [], HISTORY = [];
+var sent = [], HISTORY = [], IGNORED_STORED = [];
 global.fetch = function(path, opts){
   path = String(path); opts = opts || {};
   var method = opts.method || 'GET', body = opts.body ? JSON.parse(opts.body) : null, answer, status = 200;
@@ -11870,6 +11876,11 @@ global.fetch = function(path, opts){
                         urls: ['www.example.com', 'www.nordwind.example'],
                         signature: {lines: ['Erik Einkauf', 'Director'], read: '2026-09-01T09:00:00Z'}});
   else if(path.indexOf('/versions') >= 0) answer = {items: HISTORY, count: HISTORY.length};
+  else if(path.indexOf('/api/v1/contacts/ignored') >= 0){
+    if(method === 'POST') IGNORED_STORED.push(body.address);
+    if(method === 'DELETE') IGNORED_STORED = IGNORED_STORED.filter(function(a){ return 'address=' + encodeURIComponent(a) !== path.split('?')[1]; });
+    answer = {items: IGNORED_STORED.slice(), count: IGNORED_STORED.length};
+  }
   else if(path.indexOf('/api/v1/contacts/own/') >= 0 && method === 'PATCH') answer = cardOf(2, Object.assign({versions: 3}, body));
   else if(path.indexOf('/api/v1/contacts/own/') >= 0 && method === 'DELETE') return Promise.resolve({ok: true, status: 204});
   else if(path.indexOf('/api/v1/contacts/own') >= 0 && method === 'POST'){ answer = cardOf(2); status = 201; }
@@ -11905,7 +11916,22 @@ setTimeout(function(){
     pruefe(BOOK_ADD.some(function(a){ return a.address === 'erik@example.org' && a.name === 'Erik Einkauf'; }), JSON.stringify(BOOK_ADD));
     bookFlag('missing');
     pruefe(cards().length === 2, 'missing before: ' + cards().length);
+    // A newsletter or a shared mailbox is set to be ignored in the card's menu: it leaves this list …
+    var greta = card('Greta Gast');
+    pruefe(greta.indexOf('bookIgnore(') >= 0 && greta.indexOf(esc(t('book.ignore'))) >= 0 && card('Dana Dienstleister') === '', 'no way to ignore: ' + greta);
+    bookIgnore(BOOK_ADD.map(function(a){ return a.address; }).indexOf('greta@example.org'), true);
+  setTimeout(function(){
+    pruefe(sent[0][0] === 'POST' && sent[0][1].indexOf('/contacts/ignored') >= 0 && sent[0][2].address === 'greta@example.org', 'ignored: ' + JSON.stringify(sent));
+    pruefe(cards().length === 1 && card('Greta Gast') === '', 'still missing: ' + cards().length);
+    // … stays among all, marked, and can be taken back there.
     bookFlag('missing');
+    greta = card('Greta Gast');
+    pruefe(greta.indexOf(esc(t('book.tag.ignored'))) >= 0 && greta.indexOf(esc(t('book.ignore.stop'))) >= 0, 'not marked: ' + greta);
+    bookIgnore(BOOK_ADD.map(function(a){ return a.address; }).indexOf('greta@example.org'), false);
+  setTimeout(function(){
+    pruefe(sent[1][0] === 'DELETE' && sent[1][1].indexOf('address=greta%40example.org') >= 0, 'taken back: ' + JSON.stringify(sent[1]));
+    pruefe(card('Greta Gast').indexOf(esc(t('book.tag.ignored'))) < 0, 'still ignored');
+    sent = [];
     ownContactAdd(BOOK_ADD.map(function(a){ return a.address; }).indexOf('erik@example.org'));
   setTimeout(function(){
     pruefe(sent.length === 1 && sent[0][0] === 'POST' && sent[0][2].address === 'erik@example.org', 'sent: ' + JSON.stringify(sent));
@@ -11998,6 +12024,7 @@ setTimeout(function(){
     pruefe(VERSIONS === behind, 'the detail does not get its versions back');
     console.log('OK');
   }, 20); }, 20); }, 20); }, 20); }, 20);
+  }, 20); }, 20);
   }, 40);
 }, 20);
 """
