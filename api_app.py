@@ -7,6 +7,7 @@ import threading
 from urllib.parse import quote
 
 import api
+import correspondents
 import folders
 import i18n
 from api import Ablehnung
@@ -95,6 +96,10 @@ def konfig_speichern(h, data):
                                # 0 = never re-read the chat comments.
                                ("planner_sweep_hours", 0, 8760),
                                ("search_results", 5, 100),
+                               # Two is the least a mail each way can be.
+                               ("frequent_mails", 2, 10000),
+                               ("frequent_months", 1, 120),
+                               ("contacts_people", 1, 5000),
                                # Below five seconds the page would ask
                                # more often than anything can change.
                                ("status_poll_seconds", 5, 600),
@@ -142,6 +147,9 @@ def konfig_speichern(h, data):
         for k in ("internal_domains", "own_name"):
             if k in data:
                 cfg[k] = str(data[k] or "").strip()
+        # Your own addresses: kept as the addresses found in what was typed.
+        if "own_addresses" in data:
+            cfg["own_addresses"] = ", ".join(correspondents.typed_addresses(data["own_addresses"]))
         # Whoever switches Ollama off no longer means the check from just now.
         if "ollama_enabled" in data:
             h.app._ollama_cache = (0, None)

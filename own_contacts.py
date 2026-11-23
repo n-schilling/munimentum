@@ -1,0 +1,373 @@
+"""
+own_contacts.py – the contacts the user added to the address book in the
+app itself.
+
+The Outlook address book is what Microsoft holds and the export copies; a
+person the user writes with every week is often on no card there. Such a
+person can be added here: a card of the app's own, begun from what the
+mail says (the name the address writes under, the numbers and links of
+its footer) and completed by hand – title, company, department, numbers,
+links, a note.
+
+A card of the app's own is never a file in an export folder: everything
+there is what Microsoft delivered, and the evidence chain holds it to
+that. The cards live in the profile's small database (faelle.db, beside
+the cases), one row per mail address – a person is an address. An Outlook
+card for the same address always wins: the app's own card stays in the
+table and is not shown while Outlook has one.
+
+A card has a history: what a change, a footer read again or a removal
+replaces is kept as an earlier version (own_contact_versions), by address
+– a card added again for the same address continues it. The history lies
+beside the cards, not in the evidence chain: that one holds what
+Microsoft delivered.
+"""
+
+import json
+import re
+import sqlite3
+from datetime import datetime, UTC
+from pathlib import Path
+
+KINDS = ("phone", "mobile", "fax")
+TEXT_MOST = 200         # a name, a title, a company, a department, a number, a link
+NOTE_MOST = 4000
+LIST_MOST = 20          # numbers, links
+ORIGIN = "munimentum"   # what a reader is told such a card comes from
+REASONS = ("changed", "reread", "removed")      # what replaced a version
+VERSIONS_MOST = 200     # earlier versions one answer lists, newest first
+
+# What the mail lines call an address (correspondents._ADDRESS): whoever
+# is listed there can get a card.
+# … a sender on a host without a dot among them ("root@server01").
+_ADDRESS = re.compile(r"^[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)*$")
+_TEXTS = ("name", "title", "company", "department", "note")
+_KEPT = ("name", "title", "company", "department", "phones", "urls", "note", "signature")
+_CONTROL = re.compile("[\x00-\x09\x0b-\x1f\x7f\u200e\u200f\u202a-\u202e\u2066-\u2069]")
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS own_contacts(
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,   -- never given twice: a removed card's id names nobody else
+    address     TEXT NOT NULL UNIQUE,    -- lower case: who this is
+    name        TEXT NOT NULL,
+    title       TEXT NOT NULL DEFAULT '',
+    company     TEXT NOT NULL DEFAULT '',
+    department  TEXT NOT NULL DEFAULT '',
+    phones      TEXT NOT NULL DEFAULT '[]',   -- JSON: [{"type", "number"}]
+    urls        TEXT NOT NULL DEFAULT '[]',   -- JSON: [link]
+    note        TEXT NOT NULL DEFAULT '',
+    signature   TEXT NOT NULL DEFAULT '{}',   -- JSON: the footer as last read
+    created     TEXT NOT NULL,
+    updated     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS own_contact_versions(
+    id          INTEGER PRIMARY KEY,
+    address     TEXT NOT NULL,           -- whose card this was
+    replaced    TEXT NOT NULL,           -- when it stopped being the card
+    reason      TEXT NOT NULL,           -- one of REASONS
+    card        TEXT NOT NULL            -- JSON: the fields of _KEPT as they were
+);
+CREATE INDEX IF NOT EXISTS own_contact_versions_address ON own_contact_versions(address, id);
+"""
+
+
+class Exists(Exception):
+    """The address has a card of the app's own already."""
+
+
+class BadValue(ValueError):
+    """A field's value is not what the field takes; `field` names it."""
+
+    def __init__(self, field):
+        super().__init__(field)
+        self.field = field
+
+
+def now():
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def clean_address(value):
+    address = str(value or "").strip().lower()
+    if not _ADDRESS.match(address) or len(address) > TEXT_MOST:
+        raise BadValue("address")
+    return address
+
+
+def _text(field, value, most):
+    if not isinstance(value, str):
+        raise BadValue(field)
+    # No control characters, no marks that turn the writing direction: a
+    # card is read by people and handed to MCP clients as it stands.
+    if field == "note":
+        value = value.replace("\r\n", "\n").replace("\r", "\n").replace("\t", " ")
+    value = _CONTROL.sub(" " if field != "note" else "", value)
+    value = " ".join(value.split()) if field != "note" else value.strip()
+    if len(value) > most:
+        raise BadValue(field)
+    return value
+
+
+def clean(fields):
+    """The fields of a card as they are stored – checked whole before
+    anything is written: texts of bounded length, numbers each with a kind
+    of KINDS, links as text. An unknown field is a bad value too."""
+    out = {}
+    for field, value in (fields or {}).items():
+        if field in _TEXTS:
+            out[field] = _text(field, value, NOTE_MOST if field == "note" else TEXT_MOST)
+            if field == "name" and not out[field]:
+                raise BadValue("name")
+        elif field == "phones":
+            if not isinstance(value, list) or len(value) > LIST_MOST:
+                raise BadValue(field)
+            phones = []
+            for row in value:
+                if not isinstance(row, dict) or row.get("type") not in KINDS:
+                    raise BadValue(field)
+                number = _text(field, row.get("number"), TEXT_MOST)
+                if number:
+                    phones.append({"type": row["type"], "number": number})
+            out[field] = phones
+        elif field == "urls":
+            if not isinstance(value, list) or len(value) > LIST_MOST:
+                raise BadValue(field)
+            urls = [_text(field, row, TEXT_MOST) for row in value]
+            out[field] = list(dict.fromkeys(u for u in urls if u))
+        else:
+            raise BadValue(field)
+    return out
+
+
+def footer(found):
+    """What is kept of a footer as it was read (signature.read's answer,
+    or the MCP tool's row): its lines, what they rest on, the mail they
+    stand in, and when it was read. Nothing read (no index, no mail file)
+    is no reading: no lines and no day."""
+    if not found:
+        return {"lines": []}
+    kept = {"lines": [str(line) for line in found.get("lines") or []], "read": now()}
+    for key in ("basis", "uid", "date"):
+        if found.get(key):
+            kept[key] = str(found[key])
+    return kept
+
+
+def _merged(have, new, key):
+    seen = {key(row) for row in have}
+    return have + [row for row in new if key(row) not in seen and not seen.add(key(row))]
+
+
+def _digits(row):
+    return "".join(ch for ch in row["number"] if ch.isdigit())
+
+
+def _said(card):
+    """What a card says, field by field – of the footer its lines and
+    what they rest on: the same lines read again, on another day or from
+    a newer mail, are no change."""
+    said = {field: card.get(field) for field in _KEPT}
+    said["signature"] = {k: v for k, v in (said["signature"] or {}).items() if k in ("lines", "basis")}
+    return said
+
+
+_EMPTY = {"name": "", "title": "", "company": "", "department": "", "phones": [], "urls": [],
+          "note": "", "signature": {"lines": []}}
+
+
+def _differing(earlier, later):
+    earlier, later = _said(earlier), _said(later)
+    return [field for field in _KEPT if earlier[field] != later[field]]
+
+
+def _keep(con, card, reason):
+    con.execute("INSERT INTO own_contact_versions(address, replaced, reason, card) VALUES(?,?,?,?)",
+                (card["address"], now(), reason,
+                 json.dumps({field: card[field] for field in _KEPT}, ensure_ascii=False)))
+
+
+class OwnContacts:
+    """The table on the profile's database file. Reads never raise on a
+    missing file – the table is created on first use."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def _connect(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        con = sqlite3.connect(self.path, timeout=5)
+        con.row_factory = sqlite3.Row
+        con.executescript(_SCHEMA)
+        return con
+
+    @staticmethod
+    def _kept(con):
+        """How many earlier versions each address has – none while the
+        table is not there (a read creates nothing)."""
+        if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                       "AND name = 'own_contact_versions'").fetchone() is None:
+            return {}
+        return dict(con.execute("SELECT address, COUNT(*) FROM own_contact_versions GROUP BY address"))
+
+    @staticmethod
+    def _card(row, kept=None):
+        return {"id": row["id"], "address": row["address"], "name": row["name"],
+                "versions": (kept or {}).get(row["address"], 0),
+                "title": row["title"], "company": row["company"],
+                "department": row["department"],
+                "phones": json.loads(row["phones"] or "[]"),
+                "urls": json.loads(row["urls"] or "[]"), "note": row["note"],
+                "signature": json.loads(row["signature"] or "{}"),
+                "created": row["created"], "updated": row["updated"]}
+
+    def all(self):
+        """Every card, by name. An unreadable or absent file has none."""
+        if not self.path.exists():
+            return []
+        # Read without creating anything: an MCP process reads here too.
+        con = sqlite3.connect(self.path, timeout=5)
+        con.row_factory = sqlite3.Row
+        try:
+            # No table yet is no card. Anything else – a file that is
+            # locked, one that is no database – is an error and says so:
+            # "none" would make the cards disappear from the page.
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                           "AND name = 'own_contacts'").fetchone() is None:
+                return []
+            kept = self._kept(con)
+            return [self._card(r, kept) for r in con.execute(
+                "SELECT * FROM own_contacts ORDER BY name COLLATE NOCASE, address")]
+        finally:
+            con.close()
+
+    def one(self, ident):
+        con = self._connect()
+        try:
+            row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
+            return self._card(row, self._kept(con)) if row else None
+        finally:
+            con.close()
+
+    def add(self, address, name="", found=None):
+        """A new card for `address`, begun from what the mail says: the
+        name it writes under and its footer's numbers and links (`found`).
+        Raises Exists for an address that has one."""
+        address = clean_address(address)
+        fields = clean({"name": str(name or "").strip() or address,
+                        "phones": [p for p in (found or {}).get("phones") or []
+                                   if isinstance(p, dict) and p.get("type") in KINDS][:LIST_MOST],
+                        "urls": [u for u in (found or {}).get("urls") or []
+                                 if isinstance(u, str) and len(u) <= TEXT_MOST][:LIST_MOST]})
+        con = self._connect()
+        try:
+            stamp = now()
+            try:
+                cur = con.execute(
+                    "INSERT INTO own_contacts(address, name, phones, urls, signature, created, updated) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (address, fields["name"], json.dumps(fields["phones"], ensure_ascii=False),
+                     json.dumps(fields["urls"], ensure_ascii=False),
+                     json.dumps(footer(found), ensure_ascii=False), stamp, stamp))
+            except sqlite3.IntegrityError:
+                raise Exists(address) from None
+            con.commit()
+            return cur.lastrowid
+        finally:
+            con.close()
+
+    def change(self, ident, fields):
+        """Set the named fields – all or none. False for a card that is
+        not there."""
+        fields = clean(fields)
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")       # what is read here is what the write replaces
+            row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
+            if row is None:
+                return False
+            card = self._card(row)
+            if not _differing(card, {**card, **fields}):
+                return True                      # saved as it stood: no version, no new day
+            _keep(con, card, "changed")
+            for field, value in fields.items():
+                stored = json.dumps(value, ensure_ascii=False) if field in ("phones", "urls") else value
+                con.execute(f"UPDATE own_contacts SET {field} = ? WHERE id = ?", (stored, ident))
+            con.execute("UPDATE own_contacts SET updated = ? WHERE id = ?", (now(), ident))
+            con.commit()
+            return True
+        finally:
+            con.close()
+
+    def reread(self, ident, found):
+        """The footer read again: its lines replace the kept ones, and a
+        number or a link the card does not have yet joins it. Nothing the
+        user typed is taken away or overwritten – and a reading that finds
+        no footer (the newest mails are short answers) leaves the kept
+        one as it is. False for a card that is not there."""
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")       # what is read here is what the write replaces
+            row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
+            if row is None:
+                return False
+            card = self._card(row)
+            phones = _merged(card["phones"],
+                             [p for p in (found or {}).get("phones") or []
+                              if isinstance(p, dict) and p.get("type") in KINDS], _digits)[:LIST_MOST]
+            urls = _merged(card["urls"], [u for u in (found or {}).get("urls") or []
+                                          if isinstance(u, str) and len(u) <= TEXT_MOST],
+                           lambda u: u)[:LIST_MOST]
+            kept = footer(found) if (found or {}).get("lines") or not card["signature"].get("lines") \
+                else card["signature"]
+            if _differing(card, {**card, "phones": phones, "urls": urls, "signature": kept}):
+                _keep(con, card, "reread")
+            con.execute("UPDATE own_contacts SET phones = ?, urls = ?, signature = ?, updated = ? "
+                        "WHERE id = ?",
+                        (json.dumps(phones, ensure_ascii=False), json.dumps(urls, ensure_ascii=False),
+                         json.dumps(kept, ensure_ascii=False), now(), ident))
+            con.commit()
+            return True
+        finally:
+            con.close()
+
+    def remove(self, ident):
+        """Take the card out of the address book. What it said last stays
+        as an earlier version, for a card added again for the address."""
+        con = self._connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")       # what is read here is what the write replaces
+            row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
+            if row is None:
+                return False
+            _keep(con, self._card(row), "removed")
+            con.execute("DELETE FROM own_contacts WHERE id = ?", (ident,))
+            con.commit()
+            return True
+        finally:
+            con.close()
+
+    def versions(self, ident):
+        """The earlier versions of a card, newest first: when each was
+        replaced, by what (REASONS), the card as it was, and `changed` –
+        the fields in which it differs from what came after it. A version
+        a removal kept has no successor – the card added later began anew
+        – and names every field that held something.
+        None for a card that is not there."""
+        con = self._connect()
+        try:
+            row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
+            if row is None:
+                return None
+            after, out = self._card(row), []
+            for kept in con.execute(
+                    "SELECT replaced, reason, card FROM own_contact_versions WHERE address = ? "
+                    "ORDER BY id DESC LIMIT ?", (after["address"], VERSIONS_MOST)):
+                card = json.loads(kept["card"])
+                # What a removed card said went as a whole: every field
+                # that held something, as against an empty card.
+                out.append({"replaced": kept["replaced"], "reason": kept["reason"], "card": card,
+                            "changed": _differing(card, _EMPTY if kept["reason"] == "removed" else after)})
+                after = card
+            return out
+        finally:
+            con.close()

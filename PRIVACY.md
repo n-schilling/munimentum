@@ -44,7 +44,10 @@ filters — never its hits, for as long as *Settings › App* says (or not at
 all), and a case keeps pointers into the archive plus what a hit said when it
 was added, the remarks you write on its items, and the keys of items you
 removed by hand, so that a search set to collect automatically does not put
-them back. Two things leave the app's folders, each only when you ask: a
+them back. The contacts you add to the address book in the app are rows in
+the same file – name, mail address, what you typed, the mail signature as last
+read, and what a card said before each change or its removal – and are never
+sent to Microsoft. Two things leave the app's folders, each only when you ask: a
 **case export**, a ZIP of copied originals under the path you chose (your
 Documents folder by default), and the **organization as CSV**, the names and
 titles of colleagues – mail addresses only when you tick them – where your
@@ -68,7 +71,8 @@ before posting.
 coverage, the run history with the logs those runs wrote, the completeness
 balance against Microsoft, the analytics figures, your cases and saved
 searches, the earlier versions of items and their checksums, the organization
-in every version the archive holds — to any MCP client, Claude for one,
+in every version the archive holds, whom you exchange mail with, the signatures
+under their mails and the contacts you added — to any MCP client, Claude for one,
 on `127.0.0.1`. It reads; it changes a case only when *MCP clients may
 change cases* is on under *Settings › MCP clients*, and then only adds.
 What the client does with the passages it reads is governed by your

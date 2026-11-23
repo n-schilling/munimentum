@@ -41,6 +41,7 @@ import numpy as np
 
 import analytics_db
 import corpus
+import correspondents
 import recurrence
 import schluessel
 import export_util
@@ -290,6 +291,14 @@ def write_db(store, chunks, manifest=None, now=None, since=None):
         CREATE TABLE adressen(role TEXT NOT NULL, addr TEXT NOT NULL,
                               messages INTEGER NOT NULL);
         CREATE INDEX ix_adressen ON adressen(role, messages DESC);
+        -- One slim row per mail: who wrote it under which name, to whom,
+        -- in which conversation. "Whom do I write with, and how often" is
+        -- a count over every mail – asked of the chunks it would walk the
+        -- fattest table of the store (correspondents.py).
+        CREATE TABLE correspondence(ts REAL, sender TEXT, name TEXT, rcpt TEXT,
+                                    thread TEXT, rel TEXT NOT NULL);
+        -- The newest mails of one sender: where its signature is read from.
+        CREATE INDEX ix_correspondence_sender ON correspondence(sender, ts DESC);
         -- Anhangnamen als eigene Spalte statt angehängt an den Text: sonst
         -- stünden sie in jeder Vorschau und im Kontext der KI-Antwort.
         CREATE VIRTUAL TABLE chunks_fts USING fts5(
@@ -309,6 +318,8 @@ def write_db(store, chunks, manifest=None, now=None, since=None):
                      in (manifest or {}).items()))
     con.executemany("INSERT INTO people VALUES (?,?,?,?)", _people_rows(chunks))
     con.executemany("INSERT INTO adressen VALUES (?,?,?)", _adressen_rows(chunks))
+    con.executemany("INSERT INTO correspondence VALUES (?,?,?,?,?,?)",
+                    correspondents.index_rows(chunks))
     con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
     # The planner's statistics. With them a date window that also asks
     # series_dates (mcp_server._where) is two index seeks and a sort;

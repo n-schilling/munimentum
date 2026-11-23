@@ -171,6 +171,7 @@ def build(home, *, index=True, clean=True, flat=False):
             run_index(home, exports, store)
             run_calendar(home, exports, store)
             case_id = history.case(home, exports, store, earlier)
+            history.own_contact(home)
             history.archive_report(home, exports, store, lambda argv: run_step(home, argv))
     finally:
         # The profile is written: whoever called this (a test session) goes

@@ -335,6 +335,67 @@ def angemeldet(heim=None):
     return None
 
 
+def token_claims(token):
+    """Read a JWT's payload without verifying the signature. {} if not one.
+
+    Display only (account, expiry, permissions) – the token is validated
+    by Graph on the first call anyway.
+    """
+    import base64
+    import json
+    parts = (token or "").split(".")
+    if len(parts) < 2:
+        return {}
+    body = parts[1] + "=" * (-len(parts[1]) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(body).decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def claims_account(claims):
+    """The account a token's claims name, None when they name none."""
+    account = (claims.get("upn") or claims.get("preferred_username")
+               or claims.get("unique_name"))
+    return account if isinstance(account, str) and account else None
+
+
+def stored_account(home, mode=None):
+    """Whose archive the profile folder `home` holds: the account of the
+    way of access in use there – the pasted key's in "token" mode, the
+    sign-in's in "login" mode (`mode`; read from the folder's own
+    configuration when not given) – from the files on disk, asking
+    nobody. None when that way names none: a key left over from before a
+    sign-in says nothing about whose archive this is.
+
+    For the MCP server, which has no app to ask and tells its client
+    whose archive it searches."""
+    if mode is None:
+        # Read afresh, past settings.load: its cache holds one file, the
+        # process's own, and the mode can change while a server runs.
+        import json
+        try:
+            stored = json.loads((Path(home) / settings.CONFIG_NAME).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            stored = {}
+        mode = ((stored.get("auth_mode") if isinstance(stored, dict) else None)
+                or os.environ.get("GRAPH_AUTH") or "token")
+    if str(mode).strip().lower() != "login":
+        try:
+            token = (Path(home) / TOKEN_DATEI).read_text(encoding="utf-8").strip().strip("\"'")
+        except (OSError, UnicodeDecodeError):
+            token = ""
+        if token.lower().startswith("bearer "):
+            token = token[7:]
+        return claims_account(token_claims("".join(token.split())))
+    try:
+        account = angemeldet(heim=home)
+    except Exception:                            # noqa: BLE001 – display only
+        return None
+    return account if isinstance(account, str) else None
+
+
 # --------------------------------------------------------------------------
 # For the scripts: pick a path and say which one it was
 # --------------------------------------------------------------------------

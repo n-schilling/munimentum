@@ -1,13 +1,36 @@
-## New in 14.7.0
+## New in 15.0.0
 
-- **The organization as CSV**: *CSV…* in *Organization* downloads the people
-  of a version – the whole tenant, the part below a person or the list shown
-  – or the changes over a span of versions, ready for Excel. Every file names
-  each person's company; mail addresses come along only when you tick them.
+- **Contacts know your mail**: a card marks a *frequent contact*, and
+  *Additional information* in its menu shows the mails received from and sent
+  to the person. Three switches narrow the list to an exchange both ways, to
+  frequent contacts and to who the address book lacks.
+- **Mail signatures**: the same window reads what stands under a person's
+  mails – job title, company, numbers – with the mail it came from one click
+  away; it is read automatically and can be incomplete or wrong. The card
+  itself names job title, company, department and mobile numbers apart.
+- **Add to the address book**: who writes to you and has no Outlook card gets
+  a card in Munimentum with one click – begun from the mail and its
+  signature's numbers, completed by hand, marked *added here*. It stays in
+  your profile; Outlook's card wins.
+- **Versions of a card**: *Versions* in a card's menu shows what it said
+  before – for an Outlook card every version the archive keeps, for your own
+  what each change replaced.
+- **One person, one address**: two people of the same name are two entries in
+  *Contacts*, each with the address they are and their own mail.
+- **Frequent contact is yours to define**: from how many mails in how many
+  months someone counts is set under *Settings › App*, twelve in twelve by
+  default – as are your own addresses and how many people *Contacts* lists, 500.
+- **For MCP clients**: a client can ask whom you exchange mail with and what
+  their signatures say – what a contact list needs and the address book lacks –,
+  reads the contacts you added as address book contacts, marked as yours, and
+  is told whose archive it searches.
+- **Linux**: the bundle now needs glibc 2.39 or newer.
 
 ## Upgrading
 
-Nothing happens once after this update.
+Run *Build calendar & contacts* under *Settings › Expert mode* once: the
+contact cards then name department and mobile numbers. The next Outlook
+export that brings something new does the same by itself.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the
@@ -22,7 +45,7 @@ whether any of them asks something of you.
 |---|---|
 | `Munimentum-macos-arm64.dmg` | Mac with Apple Silicon (M1 or newer) |
 | `Munimentum-windows-x64.zip` | Windows 10/11 (64-bit) |
-| `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.35+) |
+| `Munimentum-linux-x64.tar.gz` | Linux (64-bit, glibc 2.39+) |
 | `Munimentum-skill-research.zip`, `…-case.zip`, `…-evidence.zip` | the three skills for MCP clients, to install by hand – the same files *Download skills* gives |
 
 

@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 14.7.0
+  version: 15.0.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1632,7 +1632,7 @@ paths:
       parameters:
         - { $ref: "#/components/parameters/Source" }
         - { name: contains, in: query, schema: { type: string }, description: "Substring of the name." }
-        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: limit, in: query, schema: { type: integer, default: 50, maximum: 5000 }, description: "The address book asks for as many as the setting `contacts_people` says." }
       responses:
         "200":
           description: Names with their message counts, most first.
@@ -1671,6 +1671,338 @@ paths:
               $ref: "#/components/mediaTypes/Problem"
         "503":
           description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/correspondents:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListCorrespondents
+      x-needs-index: true
+      summary: Whom the owner exchanges mail with
+      description: |
+        Everyone the mailbox's owner exchanged mail with, person by person:
+        the addresses of one address book card are one person, every other
+        address is a person of its own – a name says nothing, two people
+        share one often enough. `received` counts the mails the
+        person sent, `sent` the mails the owner sent them (To, Cc or Bcc);
+        a third party's mail that merely names them counts for neither.
+        `frequent` marks mail in both directions and at least
+        `frequent.mails` of them in the archive's last `frequent.months`
+        months, counted back from its newest mail – the settings
+        `frequent_mails` and `frequent_months`. Mail only. Most mail
+        first; the address book's cards and its filters read this, so it
+        names the people with the most mail – as many as the setting
+        `contacts_people` says, 500 by default – and, beyond them, everyone
+        with mail whom the address book has a card for. An index from before the mail
+        lines answers an empty list.
+      responses:
+        "200":
+          description: The correspondents, most mail first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, total, frequent]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Correspondent" } }
+                  count: { type: integer }
+                  total:
+                    type: integer
+                    description: "How many people the mail knows – `count` of them are listed."
+                  frequent:
+                    type: object
+                    description: The rule behind the `frequent` mark.
+                    required: [months, mails]
+                    properties:
+                      months: { type: integer }
+                      mails: { type: integer }
+              example:
+                items:
+                - name: Dana Dienstleister
+                  addresses: [dana.dienstleister@example.com]
+                  received: 23
+                  sent: 16
+                  frequent: true
+                count: 1
+                total: 1
+                frequent: { months: 12, mails: 12 }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/correspondents/signature:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetCorrespondentSignature
+      x-needs-index: true
+      summary: The footer under a person's mails
+      description: |
+        What stands under the mails of one address: the lines more than one
+        of its mails ends with (`basis` "repeated"), or, for an address with
+        a single mail, what follows that mail's closing line (`basis`
+        "single"). Read from the mail files when asked, never kept. `lines`
+        is the footer as it stands, `uid` the mail it was read from – what
+        the window behind a contact card draws. An address without a footer answers
+        empty `lines` and none of the other fields.
+      parameters:
+        - { name: address, in: query, required: true, schema: { type: string }, description: "The mail address." }
+      responses:
+        "200":
+          description: The footer, or empty lines when none was found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Signature" }
+              example:
+                lines: [Dana Dienstleister, Project manager, "Beispiel GmbH · Beispielweg 1 · Hamburg", "Tel. +49 40 000000 77"]
+                basis: repeated
+                uid: "outlook:E-Mail/Inbox/2026-05-30_0605__Invoice__da7eba9e.eml:0"
+                date: "2026-05-30"
+        "400":
+          description: No mail address in `address` (srv.badparam).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "409":
+          description: The mail files are not at hand (srv.signature.nofiles), or the index predates the mail lines (srv.signature.oldindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/contacts/own:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListOwnContacts
+      summary: The contacts added to the address book in the app
+      description: |
+        The Outlook address book is what Microsoft holds and the export
+        copies. A person the mail knows and no card names can be added to
+        the address book in the app itself: a card of the app's own, kept
+        in the profile – never a file in an export folder –, begun from
+        the mail and completed by hand. One card per mail address. Where
+        Outlook has a card for the same address, that one is shown.
+      responses:
+        "200":
+          description: The cards, by name.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/OwnContact" } }
+                  count: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    post:
+      tags: [Explore, POST]
+      operationId: v1AddOwnContact
+      summary: Add a person to the address book
+      description: |
+        A new card for the person behind `address`. It begins with the
+        name the address writes under (`name`, or what the mail says) and
+        – while an index and the mail files are at hand – the numbers and
+        links of the footer under its mails, kept with the footer's lines
+        as `signature`. Everything else is filled in with PATCH.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string, description: "The mail address – who the card is." }
+                name: { type: string }
+            example: { address: erik.einkauf@example.com, name: Erik Einkauf }
+      responses:
+        "201":
+          description: The new card.
+          headers:
+            Location: { description: The new card's path., schema: { type: string } }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnContact" }
+        "400":
+          description: No mail address in `address`, or a name that is no text (srv.contact.badvalue).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "409":
+          description: The address has a card of the app's own already (srv.contact.exists).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/contacts/own/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Explore, GET]
+      operationId: v1OwnContact
+      summary: One card of the app's own
+      description: The card as it is – what a 201's `Location` names.
+      responses:
+        "200":
+          description: The card.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnContact" }
+        "404":
+          description: No such card (srv.contact.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    patch:
+      tags: [Explore, PATCH]
+      operationId: v1UpdateOwnContact
+      summary: Fill in or correct a card of the app's own
+      description: |
+        The fields the body names, all or none: `name`, `title`,
+        `company`, `department`, `note`, `phones` (the whole list, each
+        with its kind) and `urls` (the whole list). The address is who
+        the card is and does not change.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                title: { type: string }
+                company: { type: string }
+                department: { type: string }
+                note: { type: string }
+                phones: { type: array, items: { $ref: "#/components/schemas/ContactPhone" } }
+                urls: { type: array, items: { type: string } }
+            example: { title: Head of purchasing, company: Nordwind GmbH }
+      responses:
+        "200":
+          description: The card as it now is.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnContact" }
+        "400":
+          description: "A field the card does not have, an empty name, a text too long, a number without a kind – `error.v.field` names it (srv.contact.badvalue)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "404":
+          description: No such card (srv.contact.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    delete:
+      tags: [Explore, DELETE]
+      operationId: v1DeleteOwnContact
+      summary: Take a card of the app's own out of the address book
+      description: Deletes the card; the person stays what the mail says of them, and what the card said last stays as an earlier version for a card added again.
+      responses:
+        "204":
+          description: Deleted; no body.
+        "404":
+          description: No such card (srv.contact.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/contacts/own/{id}/signature:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    post:
+      tags: [Explore, POST]
+      operationId: v1RereadOwnContactSignature
+      x-needs-index: true
+      summary: Read the footer under the person's mails again
+      description: |
+        The footer as it stands now replaces the kept `signature`; a
+        number or a link the card does not have yet joins it. Nothing the
+        user typed is taken away or overwritten, and a reading that finds
+        no footer leaves the kept one.
+      responses:
+        "200":
+          description: The card as it now is.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OwnContact" }
+        "404":
+          description: No such card (srv.contact.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "409":
+          description: The mail files are not at hand (srv.signature.nofiles), or the index predates the mail lines (srv.signature.oldindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/contacts/own/{id}/versions:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListOwnContactVersions
+      summary: What a card of the app's own said before
+      description: |
+        Every version a change, a footer read again or a removal
+        replaced, newest first, at most 200. The history goes by the
+        address: a card added again for an address continues the one
+        removed before.
+      responses:
+        "200":
+          description: The earlier versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/OwnContactVersion" } }
+                  count: { type: integer }
+        "404":
+          description: No such card (srv.contact.unknown).
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -4783,6 +5115,7 @@ components:
         search_history: { type: string, enum: ["off", "30", "90", "365", "forever"], default: "90", description: "How long the search history is kept: off, 30, 90 or 365 days, or forever." }
         case_export_dir: { type: string, default: "", description: "One ZIP per exported case below this path: the originals, an index page, the timeline, the list as CSV and the casebook. Empty means “Munimentum cases” in the Documents folder. Nothing is moved out of the archive." }
         internal_domains: { type: string, default: "", description: "Comma-separated, like example.com, example.org. A person in a case whose address lies outside them is marked external. Empty means the domain of the account you signed in with." }
+        own_addresses: { type: string, default: "", description: "Your own mail addresses, comma-separated – the address of your access, a private address, an alias. They count as you where mail is counted, and are no contact. Stored as the addresses found in the text; the page starts the empty field with the access's address." }
         own_name: { type: string, default: "", description: "Your name as the archive writes it – left out of a case's People view, together with the address you signed in with. Empty means the name your sign-in carries." }
         notifications: { type: string, enum: ["off", "errors", "all"], default: "errors", description: "System notifications at the end of a run: off, errors only, or all runs." }
         keep_awake: { type: boolean, default: true, description: "Holds the machine off idle sleep while a run is on – on macOS through caffeinate, on Windows through a power request, on Linux through systemd-inhibit." }
@@ -4810,6 +5143,9 @@ components:
         data_dir: { type: string, default: "", description: "The data folder; empty = the profile's default (data/)." }
         index_dir: { type: string, default: "", description: "The index folder; empty = the profile's default (rag_store/)." }
         log_retention_days: { type: integer, default: 14, description: "Every run's log is stored in the run history (runs.db) and shown inline under Insights → Runs. Lines older than this are dropped; the run rows themselves have their own retention above." }
+        frequent_mails: { type: integer, default: 12, minimum: 2, maximum: 10000, description: "How many mails, both directions together, make a frequent contact in the address book – within `frequent_months`, and only with mail in both directions." }
+        frequent_months: { type: integer, default: 12, minimum: 1, maximum: 120, description: "How many months back the mails of a frequent contact are counted, from the archive's newest mail." }
+        contacts_people: { type: integer, default: 500, minimum: 1, maximum: 5000, description: "How many people the address book lists beyond its cards – those the communication names most; what it asks `/people` and what `/correspondents` answers." }
         status_poll_seconds: { type: integer, default: 30, minimum: 5, maximum: 600, description: "How often the page asks /api/v1/status while nothing runs, in seconds. During a run it follows the run's own rhythm; this only decides how quickly something changed elsewhere shows up. Out-of-range values are clamped." }
         mcp_port: { type: integer, default: 8365, description: "Which port the MCP server listens on. A changed port takes effect after restarting the server." }
         mcp_enabled: { type: boolean, default: true, description: "The hard switch. Off means the server refuses to serve, no matter who starts it — the HTTP endpoint here as well as a client that launches it as a subprocess (stdio, which is how Claude Desktop does it)." }
@@ -5581,6 +5917,82 @@ components:
         by_source: { type: object, additionalProperties: { type: integer }, description: "The same count per source key." }
         first: { type: string, description: "'YYYY-MM-DD HH:MM' of the oldest item; empty when none is dated." }
         last: { type: string, description: "The same for the newest." }
+    Correspondent:
+      type: object
+      required: [name, addresses, received, sent, frequent]
+      properties:
+        name: { type: string, description: "The address book card's name, else the name the person writes under, else the address." }
+        also: { type: array, items: { type: string }, description: "Other names the person's addresses write under; absent when there is none." }
+        addresses: { type: array, items: { type: string }, description: "The person's addresses, the one with the most mail first." }
+        writes_from: { type: string, description: "The address most of the person's mail comes from – the one to ask a signature for; absent for someone who never wrote." }
+        received: { type: integer, description: "Mails the person sent." }
+        sent: { type: integer, description: "Mails the owner sent the person." }
+        frequent: { type: boolean, description: "Mail in both directions and enough of it lately – the rule stands beside the list." }
+    Signature:
+      type: object
+      required: [lines]
+      properties:
+        lines: { type: array, items: { type: string }, description: "The footer, line by line; empty when none was found." }
+        basis: { type: string, enum: [repeated, single], description: "What it rests on – the same lines end more than one mail, or one mail's closing line; absent without a footer." }
+        uid: { type: string, description: "The mail the footer was read from." }
+        date: { type: string, format: date, description: "That mail's day." }
+    ContactPhone:
+      type: object
+      required: [type, number]
+      properties:
+        type: { type: string, enum: [phone, mobile, fax] }
+        number: { type: string }
+    OwnContact:
+      type: object
+      description: A card the user added to the address book in the app – not exported from Outlook.
+      required: [id, address, name, title, company, department, phones, urls, note, signature, versions, created, updated]
+      properties:
+        id: { type: integer }
+        address: { type: string, description: "The mail address, lower case – who the card is." }
+        name: { type: string }
+        title: { type: string }
+        company: { type: string }
+        department: { type: string }
+        phones: { type: array, items: { $ref: "#/components/schemas/ContactPhone" } }
+        urls: { type: array, items: { type: string } }
+        note: { type: string }
+        signature:
+          type: object
+          description: "The footer under the person's mails as last read – empty lines when none was found; without `read` when none could be read (no index, no mail file)."
+          required: [lines]
+          properties:
+            lines: { type: array, items: { type: string } }
+            read: { type: string, format: date-time }
+            basis: { type: string, enum: [repeated, single] }
+            uid: { type: string, description: "The mail the footer was read from." }
+            date: { type: string, format: date }
+        versions: { type: integer, description: "How many earlier versions the address has – what `/versions` lists." }
+        created: { type: string, format: date-time }
+        updated: { type: string, format: date-time }
+    OwnContactVersion:
+      type: object
+      description: A card of the app's own as it was before something replaced it.
+      required: [replaced, reason, card, changed]
+      properties:
+        replaced: { type: string, format: date-time, description: "When it stopped being the card." }
+        reason: { type: string, enum: [changed, reread, removed], description: "What replaced it – a change by hand, the footer read again, or the card's removal." }
+        card:
+          type: object
+          description: "The card's fields as they were – those of OwnContact without `id`, `address`, `created` and `updated`."
+          required: [name, title, company, department, phones, urls, note, signature]
+          properties:
+            name: { type: string }
+            title: { type: string }
+            company: { type: string }
+            department: { type: string }
+            phones: { type: array, items: { $ref: "#/components/schemas/ContactPhone" } }
+            urls: { type: array, items: { type: string } }
+            note: { type: string }
+            signature: { type: object }
+        changed:
+          type: array
+          items: { type: string, enum: [name, title, company, department, phones, urls, note, signature] }
+          description: "The fields in which it differs from what came after it; for a removed card's last version every field that held something."
     Criteria:
       type: object
       description: |

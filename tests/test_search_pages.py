@@ -292,6 +292,20 @@ def test_combined_read_outlook_sammelt_ical(tmp_path):
     assert "bob@example.com" in ghosts[0]["ppl"]
 
 
+def test_a_semicolon_in_a_companys_name_is_no_field_boundary():
+    """The export escapes it (outlook_export._esc); the reader takes the
+    company whole and the department after it."""
+    import corpus
+    card = corpus.read_vcard("BEGIN:VCARD\nFN:Dana Dienstleister\n"
+                             "ORG:Beispiel\\; Partner GmbH;Sales;North\nEND:VCARD\n")
+    assert (card["organisation"], card["department"]) == ("Beispiel; Partner GmbH", "Sales · North")
+    # A backslash before the semicolon may be escaped itself: then it ends the company.
+    assert corpus.org_parts("A\\\\;Sales;") == ["A\\", "Sales"]
+    # A department without a company stays a department.
+    card = corpus.read_vcard("BEGIN:VCARD\nFN:Erik Einkauf\nORG:;Purchasing\nEND:VCARD\n")
+    assert (card["organisation"], card["department"]) == ("", "Purchasing")
+
+
 def test_combined_read_contacts(tmp_path):
     root = tmp_path / "outlook_export"
     d = root / "kontakte" / "Team"
@@ -313,7 +327,11 @@ def test_combined_read_contacts(tmp_path):
     assert "alice@example.com" in alice["ppl"]
     # Extra fields for the address book
     assert alice["em"] == ["alice@example.com"] and alice["tel"] == ["+49 123 456"]
-    assert alice["org"] == "Firma GmbH · Entwicklung" and alice["role"] == "Engineer"
+    assert alice["role"] == "Engineer"
+    # The card field by field: the company and the department apart, the
+    # mobile numbers named among the numbers.
+    assert (alice["org"], alice["dept"]) == ("Firma GmbH", "Entwicklung")
+    assert alice["mob"] == []          # the card's one number names no kind
     # without FN: name from the N property (first name last name), generic rest
     erika = by_title["Erika Muster"]
     assert erika["ctx"] == "Kontakte" and erika["who"] == "Kontakt"

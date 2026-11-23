@@ -93,9 +93,12 @@ def id_aus(p, name, fehlt):
     nothing that exists – `fehlt` says what: the case, the search,
     the run, the row of a case's collection."""
     try:
-        return int(p[name])
+        number = int(p[name])
     except (KeyError, TypeError, ValueError):
         raise Ablehnung(404, fehlt) from None
+    if not 0 <= number < 2 ** 63:                # beyond what a row id can be
+        raise Ablehnung(404, fehlt)
+    return number
 
 
 def zeile(zeilen, kennung, fehlt):

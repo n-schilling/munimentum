@@ -421,6 +421,58 @@ def test_corpus_stats_counts_per_source(state):
     assert out["teams_dir"] == str(state["teams_dir"])
 
 
+def test_the_server_says_whose_archive_it_searches(state, tmp_path, monkeypatch):
+    """A server a client started has no app to ask: the account comes from
+    the profile folder – the pasted key's, else the sign-in's."""
+    import base64
+    assert mcp_server.corpus_stats()["account"] is None       # no home, nobody to ask
+    home = tmp_path / "profile"
+    home.mkdir()
+    mcp_server.STATE["home"] = str(home)
+    monkeypatch.setattr(mcp_server, "_ACCOUNT", {})
+    asked = []
+    monkeypatch.setattr(mcp_server.auth, "angemeldet",
+                        lambda heim=None: asked.append(heim) or "bob@nordwind.example")
+    monkeypatch.delenv("GRAPH_AUTH", raising=False)
+    config = home / mcp_server.settings.CONFIG_NAME
+    # By the way of access in use there: without a key, token mode names nobody.
+    assert mcp_server.corpus_stats()["account"] is None and asked == []
+    config.write_text('{"auth_mode": "login"}', encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "_ACCOUNT", {})
+    assert mcp_server.corpus_stats()["account"] == "bob@nordwind.example"
+    # Kept a minute: a second question reads no file.
+    assert mcp_server.corpus_stats()["account"] == "bob@nordwind.example" and asked == [str(home)]
+    claims = base64.urlsafe_b64encode(json.dumps({"upn": "alice@nordwind.example"}).encode())
+    (home / "gx_token.txt").write_text(f'"x.{claims.decode().rstrip("=")}.y"\n', encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "_ACCOUNT", {})
+    # A key left over from before the sign-in is not the account …
+    assert mcp_server.corpus_stats()["account"] == "bob@nordwind.example"
+    # … it is, where the key is the way in.
+    config.write_text('{"auth_mode": "token"}', encoding="utf-8")
+    monkeypatch.setattr(mcp_server, "_ACCOUNT", {})
+    assert mcp_server.corpus_stats()["account"] == "alice@nordwind.example"
+    # The app knows better than the files, and hands it in.
+    mcp_server.STATE["own_account"] = "carla@nordwind.example"
+    assert mcp_server.corpus_stats()["account"] == "carla@nordwind.example"
+    # … and it is the account the correspondents are counted for.
+    box = {"stats": {"carla@nordwind.example": [0, 30], "dana@example.com": [3, 1],
+                     "bob@nordwind.example": [5, 5]}, "names": {}}
+    assert mcp_server._own_addresses(box) == {"carla@nordwind.example"}
+    # An address typed under Settings while the server runs counts with the next question:
+    # the profile's file is read afresh, not kept from the server's start.
+    config.write_text('{"auth_mode": "token", "own_addresses": "bob@nordwind.example"}', encoding="utf-8")
+    assert mcp_server._own_addresses(box) == {"carla@nordwind.example", "bob@nordwind.example"}
+    config.write_text('{"auth_mode": "token"}', encoding="utf-8")
+    assert mcp_server._own_addresses(box) == {"carla@nordwind.example"}
+    # Its domain is what "internal" means where no setting says so – as in
+    # the app: a server a client started can tell the parties apart too.
+    monkeypatch.setattr(mcp_server.settings, "value", lambda key, default="": default)
+    mcp_server.STATE.pop("internal_domains", None)
+    assert mcp_server._intern_domains() == ["nordwind.example"]
+    mcp_server.STATE["internal_domains"] = "example.com"
+    assert mcp_server._intern_domains() == ["example.com"]
+
+
 def test_corpus_stats_kennt_die_raender_des_archivs(state):
     """Claude used to answer over an archive whose reach it did not know.
     Coverage and gaps come from the analytics block, the last successful
@@ -1074,6 +1126,9 @@ TOOL_NAMES = {"search_messages", "browse_messages", "get_document",
               "org_health",
               # an item held against the evidence chain
               "verify_item",
+              # whom the user writes with, and the footers under their mails
+              # (tests/test_correspondents.py)
+              "list_correspondents", "get_signatures",
               # the skills' text and token for the gated tools (test_skills.py)
               "get_guide"}
 # The two that write – behind the "MCP clients may change cases" switch.

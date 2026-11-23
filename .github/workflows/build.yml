@@ -33,7 +33,7 @@ jobs:
           - os: windows-latest
             ziel: windows-x64
             exe: dist/Munimentum/Munimentum.exe
-          - os: ubuntu-22.04      # older glibc = also runs on newer systems
+          - os: ubuntu-24.04      # pinned, not -latest: the image's glibc (2.39) is the bundle's floor
             ziel: linux-x64
             exe: dist/Munimentum/Munimentum
 

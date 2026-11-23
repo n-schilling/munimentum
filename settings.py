@@ -217,6 +217,19 @@ VORGABEN = {
     # view, with the address you signed in with. Empty means the name the
     # sign-in carries.
     "own_name": "",
+    # Your own mail addresses, comma-separated: the one of your access
+    # (the page starts the field with it), a private address, an alias.
+    # Mail to and from them is yours, and they are no contact of yours.
+    "own_addresses": "",
+    # What the address book marks as a "frequent contact": mail in both
+    # directions and at least this many mails in the archive's last so
+    # many months, counted back from its newest mail (correspondents.py).
+    "frequent_mails": 12,
+    "frequent_months": 12,
+    # How many people the address book lists beyond its cards: those the
+    # communication names most. One number for both questions the page
+    # asks (/people, /correspondents) – what is asked is what is answered.
+    "contacts_people": 500,
     # UI userflow recording: the last interaction steps for the error
     # report – only the kind (tab, search, run), never contents, purely in
     # the memory of the open page. 0 turns it off.

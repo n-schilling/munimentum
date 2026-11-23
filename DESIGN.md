@@ -130,7 +130,31 @@ people over the whole result, up to the cap a case's list has. *Calendar*
 (week, month, reconstructed appointments marked in the grid; the month
 name as picker, *Today*), *Contacts* (list or picture as a segment — the
 picture is the case's, over the archive — then all, from contacts, from
-communication as chips, absent in the picture), *Files* (the mirrors
+communication and — absent while there is none — *Added here* as chips
+and, after a divider, what the mail says as
+switches that combine with them: *With exchange*, *Frequent contact*,
+*Not in the address book*, each absent while no entry could pass it,
+all absent in the picture; one `(i)` at the end of the row explains every
+chip and switch, a line each, and no sentence stands below the row; who has mail and no
+card is one entry per address, the address on it – two people of one
+name are two entries – and offers *Add to address book*: a card of the
+app's own, tagged *added here*, with *Edit* opening its one dialog
+(name, job title, company, department, numbers, links, note, the
+signature to read again, *Save* as the primary action, *Remove from
+the address book* beside it); an Outlook card for the same address always
+shows instead; a card says who the person is and nothing else – the job
+title, then company and department, the addresses, the numbers with the
+mobile ones marked, and last its marks side by side (where it comes
+from, the frequent contact) – no fold and no button on it; everything
+else is behind the three dots at its corner: *Show communication*,
+*Additional information* – a window with what the archive says of the
+person: messages, mails received and sent, and the footer under their
+mails, read when it opens and set as a quotation, the note that it was
+read automatically apart below it –, *Versions* – a window of its own:
+for an Outlook card the versions the archive keeps of its file, with what
+changed to the current one; for a card of the app's own, absent while
+nothing was replaced, what it said before each change –, and *Add to
+address book* or *Edit*), *Files* (the mirrors
 as a tree) and *Organization* (above everything a closed *Overview* fold –
 people and changes per version, one point a day, a drag zooms, a kept
 point's number opens just those changes –, below it a closed *Seniority*

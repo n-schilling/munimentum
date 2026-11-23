@@ -253,9 +253,61 @@ def collapse(s, cap=SAFETY_CAP):
 # embedding) and hurts retrieval (duplicate noise). We cut at the first quote
 # boundary before chunking and keep only the new message. Conservative: only
 # on unambiguous Outlook/mail-client markers.
-_QUOTE_CUTS = [
+_DIVIDER_CUTS = [
     re.compile(r"_{25,}"),                                  # Outlook divider
     re.compile(r"(?m)^\s*_{10,}\s*$"),                      # divider on a line of its own
+]
+# The header block of a quoted mail, as it follows such a divider.
+_QUOTED_HEAD = re.compile(
+    r"(?i)[^\n]*\n(?:[ \t]*\n){0,2}[ \t>*]*"
+    r"(From|Von|De|Da|Van|Från|Fra|Sent|Gesendet|Envoyé|Date|Datum|To|An|Subject|Betreff|Objet)"
+    r"\*?[ \t]*:")
+# The same block standing on its own, as an HTML reply has it: two header
+# lines in a row, the colon after a space where the language wants one.
+_QUOTED_BLOCK = re.compile(
+    r"(?im)^[ \t>*]*(From|Von|De|Da|Van|Från|Fra|Sent|Gesendet)\*?[ \t]*:[^\n]*\n(?:[ \t]*\n)?[ \t>*]*"
+    r"(Sent|Gesendet|Envoyé|Inviato|Enviad[oa]|Verzonden|Skickat|Sendt|Date|Datum|Data|Fecha"
+    r"|From|Von|To|An|À|A|Para|Aan|Till|Til|Cc"
+    r"|Subject|Betreff|Objet|Oggetto|Asunto|Assunto|Onderwerp|Ämne|Emne)"
+    r"(?:[ \t]+(?:el|em|le))?\*?[ \t]*:")
+# What a date in a reply line is made of, behind the verb: figures, the
+# small words between them, the names of days and months. Case counts.
+_DATE_PART = (r"(?:[ \t]+(?:[\d.,:/+-]+|(?:on|at|am|um|den|the|of|[Uu]hr|[AaPp]\.?[Mm]\.?|GMT|UTC|CES?T"
+              r"|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun|Mo|Di|Mi|Do|Fr|Sa|So"
+              r"|Jan|Feb|Mar|Mär|Apr|Ma[iy]|Jun|Jul|Aug|Sep|Okt|Oct|Nov|De[cz])[a-zä]*)\.?,?))")
+# … and the line a reply puts above what it quotes, in the languages
+# beside "On … wrote:" and "Am … schrieb …:".
+_QUOTED_LINE = re.compile(
+    # … which begin with the date: a figure stands near the start. "Le
+    # client a écrit le 3 mai :" is a sentence.
+    # Apple Mail says it in Dutch as "Op … heeft … het volgende
+    # geschreven:", Portuguese also begins "No dia …".
+    r"(?im)^[ \t>]*(Le|El|Il|Op|Em|No dia|Den)\b[^\n\d]{0,40}\d.{0,300}?"
+    r"(a écrit|escribió|ha scritto|schreef|het volgende geschreven|escreveu|skrev)\b.{0,120}?:\s*$"
+    # … and in Swedish with the date first: "4 maj 2026 kl. 10:00 skrev
+    # Alice Beispiel <alice@…>:".
+    r"|^[ \t>]*\d{1,2}[ \t]+[a-zåäö]{3,9}\.?[ \t]+\d{4}[ \t]+kl\.?[ \t]*\d{1,2}[:.]\d{2}[ \t]+skrev\b[^\n]{1,200}?:[ \t]*$"
+    # The name first, the verb behind it, and behind that a date or
+    # nothing. With the sender's address right before the verb – "Alice
+    # Beispiel <alice@…> wrote on Mon, 4 May 2026 at 10:00:" …
+    r"|^[ \t>]*[^\n@]{0,200}?<?[\w.+-]{1,64}@[\w.-]{1,255}[>\"')\]]*[ \t]+"
+    r"(?:wrote|schrieb|pisze|napisał(?:\(a\))?|написала?)(?-i:" + _DATE_PART + r"{0,12})[ \t]*:[ \t]*$"
+    # … or a name alone, with a date that has a figure in it: "Alice
+    # Beispiel wrote on 4 May 2026:". A sentence is none – "Dana wrote on
+    # 3 May that the open points are:", "Der Kunde schrieb am 3. Mai:",
+    # "As I wrote …" – so who stands first must look like a name, and what
+    # follows the verb like a date. (Case tells a name and a month.)
+    r"|^[ \t>]*(?-i:(?!(?:Der|Die|Das|The|Herr|Frau|Mrs?|Ms|Dr|Meine?|Unsere?|Our|My|He|She|Er|Sie|Es|Wie"
+    r"|As|When|Als|Wir|We|Ich)\b)[A-ZÄÖÜ][\w.'-]*[ \t]+"
+    r"(?:(?:[A-ZÄÖÜ][\w.'-]*|von|van|de|der|den|zu|la|le|di|da)[ \t]+){0,4}"
+    r"(?:wrote|schrieb)(?=[^\n:]{0,80}\d)" + _DATE_PART + r"{1,12}[ \t]*:[ \t]*$)"
+    # Polish puts the day first: "W dniu 4.05.2026 Alice Beispiel pisze:".
+    r"|^[ \t>]*W dniu\b[^\n]{0,200}?\b(?:pisze|napisał(?:\(a\))?)[ \t]*:[ \t]*$"
+    # A forward says so in a line of its own.
+    r"|^[ \t>]*-{2,}[ \t]*(?:Weitergeleitete Nachricht|Forwarded Message|Original-Nachricht)[ \t]*-{2,}[ \t]*$"
+    r"|^[ \t>]*(?:Begin forwarded message|Anfang der weitergeleiteten (?:Nachricht|E-?Mail))[ \t]*:[ \t]*$",
+    re.S)
+_QUOTE_CUTS = [
     re.compile(r"-{3,}\s*(Original Message|Ursprüngliche Nachricht)\s*-{3,}", re.I),
     re.compile(r"(?m)^\s*(From|Von):\s.*(?:\n.*){0,4}?^\s*(Sent|Gesendet|Date):\s", re.I),
     re.compile(r"(?im)^[ \t>]*On\b.{0,300}?\bwrote:\s*$", re.S),
@@ -269,17 +321,43 @@ _SIG_CUTS = [
 ]
 
 
+def quote_start(text, dividers=True):
+    """Where the quoted history begins in a mail's text – its length when
+    nothing is quoted. The text has its line ends as "\\n".
+
+    A line of underscores is Outlook's divider above a quoted mail – and
+    many a signature's divider above the company's lines. With
+    `dividers` False it counts only where a quoted mail's header block
+    follows it: the reader of a footer must not lose the footer – and
+    that reader also knows the header block in more languages."""
+    cut = len(text)
+    for rx in _QUOTE_CUTS:
+        m = rx.search(text)
+        if m and m.start() < cut:
+            cut = m.start()
+    if not dividers:
+        # The footer's reader is the stricter one: quoted history left in
+        # would hand out the quoted person's footer as the sender's.
+        for rx in (_QUOTED_BLOCK, _QUOTED_LINE):
+            m = rx.search(text)
+            if m and m.start() < cut:
+                cut = m.start()
+    for rx in _DIVIDER_CUTS:
+        for m in rx.finditer(text):
+            if m.start() >= cut:
+                break
+            if dividers or _QUOTED_HEAD.match(text, m.end()):
+                cut = m.start()
+                break
+    return cut
+
+
 def strip_quoted(text):
     """Cut off quoted thread history and signature, keep the new message."""
     if not text:
         return text
     t = text.replace("\r\n", "\n").replace("\r", "\n")
-    cut = len(t)
-    for rx in _QUOTE_CUTS:
-        m = rx.search(t)
-        if m and m.start() < cut:
-            cut = m.start()
-    head = t[:cut]
+    head = t[:quote_start(t)]
     for rx in _SIG_CUTS:
         m = rx.search(head)
         if m and m.start() > 0:
@@ -764,36 +842,81 @@ def load_calendar(root_dir):
     return recs
 
 
+# What a TEL line's TYPE says, in the words an answer uses.
+_TEL_KINDS = (("CELL", "mobile"), ("FAX", "fax"), ("HOME", "home"), ("WORK", "work"))
+
+
+def org_parts(value):
+    """An ORG value's components – the company, then its units – each
+    unescaped and in its place: a card with a department and no company
+    ("ORG:;Purchasing") has an empty first one. Split first, unescape then: an escaped
+    ";" belongs to a name, and a backslash before it may be escaped itself."""
+    parts, part, i = [], [], 0
+    while i < len(value):
+        if value[i] == "\\" and i + 1 < len(value):
+            part.append(value[i:i + 2])
+            i += 2
+            continue
+        if value[i] == ";":
+            parts.append("".join(part))
+            part = []
+        else:
+            part.append(value[i])
+        i += 1
+    parts.append("".join(part))
+    out = [_unescape(p).strip() for p in parts]
+    while out and not out[-1]:
+        out.pop()
+    return out
+
+
+def read_vcard(text):
+    """One contact card, field by field: the name and its parts, the
+    organisation and the department (ORG's two components), the job
+    title, every address, every number with its kind (work, mobile, home,
+    fax – "" when the card names none) and the note."""
+    card = {"uid": "", "name": "", "given": "", "family": "", "organisation": "",
+            "department": "", "title": "", "emails": [], "phones": [], "note": ""}
+    for line in _unfold(text):
+        name, params, value = _prop(line)
+        if not name:
+            continue
+        if name == "UID":
+            card["uid"] = value.strip()
+        elif name == "FN":
+            card["name"] = _unescape(value)
+        elif name == "N":
+            parts = [_unescape(x) for x in value.split(";")]
+            card["family"] = parts[0] if len(parts) > 0 else ""
+            card["given"] = parts[1] if len(parts) > 1 else ""
+        elif name == "ORG":
+            parts = org_parts(value)
+            card["organisation"] = parts[0] if parts else ""
+            card["department"] = " · ".join(p for p in parts[1:] if p)
+        elif name == "TITLE":
+            card["title"] = _unescape(value)
+        elif name == "EMAIL":
+            card["emails"].append(_unescape(value).strip())
+        elif name == "TEL":
+            types = (params or "").upper()
+            kind = next((word for mark, word in _TEL_KINDS if mark in types), "")
+            card["phones"].append({"type": kind, "number": _unescape(value).strip()})
+        elif name == "NOTE":
+            card["note"] = _unescape(value)
+    if not card["name"]:
+        card["name"] = (card["given"] + " " + card["family"]).strip()
+    return card
+
+
 def load_contacts(root_dir):
     recs = []
     root = Path(root_dir)
     for p in sorted(root.rglob("*.vcf")):
-        fn = org = title = note = given = family = uid = ""
-        emails, tels = [], []
-        for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
-            name, params, value = _prop(line)
-            if not name:
-                continue
-            if name == "UID":
-                uid = value.strip()
-            elif name == "FN":
-                fn = _unescape(value)
-            elif name == "N":
-                parts = [_unescape(x) for x in value.split(";")]
-                family = parts[0] if len(parts) > 0 else ""
-                given = parts[1] if len(parts) > 1 else ""
-            elif name == "ORG":
-                org = " · ".join(x for x in _unescape(value).split(";") if x)
-            elif name == "TITLE":
-                title = _unescape(value)
-            elif name == "EMAIL":
-                emails.append(value.strip())
-            elif name == "TEL":
-                tels.append(value.strip())
-            elif name == "NOTE":
-                note = _unescape(value)
-        if not fn:
-            fn = (given + " " + family).strip() or "(ohne Namen)"
+        card = read_vcard(p.read_text(encoding="utf-8", errors="replace"))
+        fn = card["name"] or "(ohne Namen)"
+        org = " · ".join(x for x in (card["organisation"], card["department"]) if x)
+        title, emails, note, uid = card["title"], card["emails"], card["note"], card["uid"]
+        tels = [t["number"] for t in card["phones"]]
         rel = p.relative_to(root).as_posix()
         segs = rel.split("/")
         folder = segs[1] if len(segs) >= 3 and segs[0] == "kontakte" else ""

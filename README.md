@@ -20,7 +20,7 @@ delegated access makes it possible, not permitted.
 
 Bundles are attached to every [release](../../releases), nothing to install:
 `Munimentum-macos-arm64.dmg` for Macs with Apple Silicon, `Munimentum-windows-x64.zip`
-for Windows 10/11, `Munimentum-linux-x64.tar.gz` for Linux (glibc 2.35+).
+for Windows 10/11, `Munimentum-linux-x64.tar.gz` for Linux (glibc 2.39+).
 
 On macOS drag the app to *Applications*; on Windows and Linux unpack the
 archive. Windows asks once on first launch, because the build carries no
@@ -74,10 +74,9 @@ weekly, monthly — can be set per source, per part of it or for a single folder
 
 ### Explore archive
 
-Five ways in, one strip: **Search**, **Calendar**, **Contacts**, **Files** and
-**Organization** – the tenant in any version, by role, its changes, seniority and
-health, as CSV too. Only Search searches; the others hand over source, month,
-folder or person.
+Five ways in: **Search**, **Calendar**, **Contacts**, **Files**, **Organization**
+– the tenant in any version, by role, its changes, seniority, health, as CSV.
+Only Search searches; the rest hand it source, month, folder or person.
 
 **Search.** Three kinds, chosen in the field: *Text search* finds the words
 that actually occur, best matches first — a phrase in quotes must occur as
@@ -103,8 +102,9 @@ contact, *external* marked. The last two take the whole result.
 
 **Calendar** shows the appointments by week or month: every date of a series,
 deleted ones marked, those recovered from invitation mails. **Contacts** merges
-the Outlook address book with everyone found in the communication, as a list or
-as that picture. **Files** walks the mirrored drives, originals one click away.
+the Outlook address book – title, company, department, numbers – with everyone in the
+communication, list or picture, one entry per address: mails received and sent, *frequent contacts* to filter by, a signature (read automatically, so check it) –
+and *Add to address book* for who has no card: Munimentum's own card, kept in your profile; *Versions* shows what a card said before. **Files** walks the drives, originals a click away.
 
 ### Cases
 
@@ -141,23 +141,23 @@ first, none deletes. **Runs** keeps every run with its log.
 
 Microsoft Access, Sources, Schedule, AI (Ollama), MCP clients, Profiles,
 Evidence, App, Expert mode — one card each on one running page, every setting
-with an **(i)** that says what changes. *Evidence* keeps earlier versions and
-can have runs time-stamped (RFC 3161). The App card holds notifications, how
-long the search history is kept, where case exports land, your organisation's
-mail domains (what *external* means), and *Report a problem*: a GitHub issue
-with the log, anonymised, shown for you to edit and sent by nobody but you.
+with an **(i)** that says what changes. *Evidence* keeps earlier versions and can
+have runs time-stamped (RFC 3161). The App card holds notifications, how long the
+search history is kept, where case exports land, your organisation's mail domains
+(what *external* means), your own addresses, what makes a frequent contact, how many people *Contacts*
+lists, and *Report a problem*: a GitHub issue with the log, anonymised, yours to send.
 
 ## Search with an MCP client
 
-A built-in MCP server hands the archive to Claude Code, Claude Desktop or any
-MCP client on this machine only: every source with its filters, how far the
-archive reaches, item versions, the org chart on any day and its health in
-numbers, your cases as pages to attach. Citations open the item in the app and
-hold against the checksum chain; three [skills](skills/README.md) teach
-research, case work and evidence, served or downloaded to install by hand, and
-search, case writes and verification ask for their token first (`get_guide`).
-It changes a case only when *MCP clients may change cases* is on under *Settings
-› MCP clients*, and then only adds, marked *via MCP*; the card prints the snippet.
+A built-in MCP server hands the archive to Claude Code, Claude Desktop or any MCP
+client on this machine only: every source with its filters, whose archive it is and
+how far it reaches, item versions, the org chart on any day, its health in numbers,
+your mail contacts, their signatures and the contacts you added, your cases to attach. Citations open the item
+in the app and hold against the checksum chain; three [skills](skills/README.md)
+teach research, case work and evidence, served or installed by hand; search, case
+writes and verification ask for a token first (`get_guide`). It changes a case
+only when *MCP clients may change cases* is on under *Settings › MCP clients*,
+and then only adds, marked *via MCP*; the card prints the snippet.
 
 > The server has **no authentication**. It binds to `127.0.0.1` only and
 > checks the `Host` and `Origin` headers, so a web page you visit cannot

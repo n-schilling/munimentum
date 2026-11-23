@@ -2547,6 +2547,26 @@ def test_http_config_userflow_grenzen(server, sandbox):
     assert code == 200 and r["config"]["userflow_actions"] == 0
 
 
+def test_the_frequent_contact_rule_is_a_setting_within_limits(server, sandbox):
+    """Twelve mails in twelve months unless said otherwise; two mails is
+    the least a mail each way can be, a month the shortest span."""
+    _, port = server
+    code, r = call(port, "GET", "/api/v1/config")
+    assert (r["config"]["frequent_mails"], r["config"]["frequent_months"]) == (12, 12)
+    code, r = call(port, "PATCH", "/api/v1/config", {"frequent_mails": 30, "frequent_months": 6})
+    assert code == 200
+    assert (r["config"]["frequent_mails"], r["config"]["frequent_months"]) == (30, 6)
+    code, r = call(port, "PATCH", "/api/v1/config", {"frequent_mails": 0, "frequent_months": 0})
+    assert (r["config"]["frequent_mails"], r["config"]["frequent_months"]) == (2, 1)
+    code, r = call(port, "PATCH", "/api/v1/config", {"frequent_mails": 10 ** 6, "frequent_months": 999})
+    assert (r["config"]["frequent_mails"], r["config"]["frequent_months"]) == (10000, 120)
+    # How many people Contacts lists beyond the cards: 500, within limits.
+    assert r["config"]["contacts_people"] == 500
+    for asked, kept in ((0, 1), (10 ** 6, 5000), (800, 800)):
+        code, r = call(port, "PATCH", "/api/v1/config", {"contacts_people": asked})
+        assert code == 200 and r["config"]["contacts_people"] == kept
+
+
 def test_http_config_schalter_und_ordner(server, sandbox):
     a, port = server
     code, r = call(port, "PATCH", "/api/v1/config",
@@ -6040,7 +6060,9 @@ pruefe(namen().join(',') === 'Alice Example,Bob Ausdemchat,Nur im Buch',
 // Wer in beidem vorkommt, erscheint EINMAL – sonst stuende Alice doppelt da.
 var html = document.getElementById('kbBox').innerHTML;
 pruefe(html.split('Alice Example').length - 1 <= 2, 'Alice mehrfach im Buch');
-pruefe(html.indexOf('42') >= 0, 'Nachrichtenzahl fehlt bei Alice');
+// The message count is no line of the card: it stands in the window the card's menu opens.
+pruefe(BOOK_INFO.some(function(x){ return x.name === 'Alice Example' && x.n === 42; }) && html.indexOf('bookInfo(') >= 0,
+       'Nachrichtenzahl fehlt bei Alice: ' + JSON.stringify(BOOK_INFO));
 
 bookF = 'contacts'; drawBook();
 pruefe(namen().join(',') === 'Alice Example,Nur im Buch', 'Kontakte: ' + namen());
@@ -9150,7 +9172,8 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
                # Issue #3: a reporter's own domain stood in a public issue,
                # printed by this report – names shrink to their count.
                internal_domains="nordwind.example, example.com",
-               own_name="Alice Beispiel", case_export_dir="/Users/alice/Documents",
+               own_name="Alice Beispiel", own_addresses="alice@home.example, a.beispiel@example.com",
+               case_export_dir="/Users/alice/Documents",
                teams_rules="- Chat with Bob", org_rules="+ Carla Chef",
                ollama="http://nas.local:11434",
                schedule={**cfg["schedule"], "enabled": True, "interval_minutes": 30})
@@ -9160,7 +9183,8 @@ def test_einstellungs_abweichungen_nennen_werte_aber_keine_inhalte(sandbox):
     assert "analytics_skip: 1 Eintrag" in aus
     assert "tenant: gesetzt" in aus
     assert "enabled=true" in aus and "interval_minutes=30" in aus
-    assert "internal_domains: 2 Einträge" in aus
+    assert "internal_domains: 2 Einträge" in aus and "own_addresses: 2 Einträge" in aus
+    assert "home.example" not in aus
     assert "own_name: gesetzt" in aus and "case_export_dir: gesetzt" in aus and "ollama: gesetzt" in aus
     assert "teams_rules: 1 Zeile" in aus and "org_rules: 1 Zeile" in aus
     # the contents themselves appear nowhere
@@ -11088,7 +11112,7 @@ setTimeout(function(){
       pruefe(html.split('class="knoten').length - 1 === 2 && html.indexOf('bookPerson(') >= 0, 'Bild ohne Knoten: ' + html.slice(0, 200));
       pruefe(html.indexOf('A B') < 0, 'ich selbst nicht ausgenommen');
       pruefe(html.indexOf('2 Personen in 46') >= 0, 'Kopf: ' + html.slice(0, 200));
-      pruefe(el('book-origin').classList.contains('hide') && el('book-note').classList.contains('hide'), 'Herkunfts-Chips bleiben im Bild');
+      pruefe(el('book-origin').classList.contains('hide') && el('book-flags-i').classList.contains('hide'), 'Herkunfts-Chips bleiben im Bild');
       pruefe(el('kbStats').textContent === '', 'Zaehlzeile der Liste bleibt stehen');
       bookPerson('Dana Dienstleister');
       html = el('kbBox').innerHTML;
@@ -11598,3 +11622,421 @@ orgCsvDownload().then(function(){
 
 def test_the_csv_window_makes_the_export_address_from_the_view():
     _in_node(PRUEFUNG_ORG_CSV, sprache="en")
+
+
+# --------------------------------------------------------------------------
+# Address book: what the mail says about a person – both directions, the
+# "frequent contact" mark, the three switches, the signature fold
+# --------------------------------------------------------------------------
+PRUEFUNG_ADDRESS_BOOK_MAIL = GRUNDZUSTAND + """
+process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
+var CORR_ANSWER = {items: [
+  {name: 'Dana Dienstleister', also: ['Dienstleister, Dana'], addresses: ['dana@example.org', 'dana@home.example'],
+   writes_from: 'dana@home.example', received: 23, sent: 16, frequent: true},
+  {name: 'Erik Einkauf', addresses: ['erik@example.org'], received: 3, sent: 1, frequent: false},
+  {name: 'Shop News', addresses: ['news@shop.example'], received: 40, sent: 0, frequent: false},
+  {name: 'Info', addresses: ['info@shop1.example'], received: 1, sent: 0, frequent: false},
+  {name: 'Info', addresses: ['info@shop2.example'], received: 2, sent: 0, frequent: false}
+], count: 5, total: 9, frequent: {months: 12, mails: 12}};
+var SIGNATURE = {lines: ['Dana Dienstleister', 'Project manager', 'Tel. +49 40 000000 77'],
+  basis: 'repeated', uid: 'outlook:E-Mail/Inbox/a.eml:0', date: '2026-05-30'};
+var asked = [], refuse = 1;
+global.fetch = function(path){
+  path = String(path); asked.push(path);
+  var answer;
+  // The first question meets an index a run is just replacing.
+  if(path.indexOf('/api/v1/correspondents') >= 0 && path.indexOf('signature') < 0 && refuse-- > 0)
+    return Promise.resolve({ok: false, status: 503, json: function(){ return Promise.resolve(
+      {ok: false, status: 503, detail: 'No index yet.', error: {k: 'srv.noindex', v: {}}, items: []}); }});
+  if(path.indexOf('/api/v1/calendar') >= 0)
+    answer = {generated: '2026-08-07T09:00:00', counts: {kalender: 0, rekonstruiert: 0}, recs: [
+      {src: 'kontakte', title: 'Dana Dienstleister', em: ['Dana@example.org'], tel: ['+49 40 000000 77', '+49 170 0000077'],
+       mob: ['+49 170 0000077'], org: 'Beispiel GmbH', dept: 'Projects', role: 'Project manager', root: 'outlook', rel: 'kontakte/d.vcf'},
+      {src: 'kontakte', title: 'Only In The Book', em: [], tel: [], org: 'Muster AG', root: 'outlook', rel: 'kontakte/o.vcf'},
+      {src: 'kontakte', title: 'Only In The Book', em: ['second@example.org'], tel: [], org: 'Beispiel KG', root: 'outlook', rel: 'kontakte/o2.vcf'}]};
+  else if(path.indexOf('/api/v1/correspondents/signature') >= 0)
+    answer = path.indexOf('erik') >= 0 ? {lines: []} : SIGNATURE;
+  else if(path.indexOf('/api/v1/correspondents') >= 0) answer = CORR_ANSWER;
+  else if(path.indexOf('/api/v1/people') >= 0)
+    answer = {items: [{name: 'Dana Dienstleister', messages: 30}, {name: 'Dienstleister, Dana', messages: 9},
+                      {name: 'Erik Einkauf', messages: 4}, {name: 'Shop News', messages: 40},
+                      {name: 'Bob Chat', messages: 12}]};
+  else if(path.indexOf('/api/v1/documents') >= 0) answer = {uid: SIGNATURE.uid, source: 'outlook', title: 'Offer', text: 'x'};
+  else answer = statusGeruest();
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(answer); }});
+};
+function count(pattern){ return asked.filter(function(p){ return p.indexOf(pattern) >= 0; }).length; }
+function cards(){ return el('kbBox').innerHTML.split('<div class="card2">').slice(1); }
+function card(name){ return cards().filter(function(c){ return c.indexOf(name) >= 0; })[0] || ''; }
+
+setTimeout(function(){
+  var status = statusGeruest();
+  status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
+  renderStatus(status);
+  aktiverTab = 'suche';
+  offeneSicht = 'adressbuch';
+  ladeKalender('adressbuch');
+  setTimeout(function(){
+    // The people beyond the cards are asked for as many as the setting says.
+    pruefe(asked.filter(function(p){ return p.indexOf('/api/v1/people?limit=500') >= 0; }).length === 1,
+           'people asked: ' + asked.filter(function(p){ return p.indexOf('/people') >= 0; }).join(' '));
+    // A refused question leaves the cards without mail facts – and is
+    // asked again with the next drawing, not only after the next run.
+    pruefe(count('/api/v1/correspondents') === 1 && card('Dana Dienstleister').indexOf('tag frequent') < 0,
+           'after the refusal: ' + count('/api/v1/correspondents'));
+    drawBook();
+  setTimeout(function(){
+    pruefe(count('/api/v1/correspondents') === 2, 'correspondents asked ' + count('/api/v1/correspondents') + ' times');
+    // The spelling the communication uses joins the card it belongs to.
+    pruefe(cards().length === 8, 'entries: ' + cards().length);
+    // Two cards of one name are two entries.
+    pruefe(cards().filter(function(c){ return c.indexOf('Only In The Book') >= 0; }).length === 2, 'a card of the same name is gone');
+    // A card that names an address is that address: a namesake's mail is not its.
+    pruefe(correspondentOf('Erik Einkauf', ['someone@else.example']) === null, 'a card took a namesake by name');
+    pruefe(correspondentOf('Erik Einkauf', []).received === 3, 'a card without an address is not found by name');
+    // The list is capped by a setting: how many people it leaves out is said.
+    pruefe(el('kbStats').textContent.indexOf(t('book.stats.more', {more: '4'})) >= 0, 'the rest is not named: ' + el('kbStats').textContent);
+    // Two senders of one name are two entries, each with its address and
+    // its own mail – and neither takes the count the name has.
+    var infos = cards().filter(function(c){ return c.indexOf('>Info<') >= 0 || c.indexOf('cname">Info') >= 0; });
+    pruefe(infos.length === 2, 'namesakes: ' + infos.length);
+    pruefe(infos.filter(function(c){ return c.indexOf('info@shop1.example') >= 0; }).length === 1 &&
+           infos.filter(function(c){ return c.indexOf('info@shop2.example') >= 0; }).length === 1, 'the addresses: ' + infos.join(' | '));
+    function info(name){ return BOOK_INFO.filter(function(x){ return x.name === name; }); }
+    pruefe(infos.every(function(c){ return c.indexOf('bookInfo(') >= 0; }) &&
+           info('Info').length === 2 && info('Info').every(function(x){ return x.sig >= 0 && x.m.received > 0; }),
+           'no mail facts: ' + JSON.stringify(info('Info')));
+    // … and each hands the search its address: the name would show both.
+    pruefe(infos.filter(function(c){ return c.indexOf('zeigeKommunikation(&quot;info@shop1.example&quot;)') >= 0; }).length === 1,
+           'the hand-over of a namesake: ' + infos.join(' | '));
+    pruefe(card('Erik Einkauf').indexOf('zeigeKommunikation(&quot;Erik Einkauf&quot;)') >= 0, 'a name of one person is handed over as a name');
+    // A person without a card stands with the address they are.
+    pruefe(card('Erik Einkauf').indexOf('erik@example.org') >= 0, 'no address on Erik');
+    pruefe(card('Dienstleister, Dana') === '', 'the other spelling stays an entry of its own');
+    var dana = card('Dana Dienstleister');
+    pruefe(info('Dana Dienstleister')[0].n === 39, 'the counts of both spellings are not added: ' + JSON.stringify(info('Dana Dienstleister')));
+    pruefe(dana.indexOf('tag frequent') >= 0, 'no frequent mark on Dana');
+    // The marks close the card, side by side – after the lines, not beside the name.
+    pruefe(dana.indexOf('<div class="ctags">') > dana.indexOf('class="cline"') && dana.indexOf('class="cname"') < dana.indexOf('class="tag'), 'the marks: ' + dana);
+    pruefe(card('Only In The Book').indexOf('ctags') < 0, 'an empty row of marks');
+    // What the archive says of a person stands in a window of its own, what can be done in the card's menu – neither on the card.
+    pruefe(dana.indexOf('<details class="card-menu">') === 0 && dana.indexOf('button class="mini"') < 0 &&
+           dana.indexOf('class="card-menu-list"><button onclick="zeigeKommunikation(') > 0, 'the menu: ' + dana);
+    // An Outlook card's versions are its file's: the menu leads to them, by root and path.
+    pruefe(dana.indexOf('bookVersions(') >= 0 && card('Erik Einkauf').indexOf('bookVersions(') < 0, 'versions in the menu: ' + dana);
+    pruefe(BOOK_VERSIONS.some(function(x){ return x.name === 'Dana Dienstleister' && x.root === 'outlook' && /\\.vcf$/.test(x.rel); }),
+           JSON.stringify(BOOK_VERSIONS));
+    pruefe(dana.indexOf('book-sig') < 0 && dana.indexOf('class="cline muted') < 0 && dana.split('<details').length - 1 === 1, 'a fold or counts on the card: ' + dana);
+    // … and the footer is asked for as the window opens (kept from asking here: the requests are counted below).
+    var readFooter = bookSignature, opened = null;
+    bookSignature = function(open, i){ opened = [open, i]; };
+    bookInfo(BOOK_INFO.indexOf(info('Dana Dienstleister')[0]));
+    bookSignature = readFooter;
+    pruefe(opened && opened[0] === true && opened[1] === info('Dana Dienstleister')[0].sig, 'the footer is not asked: ' + JSON.stringify(opened));
+    var win = el('modal').innerHTML;
+    pruefe(wizardOffen === 'bookinfo' && win.indexOf('Dana Dienstleister') >= 0, 'the window: ' + win);
+    pruefe(win.indexOf('<dt>' + esc(t('book.info.messages')) + '</dt><dd>39</dd>') >= 0 &&
+           win.indexOf('<dt>' + esc(t('book.info.received')) + '</dt><dd>23</dd>') >= 0 &&
+           win.indexOf('<dt>' + esc(t('book.info.sent')) + '</dt><dd>16</dd>') >= 0, 'the counts: ' + win);
+    pruefe(win.indexOf('id="book-sig-' + info('Dana Dienstleister')[0].sig + '"') >= 0, 'no place for the footer: ' + win);
+    closeWizard('bookinfo');
+    // The card field by field: title, then company and department, the mobile number as one.
+    pruefe(dana.indexOf('<div class="crole">Project manager</div><div class="crole">Beispiel GmbH · Projects</div>') >= 0, 'fields: ' + dana);
+    pruefe(dana.split('<svg').length - 1 >= 3, 'icons missing');
+    var erik = card('Erik Einkauf');
+    pruefe(erik.indexOf('tag frequent') < 0 && info('Erik Einkauf')[0].sig >= 0, 'Erik: ' + erik);
+    // No mail, no footer to ask; nothing in the archive, no window; a pure sender has both.
+    pruefe(info('Bob Chat').every(function(x){ return x.sig < 0 && !x.m; }), 'mail facts where there is no mail: ' + JSON.stringify(info('Bob Chat')));
+    pruefe(info('Only In The Book').length === 0 && card('Only In The Book').indexOf('bookInfo(') < 0, 'a window with nothing in it');
+    pruefe(info('Shop News')[0].m.received === 40 && info('Shop News')[0].sig >= 0, 'sender: ' + JSON.stringify(info('Shop News')));
+
+    // The switches narrow, and combine with the origin chips.
+    bookFlag('exchange');
+    pruefe(cards().length === 2 && card('Shop News') === '', 'with exchange: ' + cards().length);
+    bookFlag('frequent');
+    pruefe(cards().length === 1 && card('Dana Dienstleister') !== '', 'frequent: ' + cards().length);
+    bookF = 'comm'; drawBook();
+    pruefe(cards().length === 1, 'Dana is in the address book and in the communication');
+    bookFlag('frequent');
+    pruefe(cards().length === 2, 'exchange, from communication: ' + cards().length);
+    // Who the address book lacks: Erik writes and is written to, and has no card.
+    bookFlag('missing');
+    pruefe(cards().length === 1 && card('Erik Einkauf') !== '', 'not in the address book: ' + cards().length);
+    bookFlag('missing');
+    bookFlag('exchange'); bookF = 'all'; drawBook();
+    pruefe(cards().length === 8, 'all again: ' + cards().length);
+    pruefe(el('book-flags-i').title.indexOf('12') >= 0, 'the rule is not on the (i): ' + el('book-flags-i').title);
+    // One (i) explains the whole row – the origins first, then the switches – and no paragraph stands below it.
+    pruefe(el('book-flags-i').title.indexOf(t('book.f.note') + '\\n\\n') === 0 &&
+           el('book-flags-i').title.indexOf(t('book.f.missing')) > 0, 'the (i): ' + el('book-flags-i').title);
+    // A name two senders write under names neither: only the address does.
+    pruefe(correspondentOf('Info', []) === null, 'a shared name picks one of its senders');
+    pruefe(correspondentOf('Info', ['Info@shop2.example']).received === 2, 'the address does not find its sender');
+    // The rule is a setting: changed, the correspondents are asked again – once.
+    KONFIG = Object.assign({}, KONFIG, {frequent_mails: 30, frequent_months: 6});
+    drawBook(); drawBook();
+    pruefe(count('/api/v1/correspondents') === 3, 'a changed rule asks ' + count('/api/v1/correspondents') + ' times');
+    // So does whose mailbox it is: the name given, the way of access.
+    KONFIG = Object.assign({}, KONFIG, {own_name: 'Alice Beispiel'});
+    drawBook(); drawBook();
+    KONFIG = Object.assign({}, KONFIG, {own_addresses: 'alice@home.example'});
+    drawBook(); drawBook();
+    KONFIG = Object.assign({}, KONFIG, {auth_mode: 'login'});
+    drawBook();
+    ACCESS_SESSION = {signed_in: true, account: 'alice@nordwind.example'};
+    drawBook(); drawBook();
+    pruefe(count('/api/v1/correspondents') === 7, 'a changed owner asks ' + count('/api/v1/correspondents') + ' times');
+
+    // The fold asks once, when opened, and for the address the person writes from.
+    pruefe(count('/correspondents/signature') === 0, 'a signature was read unasked');
+    var which = BOOK_SIGNATURES.indexOf('dana@home.example');
+    pruefe(which >= 0, 'no fold for Dana: ' + JSON.stringify(BOOK_SIGNATURES));
+    bookSignature(false, which);
+    pruefe(count('/correspondents/signature') === 0, 'closing the fold asks');
+    bookSignature(true, which);
+    setTimeout(function(){
+      var box = dyn('book-sig-' + which).innerHTML;
+      pruefe(asked[asked.length - 1].indexOf('address=dana%40home.example') >= 0, 'asked: ' + asked[asked.length - 1]);
+      pruefe(box.split('class="sigline"').length - 1 === 3 && box.indexOf('Project manager') >= 0, 'lines: ' + box);
+      pruefe(box.indexOf('bookSignatureMail(' + which + ')') >= 0, 'no way to the mail: ' + box);
+      // The footer was read by rules: the fold says so where it shows one – and only there.
+      pruefe(box.indexOf(t('book.sig.auto')) >= 0 && signatureHtml({lines: []}, which).indexOf(t('book.sig.auto')) < 0, 'the caveat: ' + box);
+      // The mail's day with its year – and no dangling "of" without a day.
+      pruefe(box.indexOf('2026') >= 0, 'the day has no year: ' + box);
+      var undated = signatureHtml({lines: ['x'], uid: 'u'}, which);
+      pruefe(undated.indexOf(t('book.sig.open') + '<') >= 0, 'undated: ' + undated);
+      bookSignature(true, which);
+      pruefe(count('/correspondents/signature') === 1, 'the footer is read again');
+      var shown = null, real = showDocument;
+      showDocument = function(d){ shown = d; };
+      bookSignatureMail(which);
+      setTimeout(function(){
+        showDocument = real;
+        pruefe(shown && shown.uid === SIGNATURE.uid, 'the mail does not open: ' + JSON.stringify(shown));
+        var eriks = BOOK_SIGNATURES.indexOf('erik@example.org');
+        bookSignature(true, eriks);
+        setTimeout(function(){
+          var none = dyn('book-sig-' + eriks).innerHTML;
+          pruefe(none.split('class="sigline').length - 1 === 1 && none.indexOf('button') < 0, 'no footer: ' + none);
+          // Without mail in the archive the switches are absent and nothing is marked.
+          CORRESPONDENTS = {byName: {}, byAddress: {}};
+          BOOK_FLAGS.frequent = true;
+          drawBook();
+          pruefe(cards().length === 7 && BOOK_FLAGS.frequent === false, 'a switch that narrows nothing stays set: ' + cards().length);
+          // How many people are listed is a setting: changed, the people by name are asked again – once.
+          KONFIG = Object.assign({}, KONFIG, {contacts_people: 700});
+          drawBook(); drawBook();
+          pruefe(asked.filter(function(p){ return p.indexOf('/api/v1/people?limit=700') >= 0; }).length === 1, 'people after the setting');
+          pruefe(el('kbBox').innerHTML.indexOf('tag frequent') < 0 && BOOK_INFO.every(function(x){ return x.sig < 0; }), 'mail facts without mail');
+          console.log('OK');
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 30);
+  }, 30);
+}, 20);
+"""
+
+
+def test_the_address_book_shows_what_the_mail_says_about_a_person():
+    _in_node(PRUEFUNG_ADDRESS_BOOK_MAIL)
+
+
+PRUEFUNG_OWN_CONTACTS = GRUNDZUSTAND + """
+process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
+var CORR = {items: [
+  {name: 'Dana Dienstleister', addresses: ['dana@example.org'], received: 23, sent: 16, frequent: true},
+  {name: 'Erik Einkauf', addresses: ['erik@example.org'], writes_from: 'erik@example.org', received: 3, sent: 1, frequent: false},
+  {name: 'Greta Gast', addresses: ['greta@example.org'], received: 2, sent: 2, frequent: false}
+], count: 3, total: 3, frequent: {months: 12, mails: 12}};
+function cardOf(id, more){
+  return Object.assign({id: id, address: 'erik@example.org', name: 'Erik Einkauf', title: '', company: '', department: '',
+    phones: [{type: 'phone', number: '+49 40 000000 31'}], urls: ['www.example.com'], note: '',
+    signature: {lines: ['Erik Einkauf', 'Tel. +49 40 000000 31'], basis: 'repeated', read: '2026-08-07T09:00:00Z'},
+    versions: 0, created: '2026-08-07T09:00:00Z', updated: '2026-08-07T09:00:00Z'}, more || {});
+}
+// Dana has an Outlook card and, from before it, one of the app's own: Outlook's wins.
+var STORED = [cardOf(1, {address: 'dana@example.org', name: 'Somebody Else'})];
+var sent = [], HISTORY = [];
+global.fetch = function(path, opts){
+  path = String(path); opts = opts || {};
+  var method = opts.method || 'GET', body = opts.body ? JSON.parse(opts.body) : null, answer, status = 200;
+  if(method !== 'GET') sent.push([method, path, body]);
+  if(path.indexOf('/api/v1/calendar') >= 0)
+    answer = {generated: '2026-08-07T09:00:00', counts: {kalender: 0, rekonstruiert: 0}, recs: [
+      {src: 'kontakte', title: 'Dana Dienstleister', em: ['dana@example.org'], tel: [], org: 'Beispiel GmbH', root: 'outlook', rel: 'kontakte/d.vcf'}]};
+  else if(path.indexOf('/signature') >= 0 && method === 'POST')
+    answer = cardOf(2, {phones: [{type: 'phone', number: '+49 40 000000 31'}, {type: 'fax', number: '+49 40 000000 39'}],
+                        urls: ['www.example.com', 'www.nordwind.example'],
+                        signature: {lines: ['Erik Einkauf', 'Director'], read: '2026-09-01T09:00:00Z'}});
+  else if(path.indexOf('/versions') >= 0) answer = {items: HISTORY, count: HISTORY.length};
+  else if(path.indexOf('/api/v1/contacts/own/') >= 0 && method === 'PATCH') answer = cardOf(2, Object.assign({versions: 3}, body));
+  else if(path.indexOf('/api/v1/contacts/own/') >= 0 && method === 'DELETE') return Promise.resolve({ok: true, status: 204});
+  else if(path.indexOf('/api/v1/contacts/own') >= 0 && method === 'POST'){ answer = cardOf(2); status = 201; }
+  else if(path.indexOf('/api/v1/contacts/own') >= 0) answer = {items: STORED, count: STORED.length};
+  else if(path.indexOf('/api/v1/correspondents') >= 0) answer = CORR;
+  else if(path.indexOf('/api/v1/people') >= 0) answer = {items: [{name: 'Erik Einkauf', messages: 4}]};
+  else answer = statusGeruest();
+  return Promise.resolve({ok: true, status: status, json: function(){ return Promise.resolve(answer); }});
+};
+global.confirm = function(){ return true; };
+function cards(){ return el('kbBox').innerHTML.split('<div class="card2">').slice(1); }
+function card(name){ return cards().filter(function(c){ return c.indexOf(name) >= 0; })[0] || ''; }
+function ownChip(){ return document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book="own"]')[0]; }
+var chipHidden = null;
+
+setTimeout(function(){
+  var status = statusGeruest();
+  status.calendar = {exists: true, built_at: '2026-08-07T10:00:00'};
+  renderStatus(status);
+  aktiverTab = 'suche';
+  offeneSicht = 'adressbuch';
+  ladeKalender('adressbuch');
+  setTimeout(function(){
+    drawBook();
+    // The Outlook card always wins: Dana shows her card, not the app's own.
+    pruefe(cards().length === 3, 'entries: ' + cards().length);
+    pruefe(card('Somebody Else') === '' && card('Dana Dienstleister').indexOf('tag added') < 0, 'the own card beat Outlook');
+    pruefe(card('Dana Dienstleister').indexOf('ownContactAdd') < 0, 'a person with a card is offered another');
+    pruefe(bookF === 'all', 'chip state');
+    // Who has mail and no card can be added; the button names the address they write from.
+    var erik = card('Erik Einkauf');
+    pruefe(erik.indexOf('ownContactAdd(') >= 0 && erik.indexOf('ownContactDialog') < 0, 'Erik: ' + erik);
+    pruefe(BOOK_ADD.some(function(a){ return a.address === 'erik@example.org' && a.name === 'Erik Einkauf'; }), JSON.stringify(BOOK_ADD));
+    bookFlag('missing');
+    pruefe(cards().length === 2, 'missing before: ' + cards().length);
+    bookFlag('missing');
+    ownContactAdd(BOOK_ADD.map(function(a){ return a.address; }).indexOf('erik@example.org'));
+  setTimeout(function(){
+    pruefe(sent.length === 1 && sent[0][0] === 'POST' && sent[0][2].address === 'erik@example.org', 'sent: ' + JSON.stringify(sent));
+    // The card is marked, shows its number, and its one dialog is open with the values in it.
+    erik = card('Erik Einkauf');
+    pruefe(erik.indexOf('tag added') >= 0 && erik.indexOf('+49 40 000000 31') >= 0, 'after adding: ' + erik);
+    pruefe(erik.indexOf('ownContactDialog(2)') >= 0 && erik.indexOf('ownContactAdd') < 0 && erik.indexOf('bookInfo(') >= 0, 'buttons: ' + erik);
+    pruefe(wizardOffen === 'owncontact' && dyn('own-name').value === 'Erik Einkauf', 'the dialog is not open');
+    pruefe(dyn('own-phone-number-0').value === '+49 40 000000 31' && dyn('own-phone-kind-0').value === 'phone', 'the number is not in the dialog');
+    pruefe(dyn('own-footer').innerHTML.indexOf('Tel. +49 40 000000 31') >= 0, 'footer: ' + dyn('own-footer').innerHTML);
+    pruefe(dyn('own-footer').innerHTML.indexOf(t('book.sig.auto')) >= 0, 'the dialog shows a footer without its caveat');
+    // Job title and company are not guessed: the empty fields say so, and the signature stands open to copy from.
+    var form = el('modal').innerHTML;
+    pruefe(form.split(esc(t('book.own.manual.ph'))).length - 1 === 3, 'the empty fields do not say why they are empty');
+    // Nothing was replaced yet: the card's menu offers no versions, and the dialog holds none.
+    pruefe(erik.indexOf('ownContactHistory') < 0 && form.indexOf('own-versions') < 0, 'versions of a new card: ' + erik);
+    pruefe(form.indexOf('id="own-name" placeholder') < 0 && form.indexOf('<details class="book-sig" style="margin-top:12px" open>') >= 0,
+           'name or fold: ' + form.slice(0, 400));
+    // No longer missing – and the chip for the app's own cards narrows to it.
+    bookFlag('missing');
+    pruefe(cards().length === 1 && card('Greta Gast') !== '', 'missing after: ' + cards().length);
+    bookFlag('missing');
+    bookF = 'own'; drawBook();
+    pruefe(cards().length === 1 && card('Erik Einkauf') !== '', 'added here: ' + cards().length);
+    bookF = 'contacts'; drawBook();
+    pruefe(cards().length === 1 && card('Dana Dienstleister') !== '', 'from contacts: ' + cards().length);
+    bookF = 'all'; drawBook();
+
+    // Typed values, a second number, one removed again – then the footer is read anew.
+    dyn('own-title').value = 'Head of purchasing';
+    ownContactPhone();
+    dyn('own-phone-kind-1').value = 'mobile'; dyn('own-phone-number-1').value = '+49 170 0000031';
+    ownContactPhone();
+    pruefe(dyn('own-phone-number-1').value === '+49 170 0000031' && dyn('own-phone-number-2').value === '', 'a new row lost what was typed');
+    ownContactPhone(2);
+    dyn('own-urls').value = '';                           // the link the card held is taken out, unsaved
+    HISTORY = [
+      {replaced: '2026-09-01T09:00:00Z', reason: 'reread', changed: ['phones', 'signature'],
+       card: {name: 'Erik Einkauf', title: '', phones: [{type: 'phone', number: '+49 40 000000 31'}],
+              signature: {lines: ['Erik Einkauf', 'Tel. +49 40 000000 31']}}},
+      {replaced: '2026-08-20T09:00:00Z', reason: 'changed', changed: ['title'], card: {name: 'Erik Einkauf', title: '<b>Buyer</b>'}},
+      {replaced: '2026-08-10T09:00:00Z', reason: 'removed', changed: [], card: {name: 'Erik Einkauf', title: ''}}];
+    ownContactReread();
+  setTimeout(function(){
+    pruefe(sent[1][0] === 'POST' && sent[1][1].indexOf('/contacts/own/2/signature') >= 0, 'reread: ' + JSON.stringify(sent[1]));
+    // What was typed stays; the footer's new number and link join it.
+    pruefe(dyn('own-title').value === 'Head of purchasing', 'the typed title is gone');
+    pruefe(OWN_EDIT.phones.length === 3 && dyn('own-phone-number-2').value === '+49 40 000000 39' && dyn('own-phone-kind-2').value === 'fax',
+           'numbers after reading again: ' + JSON.stringify(OWN_EDIT.phones));
+    // … and only that: the link taken out in the dialog does not come back with the reading.
+    pruefe(dyn('own-urls').value === 'www.nordwind.example', 'links: ' + dyn('own-urls').value);
+    pruefe(dyn('own-footer').innerHTML.indexOf('Director') >= 0, 'the footer is not drawn anew');
+
+    dyn('own-company').value = 'Nordwind GmbH';
+    ownContactSave();
+  setTimeout(function(){
+    var body = sent[2][2];
+    pruefe(sent[2][0] === 'PATCH' && body.title === 'Head of purchasing' && body.company === 'Nordwind GmbH', 'saved: ' + JSON.stringify(sent[2]));
+    pruefe(body.phones.length === 3 && body.phones[1].type === 'mobile' && body.urls.length === 1, 'saved lists: ' + JSON.stringify(body));
+    pruefe(wizardOffen === null, 'the dialog stays open');
+    erik = card('Erik Einkauf');
+    pruefe(erik.indexOf('Head of purchasing') >= 0 && erik.indexOf('Nordwind GmbH') >= 0, 'the card after saving: ' + erik);
+    // What the change replaced: the card's menu now leads to a window of its own.
+    pruefe(erik.indexOf('ownContactHistory(2)') >= 0, 'no way to the versions: ' + erik);
+    ownContactHistory(2);
+  setTimeout(function(){
+    var kept = dyn('own-history').innerHTML;
+    pruefe(wizardOffen === 'ownhistory' && el('modal').innerHTML.indexOf('Erik Einkauf') >= 0, 'the window is not open');
+    // When, by what, and what stood in the fields that changed – a footer as a quotation.
+    pruefe(kept.split('<h4 class="info-head">').length - 1 === 3, 'versions: ' + kept);
+    pruefe(kept.indexOf('<dt>' + esc(t('book.own.phones')) + '</dt><dd>+49 40 000000 31</dd>') >= 0 &&
+           kept.indexOf('<blockquote class="sigquote book-sig"><div class="sigline">Erik Einkauf</div><div class="sigline">Tel. +49 40 000000 31</div>') >= 0,
+           'what stood there: ' + kept);
+    pruefe(kept.indexOf('&lt;b&gt;Buyer') >= 0 && kept.indexOf('<b>Buyer') < 0, 'a title is drawn as markup: ' + kept);
+    pruefe(kept.indexOf(esc(t('book.own.versions.reread', {when: fmt('2026-09-01T09:00:00Z')}))) <
+           kept.indexOf(esc(t('book.own.versions.removed', {when: fmt('2026-08-10T09:00:00Z')}))), 'order: ' + kept);
+    closeWizard('ownhistory');
+    ownContactDialog(2);
+    ownContactRemove();
+  setTimeout(function(){
+    pruefe(sent[3][0] === 'DELETE' && wizardOffen === null, 'removed: ' + JSON.stringify(sent[3]));
+    erik = card('Erik Einkauf');
+    pruefe(erik.indexOf('tag added') < 0 && erik.indexOf('ownContactAdd(') >= 0, 'after removing: ' + erik);
+    // A card's versions window borrows the detail's versions and hands them back when it closes.
+    var behind = {into: {back: 'detail', list: 'detail-versions', view: 'detail-text'}, items: [], chosen: null};
+    VERSIONS = behind;
+    bookVersions(0);
+    pruefe(wizardOffen === 'bookversions' && VERSIONS === null, 'the window did not take the versions');
+    closeWizard('bookversions');
+    pruefe(VERSIONS === behind, 'the detail does not get its versions back');
+    console.log('OK');
+  }, 20); }, 20); }, 20); }, 20); }, 20);
+  }, 40);
+}, 20);
+"""
+
+
+def test_a_person_from_the_mail_is_added_to_the_address_book_and_edited():
+    _in_node(PRUEFUNG_OWN_CONTACTS)
+
+
+PRUEFUNG_OWN_ADDRESSES_PREFILL = GRUNDZUSTAND + """
+setTimeout(function(){
+  var cfg = Object.assign({}, statusGeruest().config || {}, KONFIG || {});
+  S = Object.assign({}, S, {token: {account: 'alice@nordwind.example'}});
+  cfgGefuellt = false;
+  fuelleEinstellungen(Object.assign({}, cfg, {own_addresses: ''}));
+  // Empty, the field starts with the address the access carries …
+  pruefe(el('c-own_addresses').value === 'alice@nordwind.example', 'prefill: ' + el('c-own_addresses').value);
+  // The access in use: signed in, a key left on disk is not whose archive this is.
+  cfgGefuellt = false;
+  ACCESS_SESSION = {account: 'alice@login.example'};
+  fuelleEinstellungen(Object.assign({}, cfg, {own_addresses: '', auth_mode: 'login'}));
+  pruefe(el('c-own_addresses').value === 'alice@login.example', 'prefill when signed in: ' + el('c-own_addresses').value);
+  // … and what was saved stands as it was saved.
+  cfgGefuellt = false;
+  fuelleEinstellungen(Object.assign({}, cfg, {own_addresses: 'alice@nordwind.example, alice@home.example'}));
+  pruefe(el('c-own_addresses').value === 'alice@nordwind.example, alice@home.example', 'saved: ' + el('c-own_addresses').value);
+  console.log('OK');
+}, 30);
+"""
+
+
+def test_the_own_addresses_start_with_the_address_of_the_access():
+    _in_node(PRUEFUNG_OWN_ADDRESSES_PREFILL)
+
+
+def test_a_value_in_an_onclick_goes_through_jsarg():
+    """JSON.stringify with only the quotes replaced lets a name holding
+    "&quot;" end the string inside the attribute – a sender's display name
+    is foreign text. jsArg escapes the ampersand too."""
+    page = (Path(__file__).resolve().parent.parent / "page.html").read_text(encoding="utf-8")
+    assert ".replace(/\"/g, '&quot;')" not in page
+    assert "function jsArg(x){ return esc(JSON.stringify(x)); }" in page

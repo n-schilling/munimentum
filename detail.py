@@ -228,7 +228,7 @@ def _kontakt(row, ziel):
     for line in zeilen:
         name, params, value = corpus._prop(line)
         if name == "ORG":
-            out["org"] = " · ".join(x for x in corpus._unescape(value).split(";") if x)
+            out["org"] = " · ".join(p for p in corpus.org_parts(value) if p)
         elif name == "TITLE":
             out["role"] = corpus._unescape(value)
         elif name == "EMAIL":

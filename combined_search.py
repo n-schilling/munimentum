@@ -50,6 +50,7 @@ import progress
 import settings
 import state_db
 import recurrence
+import corpus
 # The parser primitives for .eml, iCalendar and vCard live in corpus.py –
 # they are only reused here, not maintained a second time.
 from corpus import addr_people, grabsteine, hdr, _demail, _ics_when, _pval, _prop, _unescape, _unfold
@@ -580,30 +581,11 @@ def reconstruct_events(invites, cal_recs):
 def read_contacts(root, out_dir):
     recs = []
     for p in sorted(root.rglob("*.vcf")):
-        fn = org = title = note = given = family = ""
-        emails, tels = [], []
-        for line in _unfold(p.read_text(encoding="utf-8", errors="replace")):
-            name, params, value = _prop(line)
-            if not name:
-                continue
-            if name == "FN":
-                fn = _unescape(value)
-            elif name == "N":
-                parts = [_unescape(x) for x in value.split(";")]
-                family = parts[0] if len(parts) > 0 else ""
-                given = parts[1] if len(parts) > 1 else ""
-            elif name == "ORG":
-                org = " · ".join(x for x in _unescape(value).split(";") if x)
-            elif name == "TITLE":
-                title = _unescape(value)
-            elif name == "EMAIL":
-                emails.append(value.strip())
-            elif name == "TEL":
-                tels.append(value.strip())
-            elif name == "NOTE":
-                note = _unescape(value)
-        if not fn:
-            fn = (given + " " + family).strip() or "(ohne Namen)"
+        card = corpus.read_vcard(p.read_text(encoding="utf-8", errors="replace"))
+        fn = card["name"] or "(ohne Namen)"
+        org = " · ".join(x for x in (card["organisation"], card["department"]) if x)
+        title, emails, note = card["title"], card["emails"], card["note"]
+        tels = [t["number"] for t in card["phones"]]
         segs = p.relative_to(root).as_posix().split("/")
         folder = segs[1] if len(segs) >= 3 and segs[0] == "kontakte" else ""
         text = " · ".join(x for x in ([org, title] + emails + tels + ([note] if note else [])) if x)
@@ -616,10 +598,13 @@ def read_contacts(root, out_dir):
             "ctx": f"Kontakte: {folder}" if folder else "Kontakte",
             "x": text[:BODY_CAP],
             "p": link(p, out_dir),
-            # extra fields for the address book
+            # The address book's card, field by field: the company and the
+            # department apart, and which of the numbers are mobile ones.
             "em": emails[:10],
             "tel": tels[:10],
-            "org": org,
+            "mob": [t["number"] for t in card["phones"] if t["type"] == "mobile"][:10],
+            "org": card["organisation"],
+            "dept": card["department"],
             "role": title,
         })
     return recs

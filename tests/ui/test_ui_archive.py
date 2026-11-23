@@ -179,6 +179,174 @@ def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
     expect(archive_page.locator("#kbBox .card2").first).to_be_visible()
 
 
+def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archive):
+    """On a card: mails received and sent, the frequent contact's mark,
+    the address book's fields one by one, and the footer under the
+    person's mails in a fold. Above the list: three switches that narrow it
+    and combine with the origin."""
+    me = people.ME[1]
+
+    def counts(address):
+        received = sum(1 for m in sources.MAILS if m["frm"][1] == address)
+        sent = sum(1 for m in sources.MAILS if m["frm"][1] == me and address in
+                   {p[1] for line in ("to", "cc", "bcc") for p in m.get(line) or []})
+        return received, sent
+
+    open_app(archive_page, archive, tab="suche")
+    with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/correspondents")):
+        archive_page.click('#sichten [data-sicht="adressbuch"]')
+    cards = archive_page.locator("#kbBox .card2")
+    dana, greta, lars = people.EXTERNALS[0], people.EXTERNALS[2], people.EXTERNALS[5]
+    card = cards.filter(has_text=dana[0])
+    expect(card.locator(".tag.frequent")).to_have_text(EN["book.tag.frequent"])
+    received, sent = counts(dana[1])
+    # The marks close the card; what the archive says of Dana is a window of its own.
+    expect(card.locator(".ctags .tag")).to_have_count(1)
+    expect(card.locator("details.book-sig")).to_have_count(0)
+    window = archive_page.locator("#modal")
+    card.locator(".card-menu summary").click()
+    card.get_by_role("button", name=EN["book.info"]).click()
+    expect(window.locator(".modal-kopf")).to_contain_text(dana[0])
+    facts = window.locator("dl.fakten")
+    expect(facts.locator("dt", has_text=EN["book.info.received"]).locator("+ dd")).to_have_text(f"{received:,}")
+    expect(facts.locator("dt", has_text=EN["book.info.sent"]).locator("+ dd")).to_have_text(f"{sent:,}")
+    window.locator(".modal-zu").click()
+    expect(window).to_be_hidden()
+    # Outlook changed her card once: both versions are listed, and what changed stands below.
+    card.locator(".card-menu summary").click()
+    with archive_page.expect_response(lambda r: "/api/v1/documents/versions/diff" in r.url):
+        card.get_by_role("button", name=EN["book.versions"]).click()
+    expect(window.locator(".book-versions-list .vzeile")).to_have_count(2)
+    expect(window.locator(".book-versions-view del")).to_contain_text(history.CONTACT_TITLE_BEFORE)
+    expect(window.locator(".book-versions-view ins")).to_contain_text(
+        next(c for c in sources.CONTACTS if c["displayName"] == dana[0])["jobTitle"])
+    window.locator(".modal-zu").click()
+    expect(window).to_be_hidden()
+    contact = [c for c in sources.CONTACTS if c["displayName"] == dana[0]][0]
+    expect(card.locator(".crole").nth(0)).to_have_text(contact["jobTitle"])
+    expect(card.locator(".crole").nth(1)).to_have_text(contact["companyName"])
+    expect(card.locator(".cline", has_text=contact["mobilePhone"])).to_be_visible()
+    everyone = cards.count()
+
+    # Frequent contacts only: every card left carries the mark.
+    flags = archive_page.locator("#sicht-adressbuch [data-book-flag]")
+    expect(flags).to_have_count(3)
+    archive_page.locator('#sicht-adressbuch [data-book-flag="frequent"]').click()
+    expect(cards.filter(has_text=dana[0])).to_be_visible()
+    frequent = cards.count()
+    assert 0 < frequent < everyone
+    expect(archive_page.locator("#kbBox .card2 .tag.frequent")).to_have_count(frequent)
+    # … of them, those the address book lacks.
+    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+    expect(cards.filter(has_text=lars[0])).to_be_visible()
+    expect(cards.filter(has_text=dana[0])).to_have_count(0)
+    assert 0 < cards.count() < frequent
+    archive_page.locator('#sicht-adressbuch [data-book-flag="frequent"]').click()
+    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+    archive_page.locator('#sicht-adressbuch [data-book-flag="exchange"]').click()
+    assert frequent <= cards.count() < everyone
+    archive_page.locator('#sicht-adressbuch [data-book-flag="exchange"]').click()
+    expect(cards).to_have_count(everyone)
+
+    # The footer: Greta's card has no number, the fold under it has.
+    card = cards.filter(has_text=greta[0])
+    expect(card.locator(".cline a[href^='tel:']")).to_have_count(0)
+    card.locator(".card-menu summary").click()
+    with archive_page.expect_response(lambda r: "/api/v1/correspondents/signature" in r.url):
+        card.get_by_role("button", name=EN["book.info"]).click()
+    fold = window.locator(".book-sig")
+    expect(fold).to_contain_text("+49 170 0000042")
+    expect(fold).to_contain_text("Trainer")
+    # … and the mail it was read from is one click away.
+    with archive_page.expect_response(lambda r: "/api/v1/documents" in r.url):
+        fold.get_by_role("button").click()
+    expect(archive_page.locator("#sicht-treffer")).to_be_visible()
+    expect(archive_page.locator("#detail")).to_contain_text(greta[0])
+
+    # In the picture the switches are absent, like the origin chips.
+    archive_page.click('nav [data-tab="suche"]')         # the door, back from the one item
+    archive_page.click('#sichten [data-sicht="adressbuch"]')
+    archive_page.locator('#sicht-adressbuch [data-book-mode="picture"]').click()
+    expect(flags.first).to_be_hidden()
+    expect(archive_page.locator("#book-flags-i")).to_be_hidden()
+
+
+def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archive):
+    """The keeper's own card stands marked among the contacts; a person
+    the mail knows and no card names gets one with a click, begun from
+    the footer under their mails, filled in by hand – and can go again."""
+    open_app(archive_page, archive, tab="suche")
+    with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/correspondents")):
+        archive_page.click('#sichten [data-sicht="adressbuch"]')
+    cards = archive_page.locator("#kbBox .card2")
+    kept = history.OWN_CONTACT
+    card = cards.filter(has_text=kept["person"][0])
+    expect(card.locator(".tag.added")).to_have_text(EN["book.tag.own"])
+    expect(card.locator(".crole").nth(0)).to_have_text(kept["title"])
+    expect(card.locator(".crole").nth(1)).to_have_text(kept["company"])
+    expect(card.locator(".cline", has_text=kept["mobile"])).to_be_visible()
+    expect(card).to_contain_text(kept["person"][1])
+    # The chip shows the app's own cards alone; the keeper's is no longer missing.
+    chip = archive_page.locator('#sicht-adressbuch [data-book="own"]')
+    chip.click()
+    expect(cards).to_have_count(1)
+    archive_page.locator('#sicht-adressbuch [data-book="all"]').click()
+    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+    expect(cards.filter(has_text=kept["person"][0])).to_have_count(0)
+
+    lars = people.EXTERNALS[5]
+
+    def forget_lars():
+        for kept_card in archive.get("/api/v1/contacts/own")["items"]:
+            if kept_card["address"] == lars[1]:
+                archive.send("DELETE", f"/api/v1/contacts/own/{kept_card['id']}", {})
+
+    # Whatever happens below, the archive is what the other tests expect.
+    forget_lars()
+    try:
+        # Lars writes often and has no card: one click makes him one.
+        card = cards.filter(has_text=lars[0])
+        with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/contacts/own") and r.status == 201):
+            card.locator(".card-menu summary").click()
+            card.get_by_role("button", name=EN["book.add"]).click()
+        dialog = archive_page.locator("#modal")
+        expect(dialog).to_contain_text(EN["book.own.title"])
+        expect(dialog.locator("#own-name")).to_have_value(lars[0])
+        # The numbers of his footer are in it already – nobody typed them.
+        numbers = [dialog.locator(f"#own-phone-number-{i}").input_value() for i in range(2)]
+        assert all(n.startswith("+49") for n in numbers), numbers
+        dialog.locator("#own-title").fill("Dispatcher")
+        with archive_page.expect_response(lambda r: "/api/v1/contacts/own/" in r.url and r.request.method == "PATCH"):
+            dialog.get_by_role("button", name=EN["book.own.save"]).click()
+        expect(dialog).to_be_hidden()
+        # With a card he is no longer missing: all contacts again.
+        expect(cards.filter(has_text=lars[0])).to_have_count(0)
+        archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+        card = cards.filter(has_text=lars[0])
+        expect(card.locator(".tag.added")).to_be_visible()
+        expect(card.locator(".crole").first).to_have_text("Dispatcher")
+        expect(card.locator(".cline", has_text=numbers[0])).to_be_visible()
+
+        # … and out again, so the archive is what the other tests expect.
+        # What the change replaced is kept: the title was empty before.
+        card.locator(".card-menu summary").click()
+        card.get_by_role("button", name=EN["book.versions"]).click()
+        expect(dialog.locator(".modal-kopf")).to_contain_text(lars[0])
+        expect(dialog.locator("#own-history dt", has_text=EN["book.own.jobtitle"]).first.locator("+ dd")).to_have_text(
+            EN["book.own.versions.empty"])
+        dialog.locator(".modal-zu").click()
+        card.locator(".card-menu summary").click()
+        card.get_by_role("button", name=EN["book.own.edit"]).click()
+        archive_page.once("dialog", lambda d: d.accept())
+        with archive_page.expect_response(lambda r: "/api/v1/contacts/own/" in r.url and r.request.method == "DELETE"):
+            dialog.get_by_role("button", name=EN["book.own.remove"]).click()
+        expect(cards.filter(has_text=lars[0]).locator(".tag.added")).to_have_count(0)
+        cards.filter(has_text=lars[0]).locator(".card-menu summary").click()
+        expect(cards.filter(has_text=lars[0]).get_by_role("button", name=EN["book.add"])).to_be_visible()
+    finally:
+        forget_lars()
+
+
 def test_a_citation_link_opens_the_item_and_nothing_else(archive_page, archive):
     """The link a citation over MCP carries (#item=<key>) opens the item –
     and only the item: nobody searched, so no search row, no filters, no

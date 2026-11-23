@@ -121,7 +121,7 @@ Two points are still open: the test window in May and who supplies the
 hardware. I would suggest we settle both in the kickoff meeting.
 
 Kind regards
-Dana Dienstleister""",
+{bulk.footer(DANA)}""",
      "attachments": [("offer-4711.txt", f"""{OFFER}
 Project: {PROJECT}
 Stage 1  Analysis and setup      12 days
@@ -212,13 +212,13 @@ Carla"""},
     {"key": "visit", "folder": "Inbox", "when": day(4, 22, 11, 11),
      "frm": GRETA, "to": [people.ME],
      "subject": "Visitor badge for the workshop",
-     "body": """Hello Alice,
+     "body": f"""Hello Alice,
 
 I will be at the workshop on 7 May. Could you arrange a visitor badge for
 me? I arrive around nine.
 
 Thanks and see you there
-Greta Gast"""},
+{bulk.footer(GRETA)}"""},
 
     {"key": "status", "folder": "Sent", "when": day(5, 5, 17, 45),
      "frm": people.ME, "to": [BOB, CARLA], "bcc": [ERIK],
@@ -237,14 +237,14 @@ Alice"""},
     {"key": "rollout", "folder": "Inbox", "when": day(5, 18, 8, 30),
      "frm": DANA, "to": [people.ME], "cc": [ERIK],
      "subject": f"{PROJECT} rollout plan, second draft",
-     "body": """Hello Alice,
+     "body": f"""Hello Alice,
 
 the second draft of the rollout plan is attached. The change against the
 first one: we do the second site in two waves, so the network change has
 less weight.
 
 Kind regards
-Dana""",
+{bulk.footer(DANA)}""",
      "attachments": [("rollout-plan.md", f"""# {PROJECT} rollout plan (draft 2)
 
 ## Site 1

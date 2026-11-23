@@ -46,7 +46,6 @@ import copy
 import json
 import time
 import gzip
-import base64
 import html
 import posixpath
 import shutil
@@ -72,6 +71,7 @@ import completeness
 import export_util
 import evidence
 import faelle
+import own_contacts
 import folders
 import i18n
 import instance
@@ -1059,14 +1059,7 @@ def decode_jwt(token):
     Display only (account, expiry, permissions) – the token is validated
     by Graph on the first call anyway.
     """
-    parts = (token or "").split(".")
-    if len(parts) < 2:
-        return {}
-    body = parts[1] + "=" * (-len(parts[1]) % 4)
-    try:
-        return json.loads(base64.urlsafe_b64decode(body).decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return {}
+    return auth.token_claims(token)
 
 
 def token_status(token, now=None, needed=()):
@@ -1089,8 +1082,7 @@ def token_status(token, now=None, needed=()):
         out["valid"] = True          # unreadable but present -> just try it
         return out
     out["readable"] = True
-    out["account"] = (claims.get("upn") or claims.get("preferred_username")
-                      or claims.get("unique_name"))
+    out["account"] = auth.claims_account(claims)
     out["name"] = claims.get("name")
     out["scopes"] = sorted((claims.get("scp") or "").split())
     exp = claims.get("exp")
@@ -1450,7 +1442,7 @@ _UMFANG_ZEILEN = {"folder_rules", "calendar_rules", "onedrive_rules",
 _UMFANG_LISTE = {"skip_folders", "filetype_hidden", "analytics_skip"}
 # Comma-separated names: the organisation's mail domains (issue #3 showed
 # a reporter's domain in a public issue, printed by this very report).
-_UMFANG_KOMMA = {"internal_domains"}
+_UMFANG_KOMMA = {"internal_domains", "own_addresses"}
 # One's own name, paths with the user name, a host of one's own.
 _NUR_GESETZT = {"client_id", "tenant", "own_name", "case_export_dir",
                 "data_dir", "index_dir", "evidence_tsa_url", "ollama",
@@ -2028,6 +2020,8 @@ class App:
         # An item comes in with the checksum of the version it has then.
         self.faelle.pinner = evidence.pinner(BASE)
         self.faelle.aufraeumen(historie_tage(self.cfg))
+        # The contacts added to the address book in the app: same file.
+        self.own_contacts = own_contacts.OwnContacts(HEIM / faelle.DB_NAME)
         self.jobs = JobRunner(self.history, cwd=lambda: str(BASE), res=RES)
         self.mcp = McpProcess(self.jobs, _mcp_befehl, mcp_client_config)
         self.search = SearchBridge()
@@ -2662,6 +2656,15 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/filetypes", api_explore.dateitypen),
     ("GET", "/api/v1/people", api_explore.personen),
     ("GET", "/api/v1/addresses", api_explore.adressen),
+    ("GET", "/api/v1/correspondents", api_explore.correspondent_list),
+    ("GET", "/api/v1/correspondents/signature", api_explore.correspondent_signature),
+    ("GET", "/api/v1/contacts/own", api_explore.own_contact_list),
+    ("POST", "/api/v1/contacts/own", api_explore.own_contact_add),
+    ("GET", "/api/v1/contacts/own/{id}", api_explore.own_contact_one),
+    ("PATCH", "/api/v1/contacts/own/{id}", api_explore.own_contact_change),
+    ("DELETE", "/api/v1/contacts/own/{id}", api_explore.own_contact_remove),
+    ("POST", "/api/v1/contacts/own/{id}/signature", api_explore.own_contact_reread),
+    ("GET", "/api/v1/contacts/own/{id}/versions", api_explore.own_contact_versions),
     ("GET", "/api/v1/threads", api_explore.gespraech),
     ("GET", "/api/v1/documents", api_explore.dokument),
     ("GET", "/api/v1/documents/facts", api_explore.fakten),

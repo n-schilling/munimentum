@@ -8,13 +8,13 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import re
-
 import api
 import detail
 import evidence
 import faelle
 import org_csv
 import organization
+import own_contacts
 import rest
 import seniority
 import state_db
@@ -73,9 +73,217 @@ def aehnlich(h, _p, q, _data):
     return api.liste(res, "results", grenze)
 
 
+PEOPLE_MOST = 5000              # the most the setting contacts_people can ask for
+
+
 def personen(h, _p, q, _data):
-    grenze = api.zahl(q, "limit", 50, 1, 200)
+    grenze = api.zahl(q, "limit", 50, 1, PEOPLE_MOST)
     return api.liste(people(h, q, grenze + 1), "people", grenze)
+
+
+def _whole(value, default):
+    """A setting that is a count: the number, the default for anything else."""
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _own_account(h):
+    """The address the user is signed in with, by the way of access in
+    use – the pasted key's or the sign-in's; "" when it names none. A key
+    left on disk from before a sign-in is somebody else's word."""
+    try:
+        if h.app.auth_modus() == "login":
+            account = h.app.auth_status().get("account")
+        else:
+            account = h.M.token_status(h.M.read_token()).get("account")
+    except Exception:                            # noqa: BLE001 – unknown is an answer too
+        account = None
+    return account if isinstance(account, str) else ""
+
+
+def _owner_known(h, mod):
+    """Whose mailbox it is, handed to the search before anything counts
+    or reads by it: the name and the addresses the user gave the app, the
+    account in use."""
+    mod.STATE["own_name"] = str(h.app.cfg.get("own_name") or "")
+    mod.STATE["own_addresses"] = str(h.app.cfg.get("own_addresses") or "")
+    mod.STATE["own_account"] = _own_account(h)
+
+
+def correspondent_list(h, _p, _q, _data):
+    """Whom the archive's owner exchanges mail with, person by person:
+    mails received and sent, and whether the contact is a
+    frequent one – what the address book draws on its cards and filters
+    by. An index that cannot say answers an empty list; `frequent` names
+    the rule the mark follows, the settings frequent_months and
+    frequent_mails."""
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error, items=[])
+    _owner_known(h, mod)
+    rule = {key: _whole(h.app.cfg.get(f"frequent_{key}"), 12) for key in ("months", "mails")}
+    items = []
+    # The cards draw on this: everyone the address book knows, and of the
+    # rest those with the most mail – as many as the address book lists
+    # (the setting contacts_people) – a mailbox's thousands of one-off
+    # senders are on no card.
+    most = min(_whole(h.app.cfg.get("contacts_people"), 500), PEOPLE_MOST)
+    people = mod.correspondent_people(**rule) or []
+    beyond = 0                                   # listed people without a card
+    for person in people:
+        if not person.get("card"):
+            # A frequent contact is listed whatever the cap: the switch
+            # for them would otherwise miss who writes often and little.
+            if beyond >= most and not person["frequent"]:
+                continue
+            beyond += 1
+        item = {"name": person["name"], "addresses": person["addresses"],
+                "received": person["received"], "sent": person["sent"],
+                "frequent": person["frequent"]}
+        if person["also"]:
+            item["also"] = person["also"]
+        if person.get("writes_from"):
+            item["writes_from"] = person["writes_from"]
+        items.append(item)
+    # `total` says how many the mail knows: the page names the rest.
+    return api.json({"items": items, "count": len(items), "total": len(people), "frequent": rule})
+
+
+def _signature(mod, address):
+    """One address's footer as the MCP tool reads it, or the refusal that
+    says why none can be read: no mail files, an index from before the
+    mail lines."""
+    res = mod.get_signatures([address])
+    if res.get("error"):
+        old = res["error"] == getattr(mod, "_NO_MAIL_LINES", None)
+        raise Ablehnung(409, "srv.signature.oldindex" if old else "srv.signature.nofiles")
+    return res["signatures"][0]
+
+
+def correspondent_signature(h, _p, q, _data):
+    """The footer under one address's mails (signature.py), read when the
+    address book opens a person's window."""
+    address = str(q.get("address") or "").strip().lower()
+    if "@" not in address:
+        raise Ablehnung(400, "srv.badparam", {"name": "address"})
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error)
+    _owner_known(h, mod)
+    found = _signature(mod, address)
+    # What the window draws, no more: the lines, what they rest on, the
+    # mail they stand in. Numbers and links are a client's (get_signatures).
+    return api.json({"lines": found["lines"],
+                     **{k: found[k] for k in ("basis", "uid", "date") if found.get(k)}})
+
+
+# -- the contacts added in the app (own_contacts.py) --------------------------
+def _footer_of(h, address):
+    """The footer under an address's mails as the MCP tool reads it – None
+    while no index or no mail file can say: a card is added and kept
+    without one."""
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        return None
+    _owner_known(h, mod)
+    try:
+        res = mod.get_signatures([address])
+    except Exception:                            # noqa: BLE001 – a footer is an extra
+        return None
+    return None if res.get("error") or not res.get("signatures") else res["signatures"][0]
+
+
+def _own_contact(h, ident):
+    card = h.app.own_contacts.one(ident)
+    if card is None:
+        raise Ablehnung(404, "srv.contact.unknown")
+    return card
+
+
+def own_contact_list(h, _p, _q, _data):
+    """The contacts the user added to the address book in the app."""
+    items = h.app.own_contacts.all()
+    return api.json({"items": items, "count": len(items)})
+
+
+def own_contact_add(h, _p, _q, data):
+    """Add the person behind a mail address to the address book: a card
+    of the app's own, begun from the name the address writes under and
+    the numbers and links of its footer."""
+    try:
+        address = own_contacts.clean_address(data.get("address"))
+    except own_contacts.BadValue:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": "address"}) from None
+    name = data.get("name", "")
+    if not isinstance(name, str) or len(name) > own_contacts.TEXT_MOST:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": "name"})
+    for field in data:
+        if field not in ("address", "name"):     # the rest is filled in with PATCH
+            raise Ablehnung(400, "srv.contact.badvalue", {"field": str(field)[:40]})
+    found = _footer_of(h, address)
+    # The name the mail says, where the caller says none – at a name's length.
+    name = name or str((found or {}).get("name") or "")[:own_contacts.TEXT_MOST]
+    try:
+        ident = h.app.own_contacts.add(address, name, found)
+    except own_contacts.Exists:
+        raise Ablehnung(409, "srv.contact.exists", {"address": address}) from None
+    except own_contacts.BadValue as e:           # a name the mail says, longer than a name
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": e.field}) from None
+    return api.json(_own_contact(h, ident), 201,
+                    {"Location": f"{api.API_V1}/contacts/own/{ident}"})
+
+
+def _own_id(p):
+    return api.id_aus(p, "id", "srv.contact.unknown")
+
+
+def own_contact_one(h, p, _q, _data):
+    return api.json(_own_contact(h, _own_id(p)))
+
+
+def own_contact_change(h, p, _q, data):
+    """Set fields of a card – all or none; the address is who the card
+    is and does not change."""
+    ident = _own_id(p)
+    if not isinstance(data, dict) or not data:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": "body"})
+    try:
+        there = h.app.own_contacts.change(ident, data)
+    except own_contacts.BadValue as e:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": str(e.field)[:40]}) from None
+    if not there:
+        raise Ablehnung(404, "srv.contact.unknown")
+    return api.json(_own_contact(h, ident))
+
+
+def own_contact_remove(h, p, _q, _data):
+    if not h.app.own_contacts.remove(_own_id(p)):
+        raise Ablehnung(404, "srv.contact.unknown")
+    return api.leer()
+
+
+def own_contact_reread(h, p, _q, _data):
+    """Read the footer again: its lines replace the kept ones, a number
+    or a link the card lacks joins it, nothing typed is overwritten."""
+    ident = _own_id(p)
+    card = _own_contact(h, ident)
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error)
+    _owner_known(h, mod)
+    h.app.own_contacts.reread(ident, _signature(mod, card["address"]))
+    return api.json(_own_contact(h, ident))
+
+
+def own_contact_versions(h, p, _q, _data):
+    """What a card said before: every version a change, a footer read
+    again or a removal replaced, newest first."""
+    items = h.app.own_contacts.versions(_own_id(p))
+    if items is None:
+        raise Ablehnung(404, "srv.contact.unknown")
+    return api.json({"items": items, "count": len(items)})
 
 
 def adressen(h, _p, q, _data):
@@ -986,6 +1194,15 @@ ROUTEN = (
     ("GET", "/api/v1/filetypes", dateitypen),
     ("GET", "/api/v1/people", personen),
     ("GET", "/api/v1/addresses", adressen),
+    ("GET", "/api/v1/correspondents", correspondent_list),
+    ("GET", "/api/v1/correspondents/signature", correspondent_signature),
+    ("GET", "/api/v1/contacts/own", own_contact_list),
+    ("POST", "/api/v1/contacts/own", own_contact_add),
+    ("GET", "/api/v1/contacts/own/{id}", own_contact_one),
+    ("PATCH", "/api/v1/contacts/own/{id}", own_contact_change),
+    ("DELETE", "/api/v1/contacts/own/{id}", own_contact_remove),
+    ("POST", "/api/v1/contacts/own/{id}/signature", own_contact_reread),
+    ("GET", "/api/v1/contacts/own/{id}/versions", own_contact_versions),
     ("GET", "/api/v1/threads", gespraech),
     ("GET", "/api/v1/documents", dokument),
     ("GET", "/api/v1/documents/facts", fakten),

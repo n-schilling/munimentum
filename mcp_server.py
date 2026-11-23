@@ -99,14 +99,18 @@ import evidence
 import export_util
 import completeness
 import corpus
+import correspondents
 import faelle
 import i18n
 import instance
 import ollama_client
 import organization
+import own_contacts
 import run_history
 import seniority
+import auth
 import settings
+import signature
 import state_db
 import steps
 import store_layout
@@ -192,7 +196,15 @@ Which tool to use:
     mails; the search knows them only as text. Upcoming ones need
     date_from/date_to.
   • lookup_contact  – the address book, structured: e-mail, phone,
-    organisation.
+    organisation, job title.
+  • list_correspondents – whom the user exchanged MAIL with, per address:
+    mails received and sent counted apart, conversations, first and last
+    contact, the contact card where the address book has one. For "whom
+    do I have frequent contact with" and for a contact list (a CRM
+    import): filter by period, `party`, `min_sent`.
+  • get_signatures  – the footer under a person's mails, for up to 25
+    addresses a call: its lines, and the phone numbers, addresses and
+    links in it. What a contact list needs and the address book lacks.
   • get_org_chart / get_manager / list_reports / find_by_role / list_roles /
     org_changes – the ORGANIZATION as the directory had it, kept version by
     version: where someone stands, their manager, their team (direct or all
@@ -206,7 +218,8 @@ Which tool to use:
     shared in Teams and mirrored channel folders, and the Planner
     attachments folder by folder; the files' contents are not indexed, only
     their names.
-  • corpus_stats    – what is indexed, which ranking backend is live, and how
+  • corpus_stats    – whose archive this is (account – name it once, the user
+    may keep several), what is indexed, which ranking backend is live, and how
     far the archive reaches: coverage (first and last message), gaps (months
     without a single message) and when each source last exported
     successfully. "No hits" in an archive that ends in May says nothing
@@ -738,7 +751,9 @@ def _intern_domains():
     hand – the setting alone."""
     roh = STATE.get("internal_domains")
     if roh is None:
-        roh = settings.value("internal_domains", "")
+        # A server a client started: the setting, else – as in the app –
+        # the domain of the account the profile is signed in with.
+        roh = settings.value("internal_domains", "") or _account().partition("@")[2]
     return sorted({d.strip().lower() for d in str(roh or "").replace(",", " ").split() if d.strip()})
 
 
@@ -2535,7 +2550,7 @@ def _archiv_stand():
     komm = block.get("komm") or {}
 
     def tag(ts):
-        return date.fromtimestamp(ts).isoformat() if ts else None
+        return _day(ts)
     laeufe = {}
     pfad = STATE.get("runs_db")
     if pfad and Path(pfad).exists():
@@ -2629,13 +2644,51 @@ def list_events(date_from: str = "", date_to: str = "", days: int = 0,
             "events": aus[offset:offset + k]}
 
 
+_MAIL_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_PHONE_NUMBER = re.compile(r"(?<![\w@.])\+?\d[\d /().-]{5,}\d")
+
+
+def _contact_card(rel, name, text):
+    """One address book entry, field by field – read from its .vcf, which
+    keeps the name's parts, the department and each number's kind apart.
+    The index row alone (a card whose file is not at hand) gives the name,
+    the addresses and the numbers found in its text."""
+    card, (path, _error) = None, _resolve_source("outlook", rel)
+    if path is not None:
+        try:
+            card = corpus.read_vcard(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            card = None
+    if card is None:
+        text = text or ""
+        # Not the index's `who`: that is the company or the job title or
+        # the word "Kontakt", joined with the department – no field's value.
+        return {"name": name or "", "given": "", "family": "", "organisation": "",
+                "department": "", "title": "",
+                "emails": sorted(set(_MAIL_ADDRESS.findall(text))),
+                "phones": [m.strip() for m in _PHONE_NUMBER.findall(text)], "mobile": []}
+    return {"name": card["name"] or name or "", "given": card["given"],
+            "family": card["family"], "organisation": card["organisation"],
+            "department": card["department"], "title": card["title"],
+            "emails": card["emails"],
+            "phones": [t["number"] for t in card["phones"]],
+            "mobile": [t["number"] for t in card["phones"] if t["type"] == "mobile"]}
+
+
 @_tool(_READONLY)
 def lookup_contact(query: str, limit: int = 20) -> dict:
-    """Look a person up in the exported address book – structured: name,
-    organisation, e-mail addresses, phone numbers, contact folder.
+    """Look a person up in the exported address book – structured: name
+    (with its given and family part), organisation, department, job title,
+    e-mail addresses, phone numbers (`mobile` names the mobile ones among
+    them), contact folder.
 
     list_people knows who wrote messages; this knows the contact cards.
     The query is a substring match over name, organisation and addresses.
+    A contact with `origin: "munimentum"` is one the user added to the
+    address book in Munimentum – from the mail and by hand, not exported
+    from Outlook; it has no file (`path`), its name comes whole (no
+    `given` and `family`), and it is left out where Outlook has a card
+    for the same address.
 
     Args:
         query: Part of a name, organisation or e-mail address.
@@ -2653,15 +2706,451 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
     finally:
         con.close()
     kontakte = []
-    for uid, name, org, ctx, rel, text, _ppl in rows:
-        text = text or ""
-        mails = sorted(set(re.findall(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", text)))
-        telefone = [m.strip() for m in re.findall(
-            r"(?<![\w@.])\+?\d[\d /().-]{5,}\d", text)]
-        kontakte.append({"uid": uid, "name": name, "organisation": org or "",
-                         "emails": mails, "phones": telefone,
-                         "folder": ctx, "path": rel, "text": text})
+    for uid, name, _org, ctx, rel, text, _ppl in rows:
+        card = _contact_card(rel, name, text)
+        kontakte.append({"uid": uid, **card, "folder": ctx, "path": rel, "text": text or ""})
+    # The contacts added in the app, where Outlook has no card for the address.
+    # Outlook's card wins: its addresses come from the mailbox's profile
+    # where one is kept, else from the cards themselves – asked for only
+    # when there is a card of the app's own to hold against them.
+    own, outlook, needle = _own_cards(), {}, (query or "").strip().casefold()
+    if own:
+        box = _mailbox()
+        if box is None:
+            con = _db()
+            try:
+                outlook = _address_book(con)
+            finally:
+                con.close()
+        else:
+            outlook = box["book"]
+    for address, card in own.items():
+        if address in outlook:
+            continue
+        if len(kontakte) >= max(1, min(int(limit), 200)):
+            break
+        text = " ".join((address, *(v if isinstance(v, str) else " ".join(v) for k, v in card.items()
+                                    if k not in ("uid", "origin"))))
+        # "*" is the wildcard here as for Outlook's cards (_wie).
+        if re.search(".*".join(re.escape(part) for part in needle.split("*")), text.casefold(), re.S):
+            kontakte.append({**card, "emails": [address]})
     return {"count": len(kontakte), "contacts": kontakte}
+
+
+# ---------------------------------------------------------------------------
+# Correspondents: whom the owner writes with (correspondents.py), and the
+# footers under their mails (signature.py)
+# ---------------------------------------------------------------------------
+_MAILBOX = {}                   # per index file: the mailbox's profile, the address book
+_SIGNATURE_BATCH = 25           # addresses one get_signatures call reads
+_SIGNATURE_FILE_CAP = 3 * 1024 * 1024   # a mail above this is mostly attachment: not parsed
+_NO_MAIL_FILES = ("The mail export folder is not at hand – signatures are read "
+                  "from the mails' files.")
+_NO_MAIL_LINES = ("This index predates the mail lines. Rebuild it (Build archive → "
+                  "“Index only”) to list correspondents.")
+
+
+def _address_book(con):
+    """address → contact card, for every address a card names. A card
+    says only what it has: an empty field is left out, a list of rows
+    repeats it per row otherwise."""
+    book = {}
+    for uid, name, rel, text in con.execute(
+            "SELECT uid, title, rel, text FROM chunks "
+            "WHERE src = 'kontakte' AND seq = 0 ORDER BY title"):
+        card = _contact_card(rel, name, text)
+        addresses = card.pop("emails")
+        card = {"uid": uid, **{field: value for field, value in card.items() if value}}
+        for address in addresses:
+            book.setdefault(address.lower(), card)
+    return book
+
+
+def _own_cards(outlook=()):
+    """address → card for the contacts the user added in the app
+    (own_contacts.py), in the shape of an address book card and marked
+    `origin: "munimentum"` – not exported from Outlook, begun from the
+    mail and completed by hand. An address Outlook has a card for
+    (`outlook`) is left out: the Outlook card always wins. Read on every
+    call – the page changes them between two questions."""
+    path = STATE.get("faelle_db")
+    if not path:
+        return {}
+    cards = {}
+    try:
+        rows = own_contacts.OwnContacts(path).all()
+    except sqlite3.Error:                        # locked for the moment: asked again next time
+        return {}
+    for row in rows:
+        if row["address"] in outlook:
+            continue
+        card = {"uid": f"munimentum:contact:{row['id']}", "origin": own_contacts.ORIGIN,
+                "name": row["name"], "organisation": row["company"],
+                "department": row["department"], "title": row["title"],
+                "phones": [p["number"] for p in row["phones"]],
+                "mobile": [p["number"] for p in row["phones"] if p["type"] == "mobile"],
+                "fax": [p["number"] for p in row["phones"] if p["type"] == "fax"],
+                "urls": row["urls"], "note": row["note"]}
+        cards[row["address"]] = {field: value for field, value in card.items() if value}
+    return cards
+
+
+def _mailbox():
+    """The mailbox as a whole – every address's mail counts, the name it
+    writes under, the address book – read once per index file. None for an
+    index that cannot answer."""
+    global _MAILBOX
+    stamp = (STATE["db"], Path(STATE["db"]).stat().st_mtime_ns, STATE.get("outlook_dir"))
+    box = _MAILBOX
+    if box.get("stamp") != stamp:
+        con = _db()
+        try:
+            if not correspondents.readable(con):
+                return None
+            stats, names = correspondents.profile(con)
+            fresh = {"stamp": stamp, "stats": stats, "names": names,
+                     "book": _address_book(con), "window": None, "people": None}
+        finally:
+            con.close()
+        # One assignment, never clear() and update(): the app answers from
+        # several threads, and whoever holds the earlier dict keeps a whole one.
+        _MAILBOX = box = fresh
+    return box
+
+
+_ACCOUNT = {}                   # the account read from the profile folder, kept a minute
+
+
+def _account():
+    """The account whose archive this is: what the app handed in
+    (STATE["own_account"]), else what the profile folder says
+    (auth.stored_account) – a server a client started has no app to ask.
+    "" when nobody is signed in, or the server runs without a home."""
+    handed = str(STATE.get("own_account") or "")
+    home = STATE.get("home")
+    if handed or not home:
+        return handed
+    now = time.monotonic()
+    if _ACCOUNT.get("home") != home or now - _ACCOUNT.get("at", 0) > 60:
+        _ACCOUNT.update(home=home, at=now, account=auth.stored_account(home) or "")
+    return _ACCOUNT["account"]
+
+
+def _day(ts):
+    """A timestamp's day, None when it has none – or one the platform
+    cannot say: Windows refuses a Date header from before 1970."""
+    try:
+        return date.fromtimestamp(ts).isoformat() if ts else None
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _named_addresses(text):
+    """The addresses a caller names, read as the index's rows are made
+    (correspondents.addresses_of) – commas and semicolons between them."""
+    return correspondents.addresses_of(str(text or "").replace(",", " ").replace(";", " "))
+
+
+def _owner_setting(key):
+    """What the settings say of the owner (`own_name`, `own_addresses`):
+    what the app handed in, else the profile's configuration read afresh
+    – past settings.load, whose cache is filled once per process: a server
+    a client started must not go on naming the owner as it was when it
+    began."""
+    handed = STATE.get(key)
+    if handed is not None:
+        return handed
+    home = STATE.get("home")
+    if not home:
+        return settings.value(key, "")
+    try:
+        stored = json.loads((Path(home) / settings.CONFIG_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        stored = {}
+    value = stored.get(key) if isinstance(stored, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def _own_addresses(box, me=""):
+    """Whose mailbox this is: the addresses the caller names, else what
+    the mailbox itself says (correspondents.own_addresses)."""
+    named = _named_addresses(me)
+    if named:
+        return named
+    own_name, mine = _owner_setting("own_name"), _owner_setting("own_addresses")
+    return correspondents.own_addresses(box["stats"], box["names"], str(own_name or ""),
+                                        _account(), correspondents.typed_addresses(mine))
+
+
+def correspondent_people(months=12, mails=12):
+    """The correspondents person by person (correspondents.people) – what
+    the app's address book reads; kept per index file and per rule for a
+    frequent contact (`months`, `mails`). None for an index that cannot
+    answer. Not a tool: a client has list_correspondents."""
+    box = _mailbox()
+    if box is None:
+        return None
+    # A contact added in the app is a card too: its person is listed
+    # whatever the mail count, and known as one the address book has.
+    own = _own_cards(box["book"])
+    # … by its name too: a person is named by their card.
+    key = (frozenset(_own_addresses(box)), int(months), int(mails),
+           frozenset((address, card["name"]) for address, card in own.items()))
+    # Read once into a local: another thread may store its own list.
+    kept = box.get("people")
+    if kept is None or kept[0] != key:
+        con = _db()
+        try:
+            kept = box["people"] = (key, correspondents.people(
+                con, set(key[0]), box["names"], {**own, **box["book"]},
+                months=key[1], mails=key[2]))
+        finally:
+            con.close()
+    return kept[1]
+
+
+def _domain_set(text):
+    return {d.strip().lower().lstrip("@") for d in str(text or "").replace(",", " ").split()
+            if d.strip()}
+
+
+def _in_domains(domain, domains):
+    return any(domain == d or domain.endswith("." + d) for d in domains)
+
+
+@_tool(_READONLY)
+def list_correspondents(date_from: str = "", date_to: str = "", days: int = 0,
+                        party: str = "", min_sent: int = 1, min_received: int = 0,
+                        contains: str = "", exclude_domains: str = "",
+                        address_book: str = "", sort: str = "messages",
+                        limit: int = 50, offset: int = 0, me: str = "") -> dict:
+    """List whom the user exchanged mail with – one row per address, both
+    directions counted apart, with the contact card where the address
+    book has one. The tool for "whom do I have frequent contact with" and
+    for building a contact list (a CRM import, an address book clean-up).
+
+    Per address: `received` – mails it sent –, `sent` – mails the user
+    sent with it in To, Cc or Bcc –, `threads` – the conversations those
+    belong to –, `first` and `last` contact, its `name` as it writes it,
+    its `domain`, `external` (when the user's own domains are known),
+    `in_address_book` and, when true, `contact`: name with `given` and
+    `family`, `organisation`, `department`, `title`, `phones` (`mobile`
+    names the mobile ones among them) and the card's `uid`. A contact
+    with `origin: "munimentum"` was not exported from Outlook: the user
+    added it to the address book in Munimentum, from the mail and by hand
+    – say so when the difference matters. Outlook's card wins where both
+    exist.
+
+    `sent` is what tells a person from a sender: a newsletter or a ticket
+    system has many received and none sent. The default (min_sent=1)
+    therefore lists only addresses the user wrote to. Mail only – chats
+    carry no addresses. A third party's mail that merely names an address
+    beside the user counts for neither direction.
+
+    The user's own addresses are read from the mailbox and returned as
+    `me`; when they are wrong, name the right ones in `me` – every count
+    depends on them. What the address book lacks about a person stands in
+    the footer of their mails: get_signatures reads it.
+
+    Args:
+        date_from: Optional. First day, "YYYY-MM-DD".
+        date_to: Optional. Last day, "YYYY-MM-DD".
+        days: Shorthand for the last N days, counting today.
+        party: "external" – only addresses outside the user's own mail
+            domains –, "internal" – only inside –, empty for both.
+        min_sent: Only addresses the user sent at least this many mails
+            (default 1; 0 lists pure senders too).
+        min_received: Only addresses that sent at least this many mails.
+        contains: Optional. Only addresses or names holding this text.
+        exclude_domains: Optional. Domains to leave out, comma-separated
+            ("example.com, lists.example.org"); subdomains go with them.
+        address_book: "no" – only addresses the address book lacks –,
+            "yes" – only those it has –, empty for both.
+        sort: "messages" – most mail first, both directions together
+            (default) –, "recent" – last contact first –, "threads" – most
+            conversations first.
+        limit: Max rows (default 50, cap 200); page with `next_offset`.
+        offset: Rows to skip.
+        me: Optional. The user's own addresses, comma-separated, when the
+            ones returned as `me` are not theirs.
+    """
+    empty = {"count": 0, "total": 0, "correspondents": []}
+    party = str(party or "").strip().lower()
+    wanted_book = str(address_book or "").strip().lower()
+    if party not in ("", "internal", "external"):
+        return {"error": f'Unknown party: "{party}" (internal, external).', **empty}
+    if wanted_book not in ("", "yes", "no"):
+        return {"error": f'Unknown address_book: "{address_book}" (yes, no).', **empty}
+    sort = str(sort or "").strip().lower() or "messages"
+    if sort not in ("messages", "recent", "threads"):
+        return {"error": f'Unknown sort: "{sort}" (messages, recent, threads).', **empty}
+    if str(me or "").strip() and not _named_addresses(me):
+        return {"error": f'No mail address in me: "{me}".', **empty}
+    intern = _intern_domains()
+    if party and not intern:
+        return {"error": "No internal domains known – set them in Munimentum under "
+                         "Settings › App, or sign in so the account's domain counts.", **empty}
+    try:
+        since, until = _zeitraum(date_from, date_to, days)
+    except ValueError as e:
+        return {"error": str(e), **empty}
+    box = _mailbox()
+    if box is None:
+        return {"error": _NO_MAIL_LINES, **empty}
+    own = _own_addresses(box, me)
+    added = _own_cards(box["book"])
+    # Paging asks the same window again: the count is kept for the last one.
+    key = (frozenset(own), since, until)
+    # Read once into a local: another thread may store its own window.
+    window = box["window"]
+    if not window or window[0] != key:
+        con = _db()
+        try:
+            window = box["window"] = (key, correspondents.collect(con, own, since, until))
+        finally:
+            con.close()
+    found = window[1]
+    left_out = _domain_set(exclude_domains)
+    needle = str(contains or "").strip().casefold()
+    rows = []
+    for address, counts in found.items():
+        if counts["sent"] < int(min_sent) or counts["received"] < int(min_received):
+            continue
+        if "@" not in address:              # an Exchange path in From, not an address
+            continue
+        domain = address.rsplit("@", 1)[1]
+        # As the search's party filter and the page tell them apart: by
+        # the domain itself, a subdomain is another one.
+        inside = (domain in intern) if intern else None
+        if (party == "external" and inside) or (party == "internal" and not inside):
+            continue
+        if left_out and _in_domains(domain, left_out):
+            continue
+        card = box["book"].get(address) or added.get(address)
+        if (wanted_book == "yes" and card is None) or (wanted_book == "no" and card is not None):
+            continue
+        name = box["names"].get(address) or (card or {}).get("name") or ""
+        if needle and needle not in address and needle not in name.casefold():
+            continue
+        row = {"address": address, "name": name, "domain": domain,
+               "received": counts["received"], "sent": counts["sent"],
+               "threads": counts["threads"],
+               "first": _day(counts["first"]), "last": _day(counts["last"])}
+        if inside is not None:
+            row["external"] = not inside
+        row["in_address_book"] = card is not None
+        if card is not None:
+            row["contact"] = card
+        rows.append((counts["last"] or 0, row))
+    order = {"messages": lambda r: (-(r[1]["received"] + r[1]["sent"]), r[1]["address"]),
+             "recent": lambda r: (-r[0], r[1]["address"]),
+             "threads": lambda r: (-r[1]["threads"], r[1]["address"])}[sort]
+    rows.sort(key=order)
+    start = max(0, int(offset))
+    page = [row for _last, row in rows[start:start + max(1, min(int(limit), 200))]]
+    more = start + len(page) < len(rows)
+    return {"count": len(page), "total": len(rows),
+            "next_offset": start + len(page) if more else None,
+            "me": sorted(own), "correspondents": page}
+
+
+@_tool(_READONLY)
+def get_signatures(addresses: list[str], mails: int = 6) -> dict:
+    """Read the footer under a person's mails – job title, company, postal
+    address, phone numbers, website – for up to 25 addresses at once. What
+    a contact list needs and the address book lacks.
+
+    A signature is what repeats at the end of someone's mails: the newest
+    mails of each address are held against each other, and the lines more
+    than one of them ends with are the footer (`basis`: "repeated"). An
+    address with a single mail is read by that mail's closing line, its
+    "-- " separator or the line with the sender's name (`basis`: "single"
+    – one mail's word, less sure). Quoted history, disclaimers and "sent
+    from my phone" lines are left out where they are recognised.
+
+    The footer is read by rules, not understood: it can miss lines, keep
+    a line that is not the person's (a quoted footer, a banner, a note) or
+    take a number for a phone that is none. Treat it as a strong hint, not
+    as master data – say that it was read from mail footers, and let the
+    user check before it goes into a contact list.
+
+    Per address: `lines` – the footer as it stands, line by line –, and
+    what has a shape of its own taken out of it: `phones` (each with its
+    `type`: "phone", "mobile" or "fax", by the label in front of it),
+    `emails` (other than the address asked about), `urls`. Name, job
+    title, company and postal address are in `lines`: which line is which
+    differs from footer to footer – read them there, and leave a field
+    empty rather than guess. `uid` and `date` name the mail the footer was
+    read from (get_document shows it), `mails_read` how many were held
+    against each other. Empty `lines` mean no footer was found – many
+    people write without one.
+
+    Args:
+        addresses: The mail addresses to read, at most 25 per call – take
+            them from list_correspondents.
+        mails: How many of each address's mails to hold against each
+            other at a time (default 6, cap 12) – the newest and the ones
+            that opened a conversation; up to three times as many are
+            read when the first show no footer.
+    """
+    if isinstance(addresses, str):               # one address, or several in one line
+        addresses = re.split(r"[\s,;]+", addresses)
+    wanted = list(dict.fromkeys(a.strip().lower() for a in (addresses or [])
+                                if isinstance(a, str) and "@" in a))
+    if not wanted:
+        return {"error": "Name at least one mail address.", "count": 0, "signatures": []}
+    if len(wanted) > _SIGNATURE_BATCH:
+        return {"error": f"At most {_SIGNATURE_BATCH} addresses per call – "
+                         f"{len(wanted)} were named. Ask in batches.",
+                "count": 0, "signatures": []}
+    if not STATE.get("outlook_dir"):
+        return {"error": _NO_MAIL_FILES, "count": 0, "signatures": []}
+    box = _mailbox()
+    if box is None:
+        return {"error": _NO_MAIL_LINES, "count": 0, "signatures": []}
+    depth = max(1, min(int(mails), 12))
+    # The owner's own footer, quoted under an answer, is nobody else's.
+    own = _own_addresses(box)
+    own_names = {box["names"].get(a, "") for a in own} - {""}
+    con = _db()
+    try:
+        # Three rounds of candidates: a sender whose first mails show no
+        # footer is read further (signature.read), and a mail that is
+        # mostly attachment is passed over.
+        candidates = correspondents.signature_mails(con, wanted, depth * 3)
+    finally:
+        con.close()
+    out, indexed, at_hand = [], 0, 0
+    for address in wanted:
+        name = box["names"].get(address, "")
+        files = {}
+        for rel, ts in candidates.get(address, []):
+            path, _error = _resolve_source("outlook", rel)
+            indexed += 1
+            at_hand += path is not None
+            try:
+                small = path is not None and path.stat().st_size <= _SIGNATURE_FILE_CAP
+            except OSError:
+                small = False
+            if small:
+                files[path] = (rel, ts)
+        found = signature.read(list(files), name, depth, foreign=own - {address},
+                               foreign_names=() if address in own else own_names)
+        entry = {"address": address, "name": name, "lines": found["lines"],
+                 "mails_read": found["mails"]}
+        if found["lines"]:
+            rel, ts = files[found["path"]]
+            entry.update(phones=found["phones"],
+                         emails=[m for m in found["emails"] if m != address],
+                         urls=found["urls"], basis=found["basis"],
+                         uid=f"outlook:{rel}:0",
+                         date=_day(ts))
+        out.append(entry)
+    if indexed and not at_hand:
+        # The index knows their mails and not one file is there: the
+        # folder moved, the drive is away – not "nobody signs their mail".
+        return {"error": _NO_MAIL_FILES, "count": 0, "signatures": []}
+    return {"count": len(out), "signatures": out}
 
 
 # ---------------------------------------------------------------------------
@@ -3115,7 +3604,12 @@ def archive_analytics() -> dict:
 @_tool(_READONLY)
 def corpus_stats() -> dict:
     """Corpus size, per-source counts, the active ranking backend – and the
-    archive's edges: coverage, gaps, last successful run per source."""
+    archive's edges: coverage, gaps, last successful run per source.
+
+    `account` is the Microsoft 365 account this archive belongs to (null
+    when nobody is signed in): say it once, so the user knows whose
+    archive the answers come from.
+    """
     con = _db()
     try:
         by_src = {r[0]: {"chunks": r[1], "messages": r[2]} for r in con.execute(
@@ -3125,6 +3619,7 @@ def corpus_stats() -> dict:
             "SELECT root, COUNT(DISTINCT uid) FROM chunks "
             "WHERE src = 'datei' GROUP BY root")}
         return {
+            "account": _account() or None,
             "chunks": n,
             "by_source": by_src,
             "files_by_mirror": dateien,
@@ -4556,6 +5051,7 @@ def main():
                  # The run history and the case book live in the app's home
                  # folder, which the app hands to every subprocess; started
                  # by hand there is neither.
+                 home=settings.home_env() or None,
                  runs_db=(str(Path(settings.home_env()) / run_history.DB_NAME)
                           if settings.home_env() else None),
                  faelle_db=(str(Path(settings.home_env()) / faelle.DB_NAME)

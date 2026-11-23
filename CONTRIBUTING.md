@@ -86,7 +86,7 @@ It is the quickest way to see the interface with data in it without touching
 a Microsoft account. It has a past, too (`testdata/history.py`): files with
 an earlier version, an organization a week older than today's, an edited and
 a deleted Teams message, a case whose items changed since they came in, a
-file changed by hand – and the chain of checksums over all of it. The
+contact added to the address book in the app and filled in since, a file changed by hand – and the chain of checksums over all of it. The
 browser tests use the same archive, and that is what lets them go deeper
 than "every page renders": they set the search filters one by one and count
 what comes back, fill a case from the search, order it into folders, write a
@@ -105,7 +105,12 @@ reads, walks and compares; `seniority.py` reads its titles into levels by the
 role model and its tree into figures, and `org_csv.py` turns a version, or a
 span of them, into a CSV file. Every export writes through `versions.py`,
 which keeps what it replaces and journals the write; `evidence.py` turns that
-into the chain of checksums after every run and checks it. `mcp_server.py` is
+into the chain of checksums after every run and checks it. `correspondents.py`
+counts whom the mailbox's owner writes with from one slim row per mail the
+index run writes, and `signature.py` reads the footer under a person's mails
+from the `.eml` files; `own_contacts.py` keeps the contacts added to the
+address book in the app and what each said before a change – rows in the
+profile's database, never files in an export folder. `mcp_server.py` is
 the MCP server; the app's search calls its tools in-process, so what leaves
 over MCP passes `_tool()`, which keeps the answer compact, brief and within a
 budget. Its prompts and case resources sit beside the tools, and the three

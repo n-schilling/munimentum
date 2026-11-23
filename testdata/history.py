@@ -30,12 +30,14 @@ from datetime import UTC, datetime, timedelta
 
 import evidence
 import faelle
+import own_contacts
 import organization
+import outlook_export
 import settings
 import store_layout
 import versions
 
-from testdata import people, sources
+from testdata import bulk, people, sources
 from testdata.people import day
 
 PROJECT = people.PROJECT
@@ -90,8 +92,13 @@ ORG_BEFORE = sources.org_users({
 })
 ORG_EARLIER = (settings.TEAMS_DIR, f"{organization.ORG_DIR}/{organization.FILE}",
                sources.org_text(ORG_BEFORE), day(6, 7, 6, 0))
+# A contact as Outlook had it before: Dana's card named another job title.
+_DANA = next(c for c in sources.CONTACTS if c["displayName"] == people.EXTERNALS[0][0])
+CONTACT_TITLE_BEFORE = "Consultant"
+CONTACT_EARLIER = (settings.OUTLOOK_DIR, f"kontakte/{outlook_export.contact_filename(_DANA)}",
+                   outlook_export.build_vcf({**_DANA, "jobTitle": CONTACT_TITLE_BEFORE}), day(5, 12, 9, 0))
 # Every file with a kept earlier version.
-KEPT = [*EARLIER, ORG_EARLIER]
+KEPT = [*EARLIER, ORG_EARLIER, CONTACT_EARLIER]
 
 # The organization's past: one export a week for fifteen weeks, three days
 # with a second run in the afternoon, the last one ORG_BEFORE (three days
@@ -157,7 +164,7 @@ def org_timeline(now=None):
 ORG_TIMELINE_LEN = _STEPS
 # Version files the versions folder keeps: one per earlier file version,
 # and every organization version before today's.
-KEPT_VERSIONS = len(EARLIER) + _STEPS
+KEPT_VERSIONS = len(EARLIER) + 1 + _STEPS       # … and the contact's
 ORG_CHANGES = {"moved": [sources.ORG_ME], "changed": ["org-nina"], "left": ["org-olaf"],
                "joined": ["org-kai"]}
 
@@ -305,6 +312,27 @@ def case(home, exports, store, earlier):
     finally:
         con.close()
     return case_id
+
+
+# The person the keeper added to the address book in the app: writes
+# often, has no Outlook card – a card of the app's own, filled in by hand.
+OWN_CONTACT = {"person": people.EXTERNALS[6], "title": "Site manager", "company": "Nordwind Montage GmbH",
+               "mobile": "+49 170 0000066", "note": "On site Tuesdays and Thursdays."}
+
+
+def own_contact(home):
+    """The card of the app's own in the profile's database (own_contacts.py)."""
+    name, address = OWN_CONTACT["person"]
+    book = own_contacts.OwnContacts(home / faelle.DB_NAME)
+    found = {"lines": bulk.footer(OWN_CONTACT["person"]).split("\n")[:-1], "basis": "repeated"}
+    try:
+        ident = book.add(address, name, found)
+    except own_contacts.Exists:                  # a profile kept from an earlier build
+        ident = next(c["id"] for c in book.all() if c["address"] == address)
+    book.change(ident, {"title": OWN_CONTACT["title"], "company": OWN_CONTACT["company"],
+                        "note": OWN_CONTACT["note"],
+                        "phones": [{"type": "mobile", "number": OWN_CONTACT["mobile"]}]})
+    return ident
 
 
 def archive_report(home, exports, store, run):

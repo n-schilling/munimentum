@@ -139,6 +139,13 @@ code{padding:2px 5px} pre{padding:12px;overflow-x:auto;margin:8px 0}
 a.chip{color:inherit;text-decoration:none}
 a.chip:hover,a.chip:focus-visible{border-color:var(--accent);color:var(--accent)}
 .tag.herkunft{margin-left:8px;font-weight:400}
+.tag.added{margin-left:8px;font-weight:400;color:var(--accent)}
+.contact-phone{display:flex;gap:8px;align-items:center;margin:0 0 6px}
+.contact-phone input{flex:1;min-width:0}
+.contact-form label.bez{display:block;margin:10px 0 3px;font-size:12px;color:var(--muted)}
+.contact-form input[type=text],.contact-form textarea{width:100%}
+.contact-form textarea{min-height:0;height:58px}
+.tag.frequent{margin-left:8px;color:var(--accent);background:var(--accent-weich);font-weight:500}
 mark{background:var(--code);color:var(--ink);font-weight:600;border-radius:3px;padding:0 3px}
 /* Small status next to a field: the dot carries the colour, the word the fact. */
 .stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
@@ -648,15 +655,33 @@ details.verlauf .vzeile.aus{opacity:.55;cursor:default}
 @media(max-width:820px){.rbrow{flex-wrap:wrap;gap:4px 9px}.rbwho{max-width:none}}
 .letter{margin:18px 0 6px;font-size:13px;font-weight:700;color:var(--muted);border-bottom:1px solid var(--line);padding-bottom:3px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
-.card2{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+.card2{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:11px 13px;position:relative}
 .card2 button.mini{margin-top:8px}
-.cname{font-weight:600;overflow-wrap:anywhere}
+.cname{font-weight:600;overflow-wrap:anywhere;padding-right:30px}
+.card-menu{position:absolute;top:7px;right:7px}
+.card-menu>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:8px;color:var(--muted)}
+.card-menu>summary::-webkit-details-marker{display:none}
+.card-menu>summary:hover,.card-menu[open]>summary{background:var(--code);color:var(--ink)}
+.card-menu-list{position:absolute;top:calc(100% + 4px);right:0;z-index:20;min-width:210px;display:flex;flex-direction:column;gap:2px;padding:6px;background:var(--card);border:1px solid var(--line);border-radius:10px;box-shadow:0 12px 40px rgba(0,0,0,.18)}
+.card-menu-list button{border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:6px;font:inherit;font-size:13.5px;color:inherit;cursor:pointer;white-space:nowrap}
+.card-menu-list button:hover{background:var(--code)}
 .cname a{color:var(--ink);text-decoration:none}
 .cname a:hover{color:var(--accent);text-decoration:underline}
 .crole{font-size:12.5px;color:var(--muted);margin-bottom:5px;overflow-wrap:anywhere}
 .cline{font-size:13px;overflow-wrap:anywhere;display:flex;gap:6px;align-items:center}
 .cline svg{color:var(--muted)}
 .cline a{color:var(--accent);text-decoration:none}
+.book-sig{margin-top:8px;font-size:12.5px}
+.book-sig>summary{cursor:pointer;color:var(--muted)}
+.book-sig .sigline{overflow-wrap:anywhere}
+.book-sig .sigline:first-child{margin-top:5px}
+.sigquote{margin:0;padding:3px 0 3px 12px;border-left:3px solid var(--line)}
+.book-sig .sigquote .sigline:first-child{margin-top:0}
+.signote{margin:12px 0 2px;color:var(--muted);overflow-wrap:anywhere}
+.ctags{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.ctags .tag{margin-left:0}
+.info-head{margin:16px 0 7px;font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);font-weight:650}
+.book-sig button.mini{margin-top:6px}
 
 /* ---- Overview ---- */
 .kpis{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
@@ -1571,10 +1596,19 @@ details.rechte p{margin:6px 0}
       <span class="chip on" data-book="all" data-i18n="book.f.all">Alle</span>
       <span class="chip" data-book="contacts" data-i18n="book.f.contacts">Aus Kontakten</span>
       <span class="chip" data-book="comm" data-i18n="book.f.comm">Aus Kommunikation</span>
+      <!-- The contacts added in the app – absent while there is none -->
+      <span class="chip hide" data-book="own" data-i18n="book.f.own">Added here</span>
+      <!-- What the mail says about a person: three switches beside the
+           origin, each absent while no entry could pass it; one (i)
+           explains the whole row -->
+      <span class="calbar-trenner" id="book-flags"></span>
+      <span class="chip" data-book-flag="exchange" data-i18n="book.f.exchange">With exchange</span>
+      <span class="chip" data-book-flag="frequent" data-i18n="book.f.frequent">Frequent contact</span>
+      <span class="chip" data-book-flag="missing" data-i18n="book.f.missing">Not in the address book</span>
+      <span class="info" id="book-flags-i" tabindex="0" aria-label="i">i</span>
       <span class="small muted" id="kbStats"></span>
       <button class="ghost rechts" id="kbSuchen" onclick="kontakteSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="book.search">Alle Kontakte durchsuchen</span></button>
     </div>
-    <p class="small muted" style="margin:8px 0 0" id="book-note" data-i18n="book.f.note">Kontakte stammen aus dem Outlook-Adressbuch, Kommunikation aus Absendern und Empfängern.</p>
   </div>
   <div class="card"><div id="kbBox"><p class="hint" data-i18n="cal.loading">Wird geladen…</p></div></div>
   </div>
@@ -2230,6 +2264,10 @@ details.rechte p{margin:6px 0}
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.case_export_dir"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.case_export_dir.i">i</span></span><input type="text" id="c-case_export_dir" data-i18n-ph="settings.case_export_dir.ph" placeholder="Dokumente/Munimentum cases"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.internal_domains"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.internal_domains.i">i</span></span><input type="text" id="c-internal_domains" data-i18n-ph="settings.internal_domains.ph" placeholder="example.com, example.org"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.own_name"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.own_name.i">i</span></span><input type="text" id="c-own_name" data-i18n-ph="settings.own_name.ph" placeholder=""></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.own_addresses"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.own_addresses.i">i</span></span><input type="text" id="c-own_addresses" data-i18n-ph="settings.own_addresses.ph" placeholder="alice@example.com, alice@home.example"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.frequent_mails"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.frequent_mails.i">i</span></span><input type="number" id="c-frequent_mails" min="2" max="10000"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.frequent_months"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.frequent_months.i">i</span></span><input type="number" id="c-frequent_months" min="1" max="120"></div>
+      <div class="feldzeile "><span class="bez"><span data-i18n="settings.contacts_people"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.contacts_people.i">i</span></span><input type="number" id="c-contacts_people" min="1" max="5000"></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.notifications"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.notifications.i">i</span></span><select id="c-notifications"><option value="off" data-i18n="settings.notifications.off"></option><option value="errors" data-i18n="settings.notifications.errors"></option><option value="all" data-i18n="settings.notifications.all"></option></select></div>
       <div class="feldzeile "><span class="bez"><span data-i18n="settings.keep_awake"></span><span class="info" tabindex="0" aria-label="i" data-i18n-title="settings.keep_awake.i">i</span></span><input type="checkbox" id="c-keep_awake"></div>
     </div>
@@ -2472,6 +2510,7 @@ var IKON = {
   kalender: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18"/><path d="M8 2v4M16 2v4"/>',
   kontakt: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
   ordner: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  mobile: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
   telefon: '<path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2z"/>',
   lupe: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
   fall: '<path d="M3 7h6l2 2h10v10H3z"/>',
@@ -2495,6 +2534,7 @@ var IKON = {
   klammer: '<path d="M21 12l-8.5 8.5a5 5 0 0 1-7-7L14 5a3.5 3.5 0 0 1 5 5l-8.5 8.5a2 2 0 0 1-3-3L15 8"/>',
   auto: '<path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>',
   weg: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+  more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>',
   fertig: '<circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/>',
   uhr: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   kreis: '<circle cx="12" cy="12" r="9"/>',
@@ -5251,6 +5291,19 @@ function detailInhalt(h, r){
    its difference to the current one – until "Back to current". A case's
    item shows the same in its window, with the version it came in with. */
 var VERSIONS = null;       // {query, items, format, unit, into, chosen, mode}
+/* A window with versions of its own (a case's item, a contact card) takes
+   VERSIONS while it is open and hands the detail's back when it closes:
+   the rows of the detail behind it go on working. */
+var VERSIONS_BEHIND = null;
+function versionsLend(){
+  if(VERSIONS && VERSIONS.into.back === 'detail') VERSIONS_BEHIND = VERSIONS;
+  VERSIONS = null;
+}
+function versionsReturn(){
+  if(!VERSIONS_BEHIND) return;
+  VERSIONS = VERSIONS_BEHIND;
+  VERSIONS_BEHIND = null;
+}
 function versionQuery(h){
   return h.uid ? 'uid=' + encodeURIComponent(h.uid)
     : 'root=' + encodeURIComponent(h.root || '') + '&rel=' + encodeURIComponent(h.rel || '') +
@@ -5395,7 +5448,7 @@ function zeichneGespraech(h, nr, r){
     esc(t('search.detail.thread.addall')) + '</button>';
   // A row opens its message as the detail – the original stays one click
   // away there, under "Open original".
-  var faden = JSON.stringify(String(h.thread || '')).replace(/"/g, '&quot;');
+  var faden = jsArg(String(h.thread || ''));
   el('detail-verlauf').innerHTML = '<details class="verlauf"><summary><span class="pfeil">' + ikon('rechts', 'klein') + '</span>' +
     esc(t('search.detail.thread', {n: zahl(n)})) + '</summary>' +
     msgs.map(function(m, i){
@@ -6337,6 +6390,7 @@ function compareVersions(key){
   var e = ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0];
   if(!e) return;
   merke('flow.case.versions', '');
+  versionsLend();
   oeffneEigenes('versions', modalKopf(t('cases.versions.title', {name: e.title || e.rel || e.key}), 'versions',
                                        t('cases.versions.i')) +
     '<div id="versions-list"></div><div class="dinhalt" id="versions-view"><p class="hint">' +
@@ -6759,6 +6813,9 @@ function istIch(p){
   var konto = String((S && S.token && S.token.account) || '').toLowerCase();
   var name = String(((S && S.config) || {}).own_name || (S && S.token && S.token.name) || '').trim().toLowerCase();
   if(konto && p.adressen.indexOf(konto) >= 0) return true;
+  // … or one of the addresses named as your own (the setting own_addresses).
+  var mine = String(((S && S.config) || {}).own_addresses || '').toLowerCase().split(/[\s,;]+/).filter(Boolean);
+  if(mine.some(function(a){ return p.adressen.indexOf(a) >= 0; })) return true;
   return !!name && p.name.toLowerCase() === name;
 }
 function istExtern(p){
@@ -9007,7 +9064,7 @@ function bilanzZeile(e, b){
   var offen = b && b.offen > 0;
   // "Fetch now" hands the row to the server, which knows the cheapest
   // way to fetch what it found open (see /api/v1/balance/{row}/fetch).
-  var lauf = JSON.stringify(e.quelle).replace(/"/g, '&quot;');
+  var lauf = jsArg(e.quelle);
   var html = '<div class="zeile">' + ikon(ikonName) +
     '<div class="text"><b>' + esc(t(e.titel)) + '</b>' +
     '<span><span class="dot ' + satz.dot + '"></span>' + esc(satz.text) + '</span></div>' +
@@ -9063,7 +9120,7 @@ function archivSatz(z){
    the note – for lost tombstones, and for files a fetch did not bring
    back – set aside, put back, rebuild. Nothing here deletes. */
 function archivKnoepfe(z){
-  var q = JSON.stringify(z.quelle).replace(/"/g, '&quot;');
+  var q = jsArg(z.quelle);
   function knopf(aktion, key){
     return '<button class="mini" onclick="archivAktion(&quot;' + aktion + '&quot;, ' + q + ')">' +
       esc(t(key)) + '</button>';
@@ -9228,7 +9285,7 @@ var EVIDENCE_ROOTS = {outlook_export: 'outlook', teams_export: 'teams', onedrive
                       sharepoint_export: 'sharepoint', sharepoint_pages: 'pages',
                       planner_export: 'planner', todo_export: 'todo', onenote_export: 'onenote'};
 function evidenceFileLink(rel){
-  var go = 'evidenceOpen(' + JSON.stringify(String(rel)).replace(/"/g, '&quot;') + ')';
+  var go = 'evidenceOpen(' + jsArg(String(rel)) + ')';
   return '<a href="javascript:void(0)" title="' + esc(t('ana.evidence.findings.open')) + '" onclick="' + go + '">' +
     '<code>' + esc(rel) + '</code></a>';
 }
@@ -9333,7 +9390,7 @@ function befundeFenster(quelle){
   if(!z) return;
   var titel = t(ARCHIV_TITEL[quelle] || quelle);
   var b = z.befunde || {};
-  var q = JSON.stringify(quelle).replace(/"/g, '&quot;');
+  var q = jsArg(quelle);
   function gruppe(key, liste){
     if(!liste.length) return '';
     return '<details class="plangruppe" open><summary>' + esc(t(key, {n: zahl(liste.length)})) + '</summary>' +
@@ -9520,24 +9577,228 @@ function pruefeVollstaendigkeit(){
 /* ---------- Address book ---------- */
 function telHref(t){ return 'tel:' + (t||'').replace(/[^\d+]/g, ''); }
 function cardHtml(e){
-  var r = e.c || {};
-  var sub = [r.role, r.org].filter(Boolean).join(' · ');
+  var o = e.o || null, m = e.m;
+  // A card of the app's own shows its fields where an Outlook card shows its.
+  var r = e.c || (o ? {role: o.title, org: o.company, dept: o.department} : {});
+  // What can be done with the person stands in the card's menu, not on
+  // the card: the hand-over to the search, and the card of the app's own
+  // – edited in its one dialog, or begun for a person the mail knows and
+  // no card names. The search finds a person by name or by address; the
+  // address where the name would not do: one several people share, one
+  // typed by hand.
+  var shared = CORRESPONDENTS && CORRESPONDENTS.byName[normName(e.name)] === false;
+  var at = m && m.addresses.length ? (m.writes_from || m.addresses[0]) : (o ? o.address : '');
+  var who = !e.c && at && (o || shared) ? at : e.name;
+  var menu = '<button onclick="zeigeKommunikation(' + jsArg(who) + ')">' + esc(t('book.show.comm')) + '</button>';
+  // What the archive says of the person is no part of who they are: the
+  // counts and the footer under their mails stand in a window of their
+  // own, absent while there is nothing to say.
+  if(e.n || (m && (m.received || m.sent))){
+    var asks = m && m.received && m.addresses.length;
+    var k = BOOK_INFO.push({name: e.name, n: e.n || 0, m: m || null,
+                            sig: asks ? signatureIndex(m.writes_from || m.addresses[0]) : -1}) - 1;
+    menu += '<button onclick="bookInfo(' + k + ')">' + esc(t('book.info')) + '</button>';
+  }
+  // What a card said before: an Outlook card's versions are its file's,
+  // as the archive keeps them; a card of the app's own has its own.
+  if(e.c && r.root && r.rel){
+    var v = BOOK_VERSIONS.push({name: e.name, root: r.root, rel: r.rel}) - 1;
+    menu += '<button onclick="bookVersions(' + v + ')">' + esc(t('book.versions')) + '</button>';
+  }
+  else if(o && !e.c && o.versions) menu += '<button onclick="ownContactHistory(' + o.id + ')">' + esc(t('book.versions')) + '</button>';
+  if(o && !e.c) menu += '<button onclick="ownContactDialog(' + o.id + ')">' + esc(t('book.own.edit')) + '</button>';
+  else if(!e.c && m && m.addresses.length){
+    var a = BOOK_ADD.push({address: m.writes_from || m.addresses[0], name: e.name}) - 1;
+    menu += '<button onclick="ownContactAdd(' + a + ')">' + esc(t('book.add')) + '</button>';
+  }
   // Only entries from the address book have a source file to link to.
-  var h = '<div class="card2"><div class="cname">' +
+  var h = '<div class="card2"><details class="card-menu"><summary title="' + esc(t('book.menu')) + '" aria-label="' +
+    esc(t('book.menu')) + '">' + ikon('more', 'klein') + '</summary><div class="card-menu-list">' + menu + '</div></details>' +
+    '<div class="cname">' +
     (e.c ? '<a href="' + quelle(r) + '" target="_blank" rel="noopener">' +
-           esc(e.name) + '</a>' : esc(e.name)) +
-    (e.quelle === 'comm' ? '<span class="tag herkunft">' + esc(t('book.tag.comm')) +
-                           '</span>' : '') + '</div>';
-  if(sub) h += '<div class="crole">' + esc(sub) + '</div>';
-  (r.em||[]).forEach(function(m){
-    h += '<div class="cline">' + ikon('mail', 'klein') + '<a href="mailto:' + esc(m) + '">' + esc(m) + '</a></div>'; });
+           esc(e.name) + '</a>' : esc(e.name)) + '</div>';
+  // The marks close the card, side by side.
+  var tags = (o ? '<span class="tag added">' + esc(t('book.tag.own')) + '</span>'
+       : e.quelle === 'comm' ? '<span class="tag herkunft">' + esc(t('book.tag.comm')) + '</span>' : '') +
+    (m && m.frequent ? '<span class="tag frequent">' + esc(t('book.tag.frequent')) + '</span>' : '');
+  // The card field by field: the job title, then where – company and department.
+  if(r.role) h += '<div class="crole">' + esc(r.role) + '</div>';
+  var where = [r.org, r.dept].filter(Boolean).join(' · ');
+  if(where) h += '<div class="crole">' + esc(where) + '</div>';
+  // Without a card the address is who this is: two people of one name
+  // differ in nothing else.
+  (e.c ? (r.em || []) : ((m || {}).addresses || (o ? [o.address] : []))).forEach(function(a){
+    h += '<div class="cline">' + ikon('mail', 'klein') + '<a href="mailto:' + esc(a) + '">' + esc(a) + '</a></div>'; });
   (r.tel||[]).forEach(function(x){
-    h += '<div class="cline">' + ikon('telefon', 'klein') + '<a href="' + esc(telHref(x)) + '">' + esc(x) + '</a></div>'; });
-  if(e.n) h += '<div class="cline muted small">' + esc(t('book.messages', {n: e.n.toLocaleString(LOC)})) + '</div>';
-  h += '<button class="mini" onclick="zeigeKommunikation(' +
-       JSON.stringify(e.name).replace(/"/g, '&quot;') + ')">' +
-       esc(t('book.show.comm')) + '</button>';
-  return h + '</div>';
+    var mobile = (r.mob || []).indexOf(x) >= 0;
+    h += '<div class="cline">' + ikon(mobile ? 'mobile' : 'telefon', 'klein') + '<a href="' + esc(telHref(x)) + '">' + esc(x) + '</a></div>'; });
+  if(o && !e.c){
+    o.phones.forEach(function(x){
+      h += '<div class="cline">' + ikon(x.type === 'mobile' ? 'mobile' : 'telefon', 'klein') + '<a href="' +
+           esc(telHref(x.number)) + '">' + esc(x.number) + '</a>' +
+           (x.type === 'fax' ? ' <span class="muted small">' + esc(t('book.own.kind.fax')) + '</span>' : '') + '</div>'; });
+    o.urls.forEach(function(u){
+      h += '<div class="cline">' + ikon('link', 'klein') + '<a href="' + esc(/^https?:/i.test(u) ? u : 'https://' + u) +
+           '" target="_blank" rel="noopener">' + esc(u) + '</a></div>'; });
+    if(o.note) h += '<div class="cline muted small">' + esc(o.note) + '</div>';
+  }
+  return h + (tags ? '<div class="ctags">' + tags + '</div>' : '') + '</div>';
+}
+/* What the archive says of one person, in a window of its own: how much
+   there is, mail in both directions, and the footer under the person's
+   mails – read when the window opens. */
+function bookInfo(k){
+  var x = BOOK_INFO[k];
+  if(!x) return;
+  var m = x.m, rows = '';
+  function row(label, n){ rows += '<dt>' + esc(t(label)) + '</dt><dd>' + esc(zahl(n)) + '</dd>'; }
+  if(x.n) row('book.info.messages', x.n);
+  if(m && (m.received || m.sent)){ row('book.info.received', m.received); row('book.info.sent', m.sent); }
+  oeffneEigenes('bookinfo', modalKopf(x.name, 'bookinfo') +
+    '<h4 class="info-head">' + esc(t('book.info.archive')) + '</h4><dl class="fakten">' + rows + '</dl>' +
+    (x.sig >= 0 ? '<h4 class="info-head">' + esc(t('book.sig')) + '</h4><div class="book-sig" id="book-sig-' + x.sig + '"></div>' : ''), true);
+  if(x.sig >= 0) bookSignature(true, x.sig);
+}
+/* A card's menu closes with the next click anywhere but on its own dots. */
+document.addEventListener('click', function(ev){
+  var open = document.querySelectorAll('details.card-menu[open]');
+  for(var k = 0; k < open.length; k++){
+    var dots = open[k].firstElementChild;
+    if(!(dots && dots.contains(ev.target))) open[k].removeAttribute('open');
+  }
+});
+/* An address's place in BOOK_SIGNATURES – the same for as long as the page
+   lives: a window open over the list keeps asking for its own address
+   when the list behind it is drawn again. */
+function signatureIndex(address){
+  var i = BOOK_SIGNATURES.indexOf(address);
+  return i >= 0 ? i : BOOK_SIGNATURES.push(address) - 1;
+}
+function mailCounts(m){
+  return t('book.mail', {r: zahl(m.received), s: zahl(m.sent)});
+}
+/* Whom the archive's owner exchanges mail with (/correspondents): mails
+   received and sent per person and the "frequent contact" mark, asked once
+   and again after an index run. A person is found by an address of their
+   card first, by name otherwise – the card's name or one their addresses
+   write under. */
+var CORRESPONDENTS = null, CORRESPONDENTS_STAND, FREQUENT_RULE = null;
+var BOOK_FLAGS = {exchange: false, frequent: false, missing: false}, BOOK_SIGNATURES = [], BOOK_INFO = [], BOOK_VERSIONS = [], BOOK_VERSIONS_SEQ = 0, SIGNATURES = {};
+function loadCorrespondents(){
+  // Asked again when the index is another one – or the rule for a
+  // frequent contact is (the settings frequent_mails, frequent_months).
+  // … or whose mailbox it is: the counts follow the owner's addresses,
+  // which the server reads from the name given and the account in use.
+  var stand = [(S && S.store) ? S.store.built_at : '', (KONFIG || {}).frequent_mails,
+               (KONFIG || {}).frequent_months, contactsPeople(), (KONFIG || {}).own_name, (KONFIG || {}).own_addresses, (KONFIG || {}).auth_mode,
+               (S && S.token && S.token.account) || '', (ACCESS_SESSION || {}).account || ''].join('|');
+  if(CORRESPONDENTS_STAND === stand) return;
+  CORRESPONDENTS_STAND = stand;
+  // A refusal or a broken connection is asked again with the next
+  // drawing; an answer for a stand that is no longer the current one is
+  // dropped – a later question is on its way.
+  api(API + '/correspondents').then(function(r){
+    if(CORRESPONDENTS_STAND !== stand) return;
+    if(!r || r.ok === false){ CORRESPONDENTS_STAND = null; CORRESPONDENTS = null; return; }
+    var found = {byName: {}, byAddress: {}, list: (r && r.items) || [],
+                 more: Math.max(0, (Number(r && r.total) || 0) - ((r && r.items) || []).length)};
+    found.list.forEach(function(p){
+      // A person is an address (or a card's addresses), never a name: a
+      // name two of them write under – two people of one name, "Info" of
+      // two companies – names neither, only an address tells them apart.
+      [p.name].concat(p.also || []).forEach(function(n){
+        var k = normName(n);
+        found.byName[k] = (k in found.byName && found.byName[k] !== p) ? false : p; });
+      (p.addresses || []).forEach(function(a){ found.byAddress[a] = p; });
+    });
+    CORRESPONDENTS = found;
+    FREQUENT_RULE = (r && r.frequent) || null;
+    SIGNATURES = {};
+    if(offeneSicht === 'adressbuch') drawBook();
+  }).catch(function(){
+    if(CORRESPONDENTS_STAND !== stand) return;
+    CORRESPONDENTS_STAND = null; CORRESPONDENTS = null;
+  });
+}
+function correspondentOf(name, addresses){
+  if(!CORRESPONDENTS) return null;
+  var hit = null;
+  (addresses || []).some(function(a){
+    hit = CORRESPONDENTS.byAddress[String(a).toLowerCase()] || null;
+    return !!hit;
+  });
+  // By name only for a card that names no address: with one, the card is
+  // that address – a namesake who writes from another is another person.
+  if(hit || (addresses || []).length) return hit;
+  return CORRESPONDENTS.byName[normName(name)] || null;
+}
+function bookFlag(flag){
+  BOOK_FLAGS[flag] = !BOOK_FLAGS[flag];
+  drawBook();
+}
+function dayWithYear(day){
+  // A day stands as it is; a moment (a stamp with its zone) falls on the reader's day.
+  var d = new Date(String(day).length > 10 ? String(day) : String(day) + 'T00:00:00');
+  return isNaN(d) ? String(day) : d.toLocaleDateString(LOC, {day: 'numeric', month: 'short', year: 'numeric'});
+}
+function signatureHtml(r, i){
+  if(rtext(r)) return '<p class="hint err small">' + esc(rtext(r)) + '</p>';
+  if(!(r.lines || []).length) return '<div class="sigline muted">' + esc(t('book.sig.none')) + '</div>';
+  // The footer stands as what it is – a quotation from a mail; what is
+  // said about it stands apart, below.
+  return '<blockquote class="sigquote">' +
+    r.lines.map(function(line){ return '<div class="sigline">' + esc(line) + '</div>'; }).join('') + '</blockquote>' +
+    // What is shown was read by rules, not by a person: said where it is shown.
+    '<div class="signote">' + (r.basis === 'single' ? esc(t('book.sig.single')) + ' ' : '') + esc(t('book.sig.auto')) + '</div>' +
+    (r.uid ? '<button class="mini" onclick="bookSignatureMail(' + i + ')">' +
+             esc(r.date ? t('book.sig.from', {when: dayWithYear(r.date)}) : t('book.sig.open')) + '</button>' : '');
+}
+function bookSignature(open, i){
+  var address = BOOK_SIGNATURES[i], box = dyn('book-sig-' + i);
+  if(!open || !address || !box) return;
+  if(SIGNATURES[address]){ box.innerHTML = signatureHtml(SIGNATURES[address], i); return; }
+  box.innerHTML = '<div class="sigline muted">' + esc(t('cal.loading')) + '</div>';
+  api(API + '/correspondents/signature?address=' + encodeURIComponent(address)).then(function(r){
+    if(r && r.ok !== false) SIGNATURES[address] = r;
+    var now = dyn('book-sig-' + i);
+    if(now && BOOK_SIGNATURES[i] === address) now.innerHTML = signatureHtml(r || {}, i);
+  }).catch(function(e){
+    var now = dyn('book-sig-' + i);
+    if(now && BOOK_SIGNATURES[i] === address) now.innerHTML = '<p class="hint err small">' + esc(String(e && e.message || e)) + '</p>';
+  });
+}
+/* The versions of an Outlook card, in a window of their own: the list the
+   archive keeps of the card's file, and below it the chosen one – what
+   changed from the last earlier version to the current one where there
+   is one, the card as it stands otherwise. */
+function bookVersions(k){
+  var x = BOOK_VERSIONS[k];
+  if(!x) return;
+  // Its own boxes per opening: an answer that comes after the window
+  // was closed and opened for another card finds none to fill.
+  var list = 'book-versions-list-' + (++BOOK_VERSIONS_SEQ), view = 'book-versions-view-' + BOOK_VERSIONS_SEQ;
+  oeffneEigenes('bookversions', modalKopf(x.name, 'bookversions', t('book.versions.i')) +
+    '<div class="book-versions-list" id="' + list + '"></div><div class="dinhalt book-versions-view" id="' + view +
+    '"><p class="hint">' + esc(t('search.versions.loading')) + '</p></div>');
+  versionsLend();
+  loadVersions({root: x.root, rel: x.rel, key: ''}, null, {list: list, view: view, back: 'modal'}, function(items){
+    return !items.length ? null : items.length > 1 && items[1].available ? 1 : 0;
+  }).then(function(){
+    var box = dyn(view);
+    // Nothing on record (no chain yet, no index to find the file by): said, not left loading.
+    if(box && wizardOffen === 'bookversions' && !(VERSIONS && VERSIONS.into.list === list))
+      box.innerHTML = '<p class="hint">' + esc(t('book.versions.none')) + '</p>';
+  });
+}
+/* The mail a footer was read from, opened as an item of its own. */
+function bookSignatureMail(i){
+  var r = SIGNATURES[BOOK_SIGNATURES[i]];
+  if(!r || !r.uid) return;
+  api(API + '/documents?uid=' + encodeURIComponent(r.uid)).then(function(d){
+    if(!d || d.ok === false){ apiFehler(d); return; }
+    if(wizardOffen === 'bookinfo') closeWizard('bookinfo');
+    showDocument(d);
+  }).catch(function(){});
 }
 /* Two sources for the same question "who is that?": the Outlook address
    book (.vcf, curated, often incomplete) and the communication itself
@@ -9546,32 +9807,313 @@ function cardHtml(e){
    top. */
 var personen = [], personenGeladen = false, bookF = 'all';
 
+/* How many people the address book lists beyond its cards – the setting
+   contacts_people. Asked for exactly that many: the route answers no more
+   than it is asked. */
+function contactsPeople(){ return Number((KONFIG || {}).contacts_people) || 500; }
 function ladePersonen(){
-  if(personenGeladen) return;
-  personenGeladen = true;
-  api(API + '/people?limit=2000').then(function(r){
+  // Asked again when the setting is another – or the index is.
+  var most = contactsPeople(), stand = most + '|' + ((S && S.store) ? S.store.built_at : '');
+  if(personenGeladen === stand) return;
+  personenGeladen = stand;
+  api(API + '/people?limit=' + most).then(function(r){
+    if(personenGeladen !== stand) return;
     personen = r.items || [];
     if(offeneSicht === 'adressbuch') drawBook();
-  }).catch(function(){ personen = []; });
+  }).catch(function(){ if(personenGeladen === stand) personenGeladen = null; });
 }
 
 function normName(n){ return (n || '').trim().toLowerCase(); }
 
 function buchEintraege(){
-  /* Contacts win: they carry company, role and phone number. The message
-     count is added from the communication – also for those who are in the
-     address book. */
-  var nachName = {};
+  /* Contacts win: they carry company, role and phone number. Who has mail
+     is a person of the correspondents – a card's addresses, else one
+     address – and an entry of their own: two people of one name are two
+     entries, told apart by the address they stand with. The people by
+     name (/people) give the message count, and the entries of those the
+     mail does not know (a chat partner). */
+  var byName = {}, out = [], claimed = new Set(), cards = [];
+  var messages = {}, spelled = {};
+  personen.forEach(function(p){ var k = normName(p.name); if(k){ messages[k] = p.messages; spelled[k] = p.name; } });
+  var known = CORRESPONDENTS || {byName: {}, byAddress: {}};
   contacts.forEach(function(c){
-    nachName[normName(c.title)] = {c: c, name: c.title, quelle: 'contacts', n: 0};
+    var k = normName(c.title);
+    var e = {c: c, name: c.title, quelle: 'contacts', n: 0, m: correspondentOf(c.title, c.em),
+             named: !(c.em || []).length};      // found by its name alone, not by an address
+    // Two cards of one name are two entries; what the name counts goes to the first.
+    if(!byName[k]) byName[k] = e;
+    cards.push(e);
+    if(messages[k]){ e.n = messages[k]; e.quelle = 'both'; delete messages[k]; }
+    if(e.m){ claimed.add(e.m); if(e.m.received || e.m.sent) e.quelle = 'both'; }
   });
-  personen.forEach(function(p){
-    var k = normName(p.name);
-    if(!k) return;
-    if(nachName[k]){ nachName[k].n = p.messages; nachName[k].quelle = 'both'; }
-    else nachName[k] = {c: null, name: p.name, quelle: 'comm', n: p.messages};
+  // A spelling the card's person also writes under joins the card – when
+  // it is that person's alone and no other card's name.
+  function spellings(e){
+    [e.m.name].concat(e.m.also || []).forEach(function(n){
+      var k = normName(n);
+      if(!(k in messages) || known.byName[k] !== e.m || (byName[k] && byName[k] !== e)) return;
+      e.n += messages[k]; delete messages[k];
+      if(e.c) e.quelle = 'both';
+    });
+  }
+  cards.forEach(function(e){ out.push(e); if(e.m) spellings(e); });
+  (known.list || []).forEach(function(m){
+    if(claimed.has(m)) return;
+    var e = {c: null, name: m.name, quelle: 'comm', n: 0, m: m};
+    spellings(e);
+    out.push(e);
   });
-  return Object.keys(nachName).map(function(k){ return nachName[k]; });
+  // What is left by name: nobody the mail knows as one person. A name
+  // several of them share belongs to none of the entries above.
+  Object.keys(messages).forEach(function(k){
+    if(known.byName[k] === false) return;
+    out.push({c: null, name: spelled[k], quelle: 'comm', n: messages[k], m: null});
+  });
+  /* The cards of the app's own (own_contacts): each joins the entry of
+     the person its address is. An address an Outlook card names keeps
+     its Outlook card alone – that one always wins. */
+  var own = {}, taken = {};
+  (OWN_CONTACTS || []).forEach(function(o){ own[o.address] = o; });
+  out.forEach(function(e){
+    if(!e.c) return;
+    // … by the addresses it names, or its person's – not by a person it
+    // only shares a name with: there the card of the app's own stays.
+    (e.c.em || []).concat(e.named ? [] : ((e.m || {}).addresses || []))
+      .forEach(function(a){ taken[String(a).toLowerCase()] = true; });
+  });
+  out.forEach(function(e){
+    if(e.c || !e.m) return;
+    e.m.addresses.some(function(a){
+      if(!own[a] || taken[a]) return false;
+      e.o = own[a]; e.name = own[a].name; e.quelle = 'own'; taken[a] = true;
+      return true;
+    });
+  });
+  Object.keys(own).forEach(function(a){
+    if(taken[a]) return;
+    // While the mail cannot say who is who, the entry the people by name
+    // made under the same name is this card's.
+    var same = known.byAddress[a] ? null : out.filter(function(e){
+      return !e.c && !e.o && !e.m && normName(e.name) === normName(own[a].name); })[0];
+    if(same){ same.o = own[a]; same.quelle = 'own'; return; }
+    out.push({c: null, o: own[a], name: own[a].name, quelle: 'own', n: 0, m: known.byAddress[a] || null});
+  });
+  return out;
+}
+
+/* ---------- The contacts added to the address book in the app ----------
+   A person the mail knows and Outlook has no card for can be added here:
+   a card of the app's own, begun from the mail (name, the footer's
+   numbers and links) and completed in its one dialog. It is kept in the
+   profile, marked on its card, and gives way to an Outlook card for the
+   same address. */
+var OWN_CONTACTS = null, OWN_CONTACTS_ASKED = false, BOOK_ADD = [], OWN_EDIT = null, OWN_ADDING = {};
+var OWN_HISTORY = null;         // the card whose versions window was opened last
+var OWN_MOST = 20;              // numbers, links: what a card takes (own_contacts.LIST_MOST)
+function loadOwnContacts(){
+  if(OWN_CONTACTS_ASKED) return;
+  OWN_CONTACTS_ASKED = true;
+  api(API + '/contacts/own').then(function(r){
+    if(!r || r.ok === false){ OWN_CONTACTS_ASKED = false; return; }
+    OWN_CONTACTS = r.items || [];
+    if(OWN_CONTACTS.length && offeneSicht === 'adressbuch') drawBook();
+  }).catch(function(){ OWN_CONTACTS_ASKED = false; });
+}
+/* The correspondents name a person by their card: a card added, renamed
+   or removed asks them again with the next drawing. */
+function ownContactKeep(card){
+  OWN_CONTACTS = (OWN_CONTACTS || []).filter(function(o){ return o.id !== card.id; }).concat(card.address ? [card] : []);
+  CORRESPONDENTS_STAND = null;
+}
+function ownContactFailed(e){ meldung(String(e && e.message || e), 'err'); }
+function ownContactAdd(i){
+  var who = BOOK_ADD[i];
+  if(!who || OWN_ADDING[who.address]) return;            // a second click while the first is on its way
+  OWN_ADDING[who.address] = true;
+  post(API + '/contacts/own', who).then(function(r){
+    delete OWN_ADDING[who.address];
+    if(apiFehler(r)) return;
+    ownContactKeep(r);
+    drawBook();
+    ownContactDialog(r.id);
+  }).catch(function(e){ delete OWN_ADDING[who.address]; ownContactFailed(e); });
+}
+function ownContactPhones(){
+  return OWN_EDIT.phones.map(function(p, i){
+    var what = esc(t('book.own.phones')) + ' ' + (i + 1);
+    return '<div class="contact-phone"><select id="own-phone-kind-' + i + '" aria-label="' + what + '">' +
+      '<option value="phone">' + esc(t('book.own.kind.phone')) + '</option>' +
+      '<option value="mobile">' + esc(t('book.own.kind.mobile')) + '</option>' +
+      '<option value="fax">' + esc(t('book.own.kind.fax')) + '</option></select>' +
+      '<input type="text" id="own-phone-number-' + i + '" aria-label="' + what + '">' +
+      '<button class="mini" title="' + esc(t('book.own.phone.remove')) + '" aria-label="' + esc(t('book.own.phone.remove')) +
+      '" onclick="ownContactPhone(' + i + ')">' + ikon('weg', 'klein') + '</button></div>';
+  }).join('');
+}
+/* The rows are drawn from OWN_EDIT.phones; what stands in the fields is
+   read back into it before every drawing. */
+function ownContactRead(){
+  OWN_EDIT.phones = OWN_EDIT.phones.map(function(p, i){
+    var kind = dyn('own-phone-kind-' + i), number = dyn('own-phone-number-' + i);
+    return {type: kind ? kind.value || p.type : p.type, number: number ? number.value : p.number};
+  });
+}
+function ownContactDrawPhones(){
+  dyn('own-phones').innerHTML = ownContactPhones();
+  OWN_EDIT.phones.forEach(function(p, i){
+    dyn('own-phone-kind-' + i).value = p.type;
+    dyn('own-phone-number-' + i).value = p.number;
+  });
+}
+/* Without an index: a new, empty row; with one: that row goes. */
+function ownContactPhone(i){
+  ownContactRead();
+  if(i === undefined){ if(OWN_EDIT.phones.length < OWN_MOST) OWN_EDIT.phones.push({type: 'phone', number: ''}); }
+  else OWN_EDIT.phones.splice(i, 1);
+  ownContactDrawPhones();
+}
+function ownContactFooter(o){
+  var sig = o.signature || {}, lines = sig.lines || [];
+  return (lines.length
+      ? '<blockquote class="sigquote">' +
+        lines.map(function(line){ return '<div class="sigline">' + esc(line) + '</div>'; }).join('') + '</blockquote>' +
+        '<div class="signote">' + esc(t('book.sig.auto')) + '</div>'
+      : '<div class="sigline muted">' + esc(t(sig.read ? 'book.sig.none' : 'book.own.signature.unread')) + '</div>') +
+    (sig.read ? '<div class="sigline muted">' + esc(t('book.own.signature.read', {when: dayWithYear(sig.read)})) + '</div>' : '');
+}
+function ownContactDialog(id){
+  var o = (OWN_CONTACTS || []).filter(function(x){ return x.id === id; })[0];
+  if(!o) return;
+  OWN_EDIT = {id: id, phones: o.phones.map(function(p){ return {type: p.type, number: p.number}; })};
+  // An empty field says why it is empty: what a signature does not mark
+  // is not guessed (name excepted – the mail says it).
+  function field(key, label, manual){
+    return '<label class="bez" for="own-' + key + '">' + esc(t(label)) + '</label><input type="text" id="own-' + key +
+      '" onkeydown="if(event.key===\'Enter\')ownContactSave()"' +
+      (manual && lines ? ' placeholder="' + esc(t('book.own.manual.ph')) + '"' : '') + '>';
+  }
+  var lines = ((o.signature || {}).lines || []).length > 0;
+  var html = modalKopf(t('book.own.title'), 'owncontact', t('book.own.i')) +
+    '<div class="contact-form"><p class="small muted" style="margin:0">' + ikon('mail', 'klein') + ' ' + esc(o.address) + '</p>' +
+    field('name', 'book.own.name') + field('title', 'book.own.jobtitle', true) +
+    field('company', 'book.own.company', true) + field('department', 'book.own.department', true) +
+    '<label class="bez">' + esc(t('book.own.phones')) + '</label><div id="own-phones"></div>' +
+    '<button class="mini" onclick="ownContactPhone()">' + esc(t('book.own.phone.add')) + '</button>' +
+    '<label class="bez" for="own-urls">' + esc(t('book.own.urls')) + '</label><textarea id="own-urls" rows="2"></textarea>' +
+    '<label class="bez" for="own-note">' + esc(t('book.own.note')) + '</label><textarea id="own-note" rows="2"></textarea>' +
+    '<details class="book-sig" style="margin-top:12px"' + (lines && !(o.title || o.company) ? ' open' : '') +
+    '><summary>' + esc(t('book.sig')) + '</summary><div id="own-footer"></div>' +
+    '<button class="mini" onclick="ownContactReread()">' + esc(t('book.own.reread')) + '</button></details></div>' +
+    '<div class="row modal-fuss"><button class="act" onclick="ownContactSave()">' + esc(t('book.own.save')) + '</button>' +
+    '<button class="ghost rechts rot" onclick="ownContactRemove()">' + esc(t('book.own.remove')) + '</button></div>';
+  oeffneEigenes('owncontact', html, true);
+  // The values by script, not by attribute: what the page sets it can read back.
+  dyn('own-name').value = o.name; dyn('own-title').value = o.title;
+  dyn('own-company').value = o.company; dyn('own-department').value = o.department;
+  dyn('own-urls').value = o.urls.join('\n'); dyn('own-note').value = o.note;
+  dyn('own-footer').innerHTML = ownContactFooter(o);
+  ownContactDrawPhones();
+}
+/* What a card of the app's own said before, in a window of its own,
+   newest first: when and by what each version was replaced, and the
+   fields in which it differs from what came after it, with what stood
+   there – a footer as the quotation it is. */
+function ownContactWas(card, field){
+  var value = card[field];
+  if(field === 'signature'){
+    var lines = (value || {}).lines || [];
+    return lines.length ? '<blockquote class="sigquote book-sig">' + lines.map(function(line){
+      return '<div class="sigline">' + esc(line) + '</div>'; }).join('') + '</blockquote>'
+      : '<span class="muted">' + esc(t('book.own.versions.empty')) + '</span>';
+  }
+  if(field === 'phones') value = (value || []).map(function(p){ return p.number; }).join(', ');
+  else if(field === 'urls') value = (value || []).join(', ');
+  value = String(value || '').trim();
+  return value ? esc(value) : '<span class="muted">' + esc(t('book.own.versions.empty')) + '</span>';
+}
+function ownContactHistory(id){
+  var o = (OWN_CONTACTS || []).filter(function(x){ return x.id === id; })[0];
+  if(!o) return;
+  var labels = {name: t('book.own.name'), title: t('book.own.jobtitle'), company: t('book.own.company'),
+                department: t('book.own.department'), phones: t('book.own.phones'), urls: t('book.own.versions.urls'),
+                note: t('book.own.note'), signature: t('book.own.versions.signature')};
+  function head(v){
+    var when = {when: fmt(v.replaced)};
+    return v.reason === 'removed' ? t('book.own.versions.removed', when)
+         : v.reason === 'reread' ? t('book.own.versions.reread', when) : t('book.own.versions.changed', when);
+  }
+  oeffneEigenes('ownhistory', modalKopf(o.name, 'ownhistory', t('book.own.versions.i')) +
+    '<div id="own-history"><p class="hint">' + esc(t('search.versions.loading')) + '</p></div>', true);
+  var asked = OWN_HISTORY = {id: id};
+  api(API + '/contacts/own/' + id + '/versions').then(function(r){
+    var box = dyn('own-history');
+    // Only while the window is still this card's.
+    if(wizardOffen !== 'ownhistory' || OWN_HISTORY !== asked || !box) return;
+    if(!r || r.ok === false){ box.innerHTML = '<p class="hint err">' + esc(rtext(r || {})) + '</p>'; return; }
+    box.innerHTML = (r.items || []).map(function(v){
+      return '<h4 class="info-head">' + esc(head(v)) + '</h4><dl class="fakten">' +
+        (v.changed || []).map(function(field){
+          return '<dt>' + esc(labels[field] || field) + '</dt><dd>' + ownContactWas(v.card || {}, field) + '</dd>';
+        }).join('') + '</dl>';
+    }).join('') || '<p class="hint">' + esc(t('book.versions.none')) + '</p>';
+  }).catch(function(e){
+    var box = dyn('own-history');
+    if(box && wizardOffen === 'ownhistory' && OWN_HISTORY === asked) box.innerHTML = '<p class="hint err">' + esc(String(e && e.message || e)) + '</p>';
+  });
+}
+function ownContactSave(){
+  if(!OWN_EDIT) return;
+  ownContactRead();
+  var body = {name: dyn('own-name').value, title: dyn('own-title').value, company: dyn('own-company').value,
+              department: dyn('own-department').value, note: dyn('own-note').value,
+              phones: OWN_EDIT.phones.filter(function(p){ return p.number.trim(); }),
+              urls: dyn('own-urls').value.split('\n').map(function(u){ return u.trim(); }).filter(Boolean)};
+  patch(API + '/contacts/own/' + OWN_EDIT.id, body).then(function(r){
+    if(apiFehler(r)) return;
+    ownContactKeep(r);
+    closeWizard('owncontact');
+    drawBook();
+  }).catch(ownContactFailed);
+}
+function ownContactRemove(){
+  var id = OWN_EDIT && OWN_EDIT.id;
+  var o = (OWN_CONTACTS || []).filter(function(x){ return x.id === id; })[0];
+  if(!o || !confirm(t('book.own.remove.ask', {name: o.name}))) return;
+  entferne(API + '/contacts/own/' + id).then(function(r){
+    if(apiFehler(r)) return;
+    ownContactKeep({id: id});
+    closeWizard('owncontact');
+    drawBook();
+  }).catch(ownContactFailed);
+}
+/* The footer read again: its lines are shown as they now stand, and a
+   number or a link the dialog does not hold yet joins what is typed –
+   nothing typed is replaced. */
+function ownContactReread(){
+  var edit = OWN_EDIT;
+  if(!edit) return;
+  post(API + '/contacts/own/' + edit.id + '/signature').then(function(r){
+    if(apiFehler(r)) return;
+    // Only what the reading brought joins the dialog: a number or a link
+    // the card held before and the dialog took out stays out.
+    var before = (OWN_CONTACTS || []).filter(function(x){ return x.id === edit.id; })[0] || {phones: [], urls: []};
+    ownContactKeep(r);
+    drawBook();                                          // the card behind shows what was read
+    // The dialog only while it is still this one, and open.
+    if(OWN_EDIT !== edit || wizardOffen !== 'owncontact' || !dyn('own-footer')) return;
+    dyn('own-footer').innerHTML = ownContactFooter(r);
+    ownContactRead();
+    function digits(n){ return String(n).replace(/\D/g, ''); }
+    r.phones.forEach(function(p){
+      function same(x){ return digits(x.number) === digits(p.number); }
+      if(edit.phones.length < OWN_MOST && !before.phones.some(same) && !edit.phones.some(same))
+        edit.phones.push({type: p.type, number: p.number});
+    });
+    ownContactDrawPhones();
+    var urls = dyn('own-urls').value.split('\n').map(function(u){ return u.trim(); }).filter(Boolean);
+    r.urls.forEach(function(u){ if(urls.indexOf(u) < 0 && before.urls.indexOf(u) < 0) urls.push(u); });
+    dyn('own-urls').value = urls.slice(0, OWN_MOST).join('\n');
+  }).catch(ownContactFailed);
 }
 
 var BOOK_MODE = 'list', BOOK_PERSON = null, BOOK_EXPANDED = {};
@@ -9612,11 +10154,11 @@ function drawBookPicture(){
   peoplePicture('kbBox', alle, {chosen: BOOK_PERSON, filter: '', pick: 'bookPerson', expand: 'bookExpand',
     expanded: BOOK_EXPANDED, cap: 24, none: t('book.picture.none'),
     ways: function(p){
-      var name = JSON.stringify(p.name).replace(/"/g, '&quot;');
+      var name = jsArg(p.name);
       return '<button class="mini" onclick="zeigeKommunikation(' + name + ', \'timeline\')">' + esc(t('people.timeline')) + '</button>' +
         '<button class="mini" onclick="zeigeKommunikation(' + name + ', \'list\')">' + esc(t('people.search')) + '</button>';
     },
-    extra: function(p){ return contactLine(p.name); }}, head);
+    extra: function(p){ return contactLine(p.name) + correspondentLine(p); }}, head);
 }
 function bookPerson(name){
   BOOK_PERSON = BOOK_PERSON === name ? null : name;
@@ -9630,28 +10172,66 @@ function bookExpand(key){
 function contactLine(name){
   var c = contacts.filter(function(x){ return normName(x.title) === normName(name); })[0];
   if(!c) return '';
-  var teile = [c.role, c.org].filter(Boolean).concat(c.tel || []);
+  var teile = [c.role, c.org, c.dept].filter(Boolean).concat(c.tel || []);
   return teile.length ? '<span>' + esc(teile.join(' · ')) + '</span>' : '';
+}
+/* … and what the mail says of them: both directions, and the mark. */
+function correspondentLine(p){
+  var m = correspondentOf(p.name, p.adressen);
+  if(!m || !(m.received || m.sent)) return '';
+  return '<span>' + esc(mailCounts(m)) +
+    (m.frequent ? '<span class="tag frequent">' + esc(t('book.tag.frequent')) + '</span>' : '') + '</span>';
 }
 function drawBook(){
   var bild = BOOK_MODE === 'picture';
+  loadCorrespondents();
   document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]')
     .forEach(function(c){ c.classList.toggle('on', c.dataset.bookMode === BOOK_MODE); });
   document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
     .forEach(function(c){ c.classList.toggle('hide', bild); });
   el('book-origin').classList.toggle('hide', bild);
-  el('book-note').classList.toggle('hide', bild);
+  loadOwnContacts();
+  if(personenGeladen !== false) ladePersonen();          // again when the setting is another
+  BOOK_ADD = []; BOOK_INFO = []; BOOK_VERSIONS = [];
+  var alle = bild ? [] : buchEintraege();
+  // The chip for the cards of the app's own is absent while there is none.
+  var anyOwn = alle.some(function(e){ return !!e.o; });
+  if(!bild && !anyOwn && bookF === 'own') bookF = 'all';
+  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book="own"]')
+    .forEach(function(c){ c.classList.toggle('hide', bild || !anyOwn); });
+  // A switch that could narrow nothing is absent – and no longer set.
+  var can = {exchange: alle.some(function(e){ return e.m && e.m.received && e.m.sent; }),
+             frequent: alle.some(function(e){ return e.m && e.m.frequent; }),
+             missing: alle.some(function(e){ return !e.c && !e.o; }) && alle.some(function(e){ return !!(e.c || e.o); })};
+  if(!bild) Object.keys(can).forEach(function(flag){ if(!can[flag]) BOOK_FLAGS[flag] = false; });
+  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-flag]').forEach(function(c){
+    var flag = c.dataset.bookFlag;
+    c.classList.toggle('hide', !can[flag]);
+    c.classList.toggle('on', BOOK_FLAGS[flag]);
+  });
+  var any = can.exchange || can.frequent || can.missing;
+  el('book-flags').classList.toggle('hide', !any);
+  // One (i) for the whole row: where an entry comes from, then – while
+  // there is mail to say it – what the switches mean. A line per chip.
+  el('book-flags-i').classList.toggle('hide', bild);
+  el('book-flags-i').title = t('book.f.note') + (any ? '\n\n' + t('book.f.flags.i', FREQUENT_RULE ||
+    {mails: (KONFIG || {}).frequent_mails || 12, months: (KONFIG || {}).frequent_months || 12}) : '');
   if(bild){ drawBookPicture(); return; }
-  var alle = buchEintraege();
   if(!alle.length){
     el('kbStats').textContent = '';
     el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.empty')) + '</p>';
     return;
   }
   var imFilter = alle.filter(function(e){
-    if(bookF === 'contacts') return e.quelle !== 'comm';
-    if(bookF === 'comm') return e.quelle !== 'contacts';
+    if(bookF === 'contacts') return e.quelle === 'contacts' || e.quelle === 'both';
+    // … a card of the app's own for someone the archive never saw is not from the communication.
+    if(bookF === 'comm') return e.quelle !== 'contacts' && !(e.quelle === 'own' && !e.m && !e.n);
+    if(bookF === 'own') return !!e.o;
     return true;
+  }).filter(function(e){
+    if(BOOK_FLAGS.exchange && !(e.m && e.m.received && e.m.sent)) return false;
+    if(BOOK_FLAGS.missing && (e.c || e.o)) return false;
+    return !(BOOK_FLAGS.frequent && !(e.m && e.m.frequent));
   });
   var hits = imFilter.slice();
   hits.sort(function(a, b){
@@ -9659,7 +10239,11 @@ function drawBook(){
   });
   document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
     .forEach(function(c){ c.classList.toggle('on', c.dataset.book === bookF); });
-  el('kbStats').textContent = t('book.stats', {n: hits.length, total: alle.length});
+  // The list is the people with the most mail: how many it leaves out is said.
+  var more = (CORRESPONDENTS || {}).more || 0;
+  el('kbStats').textContent = t('book.stats', {n: hits.length, total: alle.length}) +
+    (more ? t('book.stats.more', {more: zahl(more)}) : '');
+  el('kbStats').title = more ? t('book.stats.more.i') : '';
   if(!hits.length){ el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.nohits')) + '</p>'; return; }
   var h = '', letter = null;
   hits.forEach(function(e){
@@ -9676,6 +10260,9 @@ document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]').forEach(
 });
 document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]').forEach(function(ch){
   ch.addEventListener('click', function(){ bookMode(ch.dataset.bookMode); });
+});
+document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-flag]').forEach(function(ch){
+  ch.addEventListener('click', function(){ bookFlag(ch.dataset.bookFlag); });
 });
 
 /* From a person to everything that happened with them. The search's person
@@ -9960,14 +10547,14 @@ var ZAHLEN   = ['workers','mirror_workers','index_batch','mcp_port','answer_sour
                 'onedrive_max_mb','sharepoint_max_mb','teams_files_max_mb',
                 'sharepoint_pages_image_max_mb','onenote_image_max_mb','semantic_min',
                 'userflow_actions','runs_retention_months','log_retention_days',
-                'status_poll_seconds',
+                'status_poll_seconds','frequent_mails','frequent_months','contacts_people',
                 'calendar_months_back','planner_sweep_hours','versions_max_mb'];
 var TEXTE    = ['ollama','embed_model','chat_model',
                 'folder_rules','onedrive_rules','calendar_rules','onenote_rules',
                 'teams_rules','sharepoint_rules','todo_rules','org_rules',
                 'outlook_since','teams_since',
                 'sharepoint_types_include','sharepoint_types_exclude','teams_files_exclude','case_export_dir',
-                'internal_domains','own_name','evidence_tsa_url'];
+                'internal_domains','own_name','own_addresses','evidence_tsa_url'];
 // Cadence selects and the keys they carry in sync_cadence: a whole source
 // (OneDrive, To Do) or one category of it (Outlook, Teams).
 var KADENZ_FELDER = {'onedrive': 'c-cadence-onedrive', 'todo': 'c-cadence-todo',
@@ -9988,6 +10575,10 @@ function fuelleEinstellungen(cfg){
   SCHALTER.forEach(function(k){ el('c-'+k).checked = !!cfg[k]; });
   ZAHLEN.forEach(function(k){ el('c-'+k).value = cfg[k]; });
   TEXTE.forEach(function(k){ el('c-'+k).value = cfg[k] || ''; });
+  // Your addresses begin with the one the access carries: the first save keeps it.
+  // The one in use: a key left on disk from before a sign-in is not it.
+  if(!cfg.own_addresses) el('c-own_addresses').value = (cfg.auth_mode === 'login'
+    ? (ACCESS_SESSION || {}).account : S && S.token && S.token.account) || '';
   el('c-notifications').value = cfg.notifications || 'errors';
   el('c-search_history').value = cfg.search_history || '90';
   var kad = cfg.sync_cadence || {};
@@ -10388,13 +10979,13 @@ function kadenzAuswahl(k){
   var ueber = kadenzWirksam(k.pfad.split('/').slice(0, -1).join('/'), KADENZ.abw, kadenzAllgemein(k.pfad));
   var erbtText = ueber.von ? t('kadenz.inherit_from', {cadence: t('cadence.' + ueber.wert), from: ueber.von.split('/').pop()})
                            : t('kadenz.inherit', {cadence: t('cadence.' + ueber.wert)});
-  return '<select class="' + (eigen ? 'gesetzt' : 'erbt') + '" onchange="kadenzSetzen(' + JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ', this.value)">' +
+  return '<select class="' + (eigen ? 'gesetzt' : 'erbt') + '" onchange="kadenzSetzen(' + jsArg(k.pfad) + ', this.value)">' +
     '<option value=""' + (eigen ? '' : ' selected') + '>' + esc(erbtText) + '</option>' +
     KADENZ_WERTE.map(function(o){
       return '<option value="' + o + '"' + (o === eigen ? ' selected' : '') + '>' + esc(t('cadence.' + o)) + '</option>';
     }).join('') + '</select>' +
     (eigen ? '<button class="abw-weg" title="' + esc(t('kadenz.remove')) + '" onclick="kadenzSetzen(' +
-             JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ', &quot;&quot;)">&times;</button>' : '');
+             jsArg(k.pfad) + ', &quot;&quot;)">&times;</button>' : '');
 }
 function kadenzZahl(k){
   var q = KADENZ.quelle;
@@ -10428,7 +11019,7 @@ function kadenzZeile(k, tiefe, vor, treffer){
     rechts = kadenzAuswahl(k);
   }
   var pfeil = k.kinder.length && !vor
-    ? '<button class="pfeil" onclick="kadenzKlappen(' + JSON.stringify(k.pfad).replace(/"/g, '&quot;') + ')" aria-expanded="' + offen + '">' + ikon('rechts', 'klein') + '</button>'
+    ? '<button class="pfeil" onclick="kadenzKlappen(' + jsArg(k.pfad) + ')" aria-expanded="' + offen + '">' + ikon('rechts', 'klein') + '</button>'
     : '<span class="pfeil"></span>';
   return '<div class="zeile' + (offen ? ' offen' : '') + (k.an ? '' : ' aus') + '" style="padding-left:' + (tiefe * 22) + 'px">' +
     pfeil + '<span class="name">' + (vor ? '<span class="vor">' + esc(vor) + '</span>' : '') + name + '</span>' +
@@ -11802,6 +12393,7 @@ function closeWizard(kind){
   el('overlay').classList.remove('on');
   wizardOffen = null;
   wizardStand = null;
+  if(kind === 'versions' || kind === 'bookversions') versionsReturn();
   if(fokusVorher && fokusVorher.focus) fokusVorher.focus();
   fokusVorher = null;
   // Only wizards are to be reported as "seen" – a self-opened window was

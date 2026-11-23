@@ -133,12 +133,52 @@ ASIDES = ["The list is in the project folder.",
           ""]
 
 
-def _text(n, sender, to, paragraphs):
-    """A mail: the greeting, what it says, an aside, the signature. Which
-    words are chosen follows the position, so the archive reads varied
-    and comes out the same on every machine."""
+# What the story's externals have under their mails – the numbers their
+# contact cards carry too, and for the one whose card has none, the number
+# only her footer knows.
+FOOTER_FACTS = {
+    "Dana Dienstleister": ("Project manager", "Beispiel GmbH",
+                           "+49 40 000000 77", "+49 170 0000077"),
+    "Erik Einkauf": ("Purchasing", "Beispiel GmbH", "+49 40 000000 12", ""),
+    "Greta Gast": ("Trainer", "Beispiel GmbH", "", "+49 170 0000042"),
+}
+
+
+def footer(person):
+    """The footer an external writes under a new mail: name, job title,
+    company with its street and town, numbers, address and website, and
+    the register's line below – the lines a signature has, each derived
+    from the person's place in the cast."""
+    i = OUTSIDE.index(person)
+    title, company, phone, mobile = FOOTER_FACTS.get(person[0]) or (
+        FOOTER_TITLES[i % len(FOOTER_TITLES)], _company(i),
+        f"+49 40 000000 {30 + i:02d}", f"+49 171 00000{30 + i:02d}")
+    numbers = " · ".join(x for x in (f"Tel. {phone}" if phone else "",
+                                     f"Mobile {mobile}" if mobile else "") if x)
+    return "\n".join([person[0], title,
+                      f"{company} · Beispielweg {i + 1} · {_site(i)}",
+                      numbers, f"{person[1]} · www.example.com", register(person)])
+
+
+def register(person):
+    """The line of the register a company puts under every mail – about
+    the company, so no part of the person's footer (signature._LEGAL)."""
+    i = OUTSIDE.index(person)
+    return f"Sitz: {_site(i)} · Registergericht: Amtsgericht {_site(i)}, HRB 0000{30 + i:02d}"
+
+
+FOOTER_TITLES = ["Account manager", "Service engineer", "Head of sales",
+                 "Consultant", "Office manager"]
+
+
+def _text(n, sender, to, paragraphs, with_footer=False):
+    """A mail: the greeting, what it says, an aside, the signature – the
+    sender's name, or the whole footer under a mail that opens a
+    conversation. Which words are chosen follows the position, so the
+    archive reads varied and comes out the same on every machine."""
+    signed = footer(sender) if with_footer and sender in OUTSIDE else sender[0]
     teile = [GREETINGS[n % len(GREETINGS)].format(name=_first(to)),
-             *paragraphs, f"{CLOSINGS[n % len(CLOSINGS)]}\n{sender[0]}"]
+             *paragraphs, f"{CLOSINGS[n % len(CLOSINGS)]}\n{signed}"]
     return "\n\n".join(t for t in teile if t)
 
 
@@ -310,7 +350,10 @@ def mails(count):
                 "subject": subject if j == 0 else f"Re: {subject}",
                 "body": _text(n + j, sender, to,
                               [s.format(**ctx) for s in says]
-                              + [ASIDES[(n + 3 * j) % len(ASIDES)].format(**ctx)]),
+                              + [ASIDES[(n + 3 * j) % len(ASIDES)].format(**ctx)],
+                              # A new mail carries the footer, an answer
+                              # the name alone – as mail clients have it.
+                              with_footer=j == 0),
             }
             if j:
                 entry["reply_to"] = f"bulk-{topic['key']}-{n:03d}-{j - 1}"

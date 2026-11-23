@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 14.7.0. Installed by hand – under
+This guide belongs to Munimentum 15.0.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -36,11 +36,13 @@ in the app: pass its sentence on and stop – no other path reaches the data.
 1. `list_sources` – which sources exist, what each indexes, what `folder`
    and `person` mean there, and `not_in_archive` (never exported: say so
    instead of searching).
-2. `corpus_stats` – coverage (first and last item), months without a single
-   item, last successful export per source, and the ranking backend
-   (`default_backend`: "hybrid" or "lexical").
+2. `corpus_stats` – whose archive this is (`account`), coverage (first and
+   last item), months without a single item, last successful export per
+   source, and the ranking backend (`default_backend`: "hybrid" or
+   "lexical").
 
-Keep both results in mind for the rest of the conversation.
+Keep both results in mind for the rest of the conversation, and name the
+account in the first answer: the user may keep several archives.
 
 ## Which tool
 
@@ -54,7 +56,9 @@ Keep both results in mind for the rest of the conversation.
 | Which addresses stand in From/To/Cc | `list_addresses` |
 | Values for `folder` / `filetype` | `list_folders` / `list_filetypes` |
 | Appointments with start, end, attendees | `list_events` – upcoming ones need `date_from`/`date_to`, `days` only looks back |
-| Phone, e-mail, organisation | `lookup_contact` |
+| Phone, e-mail, organisation, job title | `lookup_contact` |
+| Whom the user exchanges mail with, how often, since when | `list_correspondents` |
+| What a person's mail footer says (title, company, numbers) | `get_signatures` |
 | Files by folder | `list_files` (contents are not indexed) |
 | Who reports to whom, on any day | `get_org_chart`, `get_manager`, `list_reports`, `find_by_role`, `list_roles`, `org_changes` (all take `as_of`) |
 | The organization's health: spans, layers, seniority | `org_health` (`as_of`, `below` a person, `history`) |
@@ -129,6 +133,34 @@ top-heavy ones; `get_org_chart` shows where a leader stands, `org_changes`
 who joined, left or moved between two versions. Say what the numbers rest
 on: a short history, many people not assigned, a role model that is still
 the default.
+
+## "Which contacts belong in my CRM?" – a contact list
+
+1. `list_correspondents` for the period the user means (`date_from`,
+   `date_to` or `days`), usually with `party` "external". Each row counts
+   an address's mail in both directions: received from it, sent to it. The
+   default `min_sent` of 1 keeps newsletters and ticket systems out – they
+   write, the user never answers. Check `me` in the answer: those must be
+   the user's own addresses; if not, pass the right ones as `me`.
+2. Decide who is in, and say by which rule ("at least five mails each way
+   since January"). Follow `next_offset` to the end before counting;
+   `exclude_domains` drops what does not belong, `address_book` "no" lists
+   only people the address book lacks.
+3. A row with a contact card has name parts, organisation, job title and
+   numbers from the address book. A card with `origin` "munimentum" was
+   added by the user in Munimentum, not exported from Outlook – it is an
+   address book contact all the same; say where it comes from when that
+   matters. For everyone else, and for what a card
+   lacks, `get_signatures` reads the footers under their mails – up to 25
+   addresses a call. Take numbers from its phones, and name, job title,
+   company and postal address from its lines; leave a field empty rather
+   than guess, and treat a footer read from a single mail as less sure.
+   A footer is read by rules and can be incomplete or carry a line that
+   is not the person's: present it as read from mail footers, to check.
+4. Write the file in the template's columns, one row per person, and say
+   what came from the address book, what from footers, and who has neither.
+
+Mail only: someone the user only chats with in Teams is not in this list.
 
 ## Citing
 

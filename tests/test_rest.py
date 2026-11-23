@@ -6,6 +6,7 @@ problem details as RFC 9457 describes them – and that the app's own
 routes keep answering exactly as they did.
 """
 
+from datetime import datetime
 import http.client
 import json
 import re
@@ -1185,3 +1186,156 @@ def test_the_skills_come_as_one_zip_of_three(server):
         with zipfile.ZipFile(io.BytesIO(z.read("Munimentum-skill-case.zip"))) as inner:
             assert inner.namelist() == ["munimentum-case/SKILL.md"]
             assert inner.read("munimentum-case/SKILL.md").startswith(b"---\nname: munimentum-case\n")
+
+
+# --------------------------------------------------------------------------
+# Correspondents: what the address book knows from the mail
+# --------------------------------------------------------------------------
+class FakeCorrespondents:
+    STATE = {}
+    PEOPLE = [
+        {"name": "Dana Dienstleister", "also": ["Dienstleister, Dana"],
+         "addresses": ["dana@example.com", "d.dienstleister@example.com"],
+         "writes_from": "d.dienstleister@example.com",
+         "received": 23, "sent": 16, "frequent": True,
+         "last": datetime(2026, 6, 1, 12).timestamp()},
+        {"name": "news@shop.example", "also": [], "addresses": ["news@shop.example"],
+         "writes_from": "", "received": 40, "sent": 0, "frequent": False, "last": None}]
+    SIGNATURE = {"address": "dana@example.com", "name": "Dana Dienstleister",
+                 "lines": ["Dana Dienstleister", "Project manager"], "mails_read": 6,
+                 "phones": [], "emails": [], "urls": [], "basis": "repeated",
+                 "uid": "outlook:E-Mail/Inbox/a.eml:0", "date": "2026-05-30"}
+    asked = None
+
+    @classmethod
+    def correspondent_people(cls, months=12, mails=12):
+        cls.rule = (months, mails)
+        return cls.PEOPLE
+
+    @classmethod
+    def get_signatures(cls, addresses):
+        cls.asked = addresses
+        return {"count": 1, "signatures": [cls.SIGNATURE]}
+
+
+def test_the_correspondents_come_person_by_person_with_the_rule(server, monkeypatch):
+    a, port = server
+    a.cfg["own_name"] = "Alice Beispiel"
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeCorrespondents)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents")
+    assert code == 200, r
+    assert r["count"] == 2 and r["total"] == 2 and r["frequent"] == {"months": 12, "mails": 12}
+    assert r["items"][0] == {
+        "name": "Dana Dienstleister", "also": ["Dienstleister, Dana"],
+        "addresses": ["dana@example.com", "d.dienstleister@example.com"],
+        "writes_from": "d.dienstleister@example.com",
+        "received": 23, "sent": 16, "frequent": True}
+    # Nothing empty rides along, and nothing the cards do not draw.
+    assert r["items"][1] == {"name": "news@shop.example", "addresses": ["news@shop.example"],
+                             "received": 40, "sent": 0, "frequent": False}
+    # Whose mailbox it is, is read with the name the user gave the app.
+    assert FakeCorrespondents.STATE["own_name"] == "Alice Beispiel"
+    assert FakeCorrespondents.STATE["own_addresses"] == ""
+    # … and with the account the user is signed in with, when one is known.
+    assert FakeCorrespondents.STATE["own_account"] == ""
+    # By the way of access in use: a sign-in's account counts in login
+    # mode only – and a key left on disk from before does not count there.
+    monkeypatch.setattr(a, "auth_status", lambda: {"account": "alice@nordwind.example"})
+    roh(port, "GET", "/api/v1/correspondents")
+    assert FakeCorrespondents.STATE["own_account"] == ""
+    a.cfg["auth_mode"] = "login"
+    monkeypatch.setattr(app_mod, "token_status", lambda *args, **kw: {"account": "old@example.com"})
+    roh(port, "GET", "/api/v1/correspondents")
+    assert FakeCorrespondents.STATE["own_account"] == "alice@nordwind.example"
+    a.cfg["auth_mode"] = "token"
+    roh(port, "GET", "/api/v1/correspondents")
+    assert FakeCorrespondents.STATE["own_account"] == "old@example.com"
+    # The rule is the settings': asked with them, and named in the answer.
+    assert FakeCorrespondents.rule == (12, 12)
+    a.cfg.update(frequent_months=6, frequent_mails=30)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents")
+    assert r["frequent"] == {"months": 6, "mails": 30} and FakeCorrespondents.rule == (6, 30)
+    a.cfg.update(frequent_months="often", frequent_mails=None)
+    assert roh(port, "GET", "/api/v1/correspondents")[2]["frequent"] == {"months": 12, "mails": 12}
+
+
+def test_the_correspondents_are_the_cards_and_the_people_with_the_most_mail(server, monkeypatch):
+    """A mailbox's thousands of one-off senders are on no card."""
+    class Many(FakeCorrespondents):
+        PEOPLE = [{"name": f"p{n}", "also": [], "addresses": [f"p{n}@example.com"],
+                   "writes_from": "", "received": 1, "sent": 0, "frequent": False,
+                   "last": None, "card": n == 7} for n in range(8)]
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: Many)
+    a.cfg["contacts_people"] = 3
+    r = roh(port, "GET", "/api/v1/correspondents")[2]
+    assert [p["name"] for p in r["items"]] == ["p0", "p1", "p2", "p7"] and r["count"] == 4
+    assert "card" not in r["items"][3]
+    # A frequent contact is listed whatever the cap: the switch for them must find it.
+    Many.PEOPLE[5]["frequent"] = True
+    r = roh(port, "GET", "/api/v1/correspondents")[2]
+    assert [p["name"] for p in r["items"]] == ["p0", "p1", "p2", "p5", "p7"] and r["total"] == 8
+
+
+def test_an_index_that_cannot_say_answers_no_correspondents(server, monkeypatch):
+    class Old(FakeCorrespondents):
+        @classmethod
+        def correspondent_people(cls, months=12, mails=12):
+            return None
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: Old)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents")
+    assert code == 200 and r["items"] == [] and r["count"] == 0
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: None)
+    for path in ("/api/v1/correspondents", "/api/v1/correspondents/signature?address=a@example.com"):
+        assert roh(port, "GET", path)[0] == 503
+
+
+def test_a_signature_is_asked_for_one_address(server, monkeypatch):
+    a, port = server
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeCorrespondents)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=Dana%40Example.com")
+    # What the fold draws, no more: no name, no numbers, no links.
+    assert code == 200 and r == {"lines": ["Dana Dienstleister", "Project manager"], "basis": "repeated",
+                                 "uid": "outlook:E-Mail/Inbox/a.eml:0", "date": "2026-05-30"}
+    assert FakeCorrespondents.asked == ["dana@example.com"]
+    for wrong in ("", "?address=", "?address=dana"):
+        code, _, r = roh(port, "GET", "/api/v1/correspondents/signature" + wrong)
+        assert code == 400 and r["error"]["k"] == "srv.badparam", r
+
+    class NoFiles(FakeCorrespondents):
+        @classmethod
+        def get_signatures(cls, addresses):
+            return {"error": "The mail export folder is not at hand", "count": 0, "signatures": []}
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: NoFiles)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")
+    assert code == 409 and r["error"]["k"] == "srv.signature.nofiles", r
+
+    class OldIndex(FakeCorrespondents):
+        _NO_MAIL_LINES = "This index predates the mail lines."
+
+        @classmethod
+        def get_signatures(cls, addresses):
+            return {"error": cls._NO_MAIL_LINES, "count": 0, "signatures": []}
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: OldIndex)
+    code, _, r = roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")
+    assert code == 409 and r["error"]["k"] == "srv.signature.oldindex", r
+
+    class NoFooter(FakeCorrespondents):
+        @classmethod
+        def get_signatures(cls, addresses):
+            return {"count": 1, "signatures": [{"address": addresses[0], "name": "", "lines": [],
+                                                "mails_read": 2}]}
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: NoFooter)
+    assert roh(port, "GET", "/api/v1/correspondents/signature?address=dana@example.com")[2] == {"lines": []}
+
+
+def test_the_owners_other_addresses_are_kept_as_addresses(server):
+    """The setting takes what was typed and keeps the addresses in it,
+    lower-case, comma-separated – and the search is told them."""
+    a, port = server
+    code, _, _r = roh(port, "PATCH", "/api/v1/config",
+                      {"own_addresses": " Alice@Home.example; <a.beispiel@example.com>\nnot one "})
+    assert code == 200 and a.cfg["own_addresses"] == "alice@home.example, a.beispiel@example.com"
+    assert roh(port, "GET", "/api/v1/config")[2]["config"]["own_addresses"] \
+        == "alice@home.example, a.beispiel@example.com"
