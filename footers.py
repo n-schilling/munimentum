@@ -16,6 +16,7 @@ chain would call a file there a write from outside.
 """
 
 import json
+import re
 import sqlite3
 from pathlib import Path
 
@@ -61,6 +62,43 @@ def asked(person):
     return person.get("writes_from") or person["addresses"][0]
 
 
+def _digits(number):
+    """A number as its digits – without "(0)" and without the zeros a
+    country or an area code begins with."""
+    return re.sub(r"\D", "", str(number or "").replace("(0)", "")).lstrip("0")
+
+
+def same_phone(a, b):
+    """One number however it is written: "+49 40 123456" and "040 123456"
+    – the longer ends with the shorter, six digits at least."""
+    a, b = _digits(a), _digits(b)
+    if not a or not b:
+        return False
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 6 and long.endswith(short)
+
+
+def _link(url):
+    return re.sub(r"^www\.", "", re.sub(r"^https?://", "", str(url or "").lower())).rstrip("/")
+
+
+def missing(shaped, card):
+    """What a footer names and the person's card lacks: `shaped` is
+    signature.fields of the footer's lines, `card` the card as
+    mcp_server.cards_shaped gives it (`urls` None for a card whose links
+    are not known: not held against the footer's). Only what has a shape
+    of its own can be compared – numbers, addresses, links; {} when
+    nothing is missing."""
+    known = {str(a).lower() for a in card.get("emails") or ()}
+    out = {"phones": [p for p in shaped.get("phones") or ()
+                      if not any(same_phone(p["number"], have) for have in card.get("phones") or ())],
+           "emails": [a for a in shaped.get("emails") or () if a.lower() not in known],
+           "urls": [] if card.get("urls") is None else
+                   [u for u in shaped.get("urls") or ()
+                    if not any(_link(u) == _link(have) for have in card["urls"])]}
+    return {kind: found for kind, found in out.items() if found}
+
+
 class Footers:
     """The kept footers of one profile."""
 
@@ -91,6 +129,11 @@ class Footers:
         """The addresses a footer is kept for."""
         return {row["address"] for row in
                 self._read("SELECT address FROM footers WHERE lines <> '[]'")}
+
+    def lines(self):
+        """address → the kept footer's lines, for every address with one."""
+        return {row["address"]: json.loads(row["lines"]) for row in
+                self._read("SELECT address, lines FROM footers WHERE lines <> '[]'")}
 
     def stamps(self):
         """address → (newest mail, mails) as of the reading."""

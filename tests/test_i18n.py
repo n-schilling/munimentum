@@ -220,7 +220,7 @@ GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
 DYNAMISCH = (
     # The address book's pills draw their rows and their values from lists.
     # … each row its name and, under `.i`, what it does.
-    ("book.f.", tuple(k + e for k in ("all", "contacts", "comm", "own", "exchange", "frequent", "missing")
+    ("book.f.", tuple(k + e for k in ("all", "contacts", "comm", "own", "exchange", "frequent", "missing", "update")
                       for e in ("", ".i"))),
     ("book.hide.", tuple(k + e for k in ("noaddress", "ignored", "own") for e in ("", ".i"))),
     ("book.pill.", ("origin", "mail", "hide", "mail.n", "hide.n")),

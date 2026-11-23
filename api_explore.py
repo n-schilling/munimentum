@@ -19,6 +19,7 @@ import organization
 import own_contacts
 import rest
 import seniority
+import signature
 import state_db
 import versions
 from api import Ablehnung
@@ -134,7 +135,10 @@ def correspondent_list(h, _p, _q, _data):
     most = min(_whole(h.app.cfg.get("contacts_people"), 500), PEOPLE_MOST)
     people = mod.correspondent_people(**rule) or []
     # Whose footer is kept (footers.py): the card's mark, without a mail read.
-    signed = footers.Footers(h.app.own_contacts.path).found()
+    signed = footers.Footers(h.app.own_contacts.path).lines()
+    # … and, where the person has a card, whether the footer names a
+    # number or an address the card lacks: the card's "possible update".
+    cards = mod.cards_shaped()
     # A frequent contact is listed whatever the cap: the switch for them
     # would otherwise miss who writes often and little.
     for person in footers.listed(people, most):
@@ -145,8 +149,11 @@ def correspondent_list(h, _p, _q, _data):
             item["also"] = person["also"]
         if person.get("writes_from"):
             item["writes_from"] = person["writes_from"]
-        if footers.asked(person) in signed:
+        asked = footers.asked(person)
+        if asked in signed:
             item["footer"] = True
+            if asked in cards and footers.missing(signature.fields(signed[asked]), cards[asked]):
+                item["update"] = True
         items.append(item)
     # `total` says how many the mail knows: the page names the rest.
     return api.json({"items": items, "count": len(items), "total": len(people), "frequent": rule})
@@ -181,8 +188,12 @@ def correspondent_signature(h, _p, q, _data):
         book.keep(address, _signature(mod, address))
         kept = book.one(address)
     # What the window draws, no more: the lines, what they rest on, the
-    # mail they stand in, when they were read. Numbers and links are a
-    # client's (get_signatures).
+    # mail they stand in, when they were read – and, for a person with a
+    # card, what the footer names and the card lacks.
+    card = mod.cards_shaped().get(address)
+    lacking = footers.missing(signature.fields(kept["lines"]), card) if card and kept["lines"] else None
+    if lacking:
+        kept["missing"] = lacking
     return api.json(kept)
 
 

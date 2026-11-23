@@ -1,21 +1,16 @@
-## New in 15.2.0
+## New in 15.2.1
 
-- **Contacts filter with three pills**: *Source*, *Mail* and *Hide* replace
-  the row of chips. Every choice says below its name what it does and beside
-  it how many entries it takes.
-- **Hide**: names without a mail address – a chat partner, a system's sender
-  name – are left out from the start, and so is whom you ignore; your own
-  domain can be left out too. The count of the list says how many are hidden,
-  and such a name can be set to *Ignore* as well.
-- **Versions of an Outlook card** show its fields – what changed struck out
-  beside what it says now – with the vCard as a download.
-- **For MCP clients**: a signature can be asked for by name, and one the app
-  has read already is answered without opening a mail.
+- **The signature held against the card**: for a person with a card,
+  *Additional information* lists the numbers and mail addresses the signature
+  names and the card lacks – for a card you added in Munimentum, links too.
+  Read automatically, so check before you take one over.
+- **Possible update**: such a card is marked *possible update*, and *Signature
+  has more* in the *Mail* pill lists these cards alone.
 
 ## Upgrading
 
-Nothing to do. Whom you set to *Ignore* is now hidden in every list of
-*Contacts*; untick *Ignored by you* under *Hide* to see them.
+Nothing to do. The mark appears for everyone whose signature an index run has
+read – after the next run for an archive that comes from before 15.1.0.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

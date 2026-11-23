@@ -247,7 +247,15 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     # Frequent contacts only: every card left carries the mark.
     # Three pills: where an entry comes from, what the mail says, what is left out.
     expect(archive_page.locator("#sicht-adressbuch .calbar .pill:visible")).to_have_count(3)
-    expect(archive_page.locator("#book-po-mail-list button")).to_have_count(3)
+    expect(archive_page.locator("#book-po-mail-list button")).to_have_count(4)
+    # Greta's footer names a number her card lacks: the card says so, and the Mail pill lists such cards alone.
+    expect(cards.filter(has_text=greta[0]).locator(".tag.update")).to_have_text(EN["book.tag.update"])
+    expect(cards.filter(has_text=dana[0]).locator(".tag.update")).to_have_count(0)
+    book_choice(archive_page, "mail", "update")
+    expect(cards.filter(has_text=greta[0])).to_be_visible()
+    expect(cards.filter(has_text=dana[0])).to_have_count(0)
+    expect(archive_page.locator("#kbBox .card2 .tag.update")).to_have_count(cards.count())
+    book_choice(archive_page, "mail", "update")
     expect(archive_page.locator("#book-pill-mail .wert")).to_have_text(EN["book.pill.mail"])
     book_choice(archive_page, "mail", "frequent")
     expect(cards.filter(has_text=dana[0])).to_be_visible()
@@ -275,6 +283,9 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     fold = window.locator(".book-sig")
     expect(fold).to_contain_text("+49 170 0000042")
     expect(fold).to_contain_text("Trainer")
+    # What the footer names and her card lacks is said apart: the number.
+    expect(window.locator(".info-head", has_text=EN["book.sig.missing"])).to_be_visible()
+    expect(window.locator(".sig-missing .cline")).to_have_text(["+49 170 0000042"])
     # … and the mail it was read from is one click away.
     with archive_page.expect_response(lambda r: "/api/v1/documents" in r.url):
         fold.get_by_role("button").click()

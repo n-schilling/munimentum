@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 15.2.0
+  version: 15.2.1
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1754,8 +1754,9 @@ paths:
         people the address book lists who have new mail, and keeps it in the
         profile; an address not read yet is read when asked, and kept.
         `lines` is the footer as it stands, `uid` the mail it was read from,
-        `read` the moment of the reading – what the window behind a contact
-        card draws. An address without a footer answers empty `lines`,
+        `read` the moment of the reading, `missing` what the footer names
+        and the person's card lacks – what the window behind a contact card
+        draws. An address without a footer answers empty `lines`,
         `read` and none of the other fields.
       parameters:
         - { name: address, in: query, required: true, schema: { type: string }, description: "The mail address." }
@@ -6051,6 +6052,7 @@ components:
         sent: { type: integer, description: "Mails the owner sent the person." }
         frequent: { type: boolean, description: "Mail in both directions and enough of it lately – the rule stands beside the list." }
         footer: { type: boolean, description: "A footer read from the person's mails is kept (GET /correspondents/signature shows it); absent otherwise." }
+        update: { type: boolean, description: "The kept footer names a number or an address the person's card lacks (`missing` of the signature); absent otherwise." }
     Signature:
       type: object
       required: [lines]
@@ -6060,6 +6062,13 @@ components:
         uid: { type: string, description: "The mail the footer was read from." }
         date: { type: string, format: date, description: "That mail's day." }
         read: { type: string, format: date-time, description: "When the footer was read from the mails – it may have changed since." }
+        missing:
+          type: object
+          description: "What the footer names and the person's card lacks – only what has a shape of its own; absent for a person without a card and while nothing is missing."
+          properties:
+            phones: { type: array, items: { $ref: "#/components/schemas/ContactPhone" } }
+            emails: { type: array, items: { type: string } }
+            urls: { type: array, items: { type: string }, description: "Only for a card added in the app: an Outlook card's links are not read." }
     ContactPhone:
       type: object
       required: [type, number]

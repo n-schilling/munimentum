@@ -2808,6 +2808,25 @@ def _ignored():
         return set()
 
 
+def cards_shaped():
+    """address → what the card of the person at that address says in the
+    shapes a footer shares with it: its `emails`, its `phones` and – for a
+    card added in the app – its `urls` (None for an Outlook card: its
+    links are not read). One dict per card, under each of its addresses.
+    Not a tool: the app holds the kept footers against it (footers.missing)."""
+    box = _mailbox()
+    if box is None:
+        return {}
+    book = {**_own_cards(box["book"]), **box["book"]}
+    by_card = {}
+    for address, card in book.items():
+        shaped = by_card.setdefault(card["uid"], {
+            "emails": [], "phones": list(card.get("phones") or []),
+            "urls": list(card.get("urls") or []) if card.get("origin") else None})
+        shaped["emails"].append(address)
+    return {address: by_card[card["uid"]] for address, card in book.items()}
+
+
 def _mailbox():
     """The mailbox as a whole – every address's mail counts, the name it
     writes under, the address book – read once per index file. None for an

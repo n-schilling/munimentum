@@ -146,6 +146,7 @@ a.chip:hover,a.chip:focus-visible{border-color:var(--accent);color:var(--accent)
 .contact-form input[type=text],.contact-form textarea{width:100%}
 .contact-form textarea{min-height:0;height:58px}
 .tag.frequent{margin-left:8px;color:var(--accent);background:var(--accent-weich);font-weight:500}
+.tag.update{margin-left:8px;color:var(--warn);font-weight:500}
 mark{background:var(--code);color:var(--ink);font-weight:600;border-radius:3px;padding:0 3px}
 /* Small status next to a field: the dot carries the colour, the word the fact. */
 .stand{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
@@ -9685,6 +9686,8 @@ function cardHtml(e){
        : e.quelle === 'comm' ? '<span class="tag herkunft">' + esc(t('book.tag.comm')) + '</span>' : '') +
     (m && m.frequent ? '<span class="tag frequent">' + esc(t('book.tag.frequent')) + '</span>' : '') +
     (m && m.footer ? '<span class="tag herkunft">' + esc(t('book.tag.footer')) + '</span>' : '') +
+    // … and the footer names what the card lacks: the window says what.
+    (m && m.update && (e.c || o) ? '<span class="tag update" title="' + esc(t('book.f.update.i')) + '">' + esc(t('book.tag.update')) + '</span>' : '') +
     (e.ignored ? '<span class="tag herkunft">' + esc(t('book.tag.ignored')) + '</span>' : '');
   // The card field by field: the job title, then where – company and department.
   if(r.role) h += '<div class="crole">' + esc(r.role) + '</div>';
@@ -9748,7 +9751,7 @@ function mailCounts(m){
    card first, by name otherwise – the card's name or one their addresses
    write under. */
 var CORRESPONDENTS = null, CORRESPONDENTS_STAND, FREQUENT_RULE = null;
-var BOOK_FLAGS = {exchange: false, frequent: false, missing: false}, BOOK_HIDE = {noaddress: true, ignored: true, own: false}, BOOK_SIGNATURES = [], BOOK_INFO = [], BOOK_VERSIONS = [], BOOK_VERSIONS_SEQ = 0, SIGNATURES = {};
+var BOOK_FLAGS = {exchange: false, frequent: false, missing: false, update: false}, BOOK_HIDE = {noaddress: true, ignored: true, own: false}, BOOK_SIGNATURES = [], BOOK_INFO = [], BOOK_VERSIONS = [], BOOK_VERSIONS_SEQ = 0, SIGNATURES = {};
 function loadCorrespondents(){
   // Asked again when the index is another one – or the rule for a
   // frequent contact is (the settings frequent_mails, frequent_months).
@@ -9825,15 +9828,30 @@ function signatureHtml(r, i){
     (r.uid ? '<button class="mini" onclick="bookSignatureMail(' + i + ')">' +
              esc(r.date ? t('book.sig.from', {when: dayWithYear(r.date)}) : t('book.sig.open')) + '</button>' : '');
 }
+/* What the footer names and the person's card does not (`missing` of the
+   signature's answer: numbers, mail addresses and – for a card of the
+   app's own – links), as a section of its own. Nothing missing is no
+   section. */
+function signatureMissing(r){
+  var lack = r.missing || {}, rows = '';
+  (lack.phones || []).forEach(function(p){
+    rows += '<div class="cline">' + ikon(p.type === 'mobile' ? 'mobile' : 'telefon', 'klein') + esc(p.number) +
+      (p.type === 'fax' ? ' <span class="muted small">' + esc(t('book.own.kind.fax')) + '</span>' : '') + '</div>';
+  });
+  (lack.emails || []).forEach(function(a){ rows += '<div class="cline">' + ikon('mail', 'klein') + esc(a) + '</div>'; });
+  (lack.urls || []).forEach(function(u){ rows += '<div class="cline">' + ikon('link', 'klein') + esc(u) + '</div>'; });
+  return rows ? '<h4 class="info-head">' + esc(t('book.sig.missing')) + '</h4><div class="sig-missing">' + rows +
+    '</div><div class="signote">' + esc(t('book.sig.missing.i')) + '</div>' : '';
+}
 function bookSignature(open, i){
   var address = BOOK_SIGNATURES[i], box = dyn('book-sig-' + i);
   if(!open || !address || !box) return;
-  if(SIGNATURES[address]){ box.innerHTML = signatureHtml(SIGNATURES[address], i); return; }
+  if(SIGNATURES[address]){ box.innerHTML = signatureHtml(SIGNATURES[address], i) + signatureMissing(SIGNATURES[address]); return; }
   box.innerHTML = '<div class="sigline muted">' + esc(t('cal.loading')) + '</div>';
   api(API + '/correspondents/signature?address=' + encodeURIComponent(address)).then(function(r){
     if(r && r.ok !== false) SIGNATURES[address] = r;
     var now = dyn('book-sig-' + i);
-    if(now && BOOK_SIGNATURES[i] === address) now.innerHTML = signatureHtml(r || {}, i);
+    if(now && BOOK_SIGNATURES[i] === address) now.innerHTML = signatureHtml(r || {}, i) + signatureMissing(r || {});
   }).catch(function(e){
     var now = dyn('book-sig-' + i);
     if(now && BOOK_SIGNATURES[i] === address) now.innerHTML = '<p class="hint err small">' + esc(String(e && e.message || e)) + '</p>';
@@ -10306,7 +10324,8 @@ function drawBook(){
   var can = {exchange: alle.some(function(e){ return e.m && e.m.received && e.m.sent; }),
              frequent: alle.some(function(e){ return e.m && e.m.frequent; }),
              missing: alle.some(function(e){ return !e.c && !e.o && !e.ignored; }) &&
-                      alle.some(function(e){ return !!(e.c || e.o || e.ignored); })};
+                      alle.some(function(e){ return !!(e.c || e.o || e.ignored); }),
+             update: alle.some(function(e){ return !!((e.c || e.o) && e.m && e.m.update); })};
   if(!bild) Object.keys(can).forEach(function(flag){ if(!can[flag]) BOOK_FLAGS[flag] = false; });
   // What is left out keeps its setting while there is nothing to leave
   // out: who has neither a card nor an address stays out by default.
@@ -10321,7 +10340,8 @@ function drawBook(){
   }
   var passes = {exchange: function(e){ return !!(e.m && e.m.received && e.m.sent); },
                 frequent: function(e){ return !!(e.m && e.m.frequent); },
-                missing: function(e){ return !(e.c || e.o || e.ignored); }};
+                missing: function(e){ return !(e.c || e.o || e.ignored); },
+                update: function(e){ return !!((e.c || e.o) && e.m && e.m.update); }};
   var hidden = {noaddress: function(e){ return e.nameOnly; },
                 ignored: function(e){ return e.ignored; },
                 own: function(e){ return e.internal; }};
@@ -10388,7 +10408,7 @@ function bookPills(picture, anyOwn, can, hides, counts){
       '<span class="n">' + zahl(n || 0) + '</span></button>';
   }
   var origins = ['all', 'contacts', 'comm'].concat(anyOwn ? ['own'] : []);
-  var mail = ['exchange', 'frequent', 'missing'].filter(function(f){ return can[f]; });
+  var mail = ['exchange', 'frequent', 'missing', 'update'].filter(function(f){ return can[f]; });
   var hide = ['noaddress', 'ignored', 'own'].filter(function(f){ return hides[f]; });
   var rows = {
     origin: origins.map(function(o){ return row('data-book', o, 'book.f.' + o, bookF === o, 'bookOrigin', false, counts[o]); }),

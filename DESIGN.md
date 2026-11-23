@@ -133,7 +133,7 @@ picture is the case's, over the archive — then three pills, each with
 its choices in a popover and absent in the picture: *Source* (one of all,
 from contacts, from communication and — absent while there is none —
 *Added here*), *Mail* (any of *Wrote both ways*, *Frequent contact*, *Not
-in your address book*) and *Hide* (any of *Names without a mail address*
+in your address book*, *Signature has more*) and *Hide* (any of *Names without a mail address*
 and *Ignored by you*, both ticked from the start, and *Colleagues* with
 the own domain spelled out); every choice says below its name, small, what
 it does and at its right how many entries it takes, so the row has no
@@ -151,12 +151,16 @@ shows instead; a card says who the person is and nothing else – the job
 title, then company and department, the addresses, the numbers with the
 mobile ones marked, and last its marks side by side (where it comes
 from, the frequent contact, *footer extracted* where a footer was read from
-the person's mails) – no fold and no button on it; everything
+the person's mails, *possible update* where that footer names a number or
+an address the card lacks) – no fold and no button on it; everything
 else is behind the three dots at its corner: *Show communication*,
 *Additional information* – a window with what the archive says of the
 person: messages, mails received and sent, and the footer under their
 mails, read by the index run and kept, set as a quotation, the note that
-it was read automatically and when apart below it –, *Ignore* for who has no card – a shared mailbox, a newsletter, somebody
+it was read automatically and when apart below it, and – where the person
+has a card – what the footer names and the card lacks (numbers, mail
+addresses, for a card of the app's own links too) as a section of its
+own, absent while nothing is missing –, *Ignore* for who has no card – a shared mailbox, a newsletter, somebody
 no card is wanted for, by the address or, without one, by the name: the entry is left
 out while *Ignored by you* is ticked under *Hide*; unticked it stands there tagged *ignored*, and the same place takes it back –, *Versions* – a
 window of its own:

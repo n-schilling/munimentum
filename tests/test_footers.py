@@ -52,6 +52,21 @@ def test_the_address_book_s_people_are_the_ones_read():
     assert footers.asked(person(6, received=0)) is None
 
 
+def test_a_footer_is_held_against_a_card():
+    shaped = {"phones": [{"type": "phone", "number": "+49 (0) 40 000000 77"}, {"type": "mobile", "number": "+49 170 0000077"}],
+              "emails": ["office@example.com", "Dana@Example.com"], "urls": ["https://www.example.com/"]}
+    # The number the card has under another spelling is the same number; an Outlook card's links are not compared.
+    outlook = {"emails": ["dana@example.com"], "phones": ["040 000000 77"], "urls": None}
+    assert footers.missing(shaped, outlook) == {"phones": [shaped["phones"][1]], "emails": ["office@example.com"]}
+    # A card of the app's own names links: one it has in another spelling is not missing.
+    own = {"emails": ["dana@example.com", "office@example.com"], "phones": ["+49 40 000000 77", "0170 0000077"],
+           "urls": ["example.com"]}
+    assert footers.missing(shaped, own) == {}
+    assert footers.missing(shaped, {**own, "urls": ["nordwind.example"]}) == {"urls": ["https://www.example.com/"]}
+    # Two numbers that merely end alike on a few digits are two numbers.
+    assert not footers.same_phone("+49 40 12345", "2345") and not footers.same_phone("", "")
+
+
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):
     home = tmp_path_factory.mktemp("footers")
@@ -86,6 +101,20 @@ def test_the_index_run_keeps_the_footers_and_the_next_reads_nobody(built, state)
     con.close()
     assert footers.fill(home, written["store"], home / "outlook_export") == (1, 0, 1)
     assert book.one(dana[1])["read"] != "then"
+
+
+def test_the_archive_s_cards_are_held_against_their_footers(built, state):
+    """Greta's Outlook card has no number, her footer has: a possible update."""
+    home, written = built
+    mcp_server.STATE.clear()
+    mcp_server.STATE.update(db=str(written["store"] / "corpus.db"), outlook_dir=str(home / "outlook_export"),
+                            faelle_db=str(home / faelle.DB_NAME), home=str(home))
+    greta, lars = people.EXTERNALS[2][1], people.EXTERNALS[5][1]
+    cards = mcp_server.cards_shaped()
+    assert cards[greta] == {"emails": [greta], "phones": [], "urls": None} and lars not in cards
+    kept = footers.Footers(home / faelle.DB_NAME).lines()
+    lacking = footers.missing(mcp_server.signature.fields(kept[greta]), cards[greta])
+    assert lacking == {"phones": [{"type": "mobile", "number": "+49 170 0000042"}]}
 
 
 def test_nothing_is_read_without_an_index(tmp_path):

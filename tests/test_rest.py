@@ -1217,6 +1217,12 @@ class FakeCorrespondents:
         cls.asked = addresses
         return {"count": 1, "signatures": [cls.SIGNATURE]}
 
+    CARDS = {}
+
+    @classmethod
+    def cards_shaped(cls):
+        return cls.CARDS
+
 
 def test_the_correspondents_come_person_by_person_with_the_rule(server, monkeypatch):
     a, port = server
@@ -1317,6 +1323,18 @@ def test_a_signature_is_asked_for_one_address(server, monkeypatch):
     monkeypatch.setattr(a.search, "ensure", lambda cfg: Dana)
     listed = roh(port, "GET", "/api/v1/correspondents")[2]["items"]
     assert listed[0]["footer"] is True and "footer" not in listed[1]
+    # Without a card there is nothing to hold the footer against.
+    assert "update" not in listed[0] and "missing" not in again
+
+    # With one, what the footer names and the card lacks is said – in the window and as the person's mark.
+    class Carded(Dana):
+        SIGNATURE = {**FakeCorrespondents.SIGNATURE, "lines": ["Erik Einkauf", "Tel. +49 40 000000 12 · Mobile +49 170 0000012"]}
+        CARDS = {"erik@example.com": {"emails": ["erik@example.com"], "phones": ["040 000000 12"], "urls": None}}
+    monkeypatch.setattr(a.search, "ensure", lambda cfg: Carded)
+    erik = roh(port, "GET", "/api/v1/correspondents/signature?address=erik@example.com")[2]
+    assert erik["missing"] == {"phones": [{"type": "mobile", "number": "+49 170 0000012"}]}
+    listed = roh(port, "GET", "/api/v1/correspondents")[2]["items"]
+    assert listed[1]["update"] is True and "update" not in listed[0]
     monkeypatch.setattr(a.search, "ensure", lambda cfg: FakeCorrespondents)
     for wrong in ("", "?address=", "?address=dana"):
         code, _, r = roh(port, "GET", "/api/v1/correspondents/signature" + wrong)

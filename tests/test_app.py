@@ -11638,7 +11638,7 @@ PRUEFUNG_ADDRESS_BOOK_MAIL = GRUNDZUSTAND + """
 process.on('unhandledRejection', function(e){ console.error('REJECTION', e); process.exit(1); });
 var CORR_ANSWER = {items: [
   {name: 'Dana Dienstleister', also: ['Dienstleister, Dana'], addresses: ['dana@example.org', 'dana@home.example'],
-   writes_from: 'dana@home.example', received: 23, sent: 16, frequent: true, footer: true},
+   writes_from: 'dana@home.example', received: 23, sent: 16, frequent: true, footer: true, update: true},
   {name: 'Erik Einkauf', addresses: ['erik@example.org'], received: 3, sent: 1, frequent: false},
   {name: 'Shop News', addresses: ['news@shop.example'], received: 40, sent: 0, frequent: false},
   {name: 'Info', addresses: ['info@shop1.example'], received: 1, sent: 0, frequent: false},
@@ -11746,6 +11746,12 @@ setTimeout(function(){
     pruefe(card('Only In The Book').indexOf('ctags') < 0, 'an empty row of marks');
     // A footer kept from the person's mails is a mark of its own – only where one is.
     pruefe(dana.indexOf(esc(t('book.tag.footer'))) >= 0 && card('Erik Einkauf').indexOf(esc(t('book.tag.footer'))) < 0, 'the footer mark: ' + dana);
+    // … and so is what the footer names beyond the card: a mark, and a row of the Mail pill to list such cards alone.
+    pruefe(dana.indexOf('class="tag update"') >= 0 && card('Erik Einkauf').indexOf('tag update') < 0, 'the update mark: ' + dana);
+    pruefe(el('book-po-mail-list').innerHTML.indexOf('data-book-flag="update"') > 0, 'no row for it: ' + el('book-po-mail-list').innerHTML);
+    bookFlag('update');
+    pruefe(cards().length === 1 && card('Dana Dienstleister') !== '', 'the cards with more in the signature: ' + cards().length);
+    bookFlag('update');
     // What the archive says of a person stands in a window of its own, what can be done in the card's menu – neither on the card.
     pruefe(dana.indexOf('<details class="card-menu">') === 0 && dana.indexOf('button class="mini"') < 0 &&
            dana.indexOf('class="card-menu-list"><button onclick="zeigeKommunikation(') > 0, 'the menu: ' + dana);
@@ -11801,7 +11807,7 @@ setTimeout(function(){
     // Every choice says below its name what it does – the rule for a frequent contact with its numbers – and beside it how many it takes.
     var mailRows = el('book-po-mail-list').innerHTML, originRows = el('book-po-origin-list').innerHTML;
     pruefe(mailRows.indexOf(esc(t('book.f.frequent.i', {mails: 12, months: 12}))) > 0 && mailRows.indexOf('{') < 0, 'the rule is not in its row: ' + mailRows);
-    pruefe(mailRows.split('class="choice-hint"').length - 1 === 3 && mailRows.split('class="n"').length - 1 === 3, 'hints and counts: ' + mailRows);
+    pruefe(mailRows.split('class="choice-hint"').length - 1 === 4 && mailRows.split('class="n"').length - 1 === 4, 'hints and counts: ' + mailRows);
     pruefe(originRows.indexOf('<span class="n">7</span>') > 0, 'the origin All does not count what is shown: ' + originRows);
     // What Hide leaves out is said beside the count of the list.
     pruefe(el('kbHidden').textContent === t('book.stats.hidden', {n: 1}) && !el('kbHidden').classList.contains('hide'), 'hidden: ' + el('kbHidden').textContent);
@@ -11884,6 +11890,20 @@ setTimeout(function(){
 
 def test_the_address_book_shows_what_the_mail_says_about_a_person():
     _in_node(PRUEFUNG_ADDRESS_BOOK_MAIL)
+
+
+def test_what_the_card_lacks_is_a_section_of_its_own():
+    _in_node(GRUNDZUSTAND + """
+// The server says what the footer names and the card lacks; the window draws it, kind by kind.
+var lacking = signatureMissing({lines: ['x'], missing: {phones: [{type: 'mobile', number: '+49 170 0000077'}, {type: 'fax', number: '+49 40 000000 79'}],
+                                                        emails: ['office@example.com'], urls: ['www.example.com']}});
+pruefe(lacking.split('class="cline"').length - 1 === 4 && lacking.indexOf('+49 170 0000077') > 0 &&
+       lacking.indexOf(esc(t('book.own.kind.fax'))) > 0 && lacking.indexOf('office@example.com') > 0, lacking);
+pruefe(lacking.indexOf(esc(t('book.sig.missing'))) > 0 && lacking.indexOf(esc(t('book.sig.missing.i'))) > 0, lacking);
+// Nothing missing is no section.
+pruefe(signatureMissing({lines: ['x']}) === '' && signatureMissing({lines: ['x'], missing: {}}) === '', 'an empty section');
+console.log('OK');
+""")
 
 
 def test_a_contact_card_s_version_is_shown_by_its_fields():

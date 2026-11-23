@@ -103,7 +103,7 @@ contact, *external* marked. The last two take the whole result.
 **Calendar** shows the appointments by week or month: every date of a series,
 deleted ones marked, those recovered from invitation mails. **Contacts** merges
 the Outlook address book – title, company, department, numbers – with everyone in the
-communication, list or picture, one entry per address: mails received and sent, three pills narrow by origin, by what the mail says (*frequent contacts*) and hide your own domain, names without an address and whom you ignore, a signature (read automatically with each index run and marked on the card, so check it) –
+communication, list or picture, one entry per address: mails received and sent, three pills narrow by origin, by what the mail says (*frequent contacts*) and hide your own domain, names without an address and whom you ignore, a signature (read automatically with each index run and marked on the card, so check it; *possible update* where it names a number or address the card lacks) –
 and *Add to address book* or *Ignore* for who has no card: Munimentum's own card, kept in your profile; *Versions* shows what a card said before, field by field. **Files** walks the drives, originals a click away.
 
 ### Cases
