@@ -164,9 +164,23 @@ def test_a_read_creates_nothing(tmp_path):
     path = tmp_path / "faelle.db"
     sqlite3.connect(path).close()                        # a profile from before the table
     assert own_contacts.OwnContacts(path).all() == [] and own_contacts.OwnContacts(path).ignored() == []
+    assert own_contacts.OwnContacts(path).ignored_names() == []
     con = sqlite3.connect(path)
     assert con.execute("SELECT name FROM sqlite_master").fetchall() == []
     con.close()
+
+
+def test_an_entry_without_an_address_is_ignored_by_its_name(book):
+    book.ignore_name("  Ticket   System ")
+    book.ignore_name("Ticket System")
+    assert book.ignored_names() == ["Ticket System"] and book.ignored() == []
+    book.ignore_name("ticket system", on=False)          # another spelling is another name
+    assert book.ignored_names() == ["Ticket System"]
+    book.ignore_name("Ticket System", on=False)
+    assert book.ignored_names() == []
+    for bad in ("", "   ", None, 7, "x" * 201):
+        with pytest.raises(own_contacts.BadValue):
+            book.ignore_name(bad)
 
 
 # -- the routes ---------------------------------------------------------------
@@ -227,15 +241,19 @@ def test_a_contact_goes_through_the_methods(server, monkeypatch):  # noqa: F811
     assert roh(port, "GET", "/api/v1/contacts/own")[2]["count"] == 0
     # Ignoring an address: every write answers the whole list.
     where = "/api/v1/contacts/ignored"
-    assert roh(port, "GET", where)[2] == {"items": [], "count": 0}
-    assert roh(port, "POST", where, {"address": "News@shop.example"})[2] == {"items": ["news@shop.example"], "count": 1}
+    assert roh(port, "GET", where)[2] == {"items": [], "names": [], "count": 0}
+    assert roh(port, "POST", where, {"address": "News@shop.example"})[2] == {"items": ["news@shop.example"], "names": [], "count": 1}
     assert roh(port, "POST", where, {"address": "news@shop.example"})[2]["count"] == 1
-    for body in ({}, {"address": "nobody"}, {"address": "a@example.com", "why": "x"}):
+    # An entry without an address is ignored by its name.
+    assert roh(port, "POST", where, {"name": "  Ticket   System "})[2]["names"] == ["Ticket System"]
+    for body in ({}, {"address": "nobody"}, {"address": "a@example.com", "why": "x"}, {"name": ""}, {"name": 7},
+                 {"name": "x" * 201}, {"address": "a@example.com", "name": "both"}):
         code, _, r = roh(port, "POST", where, body)
         assert code == 400 and r["error"]["k"] == "srv.contact.badvalue", body
     assert roh(port, "DELETE", where)[0] == 400
     code, _, r = roh(port, "DELETE", where + "?address=news%40shop.example")
-    assert code == 200 and r == {"items": [], "count": 0}
+    assert code == 200 and r == {"items": [], "names": ["Ticket System"], "count": 0}
+    assert roh(port, "DELETE", where + "?name=Ticket%20System")[2] == {"items": [], "names": [], "count": 0}
 
 
 def test_a_contact_is_added_without_an_index_and_read_again_only_with_one(server, monkeypatch):  # noqa: F811

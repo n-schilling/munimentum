@@ -101,6 +101,7 @@ import completeness
 import corpus
 import correspondents
 import faelle
+import footers
 import i18n
 import instance
 import ollama_client
@@ -3071,11 +3072,39 @@ def list_correspondents(date_from: str = "", date_to: str = "", days: int = 0,
             "me": sorted(own), "correspondents": page}
 
 
+def _addresses_named(box, name, most=3):
+    """The addresses that write under `name`, or whose card bears it – the
+    exact name first, then every name holding all its words; `most` at
+    the most, the one with the most mail first."""
+    needle = " ".join(name.casefold().split())
+    words = needle.split()
+    named = dict(box["names"])
+    for address, card in {**_own_cards(box["book"]), **box["book"]}.items():
+        named.setdefault(address, card.get("name") or "")
+    exact, partly = [], []
+    for address, known in named.items():
+        known = " ".join(str(known).casefold().split())
+        if known == needle:
+            exact.append(address)
+        elif words and all(word in known for word in words):
+            partly.append(address)
+
+    def mail(address):
+        sent, written_to = (list(box["stats"].get(address) or ()) + [0, 0])[:2]
+        return (-sent, -written_to)
+    return sorted(exact or partly, key=lambda a: (mail(a), a))[:most]
+
+
 @_tool(_READONLY)
 def get_signatures(addresses: list[str], mails: int = 6) -> dict:
-    """Read the footer under a person's mails – job title, company, postal
-    address, phone numbers, website – for up to 25 addresses at once. What
-    a contact list needs and the address book lacks.
+    """Give the footer under a person's mails – job title, company, postal
+    address, phone numbers, website – for up to 25 people at once, each
+    named by mail address or by name. What a contact list needs and the
+    address book lacks, and THE tool for "what is X's signature / phone
+    number / job title": do not search and read the person's mails
+    yourself – this reads them by rule, and for the people the user's
+    address book lists Munimentum has read the footer already and answers
+    it from there (`read` says when; no mail is opened).
 
     A signature is what repeats at the end of someone's mails: the newest
     mails of each address are held against each other, and the lines more
@@ -3102,29 +3131,47 @@ def get_signatures(addresses: list[str], mails: int = 6) -> dict:
     against each other. Empty `lines` mean no footer was found – many
     people write without one.
 
+    A name instead of an address is looked up among the names the
+    mailbox's senders write under and the address book's cards: the entry
+    says `asked` (the name given) and the address found; a name several
+    people write under gives an entry each (at most three), a name nobody
+    writes under one entry without an address.
+
     Args:
-        addresses: The mail addresses to read, at most 25 per call – take
-            them from list_correspondents.
+        addresses: Whose footers: mail addresses or names, at most 25 per
+            call – from the user's question, or from list_correspondents.
         mails: How many of each address's mails to hold against each
             other at a time (default 6, cap 12) – the newest and the ones
             that opened a conversation; up to three times as many are
             read when the first show no footer.
     """
-    if isinstance(addresses, str):               # one address, or several in one line
-        addresses = re.split(r"[\s,;]+", addresses)
-    wanted = list(dict.fromkeys(a.strip().lower() for a in (addresses or [])
-                                if isinstance(a, str) and "@" in a))
-    if not wanted:
-        return {"error": "Name at least one mail address.", "count": 0, "signatures": []}
-    if len(wanted) > _SIGNATURE_BATCH:
+    if isinstance(addresses, str):               # one, or several in one line
+        addresses = [part for chunk in re.split(r"[,;\n]+", addresses)
+                     for part in (chunk.split() if "@" in chunk else [chunk])]
+    given = list(dict.fromkeys(" ".join(a.split()) for a in (addresses or [])
+                               if isinstance(a, str) and a.strip()))
+    if not given:
+        return {"error": "Name at least one mail address or name.", "count": 0, "signatures": []}
+    if len(given) > _SIGNATURE_BATCH:
         return {"error": f"At most {_SIGNATURE_BATCH} addresses per call – "
-                         f"{len(wanted)} were named. Ask in batches.",
+                         f"{len(given)} were named. Ask in batches.",
                 "count": 0, "signatures": []}
     if not STATE.get("outlook_dir"):
         return {"error": _NO_MAIL_FILES, "count": 0, "signatures": []}
     box = _mailbox()
     if box is None:
         return {"error": _NO_MAIL_LINES, "count": 0, "signatures": []}
+    # A name is the addresses that write under it; `asked` keeps the name.
+    wanted, asked, unknown = [], {}, []
+    for one in given:
+        found = [one.lower()] if "@" in one else _addresses_named(box, one)
+        if not found:
+            unknown.append(one)
+        for address in found:
+            if address not in wanted:
+                wanted.append(address)
+                if "@" not in one:
+                    asked[address] = one
     depth = max(1, min(int(mails), 12))
     # The owner's own footer, quoted under an answer, is nobody else's.
     own = _own_addresses(box)
@@ -3135,11 +3182,30 @@ def get_signatures(addresses: list[str], mails: int = 6) -> dict:
         # footer is read further (signature.read), and a mail that is
         # mostly attachment is passed over.
         candidates = correspondents.signature_mails(con, wanted, depth * 3)
+        # What the index run read and kept (footers.py) is the answer
+        # for an address without mail since: no file is opened for it.
+        stamps = footers.mail_stamps(con, wanted) if STATE.get("faelle_db") else {}
     finally:
         con.close()
+    kept_in = footers.Footers(STATE["faelle_db"]) if STATE.get("faelle_db") else None
+    kept_at = kept_in.stamps() if kept_in else {}
     out, indexed, at_hand = [], 0, 0
     for address in wanted:
         name = box["names"].get(address, "")
+        kept = kept_in.one(address) if address in kept_at and address in stamps \
+            and tuple(kept_at[address]) == tuple(stamps[address]) else None
+        if kept is not None:
+            entry = {"address": address, "name": name, "lines": kept["lines"], "read": kept["read"]}
+            if kept["lines"]:
+                shaped = signature.fields(kept["lines"])
+                entry.update(phones=shaped["phones"],
+                             emails=[m for m in shaped["emails"] if m != address],
+                             urls=shaped["urls"],
+                             **{k: kept[k] for k in ("basis", "uid", "date") if kept.get(k)})
+            if address in asked:
+                entry = {"asked": asked[address], **entry}
+            out.append(entry)
+            continue
         files = {}
         for rel, ts in candidates.get(address, []):
             path, _error = _resolve_source("outlook", rel)
@@ -3162,11 +3228,15 @@ def get_signatures(addresses: list[str], mails: int = 6) -> dict:
                          urls=found["urls"], basis=found["basis"],
                          uid=f"outlook:{rel}:0",
                          date=_day(ts))
+        if address in asked:
+            entry = {"asked": asked[address], **entry}
         out.append(entry)
     if indexed and not at_hand:
         # The index knows their mails and not one file is there: the
         # folder moved, the drive is away – not "nobody signs their mail".
         return {"error": _NO_MAIL_FILES, "count": 0, "signatures": []}
+    out += [{"asked": name, "address": "", "name": "", "lines": [], "mails_read": 0}
+            for name in unknown]
     return {"count": len(out), "signatures": out}
 
 

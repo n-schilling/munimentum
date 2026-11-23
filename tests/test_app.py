@@ -6055,6 +6055,9 @@ function namen(){
 }
 
 bookF = 'all'; drawBook();
+// A name without a card and without an address is left out until asked for.
+pruefe(namen().join(',') === 'Alice Example,Nur im Buch', 'by default: ' + namen());
+bookHide('noaddress');
 pruefe(namen().join(',') === 'Alice Example,Bob Ausdemchat,Nur im Buch',
        'Alle: ' + namen());
 // Wer in beidem vorkommt, erscheint EINMAL – sonst stuende Alice doppelt da.
@@ -11068,9 +11071,12 @@ def test_das_ergebnis_traegt_seinen_streifen_im_markup():
     # No tool in the strip: the band narrows the timeline, the person pill the people.
     for kennung in ("result-people-filter", "result-direction"):
         assert kennung not in block, kennung
-    # The address book: list or picture, before the origin chips
+    # The address book: list or picture, then the three pills – origin, mail, what is left out
     assert block.count('data-book-mode=') == 2
-    assert block.index('data-book-mode="list"') < block.index('data-book="all"')
+    assert block.index('data-book-mode="list"') < block.index('id="book-pill-origin"') \
+        < block.index('id="book-pill-mail"') < block.index('id="book-pill-hide"') < block.index('id="kbStats"') < block.index('id="kbHidden"')
+    assert 'book-flags-i' not in block                   # every choice explains itself in its popover
+    assert 'data-book="' not in block and 'data-book-flag=' not in block     # rows of the popovers, drawn with the list
     assert block.index('id="book-origin"') < block.index('id="kbBox"')
 
 
@@ -11112,7 +11118,7 @@ setTimeout(function(){
       pruefe(html.split('class="knoten').length - 1 === 2 && html.indexOf('bookPerson(') >= 0, 'Bild ohne Knoten: ' + html.slice(0, 200));
       pruefe(html.indexOf('A B') < 0, 'ich selbst nicht ausgenommen');
       pruefe(html.indexOf('2 Personen in 46') >= 0, 'Kopf: ' + html.slice(0, 200));
-      pruefe(el('book-origin').classList.contains('hide') && el('book-flags-i').classList.contains('hide'), 'Herkunfts-Chips bleiben im Bild');
+      pruefe(el('book-origin').classList.contains('hide') && el('book-pill-origin').classList.contains('hide') && el('kbHidden').classList.contains('hide'), 'Herkunfts-Chips bleiben im Bild');
       pruefe(el('kbStats').textContent === '', 'Zaehlzeile der Liste bleibt stehen');
       bookPerson('Dana Dienstleister');
       html = el('kbBox').innerHTML;
@@ -11688,7 +11694,26 @@ setTimeout(function(){
   setTimeout(function(){
     pruefe(count('/api/v1/correspondents') === 2, 'correspondents asked ' + count('/api/v1/correspondents') + ' times');
     // The spelling the communication uses joins the card it belongs to.
-    pruefe(cards().length === 8, 'entries: ' + cards().length);
+    // Who has neither a card nor an address is left out until asked for …
+    pruefe(cards().length === 7 && card('Bob Chat') === '', 'entries: ' + cards().length);
+    bookHide('noaddress');
+    // … and can then be ignored by the name it stands under.
+    pruefe(cards().length === 8 && card('Bob Chat').indexOf('bookIgnore(') >= 0 && card('Bob Chat').indexOf('ownContactAdd(') < 0,
+           'the entry without an address: ' + card('Bob Chat'));
+    bookHide('noaddress');
+    // The user's own domain can be left out: who has every address in
+    // it goes, who also writes from elsewhere stays.
+    var before = cards().length;
+    S.config = S.config || {};
+    S.config.internal_domains = 'example.org';
+    drawBook();
+    bookHide('own');
+    pruefe(cards().length < before && card('Erik Einkauf') === '' && card('info@shop1.example') !== '',
+           'the own domain: ' + cards().length);
+    bookHide('own');
+    S.config.internal_domains = '';
+    drawBook();
+    pruefe(cards().length === before, 'the switch does not come back');
     // Two cards of one name are two entries.
     pruefe(cards().filter(function(c){ return c.indexOf('Only In The Book') >= 0; }).length === 2, 'a card of the same name is gone');
     // A card that names an address is that address: a namesake's mail is not its.
@@ -11755,7 +11780,13 @@ setTimeout(function(){
     // The switches narrow, and combine with the origin chips.
     bookFlag('exchange');
     pruefe(cards().length === 2 && card('Shop News') === '', 'with exchange: ' + cards().length);
+    // A set pill says its value – one as it is, several by their number – and its × clears it.
+    pruefe(el('book-pill-mail-value').textContent === t('book.f.exchange') && el('book-pill-origin-value').textContent === t('book.pill.origin'),
+           'the pills: ' + el('book-pill-mail-value').textContent);
     bookFlag('frequent');
+    pruefe(el('book-pill-mail-value').textContent === t('book.pill.mail.n', {n: 2}), 'two values: ' + el('book-pill-mail-value').textContent);
+    pruefe(el('book-po-mail-list').innerHTML.split('class="on"').length - 1 === 2 &&
+           el('book-po-origin-list').innerHTML.indexOf('data-book="comm"') > 0, 'the rows: ' + el('book-po-mail-list').innerHTML);
     pruefe(cards().length === 1 && card('Dana Dienstleister') !== '', 'frequent: ' + cards().length);
     bookF = 'comm'; drawBook();
     pruefe(cards().length === 1, 'Dana is in the address book and in the communication');
@@ -11766,11 +11797,14 @@ setTimeout(function(){
     pruefe(cards().length === 1 && card('Erik Einkauf') !== '', 'not in the address book: ' + cards().length);
     bookFlag('missing');
     bookFlag('exchange'); bookF = 'all'; drawBook();
-    pruefe(cards().length === 8, 'all again: ' + cards().length);
-    pruefe(el('book-flags-i').title.indexOf('12') >= 0, 'the rule is not on the (i): ' + el('book-flags-i').title);
-    // One (i) explains the whole row – the origins first, then the switches – and no paragraph stands below it.
-    pruefe(el('book-flags-i').title.indexOf(t('book.f.note') + '\\n\\n') === 0 &&
-           el('book-flags-i').title.indexOf(t('book.f.missing')) > 0, 'the (i): ' + el('book-flags-i').title);
+    pruefe(cards().length === 7, 'all again: ' + cards().length);
+    // Every choice says below its name what it does – the rule for a frequent contact with its numbers – and beside it how many it takes.
+    var mailRows = el('book-po-mail-list').innerHTML, originRows = el('book-po-origin-list').innerHTML;
+    pruefe(mailRows.indexOf(esc(t('book.f.frequent.i', {mails: 12, months: 12}))) > 0 && mailRows.indexOf('{') < 0, 'the rule is not in its row: ' + mailRows);
+    pruefe(mailRows.split('class="choice-hint"').length - 1 === 3 && mailRows.split('class="n"').length - 1 === 3, 'hints and counts: ' + mailRows);
+    pruefe(originRows.indexOf('<span class="n">7</span>') > 0, 'the origin All does not count what is shown: ' + originRows);
+    // What Hide leaves out is said beside the count of the list.
+    pruefe(el('kbHidden').textContent === t('book.stats.hidden', {n: 1}) && !el('kbHidden').classList.contains('hide'), 'hidden: ' + el('kbHidden').textContent);
     // A name two senders write under names neither: only the address does.
     pruefe(correspondentOf('Info', []) === null, 'a shared name picks one of its senders');
     pruefe(correspondentOf('Info', ['Info@shop2.example']).received === 2, 'the address does not find its sender');
@@ -11828,7 +11862,11 @@ setTimeout(function(){
           CORRESPONDENTS = {byName: {}, byAddress: {}};
           BOOK_FLAGS.frequent = true;
           drawBook();
-          pruefe(cards().length === 7 && BOOK_FLAGS.frequent === false, 'a switch that narrows nothing stays set: ' + cards().length);
+          // … and who is left by name alone waits behind "Also without address".
+          pruefe(cards().length === 3 && BOOK_FLAGS.frequent === false, 'a switch that narrows nothing stays set: ' + cards().length);
+          bookHide('noaddress');
+          pruefe(cards().length === 7, 'the names without an address: ' + cards().length);
+          bookHide('noaddress');
           // How many people are listed is a setting: changed, the people by name are asked again – once.
           KONFIG = Object.assign({}, KONFIG, {contacts_people: 700});
           drawBook(); drawBook();
@@ -11846,6 +11884,24 @@ setTimeout(function(){
 
 def test_the_address_book_shows_what_the_mail_says_about_a_person():
     _in_node(PRUEFUNG_ADDRESS_BOOK_MAIL)
+
+
+def test_a_contact_card_s_version_is_shown_by_its_fields():
+    _in_node(GRUNDZUSTAND + """
+var was = {name: 'Dana Dienstleister', title: 'Consultant', organisation: 'Beispiel GmbH', department: '',
+           emails: ['dana@example.com'], phones: [{type: 'work', number: '+49 40 000000 77'}], note: ''};
+var now = Object.assign({}, was, {title: 'Project manager',
+           phones: was.phones.concat([{type: 'mobile', number: '+49 170 0000077'}])});
+// One version alone: its fields, an empty one no row, nothing struck out.
+var one = versionCard({from: was, to: was}, false);
+pruefe(one.split('<dt>').length - 1 === 5 && one.indexOf('<del>') < 0 && one.indexOf(esc(t('book.own.department'))) < 0, one);
+// Compared: what a field said before struck out beside what it says now; what stayed stands plain.
+var both = versionCard({from: was, to: now}, true);
+pruefe(both.indexOf('<del>Consultant</del>') > 0 && both.indexOf('<ins>Project manager</ins>') > 0, both);
+pruefe(both.indexOf('+49 40 000000 77<br><ins>+49 170 0000077 (' + esc(t('book.own.kind.mobile')) + ')</ins>') > 0 &&
+       both.indexOf('<dd>dana@example.com</dd>') > 0, both);
+console.log('OK');
+""")
 
 
 PRUEFUNG_OWN_CONTACTS = GRUNDZUSTAND + """
@@ -11923,14 +11979,17 @@ setTimeout(function(){
   setTimeout(function(){
     pruefe(sent[0][0] === 'POST' && sent[0][1].indexOf('/contacts/ignored') >= 0 && sent[0][2].address === 'greta@example.org', 'ignored: ' + JSON.stringify(sent));
     pruefe(cards().length === 1 && card('Greta Gast') === '', 'still missing: ' + cards().length);
-    // … stays among all, marked, and can be taken back there.
+    // … and every other one, until "Ignored" is no longer left out: there it stands, marked, and can be taken back.
     bookFlag('missing');
+    pruefe(card('Greta Gast') === '' && el('book-po-hide-list').innerHTML.indexOf('data-book-hide="ignored"') >= 0 &&
+           el('book-pill-hide').classList.contains('on'), 'an ignored entry is listed: ' + el('book-po-hide-list').innerHTML);
+    bookHide('ignored');
     greta = card('Greta Gast');
-    pruefe(greta.indexOf(esc(t('book.tag.ignored'))) >= 0 && greta.indexOf(esc(t('book.ignore.stop'))) >= 0, 'not marked: ' + greta);
+    pruefe(greta.indexOf('>' + esc(t('book.tag.ignored')) + '</span>') >= 0 && greta.indexOf(esc(t('book.ignore.stop'))) >= 0, 'not marked: ' + greta);
     bookIgnore(BOOK_ADD.map(function(a){ return a.address; }).indexOf('greta@example.org'), false);
   setTimeout(function(){
     pruefe(sent[1][0] === 'DELETE' && sent[1][1].indexOf('address=greta%40example.org') >= 0, 'taken back: ' + JSON.stringify(sent[1]));
-    pruefe(card('Greta Gast').indexOf(esc(t('book.tag.ignored'))) < 0, 'still ignored');
+    pruefe(card('Greta Gast').indexOf('>' + esc(t('book.tag.ignored')) + '</span>') < 0, 'still ignored');
     sent = [];
     ownContactAdd(BOOK_ADD.map(function(a){ return a.address; }).indexOf('erik@example.org'));
   setTimeout(function(){

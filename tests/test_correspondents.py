@@ -570,10 +570,47 @@ def test_a_footer_is_read_from_the_mails_that_carry_it(archive):
     assert "basis" not in by[bob[1]]
 
 
+def test_a_footer_is_asked_by_name_too(archive):
+    dana, greta = people.EXTERNALS[0], people.EXTERNALS[2]
+    answer = mcp_server.get_signatures([dana[0].upper(), greta[1], "Nobody Of That Name"])
+    by = {s["address"]: s for s in answer["signatures"]}
+    # The name is the address that writes under it; the entry says what was asked.
+    assert by[dana[1]]["asked"] == dana[0].upper() and by[dana[1]]["lines"] == bulk.footer(dana).split("\n")[:-1]
+    assert "asked" not in by[greta[1]]
+    assert by[""] == {"asked": "Nobody Of That Name", "address": "", "name": "", "lines": [], "mails_read": 0}
+    # One line of names and addresses is taken apart at the commas, a name keeps its words.
+    line = mcp_server.get_signatures(f"{dana[0]}, {greta[1]}")
+    assert {s["address"] for s in line["signatures"]} == {dana[1], greta[1]}
+
+
+def test_a_kept_footer_is_answered_without_a_mail_read(archive, tmp_path, monkeypatch):
+    """What the index run read (footers.py) is the answer for an address
+    without mail since – a client asking for a footer costs no reading."""
+    import footers
+    dana, greta = people.EXTERNALS[0][1], people.EXTERNALS[2][1]
+    fresh = mcp_server.get_signatures([dana])["signatures"][0]
+    book = footers.Footers(tmp_path / "faelle.db")
+    con = mcp_server._db()
+    stamps = footers.mail_stamps(con, [dana, greta])
+    con.close()
+    book.keep(dana, fresh, stamps[dana])
+    book.keep(greta, {"lines": ["An old footer"]}, (1.0, 1))      # mail came since: not the answer
+    mcp_server.STATE["faelle_db"] = str(tmp_path / "faelle.db")
+    read = []
+    real = mcp_server.signature.read
+    monkeypatch.setattr(mcp_server.signature, "read", lambda paths, *a, **kw: read.append(1) or real(paths, *a, **kw))
+    by = {s["address"]: s for s in mcp_server.get_signatures([dana, greta])["signatures"]}
+    assert len(read) == 1
+    kept = by[dana]
+    assert kept.pop("read").endswith("Z") and "mails_read" not in kept
+    assert kept == {k: v for k, v in fresh.items() if k != "mails_read"}
+    assert by[greta]["lines"] != ["An old footer"] and by[greta]["mails_read"] > 0
+
+
 def test_signatures_are_asked_in_batches_and_need_the_files(archive):
     many = [f"person{n}@example.com" for n in range(26)]
     assert "At most 25" in mcp_server.get_signatures(many)["error"]
-    assert mcp_server.get_signatures(["no address"])["error"]
+    assert mcp_server.get_signatures([" ", 7])["error"]
     unknown = mcp_server.get_signatures(["nobody@example.org"])["signatures"]
     assert unknown == [{"address": "nobody@example.org", "name": "", "lines": [], "mails_read": 0}]
     mcp_server.STATE["outlook_dir"] = None

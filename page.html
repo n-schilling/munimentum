@@ -297,6 +297,15 @@ button.ghost.rot{color:var(--err)}
 .popover .wahl button{border:0;background:transparent;text-align:left;padding:6px 8px;border-radius:6px;display:flex;align-items:center;gap:8px;font:inherit;color:inherit;cursor:pointer}
 .popover .wahl button:hover{background:var(--code)}
 .popover .wahl button.on{background:var(--accent-weich);font-weight:600}
+.popover .wahl .tick{width:14px;display:inline-flex;flex:none;color:var(--accent)}
+.popover .wahl .choice-text{display:flex;flex-direction:column;min-width:0}
+.popover .wahl .choice-hint{font-size:12px;font-weight:400;color:var(--muted);line-height:1.35}
+#sicht-adressbuch .calbar .popover{width:360px}
+#sicht-adressbuch .calbar .popover .wahl{max-height:none}
+#sicht-adressbuch .calbar .popover .wahl button{align-items:flex-start}
+.stats-link{border:0;background:none;padding:0;margin:0;min-height:0;font-family:inherit;color:var(--accent);cursor:pointer}
+.stats-link::before{content:'· ';color:var(--muted)}
+.stats-link:hover{text-decoration:underline}
 .popover .wahl .n{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
 .vorschlagfeld{position:relative;display:block}
 #filter-weg{border:0;background:transparent;color:var(--accent);font:inherit;font-size:13px;padding:0 4px;cursor:pointer}
@@ -599,6 +608,8 @@ details.org-overview>summary .small{font-weight:400}
 .version-body del{background:var(--diff-del);color:var(--diff-del-ink);text-decoration:line-through;border-radius:3px}
 .version-body ins{background:var(--diff-ins);color:var(--diff-ins-ink);text-decoration:none;border-radius:3px}
 .version-body .dframe{white-space:normal}
+.version-body .fakten{white-space:normal;gap:6px 18px}
+.version-body .card-download{display:inline-flex;align-items:center;gap:6px;margin-top:14px;white-space:normal}
 details.verlauf .vzeile.aus{opacity:.55;cursor:default}
 .calbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
 .calbar .chip{padding:5px 12px}
@@ -1592,21 +1603,37 @@ details.rechte p{margin:6px 0}
            month: the list, and the picture the case has (13.6) -->
       <span class="chip on" data-book-mode="list" data-i18n="book.mode.list">Liste</span>
       <span class="chip" data-book-mode="picture" data-i18n="book.mode.picture">Bild</span>
+      <!-- Three questions, one pill each, its choices in a popover: where
+           an entry comes from (one of them), what the mail says of the
+           person (any of them), what is left out (any of them). A choice
+           that could change nothing is absent; every choice says below its
+           name what it does, and beside it how many entries it takes -->
       <span class="calbar-trenner" id="book-origin"></span>
-      <span class="chip on" data-book="all" data-i18n="book.f.all">Alle</span>
-      <span class="chip" data-book="contacts" data-i18n="book.f.contacts">Aus Kontakten</span>
-      <span class="chip" data-book="comm" data-i18n="book.f.comm">Aus Kommunikation</span>
-      <!-- The contacts added in the app – absent while there is none -->
-      <span class="chip hide" data-book="own" data-i18n="book.f.own">Added here</span>
-      <!-- What the mail says about a person: three switches beside the
-           origin, each absent while no entry could pass it; one (i)
-           explains the whole row -->
-      <span class="calbar-trenner" id="book-flags"></span>
-      <span class="chip" data-book-flag="exchange" data-i18n="book.f.exchange">With exchange</span>
-      <span class="chip" data-book-flag="frequent" data-i18n="book.f.frequent">Frequent contact</span>
-      <span class="chip" data-book-flag="missing" data-i18n="book.f.missing">Not in the address book</span>
-      <span class="info" id="book-flags-i" tabindex="0" aria-label="i">i</span>
+      <div class="pill hide" id="book-pill-origin" role="button" tabindex="0" onclick="bookPill('origin')" onkeydown="bookPillKey(event, 'origin')">
+        <span data-ikon="person" data-ikon-klasse="klein"></span><span class="wert" id="book-pill-origin-value"></span><span class="pfeil" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="book-pill-origin-x" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();bookPillClear('origin')">×</span>
+        <div class="popover hide" id="book-po-origin" onclick="event.stopPropagation()">
+          <h4 data-i18n="book.pill.origin"></h4>
+          <div class="wahl" id="book-po-origin-list"></div>
+        </div>
+      </div>
+      <div class="pill hide" id="book-pill-mail" role="button" tabindex="0" onclick="bookPill('mail')" onkeydown="bookPillKey(event, 'mail')">
+        <span data-ikon="mail" data-ikon-klasse="klein"></span><span class="wert" id="book-pill-mail-value"></span><span class="pfeil" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="book-pill-mail-x" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();bookPillClear('mail')">×</span>
+        <div class="popover hide" id="book-po-mail" onclick="event.stopPropagation()">
+          <h4 data-i18n="book.pill.mail"></h4>
+          <div class="wahl" id="book-po-mail-list"></div>
+          <p class="satz" data-i18n="book.pill.mail.note"></p>
+        </div>
+      </div>
+      <div class="pill hide" id="book-pill-hide" role="button" tabindex="0" onclick="bookPill('hide')" onkeydown="bookPillKey(event, 'hide')">
+        <span data-ikon="minus" data-ikon-klasse="klein"></span><span class="wert" id="book-pill-hide-value"></span><span class="pfeil" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="book-pill-hide-x" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();bookPillClear('hide')">×</span>
+        <div class="popover hide" id="book-po-hide" onclick="event.stopPropagation()">
+          <h4 data-i18n="book.pill.hide"></h4>
+          <div class="wahl" id="book-po-hide-list"></div>
+        </div>
+      </div>
       <span class="small muted" id="kbStats"></span>
+      <!-- What the Hide pill leaves out, said where the count stands: a click opens the pill -->
+      <button type="button" class="stats-link small hide" id="kbHidden" onclick="event.stopPropagation();bookPill('hide')"></button>
       <button class="ghost rechts" id="kbSuchen" onclick="kontakteSuchen()"><span data-ikon="lupe" data-ikon-klasse="klein"></span><span data-i18n="book.search">Alle Kontakte durchsuchen</span></button>
     </div>
   </div>
@@ -5402,11 +5429,40 @@ function showVersion(i, mode){
     var body = dyn(bodyId);
     if(!body || asked !== VERSIONS) return;
     if(!r || r.ok === false){ body.innerHTML = '<p class="hint err">' + esc(rtext(r)) + '</p>'; return; }
+    // A contact card is shown by its fields; its file is a download.
+    if(r.card){
+      body.innerHTML = versionCard(r.card, show === 'diff') + '<a class="ghost card-download" href="' +
+        esc(versionUrl('/content', '&sha=' + sha)) + '" download>' + ikon('export', 'klein') + esc(t('book.card.download')) + '</a>';
+      return;
+    }
     body.innerHTML = (r.ops || []).map(function(op){
       return op[0] === '-' ? '<del>' + esc(op[1]) + '</del>'
            : op[0] === '+' ? '<ins>' + esc(op[1]) + '</ins>' : esc(op[1]);
     }).join('') || '<p class="hint">' + esc(t('search.versions.empty')) + '</p>';
   }).catch(function(){});
+}
+/* A contact card's version as the fields a reader knows a contact by –
+   and, compared with the current one, what a field said before struck
+   out beside what it says now. A field empty on both sides is no row. */
+function versionCard(card, compare){
+  function values(side, field){
+    var v = (side || {})[field];
+    if(field === 'phones') return (v || []).map(function(p){
+      var kind = p.type === 'mobile' || p.type === 'fax' ? ' (' + t('book.own.kind.' + p.type) + ')' : '';
+      return p.number + kind; });
+    return Array.isArray(v) ? v : (v ? [v] : []);
+  }
+  var labels = {name: 'book.own.name', title: 'book.own.jobtitle', organisation: 'book.own.company',
+                department: 'book.own.department', emails: 'book.card.mail', phones: 'book.own.phones', note: 'book.own.note'};
+  var rows = Object.keys(labels).map(function(field){
+    var was = values(card.from, field), now = values(card.to, field);
+    if(!was.length && !now.length) return '';
+    var parts = !compare ? was.map(esc)
+      : was.filter(function(x){ return now.indexOf(x) < 0; }).map(function(x){ return '<del>' + esc(x) + '</del>'; })
+          .concat(now.map(function(x){ return was.indexOf(x) < 0 ? '<ins>' + esc(x) + '</ins>' : esc(x); }));
+    return parts.length ? '<dt>' + esc(t(labels[field])) + '</dt><dd>' + parts.join('<br>') + '</dd>' : '';
+  }).join('');
+  return '<dl class="fakten">' + rows + '</dl>';
 }
 /* The version a link pinned by its checksum: the index of an earlier one
    to open, or null for the current one – and the head says when the item
@@ -9613,6 +9669,11 @@ function cardHtml(e){
       '<button title="' + esc(t('book.ignore.i')) + '" onclick="bookIgnore(' + a + ', ' + !e.ignored + ')">' +
       esc(t(e.ignored ? 'book.ignore.stop' : 'book.ignore')) + '</button>';
   }
+  else if(e.nameOnly){
+    var n = BOOK_ADD.push({address: '', name: e.name}) - 1;
+    menu += '<button title="' + esc(t('book.ignore.i')) + '" onclick="bookIgnore(' + n + ', ' + !e.ignored + ')">' +
+      esc(t(e.ignored ? 'book.ignore.stop' : 'book.ignore')) + '</button>';
+  }
   // Only entries from the address book have a source file to link to.
   var h = '<div class="card2"><details class="card-menu"><summary title="' + esc(t('book.menu')) + '" aria-label="' +
     esc(t('book.menu')) + '">' + ikon('more', 'klein') + '</summary><div class="card-menu-list">' + menu + '</div></details>' +
@@ -9687,7 +9748,7 @@ function mailCounts(m){
    card first, by name otherwise – the card's name or one their addresses
    write under. */
 var CORRESPONDENTS = null, CORRESPONDENTS_STAND, FREQUENT_RULE = null;
-var BOOK_FLAGS = {exchange: false, frequent: false, missing: false}, BOOK_SIGNATURES = [], BOOK_INFO = [], BOOK_VERSIONS = [], BOOK_VERSIONS_SEQ = 0, SIGNATURES = {};
+var BOOK_FLAGS = {exchange: false, frequent: false, missing: false}, BOOK_HIDE = {noaddress: true, ignored: true, own: false}, BOOK_SIGNATURES = [], BOOK_INFO = [], BOOK_VERSIONS = [], BOOK_VERSIONS_SEQ = 0, SIGNATURES = {};
 function loadCorrespondents(){
   // Asked again when the index is another one – or the rule for a
   // frequent contact is (the settings frequent_mails, frequent_months).
@@ -9934,19 +9995,24 @@ function loadOwnContacts(){
 /* The addresses set to be ignored: a shared mailbox, a newsletter the
    mail's rules took for a person, somebody the user wants no card for.
    They stay in the list, marked, and leave "Not in the address book". */
-var IGNORED = {};
+var IGNORED = {}, IGNORED_NAMES = {};
 function ignoredKeep(r){
   if(!r || r.ok === false){ apiFehler(r); return; }
-  var before = Object.keys(IGNORED).sort().join('|');
-  IGNORED = {};
+  function stand(){ return Object.keys(IGNORED).sort().join('|') + '||' + Object.keys(IGNORED_NAMES).sort().join('|'); }
+  var before = stand();
+  IGNORED = {}; IGNORED_NAMES = {};
   (r.items || []).forEach(function(a){ IGNORED[a] = true; });
-  if(Object.keys(IGNORED).sort().join('|') !== before && offeneSicht === 'adressbuch') drawBook();
+  (r.names || []).forEach(function(n){ IGNORED_NAMES[normName(n)] = true; });
+  if(stand() !== before && offeneSicht === 'adressbuch') drawBook();
 }
 function bookIgnore(i, on){
   var who = BOOK_ADD[i];
   if(!who) return;
-  (on ? post(API + '/contacts/ignored', {address: who.address})
-      : entferne(API + '/contacts/ignored?address=' + encodeURIComponent(who.address)))
+  // An entry without an address is ignored by the name it stands under.
+  var by = who.address ? 'address' : 'name', body = {};
+  body[by] = who.address || who.name;
+  (on ? post(API + '/contacts/ignored', body)
+      : entferne(API + '/contacts/ignored?' + by + '=' + encodeURIComponent(body[by])))
     .then(ignoredKeep).catch(ownContactFailed);
 }
 /* The correspondents name a person by their card: a card added, renamed
@@ -10217,63 +10283,75 @@ function drawBook(){
   loadCorrespondents();
   document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]')
     .forEach(function(c){ c.classList.toggle('on', c.dataset.bookMode === BOOK_MODE); });
-  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
-    .forEach(function(c){ c.classList.toggle('hide', bild); });
   el('book-origin').classList.toggle('hide', bild);
   loadOwnContacts();
   if(personenGeladen !== false) ladePersonen();          // again when the setting is another
   BOOK_ADD = []; BOOK_INFO = []; BOOK_VERSIONS = [];
   var alle = bild ? [] : buchEintraege();
-  // Ignored is who has no card and whose address the user set so.
+  // Ignored is who has no card and whose address the user set so – or,
+  // for an entry the communication makes without an address, its name.
+  var ownDomains = internDomains();
   alle.forEach(function(e){
-    e.ignored = !e.c && !e.o && ((e.m || {}).addresses || []).some(function(a){ return IGNORED[a] === true; });
+    var at = e.c ? (e.c.em || []) : e.o ? [e.o.address] : ((e.m || {}).addresses || []);
+    e.nameOnly = !e.c && !e.o && !at.length;
+    e.ignored = !e.c && !e.o && (e.nameOnly ? IGNORED_NAMES[normName(e.name)] === true
+                                            : at.some(function(a){ return IGNORED[a] === true; }));
+    // Of the user's own organisation: every address in one of its domains.
+    e.internal = at.length > 0 && ownDomains.length > 0 &&
+      at.every(function(a){ return ownDomains.indexOf(String(a).toLowerCase().split('@')[1] || '') >= 0; });
   });
-  // The chip for the cards of the app's own is absent while there is none.
+  // A choice that could change nothing is absent – and no longer set.
   var anyOwn = alle.some(function(e){ return !!e.o; });
   if(!bild && !anyOwn && bookF === 'own') bookF = 'all';
-  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book="own"]')
-    .forEach(function(c){ c.classList.toggle('hide', bild || !anyOwn); });
-  // A switch that could narrow nothing is absent – and no longer set.
   var can = {exchange: alle.some(function(e){ return e.m && e.m.received && e.m.sent; }),
              frequent: alle.some(function(e){ return e.m && e.m.frequent; }),
              missing: alle.some(function(e){ return !e.c && !e.o && !e.ignored; }) &&
                       alle.some(function(e){ return !!(e.c || e.o || e.ignored); })};
   if(!bild) Object.keys(can).forEach(function(flag){ if(!can[flag]) BOOK_FLAGS[flag] = false; });
-  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-flag]').forEach(function(c){
-    var flag = c.dataset.bookFlag;
-    c.classList.toggle('hide', !can[flag]);
-    c.classList.toggle('on', BOOK_FLAGS[flag]);
-  });
-  var any = can.exchange || can.frequent || can.missing;
-  el('book-flags').classList.toggle('hide', !any);
-  // One (i) for the whole row: where an entry comes from, then – while
-  // there is mail to say it – what the switches mean. A line per chip.
-  el('book-flags-i').classList.toggle('hide', bild);
-  el('book-flags-i').title = t('book.f.note') + (any ? '\n\n' + t('book.f.flags.i', FREQUENT_RULE ||
-    {mails: (KONFIG || {}).frequent_mails || 12, months: (KONFIG || {}).frequent_months || 12}) : '');
+  // What is left out keeps its setting while there is nothing to leave
+  // out: who has neither a card nor an address stays out by default.
+  var hides = {noaddress: alle.some(function(e){ return e.nameOnly; }),
+               ignored: alle.some(function(e){ return e.ignored; }),
+               own: alle.some(function(e){ return e.internal; }) && alle.some(function(e){ return !e.internal; })};
+  function fromOrigin(e, origin){
+    if(origin === 'contacts') return e.quelle === 'contacts' || e.quelle === 'both';
+    // … a card of the app's own for someone the archive never saw is not from the communication.
+    if(origin === 'comm') return e.quelle !== 'contacts' && !(e.quelle === 'own' && !e.m && !e.n);
+    return origin === 'own' ? !!e.o : true;
+  }
+  var passes = {exchange: function(e){ return !!(e.m && e.m.received && e.m.sent); },
+                frequent: function(e){ return !!(e.m && e.m.frequent); },
+                missing: function(e){ return !(e.c || e.o || e.ignored); }};
+  var hidden = {noaddress: function(e){ return e.nameOnly; },
+                ignored: function(e){ return e.ignored; },
+                own: function(e){ return e.internal; }};
+  // Who has neither a card nor an address is no contact to keep: left
+  // out until asked for – like whom the user ignores.
+  var shown = alle.filter(function(e){
+    return !Object.keys(hidden).some(function(k){ return BOOK_HIDE[k] && hidden[k](e); }); });
+  var inOrigin = shown.filter(function(e){ return fromOrigin(e, bookF); });
+  // What a choice takes, said beside it: an origin of what is shown, a
+  // mail row of that origin, a hide row of everything.
+  var counts = {};
+  ['all', 'contacts', 'comm', 'own'].forEach(function(o){
+    counts[o] = shown.filter(function(e){ return fromOrigin(e, o); }).length; });
+  Object.keys(passes).forEach(function(f){ counts[f] = inOrigin.filter(passes[f]).length; });
+  Object.keys(hidden).forEach(function(k){ counts['hide.' + k] = alle.filter(hidden[k]).length; });
+  bookPills(bild, anyOwn, can, hides, counts);
+  el('kbHidden').classList.toggle('hide', bild || shown.length === alle.length);
+  el('kbHidden').textContent = t('book.stats.hidden', {n: zahl(alle.length - shown.length)});
   if(bild){ drawBookPicture(); return; }
   if(!alle.length){
     el('kbStats').textContent = '';
     el('kbBox').innerHTML = '<p class="hint">' + esc(t('book.empty')) + '</p>';
     return;
   }
-  var imFilter = alle.filter(function(e){
-    if(bookF === 'contacts') return e.quelle === 'contacts' || e.quelle === 'both';
-    // … a card of the app's own for someone the archive never saw is not from the communication.
-    if(bookF === 'comm') return e.quelle !== 'contacts' && !(e.quelle === 'own' && !e.m && !e.n);
-    if(bookF === 'own') return !!e.o;
-    return true;
-  }).filter(function(e){
-    if(BOOK_FLAGS.exchange && !(e.m && e.m.received && e.m.sent)) return false;
-    if(BOOK_FLAGS.missing && (e.c || e.o || e.ignored)) return false;
-    return !(BOOK_FLAGS.frequent && !(e.m && e.m.frequent));
-  });
+  var imFilter = inOrigin.filter(function(e){
+    return !Object.keys(passes).some(function(f){ return BOOK_FLAGS[f] && !passes[f](e); }); });
   var hits = imFilter.slice();
   hits.sort(function(a, b){
     return (a.name || '').localeCompare(b.name || '', LOC, {sensitivity: 'base'});
   });
-  document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]')
-    .forEach(function(c){ c.classList.toggle('on', c.dataset.book === bookF); });
   // The list is the people with the most mail: how many it leaves out is said.
   var more = (CORRESPONDENTS || {}).more || 0;
   el('kbStats').textContent = t('book.stats', {n: hits.length, total: alle.length}) +
@@ -10290,15 +10368,94 @@ function drawBook(){
   });
   el('kbBox').innerHTML = h + '</div>';
 }
-document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book]').forEach(function(ch){
-  ch.addEventListener('click', function(){ bookF = ch.dataset.book; drawBook(); });
-});
 document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-mode]').forEach(function(ch){
   ch.addEventListener('click', function(){ bookMode(ch.dataset.bookMode); });
 });
-document.querySelectorAll('#sicht-adressbuch .calbar .chip[data-book-flag]').forEach(function(ch){
-  ch.addEventListener('click', function(){ bookFlag(ch.dataset.bookFlag); });
+/* The three pills of the address book. Their rows are drawn with the
+   list: a choice that could change nothing is no row, a pill without
+   rows is absent, and a set pill says its value. */
+var BOOK_PILLS = ['origin', 'mail', 'hide'], BOOK_PILL_OPEN = null;
+function bookPills(picture, anyOwn, can, hides, counts){
+  var rule = FREQUENT_RULE || {mails: (KONFIG || {}).frequent_mails || 12, months: (KONFIG || {}).frequent_months || 12};
+  var own = internDomains();
+  var named = {domains: own.slice(0, 2).join(', ') + (own.length > 2 ? ', …' : ''), mails: rule.mails, months: rule.months};
+  // A row: the tick of a choice that combines, its name with what it
+  // does below, and how many entries it takes.
+  function row(attr, key, text, on, call, tick, n){
+    return '<button type="button"' + (on ? ' class="on"' : '') + ' ' + attr + '="' + key + '" onclick="' + call + '(\'' + key + '\')">' +
+      (tick ? '<span class="tick">' + (on ? ikon('haken', 'klein') : '') + '</span>' : '') +
+      '<span class="choice-text">' + esc(t(text, named)) + '<span class="choice-hint">' + esc(t(text + '.i', named)) + '</span></span>' +
+      '<span class="n">' + zahl(n || 0) + '</span></button>';
+  }
+  var origins = ['all', 'contacts', 'comm'].concat(anyOwn ? ['own'] : []);
+  var mail = ['exchange', 'frequent', 'missing'].filter(function(f){ return can[f]; });
+  var hide = ['noaddress', 'ignored', 'own'].filter(function(f){ return hides[f]; });
+  var rows = {
+    origin: origins.map(function(o){ return row('data-book', o, 'book.f.' + o, bookF === o, 'bookOrigin', false, counts[o]); }),
+    mail: mail.map(function(f){ return row('data-book-flag', f, 'book.f.' + f, BOOK_FLAGS[f], 'bookFlag', true, counts[f]); }),
+    hide: hide.map(function(f){ return row('data-book-hide', f, 'book.hide.' + f, BOOK_HIDE[f], 'bookHide', true, counts['hide.' + f]); })};
+  var set = {origin: bookF === 'all' ? [] : [t('book.f.' + bookF)],
+             mail: mail.filter(function(f){ return BOOK_FLAGS[f]; }).map(function(f){ return t('book.f.' + f); }),
+             hide: hide.filter(function(f){ return BOOK_HIDE[f]; })};
+  BOOK_PILLS.forEach(function(k){
+    var absent = picture || !rows[k].length;
+    el('book-pill-' + k).classList.toggle('hide', absent);
+    if(absent && BOOK_PILL_OPEN === k) bookPillClose();
+    el('book-po-' + k + '-list').innerHTML = rows[k].join('');
+    // One value is said as it is, several by their number.
+    el('book-pill-' + k + '-value').textContent = !set[k].length ? t('book.pill.' + k)
+      : set[k].length === 1 && k !== 'hide' ? set[k][0] : t('book.pill.' + k + '.n', {n: set[k].length});
+    el('book-pill-' + k).classList.toggle('on', set[k].length > 0);
+    el('book-pill-' + k + '-x').classList.toggle('hide', !set[k].length);
+  });
+}
+function bookPill(k){
+  var was = BOOK_PILL_OPEN === k;
+  bookPillClose();
+  if(was) return;
+  BOOK_PILL_OPEN = k;
+  el('book-po-' + k).classList.remove('hide');
+  el('book-pill-' + k).classList.add('offen');
+}
+function bookPillClose(){
+  BOOK_PILL_OPEN = null;
+  BOOK_PILLS.forEach(function(k){
+    el('book-po-' + k).classList.add('hide');
+    el('book-pill-' + k).classList.remove('offen');
+  });
+}
+function bookPillKey(ev, k){
+  if(ev.target && ev.currentTarget && ev.target !== ev.currentTarget) return;
+  if(ev.key === 'Enter' || ev.key === ' '){ ev.preventDefault(); bookPill(k); }
+  else if(ev.key === 'Escape') bookPillClose();
+}
+function bookPillClear(k){
+  if(k === 'origin') bookF = 'all';
+  else Object.keys(k === 'mail' ? BOOK_FLAGS : BOOK_HIDE).forEach(function(f){ (k === 'mail' ? BOOK_FLAGS : BOOK_HIDE)[f] = false; });
+  bookPillClose();
+  drawBook();
+}
+/* One origin at a time: chosen, the popover closes. The other two take
+   any of their rows and stay open while they are ticked. */
+function bookOrigin(origin){
+  bookF = origin;
+  bookPillClose();
+  drawBook();
+}
+function bookHide(key){
+  BOOK_HIDE[key] = !BOOK_HIDE[key];
+  drawBook();
+}
+document.addEventListener('click', function(ev){
+  if(!BOOK_PILL_OPEN) return;
+  var k = ev.target;
+  while(k){
+    if(k.classList && k.classList.contains && k.classList.contains('pill')) return;
+    k = k.parentElement;
+  }
+  bookPillClose();
 });
+document.addEventListener('keydown', function(ev){ if(ev.key === 'Escape' && BOOK_PILL_OPEN) bookPillClose(); });
 
 /* From a person to everything that happened with them. The search's person
    filter can do that already – this merely wires it to the address book. */

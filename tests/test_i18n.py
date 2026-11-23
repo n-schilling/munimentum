@@ -218,6 +218,12 @@ GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
                           "run.conv.changed", "run.collect.start")
 
 DYNAMISCH = (
+    # The address book's pills draw their rows and their values from lists.
+    # … each row its name and, under `.i`, what it does.
+    ("book.f.", tuple(k + e for k in ("all", "contacts", "comm", "own", "exchange", "frequent", "missing")
+                      for e in ("", ".i"))),
+    ("book.hide.", tuple(k + e for k in ("noaddress", "ignored", "own") for e in ("", ".i"))),
+    ("book.pill.", ("origin", "mail", "hide", "mail.n", "hide.n")),
     # The organization view names a change's kind and its fields.
     ("org.change.", ("joined", "moved", "changed", "left")),
     ("org.field.", ("title", "department", "office", "company", "city", "country",

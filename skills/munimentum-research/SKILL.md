@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 15.1.0. Installed by hand – under
+This guide belongs to Munimentum 15.2.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -160,6 +160,10 @@ the default.
    than guess, and treat a footer read from a single mail as less sure.
    A footer is read by rules and can be incomplete or carry a line that
    is not the person's: present it as read from mail footers, to check.
+   Asked for one person's signature, number or job title, call
+   `get_signatures` with the name or the address – never search and read
+   the person's mails for it: where Munimentum has read the footer
+   already, the answer comes from there and opens no mail.
 4. Write the file in the template's columns, one row per person, and say
    what came from the address book, what from footers, and who has neither.
 

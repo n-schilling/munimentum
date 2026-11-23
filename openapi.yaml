@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 15.1.0
+  version: 15.2.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -2022,7 +2022,9 @@ paths:
       description: |
         Whom the user set to be ignored – a shared mailbox, a newsletter,
         somebody they want no card for. Such an address stays what the mail
-        says of it; the page leaves it out of *Not in the address book*.
+        says of it; the page leaves it out of *Not in the address book*. An
+        entry the communication makes without an address (a chat partner, a
+        system's sender name) is ignored by its name, under `names`.
         Kept in the profile, never sent anywhere.
       responses:
         "200":
@@ -2031,27 +2033,28 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, count]
+                required: [items, names, count]
                 properties:
                   items: { type: array, items: { type: string }, description: "The ignored addresses, lower case, sorted." }
-                  count: { type: integer }
+                  names: { type: array, items: { type: string }, description: "The ignored names – entries without an address –, sorted." }
+                  count: { type: integer, description: "How many addresses." }
         "403": { $ref: "#/components/responses/Forbidden" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
     post:
       tags: [Explore, POST]
       operationId: v1IgnoreContact
-      summary: Ignore an address
-      description: Sets the address to be ignored; one that is already stays so. Adding a card for an address takes the mark away.
+      summary: Ignore an address or a name
+      description: Sets the address – or, for an entry without one, the name – to be ignored; one that is already stays so. Exactly one of the two. Adding a card for an address takes the mark away.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [address]
               properties:
                 address: { type: string }
+                name: { type: string, maxLength: 200 }
             example: { address: newsletter@example.com }
       responses:
         "200":
@@ -2060,12 +2063,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, count]
+                required: [items, names, count]
                 properties:
                   items: { type: array, items: { type: string }, description: "The ignored addresses, lower case, sorted." }
-                  count: { type: integer }
+                  names: { type: array, items: { type: string }, description: "The ignored names – entries without an address –, sorted." }
+                  count: { type: integer, description: "How many addresses." }
         "400":
-          description: "No mail address (srv.contact.badvalue, `error.v.field` \"address\")."
+          description: "No mail address, no name, or both (srv.contact.badvalue, `error.v.field` \"address\" or \"name\")."
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -2076,10 +2080,11 @@ paths:
     delete:
       tags: [Explore, DELETE]
       operationId: v1UnignoreContact
-      summary: No longer ignore an address
-      description: Takes the mark away; an address that has none is no error. Answers the list, like a case's sub-resource.
+      summary: No longer ignore an address or a name
+      description: Takes the mark away; one that has none is no error. Exactly one of `address` and `name`. Answers the list, like a case's sub-resource.
       parameters:
-        - { name: address, in: query, required: true, schema: { type: string }, description: "The mail address." }
+        - { name: address, in: query, schema: { type: string }, description: "The mail address." }
+        - { name: name, in: query, schema: { type: string }, description: "The name of an entry without an address." }
       responses:
         "200":
           description: The whole list as it now is.
@@ -2087,12 +2092,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [items, count]
+                required: [items, names, count]
                 properties:
                   items: { type: array, items: { type: string }, description: "The ignored addresses, lower case, sorted." }
-                  count: { type: integer }
+                  names: { type: array, items: { type: string }, description: "The ignored names – entries without an address –, sorted." }
+                  count: { type: integer, description: "How many addresses." }
         "400":
-          description: "No mail address (srv.contact.badvalue, `error.v.field` \"address\")."
+          description: "No mail address, no name, or both (srv.contact.badvalue, `error.v.field` \"address\" or \"name\")."
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
@@ -2875,6 +2881,7 @@ paths:
         moved reads as `=`). `to` defaults to the current version;
         the same checksum on both sides answers the version's text in one
         piece. Only for versions with text – not for a Word file or a PDF.
+        A contact card also answers `card`: both versions field by field.
       parameters:
         - { name: uid, in: query, schema: { type: string }, description: "The item's uid from a hit – or, for a case's item, `root`, `rel` and `key`." }
         - { name: root, in: query, schema: { type: string }, description: "The item's source root (with `rel`), when there is no uid." }
@@ -5513,6 +5520,31 @@ components:
           items:
             type: array
             prefixItems: [{ type: string, enum: ["=", "-", "+"] }, { type: string }]
+        card:
+          type: object
+          description: "Only for a contact card (.vcf): what the two versions say field by field, so a reader need not read the file's lines."
+          required: [from, to]
+          properties:
+            from: { $ref: "#/components/schemas/CardFields" }
+            to: { $ref: "#/components/schemas/CardFields" }
+    CardFields:
+      type: object
+      required: [name, title, organisation, department, emails, phones, note]
+      properties:
+        name: { type: string }
+        title: { type: string }
+        organisation: { type: string }
+        department: { type: string }
+        emails: { type: array, items: { type: string } }
+        phones:
+          type: array
+          items:
+            type: object
+            required: [type, number]
+            properties:
+              type: { type: string, description: "mobile, fax, home, work – empty when the card names none." }
+              number: { type: string }
+        note: { type: string }
     OrgFigures:
       type: object
       description: The organization's health from the tree alone.

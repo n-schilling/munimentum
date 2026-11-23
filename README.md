@@ -103,8 +103,8 @@ contact, *external* marked. The last two take the whole result.
 **Calendar** shows the appointments by week or month: every date of a series,
 deleted ones marked, those recovered from invitation mails. **Contacts** merges
 the Outlook address book – title, company, department, numbers – with everyone in the
-communication, list or picture, one entry per address: mails received and sent, *frequent contacts* to filter by, a signature (read automatically with each index run and marked on the card, so check it) –
-and *Add to address book* or *Ignore* for who has no card: Munimentum's own card, kept in your profile; *Versions* shows what a card said before. **Files** walks the drives, originals a click away.
+communication, list or picture, one entry per address: mails received and sent, three pills narrow by origin, by what the mail says (*frequent contacts*) and hide your own domain, names without an address and whom you ignore, a signature (read automatically with each index run and marked on the card, so check it) –
+and *Add to address book* or *Ignore* for who has no card: Munimentum's own card, kept in your profile; *Versions* shows what a card said before, field by field. **Files** walks the drives, originals a click away.
 
 ### Cases
 
@@ -152,7 +152,7 @@ lists, and *Report a problem*: a GitHub issue with the log, anonymised, yours to
 A built-in MCP server hands the archive to Claude Code, Claude Desktop or any MCP
 client on this machine only: every source with its filters, whose archive it is and
 how far it reaches, item versions, the org chart on any day, its health in numbers,
-your mail contacts (the ones you ignore marked), their signatures and the contacts you added, your cases to attach. Citations open the item
+your mail contacts (the ones you ignore marked), their signatures by address or name and the contacts you added, your cases to attach. Citations open the item
 in the app and hold against the checksum chain; three [skills](skills/README.md)
 teach research, case work and evidence, served or installed by hand; search, case
 writes and verification ask for a token first (`get_guide`). It changes a case

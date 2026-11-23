@@ -128,7 +128,7 @@ class Footers:
         return (before["lines"] if before else "[]") != lines
 
 
-def _stamps(con, addresses):
+def mail_stamps(con, addresses):
     """address → (newest mail, mails sent), from the index."""
     if not addresses or not correspondents._has_table(con):
         return {}
@@ -165,7 +165,7 @@ def fill(home, store, outlook, most=500, months=12, mails=12):
     wanted = [a for a in (asked(p) for p in listed(people, most)) if a]
     con = mcp_server._db()
     try:
-        now = _stamps(con, wanted)
+        now = mail_stamps(con, wanted)
     finally:
         con.close()
     kept = book.stamps()

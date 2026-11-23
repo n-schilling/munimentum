@@ -9,6 +9,7 @@ from pathlib import Path
 
 import re
 import api
+import corpus
 import detail
 import evidence
 import faelle
@@ -294,34 +295,43 @@ def own_contact_versions(h, p, _q, _data):
 
 def _ignored(h):
     items = h.app.own_contacts.ignored()
-    return api.json({"items": items, "count": len(items)})
+    return api.json({"items": items, "names": h.app.own_contacts.ignored_names(), "count": len(items)})
 
 
 def ignored_contact_list(h, _p, _q, _data):
     """The addresses the user set to be ignored: not offered for the
-    address book, whatever the mail says of them."""
+    address book, whatever the mail says of them – and the names, for the
+    entries the communication makes without an address."""
     return _ignored(h)
 
 
-def _ignore(h, address, on):
+def _ignore(h, given, on):
+    """One address or one name, never both: `given` is the body or the query."""
+    address, name = given.get("address"), given.get("name")
+    if (address is None) == (name is None):
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": "address"})
     try:
-        h.app.own_contacts.ignore(address, on)
-    except own_contacts.BadValue:
-        raise Ablehnung(400, "srv.contact.badvalue", {"field": "address"}) from None
+        if name is not None:
+            h.app.own_contacts.ignore_name(name, on)
+        else:
+            h.app.own_contacts.ignore(address, on)
+    except own_contacts.BadValue as e:
+        raise Ablehnung(400, "srv.contact.badvalue", {"field": e.field}) from None
     return _ignored(h)
 
 
 def ignored_contact_add(h, _p, _q, data):
-    """Ignore an address; answers the whole list."""
-    for field in data if isinstance(data, dict) else ():
-        if field != "address":
+    """Ignore an address or a name; answers the whole list."""
+    data = data if isinstance(data, dict) else {}
+    for field in data:
+        if field not in ("address", "name"):
             raise Ablehnung(400, "srv.contact.badvalue", {"field": str(field)[:40]})
-    return _ignore(h, (data or {}).get("address") if isinstance(data, dict) else None, True)
+    return _ignore(h, data, True)
 
 
 def ignored_contact_remove(h, _p, q, _data):
-    """No longer ignore an address; answers the whole list."""
-    return _ignore(h, q.get("address"), False)
+    """No longer ignore an address or a name; answers the whole list."""
+    return _ignore(h, q, False)
 
 
 def adressen(h, _p, q, _data):
@@ -887,7 +897,20 @@ def version_diff(h, _p, q, _data):
     new_text = _version_text(target, newer) if newer else None
     if old_text is None or new_text is None:
         raise Ablehnung(404, "srv.versions.notext")
-    return api.json({"from": older, "to": newer, "ops": versions.diff(old_text, new_text)})
+    answer = {"from": older, "to": newer, "ops": versions.diff(old_text, new_text)}
+    # A contact card is its fields to a reader, not its file's lines.
+    if target["rel"].lower().endswith(".vcf"):
+        answer["card"] = {"from": _card_fields(old_text), "to": _card_fields(new_text)}
+    return api.json(answer)
+
+
+def _card_fields(text):
+    """What a contact card says, field by field (corpus.read_vcard) – the
+    fields a reader knows a contact by."""
+    card = corpus.read_vcard(text)
+    return {"name": card["name"], "title": card["title"], "organisation": card["organisation"],
+            "department": card["department"], "emails": card["emails"],
+            "phones": card["phones"], "note": card["note"]}
 
 
 # ---------------------------------------------------------------------------

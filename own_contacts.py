@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS ignored_contacts(
     address     TEXT PRIMARY KEY,        -- lower case: who is not to be offered for the address book
     since       TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ignored_names(
+    name        TEXT PRIMARY KEY,        -- an entry without an address, by the name it stands under
+    since       TEXT NOT NULL
+);
 """
 
 
@@ -101,6 +105,14 @@ def clean_address(value):
     if not _ADDRESS.match(address) or len(address) > TEXT_MOST:
         raise BadValue("address")
     return address
+
+
+def clean_name(value):
+    """A name as the ignore list keeps it: its words, single-spaced."""
+    name = " ".join(value.split()) if isinstance(value, str) else ""
+    if not name or len(name) > 200:
+        raise BadValue("name")
+    return name
 
 
 def _text(field, value, most):
@@ -380,6 +392,34 @@ class OwnContacts:
                 con.execute("INSERT OR IGNORE INTO ignored_contacts(address, since) VALUES(?,?)", (address, now()))
             else:
                 con.execute("DELETE FROM ignored_contacts WHERE address = ?", (address,))
+            con.commit()
+        finally:
+            con.close()
+
+    # … and the names: an entry the communication makes without an address
+    # (a chat partner, a system's sender name) is ignored by its name.
+    def ignored_names(self):
+        """The ignored names, sorted. Reads without creating anything."""
+        if not self.path.exists():
+            return []
+        con = sqlite3.connect(self.path, timeout=5)
+        try:
+            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
+                           "AND name = 'ignored_names'").fetchone() is None:
+                return []
+            return [row[0] for row in con.execute("SELECT name FROM ignored_names ORDER BY name")]
+        finally:
+            con.close()
+
+    def ignore_name(self, name, on=True):
+        """Set a name to be ignored, or (`on` False) no longer."""
+        name = clean_name(name)
+        con = self._connect()
+        try:
+            if on:
+                con.execute("INSERT OR IGNORE INTO ignored_names(name, since) VALUES(?,?)", (name, now()))
+            else:
+                con.execute("DELETE FROM ignored_names WHERE name = ?", (name,))
             con.commit()
         finally:
             con.close()

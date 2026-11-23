@@ -44,6 +44,17 @@ def search_for(page, archive, term):
     return page.locator("#results .hit")
 
 
+def book_choice(page, pill, key):
+    """Tick or pick one row of an address book pill, as a user does: open
+    the pill, click the row, and leave the popover."""
+    attr = {"origin": "data-book", "mail": "data-book-flag", "hide": "data-book-hide"}[pill]
+    if page.locator(f"#book-po-{pill}").is_hidden():
+        page.locator(f"#book-pill-{pill} > .wert").click()
+    page.locator(f'#book-po-{pill}-list [{attr}="{key}"]').click()
+    page.keyboard.press("Escape")
+    expect(page.locator(f"#book-po-{pill}")).to_be_hidden()
+
+
 def test_a_search_finds_the_project_across_the_sources(archive_page, archive):
     hits = search_for(archive_page, archive, PROJECT)
     expect(hits.first).to_be_visible()
@@ -156,7 +167,7 @@ def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
     # entries are no nodes either – a card names a company, not a person.
     expect(picture.locator(".knoten")).to_have_count(len(people.COLLEAGUES) + len(people.EXTERNALS))
     expect(picture.locator(".ich")).to_contain_text(people.ME[0])
-    expect(archive_page.locator('#sicht-adressbuch [data-book="comm"]')).to_be_hidden()
+    expect(archive_page.locator("#book-pill-origin")).to_be_hidden()
     # The card: address, and company, role and number from the address book.
     dana = people.EXTERNALS[0]
     contact = [c for c in sources.CONTACTS if c["displayName"] == dana[0]][0]
@@ -175,7 +186,7 @@ def test_the_contacts_show_the_picture_over_the_archive(archive_page, archive):
     # Back in the book, the list and its chips are back.
     archive_page.click('#sichten [data-sicht="adressbuch"]')
     archive_page.locator('#sicht-adressbuch [data-book-mode="list"]').click()
-    expect(archive_page.locator('#sicht-adressbuch [data-book="comm"]')).to_be_visible()
+    expect(archive_page.locator("#book-pill-origin")).to_be_visible()
     expect(archive_page.locator("#kbBox .card2").first).to_be_visible()
 
 
@@ -217,7 +228,12 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     with archive_page.expect_response(lambda r: "/api/v1/documents/versions/diff" in r.url):
         card.get_by_role("button", name=EN["book.versions"]).click()
     expect(window.locator(".book-versions-list .vzeile")).to_have_count(2)
-    expect(window.locator(".book-versions-view del")).to_contain_text(history.CONTACT_TITLE_BEFORE)
+    # … field by field, as a reader knows a contact – not as a vCard's lines; the file is a download.
+    view = window.locator(".book-versions-view")
+    expect(view.locator("dl.fakten dt", has_text=EN["book.own.jobtitle"])).to_be_visible()
+    expect(view).not_to_contain_text("BEGIN:VCARD")
+    expect(view.get_by_role("link", name=EN["book.card.download"])).to_have_attribute("download", "")
+    expect(window.locator(".book-versions-view del")).to_have_text(history.CONTACT_TITLE_BEFORE)
     expect(window.locator(".book-versions-view ins")).to_contain_text(
         next(c for c in sources.CONTACTS if c["displayName"] == dana[0])["jobTitle"])
     window.locator(".modal-zu").click()
@@ -229,23 +245,25 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     everyone = cards.count()
 
     # Frequent contacts only: every card left carries the mark.
-    flags = archive_page.locator("#sicht-adressbuch [data-book-flag]")
-    expect(flags).to_have_count(3)
-    archive_page.locator('#sicht-adressbuch [data-book-flag="frequent"]').click()
+    # Three pills: where an entry comes from, what the mail says, what is left out.
+    expect(archive_page.locator("#sicht-adressbuch .calbar .pill:visible")).to_have_count(3)
+    expect(archive_page.locator("#book-po-mail-list button")).to_have_count(3)
+    expect(archive_page.locator("#book-pill-mail .wert")).to_have_text(EN["book.pill.mail"])
+    book_choice(archive_page, "mail", "frequent")
     expect(cards.filter(has_text=dana[0])).to_be_visible()
     frequent = cards.count()
     assert 0 < frequent < everyone
     expect(archive_page.locator("#kbBox .card2 .tag.frequent")).to_have_count(frequent)
     # … of them, those the address book lacks.
-    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+    book_choice(archive_page, "mail", "missing")
     expect(cards.filter(has_text=lars[0])).to_be_visible()
     expect(cards.filter(has_text=dana[0])).to_have_count(0)
     assert 0 < cards.count() < frequent
-    archive_page.locator('#sicht-adressbuch [data-book-flag="frequent"]').click()
-    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
-    archive_page.locator('#sicht-adressbuch [data-book-flag="exchange"]').click()
+    book_choice(archive_page, "mail", "frequent")
+    book_choice(archive_page, "mail", "missing")
+    book_choice(archive_page, "mail", "exchange")
     assert frequent <= cards.count() < everyone
-    archive_page.locator('#sicht-adressbuch [data-book-flag="exchange"]').click()
+    book_choice(archive_page, "mail", "exchange")
     expect(cards).to_have_count(everyone)
 
     # The footer: Greta's card has no number, the fold under it has.
@@ -267,8 +285,8 @@ def test_the_contacts_say_what_the_mail_says_about_a_person(archive_page, archiv
     archive_page.click('nav [data-tab="suche"]')         # the door, back from the one item
     archive_page.click('#sichten [data-sicht="adressbuch"]')
     archive_page.locator('#sicht-adressbuch [data-book-mode="picture"]').click()
-    expect(flags.first).to_be_hidden()
-    expect(archive_page.locator("#book-flags-i")).to_be_hidden()
+    expect(archive_page.locator("#book-pill-mail")).to_be_hidden()
+    expect(archive_page.locator("#kbHidden")).to_be_hidden()
 
 
 def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archive):
@@ -286,12 +304,12 @@ def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archi
     expect(card.locator(".crole").nth(1)).to_have_text(kept["company"])
     expect(card.locator(".cline", has_text=kept["mobile"])).to_be_visible()
     expect(card).to_contain_text(kept["person"][1])
-    # The chip shows the app's own cards alone; the keeper's is no longer missing.
-    chip = archive_page.locator('#sicht-adressbuch [data-book="own"]')
-    chip.click()
+    # The origin "Added here" shows the app's own cards alone – the pill says so; the keeper's is no longer missing.
+    book_choice(archive_page, "origin", "own")
+    expect(archive_page.locator("#book-pill-origin .wert")).to_have_text(EN["book.f.own"])
     expect(cards).to_have_count(1)
-    archive_page.locator('#sicht-adressbuch [data-book="all"]').click()
-    archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+    book_choice(archive_page, "origin", "all")
+    book_choice(archive_page, "mail", "missing")
     expect(cards.filter(has_text=kept["person"][0])).to_have_count(0)
 
     lars = people.EXTERNALS[5]
@@ -306,7 +324,6 @@ def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archi
     forget_lars()
     try:
         # Somebody the address book lacks can be set to be ignored: he leaves that list …
-        missing = archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]')
         card = cards.filter(has_text=lars[0])
         # The index run read his footer: the card says so, the window says when.
         expect(card.locator(".ctags .tag", has_text=EN["book.tag.footer"])).to_be_visible()
@@ -318,15 +335,20 @@ def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archi
         with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/contacts/ignored")):
             card.get_by_role("button", name=EN["book.ignore"], exact=True).click()
         expect(cards.filter(has_text=lars[0])).to_have_count(0)
-        # … stays among all contacts, marked, and is taken back there.
-        missing.click()
+        # … and every other, until "Ignored" is no longer left out: there he stands, marked, and is taken back.
+        book_choice(archive_page, "mail", "missing")
+        expect(cards.filter(has_text=lars[0])).to_have_count(0)
+        expect(archive_page.locator("#book-pill-hide .wert")).to_have_text(EN["book.pill.hide.n"].replace("{n}", "2"))
+        book_choice(archive_page, "hide", "ignored")
         card = cards.filter(has_text=lars[0])
         expect(card.locator(".ctags .tag", has_text=EN["book.tag.ignored"])).to_be_visible()
         card.locator(".card-menu summary").click()
         with archive_page.expect_response(lambda r: "/api/v1/contacts/ignored?address=" in r.url):
             card.get_by_role("button", name=EN["book.ignore.stop"]).click()
         expect(card.locator(".ctags .tag", has_text=EN["book.tag.ignored"])).to_have_count(0)
-        missing.click()
+        # Nobody is ignored any more: the row for them is gone from the pill.
+        expect(archive_page.locator('#book-po-hide-list [data-book-hide="ignored"]')).to_have_count(0)
+        book_choice(archive_page, "mail", "missing")
         # Lars writes often and has no card: one click makes him one.
         card = cards.filter(has_text=lars[0])
         with archive_page.expect_response(lambda r: r.url.endswith("/api/v1/contacts/own") and r.status == 201):
@@ -344,7 +366,7 @@ def test_a_person_from_the_mail_is_added_to_the_address_book(archive_page, archi
         expect(dialog).to_be_hidden()
         # With a card he is no longer missing: all contacts again.
         expect(cards.filter(has_text=lars[0])).to_have_count(0)
-        archive_page.locator('#sicht-adressbuch [data-book-flag="missing"]').click()
+        book_choice(archive_page, "mail", "missing")
         card = cards.filter(has_text=lars[0])
         expect(card.locator(".tag.added")).to_be_visible()
         expect(card.locator(".crole").first).to_have_text("Dispatcher")

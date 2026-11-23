@@ -85,6 +85,25 @@ def test_one_version_and_its_difference_to_today(archive):
     assert r["ops"] == [["=", history.ROLLOUT_DRAFT_1]]
 
 
+def test_a_contact_card_s_versions_come_field_by_field(archive):
+    """A reader knows a contact by its fields, not by a vCard's lines."""
+    _a, port, _home, built = archive
+    key = next(k for k in built["earlier"] if k.endswith(".vcf"))
+    rel, sha = key.split("/", 1)[1], built["earlier"][key]
+    code, r = call(port, "GET", f"/api/v1/documents/versions/diff?root=outlook&rel={quote(rel)}&sha={sha}")
+    assert code == 200 and r["ops"]
+    before, now = r["card"]["from"], r["card"]["to"]
+    assert set(before) == {"name", "title", "organisation", "department", "emails", "phones", "note"}
+    assert before["title"] == history.CONTACT_TITLE_BEFORE != now["title"]
+    assert before["name"] == now["name"] and now["emails"] and all(set(p) == {"type", "number"} for p in now["phones"])
+    # One version on both sides is that version's fields twice; another kind of file has none.
+    code, r = call(port, "GET", f"/api/v1/documents/versions/diff?root=outlook&rel={quote(rel)}&sha={sha}&to={sha}")
+    assert r["card"]["from"] == r["card"]["to"] == before
+    uid = _uid(port, "rollout plan", "datei:Dateien/Documents/Ostwind/rollout-plan.md")
+    other = built["earlier"]["onedrive_export/Dateien/Documents/Ostwind/rollout-plan.md"]
+    assert "card" not in call(port, "GET", f"/api/v1/documents/versions/diff?uid={quote(uid)}&sha={other}")[1]
+
+
 def test_a_page_version_is_shown_in_a_sandbox(archive):
     _a, port, _home, built = archive
     rel = sources.page_rel(history._PROJECT_PAGE[1])

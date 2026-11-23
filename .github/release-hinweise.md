@@ -1,21 +1,21 @@
-## New in 15.1.0
+## New in 15.2.0
 
-- **Ignore**: an address without a card – a shared mailbox, a newsletter,
-  somebody you do not want listed – can be set to *Ignore* in the card's menu.
-  It leaves *Not in the address book*, stays among all contacts tagged
-  *ignored*, and the same menu takes it back.
-- **Signatures are read ahead**: each index run reads the signatures of the
-  people *Contacts* lists and keeps them in your profile. A card says *footer
-  extracted* where one was found, and the window names when it was read – it
-  may have changed since.
-- **For MCP clients**: an address you set to be ignored is marked as such, and
-  the research skill tells the client to leave it out of a contact list.
+- **Contacts filter with three pills**: *Source*, *Mail* and *Hide* replace
+  the row of chips. Every choice says below its name what it does and beside
+  it how many entries it takes.
+- **Hide**: names without a mail address – a chat partner, a system's sender
+  name – are left out from the start, and so is whom you ignore; your own
+  domain can be left out too. The count of the list says how many are hidden,
+  and such a name can be set to *Ignore* as well.
+- **Versions of an Outlook card** show its fields – what changed struck out
+  beside what it says now – with the vCard as a download.
+- **For MCP clients**: a signature can be asked for by name, and one the app
+  has read already is answered without opening a mail.
 
 ## Upgrading
 
-The first index run after the update reads the signatures once for everyone
-*Contacts* lists; later runs read only who has sent new mail. Until then a
-signature is read when you open a person's *Additional information*.
+Nothing to do. Whom you set to *Ignore* is now hidden in every list of
+*Contacts*; untick *Ignored by you* under *Hide* to see them.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the
