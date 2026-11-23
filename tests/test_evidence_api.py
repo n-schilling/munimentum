@@ -35,7 +35,8 @@ def built(tmp_path_factory):
 def archive(built, tmp_path, monkeypatch, with_ollama):
     """A copy per test – some of them close a case or change a file."""
     home = tmp_path / "archive"
-    shutil.copytree(built["home"], home)
+    shutil.copytree(built["home"], home,
+                    ignore=shutil.ignore_patterns("*-wal", "*-shm"))   # a reader's passing files
     for name, value in (("WURZEL", home), ("HEIM", home), ("BASE", home),
                         ("STORE_PFAD", home / app_mod.STORE_DIR),
                         ("CONFIG_FILE", home / "app_config.json"),

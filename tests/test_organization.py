@@ -298,7 +298,8 @@ def built(tmp_path_factory):
 @pytest.fixture
 def served(built, tmp_path, monkeypatch):
     home = tmp_path / "archive"
-    shutil.copytree(built["home"], home)
+    shutil.copytree(built["home"], home,
+                    ignore=shutil.ignore_patterns("*-wal", "*-shm"))   # a reader's passing files
     for name, value in (("WURZEL", home), ("HEIM", home), ("BASE", home),
                         ("STORE_PFAD", home / app_mod.STORE_DIR),
                         ("CONFIG_FILE", home / "app_config.json"),

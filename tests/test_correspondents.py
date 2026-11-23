@@ -595,7 +595,8 @@ def test_an_index_from_before_the_table_answers_the_same(archive, built, tmp_pat
     dana = people.EXTERNALS[0][1]
     before = (_all(min_sent=0), mcp_server.get_signatures([dana]))
     store = tmp_path / "old_store"
-    shutil.copytree(built[1]["store"], store)
+    shutil.copytree(built[1]["store"], store,
+                    ignore=shutil.ignore_patterns("*-wal", "*-shm"))   # a reader's passing files
     con = sqlite3.connect(store / "corpus.db")
     con.execute("DROP TABLE correspondence")
     con.commit()
